@@ -1,0 +1,118 @@
+/*
+ * Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+:root {
+  color-scheme: light;
+  color: #20262e;
+  background: #f5f6f8;
+  font-family: var(--font-stack);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  /* Text */
+  --text-strong: #111827;
+  --text: #20262e;
+  --text-heading: #344054;
+  --text-secondary: #475467;
+  --muted: #667085;
+  --text-faint: #7a8697;
+  --muted-light: #8a94a3;
+  --text-muted: var(--muted);
+
+  /* Typography */
+  --font-stack: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  /* Surfaces */
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --surface-sunk: #f7f8fa;
+  --surface-soft: #f3f5f7;
+  --surface-hover: #f0f2f5;
+  --surface-track: #e9edf2;
+  --app-bg: #f5f6f8;
+  --surface-floating: rgba(255, 255, 255, .94);
+
+  /* Borders */
+  --border: #dfe3e8;
+  --border-strong: #cbd2da;
+
+  /* Accent */
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-deep: #1746a2;
+  --accent-ink: #2457ad;
+  --accent-soft: #eff6ff;
+  --accent-softer: #eaf2ff;
+  --accent-tint: #dbeafe;
+  --accent-border-soft: #c8d8f2;
+  --accent-border: #9ab8ec;
+
+  /* Semantic */
+  --success: #14734f;
+  --success-bright: #22a06b;
+  --success-soft: #e8f7ef;
+  --success-tint: #dff4e9;
+  --success-border: #a8d5ba;
+  --warning: #745612;
+  --warning-strong: #9a6700;
+  --warning-accent: #d19a32;
+  --warning-soft: #fff8e7;
+  --warning-border: #e0b45b;
+  --danger: #a4262c;
+  --danger-deep: #7e2228;
+  --danger-bright: #d64545;
+  --danger-soft: #fff1f2;
+  --danger-border: #e1a7a7;
+  --disabled-bg: #b8c5dc;
+  --csv-accent: #0f766e;
+  --csv-accent-soft: #e4f5f1;
+
+  /* Elevation */
+  --shadow-1: 0 1px 3px rgba(31, 41, 55, .1);
+  --shadow-card: 0 12px 30px rgba(31, 41, 55, .08);
+  --shadow-2: 0 8px 24px rgba(31, 41, 55, .14);
+  --shadow-3: 0 12px 30px rgba(31, 41, 55, .18);
+  --shadow-4: 0 28px 80px rgba(31, 41, 55, .24);
+
+  /* Shape & motion */
+  --radius-xs: 6px;
+  --radius-s: 7px;
+  --radius-m: 9px;
+  --radius-l: 13px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+  --motion-fast: .15s ease;
+
+  /* Shared component dimensions */
+  --activity-card-min-height: 58px;
+  --dialog-list-card-height: 72px;
+  --sidebar-split: 50%;
+  --timeline-gutter: 55px;
+
+  /* Overlays and elevation order */
+  --backdrop: rgba(30, 37, 48, .58);
+  --backdrop-soft: rgba(30, 37, 48, .52);
+  --window-backdrop: rgba(20, 27, 38, .68);
+  --z-dock: 5;
+  --z-panel: 20;
+  --z-overlay-low: 30;
+  --z-dialog: 40;
+  --z-overlay-high: 60;
+  --z-popover: 200;
+  --z-window: 1000;
+  --z-toast: 1100;
+}

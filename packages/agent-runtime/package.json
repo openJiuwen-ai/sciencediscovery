@@ -1,0 +1,23 @@
+{
+  "name": "@science-agent/agent-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "types": "./src/index.ts",
+    "default": "./dist/index.js"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@science-agent/schema": "workspace:*",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1"
+  }
+}

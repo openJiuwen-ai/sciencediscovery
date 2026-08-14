@@ -1,0 +1,116 @@
+/*
+ * Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* Shared interactive primitives. Feature styles keep only their variations. */
+.icon-button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.icon-button:hover { border-color: var(--border); background: var(--surface-hover); color: var(--text-heading); }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: var(--radius-pill);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+/* Dialog lists use one compact card rhythm while feature classes provide type color. */
+.model-card,
+.skill-card,
+.specialist-list button,
+.global-search-results > button {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--dialog-list-card-height);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  transition: background var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.model-card { border-inline-start: 3px solid var(--accent); }
+.skill-card { border-inline-start: 3px solid var(--success-bright); }
+.specialist-list button { border-inline-start: 3px solid var(--warning-accent); }
+.global-search-results > button { border-inline-start: 3px solid var(--accent-border); }
+
+/* All full-screen layers share geometry; feature files choose size and z-level. */
+.dialog-backdrop,
+.config-backdrop,
+.document-backdrop,
+.artifact-modal-backdrop,
+.memory-explorer-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--backdrop);
+  backdrop-filter: blur(4px);
+}
+
+.creation-dialog,
+.rename-dialog,
+.deletion-dialog,
+.config-panel,
+.document-panel,
+.artifact-modal-panel,
+.global-search-dialog,
+.skill-editor-dialog,
+.skill-delete-dialog,
+.memory-explorer-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow-4);
+}
+
+.document-header,
+.artifact-modal-header,
+.config-header,
+.memory-explorer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+/* Shared text stacks and code surfaces remove repeated declarations. */
+.model-card strong,
+.model-card small,
+.skill-card strong,
+.skill-card small,
+.specialist-list strong,
+.specialist-list small,
+.environment-card-heading strong,
+.environment-card-heading small,
+.remote-job-heading strong,
+.remote-job-heading small { display: block; }
+
+.tool-content pre,
+.subagent-steps pre,
+.remote-job-card pre,
+.skill-instructions pre,
+.skill-resource-preview pre,
+.manuscript-preview pre,
+.artifact-source-preview { font-family: var(--font-mono); }

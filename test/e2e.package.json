@@ -1,0 +1,16 @@
+{
+  "name": "science-agent-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "postinstall": "ln -sfn \"$PWD/node_modules\" \"$PWD/../test/node_modules\"",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:report": "playwright show-report playwright-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0",
+    "@types/node": "^22.0.0"
+  }
+}

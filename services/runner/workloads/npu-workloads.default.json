@@ -1,0 +1,33 @@
+{
+  "workloads": [
+    {
+      "description": "Run a fixed host MindSpore Ascend tensor probe.",
+      "id": "npu.smoke_test",
+      "label": "Ascend NPU smoke test",
+      "phase": "builtin",
+      "command": {
+        "program": "${managedPython}",
+        "args": [
+          "${env:SCIENCE_AGENT_NPU_SMOKE_SCRIPT:-repo:services/runner/workloads/npu-smoke-test.py}",
+          "${workspaceRoot}"
+        ]
+      }
+    },
+    {
+      "description": "Run the configured Protenix antibody pipeline entrypoint on the host NPU.",
+      "id": "antibody.protenix.v1",
+      "label": "Antibody Protenix pipeline",
+      "phase": "builtin",
+      "command": {
+        "program": "${managedPython}",
+        "args": [
+          "${repo:services/runner/workloads/antibody-manager-adapter.py}",
+          "${env:SCIENCE_AGENT_NPU_PROTENIX_SCRIPT}",
+          "${input:configPath}",
+          "${workspaceRoot}"
+        ]
+      },
+      "rejectAf3Intent": true
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "version": "2.8.1-0",
+  "baseUrl": "https://github.com/mamba-org/micromamba-releases/releases/download",
+  "releases": {
+    "arm64": {
+      "dockerArch": "arm64",
+      "packageArch": "aarch64",
+      "filename": "micromamba-linux-aarch64",
+      "sha256": "e5ba23b5945aa49dfd11022e592a510d2686a8feee810e00140b73c9fdf0ba2a"
+    },
+    "x64": {
+      "dockerArch": "amd64",
+      "packageArch": "x86_64",
+      "filename": "micromamba-linux-64",
+      "sha256": "9689782d863c05a1bf5d2d371ba527104e7a4eb4310c1637d8653b751aed9c82"
+    }
+  }
+}

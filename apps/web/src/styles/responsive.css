@@ -1,0 +1,141 @@
+/*
+ * Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@media (max-width: 1180px) {
+  .app-shell { grid-template-columns: 240px minmax(0, 1fr); }
+  .content-grid { grid-template-columns: minmax(0, 1fr) 340px; }
+  .messages { padding-inline: 32px; }
+  .workspace-panel { padding-inline: 12px; }
+}
+
+@media (max-width: 900px) {
+  .app-shell { display: block; }
+  .sidebar { position: relative; width: 100%; height: auto; border-right: 0; border-bottom: 1px solid var(--border); padding: 18px; }
+  .brand { padding-bottom: 16px; }
+  .sidebar-resources { display: flex; flex-direction: column; margin-bottom: 0; }
+  .sidebar-section { max-height: 220px; margin-bottom: 14px; }
+  .sidebar-resizer { display: none; }
+  .main-area { height: auto; min-height: 100vh; }
+  .content-grid { display: flex; flex-direction: column; }
+  .conversation { min-height: 720px; border-right: 0; }
+  .workspace-panel { border-top: 1px solid var(--border); }
+  .workspace-resizer, .composer-hint { display: none; }
+  .session-bar { padding: 6px 14px; }
+  .session-bar .connection { display: none; }
+  .messages { padding: 26px 22px; }
+  .composer { margin-inline: 18px; }
+  .result-preview { width: 100%; margin-left: 0; }
+  .document-backdrop, .artifact-modal-backdrop { padding: 0; }
+  .document-panel, .artifact-modal-panel { width: 100%; min-height: 100vh; max-height: 100vh; border: 0; border-radius: 0; }
+  .document-header, .artifact-modal-header { padding: 18px 20px; }
+  .document-markdown, .artifact-modal-body { padding: 28px 20px 44px; }
+  .environment-source-settings { grid-template-areas: "intro intro" "pip conda" "save save"; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  :root { --timeline-gutter: 45px; }
+  .session-bar-meta { width: 100%; }
+  .session-bar-project { max-width: 40vw; }
+  .session-bar-session-rename { min-width: 0; max-width: none; width: 100%; flex: none; }
+  .message { grid-template-columns: 34px minmax(0, 1fr); gap: 11px; }
+  .avatar { width: 34px; height: 34px; }
+  .session-usage-chip { max-width: none; width: 100%; min-width: 0; flex: none; }
+  .timeline-content { padding-left: 16px; }
+  .timeline-status { display: none; }
+  .composer-footer { align-items: stretch; flex-direction: column; }
+  .task-model-picker { align-items: stretch; flex-direction: column; }
+  .task-model-picker select { width: 100%; max-width: none; }
+  .composer-run-actions { width: 100%; flex-direction: column; }
+  .send-button { width: 100%; }
+  .trust-metrics { grid-template-columns: repeat(2, 1fr); }
+  .config-backdrop { padding: 12px; }
+  .config-panel { max-height: calc(100vh - 24px); padding: 24px 20px; }
+  .system-config-dialog { width: 100%; height: calc(100vh - 24px); padding: 0; }
+  .system-config-dialog > .config-header { padding: 18px; }
+  .system-config-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .settings-group-nav { max-width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
+  .settings-group-detail { padding: 22px 18px 30px; }
+  .skill-manager-grid { grid-template-columns: minmax(0, 1fr); }
+  .skill-catalog-list { max-height: 180px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .skill-manager-toolbar { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .skill-metadata { grid-template-columns: minmax(0, 1fr); }
+  .skill-editor-columns { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .settings-choices { grid-template-columns: 1fr; }
+  .timeout-grid, .runtime-status-summary { grid-template-columns: 1fr; }
+  .environment-starter-plan, .environment-create { grid-template-columns: 1fr; }
+  .environment-source-settings { grid-template-areas: "intro" "pip" "conda" "save"; grid-template-columns: minmax(0, 1fr); }
+  .environment-source-save { justify-self: stretch; width: 100%; }
+  .specialist-layout { grid-template-columns: minmax(0, 1fr); }
+  .remote-host-form, .remote-host-card { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .permission-card { grid-template-columns: minmax(0, 1fr); }
+  .permission-card .plan-actions { grid-column: auto; }
+  .permission-decision-actions > button { flex: 1 1 130px; }
+  .deletion-impact { grid-template-columns: 1fr; }
+  .dialog-backdrop { padding: 12px; }
+  .creation-dialog, .deletion-dialog, .rename-dialog { padding: 22px 18px; }
+  .document-header small { max-width: 220px; }
+  .system-config-footer { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 10px 12px; }
+  .system-config-footer button, .system-config-footer .primary-button { width: 100%; min-width: 0; white-space: normal; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+}
+
+/* Keep the composer compact so the message list owns the vertical space. */
+@container (max-width: 1024px) {
+  .composer-hint { display: none; }
+}
+
+@container (max-width: 900px) {
+  .task-model-picker select { max-width: 200px; }
+}
+
+@container (max-width: 720px) {
+  .task-model-picker select { max-width: 150px; }
+  .orchestration-controls select { max-width: 108px; }
+}
+
+@container (max-width: 620px) {
+  .composer-footer { gap: 8px; padding: 8px 8px 8px 12px; }
+  .task-model-picker > span { display: none; }
+  .task-model-picker select { min-width: 96px; }
+  .orchestration-controls select { max-width: 100px; }
+  .send-button { padding-inline: 10px; }
+}
+
+.composer.composer-compact .composer-hint, .composer.composer-compact .orchestration-controls { display: none; }
+.composer.composer-compact textarea { max-height: 74px; }
+
+/* Keep the stacked narrow-screen layout (max-width: 600px) winning over the
+   composer container bands above: same specificity, so this must come last. */
+@media (max-width: 600px) {
+  .task-model-picker select { width: 100%; max-width: none; }
+}
+
+@media (max-height: 900px) {
+  .session-bar { min-height: 38px; padding-block: 5px; }
+  .eyebrow { margin-bottom: 3px; }
+  .messages { padding-block: 22px 18px; }
+  .session-intro { padding: 4vh 0 24px; }
+  .empty-state { padding: 6vh 0; }
+  .composer { margin-bottom: 14px; }
+  .composer textarea { padding-block: 10px 6px; }
+  .composer-footer { padding-block: 7px; }
+  .task-model-picker select { min-height: 32px; }
+  .send-button { min-height: 34px; }
+}

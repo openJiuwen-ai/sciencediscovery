@@ -1,0 +1,43 @@
+{
+  "mcpServers": {
+    "biomed": {
+      "args": [
+        "-m",
+        "science_agent_gateway.public_biomed_mcp"
+      ],
+      "command": "python",
+      "description": "Public biomedical literature, structure, genomics, pathway, variation, chemistry, and dataset APIs",
+      "enabled": true,
+      "routing": {
+        "keywords": [],
+        "mode": "off",
+        "priority": 0
+      },
+      "tool_call_timeout": 60,
+      "type": "stdio"
+    },
+    "uniprot": {
+      "args": [
+        "-m",
+        "science_agent_gateway.uniprot_mcp"
+      ],
+      "command": "python",
+      "description": "Governed UniProtKB protein records and sequence artifact preparation",
+      "enabled": true,
+      "routing": {
+        "keywords": [
+          "UniProt",
+          "protein",
+          "accession",
+          "amino acid sequence",
+          "gene product"
+        ],
+        "mode": "prefer",
+        "priority": 90
+      },
+      "tool_call_timeout": 30,
+      "type": "stdio"
+    }
+  },
+  "skills": {}
+}

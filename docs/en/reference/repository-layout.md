@@ -1,0 +1,138 @@
+# Repository Layout Reference
+
+This page maps directories, modules, default ports, and data locations. See [Runtime architecture](../explanation/architecture.md) for the responsibility split.
+
+## 1. Repository tree
+
+The repository is a pnpm monorepo with several Python subprojects:
+
+```text
+science_agent/
+├── apps/web/                 # React/Vite browser UI
+├── services/
+│   ├── api/                  # Node control API
+│   ├── gateway/              # Python agent-loop sidecar
+│   ├── runner/               # Bubblewrap executor
+│   ├── paper/                # uv PDF worker
+│   └── memory-graph/         # experimental Science Memory sidecar, off by default
+├── packages/
+│   ├── agent-runtime/        # prompts, tools, agent event types
+│   ├── schema/               # shared TypeScript types and schemas
+│   └── mcp-sources/          # scientific MCP manifests and trust boundary
+├── skills/                   # built-in Agent Skills
+├── third_party/deer-flow/    # deer-flow git submodule
+├── scripts/                  # internal launch and packaging scripts (not a user install path)
+├── test/                     # integration and browser E2E outside pnpm check
+├── docs/                     # complete English and Chinese documentation
+├── data/                     # gitignored runtime state
+├── .e2e/                     # gitignored local Playwright environment
+├── README.md / README_zh.md
+└── LICENSE                   # Apache-2.0
+```
+
+### 1.1 Processes and default ports
+
+`./ScienceDiscovery serve` starts (the launcher starts the first two in the background and the API in the foreground; Ctrl-C stops all):
+
+| Process | Default address | Purpose |
+|---|---|---|
+| `services/gateway` | `127.0.0.1:4312` | Agent loop, loopback only |
+| `services/runner` | `127.0.0.1:4311` | Sandbox execution, loopback only |
+| `services/api` | `127.0.0.1:4310` | Control API and static UI, local-only by default |
+
+The first `serve` extracts the embedded runtime and prepares the gateway Python environment; see the [deployment guide](../how-to/deployment.md).
+
+## 2. Modules and responsibilities
+
+### 2.1 `apps/web` — workbench
+
+Project/Session navigation and lifecycle, chat/tool traces, workspace files, connector controls, settings, models, environments, skills, specialists, permissions, connection tokens, layered Project/Session overrides, approval cards, and review results.
+
+### 2.2 `services/api` — control plane
+
+| Area | Purpose |
+|---|---|
+| `server.ts`, `http/` | Process/barrel and HTTP shell: routes, auth, bodies, responses, static assets, tool callback |
+| `runs/` | Run lifecycle, SSE, orchestration, concurrency, workspace-event filtering |
+| `store.ts`, `store/` | `SessionStore` facade and SQLite domain storage |
+| `subagents/`, `artifacts/` | Handoff/private workspaces and versioned Artifact behavior |
+| `web-providers/`, `connectors/` | Web broker and scientific connector manifests/broker |
+| `gateway-agent.ts` | Gateway request/NDJSON translation into UI events |
+| `papers.ts`, `runner-client.ts` | Paper download/extraction and runner calls |
+| `provenance.ts`, `reviewer-specialist/` | Execution provenance and Artifact review |
+| `skills.ts`, `prompt-manifest.ts` | Skill revisions/resources and frozen run metadata |
+| `remote-compute.ts` | Experimental remote-job cards, not a supported primary workflow |
+
+Its external capabilities cover Project management, agent runs, connectors/papers, managed environments, skills/specialists, permissions, and review.
+
+### 2.3 `services/gateway` — agent-loop sidecar
+
+FastAPI exposes `GET /health` and `POST /run`. Each request assembles a LangChain `create_agent`; all tools are HTTP proxies back to Node `/internal/tool-exec`. `_engine/` is the only provider adapter boundary.
+
+### 2.4 `services/runner` — isolated execution
+
+Bubblewrap namespaces and seccomp run networkless Python, R, or shell with optional managed environments/persistent kernels. Guards include wall-clock timeout, workspace total, execution-output quota, and one global worker. There is no independent execution-file or CPU/memory cgroup quota.
+
+### 2.5 `services/paper` — PDF extraction
+
+An isolated bounded worker produces Markdown, tables, figures, and page previews. Limits include 50 MiB, 200 pages, and text/table/figure/preview caps; OCR is absent.
+
+### 2.6 `packages/*`
+
+- `schema`: shared Session, MCP, Artifact, execution, and permission types.
+- `agent-runtime`: workspace prompts, tool list, deferred MCP/download/extraction tools, and events.
+- `mcp-sources`: scientific manifests, input validation, and Node trust-boundary checks.
+
+### 2.7 `skills/`
+
+| Skill | Purpose |
+|---|---|
+| `life-science-evidence-brief` | Connector-backed life-science claim/citation briefs |
+| `structure-pocket-inspection` | Local PDB structure/pocket inspection in workspace Python |
+
+All skills are available by default and may be narrowed at Project/Session scope. Runs freeze revisions in Prompt Manifest.
+
+### 2.8 `test/`
+
+Root tests contain Playwright browser E2E plus gateway/API mock and real smoke suites. Playwright is not part of the default `pnpm check` path.
+
+### 2.9 `third_party/deer-flow`
+
+This ByteDance deer-flow submodule supplies `deerflow-harness` as a path dependency for compatible model adapters at the LangChain `create_agent` seam. ScienceDiscovery does not run deer-flow's complete frontend, runtime, or sandbox.
+
+## 3. Data and configuration
+
+| Location | Contents |
+|---|---|
+| `data/catalog.sqlite`, `model-secrets.key` | Metadata/settings/permissions and token-encryption key |
+| `data/projects/.../workspace/` | Per-Session files and paper extraction |
+| `data/cas/`, claims/evidence/MCP paths | Immutable content and provenance/audit |
+| `data/artifact-jobs/`, `artifact-extraction-jobs/` | Download and extraction state |
+| `data/scientific-envs/` | Managed Python/R prefixes |
+| `data/envs/gateway`, `data/envs/paper` | Rebuildable service environments |
+
+See [Configuration reference](configuration.md) for the full layout.
+
+## 4. Module count
+
+| Category | Count | Members |
+|---|---:|---|
+| Frontend | 1 | `apps/web` |
+| Backend services | 5 | API, gateway, runner, paper, experimental Science Memory |
+| Shared TS packages | 3 | agent-runtime, schema, mcp-sources |
+| Built-in skill packages | 2 | life-science and structure-pocket |
+| External submodule | 1 | deer-flow |
+
+That is about 12 first-class deployable/buildable modules, excluding tests, scripts, and docs.
+
+## 5. Related documentation
+
+- [Control plane](../explanation/control-plane.md)
+- [Agent backend](../explanation/agent-backend.md)
+- [Built-in tools](builtin-tools.md)
+- [Sandbox execution](../explanation/sandbox-execution.md)
+- [Review and provenance](../explanation/review-provenance.md)
+- [Science connectors](../explanation/science-connectors.md)
+- [PDF worker](paper-worker.md)
+- [Web frontend](web-frontend.md)
+- [README](../../../README.md)

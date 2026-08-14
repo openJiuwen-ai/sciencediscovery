@@ -1,0 +1,134 @@
+{
+  "downloads": {
+    "micromamba_config": "services/runner/src/micromamba-releases.json",
+    "runtimes_config": "scripts/binary-release/runtimes.json"
+  },
+  "package_indexes": {
+    "pypi_simple": "https://pypi.org/simple",
+    "cran": "https://cloud.r-project.org",
+    "bioconductor": "https://bioconductor.org"
+  },
+  "package_source_presets": {
+    "tsinghua": {
+      "conda_channels": ["https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"],
+      "pip_index": "https://pypi.tuna.tsinghua.edu.cn/simple"
+    },
+    "ustc": {
+      "conda_channels": ["https://mirrors.ustc.edu.cn/anaconda/cloud/conda-forge"],
+      "pip_index": "https://mirrors.ustc.edu.cn/pypi/simple"
+    },
+    "huawei": {
+      "conda_channels": [],
+      "pip_index": "https://mirrors.huaweicloud.com/repository/pypi/simple"
+    }
+  },
+  "bootstrap": {
+    "pypi_index": "https://mirrors.huaweicloud.com/repository/pypi/simple",
+    "deer_flow_git_mirror": "https://gitcode.com/GitHub_Trending/de/deer-flow.git",
+    "deer_flow_git_canonical": "https://github.com/bytedance/deer-flow.git",
+    "deer_flow_archive_template": "https://codeload.github.com/bytedance/deer-flow/tar.gz/{commit}"
+  },
+  "data_sources": {
+    "arxiv": {
+      "api_query": "https://export.arxiv.org/api/query",
+      "article_template": "https://arxiv.org/abs/{identifier}",
+      "pdf_template": "https://arxiv.org/pdf/{identifier}"
+    },
+    "doi": {
+      "canonical_template": "https://doi.org/{doi}",
+      "accepted_prefixes": [
+        "https://doi.org/",
+        "http://doi.org/"
+      ]
+    },
+    "ncbi": {
+      "eutils_esearch": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+      "eutils_esummary": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+      "eutils_elink": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi",
+      "eutils_efetch": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+      "pubmed_article_template": "https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+      "accounts_help": "https://www.ncbi.nlm.nih.gov/accounts/",
+      "pmc_oa": "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
+      "pmc_ftp_https_prefix": "https://ftp.ncbi.nlm.nih.gov/",
+      "clinvar_variation_template": "https://www.ncbi.nlm.nih.gov/clinvar/variation/{variation_id}/",
+      "geo_accession_template": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={accession}",
+      "geo_series_template": "https://ftp.ncbi.nlm.nih.gov/geo/series/{bucket}/{accession}"
+    },
+    "europe_pmc": {
+      "search_api": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+      "pmc_article_template": "https://europepmc.org/article/PMC/{identifier}",
+      "article_template": "https://europepmc.org/article/{source}/{identifier}",
+      "search_template": "https://europepmc.org/search?query=EXT_ID%3A{identifier}"
+    },
+    "preprints": {
+      "details_by_days_template": "https://api.biorxiv.org/details/{server}/{days}d/0/json",
+      "details_by_doi_template": "https://api.biorxiv.org/details/{server}/{doi}/na/json",
+      "content_template": "https://www.{server}.org/content/{doi}v{version}",
+      "pdf_template": "https://www.{server}.org/content/{doi}v{version}.full.pdf"
+    },
+    "rcsb": {
+      "entry_template": "https://data.rcsb.org/rest/v1/core/entry/{identifier}",
+      "structure_template": "https://www.rcsb.org/structure/{identifier}",
+      "search_api": "https://search.rcsb.org/rcsbsearch/v2/query",
+      "download_template": "https://files.rcsb.org/download/{identifier}.{format}"
+    },
+    "ensembl": {
+      "id_template": "https://www.ensembl.org/id/{identifier}",
+      "lookup_template": "https://rest.ensembl.org/lookup/id/{identifier}",
+      "overlap_template": "https://rest.ensembl.org/overlap/region/{species}/{region}",
+      "vep_template": "https://rest.ensembl.org/vep/{species}/id/{identifier}",
+      "variation_template": "https://www.ensembl.org/{species}/Variation/Explore?v={identifier}"
+    },
+    "reactome": {
+      "search_api": "https://reactome.org/ContentService/search/query",
+      "detail_template": "https://reactome.org/content/detail/{identifier}",
+      "data_query_template": "https://reactome.org/ContentService/data/query/{identifier}",
+      "analysis_api": "https://reactome.org/AnalysisService/identifiers/projection"
+    },
+    "chembl": {
+      "explore_template": "https://www.ebi.ac.uk/chembl/explore/{kind}/CHEMBL{identifier}",
+      "resource_search_template": "https://www.ebi.ac.uk/chembl/api/data/{resource}/search.json",
+      "activity_api": "https://www.ebi.ac.uk/chembl/api/data/activity.json",
+      "similarity_template": "https://www.ebi.ac.uk/chembl/api/data/similarity/{smiles}/{similarity}.json"
+    },
+    "uniprot": {
+      "api_base": "https://rest.uniprot.org",
+      "entry_template": "https://www.uniprot.org/uniprotkb/{accession}/entry"
+    },
+    "crossref": {
+      "works_api": "https://api.crossref.org/works"
+    }
+  },
+  "web": {
+    "jina_endpoints": [
+      "https://r.jinaai.cn",
+      "https://r.jina.ai"
+    ]
+  },
+  "terms": {
+    "arxiv": "https://info.arxiv.org/help/api/tou.html",
+    "ncbi": "https://www.ncbi.nlm.nih.gov/home/about/policies/",
+    "europe_pmc": "https://europepmc.org/terms",
+    "biorxiv": "https://www.biorxiv.org/about-biorxiv",
+    "medrxiv": "https://www.medrxiv.org/content/about-medrxiv",
+    "rcsb": "https://www.rcsb.org/pages/policies",
+    "ensembl": "https://www.ensembl.org/info/about/legal/disclaimer.html",
+    "reactome": "https://reactome.org/license",
+    "chembl": "https://www.ebi.ac.uk/about/terms-of-use",
+    "uniprot": "https://www.uniprot.org/help/license"
+  },
+  "connector_hosts": {
+    "arxiv": ["export.arxiv.org", "arxiv.org"],
+    "pubmed": ["eutils.ncbi.nlm.nih.gov", "pubmed.ncbi.nlm.nih.gov", "www.ncbi.nlm.nih.gov", "ftp.ncbi.nlm.nih.gov"],
+    "europe_pmc": ["www.ebi.ac.uk", "europepmc.org", "www.ncbi.nlm.nih.gov", "ftp.ncbi.nlm.nih.gov"],
+    "biorxiv": ["api.biorxiv.org", "www.biorxiv.org"],
+    "medrxiv": ["api.biorxiv.org", "www.medrxiv.org"],
+    "rcsb": ["search.rcsb.org", "data.rcsb.org", "files.rcsb.org", "www.rcsb.org"],
+    "ensembl": ["rest.ensembl.org", "www.ensembl.org"],
+    "reactome": ["reactome.org"],
+    "clinvar": ["eutils.ncbi.nlm.nih.gov", "www.ncbi.nlm.nih.gov"],
+    "chembl": ["www.ebi.ac.uk"],
+    "geo": ["eutils.ncbi.nlm.nih.gov", "www.ncbi.nlm.nih.gov", "ftp.ncbi.nlm.nih.gov"],
+    "uniprot": ["rest.uniprot.org", "www.uniprot.org"]
+  }
+}

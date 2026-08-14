@@ -1,0 +1,50 @@
+{
+  "comment": "Pinned runtimes for the single-file release binaries. node and python are embedded at build time; uv is downloaded on the user's machine at first launch as a PyPI wheel (from the configured package index) and verified against the sha256 pinned here. Every download is verified, so neither the build nor the first launch trusts the network. Bump a version together with its checksums for both architectures.",
+  "node": {
+    "version": "v22.19.0",
+    "baseUrl": "https://nodejs.org/dist",
+    "architectures": {
+      "aarch64": {
+        "filename": "node-v22.19.0-linux-arm64.tar.xz",
+        "sha256": "0b2d9f564b6594222a62c82e1df2efe119dd4a4aff29644f4dd325bf360b6bcc"
+      },
+      "x86_64": {
+        "filename": "node-v22.19.0-linux-x64.tar.xz",
+        "sha256": "c0649af18e6a24f6fe5535a3e86b341dd49a8e71117c8b68bde973ef834f16f2"
+      }
+    }
+  },
+  "python": {
+    "version": "3.12.13",
+    "release": "20260805",
+    "baseUrl": "https://github.com/astral-sh/python-build-standalone/releases/download",
+    "architectures": {
+      "aarch64": {
+        "filename": "cpython-3.12.13+20260805-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "f3510827b61e7a2aa89a1bb7bac73d45521939c489cf43f4699618efaead0611"
+      },
+      "x86_64": {
+        "filename": "cpython-3.12.13+20260805-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "f04a55ae95e8bd352cdff8da11c344fe609ec84795d106fa91b6620366d786fe"
+      }
+    }
+  },
+  "uv": {
+    "version": "0.9.26",
+    "project": "uv",
+    "architectures": {
+      "aarch64": {
+        "filename": "uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl",
+        "sha256": "ea296b700d7c4c27acdfd23ffaef2b0ecdd0aa1b58d942c62ee87df3b30f06ac"
+      },
+      "x86_64": {
+        "filename": "uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "b7e89798bd3df7dcc4b2b4ac4e2fc11d6b3ff4fe7d764aa3012d664c635e2922"
+      }
+    }
+  },
+  "architectures": {
+    "aarch64": { "runtimeArchitecture": "arm64", "pythonPlatform": "aarch64-unknown-linux-gnu" },
+    "x86_64": { "runtimeArchitecture": "x64", "pythonPlatform": "x86_64-unknown-linux-gnu" }
+  }
+}

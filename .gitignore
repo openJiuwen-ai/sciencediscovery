@@ -1,0 +1,56 @@
+# Python environments, caches, and packaging output
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node.js dependencies, caches, and build output
+node_modules/
+.pnpm-store/
+.vite/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment files (tracked examples stay available)
+.env
+.env.*
+!.env.example
+!.env.docker.example
+
+# Temporary files and logs
+.tmp/
+.local/
+*.log
+
+# Local Playwright environment and reports
+.e2e/
+test/node_modules/
+test/playwright-report/
+test/test-results/
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local worktrees and project tooling caches
+.worktrees/
+
+# Note: .agents/ is tracked (project agent skills, e.g. gitcode)
+# Local caches under skills (e.g. MindSpore org issue/PR templates) stay untracked
+.agents/skills/gitcode/cache/

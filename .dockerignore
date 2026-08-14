@@ -1,0 +1,51 @@
+# Build-context exclusions. Two goals: keep the context small (the host `data/`
+# alone is multi-GB) and make the image reproducible by never shipping host
+# build output, local state, or secrets.
+
+# Version control and host build output — everything is rebuilt in the image.
+.git
+.gitignore
+.gitmodules
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/*.pyc
+
+# Runtime state and credentials. `data/` is bind-mounted at run time instead.
+# `.deer-flow/` holds local harness sqlite state next to the services; unlike
+# .gitignore, Docker patterns are anchored at the context root, so it needs `**`.
+data/
+**/.deer-flow/
+**/.env
+# This also excludes build-time files such as apps/web/.env.production. If the
+# build ever requires one, pass its non-secret values explicitly instead.
+**/.env.*
+**/config.yaml
+**/conf.yaml
+.tmp/
+.e2e/
+.local/
+.uv-cache/
+.worktrees/
+**/*.log
+
+# Local tooling / editor / agent configuration, never part of the runtime.
+# `.npmrc` is deliberately kept: it carries the workspace's pnpm settings.
+.idea/
+.vscode/
+.claude/
+.codex/
+.agents/
+.mcp.json
+.ripgreprc
+
+# Docs and integration tests are not needed by the running services.
+docs/
+test/
+.github/
+
+# Docker inputs themselves.
+Dockerfile
+docker-compose.yml
+.dockerignore

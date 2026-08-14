@@ -1,0 +1,102 @@
+# Configuration, Ports, Quotas, and Storage Reference
+
+This page lists `ScienceDiscovery serve` environment variables, default ports, workspace-related quotas, and storage locations. See [Deployment](../how-to/deployment.md) for operational steps.
+
+## Environment variables
+
+```bash
+./ScienceDiscovery serve                   # start directly; exported SCIENCE_AGENT_* variables also apply
+./ScienceDiscovery serve --env-file .env   # or inject settings from a KEY=VALUE file
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SCIENCE_AGENT_HOST` | `127.0.0.1` | HTTP bind address; another interface requires explicit configuration |
+| `SCIENCE_AGENT_PORT` | `4310` | HTTP port |
+| `SCIENCE_AGENT_AUTH_TOKEN` | generated on first start | Browser/API bearer token; unset means the value stored in `<data-dir>/secrets/auth-token` |
+| `SCIENCE_AGENT_DATA_DIR` | `data` | Projects, sessions, workspaces, keys, and service environments |
+| `SCIENCE_AGENT_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR` threshold |
+| `SCIENCE_AGENT_LOG_DIR` | `<data-dir>/logs` | Optional log directory override |
+| `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | Maximum bytes in one category log before rotation |
+| `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | Rotated files retained per category |
+| `SCIENCE_AGENT_GATEWAY_URL` | `http://127.0.0.1:4312` | Agent-loop gateway endpoint |
+| `SCIENCE_AGENT_GATEWAY_HOST` | `127.0.0.1` | Gateway bind address |
+| `SCIENCE_AGENT_GATEWAY_PORT` | `4312` | Gateway bind port |
+| `SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN` | generated on first start | API-to-gateway token; unset means the value stored in `<data-dir>/secrets/gateway-internal-token` |
+| `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | Initial no-output/no-progress timeout (`0` is unlimited) |
+| `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | Initial whole-turn timeout (`0` is unlimited) |
+| `SCIENCE_AGENT_TOOL_CALLBACK_URL` | `http://<host>:<port>/internal/tool-exec` | Gateway tool callback URL |
+| `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner bind address |
+| `SCIENCE_AGENT_RUNNER_PORT` | `4311` | Runner port |
+| `SCIENCE_AGENT_RUNNER_URL` | `http://127.0.0.1:4311` | Runner endpoint used by the API |
+| `SCIENCE_AGENT_RUNNER_TOKEN` | `science-agent-runner-local` | API-to-runner token |
+| `SCIENCE_AGENT_BWRAP_PATH` | `bwrap` resolved from `PATH` | Bubblewrap executable; runner startup validates required options |
+| `SCIENCE_AGENT_NPU_BROKER` | `0` | Enables the host Ascend NPU Broker. Disabled by default; only `1`, `true`, or `yes` exposes `run_npu_job` to the Agent |
+| `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` | empty | NPU workload allowlist JSON; empty uses `services/runner/workloads/npu-workloads.default.json` |
+| `SCIENCE_AGENT_NPU_PYTHON` | `python3` | Compatibility Python only for custom allowlisted workloads that explicitly use `${python}`; built-in NPU workloads use the Agent-selected scientific environment revision instead |
+| `SCIENCE_AGENT_NPU_SMOKE_SCRIPT` | empty | Optional administrator-owned Ascend smoke probe; empty uses `services/runner/workloads/npu-smoke-test.py` |
+| `SCIENCE_AGENT_NPU_PROTENIX_SCRIPT` | empty | Host manager entry point for the Protenix antibody pipeline, usually a deployed skill `scripts/antibody_pipeline_manager.py`. The manager is launched with the Python resolved from the ScienceDiscovery scientific environment revision |
+| `SCIENCE_AGENT_PYPI_INDEX` | Huawei Cloud PyPI mirror | Package index used when the first `serve` installs the gateway Python dependencies and the uv wheel. See [Deployment](../how-to/deployment.md#dependencies-installed-on-first-launch) for the full first-launch variables |
+| `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | Memory-graph service bind address |
+| `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | Memory-graph port |
+| `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | Memory-graph endpoint used by the API |
+| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `science-agent-memory-graph-local` | API-to-memory-graph token |
+| `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | Memory-graph log level |
+| `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `0` | Initial sandbox wall-clock timeout (`0` is unlimited) |
+| `SCIENCE_AGENT_MAX_WORKSPACE_BYTES` | `10737418240` (10 GiB) | Runner workspace quota (`0` is unlimited); also seeds system settings |
+| `SCIENCE_AGENT_MAX_OUTPUT_BYTES` | `1073741824` (1 GiB) | Retained stdout+stderr per execution; excess is truncated (`0` disables truncation) |
+| `SCIENCE_AGENT_WORKSPACE_MAX_BYTES` | `10737418240` (10 GiB) | API cumulative upload-workspace limit |
+| `SCIENCE_AGENT_WORKSPACE_UPLOAD_MAX_FILE_BYTES` | `1073741824` (1 GiB) | API per-uploaded-file limit, independent of runner output |
+| `SCIENCE_AGENT_WORKSPACE_UPLOAD_MAX_REQUEST_BYTES` | `10737418240` (10 GiB) | API multipart request limit |
+| `SCIENCE_AGENT_PERMISSION_WAIT_TIMEOUT_MS` | `0` | Initial permission-decision timeout (`0` is unlimited) |
+| `SCIENTIFIC_ENVS` | `1` | Expose managed Python/R and persistent kernels; runner can start before setup completes |
+| `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator provisioner override |
+| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache; source safety checks still apply |
+| `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated allowed channels; built-in TUNA/USTC presets are always recognized |
+| `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | Initial persistent-kernel idle timeout (`0` is unlimited) |
+| `SCIENCE_AGENT_WEB_DIR` | `apps/web/dist` | Static UI assets |
+| `SCIENCE_AGENT_PAPER_PYTHON_PATH` | `<data-dir>/envs/paper/bin/python` | PDF-worker Python |
+| `SCIENCE_AGENT_PAPER_WORKER_PATH` | `services/paper/paper_worker.py` | PDF-worker entry point |
+
+The Ascend NPU Broker is for deployments that need host Ascend devices, and administrators must enable it explicitly. Keep `SCIENCE_AGENT_NPU_BROKER=0` when the host has no Ascend NPU, lacks CANN/MindSpore, or should not expose NPU jobs to the Agent; then `run_npu_job` is absent from the tool table. Enabling it does not change the normal startup command (`./ScienceDiscovery serve`); set `SCIENCE_AGENT_NPU_BROKER=1` in `--env-file` or as an exported variable. Before enabling the Broker, create and verify at least one ScienceDiscovery managed Python scientific environment revision that can import the required CANN/MindSpore stack. Built-in NPU workloads, including `npu.smoke_test`, require `environment_revision_id`; when the Agent does not pass one explicitly, the API uses the current Session revision. When `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` is empty, the built-in allowlist currently contains `npu.smoke_test` and `antibody.protenix.v1`. Add models through a custom JSON allowlist with fixed entry points, not arbitrary Agent-supplied commands. `SCIENCE_AGENT_NPU_PYTHON` is kept only for custom allowlists that explicitly use `${python}`; the built-in allowlist uses `${managedPython}` and ignores it. Changing the allowlist is equivalent to changing executable host-code entry points and should be reviewed as a deployment change. Model weights, databases, HMMER, CANN, MindScience checkouts, and similar site assets stay outside the repository and are normally referenced through the environment variables or workload configuration above.
+
+The browser stores only the API token in local storage. Model credentials stay in backend storage.
+
+### Quota levels
+
+These defaults come from `services/api/src/workspace-upload.ts`, `services/runner/src/executor.ts`, and `.env.example`. They have different meanings and are not interchangeable:
+
+| Level | Default | Scope |
+|---|---|---|
+| API uploaded file | 1 GiB | Each multipart file at the upload boundary |
+| API upload request | 10 GiB | Combined multipart request body |
+| API cumulative upload workspace | 10 GiB | Workspace total checked before accepting another upload |
+| Runner workspace | 10 GiB | Workspace before and after execution, including uploads and generated files |
+| Runner stdout + stderr | 1 GiB | Combined retained output for one execution; excess is truncated |
+| Runner execution file | no separate limit | `MAX_RUNNER_FILE_BYTES=0`; files still count against the runner workspace total |
+
+In `GET /health`, `workspace.maxFileBytes`, `maxRequestBytes`, and `maxWorkspaceBytes` report the API file, API request, and runner workspace limits. The endpoint does not report the stdout/stderr limit.
+
+## Storage layout
+
+Unless overridden, persistent application data is kept in the repository:
+
+| Location | Contents |
+|---|---|
+| `data/` (`SCIENCE_AGENT_DATA_DIR`) | All runtime state; back it up as a unit |
+| `data/catalog.sqlite` | Projects, sessions, settings, model configuration, permissions, and specialists; legacy `catalog.json` is imported |
+| `data/mcp-result-cache.sqlite` | MCP result cache |
+| `data/web-cache.sqlite`, `data/web-audit.sqlite` | Web cache and `WebInvocation` audit |
+| `data/model-secrets.key` | Owner-readable AES-256-GCM key for provider tokens |
+| `data/projects/<project-id>/sessions/<session-id>/workspace/` | Per-session uploaded/generated files and `papers/<paper-id>/` extraction results |
+| `data/cas/`, `execution-runs/`, `prompt-manifests/`, `reviews/`, `messages/` | Content-addressed blobs, execution records, prompt manifests, reviews, and chat |
+| `data/claims/`, `evidence-items/`, `evidence-links/`, `mcp-invocations/`, `artifact-derivations/` | Claim/evidence provenance and MCP audit |
+| `data/session-runs/`, `run-events/<session>/<run>/main.jsonl` plus tool/subagent streams, `model-usage/`, `connector-invocations/` | Run records, lossless append-only timelines, usage, and connector audit |
+| `data/artifact-plans/`, `artifact-jobs/`, `artifact-extraction-jobs/` | Download and PDF-extraction job state |
+| `data/scientific-envs/`, `runner-runtime/` | Managed environments and runner temporary state |
+| `data/skills/` | Managed skill packages and revisions |
+| `data/envs/paper/`, `data/envs/gateway/` | Rebuildable uv service environments |
+| `data/logs/{api,run,gateway,runner,memory-graph}.log` | Rotating category logs; Science Memory exists only when enabled |
+| Browser local storage | API bearer token only; model credentials never leave the backend |
+
+The data directory is the only runtime root. `SCIENCE_AGENT_DATA_DIR=/srv/science-agent ./ScienceDiscovery serve` moves state and service environments together. Deleting it removes projects, sessions, credentials, and audit records. `services/paper/.venv` and `services/gateway/.venv` are used only by standalone development or smoke commands.

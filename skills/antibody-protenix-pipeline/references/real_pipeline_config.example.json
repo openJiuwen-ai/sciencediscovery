@@ -1,0 +1,16 @@
+{
+  "workspace": "antibody_pipeline",
+  "target_pdb": "antibody_pipeline/inputs/target_antigen.pdb",
+  "framework_pdb": "antibody_pipeline/inputs/antibody_framework.pdb",
+  "hotspots": "[B45,B46,B49]",
+  "num_designs": 1,
+  "run_name": "custom-antigen-protenix",
+  "npus": "0",
+  "workers_per_npu": 1,
+  "protenix_use_msa": false,
+  "protenix_n_sample": 1,
+  "protenix_seeds": "42",
+  "final_step": 160,
+  "diffuser_t": 200,
+  "force": false
+}

@@ -1,0 +1,1237 @@
+/*
+ * Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+.csva-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-window);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--window-backdrop);
+}
+
+.csva-window {
+  width: min(1480px, 97vw);
+  height: min(920px, 95vh);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgba(17, 24, 39, .42);
+}
+
+.csva-shell {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--app-bg);
+}
+
+.csva-shell button,
+.csva-shell input,
+.csva-shell select {
+  color: inherit;
+  font: inherit;
+}
+
+.csva-shell button {
+  cursor: pointer;
+}
+
+.csva-header {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: minmax(220px, auto) minmax(120px, 1fr) 34px;
+  align-items: center;
+  gap: 18px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0 14px;
+}
+
+.csva-identity,
+.csva-file-heading,
+.csva-source-strip,
+.csva-panel-title,
+.csva-chart-meta,
+.csva-chart-tools,
+.csva-table-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.csva-identity {
+  gap: 9px;
+}
+
+.csva-identity > span {
+  min-width: 36px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #fff;
+  background: var(--csv-accent);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.csva-identity strong,
+.csva-identity small {
+  display: block;
+}
+
+.csva-identity strong {
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.csva-identity small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.csva-file-heading {
+  justify-content: center;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.csva-file-heading strong {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-file-heading span {
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: var(--surface-track);
+  padding: 2px 5px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.csva-header > button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.csva-header > button:hover {
+  color: var(--text-strong);
+  background: var(--surface-track);
+}
+
+.csva-source-strip {
+  min-height: 40px;
+  gap: 11px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+  padding: 0 13px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.csva-source-strip > strong {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--text-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-source-kind {
+  border-radius: 4px;
+  background: var(--csv-accent);
+  padding: 3px 6px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.csva-source-strip code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font: 10px ui-monospace, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-source-strip i {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--success);
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.csva-source-strip button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.csva-source-strip button:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.csva-message {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+  padding: 5px 12px;
+  color: var(--danger);
+  font-size: 10px;
+}
+
+.csva-message span {
+  min-width: 0;
+  flex: 1;
+}
+
+.csva-message button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+}
+
+.csva-workspace-grid {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 276px minmax(420px, 1fr) 286px;
+  flex: 1;
+  overflow: hidden;
+  transition: grid-template-columns var(--motion-fast);
+}
+
+.csva-shell.csva-left-closed .csva-workspace-grid {
+  grid-template-columns: 0 minmax(420px, 1fr) 286px;
+}
+
+.csva-shell.csva-right-closed .csva-workspace-grid {
+  grid-template-columns: 276px minmax(420px, 1fr) 0;
+}
+
+.csva-shell.csva-left-closed.csva-right-closed .csva-workspace-grid {
+  grid-template-columns: 0 minmax(420px, 1fr) 0;
+}
+
+.csva-shell.csva-left-closed .csva-config-panel,
+.csva-shell.csva-right-closed .csva-inspector-panel {
+  overflow: hidden;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.csva-config-panel,
+.csva-inspector-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--surface);
+  transition: opacity var(--motion-fast);
+}
+
+.csva-config-panel {
+  border-right: 1px solid var(--border);
+}
+
+.csva-inspector-panel {
+  border-left: 1px solid var(--border);
+}
+
+.csva-panel-title {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 11px;
+}
+
+.csva-panel-title > span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  background: var(--accent-softer);
+  color: var(--accent-ink);
+}
+
+.csva-panel-title > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.csva-panel-title strong,
+.csva-panel-title small {
+  display: block;
+}
+
+.csva-panel-title strong {
+  color: var(--text-strong);
+  font-size: 11px;
+}
+
+.csva-panel-title small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.csva-panel-title > button {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.csva-panel-title > button:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.csva-panel-title > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.csva-panel-title > .csva-delete-chart:not(:disabled):hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.csva-config-section {
+  display: grid;
+  gap: 9px;
+  border-bottom: 1px solid var(--border);
+  padding: 12px;
+}
+
+.csva-config-section h3,
+.csva-lineage h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.csva-config-section > label {
+  display: grid;
+  gap: 4px;
+}
+
+.csva-config-section > label > span {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.csva-config-section > label > span i {
+  margin-left: auto;
+  color: var(--warning-strong);
+  font-size: 8px;
+  font-style: normal;
+}
+
+.csva-config-section > label > span output {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+
+.csva-config-section input:not([type="checkbox"]):not([type="range"]),
+.csva-config-section select,
+.csva-table-toolbar input {
+  width: 100%;
+  min-width: 0;
+  min-height: 31px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 6px 8px;
+  font-size: 10px;
+}
+
+.csva-config-section input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.csva-toggle-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.csva-toggle-row input,
+.csva-filter-values input,
+.csva-tooltip-fields input {
+  accent-color: var(--accent);
+}
+
+.csva-data-facts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+
+.csva-data-facts span {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  padding: 7px 5px;
+  color: var(--muted);
+  font-size: 8px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.csva-data-facts strong {
+  display: block;
+  overflow: hidden;
+  margin-bottom: 2px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-tooltip-fields {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.csva-tooltip-fields summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.csva-tooltip-fields summary span {
+  border-radius: 4px;
+  background: var(--surface-track);
+  padding: 1px 5px;
+}
+
+.csva-tooltip-fields > div,
+.csva-filter-values {
+  max-height: 150px;
+  display: grid;
+  gap: 4px;
+  overflow-y: auto;
+  margin-top: 7px;
+}
+
+.csva-filter-values {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.csva-tooltip-fields label,
+.csva-filter-values label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.csva-tooltip-fields label span,
+.csva-filter-values label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-config-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.csva-visual-workspace {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 38px 44px minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.csva-view-tabs {
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+
+.csva-view-tabs button {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.csva-view-tabs button:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.csva-view-tabs button.active {
+  color: var(--accent-deep);
+  background: var(--surface);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.csva-view-tabs .csva-add-view {
+  width: 38px;
+  min-width: 38px;
+  justify-content: center;
+  padding: 0;
+  color: var(--accent-deep);
+}
+
+.csva-view-tabs button span {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-chart-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 9px;
+}
+
+.csva-chart-meta {
+  gap: 7px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.csva-chart-meta > span {
+  border-radius: 4px;
+  background: var(--accent-softer);
+  padding: 2px 5px;
+  color: var(--accent-ink);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.csva-chart-meta strong,
+.csva-chart-meta i {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-chart-meta i {
+  font-style: normal;
+}
+
+.csva-chart-tools {
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.csva-chart-tools button {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 5px 7px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.csva-chart-tools button:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.csva-chart-tools button:disabled {
+  cursor: not-allowed;
+  opacity: .35;
+}
+
+.csva-mode-switch {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.csva-mode-switch button {
+  border-radius: 0;
+}
+
+.csva-mode-switch button + button {
+  border-left: 1px solid var(--border);
+}
+
+.csva-mode-switch button.active {
+  color: var(--accent-deep);
+  background: var(--accent-softer);
+}
+
+.csva-toolbar-divider {
+  width: 1px;
+  height: 19px;
+  margin: 0 2px;
+  background: var(--border);
+}
+
+.csva-chart-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-rows: minmax(360px, 1fr) 30px;
+  background: var(--surface);
+}
+
+.csva-plotly-host {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.csva-interaction-hint {
+  position: static;
+  z-index: 2;
+  align-self: center;
+  justify-self: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-floating);
+  padding: 5px 8px;
+  color: var(--muted);
+  font-size: 9px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.csva-mapping-error {
+  display: grid;
+  place-content: center;
+  gap: 5px;
+  min-height: 0;
+  background: var(--danger-soft);
+  color: var(--danger);
+  text-align: center;
+}
+
+.csva-mapping-error strong {
+  font-size: 13px;
+}
+
+.csva-mapping-error span {
+  font-size: 10px;
+}
+
+.csva-inspector-panel > nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.csva-inspector-panel > nav button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.csva-inspector-panel > nav button:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.csva-inspector-panel > nav button.active {
+  color: var(--accent-deep);
+  background: var(--accent-softer);
+}
+
+.csva-inspector-content {
+  padding: 13px;
+}
+
+.csva-selection-count {
+  display: grid;
+  border-bottom: 1px solid var(--border);
+  padding: 2px 0 12px;
+}
+
+.csva-selection-count strong {
+  color: var(--text-strong);
+  font-size: 23px;
+  font-variant-numeric: tabular-nums;
+}
+
+.csva-selection-count span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.csva-focus-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 7px;
+}
+
+.csva-focus-heading span {
+  color: var(--muted);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.csva-focus-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-focus-heading i {
+  margin-left: auto;
+  color: var(--csv-accent);
+  font-size: 8px;
+  font-style: normal;
+}
+
+.csva-record-fields,
+.csva-lineage dl {
+  margin: 0;
+}
+
+.csva-record-fields > div,
+.csva-lineage dl > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 7px;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 0;
+}
+
+.csva-record-fields dt,
+.csva-record-fields dd,
+.csva-lineage dt,
+.csva-lineage dd {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-record-fields dt,
+.csva-lineage dt {
+  color: var(--muted);
+}
+
+.csva-record-fields dd,
+.csva-lineage dd {
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.csva-inspector-empty {
+  min-height: 230px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 7px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.csva-inspector-empty strong {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.csva-inspector-empty p {
+  max-width: 190px;
+  margin: 0;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.csva-selected-id-list {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.csva-selected-id-list ol {
+  max-height: 180px;
+  overflow-y: auto;
+  padding-left: 22px;
+}
+
+.csva-lineage {
+  display: grid;
+  gap: 16px;
+}
+
+.csva-lineage section {
+  min-width: 0;
+}
+
+.csva-lineage h3 {
+  margin-bottom: 6px;
+}
+
+.csva-lineage small {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.csva-provenance-record {
+  border-left: 3px solid var(--success);
+  background: var(--success-soft);
+  padding: 9px;
+}
+
+.csva-warning-list {
+  border-left: 3px solid var(--warning-accent);
+  background: var(--warning-soft);
+  padding: 9px;
+}
+
+.csva-warning-list p {
+  margin: 6px 0 0;
+  color: var(--warning);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.csva-table-view {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 42px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.csva-table-toolbar {
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding: 5px 8px;
+}
+
+.csva-table-toolbar label {
+  min-width: 140px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+}
+
+.csva-table-toolbar > span {
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.csva-table-toolbar > button {
+  min-height: 29px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--surface-hover);
+  padding: 5px 8px;
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.csva-virtual-grid {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.csva-virtual-grid-inner {
+  position: relative;
+}
+
+.csva-virtual-grid-header,
+.csva-virtual-grid-row {
+  display: grid;
+}
+
+.csva-virtual-grid-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 34px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+
+.csva-virtual-grid-header > span,
+.csva-virtual-grid-header > button,
+.csva-virtual-grid-row > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  padding: 0 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-virtual-grid-header > span {
+  justify-content: center;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.csva-virtual-grid-header > button {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.csva-virtual-grid-header > button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csva-virtual-grid-body {
+  position: relative;
+}
+
+.csva-virtual-grid-row {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0;
+  text-align: left;
+}
+
+.csva-virtual-grid-row:hover {
+  background: var(--surface-subtle);
+}
+
+.csva-virtual-grid-row.selected {
+  background: var(--accent-softer);
+}
+
+.csva-virtual-grid-row > span {
+  color: var(--text-secondary);
+  font-size: 9px;
+}
+
+.csva-virtual-grid-row > span:first-child {
+  justify-content: center;
+  color: var(--text-faint);
+}
+
+.csva-status-bar {
+  min-height: 27px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 0 0 auto;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+  background: var(--surface-subtle);
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.csva-status-bar span,
+.csva-status-bar strong {
+  white-space: nowrap;
+}
+
+.csva-status-bar strong {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+
+.csva-parse-error {
+  min-height: 0;
+  display: grid;
+  place-content: center;
+  flex: 1;
+  padding: 24px;
+  color: var(--danger);
+  text-align: center;
+}
+
+.csva-parse-error strong {
+  color: var(--text-strong);
+  font-size: 15px;
+}
+
+.csva-parse-error p {
+  max-width: 520px;
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+@media (max-width: 1120px) {
+  .csva-workspace-grid,
+  .csva-shell.csva-right-closed .csva-workspace-grid {
+    grid-template-columns: 258px minmax(420px, 1fr) 0;
+  }
+
+  .csva-shell.csva-left-closed .csva-workspace-grid,
+  .csva-shell.csva-left-closed.csva-right-closed .csva-workspace-grid {
+    grid-template-columns: 0 minmax(420px, 1fr) 0;
+  }
+
+  .csva-inspector-panel {
+    position: absolute;
+    z-index: 5;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 286px;
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow-3);
+  }
+
+  .csva-shell.csva-right-closed .csva-inspector-panel {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(100%);
+  }
+}
+
+@media (max-width: 820px) {
+  .csva-backdrop {
+    padding: 0;
+  }
+
+  .csva-window {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .csva-header {
+    grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .csva-file-heading {
+    display: none;
+  }
+
+  .csva-source-strip > span:not(.csva-source-kind),
+  .csva-source-strip code {
+    display: none;
+  }
+
+  .csva-source-strip > strong {
+    max-width: 150px;
+  }
+
+  .csva-workspace-grid,
+  .csva-shell.csva-left-closed .csva-workspace-grid,
+  .csva-shell.csva-right-closed .csva-workspace-grid,
+  .csva-shell.csva-left-closed.csva-right-closed .csva-workspace-grid {
+    grid-template-columns: minmax(320px, 1fr);
+  }
+
+  .csva-config-panel {
+    position: absolute;
+    z-index: 6;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(276px, 88vw);
+    border-right: 1px solid var(--border);
+    box-shadow: var(--shadow-3);
+  }
+
+  .csva-shell.csva-left-closed .csva-config-panel {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-100%);
+  }
+
+  .csva-visual-workspace {
+    grid-column: 1;
+  }
+
+  .csva-chart-meta i {
+    display: none;
+  }
+
+  .csva-chart-tools button {
+    padding: 5px;
+  }
+
+  .csva-chart-tools button:not([aria-label]) {
+    font-size: 0;
+  }
+
+  .csva-status-bar {
+    gap: 10px;
+  }
+
+  .csva-status-bar strong {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .csva-identity small,
+  .csva-source-strip i,
+  .csva-chart-meta strong {
+    display: none;
+  }
+
+  .csva-chart-toolbar {
+    align-items: flex-start;
+  }
+
+  .csva-view-tabs button {
+    padding: 0 8px;
+  }
+
+  .csva-plotly-host {
+    min-height: 0;
+  }
+
+  .csva-interaction-hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .csva-workspace-grid,
+  .csva-config-panel,
+  .csva-inspector-panel {
+    transition: none;
+  }
+}

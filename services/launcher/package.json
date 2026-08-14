@@ -1,0 +1,21 @@
+{
+  "name": "@science-agent/launcher",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js",
+    "test": "node --test dist/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@science-agent/external-urls": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "esbuild": "0.28.1",
+    "postject": "1.0.0-alpha.6",
+    "typescript": "7.0.2"
+  }
+}

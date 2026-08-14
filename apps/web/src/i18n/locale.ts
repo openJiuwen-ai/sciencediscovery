@@ -1,0 +1,54 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { en, type MessageKey, zhCN } from "./messages.js";
+
+export type Locale = "en" | "zh-CN";
+export const LOCALE_STORAGE_KEY = "science-agent-locale";
+
+interface LocaleEnvironment {
+  languages?: readonly string[];
+  storedLocale?: string | null;
+}
+
+interface LocaleTarget {
+  documentElement?: { lang: string };
+  storage?: Pick<Storage, "setItem">;
+}
+
+export function detectLocale(environment?: LocaleEnvironment): Locale {
+  const storedLocale = environment?.storedLocale
+    ?? (typeof window !== "undefined" ? window.localStorage.getItem(LOCALE_STORAGE_KEY) : null);
+  if (storedLocale === "en" || storedLocale === "zh-CN") return storedLocale;
+
+  const languages = environment?.languages
+    ?? (typeof navigator !== "undefined" ? navigator.languages : []);
+  return languages.some((language) => language.toLowerCase().startsWith("zh")) ? "zh-CN" : "en";
+}
+
+export function applyLocale(locale: Locale, target?: LocaleTarget): void {
+  const storage = target?.storage ?? (typeof window !== "undefined" ? window.localStorage : undefined);
+  const documentElement = target?.documentElement ?? (typeof document !== "undefined" ? document.documentElement : undefined);
+  storage?.setItem(LOCALE_STORAGE_KEY, locale);
+  if (documentElement) documentElement.lang = locale;
+}
+
+export function translate(
+  locale: Locale,
+  key: MessageKey,
+  variables: Record<string, string | number> = {},
+): string {
+  const template = (locale === "zh-CN" ? zhCN[key] : undefined) ?? en[key];
+  return template.replace(/\{(\w+)\}/g, (match, name: string) => String(variables[name] ?? match));
+}
