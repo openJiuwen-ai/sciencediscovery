@@ -110,4 +110,3 @@ PATCH is allowed for completed/failed, returns 409 for running/cancelled/timed-o
 - [Science connectors](science-connectors.md)
 - [Subagent orchestration](subagent-orchestration.md)
 - [Skill progressive disclosure](skill-progressive-disclosure.md)
-- [Gateway README](../../../services/gateway/README.md)

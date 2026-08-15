@@ -1,4 +1,4 @@
-# 配置企业网络代理
+# 配置网络代理
 
 本操作指南说明如何在设置页注册代理，并让 LLM、Web 工具或 MCP server 继承默认值、强制直连或使用指定记录。策略解析和出站接入原理见[网络代理机制](../explanation/network-proxy.md)，接口字段见 [REST API 参考](../reference/rest-api.md#代理配置)。
 
