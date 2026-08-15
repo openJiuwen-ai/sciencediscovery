@@ -2,47 +2,29 @@
 
 [中文文档](../zh/README.md) | [Documentation home](../README.md)
 
-This is the complete English documentation set. Choose a section according to what you want to accomplish:
-
-- [Tutorials](tutorial/01-quick-start.md): learn the primary workflow from a prepackaged binary.
-- [How-to guides](how-to/deployment.md): deploy the stack and configure its network proxy.
-- [Reference](reference/rest-api.md): look up APIs, configuration, built-in tools, runtime behavior, and repository structure.
-- [Explanation](explanation/README.md): understand the architecture, governance mechanisms, scientific connectors, and design trade-offs.
+This is the complete English documentation set.
 
 ## Tutorials
 
-- [Quick start](tutorial/01-quick-start.md)
+- [Quick start](tutorial/01-quick-start.md) — install, start the stack, configure a model, and complete a first agent task.
 
 ## How-to guides
 
-- [Deployment](how-to/deployment.md)
-- [Configure the network proxy](how-to/configure-network-proxy.md)
+- [Deployment](how-to/deployment.md) — local mode, Docker, and building a single-file binary from source.
+- [Configure the network proxy](how-to/configure-network-proxy.md) — add a proxy on the settings page and choose a policy for LLM, web, and MCP traffic.
+- [Literature research case guide](how-to/literature-research-case-guide.md) — run an end-to-end cross-database literature survey, from service startup to approvals and results.
 
 ## Reference
 
-- [REST API](reference/rest-api.md)
-- [Configuration](reference/configuration.md)
-- [Runtime behavior and limits](reference/runtime-behavior.md)
-- [Built-in tools](reference/builtin-tools.md)
-- [Web tools](reference/web-tools.md)
-- [Paper Worker](reference/paper-worker.md)
-- [Web frontend](reference/web-frontend.md)
-- [Repository layout](reference/repository-layout.md)
+- [Configuration](reference/configuration.md) — environment variables, default ports, upload/workspace/output quotas, and data layout.
+- [REST API](reference/rest-api.md) — internal HTTP API used by the UI: authentication, request/response, and error semantics.
+- [Runtime behavior and limits](reference/runtime-behavior.md) — models, settings inheritance, skills, permissions, timeouts, and execution limits.
+- [Built-in tools](reference/builtin-tools.md) — parameters, boundaries, and exposure conditions for model-visible tools.
+- [Web tools](reference/web-tools.md) — web search/fetch providers, configuration, permissions, caching, and audit.
+- [Repository layout](reference/repository-layout.md) — directories, modules, default ports, and data locations.
+- [Paper Worker](reference/paper-worker.md) — PDF extraction protocol, pipeline, and limits.
+- [Web frontend](reference/web-frontend.md) — frontend stack, event mapping, and development/test entry points.
 
 ## Explanation
 
-- [Explanation index](explanation/README.md)
-- [System architecture](explanation/architecture.md)
-- [Agent backend](explanation/agent-backend.md)
-- [Control plane](explanation/control-plane.md)
-- [Sandbox execution](explanation/sandbox-execution.md)
-- [Ascend NPU Host Broker](explanation/ascend-npu-runner.md)
-- [Review and provenance](explanation/review-provenance.md)
-- [Science connectors](explanation/science-connectors.md)
-- [MCP tool and protocol design](explanation/mcp-tool-protocol.md)
-- [Rate limiting](explanation/rate-limiting.md)
-- [Network proxy](explanation/network-proxy.md)
-- [Science Memory](explanation/science-memory.md)
-- [Skill progressive disclosure](explanation/skill-progressive-disclosure.md)
-- [Subagent orchestration](explanation/subagent-orchestration.md)
-- [Content-addressable storage](explanation/cas.md)
+See the [explanation index](explanation/README.md), which covers the overall architecture, control plane, agent backend, sandbox, Ascend NPU host broker, rate limiting, connectors, MCP tool protocol, network proxy, review and provenance, Science Memory, skill progressive disclosure, subagent orchestration, and content-addressable storage.

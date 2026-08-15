@@ -2,16 +2,7 @@
 
 [English documentation](../en/README.md) | [文档总入口](../README.md)
 
-本文档集按读者意图组织。每篇文档有一个主类别；需要跨类别的内容通过链接关联，不在同一页面混合操作步骤、参数表和实现机制。
-
-| 类别 | 读者意图 | 入口 |
-|---|---|---|
-| Tutorial（教程） | 跟着步骤完成一次完整任务 | [快速开始](tutorial/01-quick-start.md) |
-| How-to（操作指南） | 完成一个明确操作目标 | [部署](how-to/deployment.md)、[配置网络代理](how-to/configure-network-proxy.md) |
-| Reference（参考） | 查询参数、接口、限制或仓库结构 | [Reference 列表](#reference参考) |
-| Explanation（解释） | 理解架构、机制与设计取舍 | [Explanation 导航](explanation/README.md) |
-
-新用户建议按 [README_zh.md](../../README_zh.md) → [快速开始](tutorial/01-quick-start.md) → [配置参考](reference/configuration.md) 阅读。
+这是 ScienceDiscovery 的完整中文文档集。
 
 ## Tutorial（教程）
 
@@ -21,6 +12,7 @@
 
 - [部署](how-to/deployment.md) — 本地模式、Docker 和源码构建单文件二进制的操作步骤。
 - [配置网络代理](how-to/configure-network-proxy.md) — 在设置页添加代理并为 LLM、Web 和 MCP 选择策略。
+- [文献调研案例指南](how-to/literature-research-case-guide.md) — 以一项跨数据库文献调研任务为例，演示从启动服务、配置系统到下发任务、审批与查看结果的全流程。
 
 ## Reference（参考）
 
@@ -40,5 +32,4 @@
 ## 其他资料
 
 - [贡献指南](../../CONTRIBUTING.md)
-- [Gateway README](../../services/gateway/README.md) — 英文组件说明。
 - [License](../../LICENSE)

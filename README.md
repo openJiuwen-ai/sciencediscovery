@@ -1,6 +1,6 @@
 # ScienceDiscovery
 
-ScienceDiscovery is a one‑stop AI research workspace built specifically for scientific research. Leveraging this platform, researchers can efficiently complete the highly cumbersome research exploration workflow of "literature review, hypothesis formulation, code development, experimental trial‑and‑error, and parameter tuning" in a single unified environment..
+ScienceDiscovery is a one‑stop AI research workspace built specifically for scientific research. Leveraging this platform, researchers can efficiently complete the highly cumbersome research exploration workflow of "literature review, hypothesis formulation, code development, experimental trial‑and‑error, and parameter tuning" in a single unified environment.
 
 English | [中文](README_zh.md)
 
