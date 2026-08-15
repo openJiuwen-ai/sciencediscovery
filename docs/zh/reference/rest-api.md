@@ -99,7 +99,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 
 ## 代理配置
 
-以下接口均需 bearer 认证。配置步骤与凭据注意事项见[配置企业网络代理](../how-to/configure-network-proxy.md)。
+以下接口均需 bearer 认证。配置步骤与凭据注意事项见[配置网络代理](../how-to/configure-network-proxy.md)。
 
 | 方法与路径 | 请求 | 成功响应 |
 |---|---|---|
