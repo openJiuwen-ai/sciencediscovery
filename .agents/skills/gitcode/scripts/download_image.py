@@ -37,7 +37,8 @@ Run with uv (preferred; stdlib only, no project deps):
   uv run --no-project download_image.py '![alt](https://raw.gitcode.com/...)'
 
 Accepts either a bare raw.gitcode.com URL or a Markdown image embed
-(`![alt](url 'title')`). Stdout: saved path by default, unless --json.
+(`![alt](url 'title')`). Stdout on success: saved path by default, or one
+JSON object with --json (no progress line). Errors go to stderr only.
 Never prints the token.
 """
 
@@ -233,11 +234,7 @@ def main(argv: list[str] | None = None) -> int:
             out_path.unlink(missing_ok=True)
         return 1 if status not in (401, 403) else 4
 
-    eprint(
-        f"downloaded {url} -> {out_path} status={status} "
-        f"content_type={content_type} size={size} token_source={token_source}"
-    )
-
+    # Success: stdout is only the machine- or user-facing result (no progress).
     if args.json:
         print(
             json.dumps(

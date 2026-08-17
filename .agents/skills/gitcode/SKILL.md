@@ -22,10 +22,11 @@ resolve flags. Only if a flag is still unclear, run
 2. Install/helpers via **`uv`**; never commit CLI binaries or tokens.
 3. Never print tokens (`auth token` / `auth status --show-token`).
 4. Prefer **`--json`**; if create/edit JSON is thin (missing `html_url` or with the wrong `number`), confirm with `view`/`list`.
-5. Destructive ops (`close`/`reopen`/`merge`/`delete`…) need user intent + **`--yes`**.
-6. Scope: only repos the user named (or cwd remote when clearly that clone).
-7. **Transports**: metadata/API → `gitcode` CLI; code/MR head → **SSH** git. HTTPS git easily fails (hangs without a credential helper; web/HTTPS fetches commonly return **403**), so always use SSH and do not scrape gitcode.com HTML.
-8. Follow [Cross-references and issue association](#cross-references-and-issue-association) for visible links and unverified auto-close behavior.
+5. For a **complete Issue inventory or count**, never rely on `issue list`'s default `--limit 30`. Pass an explicit limit larger than the expected result set, check the returned JSON array length, and continue with `--page 2`, `--page 3`, … whenever a page length equals the requested limit. Stop only after a shorter page, then deduplicate by Issue number before counting.
+6. Destructive ops (`close`/`reopen`/`merge`/`delete`…) need user intent + **`--yes`**.
+7. Scope: only repos the user named (or cwd remote when clearly that clone).
+8. **Transports**: metadata/API → `gitcode` CLI; code/MR head → **SSH** git. HTTPS git easily fails (hangs without a credential helper; web/HTTPS fetches commonly return **403**), so always use SSH and do not scrape gitcode.com HTML.
+9. Follow [Cross-references and issue association](#cross-references-and-issue-association) for visible links and unverified auto-close behavior.
 
 ## Hosts
 
@@ -68,7 +69,8 @@ Always pass **`-R owner/repo`** when not on cwd `origin`. Forms: `owner/repo`, H
 ```bash
 # issues
 gitcode issue create -R owner/repo --title "…" --body-file body.md --json
-gitcode issue list -R owner/repo --state open --json
+# Complete inventory: 30 is the CLI default and is commonly truncated.
+gitcode issue list -R owner/repo --state open --limit 100 --page 1 --json
 gitcode issue view N -R owner/repo --json
 gitcode issue view N -R owner/repo --comments --json
 gitcode issue edit N -R owner/repo --body-file body.md --json
@@ -101,6 +103,8 @@ gitcode repo view owner/repo --json
 gitcode schema
 gitcode schema "issue create"
 ```
+
+For complete Issue inventories, treat `length == --limit` as “possibly truncated,” not as a final count. Fetch subsequent pages with the same filters until one returns fewer rows than the limit; combine the pages and deduplicate by `.number`. If the first page returns fewer than the explicit limit, it is complete for those filters at that retrieval time.
 
 - Line comments: `--position` = line on the **new** file (right side of diff). Inline comments appear as `comment_type: diff_comment`.
 - **`--approve`**: only with explicit user intent + approval permission; own-PR / missing role → **403** — leave a comment review instead.
@@ -149,9 +153,9 @@ uv run --no-project "$UPLOAD" -R owner/repo .tmp/image.png --json
 
 1. List the source directory first to confirm the actual filename; do not retype a path from memory. Then copy archived/non-ASCII paths to a simple ASCII name under `.tmp/` before upload.
 
-2. Prefer `--json`; continue only when the command exits 0 and returns non-empty `markdown` and `url` fields. The URL must use `https://raw.gitcode.com/user-images/assets/…`, never bare `/uploads/…`.
+2. Prefer `--json`; continue only when the command exits 0 and **stdout** is a single JSON object with non-empty `markdown` and `url` fields (success prints no progress). The URL must use `https://raw.gitcode.com/user-images/assets/…`, never bare `/uploads/…`. Errors/warnings go to stderr only.
 
-3. On non-zero exit or output containing `error:`, stop. Never paste stderr/error text into an issue/PR body or replace a failed image placeholder with an empty string.
+3. On non-zero exit or stderr containing `error:`, stop. Never paste stderr/error text into an issue/PR body or replace a failed image placeholder with an empty string.
 
 4. Build comments and long bodies in `.tmp/*.md` without shell expansion (use an editor/patch or a single-quoted heredoc), then pass the file with `--body-file`; do not use `$(cat <<EOF)` around Markdown.
 
@@ -173,7 +177,7 @@ uv run --no-project "$DOWNLOAD" "![alt](https://raw.gitcode.com/user-images/asse
 ```
 
 1. The script accepts a bare `https://raw.gitcode.com/...` URL **or** a full Markdown embed `![alt](url 'title')` (e.g. copied straight from an issue body) and extracts the URL.
-2. Prefer `--json`; continue only when the command exits 0 and returns `"success": true` with `status: 200` and a `content_type` starting with `image/`. The saved file path is in `path`.
+2. Prefer `--json`; continue only when the command exits 0 and **stdout** is a single JSON object with `"success": true`, `status: 200`, and a `content_type` starting with `image/` (success prints no progress). The saved file path is in `path`.
 3. Default output is `.tmp/<url-filename>` if `.tmp/` exists, else `./<url-filename>`; pass `-o` to override. Non-ASCII filenames (e.g. `企业微信截图_*.png`) are kept as-is — copy to an ASCII name before review if needed.
 4. On non-zero exit or stderr containing `error:`, stop. Exit 4 means auth/403 (token missing, invalid, or expired — run `gitcode auth status --json`); exit 1 is a transport/server error. Never treat a 403 as a broken image link.
 5. To inspect images referenced in an issue/PR body, `gitcode issue view N --json` / `gitcode pr view N --json` and extract `raw.gitcode.com` URLs from the `body` field before downloading.

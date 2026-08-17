@@ -30,7 +30,8 @@ Run with uv (preferred; stdlib only, no project deps):
 If `uv` is not installed: https://docs.astral.sh/uv/getting-started/installation/
   curl -LsSf https://astral.sh/uv/install.sh | sh
 
-Stdout: embed markdown by default (ready for issue/PR body), unless --url-only / --json.
+Stdout on success: embed markdown by default, or the URL with --url-only, or one
+JSON object with --json (no progress line). Errors and warnings go to stderr only.
 Never prints the token.
 """
 
@@ -292,8 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     url = build_embed_url(repo_id, uploaded["uuid"], uploaded["file_name"])
     markdown = build_markdown(url, uploaded["file_name"])
 
-    eprint(f"uploaded path={uploaded['path']} token_source={token_source} repo={owner}/{name} id={repo_id}")
-
+    # Success: stdout is only the machine- or user-facing result (no progress).
     if args.json:
         print(
             json.dumps(
