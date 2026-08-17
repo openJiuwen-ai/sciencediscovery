@@ -206,14 +206,17 @@ docker compose up -d --build  # 拉取新代码后重建并重启
 
 ### 沙箱与宿主要求
 
-容器**不**替代、也不削弱 bubblewrap 沙箱——agent 的 Python/R/shell 仍在 `bwrap` 下运行，保留独立命名空间、seccomp 过滤与无网络。bubblewrap 需要创建用户命名空间并在其中挂载，而 Docker 的默认安全配置会阻止这两点，因此 Compose 服务只放开以下两项，不多给任何权限：
+容器**不**替代、也不削弱 bubblewrap 沙箱——agent 的 Python/R/shell 仍在 `bwrap` 下运行，保留独立命名空间、seccomp 过滤与无网络。bubblewrap 需要创建用户命名空间、在其中挂载并新建 procfs，而 Docker 的默认安全配置会阻止这些，因此 Compose 服务放开以下三项，不多给任何权限：
 
 | 配置 | 为什么需要 |
 |---|---|
 | `seccomp=unconfined` | Docker 默认 seccomp 配置只对持有 `CAP_SYS_ADMIN` 的容器放行 `mount` / `pivot_root`，而 bubblewrap 需要在自己的命名空间内调用它们 |
 | `apparmor=unconfined` | Debian/Ubuntu 宿主上的 `docker-default` AppArmor 配置直接拒绝 `mount` |
+| `systempaths=unconfined` | 放开 Docker 对 `/proc`、`/sys` 的默认只读与屏蔽路径（readonlyPaths / maskedPaths）。没有它，内核会拒绝 bubblewrap 在沙箱自己的 pid 命名空间里挂载新的 procfs（报 `Can't mount proc on /newroot/proc: Operation not permitted`），产品只能回退成绑定容器的 `/proc` |
 
-不增加任何 capability，也不使用 `privileged: true`。这两项放松的是**容器**边界，而不是 agent 沙箱：请把该容器视为可信的本地软件，与宿主机安装的定位一致。
+不增加任何 capability，也不使用 `privileged: true`，不挂载 Docker socket。这三项放松的是**容器**边界，而不是 agent 沙箱：请把该容器视为可信的本地软件，与宿主机安装的定位一致。
+
+**若未放开 `systempaths`（例如沿用旧版 Compose、裸 `docker run` 或 K8s 默认配置）**：产品会自动回退为 `--ro-bind /proc /proc`，执行仍可进行，但沙箱内看到的是**容器的进程列表**，而不是只有自己的进程。回退时 runner 启动日志与预检都会打印明确 warning，说明原因与影响。要恢复更强的隔离，请加回 `systempaths=unconfined`，不要改用 `privileged`。
 
 如果宿主仍然限制用户命名空间，API 与 UI 仍可正常启动、`GET /health` 会反映 runner 状态，但每次 `run_python` / `run_shell` 都会失败。入口脚本在启动时会做一次 bubblewrap 预检，因此 `docker compose logs` 中会出现带上述检查命令的明确告警。Ubuntu 24.04+ 上通常的修复方式是：
 

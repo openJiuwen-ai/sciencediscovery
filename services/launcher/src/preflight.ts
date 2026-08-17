@@ -20,13 +20,17 @@
  * `run_shell` execute under it and it cannot be vendored, because it needs
  * setuid or unprivileged user namespaces from the host kernel.
  */
-import { execFile } from "node:child_process";
 import { access, mkdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
+import {
+  detectSandboxCapability,
+  disableUsernsOmittedMessage,
+  procFallbackMessage,
+  SANDBOX_UNUSABLE_HINT,
+  type SandboxProcMode,
+} from "@science-agent/sandbox-capability";
 
 export const BWRAP_INSTALL_HINT = [
   "Install bubblewrap with your system package manager, then run serve again:",
@@ -75,34 +79,22 @@ export async function findExecutable(
  * Probe whether bubblewrap can actually build a sandbox here. Presence on PATH
  * is not enough: hardened hosts disable unprivileged user namespaces, and the
  * failure would otherwise only surface on the first tool call.
+ *
+ * This delegates to the detection the runner uses, so preflight cannot report a
+ * sandbox the runner then fails to build. In particular it probes with
+ * `--disable-userns` first: reporting success from a launch that omits an
+ * option the runner would add is exactly the mismatch that let the service look
+ * healthy while every tool call failed.
  */
 export async function probeSandbox(bwrapPath: string): Promise<{ ok: boolean; detail?: string }> {
-  try {
-    await execFileAsync(
-      bwrapPath,
-      [
-        "--unshare-all", "--unshare-user", "--die-with-parent",
-        "--ro-bind", "/usr", "/usr",
-        "--symlink", "usr/bin", "/bin",
-        "--symlink", "usr/lib", "/lib",
-        "--symlink", "usr/lib64", "/lib64",
-        "/usr/bin/true",
-      ],
-      { timeout: 15_000 },
-    );
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, detail: error instanceof Error ? error.message : String(error) };
-  }
+  const capability = await detectSandboxCapability(bwrapPath);
+  return capability.sandboxUsable
+    ? { ok: true }
+    : { detail: capability.detail, ok: false };
 }
 
-export const RESTRICTED_USERNS_HINT = [
-  "bubblewrap is installed but cannot create a sandbox on this host.",
-  "The Web UI and control API still start; run_python and run_shell will fail.",
-  "Check that unprivileged user namespaces are permitted:",
-  "  sysctl kernel.unprivileged_userns_clone             # 1 where the knob exists",
-  "  sysctl kernel.apparmor_restrict_unprivileged_userns # 0 on Ubuntu 24.04+",
-].join("\n");
+/** The runner prints the same guidance for this host, so the text lives once. */
+export const RESTRICTED_USERNS_HINT = SANDBOX_UNUSABLE_HINT;
 
 export interface PreflightOptions {
   bwrapPath: string;
@@ -116,6 +108,15 @@ export interface PreflightResult {
   /** Absolute bubblewrap path, or undefined when the check was skipped. */
   bwrapPath?: string;
   sandboxUsable: boolean;
+  /**
+   * Whether sandboxed executions will carry `--disable-userns`. False is a
+   * degraded but working sandbox, not a failure, so it never blocks serve.
+   */
+  disableUserns: boolean;
+  /** How sandboxed executions will provide `/proc`. */
+  procMode: SandboxProcMode;
+  /** True when `--proc` was refused and launches fell back to binding `/proc`. */
+  procFallback: boolean;
 }
 
 export async function runPreflight(options: PreflightOptions): Promise<PreflightResult> {
@@ -132,10 +133,23 @@ export async function runPreflight(options: PreflightOptions): Promise<Preflight
   if (!resolved) {
     if (!options.skipSandboxCheck) throw new Error(missingBwrapMessage(options.bwrapPath));
     warn(`WARNING: bubblewrap (${options.bwrapPath}) is missing; sandboxed execution will fail.`);
-    return { sandboxUsable: false };
+    return { disableUserns: false, procFallback: false, procMode: "new", sandboxUsable: false };
   }
 
-  const probe = await probeSandbox(resolved);
-  if (!probe.ok) warn(`WARNING: ${RESTRICTED_USERNS_HINT}`);
-  return { bwrapPath: resolved, sandboxUsable: probe.ok };
+  const capability = await detectSandboxCapability(resolved);
+  if (!capability.sandboxUsable) {
+    warn(`WARNING: ${RESTRICTED_USERNS_HINT}`);
+  } else {
+    // The sandbox works but may be degraded on either axis, and both can be
+    // degraded at once, so report them independently rather than as a chain.
+    if (capability.procFallback) warn(`WARNING: ${procFallbackMessage(resolved, capability)}`);
+    if (!capability.disableUserns) warn(`WARNING: ${disableUsernsOmittedMessage(resolved, capability)}`);
+  }
+  return {
+    bwrapPath: resolved,
+    disableUserns: capability.disableUserns,
+    procFallback: capability.procFallback,
+    procMode: capability.procMode,
+    sandboxUsable: capability.sandboxUsable,
+  };
 }

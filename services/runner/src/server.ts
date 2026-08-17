@@ -21,6 +21,12 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { createOperationalLogger, shortErrorMessage } from "@science-agent/operational-logging";
+import {
+  detectSandboxCapability,
+  disableUsernsOmittedMessage,
+  procFallbackMessage,
+  sandboxUnusableMessage,
+} from "@science-agent/sandbox-capability";
 
 import type {
   ApiError,
@@ -638,13 +644,34 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
       `bubblewrap at "${config.bwrapPath}" lacks required sandbox options: ${missingOptions.join(", ")}`,
     );
   }
-  if (!help.includes("--disable-userns")) {
-    logger.warn("sandbox_option_unavailable", { option: "--disable-userns" });
-    console.warn(
-      `bubblewrap at "${config.bwrapPath}" does not support --disable-userns (requires bwrap >= 0.8; Ubuntu 22.04 ships 0.6). `
-      + "Namespace isolation still applies, but nested user namespaces inside executions are not blocked. "
-      + "Upgrade bubblewrap for the stronger profile.",
-    );
+  // Resolve the option by probing, not by reading --help: the same call warms
+  // the cache every execution reads, so the startup warning and the arguments a
+  // real launch uses always describe the same sandbox.
+  const capability = await detectSandboxCapability(config.bwrapPath);
+  if (!capability.sandboxUsable) {
+    // No sandbox builds here at all. The degradation warnings below both end in
+    // "executions still run", which would be false — and `disableUserns` is
+    // also false in this state, so reporting it would name the wrong cause.
+    logger.warn("sandbox_unusable", { detail: capability.detail, reason: capability.reason });
+    console.warn(sandboxUnusableMessage(config.bwrapPath, capability));
+  } else {
+    // The sandbox works but may be degraded on either axis, and both can be
+    // degraded at once, so report them independently rather than as a chain.
+    if (capability.procFallback) {
+      logger.warn("sandbox_proc_fallback", {
+        detail: capability.procDetail,
+        procMode: capability.procMode,
+      });
+      console.warn(procFallbackMessage(config.bwrapPath, capability));
+    }
+    if (!capability.disableUserns) {
+      logger.warn("sandbox_option_unavailable", {
+        detail: capability.detail,
+        option: "--disable-userns",
+        reason: capability.reason,
+      });
+      console.warn(disableUsernsOmittedMessage(config.bwrapPath, capability));
+    }
   }
   const environmentStore = new EnvironmentStore({
     allowedChannels: config.scientificAllowedChannels ?? ["conda-forge"],

@@ -74,7 +74,7 @@ node --version    # v22.19+
 pnpm --version    # 11.1.2
 python3 --version
 uv --version      # 0.9+
-bwrap --version   # 0.6+; 0.8+ recommended (adds --disable-userns; on older versions the runner logs a startup warning and omits it)
+bwrap --version   # 0.6+; 0.8+ recommended (adds --disable-userns where the environment allows it; otherwise the runner logs a startup warning and omits it)
 curl --version | head -1
 ```
 
@@ -162,8 +162,11 @@ curl -fsS http://127.0.0.1:4310/health
 - A uid/gid mismatch is the most common first-run failure: the entry point exits
   with an explicit "not writable" message. Fix it via `SCIENCE_AGENT_UID` /
   `SCIENCE_AGENT_GID` and recreate the container.
-- The service already sets `seccomp=unconfined` and `apparmor=unconfined` for
-  bubblewrap. Do not add capabilities or `privileged: true`.
+- The service already sets `seccomp=unconfined`, `apparmor=unconfined` and
+  `systempaths=unconfined` for bubblewrap. Do not add capabilities or
+  `privileged: true`. Dropping `systempaths=unconfined` still works, but the
+  runner then falls back to binding the container's `/proc` and warns at
+  startup: sandboxed code sees the container's process list.
 
 ## Step 5 — Report the URL
 
@@ -231,6 +234,7 @@ Docker mode).
 | API up but every run fails | Usually the sandbox warning above, or no model profile configured |
 | Port already bound | Change `SCIENCE_AGENT_PORT` / `SCIENCE_AGENT_PUBLISH_PORT` |
 | `does not support --disable-userns` warning at runner startup | Expected on bwrap < 0.8 (e.g. Ubuntu 22.04's 0.6): nested-userns hardening is skipped, everything else isolates normally. Upgrade bubblewrap for the stronger profile |
+| `supports --disable-userns but cannot use it here` warning at runner startup | Expected under LXC and container runtimes that mount `/proc/sys` read-only, so bubblewrap cannot write `user.max_user_namespaces`. The option is omitted and executions run; everything else isolates normally. Do not grant `privileged` or `systempaths=unconfined` to silence it |
 | First `docker compose build` fails on network | The build resolves pnpm and both uv environments; retry with network available |
 
 ## Checklist

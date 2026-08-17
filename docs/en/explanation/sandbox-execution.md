@@ -23,12 +23,17 @@ Runner is a rootless executor. `run_python`, `run_r`, and `run_shell` run in a n
 
 ## 3. Sandbox construction
 
-Startup checks required Bubblewrap options and executes a probe. `--disable-userns` is added on Bubblewrap 0.8+; older versions warn and retain other isolation.
+Startup checks required Bubblewrap options and executes a probe. Two parts of the sandbox shape can be refused by the environment, and both are settled by probing rather than guessing. `/proc` is settled first and `--disable-userns` second, on whichever `/proc` shape was chosen, so neither can be misdiagnosed as the other.
+
+`/proc` defaults to `--proc /proc`, giving the sandbox its own procfs so it sees only its own processes. Docker's default readonlyPaths/maskedPaths make the kernel refuse that mount in the sandbox's own pid namespace (`Can't mount proc on /newroot/proc: Operation not permitted`); the runner then falls back to `--ro-bind /proc /proc` and warns. Executions still run, but the sandbox sees the container's process list. The official Compose file keeps the stronger shape with `systempaths=unconfined`; the fallback is never the default, and `privileged` is not the way to avoid it.
+
+`--disable-userns` is added only when a probe proves it usable here, not based on the version or on `--help`: the option works by writing `user.max_user_namespaces`, so under LXC and container runtimes that mount `/proc/sys` read-only it fails and aborts the whole launch even on Bubblewrap 0.8+. The probe runs a minimal sandbox with the option, then without it, which separates an old Bubblewrap that rejects the unknown option from an environment that refuses the sysctl write, and both from a host where no sandbox builds at all. Whenever the option is omitted the runner warns and every other protection — namespaces, seccomp, the mount allowlist — is unchanged, so executions still run. The launcher preflight and the runner share this detection (`packages/sandbox-capability`), so preflight cannot pass a sandbox the runner then fails to build.
 
 ```text
 --die-with-parent --new-session --unshare-all --unshare-user [--disable-userns]
 --cap-drop ALL
-read-only /usr plus system links, /proc, /dev; tmpfs /tmp
+read-only /usr plus system links, /dev; tmpfs /tmp
+--proc /proc, or --ro-bind /proc /proc when a fresh procfs is refused
 hide host Python/R when managed environments are enabled
 read-only revision at /opt/science-env
 bind Session workspace read-write at /workspace

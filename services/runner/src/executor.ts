@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { access, open, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { promisify } from "node:util";
 
+import {
+  detectSandboxCapability,
+  procMountArguments,
+  type SandboxProcMode,
+} from "@science-agent/sandbox-capability";
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   type PythonExecutionRequest,
@@ -32,25 +36,23 @@ import type { EnvironmentStore } from "./environment-store.js";
 
 export const RUNNER_VERSION = "m4-isolation-only-v1";
 
-const execFileAsync = promisify(execFile);
-
 /**
- * bwrap >= 0.8 can forbid creating nested user namespaces inside the sandbox
- * (`--disable-userns`); older versions (e.g. Ubuntu 22.04 ships 0.6) reject the
- * unknown option outright. Probe once per binary and omit the flag on old bwrap
- * so executions still run, at the cost of not blocking nested userns.
+ * The two parts of the sandbox shape this host may refuse, resolved together so
+ * every launch site agrees.
+ *
+ * `--proc /proc` gives the sandbox its own procfs, but Docker's default
+ * readonlyPaths/maskedPaths refuse the mount; the fallback binds the existing
+ * `/proc` instead. `--disable-userns` forbids nested user namespaces, but it is
+ * implemented by writing `user.max_user_namespaces`, which old bubblewrap does
+ * not know and a read-only `/proc/sys` refuses. Both are probed for real rather
+ * than guessed from a version, and the launcher preflight calls the same
+ * detection, so its verdict and this one cannot disagree.
  */
-const disableUsernsSupport = new Map<string, Promise<boolean>>();
-
-export function bwrapSupportsDisableUserns(bwrapPath: string): Promise<boolean> {
-  let support = disableUsernsSupport.get(bwrapPath);
-  if (!support) {
-    support = execFileAsync(bwrapPath, ["--help"], { encoding: "utf8", maxBuffer: 1024 * 1024 })
-      .then((result) => `${result.stdout}\n${result.stderr}`.includes("--disable-userns"))
-      .catch(() => false);
-    disableUsernsSupport.set(bwrapPath, support);
-  }
-  return support;
+export async function sandboxLaunchProfile(
+  bwrapPath: string,
+): Promise<{ disableUserns: boolean; procMode: SandboxProcMode }> {
+  const capability = await detectSandboxCapability(bwrapPath);
+  return { disableUserns: capability.disableUserns, procMode: capability.procMode };
 }
 
 /** Default workspace total quota: 10 GiB. 0 disables the quota. */
@@ -448,6 +450,7 @@ export function buildSandboxLaunch(options: {
   hostRuntimeSupport: string[];
   language: "python" | "r" | "shell";
   pathEnv: string;
+  procMode: SandboxProcMode;
   pythonPathEnv?: string;
   workspaceBindArgs: string[];
 }): SandboxLaunch {
@@ -473,7 +476,7 @@ export function buildSandboxLaunch(options: {
       "--symlink", "usr/bin", "/bin",
       "--symlink", "usr/lib", "/lib",
       "--symlink", "usr/lib64", "/lib64",
-      "--proc", "/proc",
+      ...procMountArguments(options.procMode),
       "--dev", "/dev",
       ...options.hostInterpreterMasks,
       "--tmpfs", "/tmp",
@@ -539,7 +542,7 @@ export async function executePython(
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
   const launch = buildSandboxLaunch({
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-    disableUserns: await bwrapSupportsDisableUserns(config.bwrapPath),
+    ...await sandboxLaunchProfile(config.bwrapPath),
     environmentBinds: runtime
       ? environmentPrefixBindArguments(runtime.prefixPath)
       : localPythonPackageBindArguments(localPythonPackages),
@@ -629,7 +632,7 @@ export async function executeShell(
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
   const launch = buildSandboxLaunch({
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-    disableUserns: await bwrapSupportsDisableUserns(config.bwrapPath),
+    ...await sandboxLaunchProfile(config.bwrapPath),
     environmentBinds: localPythonPackageBindArguments(localPythonPackages),
     envProfile,
     hostInterpreterMasks: [],

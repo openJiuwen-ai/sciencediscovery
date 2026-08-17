@@ -30,7 +30,7 @@ import {
   RESOURCE_LIMIT_MODE,
   RUNNER_VERSION,
   buildSandboxLaunch,
-  bwrapSupportsDisableUserns,
+  sandboxLaunchProfile,
   executionTimeoutMs,
   hostRuntimeSupportArguments,
   resolveQuotaBytes,
@@ -474,7 +474,7 @@ export class ShellSessionManager {
     // produced by this shell, not consumed by it.
     const launch = buildSandboxLaunch({
       chdir: workspaceBinds.chdir,
-      disableUserns: await bwrapSupportsDisableUserns(this.config.bwrapPath),
+      ...await sandboxLaunchProfile(this.config.bwrapPath),
       environmentBinds: [],
       hostInterpreterMasks: [],
       hostRuntimeSupport: await hostRuntimeSupportArguments(),

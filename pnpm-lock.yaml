@@ -147,6 +147,15 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
+  packages/sandbox-capability:
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
   packages/schema:
     dependencies:
       '@science-agent/external-urls':
@@ -201,6 +210,9 @@ importers:
       '@science-agent/external-urls':
         specifier: workspace:*
         version: link:../../config
+      '@science-agent/sandbox-capability':
+        specifier: workspace:*
+        version: link:../../packages/sandbox-capability
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -220,6 +232,9 @@ importers:
       '@science-agent/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
+      '@science-agent/sandbox-capability':
+        specifier: workspace:*
+        version: link:../../packages/sandbox-capability
       '@science-agent/schema':
         specifier: workspace:*
         version: link:../../packages/schema

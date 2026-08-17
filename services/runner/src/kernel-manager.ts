@@ -31,7 +31,7 @@ import {
   RESOURCE_LIMIT_MODE,
   RUNNER_VERSION,
   buildSandboxLaunch,
-  bwrapSupportsDisableUserns,
+  sandboxLaunchProfile,
   environmentPrefixBindArguments,
   executionTimeoutMs,
   hostInterpreterMaskArguments,
@@ -464,7 +464,7 @@ export class KernelManager {
     const envProfile = this.profileProvider?.(request.permissionEpoch.sessionId, request.permissionEpoch.id);
     const launch = buildSandboxLaunch({
       chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-      disableUserns: await bwrapSupportsDisableUserns(this.config.bwrapPath),
+      ...await sandboxLaunchProfile(this.config.bwrapPath),
       environmentBinds: environmentPrefixBindArguments(prefixPath),
       envProfile,
       hostInterpreterMasks,

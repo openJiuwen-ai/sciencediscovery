@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, resolve } from "node:path";
@@ -30,7 +31,7 @@ import type {
   ShellExecutionResult,
 } from "@science-agent/schema";
 
-import { appendBounded, executePython, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, truncateToBudget } from "./executor.js";
+import { appendBounded, executePython, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
 import {
@@ -209,22 +210,159 @@ test("runner startup fails closed when bubblewrap lacks required security option
   }), /lacks required sandbox options.*--seccomp/);
 });
 
-test("runner starts without --disable-userns on old bubblewrap (< 0.8)", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `bwrap-06-${process.pid}-${Date.now()}`);
+/** Quote for a shell single-quoted string; bubblewrap messages contain apostrophes. */
+function shellQuote(value: string): string {
+  return `'${value.split("'").join(`'\\''`)}'`;
+}
+
+/**
+ * A bubblewrap stand-in whose `--help` is `helpText` and which fails any launch
+ * carrying one of `rejects` with that entry's message. Detection probes by
+ * launching, so a stub that only omits an option from `--help` would not model
+ * anything.
+ */
+async function bwrapRejecting(
+  root: string,
+  helpText: string,
+  rejects: Array<{ argument: string; failure: string }>,
+): Promise<string> {
   const fakeBwrap = resolve(root, "bwrap");
   await mkdir(root, { recursive: true });
-  await writeFile(
-    fakeBwrap,
-    "#!/bin/sh\necho 'usage: bwrap --cap-drop --die-with-parent --new-session --seccomp --unshare-all --unshare-user'\n",
-  );
+  await writeFile(fakeBwrap, [
+    "#!/bin/sh",
+    'for candidate in "$@"; do',
+    ...rejects.flatMap(({ argument, failure }) => [
+      `  if [ "$candidate" = "${argument}" ]; then`,
+      `    echo ${shellQuote(failure)} >&2`,
+      "    exit 1",
+      "  fi",
+    ]),
+    "done",
+    `if [ "$1" = "--help" ]; then echo '${helpText}'; fi`,
+    "exit 0",
+    "",
+  ].join("\n"));
   await chmod(fakeBwrap, 0o755);
+  return fakeBwrap;
+}
+
+const BWRAP_HELP_WITHOUT_OPTION =
+  "usage: bwrap --cap-drop --die-with-parent --new-session --seccomp --unshare-all --unshare-user";
+
+/** Collect the operator-facing warning without letting it reach the test output. */
+async function warningsFrom(action: () => Promise<void>): Promise<string> {
+  const original = console.warn;
+  const captured: string[] = [];
+  console.warn = (...parts: unknown[]) => { captured.push(parts.join(" ")); };
+  try {
+    await action();
+  } finally {
+    console.warn = original;
+  }
+  return captured.join("\n");
+}
+
+test("runner starts without --disable-userns on old bubblewrap (< 0.8)", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `bwrap-06-${process.pid}-${Date.now()}`);
+  const fakeBwrap = await bwrapRejecting(root, BWRAP_HELP_WITHOUT_OPTION, [
+    { argument: "--disable-userns", failure: "bwrap: Unknown option --disable-userns" },
+  ]);
   context.after(() => rm(root, { force: true, recursive: true }));
-  const server = await startRunnerServer({
-    ...config(resolve(root, "data")),
-    bwrapPath: fakeBwrap,
+  let server!: Server;
+  const warned = await warningsFrom(async () => {
+    server = await startRunnerServer({ ...config(resolve(root, "data")), bwrapPath: fakeBwrap });
   });
   context.after(() => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); }));
   assert.ok(server.listening);
+  assert.match(warned, /does not support --disable-userns/);
+  assert.match(warned, /Upgrade bubblewrap/);
+});
+
+test("runner starts and omits --disable-userns when /proc/sys is read-only", async (context) => {
+  // LXC and container runtimes that mount /proc/sys read-only: bubblewrap
+  // advertises the option but aborts when it writes user.max_user_namespaces.
+  // Trusting --help here is what made every run_python / run_r / run_shell fail.
+  const root = resolve(process.cwd(), ".tmp", `bwrap-ro-proc-${process.pid}-${Date.now()}`);
+  const fakeBwrap = await bwrapRejecting(root, `${BWRAP_HELP_WITHOUT_OPTION} --disable-userns`, [
+    {
+      argument: "--disable-userns",
+      failure: "bwrap: cannot open /proc/sys/user/max_user_namespaces: Read-only file system",
+    },
+  ]);
+  context.after(() => rm(root, { force: true, recursive: true }));
+  let server!: Server;
+  const warned = await warningsFrom(async () => {
+    server = await startRunnerServer({ ...config(resolve(root, "data")), bwrapPath: fakeBwrap });
+  });
+  context.after(() => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); }));
+  assert.ok(server.listening);
+  assert.match(warned, /cannot use it here/);
+  assert.match(warned, /max_user_namespaces: Read-only file system/);
+  // The binary is fine, so telling an operator to upgrade would misdirect them.
+  assert.ok(!/Upgrade bubblewrap/.test(warned));
+  // The detection the runner just cached is the one executions read.
+  assert.deepEqual(await sandboxLaunchProfile(fakeBwrap), { disableUserns: false, procMode: "new" });
+  // Only the userns axis degraded; /proc must not have been touched.
+  assert.ok(!/fresh \/proc/.test(warned));
+});
+
+test("runner starts and binds /proc when a fresh procfs is refused", async (context) => {
+  // Docker's default readonlyPaths/maskedPaths, i.e. Compose without
+  // systempaths=unconfined: the kernel refuses a new procfs in the sandbox's
+  // own pid namespace, which would otherwise abort every execution.
+  const root = resolve(process.cwd(), ".tmp", `bwrap-proc-eperm-${process.pid}-${Date.now()}`);
+  const fakeBwrap = await bwrapRejecting(root, `${BWRAP_HELP_WITHOUT_OPTION} --disable-userns`, [
+    { argument: "--proc", failure: "bwrap: Can't mount proc on /newroot/proc: Operation not permitted" },
+  ]);
+  context.after(() => rm(root, { force: true, recursive: true }));
+  let server!: Server;
+  const warned = await warningsFrom(async () => {
+    server = await startRunnerServer({ ...config(resolve(root, "data")), bwrapPath: fakeBwrap });
+  });
+  context.after(() => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); }));
+  assert.ok(server.listening);
+  assert.match(warned, /cannot mount a fresh \/proc/);
+  assert.match(warned, /--ro-bind \/proc \/proc/);
+  assert.match(warned, /systempaths=unconfined/);
+  // The /proc fallback must not drag --disable-userns down with it.
+  assert.deepEqual(await sandboxLaunchProfile(fakeBwrap), { disableUserns: true, procMode: "bind" });
+  assert.ok(!/does not support --disable-userns/.test(warned));
+});
+
+test("runner reports an unusable sandbox instead of claiming executions still run", async (context) => {
+  // A host that cannot build any sandbox (no unprivileged user namespaces).
+  // `disableUserns` is false here too, so reporting that degradation would name
+  // the wrong cause and promise executions that will in fact all fail.
+  const root = resolve(process.cwd(), ".tmp", `bwrap-unusable-${process.pid}-${Date.now()}`);
+  const fakeBwrap = resolve(root, "bwrap");
+  await mkdir(root, { recursive: true });
+  await writeFile(fakeBwrap, [
+    "#!/bin/sh",
+    `if [ "$1" = "--help" ]; then echo '${BWRAP_HELP_WITHOUT_OPTION} --disable-userns'; exit 0; fi`,
+    "echo 'bwrap: No permissions to creating new namespace' >&2",
+    "exit 1",
+    "",
+  ].join("\n"));
+  await chmod(fakeBwrap, 0o755);
+  context.after(() => rm(root, { force: true, recursive: true }));
+
+  let server!: Server;
+  const warned = await warningsFrom(async () => {
+    server = await startRunnerServer({ ...config(resolve(root, "data")), bwrapPath: fakeBwrap });
+  });
+  context.after(() => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); }));
+
+  // Startup still succeeds: the Web UI and control API stay up, as before.
+  assert.ok(server.listening);
+  assert.match(warned, /could not build a sandbox/);
+  assert.match(warned, /cannot create a sandbox on this host/);
+  assert.match(warned, /run_python and run_shell will fail/);
+  assert.match(warned, /No permissions to creating new namespace/);
+  // Neither degradation may be reported: both promise working executions.
+  assert.ok(!/executions still run/.test(warned));
+  assert.ok(!/supports --disable-userns but cannot use it here/.test(warned));
+  assert.ok(!/does not support --disable-userns/.test(warned));
+  assert.ok(!/cannot mount a fresh \/proc/.test(warned));
 });
 
 test("runner health remains available while Python base bootstraps in the background", async (context) => {

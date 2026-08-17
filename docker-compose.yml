@@ -68,10 +68,19 @@ services:
       # The runner still sandboxes agent code with bubblewrap; bubblewrap needs
       # mount/pivot_root inside its own user namespace. Docker's default seccomp
       # profile only allows those for containers holding CAP_SYS_ADMIN, and the
-      # docker-default AppArmor profile denies mount outright. These two are the
-      # minimum needed — no added capabilities, no privileged: true.
+      # docker-default AppArmor profile denies mount outright.
       - seccomp=unconfined
       - apparmor=unconfined
+      # Lifts Docker's default read-only and masked paths under /proc and /sys.
+      # Without it the kernel refuses to mount a fresh procfs in the sandbox's
+      # own pid namespace ("Can't mount proc on /newroot/proc: Operation not
+      # permitted"), and the runner has to fall back to binding the container's
+      # /proc — which lets sandboxed code see the container's process list.
+      # Keeping this on preserves the stronger profile: each execution gets its
+      # own /proc showing only its own processes.
+      - systempaths=unconfined
+      # These three are what the sandbox needs — no added capabilities, no
+      # privileged: true, no Docker socket.
     restart: "on-failure:3"
     healthcheck:
       test: ["CMD", "curl", "--silent", "--fail", "http://127.0.0.1:4310/health"]

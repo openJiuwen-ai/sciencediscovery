@@ -206,14 +206,17 @@ Three locations differ from a host installation:
 
 ### Sandbox and host requirements
 
-The container does not replace or weaken the Bubblewrap sandbox. Agent Python, R, and shell commands still run under `bwrap` with separate namespaces, seccomp filtering, and no network. Docker's default security configuration blocks the user-namespace mounts Bubblewrap needs, so Compose relaxes exactly these two container settings:
+The container does not replace or weaken the Bubblewrap sandbox. Agent Python, R, and shell commands still run under `bwrap` with separate namespaces, seccomp filtering, and no network. Docker's default security configuration blocks the user-namespace mounts and the fresh procfs Bubblewrap needs, so Compose relaxes these three container settings:
 
 | Setting | Reason |
 |---|---|
 | `seccomp=unconfined` | Docker's default seccomp permits `mount`/`pivot_root` only with `CAP_SYS_ADMIN`; Bubblewrap invokes them inside its own namespace |
 | `apparmor=unconfined` | The `docker-default` AppArmor profile on Debian/Ubuntu denies `mount` |
+| `systempaths=unconfined` | Lifts Docker's default read-only and masked paths under `/proc` and `/sys`. Without it the kernel refuses to let Bubblewrap mount a fresh procfs in the sandbox's own pid namespace (`Can't mount proc on /newroot/proc: Operation not permitted`), and the product has to fall back to binding the container's `/proc` |
 
-No capability is added and `privileged: true` is not used. These settings relax the **container** boundary, not the agent sandbox. Treat this container as trusted local software, like the host installation.
+No capability is added, `privileged: true` is not used, and the Docker socket is not mounted. These settings relax the **container** boundary, not the agent sandbox. Treat this container as trusted local software, like the host installation.
+
+**If `systempaths` is not relaxed** (an older Compose file, a bare `docker run`, or Kubernetes defaults), the product automatically falls back to `--ro-bind /proc /proc`. Executions still run, but the sandbox sees the **container's process list** instead of only its own processes. The fallback is never silent: both the runner startup log and the preflight print a warning naming the cause and the consequence. Restore the stronger profile by adding `systempaths=unconfined` — do not switch to `privileged`.
 
 If the host still restricts user namespaces, the API and UI start and `GET /health` reports runner state, but every `run_python` and `run_shell` fails. Startup runs a Bubblewrap preflight and prints a warning with the checks above. On Ubuntu 24.04+, the usual fix is:
 

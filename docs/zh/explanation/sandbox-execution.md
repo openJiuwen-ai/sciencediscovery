@@ -27,16 +27,45 @@ Runner 是无 root 的代码执行器：所有 `run_python` / `run_r` / `run_she
 ## 3. 沙箱构造
 
 启动预检要求 bwrap 支持：`--cap-drop --die-with-parent --new-session --seccomp --unshare-all --unshare-user`，并实际运行一次探针。
-`--disable-userns`（禁止嵌套 userns）是可选增强：bwrap ≥ 0.8 时自动追加；旧版（如 Ubuntu 22.04 的 0.6）不认识该选项，
-启动时打印告警并省略，其余隔离不受影响（探测逻辑见 `executor.ts` 的 `bwrapSupportsDisableUserns`，按二进制路径缓存）。
+
+沙箱形态有两处会被环境拒绝，都由运行时实测决定，并按「先定 `/proc`，再定 `--disable-userns`」的顺序判定，
+避免两者互相误判。检测实现见 `packages/sandbox-capability`，按二进制路径缓存；launcher 的 `probeSandbox`
+与 runner 共用同一结论，避免出现「预检通过但工具全挂」。
+
+**其一，`/proc` 的提供方式。** 默认 `--proc /proc`，让沙箱拥有自己的 procfs，只看得见自己的进程。
+Docker 默认的 readonlyPaths / maskedPaths 会让内核拒绝在沙箱自己的 pid 命名空间里挂载新的 procfs
+（报 `Can't mount proc on /newroot/proc: Operation not permitted`）。此时自动回退为 `--ro-bind /proc /proc`
+并打印 warning：执行仍可进行，但沙箱看见的是容器的进程列表。官方 Compose 通过 `systempaths=unconfined`
+保住默认的强形态；回退不是默认，也不应改用 `privileged` 消除。
+
+| 探测结果 | 结论 | 行为 |
+|---|---|---|
+| 能新建 procfs | `new` | 使用 `--proc /proc` |
+| 新建被拒但 bind 可用 | `bind` | 改用 `--ro-bind /proc /proc` 并告警 |
+
+**其二，`--disable-userns`（禁止嵌套 userns）。** 是否追加同样由实测决定，而不是看版本号或 `--help`：
+该选项的实现是往 `user.max_user_namespaces` 写值，因此在 LXC 和把 `/proc/sys` 挂成只读的容器里，
+即使 bwrap ≥ 0.8 认识该选项，写入也会失败并让整个 launch 中止。检测方式是先用带该选项的最小沙箱探一次，
+失败再用不带该选项的最小沙箱探一次（两次都在上面已定好的 `/proc` 形态上进行），从而区分三种情况：
+
+| 探测结果 | 结论 | 行为 |
+|---|---|---|
+| 带选项即可启动 | `supported` | 追加 `--disable-userns` |
+| 旧版 bwrap 不认识该选项 | `option-unknown` | 省略并告警，提示升级 bubblewrap |
+| 认识但环境拒绝写 sysctl | `option-rejected` | 省略并告警，说明只读 `/proc/sys` |
+| 不带选项也起不来 | `sandbox-unusable` | 沙箱整体不可用，预检告警 |
+
+两处降级都只减少对应的那一项，其余隔离（命名空间、seccomp、挂载白名单）不受影响，
+`run_python` / `run_r` / `run_shell` 与 persistent kernel / persistent shell 仍可执行并共用同一结论。
 
 核心参数（`buildSandboxLaunch`，同时产出注入的 env 映射与 cwd 用于溯源）：
 
 ```text
 --die-with-parent --new-session
---unshare-all --unshare-user [--disable-userns]  # 全命名空间隔离（含网络）；bwrap ≥ 0.8 时禁止嵌套 userns
+--unshare-all --unshare-user [--disable-userns]  # 全命名空间隔离（含网络）；实测可用时才禁止嵌套 userns
 --cap-drop ALL
---ro-bind /usr /usr（+ /bin /lib /lib64 symlink、/proc、/dev、--tmpfs /tmp）
+--ro-bind /usr /usr（+ /bin /lib /lib64 symlink、/dev、--tmpfs /tmp）
+--proc /proc | --ro-bind /proc /proc              # 默认新建 procfs；被拒时回退为 bind 并告警
 --ro-bind /dev/null /usr/bin/{python3*,R,Rscript}   # 启用科学环境时屏蔽宿主解释器
 --ro-bind <revision 前缀> /opt/science-env          # 科学环境只读挂载
 --bind <会话工作区> /workspace --chdir /workspace|<profile cwd>

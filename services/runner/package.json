@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@science-agent/operational-logging": "workspace:*",
+    "@science-agent/sandbox-capability": "workspace:*",
     "@science-agent/schema": "workspace:*"
   },
   "devDependencies": {
