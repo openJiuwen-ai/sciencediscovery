@@ -290,7 +290,7 @@ async function startScientificTestApi(
         maxFileBytes: 0, maxOutputBytes: 1_000_000, maxWorkspaceBytes: 1024, networkPolicy: "none", noNewPrivileges: true,
         runnerVersion: "test", sandbox: "bubblewrap",
         scientificEnvs: { available: true, enabled: true, languages: ["python", "r"], provisioner: "test", startersReady: true },
-        seccompBaseline: "multiarch-v1-profile-aware", status: "ok", workerConcurrency: 1,
+        seccompBaseline: "multiarch-v1-profile-aware", status: "ok", workerConcurrency: null,
       });
       return;
     }
@@ -2891,7 +2891,7 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
   assert.equal(health.body.runner.seccompBaseline, "multiarch-v1-profile-aware");
   assert.equal(health.body.runner.noNewPrivileges, true);
   assert.equal(health.body.runner.executionAuth, "bearer+hmac-sha256");
-  assert.equal(health.body.runner.workerConcurrency, 1);
+  assert.equal(health.body.runner.workerConcurrency, null);
   assert.equal(health.body.runner.executionTimeoutMs, 60_000);
 
   const unauthorized = await fetch(`${origin}/api/projects`);

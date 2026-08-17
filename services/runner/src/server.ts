@@ -65,6 +65,7 @@ import { EnvironmentStore } from "./environment-store.js";
 import { KernelManager } from "./kernel-manager.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
+import { agentExecutionKey, KeyedTaskQueue, requestAgentExecutionKey } from "./agent-execution.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
 
 const execFileAsync = promisify(execFile);
@@ -251,14 +252,9 @@ export function createRunnerServer(
     maxOutputBytes: config.maxOutputBytes,
     maxWorkspaceBytes: config.maxWorkspaceBytes,
   }, profiles);
-  let executionTail = Promise.resolve();
+  const executionQueues = new KeyedTaskQueue();
   const seenExecutions = new Map<string, number>();
   const activeExecutions = new Map<string, RunnerExecutionStatus>();
-  const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
-    const result = executionTail.then(operation, operation);
-    executionTail = result.then(() => undefined, () => undefined);
-    return result;
-  };
   const executionUser = currentExecutionUser();
   const executeQueued = async <T>(
     execution: PythonExecutionRequest | ShellExecutionRequest,
@@ -268,6 +264,7 @@ export function createRunnerServer(
     operation: () => Promise<T>,
   ): Promise<T> => {
     const status: RunnerExecutionStatus = {
+      agentId: execution.agentId,
       executionId: execution.executionId,
       kernelMode,
       language,
@@ -281,7 +278,7 @@ export function createRunnerServer(
     };
     signal.addEventListener("abort", removeCancelledQueueEntry, { once: true });
     try {
-      return await enqueue(async () => {
+      return await executionQueues.run(requestAgentExecutionKey(execution), async () => {
         if (signal.aborted) throw new Error("Runner execution aborted before start");
         status.startedAt = new Date().toISOString();
         status.status = "running";
@@ -290,7 +287,7 @@ export function createRunnerServer(
         } finally {
           activeExecutions.delete(status.executionId);
         }
-      });
+      }, execution.permissionEpoch.sessionId);
     } catch (error) {
       const errorMessage = shortErrorMessage(error);
       const interrupted = signal.aborted;
@@ -345,7 +342,7 @@ export function createRunnerServer(
           scientificEnvs: environmentStore?.capability ?? DISABLED_SCIENTIFIC_ENVS,
           seccompBaseline: SECCOMP_BASELINE_VERSION,
           status: "ok",
-          workerConcurrency: 1,
+          workerConcurrency: null,
         } satisfies RunnerHealth);
         return;
       }
@@ -459,8 +456,10 @@ export function createRunnerServer(
         const input = JSON.parse(await readBody(request)) as { reason?: string; sessionId?: string };
         if (!input.sessionId?.trim()) throw new Error("sessionId is required");
         const reason = input.reason?.trim() || "Persistent kernel memory was cleared";
-        const count = (kernelManager ? await kernelManager.teardownSession(input.sessionId, reason) : 0)
-          + await shellSessions.teardownSession(input.sessionId, reason);
+        const count = await executionQueues.runGroupExclusive(input.sessionId, async () => (
+          (kernelManager ? await kernelManager.teardownSession(input.sessionId!, reason) : 0)
+          + await shellSessions.teardownSession(input.sessionId!, reason)
+        ));
         sendJson(response, 200, { count, reason });
         return;
       }
@@ -469,8 +468,19 @@ export function createRunnerServer(
         const input = JSON.parse(await readBody(request)) as { reason?: string };
         const kernelId = decodeURIComponent(kernelTeardownMatch[1]!);
         const reason = input.reason?.trim() || "Persistent kernel memory was cleared";
-        const count = (kernelManager ? await kernelManager.teardownKernel(kernelId, reason) : 0)
-          || await shellSessions.teardownKernel(kernelId, reason);
+        const target = [...(kernelManager?.list() ?? []), ...shellSessions.list()]
+          .find((kernel) => kernel.id === kernelId);
+        const teardown = async () => (
+          (kernelManager ? await kernelManager.teardownKernel(kernelId, reason) : 0)
+          || await shellSessions.teardownKernel(kernelId, reason)
+        );
+        const count = target
+          ? await executionQueues.run(
+            agentExecutionKey(target.sessionId, target.agentId),
+            teardown,
+            target.sessionId,
+          )
+          : await teardown();
         sendJson(response, 200, { count, kernelId, reason });
         return;
       }
@@ -572,7 +582,7 @@ export function createRunnerServer(
           () => execution.kernelMode === "persistent"
             ? shellSessions.execute(execution, signal)
             : executeShell(config, execution, signal,
-                profiles.get(execution.permissionEpoch.sessionId, execution.permissionEpoch.id)),
+                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id)),
         )));
         return;
       }
@@ -595,8 +605,8 @@ export function createRunnerServer(
           return;
         }
         seenExecutions.set(execution.executionId, now);
-        // Any Session activity keeps that Session's persistent shell alive.
-        shellSessions.touchSession(execution.permissionEpoch.sessionId);
+        // Activity keeps only this Agent's persistent shell alive.
+        shellSessions.touchAgent(execution.permissionEpoch.sessionId, execution.agentId);
         sendJson(response, 200, await abortOnDisconnect(response, (signal) => executeQueued(
           execution,
           execution.language ?? "python",
@@ -606,7 +616,7 @@ export function createRunnerServer(
             ? kernelManager?.execute(execution, signal)
               ?? Promise.reject(new Error("Persistent kernels are unavailable"))
             : executePython(config, execution, signal, environmentStore,
-                profiles.get(execution.permissionEpoch.sessionId, execution.permissionEpoch.id)),
+                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id)),
         )));
         return;
       }
@@ -711,7 +721,9 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     idleTimeoutMs: config.scientificKernelIdleMs,
     maxOutputBytes: config.maxOutputBytes,
     maxWorkspaceBytes: config.maxWorkspaceBytes,
-  }, environmentStore, (sessionId, permissionEpochId) => envProfiles.get(sessionId, permissionEpochId));
+  }, environmentStore, (sessionId, agentId, permissionEpochId) => (
+    envProfiles.get(sessionId, agentId, permissionEpochId)
+  ));
   const server = createRunnerServer(config, environmentStore, kernelManager, shellSessionManager, envProfiles);
   server.once("close", () => { void kernelManager.close(); });
   await new Promise<void>((resolveListen, reject) => {

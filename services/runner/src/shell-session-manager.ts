@@ -43,6 +43,7 @@ import {
   workspaceUsageBytes,
 } from "./executor.js";
 import { ensureBaselineSeccompFilter } from "./seccomp.js";
+import { agentExecutionKey, KeyedTaskQueue } from "./agent-execution.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 
 /**
@@ -130,6 +131,8 @@ class ManagedShellSession {
   constructor(
     readonly child: ChildProcessWithoutNullStreams,
     session: KernelSession,
+    readonly workspaceRoot: string,
+    readonly readOnlyWorkspaceRoot: string | undefined,
     private idleTimeoutMs: number,
     /** Invoked exactly once, on every stop path (idle, teardown, exit, error). */
     private readonly onStopped: (shellSession: ManagedShellSession, reason: string) => void,
@@ -288,14 +291,15 @@ export interface ShellSessionManagerConfig {
 }
 
 /**
- * One persistent shell session per (Session, Permission Epoch), mirroring the
- * python/r kernel reuse key. Each evaluation also sediments the shell's
+ * One persistent shell session per (Session, Agent, Permission Epoch). Each
+ * evaluation also sediments the shell's
  * post-eval cwd + exported env into the SessionEnvProfileStore so later
  * python/r/ephemeral-shell executions inherit the whitelisted subset (C).
  */
 export class ShellSessionManager {
   private readonly sessions = new Map<string, ManagedShellSession>();
   private readonly lostState = new Map<string, string>();
+  private readonly executionQueue = new KeyedTaskQueue();
   private readonly idleTimeoutMs: number;
 
   constructor(
@@ -309,14 +313,35 @@ export class ShellSessionManager {
     return [...this.sessions.values()].map((shellSession) => ({ ...shellSession.session }));
   }
 
-  /** Re-arm idle timers on any Session activity (e.g. a python/r execution). */
-  touchSession(sessionId: string): void {
+  /** Re-arm idle timers on activity from the shell's owning Agent. */
+  touchAgent(sessionId: string, agentId: string): void {
     for (const shellSession of this.sessions.values()) {
-      if (shellSession.session.sessionId === sessionId) shellSession.touch();
+      if (shellSession.session.sessionId === sessionId && shellSession.session.agentId === agentId) {
+        shellSession.touch();
+      }
     }
   }
 
   async execute(request: ShellExecutionRequest, signal?: AbortSignal): Promise<ShellExecutionResult> {
+    const queueKey = agentExecutionKey(request.permissionEpoch.sessionId, request.agentId);
+    const runtimeKey = JSON.stringify([
+      request.permissionEpoch.sessionId,
+      request.agentId,
+      "shell",
+      SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+      request.permissionEpoch.id,
+    ]);
+    return await this.executionQueue.run(
+      queueKey,
+      () => this.executeSerialized(request, runtimeKey, signal),
+    );
+  }
+
+  private async executeSerialized(
+    request: ShellExecutionRequest,
+    key: string,
+    signal?: AbortSignal,
+  ): Promise<ShellExecutionResult> {
     if ((request.kernelMode ?? "ephemeral") !== "persistent") {
       throw new Error("Shell session manager requires persistent mode");
     }
@@ -333,6 +358,9 @@ export class ShellSessionManager {
       throw new Error("Persistent shell sessions accept exactly one read-write workspace mount");
     }
     const workspaceRoot = await validatedWorkspace(this.config.dataDir, request.workspaceRoot);
+    const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
+      ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot)
+      : undefined;
     const maxWorkspaceBytes = resolveQuotaBytes(
       request.maxWorkspaceBytes,
       this.config.maxWorkspaceBytes ?? DEFAULT_MAX_WORKSPACE_BYTES,
@@ -348,26 +376,30 @@ export class ShellSessionManager {
     }
 
     const sessionId = request.permissionEpoch.sessionId;
-    const key = [sessionId, "shell", SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, request.permissionEpoch.id].join(":");
+    const agentKey = agentExecutionKey(sessionId, request.agentId);
     for (const [existingKey, existing] of this.sessions) {
       if (existingKey === key || existing.session.sessionId !== sessionId) continue;
+      if (existing.session.agentId !== request.agentId) continue;
       await existing.stop("Permission Epoch changed; the persistent shell environment was lost");
     }
     let shellSession = this.sessions.get(key);
     if (shellSession?.isStopped) {
-      this.lostState.set(sessionId, shellSession.session.memoryLostReason
+      this.lostState.set(agentKey, shellSession.session.memoryLostReason
         ?? "Persistent shell session exited; the persistent shell environment was lost");
       this.sessions.delete(key);
-      this.profiles.clear(sessionId, request.permissionEpoch.id);
+      this.profiles.clear(sessionId, request.agentId, request.permissionEpoch.id);
       shellSession = undefined;
     }
     if (!shellSession) {
-      shellSession = await this.startSession(request, key);
+      shellSession = await this.startSession(request, key, workspaceRoot, readOnlyWorkspaceRoot);
       this.sessions.set(key, shellSession);
+    } else if (shellSession.workspaceRoot !== workspaceRoot
+      || shellSession.readOnlyWorkspaceRoot !== readOnlyWorkspaceRoot) {
+      throw new Error("Persistent shell Session-Agent identity cannot be reused with different workspace mounts");
     }
     // Snapshot before evaluating: a loss caused by THIS evaluation (e.g. user
     // `exit`) must surface on the NEXT call, not consume itself here.
-    const memoryStateLost = this.lostState.has(sessionId) ? this.takeLostState(sessionId) : undefined;
+    const memoryStateLost = this.lostState.has(agentKey) ? this.takeLostState(agentKey) : undefined;
 
     const before = await workspaceSnapshot(workspaceRoot);
     const startedAt = new Date().toISOString();
@@ -399,7 +431,7 @@ export class ShellSessionManager {
     // Sediment the post-eval shell state for later cross-language injection.
     // Skipped when the session died mid-eval (the exit trap still reported).
     if (!shellSession.isStopped) {
-      this.profiles.update(sessionId, request.permissionEpoch.id, response.cwd, response.env);
+      this.profiles.update(sessionId, request.agentId, request.permissionEpoch.id, response.cwd, response.env);
     }
     const after = await workspaceSnapshot(workspaceRoot);
     const createdFiles = [...after.keys()].filter((path) => !before.has(path)).toSorted();
@@ -437,7 +469,6 @@ export class ShellSessionManager {
       await shellSession.stop(reason);
       count += 1;
     }
-    if (count) this.lostState.set(sessionId, reason);
     this.profiles.clearSession(sessionId);
     return count;
   }
@@ -454,21 +485,23 @@ export class ShellSessionManager {
   async close(): Promise<void> {
     await Promise.all([...this.sessions.values()].map((shellSession) => shellSession.stop("Runner stopped")));
     this.sessions.clear();
+    this.lostState.clear();
   }
 
-  private takeLostState(sessionId: string): string {
-    const reason = this.lostState.get(sessionId)!;
-    this.lostState.delete(sessionId);
+  private takeLostState(agentKey: string): string {
+    const reason = this.lostState.get(agentKey)!;
+    this.lostState.delete(agentKey);
     return reason;
   }
 
-  private async startSession(request: ShellExecutionRequest, key: string): Promise<ManagedShellSession> {
+  private async startSession(
+    request: ShellExecutionRequest,
+    key: string,
+    workspaceRoot: string,
+    readOnlyWorkspaceRoot: string | undefined,
+  ): Promise<ManagedShellSession> {
     const id = `shell-${randomUUID()}`;
     const filter = await open(await ensureBaselineSeccompFilter(this.config.dataDir), "r");
-    const workspaceRoot = await validatedWorkspace(this.config.dataDir, request.workspaceRoot);
-    const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
-      ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot)
-      : undefined;
     const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
     // A fresh session always starts from the clearenv baseline: the profile is
     // produced by this shell, not consumed by it.
@@ -498,6 +531,7 @@ export class ShellSessionManager {
     const now = new Date();
     const idleTimeoutMs = executionTimeoutMs(request.kernelIdleTimeoutMs, this.idleTimeoutMs);
     const session: KernelSession = {
+      agentId: request.agentId,
       createdAt: now.toISOString(),
       environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
       ...(idleTimeoutMs > 0 ? { expiresAt: new Date(now.getTime() + idleTimeoutMs).toISOString() } : {}),
@@ -512,11 +546,17 @@ export class ShellSessionManager {
     return new ManagedShellSession(
       child as ChildProcessWithoutNullStreams,
       session,
+      workspaceRoot,
+      readOnlyWorkspaceRoot,
       idleTimeoutMs,
       (shellSession, reason) => {
         if (this.sessions.get(key) === shellSession) this.sessions.delete(key);
-        this.lostState.set(shellSession.session.sessionId, reason);
-        this.profiles.clear(shellSession.session.sessionId, shellSession.session.permissionEpochId);
+        this.lostState.set(agentExecutionKey(shellSession.session.sessionId, shellSession.session.agentId), reason);
+        this.profiles.clear(
+          shellSession.session.sessionId,
+          shellSession.session.agentId,
+          shellSession.session.permissionEpochId,
+        );
       },
     );
   }

@@ -48,6 +48,7 @@ import {
   type SandboxLaunch,
 } from "./executor.js";
 import { ensureBaselineSeccompFilter } from "./seccomp.js";
+import { agentExecutionKey, KeyedTaskQueue } from "./agent-execution.js";
 import type { SessionEnvProfile } from "./session-env-profile.js";
 const PYTHON_KERNEL_WORKER = String.raw`
 import contextlib, io, json, os, sys, traceback
@@ -120,6 +121,8 @@ class ManagedKernel {
     session: KernelSession,
     /** Env and cwd the kernel was spawned with; per-eval provenance fallback. */
     readonly launch: SandboxLaunch,
+    readonly workspaceRoot: string,
+    readonly readOnlyWorkspaceRoot: string | undefined,
     private idleTimeoutMs: number,
     private readonly onIdle: (kernel: ManagedKernel) => void,
     private readonly onUnexpectedExit: (kernel: ManagedKernel, reason: string) => void,
@@ -268,13 +271,18 @@ export interface KernelManagerConfig {
 export class KernelManager {
   private readonly kernels = new Map<string, ManagedKernel>();
   private readonly lostState = new Map<string, string>();
+  private readonly executionQueue = new KeyedTaskQueue();
   private readonly idleTimeoutMs: number;
 
   constructor(
     private readonly config: KernelManagerConfig,
     private readonly environmentStore: EnvironmentStore,
     /** Session env profile lookup for spawn-time injection. */
-    private readonly profileProvider?: (sessionId: string, permissionEpochId: string) => SessionEnvProfile | undefined,
+    private readonly profileProvider?: (
+      sessionId: string,
+      agentId: string,
+      permissionEpochId: string,
+    ) => SessionEnvProfile | undefined,
   ) {
     this.idleTimeoutMs = config.idleTimeoutMs ?? 0;
   }
@@ -288,6 +296,32 @@ export class KernelManager {
     signal?: AbortSignal,
   ): Promise<PythonExecutionResult> {
     const language: ScientificLanguage = request.language ?? "python";
+    const queueKey = JSON.stringify([
+      agentExecutionKey(request.permissionEpoch.sessionId, request.agentId),
+      language,
+    ]);
+    const runtime = this.environmentStore.resolveRuntime(request.environmentRevisionId, language);
+    const runtimeKey = JSON.stringify([
+      request.permissionEpoch.sessionId,
+      request.agentId,
+      language,
+      runtime.revision.id,
+      request.permissionEpoch.id,
+    ]);
+    return await this.executionQueue.run(
+      queueKey,
+      () => this.executeSerialized(request, runtime.prefixPath, runtime.revision.id, language, runtimeKey, signal),
+    );
+  }
+
+  private async executeSerialized(
+    request: PythonExecutionRequest,
+    prefixPath: string,
+    environmentRevisionId: string,
+    language: ScientificLanguage,
+    key: string,
+    signal?: AbortSignal,
+  ): Promise<PythonExecutionResult> {
     if ((request.kernelMode ?? "ephemeral") !== "persistent") throw new Error("Kernel manager requires persistent mode");
     if (request.permissionEpoch.executeGrantScope === "once") {
       throw new Error("Persistent kernels are not allowed for once-scoped execute grants");
@@ -298,8 +332,10 @@ export class KernelManager {
       || request.permissionEpoch.mounts[0]?.mode !== "read-write") {
       throw new Error("Persistent kernels accept exactly one read-write workspace mount");
     }
-    const runtime = this.environmentStore.resolveRuntime(request.environmentRevisionId, language);
     const workspaceRoot = await validatedWorkspace(this.config.dataDir, request.workspaceRoot);
+    const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
+      ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot)
+      : undefined;
     const maxWorkspaceBytes = resolveQuotaBytes(
       request.maxWorkspaceBytes,
       this.config.maxWorkspaceBytes ?? DEFAULT_MAX_WORKSPACE_BYTES,
@@ -314,13 +350,13 @@ export class KernelManager {
       throw new Error(workspaceQuotaPrecheckMessage(maxWorkspaceBytes));
     }
 
-    const key = [request.permissionEpoch.sessionId, language, runtime.revision.id, request.permissionEpoch.id].join(":");
+    const lostStateKey = JSON.stringify([request.permissionEpoch.sessionId, request.agentId, language]);
     for (const [existingKey, existing] of this.kernels) {
       if (existingKey === key || existing.session.sessionId !== request.permissionEpoch.sessionId
-        || existing.session.language !== language) continue;
+        || existing.session.agentId !== request.agentId || existing.session.language !== language) continue;
       await existing.stop("Permission Epoch or Environment Revision changed; persistent memory was lost");
       this.kernels.delete(existingKey);
-      this.lostState.set(request.permissionEpoch.sessionId, existing.session.memoryLostReason!);
+      this.lostState.set(lostStateKey, existing.session.memoryLostReason!);
     }
 
     let kernel = this.kernels.get(key);
@@ -328,13 +364,23 @@ export class KernelManager {
       // A kernel stopped mid-eval (timeout, quota, abort) stays in the map
       // until now; replace it and surface the loss on this execution.
       this.kernels.delete(key);
-      this.lostState.set(request.permissionEpoch.sessionId,
+      this.lostState.set(lostStateKey,
         kernel.session.memoryLostReason ?? "Persistent kernel stopped; persistent memory was lost");
       kernel = undefined;
     }
     if (!kernel) {
-      kernel = await this.startKernel(request, runtime.prefixPath, runtime.revision.id, language);
+      kernel = await this.startKernel(
+        request,
+        prefixPath,
+        environmentRevisionId,
+        language,
+        workspaceRoot,
+        readOnlyWorkspaceRoot,
+      );
       this.kernels.set(key, kernel);
+    } else if (kernel.workspaceRoot !== workspaceRoot
+      || kernel.readOnlyWorkspaceRoot !== readOnlyWorkspaceRoot) {
+      throw new Error("Persistent kernel Session-Agent identity cannot be reused with different workspace mounts");
     }
 
     const before = await workspaceSnapshot(workspaceRoot);
@@ -373,7 +419,7 @@ export class KernelManager {
     return {
       cgroupMode: RESOURCE_LIMIT_MODE,
       createdFiles,
-      environmentRevisionId: runtime.revision.id,
+      environmentRevisionId,
       environmentVariables: response.env ?? kernel.launch.env,
       executionId: request.executionId,
       exitCode: response.exitCode,
@@ -381,8 +427,8 @@ export class KernelManager {
       kernelId: kernel.session.id,
       kernelMode: "persistent",
       language,
-      ...(this.lostState.has(request.permissionEpoch.sessionId)
-        ? { memoryStateLost: this.takeLostState(request.permissionEpoch.sessionId) }
+      ...(this.lostState.has(lostStateKey)
+        ? { memoryStateLost: this.takeLostState(lostStateKey) }
         : {}),
       modifiedFiles,
       networkPolicy: "none",
@@ -401,9 +447,12 @@ export class KernelManager {
       if (kernel.session.sessionId !== sessionId) continue;
       await kernel.stop(reason);
       this.kernels.delete(key);
+      this.lostState.set(
+        JSON.stringify([kernel.session.sessionId, kernel.session.agentId, kernel.session.language]),
+        reason,
+      );
       count += 1;
     }
-    if (count) this.lostState.set(sessionId, reason);
     return count;
   }
 
@@ -412,7 +461,10 @@ export class KernelManager {
       if (kernel.session.id !== kernelId) continue;
       await kernel.stop(reason);
       this.kernels.delete(key);
-      this.lostState.set(kernel.session.sessionId, reason);
+      this.lostState.set(
+        JSON.stringify([kernel.session.sessionId, kernel.session.agentId, kernel.session.language]),
+        reason,
+      );
       return 1;
     }
     return 0;
@@ -424,7 +476,10 @@ export class KernelManager {
       if (kernel.session.environmentRevisionId !== revisionId) continue;
       await kernel.stop(reason);
       this.kernels.delete(key);
-      this.lostState.set(kernel.session.sessionId, reason);
+      this.lostState.set(
+        JSON.stringify([kernel.session.sessionId, kernel.session.agentId, kernel.session.language]),
+        reason,
+      );
       count += 1;
     }
     return count;
@@ -433,11 +488,12 @@ export class KernelManager {
   async close(): Promise<void> {
     await Promise.all([...this.kernels.values()].map((kernel) => kernel.stop("Runner stopped")));
     this.kernels.clear();
+    this.lostState.clear();
   }
 
-  private takeLostState(sessionId: string): string {
-    const reason = this.lostState.get(sessionId)!;
-    this.lostState.delete(sessionId);
+  private takeLostState(lostStateKey: string): string {
+    const reason = this.lostState.get(lostStateKey)!;
+    this.lostState.delete(lostStateKey);
     return reason;
   }
 
@@ -446,22 +502,24 @@ export class KernelManager {
     prefixPath: string,
     environmentRevisionId: string,
     language: ScientificLanguage,
+    workspaceRoot: string,
+    readOnlyWorkspaceRoot: string | undefined,
   ): Promise<ManagedKernel> {
     const id = `kernel-${randomUUID()}`;
     const filter = await open(
       await ensureBaselineSeccompFilter(this.config.dataDir),
       "r",
     );
-    const workspaceRoot = await validatedWorkspace(this.config.dataDir, request.workspaceRoot);
-    const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
-      ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot)
-      : undefined;
     const interpreter = `/opt/science-env/bin/${language === "python" ? "python" : "R"}`;
     const worker = language === "python" ? PYTHON_KERNEL_WORKER : R_KERNEL_WORKER;
     const hostInterpreterMasks = await hostInterpreterMaskArguments();
     const hostRuntimeSupport = await hostRuntimeSupportArguments();
     const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
-    const envProfile = this.profileProvider?.(request.permissionEpoch.sessionId, request.permissionEpoch.id);
+    const envProfile = this.profileProvider?.(
+      request.permissionEpoch.sessionId,
+      request.agentId,
+      request.permissionEpoch.id,
+    );
     const launch = buildSandboxLaunch({
       chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
       ...await sandboxLaunchProfile(this.config.bwrapPath),
@@ -493,6 +551,7 @@ export class KernelManager {
     const now = new Date();
     const idleTimeoutMs = executionTimeoutMs(request.kernelIdleTimeoutMs, this.idleTimeoutMs);
     const session: KernelSession = {
+      agentId: request.agentId,
       createdAt: now.toISOString(),
       environmentRevisionId,
       ...(idleTimeoutMs > 0 ? { expiresAt: new Date(now.getTime() + idleTimeoutMs).toISOString() } : {}),
@@ -508,14 +567,26 @@ export class KernelManager {
       for (const [key, candidate] of this.kernels) {
         if (candidate !== kernel) continue;
         this.kernels.delete(key);
-        this.lostState.set(kernel.session.sessionId, reason);
+        this.lostState.set(
+          JSON.stringify([kernel.session.sessionId, kernel.session.agentId, kernel.session.language]),
+          reason,
+        );
       }
     };
-    return new ManagedKernel(child as ChildProcessWithoutNullStreams, session, launch, idleTimeoutMs, (kernel) => {
-      const reason = `Persistent kernel idle timeout after ${kernel.configuredIdleTimeoutMs} ms`;
-      void kernel.stop(reason).then(() => {
-        removeKernel(kernel, kernel.session.memoryLostReason!);
-      });
-    }, removeKernel);
+    return new ManagedKernel(
+      child as ChildProcessWithoutNullStreams,
+      session,
+      launch,
+      workspaceRoot,
+      readOnlyWorkspaceRoot,
+      idleTimeoutMs,
+      (kernel) => {
+        const reason = `Persistent kernel idle timeout after ${kernel.configuredIdleTimeoutMs} ms`;
+        void kernel.stop(reason).then(() => {
+          removeKernel(kernel, kernel.session.memoryLostReason!);
+        });
+      },
+      removeKernel,
+    );
   }
 }

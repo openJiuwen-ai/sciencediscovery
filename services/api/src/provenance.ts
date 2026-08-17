@@ -57,6 +57,7 @@ function interruptedExecutionStatus(signal: AbortSignal | undefined): "cancelled
 }
 
 export interface RecordExecutionOptions {
+  agentId: string;
   artifactPathPrefix?: string;
   code: string;
   environmentRevisionId?: string;
@@ -368,6 +369,7 @@ export class ProvenanceRecorder {
     let result: ShellExecutionResult;
     try {
       result = await options.runnerClient.executeShell({
+        agentId: options.agentId,
         code: options.code,
         ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),
         ...(options.kernelIdleTimeoutMs !== undefined ? { kernelIdleTimeoutMs: options.kernelIdleTimeoutMs } : {}),
@@ -486,6 +488,7 @@ export class ProvenanceRecorder {
 
     try {
       result = await options.runnerClient.execute({
+        agentId: options.agentId,
         code: options.code,
         environmentRevisionId: options.environmentRevisionId,
         ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),

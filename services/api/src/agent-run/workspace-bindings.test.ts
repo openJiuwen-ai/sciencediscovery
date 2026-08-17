@@ -22,8 +22,8 @@ import type { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "./permission-runtime.js";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
-test("execution bindings apply the same permission and provenance path to each agent run", async () => {
-  const executed: Array<{ executionTimeoutMs?: number; kernelIdleTimeoutMs?: number; turnId: string }> = [];
+test("execution bindings apply stable Agent identity with the same permission and provenance path", async () => {
+  const executed: Array<{ agentId: string; executionTimeoutMs?: number; kernelIdleTimeoutMs?: number; turnId: string }> = [];
   const permission = {
     getEpoch: () => ({ id: "epoch-1" }),
     requirePrivilege: async () => undefined,
@@ -32,8 +32,14 @@ test("execution bindings apply the same permission and provenance path to each a
     permission,
     permissionScopeLabel: "in test",
     provenanceRecorder: {
-      executePython: async (options: { executionTimeoutMs?: number; kernelIdleTimeoutMs?: number; turnId: string }) => {
+      executePython: async (options: {
+        agentId: string;
+        executionTimeoutMs?: number;
+        kernelIdleTimeoutMs?: number;
+        turnId: string;
+      }) => {
         executed.push({
+          agentId: options.agentId,
           ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),
           ...(options.kernelIdleTimeoutMs !== undefined ? { kernelIdleTimeoutMs: options.kernelIdleTimeoutMs } : {}),
           turnId: options.turnId,
@@ -48,20 +54,22 @@ test("execution bindings apply the same permission and provenance path to each a
   };
   const main = createWorkspaceExecutionBindings({
     ...common,
+    agentId: "main",
     executionId: "main-execution",
     executionTimeoutMs: 45_000,
     kernelIdleTimeoutMs: 60_000,
   });
   const subagent = createWorkspaceExecutionBindings({
     ...common,
+    agentId: "subagent:subagent-1",
     executionId: "subagent-execution",
   });
 
   await main.executePython("print('main')");
   await subagent.executePython("print('subagent')");
   assert.deepEqual(executed, [
-    { executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000, turnId: "main-execution" },
-    { turnId: "subagent-execution" },
+    { agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000, turnId: "main-execution" },
+    { agentId: "subagent:subagent-1", turnId: "subagent-execution" },
   ]);
 });
 
@@ -75,6 +83,7 @@ test("environment install forwards the trusted workspace only from the Agent bin
     snapshot: { hash: "a".repeat(64), size: 1 },
   } as const;
   const bindings = createWorkspaceExecutionBindings({
+    agentId: "main",
     executionId: "run-1",
     permission: {
       getEpoch: () => ({ id: "epoch-1" }),
@@ -142,6 +151,7 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
     workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
   };
   const bindings = createWorkspaceExecutionBindings({
+    agentId: "main",
     executionId: "run-1",
     npuBrokerEnabled: true,
     permission: {

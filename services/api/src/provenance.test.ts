@@ -114,6 +114,7 @@ test("multi-step persistent R executions create separate runs and an artifact de
   const recorder = new ProvenanceRecorder(dataDir, store);
   for (const code of ["x <- 41", "write.csv(data.frame(metric='answer', value=x + 1), 'r-summary.csv')"]) {
     await recorder.executeScientific({
+      agentId: "main",
       code,
       environmentRevisionId: revision.id,
       kernelMode: "persistent",
@@ -179,6 +180,7 @@ test("shell execution records authoritative code, logs, environment, and generat
   } as unknown as RunnerClient;
   const recorder = new ProvenanceRecorder(dataDir, store);
   await recorder.executeShell({
+    agentId: "main",
     code: "/usr/bin/bash run_all.sh",
     permissionEpoch,
     runnerClient,
@@ -239,6 +241,7 @@ test("execution provenance distinguishes runs by working directory and env snaps
   const recorder = new ProvenanceRecorder(dataDir, store);
   for (const code of ["echo one", "echo two"]) {
     await recorder.executeShell({
+      agentId: "main",
       code, kernelMode: "persistent", permissionEpoch, runnerClient,
       sessionId: session.id, turnId: "turn-env", workspaceRoot,
     });
@@ -309,6 +312,7 @@ test("subagent execution prefixes generated artifact paths with the private work
   } as unknown as RunnerClient;
 
   await recorder.executeShell({
+    agentId: "subagent:subagent-1",
     artifactPathPrefix: subagentPath,
     code: "cat > report.md",
     permissionEpoch,
@@ -392,6 +396,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
     },
   } as unknown as RunnerClient;
   await recorder.executeShell({
+    agentId: "main",
     code: "cat > report.md", permissionEpoch, runnerClient, sessionId: session.id, turnId: "t1", workspaceRoot,
   });
   assert.equal(store.listArtifacts(session.id).length, 0, "generated report remains physical until declared");
@@ -424,6 +429,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
     },
   } as unknown as RunnerClient;
   await dataRecorder.executeShell({
+    agentId: "main",
     code: "cat > data.csv", permissionEpoch, runnerClient: dataRunner, sessionId: session.id, turnId: "t2", workspaceRoot,
   });
   await dataRecorder.declareWorkspaceArtifact({
@@ -556,6 +562,7 @@ test("drain is scoped by turnId: a report in one context does not absorb another
     },
   } as unknown as RunnerClient;
   await recorder.executeShell({
+    agentId: "main",
     code: "cat > report.md", permissionEpoch, runnerClient, sessionId: session.id, turnId: "leader", workspaceRoot,
   });
   // The leader declares its report — should drain ONLY the leader entry.
@@ -668,6 +675,7 @@ test("declaring an execution output preserves inferred input provenance without 
   } as unknown as RunnerClient;
 
   const result = await recorder.executeShell({
+    agentId: "main",
     code: "python plot.py squares.csv > plot.svg",
     permissionEpoch,
     runnerClient,
@@ -735,6 +743,7 @@ test("an execution that produces two artifacts in one run does not wire them as 
 
   // Code names both files — the pre-fix heuristic would have matched either.
   const result = await recorder.executeShell({
+    agentId: "main",
     code: `python plot.py --out fig.svg --data data.csv`,
     permissionEpoch,
     runnerClient,
@@ -782,6 +791,7 @@ test("an execution interrupted by a run abort is recorded as cancelled, not fail
   } as unknown as RunnerClient;
   const recorder = new ProvenanceRecorder(dataDir, store);
   await assert.rejects(recorder.executeShell({
+    agentId: "main",
     code: "/usr/bin/bash long_job.sh",
     permissionEpoch,
     runnerClient,
@@ -800,6 +810,7 @@ test("an execution interrupted by a run abort is recorded as cancelled, not fail
     executeShell: async (): Promise<ShellExecutionResult> => { throw new Error("Runner is unavailable"); },
   } as unknown as RunnerClient;
   await assert.rejects(recorder.executeShell({
+    agentId: "main",
     code: "/usr/bin/bash other_job.sh",
     permissionEpoch,
     runnerClient: brokenRunner,
@@ -858,6 +869,7 @@ test("recorder mirrors provenance addressing fields to the memory graph on shell
     const sink = new MemoryGraphSink(client, () => true);
     const recorder = new ProvenanceRecorder(dataDir, store, sink);
     await recorder.executeShell({
+      agentId: "main",
       code: "echo ok", permissionEpoch, runnerClient,
       sessionId: session.id, turnId: "turn-mirror", workspaceRoot,
     });

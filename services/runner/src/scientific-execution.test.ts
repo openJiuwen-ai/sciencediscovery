@@ -129,6 +129,7 @@ exec "${resolve(prefix, "bin", "python")}" "${resolve(prefix, "bin", "R-worker.p
 test("scientific execution uses the selected environment prefix and denies Python/R egress", async (context) => {
   const { dataDir, store, workspaceRoot } = await fixture(context);
   const python = await executePython({ bwrapPath: BWRAP_PATH, dataDir, execTimeoutMs: 60_000, maxOutputBytes: 1_000_000, maxWorkspaceBytes: 10_737_418_240 }, {
+    agentId: "main",
     code: "import socket, subprocess, sys\nprint(f'prefix={sys.prefix}')\ntry:\n socket.create_connection(('1.1.1.1', 53), timeout=.2); print('network=available')\nexcept OSError: print('network=denied')\ntry:\n subprocess.run(['/usr/bin/python3', '-c', 'print(1)'], check=True); print('host_python=available')\nexcept OSError: print('host_python=denied')",
     environmentRevisionId: "rev-python",
     executionId: "environment-prefix",
@@ -143,6 +144,7 @@ test("scientific execution uses the selected environment prefix and denies Pytho
   assert.equal(python.environmentRevisionId, "rev-python");
 
   const r = await executePython({ bwrapPath: BWRAP_PATH, dataDir, execTimeoutMs: 60_000, maxOutputBytes: 1_000_000, maxWorkspaceBytes: 10_737_418_240 }, {
+    agentId: "main",
     code: "print('network check')",
     environmentRevisionId: "rev-r",
     executionId: "r-network",
@@ -155,6 +157,7 @@ test("scientific execution uses the selected environment prefix and denies Pytho
   assert.match(r.stdout, /network=denied/);
 
   await assert.rejects(executePython({ bwrapPath: BWRAP_PATH, dataDir, execTimeoutMs: 60_000, maxOutputBytes: 1_000_000, maxWorkspaceBytes: 10_737_418_240 }, {
+    agentId: "main",
     code: "print('no')",
     environmentRevisionId: "unknown-revision",
     executionId: "unknown-revision",
@@ -171,6 +174,7 @@ test("shell execution runs an existing workspace script with the same sandbox an
     "if exec 3<>/dev/tcp/1.1.1.1/53 2>/dev/null; then echo network=available; else echo network=denied; fi",
   ].join("\n"));
   const result = await executeShell({ bwrapPath: BWRAP_PATH, dataDir, execTimeoutMs: 60_000, maxOutputBytes: 1_000_000, maxWorkspaceBytes: 10_737_418_240 }, {
+    agentId: "main",
     code: "/usr/bin/bash run_all.sh 'legacy pipeline'",
     executionId: "shell-script",
     permissionEpoch: epoch(),
@@ -189,10 +193,12 @@ test("persistent Python kernels retain variables and restart across epoch or rev
   const manager = new KernelManager({ bwrapPath: BWRAP_PATH, dataDir, execTimeoutMs: 60_000, idleTimeoutMs: 5_000 }, store);
   context.after(() => manager.close());
   const first = await manager.execute({
+    agentId: "main",
     code: "x = 41\nprint('stored')", environmentRevisionId: "rev-python", executionId: "eval-one",
     kernelMode: "persistent", language: "python", permissionEpoch: epoch(), workspaceRoot,
   });
   const second = await manager.execute({
+    agentId: "main",
     code: "print(x + 1)", environmentRevisionId: "rev-python", executionId: "eval-two",
     kernelMode: "persistent", language: "python", permissionEpoch: epoch(), workspaceRoot,
   });
@@ -200,6 +206,7 @@ test("persistent Python kernels retain variables and restart across epoch or rev
   assert.equal(second.stdout.trim(), "42");
 
   const restarted = await manager.execute({
+    agentId: "main",
     code: "print('x' in globals())", environmentRevisionId: "rev-python-next", executionId: "eval-three",
     kernelMode: "persistent", language: "python", permissionEpoch: epoch("epoch-next"), workspaceRoot,
   });
@@ -208,10 +215,58 @@ test("persistent Python kernels retain variables and restart across epoch or rev
   assert.match(restarted.memoryStateLost ?? "", /Permission Epoch or Environment Revision changed/);
 
   await assert.rejects(manager.execute({
+    agentId: "main",
     code: "print('no')", environmentRevisionId: "rev-python", executionId: "once-eval",
     kernelMode: "persistent", language: "python", permissionEpoch: { ...epoch(), executeGrantScope: "once" },
     workspaceRoot,
   }), /once-scoped/);
+});
+
+test("a persistent Kernel rejects writable and read-only mount changes for one Session-Agent", async (context) => {
+  const { dataDir, store, workspaceRoot: readOnlyWorkspaceRoot } = await fixture(context);
+  const workspaceRoot = resolve(readOnlyWorkspaceRoot, "subagents", "subagent-1");
+  const otherWorkspaceRoot = resolve(readOnlyWorkspaceRoot, "subagents", "subagent-2");
+  const otherReadOnlyWorkspaceRoot = resolve(dataDir, "projects", "project", "shared-inputs");
+  await Promise.all([
+    mkdir(workspaceRoot, { recursive: true }),
+    mkdir(otherWorkspaceRoot, { recursive: true }),
+    mkdir(otherReadOnlyWorkspaceRoot, { recursive: true }),
+  ]);
+  const manager = new KernelManager({
+    bwrapPath: BWRAP_PATH,
+    dataDir,
+    execTimeoutMs: 60_000,
+    idleTimeoutMs: 5_000,
+  }, store);
+  context.after(() => manager.close());
+  const request = {
+    agentId: "subagent:subagent-1",
+    environmentRevisionId: "rev-python",
+    kernelMode: "persistent" as const,
+    language: "python" as const,
+    permissionEpoch: epoch(),
+    readOnlyWorkspaceRoot,
+    workspaceRoot,
+  };
+
+  const first = await manager.execute({ ...request, code: "x = 41", executionId: "mount-eval-one" });
+  const reused = await manager.execute({ ...request, code: "print(x + 1)", executionId: "mount-eval-two" });
+  assert.equal(reused.kernelId, first.kernelId);
+  assert.equal(reused.stdout.trim(), "42");
+
+  await assert.rejects(manager.execute({
+    ...request,
+    code: "print('wrong writable mount')",
+    executionId: "mount-eval-writable-mismatch",
+    workspaceRoot: otherWorkspaceRoot,
+  }), /cannot be reused with different workspace mounts/);
+  await assert.rejects(manager.execute({
+    ...request,
+    code: "print('wrong read-only mount')",
+    executionId: "mount-eval-read-only-mismatch",
+    readOnlyWorkspaceRoot: otherReadOnlyWorkspaceRoot,
+  }), /cannot be reused with different workspace mounts/);
+  assert.deepEqual(manager.list().map((kernel) => kernel.id), [first.kernelId]);
 });
 
 test("persistent R kernel path retains state and reports a generated workspace artifact", async (context) => {
@@ -219,10 +274,12 @@ test("persistent R kernel path retains state and reports a generated workspace a
   const manager = new KernelManager({ bwrapPath: BWRAP_PATH, dataDir, execTimeoutMs: 60_000, idleTimeoutMs: 5_000 }, store);
   context.after(() => manager.close());
   const first = await manager.execute({
+    agentId: "main",
     code: "x <- 41", environmentRevisionId: "rev-r", executionId: "r-eval-one",
     kernelMode: "persistent", language: "r", permissionEpoch: epoch(), workspaceRoot,
   });
   const second = await manager.execute({
+    agentId: "main",
     code: "print(x + 1)\nwrite.csv(data.frame(metric='answer', value=x + 1), 'r-summary.csv')",
     environmentRevisionId: "rev-r", executionId: "r-eval-two", kernelMode: "persistent", language: "r",
     permissionEpoch: epoch(), workspaceRoot,
@@ -242,6 +299,7 @@ test("a persistent Kernel can be torn down by its runtime-status identity", asyn
   }, store);
   context.after(() => manager.close());
   const first = await manager.execute({
+    agentId: "main",
     code: "x = 41",
     environmentRevisionId: "rev-python",
     executionId: "teardown-eval-one",
@@ -255,6 +313,7 @@ test("a persistent Kernel can be torn down by its runtime-status identity", asyn
   assert.deepEqual(manager.list(), []);
 
   const restarted = await manager.execute({
+    agentId: "main",
     code: "print('x' in globals())",
     environmentRevisionId: "rev-python",
     executionId: "teardown-eval-two",

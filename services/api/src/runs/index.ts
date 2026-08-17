@@ -711,6 +711,7 @@ async function executeAgentRun(
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
     ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
     ...createWorkspaceExecutionBindings({
+      agentId: "main",
       executionId: runId,
       executionTimeoutMs: timeoutSettings.runnerExecTimeoutMs,
       kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,
@@ -1079,6 +1080,7 @@ async function executeAgentRun(
             ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
             ...createArtifactBindings(subagentWorkspaceRoot, childExecution.identity.executionId, handoff.privateWorkspacePath),
             ...createWorkspaceExecutionBindings({
+              agentId: `subagent:${subagent.id}`,
               executionId: childExecution.identity.executionId,
               executionTimeoutMs: timeoutSettings.runnerExecTimeoutMs,
               kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,

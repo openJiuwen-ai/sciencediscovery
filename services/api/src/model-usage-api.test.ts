@@ -44,7 +44,7 @@ const RUNNER_HEALTH: RunnerHealth = {
   scientificEnvs: { available: false, enabled: false, languages: [], provisioner: "test", startersReady: false },
   seccompBaseline: "multiarch-v1-profile-aware",
   status: "ok",
-  workerConcurrency: 1,
+  workerConcurrency: null,
 };
 
 function testConfig(dataDir: string, runnerUrl: string, gatewayUrl: string): ServerConfig {

@@ -14,7 +14,7 @@
 
 /**
  * Session env profiles: environment continuity between the persistent shell
- * session and later python/r/shell executions in the same Session. The profile
+ * session and later python/r/shell executions for the same Agent. The profile
  * is captured from the shell worker's own `env` dump
  * after each evaluation — it never contains host environ entries because the
  * shell itself starts from `--clearenv` — and is re-injected after
@@ -92,39 +92,38 @@ export function sedimentableCwd(cwd: string): string | undefined {
 }
 
 /**
- * Profiles are keyed by Session and Permission Epoch, mirroring the kernel
- * reuse key: an epoch change never leaks environment across permission
- * boundaries. Lifetime is tied to the owning shell session — stopping the
- * shell (idle timeout, teardown, exit) clears the profile.
+ * Profiles are keyed by Session, Agent, and Permission Epoch, mirroring the
+ * persistent runtime reuse key. Lifetime is tied to the owning shell session.
  */
 export class SessionEnvProfileStore {
   private readonly profiles = new Map<string, SessionEnvProfile>();
 
-  private key(sessionId: string, permissionEpochId: string): string {
-    return `${sessionId}:${permissionEpochId}`;
+  private key(sessionId: string, agentId: string, permissionEpochId: string): string {
+    return JSON.stringify([sessionId, agentId, permissionEpochId]);
   }
 
-  get(sessionId: string, permissionEpochId: string): SessionEnvProfile | undefined {
-    const profile = this.profiles.get(this.key(sessionId, permissionEpochId));
+  get(sessionId: string, agentId: string, permissionEpochId: string): SessionEnvProfile | undefined {
+    const profile = this.profiles.get(this.key(sessionId, agentId, permissionEpochId));
     return profile ? { ...profile, variables: { ...profile.variables } } : undefined;
   }
 
   /** Capture from a raw shell env dump; stores only the injectable subset. */
-  update(sessionId: string, permissionEpochId: string, cwd: string, dump: Record<string, string>): void {
-    this.profiles.set(this.key(sessionId, permissionEpochId), {
+  update(sessionId: string, agentId: string, permissionEpochId: string, cwd: string, dump: Record<string, string>): void {
+    this.profiles.set(this.key(sessionId, agentId, permissionEpochId), {
       cwd: sedimentableCwd(cwd) ?? "/workspace",
       updatedAt: new Date().toISOString(),
       variables: sedimentableVariables(dump),
     });
   }
 
-  clear(sessionId: string, permissionEpochId: string): void {
-    this.profiles.delete(this.key(sessionId, permissionEpochId));
+  clear(sessionId: string, agentId: string, permissionEpochId: string): void {
+    this.profiles.delete(this.key(sessionId, agentId, permissionEpochId));
   }
 
   clearSession(sessionId: string): void {
     for (const key of this.profiles.keys()) {
-      if (key.startsWith(`${sessionId}:`)) this.profiles.delete(key);
+      const [candidateSessionId] = JSON.parse(key) as [string, string, string];
+      if (candidateSessionId === sessionId) this.profiles.delete(key);
     }
   }
 }

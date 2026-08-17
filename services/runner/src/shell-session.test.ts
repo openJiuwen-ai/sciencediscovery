@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -26,7 +26,7 @@ import { ShellSessionManager } from "./shell-session-manager.js";
 
 const BWRAP_PATH = process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap";
 
-function epoch(id = "epoch-test"): PermissionEpoch {
+function epoch(id = "epoch-test", sessionId = "session-test"): PermissionEpoch {
   return {
     createdAt: new Date().toISOString(),
     environmentRevisionId: "rev-python",
@@ -35,7 +35,7 @@ function epoch(id = "epoch-test"): PermissionEpoch {
     networkPolicy: "none",
     reason: "test",
     secretRefs: [],
-    sessionId: "session-test",
+    sessionId,
   };
 }
 
@@ -54,6 +54,7 @@ async function fixture(context: TestContext) {
 test("a persistent shell session keeps exports and cwd across run_shell calls", async (context) => {
   const { manager, workspaceRoot } = await fixture(context);
   const first = await manager.execute({
+    agentId: "main",
     code: "export FOO=bar\nmkdir -p subdir\ncd subdir\necho ready",
     executionId: "shell-one", kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
   });
@@ -64,6 +65,7 @@ test("a persistent shell session keeps exports and cwd across run_shell calls", 
   assert.equal(first.environmentVariables.FOO, "bar");
 
   const second = await manager.execute({
+    agentId: "main",
     code: "echo \"$FOO in $(pwd)\"",
     executionId: "shell-two", kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
   });
@@ -72,11 +74,13 @@ test("a persistent shell session keeps exports and cwd across run_shell calls", 
 
   // A failing command reports its exit code without killing the session.
   const failing = await manager.execute({
+    agentId: "main",
     code: "false",
     executionId: "shell-three", kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
   });
   assert.equal(failing.exitCode, 1);
   const survived = await manager.execute({
+    agentId: "main",
     code: "echo $FOO",
     executionId: "shell-four", kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
   });
@@ -84,16 +88,124 @@ test("a persistent shell session keeps exports and cwd across run_shell calls", 
   assert.equal(survived.stdout.trim(), "bar");
 });
 
+test("persistent shells isolate Main, sibling Subagents, and Sessions while preserving each Agent state", async (context) => {
+  const { dataDir, manager, profiles, workspaceRoot } = await fixture(context);
+  const firstSubagentRoot = resolve(workspaceRoot, "subagents", "subagent-1");
+  const secondSubagentRoot = resolve(workspaceRoot, "subagents", "subagent-2");
+  const otherSessionRoot = resolve(dataDir, "projects", "project", "sessions", "session-other", "workspace");
+  await Promise.all([
+    mkdir(firstSubagentRoot, { recursive: true }),
+    mkdir(secondSubagentRoot, { recursive: true }),
+    mkdir(otherSessionRoot, { recursive: true }),
+  ]);
+
+  const main = await manager.execute({
+    agentId: "main",
+    code: "export OWNER=main\nprintf 'PARENT_ONLY\\n' > isolation-probe.txt",
+    executionId: "main-isolation",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    workspaceRoot,
+  });
+  const firstSubagent = await manager.execute({
+    agentId: "subagent:subagent-1",
+    code: "printf '%s\\n' \"${OWNER:-SUBAGENT_ONLY}\" > isolation-probe.txt",
+    executionId: "subagent-one-isolation",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    readOnlyWorkspaceRoot: workspaceRoot,
+    workspaceRoot: firstSubagentRoot,
+  });
+  const secondSubagent = await manager.execute({
+    agentId: "subagent:subagent-2",
+    code: "export OWNER=subagent-two\nprintf 'SECOND_SUBAGENT\\n' > isolation-probe.txt",
+    executionId: "subagent-two-isolation",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    readOnlyWorkspaceRoot: workspaceRoot,
+    workspaceRoot: secondSubagentRoot,
+  });
+  const otherSession = await manager.execute({
+    agentId: "main",
+    code: "printf 'OTHER_SESSION\\n' > isolation-probe.txt",
+    executionId: "other-session-isolation",
+    kernelMode: "persistent",
+    permissionEpoch: epoch("epoch-other", "session-other"),
+    workspaceRoot: otherSessionRoot,
+  });
+
+  assert.equal(await readFile(resolve(workspaceRoot, "isolation-probe.txt"), "utf8"), "PARENT_ONLY\n");
+  assert.equal(await readFile(resolve(firstSubagentRoot, "isolation-probe.txt"), "utf8"), "SUBAGENT_ONLY\n");
+  assert.equal(await readFile(resolve(secondSubagentRoot, "isolation-probe.txt"), "utf8"), "SECOND_SUBAGENT\n");
+  assert.equal(await readFile(resolve(otherSessionRoot, "isolation-probe.txt"), "utf8"), "OTHER_SESSION\n");
+  assert.deepEqual(main.createdFiles, ["isolation-probe.txt"]);
+  assert.deepEqual(firstSubagent.createdFiles, ["isolation-probe.txt"]);
+  assert.deepEqual(secondSubagent.createdFiles, ["isolation-probe.txt"]);
+  assert.deepEqual(otherSession.createdFiles, ["isolation-probe.txt"]);
+  assert.equal(new Set([main.kernelId, firstSubagent.kernelId, secondSubagent.kernelId, otherSession.kernelId]).size, 4);
+  assert.equal(profiles.get("session-test", "main", "epoch-test")?.variables.OWNER, "main");
+  assert.equal(profiles.get("session-test", "subagent:subagent-1", "epoch-test")?.variables.OWNER, undefined);
+  assert.equal(profiles.get("session-test", "subagent:subagent-2", "epoch-test")?.variables.OWNER, "subagent-two");
+});
+
+test("concurrent calls for one Session-Agent create one shell and execute in submission order", async (context) => {
+  const { manager, workspaceRoot } = await fixture(context);
+  const first = manager.execute({
+    agentId: "main",
+    code: "sleep 0.15\nexport ORDERED=first\necho first",
+    executionId: "ordered-one",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    workspaceRoot,
+  });
+  const second = manager.execute({
+    agentId: "main",
+    code: "echo \"${ORDERED:-missing}\"",
+    executionId: "ordered-two",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    workspaceRoot,
+  });
+
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.equal(firstResult.kernelId, secondResult.kernelId);
+  assert.equal(secondResult.stdout.trim(), "first");
+  assert.equal(manager.list().length, 1);
+});
+
+test("a Session-Agent identity rejects reuse with different workspace mounts", async (context) => {
+  const { manager, workspaceRoot } = await fixture(context);
+  const differentRoot = resolve(workspaceRoot, "different");
+  await mkdir(differentRoot, { recursive: true });
+  await manager.execute({
+    agentId: "main",
+    code: "echo ready",
+    executionId: "mount-one",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    workspaceRoot,
+  });
+  await assert.rejects(manager.execute({
+    agentId: "main",
+    code: "echo wrong",
+    executionId: "mount-two",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    workspaceRoot: differentRoot,
+  }), /cannot be reused with different workspace mounts/);
+});
+
 test("shell exports sediment into the session env profile and reach ephemeral python and shell", async (context) => {
   const { config, manager, profiles, workspaceRoot } = await fixture(context);
   const shell = await manager.execute({
+    agentId: "main",
     code: "export FOO=from-shell\nexport LD_PRELOAD=/tmp/evil.so\nmkdir -p nested\ncd nested",
     executionId: "profile-shell", kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
   });
   // Provenance keeps the real shell env (including the blocked key)...
   assert.equal(shell.environmentVariables.LD_PRELOAD, "/tmp/evil.so");
   // ...while the injectable profile applies the whitelist policy.
-  const profile = profiles.get("session-test", "epoch-test");
+  const profile = profiles.get("session-test", "main", "epoch-test");
   assert.ok(profile);
   assert.equal(profile.variables.FOO, "from-shell");
   assert.equal(profile.variables.LD_PRELOAD, undefined);
@@ -101,6 +213,7 @@ test("shell exports sediment into the session env profile and reach ephemeral py
   assert.equal(profile.cwd, "/workspace/nested");
 
   const python = await executePython(config, {
+    agentId: "main",
     code: "import os\nprint(os.environ.get('FOO'))\nprint(os.environ.get('LD_PRELOAD'))\nprint(os.getcwd())",
     executionId: "profile-python", language: "python", permissionEpoch: epoch(), workspaceRoot,
   }, undefined, undefined, profile);
@@ -111,6 +224,7 @@ test("shell exports sediment into the session env profile and reach ephemeral py
   assert.equal(python.workingDirectory, "/workspace/nested");
 
   const ephemeralShell = await executeShell(config, {
+    agentId: "main",
     code: "echo \"$FOO in $(pwd)\"",
     executionId: "profile-eph-shell", permissionEpoch: epoch(), workspaceRoot,
   }, undefined, profile);
@@ -118,6 +232,7 @@ test("shell exports sediment into the session env profile and reach ephemeral py
 
   // Executions with different effective envs stay distinguishable.
   const plain = await executePython(config, {
+    agentId: "main",
     code: "print('no profile')",
     executionId: "no-profile-python", language: "python", permissionEpoch: epoch(), workspaceRoot,
   });
@@ -128,16 +243,18 @@ test("shell exports sediment into the session env profile and reach ephemeral py
 test("an idle persistent shell session is released with an observable reason and its profile cleared", async (context) => {
   const { manager, profiles, workspaceRoot } = await fixture(context);
   const first = await manager.execute({
+    agentId: "main",
     code: "export FOO=bar", executionId: "idle-one", kernelIdleTimeoutMs: 250,
     kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
   });
-  assert.ok(profiles.get("session-test", "epoch-test"));
+  assert.ok(profiles.get("session-test", "main", "epoch-test"));
   assert.ok(first.kernelId.startsWith("shell-"));
   const expiry = Date.now() + 5_000;
   while (manager.list().length && Date.now() < expiry) await delay(50);
   assert.deepEqual(manager.list(), []);
-  assert.equal(profiles.get("session-test", "epoch-test"), undefined);
+  assert.equal(profiles.get("session-test", "main", "epoch-test"), undefined);
   const second = await manager.execute({
+    agentId: "main",
     code: "echo \"FOO=$FOO\"", executionId: "idle-two", kernelIdleTimeoutMs: 250,
     kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
   });
@@ -149,16 +266,19 @@ test("an idle persistent shell session is released with an observable reason and
 test("shell sessions honour permission boundaries and teardown", async (context) => {
   const { manager, profiles, workspaceRoot } = await fixture(context);
   await assert.rejects(manager.execute({
+    agentId: "main",
     code: "echo no", executionId: "once-shell", kernelMode: "persistent",
     permissionEpoch: { ...epoch(), executeGrantScope: "once" }, workspaceRoot,
   }), /once-scoped/);
 
   const first = await manager.execute({
+    agentId: "main",
     code: "export FOO=bar", executionId: "boundary-one", kernelMode: "persistent",
     permissionEpoch: epoch(), workspaceRoot,
   });
   // An epoch change stops the previous session and reports the loss.
   const changed = await manager.execute({
+    agentId: "main",
     code: "echo \"FOO=$FOO\"", executionId: "boundary-two", kernelMode: "persistent",
     permissionEpoch: epoch("epoch-next"), workspaceRoot,
   });
@@ -168,17 +288,19 @@ test("shell sessions honour permission boundaries and teardown", async (context)
 
   assert.equal(await manager.teardownSession("session-test", "Session was archived"), 1);
   assert.deepEqual(manager.list(), []);
-  assert.equal(profiles.get("session-test", "epoch-next"), undefined);
+  assert.equal(profiles.get("session-test", "main", "epoch-next"), undefined);
 });
 
 test("user exit ends the session gracefully and the next call starts fresh", async (context) => {
   const { manager, workspaceRoot } = await fixture(context);
   const first = await manager.execute({
+    agentId: "main",
     code: "export FOO=bar\nexit 7", executionId: "exit-one", kernelMode: "persistent",
     permissionEpoch: epoch(), workspaceRoot,
   });
   assert.equal(first.exitCode, 7);
   const second = await manager.execute({
+    agentId: "main",
     code: "echo \"FOO=$FOO\"", executionId: "exit-two", kernelMode: "persistent",
     permissionEpoch: epoch(), workspaceRoot,
   });

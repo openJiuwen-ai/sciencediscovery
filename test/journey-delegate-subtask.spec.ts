@@ -98,8 +98,6 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
       "隔离栈已启动，已有一个由旅程创建的项目与会话，审批模式为「始终允许」",
       "模型由旅程自带的本地 stub 驱动：主脚本委派一次 general-purpose 子任务并声明 results/final.md，"
         + "子脚本声明 review/notes.md 且保留一个不声明的私有文件",
-      "已知产品缺口 F5：子 Agent 声明的产物当前不会进入 Project 产物目录，"
-        + "第 5 步按用户预期断言两份交付物，因此本旅程预期为 FAIL，断言不降级",
     ],
   });
 
@@ -165,7 +163,7 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
     await journey.step(
       "在产物目录里拿到两份交付物",
       "主 Agent 的 results/final.md 与助手的 review/notes.md 平等地出现在同一个项目产物目录里，"
-        + "助手的私有文件不在其中。（已知缺口 F5：助手那份当前不会出现，本步预期失败）",
+        + "助手的私有文件不在其中。",
       async () => {
         tree = await artifactTree(page);
         await expect(tree.artifactCount).toHaveText("2", { timeout: 30_000 });

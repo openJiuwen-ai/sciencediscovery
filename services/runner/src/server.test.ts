@@ -28,12 +28,15 @@ import type {
   PythonExecutionResult,
   RunnerHealth,
   RunnerRuntimeStatus,
+  ShellExecutionRequest,
   ShellExecutionResult,
 } from "@science-agent/schema";
 
 import { appendBounded, executePython, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
+import { SessionEnvProfileStore } from "./session-env-profile.js";
+import { ShellSessionManager } from "./shell-session-manager.js";
 import {
   createExecutionSignature,
   EXECUTION_SIGNATURE_HEADER,
@@ -180,6 +183,7 @@ test("runner mounts discovered local Python package directory", async (context) 
   await writeFile(resolve(packageDir, "science_local_probe.py"), "VALUE = 'mounted-local-package'\n");
 
   const result = await executePython(config(fixture.dataDir), {
+    agentId: "main",
     code: "import science_local_probe\nprint(science_local_probe.VALUE)",
     executionId: "execution-local-python-package",
     permissionEpoch: epoch(),
@@ -443,6 +447,7 @@ function signedExecutionInit(token: string, value: unknown, timestamp = Date.now
 test("bubblewrap runner exposes only the workspace and denies network", async (context) => {
   const fixture = await workspaceFixture(context);
   const result = await executePython(config(fixture.dataDir), {
+    agentId: "main",
     code: [
       "import socket",
       "import ctypes",
@@ -485,6 +490,7 @@ test("bubblewrap runner can read but not write the parent workspace mount", asyn
   await writeFile(resolve(parentWorkspaceRoot, "final/summary.md"), "parent\n");
 
   const result = await executePython(config(fixture.dataDir), {
+    agentId: "subagent:subagent-1",
     code: [
       "from pathlib import Path",
       "print(Path('/workspace/final/summary.md').read_text().strip())",
@@ -512,6 +518,7 @@ test("runner rejects workspaces outside its configured projects root", async (co
   const fixture = await workspaceFixture(context);
   await assert.rejects(
     executePython(config(fixture.dataDir), {
+      agentId: "main",
       code: "print('no')",
       executionId: "execution-outside",
       permissionEpoch: epoch(),
@@ -525,6 +532,7 @@ test("per-request Runner timeout overrides the unlimited process default with an
   const fixture = await workspaceFixture(context);
   await assert.rejects(
     executePython({ ...config(fixture.dataDir), execTimeoutMs: 0 }, {
+      agentId: "main",
       code: "import time\ntime.sleep(1)",
       executionId: "execution-short-timeout",
       executionTimeoutMs: 25,
@@ -538,6 +546,7 @@ test("per-request Runner timeout overrides the unlimited process default with an
 test("runner allows files larger than the former 16 MiB per-file quota", async (context) => {
   const fixture = await workspaceFixture(context);
   const result = await executePython(config(fixture.dataDir), {
+    agentId: "main",
     code: "from pathlib import Path\nPath('big.bin').write_bytes(b'x' * 17_000_000)",
     executionId: "execution-large-file-ok",
     permissionEpoch: epoch(),
@@ -553,6 +562,7 @@ test("runner truncates oversized execution output instead of failing", async (co
     ...config(fixture.dataDir),
     maxOutputBytes: 2_000,
   }, {
+    agentId: "main",
     code: "print('x' * 5000)",
     executionId: "execution-output-truncate",
     permissionEpoch: epoch(),
@@ -569,6 +579,7 @@ test("runner enforces a finite workspace total quota", async (context) => {
     ...config(fixture.dataDir),
     maxWorkspaceBytes: 1_000,
   }, {
+    agentId: "main",
     code: "from pathlib import Path\nPath('too-big.bin').write_bytes(b'x' * 50_000)",
     executionId: "execution-workspace-limit",
     permissionEpoch: epoch(),
@@ -1505,6 +1516,7 @@ test("runner execute endpoint runs signed Python", async (context) => {
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   const response = await fetch(`${origin}/execute`, signedExecutionInit("runner-test-token", {
+    agentId: "main",
     code: "print('ok')",
     executionId: "http-execution",
     permissionEpoch: epoch(),
@@ -1517,6 +1529,42 @@ test("runner execute endpoint runs signed Python", async (context) => {
   assert.equal(body.cgroupMode, RESOURCE_LIMIT_MODE);
 });
 
+test("runner returns 400 for a signed shell request without agentId and leaves no runtime state", async (context) => {
+  const fixture = await workspaceFixture(context);
+  const runnerConfig = config(fixture.dataDir);
+  const profiles = new SessionEnvProfileStore();
+  const shellSessions = new ShellSessionManager({
+    bwrapPath: runnerConfig.bwrapPath,
+    dataDir: runnerConfig.dataDir,
+    execTimeoutMs: runnerConfig.execTimeoutMs,
+    idleTimeoutMs: 0,
+    maxOutputBytes: runnerConfig.maxOutputBytes,
+    maxWorkspaceBytes: runnerConfig.maxWorkspaceBytes,
+  }, profiles);
+  const server = createRunnerServer(runnerConfig, undefined, undefined, shellSessions, profiles);
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  const response = await fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
+    code: "export SHOULD_NOT_EXIST=invalid",
+    executionId: "missing-agent-id",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    workspaceRoot: fixture.workspaceRoot,
+  }));
+  assert.equal(response.status, 400);
+  assert.equal(typeof (await response.json() as { error?: unknown }).error, "string");
+
+  const status = await (await fetch(`${origin}/status`, {
+    headers: { authorization: "Bearer runner-test-token" },
+  })).json() as RunnerRuntimeStatus;
+  assert.deepEqual(status.activeExecutions, []);
+  assert.deepEqual(status.kernels, []);
+  assert.deepEqual(shellSessions.list(), []);
+  assert.equal(profiles.get("session-test", undefined as unknown as string, "epoch-test"), undefined);
+});
+
 test("runner status reports an active execution and removes it after completion", async (context) => {
   const fixture = await workspaceFixture(context);
   const server = createRunnerServer(config(fixture.dataDir));
@@ -1525,6 +1573,7 @@ test("runner status reports an active execution and removes it after completion"
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   const execution = fetch(`${origin}/execute`, signedExecutionInit("runner-test-token", {
+    agentId: "main",
     code: "import time\ntime.sleep(0.2)\nprint('done')",
     executionId: "status-execution",
     permissionEpoch: epoch(),
@@ -1534,6 +1583,7 @@ test("runner status reports an active execution and removes it after completion"
   const active = await (await fetch(`${origin}/status`, {
     headers: { authorization: "Bearer runner-test-token" },
   })).json() as RunnerRuntimeStatus;
+  assert.equal(active.activeExecutions[0]?.agentId, "main");
   assert.equal(active.activeExecutions[0]?.executionId, "status-execution");
   assert.equal(active.activeExecutions[0]?.sessionId, "session-test");
   assert.equal(active.activeExecutions[0]?.status, "running");
@@ -1566,6 +1616,7 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
   const runningController = new AbortController();
   const running = fetch(`${origin}/execute`, {
     ...signedExecutionInit("runner-test-token", {
+      agentId: "main",
       code: "import time\ntime.sleep(30)",
       executionId: "cancel-running",
       executionTimeoutMs: 0,
@@ -1581,6 +1632,7 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
   const queuedController = new AbortController();
   const queued = fetch(`${origin}/execute`, {
     ...signedExecutionInit("runner-test-token", {
+      agentId: "main",
       code: "print('must not run')",
       executionId: "cancel-queued",
       executionTimeoutMs: 0,
@@ -1603,7 +1655,82 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
   await waitFor((current) => current.activeExecutions.length === 0);
 });
 
-test("runner shell endpoint keeps a persistent session per Session and downgrades once-scoped grants", async (context) => {
+test("runner executes different Session-Agent queues concurrently", async (context) => {
+  const fixture = await workspaceFixture(context);
+  let active = 0;
+  let maximumActive = 0;
+  let entered = 0;
+  let releaseBoth!: () => void;
+  const bothEntered = new Promise<void>((resolveBoth) => { releaseBoth = resolveBoth; });
+  const shellSessions = {
+    close: async () => undefined,
+    execute: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      entered += 1;
+      if (entered === 2) releaseBoth();
+      try {
+        await Promise.race([
+          bothEntered,
+          new Promise<never>((_resolve, reject) => {
+            setTimeout(() => reject(new Error("different Session-Agent execution was serialized")), 500);
+          }),
+        ]);
+        const now = new Date().toISOString();
+        return {
+          cgroupMode: "none",
+          createdFiles: [],
+          environmentRevisionId: "system-shell-bwrap-v1",
+          environmentVariables: {},
+          executionId: request.executionId,
+          exitCode: 0,
+          finishedAt: now,
+          kernelId: `shell-${request.agentId}`,
+          kernelMode: "persistent",
+          language: "shell",
+          modifiedFiles: [],
+          networkPolicy: "none",
+          runnerVersion: "test",
+          sandbox: "bubblewrap",
+          startedAt: now,
+          stderr: "",
+          stdout: request.agentId,
+          workingDirectory: "/workspace",
+        };
+      } finally {
+        active -= 1;
+      }
+    },
+    list: () => [],
+    teardownKernel: async () => 0,
+    teardownSession: async () => 0,
+    touchAgent: () => undefined,
+  } as unknown as ShellSessionManager;
+  const server = createRunnerServer(config(fixture.dataDir), undefined, undefined, shellSessions);
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  const responses = await Promise.all(["subagent:one", "subagent:two"].map((agentId, index) => (
+    fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
+      agentId,
+      code: "echo overlap",
+      executionId: `overlap-${index}`,
+      kernelMode: "persistent",
+      permissionEpoch: epoch(),
+      workspaceRoot: fixture.workspaceRoot,
+    }))
+  )));
+
+  assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+  assert.equal(maximumActive, 2);
+  const status = await (await fetch(`${origin}/status`, {
+    headers: { authorization: "Bearer runner-test-token" },
+  })).json() as RunnerRuntimeStatus;
+  assert.deepEqual(status.activeExecutions, []);
+});
+
+test("runner shell endpoint keeps a persistent session per Session-Agent and downgrades once-scoped grants", async (context) => {
   const fixture = await workspaceFixture(context);
   const server = createRunnerServer(config(fixture.dataDir));
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
@@ -1611,6 +1738,7 @@ test("runner shell endpoint keeps a persistent session per Session and downgrade
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   const first = await (await fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
+    agentId: "main",
     code: "export FOO=http\necho first",
     executionId: "shell-http-one",
     kernelMode: "persistent",
@@ -1623,6 +1751,7 @@ test("runner shell endpoint keeps a persistent session per Session and downgrade
   assert.equal(first.environmentVariables.FOO, "http");
 
   const second = await (await fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
+    agentId: "main",
     code: "echo \"FOO=$FOO\"",
     executionId: "shell-http-two",
     kernelMode: "persistent",
@@ -1634,11 +1763,14 @@ test("runner shell endpoint keeps a persistent session per Session and downgrade
 
   const kernels = await (await fetch(`${origin}/kernels`, {
     headers: { authorization: "Bearer runner-test-token" },
-  })).json() as Array<{ id: string; language: string }>;
-  assert.equal(kernels.some((kernel) => kernel.id === first.kernelId && kernel.language === "shell"), true);
+  })).json() as Array<{ agentId: string; id: string; language: string }>;
+  assert.equal(kernels.some((kernel) => (
+    kernel.agentId === "main" && kernel.id === first.kernelId && kernel.language === "shell"
+  )), true);
 
   // The sedimented profile reaches a later ephemeral python execution.
   const python = await (await fetch(`${origin}/execute`, signedExecutionInit("runner-test-token", {
+    agentId: "main",
     code: "import os\nprint(os.environ.get('FOO'))",
     executionId: "shell-profile-python",
     permissionEpoch: epoch(),
@@ -1648,6 +1780,7 @@ test("runner shell endpoint keeps a persistent session per Session and downgrade
   assert.equal(python.stdout.trim(), "http");
 
   const once = await (await fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
+    agentId: "main",
     code: "echo once",
     executionId: "shell-http-once",
     kernelMode: "persistent",

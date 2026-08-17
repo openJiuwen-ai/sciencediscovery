@@ -64,6 +64,8 @@ export interface EnvironmentLocalWheel {
 }
 
 export interface KernelSession {
+  /** Stable Agent identity within the owning Session (`main` or `subagent:<id>`). */
+  agentId: string;
   createdAt: string;
   environmentRevisionId: string;
   /** Omitted while the kernel idle timeout is unlimited. */
@@ -80,6 +82,8 @@ export interface KernelSession {
 }
 
 export interface ScientificExecutionRequest {
+  /** Stable Agent identity within the Session; assigned by the trusted API binding. */
+  agentId: string;
   code: string;
   environmentRevisionId?: string;
   /** Per-run product timeout snapshot; 0 disables the timeout. */
@@ -155,13 +159,15 @@ export interface ScientificExecutionResult {
 export const SYSTEM_SHELL_ENVIRONMENT_REVISION_ID = "system-shell-bwrap-v1";
 
 export interface ShellExecutionRequest {
+  /** Stable Agent identity within the Session; assigned by the trusted API binding. */
+  agentId: string;
   code: string;
   /** Per-run product timeout snapshot; 0 disables the timeout. */
   executionTimeoutMs?: number;
   executionId: string;
   /** Product idle timeout for a persistent shell session; 0 disables it. */
   kernelIdleTimeoutMs?: number;
-  /** `persistent` reuses one shell session per Session (cwd/exports survive). */
+  /** `persistent` reuses one shell session per Session-Agent (cwd/exports survive). */
   kernelMode?: KernelMode;
   /** Per-run retained stdout+stderr budget; 0 disables truncation. */
   maxOutputBytes?: number;
@@ -385,5 +391,6 @@ export interface RunnerHealth {
   scientificEnvs: ScientificEnvsCapability;
   seccompBaseline: "multiarch-v1-profile-aware";
   status: "ok";
-  workerConcurrency: 1;
+  /** `null` means no global cap; positive numbers are retained for older Runner compatibility. */
+  workerConcurrency: number | null;
 }

@@ -31,6 +31,7 @@ type ExecutionBindings = Pick<
 >;
 
 export interface WorkspaceExecutionBindingOptions {
+  agentId: string;
   artifactPathPrefix?: string;
   executionId: string;
   executionTimeoutMs?: number;
@@ -123,6 +124,7 @@ export function createWorkspaceExecutionBindings(
         summary: `Run Python code ${options.permissionScopeLabel}`,
       });
       return options.provenanceRecorder.executePython({
+        agentId: options.agentId,
         code,
         artifactPathPrefix: options.artifactPathPrefix,
         executionTimeoutMs: options.executionTimeoutMs,
@@ -148,6 +150,7 @@ export function createWorkspaceExecutionBindings(
         summary: `Run a shell script ${options.permissionScopeLabel}`,
       });
       return options.provenanceRecorder.executeShell({
+        agentId: options.agentId,
         code,
         artifactPathPrefix: options.artifactPathPrefix,
         executionTimeoutMs: options.executionTimeoutMs,
@@ -229,6 +232,7 @@ export function createWorkspaceExecutionBindings(
           summary: `Run ${language} code ${options.permissionScopeLabel}`,
         });
         return options.provenanceRecorder.executeScientific({
+          agentId: options.agentId,
           code,
           artifactPathPrefix: options.artifactPathPrefix,
           environmentRevisionId,

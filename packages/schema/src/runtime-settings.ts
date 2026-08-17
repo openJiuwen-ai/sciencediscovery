@@ -210,6 +210,7 @@ export interface RuntimeSessionRun {
 }
 
 export interface RunnerExecutionStatus {
+  agentId: string;
   executionId: string;
   kernelMode: KernelMode;
   language: ExecutionLanguage;
