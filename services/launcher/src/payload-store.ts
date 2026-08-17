@@ -30,6 +30,12 @@ import { createZstdDecompress } from "node:zlib";
 import { PAYLOAD_MANIFEST_FILE, parsePayloadManifest, type PayloadManifest } from "./payload-manifest.js";
 import { readPayloadLocator, type PayloadLocator } from "./payload-container.js";
 import { extractTar } from "./tar-extract.js";
+import { migrateLegacyDirectory } from "./directory-migration.js";
+import {
+  hasRenamedEnvironmentValue,
+  renamedEnvironmentValue,
+  type CompatibilityLog,
+} from "./environment.js";
 
 export interface PayloadStoreOptions {
   /** Container to read the payload from; defaults to the running executable. */
@@ -45,13 +51,24 @@ export interface ResolvedPayload {
   root: string;
 }
 
-/** Root of the extraction cache, honouring XDG and an explicit override. */
-export function payloadCacheRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.SCIENCE_AGENT_PAYLOAD_CACHE_DIR?.trim();
-  if (override) return resolve(override);
+function cacheBase(env: NodeJS.ProcessEnv): string {
   const xdgCache = env.XDG_CACHE_HOME?.trim();
-  const base = xdgCache ? resolve(xdgCache) : join(env.HOME?.trim() || homedir(), ".cache");
-  return join(base, "science-agent", "payload");
+  return xdgCache ? resolve(xdgCache) : join(env.HOME?.trim() || homedir(), ".cache");
+}
+
+/** Root of the extraction cache, honouring XDG and an explicit override. */
+export function payloadCacheRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  onCompatibility?: CompatibilityLog,
+): string {
+  const override = renamedEnvironmentValue(
+    env,
+    "SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR",
+    "SCIENCE_AGENT_PAYLOAD_CACHE_DIR",
+    onCompatibility,
+  );
+  if (override) return resolve(override);
+  return join(cacheBase(env), "science-discovery", "payload");
 }
 
 async function readManifest(root: string): Promise<PayloadManifest> {
@@ -102,17 +119,22 @@ async function extractPayload(
 /**
  * Resolve the payload for this run, extracting it on first use.
  *
- * `SCIENCE_AGENT_PAYLOAD_DIR` points at an already-extracted payload, which is
+ * `SCIENCE_DISCOVERY_PAYLOAD_DIR` points at an already-extracted payload, which is
  * how the packaging script smoke-tests a payload before it is embedded and how
  * an operator can pre-seed an air-gapped host.
  */
 export async function resolvePayload(options: PayloadStoreOptions = {}): Promise<ResolvedPayload> {
   const env = options.env ?? process.env;
-  const explicit = env.SCIENCE_AGENT_PAYLOAD_DIR?.trim();
+  const explicit = renamedEnvironmentValue(
+    env,
+    "SCIENCE_DISCOVERY_PAYLOAD_DIR",
+    "SCIENCE_AGENT_PAYLOAD_DIR",
+    options.onProgress,
+  );
   if (explicit) {
     const root = resolve(explicit);
     if (!(await isDirectory(root))) {
-      throw new Error(`SCIENCE_AGENT_PAYLOAD_DIR points at ${root}, which is not a directory.`);
+      throw new Error(`SCIENCE_DISCOVERY_PAYLOAD_DIR points at ${root}, which is not a directory.`);
     }
     return { manifest: await readManifest(root), root };
   }
@@ -122,11 +144,24 @@ export async function resolvePayload(options: PayloadStoreOptions = {}): Promise
   if (!locator) {
     throw new Error(
       `${containerPath} has no embedded runtime payload.\n`
-      + "Run the released single-file binary, or set SCIENCE_AGENT_PAYLOAD_DIR to an extracted payload.",
+      + "Run the released single-file binary, or set SCIENCE_DISCOVERY_PAYLOAD_DIR to an extracted payload.",
     );
   }
 
-  const root = join(payloadCacheRoot(env), locator.id);
+  if (!hasRenamedEnvironmentValue(
+    env,
+    "SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR",
+    "SCIENCE_AGENT_PAYLOAD_CACHE_DIR",
+  )) {
+    const base = cacheBase(env);
+    await migrateLegacyDirectory({
+      label: "payload cache",
+      legacyPath: join(base, "science-agent"),
+      targetPath: join(base, "science-discovery"),
+      log: options.onProgress ?? (() => undefined),
+    });
+  }
+  const root = join(payloadCacheRoot(env, options.onProgress), locator.id);
   if (!(await isDirectory(root))) {
     await extractPayload(containerPath, locator, root, options.onProgress);
   }

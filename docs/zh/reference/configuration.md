@@ -15,7 +15,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_HOST` | `127.0.0.1` | HTTP 绑定地址；监听其他网卡必须显式配置 |
 | `SCIENCE_AGENT_PORT` | `4310` | HTTP 端口 |
 | `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器/API bearer token；不设置时使用 `<数据目录>/secrets/auth-token` 中保存的值 |
-| `SCIENCE_AGENT_DATA_DIR` | `data` | 项目、会话、工作区、密钥、服务环境 |
+| `SCIENCE_DISCOVERY_DATA_DIR` | 仓库启动器为 `data`；单文件 launcher 为 `./science-discovery-data` | 项目、会话、工作区、密钥、服务环境。原 `SCIENCE_AGENT_DATA_DIR` 保留为带日志的兼容回退。 |
 | `SCIENCE_AGENT_LOG_LEVEL` | `INFO` | 运行日志级别阈值（`DEBUG` / `INFO` / `WARNING` / `ERROR`） |
 | `SCIENCE_AGENT_LOG_DIR` | `<数据目录>/logs` | 可选日志目录覆盖；通常保持默认以随数据目录持久化 |
 | `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | 单个类别日志滚动前的最大字节数 |
@@ -106,7 +106,7 @@ API 在容器内监听 `0.0.0.0:4310`，gateway `4312` 与 runner `4311` 保持�
 
 | 位置 | 内容 |
 |---|---|
-| `data/`（`SCIENCE_AGENT_DATA_DIR`） | 全部运行时状态。请将该目录作为整体备份。 |
+| `data/`（`SCIENCE_DISCOVERY_DATA_DIR`） | 全部运行时状态。请将该目录作为整体备份。 |
 | `data/catalog.sqlite` | 目录库：项目、会话、设置、模型配置、权限、specialists（遗留 `catalog.json` 会自动导入） |
 | `data/mcp-result-cache.sqlite` | MCP 连接器结果缓存 |
 | `data/web-cache.sqlite`、`data/web-audit.sqlite` | Web Search/Fetch 缓存与 `WebInvocation` 审计 |
@@ -122,4 +122,6 @@ API 在容器内监听 `0.0.0.0:4310`，gateway `4312` 与 runner `4311` 保持�
 | `data/logs/{api,run,gateway,runner,memory-graph}.log` | 分级、按类别和大小滚动的运行日志；memory-graph 文件仅在功能启用时使用 |
 | 浏览器 local storage | 仅 API bearer token——模型凭证从不离开后端 |
 
-数据目录是唯一运行时根：通过设置 `SCIENCE_AGENT_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_AGENT_DATA_DIR=/srv/science-agent ./scripts/run-local.sh`）。删除该目录会清除所有项目、会话、凭证与审计记录。在 [Docker 部署](../how-to/deployment.md#docker-部署)中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `data/envs/` 下的环境。
+数据目录是唯一运行时根：通过设置 `SCIENCE_DISCOVERY_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh`）。原 `SCIENCE_AGENT_DATA_DIR` 仍作为兼容回退读取并打印日志；新旧同时设置时 `SCIENCE_DISCOVERY_DATA_DIR` 优先，且会记录该选择。对于单文件 launcher，已有默认 `./science-agent-data` 会一次性导入 `./science-discovery-data`；目标已存在时绝不覆盖并打印跳过原因。删除当前生效的数据目录会清除所有项目、会话、凭证与审计记录。在 [Docker 部署](../how-to/deployment.md#docker-部署)中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `data/envs/` 下的环境。
+
+单文件 payload 覆盖变量遵循同一命名和优先级：用 `SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR` 指定解包缓存，或用 `SCIENCE_DISCOVERY_PAYLOAD_DIR` 指定已解包 payload；对应的 `SCIENCE_AGENT_*` 名称继续作为带日志的兼容回退。

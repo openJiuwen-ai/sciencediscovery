@@ -42,7 +42,7 @@ artifact="dist/binary-release-local/ScienceDiscovery-local-linux-$arch"
 
 `serve` 依次启动 agent-loop 网关、bubblewrap runner 和带 Web UI 的控制 API，顺序与健康检查同[本地模式](#本地模式宿主进程)一致，然后打印 UI 地址。默认监听 <http://127.0.0.1:4310>，用 `SCIENCE_AGENT_AUTH_TOKEN` 登录；未设置时，`serve` 会打印首次启动生成的 token。Ctrl-C 会按启动的反序停止全部服务。
 
-首次 `serve` 会把内嵌运行时解包到 `~/.cache/science-agent/payload/<payload-id>`（可用 `XDG_CACHE_HOME` 或 `SCIENCE_AGENT_PAYLOAD_CACHE_DIR` 改位置），之后启动直接复用。目录名带 payload 摘要，因此升级到新版本不会覆盖旧解包结果。
+首次 `serve` 会把内嵌运行时解包到 `~/.cache/science-discovery/payload/<payload-id>`（可用 `XDG_CACHE_HOME` 或 `SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR` 改位置），之后启动直接复用。目录名带 payload 摘要，因此升级到新版本不会覆盖旧解包结果。如果仅存在旧的 `~/.cache/science-agent` 缓存，launcher 会把它一次性改名导入新位置并打印兼容提示；如果新位置已经存在，则保留新位置且打印跳过导入的原因。
 
 ### 首次启动安装的依赖
 
@@ -88,7 +88,7 @@ ScienceDiscovery help                显示帮助
 
 | 选项 | 默认值 | 作用 |
 |---|---|---|
-| `--data-dir <路径>` | `./science-agent-data` | 运行时数据目录，布局同[配置参考的存储布局](../reference/configuration.md#存储布局) |
+| `--data-dir <路径>` | `./science-discovery-data` | 运行时数据目录，布局同[配置参考的存储布局](../reference/configuration.md#存储布局) |
 | `--host <地址>` | `127.0.0.1` | Web UI / API 绑定地址 |
 | `--port <端口>` | `4310` | Web UI / API 端口 |
 | `--runner-port <端口>` | `4311` | runner 端口（仅回环） |

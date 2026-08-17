@@ -18,6 +18,7 @@
  */
 import { resolve } from "node:path";
 
+import { renamedEnvironmentValue, type CompatibilityLog } from "./environment.js";
 import type { ServeSettings } from "./serve.js";
 
 export type Command = "serve" | "version" | "help" | "extract";
@@ -28,6 +29,8 @@ export interface ParsedInvocation {
   extractTo?: string;
   /** `.env` file to load before applying defaults, when the operator asked. */
   envFile?: string;
+  /** True when neither an environment variable nor --data-dir chose the path. */
+  usesDefaultDataDir: boolean;
   settings: ServeSettings;
 }
 
@@ -40,7 +43,7 @@ Commands:
   help                     Show this message
 
 serve options:
-  --data-dir <path>        Runtime data directory (default: ./science-agent-data)
+  --data-dir <path>        Runtime data directory (default: ./science-discovery-data)
   --host <address>         Web UI / API bind address (default: 127.0.0.1)
   --port <number>          Web UI / API port (default: 4310)
   --runner-port <number>   Loopback runner port (default: 4311)
@@ -55,6 +58,9 @@ memory-graph feature stays off unless a separate server is configured.
 
 First launch downloads uv, deer-flow and the gateway's Python dependencies
 into the data directory (later launches skip this). Optional overrides:
+  SCIENCE_DISCOVERY_DATA_DIR          Runtime data directory
+  SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR Extracted payload cache root
+  SCIENCE_DISCOVERY_PAYLOAD_DIR       Pre-extracted payload root
   SCIENCE_AGENT_PYPI_INDEX        Package index for Python dependencies
                                   (default: the Huawei Cloud PyPI mirror)
   SCIENCE_AGENT_UV_INSTALL_INDEX  Index the uv wheel is fetched from
@@ -81,10 +87,22 @@ function parsePort(name: string, raw: string): number {
 const truthy = (value: string | undefined): boolean =>
   value === undefined || /^(1|true|yes|on)$/i.test(value.trim());
 
-export function defaultSettings(env: NodeJS.ProcessEnv, cwd: string): ServeSettings {
+export function defaultSettings(
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  onCompatibility?: CompatibilityLog,
+): ServeSettings {
   return {
     bwrapPath: env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
-    dataDir: resolve(cwd, env.SCIENCE_AGENT_DATA_DIR?.trim() || "science-agent-data"),
+    dataDir: resolve(
+      cwd,
+      renamedEnvironmentValue(
+        env,
+        "SCIENCE_DISCOVERY_DATA_DIR",
+        "SCIENCE_AGENT_DATA_DIR",
+        onCompatibility,
+      ) || "science-discovery-data",
+    ),
     gatewayHost: env.SCIENCE_AGENT_GATEWAY_HOST?.trim() || "127.0.0.1",
     gatewayPort: parsePort("SCIENCE_AGENT_GATEWAY_PORT", env.SCIENCE_AGENT_GATEWAY_PORT?.trim() || "4312"),
     // A downloadable binary binds loopback unless the operator opts in: the
@@ -103,17 +121,23 @@ export function parseInvocation(
   argv: readonly string[],
   env: NodeJS.ProcessEnv,
   cwd: string,
+  onCompatibility?: CompatibilityLog,
 ): ParsedInvocation {
   const [rawCommand, ...rest] = argv;
   const command = rawCommand ?? "help";
   if (!["serve", "version", "help", "extract", "--help", "-h", "--version"].includes(command)) {
     throw new Error(`Unknown command: ${command}\n\n${USAGE}`);
   }
+  const dataDirFromEnvironment = Boolean(
+    env.SCIENCE_DISCOVERY_DATA_DIR?.trim() || env.SCIENCE_AGENT_DATA_DIR?.trim(),
+  );
+  const dataDirFromArgument = rest.includes("--data-dir");
   const invocation: ParsedInvocation = {
     command: command === "--help" || command === "-h"
       ? "help"
       : command === "--version" ? "version" : (command as Command),
-    settings: defaultSettings(env, cwd),
+    settings: defaultSettings(env, cwd, dataDirFromArgument ? undefined : onCompatibility),
+    usesDefaultDataDir: !dataDirFromEnvironment && !dataDirFromArgument,
   };
 
   for (let index = 0; index < rest.length; index += 1) {

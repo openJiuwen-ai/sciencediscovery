@@ -125,7 +125,7 @@ describe("serve topology", () => {
     // it the moment a new release unpacks to a different cache directory.
     const services = planServices(contextFor());
     for (const service of services) {
-      assert.equal(service.env.DEER_FLOW_HOME, "/opt/science-agent/science-agent-data/deer-flow");
+      assert.equal(service.env.DEER_FLOW_HOME, "/opt/science-agent/science-discovery-data/deer-flow");
     }
   });
 

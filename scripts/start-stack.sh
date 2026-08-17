@@ -158,6 +158,18 @@ prepare_local() {
     set +a
   fi
 
+  if [[ -n "${SCIENCE_DISCOVERY_DATA_DIR:-}" ]]; then
+    if [[ -n "${SCIENCE_AGENT_DATA_DIR:-}" ]]; then
+      echo "[compat] Both SCIENCE_DISCOVERY_DATA_DIR and SCIENCE_AGENT_DATA_DIR are set; SCIENCE_DISCOVERY_DATA_DIR takes precedence." >&2
+    fi
+    SCIENCE_AGENT_DATA_DIR="$SCIENCE_DISCOVERY_DATA_DIR"
+    export SCIENCE_AGENT_DATA_DIR
+  elif [[ -n "${SCIENCE_AGENT_DATA_DIR:-}" ]]; then
+    echo "[compat] SCIENCE_AGENT_DATA_DIR is deprecated; using its value as SCIENCE_DISCOVERY_DATA_DIR." >&2
+    SCIENCE_DISCOVERY_DATA_DIR="$SCIENCE_AGENT_DATA_DIR"
+    export SCIENCE_DISCOVERY_DATA_DIR
+  fi
+
   require_command node "Node.js 22.19+ is required."
   require_command pnpm "pnpm 11.1.2 is required."
   require_command python3 "Python 3 is required for workspace analysis."
@@ -165,7 +177,7 @@ prepare_local() {
   require_command bwrap "bubblewrap is required for isolated Python execution."
   require_command curl "curl is required for local service startup checks."
 
-  data_dir="$(absolute_from_repository "${SCIENCE_AGENT_DATA_DIR:-data}")"
+  data_dir="$(absolute_from_repository "${SCIENCE_DISCOVERY_DATA_DIR:-data}")"
   local envs_dir="$data_dir/envs"
 
   if [[ "$no_build" -eq 0 ]]; then

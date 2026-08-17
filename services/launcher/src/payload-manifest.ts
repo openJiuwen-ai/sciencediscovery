@@ -21,7 +21,7 @@ export const PAYLOAD_MANIFEST_FILE = "manifest.json";
  * Version 1 payloads embed the gateway dependency tree in the bundled
  * interpreter's site-packages. Version 2 payloads ship a `bootstrap` section
  * instead and restore those dependencies on the user's machine at first
- * launch. Both remain loadable so `SCIENCE_AGENT_PAYLOAD_DIR` can keep
+ * launch. Both remain loadable so `SCIENCE_DISCOVERY_PAYLOAD_DIR` can keep
  * pointing at an already-extracted older payload.
  */
 export const PAYLOAD_MANIFEST_FORMAT_VERSIONS = [1, 2] as const;

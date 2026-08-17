@@ -42,7 +42,7 @@ artifact="dist/binary-release-local/ScienceDiscovery-local-linux-$arch"
 
 `serve` starts the agent-loop gateway, Bubblewrap runner, and control API with the Web UI in that order, using the same health checks as [local mode](#local-mode-host-processes), then prints the UI URL. It listens on <http://127.0.0.1:4310> by default. Sign in with `SCIENCE_AGENT_AUTH_TOKEN`; when it is unset, `serve` prints the token generated on first start. Ctrl-C stops all services in reverse order.
 
-The first `serve` extracts the embedded runtime to `~/.cache/science-agent/payload/<payload-id>` (change it with `XDG_CACHE_HOME` or `SCIENCE_AGENT_PAYLOAD_CACHE_DIR`). Later runs reuse it. The directory contains the payload digest, so an upgrade does not overwrite an older extraction.
+The first `serve` extracts the embedded runtime to `~/.cache/science-discovery/payload/<payload-id>` (change it with `XDG_CACHE_HOME` or `SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR`). Later runs reuse it. The directory contains the payload digest, so an upgrade does not overwrite an older extraction. If only the former `~/.cache/science-agent` cache exists, the launcher imports it once by renaming it to the new location and prints a compatibility message. If the new location already exists, the launcher keeps it unchanged and logs that the import was skipped.
 
 ### Dependencies installed on first launch
 
@@ -88,7 +88,7 @@ ScienceDiscovery help                  Show help
 
 | Option | Default | Purpose |
 |---|---|---|
-| `--data-dir <path>` | `./science-agent-data` | Runtime data; see [Storage layout](../reference/configuration.md#storage-layout) |
+| `--data-dir <path>` | `./science-discovery-data` | Runtime data; see [Storage layout](../reference/configuration.md#storage-layout) |
 | `--host <address>` | `127.0.0.1` | Web UI/API bind address |
 | `--port <port>` | `4310` | Web UI/API port |
 | `--runner-port <port>` | `4311` | Runner port (loopback only) |

@@ -180,11 +180,11 @@ export async function smokeBinary(options) {
     cwd: smokeRoot,
     env: {
       ...process.env,
-      SCIENCE_AGENT_PAYLOAD_CACHE_DIR: join(smokeRoot, "payload-cache"),
+      SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR: join(smokeRoot, "payload-cache"),
     },
   };
   try {
-    await mkdir(context.env.SCIENCE_AGENT_PAYLOAD_CACHE_DIR, { recursive: true });
+    await mkdir(context.env.SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR, { recursive: true });
     const help = await runCommand(options.binary, ["help"], context);
     const helpLine = firstMatchingLine(help.stdout, /^Usage: ScienceDiscovery/);
     if (!helpLine) throw new Error("help did not print the ScienceDiscovery usage line.");

@@ -25,6 +25,7 @@ import { resolve } from "node:path";
 import { createZstdDecompress } from "node:zlib";
 
 import { parseEnvFile, parseInvocation, USAGE } from "./cli-options.js";
+import { migrateLegacyDirectory } from "./directory-migration.js";
 import { readPayloadLocator } from "./payload-container.js";
 import { resolvePayload } from "./payload-store.js";
 import { serve } from "./serve.js";
@@ -79,7 +80,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   const envFile = envFileArgument(argv, process.cwd());
   if (envFile) await applyEnvFile(envFile, process.env);
 
-  const invocation = parseInvocation(argv, process.env, process.cwd());
+  const cwd = process.cwd();
+  const invocation = parseInvocation(argv, process.env, cwd, write);
   if (invocation.command === "help") {
     process.stdout.write(USAGE);
     return 0;
@@ -88,7 +90,16 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     return await runExtract(invocation.extractTo as string);
   }
 
-  const { manifest, root } = await resolvePayload({ onProgress: write });
+  if (invocation.command === "serve" && invocation.usesDefaultDataDir) {
+    await migrateLegacyDirectory({
+      label: "runtime data",
+      legacyPath: resolve(cwd, "science-agent-data"),
+      targetPath: invocation.settings.dataDir,
+      log: write,
+    });
+  }
+
+  const { manifest, root } = await resolvePayload({ env: process.env, onProgress: write });
   if (invocation.command === "version") {
     process.stdout.write(
       [

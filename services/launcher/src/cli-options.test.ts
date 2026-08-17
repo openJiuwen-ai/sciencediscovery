@@ -30,17 +30,18 @@ describe("launcher option parsing", () => {
     assert.equal(settings.port, 4310);
     assert.equal(settings.runnerPort, 4311);
     assert.equal(settings.gatewayPort, 4312);
-    assert.equal(settings.dataDir, "/opt/science-agent/science-agent-data");
+    assert.equal(settings.dataDir, "/opt/science-agent/science-discovery-data");
     assert.equal(settings.bwrapPath, "bwrap");
     assert.equal(settings.scientificEnvironments, true);
     assert.equal(settings.skipSandboxCheck, false);
+    assert.equal(parseInvocation(["serve"], {}, cwd).usesDefaultDataDir, true);
   });
 
   test("environment variables seed the defaults", () => {
     const settings = defaultSettings(
       {
         SCIENCE_AGENT_BWRAP_PATH: "/usr/local/bin/bwrap",
-        SCIENCE_AGENT_DATA_DIR: "/srv/agent-data",
+        SCIENCE_DISCOVERY_DATA_DIR: "/srv/agent-data",
         SCIENCE_AGENT_HOST: "0.0.0.0",
         SCIENCE_AGENT_PORT: "8080",
         SCIENTIFIC_ENVS: "0",
@@ -54,17 +55,44 @@ describe("launcher option parsing", () => {
     assert.equal(settings.scientificEnvironments, false);
   });
 
+  test("reads the legacy data variable with a log and prefers the new name", () => {
+    const fallbackMessages: string[] = [];
+    const fallback = defaultSettings(
+      { SCIENCE_AGENT_DATA_DIR: "/srv/legacy" },
+      cwd,
+      (message) => fallbackMessages.push(message),
+    );
+    assert.equal(fallback.dataDir, "/srv/legacy");
+    assert.match(fallbackMessages[0] as string, /SCIENCE_AGENT_DATA_DIR is deprecated/);
+
+    const precedenceMessages: string[] = [];
+    const precedence = defaultSettings(
+      {
+        SCIENCE_AGENT_DATA_DIR: "/srv/legacy",
+        SCIENCE_DISCOVERY_DATA_DIR: "/srv/current",
+      },
+      cwd,
+      (message) => precedenceMessages.push(message),
+    );
+    assert.equal(precedence.dataDir, "/srv/current");
+    assert.match(precedenceMessages[0] as string, /SCIENCE_DISCOVERY_DATA_DIR takes precedence/);
+  });
+
   test("flags override the environment and resolve relative paths", () => {
+    const messages: string[] = [];
     const invocation = parseInvocation(
       ["serve", "--data-dir", "state", "--port", "9000", "--host", "0.0.0.0", "--skip-sandbox-check"],
-      { SCIENCE_AGENT_PORT: "8080" },
+      { SCIENCE_AGENT_DATA_DIR: "/srv/legacy", SCIENCE_AGENT_PORT: "8080" },
       cwd,
+      (message) => messages.push(message),
     );
     assert.equal(invocation.command, "serve");
     assert.equal(invocation.settings.dataDir, "/opt/science-agent/state");
     assert.equal(invocation.settings.port, 9000);
     assert.equal(invocation.settings.host, "0.0.0.0");
     assert.equal(invocation.settings.skipSandboxCheck, true);
+    assert.equal(invocation.usesDefaultDataDir, false);
+    assert.deepEqual(messages, []);
   });
 
   test("maps bare help and version flags to commands", () => {
