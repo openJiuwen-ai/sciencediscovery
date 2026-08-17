@@ -13,9 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# M1 adapter smoke: the Node GatewayAgent against a fake Gateway that reproduces
-# the /run NDJSON + tool callback contract. Hermetic (no model, no Python gateway).
-# The real gateway is covered by test/gateway/run_m0_smoke.sh.
+# M1 agent-loop smoke: the Node-native loop against a scripted local
+# OpenAI-compatible SSE endpoint. Hermetic (no live model, no sidecar).
 #
 # Usage (from repo root):  ./test/api/run_m1_smoke.sh
 set -euo pipefail
@@ -24,4 +23,4 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 
 cd "$ROOT"
-pnpm --filter @science-agent/api exec tsx "$HERE/gateway_adapter_smoke.ts"
+pnpm --filter @science-agent/api exec tsx "$HERE/agent_loop_smoke.ts"

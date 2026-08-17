@@ -19,9 +19,9 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_SYSTEM_QUOTA_SETTINGS, DEFAULT_SYSTEM_TIMEOUT_SETTINGS } from "@science-agent/schema";
 
 import {
-  DEFAULT_GATEWAY_IDLE_TIMEOUT_MS,
-  DEFAULT_GATEWAY_TURN_TIMEOUT_MS,
-} from "../gateway-agent.js";
+  DEFAULT_AGENT_IDLE_TIMEOUT_MS as DEFAULT_GATEWAY_IDLE_TIMEOUT_MS,
+  DEFAULT_AGENT_TURN_TIMEOUT_MS as DEFAULT_GATEWAY_TURN_TIMEOUT_MS,
+} from "../native-agent/index.js";
 import {
   AUTH_TOKEN_FILE,
   GATEWAY_INTERNAL_TOKEN_FILE,
@@ -69,7 +69,6 @@ export interface ServerConfig {
   /** Initial runner output retain budget; persisted settings override after first load. */
   runnerMaxOutputBytes: number;
   /** URL the gateway's proxy tools call back into to run Node tool handlers. */
-  callbackUrl: string;
   /** Multipart upload and Session workspace quotas. */
   workspaceUpload: WorkspaceUploadLimits;
   /** Memory-graph sidecar (services/memory-graph, Python FastAPI, loopback).
@@ -148,7 +147,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     "SCIENCE_AGENT_MAX_OUTPUT_BYTES",
     DEFAULT_SYSTEM_QUOTA_SETTINGS.runnerMaxOutputBytes,
   );
-  const callbackHost = host === "0.0.0.0" ? "127.0.0.1" : host;
   const dataDir = resolve(repositoryRoot, env.SCIENCE_AGENT_DATA_DIR?.trim() || "data");
   // No fixed default credentials: an unset variable means "use the token this
   // installation generated on its first start", never a value an attacker could
@@ -162,7 +160,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   return {
     authToken: authToken.token,
     authTokenSource: authToken.source,
-    callbackUrl: env.SCIENCE_AGENT_TOOL_CALLBACK_URL?.trim() || `http://${callbackHost}:${port}/internal/tool-exec`,
     dataDir,
     gatewayInternalToken: gatewayInternalToken.token,
     gatewayInternalTokenSource: gatewayInternalToken.source,

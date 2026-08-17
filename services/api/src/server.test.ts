@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -92,6 +92,8 @@ import {
   type ServerConfig,
 } from "./server.js";
 import { SessionStore } from "./store.js";
+import type { McpCatalog, McpInvokeResponse } from "@science-agent/schema";
+import type { McpTransportClient } from "./mcp/transport.js";
 
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
@@ -132,7 +134,6 @@ function subagentSseGoldens(stream: string): string[][] {
 function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1", gatewayUrl = "http://127.0.0.1:1"): ServerConfig {
   return {
     authToken: "test-token",
-    callbackUrl: "http://127.0.0.1:0/internal/tool-exec",
     dataDir,
     gatewayIdleTimeoutMs: 240_000,
     gatewayTurnTimeoutMs: 0,
@@ -217,7 +218,7 @@ function ensureGateway(): Promise<string> {
 async function startTestApi(
   context: TestContext,
   dataDir: string,
-  mcpGatewayFetch?: typeof fetch,
+  mcpTransport?: McpTransportClient,
 ): Promise<{ origin: string }> {
   const runnerConfig: RunnerConfig = {
     authToken: "runner-test-token",
@@ -240,7 +241,7 @@ async function startTestApi(
 
   const server = createApiServer(
     testConfig(dataDir, runnerOrigin, await ensureGateway()),
-    mcpGatewayFetch ? { mcpGatewayFetch } : {},
+    mcpTransport ? { mcpTransport } : {},
   );
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   context.after(() => new Promise<void>((resolveClose) => {
@@ -1056,7 +1057,6 @@ test("loadServerConfig uses safe local defaults", async (context) => {
   assert.equal(config.dataDir, tempRoot);
   assert.equal(config.paperPythonPath, resolve(config.dataDir, "envs/paper/bin/python"));
   assert.equal(config.runnerUrl, "http://127.0.0.1:4311");
-  assert.equal(config.callbackUrl, "http://127.0.0.1:4310/internal/tool-exec");
   assert.equal(config.gatewayIdleTimeoutMs, 240_000);
   assert.equal(config.gatewayTurnTimeoutMs, 0);
   assert.equal(config.runnerExecTimeoutMs, 0);
@@ -1072,7 +1072,6 @@ test("loadServerConfig defaults the data directory to the repository data dir", 
 test("loadServerConfig preserves an explicit network bind", () => {
   const config = loadServerConfig({ ...CONFIGURED_TOKENS, SCIENCE_AGENT_HOST: "0.0.0.0" });
   assert.equal(config.host, "0.0.0.0");
-  assert.equal(config.callbackUrl, "http://127.0.0.1:4310/internal/tool-exec");
 });
 
 test("loadServerConfig derives the paper env from a relocated data dir", () => {
@@ -1709,114 +1708,46 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   const runnerOrigin = `http://127.0.0.1:${(runner.address() as AddressInfo).port}`;
 
   let gatewayMode: "silent" | "tool-success-timeout-text" | "tool-timeout" = "silent";
-  let toolTimeoutCalls = 0;
+  const openModelResponses: ServerResponse[] = [];
   const gateway = createHttpServer((request, response) => {
-    if (request.url === "/internal/mcp/catalog") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
-        loadedAt: new Date().toISOString(),
-        revision: "timeout-test-catalog",
-        servers: [],
-      }));
+    if (request.url !== "/chat/completions" || request.method !== "POST") {
+      response.writeHead(404).end();
       return;
     }
-    response.writeHead(200, { "content-type": "application/x-ndjson" });
-    response.flushHeaders();
-    if (gatewayMode === "silent") {
-      // The API's configured idle timer aborts this deliberately silent stream.
-      return;
-    }
-    toolTimeoutCalls += 1;
-    const events = gatewayMode === "tool-success-timeout-text"
-      ? [
-          {
-            data: {
-              id: "successful-runner-turn",
-              tool_calls: [{ args: {}, id: "successful-runner", name: "run_python" }],
-              type: "ai",
-            },
-            type: "messages-tuple",
-          },
-          {
-            data: {
-              content: "A paper title says: Python execution timed out after 25 ms",
-              name: "run_python",
-              status: "success",
-              tool_call_id: "successful-runner",
-              type: "tool",
-            },
-            type: "messages-tuple",
-          },
-          {
-            data: {
-              content: "The successful tool output was summarized.",
-              id: "successful-runner-result",
-              type: "ai",
-            },
-            type: "messages-tuple",
-          },
-          {
-            data: {
-              final_messages: [{ content: "The successful tool output was summarized.", role: "assistant" }],
-            },
-            type: "end",
-          },
-        ]
-      : toolTimeoutCalls === 1
-      ? [
-          {
-            data: {
-              id: "runner-turn",
-              tool_calls: [{ args: {}, id: "runner-timeout", name: "run_python" }],
-              type: "ai",
-            },
-            type: "messages-tuple",
-          },
-          {
-            data: {
-              content: `${"Diagnostic context. ".repeat(30)}Python execution timed out after 25 ms`,
-              name: "run_python",
-              status: "error",
-              tool_call_id: "runner-timeout",
-              type: "tool",
-            },
-            type: "messages-tuple",
-          },
-          {
-            data: {
-              content: "The requested operation did not complete.",
-              id: "runner-result",
-              type: "ai",
-            },
-            type: "messages-tuple",
-          },
-          {
-            data: {
-              final_messages: [{ content: "The requested operation did not complete.", role: "assistant" }],
-            },
-            type: "end",
-          },
-        ]
-      : [
-          {
-            data: {
-              content: "The Runner timeout is recorded in the conversation.",
-              id: "runner-correction",
-              type: "ai",
-            },
-            type: "messages-tuple",
-          },
-          {
-            data: {
-              final_messages: [{ content: "The Runner timeout is recorded in the conversation.", role: "assistant" }],
-            },
-            type: "end",
-          },
-        ];
-    response.end(events.map((event) => JSON.stringify(event)).join("\n") + "\n");
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      if (gatewayMode === "silent") {
+        // The API's configured idle timer aborts this deliberately silent stream.
+        openModelResponses.push(response);
+        return;
+      }
+      const body = JSON.parse(raw) as { messages: Array<{ content?: unknown; role?: string }> };
+      const lastRole = body.messages.at(-1)?.role;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (frame: unknown) => response.write(`data: ${JSON.stringify(frame)}\n\n`);
+      if (lastRole === "tool") {
+        send({ choices: [{ delta: { content: gatewayMode === "tool-timeout"
+          ? "The requested operation did not complete."
+          : "The successful tool output was summarized." } }] });
+      } else {
+        // Real run_python execution: the sleep trips the configured Runner
+        // exec timeout in tool-timeout mode; the print completes in success mode.
+        const code = gatewayMode === "tool-timeout"
+          ? "import time\ntime.sleep(2)"
+          : "print('A paper title says: Python execution timed out after 25 ms')";
+        send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_python", arguments: JSON.stringify({ code }) } }] } }] });
+      }
+      response.write("data: [DONE]\n\n");
+      response.end();
+    });
   });
   await new Promise<void>((resolveListen) => gateway.listen(0, "127.0.0.1", resolveListen));
-  context.after(() => new Promise<void>((resolveClose) => gateway.close(() => resolveClose())));
+  context.after(() => new Promise<void>((resolveClose) => {
+    for (const open of openModelResponses) open.destroy();
+    gateway.close(() => resolveClose());
+    gateway.closeAllConnections();
+  }));
   const gatewayOrigin = `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`;
 
   const server = createApiServer({
@@ -1861,9 +1792,9 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   );
 
   const model = await createTestModel(origin, {
-    baseUrl: "http://model-not-reached.test/v1",
-    model: "silent-gateway-model",
-    name: "Silent Gateway",
+    baseUrl: gatewayOrigin,
+    model: "scripted-loop-model",
+    name: "Scripted loop model",
   });
   await jsonRequest(`${origin}/api/settings`, {
     body: JSON.stringify({ modelId: model.id, semanticReviewEnabled: false }),
@@ -1903,30 +1834,16 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   const completed = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
   assert.deepEqual(completed.body.sessions, []);
 
-  gatewayMode = "tool-timeout";
-  const toolTimeoutSession = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
-    body: JSON.stringify({ title: "Runner timeout session" }),
-    headers: { ...authorization, "content-type": "application/json" },
-    method: "POST",
-  });
-  const toolTimeoutRun = await fetch(`${origin}/api/sessions/${toolTimeoutSession.body.id}/messages`, {
-    body: JSON.stringify({ content: "Run a deliberately slow Python operation." }),
-    headers: { ...authorization, "content-type": "application/json" },
-    method: "POST",
-  });
-  await toolTimeoutRun.text();
-  const toolTimeoutDetail = await jsonRequest<SessionDetail>(
-    `${origin}/api/sessions/${toolTimeoutSession.body.id}`,
-    { headers: authorization },
-  );
-  const runnerNotice = toolTimeoutDetail.body.messages.find((message) => message.kind === "timeout_notice");
-  assert.equal(runnerNotice?.timeout?.kind, "runner_exec");
-  assert.equal(runnerNotice?.timeout?.timeoutMs, 25);
-  assert.match(runnerNotice?.content ?? "", /Runner execution timeout was reached after 25 milliseconds/);
-
   gatewayMode = "tool-success-timeout-text";
+  // Real tool execution follows; keep the idle window generous so only the
+  // Runner exec timeout (next phase) is under test.
+  await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
+    body: JSON.stringify({ ...configured.body, gatewayIdleTimeoutMs: 30_000 }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
   const successfulToolSession = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
-    body: JSON.stringify({ title: "Successful tool session" }),
+    body: JSON.stringify({ approvalMode: "always_allow", title: "Successful tool session" }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
@@ -1944,6 +1861,32 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
     successfulToolDetail.body.messages.some((message) => message.kind === "timeout_notice"),
     false,
   );
+
+  gatewayMode = "tool-timeout";
+  await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
+    body: JSON.stringify({ ...configured.body, gatewayIdleTimeoutMs: 30_000, runnerExecTimeoutMs: 25 }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+  const toolTimeoutSession = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ approvalMode: "always_allow", title: "Runner timeout session" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const toolTimeoutRun = await fetch(`${origin}/api/sessions/${toolTimeoutSession.body.id}/messages`, {
+    body: JSON.stringify({ content: "Run a deliberately slow Python operation." }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  await toolTimeoutRun.text();
+  const toolTimeoutDetail = await jsonRequest<SessionDetail>(
+    `${origin}/api/sessions/${toolTimeoutSession.body.id}`,
+    { headers: authorization },
+  );
+  const runnerNotice = toolTimeoutDetail.body.messages.find((message) => message.kind === "timeout_notice");
+  assert.equal(runnerNotice?.timeout?.kind, "runner_exec");
+  assert.equal(runnerNotice?.timeout?.timeoutMs, 25);
+  assert.match(runnerNotice?.content ?? "", /Runner execution timeout was reached after 25 milliseconds/);
 
   gatewayMode = "silent";
   await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
@@ -1978,9 +1921,7 @@ test("native MCP literature flow produces an audited cited summary", async (cont
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
   const modelServer = await startLiteratureModel(context);
-  const mcpGatewayFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    const searchSchema = {
+  const searchSchema = {
       additionalProperties: false,
       properties: {
         limit: { default: 5, maximum: 25, minimum: 1, type: "integer" },
@@ -1989,8 +1930,7 @@ test("native MCP literature flow produces an audited cited summary", async (cont
       required: ["query"],
       type: "object",
     };
-    if (url.pathname.endsWith("/catalog")) {
-      return Response.json({
+  const pubmedCatalog = ({
         loadedAt: new Date().toISOString(),
         revision: "pubmed-test-catalog",
         servers: [{
@@ -2012,8 +1952,7 @@ test("native MCP literature flow produces an audited cited summary", async (cont
           ],
           transport: "stdio",
         }],
-      });
-    }
+      }) as unknown as McpCatalog;
     const citation = {
       identifier: "12524540",
       identifierType: "PMID",
@@ -2048,7 +1987,7 @@ test("native MCP literature flow produces an audited cited summary", async (cont
       untrusted: true,
       warnings: [],
     };
-    return Response.json({
+    const pubmedInvocation = ({
       attempts: [{
         attempt: 1,
         durationMs: 1,
@@ -2062,9 +2001,13 @@ test("native MCP literature flow produces an audited cited summary", async (cont
       requestId: "pubmed-request",
       serverId: "biomed",
       toolName: "pubmed_search",
-    });
+    }) as unknown as McpInvokeResponse;
+  const mcpTransport: McpTransportClient = {
+    catalog: async () => pubmedCatalog,
+    invoke: async () => pubmedInvocation,
+    reload: async () => pubmedCatalog,
   };
-  const { origin } = await startTestApi(context, tempRoot, mcpGatewayFetch);
+  const { origin } = await startTestApi(context, tempRoot, mcpTransport);
   const model = await createTestModel(origin, {
     baseUrl: modelServer.baseUrl,
     model: "literature-test-model",
@@ -2636,6 +2579,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   const initial = await jsonRequest<SkillDescriptor[]>(`${origin}/api/skills`, { headers: authorization });
   assert.equal(initial.response.status, 200);
   assert.deepEqual(initial.body.map((item) => item.id), [
+    "antibody-protenix-pipeline",
     "citation-reviewer",
     "code-engineer",
     "computation-reviewer",
@@ -3148,7 +3092,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
-  const mcpGatewayFetch: typeof fetch = async () => Response.json({
+  const subagentCatalog = ({
     loadedAt: new Date().toISOString(),
     revision: "arxiv-subagent-catalog",
     servers: [{
@@ -3187,8 +3131,13 @@ test("API runs one observable subagent through task and keeps nested task denied
       }],
       transport: "stdio",
     }],
-  });
-  const { origin } = await startTestApi(context, tempRoot, mcpGatewayFetch);
+  }) as unknown as McpCatalog;
+  const mcpTransport: McpTransportClient = {
+    catalog: async () => subagentCatalog,
+    invoke: async () => { throw new Error("subagent flow does not invoke MCP"); },
+    reload: async () => subagentCatalog,
+  };
+  const { origin } = await startTestApi(context, tempRoot, mcpTransport);
   const fixture = await startSubagentModel(context, { subagentType: "code-engineer" });
   const model = await createTestModel(origin, {
     baseUrl: fixture.baseUrl,

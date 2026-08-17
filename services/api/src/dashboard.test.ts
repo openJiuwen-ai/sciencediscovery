@@ -602,7 +602,6 @@ async function startHttpFixture<T>(
   const seedResult = seed ? await seed(fixture) : (undefined as unknown as T);
   const config: ServerConfig = {
     authToken: "test-token",
-    callbackUrl: "http://127.0.0.1:0/internal/tool-exec",
     dataDir: fixture.dataDir,
     gatewayIdleTimeoutMs: 240_000,
     gatewayInternalToken: "gateway-token",

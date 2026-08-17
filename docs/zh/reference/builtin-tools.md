@@ -1,6 +1,6 @@
 # 内置工具清单（模型可见）
 
-本文列出 Agent 循环中模型可见的全部工具。工具由 `packages/agent-runtime` 的 `createWorkspaceTools` 构建：**实现全部在 Node 控制面**，gateway 只拿到名称、描述与 JSON Schema（见 [agent-backend.md](../explanation/agent-backend.md#6-工作区工具如何进入循环)）。除标注「恒有」外，工具是否出现取决于会话配置；最终列表还会经 `toolPolicy` 过滤（子 Agent 可被限制为白名单子集）。
+本文列出 Agent 循环中模型可见的全部工具。工具由 `packages/agent-runtime` 的 `createWorkspaceTools` 构建：**实现全部在 Node 控制面**，模型请求里只带名称、描述与 JSON Schema（见 [agent-backend.md](../explanation/agent-backend.md)）。除标注「恒有」外，工具是否出现取决于会话配置；最终列表还会经 `toolPolicy` 过滤（子 Agent 可被限制为白名单子集）。
 
 ## 基础工具（恒有）
 
@@ -30,7 +30,7 @@
 | 工具 | 出现条件 | 参数要点 |
 |---|---|---|
 | `propose_plan` | 主运行注入 | `scope`（≤2000 字符）、`steps`（1-20 项）、`feasibilityConfidence: high\|medium\|low`、可选 `caveats`；计划是进度记录，不阻塞后续执行 |
-| `task` | 主运行注入（子 Agent 内不可再派生） | `description`（≤80 字符）、`prompt`（≤20000）、可选 `brief`（Brief v1 契约，见 [agent-backend.md](../explanation/agent-backend.md#61-subagent-brief-v1-契约)）、`inputPaths`（≤50）、`max_turns`（≤300）、`timeout_seconds`（≤3600）、`specialistId`、`tools`（白名单，≤32）；同轮多次调用可并行 |
+| `task` | 主运行注入（子 Agent 内不可再派生） | `description`（≤80 字符）、`prompt`（≤20000）、可选 `brief`（Brief v1 契约，见 [subagent-orchestration.md](../explanation/subagent-orchestration.md#41-subagent-brief-v1-契约)）、`inputPaths`（≤50）、`max_turns`（≤300）、`timeout_seconds`（≤3600）、`specialistId`、`tools`（白名单，≤32）；同轮多次调用可并行 |
 | `query_graph` | 在 System Settings 中启用 Science Memory | `query`：跨会话记忆图的大小写不敏感子串搜索，返回 `{hits, total, truncated}` |
 
 ## 科学环境工具

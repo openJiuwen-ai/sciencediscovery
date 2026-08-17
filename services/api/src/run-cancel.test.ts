@@ -50,7 +50,6 @@ const RUNNER_HEALTH: RunnerHealth = {
 function testConfig(dataDir: string, runnerUrl: string, gatewayUrl: string): ServerConfig {
   return {
     authToken: "test-token",
-    callbackUrl: "http://127.0.0.1:0/internal/tool-exec",
     dataDir,
     gatewayIdleTimeoutMs: 240_000,
     gatewayUrl,
@@ -79,20 +78,15 @@ function testConfig(dataDir: string, runnerUrl: string, gatewayUrl: string): Ser
 }
 
 /**
- * Reproduces a stuck run: the gateway accepts `POST /run` and never answers,
- * so the agent turn hangs and the SSE stream produces no terminal event until
- * something aborts it.
+ * Reproduces a stuck run: the model endpoint accepts `POST /chat/completions`
+ * and never answers, so the agent turn hangs and the SSE stream produces no
+ * terminal event until something aborts it.
  */
 function startHangingGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
   let runCount = 0;
   const openRuns: ServerResponse[] = [];
   const server = createHttpServer((request, response) => {
-    if (request.url === "/health") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ status: "ok" }));
-      return;
-    }
-    if (request.url === "/run" && request.method === "POST") {
+    if (request.url === "/chat/completions" && request.method === "POST") {
       runCount += 1;
       request.resume();
       openRuns.push(response);
@@ -113,53 +107,31 @@ function startHangingGateway(context: TestContext): Promise<{ origin: string; ru
   });
 }
 
-function writeGatewayEvent(response: ServerResponse, event: unknown): void {
-  response.write(`${JSON.stringify(event)}\n`);
+function writeSseEvent(response: ServerResponse, event: unknown): void {
+  response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
+/** The scripted model calls run_python, so the REAL in-process tool execution
+ *  hits the permission gate and the run blocks awaiting the user's decision. */
 function startBlockingPermissionGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
   let runCount = 0;
-  const openRuns: ServerResponse[] = [];
   const server = createHttpServer((request, response) => {
-    if (request.url === "/health") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ status: "ok" }));
-      return;
-    }
-    if (request.url === "/run" && request.method === "POST") {
+    if (request.url === "/chat/completions" && request.method === "POST") {
       runCount += 1;
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.resume();
       request.on("end", () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-          callback_token?: string;
-          callback_url?: string;
-        };
-        const toolCallId = `call-python-${runCount}`;
-        response.writeHead(200, { "content-type": "application/x-ndjson" });
-        writeGatewayEvent(response, {
-          data: {
-            id: `permission-turn-${runCount}`,
-            tool_calls: [{ args: { code: "print(1)" }, id: toolCallId, name: "run_python" }],
-            type: "ai",
-          },
-          type: "messages-tuple",
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        writeSseEvent(response, {
+          choices: [{ delta: { tool_calls: [{ index: 0, id: `call-python-${runCount}`, type: "function", function: { name: "run_python", arguments: JSON.stringify({ code: "print(1)" }) } }] } }],
         });
-        openRuns.push(response);
-        if (body.callback_url && body.callback_token) {
-          void fetch(body.callback_url, {
-            body: JSON.stringify({ args: { code: "print(1)" }, name: "run_python", toolCallId }),
-            headers: { authorization: `Bearer ${body.callback_token}`, "content-type": "application/json" },
-            method: "POST",
-          }).catch(() => undefined);
-        }
+        response.write("data: [DONE]\n\n");
+        response.end();
       });
       return;
     }
     response.writeHead(404).end();
   });
   context.after(() => new Promise<void>((done) => {
-    for (const open of openRuns) open.destroy();
     server.close(() => done());
     server.closeAllConnections();
   }));
@@ -174,30 +146,14 @@ function startBlockingPermissionGateway(context: TestContext): Promise<{ origin:
 function startUsageGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
   let runCount = 0;
   const server = createHttpServer((request, response) => {
-    if (request.url === "/health") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ status: "ok" }));
-      return;
-    }
-    if (request.url === "/run" && request.method === "POST") {
+    if (request.url === "/chat/completions" && request.method === "POST") {
       runCount += 1;
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.resume();
       request.on("end", () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { messages?: Array<{ content?: string; role?: string }> };
-        const user = body.messages?.findLast((message) => message.role === "user")?.content ?? "";
-        response.writeHead(200, { "content-type": "application/x-ndjson" });
-        writeGatewayEvent(response, { data: { content: "Done", id: "usage-ai", type: "ai" }, type: "messages-tuple" });
-        writeGatewayEvent(response, {
-          data: {
-            final_messages: [
-              { content: user, role: "user" },
-              { content: "Done", role: "assistant" },
-            ],
-            usage: { input_tokens: 7, output_tokens: 3, total_tokens: 10 },
-          },
-          type: "end",
-        });
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        writeSseEvent(response, { choices: [{ delta: { content: "Done" } }] });
+        writeSseEvent(response, { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } });
+        response.write("data: [DONE]\n\n");
         response.end();
       });
       return;
@@ -263,7 +219,7 @@ async function startApi(
   const modelResponse = await fetch(`${origin}/api/models`, {
     body: JSON.stringify({
       apiToken: "test-model-token",
-      baseUrl: "https://models.example.test/v1",
+      baseUrl: gateway.origin,
       model: "test-model",
       name: "Test model",
       vision: false,

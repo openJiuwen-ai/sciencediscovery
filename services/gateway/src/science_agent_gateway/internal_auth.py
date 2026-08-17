@@ -12,16 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Product-facing chat-model construction for the Gateway."""
+"""Bearer check shared by the Gateway's loopback-only internal routes."""
 
 from __future__ import annotations
 
-from typing import Any
+import hmac
 
-from ._engine import create_reasoning_chat_model
+from fastapi import Header, HTTPException
+
+from .bootstrap_tokens import resolve_internal_token
 
 
-def build_reasoning_chat_model(**kwargs: Any) -> Any:
-    """Create an OpenAI-compatible model that preserves reasoning deltas."""
-
-    return create_reasoning_chat_model(**kwargs)
+def require_internal_token(authorization: str | None = Header(default=None)) -> None:
+    """Reject any caller that is not the local control plane."""
+    expected = f"Bearer {resolve_internal_token()}"
+    if authorization is None or not hmac.compare_digest(authorization, expected):
+        raise HTTPException(status_code=401, detail="Invalid gateway internal token")

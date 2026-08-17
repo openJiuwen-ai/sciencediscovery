@@ -7,8 +7,8 @@
 ```text
 Agent MCP tool
   → Node MCP Governance Broker
-  → Python Agent Gateway 的 MCP client
-  → Python MCP server
+  → Node 进程内 MCP 客户端(mcp/node-client.ts,官方 TypeScript SDK)
+  → MCP server(stdio 子进程 / SSE / streamable-HTTP)
   → CAS、缓存、权限、审计
   → 规范化 McpToolResult
 ```
@@ -18,7 +18,7 @@ Agent MCP tool
 
 ## 2. 职责边界
 
-- Python MCP 负责实际查询、provider 参数/响应校验、瞬时错误重试和标准结果组装。
+- MCP server 负责实际查询与 provider 参数/响应校验;瞬时错误重试、超时与响应大小上限由 Node 的进程内客户端按治理契约执行。
 - Node 负责统一注册、会话授权、来源身份与 URL 白名单复核、并发/速率限制（限流底座与 MCP 调用流程见 [rate-limiting.md](rate-limiting.md) 第 2 节）、缓存、CAS 和审计。
 - Agent 只接收规范化结果；MCP 返回的外部内容始终视为不可信数据。
 - PDF worker 只处理已完成下载的本地 PDF，不负责联网检索。
@@ -28,8 +28,8 @@ Agent MCP tool
 | 路径 | 作用 |
 |---|---|
 | `packages/mcp-sources` | Source/Tool manifest、输入与信任边界校验 |
-| `services/gateway/src/science_agent_gateway/*_mcp.py` | Python MCP 工具和 provider 访问 |
-| `services/api/src/mcp` | Broker、Catalog、CAS 审计、缓存和 Artifact 下载 |
+| `services/gateway/src/science_agent_gateway/*_mcp.py` | 随包的 Python MCP server 实现(由 Node 以 stdio 子进程拉起,解释器取自 gateway venv) |
+| `services/api/src/mcp` | Broker、进程内 MCP 客户端(`node-client.ts`)、`extensions_config.json` 解析、Catalog、CAS 审计、缓存和 Artifact 下载 |
 | `packages/agent-runtime` | MCP 工具暴露、`artifact_download`、`paper_extract_pdf` |
 | `services/paper` | 有界 PDF 抽取 |
 
@@ -43,23 +43,26 @@ Agent 并不能直接看到全部 MCP 工具。从 connector 定义到进入模�
 | 步骤 | 实现模块 | 行为 |
 |---|---|---|
 | 1. 注册 | `packages/mcp-sources/src/registry.ts`、`builtins.ts` | 每个 connector 是一个 `McpSourceAdapter`,manifest 声明工具的 `inputSchema`、`mcpToolName`、权限模板、缓存策略和 prompt 片段,统一注册进 `McpSourceRegistry` |
-| 2. 可用性过滤 | `services/api/src/mcp/source-catalog.ts` | `McpSourceCatalog` 从 Python gateway 拉取真实 server/tool 目录,按 `mcpToolName` 匹配远端工具并用 `inputSchemasCompatible` 做 schema 兼容检查;匹配失败的进 `missingTools`,不会暴露给 Agent |
+| 2. 可用性过滤 | `services/api/src/mcp/source-catalog.ts` | `McpSourceCatalog` 通过进程内 MCP 客户端 `listTools` 拉取真实 server/tool 目录,按 `mcpToolName` 匹配远端工具并用 `inputSchemasCompatible` 做 schema 兼容检查;匹配失败的进 `missingTools`,不会暴露给 Agent |
 | 3. 会话启用过滤与包装 | `services/api/src/mcp/workspace-tools.ts` | `createMcpWorkspaceTools` 只保留会话 `enabledConnectorIds` 中启用且 catalog 判定可用的工具,包装为 `mcp__<sourceId>__<toolId>`;description 拼接工具描述、`promptFragment` 与来源 summary/citationPolicy/caveats;execute 统一走 `McpGovernanceBroker.invoke`(权限门、输入校验、缓存、限流、CAS 审计,见 `services/api/src/mcp/broker.ts`) |
 | 4. 标记 deferred | `packages/agent-runtime/src/workspace.ts` | `createWorkspaceTools` 把每个 MCP 工具包成 `AgentTool` 时统一打 `deferred: true` 并携带 `routing`(keywords/mode/priority);内置工作区工具不打此标记 |
-| 5. 发送工具 spec | `services/api/src/gateway-agent.ts` | 把全部工具 spec(name/description/schema/deferred/routing)POST 给 Python Gateway;工具执行时 Gateway 的 proxy tool 经 HTTP 回调 Node 的 `/internal/tool-exec`,真正执行仍在 Node 侧治理链路中完成 |
+| 5. 绑定给模型 | `services/api/src/native-agent/index.ts` | 原生 loop 用 `visibleToolSpecs()` 把当前可见工具(name/description/schema)随模型请求下发;工具执行时直接在进程内 `await` 同一个处理器,治理链路不变 |
 
-### 3.2 模型可见性(Python gateway 侧)
+### 3.2 模型可见性(Node 原生 loop 侧)
 
-| 机制 | 实现模块 | 行为 |
+延迟披露完全在 `services/api/src/native-agent/deferred-tools.ts` 内实现,细节见
+[agent-backend.md](agent-backend.md) §6。
+
+| 机制 | 实现 | 行为 |
 |---|---|---|
-| 延迟目录组装 | `services/gateway/src/science_agent_gateway/server.py`(`_drive_stream`)、`tools.py`(`build_proxy_tools`) | 只要存在 deferred 工具,就通过 deer-flow 的 `assemble_deferred_tools` 启用延迟机制,追加 `tool_search` 工具,并在 system prompt 注入只含工具名的 `<available-deferred-tools>` 清单 |
-| schema 隐藏与调用拦截 | `third_party/deer-flow/.../middlewares/deferred_tool_filter_middleware.py` | `DeferredToolFilterMiddleware` 在每次 model 调用前把未晋升的 deferred 工具从 `bind_tools` 中滤掉,模型请求里没有这些工具定义;直接调用未晋升工具会被拦截并返回"先调 `tool_search`"的错误 ToolMessage |
-| 晋升状态 | deer-flow `ThreadState.promoted` | 晋升记录绑定 catalog hash;catalog 变化(工具改名、schema 漂移)时旧晋升自动失效 |
-| 关键词自动晋升 | deer-flow `McpRoutingMiddleware`(由 `server.py` 的 `build_mcp_routing_middleware` 装配) | 用户消息命中工具 `routing.keywords`(`mode: "prefer"`)时,在 model 调用前自动晋升最多 top 3 个,省去一次 `tool_search` 往返 |
+| 延迟目录组装 | `buildDeferredToolState` + `deferredToolsPromptSection` | 只要存在 deferred 工具,就建立目录、追加合成的 `tool_search` 工具,并在 system prompt 注入只含工具名的 `<available-deferred-tools>` 清单 |
+| schema 隐藏与调用拦截 | `hiddenDeferredNames` + `NativeAgent.visibleToolSpecs` / `executeToolCall` | 未晋升的 deferred 工具不进入模型请求的工具表;直接调用未晋升工具会被拦截,返回"先调 `tool_search`"的可重试错误结果 |
+| 晋升状态 | `DeferredToolState.promoted`(run 级) | 晋升在本次 run 内有效;目录带 `hash`,可用于检测工具改名或 schema 漂移 |
+| 关键词自动晋升 | `autoPromoteFromRouting` | 用户消息命中工具 `routing.keywords`(`mode: "prefer"`)时,在首轮模型调用前自动晋升优先级最高的最多 3 个,省去一次 `tool_search` 往返 |
 
 因此模型的视野是:内置工作区工具全量可见;MCP 工具初始只见名字,schema 经 `tool_search`
 晋升或路由自动晋升后按需暴露。而哪些 MCP 工具能进入名字清单,又先经过会话启用开关(步骤 3)
-和 gateway catalog 可用性(步骤 2)两道过滤。
+和 catalog 可用性(步骤 2)两道过滤。
 
 ## 4. 首期数据源
 

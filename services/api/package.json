@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@science-agent/agent-runtime": "workspace:*",
     "@science-agent/cas": "workspace:*",
     "@science-agent/mcp-sources": "workspace:*",

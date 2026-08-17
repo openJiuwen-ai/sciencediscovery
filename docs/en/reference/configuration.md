@@ -26,7 +26,6 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN` | generated on first start | API-to-gateway token; unset means the value stored in `<data-dir>/secrets/gateway-internal-token` |
 | `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | Initial no-output/no-progress timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | Initial whole-turn timeout (`0` is unlimited) |
-| `SCIENCE_AGENT_TOOL_CALLBACK_URL` | `http://<host>:<port>/internal/tool-exec` | Gateway tool callback URL |
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner bind address |
 | `SCIENCE_AGENT_RUNNER_PORT` | `4311` | Runner port |
 | `SCIENCE_AGENT_RUNNER_URL` | `http://127.0.0.1:4311` | Runner endpoint used by the API |

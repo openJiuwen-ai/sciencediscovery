@@ -26,8 +26,42 @@ from urllib.parse import urlsplit
 
 from langchain_core.tools import BaseTool
 
-from deerflow.config.app_config import AppConfig, pop_current_app_config, push_current_app_config
-from deerflow.reflection import resolve_variable
+# The vendor engine backs only the keyed community providers below. It is
+# imported lazily so the agent path (which imports the engine package) never
+# loads the vendor dependency; Gateway-implemented providers (ddgs, jina)
+# work without it, and only vendor-backed provider invocation fails when the
+# dependency is absent.
+_VENDOR_SYMBOLS = ("AppConfig", "pop_current_app_config", "push_current_app_config", "resolve_variable")
+
+
+def _ensure_vendor() -> None:
+    missing = [name for name in _VENDOR_SYMBOLS if name not in globals()]
+    if not missing:
+        return
+    try:
+        from deerflow.config.app_config import AppConfig as _app_config
+        from deerflow.config.app_config import pop_current_app_config as _pop
+        from deerflow.config.app_config import push_current_app_config as _push
+        from deerflow.reflection import resolve_variable as _resolve
+    except ImportError as exc:  # pragma: no cover - environment-dependent
+        raise RuntimeError("Engine-backed web providers are unavailable: the bundled engine dependency is not installed") from exc
+    loaded = {
+        "AppConfig": _app_config,
+        "pop_current_app_config": _pop,
+        "push_current_app_config": _push,
+        "resolve_variable": _resolve,
+    }
+    # Only fill the gaps: a test may hold an active patch on one symbol while
+    # another symbol was delattr-ed by a previous patch's exit.
+    globals().update({name: loaded[name] for name in missing})
+
+
+def __getattr__(name: str):
+    if name in _VENDOR_SYMBOLS:
+        _ensure_vendor()
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _PROVIDER_PATHS: dict[tuple[str, str], str] = {
     ("search", "tavily"): "deerflow.community.tavily.tools:web_search_tool",
@@ -160,10 +194,11 @@ def resolve_web_provider(
     return resolved
 
 
-def _provider_config(provider: ResolvedWebProvider) -> AppConfig:
+def _provider_config(provider: ResolvedWebProvider):
     if provider.provider_path is None:
         raise ValueError("The selected provider is implemented by the Gateway")
-    return AppConfig.model_validate({
+    _ensure_vendor()
+    return globals()["AppConfig"].model_validate({
         "sandbox": {
             "allow_host_bash": False,
             "use": _SANDBOX_PROVIDER,
@@ -191,12 +226,12 @@ async def invoke_web_provider(
     if provider.provider_path is None:
         raise ValueError("The selected provider is implemented by the Gateway")
     config = _provider_config(provider)
-    push_current_app_config(config)
+    globals()["push_current_app_config"](config)
     try:
-        tool = resolve_variable(provider.provider_path, BaseTool)
+        tool = globals()["resolve_variable"](provider.provider_path, BaseTool)
         result = await asyncio.wait_for(tool.ainvoke(arguments), timeout=timeout_seconds)
     finally:
-        pop_current_app_config()
+        globals()["pop_current_app_config"]()
     return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
 
 

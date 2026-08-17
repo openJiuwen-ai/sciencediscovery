@@ -21,16 +21,14 @@ import type {
 } from "@science-agent/agent-runtime";
 
 import {
-  createGatewayAgent,
-  type GatewayAgentHandle,
-  type GatewayAgentOptions,
-} from "../gateway-agent.js";
+  createNativeAgent,
+  type NativeAgentHandle,
+  type NativeAgentOptions,
+} from "../native-agent/index.js";
 
 export interface AgentRunBindings {
   abortSignal?: AbortSignal;
-  callbackUrl: string;
-  createAgent?: (options: GatewayAgentOptions) => GatewayAgentHandle;
-  gatewayUrl: string;
+  createAgent?: (options: NativeAgentOptions) => NativeAgentHandle;
   observer?: (event: AgentEvent) => void;
   runIdleTimeoutMs?: number;
   workspace: WorkspaceAgentOptions;
@@ -48,12 +46,10 @@ export function createAgentRun(
   input: AgentRunInput,
 ): AgentRunHandle {
   const gatewayHistory = structuredClone(input.history);
-  const agent = (bindings.createAgent ?? createGatewayAgent)({
+  const agent = (bindings.createAgent ?? createNativeAgent)({
     ...bindings.workspace,
-    callbackUrl: bindings.callbackUrl,
     enabledConnectorIds: profile.resources.connectorIds as WorkspaceAgentOptions["enabledConnectorIds"],
     gatewayHistory,
-    gatewayUrl: bindings.gatewayUrl,
     ...(bindings.runIdleTimeoutMs !== undefined
       ? { runIdleTimeoutMs: bindings.runIdleTimeoutMs }
       : {}),

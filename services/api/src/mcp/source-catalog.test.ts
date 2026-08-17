@@ -22,7 +22,7 @@ import type {
 } from "@science-agent/schema";
 import { createMcpSourceRegistry } from "@science-agent/mcp-sources";
 
-import type { McpGatewayClient } from "./gateway-client.js";
+import type { McpTransportClient } from "./transport.js";
 import { inputSchemasCompatible, McpSourceCatalog } from "./source-catalog.js";
 
 function manifest(): McpSourceManifest {
@@ -116,7 +116,7 @@ test("source catalog marks missing MCP tools as degraded", async () => {
       transport: "stdio",
     }],
   };
-  const gateway = { async catalog() { return remoteCatalog; } } as McpGatewayClient;
+  const gateway = { async catalog() { return remoteCatalog; } } as McpTransportClient;
   const catalog = new McpSourceCatalog(registry, gateway);
   await catalog.refresh();
 

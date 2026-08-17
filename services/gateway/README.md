@@ -1,65 +1,56 @@
-# services/gateway — agent orchestration sidecar (Rung C)
+# services/gateway — web-provider sidecar
 
-A thin Python service that runs the agent loop for ScienceDiscovery. The Node
-control API consumes only product-owned HTTP contracts; bundled engine
-dependencies are isolated behind the private `_engine/` adapter.
+A thin Python service whose only client is the Node control API. It does **not**
+run the agent loop: the loop, model transport, and MCP client are native to
+`services/api` (see
+[Agent backend](../../docs/en/explanation/agent-backend.md)). What remains here
+is the surface that still depends on the bundled vendor engine:
 
-Each `POST /run` request composes an agent with
-`langchain.agents.create_agent(...)`; every product-level parameter comes from
-the request, i.e. from the Node control API:
+- `POST /internal/web/invoke` — execute one resolved web-provider request
+  (loopback only, authenticated with the gateway internal token)
+- `GET /health` — liveness for the start-up scripts
 
-- `system_prompt` — the workspace prompt Node builds per session
-- `tools` — proxy tools generated from the session's live tool set
-  (name / description / JSON schema pass straight through)
-- `model` — the session's model profile (base_url / api_key / model)
-- message state — the full turn history in OpenAI format; the gateway is
-  stateless and returns `final_messages` for Node to replay next turn
-
-The private `_engine/` adapter owns model, MCP, deferred-tool, skill-search and
-Web-provider seams. No other Gateway module may directly import the bundled
-engine package or name one of its dynamic provider paths.
-
-Every tool the loop calls round-trips back into the Node control API
-(`services/api`) over HTTP, so the bubblewrap runner, permission cards,
-provenance, and review governance stay exactly where they are. The Node API is
-this service's only client.
+The same environment also supplies the Python interpreter for the bundled stdio
+MCP servers, which the Node control plane spawns as subprocesses.
 
 ```
-apps/web ──SSE──▶ services/api (Node)  ──/run NDJSON──▶ services/gateway (this)
-                     ▲                                      │ agent loop (create_agent)
-                     └────── /internal/tool-exec ◀──────────┘ (proxy tools call back)
+apps/web ──SSE──▶ services/api (Node)
+                     │  agent loop, model calls, MCP client — all in-process
+                     └──/internal/web/invoke──▶ services/gateway (this)
+                                                   │ vendor web providers
+                                                   ▼
+                                             upstream search / fetch
 ```
+
+Node keeps ownership of permission, credentials, cache, CAS, and audit for
+`web_search` / `web_fetch`; only provider execution happens here.
 
 ## Layout
 
-- `src/science_agent_gateway/_engine/` — the only adapter allowed to import
-  bundled engine packages or resolve their dynamic provider paths.
-- `src/science_agent_gateway/server.py` — FastAPI `POST /run`: assembles the
-  agent per request, drives it on a worker thread, streams NDJSON events
-  (text deltas, reasoning deltas, tool calls/results, terminal `end` with
-  `final_messages` and usage).
-- `src/science_agent_gateway/tools.py` — builds one forwarding
-  `StructuredTool` per tool spec in the request, bound to that run's callback.
-- `src/science_agent_gateway/callback.py` — the blocking HTTP call back into
-  Node's tool-exec endpoint.
-- `src/science_agent_gateway/mcp_api.py` — authenticated Node-only MCP catalog,
-  reload, bounded invoke, deadline, and retry endpoints.
-- `src/science_agent_gateway/uniprot_mcp.py` and `public_biomed_mcp.py` —
-  provider-facing stdio MCP servers. They return records and artifact
-  candidates; Node remains authoritative for governance and downloads.
-
-Smoke fixtures and scripts live under the repository `test/` tree (not here):
-`test/gateway/` (mock model, stub callback, gateway smokes) and `test/api/`
-(Node adapter smokes).
+- `src/science_agent_gateway/server.py` — FastAPI app: `/health` plus the web
+  router.
+- `src/science_agent_gateway/web_api.py` — the internal web endpoint and its
+  request/response contracts.
+- `src/science_agent_gateway/web_providers.py`, `web_worker.py` — built-in
+  providers and the isolated-subprocess worker used when a request pins its own
+  proxy.
+- `src/science_agent_gateway/_engine/` — the only adapter allowed to import the
+  bundled vendor package. It is down to `web.py`, which is imported lazily so a
+  missing vendor install fails web provider invocation alone.
+- `src/science_agent_gateway/internal_auth.py`, `bootstrap_tokens.py` — the
+  loopback bearer check shared by internal routes.
+- `src/science_agent_gateway/uniprot_mcp.py`, `public_biomed_mcp.py` —
+  provider-facing stdio MCP servers. Node connects to them directly with the
+  official MCP SDK and remains authoritative for governance and downloads.
 
 ## Setup and run
 
-The repository run script provisions and starts this service automatically:
-the environment lives with all other
-runtime state at `<data dir>/envs/gateway` (Python 3.12 via `.python-version`;
-uv defaults to a newer Python that lacks some transitive wheels).
+The repository run script provisions and starts this service automatically; the
+environment lives with all other runtime state at `<data dir>/envs/gateway`
+(Python 3.12 via `.python-version`; uv defaults to a newer Python that lacks
+some transitive wheels).
 
-For standalone development (also used by the smoke tests below):
+For standalone development:
 
 ```bash
 git submodule update --init --recursive third_party/deer-flow
@@ -68,18 +59,15 @@ uv sync                                            # creates ./.venv
 .venv/bin/python -m science_agent_gateway.server   # port 4312 by default
 ```
 
-This is the only agent loop: the Node API sends every run here
-(`SCIENCE_AGENT_GATEWAY_URL`, default `:4312`). The model credential comes
-from the session's model profile on the Node side — the gateway itself needs
-no model configuration.
+The Node API reaches this service through `SCIENCE_AGENT_GATEWAY_URL`
+(default `:4312`). Model credentials never come here — the agent loop runs in
+Node and talks to the model endpoint itself.
 
-## Smoke tests
-
-Run from the repository root:
+## Tests
 
 ```bash
-./test/gateway/run_m0_smoke.sh   # gateway with mock model: assembly + callback + streaming
-./test/gateway/run_real_smoke.sh # gateway against the live model in the repo root .env
-./test/api/run_m1_smoke.sh       # Node adapter (hermetic): payload + translation + multi-turn
-./test/api/run_real_smoke.sh     # full path: adapter -> gateway -> live model -> real tool
+cd services/gateway && .venv/bin/python -m unittest discover -s tests
 ```
+
+End-to-end agent-loop smokes live in the repository `test/api/` tree
+(`run_m1_smoke.sh` for the hermetic path, `run_real_smoke.sh` for a live model).

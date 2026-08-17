@@ -185,6 +185,7 @@ import { createSettingsErrorRouter } from "./settings-error-routing.js";
 import { isPrimaryViewChange, parseViewState, serializeViewState, type ViewState } from "./view-url.js";
 import { PermissionCards, PermissionGrantManager } from "./Permissions.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
+import { formatRunFailure } from "./run-failure.js";
 import {
   ComposerReferenceChips,
   ComposerReferenceMenu,
@@ -2765,7 +2766,7 @@ export function App() {
         });
       }
     }
-    if (streamEvent.type === "run.failed") setError(streamEvent.error);
+    if (streamEvent.type === "run.failed") setError(formatRunFailure(streamEvent.errorCode, streamEvent.error));
   }
 
   async function loadToolOutput(

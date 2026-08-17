@@ -33,7 +33,7 @@ from ._engine import (
     invoke_web_provider,
     resolve_web_provider,
 )
-from .mcp_api import require_internal_token
+from .internal_auth import require_internal_token
 from .web_providers import invoke_ddgs_search, invoke_jina_reader
 
 router = APIRouter(prefix="/internal/web", tags=["internal-web"])

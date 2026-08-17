@@ -32,9 +32,6 @@ import {
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
 } from "@science-agent/agent-runtime";
-import {
-  toolCallbackRegistry,
-} from "../gateway-agent.js";
 import { resolveProxyForUrl } from "../proxy/index.js";
 import type {
   ArtifactCandidate,
@@ -105,6 +102,7 @@ import { reviewerSpecialistSupportsLevel } from "@science-agent/schema";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 import { RunnerClient } from "../runner-client.js";
+import { classifyRunFailure, runFailureMessage } from "../run-failure.js";
 import { ProvenanceRecorder } from "../provenance.js";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 import {
@@ -119,7 +117,6 @@ import { createPromptManifest } from "../prompt-manifest.js";
 import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
 import { ArtifactManager } from "../mcp/artifact-manager.js";
 import { McpGovernanceBroker } from "../mcp/broker.js";
-import { McpGatewayClient } from "../mcp/gateway-client.js";
 import { McpSourceCatalog } from "../mcp/source-catalog.js";
 import { createMcpWorkspaceTools } from "../mcp/workspace-tools.js";
 import { WebBroker } from "../web-providers/broker.js";
@@ -896,8 +893,6 @@ async function executeAgentRun(
         });
         const semanticReview = reviewerSpecialistSupportsLevel(reviewerSpecialistSettings.level, "deep")
           ? createReviewAgentOptions({
-              callbackUrl: serverConfig.callbackUrl,
-              gatewayUrl: serverConfig.gatewayUrl,
               modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
               runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
               skills: skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]),
@@ -1275,8 +1270,6 @@ async function executeAgentRun(
         subagentRunHandle = runSubagentTask({
           bindings: {
             abortSignal: childExecution.abortSignal,
-            callbackUrl: serverConfig.callbackUrl,
-            gatewayUrl: serverConfig.gatewayUrl,
             observer: observeSubagentEvent,
             runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
             workspace: subagentWorkspace,
@@ -1451,8 +1444,6 @@ async function executeAgentRun(
   mainExecution = runMainRequestExecution({
     bindings: {
       abortSignal: requestExecution.abortSignal,
-      callbackUrl: serverConfig.callbackUrl,
-      gatewayUrl: serverConfig.gatewayUrl,
       observer: observeMainEvent,
       runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
       workspace: agentOptions,
@@ -1569,7 +1560,8 @@ async function executeAgentRun(
     }
     await flushWorkspaceRefresh();
     await emit({
-      error: error instanceof Error ? error.message : "Agent run failed",
+      error: runFailureMessage(error),
+      errorCode: classifyRunFailure(error),
       type: "run.failed",
     });
     return "failed";
@@ -1991,11 +1983,11 @@ export function scheduleSessionRuns(
             memoryGraphClient,
           );
         } catch (reason) {
-          error = reason instanceof Error ? reason.message : "Agent run failed";
+          error = runFailureMessage(reason);
           status = cancelledRuns.has(next.id) ? "cancelled" : "failed";
           await emit(status === "cancelled"
             ? { reason: "Run cancelled", runId: next.id, type: "run.cancelled" }
-            : { error, type: "run.failed" });
+            : { error, errorCode: classifyRunFailure(reason), type: "run.failed" });
         } finally {
           await deltaSink.flush();
           await eventQueue;

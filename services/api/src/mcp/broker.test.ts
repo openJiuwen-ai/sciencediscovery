@@ -27,7 +27,8 @@ import {
   type ResourceRateLimitOptions,
 } from "../rate-limit/resource-rate-limiter.js";
 import { McpGovernanceBroker } from "./broker.js";
-import { McpGatewayClient } from "./gateway-client.js";
+import type { McpTransportClient } from "./transport.js";
+import type { McpCatalog, McpInvokeResponse } from "@science-agent/schema";
 import { McpSourceCatalog } from "./source-catalog.js";
 
 test("governance broker invokes native UniProt MCP through the gateway and caches normalized records", async (context) => {
@@ -46,9 +47,7 @@ test("governance broker invokes native UniProt MCP through the gateway and cache
   const registry = createBuiltinMcpSourceRegistry();
   const lookup = registry.get("uniprot").manifest.tools.lookup!;
   let invokeCalls = 0;
-  const gateway = new McpGatewayClient("http://gateway.test", "token", async (input, init) => {
-    if (String(input).endsWith("/internal/mcp/catalog")) {
-      return Response.json({
+  const catalogNative = ({
         loadedAt: new Date().toISOString(),
         revision: "catalog-native",
         servers: [{
@@ -62,10 +61,13 @@ test("governance broker invokes native UniProt MCP through the gateway and cache
           }],
           transport: "stdio",
         }],
-      });
-    }
-    assert.equal(init?.method, "POST");
-    assert.deepEqual(JSON.parse(String(init?.body)).proxy, { mode: "direct" });
+  }) as unknown as McpCatalog;
+  const gateway: McpTransportClient = {
+    catalog: async () => catalogNative,
+    reload: async () => catalogNative,
+    invoke: async (request) => {
+    // The broker must forward the resolved proxy on the real request object.
+    assert.deepEqual(request.proxy, { mode: "direct" });
     invokeCalls += 1;
     const citation = {
       identifier: "P04637",
@@ -76,7 +78,7 @@ test("governance broker invokes native UniProt MCP through the gateway and cache
       source: "uniprot",
       url: "https://www.uniprot.org/uniprotkb/P04637/entry",
     };
-    return Response.json({
+    return ({
       attempts: [{
         attempt: 1, durationMs: 1, finishedAt: new Date().toISOString(),
         startedAt: new Date().toISOString(), status: "succeeded",
@@ -98,8 +100,9 @@ test("governance broker invokes native UniProt MCP through the gateway and cache
       requestId: "request",
       serverId: "uniprot",
       toolName: "lookup",
-    });
-  });
+    }) as unknown as McpInvokeResponse;
+    },
+  };
   const catalog = new McpSourceCatalog(registry, gateway);
   await catalog.refresh();
   const broker = new McpGovernanceBroker(
@@ -177,9 +180,7 @@ test("governance broker preserves omitted limits, maps queue guards, and feeds 4
   delete manifest.governance.rateLimitPerSecond;
   const registry = createMcpSourceRegistry().register({ ...source, manifest });
   const lookup = registry.get("uniprot").manifest.tools.lookup!;
-  const gateway = new McpGatewayClient("http://gateway.test", "token", async (input, init) => {
-    if (String(input).endsWith("/internal/mcp/catalog")) {
-      return Response.json({
+  const catalogRate = ({
         loadedAt: new Date().toISOString(),
         revision: "catalog-rate",
         servers: [{
@@ -193,10 +194,11 @@ test("governance broker preserves omitted limits, maps queue guards, and feeds 4
           }],
           transport: "stdio",
         }],
-      });
-    }
-    assert.equal(init?.method, "POST");
-    return Response.json({
+  }) as unknown as McpCatalog;
+  const gateway: McpTransportClient = {
+    catalog: async () => catalogRate,
+    reload: async () => catalogRate,
+    invoke: async () => ({
       attempts: [{
         attempt: 1, durationMs: 1, errorCode: "RATE_LIMITED",
         errorMessage: "HTTP 429 Too Many Requests from rest.uniprot.org (retry-after: 2)",
@@ -209,8 +211,8 @@ test("governance broker preserves omitted limits, maps queue guards, and feeds 4
       requestId: "request",
       serverId: "uniprot",
       toolName: "lookup",
-    });
-  });
+    }) as unknown as McpInvokeResponse,
+  };
   const catalog = new McpSourceCatalog(registry, gateway);
   await catalog.refresh();
   const reported: Array<[string, number | undefined]> = [];

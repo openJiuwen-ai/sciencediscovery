@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+
+import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
@@ -91,8 +93,30 @@ async function setupSession(page: Page, options: { alwaysAllow?: boolean } = {})
   return { project, selectInlineCardsSession, session };
 }
 
-test("plan and subagent cards anchor to their run, collapse by default, and survive reload", async ({ page }) => {
+/**
+ * E2E-META
+ * Purpose: Plan / subagent cards render at the run that produced them, default
+ *   to collapsed, keep expansion state when their group migrates into a
+ *   conversation block, and keep positions across reload and session switch.
+ * Steps:
+ *   1. Register the real model, project, and session over the API.
+ *   2. Run a prompt that produces a plan and a subagent; approve permissions.
+ *   3. Assert card anchoring/collapse, reload, switch sessions, re-assert.
+ * Environment: Running stack at E2E_API_URL / E2E_BASE_URL with the default bearer
+ *   token; E2E_SCREENSHOTS for output.
+ * Type: real
+ * LLM: Real chat completions via E2E_LLM_BASE_URL; output and timing vary.
+ * WebSearch: None.
+ * PaperSources: None.
+ * MCP: None required by the test.
+ * OtherExternal: Local science_agent API, gateway, browser UI, and runner.
+ * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; optional E2E_API_TOKEN.
+ * CostSideEffects: Billable tokens, model rate limits, local projects/sessions/models, screenshots.
+ */
+test("plan and subagent cards anchor to their run, collapse by default, and survive reload", { tag: "@real" }, async ({ page }, testInfo) => {
   test.setTimeout(900_000);
+  requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
+  await requireRealStack(testInfo, API);
 
   const { selectInlineCardsSession } = await setupSession(page);
 
@@ -171,8 +195,29 @@ test("plan and subagent cards anchor to their run, collapse by default, and surv
   await page.screenshot({ path: `${SCREENSHOTS}/05-after-session-switch.png`, fullPage: true });
 });
 
-test("markdown previews anchor to the run that wrote them instead of pinning to the bottom", async ({ page }) => {
+/**
+ * E2E-META
+ * Purpose: Markdown artifact previews anchor to the run that wrote them and
+ *   never duplicate as a global bottom preview.
+ * Steps:
+ *   1. Register the real model, project, and session over the API.
+ *   2. Run two file-writing rounds and one plain-answer round.
+ *   3. Assert exactly one preview per writing round, anchored in order.
+ * Environment: Running stack at E2E_API_URL / E2E_BASE_URL with the default bearer
+ *   token; E2E_SCREENSHOTS for output.
+ * Type: real
+ * LLM: Real chat completions via E2E_LLM_BASE_URL; output and timing vary.
+ * WebSearch: None.
+ * PaperSources: None.
+ * MCP: None required by the test.
+ * OtherExternal: Local science_agent API, gateway, browser UI, and runner-executed Python.
+ * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; optional E2E_API_TOKEN.
+ * CostSideEffects: Billable tokens, model rate limits, local models/projects/sessions/files, screenshots.
+ */
+test("markdown previews anchor to the run that wrote them instead of pinning to the bottom", { tag: "@real" }, async ({ page }, testInfo) => {
   test.setTimeout(900_000);
+  requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
+  await requireRealStack(testInfo, API);
 
   const { selectInlineCardsSession } = await setupSession(page, { alwaysAllow: true });
 

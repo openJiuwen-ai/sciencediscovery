@@ -30,7 +30,7 @@ import { CasStore } from "@science-agent/cas";
 
 import type { SessionStore } from "../store.js";
 import type { MemoryGraphSink } from "../memory-graph.js";
-import { McpGatewayClient } from "./gateway-client.js";
+import type { McpTransportClient } from "./transport.js";
 import {
   ResourceRateLimiter,
   ResourceRateLimitQueueFullError,
@@ -168,7 +168,7 @@ export class McpGovernanceBroker {
     private readonly store: SessionStore,
     private readonly registry: McpSourceRegistry,
     private readonly catalog: McpSourceCatalog,
-    private readonly gateway: McpGatewayClient,
+    private readonly gateway: McpTransportClient,
     options: {
       cache?: McpResultCache;
       limiter?: ResourceRateLimiter;

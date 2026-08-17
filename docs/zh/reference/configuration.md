@@ -26,7 +26,6 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN` | 首次启动生成 | API→gateway 内部 token；不设置时使用 `<数据目录>/secrets/gateway-internal-token` 中保存的值 |
 | `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | 初始 Agent 无响应上限：无流式输出或进度（`0` = 无限） |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | 初始 Agent 单轮总时长上限（`0` = 无限） |
-| `SCIENCE_AGENT_TOOL_CALLBACK_URL` | `http://<host>:<port>/internal/tool-exec` | gateway 代理工具回调 URL |
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner 监听地址 |
 | `SCIENCE_AGENT_RUNNER_PORT` | `4311` | Runner 监听端口 |
 | `SCIENCE_AGENT_RUNNER_URL` | `http://127.0.0.1:4311` | Runner 端点（API 客户端） |

@@ -5,9 +5,20 @@
   "type": "module",
   "scripts": {
     "postinstall": "ln -sfn \"$PWD/node_modules\" \"$PWD/../test/node_modules\"",
-    "test": "playwright test",
-    "test:headed": "playwright test --headed",
-    "test:report": "playwright show-report playwright-report"
+    "sync": "node ../test/sync-e2e.mjs --write",
+    "check:sync": "node ../test/sync-e2e.mjs --check",
+    "test": "npm run check:sync && playwright test --project=mocked",
+    "test:headed": "npm run check:sync && playwright test --project=mocked --headed",
+    "test:list": "npm run check:sync && playwright test --project=mocked --list",
+    "test:mocked": "npm run check:sync && playwright test --project=mocked",
+    "test:real": "npm run check:sync && E2E_REAL=1 playwright test --project=real",
+    "test:real:list": "npm run check:sync && E2E_REAL=1 playwright test --project=real --list",
+    "test:mixed": "npm run check:sync && E2E_REAL=1 playwright test --project=mocked --project=real",
+    "test:mixed:list": "npm run check:sync && E2E_REAL=1 playwright test --project=mocked --project=real --list",
+    "test:legacy": "npm run check:sync && E2E_LEGACY=1 playwright test --project=legacy",
+    "test:legacy:list": "npm run check:sync && E2E_LEGACY=1 playwright test --project=legacy --list",
+    "test:report": "playwright show-report playwright-report",
+    "check:meta": "node ../test/check-e2e-meta.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.45.0",

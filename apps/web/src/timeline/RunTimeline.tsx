@@ -29,6 +29,7 @@ import { mergePermissionRequestSnapshot } from "../permission-state.js";
 import { ReviewerPanel } from "../ReviewerPanel.js";
 import { ToolIoSections } from "./ToolIoSections.js";
 import { useLocale } from "../i18n/index.js";
+import { formatRunFailure } from "../run-failure.js";
 
 // Memory-graph tools are internal bookkeeping: the LLM uses them to read the
 // graph and record claims/evidence while composing the report, but they are
@@ -294,7 +295,9 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "run.failed" || event.type === "run.cancelled") {
-    const summary = event.type === "run.failed" ? event.error : event.reason;
+    const summary = event.type === "run.failed"
+      ? formatRunFailure(event.errorCode, event.error)
+      : event.reason;
     return finishThinking(entries).map((entry) => {
       if (entry.type === "tool" && entry.trace.status === "running") {
         return { ...entry, expanded: false, trace: { ...entry.trace, status: "failed", summary } };

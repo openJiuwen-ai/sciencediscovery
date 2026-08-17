@@ -36,9 +36,15 @@ coverage/
 
 # Local Playwright environment and reports
 .e2e/
-test/node_modules/
+.e2e-data/
+test/node_modules
 test/playwright-report/
 test/test-results/
+# Generated journey step reports (report.md, report.html, step screenshots).
+# They normally land in .e2e/journey-reports/; these cover a run started from
+# test/ or an E2E_JOURNEY_REPORTS override inside the tree.
+test/journey-reports/
+journey-reports/
 
 # Editors and operating systems
 .vscode/

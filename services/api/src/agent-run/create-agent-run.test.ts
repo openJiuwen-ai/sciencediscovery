@@ -22,7 +22,7 @@ import {
   type AgentHistoryMessage,
 } from "@science-agent/agent-runtime";
 
-import type { GatewayAgentHandle, GatewayAgentOptions } from "../gateway-agent.js";
+import type { NativeAgentHandle, NativeAgentOptions } from "../native-agent/index.js";
 import { createAgentRun, type AgentRunHandle } from "./create-agent-run.js";
 import { runMainRequestExecution, runSubagentTask } from "./orchestrators.js";
 
@@ -40,7 +40,7 @@ test("createAgentRun executes once and returns the canonical final history", asy
   const observed: AgentEvent[] = [];
   const histories: AgentHistoryMessage[][] = [];
   const timeoutOptions: Array<{ idle?: number; turn?: number }> = [];
-  const createAgent = (options: GatewayAgentOptions): GatewayAgentHandle => ({
+  const createAgent = (options: NativeAgentOptions): NativeAgentHandle => ({
     abort() {},
     beginExternalWait: () => () => undefined,
     async execute() {
@@ -67,9 +67,7 @@ test("createAgentRun executes once and returns the canonical final history", asy
     workspaceRoot: "/workspace",
   });
   const handle = createAgentRun(profile, {
-    callbackUrl: "http://api.test/internal/tool-exec",
     createAgent,
-    gatewayUrl: "http://gateway.test",
     observer: (event) => observed.push(event),
     runIdleTimeoutMs: 12_000,
     workspace: workspaceBindings(),
@@ -91,7 +89,7 @@ test("createAgentRun executes once and returns the canonical final history", asy
 
 test("createAgentRun forwards long gateway history without Node-side compaction", async () => {
   const histories: AgentHistoryMessage[][] = [];
-  const createAgent = (options: GatewayAgentOptions): GatewayAgentHandle => ({
+  const createAgent = (options: NativeAgentOptions): NativeAgentHandle => ({
     abort() {},
     beginExternalWait: () => () => undefined,
     async execute() {
@@ -114,9 +112,7 @@ test("createAgentRun forwards long gateway history without Node-side compaction"
     role: "assistant",
   }));
   const handle = createAgentRun(profile, {
-    callbackUrl: "http://api.test/internal/tool-exec",
     createAgent,
-    gatewayUrl: "http://gateway.test",
     workspace: workspaceBindings(),
   }, {
     agentRunId: "agent-run-compact",
@@ -137,7 +133,7 @@ test("reviewer correction is a second AgentRun with explicit canonical history h
   const receivedHistories: AgentHistoryMessage[][] = [];
   const receivedContracts: Array<string | undefined> = [];
   let runCount = 0;
-  const createAgent = (options: GatewayAgentOptions): GatewayAgentHandle => ({
+  const createAgent = (options: NativeAgentOptions): NativeAgentHandle => ({
     abort() {},
     beginExternalWait: () => () => undefined,
     async execute() {
@@ -164,9 +160,7 @@ test("reviewer correction is a second AgentRun with explicit canonical history h
   });
   const execution = runMainRequestExecution({
     bindings: {
-      callbackUrl: "http://api.test/internal/tool-exec",
       createAgent,
-      gatewayUrl: "http://gateway.test",
       workspace: workspaceBindings(),
     },
     profile,
@@ -197,7 +191,7 @@ test("request execution forwards external waits only to its active AgentRun", as
   let finishExecute: (() => void) | undefined;
   let pauseCount = 0;
   let releaseCount = 0;
-  const createAgent = (): GatewayAgentHandle => ({
+  const createAgent = (): NativeAgentHandle => ({
     abort() {},
     beginExternalWait() {
       pauseCount += 1;
@@ -218,9 +212,7 @@ test("request execution forwards external waits only to its active AgentRun", as
   });
   const execution = runMainRequestExecution({
     bindings: {
-      callbackUrl: "http://api.test/internal/tool-exec",
       createAgent,
-      gatewayUrl: "http://gateway.test",
       workspace: workspaceBindings(),
     },
     profile: createMainAgentProfile({
@@ -252,7 +244,7 @@ test("runSubagentTask returns an unstarted handle visible before synchronous max
   let executeCount = 0;
   let abortCount = 0;
   let receivedRunContract: string | undefined;
-  const createAgent = (options: GatewayAgentOptions): GatewayAgentHandle => ({
+  const createAgent = (options: NativeAgentOptions): NativeAgentHandle => ({
     abort() {
       abortCount += 1;
     },
@@ -283,9 +275,7 @@ test("runSubagentTask returns an unstarted handle visible before synchronous max
   let handle: AgentRunHandle;
   handle = runSubagentTask({
     bindings: {
-      callbackUrl: "http://api.test/internal/tool-exec",
       createAgent,
-      gatewayUrl: "http://gateway.test",
       observer: (event) => {
         if (event.type !== "turn_start") return;
         turnCount += 1;

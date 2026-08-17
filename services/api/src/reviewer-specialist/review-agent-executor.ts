@@ -39,8 +39,6 @@ const CITATION_WEB_SEARCH_TIMEOUT_MS = 12_000;
 const MAX_CITATION_SOURCE_CHARACTERS = 12_000;
 
 export interface CreateReviewAgentOptionsInput {
-  callbackUrl: string;
-  gatewayUrl: string;
   modelIdentity: string;
   runIdleTimeoutMs: number;
   skills: RuntimeSkill[];
@@ -380,8 +378,6 @@ export function createReviewAgentOptions(input: CreateReviewAgentOptionsInput): 
       const handle = runSubagentTask({
         bindings: {
           abortSignal: signal,
-          callbackUrl: input.callbackUrl,
-          gatewayUrl: input.gatewayUrl,
           runIdleTimeoutMs: input.runIdleTimeoutMs,
           observer: (event) => logAgentEvent(logContext, event),
           workspace,

@@ -2,14 +2,14 @@
 
 ## 1. Overall model
 
-ScienceDiscovery uses Node orchestration and an independent gateway `/run` per agent:
+ScienceDiscovery runs **one native loop per AgentRun**: the main agent and each child are separate `NativeAgent.execute()` calls inside the same Node control-plane process.
 
 ```text
-main /run → task callback in API → child AgentRun /run
-          ← final_messages + result summary ← child
+main AgentRun (native loop) → task handler in API → child AgentRun (native loop)
+                            ← finalMessages + result summary ← child
 ```
 
-Unlike DeerFlow's nested graph/state update, gateway is a stateless sidecar and Node retains history, permission, workspace, tools, and audit. A child cannot call `task` again, and cross-run handoff relies on gateway `final_messages` plus Node state. Existing permission, runner sandbox, provenance, and UI remain in Node.
+Main and child share **no mutable state**: each AgentRun owns its history, tool table, and time budget, and the handoff points are an explicit `finalMessages` plus the structured `task` result. Node retains authoritative history, permissions, workspace, tools, and audit. A child cannot call `task` again, and cross-run handoff relies on the previous run's `finalMessages` plus Node state.
 
 ## 2. Lead-prompt orchestration
 
@@ -23,23 +23,31 @@ The main first-user input and each child's delegated prompt/Brief/handoff are in
 
 `task` returns status/stop reason, token usage, model name, a short result brief and SHA256, validation, and validated/raw structured results. With `outputJsonSchema`, the server validates the last non-empty assistant output as one JSON object. Failure marks the child failed rather than treating invalid content as normal structured output.
 
+### 4.1 Subagent Brief v1 contract
+
+`brief` requires a 1–2000-character `goal`, 1–20 constraints, 1–20 output requirements, and 1–12 collaboration rules (each 1–1000 characters). An optional JSON Schema 2020-12 is at most 20,000 serialized bytes and depth 64. The server owns `version`, starting at 1 and incrementing on PATCH; a client-supplied value is ignored.
+
+The schema compiles on create and PATCH; invalid, unknown-keyword, or oversized input returns 400. Completion validates the last non-empty assistant step as one JSON object. Failure marks the subagent `failed` and retains `resultValidation` / `rawStructuredResult` without setting `structuredResult`.
+
+`PATCH /api/sessions/:sessionId/subagents/:subagentId/brief` is allowed for `completed` / `failed`, returns 409 for `running` / `cancelled` / `timed_out`, 404 when absent, and 400 for an invalid Brief or schema.
+
 ## 5. Tool-loop protection
 
-Node detects the same tool with identical arguments across both main and child callbacks. Call 10 returns `REPEATED_TOOL_CALL`; call 20 returns hard-stop `TOOL_LOOP_DETECTED`. This does not depend on prompt compliance.
+The native loop's tool dispatch detects the same tool with identical arguments; main and child share the same `executeTool` path, so both are covered. Call 10 returns `REPEATED_TOOL_CALL`; call 20 returns hard-stop `TOOL_LOOP_DETECTED`. This does not depend on prompt compliance.
 
 ## 6. History summarization and handoff
 
-Gateway uses DeerFlow summarization and durable-context middleware. Within a run, old messages can become `summary_text`; at completion it becomes a hidden checkpoint inside `final_messages`. Node does not pre-summarize history again. Gateway controls within-run compression, `final_messages` controls cross-run handoff, and non-droppable boundaries live in `runContract`.
+Compaction happens inside the native loop (`services/api/src/native-agent/compaction.ts`). Within a run, older messages are summarized into one hidden checkpoint message, and the next compaction merges the previous summary forward rather than stacking layers; see [agent-backend.md](agent-backend.md) §7. There is only one summarization layer, `finalMessages` controls cross-run handoff with no extra pre-summarization, and non-droppable boundaries live in `runContract`.
 
 ## 7. Child workspace
 
 Each child writes only `subagents/<subagentId>/`; runner mounts the parent Session workspace read-only. Explicit `inputPaths`, or paths mentioned in prompt/Brief, are copied to `inputs/<original>` for audit and mirrored at `<original>` for relative access. Count/file/total limits apply; skipped excess files are recorded without aborting initialization.
 
-## 8. DeerFlow trade-offs
+## 8. Capability boundary
 
-ScienceDiscovery has the Node-executed `task` tool, lead orchestration prompt, API 10/50 limits, structured result contract, repeated-call guard, runtime summary checkpoint, and read-only parent workspace. It deliberately does not integrate same-graph nesting or child nesting. Per-run token hard budgets are also absent; usage, timeout, and turn limits are returned/enforced instead.
+ScienceDiscovery has the Node-executed `task` tool, lead orchestration prompt, API 10/50 limits, structured result contract, repeated-call guard, runtime summary checkpoint, and read-only parent workspace. It deliberately does not share one mutable state across main and child, and child nesting stays disabled. Per-run token hard budgets are also absent; usage, timeout, and turn limits are returned/enforced instead.
 
-Keeping the Node source of truth avoids making gateway stateful while retaining the most important prompt, limit, result, summary, and loop protections.
+Shared state and re-nesting would add orchestration power but require a shared checkpointer and cross-run mutable state. Keeping "Node is the only source of truth, each run is independent" retains the most important prompt, limit, result, summary, and loop protections.
 
 ## 9. Related entry points
 
@@ -47,6 +55,6 @@ Keeping the Node source of truth avoids making gateway stateful while retaining 
 - [Built-in tools](../reference/builtin-tools.md)
 - [Skill progressive disclosure](skill-progressive-disclosure.md)
 - `packages/agent-runtime/src/runtime.ts`, `workspace.ts`
-- `services/api/src/runs/index.ts`, `gateway-agent.ts`
-- `services/gateway/src/science_agent_gateway/server.py`
+- `services/api/src/runs/index.ts`
+- `services/api/src/native-agent/index.ts`, `compaction.ts`
 - `services/runner/src/executor.ts`

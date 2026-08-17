@@ -18,6 +18,17 @@ version = "0.0.0"
 description = "ScienceDiscovery orchestration sidecar with bundled engine dependencies isolated behind a private adapter."
 requires-python = ">=3.12"
 dependencies = [
+    # Agent loop, middleware, model clients, and MCP client are native code on
+    # LangChain public APIs; these are direct dependencies of the agent path.
+    "langchain>=1.2.15",
+    "langchain-openai>=1.2.1",
+    "langchain-anthropic>=1.4.1",
+    "langchain-mcp-adapters>=0.2.2",
+    "langgraph>=1.1.9",
+    "mcp>=1.0.0",
+    # deerflow-harness remains ONLY for the web-provider seam (_engine/web.py,
+    # community search/fetch tools). The agent/model/MCP paths must not import
+    # it; it is removed entirely once the web providers are replaced.
     "deerflow-harness",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",

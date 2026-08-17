@@ -24,8 +24,15 @@ import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
 import { SessionStore } from "../store.js";
 import { ArtifactManager, assertSafeArtifactPath } from "./artifact-manager.js";
 import { McpGovernanceBroker } from "./broker.js";
-import { McpGatewayClient } from "./gateway-client.js";
+import type { McpTransportClient } from "./transport.js";
 import { McpSourceCatalog } from "./source-catalog.js";
+
+/** These flows never reach MCP; any call is a test-setup mistake, not a stub gap. */
+function unusedTransport(): McpTransportClient {
+  const fail = (): never => { throw new Error("MCP transport must not be used in this flow"); };
+  return { catalog: fail, invoke: fail, reload: fail };
+}
+
 
 async function waitForCompleted(store: SessionStore, sessionId: string, jobId: string) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -52,9 +59,7 @@ test("artifact manager derives an immutable plan from MCP CAS data and downloads
   const project = await store.createProject("Artifacts");
   const session = await store.createSession(project.id, "Download", model.id);
   const registry = createBuiltinMcpSourceRegistry();
-  const gateway = new McpGatewayClient("http://127.0.0.1:1", "token", async () => {
-    throw new Error("not used");
-  });
+  const gateway = unusedTransport();
   const broker = new McpGovernanceBroker(
     dataDir,
     store,
@@ -163,7 +168,7 @@ test("artifact manager resumes concurrent downloads without corrupting shared jo
   const project = await store.createProject("Concurrent downloads");
   const session = await store.createSession(project.id, "Resume", model.id);
   const registry = createBuiltinMcpSourceRegistry();
-  const gateway = new McpGatewayClient("http://127.0.0.1:1", "token");
+  const gateway = unusedTransport();
   const broker = new McpGovernanceBroker(
     dataDir,
     store,
@@ -252,7 +257,7 @@ test("artifact manager waits for a pending permission and returns denial as a te
   const project = await store.createProject("Denied");
   const session = await store.createSession(project.id, "Denied", model.id);
   const registry = createBuiltinMcpSourceRegistry();
-  const gateway = new McpGatewayClient("http://127.0.0.1:1", "token");
+  const gateway = unusedTransport();
   const broker = new McpGovernanceBroker(
     dataDir,
     store,
@@ -306,7 +311,7 @@ test("artifact manager rejects a candidate whose host is outside the source mani
   const project = await store.createProject("Host");
   const session = await store.createSession(project.id, "Host", model.id);
   const registry = createBuiltinMcpSourceRegistry();
-  const gateway = new McpGatewayClient("http://127.0.0.1:1", "token");
+  const gateway = unusedTransport();
   const broker = new McpGovernanceBroker(
     dataDir,
     store,

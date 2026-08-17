@@ -8,8 +8,8 @@ ScienceDiscovery 使用一套 MCP 数据访问链路。科研查询、下载候�
 Agent
   → mcp__<source>__<tool>
   → Node McpGovernanceBroker
-  → DeerFlow MCP Gateway
-  → Python MCP Server
+  → Node 进程内 MCP 客户端(mcp/node-client.ts)
+  → MCP Server(stdio / SSE / streamable-HTTP)
   → McpResult
 ```
 
@@ -209,7 +209,7 @@ type ApprovalMode = "always_allow" | "ask_for_dangerous";
 Authorization 使用独立 SQLite 表追加写入，ArtifactPlan、ArtifactJob 和 McpInvocation 使用
 `permissionAuthorizationId` 关联本次动作的授权依据。旧 `permissionGrantId` 仅作历史数据读取兼容。
 
-人工审批会暂停对应主 Agent 或子 Agent 的 Gateway deadline。一个请求的决定不会改变其他请求；
+人工审批会暂停对应主 Agent 或子 Agent 的运行 deadline(`beginExternalWait`)。一个请求的决定不会改变其他请求；
 SSE 断开或 execution 结束时，其残留 pending 请求进入 `cancelled`。运行中切换到 `always_allow`
 会旋转 Permission Epoch，并分别允许和唤醒当前 Session 的所有 pending 请求。
 
@@ -306,7 +306,7 @@ Agent 使用 `artifact_download` 和 `paper_extract_pdf` 工具创建并等待�
 每个 Source 必须具有工具注册/Schema 契约和至少一个正常或空结果 Fixture；Fixture 校验 Source、
 Record、Citation 身份及 URL。能产生 ArtifactCandidate 的 Source 还必须覆盖候选身份与域名。
 
-以下行为由所有 Source 共用的 Gateway/Broker 参数化测试覆盖，不为每个 provider 重复复制：
+以下行为由所有 Source 共用的 Broker/客户端参数化测试覆盖，不为每个 provider 重复复制：
 
 - 非法输入、缺失或变化字段；
 - limit/空结果边界，以及 provider 支持时的分页；

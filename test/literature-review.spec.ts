@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page, type TestInfo } from "@playwright/test";
+
+import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 
 // Screenshots land under the local e2e environment (cwd when run from .e2e/).
 const SCREENSHOTS = "screenshots";
@@ -67,7 +69,11 @@ async function createProject(page: Page, name: string) {
   await expect(dialog).toBeHidden();
 }
 
-async function createSession(page: Page, name: string, opts: { connectorIds?: string[]; skillIds?: string[] } = {}) {
+async function createSession(
+  page: Page,
+  name: string,
+  opts: { connectorIds?: string[]; skillIds?: string[]; testInfo?: TestInfo } = {},
+) {
   await page.getByRole("button", { name: "Add session" }).click();
   const dialog = page.getByRole("dialog", { name: "Create Session" });
   await expect(dialog).toBeVisible();
@@ -76,7 +82,11 @@ async function createSession(page: Page, name: string, opts: { connectorIds?: st
   if (opts.skillIds?.length) {
     await dialog.getByLabel("Skill settings mode").selectOption("override");
     for (const skillId of opts.skillIds) {
-      await dialog.locator(".settings-choices label").filter({ hasText: skillId }).locator("input[type='checkbox']").check();
+      const skillChoice = dialog.locator(".settings-choices label").filter({ hasText: skillId }).locator("input[type='checkbox']");
+      if (opts.testInfo && await skillChoice.count() === 0) {
+        opts.testInfo.skip(true, `BLOCKED: required seeded skill is unavailable (${skillId})`);
+      }
+      await skillChoice.check();
     }
   }
 
@@ -92,18 +102,45 @@ async function createSession(page: Page, name: string, opts: { connectorIds?: st
   await expect(dialog).toBeHidden();
 }
 
-test.describe("Wave0+1 Linux Web literature review E2E", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
-    await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
-  });
+async function openWorkspace(page: Page) {
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
+}
 
-  test("Linux Web工作台、模型配置与简单文献调研主路径", async ({ page }) => {
+test.describe("Wave0+1 Linux Web literature review E2E", () => {
+  /**
+   * E2E-META
+   * Purpose: The full literature-review journey works end to end: workspace
+   *   loads, models are registered, a PubMed-backed evidence brief run
+   *   completes with a canonical clickable citation.
+   * Steps:
+   *   1. Verify the workspace and the seeded model registry.
+   *   2. Create a project and a session with the evidence-brief skill.
+   *   3. Enable the PubMed connector, set plan to auto, pick the Flash model.
+   *   4. Run a TP53 research prompt and wait for completion.
+   *   5. Assert a canonical PubMed citation in the summary or artifact.
+   * Environment: Running stack at E2E_BASE_URL whose model registry is seeded with
+ *   working DeepSeek V4 Pro/Flash entries ("Key saved"); PubMed connector
+   *   and life-science-evidence-brief skill available.
+ * Type: real
+   * LLM: Real turns through E2E_LLM_BASE_URL using E2E_LLM_MODEL.
+   * WebSearch: None.
+   * PaperSources: Live PubMed queries; results and rate limits vary.
+   * MCP: PubMed connector exposed through the product's MCP flow.
+   * OtherExternal: Local science_agent API, gateway, browser UI, and runner.
+   * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; seeded model key.
+   * CostSideEffects: Billable tokens, PubMed traffic, local projects/sessions, screenshots.
+ */
+  test("Linux Web工作台、模型配置与简单文献调研主路径", { tag: "@real" }, async ({ page }, testInfo) => {
     // The product allows progress-producing literature turns up to 600 s.
     // Keep the browser alive long enough to assert success or its explicit
     // product error instead of racing the application timeout.
     test.setTimeout(660000);
+    requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
+    await requireRealStack(testInfo);
+    await openWorkspace(page);
+
     // 1. 确认 Linux Web 工作台可访问与模型已配置（已有历史项目时不假设空白落地页）
     await expect(page.locator(".app-shell")).toBeVisible();
     await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
@@ -113,8 +150,15 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
     const config = page.getByRole("dialog", { name: "System configuration" });
     await expect(config).toBeVisible();
     await config.getByRole("button", { name: "Model registry" }).click();
-    await expect(config.getByText("DeepSeek V4 Pro")).toBeVisible();
-    await expect(config.getByText("Key saved").first()).toBeVisible();
+    const modelPro = config.getByText("DeepSeek V4 Pro");
+    const modelFlash = config.getByText("DeepSeek V4 Flash");
+    const savedKey = config.getByText("Key saved").first();
+    if (await modelPro.count() === 0 || await modelFlash.count() === 0 || await savedKey.count() === 0) {
+      testInfo.skip(true, "BLOCKED: model registry lacks seeded DeepSeek V4 Pro/Flash credentials");
+    }
+    await expect(modelPro).toBeVisible();
+    await expect(modelFlash).toBeVisible();
+    await expect(savedKey).toBeVisible();
     await screenshot(page, "02-model-registry");
     await config.getByRole("button", { name: "Done" }).click();
     await expect(config).toBeHidden();
@@ -124,11 +168,18 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
     await screenshot(page, "03-project-created");
 
     // 3. 创建 Session，启用 life-science-evidence-brief skill
-    await createSession(page, `Lit Review Session ${Date.now()}`, { skillIds: ["life-science-evidence-brief"] });
+    await createSession(page, `Lit Review Session ${Date.now()}`, {
+      skillIds: ["life-science-evidence-brief"],
+      testInfo,
+    });
     await screenshot(page, "04-session-created");
 
     // 4. 启用 PubMed connector（Domain loop 卡片）
-    await page.locator("button.connector-card").filter({ hasText: "PubMed" }).click();
+    const pubMedConnector = page.locator("button.connector-card").filter({ hasText: "PubMed" });
+    if (await pubMedConnector.count() === 0) {
+      testInfo.skip(true, "BLOCKED: required seeded PubMed connector is unavailable");
+    }
+    await pubMedConnector.click();
     await expect(page.locator("button.connector-card.enabled").filter({ hasText: "PubMed" })).toBeVisible();
     await screenshot(page, "05-pubmed-enabled");
 
@@ -204,9 +255,35 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
     ).toBe(true);
   });
 
-  test("Connector 未启用时的失败反馈", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: Searching a paper source whose connector is disabled surfaces a
+   *   clear error toast instead of failing silently.
+   * Steps:
+   *   1. Create a project and a session with no connectors enabled.
+   *   2. Search arXiv from the paper panel.
+   *   3. Assert the "enable the connector first" error feedback.
+   * Environment: Running isolated local stack at E2E_BASE_URL; no model run is started and no
+ *   connector precondition is needed.
+ * Type: mocked
+   * LLM: None.
+   * WebSearch: None.
+   * PaperSources: arXiv request is rejected locally before source access.
+   * MCP: None.
+   * OtherExternal: Local science_agent API and browser UI only.
+   * Credentials: None.
+   * CostSideEffects: Creates local project/session data and screenshots; no fees.
+   */
+  // fixme: the manual paper-search form was removed from the workspace panel
+  // (literature downloads now go through the chat agent's MCP tools), so this
+  // journey no longer exists as written; redesign around the MCP flow.
+  test.fixme("Connector 未启用时的失败反馈", { tag: "@mocked" }, async ({ page }) => {
+    await openWorkspace(page);
     await createProject(page, `E2E Failure Case ${Date.now()}`);
-    await createSession(page, `No Connector Session ${Date.now()}`, { connectorIds: [] });
+    // "Add session" creates and selects an untitled session directly; new
+    // sessions start with no connectors enabled.
+    await page.getByRole("button", { name: "Add session" }).click();
+    await expect(page.getByText("Session workspace ready")).toBeVisible();
     await screenshot(page, "11-failure-session-created");
 
     // 不启用任何 connector，直接搜索论文

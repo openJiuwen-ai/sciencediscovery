@@ -4,6 +4,11 @@
 
 Web is a global base capability, not an MCP Source, and has no Session-level provider override. The model always sees `web_search` and `web_fetch`. Node owns permission, credentials, cache, CAS, and audit; gateway resolves a generic provider request, invokes its internal implementation, and sanitizes results.
 
+> **Note:** the agent loop itself is now native to the Node process (see
+> [agent-backend.md](../explanation/agent-backend.md)), but **web-provider execution
+> still remains in the gateway sidecar** and still relies on the vendor implementation.
+> This page documents that remaining path.
+
 ```text
 Agent tool → Node WebBroker → Gateway /internal/web/invoke
            permission/cache     resolve provider + validate generic options

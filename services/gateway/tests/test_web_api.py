@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
-from science_agent_gateway.mcp_api import require_internal_token
+from science_agent_gateway.internal_auth import require_internal_token
 from science_agent_gateway.web_api import (
     MAX_TOOL_RESPONSE_BYTES,
     WebInvokeRequest,

@@ -15,7 +15,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "./helpers/e2e.ts";
 
 import { authorizationHeader } from "./e2e-auth.js";
 
@@ -30,7 +32,30 @@ async function dismissAllToasts(page: import("@playwright/test").Page): Promise<
   await expect(page.locator("[role='status']")).toHaveCount(0);
 }
 
-test("用户可配置无限超时、查看运行状态并在会话中追溯超时原因", async ({ page, request }) => {
+/**
+ * E2E-META
+ * Purpose: Timeout settings can be switched to unlimited, the running state is
+ *   visible while an agent turn hangs, and the session log attributes the
+ *   eventual idle timeout to its configured cause.
+ * Steps:
+ *   1. Register a silent stub model, project, and session over the API.
+ *   2. Set all timeouts to unlimited except a 5s agent idle timeout.
+ *   3. Start a run, observe the running status, wait for the idle timeout.
+ *   4. Verify the timeout reason in the session view; screenshot both states.
+ * Environment: Running stack at E2E_BASE_URL (default
+ *   http://127.0.0.1:4310) with the
+ *   default bearer token; no preconfigured models required.
+ * Type: mocked
+ * LLM: local silent HTTP stub only; no live model.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none — browser requests outside localhost are aborted.
+ * Credentials: none
+ * CostSideEffects: no cost; creates and deletes a model/project and restores
+ *   timeout settings in the isolated run data directory.
+ */
+test("用户可配置无限超时、查看运行状态并在会话中追溯超时原因", { tag: "@mocked" }, async ({ page, request }) => {
   test.setTimeout(60_000);
   const projectName = `E2E Runtime ${Date.now()}`;
   const sessionName = `Timeout Session ${Date.now()}`;
@@ -90,7 +115,7 @@ test("用户可配置无限超时、查看运行状态并在会话中追溯超�
       await configuration.locator("fieldset").filter({ hasText: label }).getByLabel("Unlimited").check();
     }
     await configuration.getByLabel("Agent idle timeout in seconds").fill("5");
-    await configuration.getByRole("button", { name: "Save timeouts" }).click();
+    await configuration.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.locator("[role='status']").filter({ hasText: "Timeout settings saved" })).toBeVisible();
     await configuration.locator(".settings-group-detail").evaluate((element) => { element.scrollTop = 0; });
     await page.screenshot({ path: "screenshots/timeouts-settings.png" });
@@ -98,10 +123,14 @@ test("用户可配置无限超时、查看运行状态并在会话中追溯超�
     await configuration.getByRole("button", { name: "Runtime status" }).click();
     await expect(configuration.getByRole("heading", { name: "Runtime status" })).toBeVisible();
     await expect(configuration.getByText("Runner is healthy; no execution is active.")).toBeVisible();
-    await configuration.getByRole("button", { name: "Done" }).click();
+    await configuration.getByRole("button", { name: "Cancel and close" }).last().click();
 
-    await page.getByRole("button", { name: projectName, exact: true }).click();
-    await page.getByRole("button", { name: sessionName, exact: true }).click();
+    await page.locator("#projects-panel-content")
+      .getByRole("button", { name: projectName, exact: true })
+      .click();
+    await page.locator("#sessions-panel-content")
+      .getByRole("button", { name: sessionName, exact: true })
+      .click();
     await expect(page.getByRole("heading", { name: sessionName })).toBeVisible();
 
     await page.locator(".composer textarea").fill("Start a run that I will stop.");
@@ -123,7 +152,7 @@ test("用户可配置无限超时、查看运行状态并在会话中追溯超�
     await expect(configuration.getByText(sessionName, { exact: true })).toBeVisible();
     await dismissAllToasts(page);
     await page.screenshot({ path: "screenshots/runtime-status-running.png" });
-    await configuration.getByRole("button", { name: "Done" }).click();
+    await configuration.getByRole("button", { name: "Cancel and close" }).last().click();
 
     const notice = page.locator(".message.assistant.timeout-notice");
     await expect(notice).toContainText("Agent idle timeout was reached after 5 seconds", { timeout: 15_000 });

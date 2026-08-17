@@ -6,7 +6,8 @@ ScienceDiscovery uses one governed MCP data path. Scientific queries, download c
 
 ```text
 Agent → mcp__<source>__<tool> → Node McpGovernanceBroker
-      → DeerFlow MCP Gateway → Python MCP Server → McpResult
+      → in-process Node MCP client (mcp/node-client.ts)
+      → MCP Server (stdio / SSE / streamable HTTP) → McpResult
 ```
 
 Legacy `invoke_connector`, `ConnectorBroker`, `science-sources`, and direct transport are no longer runtime architecture.
@@ -92,7 +93,7 @@ Session approval mode is `always_allow` or default `ask_for_dangerous`. Dangerou
 
 `always_allow` authorizes directly without wildcard/once Grants. Every allow, deny, or existing-grant hit appends a single-use `PermissionAuthorization`; reusable/revocable capability belongs to `PermissionGrant`. ArtifactPlan/Job and McpInvocation reference the authorization. Legacy `permissionGrantId` is read-only compatibility.
 
-Human wait pauses the corresponding main/child gateway deadline. Decisions are independent. Disconnect/run end cancels remaining pending requests. Switching to always-allow rotates the permission epoch and wakes each current pending action. Plans are only recorded progress; there is no plan approval API/gate.
+Human wait pauses the corresponding main/child run deadline (`beginExternalWait`). Decisions are independent. Disconnect/run end cancels remaining pending requests. Switching to always-allow rotates the permission epoch and wakes each current pending action. Plans are only recorded progress; there is no plan approval API/gate.
 
 ## 8. Lifecycle
 

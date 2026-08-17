@@ -41,7 +41,7 @@ Agent 工具 mcp__<source>__<tool>
       → ResourceRateLimiter.acquire(rateLimitGroup, …)   services/api/src/rate-limit/resource-rate-limiter.ts
           队列满   → RATE_LIMIT_QUEUE_FULL
           排队超时 → RATE_LIMIT_QUEUE_TIMEOUT
-      → McpGatewayClient.invoke → Python MCP → 上游 provider
+      → McpNodeClient.invoke → MCP server → 上游 provider
           Gateway 内按 retryPolicy 对 429/5xx/transport 做有限重试（尊重 Retry-After）
           attempt 出现 rate-limited → ResourceRateLimiter.reportUpstreamRateLimit(rateLimitGroup, retryAfterMs)
       → lease.release()   finally 释放并发槽并 pump 队尾

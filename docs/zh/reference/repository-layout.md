@@ -44,7 +44,7 @@ science_agent/
 
 | 进程 | 默认地址 | 说明 |
 |------|----------|------|
-| `services/gateway` | `127.0.0.1:4312` | agent loop；仅回环 |
+| `services/gateway` | `127.0.0.1:4312` | web provider 侧车 + 随包 Python MCP server 环境；仅回环 |
 | `services/runner` | `127.0.0.1:4311` | 沙箱执行；仅回环 |
 | `services/api` | `127.0.0.1:4310` | 控制 API + 静态 UI；默认仅本机 |
 
@@ -65,13 +65,14 @@ science_agent/
 | 源码区域 | 功能 |
 |----------|------|
 | `server.ts` | 兼容入口 barrel（re-export `http/`），进程启动点 |
-| `http/` | HTTP 壳：路由装配、鉴权、请求体、响应、静态资源、`/internal/tool-exec` |
+| `http/` | HTTP 壳：路由装配、鉴权、请求体、响应、静态资源 |
 | `runs/` | 运行生命周期、SSE 运行流、会话运行编排与并发串行化、workspace 事件过滤 |
 | `store.ts` / `store/` | `SessionStore` 门面 + SQLite 目录库；catalog/permissions/secrets/settings/subagents/run-streams 域模块 |
 | `subagents/` | subagent handoff、inputs 与私有 workspace |
 | `artifacts/` | 产物版本 diff 等 artifact 域 |
 | `web-providers/` | Web provider broker、通用 Gateway client 与 workspace 工具 |
-| `gateway-agent.ts` | 对接 Gateway：组装请求、消费 NDJSON、翻译为 UI 事件 |
+| `native-agent/` | **Node 原生 agent loop**：`index.ts`（循环状态机）、`model-client.ts`（流式模型传输）、`deferred-tools.ts`、`compaction.ts` |
+| `mcp/` | MCP 治理与进程内客户端：`broker.ts`、`node-client.ts`、`extensions-config.ts`、`source-catalog.ts` |
 | `connectors/` | 科学连接器 broker 与 manifest |
 | `papers.ts` | 论文搜索下载与 PDF 抽取编排 |
 | `runner-client.ts` | 调用 runner 执行 Python / R / shell |
@@ -82,12 +83,12 @@ science_agent/
 
 主要对外能力：项目管理、Agent 运行、连接器与论文、托管科学环境、技能与 specialist、权限与评审。
 
-### 2.3 `services/gateway` — Agent 循环侧车
+### 2.3 `services/gateway` — Web provider 侧车
 
-- FastAPI：`GET /health`、`POST /run`
-- 每请求用 LangChain `create_agent` 组装一轮 agent
-- 工具全部为 **HTTP 代理**：回调用 Node 的 `/internal/tool-exec`
-- `_engine/` 是唯一供应商 adapter；主流程不直接 import 供应商包或使用其动态路径（见 [Agent 后端](../explanation/agent-backend.md)）
+- **不再跑 agent 循环**：agent loop 已原生化到 `services/api` 的 `native-agent/`（见 [Agent 后端](../explanation/agent-backend.md)）
+- FastAPI：`GET /health`、`POST /internal/web/invoke`（keyed web provider 的实际执行）
+- 该 venv 同时为随包的 Python MCP server（biomed、UniProt）提供解释器，由 Node 以 stdio 子进程拉起
+- `_engine/` 只剩 `web.py` 一个供应商 adapter；agent 循环、MCP 路由及其装配代码已删除
 
 ### 2.4 `services/runner` — 隔离执行
 
@@ -119,11 +120,11 @@ science_agent/
 ### 2.8 `test/` — 测试（不并入默认 `pnpm check` 全量路径中的 Playwright）
 
 - Playwright 浏览器 e2e（本地环境在 `.e2e/`）
-- `test/gateway/*`、`test/api/*` smoke（mock / 真实模型）
+- `test/api/*` smoke（脚本化模型端点 / 真实模型）
 
 ### 2.9 `third_party/deer-flow`
 
-ByteDance deer-flow 子模块。**本产品不运行 deer-flow 完整前端/runtime/沙箱**；gateway 仅将 `deerflow-harness` 作为 path 依赖，复用其中与 OpenAI 兼容网关相关的模型适配，并在同一 LangChain `create_agent` 接缝上组环。
+ByteDance deer-flow 子模块。**本产品不运行 deer-flow 完整前端/runtime/沙箱**；gateway 仅将 `deerflow-harness` 作为 path 依赖。agent 循环已不再使用它，当前只剩 web provider 实现仍依赖。
 
 ## 3. 数据与配置落点
 

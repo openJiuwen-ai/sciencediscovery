@@ -28,7 +28,7 @@ from science_agent_gateway.bootstrap_tokens import (
     load_or_create_token,
     resolve_internal_token,
 )
-from science_agent_gateway.mcp_api import _internal_token
+from science_agent_gateway.bootstrap_tokens import resolve_internal_token as _internal_token
 
 
 class BootstrapTokenTests(unittest.TestCase):

@@ -50,7 +50,6 @@ const RUNNER_HEALTH: RunnerHealth = {
 function testConfig(dataDir: string, runnerUrl: string, gatewayUrl: string): ServerConfig {
   return {
     authToken: "test-token",
-    callbackUrl: "http://127.0.0.1:0/internal/tool-exec",
     dataDir,
     gatewayUrl,
     gatewayInternalToken: "test-gateway-token",

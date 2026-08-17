@@ -2,7 +2,7 @@
 
 ## 1. 产品定位
 
-ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：浏览器 UI 连接 Node 控制 API，由 Python agent-loop 网关驱动模型对话；工作区工具、沙箱执行、数据连接器、PDF 抽取、权限、溯源与评审均回到 Node 控制面完成。
+ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：浏览器 UI 连接 Node 控制 API，**agent 循环就跑在这个 Node 控制面进程内**；工作区工具、沙箱执行、数据连接器、PDF 抽取、权限、溯源与评审同样在 Node 控制面完成。
 
 它不是多租户云服务。API 默认只监听回环地址；认证仅为静态 bearer token 且无 TLS。只有在更换 token、并确保网络可信且受保护后，才应显式监听其他网卡。
 
@@ -14,38 +14,42 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 
 | # | 进程 | 启动方式 | 默认监听 | 协议角色 |
 |---|------|----------|----------|----------|
-| 1 | **Gateway** | `data/envs/gateway/bin/python -m science_agent_gateway.server` | `127.0.0.1:4312` | 接收 API 的 `POST /run`，跑 agent 环，流式 NDJSON |
+| 1 | **Gateway**（web sidecar） | `data/envs/gateway/bin/python -m science_agent_gateway.server` | `127.0.0.1:4312` | 只执行 keyed web provider 调用（`POST /internal/web/invoke`）；**不跑 agent 循环** |
 | 2 | **Runner** | `node services/runner/dist/server.js` | `127.0.0.1:4311` | 接收 API 的执行请求，在 bubblewrap 里跑 Python/R/shell；启用时管理白名单 Host NPU job |
-| 3 | **API** | `pnpm api` → `node services/api/dist/server.js` | `127.0.0.1:4310` | 浏览器入口：REST + SSE + 静态 UI；并回调收工具执行 |
+| 3 | **API** | `pnpm api` → `node services/api/dist/server.js` | `127.0.0.1:4310` | 浏览器入口：REST + SSE + 静态 UI；**agent 循环、模型调用、工具执行、MCP 客户端都在这个进程内** |
 
 ```
                     浏览器（不是本仓库起的服务进程）
                               │  HTTP :4310
                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│  进程 ③  services/api          127.0.0.1:4310                │
-│  控制面 · 会话存储 · 权限/溯源 · 连接器 · 静态 Web             │
-└───────────────┬─────────────────────────────┬───────────────┘
-                │ POST /run :4312             │ 执行请求 :4311
-                │ NDJSON 流式响应             │
-                │ ◀── tool-exec 回调 ──┐      │
-                ▼                      │      ▼
-┌───────────────────────────┐          │  ┌──────────────────────────┐
-│  进程 ①  services/gateway │          │  │  进程 ②  services/runner │
-│  127.0.0.1:4312           │──────────┘  │  127.0.0.1:4311          │
-│  LangChain agent 环       │  同源机回环   │  bubblewrap 沙箱执行     │
-│  （库依赖 deer-flow）     │              │                         │
-└─────────────┬─────────────┘              └────────────┬───────────┘
-              │ 出站 HTTPS                              │ 子进程 bwrap/python/R
-              ▼                                         ▼
-     用户配置的 OpenAI 兼容模型 API              会话工作区里的用户代码
+┌─────────────────────────────────────────────────────────────────┐
+│  进程 ③  services/api                     127.0.0.1:4310        │
+│  控制面 · 会话存储 · 权限/溯源 · 连接器 · 静态 Web                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  Node 原生 agent loop（native-agent/）                     │  │
+│  │  模型流式传输 · 工具调度 · 延迟工具 · 历史压缩              │  │
+│  │  进程内 MCP 客户端（mcp/node-client.ts）                    │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└──────┬──────────────────────┬───────────────────────┬───────────┘
+       │ 出站 HTTPS           │ web provider :4312    │ 执行请求 :4311
+       │                      │ POST /internal/web/invoke
+       ▼                      ▼                       ▼
+用户配置的模型 API   ┌────────────────────────┐  ┌──────────────────────────┐
+(OpenAI 兼容 /      │ 进程 ①  services/gateway│  │  进程 ②  services/runner │
+ Anthropic)         │ 127.0.0.1:4312         │  │  127.0.0.1:4311          │
+                    │ web provider sidecar    │  │  bubblewrap 沙箱执行     │
+                    └────────────────────────┘  └────────────┬─────────────┘
+                                                             │ 子进程 bwrap/python/R
+                                                             ▼
+                                                  会话工作区里的用户代码
 ```
 
 **要点：**
 
-- **3 个常驻 HTTP 服务进程** = gateway + runner + api。浏览器只是客户端。
+- **3 个常驻 HTTP 服务进程** = api + runner + gateway。浏览器只是客户端。
+- **模型对话由 API 进程直接发起**，不再有「API 把一轮对话转交给 gateway」这一跳，也不再有 gateway 回调 API 的 `/internal/tool-exec`。
 - Gateway / Runner **始终只绑回环**，API 也默认只绑回环；对外暴露 API 必须显式配置。
-- 一轮聊天时：浏览器只跟 **API:4310** 说话；API 再去调 gateway / runner；gateway 需要跑工具时再 HTTP 回调 API 的 `/internal/tool-exec`（仍是本机）。
+- 一轮聊天时：浏览器只跟 **API:4310** 说话；API 直接调模型 API 和 runner；只有 `web_search` / `web_fetch` 的 provider 执行才会走到 gateway。
 
 ### 2.2 哪些「模块」不是常驻进程？
 
@@ -54,7 +58,7 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 | 名称 | 是否常驻进程 | 实际形态 |
 |------|--------------|----------|
 | **services/paper** | 否 | PDF 需要时，API 用 `execFile` **按次拉起** `paper_worker.py` 子进程，跑完退出 |
-| **deer-flow** | 否 | **Python 库**（submodule + `deerflow-harness`），装进 gateway 的 venv，**不单独起端口、不单独收 HTTP** |
+| **deer-flow** | 否 | **Python 库**（submodule + `deerflow-harness`），装进 gateway 的 venv，**不单独起端口、不单独收 HTTP**；agent 循环已不再使用它，仅 web provider 执行仍依赖 |
 | **apps/web** | 否（生产路径） | 构建为静态资源，由 **API 进程** 从 `apps/web/dist` 托管；开发时可用 Vite 另起 `:5173`（可选） |
 | **services/memory-graph** | 否（默认） | 实验性可选侧车（Python，仅回环 `:17674`）；在 System Settings 中启用并配置后由启动脚本拉起，禁用时 API 写入为静默 no-op |
 | **持久内核 / bwrap 任务** | 否（按需） | Runner 在执行代码时派生子进程；空闲超时后回收 |
@@ -63,37 +67,35 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 
 因此：逻辑上可以画多个「模块」，**运行时默认同机常驻只有 3 个进程**（启用 Science Memory 时 +1；Host NPU Broker job 只是 Runner 按需派生的子进程）。
 
-### 2.3 deer-flow 会单独起一个进程收 HTTP 吗？
+### 2.3 agent 循环跑在哪个进程？
 
-**不会。**
+**跑在 API 进程（`services/api`）内。**
 
-- 仓库里的 `third_party/deer-flow` 是上游项目源码（git submodule），**本产品没有启动 deer-flow 官方 server / 前端 / 其 runtime**。
-- `services/gateway` 通过 uv 把 `deerflow-harness` 装成依赖；所有 `deerflow.*` 接缝集中在 Gateway 私有 `_engine/` adapter，主流程只使用通用接口。
-- 对外收 HTTP 的是本仓库自己的 **`science_agent_gateway.server`（FastAPI）**，端口默认 **4312**，接口是本产品的 `GET /health` 与 `POST /run`，**不是** deer-flow 原版 HTTP API。
-- Agent 循环用的是 LangChain 的 `create_agent`（与 deer-flow 客户端内部同类接缝），参数（system_prompt、tools、model、历史）全部由 Node API 在每次 `/run` 里传入。
+- 循环实现是本仓库自己的 TypeScript：`services/api/src/native-agent/`，入口 `createNativeAgent`。**不使用 LangChain / LangGraph**。
+- 模型调用由 API 进程用 `undici` 直接发出，支持 OpenAI 兼容与 Anthropic Messages 两种方言。
+- 模型要调工具时，循环**直接在进程内 `await` 工具处理器**，工具实现仍是 `packages/agent-runtime` 的 `createWorkspaceTools` 加 API 注入的处理器；不存在跨进程回调。
+- MCP 由 API 进程用官方 TypeScript SDK 直连（stdio 子进程 / SSE / streamable-HTTP）。随包的 Python MCP server（biomed、UniProt）以 stdio 子进程启动，**解释器来自 gateway venv**——这是 gateway 环境仍需存在的第二个原因。
 
-一句话：**deer-flow = gateway 进程里的库；收 HTTP 的是 gateway 自己，不是第二个 deer-flow 守护进程。**
+模块级说明见 [agent-backend.md](agent-backend.md)。
 
 ### 2.4 一轮用户消息的时序（跨进程）
 
 1. 浏览器 → **API:4310**（SSE/REST）提交用户消息。
-2. API 组装 `GatewayAgent`：系统提示 + 本会话工具表 + 模型密钥。
-3. API → **Gateway:4312** `POST /run`（body 含 messages、tools、model、callback_url）。
-4. Gateway 在进程内 `create_agent` + 调外部模型 API；模型要调工具时：
-   Gateway → **API** `POST /internal/tool-exec`。
-5. API 执行真实工具（可能再 → **Runner:4311** 跑 Python，或连接器出站，或读工作区文件）。
-6. 工具结果返回 gateway，继续 loop，直到 gateway 推送 `end`（含 `final_messages`）。
-7. API 把事件转成前端 `AgentEvent`，经 SSE 推给浏览器；历史由 API 落盘。
+2. API 组装 `AgentProfile` + 工作区选项，`createAgentRun` 建出 `NativeAgent`：系统提示 + 本会话工具表 + 模型 endpoint。
+3. API 进程内循环：流式调用**外部模型 API**（出站 HTTPS），文本/推理增量实时经 SSE 推给浏览器。
+4. 模型返回 tool call 时，API **在本进程内**执行真实工具（可能再 → **Runner:4311** 跑 Python，或连接器出站，或读工作区文件，或经进程内 MCP 客户端调 MCP server）。
+5. 工具结果追加回历史，继续下一轮，直到某轮不再产生 tool call。
+6. 循环返回 `finalMessages`；API 落盘历史。
 
-Gateway **无会话状态**：下一轮必须由 API 再次带上完整 `messages`。
+只有 `web_search` / `web_fetch` 的 provider 执行会额外走一跳到 **Gateway:4312** 的 `POST /internal/web/invoke`。
 
 ### 2.5 职责切分（核心原则）
 
 | 层 | 是否常驻 | 职责 | 不负责 |
 |----|----------|------|--------|
 | **Web** | 静态资源 / 可选 dev server | UI、流式展示、权限卡片、配置 | 业务权威状态 |
-| **API (Node)** | 是（:4310） | 会话状态、工具真实执行、MCP 治理、权限/溯源/评审、存储 | 模型 agent 循环本身 |
-| **Gateway (Python)** | 是（:4312） | 跑模型循环、MCP 查询与 provider 重试 | 沙箱、权限、治理持久化 |
+| **API (Node)** | 是（:4310） | **agent 循环与模型调用**、会话状态、工具真实执行、进程内 MCP 客户端与治理、权限/溯源/评审、存储 | 沙箱进程隔离本身 |
+| **Gateway (Python)** | 是（:4312） | keyed web provider 的实际执行；为随包 Python MCP server 提供解释器环境 | agent 循环、沙箱、权限、治理持久化 |
 | **Runner** | 是（:4311） | bubblewrap 代码执行；启用时管理白名单 Host NPU Broker job | 业务语义、任意宿主 shell |
 | **Paper** | 否（按次子进程） | 有界 PDF 抽取 | 联网检索 |
-| **deer-flow** | 否（库） | 模型适配补丁等 | 独立 HTTP 服务 |
+| **deer-flow** | 否（库） | web provider 实现 | agent 循环、独立 HTTP 服务 |

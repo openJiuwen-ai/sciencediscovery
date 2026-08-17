@@ -23,7 +23,7 @@ import type {
 } from "@science-agent/schema";
 import type { McpSourceRegistry } from "@science-agent/mcp-sources";
 
-import { McpGatewayClient } from "./gateway-client.js";
+import type { McpTransportClient } from "./transport.js";
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -103,7 +103,7 @@ export class McpSourceCatalog {
 
   constructor(
     private readonly registry: McpSourceRegistry,
-    private readonly gateway: McpGatewayClient,
+    private readonly gateway: McpTransportClient,
     /** Current per-server resolved proxies, sent with reloads so the gateway
      *  rebuilds MCP connections under the right outbound configuration. */
     private readonly proxyMapProvider?: () => Record<string, ResolvedProxy>,

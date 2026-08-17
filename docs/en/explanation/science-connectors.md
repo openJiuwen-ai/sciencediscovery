@@ -3,7 +3,7 @@
 ## 1. Single runtime path
 
 ```text
-Agent MCP tool → Node MCP Governance Broker → Python gateway MCP client
+Agent MCP tool → Node MCP Governance Broker → in-process Node MCP client (`mcp/node-client.ts`)
                → Python MCP server → CAS/cache/permission/audit
                → normalized McpToolResult
 ```
@@ -17,7 +17,7 @@ Legacy `invoke_connector`, `ConnectorBroker`, `ScienceSource`, and direct Node-p
 - External result content is always untrusted data.
 - PDF worker handles only a completed local PDF and never performs retrieval.
 
-Implementations are `packages/mcp-sources`, gateway `*_mcp.py`, API `mcp/`, `packages/agent-runtime`, and `services/paper`.
+Implementations are `packages/mcp-sources`, the bundled Python MCP servers in gateway `*_mcp.py` (spawned by Node as stdio subprocesses using the gateway venv interpreter), API `mcp/` (broker plus the in-process client), `packages/agent-runtime`, and `services/paper`.
 
 ## 3. Tool injection and model visibility
 
@@ -26,14 +26,14 @@ Three filters precede deferred model visibility.
 ### 3.1 Node injection path
 
 1. Registry manifests declare MCP name, schema, permission, cache, routing, and prompt/citation information.
-2. `McpSourceCatalog` compares actual gateway server/tools and compatible input schemas. Missing/incompatible tools enter `missingTools` and are hidden.
+2. `McpSourceCatalog` compares the live server/tool catalog obtained through the in-process MCP client's `listTools` against compatible input schemas. Missing/incompatible tools enter `missingTools` and are hidden.
 3. `createMcpWorkspaceTools` keeps only Session-enabled, catalog-available tools, names them `mcp__<sourceId>__<toolId>`, and executes through `McpGovernanceBroker`.
 4. `createWorkspaceTools` marks MCP tools `deferred:true` with keyword/mode/priority routing; built-ins are not deferred.
-5. `GatewayAgent` posts name/description/schema/deferred/routing. Execution still callbacks Node.
+5. The native loop's `visibleToolSpecs()` sends name/description/schema with each model request; execution `await`s the same handler in-process.
 
-### 3.2 Gateway visibility
+### 3.2 Model visibility (native loop)
 
-When deferred tools exist, DeerFlow `assemble_deferred_tools` adds `tool_search` and a name-only catalog to the prompt. `DeferredToolFilterMiddleware` removes unpromoted schemas from model `bind_tools` and rejects direct calls with guidance to search first. Promotions bind to a catalog hash and expire after tool/schema changes. Keyword `prefer` routing can automatically promote up to three matches before the call.
+Deferred disclosure lives entirely in `services/api/src/native-agent/deferred-tools.ts`; see [agent-backend.md](agent-backend.md) §6. When deferred tools exist, the loop builds a catalog, appends the synthetic `tool_search` tool, and injects a name-only `<available-deferred-tools>` list into the prompt. Unpromoted tools are filtered out of the wire tool table, and a direct call to one returns a retryable error telling the model to search first. Promotions are run-scoped, and the catalog carries a `hash` for detecting tool renames or schema drift. Keyword `prefer` routing automatically promotes up to the three highest-priority matches before the first model call.
 
 Thus built-ins are fully visible; MCP names are visible but schemas appear only after search/automatic promotion, and only after catalog availability and Session enablement.
 

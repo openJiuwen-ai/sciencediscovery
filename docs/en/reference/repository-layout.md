@@ -36,7 +36,7 @@ science_agent/
 
 | Process | Default address | Purpose |
 |---|---|---|
-| `services/gateway` | `127.0.0.1:4312` | Agent loop, loopback only |
+| `services/gateway` | `127.0.0.1:4312` | Web-provider sidecar and bundled Python MCP server environment, loopback only |
 | `services/runner` | `127.0.0.1:4311` | Sandbox execution, loopback only |
 | `services/api` | `127.0.0.1:4310` | Control API and static UI, local-only by default |
 
@@ -57,7 +57,8 @@ Project/Session navigation and lifecycle, chat/tool traces, workspace files, con
 | `store.ts`, `store/` | `SessionStore` facade and SQLite domain storage |
 | `subagents/`, `artifacts/` | Handoff/private workspaces and versioned Artifact behavior |
 | `web-providers/`, `connectors/` | Web broker and scientific connector manifests/broker |
-| `gateway-agent.ts` | Gateway request/NDJSON translation into UI events |
+| `native-agent/` | **The Node-native agent loop**: `index.ts` (state machine), `model-client.ts` (streaming transport), `deferred-tools.ts`, `compaction.ts` |
+| `mcp/` | MCP governance and the in-process client: `broker.ts`, `node-client.ts`, `extensions-config.ts`, `source-catalog.ts` |
 | `papers.ts`, `runner-client.ts` | Paper download/extraction and runner calls |
 | `provenance.ts`, `reviewer-specialist/` | Execution provenance and Artifact review |
 | `skills.ts`, `prompt-manifest.ts` | Skill revisions/resources and frozen run metadata |
@@ -65,9 +66,9 @@ Project/Session navigation and lifecycle, chat/tool traces, workspace files, con
 
 Its external capabilities cover Project management, agent runs, connectors/papers, managed environments, skills/specialists, permissions, and review.
 
-### 2.3 `services/gateway` — agent-loop sidecar
+### 2.3 `services/gateway` — web-provider sidecar
 
-FastAPI exposes `GET /health` and `POST /run`. Each request assembles a LangChain `create_agent`; all tools are HTTP proxies back to Node `/internal/tool-exec`. `_engine/` is the only provider adapter boundary.
+It **no longer runs the agent loop**; that moved into `services/api`'s `native-agent/` (see [Agent backend](../explanation/agent-backend.md)). FastAPI exposes `GET /health` and `POST /internal/web/invoke` for keyed web-provider execution. The same venv supplies the interpreter for the bundled Python MCP servers (biomed, UniProt), which Node spawns as stdio subprocesses. `_engine/` is down to `web.py` alone; the agent loop, the MCP router, and all of their assembly code are deleted.
 
 ### 2.4 `services/runner` — isolated execution
 
@@ -98,7 +99,7 @@ Root tests contain Playwright browser E2E plus gateway/API mock and real smoke s
 
 ### 2.9 `third_party/deer-flow`
 
-This ByteDance deer-flow submodule supplies `deerflow-harness` as a path dependency for compatible model adapters at the LangChain `create_agent` seam. ScienceDiscovery does not run deer-flow's complete frontend, runtime, or sandbox.
+This ByteDance deer-flow submodule supplies `deerflow-harness` as a path dependency. The agent loop no longer uses it; only the web-provider implementations still do. ScienceDiscovery does not run deer-flow's complete frontend, runtime, or sandbox.
 
 ## 3. Data and configuration
 

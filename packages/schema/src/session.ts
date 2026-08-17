@@ -240,7 +240,20 @@ export type RunStreamEvent =
   | { message: ChatMessage; type: "reviewer_checkpoint.updated" }
   | { files: WorkspaceFile[]; message: ChatMessage; type: "run.completed" }
   | { reason: string; type: "run.cancelled" }
-  | { error: string; type: "run.failed" };
+  | { error: string; errorCode: RunFailureCode; type: "run.failed" };
+
+/**
+ * Stable failure classes for a run. The classification accompanies the original
+ * error text rather than replacing it, so callers can branch on a code while
+ * the user still sees what the provider actually said.
+ */
+export type RunFailureCode =
+  | "rate-limited"
+  | "semantic-error"
+  | "server-error"
+  | "timeout"
+  | "transport-error"
+  | "unauthorized";
 
 export interface SessionRunEvent {
   createdAt: string;

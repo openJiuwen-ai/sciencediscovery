@@ -12,55 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Internal orchestration-engine adapter.
+"""Internal web-provider adapter package.
 
-Only this package may depend on the bundled engine's Python modules.  The
-Gateway routes and orchestration flow consume the product-oriented functions
-exported here so upstream package layout and configuration types stay private.
+The agent loop, model transport, and MCP client all run natively in the Node
+control plane; this package is what remains of the Python engine seam and backs
+only the keyed web providers. ``web`` executes vendor community providers and is
+imported lazily, so a missing vendor dependency fails web provider invocation
+alone rather than Gateway start-up.
 """
 
-from .agent import AgentRuntimeComponents, build_agent_runtime, search_skill_ids
-from .mcp import (
-    McpServerDefinition,
-    apply_mcp_proxy_overlay,
-    get_mcp_tools,
-    get_tool_routing,
-    is_deferred_tool,
-    load_mcp_servers,
-    mark_deferred_tool,
-    mark_tool_routing,
-    reset_mcp_tool_cache,
-    replace_mcp_proxy_overlays,
-)
-from .model import create_reasoning_chat_model
-from .web import (
-    ResolvedWebProvider,
-    configure_web_proxy_environment,
-    invoke_isolated_web_provider,
-    invoke_serialized_web_provider,
-    invoke_web_provider,
-    resolve_web_provider,
+_WEB_EXPORTS = frozenset(
+    {
+        "ResolvedWebProvider",
+        "configure_web_proxy_environment",
+        "invoke_isolated_web_provider",
+        "invoke_serialized_web_provider",
+        "invoke_web_provider",
+        "resolve_web_provider",
+    }
 )
 
 __all__ = [
-    "AgentRuntimeComponents",
-    "McpServerDefinition",
     "ResolvedWebProvider",
-    "apply_mcp_proxy_overlay",
-    "build_agent_runtime",
     "configure_web_proxy_environment",
-    "create_reasoning_chat_model",
-    "get_mcp_tools",
-    "get_tool_routing",
     "invoke_isolated_web_provider",
     "invoke_serialized_web_provider",
     "invoke_web_provider",
-    "is_deferred_tool",
-    "load_mcp_servers",
-    "mark_deferred_tool",
-    "mark_tool_routing",
-    "reset_mcp_tool_cache",
-    "replace_mcp_proxy_overlays",
     "resolve_web_provider",
-    "search_skill_ids",
 ]
+
+
+def __getattr__(name: str):
+    # Resolved lazily so importing this package never touches the vendor
+    # dependency until a web provider is actually invoked.
+    if name in _WEB_EXPORTS:
+        from . import web
+
+        return getattr(web, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

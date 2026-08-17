@@ -23,12 +23,26 @@ import type { McpSourceManifest, McpSourceStatus } from "@science-agent/schema";
 
 import { createApiServer, type ServerConfig } from "../server.js";
 
+import type { McpCatalog } from "@science-agent/schema";
+import type { McpTransportClient } from "./transport.js";
+
+/**
+ * Minimal MCP transport stub. Tests drive the real catalog/broker path and only
+ * replace the server connection, which is what production varies.
+ */
+function stubTransport(catalog: McpCatalog): McpTransportClient {
+  return {
+    catalog: async () => catalog,
+    invoke: async () => { throw new Error("not invoked in this test"); },
+    reload: async () => catalog,
+  };
+}
+
 test("MCP source API exposes only native MCP sources", async (context) => {
   const dataDir = await mkdtemp(resolve(tmpdir(), "science-agent-mcp-api-"));
   context.after(() => rm(dataDir, { force: true, recursive: true }));
   const config: ServerConfig = {
     authToken: "test-token",
-    callbackUrl: "http://127.0.0.1:0/internal/tool-exec",
     dataDir,
     gatewayIdleTimeoutMs: 240_000,
     gatewayInternalToken: "gateway-token",
@@ -55,7 +69,7 @@ test("MCP source API exposes only native MCP sources", async (context) => {
     memoryGraph: { url: "http://127.0.0.1:17674", internalToken: "test" },
   };
   const server = createApiServer(config, {
-    mcpGatewayFetch: async () => Response.json({
+    mcpTransport: stubTransport({
       loadedAt: new Date().toISOString(),
       revision: "catalog-1",
       servers: [{

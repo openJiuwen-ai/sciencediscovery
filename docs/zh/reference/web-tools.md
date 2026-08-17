@@ -6,6 +6,10 @@ Web 是全局基础能力，不是 MCP Source，也没有 Session 级 Provider �
 模型始终看到 `web_search` 与 `web_fetch`；Node 负责权限、凭证、缓存、CAS
 和审计，Gateway 只负责解析通用 Provider 请求、调用内部实现并净化返回内容。
 
+> **注意**：agent 循环本身已经原生化到 Node 进程内（见
+> [agent-backend.md](../explanation/agent-backend.md)），但 **web provider 的实际执行
+> 仍暂留在 Gateway 侧车**，仍依赖 vendor 实现。本页描述的就是这条残留路径。
+
 ```text
 Agent tool → Node WebBroker → Gateway /internal/web/invoke
            permission/cache     resolve provider + validate generic options

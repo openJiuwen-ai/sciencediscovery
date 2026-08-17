@@ -27,9 +27,6 @@ import {
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
 } from "@science-agent/agent-runtime";
-import {
-  toolCallbackRegistry,
-} from "../gateway-agent.js";
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
@@ -126,7 +123,8 @@ import { createPromptManifest } from "../prompt-manifest.js";
 import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
 import { ArtifactManager } from "../mcp/artifact-manager.js";
 import { McpGovernanceBroker } from "../mcp/broker.js";
-import { McpGatewayClient } from "../mcp/gateway-client.js";
+import type { McpTransportClient } from "../mcp/transport.js";
+import { McpNodeClient } from "../mcp/node-client.js";
 import { McpSourceCatalog } from "../mcp/source-catalog.js";
 import { createMcpWorkspaceTools } from "../mcp/workspace-tools.js";
 import { WebBroker } from "../web-providers/broker.js";
@@ -215,7 +213,8 @@ export * from "../runs/index.js";
 
 export interface ApiServerDependencies {
   connectorFetch?: typeof fetch;
-  mcpGatewayFetch?: typeof fetch;
+  /** Test seam: drive MCP through a stub transport instead of live servers. */
+  mcpTransport?: McpTransportClient;
   webGatewayFetch?: typeof fetch;
 }
 
@@ -240,7 +239,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     server.on("listening", () => {
       const address = server.address();
       if (config.port === 0 && typeof address === "object" && address) {
-        config.callbackUrl = `http://127.0.0.1:${address.port}/internal/tool-exec`;
       }
     });
   };
@@ -263,11 +261,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const memoryGraphEnabled = () => store.getMemoryGraphSettings().enabled;
   const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
   const mcpRegistry = createBuiltinMcpSourceRegistry();
-  const mcpGateway = new McpGatewayClient(
-    config.gatewayUrl,
-    config.gatewayInternalToken,
-    dependencies.mcpGatewayFetch ?? fetch,
-  );
+  // MCP runs in-process via the official SDK. Tests substitute the transport
+  // itself rather than a fake HTTP peer, so they exercise the real seam.
+  const mcpGateway: McpTransportClient = dependencies.mcpTransport ?? new McpNodeClient();
   // Resolved per-server proxies sent with MCP reloads so the gateway rebuilds
   // connections under the current proxy configuration. Unresolvable policies
   // are skipped here; they still fail loudly at invoke time.
@@ -406,31 +402,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           status: runner ? "ok" : "degraded",
           workspace,
         });
-        return;
-      }
-      // Internal, loopback-only callback used by the Gateway's proxy tools.
-      // to run this API's real tool handlers. Auth is the per-run callback token
-      // (a random UUID present in `toolCallbackRegistry` only while a run streams).
-      if (request.method === "POST" && url.pathname === "/internal/tool-exec") {
-        const authorization = request.headers.authorization;
-        const token = authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
-        const handler = toolCallbackRegistry.get(token);
-        if (!handler) {
-          sendError(response, 401, "Unknown or expired tool-callback token");
-          return;
-        }
-        const body = await readJson<{ name: string; args: Record<string, unknown>; toolCallId: string | null }>(request);
-        try {
-          const result = await handler(body.name, body.args ?? {}, body.toolCallId ?? null);
-          sendJson(response, 200, { content: result.content, is_error: result.isError });
-        } catch (error) {
-          runLog.error("tool_exec_failed", {
-            errorMessage: shortErrorMessage(error),
-            tool: body.name,
-            toolCallId: body.toolCallId,
-          });
-          sendError(response, 500, error instanceof Error ? error.message : "Tool execution failed");
-        }
         return;
       }
       if (url.pathname.startsWith("/api/") && !isAuthorized(request, config.authToken)) {
@@ -1746,8 +1717,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               workspaceRoot: store.workspacePath(sessionId),
             };
             semanticReview = createReviewAgentOptions({
-              callbackUrl: config.callbackUrl,
-              gatewayUrl: config.gatewayUrl,
               modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
               runIdleTimeoutMs: config.gatewayIdleTimeoutMs,
               skills: reviewerSkills,
