@@ -1,10 +1,11 @@
 ---
 name: e2e-testing
 description: >
-  Write, group, and run browser E2E tests for science_agent (Playwright specs
-  in test/). Use when adding or changing an E2E spec, running the mocked or
-  real E2E group, isolating a test stack (worktree, ports, data dir),
-  collecting screenshots/traces as evidence, or attributing an E2E failure.
+  Write, group, select, and run browser E2E tests for science_agent
+  (Playwright specs in test/). Use when adding or changing an E2E spec,
+  filtering E2E CI cases by environment tags, running the mocked or real E2E
+  group, isolating a test stack (worktree, ports, data dir), collecting
+  screenshots/traces as evidence, or attributing an E2E failure.
 ---
 
 # Browser E2E testing (Playwright)
@@ -127,6 +128,26 @@ Two isolation traps that produce confusing port-bind failures:
   trimmed `.env` into the worktree as the run's baseline.
 
 ## Discover, filter, run
+
+For repository CI scheduling, use the cross-runner catalog from the repository
+root before assembling a stack:
+
+```bash
+pnpm ci:tags
+pnpm ci:list -- --tag layer:e2e --tag llm:stub --tag arch:amd64
+pnpm ci:run -- --case e2e.mocked
+```
+
+Every catalog case declares `arch:*`, `llm:*`, `npu:*`, and `sandbox:*` plus
+layer/container/network tags. Repeated `--tag` clauses mean AND; comma-separated
+tags within one clause mean OR; `--exclude` removes matches. Keep `e2e.mocked`,
+`e2e.real`, and `e2e.legacy` aligned with the Playwright projects below whenever
+their requirements change. Never reclassify an unaudited dependency as safe:
+use an `unreviewed` tag or keep the case unsupported until evidence exists.
+
+The catalog chooses a CI-capability group; Playwright still discovers and
+filters the individual specs in that group. Use the pinned `.e2e` commands
+below for file/title-level discovery.
 
 Run from `.e2e/` after synchronizing and installing the committed environment:
 
