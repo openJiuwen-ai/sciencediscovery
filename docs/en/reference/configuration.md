@@ -20,10 +20,6 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_LOG_DIR` | `<data-dir>/logs` | Optional log directory override |
 | `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | Maximum bytes in one category log before rotation |
 | `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | Rotated files retained per category |
-| `SCIENCE_AGENT_GATEWAY_URL` | `http://127.0.0.1:4312` | Agent-loop gateway endpoint |
-| `SCIENCE_AGENT_GATEWAY_HOST` | `127.0.0.1` | Gateway bind address |
-| `SCIENCE_AGENT_GATEWAY_PORT` | `4312` | Gateway bind port |
-| `SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN` | generated on first start | API-to-gateway token; unset means the value stored in `<data-dir>/secrets/gateway-internal-token` |
 | `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | Initial no-output/no-progress timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | Initial whole-turn timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner bind address |
@@ -97,7 +93,7 @@ Compose reads the root `.env` and interpolates these keys into `docker-compose.y
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | Bubblewrap in the image |
 
-The API explicitly listens on `0.0.0.0:4310` **inside the container**, while gateway `4312` and runner `4311` remain on container loopback. Only the API port is published, and its host-side default is `127.0.0.1`. See [Docker deployment](../how-to/deployment.md#docker-deployment).
+The API explicitly listens on `0.0.0.0:4310` **inside the container**, while runner `4311` remains on container loopback. Only the API port is published, and its host-side default is `127.0.0.1`. See [Docker deployment](../how-to/deployment.md#docker-deployment).
 
 ## Storage layout
 

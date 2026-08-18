@@ -10,21 +10,24 @@ It is not a multi-tenant cloud service. The API binds to loopback by default. Au
 
 ### 2.1 How many resident processes?
 
-`./scripts/start-stack.sh --mode local` keeps three product processes resident; `run-local.sh` is a compatibility wrapper:
+`./scripts/start-stack.sh --mode local` keeps two product processes resident; `run-local.sh` is a compatibility wrapper:
 
 | # | Process | Startup | Default listener | Role |
 |---|---|---|---|---|
-| 1 | Gateway (web sidecar) | `data/envs/gateway/bin/python -m science_agent_gateway.server` | `127.0.0.1:4312` | Executes keyed web providers via `POST /internal/web/invoke`; **does not run the agent loop** |
+| — | ~~Gateway~~ | removed | — | With native web providers the service is gone; `services/gateway` survives only as the interpreter environment for the bundled Python MCP servers |
 | 2 | Runner | `node services/runner/dist/server.js` | `127.0.0.1:4311` | Runs Python/R/shell inside Bubblewrap; manages allowlisted Host NPU jobs when enabled |
 | 3 | API | `node services/api/dist/server.js` | `127.0.0.1:4310` | Browser REST, SSE, static UI, **and the agent loop, model calls, tool execution, and the in-process MCP client** |
 
 ```text
 Browser → API :4310 ── agent loop in-process ──→ external model (outbound HTTPS)
+                    ── web providers in-process ─→ tavily / exa / brave / bing / duckduckgo / jina
                     ↘ Runner :4311 → bwrap/Python/R in Session workspace
-                    ↘ Gateway :4312 /internal/web/invoke  (web_search / web_fetch only)
+
+services/gateway is not a process: its venv only supplies the interpreter for the
+bundled Python MCP servers (biomed, UniProt), spawned by the API over stdio.
 ```
 
-The browser is a client, not a repository service. All three HTTP services are loopback-only by default. During a chat the browser talks only to API `4310`; the API drives the model itself and calls the runner directly. There is no `POST /run` hop and no `/internal/tool-exec` callback.
+The browser is a client, not a repository service. Both HTTP services are loopback-only by default. During a chat the browser talks only to API `4310`; the API drives the model, the web providers, and the runner itself. There is no `POST /run` hop, no `/internal/tool-exec` callback, and no `/internal/web/invoke` hop.
 
 ### 2.2 Which modules are not resident processes?
 
@@ -53,7 +56,7 @@ The API process. The loop is this repository's own TypeScript under `services/ap
 5. Tool results append to history and the loop takes another turn, until a turn produces no tool calls.
 6. The loop returns `finalMessages`; the API persists history.
 
-Only `web_search` / `web_fetch` provider execution takes an extra hop to gateway `4312` at `POST /internal/web/invoke`.
+`web_search` / `web_fetch` provider calls also go out directly from the API process; there is no extra process hop left.
 
 ### 2.5 Responsibility split
 
@@ -61,7 +64,7 @@ Only `web_search` / `web_fetch` provider execution takes an extra hop to gateway
 |---|---|---|---|
 | Web | static/optional dev server | UI, streaming, permission cards, settings | authoritative business state |
 | API | yes, `4310` | **agent loop and model calls**, Session state, real tools, in-process MCP client and governance, permission/provenance/review, storage | process-level sandbox isolation |
-| Gateway | yes, `4312` | keyed web-provider execution; interpreter environment for bundled Python MCP servers | agent loop, sandbox, governance persistence |
+| Gateway | no (environment only) | interpreter environment for the bundled Python MCP servers | no longer a service: agent loop, web providers, sandbox, and governance are all elsewhere |
 | Runner | yes, `4311` | Bubblewrap code execution; allowlisted Host NPU Broker jobs when enabled | business semantics or arbitrary host shell |
 | Paper | per invocation | bounded PDF extraction | network retrieval |
 | deer-flow | library | web-provider implementations | agent loop, separate HTTP service |

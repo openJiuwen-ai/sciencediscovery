@@ -17,6 +17,10 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import {
+  FREE_SEARCH_ORDER,
+  PAID_SEARCH_ORDER,
+} from "@science-agent/schema";
 import type {
   WebAttemptStatus,
   WebError,
@@ -34,7 +38,7 @@ import type { AgentPermissionRuntime } from "../agent-run/permission-runtime.js"
 import { proxyEnvOverlay, type ProxyEnvironment } from "../proxy/index.js";
 import { SessionStore } from "../store.js";
 import { WebCache, webCacheKey } from "./cache.js";
-import { WebGatewayClient, WebGatewayError } from "./gateway-client.js";
+import { NativeWebProviderClient, WebProviderError, isPaidSearchProvider } from "./native/index.js";
 
 export interface WebCallContext {
   forceRefresh: boolean;
@@ -107,7 +111,7 @@ export class WebBroker {
   constructor(
     dataDir: string,
     private readonly store: SessionStore,
-    private readonly gateway: WebGatewayClient,
+    private readonly providers: NativeWebProviderClient,
     private readonly proxyEnvironment: ProxyEnvironment = process.env,
   ) {
     this.cache = new WebCache(dataDir);
@@ -167,18 +171,21 @@ export class WebBroker {
 
   private async invokeProvider(
     operation: "search" | "fetch",
-    provider: WebSearchProvider | WebFetchProvider,
+    provider: WebFetchProvider | WebSearchProvider,
     request: string,
     settings: WebSettingsDetails,
     signal?: AbortSignal,
   ) {
+    const tier: "free" | "paid" = operation === "search" && !isPaidSearchProvider(provider)
+      ? "free"
+      : "paid";
     const started = Date.now();
     let proxyUsed = false;
     // Resolved lazily below; failures surface as a diagnosable failed attempt.
     let proxyMode: WebProxyMode = "direct";
     try {
-      // Resolve the stored policy through the global registry, then send only
-      // the transport-neutral result to the Gateway.
+      // Resolve the stored policy through the global registry once; the
+      // provider layer consumes the resolved result directly.
       const resolved = this.store.resolveProxy(settings.proxyPolicy);
       proxyMode = resolved.mode === "url" ? "custom" : resolved.mode === "environment" ? "environment" : "direct";
       const proxyUrl = resolved.mode === "url" ? resolved.url : undefined;
@@ -198,6 +205,7 @@ export class WebBroker {
             proxyMode,
             proxyUsed: false,
             status: "unauthorized" as const,
+            tier,
           }],
           content: "",
         };
@@ -206,25 +214,18 @@ export class WebBroker {
         ? true
         : resolved.mode === "environment" && ["HTTPS_PROXY", "ALL_PROXY"]
           .some((name) => Boolean(proxyEnvironment?.[name]));
-      const response = await this.gateway.invoke({
-        arguments: operation === "search" ? { query: request } : { url: request },
+      const response = await this.providers.invoke({
+        ...(apiKey ? { apiKey } : {}),
         operation,
-        options: {
-          ...(apiKey ? { apiKey } : {}),
-          ...(operation === "search" && provider === "ddgs" ? { backend: settings.ddgsBackend } : {}),
-          ...(proxyUrl ? { proxy: proxyUrl } : {}),
-          ...(proxyEnvironment ? { proxyEnvironment } : {}),
-          proxyMode,
-        },
         provider,
+        // The provider layer consumes the resolved policy directly; NO_PROXY and
+        // protocol selection stay with the shared resolver instead of being
+        // re-derived from a flattened wire snapshot.
+        ...(resolved.mode === "direct" ? {} : { proxy: resolved }),
+        request,
         signal,
       });
-      const common = {
-        ...(provider === "ddgs" ? { backend: settings.ddgsBackend } : {}),
-        provider,
-        proxyMode,
-        proxyUsed,
-      } as const;
+      const common = { provider, proxyMode, proxyUsed, tier } as const;
       return {
         attempts: response.attempts?.map((attempt) => ({
           ...common,
@@ -243,24 +244,24 @@ export class WebBroker {
         content: response.content,
       };
     } catch (error) {
-      const gatewayError = error instanceof WebGatewayError ? error : undefined;
+      const providerError = error instanceof WebProviderError ? error : undefined;
       return {
         attempts: [{
-          ...(provider === "ddgs" ? { backend: settings.ddgsBackend } : {}),
           durationMs: Date.now() - started,
           ...(signal?.aborted
             ? { errorCode: "cancelled" }
-            : gatewayError
-              ? { errorCode: gatewayError.code }
+            : providerError
+              ? { errorCode: providerError.code }
               : {}),
           errorMessage: error instanceof Error ? error.message.slice(0, 1_000) : String(error).slice(0, 1_000),
           provider,
           proxyMode,
           proxyUsed,
+          tier,
           status: signal?.aborted
             ? "semantic-error"
-            : gatewayError
-              ? status(gatewayError.code)
+            : providerError
+              ? status(providerError.code)
               : "transport-error",
         } satisfies WebInvocationAttempt],
         content: "",
@@ -297,58 +298,78 @@ export class WebBroker {
       toolCallId: context.toolCallId,
       turnId: context.turnId,
     };
-    const searchRoute = settings.searchProvider === "ddgs"
-      ? `${settings.searchProvider}:${settings.ddgsBackend}`
-      : settings.searchProvider;
-    const key = webCacheKey("search", searchRoute, query);
+    // The aggregation order: paid providers that actually have a key, then the
+    // free engines the operator left switched on. A disabled engine is never
+    // requested, and a paid provider without a key never becomes an attempt.
+    const candidates = this.searchCandidates(settings);
+    if (!candidates.length) {
+      invocation.error = {
+        code: "INVALID_INPUT",
+        message: "No search engine is available. Configure an API key or enable a free engine in Web settings.",
+        retryable: false,
+      };
+      this.save(invocation);
+      throw new WebInvocationError(invocation.error.message, invocation);
+    }
+
     if (!context.forceRefresh) {
-      const cached = this.cache.get(key);
-      if (cached) {
+      // Each engine caches under its own route, so a cached answer from any
+      // candidate is still a valid answer for this query.
+      for (const engine of candidates) {
+        const cached = this.cache.get(webCacheKey("search", engine, query));
+        if (!cached) continue;
         invocation.cacheHit = true;
         invocation.casObjectId = cached.snapshot.hash;
         invocation.status = "succeeded";
         invocation.attempts.push({
-          ...(settings.searchProvider === "ddgs" ? { backend: settings.ddgsBackend } : {}),
           durationMs: 0,
-          provider: settings.searchProvider,
+          provider: engine,
           proxyUsed: false,
           status: "cache-hit",
+          tier: isPaidSearchProvider(engine) ? "paid" : "free",
         });
         this.save(invocation);
         return { content: cached.content, invocation };
       }
     }
 
-    let result = await this.invokeProvider("search", settings.searchProvider, query, settings, signal);
-    invocation.attempts.push(...result.attempts);
-    let terminalAttempt = result.attempts.at(-1)!;
-    if (terminalAttempt.status !== "succeeded"
-      && TRANSIENT.has(terminalAttempt.status)
-      && settings.searchFallbackProvider
-      && settings.searchFallbackProvider !== settings.searchProvider) {
-      result = await this.invokeProvider("search", settings.searchFallbackProvider, query, settings, signal);
+    let success: { content: string; engine: WebSearchProvider } | undefined;
+    for (const engine of candidates) {
+      const result = await this.invokeProvider("search", engine, query, settings, signal);
       invocation.attempts.push(...result.attempts);
-      terminalAttempt = result.attempts.at(-1)!;
+      if (result.attempts.at(-1)?.status === "succeeded") {
+        success = { content: result.content, engine };
+        break;
+      }
+      // A cancelled run must not keep walking the remaining engines.
+      if (signal?.aborted) break;
     }
-    if (terminalAttempt.status !== "succeeded") {
-      invocation.error = invocationError(terminalAttempt);
+
+    if (!success) {
+      invocation.error = invocationError(invocation.attempts.at(-1)!);
       this.save(invocation);
       throw new WebInvocationError(invocation.error.message, invocation);
     }
-    const snapshot = await this.cas.put(result.content);
+    const snapshot = await this.cas.put(success.content);
     invocation.casObjectId = snapshot.hash;
     invocation.status = "succeeded";
-    const successfulRoute = terminalAttempt.provider === "ddgs"
-      ? `ddgs:${settings.ddgsBackend}`
-      : terminalAttempt.provider;
     this.cache.put(
-      webCacheKey("search", successfulRoute, query),
-      result.content,
+      webCacheKey("search", success.engine, query),
+      success.content,
       snapshot,
       settings.searchCacheTtlSeconds,
     );
     this.save(invocation);
-    return { content: result.content, invocation };
+    return { content: success.content, invocation };
+  }
+
+  /** Paid providers holding a key, then enabled free engines, in fixed order. */
+  private searchCandidates(settings: WebSettingsDetails): WebSearchProvider[] {
+    const paid = PAID_SEARCH_ORDER
+      .filter((provider) => settings.paidSearchProviders.includes(provider))
+      .filter((provider) => Boolean(this.store.getWebProviderApiKey(provider)));
+    const free = FREE_SEARCH_ORDER.filter((engine) => settings.freeSearchEngines[engine]);
+    return [...paid, ...free];
   }
 
   async fetch(

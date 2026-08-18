@@ -341,8 +341,8 @@ test("SessionStore persists global web settings while keeping provider keys writ
   const store = new SessionStore(tempRoot);
   await store.load();
   const defaults = store.getWebSettings();
-  assert.equal(defaults.searchProvider, "ddgs");
-  assert.equal(defaults.ddgsBackend, "bing");
+  assert.deepEqual(defaults.paidSearchProviders, ["tavily", "exa", "brave"]);
+  assert.deepEqual(defaults.freeSearchEngines, { bing: true, "brave-html": true, duckduckgo: true });
   assert.equal(defaults.fetchProvider, "jina");
   assert.equal(defaults.proxyPolicy, "inherit");
 
@@ -354,10 +354,12 @@ test("SessionStore persists global web settings while keeping provider keys writ
   const updated = await store.updateWebSettings({
     fetchProvider: "exa",
     providerApiKeys: { exa: "exa-secret", jina: "jina-secret" },
+    freeSearchEngines: { bing: false, "brave-html": true, duckduckgo: true },
+    paidSearchProviders: ["exa"],
     proxyPolicy: `proxy:${proxy.id}`,
-    searchProvider: "exa",
   });
-  assert.equal(updated.searchProvider, "exa");
+  assert.deepEqual(updated.paidSearchProviders, ["exa"]);
+  assert.equal(updated.freeSearchEngines.bing, false);
   assert.equal(updated.providers.find((item) => item.provider === "exa")?.hasApiKey, true);
   assert.equal(JSON.stringify(updated).includes("exa-secret"), false);
   assert.equal(store.getWebProviderApiKey("exa"), "exa-secret");

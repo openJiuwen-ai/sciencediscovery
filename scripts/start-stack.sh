@@ -86,10 +86,8 @@ pids=()
 health_attempts=50
 gateway_python=""
 memory_graph_python=""
-gateway_url=""
 runner_url=""
 data_dir=""
-gateway_command=()
 runner_command=()
 api_command=()
 api_foreground=0
@@ -123,11 +121,8 @@ absolute_from_repository() { # <path>
 }
 
 configure_endpoints() {
-  local gateway_host="${SCIENCE_AGENT_GATEWAY_HOST:-127.0.0.1}"
-  local gateway_port="${SCIENCE_AGENT_GATEWAY_PORT:-4312}"
   local runner_host="${SCIENCE_AGENT_RUNNER_HOST:-127.0.0.1}"
   local runner_port="${SCIENCE_AGENT_RUNNER_PORT:-4311}"
-  gateway_url="${SCIENCE_AGENT_GATEWAY_URL:-http://$gateway_host:$gateway_port}"
   runner_url="${SCIENCE_AGENT_RUNNER_URL:-http://$runner_host:$runner_port}"
 }
 
@@ -207,7 +202,7 @@ prepare_local() {
 
   gateway_python="$envs_dir/gateway/bin/python"
   if [[ ! -x "$gateway_python" ]]; then
-    echo "$envs_dir/gateway is missing. Run without --no-build once to provision it." >&2
+    echo "$envs_dir/gateway is missing (needed for the bundled Python MCP servers). Run without --no-build once to provision it." >&2
     exit 1
   fi
 
@@ -249,8 +244,6 @@ prepare_local() {
       runner_environment+=("$passthrough=$value")
     fi
   done
-
-  gateway_command=("$gateway_python" -m science_agent_gateway.server)
   runner_command=(env "${runner_environment[@]}" node services/runner/dist/server.js)
   api_command=(pnpm api)
   api_foreground=1
@@ -303,7 +296,7 @@ EOF
   mkdir -p "$DEER_FLOW_HOME"
 
   if [[ ! -x "$gateway_python" ]]; then
-    echo "The gateway Python environment is missing at $gateway_python. Rebuild the image." >&2
+    echo "The Python MCP server environment is missing at $gateway_python. Rebuild the image." >&2
     exit 1
   fi
 
@@ -323,8 +316,6 @@ the host allows unprivileged user namespaces:
   sysctl kernel.apparmor_restrict_unprivileged_userns # 0 on Ubuntu 24.04+
 EOF
   fi
-
-  gateway_command=("$gateway_python" -m science_agent_gateway.server)
   runner_command=(node services/runner/dist/server.js)
   api_command=(node services/api/dist/server.js)
   api_foreground=0
@@ -334,11 +325,6 @@ EOF
 start_stack() {
   configure_endpoints
   trap cleanup EXIT INT TERM
-
-  echo "Starting the agent-loop gateway sidecar..." >&2
-  "${gateway_command[@]}" &
-  pids+=("$!")
-  wait_healthy "gateway" "$gateway_url/health"
 
   echo "Starting the bubblewrap runner daemon (rootless)..." >&2
   "${runner_command[@]}" &

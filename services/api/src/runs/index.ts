@@ -120,7 +120,6 @@ import { McpGovernanceBroker } from "../mcp/broker.js";
 import { McpSourceCatalog } from "../mcp/source-catalog.js";
 import { createMcpWorkspaceTools } from "../mcp/workspace-tools.js";
 import { WebBroker } from "../web-providers/broker.js";
-import { WebGatewayClient } from "../web-providers/gateway-client.js";
 import { createWebWorkspaceTools } from "../web-providers/workspace-tools.js";
 import {
   createDialogueSkillDraft,

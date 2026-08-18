@@ -36,7 +36,7 @@ science_agent/
 
 | Process | Default address | Purpose |
 |---|---|---|
-| `services/gateway` | `127.0.0.1:4312` | Web-provider sidecar and bundled Python MCP server environment, loopback only |
+| `services/gateway` | no port | Not a service: interpreter environment for the bundled Python MCP servers |
 | `services/runner` | `127.0.0.1:4311` | Sandbox execution, loopback only |
 | `services/api` | `127.0.0.1:4310` | Control API and static UI, local-only by default |
 
@@ -68,7 +68,7 @@ Its external capabilities cover Project management, agent runs, connectors/paper
 
 ### 2.3 `services/gateway` — web-provider sidecar
 
-It **no longer runs the agent loop**; that moved into `services/api`'s `native-agent/` (see [Agent backend](../explanation/agent-backend.md)). FastAPI exposes `GET /health` and `POST /internal/web/invoke` for keyed web-provider execution. The same venv supplies the interpreter for the bundled Python MCP servers (biomed, UniProt), which Node spawns as stdio subprocesses. `_engine/` is down to `web.py` alone; the agent loop, the MCP router, and all of their assembly code are deleted.
+It **is no longer a service**. The agent loop moved into `services/api`'s `native-agent/` and the web providers into `web-providers/native/` (see [Agent backend](../explanation/agent-backend.md)), so the FastAPI app, the web router, and the `_engine/` adapter are all deleted along with the `deerflow-harness` dependency. What remains is the bundled Python MCP servers (biomed, UniProt), which Node spawns as stdio subprocesses using this venv's interpreter.
 
 ### 2.4 `services/runner` — isolated execution
 

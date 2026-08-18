@@ -45,7 +45,6 @@ export const BOOTSTRAP_SECRETS_DIRECTORY = "secrets";
 /** Browser-to-control-plane bearer token (`SCIENCE_AGENT_AUTH_TOKEN`). */
 export const AUTH_TOKEN_FILE = "auth-token";
 /** Control-plane-to-Gateway token (`SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN`). */
-export const GATEWAY_INTERNAL_TOKEN_FILE = "gateway-internal-token";
 
 /** 32 random bytes; base64url keeps it copy-pasteable into a header or a form. */
 const TOKEN_BYTES = 32;

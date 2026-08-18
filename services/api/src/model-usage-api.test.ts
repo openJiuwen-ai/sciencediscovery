@@ -48,12 +48,10 @@ const RUNNER_HEALTH: RunnerHealth = {
   workerConcurrency: null,
 };
 
-function testConfig(dataDir: string, runnerUrl: string, gatewayUrl: string): ServerConfig {
+function testConfig(dataDir: string, runnerUrl: string): ServerConfig {
   return {
     authToken: "test-token",
     dataDir,
-    gatewayUrl,
-    gatewayInternalToken: "test-gateway-token",
     gatewayIdleTimeoutMs: 120_000,
     gatewayTurnTimeoutMs: 300_000,
     host: "127.0.0.1",
@@ -118,7 +116,7 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
   context.after(() => rm(dataDir, { force: true, recursive: true }));
 
   const deps = await startStubDeps(context);
-  const api = createApiServer(testConfig(dataDir, deps.runnerOrigin, deps.gatewayOrigin));
+  const api = createApiServer(testConfig(dataDir, deps.runnerOrigin));
   await new Promise<void>((resolveListen) => api.listen(0, "127.0.0.1", resolveListen));
   context.after(() => new Promise<void>((done) => {
     api.close(() => done());

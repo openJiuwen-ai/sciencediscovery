@@ -131,14 +131,12 @@ function subagentSseGoldens(stream: string): string[][] {
   return [...lanes.values()].sort((left, right) => left.join(",").localeCompare(right.join(",")));
 }
 
-function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1", gatewayUrl = "http://127.0.0.1:1"): ServerConfig {
+function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1"): ServerConfig {
   return {
     authToken: "test-token",
     dataDir,
     gatewayIdleTimeoutMs: 240_000,
     gatewayTurnTimeoutMs: 0,
-    gatewayUrl,
-    gatewayInternalToken: "test-gateway-token",
     host: "127.0.0.1",
     kernelIdleTimeoutMs: 0,
     paperPythonPath: resolve(process.cwd(), "../paper/.venv/bin/python"),
@@ -159,60 +157,6 @@ function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1", gatewayUr
     },
     memoryGraph: { url: "http://127.0.0.1:17674", internalToken: "test" },
   };
-}
-
-// One real agent-loop gateway (services/gateway) is shared by every test in
-// this file; agent runs are routed through it exactly as in production.
-let gatewayOriginPromise: Promise<string> | undefined;
-async function allocateLoopbackPort(): Promise<number> {
-  const probe = createHttpServer();
-  await new Promise<void>((resolveListen, rejectListen) => {
-    probe.once("error", rejectListen);
-    probe.listen(0, "127.0.0.1", resolveListen);
-  });
-  const port = (probe.address() as AddressInfo).port;
-  await new Promise<void>((resolveClose, rejectClose) => {
-    probe.close((error) => error ? rejectClose(error) : resolveClose());
-  });
-  return port;
-}
-
-function ensureGateway(): Promise<string> {
-  gatewayOriginPromise ??= (async () => {
-    const candidates = [
-      resolve(process.cwd(), "../../data/envs/gateway/bin/python"),
-      resolve(process.cwd(), "../gateway/.venv/bin/python"),
-    ];
-    let python: string | undefined;
-    for (const candidate of candidates) {
-      try {
-        await access(candidate);
-        python = candidate;
-        break;
-      } catch {
-        // keep looking
-      }
-    }
-    if (!python) throw new Error("Gateway Python env missing; run ./scripts/run-local.sh once to provision it");
-    const port = await allocateLoopbackPort();
-    const child = spawn(python, ["-m", "science_agent_gateway.server"], {
-      env: { ...process.env, SCIENCE_AGENT_GATEWAY_PORT: String(port) },
-      stdio: "ignore",
-    });
-    child.unref();
-    process.on("exit", () => child.kill("SIGKILL"));
-    const origin = `http://127.0.0.1:${port}`;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      try {
-        if ((await fetch(`${origin}/health`)).ok) return origin;
-      } catch {
-        // not up yet
-      }
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-    }
-    throw new Error("Gateway did not become healthy for tests");
-  })();
-  return gatewayOriginPromise;
 }
 
 async function startTestApi(
@@ -240,7 +184,7 @@ async function startTestApi(
   const runnerOrigin = `http://127.0.0.1:${(runner.address() as AddressInfo).port}`;
 
   const server = createApiServer(
-    testConfig(dataDir, runnerOrigin, await ensureGateway()),
+    testConfig(dataDir, runnerOrigin),
     mcpTransport ? { mcpTransport } : {},
   );
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
@@ -362,7 +306,7 @@ async function startScientificTestApi(
   await new Promise<void>((resolveListen) => runner.listen(0, "127.0.0.1", resolveListen));
   context.after(() => new Promise<void>((resolveClose) => runner.close(() => resolveClose())));
   const runnerOrigin = `http://127.0.0.1:${(runner.address() as AddressInfo).port}`;
-  const server = createApiServer(testConfig(dataDir, runnerOrigin, await ensureGateway()));
+  const server = createApiServer(testConfig(dataDir, runnerOrigin));
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
   return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
@@ -1051,9 +995,6 @@ test("loadServerConfig uses safe local defaults", async (context) => {
   assert.equal(config.authTokenSource, "generated");
   assert.equal(config.authToken.length >= 32, true);
   assert.notEqual(config.authToken, "science-agent-local");
-  assert.equal(config.gatewayInternalTokenSource, "generated");
-  assert.notEqual(config.gatewayInternalToken, "science-agent-gateway-local");
-  assert.notEqual(config.gatewayInternalToken, config.authToken);
   assert.equal(config.dataDir, tempRoot);
   assert.equal(config.paperPythonPath, resolve(config.dataDir, "envs/paper/bin/python"));
   assert.equal(config.runnerUrl, "http://127.0.0.1:4311");
@@ -1748,10 +1689,10 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
     gateway.close(() => resolveClose());
     gateway.closeAllConnections();
   }));
-  const gatewayOrigin = `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`;
+  const modelOrigin = `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`;
 
   const server = createApiServer({
-    ...testConfig(tempRoot, runnerOrigin, gatewayOrigin),
+    ...testConfig(tempRoot, runnerOrigin),
     gatewayIdleTimeoutMs: 25,
   });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
@@ -1792,7 +1733,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   );
 
   const model = await createTestModel(origin, {
-    baseUrl: gatewayOrigin,
+    baseUrl: modelOrigin,
     model: "scripted-loop-model",
     name: "Scripted loop model",
   });

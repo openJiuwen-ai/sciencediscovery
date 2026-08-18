@@ -7,7 +7,7 @@
 - Model calls go out from Node directly (`undici`) in two dialects: **OpenAI-compatible** and **Anthropic Messages**.
 - MCP servers are connected **in-process** with the official TypeScript SDK (stdio / SSE / streamable HTTP), not through a gateway HTTP hop.
 - Tool **implementations, the permission gate, sandbox execution, and provenance are unchanged**: still `createWorkspaceTools` from `packages/agent-runtime` plus API-injected handlers. The native loop `await`s those handlers directly, so `POST /internal/tool-exec` is no longer needed.
-- **The Python sidecar remains for exactly two things**: executing keyed web providers (`POST /internal/web/invoke`) and supplying the interpreter for the bundled Python MCP servers. See §10.
+- **The Python sidecar is no longer a service**: web providers are native too, so the gateway's HTTP service is gone; `services/gateway` is now only the host package and interpreter environment for the bundled Python MCP servers. See §10.
 
 The former architecture (Python gateway running LangChain `create_agent`, Node `POST /run`, gateway callback to `/internal/tool-exec`) is retired; see §11.
 
@@ -329,16 +329,13 @@ Three query forms:
 
 **Boundary principle.** The loop does **not** decide tool semantics, permissions, or provenance; the tool layer does **not** know which loop drives it. That boundary is what let the engine be replaced while governance stayed put.
 
-## 10. What the Python sidecar still does
+## 10. What `services/gateway` is now
 
-The gateway process (`services/gateway`, default `127.0.0.1:4312`) **no longer runs the agent loop**. Two uses remain:
+**Not a service.** It has no HTTP port, no FastAPI application, and `start-stack.sh` no longer launches it. What remains is the two bundled stdio MCP servers (biomed, UniProt) and the external-URL registry they share; Node locates that venv's interpreter through `resolveMcpPython()` and spawns them as subprocesses (§8.2).
 
-| Use | Interface / form | Status |
-|---|---|---|
-| Keyed web-provider calls | Node `WebGatewayClient` → `POST /internal/web/invoke` | **Still on the production path.** Permissions, credentials, caching, CAS, and audit for `web_search` / `web_fetch` happen in Node's `WebBroker`, but provider execution still lands on the gateway's vendor implementation — **this layer is not native yet** |
-| Bundled Python MCP servers | biomed / UniProt started as stdio subprocesses | Needs the gateway venv for its interpreter (§8.2) |
+So **the gateway venv still needs provisioning, but the gateway service is gone.** The `deerflow-harness` dependency was removed from `pyproject.toml`, `import deerflow` now raises `ModuleNotFoundError` in that environment, and `services/gateway/tests/test_architecture_boundaries.py` pins the boundary with a whole-package assertion.
 
-So: **do not describe the web tools as already native.** Every other gateway dependency is gone — `McpNodeClient` is the only implementation; tests inject an `McpTransportClient` stub to drive the real broker and catalog paths, so there is no second MCP client.
+Web-provider execution moved to `services/api/src/web-providers/native/`: `NativeWebProviderClient` keeps the call contract and response shape `WebBroker` already consumed, so permission, credentials, caching, CAS, auditing, and the fallback policy are untouched — only the execution body changed.
 
 ## 11. Retired
 
@@ -350,7 +347,7 @@ The following are **no longer the current architecture** and are listed only for
 | `POST {gateway}/run` driving conversations | Node → gateway | The route and all of its assembly code (`tools.py`, `callback.py`, `model.py`, and the `_engine` agent/deferred/state/summarize/model_patch/skills/sanitize modules) are deleted |
 | `POST /internal/tool-exec` callback | gateway → Node | The native loop `await`s handlers directly; the route, the `callback_token` mechanism, and `SCIENCE_AGENT_TOOL_CALLBACK_URL` are all deleted |
 | LangChain `create_agent` / LangGraph driving the loop | gateway `_engine/` | Replaced by `native-agent/index.ts` |
-| deer-flow participating in the agent loop | gateway dependency | The agent path is deleted; the vendor dependency survives only for web providers (§10) |
+| deer-flow dependency | gateway `pyproject.toml` | Removed entirely: with native web providers there is no vendor caller left |
 | Model-patch layer (thought_signature replay) | gateway `_engine/model_patch.py` | The native loop stores assistant messages verbatim, so replay is inherent |
 
 ## 12. Verification entry points

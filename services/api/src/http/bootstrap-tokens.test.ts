@@ -21,7 +21,6 @@ import {
   accessTokenBanner,
   AUTH_TOKEN_FILE,
   bootstrapTokenPath,
-  GATEWAY_INTERNAL_TOKEN_FILE,
   resolveBootstrapToken,
 } from "./bootstrap-tokens.js";
 import { loadServerConfig } from "./config.js";
@@ -68,15 +67,19 @@ test("a restart reuses the stored token instead of generating another", async (c
 });
 
 test("each credential is stored separately", async (context) => {
+  // The product currently bootstraps one credential, but the helper's contract
+  // is per-file isolation: a second credential must never inherit the first's
+  // value or file. Pinning it here keeps that true for whatever is added next.
   const dataDir = await temporaryDataDir(context, "bootstrap-separate");
+  const secondFile = "second-internal-token";
 
   const auth = resolveBootstrapToken(dataDir, AUTH_TOKEN_FILE);
-  const gateway = resolveBootstrapToken(dataDir, GATEWAY_INTERNAL_TOKEN_FILE);
+  const second = resolveBootstrapToken(dataDir, secondFile);
 
-  assert.notEqual(auth.token, gateway.token);
+  assert.notEqual(auth.token, second.token);
   assert.equal(
-    (await readFile(bootstrapTokenPath(dataDir, GATEWAY_INTERNAL_TOKEN_FILE), "utf8")).trim(),
-    gateway.token,
+    (await readFile(bootstrapTokenPath(dataDir, secondFile), "utf8")).trim(),
+    second.token,
   );
 });
 
@@ -119,13 +122,10 @@ test("the server configuration carries no fixed default credential", async (cont
   const config = loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir });
 
   assert.notEqual(config.authToken, "science-agent-local");
-  assert.notEqual(config.gatewayInternalToken, "science-agent-gateway-local");
   assert.equal(config.authTokenSource, "generated");
-  assert.equal(config.gatewayInternalTokenSource, "generated");
   // A second load is the "restart" case: same values, marked as restored.
   const restarted = loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir });
   assert.equal(restarted.authToken, config.authToken);
-  assert.equal(restarted.gatewayInternalToken, config.gatewayInternalToken);
   assert.equal(restarted.authTokenSource, "stored");
 });
 
@@ -135,11 +135,9 @@ test("explicit environment tokens keep their existing meaning", async (context) 
   const config = loadServerConfig({
     SCIENCE_AGENT_AUTH_TOKEN: "my-auth-token",
     SCIENCE_AGENT_DATA_DIR: dataDir,
-    SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN: "my-gateway-token",
   });
 
   assert.equal(config.authToken, "my-auth-token");
-  assert.equal(config.gatewayInternalToken, "my-gateway-token");
   assert.equal(config.authTokenSource, "environment");
   await assert.rejects(stat(bootstrapTokenPath(dataDir, AUTH_TOKEN_FILE)), /ENOENT/);
 });

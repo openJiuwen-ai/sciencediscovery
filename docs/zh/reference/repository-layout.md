@@ -44,7 +44,7 @@ science_agent/
 
 | 进程 | 默认地址 | 说明 |
 |------|----------|------|
-| `services/gateway` | `127.0.0.1:4312` | web provider 侧车 + 随包 Python MCP server 环境；仅回环 |
+| `services/gateway` | 无端口 | 不再是服务：仅为随包 Python MCP server 提供解释器环境 |
 | `services/runner` | `127.0.0.1:4311` | 沙箱执行；仅回环 |
 | `services/api` | `127.0.0.1:4310` | 控制 API + 静态 UI；默认仅本机 |
 
@@ -83,12 +83,12 @@ science_agent/
 
 主要对外能力：项目管理、Agent 运行、连接器与论文、托管科学环境、技能与 specialist、权限与评审。
 
-### 2.3 `services/gateway` — Web provider 侧车
+### 2.3 `services/gateway` — 随包 Python MCP server
 
 - **不再跑 agent 循环**：agent loop 已原生化到 `services/api` 的 `native-agent/`（见 [Agent 后端](../explanation/agent-backend.md)）
-- FastAPI：`GET /health`、`POST /internal/web/invoke`（keyed web provider 的实际执行）
+- 无 HTTP 服务：web provider 已原生化到 `services/api/src/web-providers/native/`
 - 该 venv 同时为随包的 Python MCP server（biomed、UniProt）提供解释器，由 Node 以 stdio 子进程拉起
-- `_engine/` 只剩 `web.py` 一个供应商 adapter；agent 循环、MCP 路由及其装配代码已删除
+- `_engine/`、FastAPI 应用与 `deerflow-harness` 依赖已整体删除；包内依赖收敛为 `mcp` + `httpx`
 
 ### 2.4 `services/runner` — 隔离执行
 

@@ -20,10 +20,10 @@ First Python/shell execution requests `code` permission. Generated files retain 
 
 | Tool | Parameters | Behavior and boundary |
 |---|---|---|
-| `web_search` | `query` (1–2000 characters) | Uses the global DeerFlow provider; snippets and URLs do not prove the page was read; transient failures may fall back to DDGS |
+| `web_search` | `query` (1–2000 characters) | Aggregates search engines — keyed paid providers first, then the enabled free engines — and returns the first that answers; snippets and URLs do not prove the page was read |
 | `web_fetch` | full public HTTP(S) `url` | Extracts one page; rejects credential URLs and private/loopback targets; no cross-provider fallback |
 
-Node performs permission, CAS, and `WebInvocation` audit, then gateway invokes the community tool. See [Web tools](web-tools.md).
+Node performs permission, CAS, and `WebInvocation` audit, and calls the vendors in-process. See [Web tools](web-tools.md).
 
 ## Orchestration tools
 

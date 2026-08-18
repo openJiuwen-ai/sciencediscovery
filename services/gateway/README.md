@@ -1,73 +1,44 @@
-# services/gateway — web-provider sidecar
+# services/gateway — bundled Python MCP servers
 
-A thin Python service whose only client is the Node control API. It does **not**
-run the agent loop: the loop, model transport, and MCP client are native to
-`services/api` (see
-[Agent backend](../../docs/en/explanation/agent-backend.md)). What remains here
-is the surface that still depends on the bundled vendor engine:
+**This is not a service.** It has no HTTP port, no FastAPI application, and the
+start-up script does not launch it. The agent loop, model transport, MCP client,
+and web providers all run natively in the Node control plane (see
+[Agent backend](../../docs/en/explanation/agent-backend.md)).
 
-- `POST /internal/web/invoke` — execute one resolved web-provider request
-  (loopback only, authenticated with the gateway internal token)
-- `GET /health` — liveness for the start-up scripts
+What remains is the two bundled provider-facing MCP servers and the external-URL
+registry they share:
 
-The same environment also supplies the Python interpreter for the bundled stdio
-MCP servers, which the Node control plane spawns as subprocesses.
+- `src/science_agent_gateway/public_biomed_mcp.py` — public biomedical sources
+- `src/science_agent_gateway/uniprot_mcp.py` — UniProt records
+- `src/science_agent_gateway/external_urls.py` — the operator-visible URL registry
 
-```
-apps/web ──SSE──▶ services/api (Node)
-                     │  agent loop, model calls, MCP client — all in-process
-                     └──/internal/web/invoke──▶ services/gateway (this)
-                                                   │ vendor web providers
-                                                   ▼
-                                             upstream search / fetch
-```
+Both speak MCP over stdio. The Node control plane spawns them as subprocesses
+using this environment's interpreter (`resolveMcpPython()` in
+`services/api/src/mcp/node-client.ts`), and remains authoritative for
+governance, permissions, caching, and downloads.
 
-Node keeps ownership of permission, credentials, cache, CAS, and audit for
-`web_search` / `web_fetch`; only provider execution happens here.
+The package therefore depends only on `mcp` and `httpx`. The `deerflow-harness`
+dependency is gone: with web providers native, nothing here calls the vendor.
+`services/gateway/tests/test_architecture_boundaries.py` fails if a vendor
+reference reappears anywhere in the package.
 
-## Layout
+## Setup
 
-- `src/science_agent_gateway/server.py` — FastAPI app: `/health` plus the web
-  router.
-- `src/science_agent_gateway/web_api.py` — the internal web endpoint and its
-  request/response contracts.
-- `src/science_agent_gateway/web_providers.py`, `web_worker.py` — built-in
-  providers and the isolated-subprocess worker used when a request pins its own
-  proxy.
-- `src/science_agent_gateway/_engine/` — the only adapter allowed to import the
-  bundled vendor package. It is down to `web.py`, which is imported lazily so a
-  missing vendor install fails web provider invocation alone.
-- `src/science_agent_gateway/internal_auth.py`, `bootstrap_tokens.py` — the
-  loopback bearer check shared by internal routes.
-- `src/science_agent_gateway/uniprot_mcp.py`, `public_biomed_mcp.py` —
-  provider-facing stdio MCP servers. Node connects to them directly with the
-  official MCP SDK and remains authoritative for governance and downloads.
-
-## Setup and run
-
-The repository run script provisions and starts this service automatically; the
-environment lives with all other runtime state at `<data dir>/envs/gateway`
-(Python 3.12 via `.python-version`; uv defaults to a newer Python that lacks
-some transitive wheels).
+The repository run script provisions this environment automatically at
+`<data dir>/envs/gateway` (Python 3.12 via `.python-version`). It is still
+provisioned even though no gateway process is started, because the MCP servers
+run from it.
 
 For standalone development:
 
 ```bash
-git submodule update --init --recursive third_party/deer-flow
 cd services/gateway
-uv sync                                            # creates ./.venv
-.venv/bin/python -m science_agent_gateway.server   # port 4312 by default
+uv sync                                   # creates ./.venv
+.venv/bin/python -m science_agent_gateway.uniprot_mcp   # speaks MCP on stdio
 ```
-
-The Node API reaches this service through `SCIENCE_AGENT_GATEWAY_URL`
-(default `:4312`). Model credentials never come here — the agent loop runs in
-Node and talks to the model endpoint itself.
 
 ## Tests
 
 ```bash
 cd services/gateway && .venv/bin/python -m unittest discover -s tests
 ```
-
-End-to-end agent-loop smokes live in the repository `test/api/` tree
-(`run_m1_smoke.sh` for the hermetic path, `run_real_smoke.sh` for a live model).

@@ -94,7 +94,6 @@ ScienceDiscovery help                  Show help
 | `--host <address>` | `127.0.0.1` | Web UI/API bind address |
 | `--port <port>` | `4310` | Web UI/API port |
 | `--runner-port <port>` | `4311` | Runner port (loopback only) |
-| `--gateway-port <port>` | `4312` | Gateway port (loopback only) |
 | `--env-file <path>` | — | Read `KEY=VALUE` settings before startup; existing environment values win |
 | `--bwrap <path>` | `bwrap` on `PATH` | Bubblewrap executable |
 | `--skip-sandbox-check` | off | Start without Bubblewrap; sandbox execution is unavailable |
@@ -141,7 +140,7 @@ In local mode the shared entry point reads the root `.env`, checks the dependenc
 
 | Service | Address | Purpose |
 |---|---|---|
-| `services/gateway` | 127.0.0.1:4312 | Agent-loop sidecar (background) |
+| `services/gateway` | no port | Interpreter environment for the bundled Python MCP servers |
 | `services/runner` | 127.0.0.1:4311 | Rootless Bubblewrap executor (background) |
 | `services/api` | 127.0.0.1:4310 | Control API and Web UI (foreground) |
 

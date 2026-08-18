@@ -20,10 +20,6 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_LOG_DIR` | `<数据目录>/logs` | 可选日志目录覆盖；通常保持默认以随数据目录持久化 |
 | `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | 单个类别日志滚动前的最大字节数 |
 | `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | 每个类别保留的滚动历史文件数 |
-| `SCIENCE_AGENT_GATEWAY_URL` | `http://127.0.0.1:4312` | Agent-loop gateway 端点 |
-| `SCIENCE_AGENT_GATEWAY_HOST` | `127.0.0.1` | Gateway 监听地址（gateway 进程使用） |
-| `SCIENCE_AGENT_GATEWAY_PORT` | `4312` | Gateway 监听端口（gateway 进程使用） |
-| `SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN` | 首次启动生成 | API→gateway 内部 token；不设置时使用 `<数据目录>/secrets/gateway-internal-token` 中保存的值 |
 | `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | 初始 Agent 无响应上限：无流式输出或进度（`0` = 无限） |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | 初始 Agent 单轮总时长上限（`0` = 无限） |
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner 监听地址 |
@@ -97,7 +93,7 @@ Compose 读取仓库根目录 `.env`，并把以下键插值到 `docker-compose.
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存路径；离线 provision 前需填充内容 |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | 镜像内 bubblewrap 可执行文件 |
 
-API 在容器内监听 `0.0.0.0:4310`，gateway `4312` 与 runner `4311` 保持在容器回环，对外只发布 API 端口。操作步骤与沙箱放权边界见[Docker 部署](../how-to/deployment.md#docker-部署)。
+API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，对外只发布 API 端口。操作步骤与沙箱放权边界见[Docker 部署](../how-to/deployment.md#docker-部署)。
 
 ## 存储布局
 

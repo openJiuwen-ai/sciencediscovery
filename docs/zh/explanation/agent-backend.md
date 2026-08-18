@@ -7,7 +7,7 @@
 - 模型调用由 Node 直接发出（`undici`），支持 **OpenAI 兼容** 与 **Anthropic Messages** 两种方言。
 - MCP 由 Node 用官方 TypeScript SDK **在进程内**连接（stdio / SSE / streamable-HTTP），不再经 gateway HTTP。
 - 工具的**实现、权限门、沙箱执行、溯源**位置没有变化：仍然是 `packages/agent-runtime` 的 `createWorkspaceTools` 加 API 侧注入的处理器。原生 loop 直接 `await` 这些处理器，因此不再需要 `POST /internal/tool-exec` 回调。
-- **仍然保留的 Python 侧车**只剩两件事：keyed web provider 的实际调用（`POST /internal/web/invoke`），以及为随包的 Python MCP server（biomed、UniProt）提供解释器环境。详见 §8。
+- **Python 侧车已不再是服务**：web provider 也已原生化到 Node，gateway 的 HTTP 服务随之删除；`services/gateway` 现在只是随包 Python MCP server（biomed、UniProt）的宿主包与解释器环境。详见 §8。
 
 历史架构（Python gateway 跑 LangChain `create_agent`、Node `POST /run`、gateway 回调 `/internal/tool-exec`）已退役，见 §9。
 
@@ -332,16 +332,13 @@ streamModelTurn(endpoint, systemPrompt, history, tools, policy, signal, callback
 
 **边界原则**：loop **不**决定工具语义、不做权限判断、不写溯源；工具层**不**知道自己被哪种循环驱动。这条边界是原生化能做到「换掉引擎但治理不变」的前提。
 
-## 10. 仍然保留的 Python 侧车
+## 10. `services/gateway` 现在是什么
 
-Gateway 进程（`services/gateway`，默认 `127.0.0.1:4312`）**不再跑 agent 循环**，只剩两个用途：
+**不再是一个服务**。它没有 HTTP 端口、没有 FastAPI 应用，也不再被 `start-stack.sh` 拉起。剩下的全部内容是随包的两个 stdio MCP server（biomed、UniProt）及其共用的外部 URL 注册表；Node 用 `resolveMcpPython()` 找到该 venv 的解释器，把它们作为子进程启动（§8.2）。
 
-| 用途 | 接口 / 形态 | 现状 |
-|---|---|---|
-| keyed web provider 调用 | Node `WebGatewayClient` → `POST /internal/web/invoke` | **仍在生产路径上**。`web_search` / `web_fetch` 的权限、凭据、缓存、CAS、审计都在 Node 的 `WebBroker` 完成，实际 provider 执行仍落到 gateway 的 vendor 实现——**这一层尚未原生化** |
-| 随包 Python MCP server | biomed / UniProt 等以 stdio 子进程启动 | 需要 gateway venv 提供解释器（§8.2） |
+因此 **gateway venv 仍需 provision，但 gateway 服务不再存在**。`deerflow-harness` 依赖已从 `pyproject.toml` 移除，环境里 `import deerflow` 会直接 `ModuleNotFoundError`；`services/gateway/tests/test_architecture_boundaries.py` 用一条覆盖全包的断言把这条边界钉住。
 
-因此：**不要把 web 工具描述成已经原生化**。其余对 gateway 的依赖已经解除——`McpNodeClient` 是唯一实现；测试通过注入 `McpTransportClient` 替身驱动真实的 broker 与目录路径，不存在第二个 MCP 客户端。
+web provider 的执行改由 `services/api/src/web-providers/native/` 承担：`NativeWebProviderClient` 保持 `WebBroker` 原有的调用契约与响应形状，所以权限、凭据、缓存、CAS、审计、降级策略一行未动，换掉的只是执行体。
 
 ## 11. 已退役
 
@@ -353,7 +350,7 @@ Gateway 进程（`services/gateway`，默认 `127.0.0.1:4312`）**不再跑 agen
 | `POST {gateway}/run` 驱动对话 | Node → gateway | 路由与其全部装配代码（`tools.py`、`callback.py`、`model.py`、`_engine` 的 agent/deferred/state/summarize/model_patch/skills/sanitize）已删除 |
 | `POST /internal/tool-exec` 回调 | gateway → Node | 原生 loop 直接 `await` 工具处理器；路由、`callback_token` 机制与 `SCIENCE_AGENT_TOOL_CALLBACK_URL` 均已删除 |
 | LangChain `create_agent` / LangGraph 驱动循环 | gateway `_engine/` | 循环改由 `native-agent/index.ts` 实现 |
-| deer-flow 参与 agent 循环 | gateway 依赖 | agent 路径已删除；vendor 依赖仅剩 web provider（§10） |
+| deer-flow 依赖 | gateway `pyproject.toml` | 已整体移除：web provider 原生化后不再有 vendor 调用方 |
 | 模型补丁层（thought_signature 重放） | gateway `_engine/model_patch.py` | 原生 loop 逐字保存 assistant 消息，回放天然成立 |
 
 ## 12. 验证入口

@@ -48,13 +48,11 @@ const RUNNER_HEALTH: RunnerHealth = {
   workerConcurrency: null,
 };
 
-function testConfig(dataDir: string, runnerUrl: string, gatewayUrl: string): ServerConfig {
+function testConfig(dataDir: string, runnerUrl: string): ServerConfig {
   return {
     authToken: "test-token",
     dataDir,
     gatewayIdleTimeoutMs: 240_000,
-    gatewayUrl,
-    gatewayInternalToken: "test-gateway-token",
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
     kernelIdleTimeoutMs: 0,
@@ -209,7 +207,7 @@ async function startApi(
   await mkdir(dataDir, { recursive: true });
   context.after(() => rm(dataDir, { force: true, recursive: true }));
   const [runnerUrl, gateway] = await Promise.all([startStubRunner(context), startGateway(context)]);
-  const server = createApiServer(testConfig(dataDir, runnerUrl, gateway.origin));
+  const server = createApiServer(testConfig(dataDir, runnerUrl));
   await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
   context.after(() => new Promise<void>((done) => {
     server.close(() => done());

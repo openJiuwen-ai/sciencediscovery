@@ -24,7 +24,6 @@ import {
 } from "../native-agent/index.js";
 import {
   AUTH_TOKEN_FILE,
-  GATEWAY_INTERNAL_TOKEN_FILE,
   resolveBootstrapToken,
   type BootstrapTokenSource,
 } from "./bootstrap-tokens.js";
@@ -49,11 +48,7 @@ export interface ServerConfig {
   sshConfigPath: string;
   staticDir: string;
   /** Base URL of the agent-loop gateway sidecar (services/gateway). */
-  gatewayUrl: string;
   /** Shared credential for Node-only Gateway MCP control endpoints. */
-  gatewayInternalToken: string;
-  /** How `gatewayInternalToken` was obtained. */
-  gatewayInternalTokenSource?: BootstrapTokenSource;
   /** Maximum time without gateway stream progress before the run is stalled. */
   gatewayIdleTimeoutMs: number;
   /** Hard upper bound for a complete gateway turn. */
@@ -94,7 +89,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error("SCIENCE_AGENT_PORT must be an integer between 0 and 65535");
   }
-  const gatewayUrl = env.SCIENCE_AGENT_GATEWAY_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:4312";
   const parseTimeoutMilliseconds = (name: string, fallback: number): number => {
     const raw = env[name]?.trim();
     if (!raw) return fallback;
@@ -152,20 +146,12 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   // installation generated on its first start", never a value an attacker could
   // guess from the source tree.
   const authToken = resolveBootstrapToken(dataDir, AUTH_TOKEN_FILE, env.SCIENCE_AGENT_AUTH_TOKEN);
-  const gatewayInternalToken = resolveBootstrapToken(
-    dataDir,
-    GATEWAY_INTERNAL_TOKEN_FILE,
-    env.SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN,
-  );
   return {
     authToken: authToken.token,
     authTokenSource: authToken.source,
     dataDir,
-    gatewayInternalToken: gatewayInternalToken.token,
-    gatewayInternalTokenSource: gatewayInternalToken.source,
     gatewayIdleTimeoutMs,
     gatewayTurnTimeoutMs,
-    gatewayUrl,
     host,
     kernelIdleTimeoutMs,
     paperPythonPath: env.SCIENCE_AGENT_PAPER_PYTHON_PATH?.trim()

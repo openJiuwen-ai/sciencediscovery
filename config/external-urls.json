@@ -10,11 +10,15 @@
   },
   "package_source_presets": {
     "tsinghua": {
-      "conda_channels": ["https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"],
+      "conda_channels": [
+        "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"
+      ],
       "pip_index": "https://pypi.tuna.tsinghua.edu.cn/simple"
     },
     "ustc": {
-      "conda_channels": ["https://mirrors.ustc.edu.cn/anaconda/cloud/conda-forge"],
+      "conda_channels": [
+        "https://mirrors.ustc.edu.cn/anaconda/cloud/conda-forge"
+      ],
       "pip_index": "https://mirrors.ustc.edu.cn/pypi/simple"
     },
     "huawei": {
@@ -100,10 +104,18 @@
     }
   },
   "web": {
+    "bing_search_endpoint": "https://www.bing.com/search",
+    "brave_html_endpoint": "https://search.brave.com/search",
+    "brave_search_endpoint": "https://api.search.brave.com/res/v1/web/search",
+    "duckduckgo_html_endpoint": "https://html.duckduckgo.com/html/",
+    "exa_contents_endpoint": "https://api.exa.ai/contents",
+    "exa_search_endpoint": "https://api.exa.ai/search",
     "jina_endpoints": [
       "https://r.jinaai.cn",
       "https://r.jina.ai"
-    ]
+    ],
+    "tavily_extract_endpoint": "https://api.tavily.com/extract",
+    "tavily_search_endpoint": "https://api.tavily.com/search"
   },
   "terms": {
     "arxiv": "https://info.arxiv.org/help/api/tou.html",
@@ -118,17 +130,58 @@
     "uniprot": "https://www.uniprot.org/help/license"
   },
   "connector_hosts": {
-    "arxiv": ["export.arxiv.org", "arxiv.org"],
-    "pubmed": ["eutils.ncbi.nlm.nih.gov", "pubmed.ncbi.nlm.nih.gov", "www.ncbi.nlm.nih.gov", "ftp.ncbi.nlm.nih.gov"],
-    "europe_pmc": ["www.ebi.ac.uk", "europepmc.org", "www.ncbi.nlm.nih.gov", "ftp.ncbi.nlm.nih.gov"],
-    "biorxiv": ["api.biorxiv.org", "www.biorxiv.org"],
-    "medrxiv": ["api.biorxiv.org", "www.medrxiv.org"],
-    "rcsb": ["search.rcsb.org", "data.rcsb.org", "files.rcsb.org", "www.rcsb.org"],
-    "ensembl": ["rest.ensembl.org", "www.ensembl.org"],
-    "reactome": ["reactome.org"],
-    "clinvar": ["eutils.ncbi.nlm.nih.gov", "www.ncbi.nlm.nih.gov"],
-    "chembl": ["www.ebi.ac.uk"],
-    "geo": ["eutils.ncbi.nlm.nih.gov", "www.ncbi.nlm.nih.gov", "ftp.ncbi.nlm.nih.gov"],
-    "uniprot": ["rest.uniprot.org", "www.uniprot.org"]
+    "arxiv": [
+      "export.arxiv.org",
+      "arxiv.org"
+    ],
+    "pubmed": [
+      "eutils.ncbi.nlm.nih.gov",
+      "pubmed.ncbi.nlm.nih.gov",
+      "www.ncbi.nlm.nih.gov",
+      "ftp.ncbi.nlm.nih.gov"
+    ],
+    "europe_pmc": [
+      "www.ebi.ac.uk",
+      "europepmc.org",
+      "www.ncbi.nlm.nih.gov",
+      "ftp.ncbi.nlm.nih.gov"
+    ],
+    "biorxiv": [
+      "api.biorxiv.org",
+      "www.biorxiv.org"
+    ],
+    "medrxiv": [
+      "api.biorxiv.org",
+      "www.medrxiv.org"
+    ],
+    "rcsb": [
+      "search.rcsb.org",
+      "data.rcsb.org",
+      "files.rcsb.org",
+      "www.rcsb.org"
+    ],
+    "ensembl": [
+      "rest.ensembl.org",
+      "www.ensembl.org"
+    ],
+    "reactome": [
+      "reactome.org"
+    ],
+    "clinvar": [
+      "eutils.ncbi.nlm.nih.gov",
+      "www.ncbi.nlm.nih.gov"
+    ],
+    "chembl": [
+      "www.ebi.ac.uk"
+    ],
+    "geo": [
+      "eutils.ncbi.nlm.nih.gov",
+      "www.ncbi.nlm.nih.gov",
+      "ftp.ncbi.nlm.nih.gov"
+    ],
+    "uniprot": [
+      "rest.uniprot.org",
+      "www.uniprot.org"
+    ]
   }
 }

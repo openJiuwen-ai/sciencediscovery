@@ -14,10 +14,15 @@
 
 import {
   DEFAULT_MEMORY_GRAPH_SETTINGS,
+  DEFAULT_WEB_SETTINGS,
+  FREE_SEARCH_ORDER,
   isSkillSelectionMode,
+  migrateLegacyWebSettings,
+  PAID_SEARCH_ORDER,
   SKILL_SELECTION_FIELDS,
   type ConnectorId,
-  type DdgsBackend,
+  type FreeSearchEngine,
+  type PaidSearchProvider,
   type McpProxyPolicies,
   type MemoryGraphSettings,
   type ProxyDefaultPolicy,
@@ -28,7 +33,6 @@ import {
   type SystemQuotaSettings,
   type SystemTimeoutSettings,
   type WebFetchProvider,
-  type WebSearchProvider,
   type WebSettings,
 } from "@science-agent/schema";
 
@@ -233,53 +237,61 @@ export function normalizeMemoryGraphSettings(value: unknown): MemoryGraphSetting
   return { enabled, neo4jHttp, neo4jUser };
 }
 
-const WEB_SEARCH_PROVIDERS = new Set<WebSearchProvider>(["ddgs", "tavily", "exa", "brave"]);
 const WEB_FETCH_PROVIDERS = new Set<WebFetchProvider>(["jina", "tavily", "exa"]);
-const DDGS_BACKENDS = new Set<DdgsBackend>(["bing", "auto", "duckduckgo"]);
 const WEB_SETTING_FIELDS = new Set([
-  "ddgsBackend",
   "fetchCacheTtlSeconds",
   "fetchProvider",
+  "freeSearchEngines",
+  "paidSearchProviders",
   "proxyPolicy",
   "searchCacheTtlSeconds",
-  "searchFallbackProvider",
-  "searchProvider",
 ]);
 
 export function normalizeWebSettings(value: unknown): WebSettings {
   if (!isRecord(value)) throw new Error("Web settings must be an object");
-  const unknown = Object.keys(value).find((key) => !WEB_SETTING_FIELDS.has(key));
+  // Records written before search became an aggregation still carry the old
+  // single-provider fields; translate them instead of rejecting the record.
+  const migrated = migrateLegacyWebSettings(value);
+  const unknown = Object.keys(migrated).find((key) => !WEB_SETTING_FIELDS.has(key));
   if (unknown) throw new Error(`Unknown web setting: ${unknown}`);
-  const searchProvider = value.searchProvider;
-  const fetchProvider = value.fetchProvider;
-  const searchFallbackProvider = value.searchFallbackProvider;
-  const ddgsBackend = value.ddgsBackend ?? "bing";
-  const proxyPolicy = normalizeProxyPolicy(value.proxyPolicy ?? "inherit", "proxyPolicy");
-  if (!WEB_SEARCH_PROVIDERS.has(searchProvider as WebSearchProvider)) {
-    throw new Error("Unsupported web search provider");
-  }
+  const fetchProvider = migrated.fetchProvider;
+  const proxyPolicy = normalizeProxyPolicy(migrated.proxyPolicy ?? "inherit", "proxyPolicy");
   if (!WEB_FETCH_PROVIDERS.has(fetchProvider as WebFetchProvider)) {
     throw new Error("Unsupported web fetch provider");
   }
-  if (!DDGS_BACKENDS.has(ddgsBackend as DdgsBackend)) {
-    throw new Error("Unsupported DDGS backend");
+
+  const paidInput = migrated.paidSearchProviders ?? [...PAID_SEARCH_ORDER];
+  if (!Array.isArray(paidInput) || paidInput.some((entry) => !PAID_SEARCH_ORDER.includes(entry as PaidSearchProvider))) {
+    throw new Error("paidSearchProviders must list supported paid search providers");
   }
-  if (searchFallbackProvider !== null && searchFallbackProvider !== "ddgs") {
-    throw new Error("searchFallbackProvider must be ddgs or null");
-  }
+  // Store in the canonical attempt order so persistence cannot reorder the tier.
+  const paidSearchProviders = PAID_SEARCH_ORDER.filter((provider) => paidInput.includes(provider));
+
+  const freeInput = migrated.freeSearchEngines ?? { ...DEFAULT_WEB_SETTINGS.freeSearchEngines };
+  if (!isRecord(freeInput)) throw new Error("freeSearchEngines must be an object");
+  const unknownEngine = Object.keys(freeInput).find((key) => !FREE_SEARCH_ORDER.includes(key as FreeSearchEngine));
+  if (unknownEngine) throw new Error(`Unknown free search engine: ${unknownEngine}`);
+  const freeSearchEngines = Object.fromEntries(FREE_SEARCH_ORDER.map((engine) => {
+    const enabled = freeInput[engine];
+    if (enabled !== undefined && typeof enabled !== "boolean") {
+      throw new Error(`freeSearchEngines.${engine} must be a boolean`);
+    }
+    return [engine, enabled ?? DEFAULT_WEB_SETTINGS.freeSearchEngines[engine]];
+  })) as Record<FreeSearchEngine, boolean>;
+
   for (const field of ["searchCacheTtlSeconds", "fetchCacheTtlSeconds"] as const) {
-    if (!Number.isSafeInteger(value[field]) || (value[field] as number) < 0 || (value[field] as number) > 30 * 24 * 60 * 60) {
+    const seconds = migrated[field];
+    if (!Number.isSafeInteger(seconds) || (seconds as number) < 0 || (seconds as number) > 30 * 24 * 60 * 60) {
       throw new Error(`${field} must be an integer between 0 and 2592000 seconds`);
     }
   }
   return {
-    ddgsBackend: ddgsBackend as DdgsBackend,
-    fetchCacheTtlSeconds: value.fetchCacheTtlSeconds as number,
+    fetchCacheTtlSeconds: migrated.fetchCacheTtlSeconds as number,
     fetchProvider: fetchProvider as WebFetchProvider,
+    freeSearchEngines,
+    paidSearchProviders,
     proxyPolicy,
-    searchCacheTtlSeconds: value.searchCacheTtlSeconds as number,
-    searchFallbackProvider,
-    searchProvider: searchProvider as WebSearchProvider,
+    searchCacheTtlSeconds: migrated.searchCacheTtlSeconds as number,
   };
 }
 

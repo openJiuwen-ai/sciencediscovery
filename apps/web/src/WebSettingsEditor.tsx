@@ -14,15 +14,25 @@
 
 import type { FormEvent } from "react";
 
-import type { UpdateWebSettingsRequest, WebSettingsDetails } from "@science-agent/schema";
+import {
+  FREE_SEARCH_ORDER,
+  PAID_SEARCH_ORDER,
+  type FreeSearchEngine,
+  type PaidSearchProvider,
+  type UpdateWebSettingsRequest,
+  type WebSettingsDetails,
+} from "@science-agent/schema";
 
 import { useLocale } from "./i18n/index.js";
 
-function editableSettings(settings: WebSettingsDetails): WebSettingsDetails {
-  return settings.searchProvider === "ddgs" && settings.searchFallbackProvider === "ddgs"
-    ? { ...settings, searchFallbackProvider: null }
-    : settings;
-}
+const ENGINE_LABELS: Record<FreeSearchEngine | PaidSearchProvider, string> = {
+  bing: "Bing",
+  brave: "Brave Search API",
+  "brave-html": "Brave (free)",
+  duckduckgo: "DuckDuckGo",
+  exa: "Exa",
+  tavily: "Tavily",
+};
 
 export interface WebSettingsDraft {
   keys: Record<"brave" | "exa" | "jina" | "tavily", string>;
@@ -34,7 +44,7 @@ export function createWebSettingsDraft(settings: WebSettingsDetails): WebSetting
   return {
     keys: { brave: "", exa: "", jina: "", tavily: "" },
     remove: new Set(),
-    values: editableSettings(settings),
+    values: settings,
   };
 }
 
@@ -45,13 +55,12 @@ export function webSettingsRequest(draft: WebSettingsDraft): UpdateWebSettingsRe
     else if (draft.keys[provider].trim()) providerApiKeys[provider] = draft.keys[provider].trim();
   }
   return {
-    ddgsBackend: draft.values.ddgsBackend,
     fetchCacheTtlSeconds: draft.values.fetchCacheTtlSeconds,
     fetchProvider: draft.values.fetchProvider,
+    freeSearchEngines: draft.values.freeSearchEngines,
+    paidSearchProviders: draft.values.paidSearchProviders,
     proxyPolicy: draft.values.proxyPolicy,
     searchCacheTtlSeconds: draft.values.searchCacheTtlSeconds,
-    searchFallbackProvider: draft.values.searchFallbackProvider,
-    searchProvider: draft.values.searchProvider,
     ...(Object.keys(providerApiKeys).length ? { providerApiKeys } : {}),
   };
 }
@@ -71,34 +80,56 @@ export function WebSettingsEditor({
   }
 
   const values = draft.values;
+  function togglePaid(provider: PaidSearchProvider, enabled: boolean): void {
+    const selected = new Set(values.paidSearchProviders);
+    if (enabled) selected.add(provider);
+    else selected.delete(provider);
+    onChange({ ...draft, values: {
+      ...values,
+      paidSearchProviders: PAID_SEARCH_ORDER.filter((entry) => selected.has(entry)),
+    } });
+  }
+
   return <form className="model-editor" onSubmit={submit}>
     <div className="settings-detail-header">
       <span className="eyebrow">Web providers</span>
       <h3>Web providers</h3>
-      <p>Global provider selection for every Session. The free defaults use DDGS with Bing for search and Jina Reader for fetch.</p>
+      <p>Search aggregates several engines for every Session: the paid providers you have keyed are tried first, in the order below, then the free engines you leave enabled. The first engine that returns results wins. Fetch stays a single provider.</p>
     </div>
-    <label><span>Search provider</span><select value={values.searchProvider} onChange={(event) => {
-      const searchProvider = event.target.value as typeof values.searchProvider;
-      onChange({ ...draft, values: {
-        ...values,
-        searchProvider,
-        ...(searchProvider === "ddgs" ? { searchFallbackProvider: null } : {}),
-      } });
-    }}>
-      <option value="ddgs">DDGS (free default)</option>
-      <option value="tavily">Tavily</option>
-      <option value="exa">Exa</option>
-      <option value="brave">Brave Search</option>
-    </select></label>
-    {values.searchProvider !== "ddgs" ? <label><span>Search fallback</span><select value={values.searchFallbackProvider ?? "none"} onChange={(event) => onChange({ ...draft, values: { ...values, searchFallbackProvider: event.target.value === "none" ? null : "ddgs" } })}>
-      <option value="ddgs">DDGS for transient failures</option>
-      <option value="none">No fallback</option>
-    </select></label> : null}
-    {values.searchProvider === "ddgs" || values.searchFallbackProvider === "ddgs" ? <label><span>{values.searchProvider === "ddgs" ? "DDGS backend" : "DDGS fallback backend"}</span><select value={values.ddgsBackend} onChange={(event) => onChange({ ...draft, values: { ...values, ddgsBackend: event.target.value as typeof values.ddgsBackend } })}>
-      <option value="bing">Bing (default)</option>
-      <option value="auto">Auto</option>
-      <option value="duckduckgo">DuckDuckGo</option>
-    </select></label> : null}
+    <fieldset className="settings-array">
+      <legend>Paid search providers (tried first)</legend>
+      <div className="settings-choices">
+        {PAID_SEARCH_ORDER.map((provider) => {
+          const saved = settings.providers.some((item) => item.provider === provider && item.hasApiKey);
+          return <label key={provider}>
+            <input
+              checked={values.paidSearchProviders.includes(provider)}
+              onChange={(event) => togglePaid(provider, event.target.checked)}
+              type="checkbox"
+            />
+            <span>{ENGINE_LABELS[provider]}{saved ? " · key saved" : " · no key"}</span>
+          </label>;
+        })}
+      </div>
+      <span className="settings-hint">Tried in the order shown. A provider without a saved API key is skipped rather than attempted.</span>
+    </fieldset>
+    <fieldset className="settings-array">
+      <legend>Free search engines (tried after paid)</legend>
+      <div className="settings-choices">
+        {FREE_SEARCH_ORDER.map((engine) => <label key={engine}>
+          <input
+            checked={values.freeSearchEngines[engine]}
+            onChange={(event) => onChange({ ...draft, values: {
+              ...values,
+              freeSearchEngines: { ...values.freeSearchEngines, [engine]: event.target.checked },
+            } })}
+            type="checkbox"
+          />
+          <span>{ENGINE_LABELS[engine]}</span>
+        </label>)}
+      </div>
+      <span className="settings-hint">No key required. A switched-off engine is never requested.</span>
+    </fieldset>
     <label><span>Fetch provider</span><select value={values.fetchProvider} onChange={(event) => onChange({ ...draft, values: { ...values, fetchProvider: event.target.value as typeof values.fetchProvider } })}>
       <option value="jina">Jina (default)</option>
       <option value="tavily">Tavily</option>
@@ -130,6 +161,6 @@ export function WebSettingsEditor({
         }}>{draft.remove.has(provider) ? "Saved key will be removed" : "Remove saved key"}</button> : null}
       </div>;
     })}
-    <div className="config-note">Provider keys are encrypted by the backend and never returned to this browser. Web inherits the global proxy by default; choose direct or one registry entry to override it. Use <code>/web-refresh request</code> to bypass both caches for one run and <code>/web-usage</code> to inspect local call statistics.</div>
+    <div className="config-note">Provider keys are encrypted by the backend and never returned to this browser. A disabled engine is never requested. Web inherits the global proxy by default; choose direct or one registry entry to override it. Use <code>/web-refresh request</code> to bypass both caches for one run and <code>/web-usage</code> to inspect local call statistics.</div>
   </form>;
 }

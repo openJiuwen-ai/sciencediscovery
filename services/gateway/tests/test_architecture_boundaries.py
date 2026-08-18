@@ -61,16 +61,19 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                     failures.append(f"content: {relative}")
         self.assertEqual(failures, [], "vendor naming escaped the Gateway boundary:\n" + "\n".join(failures))
 
-    def test_gateway_vendor_dependencies_stay_inside_engine_adapter(self) -> None:
+    def test_gateway_package_has_no_vendor_dependency(self) -> None:
+        """The adapter that once isolated the vendor is gone; nothing may reach it.
+
+        Web providers were the last vendor-backed surface. With them native to
+        Node, this package is only the bundled stdio MCP servers, so a vendor
+        reference anywhere in it would be a regression rather than an isolated
+        seam.
+        """
         failures: list[str] = []
         for path in GATEWAY_PACKAGE.rglob("*.py"):
-            relative_package_path = path.relative_to(GATEWAY_PACKAGE)
-            if relative_package_path.parts[0] == "_engine":
-                continue
-            text = path.read_text(encoding="utf-8")
-            if VENDOR_PYTHON_REFERENCE.search(text):
-                failures.append(relative_package_path.as_posix())
-        self.assertEqual(failures, [], "direct vendor dependencies bypassed _engine:\n" + "\n".join(failures))
+            if VENDOR_PYTHON_REFERENCE.search(path.read_text(encoding="utf-8")):
+                failures.append(path.relative_to(GATEWAY_PACKAGE).as_posix())
+        self.assertEqual(failures, [], "vendor dependency reintroduced:\n" + "\n".join(failures))
 
 
 if __name__ == "__main__":

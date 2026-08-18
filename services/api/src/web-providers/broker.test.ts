@@ -17,10 +17,12 @@ import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
+import type { FreeSearchEngine, PaidSearchProvider } from "@science-agent/schema";
+
 import type { AgentPermissionRuntime } from "../agent-run/permission-runtime.js";
 import type { SessionStore } from "../store.js";
 import { WebBroker, WebInvocationError } from "./broker.js";
-import { WebGatewayError, type WebGatewayClient, type WebGatewayResponse } from "./gateway-client.js";
+import { WebProviderError, type NativeWebProviderClient, type WebProviderResponse } from "./native/index.js";
 
 const context = {
   forceRefresh: false,
@@ -42,9 +44,10 @@ function permission(resources: string[]): AgentPermissionRuntime {
 
 function store(options: {
   fetchProvider?: "jina" | "tavily" | "exa";
+  freeSearchEngines?: Partial<Record<FreeSearchEngine, boolean>>;
   keys?: Record<string, string>;
+  paidSearchProviders?: PaidSearchProvider[];
   resolved?: { mode: "direct" } | { mode: "environment" } | { mode: "url"; url: string };
-  searchProvider?: "ddgs" | "tavily" | "exa" | "brave";
 } = {}): SessionStore {
   return {
     getWebProviderApiKey(provider: string) {
@@ -52,14 +55,18 @@ function store(options: {
     },
     getWebSettings() {
       return {
-        ddgsBackend: "bing",
         fetchCacheTtlSeconds: 86_400,
         fetchProvider: options.fetchProvider ?? "jina",
+        freeSearchEngines: {
+          bing: true,
+          "brave-html": true,
+          duckduckgo: true,
+          ...options.freeSearchEngines,
+        },
+        paidSearchProviders: options.paidSearchProviders ?? ["tavily", "exa", "brave"],
         providers: [],
         proxyPolicy: "none",
         searchCacheTtlSeconds: 3_600,
-        searchFallbackProvider: "ddgs",
-        searchProvider: options.searchProvider ?? "tavily",
       };
     },
     resolveProxy() {
@@ -68,40 +75,55 @@ function store(options: {
   } as unknown as SessionStore;
 }
 
+/** Only DuckDuckGo enabled, no paid keys: one predictable candidate. */
+function singleEngine(overrides: Parameters<typeof store>[0] = {}): SessionStore {
+  return store({
+    freeSearchEngines: { bing: false, "brave-html": false, duckduckgo: true },
+    paidSearchProviders: [],
+    ...overrides,
+  });
+}
+
 function gateway(
   calls: string[],
-  responses: Record<string, WebGatewayResponse>,
-): WebGatewayClient {
+  responses: Record<string, WebProviderResponse>,
+): NativeWebProviderClient {
   return {
     async invoke(input: { provider: string }) {
       calls.push(input.provider);
       return responses[input.provider]!;
     },
-  } as unknown as WebGatewayClient;
+  } as unknown as NativeWebProviderClient;
 }
 
-test("search falls back after a transient failure and caches the result under the provider that produced it", async (contextTest) => {
+test("search tries paid engines first, then free ones, and caches under the engine that answered", async (contextTest) => {
   const root = resolve(process.cwd(), ".tmp", `web-broker-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   contextTest.after(() => rm(root, { force: true, recursive: true }));
   const calls: string[] = [];
   const resources: string[] = [];
+  // Only Tavily is keyed, so Exa and Brave drop out of the paid tier entirely
+  // and DuckDuckGo — first in the free order — takes over when Tavily times out.
   const broker = new WebBroker(root, store({ keys: { tavily: "key" } }), gateway(calls, {
     tavily: { content: "", durationMs: 3, errorCode: "timeout", errorMessage: "timed out", isError: true },
-    ddgs: { content: '{"results":[{"url":"https://example.test"}]}', durationMs: 4, isError: false },
+    duckduckgo: { content: '{"results":[{"url":"https://example.test"}]}', durationMs: 4, isError: false },
   }));
 
   const first = await broker.search("TP53", context, permission(resources));
-  const fallbackConsumer = new WebBroker(root, store({ searchProvider: "ddgs" }), gateway(calls, {
-    ddgs: { content: "unused", durationMs: 1, isError: false },
+  const cacheConsumer = new WebBroker(root, store(), gateway(calls, {
+    duckduckgo: { content: "unused", durationMs: 1, isError: false },
   }));
-  const second = await fallbackConsumer.search("TP53", { ...context, toolCallId: "call-2" }, permission(resources));
+  const second = await cacheConsumer.search("TP53", { ...context, toolCallId: "call-2" }, permission(resources));
 
-  assert.deepEqual(calls, ["tavily", "ddgs"]);
+  assert.deepEqual(calls, ["tavily", "duckduckgo"]);
   assert.deepEqual(resources, ["connector:web:search", "connector:web:search"]);
-  assert.equal((first as { invocation: { attempts: unknown[] } }).invocation.attempts.length, 2);
+  const attempts = (first as { invocation: { attempts: Array<{ provider: string; tier: string }> } }).invocation.attempts;
+  assert.deepEqual(attempts.map((attempt) => [attempt.provider, attempt.tier]), [
+    ["tavily", "paid"],
+    ["duckduckgo", "free"],
+  ]);
   assert.equal((second as { invocation: { cacheHit: boolean } }).invocation.cacheHit, true);
-  assert.deepEqual(fallbackConsumer.usage(), {
+  assert.deepEqual(cacheConsumer.usage(), {
     cacheHits: 1,
     failures: 0,
     fallbacks: 1,
@@ -110,61 +132,76 @@ test("search falls back after a transient failure and caches the result under th
   });
 });
 
-test("missing paid-provider credentials fail without fallback", async (contextTest) => {
+test("unkeyed paid providers and switched-off free engines are never requested", async (contextTest) => {
+  const root = resolve(process.cwd(), ".tmp", `web-broker-skip-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  contextTest.after(() => rm(root, { force: true, recursive: true }));
+  const calls: string[] = [];
+  const broker = new WebBroker(root, store({
+    freeSearchEngines: { bing: false, "brave-html": false, duckduckgo: true },
+  }), gateway(calls, {
+    duckduckgo: { content: '{"results":[{"url":"https://example.test"}]}', durationMs: 2, isError: false },
+  }));
+
+  await broker.search("TP53", context, permission([]));
+  assert.deepEqual(calls, ["duckduckgo"]);
+});
+
+test("search fails as invalid input when every engine is unavailable", async (contextTest) => {
   const root = resolve(process.cwd(), ".tmp", `web-broker-key-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   contextTest.after(() => rm(root, { force: true, recursive: true }));
   const calls: string[] = [];
-  const broker = new WebBroker(root, store(), gateway(calls, {}));
+  const broker = new WebBroker(root, store({
+    freeSearchEngines: { bing: false, "brave-html": false, duckduckgo: false },
+  }), gateway(calls, {}));
 
   await assert.rejects(
     broker.search("TP53", context, permission([])),
     (error: unknown) => error instanceof WebInvocationError
-      && error.invocation.error?.code === "UNAUTHORIZED"
-      && error.invocation.error.message.includes("global Web settings")
+      && error.invocation.error?.code === "INVALID_INPUT"
+      && error.invocation.error.message.includes("Web settings")
       && error.invocation.error.retryable === false,
   );
   assert.deepEqual(calls, []);
   assert.equal(broker.usage().failures, 1);
 });
 
-test("web broker projects a resolved registry URL into the gateway request", async (contextTest) => {
+test("web broker hands the resolved registry proxy to the provider", async (contextTest) => {
   const root = resolve(process.cwd(), ".tmp", `web-broker-proxy-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   contextTest.after(() => rm(root, { force: true, recursive: true }));
-  const requests: Array<{ options: Record<string, unknown> }> = [];
-  const gatewayWithCapture = {
-    async invoke(input: { options: Record<string, unknown> }) {
+  const requests: Array<{ proxy?: Record<string, unknown> }> = [];
+  const providerWithCapture = {
+    async invoke(input: { proxy?: Record<string, unknown> }) {
       requests.push(input);
       return { content: '{"results":[]}', durationMs: 1, isError: false };
     },
-  } as unknown as WebGatewayClient;
-  const broker = new WebBroker(root, store({
+  } as unknown as NativeWebProviderClient;
+  const broker = new WebBroker(root, singleEngine({
     resolved: { mode: "url", url: "http://proxy.example.test:7890" },
-    searchProvider: "ddgs",
-  }), gatewayWithCapture);
+  }), providerWithCapture);
 
   await broker.search("TP53", context, permission([]));
-  assert.equal(requests[0]?.options.proxyMode, "custom");
-  assert.equal(requests[0]?.options.proxy, "http://proxy.example.test:7890");
+  assert.deepEqual(requests[0]?.proxy, { mode: "url", url: "http://proxy.example.test:7890" });
   assert.equal(broker.listInvocations(context.sessionId)[0]?.attempts[0]?.proxyUsed, true);
 });
 
-test("web broker sends the projected environment snapshot instead of ambient contradictions", async (contextTest) => {
+test("environment policy reaches the provider and still drives the audited proxy flag", async (contextTest) => {
   const root = resolve(process.cwd(), ".tmp", `web-broker-environment-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   contextTest.after(() => rm(root, { force: true, recursive: true }));
-  const requests: Array<{ options: Record<string, unknown> }> = [];
-  const gatewayWithCapture = {
-    async invoke(input: { options: Record<string, unknown> }) {
+  const requests: Array<{ proxy?: Record<string, unknown> }> = [];
+  const providerWithCapture = {
+    async invoke(input: { proxy?: Record<string, unknown> }) {
       requests.push(input);
       return { content: '{"results":[]}', durationMs: 1, isError: false };
     },
-  } as unknown as WebGatewayClient;
+  } as unknown as NativeWebProviderClient;
   const broker = new WebBroker(
     root,
-    store({ resolved: { mode: "environment" }, searchProvider: "ddgs" }),
-    gatewayWithCapture,
+    singleEngine({ resolved: { mode: "environment" } }),
+    providerWithCapture,
     {
       HTTP_PROXY: "http://ignored-upper.test:1",
       HTTPS_PROXY: "http://effective-upper.test:2",
@@ -173,10 +210,7 @@ test("web broker sends the projected environment snapshot instead of ambient con
   );
 
   await broker.search("TP53", context, permission([]));
-  assert.deepEqual(requests[0]?.options.proxyEnvironment, {
-    HTTPS_PROXY: "http://effective-upper.test:2",
-  });
-  assert.equal(requests[0]?.options.proxyMode, "environment");
+  assert.deepEqual(requests[0]?.proxy, { mode: "environment" });
   assert.equal(broker.listInvocations(context.sessionId)[0]?.attempts[0]?.proxyUsed, true);
 });
 
@@ -184,8 +218,8 @@ test("semantic no-results failures give the agent a corrective hint", async (con
   const root = resolve(process.cwd(), ".tmp", `web-broker-no-results-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   contextTest.after(() => rm(root, { force: true, recursive: true }));
-  const broker = new WebBroker(root, store({ searchProvider: "ddgs" }), gateway([], {
-    ddgs: {
+  const broker = new WebBroker(root, singleEngine(), gateway([], {
+    duckduckgo: {
       content: "Error: No results found.",
       durationMs: 3,
       errorCode: "semantic-error",
@@ -204,21 +238,21 @@ test("semantic no-results failures give the agent a corrective hint", async (con
   assert.equal(broker.listInvocations(context.sessionId)[0]?.error?.code, "NO_RESULTS");
 });
 
-test("Gateway contract failures remain distinct and non-retryable", async (contextTest) => {
+test("provider contract failures remain distinct and non-retryable", async (contextTest) => {
   const root = resolve(process.cwd(), ".tmp", `web-broker-contract-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   contextTest.after(() => rm(root, { force: true, recursive: true }));
-  const failingGateway = {
+  const failingProvider = {
     async invoke() {
-      throw new WebGatewayError("incompatible Gateway response", "gateway-contract-error", false);
+      throw new WebProviderError("query must be a non-empty string", "invalid-input", false);
     },
-  } as unknown as WebGatewayClient;
-  const broker = new WebBroker(root, store({ searchProvider: "ddgs" }), failingGateway);
+  } as unknown as NativeWebProviderClient;
+  const broker = new WebBroker(root, singleEngine(), failingProvider);
 
   await assert.rejects(
     broker.search("TP53", context, permission([])),
     (error: unknown) => error instanceof WebInvocationError
-      && error.invocation.error?.code === "GATEWAY_CONTRACT_ERROR"
+      && error.invocation.error?.code === "INVALID_INPUT"
       && error.invocation.error.retryable === false,
   );
 });

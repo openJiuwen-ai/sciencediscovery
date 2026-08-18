@@ -94,7 +94,6 @@ ScienceDiscovery help                显示帮助
 | `--host <地址>` | `127.0.0.1` | Web UI / API 绑定地址 |
 | `--port <端口>` | `4310` | Web UI / API 端口 |
 | `--runner-port <端口>` | `4311` | runner 端口（仅回环） |
-| `--gateway-port <端口>` | `4312` | gateway 端口（仅回环） |
 | `--env-file <路径>` | — | 启动前读取 `KEY=VALUE` 配置；已存在的环境变量优先 |
 | `--bwrap <路径>` | `PATH` 中的 `bwrap` | bubblewrap 可执行文件 |
 | `--skip-sandbox-check` | 关 | 缺少 bubblewrap 时仍启动；沙箱执行不可用 |
@@ -141,7 +140,7 @@ ScienceDiscovery help                显示帮助
 
 | 服务 | 地址 | 作用 |
 |---|---|---|
-| `services/gateway` | 127.0.0.1:4312 | agent-loop 侧车（后台） |
+| `services/gateway` | 无端口 | 仅为随包 Python MCP server 提供解释器环境 |
 | `services/runner` | 127.0.0.1:4311 | 无 root 的 bubblewrap 执行器（后台） |
 | `services/api` | 127.0.0.1:4310 | 控制 API + Web UI（前台） |
 

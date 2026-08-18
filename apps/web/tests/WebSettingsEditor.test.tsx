@@ -22,59 +22,67 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest } from "../src/WebSettingsEditor.js";
 
 const settings = {
-  ddgsBackend: "bing",
   fetchCacheTtlSeconds: 86_400,
   fetchProvider: "jina",
+  freeSearchEngines: { bing: true, "brave-html": false, duckduckgo: true },
+  paidSearchProviders: ["tavily", "exa", "brave"],
   providers: [
-    { hasApiKey: false, provider: "ddgs" },
     { hasApiKey: true, provider: "jina" },
-    { hasApiKey: false, provider: "tavily" },
+    { hasApiKey: true, provider: "tavily" },
     { hasApiKey: false, provider: "exa" },
     { hasApiKey: false, provider: "brave" },
   ],
   proxyPolicy: "proxy:corporate",
   searchCacheTtlSeconds: 3_600,
-  searchFallbackProvider: null,
-  searchProvider: "ddgs",
 } satisfies WebSettingsDetails;
 
-test("renders free defaults and write-only web credentials in one global settings form", () => {
+test("renders the search tiers in attempt order with write-only credentials", () => {
   const html = renderToStaticMarkup(createElement(WebSettingsEditor, {
     draft: createWebSettingsDraft(settings),
     onChange: () => undefined,
     settings,
   }));
 
-  assert.match(html, /DDGS backend/);
-  assert.match(html, /Bing \(default\)/);
+  // Search is one aggregated capability now: no provider picker, no DDGS name.
+  assert.doesNotMatch(html, /DDGS|Search provider|Search fallback/);
+  assert.match(html, /Paid search providers \(tried first\)/);
+  assert.match(html, /Free search engines \(tried after paid\)/);
+  assert.match(html, /Tavily · key saved/);
+  assert.match(html, /Exa · no key/);
+  assert.match(html, /A provider without a saved API key is skipped/);
+  assert.match(html, /A switched-off engine is never requested/);
   assert.match(html, /WebSearch proxy selection is managed in Network proxies/);
   assert.doesNotMatch(html, /Web proxy|Inherit global default|Corporate proxy/);
   assert.match(html, /Jina API key/);
   assert.match(html, /Saved · enter a new key to replace it/);
   assert.doesNotMatch(html, /proxy-user|jina-secret/);
-  assert.doesNotMatch(html, /Search fallback/);
 });
 
-test("labels the DDGS backend as fallback-only for a paid primary provider", () => {
+test("free engine switches reflect the stored per-engine state", () => {
   const html = renderToStaticMarkup(createElement(WebSettingsEditor, {
-    draft: createWebSettingsDraft({ ...settings, searchFallbackProvider: "ddgs", searchProvider: "tavily" }),
+    draft: createWebSettingsDraft(settings),
     onChange: () => undefined,
-    settings: { ...settings, searchFallbackProvider: "ddgs", searchProvider: "tavily" },
+    settings,
   }));
 
-  assert.match(html, /Search fallback/);
-  assert.match(html, /DDGS fallback backend/);
+  // brave-html is off in the fixture; the other two are on.
+  const checkboxes = [...html.matchAll(/<input type="checkbox"([^>]*)\/?>/g)].map((match) => match[1] ?? "");
+  assert.equal(checkboxes.length, 6);
+  assert.deepEqual(
+    checkboxes.slice(3).map((attributes) => attributes.includes("checked")),
+    [true, true, false],
+  );
 });
 
-test("hides the DDGS backend when DDGS is absent from the search route", () => {
-  const html = renderToStaticMarkup(createElement(WebSettingsEditor, {
-    draft: createWebSettingsDraft({ ...settings, searchFallbackProvider: null, searchProvider: "exa" }),
-    onChange: () => undefined,
-    settings: { ...settings, searchFallbackProvider: null, searchProvider: "exa" },
-  }));
+test("the update request carries both tiers so a cleared selection is not silently kept", () => {
+  const draft = createWebSettingsDraft(settings);
+  const request = webSettingsRequest({
+    ...draft,
+    values: { ...draft.values, freeSearchEngines: { bing: false, "brave-html": false, duckduckgo: true }, paidSearchProviders: [] },
+  });
 
-  assert.match(html, /Search fallback/);
-  assert.doesNotMatch(html, /DDGS (?:fallback )?backend/);
+  assert.deepEqual(request.paidSearchProviders, []);
+  assert.deepEqual(request.freeSearchEngines, { bing: false, "brave-html": false, duckduckgo: true });
 });
 
 test("builds one deferred update request from provider and credential drafts", () => {

@@ -1363,7 +1363,7 @@ export class SessionStore {
     );
     return {
       ...structuredClone(this.catalog.webSettings),
-      providers: (["ddgs", "jina", "tavily", "exa", "brave"] as const).map((provider) => ({
+      providers: (["jina", "tavily", "exa", "brave"] as const).map((provider) => ({
         hasApiKey: configured.has(provider),
         provider,
       })),

@@ -15,33 +15,16 @@
 [project]
 name = "science-agent-gateway"
 version = "0.0.0"
-description = "ScienceDiscovery orchestration sidecar with bundled engine dependencies isolated behind a private adapter."
+description = "ScienceDiscovery bundled stdio MCP servers (biomed, UniProt)."
 requires-python = ">=3.12"
 dependencies = [
-    # Agent loop, middleware, model clients, and MCP client are native code on
-    # LangChain public APIs; these are direct dependencies of the agent path.
-    "langchain>=1.2.15",
-    "langchain-openai>=1.2.1",
-    "langchain-anthropic>=1.4.1",
-    "langchain-mcp-adapters>=0.2.2",
-    "langgraph>=1.1.9",
+    # This package is now only the bundled stdio MCP servers (biomed, UniProt).
+    # The agent loop, model clients, MCP client, and web providers all run
+    # natively in the Node control plane, so nothing here needs a web
+    # framework, an agent framework, or the vendor harness.
     "mcp>=1.0.0",
-    # deerflow-harness remains ONLY for the web-provider seam (_engine/web.py,
-    # community search/fetch tools). The agent/model/MCP paths must not import
-    # it; it is removed entirely once the web providers are replaced.
-    "deerflow-harness",
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.34.0",
-    "sse-starlette>=2.1.0",
     "httpx>=0.28.0",
-    "pydantic>=2.12.5",
 ]
-
-# The harness lives inside the pinned deer-flow submodule. We consume it as an
-# editable path dependency so upgrading = bumping the submodule SHA, never a
-# source copy. See third_party/deer-flow and the strategy note in .local/.
-[tool.uv.sources]
-deerflow-harness = { path = "../../third_party/deer-flow/backend/packages/harness", editable = true }
 
 [build-system]
 requires = ["hatchling"]

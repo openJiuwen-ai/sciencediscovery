@@ -20,10 +20,10 @@
 
 | 工具 | 参数 | 行为与边界 |
 |---|---|---|
-| `web_search` | `query`（1-2000 字符） | 通过全局选择的 DeerFlow Provider 搜索；返回片段与 URL，不代表已读全文；瞬时错误可按配置降级到 DDGS |
+| `web_search` | `query`（1-2000 字符） | 自动聚合搜索：先试已配置 key 的付费 Provider，再试开启的免费引擎，取第一个出结果的；返回片段与 URL，不代表已读全文 |
 | `web_fetch` | `url`（完整 http(s) URL） | 抽取指定公开网页；拒绝凭证 URL、内网/环回地址；不做跨 Provider 降级 |
 
-两者均由 Node 发起独立权限检查，写 CAS 快照和 `WebInvocation` 审计，再由 Gateway 调用 DeerFlow 社区工具。详见 [web-tools.md](web-tools.md)。
+两者均由 Node 发起独立权限检查，写 CAS 快照和 `WebInvocation` 审计，厂商调用也在 Node 进程内完成。详见 [web-tools.md](web-tools.md)。
 
 ## 编排工具
 
@@ -79,7 +79,7 @@
 | `read_skill` | 本次运行至少选择一个技能 | `skillId`（枚举限定为本次运行选中的技能）；按需读取冻结 revision 的完整 `SKILL.md` instructions，并列出可选 supporting resources |
 | `read_skill_resource` | 选中的技能中至少一个带文本资源 | `skillId`（枚举限定为本次运行选中的技能）+ `path`；读取 `read_skill` 后按需加载 supporting resource，返回有界 UTF-8 内容，**从不**执行或安装 |
 
-技能加载流程见 [skill-progressive-disclosure.md](../explanation/skill-progressive-disclosure.md)：`describe_skill` 复用 DeerFlow 目录检索，`read_skill` 和 `read_skill_resource` 读取本次运行的冻结快照。
+技能加载流程见 [skill-progressive-disclosure.md](../explanation/skill-progressive-disclosure.md)：`describe_skill` 检索本次运行的技能目录，`read_skill` 和 `read_skill_resource` 读取本次运行的冻结快照。
 
 `run_npu_job` 不是通用宿主 shell。它只把 Agent 请求转成 Runner 内 Host NPU Broker 的作业操作，由 Broker 按 JSON 白名单启动固定 entrypoint，并按当前 Session 校验 job 的 status / logs / result / cancel。默认 NPU workload 的 Python 由 Runner 根据 `environment_revision_id` 在 `data/scientific-envs/` 中解析，Agent 不能提交任意解释器路径。技能应先用 `environment.list` 和指定 revision 的 `run_python` 验证依赖；没有满足条件的环境时，通过 `environment.create` / `environment.install` 创建新 revision，再把返回的 revision ID 交给 `run_npu_job`。内置抗体 workload 使用 Protenix 路径 `antibody.protenix.v1`；其他模型后端需要显式自定义白名单或后续扩展。
 

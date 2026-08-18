@@ -130,7 +130,7 @@ import { McpNodeClient } from "../mcp/node-client.js";
 import { McpSourceCatalog } from "../mcp/source-catalog.js";
 import { createMcpWorkspaceTools } from "../mcp/workspace-tools.js";
 import { WebBroker } from "../web-providers/broker.js";
-import { WebGatewayClient } from "../web-providers/gateway-client.js";
+import { NativeWebProviderClient } from "../web-providers/native/index.js";
 import { createWebWorkspaceTools } from "../web-providers/workspace-tools.js";
 import {
   createDialogueSkillDraft,
@@ -217,7 +217,6 @@ export interface ApiServerDependencies {
   connectorFetch?: typeof fetch;
   /** Test seam: drive MCP through a stub transport instead of live servers. */
   mcpTransport?: McpTransportClient;
-  webGatewayFetch?: typeof fetch;
 }
 
 export function createApiServer(config = loadServerConfig(), dependencies: ApiServerDependencies = {}): Server {
@@ -284,12 +283,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     return map;
   };
   const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap);
-  const webGateway = new WebGatewayClient(
-    config.gatewayUrl,
-    config.gatewayInternalToken,
-    dependencies.webGatewayFetch ?? fetch,
-  );
-  const webBroker = new WebBroker(config.dataDir, store, webGateway);
+  const webBroker = new WebBroker(config.dataDir, store, new NativeWebProviderClient());
   const mcpBroker = new McpGovernanceBroker(
     config.dataDir,
     store,
