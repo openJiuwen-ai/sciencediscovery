@@ -1,6 +1,6 @@
 # Sandbox Execution: `services/runner`
 
-Runner is a rootless executor. `run_python`, `run_r`, and `run_shell` run in a networkless Bubblewrap/seccomp sandbox that sees only the Session workspace. Runner also manages micromamba environments and persistent kernels, listens only on `127.0.0.1:4311`, and accepts API as its sole client.
+Runner is a rootless executor. `run_python`, `run_r`, and `run_shell` run in a Bubblewrap/seccomp sandbox that sees only the Session workspace and, by default, has no network. Sandbox network access is a configurable policy that defaults to `none`; see §3.1. Runner also manages micromamba environments and persistent kernels, listens only on `127.0.0.1:4311`, and accepts API as its sole client.
 
 ## 1. Source structure
 
@@ -14,7 +14,9 @@ Runner is a rootless executor. `run_python`, `run_r`, and `run_shell` run in a n
 | `environment-store.ts` | micromamba catalog and immutable revisions |
 | `npu-broker.ts` | Optional Host NPU Broker that starts allowlisted host NPU workloads under Runner control |
 | `workloads/` | Broker default workload allowlist, Ascend smoke probe, and controlled adapters |
-| `seccomp.ts` | x86_64/aarch64 BPF generated under runner runtime |
+| `seccomp.ts` | x86_64/aarch64 BPF generated under runner runtime; baseline and network profiles |
+| `egress-gateway.ts` | Host-side exit for sandbox network access: a UDS HTTP service reused per policy revision, allowed domains and address classification |
+| `egress-bridge.ts` | In-sandbox TCP→UDS bridge script, host interpreter probe, and bwrap bind arguments |
 | `request-auth.ts` | HMAC-SHA256 token/timestamp/body hash with 30-second freshness |
 
 ## 2. HTTP surface
@@ -41,9 +43,40 @@ bind Session workspace read-write at /workspace
 --seccomp 3
 ```
 
-Network policy is always none. Disconnect or Stop run propagates Abort and `SIGKILL`.
+Disconnect or Stop run propagates Abort and `SIGKILL`.
 
-### 3.1 Ascend NPU Broker (optional host execution)
+### 3.1 Sandbox network access
+
+Sandbox network access is a system setting. API snapshots it into every Permission Epoch (`networkPolicy` plus `networkAccess`, including a content-derived `revision`) and Runner shapes the sandbox from that snapshot. It is unrelated to the Network proxies settings, which govern the API/Gateway/MCP's own outbound calls and never affect sandbox code.
+
+| Mode | Sandbox |
+|---|---|
+| `none` (default) | Exactly the historical behavior: `--unshare-all`, no `--share-net`, baseline seccomp denying every socket syscall, no channel mounted, no outbound environment injected |
+| `domain-allowlist` | **Still** `--unshare-all` and **still no** `--share-net`. The only exit is a bind-mounted Unix domain socket |
+
+The `domain-allowlist` data path:
+
+```text
+sandbox process (own netns, no interface)
+  └─ HTTP_PROXY=http://127.0.0.1:18118
+       └─ egress bridge (inside the sandbox, on the sandbox's own loopback)
+            └─ /run/science-agent/egress.sock (bind mount)
+                 └─ egress gateway (in the runner process, runner's own user)
+                      └─ allowed domains only → internet
+```
+
+Properties:
+
+- **No root, no CAP_NET_ADMIN, no socat dependency.** The bridge is a product-owned stdlib Python script; its interpreter and standard library are bind-mounted read-only under `/opt/science-agent-net/`. When the host has no usable python3 the mode fails closed and `/health.sandboxNetwork` reports why.
+- The bridge listens before it forks and runs the real workload as its child with inherited stdio, so the persistent kernel and shell line protocols are unaffected; the child's exit status is passed through.
+- seccomp switches to the network profile: it allows only the socket family (`socket/connect/bind/listen/accept/accept4/socketpair`) and keeps denying ptrace, mount, setns, bpf, keyring, io_uring and the rest. Raw and packet sockets need `CAP_NET_RAW`, which `--cap-drop ALL` already removes.
+- Entries are `example.org` or `*.example.org` (label-boundary match, never the apex), optionally with `:443` to pin a port. IP literals are rejected both as entries and as request targets.
+- The gateway resolves the name, classifies the addresses, rejects loopback, link-local and private space by default, and connects to the approved address so DNS cannot change between check and connect. An internal mirror can be enabled explicitly.
+- Boundary: **TLS is not intercepted**. Filtering is by CONNECT / absolute-URI host name, so a broad entry remains a broad grant.
+- Changing the policy rotates the Permission Epoch and reclaims that Session's persistent kernels and shell, because the epoch id is part of the reuse key.
+- Scientific environment install networking (conda channels, pip index, offline cache) is independent of this policy.
+
+### 3.2 Ascend NPU Broker (optional host execution)
 
 Ascend NPU access is not modeled as ordinary device passthrough into bwrap. On the verified 910B3 deployment, host MindSpore can use the NPU, but the same probe inside the bwrap namespace fails with `Container ID verify failed (session ct_id=0; device ct_id=...)`. That points to Ascend runtime/container identity checks, not only Unix permissions on `/dev/davinci*`.
 

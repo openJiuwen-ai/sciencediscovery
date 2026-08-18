@@ -24,6 +24,21 @@ const SECCOMP_RET_ALLOW = 0x7fff0000;
 const SECCOMP_RET_ERRNO_EPERM = 0x00050001;
 const SECCOMP_RET_KILL_PROCESS = 0x80000000;
 export const SECCOMP_BASELINE_VERSION = "multiarch-v1-profile-aware";
+/** Variant used when the Permission Epoch grants `domain-allowlist` network access. */
+export const SECCOMP_NETWORK_VERSION = "multiarch-v1-egress-gateway";
+
+/**
+ * Socket-family syscalls. The baseline denies them outright (`networkPolicy`
+ * `none` is enforced by the kernel, not only by the empty network namespace);
+ * the network variant allows them so the egress bridge and ordinary HTTP
+ * clients can open sockets. Raw and packet sockets stay unreachable without
+ * per-argument filtering because the sandbox runs with `--cap-drop ALL`, and
+ * `AF_PACKET`/raw sockets require `CAP_NET_RAW`.
+ */
+const NETWORK_SYSCALLS = {
+  arm64: [198, 199, 200, 201, 202, 203, 242],
+  x64: [41, 42, 43, 49, 50, 53, 288],
+} as const;
 
 // These calls are not needed by the Python science slice and expand the kernel attack surface.
 const DENIED_X86_64_SYSCALLS = [
@@ -74,7 +89,20 @@ function seccompProfile(architecture: string) {
   return profile;
 }
 
-export function baselineSeccompFilter(architecture: string = process.arch): Buffer {
+/** `network` allows the socket-family syscalls the baseline denies. */
+export type SeccompVariant = "baseline" | "network";
+
+function deniedSyscalls(architecture: string, variant: SeccompVariant): readonly number[] {
+  const profile = seccompProfile(architecture);
+  if (variant === "baseline") return profile.deniedSyscalls;
+  const allowed = new Set<number>(NETWORK_SYSCALLS[architecture as SupportedSeccompArchitecture]);
+  return profile.deniedSyscalls.filter((syscall) => !allowed.has(syscall));
+}
+
+export function baselineSeccompFilter(
+  architecture: string = process.arch,
+  variant: SeccompVariant = "baseline",
+): Buffer {
   const profile = seccompProfile(architecture);
   const instructions = [
     instruction(BPF_LD_W_ABS, 0, 0, 4),
@@ -82,7 +110,7 @@ export function baselineSeccompFilter(architecture: string = process.arch): Buff
     instruction(BPF_RET_K, 0, 0, SECCOMP_RET_KILL_PROCESS),
     instruction(BPF_LD_W_ABS, 0, 0, 0),
   ];
-  for (const syscall of profile.deniedSyscalls) {
+  for (const syscall of deniedSyscalls(architecture, variant)) {
     instructions.push(
       instruction(BPF_JMP_JEQ_K, 0, 1, syscall),
       instruction(BPF_RET_K, 0, 0, SECCOMP_RET_ERRNO_EPERM),
@@ -92,14 +120,25 @@ export function baselineSeccompFilter(architecture: string = process.arch): Buff
   return Buffer.concat(instructions);
 }
 
-export async function ensureBaselineSeccompFilter(
+export async function ensureSeccompFilter(
   dataDir: string,
+  variant: SeccompVariant = "baseline",
   architecture: string = process.arch,
 ): Promise<string> {
   const profile = seccompProfile(architecture);
   const runtimeDirectory = resolve(dataDir, "runner-runtime");
-  const path = resolve(runtimeDirectory, profile.filename);
+  const path = resolve(
+    runtimeDirectory,
+    variant === "baseline" ? profile.filename : profile.filename.replace("seccomp-", "seccomp-network-"),
+  );
   await mkdir(runtimeDirectory, { recursive: true });
-  await writeFile(path, baselineSeccompFilter(architecture), { mode: 0o600 });
+  await writeFile(path, baselineSeccompFilter(architecture, variant), { mode: 0o600 });
   return path;
+}
+
+export function ensureBaselineSeccompFilter(
+  dataDir: string,
+  architecture: string = process.arch,
+): Promise<string> {
+  return ensureSeccompFilter(dataDir, "baseline", architecture);
 }

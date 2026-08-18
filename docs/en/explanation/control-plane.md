@@ -29,7 +29,7 @@ Representative groups, not an exhaustive route list:
 | Session plans/subagents/remote-jobs/papers/evidence | Run-associated records |
 | Session MCP and `/api/mcp/sources…` | Invocation, Artifact jobs, Source catalog/status |
 | `/api/{models,specialists,skills,remote-hosts,environments}` | Global resources |
-| Settings/timeouts/runtime status | Global controls and live state |
+| `/api/settings`, `/api/timeout-settings`, `/api/quota-settings`, `/api/sandbox-network-settings`, `/api/runtime-status` | Global controls, timeouts, quotas, sandbox network access, and live state |
 
 SSE uses fetch-stream `data: <json>\n\n` frames; see [Web frontend](../reference/web-frontend.md).
 

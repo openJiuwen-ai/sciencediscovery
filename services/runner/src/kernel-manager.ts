@@ -17,14 +17,17 @@ import { randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
-import type {
-  KernelSession,
-  PythonExecutionRequest,
-  PythonExecutionResult,
-  ScientificLanguage,
+import {
+  epochSandboxNetworkAccess,
+  type KernelSession,
+  type PythonExecutionRequest,
+  type PythonExecutionResult,
+  type SandboxNetworkAccess,
+  type ScientificLanguage,
 } from "@science-agent/schema";
 
 import { EnvironmentStore } from "./environment-store.js";
+import type { EgressGatewayRegistry } from "./egress-gateway.js";
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_WORKSPACE_BYTES,
@@ -36,8 +39,10 @@ import {
   executionTimeoutMs,
   hostInterpreterMaskArguments,
   hostRuntimeSupportArguments,
+  prepareSandboxEgress,
   resolveProfileChdir,
   resolveQuotaBytes,
+  seccompVariantFor,
   truncateToBudget,
   validatedWorkspace,
   workspaceBindArguments,
@@ -47,7 +52,7 @@ import {
   workspaceUsageBytes,
   type SandboxLaunch,
 } from "./executor.js";
-import { ensureBaselineSeccompFilter } from "./seccomp.js";
+import { ensureSeccompFilter } from "./seccomp.js";
 import { agentExecutionKey, KeyedTaskQueue } from "./agent-execution.js";
 import type { SessionEnvProfile } from "./session-env-profile.js";
 const PYTHON_KERNEL_WORKER = String.raw`
@@ -283,6 +288,8 @@ export class KernelManager {
       agentId: string,
       permissionEpochId: string,
     ) => SessionEnvProfile | undefined,
+    /** Egress gateways for Permission Epochs that grant sandbox network access. */
+    private readonly gateways?: EgressGatewayRegistry,
   ) {
     this.idleTimeoutMs = config.idleTimeoutMs ?? 0;
   }
@@ -326,7 +333,7 @@ export class KernelManager {
     if (request.permissionEpoch.executeGrantScope === "once") {
       throw new Error("Persistent kernels are not allowed for once-scoped execute grants");
     }
-    if (request.permissionEpoch.networkPolicy !== "none") throw new Error("Persistent kernels require networkPolicy=none");
+    const networkAccess = epochSandboxNetworkAccess(request.permissionEpoch);
     if (request.permissionEpoch.mounts.length !== 1
       || request.permissionEpoch.mounts[0]?.source !== "workspace"
       || request.permissionEpoch.mounts[0]?.mode !== "read-write") {
@@ -376,6 +383,7 @@ export class KernelManager {
         language,
         workspaceRoot,
         readOnlyWorkspaceRoot,
+        networkAccess,
       );
       this.kernels.set(key, kernel);
     } else if (kernel.workspaceRoot !== workspaceRoot
@@ -431,7 +439,8 @@ export class KernelManager {
         ? { memoryStateLost: this.takeLostState(lostStateKey) }
         : {}),
       modifiedFiles,
-      networkPolicy: "none",
+      networkAccessRevision: networkAccess.revision,
+      networkPolicy: networkAccess.mode,
       runnerVersion: RUNNER_VERSION,
       sandbox: "bubblewrap",
       startedAt,
@@ -504,10 +513,11 @@ export class KernelManager {
     language: ScientificLanguage,
     workspaceRoot: string,
     readOnlyWorkspaceRoot: string | undefined,
+    networkAccess: SandboxNetworkAccess,
   ): Promise<ManagedKernel> {
     const id = `kernel-${randomUUID()}`;
     const filter = await open(
-      await ensureBaselineSeccompFilter(this.config.dataDir),
+      await ensureSeccompFilter(this.config.dataDir, seccompVariantFor(networkAccess)),
       "r",
     );
     const interpreter = `/opt/science-env/bin/${language === "python" ? "python" : "R"}`;
@@ -523,6 +533,7 @@ export class KernelManager {
     const launch = buildSandboxLaunch({
       chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
       ...await sandboxLaunchProfile(this.config.bwrapPath),
+      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways),
       environmentBinds: environmentPrefixBindArguments(prefixPath),
       envProfile,
       hostInterpreterMasks,
@@ -533,6 +544,7 @@ export class KernelManager {
     });
     const bwrapArguments = [
       ...launch.args,
+      ...launch.commandPrefix,
       interpreter,
       ...(language === "python" ? ["-I", "-u", "-c", worker] : ["--vanilla", "--slave", "-e", worker]),
     ];

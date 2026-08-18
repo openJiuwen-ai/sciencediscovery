@@ -80,6 +80,7 @@ import type {
   ToolTrace,
   RotatePermissionEpochRequest,
   RunnerHealth,
+  SandboxNetworkSettings,
   SystemQuotaSettings,
   SystemTimeoutSettings,
   TimeoutKind,
@@ -109,6 +110,7 @@ import {
   uploadWorkspaceParts,
 } from "../workspace-upload.js";
 import { RunnerClient } from "../runner-client.js";
+import { sandboxNetworkRevision } from "../store/sandbox-network.js";
 import { ProvenanceRecorder } from "../provenance.js";
 import {
   ArtifactDashboardError,
@@ -394,9 +396,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           maxRequestBytes: quotas.uploadMaxRequestBytes,
           maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
         };
+        const sandboxNetworkSettings = store.getSandboxNetworkSettings();
         sendJson(response, 200, {
           memoryGraph,
           milestone: "M4",
+          sandboxNetwork: {
+            ...sandboxNetworkSettings,
+            revision: sandboxNetworkRevision(sandboxNetworkSettings),
+            runner: runner?.sandboxNetwork,
+          },
           runner: runner ?? { status: "unavailable" },
           service: "science-agent-api",
           status: runner ? "ok" : "degraded",
@@ -593,6 +601,30 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (url.pathname === "/api/quota-settings" && request.method === "PUT") {
         sendJson(response, 200, await store.replaceQuotaSettings(await readJson<SystemQuotaSettings>(request)));
+        return;
+      }
+      if (url.pathname === "/api/sandbox-network-settings" && request.method === "GET") {
+        sendJson(response, 200, store.getSandboxNetworkSettings());
+        return;
+      }
+      if (url.pathname === "/api/sandbox-network-settings" && request.method === "PUT") {
+        const saved = await store.replaceSandboxNetworkSettings(await readJson<SandboxNetworkSettings>(request));
+        // The policy is frozen into each Permission Epoch, so sessions that
+        // rotated must drop the persistent kernels and shells started under
+        // the previous policy. Best-effort: the runner's reuse key already
+        // contains the epoch id, so a failed teardown cannot leak the old
+        // policy into a later execution.
+        for (const sessionId of saved.rotatedSessionIds) {
+          await runnerClient
+            .teardownKernels(sessionId, "Sandbox network access policy changed; persistent memory was lost")
+            .catch((error: unknown) => {
+              runLog.warn("sandbox_network_teardown_failed", {
+                errorMessage: shortErrorMessage(error),
+                sessionId,
+              });
+            });
+        }
+        sendJson(response, 200, saved.settings);
         return;
       }
       if (url.pathname === "/api/environment-source-settings" && request.method === "GET") {

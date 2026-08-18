@@ -30,7 +30,7 @@ CAS 是溯源体系的地基：所有需要事后核验的内容都以「SHA-256
 
 ## 2. 执行记录与产物关联
 
-每次沙箱运行落一条 `ExecutionRun`（`data/execution-runs/<sessionId>.json`）：工具名与语言、code/stdout/stderr 的 CAS 引用、exitCode、起止时间、`environmentRevisionId`、`kernelMode`/`kernelId`、`permissionEpochId`、`networkPolicy: "none"`、`sandbox: "bubblewrap"`、`createdFiles`/`modifiedFiles`、状态（succeeded/failed/cancelled），以及执行环境溯源两字段：
+每次沙箱运行落一条 `ExecutionRun`（`data/execution-runs/<sessionId>.json`）：工具名与语言、code/stdout/stderr 的 CAS 引用、exitCode、起止时间、`environmentRevisionId`、`kernelMode`/`kernelId`、`permissionEpochId`、`networkPolicy`（生效的沙箱网络模式，默认 `"none"`）与 `networkAccessRevision`（有允许列表时的策略 revision）、`sandbox: "bubblewrap"`、`createdFiles`/`modifiedFiles`、状态（succeeded/failed/cancelled），以及执行环境溯源两字段：
 
 - `workingDirectory`：Runner 回报的沙箱内实际工作目录（如 `/workspace/subdir`；持久 shell 为求值结束后的 cwd）。历史记录为占位 `"workspace"`；执行前失败的记录为 `"unavailable"`。
 - `envSnapshot`：本次执行有效环境变量的 CAS 引用（内容为按键排序的规范 JSON）——相同 env 自动去重，不同 env 哈希可区分，`cas.read(hash)` 可取回全量键值。Runner 未回报（执行前失败）时为 `null`；历史记录缺省该字段。

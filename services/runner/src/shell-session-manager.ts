@@ -19,11 +19,14 @@ import { createInterface } from "node:readline";
 
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+  epochSandboxNetworkAccess,
   type KernelSession,
+  type SandboxNetworkAccess,
   type ShellExecutionRequest,
   type ShellExecutionResult,
 } from "@science-agent/schema";
 
+import type { EgressGatewayRegistry } from "./egress-gateway.js";
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_WORKSPACE_BYTES,
@@ -33,7 +36,9 @@ import {
   sandboxLaunchProfile,
   executionTimeoutMs,
   hostRuntimeSupportArguments,
+  prepareSandboxEgress,
   resolveQuotaBytes,
+  seccompVariantFor,
   truncateToBudget,
   validatedWorkspace,
   workspaceBindArguments,
@@ -42,7 +47,7 @@ import {
   workspaceSnapshot,
   workspaceUsageBytes,
 } from "./executor.js";
-import { ensureBaselineSeccompFilter } from "./seccomp.js";
+import { ensureSeccompFilter } from "./seccomp.js";
 import { agentExecutionKey, KeyedTaskQueue } from "./agent-execution.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 
@@ -305,6 +310,8 @@ export class ShellSessionManager {
   constructor(
     private readonly config: ShellSessionManagerConfig,
     private readonly profiles: SessionEnvProfileStore,
+    /** Egress gateways for Permission Epochs that grant sandbox network access. */
+    private readonly gateways?: EgressGatewayRegistry,
   ) {
     this.idleTimeoutMs = config.idleTimeoutMs ?? 0;
   }
@@ -349,9 +356,7 @@ export class ShellSessionManager {
     if (request.permissionEpoch.executeGrantScope === "once") {
       throw new Error("Persistent shell sessions are not allowed for once-scoped execute grants");
     }
-    if (request.permissionEpoch.networkPolicy !== "none") {
-      throw new Error("Persistent shell sessions require networkPolicy=none");
-    }
+    const networkAccess = epochSandboxNetworkAccess(request.permissionEpoch);
     if (request.permissionEpoch.mounts.length !== 1
       || request.permissionEpoch.mounts[0]?.source !== "workspace"
       || request.permissionEpoch.mounts[0]?.mode !== "read-write") {
@@ -391,7 +396,7 @@ export class ShellSessionManager {
       shellSession = undefined;
     }
     if (!shellSession) {
-      shellSession = await this.startSession(request, key, workspaceRoot, readOnlyWorkspaceRoot);
+      shellSession = await this.startSession(request, key, workspaceRoot, readOnlyWorkspaceRoot, networkAccess);
       this.sessions.set(key, shellSession);
     } else if (shellSession.workspaceRoot !== workspaceRoot
       || shellSession.readOnlyWorkspaceRoot !== readOnlyWorkspaceRoot) {
@@ -452,7 +457,8 @@ export class ShellSessionManager {
       language: "shell",
       ...(memoryStateLost !== undefined ? { memoryStateLost } : {}),
       modifiedFiles,
-      networkPolicy: "none",
+      networkAccessRevision: networkAccess.revision,
+      networkPolicy: networkAccess.mode,
       runnerVersion: RUNNER_VERSION,
       sandbox: "bubblewrap",
       startedAt,
@@ -499,15 +505,20 @@ export class ShellSessionManager {
     key: string,
     workspaceRoot: string,
     readOnlyWorkspaceRoot: string | undefined,
+    networkAccess: SandboxNetworkAccess,
   ): Promise<ManagedShellSession> {
     const id = `shell-${randomUUID()}`;
-    const filter = await open(await ensureBaselineSeccompFilter(this.config.dataDir), "r");
+    const filter = await open(
+      await ensureSeccompFilter(this.config.dataDir, seccompVariantFor(networkAccess)),
+      "r",
+    );
     const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
     // A fresh session always starts from the clearenv baseline: the profile is
     // produced by this shell, not consumed by it.
     const launch = buildSandboxLaunch({
       chdir: workspaceBinds.chdir,
       ...await sandboxLaunchProfile(this.config.bwrapPath),
+      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways),
       environmentBinds: [],
       hostInterpreterMasks: [],
       hostRuntimeSupport: await hostRuntimeSupportArguments(),
@@ -515,7 +526,11 @@ export class ShellSessionManager {
       pathEnv: "/usr/bin",
       workspaceBindArgs: workspaceBinds.args,
     });
-    const bwrapArguments = [...launch.args, "/usr/bin/bash", "--noprofile", "--norc", "-c", SHELL_SESSION_WORKER];
+    const bwrapArguments = [
+      ...launch.args,
+      ...launch.commandPrefix,
+      "/usr/bin/bash", "--noprofile", "--norc", "-c", SHELL_SESSION_WORKER,
+    ];
     let child;
     try {
       child = spawn(this.config.bwrapPath, bwrapArguments, { stdio: ["pipe", "pipe", "pipe", filter.fd] });

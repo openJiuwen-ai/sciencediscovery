@@ -23,6 +23,7 @@ export * from "./artifact-provenance.js";
 export * from "./memory-graph.js";
 export * from "./session.js";
 export * from "./permission.js";
+export * from "./sandbox-network.js";
 export * from "./environment.js";
 export * from "./model-usage.js";
 export * from "./skills.js";

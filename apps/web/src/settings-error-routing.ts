@@ -19,6 +19,7 @@ const SETTINGS_OPERATION_ROUTES = {
   revokePermission: { propagate: false, scope: "system" },
   saveGlobalSettings: { propagate: true, scope: "system" },
   saveQuotaSettings: { propagate: true, scope: "system" },
+  saveSandboxNetworkSettings: { propagate: true, scope: "system" },
   saveScopedSettings: { propagate: false, scope: "scoped" },
   saveTimeoutSettings: { propagate: true, scope: "system" },
 } as const;

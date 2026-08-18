@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { ApprovalMode } from "./plan.js";
+import { NO_SANDBOX_NETWORK_ACCESS, type SandboxNetworkAccess, type SandboxNetworkMode } from "./sandbox-network.js";
 
 export interface PermissionMount {
   mode: "read-only" | "read-write";
@@ -26,10 +27,27 @@ export interface PermissionEpoch {
   id: string;
   mounts: PermissionMount[];
   memoryLostReason?: string;
-  networkPolicy: "none";
+  /**
+   * Effective sandbox network mode for this epoch. Kept as the mode alone so
+   * epochs and provenance rows recorded before sandbox network access existed
+   * (always `"none"`) stay valid; the full policy lives in `networkAccess`.
+   */
+  networkPolicy: SandboxNetworkMode;
+  /**
+   * Immutable snapshot of the sandbox network access policy this epoch grants.
+   * Absent on epochs created before the policy existed — read it through
+   * `epochSandboxNetworkAccess` so those degrade to "no network".
+   */
+  networkAccess?: SandboxNetworkAccess;
   reason: string;
   secretRefs: string[];
   sessionId: string;
+}
+
+/** The epoch's policy snapshot, falling back to "no network" for old epochs. */
+export function epochSandboxNetworkAccess(epoch: Pick<PermissionEpoch, "networkAccess" | "networkPolicy">): SandboxNetworkAccess {
+  if (epoch.networkAccess && epoch.networkAccess.mode === epoch.networkPolicy) return epoch.networkAccess;
+  return NO_SANDBOX_NETWORK_ACCESS;
 }
 
 export type PermissionAction = "artifact_download" | "code" | "connector" | "directory" | "host" | "remote_job";

@@ -67,6 +67,7 @@ import type {
   Subagent,
   SkillDescriptor,
   Specialist,
+  SandboxNetworkSettings,
   SystemQuotaSettings,
   SystemTimeoutSettings,
   UpdateSessionRequest,
@@ -146,7 +147,12 @@ import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
 import { SkillManager } from "./SkillManager.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
-import { QuotaSettingsEditor, RuntimeStatusPanel, TimeoutSettingsEditor } from "./RuntimeControls.js";
+import {
+  QuotaSettingsEditor,
+  RuntimeStatusPanel,
+  SandboxNetworkSettingsEditor,
+  TimeoutSettingsEditor,
+} from "./RuntimeControls.js";
 import { RemoteHostManager, RemoteJobsPanel } from "./RemoteCompute.js";
 import { RunUsageInline, UsagePage } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
@@ -506,6 +512,7 @@ export type SystemSettingsGroup =
   | "proxies"
   | "quotas"
   | "remote"
+  | "sandbox-network"
   | "runtime"
   | "skills"
   | "specialists"
@@ -519,6 +526,7 @@ const SYSTEM_SETTINGS_GROUPS: Array<{
   { id: "language" },
   { id: "timeouts" },
   { id: "quotas" },
+  { id: "sandbox-network" },
   { id: "runtime" },
   { id: "models" },
   { id: "proxies" },
@@ -1011,6 +1019,7 @@ export function App() {
   const [globalSettings, setGlobalSettings] = useState<RuntimeSettingsDetails>();
   const [timeoutSettings, setTimeoutSettings] = useState<SystemTimeoutSettings>();
   const [quotaSettings, setQuotaSettings] = useState<SystemQuotaSettings>();
+  const [sandboxNetworkSettings, setSandboxNetworkSettings] = useState<SandboxNetworkSettings>();
   const [proxySettings, setProxySettings] = useState<ProxySettingsDetails>();
   const [mcpProxyPolicies, setMcpProxyPolicies] = useState<McpProxyPolicies>({});
   const [mcpSources, setMcpSources] = useState<McpSourceManifest[]>([]);
@@ -1022,6 +1031,7 @@ export function App() {
   const [globalSettingsEdit, setGlobalSettingsEdit] = useState<RuntimeSettingsOverrides>();
   const [timeoutSettingsEdit, setTimeoutSettingsEdit] = useState<SystemTimeoutSettings>();
   const [quotaSettingsEdit, setQuotaSettingsEdit] = useState<SystemQuotaSettings>();
+  const [sandboxNetworkSettingsEdit, setSandboxNetworkSettingsEdit] = useState<SandboxNetworkSettings>();
   const [webSettingsEdit, setWebSettingsEdit] = useState<WebSettingsDraft>();
   const [memoryGraphSettingsEdit, setMemoryGraphSettingsEdit] = useState<MemoryGraphSettingsDraft>();
   const [localeEdit, setLocaleEdit] = useState<"en" | "zh-CN">();
@@ -1205,9 +1215,10 @@ export function App() {
       client.getGlobalSettings(),
       client.getTimeoutSettings(),
       client.getQuotaSettings(),
+      client.getSandboxNetworkSettings(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([modelItems, connectorItems, skillItems, settings, timeouts, quotas, web, memoryGraph]) => {
+    ]).then(([modelItems, connectorItems, skillItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
       if (!active) return;
       setModels(modelItems);
       setConnectors(connectorItems);
@@ -1215,6 +1226,7 @@ export function App() {
       setGlobalSettings(settings);
       setTimeoutSettings(timeouts);
       setQuotaSettings(quotas);
+      setSandboxNetworkSettings(sandboxNetwork);
       setWebSettings(web);
       setMemoryGraphSettings(memoryGraph);
       setWorkspaceCapabilities({
@@ -1525,12 +1537,13 @@ export function App() {
       client.getGlobalSettings(),
       client.getTimeoutSettings(),
       client.getQuotaSettings(),
+      client.getSandboxNetworkSettings(),
       client.getProxySettings(),
       client.getMcpProxyPolicies(),
       client.listMcpSources(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([projectItems, modelItems, connectorItems, skillItems, settings, timeouts, quotas, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
+    ]).then(([projectItems, modelItems, connectorItems, skillItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
       setProjects(projectItems);
       setModels(modelItems);
       setConnectors(connectorItems);
@@ -1538,6 +1551,7 @@ export function App() {
       setGlobalSettings(settings);
       setTimeoutSettings(timeouts);
       setQuotaSettings(quotas);
+      setSandboxNetworkSettings(sandboxNetwork);
       setProxySettings(proxies);
       setMcpProxyPolicies(mcpPolicyDetails.policies);
       setMcpSources(mcpSourceDetails.map((item) => item.manifest));
@@ -2149,6 +2163,7 @@ export function App() {
     setGlobalSettingsEdit(undefined);
     setTimeoutSettingsEdit(undefined);
     setQuotaSettingsEdit(undefined);
+    setSandboxNetworkSettingsEdit(undefined);
     setWebSettingsEdit(undefined);
     setMemoryGraphSettingsEdit(undefined);
     setLocaleEdit(undefined);
@@ -2200,6 +2215,7 @@ export function App() {
       if (globalSettingsEdit) await saveGlobalSettings(globalSettingsEdit);
       if (timeoutSettingsEdit) await saveTimeoutSettings(timeoutSettingsEdit);
       if (quotaSettingsEdit) await saveQuotaSettings(quotaSettingsEdit);
+      if (sandboxNetworkSettingsEdit) await saveSandboxNetworkSettings(sandboxNetworkSettingsEdit);
       if (webSettingsEdit) await saveWebSettings(webSettingsRequest(webSettingsEdit));
       if (memoryGraphSettingsEdit) await saveMemoryGraphSettings(memoryGraphSettingsRequest(memoryGraphSettingsEdit));
       if (modelSettingsDirty) await saveModel();
@@ -2466,6 +2482,20 @@ export function App() {
       });
       pushToast("success", "Quota settings saved");
     }, "Could not save quota settings");
+  }
+
+  async function saveSandboxNetworkSettings(settings: SandboxNetworkSettings): Promise<void> {
+    await settingsErrorRouter.run("saveSandboxNetworkSettings", async () => {
+      const saved = await client.replaceSandboxNetworkSettings(settings);
+      setSandboxNetworkSettings(saved);
+      pushToast(
+        "success",
+        "Sandbox network access saved",
+        saved.mode === "domain-allowlist"
+          ? `${saved.allowedDomains.length} allowed domains. Open Sessions lost their persistent kernels and shell.`
+          : "Sandbox code has no network access. Open Sessions lost their persistent kernels and shell.",
+      );
+    }, "Could not save sandbox network access settings");
   }
 
   async function openScopedSettings(target: ResourceTarget): Promise<void> {
@@ -4100,6 +4130,14 @@ export function App() {
                 quotaSettings
                   ? <QuotaSettingsEditor onChange={setQuotaSettingsEdit} settings={quotaSettingsEdit ?? quotaSettings} />
                   : <p className="muted">{t("settings.loadingQuotas")}</p>
+              ) : null}
+              {systemSettingsGroup === "sandbox-network" ? (
+                sandboxNetworkSettings
+                  ? <SandboxNetworkSettingsEditor
+                    onChange={setSandboxNetworkSettingsEdit}
+                    settings={sandboxNetworkSettingsEdit ?? sandboxNetworkSettings}
+                  />
+                  : <p className="muted">{t("settings.loadingSandboxNetwork")}</p>
               ) : null}
               {systemSettingsGroup === "runtime" ? <RuntimeStatusPanel
                 client={client}

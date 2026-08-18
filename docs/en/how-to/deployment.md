@@ -75,6 +75,8 @@ sudo pacman -S bubblewrap            # Arch
 sudo apk add bubblewrap              # Alpine
 ```
 
+Enabling the `domain-allowlist` mode of **sandbox network access** additionally needs a usable `python3` on the host (the interpreter for the in-sandbox egress bridge; override it with `SCIENCE_AGENT_EGRESS_PYTHON`). Without it, executions in that mode fail with an explicit reason and the default `none` mode is unaffected. Neither mode needs root, extra capabilities, or host firewall configuration.
+
 To inspect the UI without sandbox execution, start with `--skip-sandbox-check`; `run_python` and `run_shell` will fail while other functions remain available. If Bubblewrap exists but unprivileged user namespaces are restricted, `serve` warns and continues. Diagnose it as described under [Sandbox and host requirements](#sandbox-and-host-requirements).
 
 ### Commands and options
@@ -206,7 +208,7 @@ Three locations differ from a host installation:
 
 ### Sandbox and host requirements
 
-The container does not replace or weaken the Bubblewrap sandbox. Agent Python, R, and shell commands still run under `bwrap` with separate namespaces, seccomp filtering, and no network. Docker's default security configuration blocks the user-namespace mounts and the fresh procfs Bubblewrap needs, so Compose relaxes these three container settings:
+The container does not replace or weaken the Bubblewrap sandbox. Agent Python, R, and shell commands still run under `bwrap` with separate namespaces, seccomp filtering, and — unless an administrator configures a sandbox network domain allowlist — no network at all. Even with an allowlist the sandbox keeps its own empty network namespace and reaches the internet only through the runner's egress gateway. Docker's default security configuration blocks the user-namespace mounts and the fresh procfs Bubblewrap needs, so Compose relaxes these three container settings:
 
 | Setting | Reason |
 |---|---|

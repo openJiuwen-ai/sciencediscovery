@@ -75,6 +75,8 @@ sudo pacman -S bubblewrap            # Arch
 sudo apk add bubblewrap              # Alpine
 ```
 
+开启**沙箱网络访问**的 `domain-allowlist` 模式时，宿主还需要一个可用的 `python3`（沙箱内 egress bridge 的解释器，可用 `SCIENCE_AGENT_EGRESS_PYTHON` 指定）。缺失时该模式的执行会直接失败并说明原因，默认的 `none` 模式不受影响；两种模式都**不需要** root、额外 capability 或系统防火墙配置。
+
 只想先看 Web UI、暂不使用沙箱执行时，可用 `--skip-sandbox-check` 启动；此时 `run_python` / `run_shell` 会失败，其余功能正常。bubblewrap 已安装但宿主限制了无特权用户命名空间时，`serve` 会给出告警并继续启动，排查方式与 [Docker 的沙箱与宿主要求](#沙箱与宿主要求)相同。
 
 ### 命令与选项
@@ -206,7 +208,7 @@ docker compose up -d --build  # 拉取新代码后重建并重启
 
 ### 沙箱与宿主要求
 
-容器**不**替代、也不削弱 bubblewrap 沙箱——agent 的 Python/R/shell 仍在 `bwrap` 下运行，保留独立命名空间、seccomp 过滤与无网络。bubblewrap 需要创建用户命名空间、在其中挂载并新建 procfs，而 Docker 的默认安全配置会阻止这些，因此 Compose 服务放开以下三项，不多给任何权限：
+容器**不**替代、也不削弱 bubblewrap 沙箱——agent 的 Python/R/shell 仍在 `bwrap` 下运行，保留独立命名空间与 seccomp 过滤；除非管理员配置了沙箱网络的域名允许列表，否则完全无网络。即使开启允许列表，沙箱仍然独占一个空的网络命名空间，只能经 Runner 的 egress gateway 出站。bubblewrap 需要创建用户命名空间、在其中挂载并新建 procfs，而 Docker 的默认安全配置会阻止这些，因此 Compose 服务放开以下三项，不多给任何权限：
 
 | 配置 | 为什么需要 |
 |---|---|

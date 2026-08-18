@@ -14,10 +14,12 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 
-import type {
-  RuntimeStatus,
-  SystemQuotaSettings,
-  SystemTimeoutSettings,
+import {
+  parseAllowedDomain,
+  type RuntimeStatus,
+  type SandboxNetworkSettings,
+  type SystemQuotaSettings,
+  type SystemTimeoutSettings,
 } from "@science-agent/schema";
 
 import type { ApiClient } from "./api.js";
@@ -285,6 +287,112 @@ export function QuotaSettingsEditor({
       </fieldset>
     </div>
     <div className="settings-actions"><span className="settings-source">Changes take effect only after using the dialog Save action. Env vars seed defaults on first boot.</span></div>
+  </section>;
+}
+
+/**
+ * Sandbox network access: whether run_python / run_r / run_shell may reach the
+ * network, and which domains they may reach. Deliberately its own settings
+ * group, separate from the Network proxies group, which configures this
+ * service's own outbound calls and does not affect sandbox code.
+ */
+export function SandboxNetworkSettingsEditor({
+  onChange,
+  settings,
+}: {
+  onChange: (settings: SandboxNetworkSettings) => void;
+  settings: SandboxNetworkSettings;
+}) {
+  const [draft, setDraft] = useState(settings.allowedDomains.join("\n"));
+  const [domainError, setDomainError] = useState<string>();
+
+  function commitDomains(value: string): void {
+    setDraft(value);
+    const entries = value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean);
+    try {
+      for (const entry of entries) parseAllowedDomain(entry);
+      setDomainError(undefined);
+      onChange({ ...settings, allowedDomains: entries });
+    } catch (error) {
+      setDomainError(error instanceof Error ? error.message : "Invalid allowed domain");
+    }
+  }
+
+  const allowlist = settings.mode === "domain-allowlist";
+  return <section className="timeout-settings">
+    <div className="settings-detail-header">
+      <span className="eyebrow">Sandbox code execution</span>
+      <h3>Sandbox network access</h3>
+      <p>
+        Controls whether code run by <code>run_python</code>, <code>run_r</code> and <code>run_shell</code> can
+        reach the network. The sandbox never gets a network interface: with a domain allowlist, outbound traffic
+        leaves only through this deployment&apos;s egress gateway, which allows the domains listed here.
+        Web and MCP outbound servers are configured separately under Network proxies and do not affect sandbox code.
+      </p>
+    </div>
+    <div className="timeout-grid">
+      <fieldset>
+        <legend>Mode</legend>
+        <p>
+          No network is the default and matches a sandbox with no network at all.
+          Domain allowlist keeps the sandbox isolated and permits only the listed domains.
+        </p>
+        <label className="timeout-value">
+          <span>Mode</span>
+          <select
+            aria-label="Sandbox network mode"
+            onChange={(event) => onChange({
+              ...settings,
+              mode: event.target.value === "domain-allowlist" ? "domain-allowlist" : "none",
+            })}
+            value={settings.mode}
+          >
+            <option value="none">No network</option>
+            <option value="domain-allowlist">Domain allowlist</option>
+          </select>
+        </label>
+      </fieldset>
+      <fieldset>
+        <legend>Allowed domains</legend>
+        <p>
+          One entry per line: <code>example.org</code>, <code>*.example.org</code> for subdomains,
+          optionally with <code>:443</code> to restrict the port. Traffic is filtered by host name only —
+          TLS is not inspected, so a broad entry stays a broad grant.
+        </p>
+        <label className="timeout-value">
+          <span>Domains</span>
+          <textarea
+            aria-label="Allowed domains"
+            disabled={!allowlist}
+            onChange={(event) => commitDomains(event.target.value)}
+            rows={6}
+            value={draft}
+          />
+        </label>
+        {domainError ? <small role="alert">{domainError}</small> : <small>Draft: {settings.allowedDomains.length} domains</small>}
+      </fieldset>
+      <fieldset>
+        <legend>Private addresses</legend>
+        <p>
+          Off by default: an allowed domain that resolves to a loopback, link-local or private address is
+          rejected, so sandbox code cannot reach this deployment&apos;s own services. Turn it on only for an
+          internal mirror or registry.
+        </p>
+        <label className="timeout-unlimited">
+          <input
+            checked={settings.allowPrivateNetwork}
+            disabled={!allowlist}
+            onChange={(event) => onChange({ ...settings, allowPrivateNetwork: event.target.checked })}
+            type="checkbox"
+          />
+          <span>Allow private and loopback addresses</span>
+        </label>
+      </fieldset>
+    </div>
+    <p className="muted">
+      Saving a change rotates the Permission Epoch of every open Session and clears its persistent kernels and
+      shell, because the policy is frozen into the epoch each execution runs under.
+    </p>
   </section>;
 }
 

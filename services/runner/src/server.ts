@@ -37,6 +37,7 @@ import type {
   RunnerExecutionStatus,
   RunnerHealth,
   RunnerRuntimeStatus,
+  SandboxNetworkCapability,
   ScientificEnvsCapability,
   SetupScientificEnvironmentsRequest,
   ShellExecutionRequest,
@@ -60,6 +61,8 @@ import {
   EXECUTION_TIMESTAMP_HEADER,
   verifyExecutionSignature,
 } from "./request-auth.js";
+import { resolveEgressInterpreter } from "./egress-bridge.js";
+import { EgressGatewayRegistry } from "./egress-gateway.js";
 import { SECCOMP_BASELINE_VERSION } from "./seccomp.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { KernelManager } from "./kernel-manager.js";
@@ -241,9 +244,13 @@ export function createRunnerServer(
     smokeScriptPath: config.npuSmokeScriptPath,
     workloadConfigPath: config.npuWorkloadConfigPath,
   }),
+  egressGateways?: EgressGatewayRegistry,
 ): Server {
   const logger = createOperationalLogger({ category: "runner", dataDir: config.dataDir, service: "runner" });
   const profiles = envProfiles ?? new SessionEnvProfileStore();
+  const gateways = egressGateways ?? new EgressGatewayRegistry(config.dataDir, (event, detail) => {
+    logger[event === "allowed" ? "info" : "warn"]("sandbox_network_request", { event, ...detail });
+  });
   const shellSessions = shellSessionManager ?? new ShellSessionManager({
     bwrapPath: config.bwrapPath,
     dataDir: config.dataDir,
@@ -251,7 +258,7 @@ export function createRunnerServer(
     idleTimeoutMs: config.shellSessionIdleMs ?? config.scientificKernelIdleMs,
     maxOutputBytes: config.maxOutputBytes,
     maxWorkspaceBytes: config.maxWorkspaceBytes,
-  }, profiles);
+  }, profiles, gateways);
   const executionQueues = new KeyedTaskQueue();
   const seenExecutions = new Map<string, number>();
   const activeExecutions = new Map<string, RunnerExecutionStatus>();
@@ -339,6 +346,7 @@ export function createRunnerServer(
           npuBroker: npuBroker.capability(),
           runnerVersion: RUNNER_VERSION,
           sandbox: "bubblewrap",
+          sandboxNetwork: await sandboxNetworkCapability(),
           scientificEnvs: environmentStore?.capability ?? DISABLED_SCIENTIFIC_ENVS,
           seccompBaseline: SECCOMP_BASELINE_VERSION,
           status: "ok",
@@ -582,7 +590,8 @@ export function createRunnerServer(
           () => execution.kernelMode === "persistent"
             ? shellSessions.execute(execution, signal)
             : executeShell(config, execution, signal,
-                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id)),
+                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id),
+                gateways),
         )));
         return;
       }
@@ -616,7 +625,8 @@ export function createRunnerServer(
             ? kernelManager?.execute(execution, signal)
               ?? Promise.reject(new Error("Persistent kernels are unavailable"))
             : executePython(config, execution, signal, environmentStore,
-                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id)),
+                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id),
+                gateways),
         )));
         return;
       }
@@ -630,8 +640,33 @@ export function createRunnerServer(
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Runner request failed" } satisfies ApiError);
     }
   });
-  server.once("close", () => { void shellSessions.close(); });
+  server.once("close", () => {
+    void shellSessions.close();
+    void gateways.close();
+  });
   return server;
+}
+
+/**
+ * `domain-allowlist` needs a host interpreter for the in-sandbox egress
+ * bridge. Report it so the API can tell an admin why the mode is unavailable
+ * instead of letting every execution fail with the same error.
+ *
+ * Every agent run reads runner health before it starts, so this only consults
+ * the process-wide interpreter probe: no subprocess per request, and no data
+ * directory writes. Staging the bridge script stays on the launch path.
+ */
+async function sandboxNetworkCapability(): Promise<SandboxNetworkCapability> {
+  try {
+    await resolveEgressInterpreter();
+    return { available: true, modes: ["none", "domain-allowlist"] };
+  } catch (error) {
+    return {
+      available: false,
+      modes: ["none"],
+      unavailableReason: error instanceof Error ? error.message : "The sandbox egress bridge is unavailable",
+    };
+  }
 }
 
 export async function startRunnerServer(config = loadRunnerConfig()): Promise<Server> {
@@ -706,6 +741,9 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   });
   await environmentStore.initialize();
   const envProfiles = new SessionEnvProfileStore();
+  const egressGateways = new EgressGatewayRegistry(config.dataDir, (event, detail) => {
+    logger[event === "allowed" ? "info" : "warn"]("sandbox_network_request", { event, ...detail });
+  });
   const shellSessionManager = new ShellSessionManager({
     bwrapPath: config.bwrapPath,
     dataDir: config.dataDir,
@@ -713,7 +751,7 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     idleTimeoutMs: config.shellSessionIdleMs ?? config.scientificKernelIdleMs,
     maxOutputBytes: config.maxOutputBytes,
     maxWorkspaceBytes: config.maxWorkspaceBytes,
-  }, envProfiles);
+  }, envProfiles, egressGateways);
   const kernelManager = new KernelManager({
     bwrapPath: config.bwrapPath,
     dataDir: config.dataDir,
@@ -723,8 +761,17 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     maxWorkspaceBytes: config.maxWorkspaceBytes,
   }, environmentStore, (sessionId, agentId, permissionEpochId) => (
     envProfiles.get(sessionId, agentId, permissionEpochId)
-  ));
-  const server = createRunnerServer(config, environmentStore, kernelManager, shellSessionManager, envProfiles);
+  ), egressGateways);
+  const server = createRunnerServer(
+    config,
+    environmentStore,
+    kernelManager,
+    shellSessionManager,
+    envProfiles,
+    // `undefined` keeps the parameter default: the broker this server builds itself.
+    undefined,
+    egressGateways,
+  );
   server.once("close", () => { void kernelManager.close(); });
   await new Promise<void>((resolveListen, reject) => {
     server.once("error", reject);
@@ -743,8 +790,11 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   const outputLabel = config.maxOutputBytes === 0
     ? "unlimited (no truncation)"
     : `${config.maxOutputBytes} bytes (truncate)`;
+  const sandboxNetwork = await sandboxNetworkCapability();
   console.log(
-    `Sandbox: bubblewrap (${RUNNER_VERSION}); network: none; no CPU/memory quotas; `
+    `Sandbox: bubblewrap (${RUNNER_VERSION}); sandbox network access: default none`
+    + `${sandboxNetwork.available ? ", domain-allowlist available" : ` (domain-allowlist unavailable: ${sandboxNetwork.unavailableReason})`}`
+    + "; no CPU/memory quotas; "
     + `workspace quota: ${workspaceLabel}; output budget: ${outputLabel}; `
     + `execution timeout: ${config.execTimeoutMs === 0 ? "unlimited" : `${config.execTimeoutMs / 1000}s`}`,
   );

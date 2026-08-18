@@ -30,9 +30,16 @@ export interface SessionEnvProfile {
 
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Runner-owned baseline keys: the sandbox launch always sets these itself. */
+/**
+ * Runner-owned baseline keys: the sandbox launch always sets these itself.
+ * The outbound variables are here because sandbox network access owns them —
+ * a Session must not be able to redirect (or disable) the egress bridge by
+ * exporting its own value in the persistent shell.
+ */
 export const PROFILE_RESERVED_KEYS = new Set([
   "HOME",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
   "OLDPWD",
   "PATH",
   "PWD",
@@ -40,6 +47,8 @@ export const PROFILE_RESERVED_KEYS = new Set([
   "PYTHONPATH",
   "R_ENVIRON_USER",
   "SHLVL",
+  "http_proxy",
+  "https_proxy",
   "_",
 ]);
 

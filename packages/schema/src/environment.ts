@@ -17,6 +17,7 @@ import { externalUrl, externalUrlList } from "@science-agent/external-urls";
 import type { ScientificArtifactKind } from "./artifact-provenance.js";
 import type { NpuBrokerCapability } from "./npu-job.js";
 import type { PermissionEpoch } from "./permission.js";
+import type { SandboxNetworkMode } from "./sandbox-network.js";
 import type { CasObjectRef } from "./provenance.js";
 
 export type ScientificLanguage = "python" | "r";
@@ -135,7 +136,10 @@ export interface ScientificExecutionResult {
   language: ScientificLanguage;
   memoryStateLost?: string;
   modifiedFiles: string[];
-  networkPolicy: "none";
+  /** Sandbox network mode this execution actually ran under. */
+  networkPolicy: SandboxNetworkMode;
+  /** Revision of the sandbox network policy snapshot this execution ran under. */
+  networkAccessRevision?: string;
   /**
    * Artifacts the provenance recorder registered for this execution. Lets
    * the LLM pass an `artifact_id` to `declare_claim` (the report Artifact that
@@ -364,6 +368,17 @@ export interface ScientificEnvsCapability {
   unavailableReason?: string;
 }
 
+/**
+ * Runner-side readiness of sandbox network access. `domain-allowlist` needs an
+ * egress bridge interpreter on the host; when it is missing the runner reports
+ * why here and fails such executions instead of running them unfiltered.
+ */
+export interface SandboxNetworkCapability {
+  available: boolean;
+  modes: SandboxNetworkMode[];
+  unavailableReason?: string;
+}
+
 export interface RunnerHealth {
   /** Always false: the runner no longer manages a cgroup v2 subtree. */
   cgroupDelegated: false;
@@ -383,11 +398,17 @@ export interface RunnerHealth {
   maxOutputBytes: number;
   /** Workspace total quota; `0` means unlimited. */
   maxWorkspaceBytes: number;
+  /**
+   * Default sandbox network mode: an execution only leaves this mode when its
+   * Permission Epoch carries a `domain-allowlist` policy snapshot.
+   */
   networkPolicy: "none";
   noNewPrivileges: true;
   npuBroker: NpuBrokerCapability;
   runnerVersion: string;
   sandbox: "bubblewrap";
+  /** Whether this runner can serve `domain-allowlist` executions at all. */
+  sandboxNetwork: SandboxNetworkCapability;
   scientificEnvs: ScientificEnvsCapability;
   seccompBaseline: "multiarch-v1-profile-aware";
   status: "ok";

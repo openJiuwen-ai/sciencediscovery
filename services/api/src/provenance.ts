@@ -33,7 +33,11 @@ import type {
   ScientificArtifactVersion,
   ShellExecutionResult,
 } from "@science-agent/schema";
-import { SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, classifyScientificArtifact } from "@science-agent/schema";
+import {
+  SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+  classifyScientificArtifact,
+  epochSandboxNetworkAccess,
+} from "@science-agent/schema";
 
 import { RunnerClient } from "./runner-client.js";
 import { SessionStore } from "./store.js";
@@ -396,7 +400,8 @@ export class ProvenanceRecorder {
         kernelMode: options.kernelMode ?? "ephemeral",
         language: "shell",
         modifiedFiles: [],
-        networkPolicy: "none",
+        networkAccessRevision: epochSandboxNetworkAccess(options.permissionEpoch).revision,
+        networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         runnerVersion: "unavailable",
         sandbox: "bubblewrap",
@@ -428,6 +433,7 @@ export class ProvenanceRecorder {
       kernelMode: result.kernelMode,
       language: "shell",
       modifiedFiles: result.modifiedFiles,
+      ...(result.networkAccessRevision ? { networkAccessRevision: result.networkAccessRevision } : {}),
       networkPolicy: result.networkPolicy,
       permissionEpochId: options.permissionEpoch.id,
       runnerVersion: result.runnerVersion,
@@ -519,7 +525,8 @@ export class ProvenanceRecorder {
         kernelMode,
         language,
         modifiedFiles: [],
-        networkPolicy: "none",
+        networkAccessRevision: epochSandboxNetworkAccess(options.permissionEpoch).revision,
+        networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         runnerVersion: "unavailable",
         sandbox: "bubblewrap",
@@ -570,6 +577,7 @@ export class ProvenanceRecorder {
       kernelMode: result.kernelMode,
       language: result.language,
       modifiedFiles: result.modifiedFiles,
+      ...(result.networkAccessRevision ? { networkAccessRevision: result.networkAccessRevision } : {}),
       networkPolicy: result.networkPolicy,
       permissionEpochId: options.permissionEpoch.id,
       runnerVersion: result.runnerVersion,

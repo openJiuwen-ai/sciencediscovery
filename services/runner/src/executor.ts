@@ -23,14 +23,24 @@ import {
 } from "@science-agent/sandbox-capability";
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+  epochSandboxNetworkAccess,
   type PythonExecutionRequest,
   type PythonExecutionResult,
+  type SandboxNetworkAccess,
   type ScientificLanguage,
   type ShellExecutionRequest,
   type ShellExecutionResult,
 } from "@science-agent/schema";
 
-import { ensureBaselineSeccompFilter } from "./seccomp.js";
+import {
+  EgressBridgeUnavailableError,
+  egressBridgeBindArguments,
+  egressBridgeCommandPrefix,
+  egressEnvironment,
+  resolveEgressBridge,
+} from "./egress-bridge.js";
+import type { EgressGatewayRegistry } from "./egress-gateway.js";
+import { ensureSeccompFilter, type SeccompVariant } from "./seccomp.js";
 import { profileKeyAllowed, sedimentableCwd, type SessionEnvProfile } from "./session-env-profile.js";
 import type { EnvironmentStore } from "./environment-store.js";
 
@@ -323,9 +333,10 @@ async function runSandboxed(
   timeoutLabel: string,
   maxWorkspaceBytes: number,
   maxOutputBytes: number,
+  seccompVariant: SeccompVariant = "baseline",
 ): Promise<{ exitCode: number; stderr: string; stdout: string }> {
   const seccompFilter = await open(
-    await ensureBaselineSeccompFilter(config.dataDir),
+    await ensureSeccompFilter(config.dataDir, seccompVariant),
     "r",
   );
 
@@ -408,7 +419,50 @@ async function runSandboxed(
 export interface SandboxLaunch {
   args: string[];
   chdir: string;
+  /**
+   * Argv that must precede the real command inside the sandbox. Empty unless
+   * sandbox network access is on, where it starts the egress bridge that then
+   * executes the real command as its child.
+   */
+  commandPrefix: string[];
   env: Record<string, string>;
+}
+
+/**
+ * Everything a `domain-allowlist` launch needs: the bwrap binds that expose the
+ * bridge and the gateway socket, the argv prefix that starts the bridge, and
+ * the outbound environment ordinary HTTP clients look for.
+ */
+export interface SandboxEgress {
+  bindArgs: string[];
+  commandPrefix: string[];
+  env: Record<string, string>;
+}
+
+/**
+ * Resolve the egress plumbing for one execution. `none` needs nothing;
+ * `domain-allowlist` fails closed when the host has no bridge interpreter or
+ * the runner has no gateway registry, rather than running unfiltered.
+ */
+export async function prepareSandboxEgress(
+  dataDir: string,
+  access: SandboxNetworkAccess,
+  gateways: EgressGatewayRegistry | undefined,
+): Promise<SandboxEgress | undefined> {
+  if (access.mode === "none") return undefined;
+  if (!gateways) {
+    throw new EgressBridgeUnavailableError("this runner was started without an egress gateway registry");
+  }
+  const [bridge, gateway] = await Promise.all([resolveEgressBridge(dataDir), gateways.acquire(access)]);
+  return {
+    bindArgs: egressBridgeBindArguments(bridge, gateway.socketPath),
+    commandPrefix: egressBridgeCommandPrefix(),
+    env: egressEnvironment(),
+  };
+}
+
+export function seccompVariantFor(access: SandboxNetworkAccess): SeccompVariant {
+  return access.mode === "none" ? "baseline" : "network";
 }
 
 /**
@@ -444,6 +498,8 @@ export async function resolveProfileChdir(
 export function buildSandboxLaunch(options: {
   chdir: string;
   disableUserns: boolean;
+  /** Sandbox network access plumbing; absent keeps the sandbox without network. */
+  egress?: SandboxEgress;
   environmentBinds: string[];
   envProfile?: SessionEnvProfile;
   hostInterpreterMasks: string[];
@@ -460,6 +516,7 @@ export function buildSandboxLaunch(options: {
   if (options.pythonPathEnv) env.PYTHONPATH = options.pythonPathEnv;
   if (options.language === "python" || options.pythonPathEnv) env.PYTHONNOUSERSITE = "1";
   if (options.language === "r") env.R_ENVIRON_USER = "/dev/null";
+  Object.assign(env, options.egress?.env ?? {});
   for (const [name, value] of Object.entries(options.envProfile?.variables ?? {})) {
     if (profileKeyAllowed(name)) env[name] = value;
   }
@@ -481,6 +538,7 @@ export function buildSandboxLaunch(options: {
       ...options.hostInterpreterMasks,
       "--tmpfs", "/tmp",
       ...options.environmentBinds,
+      ...(options.egress?.bindArgs ?? []),
       ...options.workspaceBindArgs,
       "--chdir", options.chdir,
       "--clearenv",
@@ -488,6 +546,7 @@ export function buildSandboxLaunch(options: {
       "--seccomp", "3",
     ],
     chdir: options.chdir,
+    commandPrefix: options.egress?.commandPrefix ?? [],
     env,
   };
 }
@@ -498,13 +557,14 @@ export async function executePython(
   signal?: AbortSignal,
   environmentStore?: EnvironmentStore,
   envProfile?: SessionEnvProfile,
+  gateways?: EgressGatewayRegistry,
 ): Promise<PythonExecutionResult> {
   const language: ScientificLanguage = request.language ?? "python";
   const kernelMode = request.kernelMode ?? "ephemeral";
   if (!request.code.trim()) throw new Error(`${language === "python" ? "Python" : "R"} code is required`);
   if (!request.executionId?.trim()) throw new Error("Execution ID is required");
   if (kernelMode !== "ephemeral") throw new Error("Persistent execution requires the kernel manager");
-  if (request.permissionEpoch.networkPolicy !== "none") throw new Error("M1 runner requires networkPolicy=none");
+  const networkAccess = epochSandboxNetworkAccess(request.permissionEpoch);
   if (request.permissionEpoch.mounts.length !== 1
     || request.permissionEpoch.mounts[0]?.source !== "workspace"
     || request.permissionEpoch.mounts[0]?.mode !== "read-write") {
@@ -543,6 +603,7 @@ export async function executePython(
   const launch = buildSandboxLaunch({
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
     ...await sandboxLaunchProfile(config.bwrapPath),
+    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways),
     environmentBinds: runtime
       ? environmentPrefixBindArguments(runtime.prefixPath)
       : localPythonPackageBindArguments(localPythonPackages),
@@ -556,6 +617,7 @@ export async function executePython(
   });
   const bwrapArguments = [
     ...launch.args,
+    ...launch.commandPrefix,
     runtime ? `/opt/science-env/bin/${language === "python" ? "python" : "R"}` : "/usr/bin/python3",
     ...(language === "python" ? [
       ...(localPythonPackages ? [] : ["-I"]),
@@ -573,6 +635,7 @@ export async function executePython(
     language === "python" ? "Python execution" : "R execution",
     maxWorkspaceBytes,
     maxOutputBytes,
+    seccompVariantFor(networkAccess),
   );
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
 
@@ -595,7 +658,8 @@ export async function executePython(
     kernelId: `ephemeral:${request.executionId}`,
     kernelMode,
     language,
-    networkPolicy: "none",
+    networkAccessRevision: networkAccess.revision,
+    networkPolicy: networkAccess.mode,
     runnerVersion: RUNNER_VERSION,
     sandbox: "bubblewrap",
     startedAt,
@@ -608,10 +672,11 @@ export async function executeShell(
   request: ShellExecutionRequest,
   signal?: AbortSignal,
   envProfile?: SessionEnvProfile,
+  gateways?: EgressGatewayRegistry,
 ): Promise<ShellExecutionResult> {
   if (!request.code.trim()) throw new Error("Shell code is required");
   if (!request.executionId?.trim()) throw new Error("Execution ID is required");
-  if (request.permissionEpoch.networkPolicy !== "none") throw new Error("Shell execution requires networkPolicy=none");
+  const networkAccess = epochSandboxNetworkAccess(request.permissionEpoch);
   if (request.permissionEpoch.mounts.length !== 1
     || request.permissionEpoch.mounts[0]?.source !== "workspace"
     || request.permissionEpoch.mounts[0]?.mode !== "read-write") {
@@ -633,6 +698,7 @@ export async function executeShell(
   const launch = buildSandboxLaunch({
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
     ...await sandboxLaunchProfile(config.bwrapPath),
+    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways),
     environmentBinds: localPythonPackageBindArguments(localPythonPackages),
     envProfile,
     hostInterpreterMasks: [],
@@ -644,6 +710,7 @@ export async function executeShell(
   });
   const bwrapArguments = [
     ...launch.args,
+    ...launch.commandPrefix,
     "/usr/bin/bash",
     "--noprofile",
     "--norc",
@@ -662,6 +729,7 @@ export async function executeShell(
     "Shell execution",
     maxWorkspaceBytes,
     maxOutputBytes,
+    seccompVariantFor(networkAccess),
   );
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
 
@@ -682,7 +750,8 @@ export async function executeShell(
     kernelMode: "ephemeral",
     language: "shell",
     modifiedFiles: shellModifiedFiles.toSorted(),
-    networkPolicy: "none",
+    networkAccessRevision: networkAccess.revision,
+    networkPolicy: networkAccess.mode,
     runnerVersion: RUNNER_VERSION,
     sandbox: "bubblewrap",
     startedAt,

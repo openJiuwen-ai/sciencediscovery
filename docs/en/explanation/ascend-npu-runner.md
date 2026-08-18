@@ -32,7 +32,7 @@ The current design therefore does not keep pushing NPU devices into bwrap. Norma
 |---|---|
 | Enable/disable Broker and `.env` variables | [Configuration reference](../reference/configuration.md#environment-variables-local-mode) |
 | Model-visible NPU tool and parameters | [Built-in tools](../reference/builtin-tools.md#other-conditional-tools) |
-| Why NPU is a sandbox exception and how it is constrained | [Sandbox execution](sandbox-execution.md#31-ascend-npu-broker-optional-host-execution) |
+| Why NPU is a sandbox exception and how it is constrained | [Sandbox execution](sandbox-execution.md#32-ascend-npu-broker-optional-host-execution) |
 | Broker placement in the runtime model | [Runtime architecture](architecture.md#25-responsibility-split) |
 | Default workload allowlist | `services/runner/workloads/npu-workloads.default.json` |
 

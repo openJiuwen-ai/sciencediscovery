@@ -98,6 +98,8 @@ import type {
   SessionListState,
   SkillDeletionImpact,
   SkillSelectionMode,
+  SandboxNetworkAccess,
+  SandboxNetworkSettings,
   Specialist,
   SystemQuotaSettings,
   SystemTimeoutSettings,
@@ -115,6 +117,7 @@ import type {
   WebSettingsDetails,
 } from "@science-agent/schema";
 import {
+  DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SKILL_SELECTION_MODE,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
   DEFAULT_REVIEWER_SPECIALIST_LEVEL,
@@ -123,6 +126,7 @@ import {
   DEFAULT_WEB_SETTINGS,
   REVIEWER_SPECIALIST_LEVELS,
   SKILL_SELECTION_FIELDS,
+  epochSandboxNetworkAccess,
   UNTITLED_SESSION_TITLE,
 } from "@science-agent/schema";
 import {
@@ -156,6 +160,11 @@ import {
   parsePermissionAuthorization,
   permissionMatcherResource,
 } from "./store/permissions.js";
+import {
+  normalizeSandboxNetworkSettings,
+  resolveSandboxNetworkSettings,
+  sandboxNetworkAccess,
+} from "./store/sandbox-network.js";
 import {
   decryptModelApiToken,
   encryptModelApiToken,
@@ -605,6 +614,10 @@ export class SessionStore {
     const quotaSettings = saved.quotaSettings === undefined
       ? structuredClone(this.initialQuotaSettings)
       : resolveQuotaSettings(saved.quotaSettings, this.initialQuotaSettings);
+    const sandboxNetworkSettings = resolveSandboxNetworkSettings(
+      saved.sandboxNetworkSettings,
+      DEFAULT_SANDBOX_NETWORK_SETTINGS,
+    );
     const webSettings = savedWebInput === undefined
       ? structuredClone(DEFAULT_WEB_SETTINGS)
       : normalizeWebSettings(savedWebInput);
@@ -620,7 +633,13 @@ export class SessionStore {
     const sessions = savedSessions.map((session) => {
       let permissionEpochId = session.permissionEpochId;
       if (!permissionEpochId || !epochIds.has(permissionEpochId)) {
-        const epoch = createPermissionEpoch(session.id, "Migrated from pre-M1 session");
+        const epoch = createPermissionEpoch(
+          session.id,
+          "Migrated from pre-M1 session",
+          undefined,
+          undefined,
+          sandboxNetworkAccess(sandboxNetworkSettings),
+        );
         permissionEpochs.push(epoch);
         epochIds.add(epoch.id);
         permissionEpochId = epoch.id;
@@ -765,6 +784,7 @@ export class SessionStore {
       proxyDefaultPolicy,
       proxyServers,
       quotaSettings,
+      sandboxNetworkSettings,
       reviewerSpecialistEnabled: saved.reviewerSpecialistEnabled === true,
       reviewerSpecialistLevel,
       remoteHosts,
@@ -793,6 +813,7 @@ export class SessionStore {
       || !Array.isArray(saved.specialists)
       || saved.timeoutSettings === undefined
       || saved.quotaSettings === undefined
+      || saved.sandboxNetworkSettings === undefined
       || migratedQuotaSettings
       || saved.webSettings === undefined
       || migratedEnvironmentSourceSettings
@@ -1245,6 +1266,49 @@ export class SessionStore {
         { overrides: this.catalog.globalSettings, source: "global" },
       ]),
     };
+  }
+
+  /** The policy new Permission Epochs snapshot. */
+  private currentSandboxNetworkAccess(): SandboxNetworkAccess {
+    return sandboxNetworkAccess(this.catalog.sandboxNetworkSettings);
+  }
+
+  getSandboxNetworkSettings(): SandboxNetworkSettings {
+    return structuredClone(this.catalog.sandboxNetworkSettings);
+  }
+
+  /**
+   * Save the sandbox network policy and rotate the Permission Epoch of every
+   * writable Session whose snapshot no longer matches. Rotation is what makes
+   * the change take effect: the epoch id is part of the runner's persistent
+   * kernel and shell reuse key, so sessions started under the old policy can
+   * never serve an execution granted under the new one.
+   */
+  async replaceSandboxNetworkSettings(value: unknown): Promise<{
+    rotatedSessionIds: string[];
+    settings: SandboxNetworkSettings;
+  }> {
+    this.catalog.sandboxNetworkSettings = normalizeSandboxNetworkSettings(value);
+    const access = this.currentSandboxNetworkAccess();
+    const rotatedSessionIds: string[] = [];
+    for (const session of this.catalog.sessions) {
+      if (session.archivedAt) continue;
+      const current = this.getPermissionEpoch(session.permissionEpochId);
+      if (current && epochSandboxNetworkAccess(current).revision === access.revision) continue;
+      const epoch = createPermissionEpoch(
+        session.id,
+        "Sandbox network access policy changed",
+        "Sandbox network access policy changed; persistent kernel and shell memory was lost",
+        current?.executeGrantScope,
+        access,
+      );
+      this.catalog.permissionEpochs.push(epoch);
+      session.permissionEpochId = epoch.id;
+      session.updatedAt = epoch.createdAt;
+      rotatedSessionIds.push(session.id);
+    }
+    await this.saveCatalog();
+    return { rotatedSessionIds, settings: this.getSandboxNetworkSettings() };
   }
 
   getTimeoutSettings(): SystemTimeoutSettings {
@@ -1800,7 +1864,13 @@ export class SessionStore {
       throw new Error("Specialist not found");
     }
     const sessionId = randomUUID();
-    const permissionEpoch = createPermissionEpoch(sessionId, "Session created");
+    const permissionEpoch = createPermissionEpoch(
+      sessionId,
+      "Session created",
+      undefined,
+      undefined,
+      this.currentSandboxNetworkAccess(),
+    );
     const session: Session = {
       approvalMode: governance.approvalMode ?? "ask_for_dangerous",
       createdAt: now,
@@ -2746,7 +2816,13 @@ export class SessionStore {
     executeGrantScope?: PermissionGrantScope,
   ): Promise<PermissionEpoch> {
     const session = this.assertSessionWritable(sessionId);
-    const epoch = createPermissionEpoch(sessionId, reason, memoryLostReason, executeGrantScope);
+    const epoch = createPermissionEpoch(
+      sessionId,
+      reason,
+      memoryLostReason,
+      executeGrantScope,
+      this.currentSandboxNetworkAccess(),
+    );
     this.catalog.permissionEpochs.push(epoch);
     session.permissionEpochId = epoch.id;
     session.updatedAt = epoch.createdAt;
@@ -3010,6 +3086,7 @@ export class SessionStore {
         : `${request.action} permission ${allowed ? "allowed" : "denied"}`,
       memoryLostReason,
       grant?.scope,
+      this.currentSandboxNetworkAccess(),
     );
     this.catalog.permissionEpochs.push(permissionEpoch);
     session.permissionEpochId = permissionEpoch.id;
@@ -3104,6 +3181,8 @@ export class SessionStore {
       session.id,
       `Approval mode changed to ${approvalMode}`,
       memoryLostReason,
+      undefined,
+      this.currentSandboxNetworkAccess(),
     );
     session.approvalMode = approvalMode;
     session.permissionEpochId = permissionEpoch.id;
@@ -3152,6 +3231,8 @@ export class SessionStore {
         session.id,
         "Permission grant revoked",
         memoryLostReason,
+        undefined,
+        this.currentSandboxNetworkAccess(),
       );
       this.catalog.permissionEpochs.push(permissionEpoch);
       session.permissionEpochId = permissionEpoch.id;

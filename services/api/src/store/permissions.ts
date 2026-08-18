@@ -14,12 +14,14 @@
 
 import { randomUUID } from "node:crypto";
 
-import type {
-  PermissionAction,
-  PermissionAuthorization,
-  PermissionAuthorizationSource,
-  PermissionEpoch,
-  PermissionGrantScope,
+import {
+  NO_SANDBOX_NETWORK_ACCESS,
+  type PermissionAction,
+  type PermissionAuthorization,
+  type PermissionAuthorizationSource,
+  type PermissionEpoch,
+  type PermissionGrantScope,
+  type SandboxNetworkAccess,
 } from "@science-agent/schema";
 
 import { DEFAULT_ENVIRONMENT_REVISION_ID } from "../environment.js";
@@ -29,6 +31,8 @@ export function createPermissionEpoch(
   reason: string,
   memoryLostReason?: string,
   executeGrantScope?: PermissionGrantScope,
+  /** Sandbox network access snapshot; the epoch freezes it for its lifetime. */
+  networkAccess: SandboxNetworkAccess = NO_SANDBOX_NETWORK_ACCESS,
 ): PermissionEpoch {
   return {
     createdAt: new Date().toISOString(),
@@ -37,7 +41,8 @@ export function createPermissionEpoch(
     ...(executeGrantScope ? { executeGrantScope } : {}),
     mounts: [{ mode: "read-write", source: "workspace" }],
     ...(memoryLostReason ? { memoryLostReason } : {}),
-    networkPolicy: "none",
+    networkAccess: structuredClone(networkAccess),
+    networkPolicy: networkAccess.mode,
     reason: cleanLabel(reason, "Session created"),
     secretRefs: [],
     sessionId,

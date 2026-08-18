@@ -45,7 +45,7 @@ The environment catalog is instance-global, not per Project. Python/R bases are 
 
 ## Permissions and reviewer
 
-Enabling a connector or runtime does not authorize its execution. The first matching code or connector action pauses for a permission card unless a non-revoked grant exists. Persistent grants are managed under **System configuration → Permissions**. Directory tools remain inside the workspace; permission never disables Bubblewrap isolation or `networkPolicy=none`.
+Enabling a connector or runtime does not authorize its execution. The first matching code or connector action pauses for a permission card unless a non-revoked grant exists. Persistent grants are managed under **System configuration → Permissions**. Directory tools remain inside the workspace; permission never disables Bubblewrap isolation and never changes the effective sandbox network policy, which only the system setting decides.
 
 Reviewer Specialist is off by default. Once enabled, **Run review** or an explicit request reviews an Artifact. Quick review checks citation format and computation provenance, persists a separate card, and supplies it to later main-agent context without blocking the current conversation. Text versions expose a diff while both immutable versions remain stored.
 
@@ -63,7 +63,7 @@ Use **Active**, **Archived**, or **All** filters. Archiving preserves messages, 
 
 ## Execution limits
 
-There are no compute tiers or CPU/memory quotas. Guardrails are a configurable execution wall clock (unlimited locally by default), 10 GiB runner workspace, 1 GiB retained stdout+stderr per execution with truncation, and one global execution worker. There is no separate runner per-file limit. API upload limits are instead 1 GiB per file, 10 GiB per request, and 10 GiB cumulative workspace. See [Quota levels](configuration.md#quota-levels). Isolation remains Bubblewrap namespaces, seccomp, no network, and only the Session workspace visible from the host filesystem.
+There are no compute tiers or CPU/memory quotas. Guardrails are a configurable execution wall clock (unlimited locally by default), 10 GiB runner workspace, 1 GiB retained stdout+stderr per execution with truncation, and one global execution worker. There is no separate runner per-file limit. API upload limits are instead 1 GiB per file, 10 GiB per request, and 10 GiB cumulative workspace. See [Quota levels](configuration.md#quota-levels). Isolation remains Bubblewrap namespaces, seccomp, and only the Session workspace visible from the host filesystem. Network is a policy, not a constant: it defaults to `none` (no interface in the sandbox), and when an administrator enables a **domain allowlist** under **System configuration → Sandbox network** the sandbox still has no interface — outbound traffic leaves only through this deployment's egress gateway, filtered by the allowed domains. The effective policy is snapshotted into the Permission Epoch and reported at `/api/health.sandboxNetwork`; see [Sandbox execution](../explanation/sandbox-execution.md#31-sandbox-network-access).
 
 ## Paper reader limits
 

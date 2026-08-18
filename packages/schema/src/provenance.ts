@@ -16,6 +16,7 @@ import type { EvidenceIdentifierType } from "./connectors.js";
 import type { ExecutionLanguage, KernelMode } from "./environment.js";
 import type { ModelUsageStatus } from "./model-usage.js";
 import type { EffectiveRuntimeSettings } from "./runtime-settings.js";
+import type { SandboxNetworkMode } from "./sandbox-network.js";
 
 export interface CasObjectRef {
   hash: string;
@@ -40,7 +41,10 @@ export interface ExecutionRun {
   /** Historical runs created before multi-language execution may contain null. */
   language: ExecutionLanguage | null;
   modifiedFiles: string[];
-  networkPolicy: "none";
+  /** Sandbox network mode of this run; historical rows always carry `"none"`. */
+  networkPolicy: SandboxNetworkMode;
+  /** Sandbox network policy revision, when the run had a policy snapshot. */
+  networkAccessRevision?: string;
   permissionEpochId: string;
   /**
    * CAS reference to the canonical JSON snapshot (sorted keys) of the effective

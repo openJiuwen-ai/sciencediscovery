@@ -1,6 +1,6 @@
 # 沙箱执行：services/runner
 
-Runner 是无 root 的代码执行器：所有 `run_python` / `run_r` / `run_shell` 都在 bubblewrap + seccomp 沙箱内运行，无网络、仅见会话工作区。它同时托管科学环境（micromamba）与持久内核。仅监听回环 `127.0.0.1:4311`，API 是唯一客户端。
+Runner 是无 root 的代码执行器：所有 `run_python` / `run_r` / `run_shell` 都在 bubblewrap + seccomp 沙箱内运行，默认无网络、仅见会话工作区。沙箱网络访问是可配置策略，默认 `none`；见 §3.1。它同时托管科学环境（micromamba）与持久内核。仅监听回环 `127.0.0.1:4311`，API 是唯一客户端。
 
 ## 1. 源码结构
 
@@ -12,7 +12,9 @@ Runner 是无 root 的代码执行器：所有 `run_python` / `run_r` / `run_she
 | `shell-session-manager.ts` | 持久 Shell 会话：沙箱内 bash 驱动循环，保留 cwd/export，空闲超时回收 |
 | `session-env-profile.ts` | Session env profile：从 shell 沉淀白名单变量与 cwd，注入后续执行 |
 | `environment-store.ts` | 科学环境 provisioning：micromamba、目录 catalog、不可变 revision |
-| `seccomp.ts` | x86_64/aarch64 seccomp BPF 基线（拒绝同一类高风险 syscall，`EPERM`），按宿主架构写入 `data/runner-runtime/seccomp-*.bpf` |
+| `seccomp.ts` | x86_64/aarch64 seccomp BPF（拒绝同一类高风险 syscall，`EPERM`），baseline 与 network 两套 profile 按宿主架构写入 `data/runner-runtime/seccomp-*.bpf` |
+| `egress-gateway.ts` | 沙箱网络访问的宿主侧出口：按 policy revision 复用的 UDS HTTP 服务，域名允许列表与地址分类 |
+| `egress-bridge.ts` | 沙箱内 TCP→UDS 桥接脚本、宿主解释器探测与 bwrap 绑定参数 |
 | `request-auth.ts` | HMAC-SHA256（token + 时间戳 + body SHA256），30 秒新鲜度窗口 |
 
 ## 2. HTTP 面
@@ -74,7 +76,38 @@ Docker 默认的 readonlyPaths / maskedPaths 会让内核拒绝在沙箱自己�
 --seccomp 3                                          # BPF 过滤器经 fd 3 传入
 ```
 
-网络策略恒为 none（`--unshare-all` 隐含）。取消（客户端断开或 Stop run）→ `AbortController` → `SIGKILL`。
+取消（客户端断开或 Stop run）→ `AbortController` → `SIGKILL`。
+
+### 3.1 沙箱网络访问
+
+沙箱网络访问是系统设置里的策略，由 API 在创建 Permission Epoch 时快照进 epoch（`networkPolicy` + `networkAccess`，含内容派生的 `revision`），Runner 按该快照决定沙箱形态。它与「网络代理」设置无关：后者管的是 API / Gateway / MCP 自身的出站，不影响沙箱代码。
+
+| 模式 | 沙箱形态 |
+|---|---|
+| `none`（默认） | 与历史行为完全一致：`--unshare-all`、无 `--share-net`、基线 seccomp 拒绝全部 socket 系统调用，不挂通道、不注入出站 env |
+| `domain-allowlist` | **仍然** `--unshare-all` 且**不加** `--share-net`。沙箱唯一的出口是挂载进来的 Unix domain socket |
+
+`domain-allowlist` 的数据面：
+
+```text
+沙箱进程（独立 netns，无网卡）
+  └─ HTTP_PROXY=http://127.0.0.1:18118
+       └─ egress bridge（沙箱内，监听沙箱自己的回环）
+            └─ /run/science-agent/egress.sock（bind-mount）
+                 └─ egress gateway（Runner 进程内，与 Runner 同用户）
+                      └─ 按域名允许列表放行 → 公网
+```
+
+要点：
+
+- **无 root、无 CAP_NET_ADMIN、不依赖 socat**。bridge 是产品自带的标准库 Python 脚本，解释器与标准库以只读方式绑到 `/opt/science-agent-net/`；宿主没有可用 python3 时该模式直接失败（fail-closed），并在 `/health.sandboxNetwork` 报告原因。
+- bridge 先监听再 fork，真实负载是它的子进程并继承 stdin/stdout/stderr，因此持久内核与持久 shell 的行协议不受影响；退出码透传。
+- seccomp 换成 network profile：只放行 socket 族调用（`socket/connect/bind/listen/accept/accept4/socketpair`），ptrace、mount、setns、bpf、keyring、io_uring 等继续拒绝；raw/packet socket 需要 `CAP_NET_RAW`，已被 `--cap-drop ALL` 挡住。
+- 允许列表条目为 `example.org`、`*.example.org`（只在 label 边界匹配，且不含 apex），可加 `:443` 限定端口；IP 字面量既不能作为条目，也不能作为请求目标。
+- gateway 先解析域名再按地址分类：默认拒绝回环、链路本地与私网地址，并连接被批准的那个 IP，避免解析与连接之间被换掉。内网镜像场景可显式打开「允许私网地址」。
+- 边界：**不解密 TLS**，只按 CONNECT / 绝对 URI 的主机名判定，因此宽泛条目仍是宽泛授权。
+- 策略变更会轮换 Permission Epoch 并回收该 Session 的持久内核与 shell（epoch id 是复用键的一部分）。
+- 科学环境 install 的网络（conda 频道 / pip index / 离线缓存）与本策略互不影响。
 
 ## 4. 执行模型与配额
 

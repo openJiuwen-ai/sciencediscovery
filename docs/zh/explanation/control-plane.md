@@ -35,7 +35,7 @@ Node 控制 API 是系统的核心进程：所有浏览器请求、Agent 运行�
 | `/api/sessions/:id/mcp/…` | MCP 调用记录、artifact plan/job/extraction-job |
 | `/api/mcp/sources…` | MCP Source 目录与状态 |
 | `/api/{models,specialists,skills,remote-hosts,environments}` | 全局资源管理 |
-| `/api/settings`、`/api/timeout-settings`、`/api/runtime-status` | 全局设置、超时、运行状态页 |
+| `/api/settings`、`/api/timeout-settings`、`/api/quota-settings`、`/api/sandbox-network-settings`、`/api/runtime-status` | 全局设置、超时、配额、沙箱网络访问、运行状态页 |
 
 SSE 传输为 fetch 流（`data: <json>\n\n` 帧），前端消费方式见[Web 前端参考](../reference/web-frontend.md)。
 

@@ -35,6 +35,7 @@ import type {
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,
   Specialist,
+  SandboxNetworkSettings,
   SystemQuotaSettings,
   SystemTimeoutSettings,
   UpdateMemoryGraphSettingsRequest,
@@ -145,6 +146,14 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   replaceQuotaSettings(body: SystemQuotaSettings): Promise<SystemQuotaSettings> {
     return this.request("/api/quota-settings", { body: JSON.stringify(body), method: "PUT" });
+  }
+
+  getSandboxNetworkSettings(): Promise<SandboxNetworkSettings> {
+    return this.request("/api/sandbox-network-settings");
+  }
+
+  replaceSandboxNetworkSettings(body: SandboxNetworkSettings): Promise<SandboxNetworkSettings> {
+    return this.request("/api/sandbox-network-settings", { body: JSON.stringify(body), method: "PUT" });
   }
 
   getMemoryGraphSettings(): Promise<MemoryGraphSettingsDetails> {

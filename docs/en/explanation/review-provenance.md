@@ -10,7 +10,7 @@ Writers include provenance (code/stdout/stderr/files), Prompt Manifest (prompt/m
 
 ## 2. Execution records and Artifact association
 
-Each sandbox run appends an `ExecutionRun` under `data/execution-runs/<sessionId>.json`: tool/language, CAS references, exit code/times, environment revision, kernel mode/id, permission epoch, no-network Bubblewrap facts, changed files, status, plus:
+Each sandbox run appends an `ExecutionRun` under `data/execution-runs/<sessionId>.json`: tool/language, CAS references, exit code/times, environment revision, kernel mode/id, permission epoch, `networkPolicy` (the sandbox network mode the run actually used, `"none"` by default) and `networkAccessRevision` (the policy revision when an allowlist applied), `sandbox: "bubblewrap"`, changed files, status, plus:
 
 - `workingDirectory`: actual sandbox cwd, legacy placeholder `workspace`, or `unavailable` before execution.
 - `envSnapshot`: CAS reference to canonical sorted JSON of the effective environment, `null` when unavailable, absent in legacy records.

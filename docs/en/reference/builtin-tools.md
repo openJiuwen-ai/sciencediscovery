@@ -12,7 +12,7 @@ This page lists tools visible inside the agent loop. `createWorkspaceTools` in `
 | `read_artifact` | `artifact_id` or `name`; optional `version` | Reads a Project Artifact version; UTF-8 for text, base64 for binary, at most 1 MiB |
 | `declare_artifact` | `path` or `paths` (1–50); optional `name`, `description` | Declares writable workspace files as Project Artifacts. Batch entries succeed/fail independently. Logical names can form virtual sidebar directories without moving files; the server infers preview kind |
 | `run_python` | `code`; optional `environmentRevisionId`, `kernelMode` | Runs Python in Bubblewrap; default ephemeral process, optional managed environment and persistent kernel; non-zero exit is a tool error |
-| `run_shell` | exactly one of `command`, `scriptPath`; optional `arguments`, `kernelMode` | Bounded, networkless workspace shell. Default persistent Session shell carries `cd`, allowed environment changes, and `source` into later shell/Python/R calls; `ephemeral` is clean |
+| `run_shell` | exactly one of `command`, `scriptPath`; optional `arguments`, `kernelMode` | Bounded workspace shell; network follows the sandbox network access policy (no network by default). Default persistent Session shell carries `cd`, allowed environment changes, and `source` into later shell/Python/R calls; `ephemeral` is clean |
 
 First Python/shell execution requests `code` permission. Generated files retain diff and derivation audit but become Artifacts only after `declare_artifact`; uploaded files, MCP downloads, and collected job outputs are registered at their control-plane entry point.
 

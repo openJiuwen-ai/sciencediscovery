@@ -41,6 +41,7 @@ const RUNNER_HEALTH: RunnerHealth = {
   npuBroker: { enabled: false, queueConcurrency: 1, workloads: [] },
   runnerVersion: "test",
   sandbox: "bubblewrap",
+  sandboxNetwork: { available: true, modes: ["none", "domain-allowlist"] },
   scientificEnvs: { available: false, enabled: false, languages: [], provisioner: "test", startersReady: false },
   seccompBaseline: "multiarch-v1-profile-aware",
   status: "ok",

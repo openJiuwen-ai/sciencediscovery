@@ -72,7 +72,7 @@ It **no longer runs the agent loop**; that moved into `services/api`'s `native-a
 
 ### 2.4 `services/runner` — isolated execution
 
-Bubblewrap namespaces and seccomp run networkless Python, R, or shell with optional managed environments/persistent kernels. Guards include wall-clock timeout, workspace total, execution-output quota, and one global worker. There is no independent execution-file or CPU/memory cgroup quota.
+Bubblewrap namespaces and seccomp run Python, R, or shell with no network by default, with optional managed environments/persistent kernels. Guards include wall-clock timeout, workspace total, execution-output quota, and one global worker. There is no independent execution-file or CPU/memory cgroup quota.
 
 ### 2.5 `services/paper` — PDF extraction
 

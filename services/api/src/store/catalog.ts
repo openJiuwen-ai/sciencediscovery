@@ -30,6 +30,7 @@ import type {
   RemoteJob,
   ReviewerSpecialistLevel,
   RuntimeSettingsOverrides,
+  SandboxNetworkSettings,
   ScientificArtifact,
   ScientificArtifactVersion,
   Session,
@@ -41,6 +42,7 @@ import type {
   WebSettings,
 } from "@science-agent/schema";
 import {
+  DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
   DEFAULT_ENVIRONMENT_SOURCE_SETTINGS,
   DEFAULT_REVIEWER_SPECIALIST_LEVEL,
@@ -71,6 +73,7 @@ export interface Catalog {
   permissionRequests: PermissionRequest[];
   projects: Project[];
   quotaSettings: SystemQuotaSettings;
+  sandboxNetworkSettings: SandboxNetworkSettings;
   reviewerSpecialistEnabled: boolean;
   reviewerSpecialistLevel: ReviewerSpecialistLevel;
   remoteHosts: RemoteHostTarget[];
@@ -109,6 +112,7 @@ export function emptyCatalog(
     permissionRequests: [],
     projects: [],
     quotaSettings: structuredClone(initialQuotaSettings),
+    sandboxNetworkSettings: structuredClone(DEFAULT_SANDBOX_NETWORK_SETTINGS),
     reviewerSpecialistEnabled: false,
     reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
     remoteHosts: [],
