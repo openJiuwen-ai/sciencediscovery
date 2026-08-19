@@ -1064,6 +1064,13 @@ export function App() {
   // The version a chip pinned (the one its claim cited) so the ArtifactModal
   // opens that version instead of the drifted-latest. Cleared on navigation.
   const [artifactModalVersion, setArtifactModalVersion] = useState<number>();
+  // The Session the opened artifact actually belongs to. The workspace artifact
+  // list is project-scoped (listProjectArtifacts), so a clicked artifact may
+  // live in a different Session than activeSessionId. Memory-graph reads filter
+  // by Session, so this is forwarded to ArtifactModal as artifactSessionId to
+  // pin graph queries to the artifact's own Session. Absent → fall back to
+  // activeSessionId (URL/shared-link and chip-in-current-session paths).
+  const [artifactModalSessionId, setArtifactModalSessionId] = useState<string | undefined>();
   // Run state is per Session: the server already isolates runs by Session, and a
   // single global flag left every Session unusable whenever one stream hung.
   const [runningSessionIds, setRunningSessionIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -1296,6 +1303,7 @@ export function App() {
     applyingUrlRef.current = true;
     setArtifactModalName(undefined);
     setArtifactModalVersion(undefined);
+    setArtifactModalSessionId(undefined);
     pushToast("info", t("error.artifactNotFound"), `“${logicalName}” is not available in this Session`);
   }, [pushToast]);
 
@@ -1442,6 +1450,7 @@ export function App() {
       if (view.workspaceOpen !== undefined) setWorkspaceCollapsed(!view.workspaceOpen);
       setArtifactModalName(view.artifact);
       setArtifactModalVersion(undefined);
+      setArtifactModalSessionId(undefined);
       if (view.settingsKind === "system") openSystemSettings();
       else cancelSystemSettings();
       setWorkspaceView(view.view === "usage" ? "usage" : "session");
@@ -1885,6 +1894,9 @@ export function App() {
             : undefined);
         if (hit) {
           setArtifactModalVersion(reference.version);
+          // Pin the graph reads to this artifact's own Session (the artifact
+          // list is project-scoped — see openArtifact for the same note).
+          setArtifactModalSessionId(hit.createdInSessionId || undefined);
           setArtifactModalName(hit.name);
           return;
         }
@@ -1899,6 +1911,7 @@ export function App() {
     if (!label) return; // session/skill chips have no graph node label.
     setPendingMemoryNode({ label, id: reference.id });
     setArtifactModalName(undefined);
+    setArtifactModalSessionId(undefined);
     if (workspaceCollapsed) setWorkspaceCollapsed(false);
     else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -3033,6 +3046,10 @@ export function App() {
       return;
     }
     setArtifactModalVersion(undefined);
+    // Pin the graph reads to this artifact's own Session (the artifact list is
+    // project-scoped, so the artifact may live in a different Session than
+    // activeSessionId — see artifactModalSessionId note above).
+    setArtifactModalSessionId(artifact.createdInSessionId || undefined);
     setArtifactModalName(artifact.name);
   }
 
@@ -4078,18 +4095,21 @@ export function App() {
           onClose={() => {
             setArtifactModalName(undefined);
             setArtifactModalVersion(undefined);
+            setArtifactModalSessionId(undefined);
           }}
           onMissing={closeMissingArtifact}
           onNavigateArtifact={(name) => {
             // Navigating to a different artifact via a parent link: that
             // artifact's version was not pinned by the original chip.
             setArtifactModalVersion(undefined);
+            setArtifactModalSessionId(undefined);
             setArtifactModalName(name);
           }}
           onChipClick={handleChipClick}
           onError={reportError}
           onPendingAnnotation={addPendingAnnotation}
           sessionId={activeSessionId}
+          artifactSessionId={artifactModalSessionId}
         />
       ) : null}
 

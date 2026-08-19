@@ -323,6 +323,38 @@ export function ScientificArtifactPanelHeader({
   </header>;
 }
 
+/**
+ * Resolve the Session a memory-graph read (subgraph / artifact-provenance) must
+ * target for the currently-viewed artifact. The workspace artifact list is
+ * project-scoped (``listProjectArtifacts``), so the open artifact may belong to
+ * a different Session than the active Session (``sessionId``). Non-graph
+ * requests tolerate the mismatch — they route by versionId/projectId, not
+ * ``n.session_id`` — but graph queries filter by ``n.session_id``, so they
+ * must target the artifact's own Session or view-chain reports
+ * "not yet in the Science Memory".
+ *
+ * Precedence (most specific first):
+ * 1. ``version?.sessionId`` — the Session that actually produced THIS version.
+ *    Finer than ``artifact.createdInSessionId`` (which is the Session that first
+ *    created the name; a later Session reusing the same name only adds a new
+ *    version). Available once the version list loads; view-chain only fires
+ *    after that, so it's safe to prefer.
+ * 2. ``artifactSessionId`` — caller-pinned Session (openArtifact / chip click
+ *    forward ``artifact.createdInSessionId``). Used before the version loads.
+ * 3. ``sessionId`` — the active Session (embedded/explorer and URL/shared-link
+ *    paths, where the artifact IS the active Session's).
+ */
+export function resolveGraphSessionId(
+  version: { sessionId?: string } | undefined,
+  artifactSessionId: string | undefined,
+  sessionId: string,
+): string {
+  // ``||`` (not ``??``): an empty string is treated as "unspecified" so legacy
+  // rows missing sessionId / a caller pin of "" fall through to the active
+  // Session rather than stranding graph reads on "".
+  return version?.sessionId || artifactSessionId || sessionId;
+}
+
 export function ArtifactModal({
   client,
   embedded = false,
@@ -337,6 +369,7 @@ export function ArtifactModal({
   onPendingAnnotation,
   refreshKey,
   sessionId,
+  artifactSessionId,
 }: {
   client: ApiClient;
   /** Render inline (memory-graph explorer) instead of as a modal over a backdrop. */
@@ -363,6 +396,19 @@ export function ArtifactModal({
   onPendingAnnotation: (annotation: ArtifactAnnotation) => void;
   refreshKey?: string;
   sessionId: string;
+  /** The Session the opened artifact actually belongs to, used ONLY for
+    * memory-graph reads (subgraph for view-chain, artifact-provenance for the
+    * derived-from row). The workspace artifact list is project-scoped
+    * (listProjectArtifacts), so an artifact opened from it may live in a
+    * different Session than ``sessionId`` (= activeSessionId); the graph
+    * filters by Session (n.session_id), so without this the reads query the
+    * wrong graph and view-chain reports "not yet in the memory graph".
+    * Prefers the version's own Session (a version node's session_id is the
+    * Session that actually produced that version — finer than
+    * artifact.createdInSessionId, which is the Session that first created the
+    * name). Absent → ``sessionId`` (current behavior for embedded/explorer
+    * and URL/shared-link paths). */
+  artifactSessionId?: string;
 }) {
   const { t } = useLocale();
   const [artifacts, setArtifacts] = useState<ScientificArtifact[]>([]);
@@ -397,6 +443,12 @@ export function ArtifactModal({
   const reportError = useCallback((message: string) => onErrorRef.current(message), []);
   const artifact = artifacts.find((item) => item.id === artifactId);
   const version = versions.find((item) => item.id === versionId);
+  // Session used ONLY for memory-graph reads (getMemorySubgraph for view-chain,
+  // getMemoryArtifactProvenance for the derived-from row). Non-graph requests
+  // keep using ``sessionId`` — they route by versionId/projectId, not session_id,
+  // so they tolerate a session mismatch; graph queries filter by n.session_id,
+  // so they must target the artifact's own Session. See resolveGraphSessionId.
+  const graphSessionId = resolveGraphSessionId(version, artifactSessionId, sessionId);
   const structureFormat = useMemo(
     () => (source ? detectStructureFormat({ content: source, mediaType: version?.mediaType, name: artifact?.logicalName }) : undefined),
     [artifact?.logicalName, source, version?.mediaType],
@@ -548,7 +600,7 @@ export function ArtifactModal({
       // ``artifact.id`` + ``version.version`` is what the new endpoint takes,
       // and both are in hand here.
       if (artifact?.id && version?.version) {
-        client.getMemoryArtifactProvenance(artifact.id, version.version, sessionId).then((graphResult) => {
+        client.getMemoryArtifactProvenance(artifact.id, version.version, graphSessionId).then((graphResult) => {
           if (!active) return;
           if (!graphResult.dependencies.length) return; // empty → keep legacy
           setProvenance((current) =>
@@ -558,7 +610,7 @@ export function ArtifactModal({
       }
     }).catch((error: Error) => { if (active) reportError(error.message); });
     return () => { active = false; if (url) URL.revokeObjectURL(url); };
-  }, [artifact?.kind, artifact?.logicalName, client, sessionId, versionId]);
+  }, [artifact?.kind, artifact?.logicalName, client, graphSessionId, sessionId, versionId]);
 
   useEffect(() => {
     if (!versionId || !artifact) { setPreview(undefined); return; }
@@ -624,7 +676,11 @@ export function ArtifactModal({
 
   async function viewChain(chainKind: "task" | "artifact"): Promise<void> {
     try {
-      const subgraph = await client.getMemorySubgraph(sessionId);
+      // Query the artifact's own Session's graph (graphSessionId), not the
+      // active Session — the workspace list is project-scoped so the open
+      // artifact may live elsewhere; querying activeSession's graph would miss
+      // the node and report "not yet in the Science Memory".
+      const subgraph = await client.getMemorySubgraph(graphSessionId);
       // Artifact is one node per version (composite key); the subgraph holds
       // v1 and v2 as separate nodes. Match the EXACT version the user is
       // viewing so "View chain from v1" vs "from v2" walk separate chains.
@@ -764,7 +820,7 @@ export function ArtifactModal({
       onClose={() => setChainExplorer(null)}
       onError={onError}
       onPendingAnnotation={onPendingAnnotation}
-      sessionId={sessionId}
+      sessionId={graphSessionId}
       subgraph={chainExplorer.subgraph}
     /></Suspense> : null}
   </div>;
