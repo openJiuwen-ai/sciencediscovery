@@ -39,15 +39,19 @@ function inputForLabel(html: string, label: string): string {
 
 test("new model drafts leave provider URL and model ID empty", () => {
   assert.deepEqual(EMPTY_MODEL_DRAFT, {
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "openai",
     baseUrl: "",
     model: "",
     name: "",
     proxyPolicy: "inherit",
+    thinkingEffort: "high",
+    thinkingMode: "auto",
     vision: false,
   });
 
   const html = renderFields("en");
-  const baseUrlInput = inputForLabel(html, "OpenAI-compatible base URL");
+  const baseUrlInput = inputForLabel(html, "Chat Completions base URL");
   const modelInput = inputForLabel(html, "Model ID");
   assert.match(baseUrlInput, /value=""/);
   assert.match(baseUrlInput, /placeholder="Usually ends with v1"/);
@@ -61,10 +65,10 @@ test("model URL guidance is localized without becoming the field value", () => {
   const english = renderFields("en");
   const chinese = renderFields("zh-CN");
 
-  assert.match(inputForLabel(english, "OpenAI-compatible base URL"), /placeholder="Usually ends with v1"/);
-  assert.match(inputForLabel(chinese, "OpenAI 兼容的基础 URL"), /placeholder="一般以 v1 结尾"/);
-  assert.match(inputForLabel(english, "OpenAI-compatible base URL"), /value=""/);
-  assert.match(inputForLabel(chinese, "OpenAI 兼容的基础 URL"), /value=""/);
+  assert.match(inputForLabel(english, "Chat Completions base URL"), /placeholder="Usually ends with v1"/);
+  assert.match(inputForLabel(chinese, "Chat Completions 基础 URL"), /placeholder="一般以 v1 结尾"/);
+  assert.match(inputForLabel(english, "Chat Completions base URL"), /value=""/);
+  assert.match(inputForLabel(chinese, "Chat Completions 基础 URL"), /value=""/);
   assert.doesNotMatch(`${english}${chinese}`, /https?:\/\//i);
 });
 
@@ -83,14 +87,43 @@ test("editing a saved model preserves its URL and model ID", () => {
 
   const draft = modelDraftFromProfile(profile);
   assert.deepEqual(draft, {
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "openai",
     baseUrl: profile.baseUrl,
     model: profile.model,
     name: profile.name,
     proxyPolicy: profile.proxyPolicy,
+    thinkingEffort: "high",
+    thinkingMode: "auto",
     vision: profile.vision,
   });
 
   const html = renderFields("en", draft);
-  assert.match(inputForLabel(html, "OpenAI-compatible base URL"), /value="https:\/\/saved\.example\.test\/v1"/);
+  assert.match(inputForLabel(html, "Chat Completions base URL"), /value="https:\/\/saved\.example\.test\/v1"/);
   assert.match(inputForLabel(html, "Model ID"), /value="saved-model-id"/);
+});
+
+test("saved protocol, variant, thinking mode, and effort are shown again", () => {
+  const draft = modelDraftFromProfile({
+    apiProtocol: "anthropic-messages",
+    apiVariant: "anthropic-legacy",
+    baseUrl: "https://api.example.test/v1",
+    createdAt: "2026-08-13T00:00:00.000Z",
+    hasApiToken: true,
+    id: "saved-anthropic",
+    model: "claude-test",
+    name: "Saved Anthropic",
+    proxyPolicy: "inherit",
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+    updatedAt: "2026-08-13T00:00:00.000Z",
+    vision: false,
+  });
+  const html = renderFields("en", draft);
+
+  assert.match(html, /<option value="anthropic-messages" selected="">Anthropic Messages<\/option>/);
+  assert.match(html, /<option value="anthropic-legacy" selected="">Anthropic legacy thinking budget<\/option>/);
+  assert.match(html, /<option value="enabled" selected="">Enabled<\/option>/);
+  assert.match(html, /<option value="max" selected="">Max<\/option>/);
+  assert.match(inputForLabel(html, "Anthropic API base URL"), /placeholder="API root or v1 endpoint"/);
 });

@@ -1796,6 +1796,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             const reviewerWorkspace: WorkspaceAgentOptions = {
               config: {
                 apiToken,
+                apiProtocol: selectedModel.apiProtocol,
+                apiVariant: selectedModel.apiVariant,
                 baseUrl: selectedModel.baseUrl,
                 dataDir: store.dataDir,
                 model: selectedModel.model,
@@ -1804,6 +1806,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
                 // that path as well; without it, a sandbox that can only reach
                 // the provider through a configured proxy fails as `Failed to fetch`.
                 proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
+                thinkingEffort: selectedModel.thinkingEffort,
+                thinkingMode: selectedModel.thinkingMode,
               },
               enabledConnectorIds: runtimeSettings.enabledConnectorIds,
               executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },

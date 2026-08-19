@@ -531,7 +531,16 @@ async function executeAgentRun(
       createdAt: userMessage.createdAt,
     });
   }
-  const promptHistory = previousMessages.map((message) => ({ ...message, content: messagePromptContent(message) }));
+  const promptHistory: AgentHistoryMessage[] = previousMessages.flatMap((message) => {
+    if (message.role === "assistant" && message.modelContext?.length) {
+      return structuredClone(message.modelContext);
+    }
+    return [{ role: message.role, content: messagePromptContent(message) }];
+  });
+  const manifestHistory = previousMessages.map((message) => ({
+    ...message,
+    content: messagePromptContent(message),
+  }));
   const pendingManualNotice = previousMessages.at(-1)?.kind === "review_notice" ? previousMessages.at(-1) : undefined;
   const promptUserMessage = {
     ...userMessage,
@@ -543,7 +552,7 @@ async function executeAgentRun(
       ] : []),
     ].join("\n\n"),
   };
-  const promptMessages = [...promptHistory, promptUserMessage];
+  const promptMessages = [...manifestHistory, promptUserMessage];
   if (cancelledRuns.has(runId) || requestAbortController.signal.aborted) {
     await emit({ reason: "Run cancelled", runId, type: "run.cancelled" });
     activeRunAbortControllers.delete(runId);
@@ -628,6 +637,7 @@ async function executeAgentRun(
   let promptManifest: PromptManifest | undefined;
   const taskInvocationId = randomUUID();
   let lastAgentUsage = unreportedModelUsage();
+  let assistantModelContext: AgentHistoryMessage[] = [];
   let turnNumber = 0;
   const observedTimeouts = new Map<string, { kind: TimeoutKind; reason: string; timeoutMs: number }>();
   const persistedTimeouts = new Set<string>();
@@ -644,9 +654,13 @@ async function executeAgentRun(
 
   const agentConfig: AgentConfig = {
     apiToken,
+    apiProtocol: selectedModel.apiProtocol,
+    apiVariant: selectedModel.apiVariant,
     baseUrl: selectedModel.baseUrl,
     dataDir: store.dataDir,
     model: selectedModel.model,
+    thinkingEffort: selectedModel.thinkingEffort,
+    thinkingMode: selectedModel.thinkingMode,
     // Resolve the profile's proxy policy up front so a broken policy fails
     // the run start with a diagnosable message instead of a hung request.
     // The Gateway receives the one effective URL/direct decision instead of
@@ -1673,14 +1687,18 @@ async function executeAgentRun(
   );
   try {
     assertRunActive();
-    const latestHistory: AgentHistoryMessage[] =
-      (agentOptions.history ?? []).map(({ content, role }) => ({ content, role }));
     lastAgentUsage = unreportedModelUsage();
-    await mainExecution.executeAgentRun({
-      history: latestHistory,
+    const initialResult = await mainExecution.executeAgentRun({
+      history: promptHistory,
       prompt: promptUserMessage.content,
       purpose: "initial",
     });
+    const promptIndex = initialResult.finalMessages.findLastIndex((message) => (
+      message.role === "user" && message.content === promptUserMessage.content
+    ));
+    assistantModelContext = promptIndex >= 0
+      ? structuredClone(initialResult.finalMessages.slice(promptIndex + 1))
+      : [];
     const taskUsage = lastAgentUsage;
     assertRunActive();
     await flushWorkspaceRefresh();
@@ -1711,7 +1729,16 @@ async function executeAgentRun(
       runId,
       usage: taskUsage,
     });
-    const message = await store.appendMessage(sessionId, "assistant", assistantText, selectedModel);
+    const message = await store.appendMessage(
+      sessionId,
+      "assistant",
+      assistantText,
+      selectedModel,
+      undefined,
+      undefined,
+      "message",
+      assistantModelContext,
+    );
     // The report Artifact version already carries the chip references drained
     // from this turn's declare_claim calls; mirror them onto the assistant
     // message so the conversation transcript renders [alias] tokens as chips

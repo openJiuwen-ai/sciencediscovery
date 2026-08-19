@@ -35,7 +35,7 @@ test.use({ locale: "zh-CN" });
  * E2E-META
  * Purpose: A first-time Chinese user can configure a model, create a Project, run two tasks, and return to the persisted work.
  * Steps:
- *   1. Open an empty zh-CN workbench and configure a local stub model through System settings.
+ *   1. Open an empty zh-CN workbench and configure a Chat Completions reasoning variant through System settings.
  *   2. Create a Project through the UI, then explicitly select the newly registered model for the task.
  *   3. Send a shell-backed request, inspect its marked tool input/output, and observe completion.
  *   4. Send a second request whose output proves the persistent shell retained state from the first request.
@@ -113,8 +113,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
     let model: JourneyModel | undefined;
     await journey.step(
       "在模型注册表新建一个模型",
-      "新建草稿的基础 URL 与模型 ID 都是空的，URL 只给出「一般以 v1 结尾」这样的中性提示；"
-        + "填好名称、URL、模型 ID 与令牌后可以保存并关闭。",
+      "新建草稿可选择基础接口、接口变种、思考开关和强度；填好并保存后，重新打开仍显示相同选择。",
       async () => {
         await page.getByRole("button", { name: /^系统设置/ }).click();
         const settings = page.getByRole("dialog", { name: "系统设置" });
@@ -125,7 +124,11 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await settings.getByRole("button", { name: "+ 添加模型" }).click();
 
         const nameInput = settings.getByLabel("显示名称");
-        const baseUrlInput = settings.getByLabel("OpenAI 兼容的基础 URL");
+        await settings.getByLabel("基础接口").selectOption("openai-chat-completions");
+        await settings.getByLabel("接口变种").selectOption("deepseek");
+        await settings.getByLabel("思考开关").selectOption("enabled");
+        await settings.getByLabel("思考强度").selectOption("max");
+        const baseUrlInput = settings.getByLabel("Chat Completions 基础 URL");
         const modelInput = settings.getByLabel("模型 ID");
         await expect(baseUrlInput).toHaveValue("");
         await expect(modelInput).toHaveValue("");
@@ -142,6 +145,19 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await settings.getByRole("button", { name: "保存并关闭" }).click();
         model = await (await modelResponsePromise).json() as JourneyModel;
         await expect(settings).toBeHidden();
+
+        await page.getByRole("button", { name: /^系统设置/ }).click();
+        const reopened = page.getByRole("dialog", { name: "系统设置" });
+        await reopened.getByRole("navigation", { name: "设置分组" })
+          .getByRole("button", { name: /^模型注册表/ })
+          .click();
+        await reopened.locator(".model-card").filter({ hasText: modelName }).click();
+        await expect(reopened.getByLabel("基础接口")).toHaveValue("openai-chat-completions");
+        await expect(reopened.getByLabel("接口变种")).toHaveValue("deepseek");
+        await expect(reopened.getByLabel("思考开关")).toHaveValue("enabled");
+        await expect(reopened.getByLabel("思考强度")).toHaveValue("max");
+        await reopened.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
+        await expect(reopened).toBeHidden();
       },
     );
 
@@ -170,6 +186,8 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         expect(modelValue).toBeTruthy();
         await modelPicker.selectOption(modelValue!);
         await expect(modelPicker.locator("option:checked")).toContainText(modelName);
+        await expect(modelPicker.locator("option:checked")).toContainText("openai-chat-completions/deepseek");
+        await expect(modelPicker.locator("option:checked")).toContainText("thinking enabled:max");
       },
     );
 

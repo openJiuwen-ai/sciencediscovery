@@ -43,6 +43,10 @@ import type {
   McpInvocation,
   McpSourceManifest,
   ModelProfile,
+  ModelApiProtocol,
+  ModelApiVariant,
+  ModelThinkingEffort,
+  ModelThinkingMode,
   ModelUsageBucket,
   MemoryGraphNodeLabel,
   PaperAcquisition,
@@ -89,6 +93,7 @@ import type {
   WorkspaceFile,
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificArtifactKind, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
@@ -475,10 +480,14 @@ export function WorkspaceFileTreeList({
 }
 
 export interface ModelDraft {
+  apiProtocol: ModelApiProtocol;
+  apiVariant: ModelApiVariant;
   baseUrl: string;
   model: string;
   name: string;
   proxyPolicy: ProxyPolicy;
+  thinkingEffort: ModelThinkingEffort;
+  thinkingMode: ModelThinkingMode;
   vision: boolean;
 }
 
@@ -667,19 +676,30 @@ export function SystemSettingsFooter({
 }
 
 export const EMPTY_MODEL_DRAFT: ModelDraft = {
+  apiProtocol: "openai-chat-completions",
+  apiVariant: "openai",
   baseUrl: "",
   model: "",
   name: "",
   proxyPolicy: "inherit",
+  thinkingEffort: "high",
+  thinkingMode: "auto",
   vision: false,
 };
 
 export function modelDraftFromProfile(profile: ModelProfile): ModelDraft {
+  const apiProtocol = profile.apiProtocol ?? (profile.baseUrl.includes("/api/plan")
+    ? "anthropic-messages"
+    : "openai-chat-completions");
   return {
+    apiProtocol,
+    apiVariant: profile.apiVariant ?? DEFAULT_MODEL_API_VARIANT[apiProtocol],
     baseUrl: profile.baseUrl,
     model: profile.model,
     name: profile.name,
     proxyPolicy: profile.proxyPolicy,
+    thinkingEffort: profile.thinkingEffort ?? "high",
+    thinkingMode: profile.thinkingMode ?? "auto",
     vision: profile.vision,
   };
 }
@@ -692,10 +712,41 @@ export function ModelDraftFields({
   onChange: (update: Partial<ModelDraft>) => void;
 }) {
   const { t } = useLocale();
+  const baseUrlLabel = draft.apiProtocol === "anthropic-messages"
+    ? t("settings.baseUrl.anthropic")
+    : draft.apiProtocol === "openai-responses"
+      ? t("settings.baseUrl.responses")
+      : t("settings.baseUrl.chatCompletions");
+  const effortSupported = [
+    "anthropic-adaptive",
+    "anthropic-legacy",
+    "deepseek",
+    "responses",
+  ].includes(draft.apiVariant);
   return <>
     <label><span>{t("settings.displayName")}</span><input required value={draft.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Fast analysis" /></label>
-    <label><span>{t("settings.baseUrl")}</span><input required value={draft.baseUrl} onChange={(event) => onChange({ baseUrl: event.target.value })} placeholder={t("settings.baseUrlHint")} /></label>
+    <label><span>{t("settings.apiProtocol")}</span><select value={draft.apiProtocol} onChange={(event) => {
+      const apiProtocol = event.target.value as ModelApiProtocol;
+      onChange({ apiProtocol, apiVariant: DEFAULT_MODEL_API_VARIANT[apiProtocol] });
+    }}>
+      <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
+      <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
+      <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
+    </select></label>
+    <label><span>{t("settings.apiVariant")}</span><select value={draft.apiVariant} onChange={(event) => onChange({ apiVariant: event.target.value as ModelApiVariant })}>
+      {MODEL_API_VARIANTS[draft.apiProtocol].map((variant) => <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>)}
+    </select></label>
+    <label><span>{baseUrlLabel}</span><input required value={draft.baseUrl} onChange={(event) => onChange({ baseUrl: event.target.value })} placeholder={draft.apiProtocol === "anthropic-messages" ? t("settings.baseUrlHint.anthropic") : t("settings.baseUrlHint")} /></label>
     <label><span>{t("settings.modelId")}</span><input required value={draft.model} onChange={(event) => onChange({ model: event.target.value })} /></label>
+    <label><span>{t("settings.thinkingMode")}</span><select value={draft.thinkingMode} onChange={(event) => onChange({ thinkingMode: event.target.value as ModelThinkingMode })}>
+      <option value="auto">{t("settings.thinkingMode.auto")}</option>
+      <option value="enabled">{t("settings.thinkingMode.enabled")}</option>
+      <option value="disabled">{t("settings.thinkingMode.disabled")}</option>
+    </select></label>
+    <label><span>{t(effortSupported ? "settings.thinkingEffort" : "settings.thinkingEffort.unsupported")}</span><select disabled={draft.thinkingMode !== "enabled" || !effortSupported} value={draft.thinkingEffort} onChange={(event) => onChange({ thinkingEffort: event.target.value as ModelThinkingEffort })}>
+      <option value="high">{t("settings.thinkingEffort.high")}</option>
+      <option value="max">{t("settings.thinkingEffort.max")}</option>
+    </select></label>
   </>;
 }
 
@@ -4392,7 +4443,7 @@ export function App() {
                     return <div className={item.id === editingModelId ? "model-card active" : "model-card"} key={item.id} title={modelOptionLabel(item, models)}>
                       <button className="model-card-main" type="button" onClick={() => editModel(item)}>
                         <span className={item.hasApiToken ? "model-status" : "model-status missing"} />
-                        <span><strong>{item.name}</strong><small>{item.model}{idHint ? ` · ${idHint}` : ""}{item.vision ? " · Vision" : ""} · {item.hasApiToken ? "Key saved" : "Key missing"}</small></span>
+                        <span><strong>{item.name}</strong><small>{item.model}{idHint ? ` · ${idHint}` : ""} · {item.apiProtocol ?? (item.baseUrl.includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions")} / {item.apiVariant ?? (item.baseUrl.includes("/api/plan") ? "anthropic-adaptive" : "openai")} · thinking {item.thinkingMode ?? "auto"}{item.thinkingMode === "enabled" ? `:${item.thinkingEffort ?? "high"}` : ""}{item.vision ? " · Vision" : ""} · {item.hasApiToken ? "Key saved" : "Key missing"}</small></span>
                       </button>
                       <ModelConnectivityButton
                         disabled={item.id === editingModelId && modelSettingsDirty}

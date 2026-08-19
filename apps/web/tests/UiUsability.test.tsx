@@ -51,9 +51,9 @@ test("model labels add a short profile ID only when visible identities collide",
 
   assert.equal(shortModelProfileId(first.id), "model-…1111");
   assert.equal(duplicateModelProfileId(first, models), "model-…1111");
-  assert.equal(modelOptionLabel(first, models), "Shared · test-model · model-…1111");
-  assert.equal(modelOptionLabel(second, models), "Shared · test-model · model-…2222");
-  assert.equal(modelOptionLabel(unique, models), "Unique · test-model");
+  assert.equal(modelOptionLabel(first, models), "Shared · test-model · openai-chat-completions/openai · thinking auto · model-…1111");
+  assert.equal(modelOptionLabel(second, models), "Shared · test-model · openai-chat-completions/openai · thinking auto · model-…2222");
+  assert.equal(modelOptionLabel(unique, models), "Unique · test-model · openai-chat-completions/openai · thinking auto");
 });
 
 test("settings checkboxes expose a 24px control inside clickable labels", () => {

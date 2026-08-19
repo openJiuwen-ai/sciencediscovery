@@ -270,13 +270,15 @@ class NativeAgent implements NativeAgentHandle {
       options.runContract ? formatRunContract(options.runContract) : "",
       ...this.toolRegistry.promptSections(),
     ].filter(Boolean).join("\n\n");
-    this.history = options.gatewayHistory
-      ? options.gatewayHistory.map(normalizeHistoryMessage)
-      : (options.history ?? []).map((message) => ({ role: message.role, content: message.content }));
+    this.history = (options.gatewayHistory ?? options.history ?? []).map(normalizeHistoryMessage);
     this.endpoint = {
+      ...(options.config.apiProtocol ? { apiProtocol: options.config.apiProtocol } : {}),
+      ...(options.config.apiVariant ? { apiVariant: options.config.apiVariant } : {}),
       baseUrl: options.config.baseUrl,
       ...(options.config.apiToken ? { apiToken: options.config.apiToken } : {}),
       model: options.config.model,
+      ...(options.config.thinkingEffort ? { thinkingEffort: options.config.thinkingEffort } : {}),
+      ...(options.config.thinkingMode ? { thinkingMode: options.config.thinkingMode } : {}),
       ...(options.config.proxy ? { proxy: options.config.proxy } : {}),
     };
     this.policy = resolveModelClientPolicy();

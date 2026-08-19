@@ -14,7 +14,40 @@
 
 import type { ProxyPolicy } from "./proxy.js";
 
+export type ModelApiProtocol =
+  | "anthropic-messages"
+  | "openai-chat-completions"
+  | "openai-responses";
+
+export type ModelApiVariant =
+  | "anthropic-adaptive"
+  | "anthropic-legacy"
+  | "deepseek"
+  | "gemini"
+  | "minimax"
+  | "ollama"
+  | "openai"
+  | "qwen"
+  | "responses";
+
+export type ModelThinkingMode = "auto" | "disabled" | "enabled";
+export type ModelThinkingEffort = "high" | "max";
+
+export const MODEL_API_VARIANTS: Record<ModelApiProtocol, readonly ModelApiVariant[]> = {
+  "openai-chat-completions": ["openai", "deepseek", "qwen", "minimax", "gemini", "ollama"],
+  "openai-responses": ["responses"],
+  "anthropic-messages": ["anthropic-adaptive", "anthropic-legacy"],
+};
+
+export const DEFAULT_MODEL_API_VARIANT: Record<ModelApiProtocol, ModelApiVariant> = {
+  "openai-chat-completions": "openai",
+  "openai-responses": "responses",
+  "anthropic-messages": "anthropic-adaptive",
+};
+
 export interface ModelProfile {
+  apiProtocol?: ModelApiProtocol;
+  apiVariant?: ModelApiVariant;
   baseUrl: string;
   createdAt: string;
   hasApiToken: boolean;
@@ -22,6 +55,8 @@ export interface ModelProfile {
   model: string;
   name: string;
   proxyPolicy: ProxyPolicy;
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
   updatedAt: string;
   vision: boolean;
 }
@@ -144,18 +179,26 @@ export interface GlobalModelUsageSummary {
 
 export interface CreateModelProfileRequest {
   apiToken?: string;
+  apiProtocol?: ModelApiProtocol;
+  apiVariant?: ModelApiVariant;
   baseUrl: string;
   model: string;
   name: string;
   proxyPolicy?: ProxyPolicy;
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
   vision?: boolean;
 }
 
 export interface UpdateModelProfileRequest {
   apiToken?: string | null;
+  apiProtocol?: ModelApiProtocol;
+  apiVariant?: ModelApiVariant;
   baseUrl: string;
   model: string;
   name: string;
   proxyPolicy?: ProxyPolicy;
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
   vision?: boolean;
 }

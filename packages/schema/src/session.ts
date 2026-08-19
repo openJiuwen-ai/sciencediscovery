@@ -110,6 +110,9 @@ export interface ChatMessage {
   kind?: "message" | "review_notice" | "reviewer_checkpoint" | "timeout_notice";
   modelId?: string;
   modelName?: string;
+  /** Canonical provider transcript for this assistant turn. It is replayed to
+   * the configured model but is not used as the user-visible message body. */
+  modelContext?: Array<Record<string, unknown>>;
   references?: ComposerReference[];
   reviewerCheckpoint?: {
     error?: string;

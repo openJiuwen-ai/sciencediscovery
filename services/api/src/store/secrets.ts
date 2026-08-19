@@ -17,9 +17,14 @@ import { chmod, readFile, writeFile } from "node:fs/promises";
 
 import type {
   CreateModelProfileRequest,
+  ModelApiProtocol,
+  ModelApiVariant,
   ModelProfile,
+  ModelThinkingEffort,
+  ModelThinkingMode,
   UpdateModelProfileRequest,
 } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import { cleanLabel } from "@sciencediscovery/governance";
 
 const MODEL_SECRET_KEY_BYTES = 32;
@@ -41,7 +46,32 @@ export function validateLiveModel(
   if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:") {
     throw new Error("The LLM base URL must use http or https");
   }
-  return { baseUrl: endpoint.toString().replace(/\/$/, ""), model, name, vision: input.vision === true };
+  const apiProtocol: ModelApiProtocol = input.apiProtocol ?? (
+    endpoint.toString().includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions"
+  );
+  if (!Object.hasOwn(MODEL_API_VARIANTS, apiProtocol)) throw new Error("The model API protocol is invalid");
+  const apiVariant: ModelApiVariant = input.apiVariant ?? DEFAULT_MODEL_API_VARIANT[apiProtocol];
+  if (!MODEL_API_VARIANTS[apiProtocol].includes(apiVariant)) {
+    throw new Error(`Model API variant ${apiVariant} is not valid for ${apiProtocol}`);
+  }
+  const thinkingMode: ModelThinkingMode = input.thinkingMode ?? "auto";
+  if (!(["auto", "enabled", "disabled"] as const).includes(thinkingMode)) {
+    throw new Error("The model thinking mode is invalid");
+  }
+  const thinkingEffort: ModelThinkingEffort = input.thinkingEffort ?? "high";
+  if (!(["high", "max"] as const).includes(thinkingEffort)) {
+    throw new Error("The model thinking effort is invalid");
+  }
+  return {
+    apiProtocol,
+    apiVariant,
+    baseUrl: endpoint.toString().replace(/\/$/, ""),
+    model,
+    name,
+    thinkingEffort,
+    thinkingMode,
+    vision: input.vision === true,
+  };
 }
 
 export function normalizeApiToken(value: string | null | undefined): string | undefined {

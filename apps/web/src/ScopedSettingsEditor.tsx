@@ -27,7 +27,7 @@ import type {
   SkillSelectionMode,
 } from "@sciencediscovery/schema";
 
-import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
+import { modelOptionLabel } from "./modelLabels.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
 
 const FIELD_LABELS = {
@@ -58,7 +58,7 @@ function effectiveModelName(modelId: string | undefined, models: ModelProfile[])
   if (!modelId) return "Not configured";
   const model = models.find((candidate) => candidate.id === modelId);
   if (!model) return modelId;
-  return duplicateModelProfileId(model, models) ? modelOptionLabel(model, models) : model.name;
+  return modelOptionLabel(model, models);
 }
 
 function normalizeSkillLibraryMount(mount: EnabledSkillLibrary): EnabledSkillLibrary {

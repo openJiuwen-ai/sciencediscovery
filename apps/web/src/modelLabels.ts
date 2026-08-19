@@ -33,7 +33,13 @@ export function duplicateModelProfileId(
 }
 
 export function modelOptionLabel(profile: ModelProfile, profiles: ModelProfile[]): string {
-  const base = `${profile.name} · ${profile.model}`;
+  const protocol = profile.apiProtocol ?? (profile.baseUrl.includes("/api/plan")
+    ? "anthropic-messages"
+    : "openai-chat-completions");
+  const variant = profile.apiVariant ?? (protocol === "anthropic-messages" ? "anthropic-adaptive" : "openai");
+  const thinking = profile.thinkingMode ?? "auto";
+  const effort = profile.thinkingEffort ?? "high";
+  const base = `${profile.name} · ${profile.model} · ${protocol}/${variant} · thinking ${thinking}${thinking === "enabled" ? `:${effort}` : ""}`;
   const idHint = duplicateModelProfileId(profile, profiles);
   return idHint ? `${base} · ${idHint}` : base;
 }

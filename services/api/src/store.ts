@@ -509,15 +509,12 @@ export class SessionStore {
         return legacy.id !== "builtin-demo" && legacy.demoMode !== true && legacy.model !== "deterministic-demo";
       })
       .map((model) => ({
-        baseUrl: model.baseUrl,
+        ...validateLiveModel(model),
         createdAt: model.createdAt,
         hasApiToken: modelIdsWithSecrets.has(model.id),
         id: model.id,
-        model: model.model,
-        name: model.name,
         proxyPolicy: normalizeSavedProxyPolicy(model.proxyPolicy),
         updatedAt: model.updatedAt,
-        vision: model.vision === true,
       }));
     const migratedModels = JSON.stringify(models) !== JSON.stringify(savedModels);
     const modelIds = new Set(models.map((model) => model.id));
@@ -3843,6 +3840,7 @@ export class SessionStore {
     references?: ComposerReference[],
     annotationIds?: string[],
     kind: ChatMessage["kind"] = "message",
+    modelContext?: ChatMessage["modelContext"],
   ): Promise<ChatMessage> {
     const session = this.assertSessionWritable(sessionId);
     const message: ChatMessage = {
@@ -3851,6 +3849,7 @@ export class SessionStore {
       id: randomUUID(),
       kind,
       ...(model ? { modelId: model.id, modelName: model.name } : {}),
+      ...(modelContext?.length ? { modelContext: structuredClone(modelContext) } : {}),
       ...(references?.length ? { references: structuredClone(references) } : {}),
       role,
     };

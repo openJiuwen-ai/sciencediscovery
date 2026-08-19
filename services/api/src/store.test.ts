@@ -884,6 +884,92 @@ test("SessionStore encrypts model API tokens and preserves them across reloads",
   assert.equal(reopened.getModelApiToken(model.id), undefined);
 });
 
+test("SessionStore persists model protocol settings and migrates legacy defaults", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-model-protocol-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const responses = await store.createModel({
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    baseUrl: "https://models.example.test/v1",
+    model: "reasoner",
+    name: "Responses model",
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+  });
+  assert.equal(responses.apiProtocol, "openai-responses");
+  assert.equal(responses.apiVariant, "responses");
+  assert.equal(responses.thinkingMode, "enabled");
+  assert.equal(responses.thinkingEffort, "max");
+
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  const row = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
+  const catalog = JSON.parse(row.json) as PersistedCatalog;
+  catalog.models.push({
+    baseUrl: "https://legacy.example.test/api/plan",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    hasApiToken: false,
+    id: "legacy-anthropic",
+    model: "legacy",
+    name: "Legacy",
+    proxyPolicy: "inherit",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    vision: false,
+  });
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(catalog));
+  database.close();
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getModel("legacy-anthropic"), {
+    apiProtocol: "anthropic-messages",
+    apiVariant: "anthropic-adaptive",
+    baseUrl: "https://legacy.example.test/api/plan",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    hasApiToken: false,
+    id: "legacy-anthropic",
+    model: "legacy",
+    name: "Legacy",
+    proxyPolicy: "inherit",
+    thinkingEffort: "high",
+    thinkingMode: "auto",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    vision: false,
+  });
+  await assert.rejects(reopened.createModel({
+    apiProtocol: "anthropic-messages",
+    apiVariant: "deepseek",
+    baseUrl: "https://invalid.example.test/v1",
+    model: "invalid",
+    name: "Invalid",
+  }), /not valid for anthropic-messages/);
+});
+
+test("SessionStore preserves provider model context across user turns", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `message-model-context-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({ apiToken: "test-token", baseUrl: "https://models.example.test/v1", model: "test", name: "Test" });
+  const project = await store.createProject("Project");
+  const session = await store.createSession(project.id, "Session", { modelId: model.id });
+  const modelContext = [{
+    role: "assistant",
+    content: "answer",
+    reasoning_content: "reasoning",
+    tool_calls: [{ id: "call-1", type: "function", function: { name: "lookup", arguments: "{}" } }],
+  }];
+  await store.appendMessage(session.id, "assistant", "answer", model, undefined, undefined, "message", modelContext);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual((await reopened.readMessages(session.id))[0]!.modelContext, modelContext);
+});
+
 test("SessionStore removes the legacy demo profile and reassigns sessions to a configured model", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-demo-migration-${Date.now()}-${process.pid}`);
   await mkdir(resolve(tempRoot, "messages"), { recursive: true });

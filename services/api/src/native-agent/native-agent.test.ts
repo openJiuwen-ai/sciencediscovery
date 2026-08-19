@@ -456,6 +456,25 @@ test("raw assistant tool-call fields replay verbatim on the next model call", as
   }
 });
 
+test("session history preserves provider reasoning context on the first model call", async () => {
+  const providerHistory: AgentHistoryMessage[] = [{
+    role: "assistant",
+    content: "",
+    reasoning_content: "deep reasoning",
+    response_items: [{ id: "rs-1", type: "reasoning", encrypted_content: "opaque" }],
+    anthropic_content: [{ type: "thinking", thinking: "consider", signature: "signed" }],
+  }];
+  const { calls, streamer } = scriptStreamer([() => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({ ...workspace(), history: providerHistory } as NativeAgentOptions);
+    await agent.execute("continue");
+    assert.deepEqual(calls[0]!.history[0], providerHistory[0]);
+  } finally {
+    restore();
+  }
+});
+
 test("deferred tools stay hidden until tool_search promotes them", async () => {
   const executed: string[] = [];
   const options: NativeAgentOptions = {
