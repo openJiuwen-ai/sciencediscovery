@@ -34,14 +34,14 @@ The browser is a client, not a repository service. Both HTTP services are loopba
 | Name | Resident? | Actual form |
 |---|---|---|
 | `services/paper` | no | API launches `paper_worker.py` per PDF and it exits afterward |
-| deer-flow | no | Python library/submodule installed in the gateway environment; no separate port. The agent loop no longer uses it; only web-provider execution still does |
+| deer-flow | removed | Was a Python library installed from a submodule into the gateway environment. Both the agent loop and the web providers now run inside the Node control plane, so the dependency and the submodule are gone |
 | `apps/web` | no in production | Static assets served by API; optional Vite `:5173` in development |
 | `services/memory-graph` | disabled by default | Experimental Python sidecar on loopback `:17674`; requires explicit enablement and external storage |
 | persistent kernels/Bubblewrap jobs | on demand | Runner children reclaimed after idle timeout |
 | Host NPU Broker jobs | on demand | Started by Runner only when `SCIENCE_AGENT_NPU_BROKER=1`; allowlisted host workloads, not a separate daemon or arbitrary command surface |
 | models and scientific databases | remote | Outbound HTTPS, not local processes |
 
-The default remains three resident processes. Enabling Science Memory adds one; Host NPU Broker jobs are only Runner-spawned child processes.
+The default is two resident processes. Enabling Science Memory adds one; Host NPU Broker jobs are only Runner-spawned child processes.
 
 ### 2.3 Which process runs the agent loop?
 
@@ -67,4 +67,4 @@ The API process. The loop is this repository's own TypeScript under `services/ap
 | Gateway | no (environment only) | interpreter environment for the bundled Python MCP servers | no longer a service: agent loop, web providers, sandbox, and governance are all elsewhere |
 | Runner | yes, `4311` | Bubblewrap code execution; allowlisted Host NPU Broker jobs when enabled | business semantics or arbitrary host shell |
 | Paper | per invocation | bounded PDF extraction | network retrieval |
-| deer-flow | library | web-provider implementations | agent loop, separate HTTP service |
+| deer-flow | removed | — | everything: the agent loop and the web providers are the repository's own code |

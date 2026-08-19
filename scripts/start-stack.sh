@@ -191,16 +191,17 @@ prepare_local() {
       pnpm install --frozen-lockfile --ignore-scripts "${pnpm_registry_args[@]}"
     fi
     uv_sync_project services/paper "$envs_dir/paper" 1
-    if [[ ! -f third_party/deer-flow/backend/packages/harness/pyproject.toml ]]; then
-      echo "Initializing the deer-flow submodule..." >&2
-      git submodule update --init --recursive third_party/deer-flow
-    fi
     # Pinned to Python 3.12 via services/gateway/.python-version.
     uv_sync_project services/gateway "$envs_dir/gateway" 0
     pnpm build
   fi
 
+  # Same two locations `resolveMcpPython()` knows about, in the same order, so
+  # a standalone `uv sync` in services/gateway is also a usable interpreter.
   gateway_python="$envs_dir/gateway/bin/python"
+  if [[ ! -x "$gateway_python" && -x "$repository_root/services/gateway/.venv/bin/python" ]]; then
+    gateway_python="$repository_root/services/gateway/.venv/bin/python"
+  fi
   if [[ ! -x "$gateway_python" ]]; then
     echo "$envs_dir/gateway is missing (needed for the bundled Python MCP servers). Run without --no-build once to provision it." >&2
     exit 1
@@ -244,6 +245,15 @@ prepare_local() {
       runner_environment+=("$passthrough=$value")
     fi
   done
+  # `pnpm api` runs the API with its own package directory as the working
+  # directory, so the two settings the API otherwise resolves relative to the
+  # process cwd would miss: the repository-root MCP registry, and the
+  # interpreter for the bundled stdio MCP servers (biomed, UniProt), whose
+  # fallback probes `data/envs/gateway/bin/python` and would degrade to a bare
+  # `python` from PATH. Name both explicitly; an operator value still wins.
+  export SCIENCE_AGENT_EXTENSIONS_CONFIG_PATH="$(absolute_from_repository "${SCIENCE_AGENT_EXTENSIONS_CONFIG_PATH:-extensions_config.json}")"
+  export SCIENCE_AGENT_GATEWAY_PYTHON_PATH="${SCIENCE_AGENT_GATEWAY_PYTHON_PATH:-$gateway_python}"
+
   runner_command=(env "${runner_environment[@]}" node services/runner/dist/server.js)
   api_command=(pnpm api)
   api_foreground=1
@@ -291,9 +301,6 @@ EOF
     mkdir -p "$HOME"
     export HOME
   fi
-
-  export DEER_FLOW_HOME="${DEER_FLOW_HOME:-$data_dir/deer-flow}"
-  mkdir -p "$DEER_FLOW_HOME"
 
   if [[ ! -x "$gateway_python" ]]; then
     echo "The Python MCP server environment is missing at $gateway_python. Rebuild the image." >&2

@@ -33,7 +33,7 @@ their machine.
    (`uv`/`pnpm`/`corepack`) over system-wide ones.
 5. **Environment must pass before deploying.** On any failed check, stop, report,
    and wait for the user's decision.
-6. Repository-local writes are fine (`.env`, `data/`, `git submodule update`),
+6. Repository-local writes are fine (`.env`, `data/`),
    but say what you are writing before you write it.
 7. After a successful start, always report the **URL and the bearer token
    source**, then the management commands for the mode actually used.
@@ -61,8 +61,7 @@ Run from the repository root. Report each check as pass/fail with the value seen
 
 ```bash
 uname -s -m                              # expect: Linux x86_64 or aarch64
-git submodule status third_party/deer-flow   # leading '-' means not initialized
-ss -ltn | grep -E ':(4310|4311|4312)' || echo "ports free"
+ss -ltn | grep -E ':(4310|4311)' || echo "ports free"
 sysctl kernel.unprivileged_userns_clone             2>/dev/null   # 1, where the knob exists
 sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null   # 0, required on Ubuntu 24.04+
 ```
@@ -111,14 +110,11 @@ fixes are **for the user to run**, quoted as such:
 - `kernel.apparmor_restrict_unprivileged_userns` is `1` → the documented fix is
   `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. Quote it,
   explain it needs root and is not persistent, and stop.
-- Submodule not initialized → `git submodule update --init --recursive third_party/deer-flow`
-  is repository-local; say so, then run it if the user agrees. Host-process mode
-  also does this automatically on a build run.
 - Port already in use → offer `SCIENCE_AGENT_PORT` (host mode) or
   `SCIENCE_AGENT_PUBLISH_PORT` (Docker) instead of killing the other process.
-  When moving the runner/gateway ports, also update the explicit
-  `SCIENCE_AGENT_RUNNER_URL` / `SCIENCE_AGENT_GATEWAY_URL` in `.env` — they do
-  not follow the `*_PORT` values automatically.
+  When moving the runner port, also update the explicit
+  `SCIENCE_AGENT_RUNNER_URL` in `.env` — it does not follow `*_PORT`
+  automatically.
 - npm / PyPI unreachable or very slow → set `SCIENCE_AGENT_NPM_REGISTRY` /
   `SCIENCE_AGENT_PYPI_INDEX` in `.env` (e.g. the Huawei Cloud mirrors; see the
   variable table in `docs/zh/reference/configuration.md`). Both are scoped to
@@ -137,8 +133,9 @@ cp .env.example .env                               # first time only; never over
 ./scripts/start-stack.sh --mode local --no-build   # start only, after a previous build
 ```
 
-- Runs in the **foreground**; it starts gateway (127.0.0.1:4312) and runner
-  (127.0.0.1:4311) in the background and the API (0.0.0.0:4310) in front.
+- Runs in the **foreground**; it starts the runner (127.0.0.1:4311) in the
+  background and the API (0.0.0.0:4310) in front. Those two are the whole
+  resident stack.
 - First run provisions `data/envs/gateway` and `data/envs/paper` through `uv`
   and needs outbound network.
 - `./scripts/run-local.sh [--no-build]` is the compatibility wrapper; `pnpm start`
@@ -205,24 +202,23 @@ published port: `SCIENCE_AGENT_PORT` in host-process mode,
 4310 is taken locally. Stop the tunnel by closing the session, or by killing the
 backgrounded `ssh -f` process.
 
-Forward only the API port. The gateway (4312) and runner (4311) are loopback-only
-by design.
+Forward only the API port. The runner (4311) is loopback-only by design.
 
 ## Management commands
 
 | Action | Host processes | Docker Compose |
 |---|---|---|
 | Start | `./scripts/start-stack.sh --mode local [--no-build]` | `docker compose up -d` |
-| Stop | Ctrl-C in that terminal (also stops gateway and runner) | `docker compose down` (`./data` survives) |
+| Stop | Ctrl-C in that terminal (also stops the runner) | `docker compose down` (`./data` survives) |
 | Restart | Ctrl-C, then start again | `docker compose restart` |
 | Rebuild + restart | start once without `--no-build` | `docker compose up -d --build` |
 | Logs | stdout/stderr of the foreground terminal (or the supervisor's log) | `docker compose logs -f` |
 | State | `ss -ltn \| grep 4310` | `docker compose ps` (includes the health check) |
 | Health | `curl -fsS http://127.0.0.1:4310/health` | same, against the published host/port |
 
-Component health endpoints in both modes: gateway `http://127.0.0.1:4312/health`,
-runner `http://127.0.0.1:4311/health` (reachable from inside the container in
-Docker mode).
+Component health endpoint in both modes: runner `http://127.0.0.1:4311/health`
+(reachable from inside the container in Docker mode). The API's own `/health`
+echoes the runner status, so it is usually the only one worth checking.
 
 ## Troubleshooting
 
@@ -230,7 +226,7 @@ Docker mode).
 |---|---|
 | `data ... is not writable by uid ...` | Docker uid/gid mismatch → set `SCIENCE_AGENT_UID` / `_GID`, recreate |
 | `WARNING: bubblewrap cannot create a sandbox` in logs | Host restricts user namespaces → quote the `sysctl` fix, let the user run it |
-| `data/envs/gateway is missing` | Started with `--no-build` before a build → run once without it |
+| `data/envs/gateway is missing` | Started with `--no-build` before a build → run once without it (that venv holds the interpreter for the bundled Python MCP servers) |
 | API up but every run fails | Usually the sandbox warning above, or no model profile configured |
 | Port already bound | Change `SCIENCE_AGENT_PORT` / `SCIENCE_AGENT_PUBLISH_PORT` |
 | `does not support --disable-userns` warning at runner startup | Expected on bwrap < 0.8 (e.g. Ubuntu 22.04's 0.6): nested-userns hardening is skipped, everything else isolates normally. Upgrade bubblewrap for the stronger profile |

@@ -30,7 +30,7 @@ ScienceDiscovery是专为科学研究打造的一站式AI科研工作台。依�
 | 路径 | 宿主要求 |
 |---|---|
 | 预打包二进制 | Linux x86_64/aarch64、bubblewrap |
-| 本地源码模式 | Linux x86_64/aarch64、Node.js 22.19+、pnpm 11.1.2、Python 3、uv 0.9+、bubblewrap、支持 submodule 的 Git |
+| 本地源码模式 | Linux x86_64/aarch64、Node.js 22.19+、pnpm 11.1.2、Python 3、uv 0.9+、bubblewrap、Git |
 | Docker | Linux x86_64/aarch64、Docker Engine 24+、Compose v2，以及可用的无特权用户命名空间 |
 
 源码模式下 Gateway 要求 Python 3.12，`uv` 会在需要时将其安装到服务环境。托管科学环境使用应用固定版本的 micromamba，不要求系统安装 Python、R 或 conda。所有受支持的部署路径均要求 Linux 以及部署指南中说明的用户命名空间能力。

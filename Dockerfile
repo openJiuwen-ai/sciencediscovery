@@ -13,9 +13,9 @@
 # limitations under the License.
 
 # ScienceDiscovery — one image carrying the whole local stack. The container uses
-# start-stack.sh --mode docker for the same three-process order as local mode
-# (agent-loop gateway → bubblewrap runner → control API with the web UI), so no
-# cross-container rewiring of loopback gateway/runner/callback URLs is needed.
+# start-stack.sh --mode docker for the same two-process order as local mode
+# (bubblewrap runner → control API with the web UI), so no cross-container
+# rewiring of the loopback runner URL is needed.
 #
 # The uv-managed Python environments are baked into the image under
 # /opt/science-agent instead of <data dir>/envs: starting the baked services
@@ -99,27 +99,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     UV_PROJECT_ENVIRONMENT=/opt/science-agent/envs/paper \
       uv sync --project services/paper --locked --no-install-project --python "${PYTHON_VERSION}"
 
-# The gateway lock includes the transitive dependencies of its editable
-# deerflow-harness path dependency. Trust that lock before local sources exist,
-# skip both local packages, then validate it with the final locked sync.
+# Install the gateway's third-party dependencies from its lock before the local
+# sources exist, skipping the local package itself; the final locked sync below
+# validates the result once the full tree is present.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=services/gateway/pyproject.toml,target=/app/services/gateway/pyproject.toml \
     --mount=type=bind,source=services/gateway/uv.lock,target=/app/services/gateway/uv.lock \
     UV_PROJECT_ENVIRONMENT=/opt/science-agent/envs/gateway \
       uv sync --project services/gateway --frozen --no-install-project \
-        --no-install-package deerflow-harness --python "${PYTHON_VERSION}"
+        --python "${PYTHON_VERSION}"
 
 COPY . .
 
-# The gateway installs the deer-flow harness as an editable path dependency, so
-# the submodule has to be present in the build context.
-RUN test -f third_party/deer-flow/backend/packages/harness/pyproject.toml \
-    || { echo "third_party/deer-flow is not checked out. Run: git submodule update --init --recursive" >&2; exit 1; }
-
 RUN pnpm build
 
-# Install the local projects from the complete source tree. The gateway's final
-# locked sync preserves the editable deerflow-harness path dependency.
+# Install the local projects from the complete source tree.
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_PROJECT_ENVIRONMENT=/opt/science-agent/envs/paper \
       uv sync --project services/paper --locked --python "${PYTHON_VERSION}" \
@@ -146,15 +140,12 @@ RUN apt-get update \
       tini \
  && rm -rf /var/lib/apt/lists/*
 
-# In-container defaults. Everything the gateway and runner need stays on
-# container loopback; only the API port is published.
+# In-container defaults. Everything the runner needs stays on container
+# loopback; only the API port is published.
 ENV NODE_ENV=production \
     SCIENCE_AGENT_DATA_DIR=/app/data \
     SCIENCE_AGENT_HOST=0.0.0.0 \
     SCIENCE_AGENT_PORT=4310 \
-    SCIENCE_AGENT_GATEWAY_HOST=127.0.0.1 \
-    SCIENCE_AGENT_GATEWAY_PORT=4312 \
-    SCIENCE_AGENT_GATEWAY_URL=http://127.0.0.1:4312 \
     SCIENCE_AGENT_RUNNER_HOST=127.0.0.1 \
     SCIENCE_AGENT_RUNNER_PORT=4311 \
     SCIENCE_AGENT_RUNNER_URL=http://127.0.0.1:4311 \

@@ -4,7 +4,7 @@ Thanks for your interest in contributing. This document covers the development s
 
 ## Prerequisites
 
-Everything listed under [README → Quick start → Requirements](README.md#requirements) (Linux x86_64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, bubblewrap 0.6+ (0.8+ recommended), git with submodule support).
+Everything listed under [README → Quick start → Requirements](README.md#requirements) (Linux x86_64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, bubblewrap 0.6+ (0.8+ recommended), git).
 
 Run the stack once before running the full check suite — the API agent-path tests spawn the gateway and need its Python environment:
 

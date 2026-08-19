@@ -30,14 +30,6 @@ export const PAYLOAD_MANIFEST_FORMAT_VERSIONS = [1, 2] as const;
 export interface PayloadBootstrap {
   /** uv is fetched as this pinned PyPI wheel and verified before use. */
   uv: { version: string; project: string; wheelFilename: string; wheelSha256: string };
-  deerFlow: {
-    /** Exact commit recorded by the repository's submodule gitlink. */
-    commit: string;
-    /** `digestTree` result for that commit's checkout, for git-less verification. */
-    treeDigest: string;
-    /** Repository-relative directory of the installable harness package. */
-    harnessPath: string;
-  };
   /** Payload-relative path of the hash-pinned gateway requirements export. */
   requirementsPath: string;
   /** Payload-relative path of the prebuilt science-agent-gateway wheel. */
@@ -67,7 +59,6 @@ export interface PayloadManifest {
     apiEntry: string;
     runnerEntry: string;
     webDir: string;
-    gatewayModule: string;
   };
   /** Present from format version 2 on; absent in embedded-dependency payloads. */
   bootstrap?: PayloadBootstrap;
@@ -99,12 +90,6 @@ export function parsePayloadManifest(raw: string, source: string): PayloadManife
     const bootstrap = manifest.bootstrap;
     if (!bootstrap?.uv?.wheelFilename || !bootstrap.uv.wheelSha256 || !bootstrap.uv.version || !bootstrap.uv.project) {
       throw new Error(`${source} is missing the bootstrap uv wheel pin.`);
-    }
-    if (!/^[0-9a-f]{40}$/.test(bootstrap.deerFlow?.commit ?? "")) {
-      throw new Error(`${source} is missing a full deer-flow commit SHA in the bootstrap section.`);
-    }
-    if (!bootstrap.deerFlow.treeDigest?.startsWith("sha256:") || !bootstrap.deerFlow.harnessPath) {
-      throw new Error(`${source} is missing the deer-flow tree digest or harness path.`);
     }
     if (!bootstrap.requirementsPath || !bootstrap.gatewayWheelPath) {
       throw new Error(`${source} is missing a bootstrap artifact path entry.`);

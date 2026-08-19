@@ -10,7 +10,7 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 
 ### 2.1 有几个常驻进程？
 
-本地用 `./scripts/start-stack.sh --mode local` 启动时，**产品本身常驻 2 个进程**（脚本后台拉起前两个，前台跑第三个；Ctrl-C 会一并清理后台）。原有 `./scripts/run-local.sh` 仍是转调该模式的兼容入口：
+本地用 `./scripts/start-stack.sh --mode local` 启动时，**产品本身常驻 2 个进程**（脚本后台拉起 Runner，前台跑 API；Ctrl-C 会一并清理后台）。原有 `./scripts/run-local.sh` 仍是转调该模式的兼容入口：
 
 | # | 进程 | 启动方式 | 默认监听 | 协议角色 |
 |---|------|----------|----------|----------|
@@ -53,23 +53,23 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 - **3 个常驻 HTTP 服务进程** = api + runner + gateway。浏览器只是客户端。
 - **模型对话由 API 进程直接发起**，不再有「API 把一轮对话转交给 gateway」这一跳，也不再有 gateway 回调 API 的 `/internal/tool-exec`。
 - Runner **始终只绑回环**，API 也默认只绑回环；对外暴露 API 必须显式配置。
-- 一轮聊天时：浏览器只跟 **API:4310** 说话；API 直接调模型 API 和 runner；只有 `web_search` / `web_fetch` 的 provider 执行才会走到 gateway。
+- 一轮聊天时：浏览器只跟 **API:4310** 说话；API 直接调模型 API、web provider 和 runner，没有 gateway 这一跳。
 
 ### 2.2 哪些「模块」不是常驻进程？
 
-架构图里的 **paper**、**deer-flow** 容易被理解成独立服务，实际不是：
+架构图里的 **paper**、**deer-flow** 容易被理解成独立服务，实际不是（deer-flow 已整体移除）：
 
 | 名称 | 是否常驻进程 | 实际形态 |
 |------|--------------|----------|
 | **services/paper** | 否 | PDF 需要时，API 用 `execFile` **按次拉起** `paper_worker.py` 子进程，跑完退出 |
-| **deer-flow** | 否 | 已完全移除：agent 循环与 web provider 都在 Node 进程内实现，gateway 的 venv 不再安装 `deerflow-harness` |
+| **deer-flow** | 已移除 | agent 循环与 web provider 都在 Node 进程内实现，gateway 的 venv 不再安装 `deerflow-harness`，对应 submodule 也已删除 |
 | **apps/web** | 否（生产路径） | 构建为静态资源，由 **API 进程** 从 `apps/web/dist` 托管；开发时可用 Vite 另起 `:5173`（可选） |
 | **services/memory-graph** | 否（默认） | 实验性可选侧车（Python，仅回环 `:17674`）；在 System Settings 中启用并配置后由启动脚本拉起，禁用时 API 写入为静默 no-op |
 | **持久内核 / bwrap 任务** | 否（按需） | Runner 在执行代码时派生子进程；空闲超时后回收 |
 | **Host NPU Broker job** | 否（按需） | 仅当 `SCIENCE_AGENT_NPU_BROKER=1` 时由 Runner 启动白名单宿主 workload；不是独立 daemon，不开放任意命令 |
 | **外部模型 / PubMed 等** | 远端 | 出站 HTTPS，不是本机进程 |
 
-因此：逻辑上可以画多个「模块」，**运行时默认同机常驻只有 3 个进程**（启用 Science Memory 时 +1；Host NPU Broker job 只是 Runner 按需派生的子进程）。
+因此：逻辑上可以画多个「模块」，**运行时默认同机常驻只有 2 个进程**（启用 Science Memory 时 +1；Host NPU Broker job 只是 Runner 按需派生的子进程）。
 
 ### 2.3 agent 循环跑在哪个进程？
 
@@ -102,4 +102,4 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 | **Gateway (Python)** | 否（仅环境） | 为随包 Python MCP server 提供解释器环境 | 不再是服务：agent 循环、web provider、沙箱、治理都不在这里 |
 | **Runner** | 是（:4311） | bubblewrap 代码执行；启用时管理白名单 Host NPU Broker job | 业务语义、任意宿主 shell |
 | **Paper** | 否（按次子进程） | 有界 PDF 抽取 | 联网检索 |
-| **deer-flow** | 否（库） | web provider 实现 | agent 循环、独立 HTTP 服务 |
+| **deer-flow** | 已移除 | — | 全部：agent 循环与 web provider 都是本仓自有代码 |

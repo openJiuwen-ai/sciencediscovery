@@ -37,7 +37,7 @@ export interface ParsedInvocation {
 export const USAGE = `Usage: ScienceDiscovery <command> [options]
 
 Commands:
-  serve                    Start the Web UI, control API, agent-loop gateway and runner
+  serve                    Start the Web UI, control API and sandbox runner
   extract --to <dir>       Unpack the embedded runtime payload without starting it
   version                  Print the release version and bundled runtime versions
   help                     Show this message
@@ -47,7 +47,6 @@ serve options:
   --host <address>         Web UI / API bind address (default: 127.0.0.1)
   --port <number>          Web UI / API port (default: 4310)
   --runner-port <number>   Loopback runner port (default: 4311)
-  --gateway-port <number>  Loopback gateway port (default: 4312)
   --env-file <path>        Load KEY=VALUE settings from this file before starting
   --bwrap <path>           bubblewrap executable (default: bwrap from PATH)
   --skip-sandbox-check     Start without bubblewrap; sandboxed tools will fail
@@ -56,8 +55,8 @@ serve options:
 Bubblewrap is the only required host dependency. Neo4j is not bundled, so the
 memory-graph feature stays off unless a separate server is configured.
 
-First launch downloads uv, deer-flow and the gateway's Python dependencies
-into the data directory (later launches skip this). Optional overrides:
+First launch downloads uv and the Python dependencies of the bundled MCP
+servers into the data directory (later launches skip this). Optional overrides:
   SCIENCE_DISCOVERY_DATA_DIR          Runtime data directory
   SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR Extracted payload cache root
   SCIENCE_DISCOVERY_PAYLOAD_DIR       Pre-extracted payload root
@@ -66,9 +65,6 @@ into the data directory (later launches skip this). Optional overrides:
   SCIENCE_AGENT_UV_INSTALL_INDEX  Index the uv wheel is fetched from
                                   (default: SCIENCE_AGENT_PYPI_INDEX)
   SCIENCE_AGENT_UV_PATH           Existing uv executable to use as-is
-  SCIENCE_AGENT_DEERFLOW_GIT_URL  Git URL tried first for deer-flow
-  SCIENCE_AGENT_DEERFLOW_DIR      Where the deer-flow checkout lives
-                                  (default: <data-dir>/vendor/deer-flow)
 `;
 
 function requireValue(name: string, value: string | undefined): string {
@@ -103,8 +99,6 @@ export function defaultSettings(
         onCompatibility,
       ) || "science-discovery-data",
     ),
-    gatewayHost: env.SCIENCE_AGENT_GATEWAY_HOST?.trim() || "127.0.0.1",
-    gatewayPort: parsePort("SCIENCE_AGENT_GATEWAY_PORT", env.SCIENCE_AGENT_GATEWAY_PORT?.trim() || "4312"),
     // A downloadable binary binds loopback unless the operator opts in: the
     // product's default API token is well known, so exposing the UI on every
     // interface has to be a deliberate choice.
@@ -147,7 +141,12 @@ export function parseInvocation(
       case "--bwrap": invocation.settings.bwrapPath = next(); break;
       case "--data-dir": invocation.settings.dataDir = resolve(cwd, next()); break;
       case "--env-file": invocation.envFile = resolve(cwd, next()); break;
-      case "--gateway-port": invocation.settings.gatewayPort = parsePort(argument, next()); break;
+      // Accepted and ignored: a saved command line must not start failing just
+      // because the service that owned this port was removed.
+      case "--gateway-port":
+        next();
+        onCompatibility?.("[compat] --gateway-port is ignored; the gateway HTTP service was removed.");
+        break;
       case "--host": invocation.settings.host = next(); break;
       case "--no-scientific-envs": invocation.settings.scientificEnvironments = false; break;
       case "--port": invocation.settings.port = parsePort(argument, next()); break;

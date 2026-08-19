@@ -11,7 +11,7 @@ science_agent/
 ├── apps/web/                 # React/Vite browser UI
 ├── services/
 │   ├── api/                  # Node control API
-│   ├── gateway/              # Python agent-loop sidecar
+│   ├── gateway/              # bundled Python MCP servers + their venv
 │   ├── runner/               # Bubblewrap executor
 │   ├── paper/                # uv PDF worker
 │   └── memory-graph/         # experimental Science Memory sidecar, off by default
@@ -20,7 +20,6 @@ science_agent/
 │   ├── schema/               # shared TypeScript types and schemas
 │   └── mcp-sources/          # scientific MCP manifests and trust boundary
 ├── skills/                   # built-in Agent Skills
-├── third_party/deer-flow/    # deer-flow git submodule
 ├── scripts/                  # shared launcher and mode wrappers
 ├── test/                     # integration and browser E2E outside pnpm check
 ├── docs/                     # complete English and Chinese documentation
@@ -40,7 +39,7 @@ science_agent/
 | `services/runner` | `127.0.0.1:4311` | Sandbox execution, loopback only |
 | `services/api` | `127.0.0.1:4310` | Control API and static UI, local-only by default |
 
-First startup initializes `third_party/deer-flow` and prepares uv environments under `data/envs/gateway` and `data/envs/paper`.
+First startup prepares uv environments under `data/envs/gateway` and `data/envs/paper`. The repository has no submodules.
 
 ## 2. Modules and responsibilities
 
@@ -68,7 +67,7 @@ Its external capabilities cover Project management, agent runs, connectors/paper
 
 ### 2.3 `services/gateway` — web-provider sidecar
 
-It **is no longer a service**. The agent loop moved into `services/api`'s `native-agent/` and the web providers into `web-providers/native/` (see [Agent backend](../explanation/agent-backend.md)), so the FastAPI app, the web router, and the `_engine/` adapter are all deleted along with the `deerflow-harness` dependency. What remains is the bundled Python MCP servers (biomed, UniProt), which Node spawns as stdio subprocesses using this venv's interpreter.
+It **is no longer a service**. The agent loop moved into `services/api`'s `native-agent/` and the web providers into `web-providers/native/` (see [Agent backend](../explanation/agent-backend.md)), so the FastAPI app, the web router, and the `_engine/` adapter are all deleted, along with the vendor harness dependency and the submodule it came from. What remains is the bundled Python MCP servers (biomed, UniProt), which Node spawns as stdio subprocesses using this venv's interpreter.
 
 ### 2.4 `services/runner` — isolated execution
 
@@ -97,10 +96,6 @@ All skills are available by default and may be narrowed at Project/Session scope
 
 Root tests contain Playwright browser E2E plus gateway/API mock and real smoke suites. Playwright is not part of the default `pnpm check` path.
 
-### 2.9 `third_party/deer-flow`
-
-This ByteDance deer-flow submodule supplies `deerflow-harness` as a path dependency. The agent loop no longer uses it; only the web-provider implementations still do. ScienceDiscovery does not run deer-flow's complete frontend, runtime, or sandbox.
-
 ## 3. Data and configuration
 
 | Location | Contents |
@@ -122,9 +117,8 @@ See [Configuration reference](configuration.md) for the full layout.
 | Backend services | 5 | API, gateway, runner, paper, experimental Science Memory |
 | Shared TS packages | 3 | agent-runtime, schema, mcp-sources |
 | Built-in skill packages | 2 | life-science and structure-pocket |
-| External submodule | 1 | deer-flow |
 
-That is about 12 first-class deployable/buildable modules, excluding tests, scripts, and docs.
+That is about 11 first-class deployable/buildable modules, excluding tests, scripts, and docs.
 
 ## 5. Related documentation
 

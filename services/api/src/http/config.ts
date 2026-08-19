@@ -47,11 +47,14 @@ export interface ServerConfig {
   runnerUrl: string;
   sshConfigPath: string;
   staticDir: string;
-  /** Base URL of the agent-loop gateway sidecar (services/gateway). */
-  /** Shared credential for Node-only Gateway MCP control endpoints. */
-  /** Maximum time without gateway stream progress before the run is stalled. */
+  /**
+   * Agent-loop timeouts. The `gateway` prefix is the settled name of the
+   * environment variables and persisted settings, kept for compatibility; the
+   * loop they bound runs inside this process.
+   */
+  /** Maximum time without model-stream progress before the run is stalled. */
   gatewayIdleTimeoutMs: number;
-  /** Hard upper bound for a complete gateway turn. */
+  /** Hard upper bound for a complete agent turn. */
   gatewayTurnTimeoutMs: number;
   /** Initial Runner execution timeout; persisted settings override after first load. */
   runnerExecTimeoutMs: number;

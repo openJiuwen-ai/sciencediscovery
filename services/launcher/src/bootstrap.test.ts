@@ -25,7 +25,6 @@ import { gzipSync } from "node:zlib";
 import { after, before, beforeEach, describe, test } from "node:test";
 
 import {
-  ensureDeerFlow,
   ensureGatewayEnvironment,
   ensureUv,
   findWheelUrl,
@@ -36,7 +35,6 @@ import {
   type BootstrapSettings,
   type RunResult,
 } from "./bootstrap.js";
-import { digestTree } from "./content-digest.js";
 import type { PayloadBootstrap, PayloadManifest } from "./payload-manifest.js";
 
 const execFileAsync = promisify(execFile);
@@ -45,9 +43,8 @@ const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const WHEEL_BYTES = Buffer.from("not really a zip, the fake extractor never reads it");
 const WHEEL_SHA256 = createHash("sha256").update(WHEEL_BYTES).digest("hex");
 
-function bootstrapFixture(treeDigest = "sha256:unset"): PayloadBootstrap {
+function bootstrapFixture(): PayloadBootstrap {
   return {
-    deerFlow: { commit: COMMIT, harnessPath: "backend/packages/harness", treeDigest },
     gatewayWheelPath: "bootstrap/wheels/science_agent_gateway-0.0.0-py3-none-any.whl",
     requirementsPath: "bootstrap/requirements-gateway.txt",
     uv: {
@@ -107,9 +104,6 @@ function fakeIo(options: IoOptions = {}): BootstrapIo & { logs: string[] } {
 function settingsFixture(dataDir: string, overrides: Partial<BootstrapSettings> = {}): BootstrapSettings {
   return {
     dataDir,
-    deerFlowArchiveUrl: `https://codeload.example/deer-flow/tar.gz/${COMMIT}`,
-    deerFlowDir: join(dataDir, "vendor", "deer-flow"),
-    deerFlowGitUrls: ["https://gitcode.example/mirror/deer-flow.git", "https://github.example/canonical/deer-flow.git"],
     pypiIndex: "https://mirror.example/pypi/simple",
     uvInstallIndex: "https://mirror.example/pypi/simple",
     ...overrides,
@@ -117,50 +111,25 @@ function settingsFixture(dataDir: string, overrides: Partial<BootstrapSettings> 
 }
 
 describe("bootstrap configuration", () => {
-  const bootstrap = bootstrapFixture();
-
-  test("defaults to the Huawei Cloud mirror and the GitCode-first source order", () => {
-    const settings = resolveBootstrapSettings({}, "/data", bootstrap);
+  test("defaults to the Huawei Cloud PyPI mirror", () => {
+    const settings = resolveBootstrapSettings({}, "/data");
     assert.equal(settings.pypiIndex, "https://mirrors.huaweicloud.com/repository/pypi/simple");
     assert.equal(settings.uvInstallIndex, settings.pypiIndex);
-    assert.deepEqual(settings.deerFlowGitUrls, [
-      "https://gitcode.com/GitHub_Trending/de/deer-flow.git",
-      "https://github.com/bytedance/deer-flow.git",
-    ]);
-    assert.equal(settings.deerFlowArchiveUrl, `https://codeload.github.com/bytedance/deer-flow/tar.gz/${COMMIT}`);
-    assert.equal(settings.deerFlowDir, join("/data", "vendor", "deer-flow"));
     assert.equal(settings.uvPathOverride, undefined);
   });
 
   test("environment variables override every default", () => {
     const settings = resolveBootstrapSettings(
       {
-        SCIENCE_AGENT_DEERFLOW_DIR: "/srv/deer-flow",
-        SCIENCE_AGENT_DEERFLOW_GIT_URL: "https://internal.example/deer-flow.git",
         SCIENCE_AGENT_PYPI_INDEX: "https://pypi.org/simple",
         SCIENCE_AGENT_UV_INSTALL_INDEX: "https://other.example/simple",
         SCIENCE_AGENT_UV_PATH: "/usr/local/bin/uv",
       },
       "/data",
-      bootstrap,
     );
     assert.equal(settings.pypiIndex, "https://pypi.org/simple");
     assert.equal(settings.uvInstallIndex, "https://other.example/simple");
     assert.equal(settings.uvPathOverride, "/usr/local/bin/uv");
-    assert.equal(settings.deerFlowDir, "/srv/deer-flow");
-    assert.deepEqual(settings.deerFlowGitUrls, [
-      "https://internal.example/deer-flow.git",
-      "https://github.com/bytedance/deer-flow.git",
-    ]);
-  });
-
-  test("deduplicates the source list when the override is the canonical URL", () => {
-    const settings = resolveBootstrapSettings(
-      { SCIENCE_AGENT_DEERFLOW_GIT_URL: "https://github.com/bytedance/deer-flow.git" },
-      "/data",
-      bootstrap,
-    );
-    assert.deepEqual(settings.deerFlowGitUrls, ["https://github.com/bytedance/deer-flow.git"]);
   });
 });
 
@@ -281,185 +250,6 @@ describe("uv installation", () => {
   });
 });
 
-describe("deer-flow provisioning", () => {
-  let workspace = "";
-  let fixtureDigest = "";
-  let archiveGz: Buffer = Buffer.alloc(0);
-
-  before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-bootstrap-df-"));
-    // A miniature deer-flow tree; the archive extracts to deer-flow-<commit>/.
-    // The real codeload archive carries zero-byte regular files, so the
-    // fixture must too — the digest comparison catches an extractor that
-    // drops them.
-    const source = join(workspace, "fixture", `deer-flow-${COMMIT}`);
-    await mkdir(join(source, "backend", "packages", "harness"), { recursive: true });
-    await writeFile(join(source, "README.md"), "deer-flow\n");
-    await writeFile(join(source, "backend", "packages", "harness", "pyproject.toml"), "[project]\n");
-    await writeFile(join(source, "backend", "packages", "harness", "__init__.py"), "");
-    fixtureDigest = await digestTree(source);
-    const tarPath = join(workspace, "fixture.tar");
-    await execFileAsync("tar", [
-      "--create", "--file", tarPath, "--directory", join(workspace, "fixture"), `deer-flow-${COMMIT}`,
-    ]);
-    archiveGz = gzipSync(await readFile(tarPath));
-  });
-
-  after(async () => {
-    await rm(workspace, { force: true, recursive: true });
-  });
-
-  let caseIndex = 0;
-  let dataDir = "";
-
-  beforeEach(async () => {
-    dataDir = join(workspace, `case-${caseIndex += 1}`);
-    await mkdir(dataDir, { recursive: true });
-  });
-
-  /** A git fake whose fetch succeeds only for the given URLs. */
-  function gitIo(reachableUrls: string[], fetchLog: string[]): BootstrapIo & { logs: string[] } {
-    return fakeIo({
-      fetch: (url) => {
-        fetchLog.push(url);
-        return fakeResponse({ status: 502 });
-      },
-      findExecutable: async (command) => (command === "git" ? "/usr/bin/git" : undefined),
-      run: async (command, args) => {
-        assert.equal(command, "/usr/bin/git");
-        if (args[0] === "init") return { stderr: "", stdout: "" };
-        if (args[2] === "fetch") {
-          const url = args[6] as string;
-          fetchLog.push(url);
-          if (!reachableUrls.includes(url)) throw new Error(`could not resolve host ${url}`);
-          return { stderr: "", stdout: "" };
-        }
-        if (args.includes("checkout")) {
-          const staging = args[1] as string;
-          await mkdir(join(staging, "backend", "packages", "harness"), { recursive: true });
-          await writeFile(join(staging, "README.md"), "deer-flow\n");
-          return { stderr: "", stdout: "" };
-        }
-        if (args[2] === "rev-parse") return { stderr: "", stdout: `${COMMIT}\n` };
-        throw new Error(`unexpected git invocation: ${args.join(" ")}`);
-      },
-    });
-  }
-
-  test("uses the GitCode mirror first and records completion in the marker", async () => {
-    const settings = settingsFixture(dataDir);
-    const bootstrap = bootstrapFixture(fixtureDigest);
-    const log: string[] = [];
-    const io = gitIo([settings.deerFlowGitUrls[0] as string], log);
-
-    const target = await ensureDeerFlow(io, settings, bootstrap);
-    assert.equal(target, settings.deerFlowDir);
-    assert.deepEqual(log, [settings.deerFlowGitUrls[0]]);
-    const marker = JSON.parse(await readFile(join(target, ".science-agent-deerflow.json"), "utf8"));
-    assert.equal(marker.commit, COMMIT);
-    assert.equal(marker.source, settings.deerFlowGitUrls[0]);
-
-    // Second launch takes the marker fast path: no fetches, no subprocesses.
-    await ensureDeerFlow(fakeIo({}), settings, bootstrap);
-  });
-
-  test("falls back from GitCode to GitHub in order", async () => {
-    const settings = settingsFixture(dataDir);
-    const log: string[] = [];
-    const io = gitIo([settings.deerFlowGitUrls[1] as string], log);
-    await ensureDeerFlow(io, settings, bootstrapFixture(fixtureDigest));
-    assert.deepEqual(log, settings.deerFlowGitUrls);
-  });
-
-  test("falls back to the archive when git is unavailable, verifying the tree digest", async () => {
-    const settings = settingsFixture(dataDir);
-    const fetched: string[] = [];
-    const io = fakeIo({
-      fetch: (url) => {
-        fetched.push(url);
-        return fakeResponse({ body: archiveGz, stream: true });
-      },
-    });
-    const target = await ensureDeerFlow(io, settings, bootstrapFixture(fixtureDigest));
-    assert.deepEqual(fetched, [settings.deerFlowArchiveUrl]);
-    assert.equal(await readFile(join(target, "README.md"), "utf8"), "deer-flow\n");
-    assert.deepEqual(await readdir(join(dataDir, ".bootstrap-staging")), []);
-  });
-
-  test("rejects an archive whose content does not match the pinned digest", async () => {
-    const settings = settingsFixture(dataDir);
-    const io = fakeIo({ fetch: () => fakeResponse({ body: archiveGz, stream: true }) });
-    await assert.rejects(
-      ensureDeerFlow(io, settings, bootstrapFixture("sha256:" + "0".repeat(64))),
-      /could not be downloaded automatically/,
-    );
-    // The mismatching download must not have been promoted.
-    await assert.rejects(stat(settings.deerFlowDir));
-  });
-
-  test("when every source fails, the error carries the manual-placement runbook", async () => {
-    const settings = settingsFixture(dataDir);
-    const io = fakeIo({ fetch: () => fakeResponse({ status: 404 }) });
-    await assert.rejects(
-      ensureDeerFlow(io, settings, bootstrapFixture(fixtureDigest)),
-      (error: Error) => {
-        assert.match(error.message, /git is not installed on this host/);
-        assert.match(error.message, /download failed \(404\)/);
-        assert.match(error.message, new RegExp(COMMIT));
-        assert.match(error.message, new RegExp(settings.deerFlowDir.replaceAll("/", "\\/")));
-        assert.match(error.message, /git checkout|checkout/);
-        return true;
-      },
-    );
-  });
-
-  test("accepts a manually placed checkout after verifying its content", async () => {
-    const settings = settingsFixture(dataDir);
-    const bootstrap = bootstrapFixture(fixtureDigest);
-    // Simulate the runbook: the user unpacked the archive at the target path.
-    await mkdir(dirname(settings.deerFlowDir), { recursive: true });
-    await mkdir(join(settings.deerFlowDir, "backend", "packages", "harness"), { recursive: true });
-    await writeFile(join(settings.deerFlowDir, "README.md"), "deer-flow\n");
-    await writeFile(join(settings.deerFlowDir, "backend", "packages", "harness", "pyproject.toml"), "[project]\n");
-    await writeFile(join(settings.deerFlowDir, "backend", "packages", "harness", "__init__.py"), "");
-
-    await ensureDeerFlow(fakeIo({}), settings, bootstrap);
-    const marker = JSON.parse(await readFile(join(settings.deerFlowDir, ".science-agent-deerflow.json"), "utf8"));
-    assert.equal(marker.source, "pre-existing");
-  });
-
-  test("rejects a manually placed checkout with the wrong content", async () => {
-    const settings = settingsFixture(dataDir);
-    await mkdir(settings.deerFlowDir, { recursive: true });
-    await writeFile(join(settings.deerFlowDir, "README.md"), "some other project\n");
-    await assert.rejects(
-      ensureDeerFlow(fakeIo({}), settings, bootstrapFixture(fixtureDigest)),
-      /does not match deer-flow commit/,
-    );
-  });
-
-  test("rejects an existing git checkout at the wrong commit with fix-up instructions", async () => {
-    const settings = settingsFixture(dataDir);
-    await mkdir(join(settings.deerFlowDir, ".git"), { recursive: true });
-    await writeFile(join(settings.deerFlowDir, ".git", "HEAD"), "ref: refs/heads/main\n");
-    const io = fakeIo({
-      findExecutable: async (command) => (command === "git" ? "/usr/bin/git" : undefined),
-      run: async (_command, args) => {
-        assert.equal(args[2], "rev-parse");
-        return { stderr: "", stdout: "ffffffffffffffffffffffffffffffffffffffff\n" };
-      },
-    });
-    await assert.rejects(
-      ensureDeerFlow(io, settings, bootstrapFixture(fixtureDigest)),
-      (error: Error) => {
-        assert.match(error.message, /at commit ffff/);
-        assert.match(error.message, new RegExp(`needs ${COMMIT}`));
-        return true;
-      },
-    );
-  });
-});
-
 describe("gateway environment provisioning", () => {
   let workspace = "";
 
@@ -475,8 +265,7 @@ describe("gateway environment provisioning", () => {
     return {
       app: {
         apiEntry: "app/services/api/dist/server.js",
-        gatewayModule: "science_agent_gateway.server",
-        root: "app",
+            root: "app",
         runnerEntry: "app/services/runner/dist/server.js",
         webDir: "app/apps/web/dist",
       },
@@ -491,7 +280,7 @@ describe("gateway environment provisioning", () => {
     };
   }
 
-  const gatewaySentinel = join("lib", "site-packages", "science_agent_gateway", "server.py");
+  const gatewaySentinel = join("lib", "site-packages", "science_agent_gateway", "uniprot_mcp.py");
 
   function simulatedGatewayIo(options: { failInstall?: boolean } = {}): {
     invocations: Array<{
@@ -567,7 +356,7 @@ describe("gateway environment provisioning", () => {
     const { invocations, io } = simulatedGatewayIo();
 
     const python = await ensureGatewayEnvironment(
-      io, settings, bootstrap, payloadRoot, manifestFixture(bootstrap), "/tools/uv", join(dataDir, "vendor", "deer-flow"),
+      io, settings, bootstrap, payloadRoot, manifestFixture(bootstrap), "/tools/uv",
       gatewayRuntime(appRoot),
     );
     assert.equal(python, join(environmentDir, "bin", "python"));
@@ -584,14 +373,13 @@ describe("gateway environment provisioning", () => {
     );
     const localInstall = invocations[2]?.args as string[];
     assert.ok(localInstall.includes("--no-deps"), "local packages must not pull unpinned dependencies");
-    assert.ok(localInstall.includes(join(dataDir, "vendor", "deer-flow", "backend", "packages", "harness")));
     assert.ok(localInstall.includes(join(payloadRoot, bootstrap.gatewayWheelPath)));
 
     // Unchanged inputs: one local import probe, no uv or network work.
     const healthy = simulatedGatewayIo();
     assert.equal(
       await ensureGatewayEnvironment(
-        healthy.io, settings, bootstrap, payloadRoot, manifestFixture(bootstrap), "/tools/uv", join(dataDir, "vendor", "deer-flow"),
+        healthy.io, settings, bootstrap, payloadRoot, manifestFixture(bootstrap), "/tools/uv",
         gatewayRuntime(appRoot),
       ),
       python,
@@ -606,7 +394,7 @@ describe("gateway environment provisioning", () => {
     await writeFile(join(payloadRoot, bootstrap.requirementsPath), "fastapi==0.116.0 --hash=sha256:def\n");
     invocations.length = 0;
     await ensureGatewayEnvironment(
-      io, settings, bootstrap, payloadRoot, manifestFixture(bootstrap), "/tools/uv", join(dataDir, "vendor", "deer-flow"),
+      io, settings, bootstrap, payloadRoot, manifestFixture(bootstrap), "/tools/uv",
       gatewayRuntime(appRoot),
     );
     assert.equal(invocations.length, 4);
@@ -622,7 +410,6 @@ describe("gateway environment provisioning", () => {
       payloadRoot,
       manifestFixture(bootstrap),
       "/tools/uv",
-      join(dataDir, "vendor", "deer-flow"),
       gatewayRuntime(appRoot),
     );
     await rm(join(appRoot, "config", "external-urls.json"));
@@ -635,7 +422,6 @@ describe("gateway environment provisioning", () => {
         payloadRoot,
         manifestFixture(bootstrap),
         "/tools/uv",
-        join(dataDir, "vendor", "deer-flow"),
         gatewayRuntime(appRoot),
       ),
       /External URL configuration not found.*missing-app-config-payload\/app\/config\/external-urls\.json/,
@@ -658,7 +444,6 @@ describe("gateway environment provisioning", () => {
       payloadRoot,
       manifestFixture(bootstrap),
       "/tools/uv",
-      join(dataDir, "vendor", "deer-flow"),
       gatewayRuntime(appRoot, { SCIENCE_AGENT_EXTERNAL_URLS_PATH: configured }),
     );
     const probe = simulated.invocations.at(-1);
@@ -677,7 +462,6 @@ describe("gateway environment provisioning", () => {
       payloadRoot,
       manifestFixture(bootstrap),
       "/tools/uv",
-      join(dataDir, "vendor", "deer-flow"),
       gatewayRuntime(appRoot),
     );
     await rm(dirname(installedSentinel), { force: true, recursive: true });
@@ -690,7 +474,6 @@ describe("gateway environment provisioning", () => {
       payloadRoot,
       manifestFixture(bootstrap),
       "/tools/uv",
-      join(dataDir, "vendor", "deer-flow"),
       gatewayRuntime(appRoot),
     );
     await access(installedSentinel);
@@ -706,7 +489,6 @@ describe("gateway environment provisioning", () => {
       payloadRoot,
       manifestFixture(bootstrap),
       "/tools/uv",
-      join(dataDir, "vendor", "deer-flow"),
       gatewayRuntime(appRoot),
     );
     assert.deepEqual(secondLaunch.invocations.map(({ command }) => command), [join(environmentDir, "bin", "python")]);
@@ -724,7 +506,6 @@ describe("gateway environment provisioning", () => {
       payloadRoot,
       manifestFixture(bootstrap),
       "/tools/uv",
-      join(dataDir, "vendor", "deer-flow"),
       gatewayRuntime(appRoot),
     );
     await rm(join(environmentDir, "lib", "site-packages", "science_agent_gateway"), { force: true, recursive: true });
@@ -739,7 +520,6 @@ describe("gateway environment provisioning", () => {
         payloadRoot,
         manifestFixture(bootstrap),
         "/tools/uv",
-        join(dataDir, "vendor", "deer-flow"),
         gatewayRuntime(appRoot),
       ),
       /simulated install failure/,
@@ -754,7 +534,6 @@ describe("gateway environment provisioning", () => {
       payloadRoot,
       manifestFixture(bootstrap),
       "/tools/uv",
-      join(dataDir, "vendor", "deer-flow"),
       gatewayRuntime(appRoot),
     );
     await access(join(environmentDir, gatewaySentinel));
@@ -770,7 +549,6 @@ describe("gateway environment provisioning", () => {
       payloadRoot,
       manifestFixture(bootstrap),
       "/tools/uv",
-      join(dataDir, "vendor", "deer-flow"),
       gatewayRuntime(appRoot),
     );
     const backup = join(dataDir, ".bootstrap-staging", "gateway-env-backup");
@@ -784,7 +562,6 @@ describe("gateway environment provisioning", () => {
       payloadRoot,
       manifestFixture(bootstrap),
       "/tools/uv",
-      join(dataDir, "vendor", "deer-flow"),
       gatewayRuntime(appRoot),
     );
     assert.deepEqual(recovered.invocations.map(({ command }) => command), [join(environmentDir, "bin", "python")]);

@@ -17,12 +17,11 @@
 #
 # The payload carries the product's own pieces: Node, CPython, the built Web
 # assets, the deployed Node services and micromamba. It deliberately does NOT
-# carry uv, deer-flow or the gateway's third-party Python dependencies — the
-# launcher restores those on the user's machine at first launch, from a
-# configurable package index (Huawei Cloud mirror by default) and from the
-# deer-flow git sources, pinned here to exact versions: a hash-locked
-# requirements export of services/gateway/uv.lock, a sha256-pinned uv wheel,
-# and the submodule gitlink commit plus a content digest for deer-flow.
+# carry uv or the gateway's third-party Python dependencies — the launcher
+# restores those on the user's machine at first launch, from a configurable
+# package index (Huawei Cloud mirror by default), pinned here to exact
+# versions: a hash-locked requirements export of services/gateway/uv.lock and
+# a sha256-pinned uv wheel.
 # Docker is never involved: every architecture-specific piece is downloaded
 # from a pinned manifest, so both architectures build on any x86_64 or
 # aarch64 host.
@@ -188,8 +187,8 @@ prepare_shared() {
   cp -a skills "$shared_dir/app/skills"
 
   echo "Building the gateway wheel and the first-launch bootstrap inputs..." >&2
-  # The gateway is our own code and ships as a prebuilt wheel; deer-flow and
-  # the third-party tree are restored on the user's machine instead.
+  # The gateway is our own code and ships as a prebuilt wheel; the third-party
+  # tree is restored on the user's machine instead.
   uv build --wheel --out-dir "$shared_dir/wheels" services/gateway
 
   # Export the locked third-party set with hashes. At first launch the
@@ -199,25 +198,8 @@ prepare_shared() {
   # uv.lock itself records pypi.org URLs and would bypass a mirror.
   # --no-header: the generated header would record this build's command line,
   # including build-machine absolute paths, inside a shipped artifact.
-  (cd services/gateway && uv export --frozen --no-dev --no-emit-project \
-    --no-emit-package deerflow-harness --no-header \
+  (cd services/gateway && uv export --frozen --no-dev --no-emit-project --no-header \
     --format requirements.txt -o "$shared_dir/requirements-gateway.txt")
-  # The deer-flow submodule is not packaged, but the payload must pin the
-  # exact commit and a content digest so first launch can verify whatever a
-  # download (or a manual placement) produced.
-  if [[ ! -f third_party/deer-flow/backend/packages/harness/pyproject.toml ]]; then
-    git submodule update --init --recursive third_party/deer-flow
-  fi
-  local deer_flow_commit deer_flow_checkout
-  deer_flow_commit="$(git rev-parse HEAD:third_party/deer-flow)"
-  deer_flow_checkout="$(git -C third_party/deer-flow rev-parse HEAD)"
-  if [[ "$deer_flow_commit" != "$deer_flow_checkout" ]]; then
-    echo "third_party/deer-flow is checked out at $deer_flow_checkout but HEAD records $deer_flow_commit." >&2
-    echo "Run: git submodule update --checkout third_party/deer-flow" >&2
-    exit 1
-  fi
-  printf '%s\n' "$deer_flow_commit" >"$shared_dir/deer-flow-commit"
-  node "$script_dir/digest-tree.mjs" third_party/deer-flow >"$shared_dir/deer-flow-digest"
 
   touch "$shared_dir/.complete"
 }
@@ -283,7 +265,7 @@ prune_pnpm_build_metadata "$output/app"
 # The gateway's dependency tree is not embedded. The payload instead carries
 # the inputs the first-launch bootstrap needs: the hash-locked requirements
 # export, the prebuilt gateway wheel, and (in the manifest below) the pinned
-# uv wheel identity plus the deer-flow commit and content digest. At run time
+# uv wheel identity. At run time
 # the dependencies land in the interpreter's own site directory of a venv
 # built on the bundled CPython — the gateway starts stdio MCP servers through
 # the MCP SDK, which forwards only an allow-listed environment, so a
@@ -294,8 +276,6 @@ mkdir -p "$output/bootstrap/wheels"
 cp "$shared_dir/requirements-gateway.txt" "$output/bootstrap/requirements-gateway.txt"
 cp "$shared_dir"/wheels/science_agent_gateway-*.whl "$output/bootstrap/wheels/"
 gateway_wheel_name="$(basename "$(ls "$output"/bootstrap/wheels/science_agent_gateway-*.whl)")"
-deer_flow_commit="$(cat "$shared_dir/deer-flow-commit")"
-deer_flow_digest="$(cat "$shared_dir/deer-flow-digest")"
 
 # A pyvenv.cfg makes site.py treat the prefix as an environment, which disables
 # the host user site directory (~/.local/lib/pythonX.Y/site-packages). Omitting
@@ -346,8 +326,7 @@ cat >"$output/manifest.json" <<EOF
     "root": "app",
     "apiEntry": "app/services/api/dist/server.js",
     "runnerEntry": "app/services/runner/dist/server.js",
-    "webDir": "app/apps/web/dist",
-    "gatewayModule": "science_agent_gateway.server"
+    "webDir": "app/apps/web/dist"
   },
   "bootstrap": {
     "uv": {
@@ -355,11 +334,6 @@ cat >"$output/manifest.json" <<EOF
       "project": "$uv_project",
       "wheelFilename": "$uv_wheel_filename",
       "wheelSha256": "$uv_wheel_sha256"
-    },
-    "deerFlow": {
-      "commit": "$deer_flow_commit",
-      "treeDigest": "$deer_flow_digest",
-      "harnessPath": "backend/packages/harness"
     },
     "requirementsPath": "bootstrap/requirements-gateway.txt",
     "gatewayWheelPath": "bootstrap/wheels/$gateway_wheel_name"

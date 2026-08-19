@@ -40,17 +40,16 @@ artifact="dist/binary-release-local/ScienceDiscovery-local-linux-$arch"
 "$artifact" serve
 ```
 
-`serve` 依次启动 agent-loop 网关、bubblewrap runner 和带 Web UI 的控制 API，顺序与健康检查同[本地模式](#本地模式宿主进程)一致，然后打印 UI 地址。默认监听 <http://127.0.0.1:4310>，用 `SCIENCE_AGENT_AUTH_TOKEN` 登录；未设置时，`serve` 会打印首次启动生成的 token。Ctrl-C 会按启动的反序停止全部服务。
+`serve` 依次启动 bubblewrap runner 和带 Web UI 的控制 API，顺序与健康检查同[本地模式](#本地模式宿主进程)一致，然后打印 UI 地址。常驻的就是这两个进程：agent 循环、模型调用与 web provider 都在 API 进程内，随包的 Python MCP server 由 API 按需拉起，不受 supervisor 托管。默认监听 <http://127.0.0.1:4310>，用 `SCIENCE_AGENT_AUTH_TOKEN` 登录；未设置时，`serve` 会打印首次启动生成的 token。Ctrl-C 会按启动的反序停止全部服务。
 
 首次 `serve` 会把内嵌运行时解包到 `~/.cache/science-discovery/payload/<payload-id>`（可用 `XDG_CACHE_HOME` 或 `SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR` 改位置），之后启动直接复用。目录名带 payload 摘要，因此升级到新版本不会覆盖旧解包结果。如果仅存在旧的 `~/.cache/science-agent` 缓存，launcher 会把它一次性改名导入新位置并打印兼容提示；如果新位置已经存在，则保留新位置且打印跳过导入的原因。
 
 ### 首次启动安装的依赖
 
-制品刻意不打包 uv、deer-flow 与 gateway 的第三方 Python 依赖树。首次 `serve` 在解包后会自动把它们装进数据目录（之后的启动直接复用，升级版本时只重建其中失效的部分）：
+制品刻意不打包 uv 与 gateway 的第三方 Python 依赖树。首次 `serve` 在解包后会自动把它们装进数据目录（之后的启动直接复用，升级版本时只重建其中失效的部分）：
 
 1. **uv**：从 PyPI 镜像（默认华为云 `https://mirrors.huaweicloud.com/repository/pypi/simple`）下载打包时固定版本与 SHA256 的 uv wheel，校验后解出二进制放到 `<数据目录>/tools/uv/`。
-2. **deer-flow**：按本仓 submodule 锁定的精确 commit 获取，依次尝试 GitCode 镜像（`git fetch` 按 commit 浅取，需要宿主有 `git`）、GitHub 仓库、GitHub 归档直链（无 `git` 也可用）；下载结果先校验 commit 或内容摘要，再落到 `<数据目录>/vendor/deer-flow`。全部失败时错误信息会给出人工放置的目标路径、期望 commit 与逐步操作。
-3. **gateway Python 环境**：用 uv 在 `<数据目录>/envs/gateway` 基于内置 CPython 建 venv，按打包时从 `services/gateway/uv.lock` 导出的带 SHA256 哈希的精确版本清单安装（`--require-hashes`），版本与锁文件完全一致、下载走配置的镜像。
+2. **gateway Python 环境**：用 uv 在 `<数据目录>/envs/gateway` 基于内置 CPython 建 venv，按打包时从 `services/gateway/uv.lock` 导出的带 SHA256 哈希的精确版本清单安装（`--require-hashes`），版本与锁文件完全一致、下载走配置的镜像。
 
 相关环境变量（可写入 `--env-file`）：
 
@@ -59,10 +58,8 @@ artifact="dist/binary-release-local/ScienceDiscovery-local-linux-$arch"
 | `SCIENCE_AGENT_PYPI_INDEX` | 华为云 PyPI 镜像 | Python 依赖使用的 package index |
 | `SCIENCE_AGENT_UV_INSTALL_INDEX` | 同 `SCIENCE_AGENT_PYPI_INDEX` | 单独指定 uv wheel 的下载 index |
 | `SCIENCE_AGENT_UV_PATH` | — | 直接使用已有的 uv，可跳过下载 |
-| `SCIENCE_AGENT_DEERFLOW_GIT_URL` | GitCode 镜像 | deer-flow 首选 git 源（其后仍回退 GitHub） |
-| `SCIENCE_AGENT_DEERFLOW_DIR` | `<数据目录>/vendor/deer-flow` | deer-flow 检出位置，也是人工放置的目标路径 |
 
-离线主机可以提前在联网机器上完成一次首启，把整个数据目录拷贝过去；或按失败提示手工放置 deer-flow、用 `SCIENCE_AGENT_UV_PATH` 指向已安装的 uv。
+离线主机可以提前在联网机器上完成一次首启，把整个数据目录拷贝过去；或用 `SCIENCE_AGENT_UV_PATH` 指向已安装的 uv，并把 `SCIENCE_AGENT_PYPI_INDEX` 指向可达镜像。
 
 ### 宿主依赖：bubblewrap
 
@@ -82,7 +79,7 @@ sudo apk add bubblewrap              # Alpine
 ### 命令与选项
 
 ```
-ScienceDiscovery serve [选项]        启动 Web UI、控制 API、agent-loop 网关与 runner
+ScienceDiscovery serve [选项]        启动 Web UI、控制 API 与沙箱 runner
 ScienceDiscovery extract --to <目录>  只解包内嵌运行时，不启动
 ScienceDiscovery version             打印版本与内置 Node / CPython / micromamba 版本
 ScienceDiscovery help                显示帮助
@@ -99,7 +96,7 @@ ScienceDiscovery help                显示帮助
 | `--skip-sandbox-check` | 关 | 缺少 bubblewrap 时仍启动；沙箱执行不可用 |
 | `--no-scientific-envs` | 关 | 不初始化托管科学环境 |
 
-[配置参考](../reference/configuration.md#环境变量本地模式)中的变量同样生效，可直接导出或写进 `--env-file`。API、gateway 与 runner 默认都只监听回环。确需对外提供 API 时，应先更换 `SCIENCE_AGENT_AUTH_TOKEN`，在可信且受保护的网络中显式使用 `--host 0.0.0.0`。
+[配置参考](../reference/configuration.md#环境变量本地模式)中的变量同样生效，可直接导出或写进 `--env-file`。API 与 runner 默认都只监听回环。确需对外提供 API 时，应先更换 `SCIENCE_AGENT_AUTH_TOKEN`，在可信且受保护的网络中显式使用 `--host 0.0.0.0`。
 
 ### 二进制里有什么
 
@@ -109,10 +106,10 @@ ScienceDiscovery help                显示帮助
 | Node 运行时 | 供控制 API 与 runner 使用 |
 | CPython 3.12 | 可重定位发行版，无需宿主 Python；同时作为首启 gateway venv 的基础解释器 |
 | Web 静态资源 | 预构建的 `apps/web/dist` |
-| gateway wheel 与首启清单 | 自有代码的 `science-agent-gateway` wheel、带哈希的锁定依赖清单、uv wheel 与 deer-flow 的版本 pin |
+| gateway wheel 与首启清单 | 自有代码的 `science-agent-gateway` wheel、带哈希的锁定依赖清单、uv wheel 的版本 pin |
 | micromamba | 固定版本，首次 `serve` 播种到 `<数据目录>/scientific-envs/bin/micromamba`，之后 Runner 按同一发布清单校验 |
 
-不含 uv、deer-flow 与 gateway 的第三方 Python 依赖（见[首次启动安装的依赖](#首次启动安装的依赖)），不含 Neo4j，也不含 starter Python/R 科学环境与 conda 包缓存：首次创建 starter 环境仍需访问允许的软件包渠道。
+不含 uv 与 gateway 的第三方 Python 依赖（见[首次启动安装的依赖](#首次启动安装的依赖)），不含 Neo4j，也不含 starter Python/R 科学环境与 conda 包缓存：首次创建 starter 环境仍需访问允许的软件包渠道。
 
 ### 生成双架构发布包
 
@@ -125,7 +122,7 @@ ScienceDiscovery help                显示帮助
   --arch x86_64 --version local --output dist/binary-release-local
 ```
 
-构建机需要 `node`、`pnpm`、`uv`、`tar`、`zstd`、`sha256sum`，**不需要 Docker，也不需要 QEMU**（uv 只在构建期用于导出锁定依赖清单和构建 gateway wheel，不进入制品）。两个架构都能在同一台 x86_64 或 aarch64 机器上产出：Node 与 CPython 运行时按 `scripts/binary-release/runtimes.json` 中的固定版本与 SHA256 下载，gateway 的第三方依赖不再打包、改为首启在用户机器上按锁定清单安装，其余部分（TypeScript 产物、Web 资源、gateway wheel）与架构无关。打包脚本仍逐个检查内置 CPython 扩展模块的 ELF 架构，架构不符会让构建失败。构建要求 `third_party/deer-flow` 子模块检出到 gitlink 记录的 commit——打包时会据此记录期望 commit 与内容摘要，供首启校验下载结果。
+构建机需要 `node`、`pnpm`、`uv`、`tar`、`zstd`、`sha256sum`，**不需要 Docker，也不需要 QEMU**（uv 只在构建期用于导出锁定依赖清单和构建 gateway wheel，不进入制品）。两个架构都能在同一台 x86_64 或 aarch64 机器上产出：Node 与 CPython 运行时按 `scripts/binary-release/runtimes.json` 中的固定版本与 SHA256 下载，gateway 的第三方依赖不再打包、改为首启在用户机器上按锁定清单安装，其余部分（TypeScript 产物、Web 资源、gateway wheel）与架构无关。打包脚本仍逐个检查内置 CPython 扩展模块的 ELF 架构，架构不符会让构建失败。本仓已无 submodule，普通检出即可构建。
 
 输出目录包含两个可执行文件、`VERSION` 与 `SHA256SUMS`。gateway 的 Python 依赖树（duckdb、pandas、numpy、onnxruntime 等）不再随包分发，制品体积相比打包依赖树的旧格式显著缩小；这部分改为首次启动时经镜像下载。压缩等级默认 zstd 19，可用 `SCIENCE_AGENT_PAYLOAD_ZSTD_LEVEL` 在迭代时调低。
 
@@ -144,15 +141,15 @@ ScienceDiscovery help                显示帮助
 | `services/runner` | 127.0.0.1:4311 | 无 root 的 bubblewrap 执行器（后台） |
 | `services/api` | 127.0.0.1:4310 | 控制 API + Web UI（前台） |
 
-停止脚本（Ctrl-C）会一并停止其启动的后台服务。原有 `./scripts/run-local.sh [--no-build]` 命令仍受支持，它只是转调本地模式的薄包装；`pnpm start` 与 `pnpm server` 继续使用这一兼容入口。无人值守部署时可把脚本交给进程管理器（如 systemd user unit 或 tmux），也可以改用 [Docker 部署](#docker-部署)；runner 与 gateway 设计上始终只监听回环。
+停止脚本（Ctrl-C）会一并停止其启动的后台服务。原有 `./scripts/run-local.sh [--no-build]` 命令仍受支持，它只是转调本地模式的薄包装；`pnpm start` 与 `pnpm server` 继续使用这一兼容入口。无人值守部署时可把脚本交给进程管理器（如 systemd user unit 或 tmux），也可以改用 [Docker 部署](#docker-部署)；runner 设计上始终只监听回环。
 
-首次启动会自动初始化 `third_party/deer-flow` 子模块，并在 `data/envs/gateway` 下准备 gateway 的 Python 3.12 环境。
+首次启动会在 `data/envs/gateway` 下准备 Python 3.12 环境，它提供随包的 Python MCP server（biomed、UniProt）所用的解释器；本仓已无 submodule。
 
 需要在 Ascend 主机上运行宿主 NPU workload 时，启动方式仍是本地模式入口；管理员在 `.env` 中显式设置 `SCIENCE_AGENT_NPU_BROKER=1` 及对应 workload 入口后，Runner 才会向 Agent 暴露 `run_npu_job`。启用前应先创建并验证一个面向 Ascend 栈的托管 Python scientific environment revision；内置 NPU workload（包括 smoke test）会提交到该 revision，而不是读取 `SCIENCE_AGENT_NPU_PYTHON`。完整参数见[配置参考](../reference/configuration.md#环境变量本地模式)，设计边界见 [Ascend NPU 宿主 Broker](../explanation/ascend-npu-runner.md)。
 
 ## Docker 部署
 
-单个镜像承载完整技术栈，并通过 `docker-entrypoint.sh` 兼容包装调用 `scripts/start-stack.sh --mode docker`。共用入口在一个容器内启动与本地模式相同的三个进程：agent-loop 网关、bubblewrap runner，以及带 Web UI 的控制 API；Docker 专属预检仍只在该模式执行。builder 阶段使用 pnpm 与 uv；运行镜像携带 Node、预构建的服务 Python 环境、bubblewrap，以及按 `TARGETARCH` 下载并校验的固定版本 micromamba，宿主机只需要 Docker。
+单个镜像承载完整技术栈，并通过 `docker-entrypoint.sh` 兼容包装调用 `scripts/start-stack.sh --mode docker`。共用入口在一个容器内启动与本地模式相同的两个进程：bubblewrap runner，以及带 Web UI 的控制 API；Docker 专属预检仍只在该模式执行。builder 阶段使用 pnpm 与 uv；运行镜像携带 Node、预构建的服务 Python 环境、bubblewrap，以及按 `TARGETARCH` 下载并校验的固定版本 micromamba，宿主机只需要 Docker。
 
 ### 前置条件
 
@@ -162,12 +159,6 @@ ScienceDiscovery help                显示帮助
   ```bash
   sysctl kernel.unprivileged_userns_clone            # 暴露该开关的内核上应为 1
   sysctl kernel.apparmor_restrict_unprivileged_userns # Ubuntu 24.04+ 上必须为 0
-  ```
-
-- 已检出 `third_party/deer-flow` 子模块——gateway 从中安装 harness；缺失时构建会提前失败并给出该提示：
-
-  ```bash
-  git submodule update --init --recursive
   ```
 
 ### 构建与启动
@@ -185,7 +176,7 @@ curl -fsS http://127.0.0.1:4310/health
 Docker 构建会根据 BuildKit 的 `TARGETARCH` 选择 `linux/amd64` 或 `linux/arm64` 对应的 micromamba，并用 Runner 共用的发布清单校验 SHA256。二进制保存在镜像的 `/opt/science-agent/provisioner/micromamba`；容器首次面对空的 `/app/data` bind mount 时，会把它复制到默认托管路径，Runner 随后再次按同一清单校验。这个流程不需要在**运行时**访问 GitHub。
 
 ```bash
-docker compose logs -f        # 跟踪启动顺序：gateway → runner → API
+docker compose logs -f        # 跟踪启动顺序：runner → API
 docker compose ps             # 容器状态，含健康检查结果
 docker compose down           # 停止并删除容器；./data 保留
 docker compose up -d --build  # 拉取新代码后重建并重启
@@ -199,11 +190,10 @@ docker compose up -d --build  # 拉取新代码后重建并重启
 
 容器默认以 uid/gid `1000:1000` 运行。如果你的账号 id 不同，请在 `.env` 中设置 `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID`（`id -u`、`id -g`）并重建容器；否则入口脚本会立即以明确的「目录不可写」提示退出，而不是在更深处失败。
 
-有三处与宿主机安装不同：
+有两处与宿主机安装不同：
 
 - uv 管理的 Python 环境**不**写入数据目录，而是烘焙在镜像的 `/opt/science-agent/envs/{gateway,paper}` 中。这样 bind mount 只保存应用状态，全新的 `compose up` 也无需联网。
 - 固定版本 micromamba 烘焙在 `/opt/science-agent/provisioner/micromamba`，空数据目录首次启动时播种到 `data/scientific-envs/bin/micromamba`。显式设置 `SCIENCE_AGENT_PROVISIONER_PATH` 时不播种，Runner 继续使用该管理员覆盖路径。
-- 宿主机运行时落在工作目录旁 `.deer-flow/` 的 deer-flow harness 状态，被重定向到 `data/deer-flow/`（`DEER_FLOW_HOME`），因为镜像中的应用目录对服务用户是只读的。
 
 ### 沙箱与宿主要求
 

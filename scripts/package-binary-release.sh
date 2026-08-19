@@ -16,12 +16,12 @@
 # Produce the ScienceDiscovery single-file release binaries.
 #
 # Each supported architecture yields exactly one executable that carries the
-# product: Web UI, control API, agent-loop gateway, runner, their Node and
-# CPython runtimes and micromamba. uv, deer-flow and the gateway's Python
-# dependency tree are deliberately not packaged; the first `serve` on the
-# user's machine downloads them from configurable sources (Huawei Cloud
-# mirror and the deer-flow git mirrors by default) at versions pinned inside
-# the payload. A user downloads that one file and runs
+# product: Web UI, control API, sandbox runner, their Node and
+# CPython runtimes and micromamba. uv and the gateway's Python dependency tree
+# are deliberately not packaged; the first `serve` on the user's machine
+# downloads them from a configurable package index (Huawei Cloud mirror by
+# default) at versions pinned inside the payload. A user downloads that one
+# file and runs
 # `./ScienceDiscovery serve`.
 #
 # This is the binary deployment path and it never involves Docker, neither at
@@ -137,8 +137,8 @@ rm -rf -- "$output_dir"/.work-* "$output_dir/.shared" "$output_dir/.downloads"
   echo "science-agent=$version"
   echo "format=science-agent-single-binary-v1"
   echo "contents=web+api+gateway+runner+node+cpython+micromamba"
-  echo "excluded=neo4j,uv,deer-flow,gateway-python-deps"
-  echo "first-launch-installs=uv,deer-flow,gateway-python-deps"
+  echo "excluded=neo4j,uv,gateway-python-deps"
+  echo "first-launch-installs=uv,gateway-python-deps"
   echo "host-requirements=bubblewrap"
   printf 'architectures='
   separator=""

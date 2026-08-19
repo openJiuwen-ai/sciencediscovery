@@ -11,7 +11,7 @@ science_agent/
 ├── apps/web/                 # React 浏览器 UI（Vite）
 ├── services/
 │   ├── api/                  # Node 控制 API（主业务）
-│   ├── gateway/              # Python agent-loop 侧车
+│   ├── gateway/              # 随包 Python MCP server 及其 venv
 │   ├── runner/               # bubblewrap 执行器
 │   ├── paper/                # PDF worker（uv 项目）
 │   └── memory-graph/         # 实验性 Science Memory 侧车（默认禁用；需 Neo4j）
@@ -20,7 +20,6 @@ science_agent/
 │   ├── schema/               # 共享 TypeScript 类型与 schema
 │   └── mcp-sources/          # 科研 MCP Source/Tool manifest 与信任边界
 ├── skills/                   # 内置 Agent Skills 包
-├── third_party/deer-flow/    # git submodule：deer-flow（gateway 可编辑依赖）
 ├── scripts/
 │   ├── start-stack.sh        # 本地与 Docker 共用的三进程启动入口
 │   ├── run-local.sh          # 本地模式兼容包装
@@ -48,7 +47,7 @@ science_agent/
 | `services/runner` | `127.0.0.1:4311` | 沙箱执行；仅回环 |
 | `services/api` | `127.0.0.1:4310` | 控制 API + 静态 UI；默认仅本机 |
 
-首次启动会初始化 `third_party/deer-flow` submodule，并在 `data/envs/gateway`、`data/envs/paper` 下用 uv 准备 Python 环境。
+首次启动会在 `data/envs/gateway`、`data/envs/paper` 下用 uv 准备 Python 环境。本仓已无 submodule。
 
 ## 2. 模块划分与主要功能
 
@@ -88,7 +87,7 @@ science_agent/
 - **不再跑 agent 循环**：agent loop 已原生化到 `services/api` 的 `native-agent/`（见 [Agent 后端](../explanation/agent-backend.md)）
 - 无 HTTP 服务：web provider 已原生化到 `services/api/src/web-providers/native/`
 - 该 venv 同时为随包的 Python MCP server（biomed、UniProt）提供解释器，由 Node 以 stdio 子进程拉起
-- `_engine/`、FastAPI 应用与 `deerflow-harness` 依赖已整体删除；包内依赖收敛为 `mcp` + `httpx`
+- `_engine/`、FastAPI 应用、`deerflow-harness` 依赖及其 submodule 已整体删除；包内依赖收敛为 `mcp` + `httpx`
 
 ### 2.4 `services/runner` — 隔离执行
 
@@ -122,10 +121,6 @@ science_agent/
 - Playwright 浏览器 e2e（本地环境在 `.e2e/`）
 - `test/api/*` smoke（脚本化模型端点 / 真实模型）
 
-### 2.9 `third_party/deer-flow`
-
-ByteDance deer-flow 子模块。**本产品不运行 deer-flow 完整前端/runtime/沙箱**；gateway 仅将 `deerflow-harness` 作为 path 依赖。agent 循环已不再使用它，当前只剩 web provider 实现仍依赖。
-
 ## 3. 数据与配置落点
 
 | 位置 | 内容 |
@@ -151,16 +146,15 @@ ByteDance deer-flow 子模块。**本产品不运行 deer-flow 完整前端/runt
 | 后端服务 | 5 | `api`、`gateway`、`runner`、`paper`、`memory-graph`（Science Memory；实验性，默认禁用） |
 | 共享 TS 包 | 3 | `agent-runtime`、`schema`、`mcp-sources`（科研 MCP manifest 与治理校验） |
 | 内置技能包 | 2 | life-science / structure-pocket |
-| 外部 submodule | 1 | deer-flow |
 
-**合计约 12 个一等模块**（不含 `test/`、`scripts/`、`docs/`）。
+**合计约 11 个一等模块**（不含 `test/`、`scripts/`、`docs/`）。
 
 业务能力上还可概括为：**工作台 · Agent 循环 · 沙箱执行 · 科学连接器 · 论文阅读 · 技能/评审/权限 · 托管科学环境** 等功能面；详细科学数据源见[科研连接器](../explanation/science-connectors.md)。
 
 ## 5. 相关文档
 
 - [控制面](../explanation/control-plane.md) — `services/api` 内部结构
-- [Agent 后端](../explanation/agent-backend.md) — Agent 与 deer-flow 交互细节
+- [Agent 后端](../explanation/agent-backend.md) — Node 原生 Agent 循环的实现细节
 - [内置工具](builtin-tools.md) — 模型可见的内置工具清单
 - [沙箱执行](../explanation/sandbox-execution.md) — Runner 沙箱与科学环境
 - [评审与溯源](../explanation/review-provenance.md) — 评审与溯源机制

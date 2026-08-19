@@ -13,8 +13,10 @@
 **/*.pyc
 
 # Runtime state and credentials. `data/` is bind-mounted at run time instead.
-# `.deer-flow/` holds local harness sqlite state next to the services; unlike
-# .gitignore, Docker patterns are anchored at the context root, so it needs `**`.
+# `.deer-flow/` is state the retired vendor harness used to write beside the
+# services; the pattern stays so a stale directory on a developer machine
+# cannot re-enter the build context. Unlike .gitignore, Docker patterns are
+# anchored at the context root, so it needs `**`.
 data/
 **/.deer-flow/
 **/.env

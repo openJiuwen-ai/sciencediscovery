@@ -22,7 +22,6 @@ import {
   accessTokenBanner,
   AUTH_TOKEN_FILE,
   bootstrapTokenPath,
-  GATEWAY_INTERNAL_TOKEN_FILE,
   resolveBootstrapToken,
   resolveServeCredentials,
 } from "./bootstrap-tokens.js";
@@ -69,17 +68,15 @@ describe("launcher bootstrap credentials", () => {
 
     assert.deepEqual(credentials.authToken, { source: "environment", token: "chosen-token" });
     await assert.rejects(stat(bootstrapTokenPath(dataDir, AUTH_TOKEN_FILE)), /ENOENT/);
-    // The gateway credential is independent: it is still generated here.
-    assert.equal(credentials.gatewayInternalToken.source, "generated");
-    await stat(bootstrapTokenPath(dataDir, GATEWAY_INTERNAL_TOKEN_FILE));
+    // The retired gateway service's internal token is no longer generated, so
+    // an install started fresh writes nothing beside the access token.
+    await assert.rejects(stat(bootstrapTokenPath(dataDir, "gateway-internal-token")), /ENOENT/);
   });
 
   test("no fixed default survives anywhere in the chain", () => {
     const credentials = resolveServeCredentials(join(workspace, "no-default"), {});
 
     assert.notEqual(credentials.authToken.token, "science-agent-local");
-    assert.notEqual(credentials.gatewayInternalToken.token, "science-agent-gateway-local");
-    assert.notEqual(credentials.authToken.token, credentials.gatewayInternalToken.token);
   });
 
   test("the ready banner prints a managed token and withholds an operator one", () => {

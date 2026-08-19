@@ -27,10 +27,7 @@
     }
   },
   "bootstrap": {
-    "pypi_index": "https://mirrors.huaweicloud.com/repository/pypi/simple",
-    "deer_flow_git_mirror": "https://gitcode.com/GitHub_Trending/de/deer-flow.git",
-    "deer_flow_git_canonical": "https://github.com/bytedance/deer-flow.git",
-    "deer_flow_archive_template": "https://codeload.github.com/bytedance/deer-flow/tar.gz/{commit}"
+    "pypi_index": "https://mirrors.huaweicloud.com/repository/pypi/simple"
   },
   "data_sources": {
     "arxiv": {

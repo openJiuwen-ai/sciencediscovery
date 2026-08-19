@@ -350,7 +350,7 @@ web provider 的执行改由 `services/api/src/web-providers/native/` 承担：`
 | `POST {gateway}/run` 驱动对话 | Node → gateway | 路由与其全部装配代码（`tools.py`、`callback.py`、`model.py`、`_engine` 的 agent/deferred/state/summarize/model_patch/skills/sanitize）已删除 |
 | `POST /internal/tool-exec` 回调 | gateway → Node | 原生 loop 直接 `await` 工具处理器；路由、`callback_token` 机制与 `SCIENCE_AGENT_TOOL_CALLBACK_URL` 均已删除 |
 | LangChain `create_agent` / LangGraph 驱动循环 | gateway `_engine/` | 循环改由 `native-agent/index.ts` 实现 |
-| deer-flow 依赖 | gateway `pyproject.toml` | 已整体移除：web provider 原生化后不再有 vendor 调用方 |
+| deer-flow 依赖与 submodule | gateway `pyproject.toml`、`third_party/deer-flow` | 已整体移除：web provider 原生化后不再有 vendor 调用方，依赖、submodule、首启下载与打包 pin 全部删除 |
 | 模型补丁层（thought_signature 重放） | gateway `_engine/model_patch.py` | 原生 loop 逐字保存 assistant 消息，回放天然成立 |
 
 ## 12. 验证入口

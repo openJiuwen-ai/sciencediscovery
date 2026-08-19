@@ -97,9 +97,9 @@ multi-platform manifest into its classic local image store.
 
 ## Source and result mounts
 
-Use a recursive checkout: `third_party/deer-flow` must be initialized on the
-host/checkout agent before mounting because a linked Git worktree's `.git`
-file is not portable into the container.
+The repository has no submodules, so a plain checkout is enough. Mount a real
+checkout rather than a linked Git worktree: a worktree's `.git` file points at
+the main repository and is not portable into the container.
 
 All commands use the same mounts. `<host-results>` should be a new or empty
 directory for the run.

@@ -22,12 +22,11 @@ import { after, before, describe, test } from "node:test";
 import type { ServeCredentials } from "./bootstrap-tokens.js";
 import { defaultSettings } from "./cli-options.js";
 import type { PayloadManifest } from "./payload-manifest.js";
-import { planServices, seedProvisioner, type ServeContext, type ServicePlanContext } from "./serve.js";
+import { mcpProbeRuntime, planServices, seedProvisioner, type ServeContext, type ServicePlanContext } from "./serve.js";
 
 const manifest: PayloadManifest = {
   app: {
     apiEntry: "app/services/api/dist/server.js",
-    gatewayModule: "science_agent_gateway.server",
     root: "app",
     runnerEntry: "app/services/runner/dist/server.js",
     webDir: "app/apps/web/dist",
@@ -47,7 +46,6 @@ const manifest: PayloadManifest = {
 // them literal here means planning a topology never touches the disk.
 const credentials: ServeCredentials = {
   authToken: { source: "generated", token: "generated-access-token" },
-  gatewayInternalToken: { source: "generated", token: "generated-gateway-token" },
 };
 
 function contextFor(overrides: Partial<ServicePlanContext> = {}): ServicePlanContext {
@@ -62,18 +60,23 @@ function contextFor(overrides: Partial<ServicePlanContext> = {}): ServicePlanCon
 }
 
 describe("serve topology", () => {
-  test("starts gateway, then runner, then the API, each health gated", () => {
+  test("starts the runner, then the API, each health gated — no Python service", () => {
     const services = planServices(contextFor());
+    // The agent loop, the MCP client and the web providers all run inside the
+    // API process. Supervising a Python service here would gate startup on a
+    // health endpoint nothing serves.
     assert.deepEqual(services.map((service) => service.name), [
-      "agent-loop gateway",
       "bubblewrap runner",
       "control API and Web UI",
     ]);
     assert.deepEqual(services.map((service) => service.healthUrl), [
-      "http://127.0.0.1:4312/health",
       "http://127.0.0.1:4311/health",
       "http://127.0.0.1:4310/health",
     ]);
+    assert.ok(
+      services.every((service) => !service.command.includes("python")),
+      "no supervised service may be a Python process",
+    );
   });
 
   test("runs every process from the payload, never from the host", () => {
@@ -81,7 +84,6 @@ describe("serve topology", () => {
     assert.deepEqual(
       services.map((service) => [service.command, ...service.args]),
       [
-        ["/cache/payload/abc/python/bin/python3", "-m", "science_agent_gateway.server"],
         ["/cache/payload/abc/node/bin/node", "/cache/payload/abc/app/services/runner/dist/server.js"],
         ["/cache/payload/abc/node/bin/node", "/cache/payload/abc/app/services/api/dist/server.js"],
       ],
@@ -91,80 +93,80 @@ describe("serve topology", () => {
     assert.ok(services.every((service) => service.cwd === "/cache/payload/abc/app"));
   });
 
-  test("a bootstrap-provisioned interpreter replaces the payload python for the gateway only", () => {
-    const services = planServices(contextFor({ gatewayPythonPath: "/data/envs/gateway/bin/python" }));
+  test("the API is told which interpreter starts the bundled stdio MCP servers", () => {
+    // `resolveMcpPython()` otherwise searches repository-shaped paths relative
+    // to the process cwd, which here is inside the payload cache.
+    const [, embedded] = planServices(contextFor());
+    assert.equal(embedded?.env.SCIENCE_AGENT_GATEWAY_PYTHON_PATH, "/cache/payload/abc/python/bin/python3");
+
+    const [, provisioned] = planServices(contextFor({ gatewayPythonPath: "/data/envs/gateway/bin/python" }));
+    assert.equal(provisioned?.env.SCIENCE_AGENT_GATEWAY_PYTHON_PATH, "/data/envs/gateway/bin/python");
+    // The interpreter is a spawn target, not a supervised process.
     assert.deepEqual(
-      services.map((service) => service.command),
-      [
-        "/data/envs/gateway/bin/python",
-        "/cache/payload/abc/node/bin/node",
-        "/cache/payload/abc/node/bin/node",
-      ],
+      planServices(contextFor({ gatewayPythonPath: "/data/envs/gateway/bin/python" })).map((s) => s.command),
+      ["/cache/payload/abc/node/bin/node", "/cache/payload/abc/node/bin/node"],
     );
   });
 
-  test("does not rely on PYTHONPATH for the gateway's own package", () => {
-    // The gateway starts stdio MCP servers through the MCP SDK, which forwards
-    // only an allow-listed environment. PYTHONPATH would be dropped there, so
-    // the payload installs into the interpreter's own site-packages instead.
-    const [gateway] = planServices(contextFor());
-    assert.equal(gateway?.env.PYTHONPATH, undefined);
-  });
-
-  test("preserves an operator-provided external URL config for the gateway and bootstrap probe", () => {
-    const [gateway] = planServices(contextFor({
-      baseEnv: { SCIENCE_AGENT_EXTERNAL_URLS_PATH: "/srv/science-agent/external-urls.json" },
-    }));
-    assert.equal(gateway?.cwd, "/cache/payload/abc/app");
-    assert.equal(gateway?.env.SCIENCE_AGENT_EXTERNAL_URLS_PATH, "/srv/science-agent/external-urls.json");
-  });
-
-  test("keeps deer-flow harness state in the data directory", () => {
-    // The gateway runs with its cwd inside the payload cache, so the harness
-    // default of `.deer-flow/` beside the cwd would strand state there and lose
-    // it the moment a new release unpacks to a different cache directory.
-    const services = planServices(contextFor());
-    for (const service of services) {
-      assert.equal(service.env.DEER_FLOW_HOME, "/opt/science-agent/science-discovery-data/deer-flow");
+  test("does not rely on PYTHONPATH for the bundled MCP servers' package", () => {
+    // The API starts those servers through the MCP SDK, which forwards only an
+    // allow-listed environment. PYTHONPATH would be dropped there, so the
+    // payload installs into the interpreter's own site-packages instead.
+    for (const service of planServices(contextFor())) {
+      assert.equal(service.env.PYTHONPATH, undefined);
     }
   });
 
-  test("respects an operator-provided DEER_FLOW_HOME", () => {
-    const [gateway] = planServices(contextFor({ baseEnv: { DEER_FLOW_HOME: "/srv/deer-flow" } }));
-    assert.equal(gateway?.env.DEER_FLOW_HOME, "/srv/deer-flow");
+  test("the bootstrap probe runs in the app root and keeps an operator URL config", () => {
+    const runtime = mcpProbeRuntime(contextFor({
+      baseEnv: { SCIENCE_AGENT_EXTERNAL_URLS_PATH: "/srv/science-agent/external-urls.json" },
+    }));
+    assert.equal(runtime.cwd, "/cache/payload/abc/app");
+    assert.equal(runtime.env.SCIENCE_AGENT_EXTERNAL_URLS_PATH, "/srv/science-agent/external-urls.json");
+  });
+
+  test("no service carries the retired vendor state directory", () => {
+    // DEER_FLOW_HOME only existed to keep the vendor harness from writing
+    // `.deer-flow/` into the payload cache. The harness is gone, so injecting
+    // it would create an empty directory nothing reads.
+    for (const service of planServices(contextFor())) {
+      assert.equal(service.env.DEER_FLOW_HOME, undefined);
+    }
   });
 
   test("shares one runner token between the runner and the API", () => {
-    const [, runner, api] = planServices(contextFor());
+    const [runner, api] = planServices(contextFor());
     assert.equal(runner?.env.SCIENCE_AGENT_RUNNER_TOKEN, "science-agent-runner-local");
     assert.equal(api?.env.SCIENCE_AGENT_RUNNER_TOKEN, runner?.env.SCIENCE_AGENT_RUNNER_TOKEN);
     assert.equal(api?.env.SCIENCE_AGENT_RUNNER_URL, "http://127.0.0.1:4311");
-    assert.equal(api?.env.SCIENCE_AGENT_GATEWAY_URL, "http://127.0.0.1:4312");
   });
 
-  test("hands the same credentials to the API and the gateway", () => {
-    const [gateway, , api] = planServices(contextFor());
-    // Both ends of the internal channel must agree, and the API must receive the
-    // access token `serve` prints, so no child regenerates one of its own.
-    assert.equal(gateway?.env.SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN, "generated-gateway-token");
-    assert.equal(api?.env.SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN, "generated-gateway-token");
+  test("no service is pointed at the retired gateway HTTP endpoint", () => {
+    // The API drives the loop itself; handing it a URL and an internal token
+    // for a service nobody starts would only invite one to be started again.
+    for (const service of planServices(contextFor())) {
+      assert.equal(service.env.SCIENCE_AGENT_GATEWAY_URL, undefined);
+      assert.equal(service.env.SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN, undefined);
+      assert.equal(service.env.SCIENCE_AGENT_GATEWAY_PORT, undefined);
+    }
+  });
+
+  test("hands the printed access token to the API", () => {
+    const [, api] = planServices(contextFor());
+    // The API must receive the token `serve` prints, so it never generates one
+    // of its own that the user was never shown.
     assert.equal(api?.env.SCIENCE_AGENT_AUTH_TOKEN, "generated-access-token");
   });
 
   test("passes an operator-configured token through unchanged", () => {
-    const [gateway, , api] = planServices(contextFor({
-      credentials: {
-        authToken: { source: "environment", token: "chosen-access" },
-        gatewayInternalToken: { source: "environment", token: "chosen-gateway" },
-      },
+    const [, api] = planServices(contextFor({
+      credentials: { authToken: { source: "environment", token: "chosen-access" } },
     }));
     assert.equal(api?.env.SCIENCE_AGENT_AUTH_TOKEN, "chosen-access");
-    assert.equal(gateway?.env.SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN, "chosen-gateway");
   });
 
   test("ships no fixed default credential in the process plan", () => {
     const plan = JSON.stringify(planServices(contextFor()));
-    assert.ok(!plan.includes("science-agent-gateway-local"), "no fixed gateway token may remain");
     assert.ok(!plan.includes("science-agent-local"), "no fixed access token may remain");
   });
 
@@ -173,7 +175,7 @@ describe("serve topology", () => {
       baseEnv: { SCIENCE_AGENT_EXEC_TIMEOUT_MS: "60000", SCIENCE_AGENT_SCIENTIFIC_CHANNELS: "conda-forge" },
     });
     context.settings.bwrapPath = "/usr/local/bin/bwrap";
-    const [, runner] = planServices(context);
+    const [runner] = planServices(context);
     assert.equal(runner?.env.SCIENCE_AGENT_EXEC_TIMEOUT_MS, "60000");
     assert.equal(runner?.env.SCIENCE_AGENT_SCIENTIFIC_CHANNELS, "conda-forge");
     assert.equal(runner?.env.SCIENCE_AGENT_BWRAP_PATH, "/usr/local/bin/bwrap");
@@ -182,7 +184,7 @@ describe("serve topology", () => {
   test("disables scientific environments when the operator asked", () => {
     const context = contextFor();
     context.settings.scientificEnvironments = false;
-    const [, runner] = planServices(context);
+    const [runner] = planServices(context);
     assert.equal(runner?.env.SCIENTIFIC_ENVS, "0");
   });
 
@@ -190,7 +192,7 @@ describe("serve topology", () => {
     const context = contextFor();
     context.settings.host = "0.0.0.0";
     const services = planServices(context);
-    assert.equal(services[2]?.healthUrl, "http://127.0.0.1:4310/health");
+    assert.equal(services.at(-1)?.healthUrl, "http://127.0.0.1:4310/health");
   });
 
   test("never references Docker in the process plan", () => {

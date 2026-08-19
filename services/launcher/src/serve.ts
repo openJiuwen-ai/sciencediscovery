@@ -36,8 +36,6 @@ import { Supervisor, type ServiceDefinition } from "./supervisor.js";
 export interface ServeSettings {
   bwrapPath: string;
   dataDir: string;
-  gatewayHost: string;
-  gatewayPort: number;
   host: string;
   port: number;
   runnerHost: string;
@@ -53,9 +51,11 @@ export interface ServeContext {
   /** Base environment the services inherit; the process env in production. */
   baseEnv: NodeJS.ProcessEnv;
   /**
-   * Gateway interpreter provisioned by the first-launch bootstrap. Absent for
-   * format-version-1 payloads, whose dependencies are embedded beside the
-   * bundled interpreter.
+   * Interpreter of the gateway *environment* provisioned by the first-launch
+   * bootstrap. "Gateway" here names `<data-dir>/envs/gateway`, not a service:
+   * the API spawns the bundled stdio MCP servers (biomed, UniProt) with it.
+   * Absent for format-version-1 payloads, whose dependencies are embedded
+   * beside the bundled interpreter.
    */
   gatewayPythonPath?: string;
 }
@@ -86,11 +86,6 @@ function forwarded(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return result;
 }
 
-export function gatewayUrl(settings: ServeSettings, baseEnv: NodeJS.ProcessEnv = {}): string {
-  return baseEnv.SCIENCE_AGENT_GATEWAY_URL?.trim().replace(/\/$/, "")
-    || `http://${settings.gatewayHost}:${settings.gatewayPort}`;
-}
-
 export function runnerUrl(settings: ServeSettings, baseEnv: NodeJS.ProcessEnv = {}): string {
   return baseEnv.SCIENCE_AGENT_RUNNER_URL?.trim().replace(/\/$/, "")
     || `http://${settings.runnerHost}:${settings.runnerPort}`;
@@ -99,40 +94,36 @@ export function runnerUrl(settings: ServeSettings, baseEnv: NodeJS.ProcessEnv = 
 /** Absolute path of a payload-relative entry recorded in the manifest. */
 const payloadPath = (root: string, relative: string): string => join(root, relative);
 
+/** Working directory and environment the bundled Python is exercised in. */
+export function mcpProbeRuntime(context: ServeContext): { cwd: string; env: NodeJS.ProcessEnv } {
+  // The app root, not the launcher's own working tree: the bundled servers
+  // resolve `config/external-urls.json` relative to their cwd, so a probe run
+  // from anywhere else would validate a different configuration than the one
+  // the API will actually spawn them with.
+  return {
+    cwd: payloadPath(context.payloadRoot, context.manifest.app.root),
+    env: { ...context.baseEnv },
+  };
+}
+
 /**
  * Build the ordered service list. Kept pure so tests can assert the topology,
  * ordering and environment without spawning anything.
+ *
+ * Two resident processes, matching `scripts/start-stack.sh`: the runner first
+ * because the API is gated on its health, then the API. There is no Python
+ * service — the agent loop, the MCP client, and the web providers all run
+ * inside the API process, and the bundled stdio MCP servers are spawned by it
+ * on demand rather than supervised here.
  */
 export function planServices(context: ServicePlanContext): ServiceDefinition[] {
   const { credentials, manifest, payloadRoot, settings } = context;
-  // The deer-flow harness otherwise writes `.deer-flow/` beside the working
-  // directory, which here is inside the payload cache — state would then be
-  // stranded when a new release unpacks to a different cache directory.
-  const baseEnv: NodeJS.ProcessEnv = {
-    ...context.baseEnv,
-    DEER_FLOW_HOME: context.baseEnv.DEER_FLOW_HOME?.trim() || join(settings.dataDir, "deer-flow"),
-  };
+  const baseEnv: NodeJS.ProcessEnv = { ...context.baseEnv };
   const nodeBinary = payloadPath(payloadRoot, manifest.node.path);
   const pythonBinary = context.gatewayPythonPath ?? payloadPath(payloadRoot, manifest.python.path);
   const appRoot = payloadPath(payloadRoot, manifest.app.root);
 
-  const gatewayBase = gatewayUrl(settings, baseEnv);
   const runnerBase = runnerUrl(settings, baseEnv);
-
-  // No PYTHONPATH: the payload installs the gateway dependencies into the
-  // bundled interpreter's own site-packages. The gateway launches stdio MCP
-  // servers through the MCP SDK, which passes only an allow-listed environment
-  // to those subprocesses, so anything carried in PYTHONPATH would be dropped
-  // exactly where the gateway needs its own package to be importable.
-  const gatewayEnvironment: NodeJS.ProcessEnv = {
-    ...baseEnv,
-    SCIENCE_AGENT_GATEWAY_HOST: settings.gatewayHost,
-    // Both ends of the internal channel get the value `serve` already resolved,
-    // so neither service has to find the stored credential from whatever working
-    // directory it happens to run in.
-    SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN: credentials.gatewayInternalToken.token,
-    SCIENCE_AGENT_GATEWAY_PORT: String(settings.gatewayPort),
-  };
 
   const runnerEnvironment: NodeJS.ProcessEnv = {
     ...baseEnv,
@@ -149,8 +140,12 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
     ...baseEnv,
     SCIENCE_AGENT_AUTH_TOKEN: credentials.authToken.token,
     SCIENCE_AGENT_DATA_DIR: settings.dataDir,
-    SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN: credentials.gatewayInternalToken.token,
-    SCIENCE_AGENT_GATEWAY_URL: gatewayBase,
+    // Name the interpreter explicitly instead of leaving the API to search:
+    // `resolveMcpPython()` probes repository-shaped paths relative to the
+    // process cwd, which here is inside the payload cache. A format-version-1
+    // payload has no provisioned venv, so this is the bundled CPython whose
+    // own site-packages already carry the gateway package.
+    SCIENCE_AGENT_GATEWAY_PYTHON_PATH: pythonBinary,
     SCIENCE_AGENT_HOST: settings.host,
     SCIENCE_AGENT_PORT: String(settings.port),
     SCIENCE_AGENT_RUNNER_TOKEN: runnerEnvironment.SCIENCE_AGENT_RUNNER_TOKEN,
@@ -158,14 +153,6 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
   };
 
   return [
-    {
-      name: "agent-loop gateway",
-      command: pythonBinary,
-      args: ["-m", manifest.app.gatewayModule],
-      cwd: appRoot,
-      env: gatewayEnvironment,
-      healthUrl: `${gatewayBase}/health`,
-    },
     {
       name: "bubblewrap runner",
       command: nodeBinary,
@@ -230,22 +217,17 @@ export async function serve(context: ServeContext, log: (message: string) => voi
   await seedProvisioner(context);
 
   // Resolved before anything starts: the same values go to the children below
-  // and into both the gateway bootstrap probe and the ready banner, so every
-  // process observes one credential set and the user can recover access.
+  // and into the ready banner, so every process observes one credential set
+  // and the user can recover access.
   const credentials = resolveServeCredentials(settings.dataDir, context.baseEnv);
 
-  // Format-version-2 payloads restore uv, deer-flow and the gateway
-  // environment on first launch; later launches pass straight through.
+  // Format-version-2 payloads restore uv and the gateway environment on first
+  // launch; later launches pass straight through.
   if (manifest.bootstrap && !context.gatewayPythonPath) {
-    // The integrity probe imports the real gateway entry point, whose config
-    // resolution depends on process context. Reuse the service plan verbatim
-    // so the probe cannot accidentally inherit the launcher's working tree.
-    const gatewayService = planServices({ ...context, credentials })[0];
-    if (!gatewayService) throw new Error("The gateway service plan is empty.");
     const bootstrap = await runBootstrap({
       dataDir: settings.dataDir,
       env: context.baseEnv,
-      gatewayRuntime: { cwd: gatewayService.cwd, env: gatewayService.env },
+      gatewayRuntime: mcpProbeRuntime(context),
       log,
       manifest,
       payloadRoot: context.payloadRoot,
@@ -254,7 +236,6 @@ export async function serve(context: ServeContext, log: (message: string) => voi
   }
 
   const services = planServices({ ...context, credentials });
-  await mkdir(services[0]?.env.DEER_FLOW_HOME as string, { recursive: true });
 
   const supervisor = new Supervisor({ log });
   let stopping = false;

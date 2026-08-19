@@ -30,7 +30,7 @@ The prepackaged binary is the primary user path. Other deployment modes are docu
 | Path | Host requirements |
 |---|---|
 | Prepackaged binary | Linux x86_64/aarch64 and bubblewrap |
-| Local source mode | Linux x86_64/aarch64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, bubblewrap, and Git with submodule support |
+| Local source mode | Linux x86_64/aarch64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, bubblewrap, and Git |
 | Docker | Linux x86_64/aarch64, Docker Engine 24+, Compose v2, and host support for unprivileged user namespaces |
 
 The Gateway requires Python 3.12 in source mode; `uv` installs it into the service environment when needed. Managed scientific environments use the application's pinned micromamba and do not require system Python, R, or conda. All supported deployment paths require Linux and the user-namespace capabilities described in the deployment guide.

@@ -143,9 +143,6 @@ try {
   await mkdir(configuredRuntimeRoot, { recursive: true });
   runtimeRoot = await mkdtemp(join(configuredRuntimeRoot, `${layer}-`));
   await stat(join(repositoryRoot, "package.json"));
-  if (layer === "ut" || layer === "ut-core") {
-    await stat(join(repositoryRoot, "third_party/deer-flow/backend/packages/harness/pyproject.toml"));
-  }
   for (const [command, args] of layers[layer]) {
     const result = await run(command, args);
     exitCode = result.exitCode;

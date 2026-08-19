@@ -97,10 +97,6 @@ elif [[ "$group" == "legacy" && "${CI_ALLOW_LEGACY:-}" != "1" ]]; then
 fi
 
 cd "$repository_root"
-if [[ ! -f third_party/deer-flow/backend/packages/harness/pyproject.toml ]]; then
-  printf 'BLOCKED: third_party/deer-flow is not initialized; mount a recursive checkout.\n' | tee -a "$test_log" >&2
-  exit 2
-fi
 
 pnpm install --frozen-lockfile 2>&1 | tee -a "$test_log" || exit $?
 node test/sync-e2e.mjs --write 2>&1 | tee -a "$test_log" || exit $?
@@ -119,8 +115,6 @@ export SCIENCE_AGENT_DATA_DIR="$runtime_root/data"
 export SCIENCE_AGENT_PORT="${SCIENCE_AGENT_PORT:-4310}"
 export SCIENCE_AGENT_RUNNER_PORT="${SCIENCE_AGENT_RUNNER_PORT:-4311}"
 export SCIENCE_AGENT_RUNNER_URL="http://127.0.0.1:${SCIENCE_AGENT_RUNNER_PORT}"
-export SCIENCE_AGENT_GATEWAY_PORT="${SCIENCE_AGENT_GATEWAY_PORT:-4312}"
-export SCIENCE_AGENT_GATEWAY_URL="http://127.0.0.1:${SCIENCE_AGENT_GATEWAY_PORT}"
 # The default mocked job must not turn J3 into a conda-channel provisioning
 # job. A dedicated CI setup job may opt in after its network policy is reviewed.
 export SCIENTIFIC_ENVS="${E2E_SCIENTIFIC_ENVS:-0}"

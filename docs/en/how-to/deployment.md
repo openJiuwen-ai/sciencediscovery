@@ -40,17 +40,16 @@ artifact="dist/binary-release-local/ScienceDiscovery-local-linux-$arch"
 "$artifact" serve
 ```
 
-`serve` starts the agent-loop gateway, Bubblewrap runner, and control API with the Web UI in that order, using the same health checks as [local mode](#local-mode-host-processes), then prints the UI URL. It listens on <http://127.0.0.1:4310> by default. Sign in with `SCIENCE_AGENT_AUTH_TOKEN`; when it is unset, `serve` prints the token generated on first start. Ctrl-C stops all services in reverse order.
+`serve` starts the Bubblewrap runner, then the control API with the Web UI, using the same health checks as [local mode](#local-mode-host-processes), then prints the UI URL. Those two are the whole resident stack: the agent loop, the model calls, and the web providers all run inside the API process, and the bundled Python MCP servers are spawned on demand rather than supervised. It listens on <http://127.0.0.1:4310> by default. Sign in with `SCIENCE_AGENT_AUTH_TOKEN`; when it is unset, `serve` prints the token generated on first start. Ctrl-C stops all services in reverse order.
 
 The first `serve` extracts the embedded runtime to `~/.cache/science-discovery/payload/<payload-id>` (change it with `XDG_CACHE_HOME` or `SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR`). Later runs reuse it. The directory contains the payload digest, so an upgrade does not overwrite an older extraction. If only the former `~/.cache/science-agent` cache exists, the launcher imports it once by renaming it to the new location and prints a compatibility message. If the new location already exists, the launcher keeps it unchanged and logs that the import was skipped.
 
 ### Dependencies installed on first launch
 
-The artifact deliberately does not package uv, deer-flow, or the gateway's third-party Python dependency tree. After extraction, the first `serve` installs them into the data directory (later launches reuse them; an upgrade rebuilds only what became stale):
+The artifact deliberately does not package uv or the gateway's third-party Python dependency tree. After extraction, the first `serve` installs them into the data directory (later launches reuse them; an upgrade rebuilds only what became stale):
 
 1. **uv** — the wheel pinned at build time (version and SHA256) is downloaded from a PyPI index, Huawei Cloud mirror `https://mirrors.huaweicloud.com/repository/pypi/simple` by default, verified, and its binary is placed under `<data-dir>/tools/uv/`.
-2. **deer-flow** — fetched at the exact commit this repository's submodule gitlink records, trying in order: the GitCode mirror (`git fetch` by commit, needs `git` on the host), the GitHub repository, and a GitHub archive URL that works without `git`. Every download is verified against the pinned commit or content digest before it lands in `<data-dir>/vendor/deer-flow`. If every source fails, the error spells out the manual placement path, the expected commit, and the exact steps.
-3. **The gateway Python environment** — uv creates a venv at `<data-dir>/envs/gateway` on the bundled CPython and installs the hash-pinned requirements exported from `services/gateway/uv.lock` at build time (`--require-hashes`), so the versions match the lockfile exactly while the download goes through the configured mirror.
+2. **The gateway Python environment** — uv creates a venv at `<data-dir>/envs/gateway` on the bundled CPython and installs the hash-pinned requirements exported from `services/gateway/uv.lock` at build time (`--require-hashes`), so the versions match the lockfile exactly while the download goes through the configured mirror.
 
 Related environment variables (usable in `--env-file`):
 
@@ -59,10 +58,8 @@ Related environment variables (usable in `--env-file`):
 | `SCIENCE_AGENT_PYPI_INDEX` | Huawei Cloud PyPI mirror | Package index for Python dependencies |
 | `SCIENCE_AGENT_UV_INSTALL_INDEX` | same as `SCIENCE_AGENT_PYPI_INDEX` | Separate index for the uv wheel download |
 | `SCIENCE_AGENT_UV_PATH` | — | Use an existing uv executable, skipping the download |
-| `SCIENCE_AGENT_DEERFLOW_GIT_URL` | GitCode mirror | Git URL tried first for deer-flow (GitHub remains the fallback) |
-| `SCIENCE_AGENT_DEERFLOW_DIR` | `<data-dir>/vendor/deer-flow` | Where the deer-flow checkout lives; also the manual-placement target |
 
-For air-gapped hosts, run the first launch once on a connected machine and copy the whole data directory over, or follow the failure message to place deer-flow manually and point `SCIENCE_AGENT_UV_PATH` at a pre-installed uv.
+For air-gapped hosts, run the first launch once on a connected machine and copy the whole data directory over, or point `SCIENCE_AGENT_UV_PATH` at a pre-installed uv and `SCIENCE_AGENT_PYPI_INDEX` at a reachable mirror.
 
 ### Host dependency: Bubblewrap
 
@@ -82,7 +79,7 @@ To inspect the UI without sandbox execution, start with `--skip-sandbox-check`; 
 ### Commands and options
 
 ```text
-ScienceDiscovery serve [options]       Start the Web UI, control API, agent-loop gateway, and runner
+ScienceDiscovery serve [options]       Start the Web UI, control API and sandbox runner
 ScienceDiscovery extract --to <dir>    Extract the embedded runtime without starting it
 ScienceDiscovery version               Print the version and embedded Node, CPython, and micromamba versions
 ScienceDiscovery help                  Show help
@@ -99,7 +96,7 @@ ScienceDiscovery help                  Show help
 | `--skip-sandbox-check` | off | Start without Bubblewrap; sandbox execution is unavailable |
 | `--no-scientific-envs` | off | Do not initialize managed scientific environments |
 
-The variables in [Configuration reference](../reference/configuration.md#environment-variables-local-mode) also apply and can be exported or placed in `--env-file`. The API, gateway, and runner bind to loopback by default. To expose the API, first replace `SCIENCE_AGENT_AUTH_TOKEN`, then explicitly use `--host 0.0.0.0` only on a trusted, protected network.
+The variables in [Configuration reference](../reference/configuration.md#environment-variables-local-mode) also apply and can be exported or placed in `--env-file`. The API and the runner bind to loopback by default. To expose the API, first replace `SCIENCE_AGENT_AUTH_TOKEN`, then explicitly use `--host 0.0.0.0` only on a trusted, protected network.
 
 ### What the binary contains
 
@@ -109,10 +106,10 @@ The variables in [Configuration reference](../reference/configuration.md#environ
 | Node runtime | Runs the control API and runner |
 | CPython 3.12 | Relocatable distribution; no host Python needed, and it is the base interpreter for the first-launch gateway venv |
 | Web assets | Prebuilt `apps/web/dist` |
-| Gateway wheel and bootstrap pins | The `science-agent-gateway` wheel (our own code), the hash-locked dependency export, and the uv wheel and deer-flow version pins |
+| Gateway wheel and bootstrap pins | The `science-agent-gateway` wheel (our own code), the hash-locked dependency export, and the uv wheel pin |
 | micromamba | Fixed version, seeded to `<data-dir>/scientific-envs/bin/micromamba` on first `serve`, then checked by the runner against the same release manifest |
 
-It does not contain uv, deer-flow, or the gateway's third-party Python dependencies (see [Dependencies installed on first launch](#dependencies-installed-on-first-launch)), nor Neo4j, starter Python/R scientific environments, or a conda package cache. Creating a starter environment for the first time still needs access to permitted package channels.
+It does not contain uv or the gateway's third-party Python dependencies (see [Dependencies installed on first launch](#dependencies-installed-on-first-launch)), nor Neo4j, starter Python/R scientific environments, or a conda package cache. Creating a starter environment for the first time still needs access to permitted package channels.
 
 ### Build both architecture packages
 
@@ -125,7 +122,7 @@ It does not contain uv, deer-flow, or the gateway's third-party Python dependenc
   --arch x86_64 --version local --output dist/binary-release-local
 ```
 
-The build host needs `node`, `pnpm`, `uv`, `tar`, `zstd`, and `sha256sum`; it needs **neither Docker nor QEMU** (uv is a build tool only — it exports the locked dependency list and builds the gateway wheel, and is not shipped). Both architectures can be produced on one x86_64 or aarch64 host. Node and CPython runtimes are downloaded with pinned versions and SHA256 values from `scripts/binary-release/runtimes.json`; the gateway's third-party dependencies are no longer embedded and instead install natively on the user's machine at first launch; TypeScript outputs, web assets, and the gateway wheel are architecture independent. The packager still checks the bundled CPython extension modules' ELF architecture and fails the build on a mismatch. The build requires the `third_party/deer-flow` submodule to be checked out at the commit its gitlink records — the packager pins that commit and a content digest for first-launch verification.
+The build host needs `node`, `pnpm`, `uv`, `tar`, `zstd`, and `sha256sum`; it needs **neither Docker nor QEMU** (uv is a build tool only — it exports the locked dependency list and builds the gateway wheel, and is not shipped). Both architectures can be produced on one x86_64 or aarch64 host. Node and CPython runtimes are downloaded with pinned versions and SHA256 values from `scripts/binary-release/runtimes.json`; the gateway's third-party dependencies are no longer embedded and instead install natively on the user's machine at first launch; TypeScript outputs, web assets, and the gateway wheel are architecture independent. The packager still checks the bundled CPython extension modules' ELF architecture and fails the build on a mismatch. The repository has no submodules, so a plain checkout is enough.
 
 The output contains both executables, `VERSION`, and `SHA256SUMS`. The gateway dependency tree (duckdb, pandas, numpy, onnxruntime, and others) is no longer shipped, so the artifacts are much smaller than the older format that embedded it; that tree is downloaded through the configured mirror at first launch instead. Compression defaults to zstd level 19; use `SCIENCE_AGENT_PAYLOAD_ZSTD_LEVEL` to lower it during iteration.
 
@@ -144,9 +141,9 @@ In local mode the shared entry point reads the root `.env`, checks the dependenc
 | `services/runner` | 127.0.0.1:4311 | Rootless Bubblewrap executor (background) |
 | `services/api` | 127.0.0.1:4310 | Control API and Web UI (foreground) |
 
-Ctrl-C stops its background services. `./scripts/run-local.sh [--no-build]` remains a thin compatibility wrapper, and `pnpm start` and `pnpm server` continue to use it. For unattended use, run it under a process manager such as a systemd user unit or tmux, or use [Docker deployment](#docker-deployment). The runner and gateway always bind only to loopback.
+Ctrl-C stops its background services. `./scripts/run-local.sh [--no-build]` remains a thin compatibility wrapper, and `pnpm start` and `pnpm server` continue to use it. For unattended use, run it under a process manager such as a systemd user unit or tmux, or use [Docker deployment](#docker-deployment). The runner always binds only to loopback.
 
-The first start initializes the `third_party/deer-flow` submodule and prepares a Python 3.12 gateway environment under `data/envs/gateway`.
+The first start prepares a Python 3.12 gateway environment under `data/envs/gateway`. It holds the interpreter for the bundled Python MCP servers (biomed, UniProt); the repository has no submodules.
 
 Ascend host NPU workloads use the same local-mode entry point. The Runner exposes `run_npu_job` only after an administrator explicitly sets `SCIENCE_AGENT_NPU_BROKER=1` and configures the workload entry points in `.env`. Before enabling it, create and verify a managed Python scientific environment revision for the Ascend stack; built-in NPU workloads, including smoke tests, submit against that revision rather than `SCIENCE_AGENT_NPU_PYTHON`. See [Configuration reference](../reference/configuration.md#environment-variables-local-mode) for variables and [Ascend NPU Host Broker](../explanation/ascend-npu-runner.md) for the design boundary.
 
@@ -164,12 +161,6 @@ One image contains the complete stack. `docker-entrypoint.sh` wraps `scripts/sta
   sysctl kernel.apparmor_restrict_unprivileged_userns # must be 0 on Ubuntu 24.04+
   ```
 
-- The `third_party/deer-flow` submodule checked out, because the gateway installs its harness from there:
-
-  ```bash
-  git submodule update --init --recursive
-  ```
-
 ### Build and start
 
 ```bash
@@ -185,7 +176,7 @@ Open <http://127.0.0.1:4310> and sign in with `SCIENCE_AGENT_AUTH_TOKEN`; when i
 BuildKit selects the `linux/amd64` or `linux/arm64` micromamba for `TARGETARCH` and verifies it against the runner's shared release manifest. The binary is stored at `/opt/science-agent/provisioner/micromamba`; when `/app/data` is an empty bind mount, the first start copies it to the managed default path and the runner verifies it again. This does not access GitHub at **runtime**.
 
 ```bash
-docker compose logs -f        # startup order: gateway -> runner -> API
+docker compose logs -f        # startup order: runner -> API
 docker compose ps             # status and health result
 docker compose down           # remove the container; preserve ./data
 docker compose up -d --build  # rebuild and restart after updating source
@@ -199,11 +190,10 @@ To separate container state from an existing local `data/`, change the host side
 
 The container runs as uid/gid `1000:1000`. If the account IDs differ, set `SCIENCE_AGENT_UID` and `SCIENCE_AGENT_GID` (`id -u`, `id -g`) in `.env` and rebuild. Otherwise, the entry point exits immediately with an explicit unwritable-directory error.
 
-Three locations differ from a host installation:
+Two locations differ from a host installation:
 
 - uv-managed environments are baked into `/opt/science-agent/envs/{gateway,paper}`, not the data directory. A fresh `compose up` therefore needs no network access for them.
 - Fixed micromamba is baked into `/opt/science-agent/provisioner/micromamba` and seeded to `data/scientific-envs/bin/micromamba` for an empty data directory. When `SCIENCE_AGENT_PROVISIONER_PATH` is explicitly set, seeding is skipped and the runner uses that administrator override.
-- Deer-flow harness state that normally appears beside the working tree in `.deer-flow/` is redirected to `data/deer-flow/` through `DEER_FLOW_HOME`, because the image application directory is read-only to the service user.
 
 ### Sandbox and host requirements
 

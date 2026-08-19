@@ -347,7 +347,7 @@ The following are **no longer the current architecture** and are listed only for
 | `POST {gateway}/run` driving conversations | Node → gateway | The route and all of its assembly code (`tools.py`, `callback.py`, `model.py`, and the `_engine` agent/deferred/state/summarize/model_patch/skills/sanitize modules) are deleted |
 | `POST /internal/tool-exec` callback | gateway → Node | The native loop `await`s handlers directly; the route, the `callback_token` mechanism, and `SCIENCE_AGENT_TOOL_CALLBACK_URL` are all deleted |
 | LangChain `create_agent` / LangGraph driving the loop | gateway `_engine/` | Replaced by `native-agent/index.ts` |
-| deer-flow dependency | gateway `pyproject.toml` | Removed entirely: with native web providers there is no vendor caller left |
+| deer-flow dependency and submodule | gateway `pyproject.toml`, `third_party/deer-flow` | Removed entirely: with native web providers there is no vendor caller left, so the dependency, the submodule, the first-launch download, and the packaging pin are all gone |
 | Model-patch layer (thought_signature replay) | gateway `_engine/model_patch.py` | The native loop stores assistant messages verbatim, so replay is inherent |
 
 ## 12. Verification entry points

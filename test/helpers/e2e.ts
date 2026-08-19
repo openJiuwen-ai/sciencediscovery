@@ -32,9 +32,9 @@ function isLocal(url: string): boolean {
 /**
  * Abort every browser request that does not target the local stack. The
  * automatic mocked fixture installs this before hooks and pages, preventing
- * accidental CDN, telemetry, model, or WebSocket traffic. Backend egress (API
- * → gateway → model) is not visible here; mocked specs keep it local by
- * registering their own 127.0.0.1 stub model.
+ * accidental CDN, telemetry, model, or WebSocket traffic. Backend egress
+ * (API → model) is not visible here; mocked specs keep it local by registering
+ * their own 127.0.0.1 stub model.
  */
 export async function blockNonLocalRequests(context: BrowserContext): Promise<void> {
   await context.route("**/*", (route) => {
@@ -98,7 +98,14 @@ export function allowRealEnvException(testInfo: TestInfo, reason: string): void 
   testInfo.annotations.push({ type: "real-env-gate-exception", description: reason });
 }
 
-/** Skip only when the configured local stack is absent or recognizably incomplete. */
+/**
+ * Skip only when the configured local stack is absent or recognizably incomplete.
+ *
+ * The resident stack is API + Runner, so one probe covers it: the API reports
+ * `status: "ok"` only when the Runner answered its own health check, and echoes
+ * that Runner status back. There is no third service to probe — the agent loop,
+ * the MCP client, and the web providers all run inside the API process.
+ */
 export async function requireRealStack(
   testInfo: TestInfo,
   apiOrigin = process.env.E2E_API_URL ?? process.env.E2E_BASE_URL ?? "http://127.0.0.1:4310",
@@ -118,25 +125,6 @@ export async function requireRealStack(
   const health = await response.json() as { runner?: { status?: string }; service?: string; status?: string };
   if (health.service !== "science-agent-api" || health.status !== "ok" || health.runner?.status === "unavailable") {
     const reason = `BLOCKED: science_agent stack health is incomplete (service=${health.service ?? "unknown"}, status=${health.status ?? "unknown"}, runner=${health.runner?.status ?? "unknown"})`;
-    console.warn(reason);
-    testInfo.skip(true, reason);
-  }
-
-  const gatewayOrigin = process.env.SCIENCE_AGENT_GATEWAY_URL ?? "http://127.0.0.1:4312";
-  let gatewayResponse: Response;
-  try {
-    gatewayResponse = await fetch(new URL("/health", gatewayOrigin), { signal: AbortSignal.timeout(3_000) });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    const reason = `BLOCKED: science_agent gateway is unavailable at configured gateway origin (${detail})`;
-    console.warn(reason);
-    testInfo.skip(true, reason);
-    return;
-  }
-  if (!gatewayResponse.ok) throw new Error(`Real gateway health check failed with HTTP ${gatewayResponse.status}`);
-  const gatewayHealth = await gatewayResponse.json() as { status?: string };
-  if (gatewayHealth.status !== "ok") {
-    const reason = `BLOCKED: science_agent gateway health is incomplete (status=${gatewayHealth.status ?? "unknown"})`;
     console.warn(reason);
     testInfo.skip(true, reason);
   }

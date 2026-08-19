@@ -15,20 +15,14 @@
 /**
  * First-launch dependency bootstrap for the single-file binary.
  *
- * A format-version-2 payload no longer embeds the gateway's Python dependency
- * tree or any deer-flow content. Before the stack starts, the launcher
- * restores them into the persistent data directory:
+ * A format-version-2 payload does not embed the gateway's Python dependency
+ * tree. Before the stack starts, the launcher restores it into the persistent
+ * data directory:
  *
  *   1. uv — downloaded as a pinned PyPI wheel from a configurable package
  *      index (Huawei Cloud mirror by default), sha256-verified against the
  *      pin recorded at build time, binary extracted with the bundled CPython.
- *   2. deer-flow — fetched at the exact commit the repository's submodule
- *      gitlink records: the GitCode mirror first, then the canonical GitHub
- *      repository, then a GitHub codeload archive for hosts without git.
- *      Whatever the source, the result is verified (commit SHA or content
- *      tree digest) before it is used; when every source fails, the error
- *      spells out how to place the checkout manually.
- *   3. The gateway environment — a uv-managed venv on the bundled CPython,
+ *   2. The gateway environment — a uv-managed venv on the bundled CPython,
  *      installed from the hash-pinned requirements export of
  *      services/gateway/uv.lock. The export carries exact versions and
  *      sha256 hashes but no index URLs, so the mirror configuration applies
@@ -42,28 +36,22 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { access, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
-import { Readable } from "node:stream";
-import { createGunzip } from "node:zlib";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { externalUrl, formatExternalUrl } from "@science-agent/external-urls";
+import { externalUrl } from "@science-agent/external-urls";
 
-import { digestTree } from "./content-digest.js";
 import { findExecutable } from "./preflight.js";
-import { extractTar } from "./tar-extract.js";
 import type { PayloadBootstrap, PayloadManifest } from "./payload-manifest.js";
 
 const execFileAsync = promisify(execFile);
 
 /** uv pip output for the full gateway tree is large; do not truncate it. */
 const RUN_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-const GIT_FETCH_TIMEOUT_MS = 15 * 60_000;
 const INSTALL_TIMEOUT_MS = 60 * 60_000;
 const LOCK_WAIT_TIMEOUT_MS = 60 * 60_000;
-const DEERFLOW_MARKER_FILE = ".science-agent-deerflow.json";
 const GATEWAY_ENV_MARKER_FILE = ".science-agent-bootstrap.json";
 
 export interface RunResult {
@@ -122,34 +110,21 @@ export interface BootstrapSettings {
   uvInstallIndex: string;
   /** Operator-provided uv binary; skips the wheel download entirely. */
   uvPathOverride?: string;
-  deerFlowDir: string;
-  /** Git URLs in fallback order: mirror first, canonical second. */
-  deerFlowGitUrls: string[];
-  /** Git-less archive of the pinned commit; the last-resort download. */
-  deerFlowArchiveUrl: string;
 }
 
 /**
  * Resolve the bootstrap configuration. Environment variables take precedence;
- * the defaults come from the repository's external URL authority
- * (config/external-urls.json), so the Huawei Cloud mirror default and the
- * deer-flow source order are maintained in one place.
+ * the default package index comes from the repository's external URL authority
+ * (config/external-urls.json), so the Huawei Cloud mirror default is
+ * maintained in one place.
  */
 export function resolveBootstrapSettings(
   env: NodeJS.ProcessEnv,
   dataDir: string,
-  bootstrap: PayloadBootstrap,
 ): BootstrapSettings {
   const pypiIndex = env.SCIENCE_AGENT_PYPI_INDEX?.trim() || externalUrl("bootstrap.pypi_index");
-  const mirror = env.SCIENCE_AGENT_DEERFLOW_GIT_URL?.trim() || externalUrl("bootstrap.deer_flow_git_mirror");
-  const canonical = externalUrl("bootstrap.deer_flow_git_canonical");
   return {
     dataDir,
-    deerFlowArchiveUrl: formatExternalUrl("bootstrap.deer_flow_archive_template", {
-      commit: bootstrap.deerFlow.commit,
-    }),
-    deerFlowDir: resolve(env.SCIENCE_AGENT_DEERFLOW_DIR?.trim() || join(dataDir, "vendor", "deer-flow")),
-    deerFlowGitUrls: mirror === canonical ? [canonical] : [mirror, canonical],
     pypiIndex,
     uvInstallIndex: env.SCIENCE_AGENT_UV_INSTALL_INDEX?.trim() || pypiIndex,
     uvPathOverride: env.SCIENCE_AGENT_UV_PATH?.trim() || undefined,
@@ -168,15 +143,6 @@ async function isExecutableFile(path: string): Promise<boolean> {
   try {
     await access(path, constants.X_OK);
     return (await stat(path)).isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function isNonEmptyDirectory(path: string): Promise<boolean> {
-  try {
-    if (!(await stat(path)).isDirectory()) return false;
-    return (await readdir(path)).length > 0;
   } catch {
     return false;
   }
@@ -294,12 +260,6 @@ export async function ensureUv(
   }
 }
 
-interface DeerFlowMarker {
-  commit: string;
-  source: string;
-  treeDigest: string;
-}
-
 async function readJson<T>(path: string): Promise<T | undefined> {
   try {
     return JSON.parse(await readFile(path, "utf8")) as T;
@@ -308,155 +268,7 @@ async function readJson<T>(path: string): Promise<T | undefined> {
   }
 }
 
-function manualPlacementMessage(
-  settings: BootstrapSettings,
-  bootstrap: PayloadBootstrap,
-  attempts: string[],
-): string {
-  const { commit } = bootstrap.deerFlow;
-  return [
-    "deer-flow could not be downloaded automatically.",
-    "",
-    "Attempted sources, in order:",
-    ...attempts.map((attempt) => `  - ${attempt}`),
-    "",
-    `ScienceDiscovery needs deer-flow at exactly commit ${commit}`,
-    "(the version this release was built and tested against). To place it manually:",
-    "",
-    "  1. On a machine with access, obtain that exact commit. Either:",
-    `       git clone ${settings.deerFlowGitUrls[settings.deerFlowGitUrls.length - 1]} deer-flow`,
-    `       git -C deer-flow checkout ${commit}`,
-    "     or download and unpack the archive:",
-    `       ${settings.deerFlowArchiveUrl}`,
-    `       (unpacks to deer-flow-${commit}/; rename that directory to deer-flow)`,
-    `  2. Move the checkout to: ${settings.deerFlowDir}`,
-    "     so that this directory itself contains backend/, frontend/ and so on.",
-    "  3. Run serve again. The launcher verifies the commit before using it.",
-  ].join("\n");
-}
-
-/**
- * Ensure the pinned deer-flow checkout exists at the configured location.
- * Sources are tried in the user-mandated order: GitCode mirror, canonical
- * GitHub repository, then the codeload archive that works without git. Every
- * path ends in verification — a checkout is only accepted once its commit or
- * content digest matches the pin, and acceptance is recorded in a marker so
- * later launches skip straight through.
- */
-export async function ensureDeerFlow(
-  io: BootstrapIo,
-  settings: BootstrapSettings,
-  bootstrap: PayloadBootstrap,
-): Promise<string> {
-  const { commit, treeDigest } = bootstrap.deerFlow;
-  const target = settings.deerFlowDir;
-  const markerPath = join(target, DEERFLOW_MARKER_FILE);
-
-  const marker = await readJson<DeerFlowMarker>(markerPath);
-  if (marker?.commit === commit && marker.treeDigest === treeDigest) return target;
-
-  if (await isNonEmptyDirectory(target)) {
-    // A directory without a matching marker is either a manual placement or a
-    // leftover from an older release; verify it rather than trusting it.
-    const git = await io.findExecutable("git");
-    if (git && (await isNonEmptyDirectory(join(target, ".git")))) {
-      const head = (await io.run(git, ["-C", target, "rev-parse", "HEAD"])).stdout.trim();
-      if (head !== commit) {
-        throw new Error(
-          `${target} contains deer-flow at commit ${head}, but this release needs ${commit}.\n`
-          + `Run: git -C ${target} fetch origin ${commit} && git -C ${target} checkout ${commit}\n`
-          + "or remove the directory and run serve again to download it.",
-        );
-      }
-    } else {
-      io.log(`Verifying the existing deer-flow checkout at ${target}...`);
-      const digest = await digestTree(target);
-      if (digest !== treeDigest) {
-        throw new Error(
-          `${target} exists but its content does not match deer-flow commit ${commit}.\n`
-          + "Remove the directory and run serve again to download the pinned version, or replace it "
-          + `with an exact checkout of that commit.\n(expected ${treeDigest}, found ${digest})`,
-        );
-      }
-    }
-    await writeFile(markerPath, `${JSON.stringify({ commit, source: "pre-existing", treeDigest } satisfies DeerFlowMarker, null, 2)}\n`);
-    return target;
-  }
-
-  const attempts: string[] = [];
-  const git = await io.findExecutable("git");
-
-  const promote = async (staging: string, source: string): Promise<void> => {
-    await writeFile(
-      join(staging, DEERFLOW_MARKER_FILE),
-      `${JSON.stringify({ commit, source, treeDigest } satisfies DeerFlowMarker, null, 2)}\n`,
-    );
-    await mkdir(dirname(target), { recursive: true });
-    await rename(staging, target);
-  };
-
-  for (const [index, url] of settings.deerFlowGitUrls.entries()) {
-    if (!git) {
-      attempts.push(`git fetch from ${url}: git is not installed on this host`);
-      continue;
-    }
-    const staging = join(settings.dataDir, ".bootstrap-staging", `deer-flow-git-${index}.${process.pid}`);
-    try {
-      io.log(`Downloading deer-flow ${commit.slice(0, 12)} from ${url}...`);
-      await rm(staging, { force: true, recursive: true });
-      await mkdir(staging, { recursive: true });
-      await io.run(git, ["init", "--quiet", staging]);
-      // Fetching the commit itself (not a branch) is what pins the version:
-      // the mirror's default branch may be ahead of or behind the gitlink.
-      await io.run(git, ["-C", staging, "fetch", "--quiet", "--depth", "1", url, commit], {
-        timeoutMs: GIT_FETCH_TIMEOUT_MS,
-      });
-      await io.run(git, ["-C", staging, "-c", "advice.detachedHead=false", "checkout", "--quiet", commit]);
-      const head = (await io.run(git, ["-C", staging, "rev-parse", "HEAD"])).stdout.trim();
-      if (head !== commit) throw new Error(`checked out ${head} instead of ${commit}`);
-      await promote(staging, url);
-      return target;
-    } catch (error) {
-      attempts.push(`git fetch from ${url}: ${error instanceof Error ? error.message.split("\n")[0] : error}`);
-      await rm(staging, { force: true, recursive: true });
-    }
-  }
-
-  {
-    const staging = join(settings.dataDir, ".bootstrap-staging", `deer-flow-archive.${process.pid}`);
-    try {
-      io.log(`Downloading the deer-flow archive from ${settings.deerFlowArchiveUrl}...`);
-      await rm(staging, { force: true, recursive: true });
-      await mkdir(staging, { recursive: true });
-      const response = await io.fetch(settings.deerFlowArchiveUrl, { redirect: "follow" });
-      if (!response.ok || !response.body) {
-        throw new Error(`download failed (${response.status})`);
-      }
-      const tarStream = Readable.fromWeb(response.body as import("node:stream/web").ReadableStream).pipe(createGunzip());
-      await extractTar(tarStream, staging);
-      const entries = await readdir(staging);
-      if (entries.length !== 1) throw new Error(`expected one top-level directory, found ${entries.length}`);
-      const root = join(staging, entries[0] as string);
-      const digest = await digestTree(root);
-      if (digest !== treeDigest) {
-        throw new Error(`archive content does not match the pinned commit (expected ${treeDigest}, got ${digest})`);
-      }
-      await promote(root, settings.deerFlowArchiveUrl);
-      await rm(staging, { force: true, recursive: true });
-      return target;
-    } catch (error) {
-      attempts.push(
-        `archive download ${settings.deerFlowArchiveUrl}: ${error instanceof Error ? error.message.split("\n")[0] : error}`,
-      );
-      await rm(staging, { force: true, recursive: true });
-    }
-  }
-
-  throw new Error(manualPlacementMessage(settings, bootstrap, attempts));
-}
-
 interface GatewayEnvironmentMarker {
-  deerFlowCommit: string;
   gatewayWheel: string;
   payloadRoot: string;
   pythonVersion: string;
@@ -466,11 +278,17 @@ interface GatewayEnvironmentMarker {
   uvVersion: string;
 }
 
-/** Modules imported before the marker fast path is trusted. */
-function gatewaySentinelModules(manifest: PayloadManifest): string[] {
-  // Importing the actual gateway entry exercises its transitive imports; the
-  // other two modules represent the process host and the local DeerFlow tree.
-  return ["uvicorn", manifest.app.gatewayModule, "deerflow"];
+/**
+ * Modules imported before the marker fast path is trusted.
+ *
+ * One module per install step: `mcp` proves the hash-checked third-party
+ * install landed, and a bundled stdio server proves the gateway wheel did.
+ * The names are fixed here rather than read from the manifest on purpose: an
+ * already-extracted payload from an older release records the retired HTTP
+ * entry point, and probing that would fail forever and rebuild on every launch.
+ */
+function gatewaySentinelModules(): string[] {
+  return ["mcp", "science_agent_gateway.uniprot_mcp"];
 }
 
 /** Fixed probe program; module names travel as argv, never interpolated. */
@@ -563,7 +381,6 @@ export async function ensureGatewayEnvironment(
   payloadRoot: string,
   manifest: PayloadManifest,
   uvBinary: string,
-  deerFlowDir: string,
   gatewayRuntime: GatewayProbeRuntime,
 ): Promise<string> {
   const environmentDir = join(settings.dataDir, "envs", "gateway");
@@ -571,12 +388,10 @@ export async function ensureGatewayEnvironment(
   const venvPython = join(environmentDir, "bin", "python");
   const requirementsPath = join(payloadRoot, bootstrap.requirementsPath);
   const gatewayWheelPath = join(payloadRoot, bootstrap.gatewayWheelPath);
-  const harnessDir = join(deerFlowDir, bootstrap.deerFlow.harnessPath);
-  const sentinels = gatewaySentinelModules(manifest);
+  const sentinels = gatewaySentinelModules();
   await recoverGatewayEnvironmentBackup(environmentDir, settings.dataDir);
 
   const expected: GatewayEnvironmentMarker = {
-    deerFlowCommit: bootstrap.deerFlow.commit,
     gatewayWheel: basename(gatewayWheelPath),
     payloadRoot,
     pythonVersion: manifest.python.version,
@@ -619,8 +434,7 @@ export async function ensureGatewayEnvironment(
       ],
       { env: uvEnvironment, timeoutMs: INSTALL_TIMEOUT_MS },
     );
-    // The harness comes from the verified deer-flow checkout and the gateway
-    // wheel from the payload; both are local and --no-deps keeps every
+    // The gateway wheel is our own code from the payload; --no-deps keeps every
     // third-party package under the hash-checked install above.
     await io.run(
       uvBinary,
@@ -629,7 +443,6 @@ export async function ensureGatewayEnvironment(
         "--python", stagingPython,
         "--no-deps",
         "--index-url", settings.pypiIndex,
-        harnessDir,
         gatewayWheelPath,
       ],
       { env: uvEnvironment, timeoutMs: INSTALL_TIMEOUT_MS },
@@ -717,7 +530,6 @@ export interface BootstrapContext {
 }
 
 export interface BootstrapResult {
-  deerFlowDir: string;
   /** Interpreter the gateway service must run with. */
   gatewayPython: string;
   uvBinary: string;
@@ -728,15 +540,14 @@ export async function runBootstrap(context: BootstrapContext): Promise<Bootstrap
   const bootstrap = context.manifest.bootstrap;
   if (!bootstrap) throw new Error("runBootstrap requires a payload manifest with a bootstrap section.");
   const io = context.io ?? defaultBootstrapIo(context.log);
-  const settings = resolveBootstrapSettings(context.env, context.dataDir, bootstrap);
+  const settings = resolveBootstrapSettings(context.env, context.dataDir);
   const pythonBinary = join(context.payloadRoot, context.manifest.python.path);
 
   return await withBootstrapLock(context.dataDir, io, async () => {
     const uvBinary = await ensureUv(io, settings, bootstrap, pythonBinary);
-    const deerFlowDir = await ensureDeerFlow(io, settings, bootstrap);
     const gatewayPython = await ensureGatewayEnvironment(
-      io, settings, bootstrap, context.payloadRoot, context.manifest, uvBinary, deerFlowDir, context.gatewayRuntime,
+      io, settings, bootstrap, context.payloadRoot, context.manifest, uvBinary, context.gatewayRuntime,
     );
-    return { deerFlowDir, gatewayPython, uvBinary };
+    return { gatewayPython, uvBinary };
   });
 }

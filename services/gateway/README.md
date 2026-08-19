@@ -17,10 +17,11 @@ using this environment's interpreter (`resolveMcpPython()` in
 `services/api/src/mcp/node-client.ts`), and remains authoritative for
 governance, permissions, caching, and downloads.
 
-The package therefore depends only on `mcp` and `httpx`. The `deerflow-harness`
-dependency is gone: with web providers native, nothing here calls the vendor.
-`services/gateway/tests/test_architecture_boundaries.py` fails if a vendor
-reference reappears anywhere in the package.
+The package therefore depends only on `mcp` and `httpx`. It once installed the
+`deerflow-harness` vendor package; that dependency, and the submodule it came
+from, were removed once the agent loop and the web providers had moved into
+Node. `services/gateway/tests/test_architecture_boundaries.py` fails if a
+vendor reference reappears anywhere in the package.
 
 ## Setup
 

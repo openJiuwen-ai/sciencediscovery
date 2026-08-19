@@ -1,4 +1,5 @@
 .venv/
+# Left by the retired vendor harness; keeps a stale local directory unstaged.
 .deer-flow/
 __pycache__/
 *.pyc

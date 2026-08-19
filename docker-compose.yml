@@ -14,8 +14,8 @@
 
 # ScienceDiscovery — single-user local deployment.
 #
-# One service runs the whole stack (gateway + runner + control API/UI), mirroring
-# the process topology of scripts/run-local.sh.
+# One service runs the whole stack (runner + control API/UI), mirroring the
+# process topology of scripts/start-stack.sh.
 #
 # Persistence is a plain host bind mount of ./data. There is deliberately NO
 # Docker named volume: all runtime state stays as ordinary files that can be

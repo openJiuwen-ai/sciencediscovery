@@ -1127,13 +1127,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-Software: DeerFlow d075be0277ea759623b3924a8032c2983f4d470a
-Copyright notice:
-Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-Copyright (c) 2025-2026 DeerFlow Authors
-License: MIT
-Please see above
-
 Software: depd 2.0.0
 Copyright notice:
 Copyright (c) 2014-2018 Douglas Christopher Wilson

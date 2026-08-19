@@ -20,7 +20,6 @@ import { parsePayloadManifest } from "./payload-manifest.js";
 const base = {
   app: {
     apiEntry: "app/services/api/dist/server.js",
-    gatewayModule: "science_agent_gateway.server",
     root: "app",
     runnerEntry: "app/services/runner/dist/server.js",
     webDir: "app/apps/web/dist",
@@ -34,11 +33,6 @@ const base = {
 };
 
 const bootstrap = {
-  deerFlow: {
-    commit: "0123456789abcdef0123456789abcdef01234567",
-    harnessPath: "backend/packages/harness",
-    treeDigest: `sha256:${"a".repeat(64)}`,
-  },
   gatewayWheelPath: "bootstrap/wheels/science_agent_gateway-0.0.0-py3-none-any.whl",
   requirementsPath: "bootstrap/requirements-gateway.txt",
   uv: { project: "uv", version: "0.9.26", wheelFilename: "uv-0.9.26.whl", wheelSha256: "b".repeat(64) },
@@ -54,7 +48,7 @@ describe("payload manifest parsing", () => {
   test("accepts a version-2 payload with a complete bootstrap section", () => {
     const manifest = parsePayloadManifest(JSON.stringify({ ...base, bootstrap, formatVersion: 2 }), "manifest.json");
     assert.equal(manifest.bootstrap?.uv.version, "0.9.26");
-    assert.equal(manifest.bootstrap?.deerFlow.commit, bootstrap.deerFlow.commit);
+    assert.equal(manifest.bootstrap?.gatewayWheelPath, bootstrap.gatewayWheelPath);
   });
 
   test("rejects a version-2 payload whose bootstrap pins are incomplete", () => {
@@ -62,11 +56,19 @@ describe("payload manifest parsing", () => {
       () => parsePayloadManifest(JSON.stringify({ ...base, formatVersion: 2 }), "manifest.json"),
       /bootstrap uv wheel pin/,
     );
-    const shortCommit = { ...bootstrap, deerFlow: { ...bootstrap.deerFlow, commit: "abc123" } };
+    const missingArtifacts = { ...bootstrap, gatewayWheelPath: "" };
     assert.throws(
-      () => parsePayloadManifest(JSON.stringify({ ...base, bootstrap: shortCommit, formatVersion: 2 }), "manifest.json"),
-      /full deer-flow commit SHA/,
+      () => parsePayloadManifest(JSON.stringify({ ...base, bootstrap: missingArtifacts, formatVersion: 2 }), "manifest.json"),
+      /bootstrap artifact path entry/,
     );
+  });
+
+  test("ignores the retired deer-flow pin an older release recorded", () => {
+    // Payloads built before the vendor was dropped still carry the field; a
+    // launcher upgrade must keep loading an already-extracted payload dir.
+    const legacy = { ...bootstrap, deerFlow: { commit: "a".repeat(40), harnessPath: "x", treeDigest: "sha256:y" } };
+    const manifest = parsePayloadManifest(JSON.stringify({ ...base, bootstrap: legacy, formatVersion: 2 }), "manifest.json");
+    assert.equal(manifest.bootstrap?.uv.version, "0.9.26");
   });
 
   test("rejects unknown format versions", () => {

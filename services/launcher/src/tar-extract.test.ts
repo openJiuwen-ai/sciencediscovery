@@ -47,8 +47,8 @@ describe("payload tar extraction", () => {
     await mkdir(deepDirectory, { recursive: true });
     await writeFile(join(source, "manifest.json"), '{"formatVersion":1}\n');
     await writeFile(join(deepDirectory, "nested.txt"), "nested payload file\n");
-    // Real payloads and the deer-flow codeload archive both carry zero-byte
-    // regular files (markers, empty __init__.py); they must survive extraction.
+    // Real payloads carry zero-byte regular files (markers, empty
+    // __init__.py); they must survive extraction.
     await writeFile(join(source, "empty.txt"), "");
     await writeFile(join(deepDirectory, "empty-nested"), "");
     await mkdir(join(source, "empty-dir"), { recursive: true });

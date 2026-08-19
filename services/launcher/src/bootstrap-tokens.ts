@@ -15,17 +15,17 @@
 /**
  * Bootstrap credentials for the single-file distribution.
  *
- * `serve` has to know the tokens before it spawns anything, so it can hand the
- * same values to the API and the Gateway and print the access token once the
- * stack is up. The resolution chain is "explicit environment variable, then the
- * value this installation already stored, then a freshly generated one" — the
- * product carries no fixed default credential.
+ * `serve` has to know the access token before it spawns anything, so it can
+ * hand it to the API and print it once the stack is up. The resolution chain is
+ * "explicit environment variable, then the value this installation already
+ * stored, then a freshly generated one" — the product carries no fixed default
+ * credential.
  *
  * This duplicates `services/api/src/http/bootstrap-tokens.ts` on purpose: the
  * release script builds only `@science-agent/launcher` before esbuild bundles
  * it into the executable, so a workspace dependency here would break packaging.
  * The file layout (one token per file under `<dataDir>/secrets/`) is the real
- * contract, and it is shared with the Python Gateway as well.
+ * contract.
  */
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -40,7 +40,6 @@ export interface ResolvedBootstrapToken {
 
 export const BOOTSTRAP_SECRETS_DIRECTORY = "secrets";
 export const AUTH_TOKEN_FILE = "auth-token";
-export const GATEWAY_INTERNAL_TOKEN_FILE = "gateway-internal-token";
 
 const TOKEN_BYTES = 32;
 
@@ -83,20 +82,18 @@ export function resolveBootstrapToken(
   }
 }
 
-/** The credentials `serve` resolves once and shares with every child process. */
+/**
+ * The credentials `serve` resolves once and shares with every child process.
+ * Only the browser-facing access token remains: the control-plane-to-gateway
+ * token existed for an HTTP service that no longer runs.
+ */
 export interface ServeCredentials {
   authToken: ResolvedBootstrapToken;
-  gatewayInternalToken: ResolvedBootstrapToken;
 }
 
 export function resolveServeCredentials(dataDir: string, env: NodeJS.ProcessEnv): ServeCredentials {
   return {
     authToken: resolveBootstrapToken(dataDir, AUTH_TOKEN_FILE, env.SCIENCE_AGENT_AUTH_TOKEN),
-    gatewayInternalToken: resolveBootstrapToken(
-      dataDir,
-      GATEWAY_INTERNAL_TOKEN_FILE,
-      env.SCIENCE_AGENT_GATEWAY_INTERNAL_TOKEN,
-    ),
   };
 }
 

@@ -35,11 +35,11 @@ Node `fetch` 调用可用 `proxyDispatcher(resolved, targetUrl)` 获得按目标
 
 当前接入路径：
 
-- LLM：Node 在每次 run 开始时解析模型策略，并按模型 base URL 把 environment 策略固化为最终 `url` 或 `direct`；Gateway 据此为 OpenAI-compatible 与 Anthropic-compatible 客户端创建请求级 httpx transport（`url` 用显式代理，`direct` 设 `trust_env=false`）。
-- WebSearch/Web fetch：Web broker 解析 Web 策略，再投影到既有 DeerFlow web worker 的 `environment/custom/direct` wire contract。
+- LLM：Node 在每次 run 开始时解析模型策略，并按模型 base URL 把 environment 策略固化为最终 `url` 或 `direct`，再由 `native-agent/model-client.ts` 为该次请求固定一个 undici dispatcher。
+- WebSearch/Web fetch：`WebBroker` 每次调用解析一次 Web 策略，把解析结果直接交给进程内的 provider 层，由同一套共享 dispatcher 生效。
 - MCP/论文源：Node broker 按 `mcpServerId` 独立解析；内建 stdio MCP server 以进程环境覆盖连接上游。MCP 产物字节下载也复用同一 server 策略和 Node dispatcher。
 
-新增 Node 出站路径时，应接收 `ProxyPolicy`，在最靠近请求的位置调用 `resolveProxy`，然后使用统一 dispatcher/环境覆盖；不要自行读取代理密文或复制策略解析逻辑。新增 Gateway 出站路径时，由 Node 传递已解析的 `ResolvedProxy`，不要让 Gateway 读取 Node 数据目录。
+新增出站路径时，应接收 `ProxyPolicy`，在最靠近请求的位置调用 `resolveProxy`，然后使用统一 dispatcher/环境覆盖；不要自行读取代理密文或复制策略解析逻辑。随包的 Python MCP server 由 Node 传入已解析的环境覆盖，不读取 Node 数据目录。
 
 ## 迁移、安全与限制
 
