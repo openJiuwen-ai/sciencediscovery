@@ -128,7 +128,7 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
    * WebSearch: None.
    * PaperSources: Live PubMed queries; results and rate limits vary.
    * MCP: PubMed connector exposed through the product's MCP flow.
-   * OtherExternal: Local science_agent API, gateway, browser UI, and runner.
+   * OtherExternal: Local ScienceDiscovery API, gateway, browser UI, and runner.
    * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; seeded model key.
    * CostSideEffects: Billable tokens, PubMed traffic, local projects/sessions, screenshots.
  */
@@ -270,7 +270,7 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
    * WebSearch: None.
    * PaperSources: arXiv request is rejected locally before source access.
    * MCP: None.
-   * OtherExternal: Local science_agent API and browser UI only.
+   * OtherExternal: Local ScienceDiscovery API and browser UI only.
    * Credentials: None.
    * CostSideEffects: Creates local project/session data and screenshots; no fees.
    */

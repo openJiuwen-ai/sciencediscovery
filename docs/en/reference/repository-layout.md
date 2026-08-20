@@ -7,7 +7,7 @@ This page maps directories, modules, default ports, and data locations. See [Run
 The repository is a pnpm monorepo with several Python subprojects:
 
 ```text
-science_agent/
+sciencediscovery/
 ├── apps/web/                 # React/Vite browser UI
 ├── services/
 │   ├── api/                  # Node control API

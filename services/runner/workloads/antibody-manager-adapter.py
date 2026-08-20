@@ -389,7 +389,7 @@ def _write_artifact_manifest(cfg) -> None:
     print(f"Artifact count: {len(lines)}", flush=True)
 
 
-spec = importlib.util.spec_from_file_location("_science_agent_antibody_manager", manager_path)
+spec = importlib.util.spec_from_file_location("_sciencediscovery_antibody_manager", manager_path)
 if spec is None or spec.loader is None:
     print(f"ERROR: cannot load antibody manager: {manager_path}", file=sys.stderr)
     raise SystemExit(2)
