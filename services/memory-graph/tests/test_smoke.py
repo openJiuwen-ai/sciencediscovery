@@ -56,7 +56,7 @@ def _wipe_session(session_id: str) -> None:
     like ``len(cites) == 1`` break on the residue. Called at the top of each
     live test on its own (unique) session id.
     """
-    from science_agent_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.neo4j_driver import handle
     if not handle().is_reachable():
         return
     with handle().session() as s:
@@ -76,8 +76,8 @@ def live_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_ENABLED", "1")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN", "test-token")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP", http_uri)
-    from science_agent_memory_graph import neo4j_driver, persistence, query, server
-    from science_agent_memory_graph.constraints import ensure_schema
+    from sciencediscovery_memory_graph import neo4j_driver, persistence, query, server
+    from sciencediscovery_memory_graph.constraints import ensure_schema
 
     importlib.reload(neo4j_driver)
     importlib.reload(persistence)
@@ -100,7 +100,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN", "test-token")
     # Reload the driver module so the singleton picks up the env (no password
     # set → has_password is False → degraded branch).
-    from science_agent_memory_graph import neo4j_driver, persistence, query, server
+    from sciencediscovery_memory_graph import neo4j_driver, persistence, query, server
 
     importlib.reload(neo4j_driver)
     importlib.reload(persistence)
@@ -152,7 +152,7 @@ def test_produced_artifact_model_preserves_input_artifact_versions() -> None:
     that would have caught it, and it is Neo4j-gated). This unit test needs no
     Neo4j. See docs/memory-graph-provenance-fields-impl.md §0.1.
     """
-    from science_agent_memory_graph.server import ProducedArtifact
+    from sciencediscovery_memory_graph.server import ProducedArtifact
 
     # Field present → survives into model_dump (the dict upsert_execution sees).
     pa = ProducedArtifact(
@@ -248,7 +248,7 @@ def test_observe_mcp_search_rejects_missing_token(client: TestClient) -> None:
 
 def test_normalize_link_collapses_same_paper_variants() -> None:
     """All of these are the same Paper and must MERGE to one node."""
-    from science_agent_memory_graph.persistence import _normalize_link
+    from sciencediscovery_memory_graph.persistence import _normalize_link
 
     # http vs https, trailing slash, query, fragment, case — all collapse.
     assert _normalize_link("http://europepmc.org/article/MED/123") == \
@@ -841,8 +841,8 @@ def test_legacy_artifact_id_constraint_dropped(live_client: TestClient) -> None:
     v2 writes do not 500 (the same hazard Paper's link-only constraint had)."""
     headers = {"authorization": "Bearer test-token"}
     _wipe_session("sess-leg")
-    from science_agent_memory_graph.constraints import ensure_schema
-    from science_agent_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.constraints import ensure_schema
+    from sciencediscovery_memory_graph.neo4j_driver import handle
 
     # This test exercises a schema-level invariant (legacy single-field
     # constraint is dropped at boot), which requires the Artifact label to be

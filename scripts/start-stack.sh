@@ -350,8 +350,8 @@ start_stack() {
     echo "Starting the memory-graph service..." >&2
     SCIENCE_AGENT_DATA_DIR="$data_dir" \
     SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP="${SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP:-http://127.0.0.1:7474}" \
-    SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN="${SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN:-science-agent-memory-graph-local}" \
-    "$memory_graph_python" -m science_agent_memory_graph.server &
+    SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN="${SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN:-sciencediscovery-memory-graph-local}" \
+    "$memory_graph_python" -m sciencediscovery_memory_graph.server &
     pids+=("$!")
     wait_healthy "memory-graph" "http://127.0.0.1:17674/health"
   fi

@@ -274,8 +274,8 @@ site_packages="python/lib/python3.12/site-packages"
 echo "Staging the first-launch bootstrap inputs..." >&2
 mkdir -p "$output/bootstrap/wheels"
 cp "$shared_dir/requirements-gateway.txt" "$output/bootstrap/requirements-gateway.txt"
-cp "$shared_dir"/wheels/science_agent_gateway-*.whl "$output/bootstrap/wheels/"
-gateway_wheel_name="$(basename "$(ls "$output"/bootstrap/wheels/science_agent_gateway-*.whl)")"
+cp "$shared_dir"/wheels/sciencediscovery_gateway-*.whl "$output/bootstrap/wheels/"
+gateway_wheel_name="$(basename "$(ls "$output"/bootstrap/wheels/sciencediscovery_gateway-*.whl)")"
 
 # A pyvenv.cfg makes site.py treat the prefix as an environment, which disables
 # the host user site directory (~/.local/lib/pythonX.Y/site-packages). Omitting

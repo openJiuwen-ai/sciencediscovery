@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from science_agent_memory_graph.logging_config import get_logger
+from sciencediscovery_memory_graph.logging_config import get_logger
 
 
 class MemoryGraphLoggingTests(unittest.TestCase):

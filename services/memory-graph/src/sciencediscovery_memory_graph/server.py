@@ -71,7 +71,7 @@ from .query import (
 
 log = get_logger("server")
 
-app = FastAPI(title="science-agent-memory-graph")
+app = FastAPI(title="sciencediscovery-memory-graph")
 
 # Node/edge label vocabularies mirrored from ``packages/schema`` (7 + 7).
 # Used for request validation so a bad_request response is returned before

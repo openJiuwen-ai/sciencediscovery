@@ -106,7 +106,7 @@ ScienceDiscovery help                显示帮助
 | Node 运行时 | 供控制 API 与 runner 使用 |
 | CPython 3.12 | 可重定位发行版，无需宿主 Python；同时作为首启 gateway venv 的基础解释器 |
 | Web 静态资源 | 预构建的 `apps/web/dist` |
-| gateway wheel 与首启清单 | 自有代码的 `science-agent-gateway` wheel、带哈希的锁定依赖清单、uv wheel 的版本 pin |
+| gateway wheel 与首启清单 | 自有代码的 `sciencediscovery-gateway` wheel、带哈希的锁定依赖清单、uv wheel 的版本 pin |
 | micromamba | 固定版本，首次 `serve` 播种到 `<数据目录>/scientific-envs/bin/micromamba`，之后 Runner 按同一发布清单校验 |
 
 不含 uv 与 gateway 的第三方 Python 依赖（见[首次启动安装的依赖](#首次启动安装的依赖)），不含 Neo4j，也不含 starter Python/R 科学环境与 conda 包缓存：首次创建 starter 环境仍需访问允许的软件包渠道。

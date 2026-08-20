@@ -288,7 +288,7 @@ interface GatewayEnvironmentMarker {
  * entry point, and probing that would fail forever and rebuild on every launch.
  */
 function gatewaySentinelModules(): string[] {
-  return ["mcp", "science_agent_gateway.uniprot_mcp"];
+  return ["mcp", "sciencediscovery_gateway.uniprot_mcp"];
 }
 
 /** Fixed probe program; module names travel as argv, never interpolated. */

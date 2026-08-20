@@ -3,7 +3,7 @@
     "biomed": {
       "args": [
         "-m",
-        "science_agent_gateway.public_biomed_mcp"
+        "sciencediscovery_gateway.public_biomed_mcp"
       ],
       "command": "python",
       "description": "Public biomedical literature, structure, genomics, pathway, variation, chemistry, and dataset APIs",
@@ -19,7 +19,7 @@
     "uniprot": {
       "args": [
         "-m",
-        "science_agent_gateway.uniprot_mcp"
+        "sciencediscovery_gateway.uniprot_mcp"
       ],
       "command": "python",
       "description": "Governed UniProtKB protein records and sequence artifact preparation",

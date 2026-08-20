@@ -28,7 +28,7 @@ Agent MCP tool
 | 路径 | 作用 |
 |---|---|
 | `packages/mcp-sources` | Source/Tool manifest、输入与信任边界校验 |
-| `services/gateway/src/science_agent_gateway/*_mcp.py` | 随包的 Python MCP server 实现(由 Node 以 stdio 子进程拉起,解释器取自 gateway venv) |
+| `services/gateway/src/sciencediscovery_gateway/*_mcp.py` | 随包的 Python MCP server 实现(由 Node 以 stdio 子进程拉起,解释器取自 gateway venv) |
 | `services/api/src/mcp` | Broker、进程内 MCP 客户端(`node-client.ts`)、`extensions_config.json` 解析、Catalog、CAS 审计、缓存和 Artifact 下载 |
 | `packages/agent-runtime` | MCP 工具暴露、`artifact_download`、`paper_extract_pdf` |
 | `services/paper` | 有界 PDF 抽取 |

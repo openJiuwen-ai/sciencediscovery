@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import unittest
 
-from science_agent_gateway.uniprot_mcp import _parse_tsv, prepare_sequence
+from sciencediscovery_gateway.uniprot_mcp import _parse_tsv, prepare_sequence
 
 
 class UniProtMcpTests(unittest.IsolatedAsyncioTestCase):

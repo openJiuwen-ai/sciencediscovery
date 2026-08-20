@@ -33,7 +33,7 @@ const base = {
 };
 
 const bootstrap = {
-  gatewayWheelPath: "bootstrap/wheels/science_agent_gateway-0.0.0-py3-none-any.whl",
+  gatewayWheelPath: "bootstrap/wheels/sciencediscovery_gateway-0.0.0-py3-none-any.whl",
   requirementsPath: "bootstrap/requirements-gateway.txt",
   uv: { project: "uv", version: "0.9.26", wheelFilename: "uv-0.9.26.whl", wheelSha256: "b".repeat(64) },
 };

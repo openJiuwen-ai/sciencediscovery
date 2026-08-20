@@ -37,7 +37,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | Memory-graph service bind address |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | Memory-graph port |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | Memory-graph endpoint used by the API |
-| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `science-agent-memory-graph-local` | API-to-memory-graph token |
+| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API-to-memory-graph token |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | Memory-graph log level |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `0` | Initial sandbox wall-clock timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_MAX_WORKSPACE_BYTES` | `10737418240` (10 GiB) | Runner workspace quota (`0` is unlimited); also seeds system settings |

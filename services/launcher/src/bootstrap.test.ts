@@ -45,7 +45,7 @@ const WHEEL_SHA256 = createHash("sha256").update(WHEEL_BYTES).digest("hex");
 
 function bootstrapFixture(): PayloadBootstrap {
   return {
-    gatewayWheelPath: "bootstrap/wheels/science_agent_gateway-0.0.0-py3-none-any.whl",
+    gatewayWheelPath: "bootstrap/wheels/sciencediscovery_gateway-0.0.0-py3-none-any.whl",
     requirementsPath: "bootstrap/requirements-gateway.txt",
     uv: {
       project: "uv",
@@ -280,7 +280,7 @@ describe("gateway environment provisioning", () => {
     };
   }
 
-  const gatewaySentinel = join("lib", "site-packages", "science_agent_gateway", "uniprot_mcp.py");
+  const gatewaySentinel = join("lib", "site-packages", "sciencediscovery_gateway", "uniprot_mcp.py");
 
   function simulatedGatewayIo(options: { failInstall?: boolean } = {}): {
     invocations: Array<{
@@ -508,7 +508,7 @@ describe("gateway environment provisioning", () => {
       "/tools/uv",
       gatewayRuntime(appRoot),
     );
-    await rm(join(environmentDir, "lib", "site-packages", "science_agent_gateway"), { force: true, recursive: true });
+    await rm(join(environmentDir, "lib", "site-packages", "sciencediscovery_gateway"), { force: true, recursive: true });
     const oldMarker = await readFile(markerPath, "utf8");
     const oldPython = await readFile(python, "utf8");
 

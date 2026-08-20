@@ -37,7 +37,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | memory-graph 监听地址（服务进程使用） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | memory-graph 监听端口（服务进程使用） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | memory-graph 端点（API 客户端） |
-| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `science-agent-memory-graph-local` | API→memory-graph token |
+| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API→memory-graph token |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | memory-graph 日志级别 |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `0` | 初始单次沙箱执行墙钟上限（`0` = 无限） |
 | `SCIENCE_AGENT_MAX_WORKSPACE_BYTES` | `10737418240`（10 GiB） | Runner 工作区总量上限（`0` = 无限）；亦播种系统设置 |

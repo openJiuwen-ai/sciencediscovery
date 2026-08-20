@@ -13,7 +13,7 @@
 # limitations under the License.
 
 [project]
-name = "science-agent-gateway"
+name = "sciencediscovery-gateway"
 version = "0.0.0"
 description = "ScienceDiscovery bundled stdio MCP servers (biomed, UniProt)."
 requires-python = ">=3.12"
@@ -31,4 +31,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/science_agent_gateway"]
+packages = ["src/sciencediscovery_gateway"]

@@ -106,7 +106,7 @@ The variables in [Configuration reference](../reference/configuration.md#environ
 | Node runtime | Runs the control API and runner |
 | CPython 3.12 | Relocatable distribution; no host Python needed, and it is the base interpreter for the first-launch gateway venv |
 | Web assets | Prebuilt `apps/web/dist` |
-| Gateway wheel and bootstrap pins | The `science-agent-gateway` wheel (our own code), the hash-locked dependency export, and the uv wheel pin |
+| Gateway wheel and bootstrap pins | The `sciencediscovery-gateway` wheel (our own code), the hash-locked dependency export, and the uv wheel pin |
 | micromamba | Fixed version, seeded to `<data-dir>/scientific-envs/bin/micromamba` on first `serve`, then checked by the runner against the same release manifest |
 
 It does not contain uv or the gateway's third-party Python dependencies (see [Dependencies installed on first launch](#dependencies-installed-on-first-launch)), nor Neo4j, starter Python/R scientific environments, or a conda package cache. Creating a starter environment for the first time still needs access to permitted package channels.
