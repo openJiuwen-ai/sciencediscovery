@@ -280,34 +280,6 @@ test("linkClaimsToReport posts artifact_version with the composite key", async (
   }
 });
 
-test("getNode returns null on 404", async () => {
-  const server = await startFakeMemoryGraph(() => ({ status: 404, json: { detail: { code: "not_found" } } }));
-  try {
-    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
-    const result = await client.getNode("Paper", "missing-link");
-    assert.equal(result, null);
-  } finally {
-    await close(server);
-  }
-});
-
-test("getNode returns the hit with field mapping on 200", async () => {
-  const server = await startFakeMemoryGraph(() => ({
-    status: 200,
-    json: { label: "Paper", id: "doi-x", session_id: "sess-1", session_title: "S1", excerpt: "x", extra: { title: "T" }, created_at: "2026-07-27T00:00:00Z" },
-  }));
-  try {
-    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
-    const result = await client.getNode("Paper", "doi-x");
-    assert.ok(result);
-    assert.equal(result.sessionTitle, "S1");
-    assert.equal(result.sessionId, "sess-1");
-    assert.equal((result.extra as { title: string }).title, "T");
-  } finally {
-    await close(server);
-  }
-});
-
 // --- declare_* (LLM tools; business errors surface, no silent degrade) ------
 
 test("declareEvidence posts snake_case and returns ok with the evidence id", async () => {

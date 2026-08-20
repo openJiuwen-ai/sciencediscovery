@@ -593,29 +593,6 @@ export class MemoryGraphClient {
     };
   }
 
-  async getNode(label: MemoryGraphNodeLabel, id: string): Promise<MemoryGraphHit | null> {
-    const path = `/nodes/${encodeURIComponent(label)}/${encodeURIComponent(id)}`;
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseUrl}${path}`, { headers: this.initHeaders() });
-    } catch (error) {
-      mgLog.warn("getNode error: cannot reach memory-graph service (%s/%s): %s",
-        label, id, error instanceof Error ? error.message : String(error));
-      return null;
-    }
-    if (response.status === 404) {
-      mgLog.info("getNode out: %s/%s not found", label, id);
-      return null;
-    }
-    if (!response.ok) {
-      mgLog.warn("getNode not ok: memory-graph returned HTTP %s (%s/%s)",
-        response.status, label, id);
-      return null;
-    }
-    const hit = (await response.json()) as Record<string, unknown>;
-    return this.toHit(hit);
-  }
-
   /** Shape the sidecar's aggregate row into the typed result. Each field is a
    * hash or routing key — never content. */
   private toArtifactProvenance(raw: Record<string, unknown>): ArtifactProvenanceGraphResult {

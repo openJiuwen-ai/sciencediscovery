@@ -27,7 +27,6 @@ import type {
   MemoryGraphByEdgeResult,
   MemoryGraphChainResult,
   MemoryGraphEdgeType,
-  MemoryGraphHit,
   MemoryGraphMatchResponse,
   MemoryGraphNodeLabel,
   MemorySubgraph,
@@ -185,10 +184,6 @@ export class ArtifactsApiClient extends RunsApiClient {
       body: JSON.stringify({ node_id: nodeId, session_id: sessionId, version, chain_kind: chainKind ?? "full" }),
       method: "POST",
     });
-  }
-
-  getMemoryNode(label: MemoryGraphNodeLabel, id: string): Promise<MemoryGraphHit | null> {
-    return this.request(`/api/memory/nodes/${encodeURIComponent(label)}/${encodeURIComponent(id)}`);
   }
 
   listArtifactVersions(sessionId: string, artifactId: string): Promise<ScientificArtifactVersion[]> {

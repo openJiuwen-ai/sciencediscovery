@@ -22,7 +22,7 @@
 
 import { lazy, Suspense, useEffect, useState } from "react";
 
-import type { MemoryGraphChainResult, MemoryGraphHit, MemoryGraphNode, MemorySubgraph } from "@science-agent/schema";
+import type { MemoryGraphChainResult, MemoryGraphNode, MemorySubgraph } from "@science-agent/schema";
 
 import type { ApiClient } from "./api.js";
 import { firstContentValue, humanizeKey, partitionEvidenceExtra } from "./NodeField.js";
@@ -48,7 +48,7 @@ function paperExtra(paper: MemoryGraphNode): Record<string, unknown> {
 }
 
 export function EvidenceModal({ client, evidenceId, onClose, sessionId }: EvidenceModalProps) {
-  const [evidence, setEvidence] = useState<MemoryGraphHit | null>(null);
+  const [evidence, setEvidence] = useState<MemoryGraphNode | null>(null);
   const [papers, setPapers] = useState<MemoryGraphNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>();
@@ -71,13 +71,15 @@ export function EvidenceModal({ client, evidenceId, onClose, sessionId }: Eviden
     let active = true;
     setLoading(true);
     setError(undefined);
-    void Promise.all([
-      client.getMemoryNode("Evidence", evidenceId),
-      client.getMemoryChain(evidenceId, sessionId),
-    ]).then(([hit, chain]) => {
+    // The Evidence node itself is the chain's source, so it appears in the
+    // chain result's nodes with its full `extra` (the chain serializer uses
+    // the same _to_hit as the node-detail path used to). No separate node
+    // fetch needed — one chain request carries both the evidence and its
+    // upstream Paper(s).
+    void client.getMemoryChain(evidenceId, sessionId).then((chain) => {
       if (!active) return;
-      setEvidence(hit);
       const chainResult = chain as MemoryGraphChainResult;
+      setEvidence((chainResult?.nodes ?? []).find((node) => node.id === evidenceId) ?? null);
       // The Paper upstream of this Evidence (extracts, walked in) surfaces in the
       // chain nodes; collect any Paper nodes that appear.
       setPapers((chainResult?.nodes ?? []).filter((node) => node.label === "Paper"));
@@ -111,10 +113,10 @@ export function EvidenceModal({ client, evidenceId, onClose, sessionId }: Eviden
   // Header title: prefer the full evidence content (truncated to one line by
   // CSS with an ellipsis) so the reader sees the start of the claim; the
   // complete content is surfaced via a native title tooltip on hover (the
-  // standard pattern for titles that don't fit). Fall back to excerpt/id when
-  // there is no content field.
-  const titleText = firstContentValue(evidence?.extra) ?? evidence?.excerpt ?? evidenceId.slice(0, 8);
-  const titleHover = titleText === evidence?.excerpt ? undefined : titleText;
+  // standard pattern for titles that don't fit). Fall back to the id prefix
+  // when there is no content field.
+  const titleText = firstContentValue(evidence?.extra) ?? evidenceId.slice(0, 8);
+  const titleHover = titleText === evidenceId.slice(0, 8) ? undefined : titleText;
   const { contentNodes, metaPairs, rawPairs } = partitionEvidenceExtra(evidence?.extra);
 
   return (

@@ -365,12 +365,18 @@ test("Quick computation Evidence tracer reuses one extracts edge query", async (
           { source: "paper-1", target: "evidence-1", type: "extracts" as const },
           { source: "paper-1", target: "evidence-2", type: "extracts" as const },
         ],
-        nodes: [{ id: "paper-1", label: "Paper" as const }],
+        // Both Evidence endpoints + the Paper endpoint are returned by the
+        // by-edge-type query (it de-dups both edge endpoints), so the tracer
+        // finds each Evidence node here instead of a separate getNode call.
+        nodes: [
+          { id: "evidence-1", label: "Evidence" as const },
+          { id: "evidence-2", label: "Evidence" as const },
+          { id: "paper-1", label: "Paper" as const },
+        ],
         total: 2,
         truncated: false,
       };
     },
-    getNode: async () => ({ id: "evidence", label: "Evidence" as const }),
   } as unknown as MemoryGraphClient;
   const trace = createEvidenceReferenceTracer(client, "session-1");
 

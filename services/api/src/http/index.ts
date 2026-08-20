@@ -1977,20 +1977,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         return;
       }
-      const memoryNodeMatch = url.pathname.match(/^\/api\/memory\/nodes\/([^/]+)\/([^/]+)$/);
-      if (memoryNodeMatch && request.method === "GET") {
-        // The id path segment is URL-encoded by the browser (Paper ids are full
-        // URLs like https://pubmed...); decode it before forwarding so the
-        // sidecar's exact-match Cypher hits the real value.
-        const label = memoryNodeMatch[1]! as MemoryGraphNodeLabel;
-        const id = decodeURIComponent(memoryNodeMatch[2]!);
-        const result = memoryGraphClient
-          ? await memoryGraphClient.getNode(label, id).catch(() => null)
-          : null;
-        if (result === null) return sendError(response, 404, `${label} not found: ${id}`);
-        sendJson(response, 200, result);
-        return;
-      }
       if (artifactAnnotationsMatch && request.method === "POST") {
         sendJson(response, 201, await store.createArtifactAnnotation(
           artifactAnnotationsMatch[1]!,

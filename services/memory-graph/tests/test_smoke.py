@@ -810,31 +810,6 @@ def test_get_chain_pins_artifact_version(live_client: TestClient) -> None:
 
 
 @needs_neo4j
-def test_get_node_resolves_version_encoded_artifact_id(live_client: TestClient) -> None:
-    """get_node splits ``<artifact_id>#v<N>`` back into the composite key and
-    returns that exact version (not an arbitrary LIMIT-1 hit)."""
-    headers = {"authorization": "Bearer test-token"}
-    sid = "sess-node"
-    _wipe_session(sid)
-    for v in (1, 2):
-        live_client.post("/observe/execution", json={
-            "execution_id": f"exec-node-{v}", "session_id": sid,
-            "turn_id": f"turn-node-{v}", "tool": "run_python", "language": "python",
-            "code_hash": f"hash-node-{v}", "exit_code": 0, "status": "succeeded",
-            "started_at": f"2026-07-30T00:00:0{v}Z", "finished_at": f"2026-07-30T00:00:0{v}Z",
-            "produced_artifacts": [{
-                "artifact_id": "art-node", "path": "n.csv", "logical_name": "n.csv",
-                "version": v, "media_type": "text/csv",
-            }],
-        }, headers=headers)
-    # /nodes/Artifact/art-node#v1 → v1 node (not v2).
-    v1 = live_client.get("/nodes/Artifact/art-node%23v1", headers=headers).json()
-    assert v1["extra"]["version"] == 1
-    v2 = live_client.get("/nodes/Artifact/art-node%23v2", headers=headers).json()
-    assert v2["extra"]["version"] == 2
-
-
-@needs_neo4j
 def test_get_chain_accepts_version_encoded_node_id(live_client: TestClient) -> None:
     """The frontend passes the subgraph node id (``<artifact_id>#v<N>``) as
     get_chain's node_id; the chain source must resolve to that version."""

@@ -29,7 +29,6 @@ Routes:
 - ``POST /query/match`` (Bearer) → full-graph case-insensitive substring search
 - ``POST /query/chain`` (Bearer) → preset upstream↔downstream chain from a node
 - ``POST /trace/provenance`` (Bearer) → ordered provenance chain + ``broken``/``truncated``/``reason`` (reviewer authenticity check)
-- ``GET /nodes/{label}/{id}`` (Bearer) → single-node detail (full ``extra``)
 - ``POST /internal/neo4j-password`` (Bearer) → push plaintext password, run
   ``ensure_schema()`` if reachable
 
@@ -65,7 +64,6 @@ from .query import (
     by_node_type,
     get_artifact_provenance,
     get_chain,
-    get_node,
     get_subgraph,
     get_trace,
     query_match,
@@ -419,20 +417,6 @@ def trace_provenance(req: TraceProvenanceRequest) -> dict[str, Any]:
     log.info("trace out: hops=%d broken=%s truncated=%s%s",
              len(result["chain"]), result["broken"], result["truncated"],
              f" (reason={result.get('reason')})" if result.get("reason") else "")
-    return result
-
-
-# --- Read: node detail ------------------------------------------------------
-
-@app.get("/nodes/{label}/{id}", dependencies=[Depends(require_internal_token)])
-def read_node(label: str, id: str) -> dict[str, Any]:
-    if label not in _NODE_LABELS:
-        _error("bad_request", 400, f"unknown node label: {label}")
-    log.info("node in: label=%s id=%s", label, id)
-    result = get_node(label, id)
-    if result is None:
-        _error("not_found", 404, f"{label} not found: {id}")
-    log.info("node out: label=%s id=%s", label, id)
     return result
 
 

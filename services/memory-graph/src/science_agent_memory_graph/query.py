@@ -294,52 +294,6 @@ def by_edge_type(edge_types: list[str], session_id: str | None = None) -> dict[s
         }
 
 
-def get_node(label: str, id: str) -> dict[str, Any] | None:
-    """Single-node detail (with full ``extra``). Returns ``None`` if not found.
-
-    For Artifact the id carries an encoded version (``"<artifact_id>#v<N>"``,
-    see ``_node_identity``); it is split back into the composite key here so
-    the exact version node is returned (not an arbitrary LIMIT-1 hit).
-    """
-    driver = handle()
-    if not driver.is_reachable():
-        log.warning("get_node skipped: Neo4j not reachable (label=%s id=%s)", label, id)
-        return None
-
-    id_field = _ID_FIELDS.get(label)
-    if not id_field:
-        return None
-
-    # Artifact id encodes the version; peel it off for the composite-key match.
-    artifact_id, version = id, None
-    if label == "Artifact" and "#v" in id:
-        artifact_id, _, ver_suffix = id.partition("#v")
-        try:
-            version = int(ver_suffix)
-        except ValueError:
-            version = None
-
-    with driver.session() as session:
-        if label == "Artifact" and version is not None:
-            result = session.run(
-                "MATCH (n:Artifact {artifact_id: $aid, version: $v}) "
-                "RETURN n, labels(n)[0] AS label LIMIT 1",
-                aid=artifact_id, v=version,
-            )
-        else:
-            result = session.run(
-                f"""
-                MATCH (n:{label}) WHERE n.{id_field} = $id
-                RETURN n, labels(n)[0] AS label LIMIT 1
-                """,
-                id=id,
-            )
-        rec = result.single()
-        if rec is None:
-            return None
-        return _to_hit(rec["n"], rec["label"])
-
-
 def get_artifact_provenance(
     artifact_id: str, version: int, session_id: str | None = None,
 ) -> dict[str, Any]:

@@ -532,19 +532,18 @@ export function createEvidenceReferenceTracer(
     if (!memoryGraphClient || !isEnabled()) {
       return { evidenceFound: false, paperLinked: false, reason: "memory_graph_disabled" };
     }
-    let evidence;
-    try {
-      evidence = await memoryGraphClient.getNode("Evidence", evidenceId);
-    } catch {
-      return { evidenceFound: false, paperLinked: false, reason: "memory_graph_unreachable" };
-    }
-    if (!evidence) return { evidenceFound: false, paperLinked: false };
     try {
       extractedFromQuery ??= memoryGraphClient.byEdgeType(["extracts"], sessionId);
       const graph = await extractedFromQuery;
       if (graph.reason) {
-        return { evidenceFound: true, paperLinked: false, reason: graph.reason, truncated: graph.truncated };
+        return { evidenceFound: false, paperLinked: false, reason: graph.reason, truncated: graph.truncated };
       }
+      // The Evidence node is one endpoint of the extracts edge, so it
+      // appears in the by-edge-type result's nodes with its full `extra`
+      // (the edge serializer returns both endpoints). No separate node fetch
+      // is needed — one request carries evidence + its source Paper.
+      const evidence = graph.nodes.find((node) => node.id === evidenceId);
+      if (!evidence) return { evidenceFound: false, paperLinked: false };
       // extracts runs Paper → Evidence (Paper is the source, Evidence the
       // target), so the Paper this Evidence was extracted from is the edge's
       // source — the inverse of the old extracted_from direction.
