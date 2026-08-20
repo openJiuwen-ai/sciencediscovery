@@ -141,6 +141,13 @@ def env_truthy(name: str, default: bool = True) -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def require_managed_env() -> bool:
+    """Managed-environment gate. The former variable name is still honoured."""
+    if env_or_empty("ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV"):
+        return env_truthy("ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV", True)
+    return env_truthy("ANTIBODY_REQUIRE_SCIENCEAGENT_ENV", True)
+
+
 def broker_host_python_allowed(cfg: dict[str, Any]) -> bool:
     return bool(cfg.get("broker_mode")) or env_truthy("ANTIBODY_ALLOW_HOST_NPU_PYTHON", False) or env_truthy("SCIENCE_AGENT_NPU_BROKER", False)
 
@@ -163,8 +170,8 @@ def managed_python_errors(cfg: dict[str, Any]) -> list[str]:
         blocked_fragments.extend([f"{ph}/venv/", f"{ph}/python_user/", f"{ph}/bin/"])
     if any(fragment and fragment in py_text for fragment in blocked_fragments):
         errors.append(f"python points at a host pipeline environment, not ScienceDiscovery managed env: {py_text}")
-    scienceagent_python = "/scientific-envs/revisions/" in py_text or py_text.startswith("/opt/science-env/")
-    if env_truthy("ANTIBODY_REQUIRE_SCIENCEAGENT_ENV", True) and not scienceagent_python:
+    managed_env_python = "/scientific-envs/revisions/" in py_text or py_text.startswith("/opt/science-env/")
+    if require_managed_env() and not managed_env_python:
         errors.append(
             "python must come from the ScienceDiscovery selected scientific environment "
             f"(SCIENCE_ENV_PYTHON or /opt/science-env/bin/python), got: {py_text}"
@@ -174,7 +181,7 @@ def managed_python_errors(cfg: dict[str, Any]) -> list[str]:
 
 def managed_pipeline_env_errors(cfg: dict[str, Any]) -> list[str]:
     pipeline_env = str(cfg.get("pipeline_env", "")).strip()
-    if env_truthy("ANTIBODY_REQUIRE_SCIENCEAGENT_ENV", True) and pipeline_env:
+    if require_managed_env() and pipeline_env:
         return [
             "pipeline_env is not allowed in ScienceDiscovery managed-env mode; "
             f"do not source host env.sh, got: {pipeline_env}"
@@ -192,7 +199,7 @@ OPERATOR_ONLY_CONFIG_KEYS = {
 
 
 def operator_only_config_errors(cfg: dict[str, Any]) -> list[str]:
-    if not env_truthy("ANTIBODY_REQUIRE_SCIENCEAGENT_ENV", True):
+    if not require_managed_env():
         return []
     return [
         f"{key} is operator-only in Broker mode; configure it through deployment environment, not config.json"

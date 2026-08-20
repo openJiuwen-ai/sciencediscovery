@@ -29,7 +29,7 @@ describe("payload container footer", () => {
   let workspace = "";
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-container-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-container-"));
   });
 
   after(async () => {

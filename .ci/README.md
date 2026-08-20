@@ -77,7 +77,7 @@ Build the current host architecture. Using `.ci` as the build context makes it
 impossible for the Dockerfile to copy the product checkout into a layer.
 
 ```bash
-docker build --file .ci/Dockerfile --tag science-agent-ci:test .ci
+docker build --file .ci/Dockerfile --tag sciencediscovery-ci:test .ci
 ```
 
 Build both supported Linux architectures and publish a manifest:
@@ -86,13 +86,13 @@ Build both supported Linux architectures and publish a manifest:
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   --file .ci/Dockerfile \
-  --tag <registry>/science-agent-ci:<tag> \
+  --tag <registry>/sciencediscovery-ci:<tag> \
   --push \
   .ci
 ```
 
 For a local, non-pushed multi-architecture artifact, replace `--push` with
-`--output type=oci,dest=science-agent-ci.oci`. Docker cannot `--load` a
+`--output type=oci,dest=sciencediscovery-ci.oci`. Docker cannot `--load` a
 multi-platform manifest into its classic local image store.
 
 ## Source and result mounts
@@ -137,7 +137,7 @@ unprivileged user namespaces still blocks the real sandbox; see
 Optional cache volumes speed up repeated dependency and browser installs:
 
 ```text
---mount type=volume,source=science-agent-ci-cache,target=/ci-cache
+--mount type=volume,source=sciencediscovery-ci-cache,target=/ci-cache
 ```
 
 ## One command per layer
@@ -155,7 +155,7 @@ docker run --rm \
   --security-opt systempaths=unconfined \
   -v <repo>:/workspace \
   -v <host-results>:/ci-results \
-  science-agent-ci:test pnpm ci:ut
+  sciencediscovery-ci:test pnpm ci:ut
 ```
 
 ST:
@@ -168,7 +168,7 @@ docker run --rm \
   --security-opt systempaths=unconfined \
   -v <repo>:/workspace \
   -v <host-results>:/ci-results \
-  science-agent-ci:test pnpm ci:st
+  sciencediscovery-ci:test pnpm ci:st
 ```
 
 E2E (mocked only):
@@ -182,7 +182,7 @@ docker run --rm \
   --security-opt systempaths=unconfined \
   -v <repo>:/workspace \
   -v <host-results>:/ci-results \
-  science-agent-ci:test pnpm ci:e2e
+  sciencediscovery-ci:test pnpm ci:e2e
 ```
 
 The selector can replace the final command on capability-driven workers. For
@@ -193,7 +193,7 @@ docker run --rm \
   --user "$(id -u):$(id -g)" \
   -v <repo>:/workspace \
   -v <host-results>:/ci-results \
-  science-agent-ci:test \
+  sciencediscovery-ci:test \
   pnpm ci:run -- --tag layer:st --tag llm:stub --tag arch:amd64 --exclude npu:required
 ```
 
@@ -242,7 +242,7 @@ selection/
 `run-layer.mjs` stops at the first failing UT/ST command and records every
 attempted command, exit code, and duration. It gives each run a unique
 `SCIENCE_AGENT_DATA_DIR` below `CI_RUNTIME_DIR` (default
-`/ci-cache/science-agent-tests`) and removes it afterward, so tests cannot
+`/ci-cache/sciencediscovery-tests`) and removes it afterward, so tests cannot
 leave generated logs or bootstrap tokens in the source mount. The E2E entry propagates
 Playwright's exit code after copying reports, including failure evidence.
 

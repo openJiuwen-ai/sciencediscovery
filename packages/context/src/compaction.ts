@@ -18,9 +18,11 @@
  * When a run's history crosses the message trigger, older messages are
  * summarized by the run's model and replaced with one summary checkpoint
  * message (hidden from the UI). The checkpoint uses the established
- * `[ScienceAgent summary checkpoint]` format, so histories produced before
- * this loop keep parsing and the standing summary keeps chaining: the next
- * compaction feeds the previous summary back into the prompt.
+ * `[ScienceDiscovery summary checkpoint]` format — with the former
+ * `[ScienceAgent summary checkpoint]` spelling still recognized on read — so
+ * histories produced before this loop keep parsing and the standing summary
+ * keeps chaining: the next compaction feeds the previous summary back into
+ * the prompt.
  */
 
 import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
@@ -30,10 +32,17 @@ type AgentHistoryMessage = RuntimeMessage;
 export const COMPACTION_TRIGGER_MESSAGES = 50;
 export const COMPACTION_KEEP_MESSAGES = 20;
 const SUMMARY_CHECKPOINT_NAME = "summary";
-const SUMMARY_CHECKPOINT_KEY = "science_agent_summary_checkpoint";
+const SUMMARY_CHECKPOINT_KEY = "sciencediscovery_summary_checkpoint";
 const SUMMARY_RENDER_CHAR_BUDGET = 6_000;
 const SUMMARY_INPUT_CHAR_BUDGET = 16_000;
-const SUMMARY_MARKER = "[ScienceAgent summary checkpoint]";
+const SUMMARY_MARKER = "[ScienceDiscovery summary checkpoint]";
+/**
+ * Key and marker written before the product rename. New checkpoints use the
+ * current spelling; both stay recognized so histories stored under the former
+ * name keep chaining instead of being summarized a second time.
+ */
+const LEGACY_SUMMARY_CHECKPOINT_KEY = "science_agent_summary_checkpoint";
+const LEGACY_SUMMARY_MARKER = "[ScienceAgent summary checkpoint]";
 
 /**
  * Authority contract carried with the durable-context block.
@@ -73,8 +82,10 @@ export function boundText(text: string, cap: number): string {
 export function isSummaryCheckpointMessage(message: AgentHistoryMessage): boolean {
   if (message.name !== SUMMARY_CHECKPOINT_NAME) return false;
   const additional = message.additional_kwargs;
-  if (isRecord(additional) && additional[SUMMARY_CHECKPOINT_KEY] === true) return true;
-  return typeof message.content === "string" && message.content.includes(SUMMARY_MARKER);
+  if (isRecord(additional)
+    && (additional[SUMMARY_CHECKPOINT_KEY] === true || additional[LEGACY_SUMMARY_CHECKPOINT_KEY] === true)) return true;
+  return typeof message.content === "string"
+    && (message.content.includes(SUMMARY_MARKER) || message.content.includes(LEGACY_SUMMARY_MARKER));
 }
 
 export function summaryCheckpointMessage(summaryText: string): AgentHistoryMessage | undefined {

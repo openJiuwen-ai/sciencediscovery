@@ -34,7 +34,7 @@ import {
  */
 
 /** Credentials the product used to ship, which must never work as a fallback. */
-const RETIRED_DEFAULTS = ["science-agent-local", "sciencediscovery-gateway-local"];
+const RETIRED_DEFAULTS = ["science-agent-local", "science-agent-gateway-local"];
 
 test("a configured token resolves for both the API fixtures and the browser", () => {
   const env = { [API_TOKEN_VARIABLE]: "configured-token", [BASE_URL_VARIABLE]: "http://127.0.0.1:4310" };

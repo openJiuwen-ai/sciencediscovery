@@ -398,7 +398,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             runner: runner?.sandboxNetwork,
           },
           runner: runner ?? { status: "unavailable" },
-          service: "science-agent-api",
+          service: "sciencediscovery-api",
           status: runner ? "ok" : "degraded",
           workspace,
         });

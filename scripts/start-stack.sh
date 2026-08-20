@@ -224,7 +224,7 @@ prepare_local() {
     "SCIENCE_AGENT_DATA_DIR=$data_dir"
     "SCIENCE_AGENT_RUNNER_HOST=${SCIENCE_AGENT_RUNNER_HOST:-127.0.0.1}"
     "SCIENCE_AGENT_RUNNER_PORT=${SCIENCE_AGENT_RUNNER_PORT:-4311}"
-    "SCIENCE_AGENT_RUNNER_TOKEN=${SCIENCE_AGENT_RUNNER_TOKEN:-science-agent-runner-local}"
+    "SCIENCE_AGENT_RUNNER_TOKEN=${SCIENCE_AGENT_RUNNER_TOKEN:-sciencediscovery-runner-local}"
     "SCIENTIFIC_ENVS=${SCIENTIFIC_ENVS:-1}"
   )
   # Keep SCIENCE_AGENT_NPU_PYTHON passthrough for custom allowlists that still
@@ -261,7 +261,7 @@ prepare_local() {
 }
 
 prepare_docker() {
-  local envs_root="${SCIENCE_AGENT_ENVS_ROOT:-/opt/science-agent/envs}"
+  local envs_root="${SCIENCE_AGENT_ENVS_ROOT:-/opt/sciencediscovery/envs}"
   gateway_python="${SCIENCE_AGENT_GATEWAY_PYTHON_PATH:-$envs_root/gateway/bin/python}"
 
   data_dir="${SCIENCE_AGENT_DATA_DIR:-/app/data}"

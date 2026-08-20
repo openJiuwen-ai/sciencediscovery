@@ -93,14 +93,14 @@ Docker 默认的 readonlyPaths / maskedPaths 会让内核拒绝在沙箱自己�
 沙箱进程（独立 netns，无网卡）
   └─ HTTP_PROXY=http://127.0.0.1:18118
        └─ egress bridge（沙箱内，监听沙箱自己的回环）
-            └─ /run/science-agent/egress.sock（bind-mount）
+            └─ /run/sciencediscovery/egress.sock（bind-mount）
                  └─ egress gateway（Runner 进程内，与 Runner 同用户）
                       └─ 按域名允许列表放行 → 公网
 ```
 
 要点：
 
-- **无 root、无 CAP_NET_ADMIN、不依赖 socat**。bridge 是产品自带的标准库 Python 脚本，解释器与标准库以只读方式绑到 `/opt/science-agent-net/`；宿主没有可用 python3 时该模式直接失败（fail-closed），并在 `/health.sandboxNetwork` 报告原因。
+- **无 root、无 CAP_NET_ADMIN、不依赖 socat**。bridge 是产品自带的标准库 Python 脚本，解释器与标准库以只读方式绑到 `/opt/sciencediscovery-net/`；宿主没有可用 python3 时该模式直接失败（fail-closed），并在 `/health.sandboxNetwork` 报告原因。
 - bridge 先监听再 fork，真实负载是它的子进程并继承 stdin/stdout/stderr，因此持久内核与持久 shell 的行协议不受影响；退出码透传。
 - seccomp 换成 network profile：只放行 socket 族调用（`socket/connect/bind/listen/accept/accept4/socketpair`），ptrace、mount、setns、bpf、keyring、io_uring 等继续拒绝；raw/packet socket 需要 `CAP_NET_RAW`，已被 `--cap-drop ALL` 挡住。
 - 允许列表条目为 `example.org`、`*.example.org`（只在 label 边界匹配，且不含 apex），可加 `:443` 限定端口；IP 字面量既不能作为条目，也不能作为请求目标。
@@ -158,7 +158,7 @@ curl -s -X PUT -H "authorization: Bearer $TOKEN" -H "content-type: application/j
 
 ## 6. 科学环境
 
-- **Provisioner**：固定版本 micromamba（Linux x86_64/aarch64 URL + SHA256 来自 Runner、Docker 与发布脚本共用的 `micromamba-releases.json`）。宿主机进程模式首次 setup 按架构下载校验后缓存到 `data/scientific-envs/bin/micromamba`；Docker 镜像构建期下载校验，并在空 data bind mount 首启时从 `/opt/science-agent/provisioner/micromamba` 播种到同一默认路径，所以运行时无需为 micromamba 访问 GitHub。`SCIENCE_AGENT_PROVISIONER_PATH` 可覆盖默认路径。
+- **Provisioner**：固定版本 micromamba（Linux x86_64/aarch64 URL + SHA256 来自 Runner、Docker 与发布脚本共用的 `micromamba-releases.json`）。宿主机进程模式首次 setup 按架构下载校验后缓存到 `data/scientific-envs/bin/micromamba`；Docker 镜像构建期下载校验，并在空 data bind mount 首启时从 `/opt/sciencediscovery/provisioner/micromamba` 播种到同一默认路径，所以运行时无需为 micromamba 访问 GitHub。`SCIENCE_AGENT_PROVISIONER_PATH` 可覆盖默认路径。
 - **异步 bootstrap**：Runner 监听并可响应 `/health` 后，在后台准备 Python base；`GET /environment-setup` 返回 state、phase、message、error 与时间戳，`POST` 只触发串行重试/补装并立即返回进度。失败不会终止 Runner。
 - **基础环境**（固定版本）：冷启动默认只创建只读 Python base（Python 3.12 + numpy/pandas/scipy/matplotlib），不默认下载 R。用户或 Agent 显式创建第一个 R 命名环境时，才按需创建只读 R base（R 4.4 + tidyverse/data.table）。升级前已有的 `starter-r` 会保留。
 - **全局 catalog**：base 与命名环境是实例级共享资源，不按 Project 隔离。兼容性上 catalog 仍使用 `starter` / `task` kind；产品语义分别是 base / named。

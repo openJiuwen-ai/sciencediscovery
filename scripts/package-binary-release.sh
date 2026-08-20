@@ -141,8 +141,8 @@ done
 rm -rf -- "$output_dir"/.work-* "$output_dir/.shared" "$output_dir/.downloads"
 
 {
-  echo "science-agent=$version"
-  echo "format=science-agent-single-binary-v1"
+  echo "sciencediscovery=$version"
+  echo "format=sciencediscovery-single-binary-v1"
   echo "contents=web+api+gateway+runner+node+cpython+micromamba"
   echo "excluded=neo4j,uv,gateway-python-deps"
   echo "first-launch-installs=uv,gateway-python-deps"

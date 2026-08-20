@@ -334,7 +334,7 @@ test("history over the trigger compacts into a summary checkpoint", async () => 
 
     const checkpoint = result.finalMessages[0]!;
     assert.equal(checkpoint.name, "summary");
-    assert.match(String(checkpoint.content), /\[ScienceAgent summary checkpoint\]/);
+    assert.match(String(checkpoint.content), /\[ScienceDiscovery summary checkpoint\]/);
     assert.match(String(checkpoint.content), /SUMMARY: goals and results/);
     assert((result.finalMessages.length) < longHistory.length);
 

@@ -27,7 +27,7 @@ describe("host preflight", () => {
   let fakeBinDirectory = "";
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-preflight-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-preflight-"));
     fakeBinDirectory = join(workspace, "bin");
     await mkdir(fakeBinDirectory, { recursive: true });
     // A bwrap stand-in that always fails the sandbox probe, so preflight has

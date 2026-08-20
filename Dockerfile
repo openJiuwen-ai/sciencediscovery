@@ -18,7 +18,7 @@
 # rewiring of the loopback runner URL is needed.
 #
 # The uv-managed Python environments are baked into the image under
-# /opt/science-agent instead of <data dir>/envs: starting the baked services
+# /opt/sciencediscovery instead of <data dir>/envs: starting the baked services
 # needs no network, and the bind-mounted host directory holds application state
 # only. Creating the managed starter Python environment remains a separate,
 # channel-dependent step unless an offline package cache is supplied.
@@ -47,7 +47,7 @@ RUN test -n "$TARGETARCH" \
  || { echo "TARGETARCH is required to select the managed micromamba release (use Docker BuildKit/buildx)." >&2; exit 1; }
 RUN node scripts/fetch-managed-micromamba.mjs \
       --arch "$TARGETARCH" \
-      --output /opt/science-agent/provisioner/micromamba
+      --output /opt/sciencediscovery/provisioner/micromamba
 
 # ---------------------------------------------------------------- builder ---
 FROM ${NODE_BUILD_IMAGE} AS builder
@@ -59,7 +59,7 @@ COPY --from=uv /uv /usr/local/bin/uv
 # UV_LINK_MODE=copy keeps cache mounts and environments on separate filesystems
 # without relying on hardlinks. The remaining settings make every sync
 # production-oriented and let managed Python downloads share the uv cache.
-ENV UV_PYTHON_INSTALL_DIR=/opt/science-agent/python \
+ENV UV_PYTHON_INSTALL_DIR=/opt/sciencediscovery/python \
     UV_PYTHON_CACHE_DIR=/root/.cache/uv/python \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
@@ -96,7 +96,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=services/paper/pyproject.toml,target=/app/services/paper/pyproject.toml \
     --mount=type=bind,source=services/paper/uv.lock,target=/app/services/paper/uv.lock \
-    UV_PROJECT_ENVIRONMENT=/opt/science-agent/envs/paper \
+    UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/paper \
       uv sync --project services/paper --locked --no-install-project --python "${PYTHON_VERSION}"
 
 # Install the gateway's third-party dependencies from its lock before the local
@@ -105,7 +105,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=services/gateway/pyproject.toml,target=/app/services/gateway/pyproject.toml \
     --mount=type=bind,source=services/gateway/uv.lock,target=/app/services/gateway/uv.lock \
-    UV_PROJECT_ENVIRONMENT=/opt/science-agent/envs/gateway \
+    UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/gateway \
       uv sync --project services/gateway --frozen --no-install-project \
         --python "${PYTHON_VERSION}"
 
@@ -115,9 +115,9 @@ RUN pnpm build
 
 # Install the local projects from the complete source tree.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_PROJECT_ENVIRONMENT=/opt/science-agent/envs/paper \
+    UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/paper \
       uv sync --project services/paper --locked --python "${PYTHON_VERSION}" \
- && UV_PROJECT_ENVIRONMENT=/opt/science-agent/envs/gateway \
+ && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/gateway \
       uv sync --project services/gateway --locked --python "${PYTHON_VERSION}"
 
 # ---------------------------------------------------------------- runtime ---
@@ -150,13 +150,13 @@ ENV NODE_ENV=production \
     SCIENCE_AGENT_RUNNER_PORT=4311 \
     SCIENCE_AGENT_RUNNER_URL=http://127.0.0.1:4311 \
     SCIENTIFIC_ENVS=1 \
-    SCIENCE_AGENT_PROVISIONER_SEED_PATH=/opt/science-agent/provisioner/micromamba \
-    SCIENCE_AGENT_ENVS_ROOT=/opt/science-agent/envs \
-    SCIENCE_AGENT_PAPER_PYTHON_PATH=/opt/science-agent/envs/paper/bin/python \
-    SCIENCE_AGENT_GATEWAY_PYTHON_PATH=/opt/science-agent/envs/gateway/bin/python
+    SCIENCE_AGENT_PROVISIONER_SEED_PATH=/opt/sciencediscovery/provisioner/micromamba \
+    SCIENCE_AGENT_ENVS_ROOT=/opt/sciencediscovery/envs \
+    SCIENCE_AGENT_PAPER_PYTHON_PATH=/opt/sciencediscovery/envs/paper/bin/python \
+    SCIENCE_AGENT_GATEWAY_PYTHON_PATH=/opt/sciencediscovery/envs/gateway/bin/python
 
-COPY --from=builder /opt/science-agent /opt/science-agent
-COPY --from=micromamba /opt/science-agent/provisioner /opt/science-agent/provisioner
+COPY --from=builder /opt/sciencediscovery /opt/sciencediscovery
+COPY --from=micromamba /opt/sciencediscovery/provisioner /opt/sciencediscovery/provisioner
 COPY --from=builder /app /app
 
 WORKDIR /app

@@ -26,7 +26,7 @@ const base = {
   },
   architecture: "x86_64",
   node: { path: "node/bin/node", version: "v22.19.0" },
-  product: "science-agent",
+  product: "sciencediscovery",
   python: { path: "python/bin/python3", sitePackages: "python/lib/python3.12/site-packages", version: "3.12.13" },
   runtimeArchitecture: "x64",
   version: "1.2.3",

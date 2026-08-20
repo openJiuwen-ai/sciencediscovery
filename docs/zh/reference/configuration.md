@@ -25,7 +25,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner 监听地址 |
 | `SCIENCE_AGENT_RUNNER_PORT` | `4311` | Runner 监听端口 |
 | `SCIENCE_AGENT_RUNNER_URL` | `http://127.0.0.1:4311` | Runner 端点（API 客户端） |
-| `SCIENCE_AGENT_RUNNER_TOKEN` | `science-agent-runner-local` | API→runner token |
+| `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API→runner token |
 | `SCIENCE_AGENT_BWRAP_PATH` | `bwrap`（通过 `PATH` 解析） | bubblewrap 可执行文件；Runner 启动时校验所需沙箱参数 |
 | `SCIENCE_AGENT_NPU_BROKER` | `0` | 是否启用宿主 Ascend NPU Broker。默认关闭；只有 `1` / `true` / `yes` 会让 Agent 看到 `run_npu_job` |
 | `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` | 空 | NPU workload 白名单 JSON；留空时使用 `services/runner/workloads/npu-workloads.default.json` |
@@ -84,7 +84,7 @@ Compose 读取仓库根目录 `.env`，并把以下键插值到 `docker-compose.
 | `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | UI/API 在宿主上发布到的网卡 |
 | `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | 映射到容器 `4310` 的宿主端口 |
 | `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器/API bearer token；不设置时使用 `<数据目录>/secrets/auth-token` 中保存的值 |
-| `SCIENCE_AGENT_RUNNER_TOKEN` | `science-agent-runner-local` | API→runner token（仅容器回环） |
+| `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API→runner token（仅容器回环） |
 | `SCIENTIFIC_ENVS` | `1` | 托管 Python/R 环境与持久内核 |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | 单次沙箱执行的墙钟上限 |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | 持久内核空闲超时（最小 1000 ms） |

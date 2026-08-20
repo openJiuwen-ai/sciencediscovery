@@ -194,7 +194,7 @@ export class McpNodeClient {
     if (existing && existing.proxySignature === proxySignature) return existing.client;
     if (existing) await this.closeSession(serverId);
 
-    const client = new Client({ name: "science-agent-api", version: "1.0.0" });
+    const client = new Client({ name: "sciencediscovery-api", version: "1.0.0" });
     if (server.transport === "stdio") {
       if (!server.command) throw new Error(`MCP server '${serverId}' with stdio transport requires 'command'`);
       const command = server.command === "python" || server.command === "python3"

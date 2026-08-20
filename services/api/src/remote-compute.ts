@@ -213,7 +213,7 @@ export class RemoteComputeClient {
         job.card.command,
         "",
       ].join("\n");
-      const scriptReference = `${workingDirectory}/.science-agent/jobs/${job.id}.sh`;
+      const scriptReference = `${workingDirectory}/.sciencediscovery/jobs/${job.id}.sh`;
       const encoded = Buffer.from(batch).toString("base64");
       const submit = await this.transport.run(job.card.targetAlias, [
         "set -eu",

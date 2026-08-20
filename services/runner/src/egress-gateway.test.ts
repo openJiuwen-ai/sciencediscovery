@@ -27,7 +27,7 @@ import { EgressGateway, EgressGatewayRegistry, isPrivateAddress } from "./egress
 const temporaryDirectories: string[] = [];
 
 async function scratchDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "science-agent-egress-"));
+  const directory = await mkdtemp(join(tmpdir(), "sciencediscovery-egress-"));
   temporaryDirectories.push(directory);
   return directory;
 }

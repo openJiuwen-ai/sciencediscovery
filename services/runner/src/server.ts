@@ -189,7 +189,7 @@ export function loadRunnerConfig(env: NodeJS.ProcessEnv = process.env, cwd = rep
     return value;
   };
   return {
-    authToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "science-agent-runner-local",
+    authToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "sciencediscovery-runner-local",
     bwrapPath: env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
     dataDir: resolve(cwd, env.SCIENCE_AGENT_DATA_DIR?.trim() || "data"),
     execTimeoutMs,

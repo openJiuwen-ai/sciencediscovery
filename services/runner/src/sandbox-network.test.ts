@@ -40,7 +40,7 @@ const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
 
 async function scratchDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "science-agent-sandbox-network-"));
+  const directory = await mkdtemp(join(tmpdir(), "sciencediscovery-sandbox-network-"));
   temporaryDirectories.push(directory);
   return directory;
 }

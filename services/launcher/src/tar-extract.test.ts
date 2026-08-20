@@ -30,7 +30,7 @@ describe("payload tar extraction", () => {
   let workspace = "";
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-tar-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-tar-"));
   });
 
   after(async () => {

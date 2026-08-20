@@ -36,7 +36,7 @@ apps -> services/api -> capability adapters -> packages/runtime-core
 
 Capability code may implement Runtime Core ports. Runtime Core must never
 import HTTP/SSE, provider clients, tools, MCP, permissions, artifacts,
-provenance, specialists, or other ScienceAgent domain packages.
+provenance, specialists, or other ScienceDiscovery domain packages.
 
 Current capability ownership:
 

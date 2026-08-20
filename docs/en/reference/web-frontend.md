@@ -25,7 +25,7 @@ The React browser UI is served as static assets by the control API after build a
 
 ## 3. Server communication
 
-`ApiClient.request()` injects `authorization: Bearer <token>` from local-storage key `science-agent-token`. `streamMessage()` posts `/api/sessions/:id/runs` with `accept: text/event-stream` and manually parses `data: <json>\n\n` through `body.getReader()`, rather than EventSource, to support Authorization and abort.
+`ApiClient.request()` injects `authorization: Bearer <token>` from local-storage key `sciencediscovery-token`. `streamMessage()` posts `/api/sessions/:id/runs` with `accept: text/event-stream` and manually parses `data: <json>\n\n` through `body.getReader()`, rather than EventSource, to support Authorization and abort.
 
 ## 4. Event-to-UI mapping
 

@@ -63,7 +63,7 @@ for line in sys.stdin:
     stdout, stderr, exit_code = io.StringIO(), io.StringIO(), 0
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            exec(compile(request["code"], "<science-agent>", "exec"), namespace, namespace)
+            exec(compile(request["code"], "<sciencediscovery>", "exec"), namespace, namespace)
     except BaseException:
         exit_code = 1
         traceback.print_exc(file=stderr)

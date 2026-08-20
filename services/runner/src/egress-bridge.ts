@@ -40,11 +40,11 @@ const execFileAsync = promisify(execFile);
  */
 
 /** Sandbox-internal mount prefix for the bridge interpreter and script. */
-export const EGRESS_PREFIX = "/opt/science-agent-net";
+export const EGRESS_PREFIX = "/opt/sciencediscovery-net";
 export const EGRESS_BRIDGE_SCRIPT_PATH = `${EGRESS_PREFIX}/egress-bridge.py`;
 export const EGRESS_INTERPRETER_PATH = `${EGRESS_PREFIX}/bin/python3`;
 /** Sandbox-internal path of the bind-mounted gateway socket. */
-export const EGRESS_SOCKET_PATH = "/run/science-agent/egress.sock";
+export const EGRESS_SOCKET_PATH = "/run/sciencediscovery/egress.sock";
 /** Sandbox-internal loopback port the bridge listens on. */
 export const EGRESS_BRIDGE_PORT = 18_118;
 export const EGRESS_PROXY_URL = `http://127.0.0.1:${EGRESS_BRIDGE_PORT}`;

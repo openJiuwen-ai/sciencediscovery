@@ -173,7 +173,7 @@ curl -fsS http://127.0.0.1:4310/health
 
 Open <http://127.0.0.1:4310> and sign in with `SCIENCE_AGENT_AUTH_TOKEN`; when it is unset, the container log prints the token generated on first start. The first build compiles the Web UI, resolves both service Python environments, and downloads micromamba, so it takes longer and needs network access. Starting services and obtaining micromamba from the completed image do not. The package-network boundary for managed starter Python is described under [Limitations](#limitations).
 
-BuildKit selects the `linux/amd64` or `linux/arm64` micromamba for `TARGETARCH` and verifies it against the runner's shared release manifest. The binary is stored at `/opt/science-agent/provisioner/micromamba`; when `/app/data` is an empty bind mount, the first start copies it to the managed default path and the runner verifies it again. This does not access GitHub at **runtime**.
+BuildKit selects the `linux/amd64` or `linux/arm64` micromamba for `TARGETARCH` and verifies it against the runner's shared release manifest. The binary is stored at `/opt/sciencediscovery/provisioner/micromamba`; when `/app/data` is an empty bind mount, the first start copies it to the managed default path and the runner verifies it again. This does not access GitHub at **runtime**.
 
 ```bash
 docker compose logs -f        # startup order: runner -> API
@@ -192,8 +192,8 @@ The container runs as uid/gid `1000:1000`. If the account IDs differ, set `SCIEN
 
 Two locations differ from a host installation:
 
-- uv-managed environments are baked into `/opt/science-agent/envs/{gateway,paper}`, not the data directory. A fresh `compose up` therefore needs no network access for them.
-- Fixed micromamba is baked into `/opt/science-agent/provisioner/micromamba` and seeded to `data/scientific-envs/bin/micromamba` for an empty data directory. When `SCIENCE_AGENT_PROVISIONER_PATH` is explicitly set, seeding is skipped and the runner uses that administrator override.
+- uv-managed environments are baked into `/opt/sciencediscovery/envs/{gateway,paper}`, not the data directory. A fresh `compose up` therefore needs no network access for them.
+- Fixed micromamba is baked into `/opt/sciencediscovery/provisioner/micromamba` and seeded to `data/scientific-envs/bin/micromamba` for an empty data directory. When `SCIENCE_AGENT_PROVISIONER_PATH` is explicitly set, seeding is skipped and the runner uses that administrator override.
 
 ### Sandbox and host requirements
 
@@ -229,6 +229,6 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 sha256sum --check dist/micromamba-release/SHA256SUMS
 ```
 
-The defaults are `science-agent-micromamba-<version>-linux-x86_64.tar.gz` and `science-agent-micromamba-<version>-linux-aarch64.tar.gz`. Each contains only `bin/micromamba` and a `manifest.json` recording the target architecture, upstream filename, and binary SHA256; the output also contains `VERSION` and `SHA256SUMS`. The script does **not** create or collect starter Python/R environments, conda caches, or other Python trees.
+The defaults are `sciencediscovery-micromamba-<version>-linux-x86_64.tar.gz` and `sciencediscovery-micromamba-<version>-linux-aarch64.tar.gz`. Each contains only `bin/micromamba` and a `manifest.json` recording the target architecture, upstream filename, and binary SHA256; the output also contains `VERSION` and `SHA256SUMS`. The script does **not** create or collect starter Python/R environments, conda caches, or other Python trees.
 
 Use `--arch x86_64` or `--arch aarch64` for one architecture, or `--dry-run` to inspect versions, URLs, and SHA256 values without downloading. On a restricted builder, prepare both raw binaries from the release manifest and use `--source-dir <directory>` for local verification and packaging.

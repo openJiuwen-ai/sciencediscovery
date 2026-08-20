@@ -64,8 +64,8 @@ import { SessionEnvProfileStore } from "./session-env-profile.js";
  * still end the whole session, which is then recreated with memory lost).
  */
 const SHELL_SESSION_WORKER = String.raw`
-__sa_out=/tmp/.science-agent-shell-stdout
-__sa_err=/tmp/.science-agent-shell-stderr
+__sa_out=/tmp/.sciencediscovery-shell-stdout
+__sa_err=/tmp/.sciencediscovery-shell-stderr
 __sa_current=''
 __sa_emit() {
   printf '%s %s %s %s %s %s %s %s\n' __SA_RESULT__ "$1" "$2" \

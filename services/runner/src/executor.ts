@@ -280,7 +280,7 @@ async function assertWorkspaceWithinQuota(workspaceRoot: string, maxWorkspaceByt
   }
 }
 
-const LOCAL_PYTHON_PACKAGES_MOUNT = "/opt/science-agent-python-packages";
+const LOCAL_PYTHON_PACKAGES_MOUNT = "/opt/sciencediscovery-python-packages";
 
 export async function localPythonPackageCandidatePaths(dataDir: string): Promise<string[]> {
   const packageRoot = resolve(dataDir, "python-packages");

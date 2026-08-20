@@ -25,7 +25,7 @@ React 浏览器 UI，构建后由控制 API 作为静态资源托管；开发时
 
 ## 3. 与服务端通信
 
-- `ApiClient.request()` 统一注入 `authorization: Bearer <token>`；token 存 localStorage 键 `science-agent-token`（另有工作区面板布局键）。
+- `ApiClient.request()` 统一注入 `authorization: Bearer <token>`；token 存 localStorage 键 `sciencediscovery-token`（另有工作区面板布局键）。
 - 运行流：`streamMessage()` POST `/api/sessions/:id/runs`，以 `accept: text/event-stream` 用 fetch `body.getReader()` 手工解析 `data: <json>\n\n` 帧（非 EventSource，便于带 Authorization 头与 abort）。
 
 ## 4. 事件到 UI 的映射

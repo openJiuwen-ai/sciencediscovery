@@ -496,7 +496,7 @@ export class ArtifactManager {
     }
     const workspaceRoot = this.store.workspacePath(job.sessionId);
     const finalPath = resolveWorkspaceFile(workspaceRoot, plan.destination.path);
-    const stagingPath = resolve(workspaceRoot, ".science-agent", "staging", `${job.id}.part`);
+    const stagingPath = resolve(workspaceRoot, ".sciencediscovery", "staging", `${job.id}.part`);
     await assertSafeArtifactPath(workspaceRoot, finalPath);
     await assertSafeArtifactPath(workspaceRoot, stagingPath);
     await mkdir(dirname(stagingPath), { recursive: true });

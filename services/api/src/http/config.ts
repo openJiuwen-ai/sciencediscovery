@@ -166,7 +166,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     runnerExecTimeoutMs,
     runnerMaxOutputBytes,
     runnerMaxWorkspaceBytes,
-    runnerToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "science-agent-runner-local",
+    runnerToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "sciencediscovery-runner-local",
     runnerUrl: env.SCIENCE_AGENT_RUNNER_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:4311",
     sshConfigPath: resolve(env.SCIENCE_AGENT_SSH_CONFIG_PATH?.trim() || resolve(homedir(), ".ssh/config")),
     staticDir: resolve(repositoryRoot, env.SCIENCE_AGENT_WEB_DIR?.trim() || "apps/web/dist"),

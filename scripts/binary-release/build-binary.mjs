@@ -41,7 +41,7 @@ const require = createRequire(join(launcherPackage, "package.json"));
 
 /** Sentinel postject looks for inside the Node binary; fixed by Node itself. */
 const SEA_FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
-const PAYLOAD_MAGIC = Buffer.from("SCIENCEAGENTPL01", "ascii");
+const PAYLOAD_MAGIC = Buffer.from("SCIDISCOVERYPL01", "ascii");
 
 const USAGE = `Usage: build-binary.mjs --arch <x86_64|aarch64> --payload <dir> --output <file> [--keep-work]
 `;

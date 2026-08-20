@@ -39,7 +39,7 @@ function stubTransport(catalog: McpCatalog): McpTransportClient {
 }
 
 test("MCP source API exposes only native MCP sources", async (context) => {
-  const dataDir = await mkdtemp(resolve(tmpdir(), "science-agent-mcp-api-"));
+  const dataDir = await mkdtemp(resolve(tmpdir(), "sciencediscovery-mcp-api-"));
   context.after(() => rm(dataDir, { force: true, recursive: true }));
   const config: ServerConfig = {
     authToken: "test-token",

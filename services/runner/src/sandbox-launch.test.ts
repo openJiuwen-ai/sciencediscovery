@@ -104,7 +104,7 @@ describe("detection feeding the launch", () => {
   let workspace = "";
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-runner-sandbox-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-runner-sandbox-"));
     resetSandboxCapabilityCache();
   });
 

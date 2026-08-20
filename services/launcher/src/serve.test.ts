@@ -35,7 +35,7 @@ const manifest: PayloadManifest = {
   formatVersion: 1,
   micromamba: { path: "provisioner/micromamba", version: "2.8.1-0" },
   node: { path: "node/bin/node", version: "v22.19.0" },
-  product: "science-agent",
+  product: "sciencediscovery",
   python: { path: "python/bin/python3", sitePackages: "python/lib/python3.12/site-packages", version: "3.12.13" },
   runtimeArchitecture: "x64",
   version: "0.0.0",
@@ -54,7 +54,7 @@ function contextFor(overrides: Partial<ServicePlanContext> = {}): ServicePlanCon
     credentials,
     manifest,
     payloadRoot: "/cache/payload/abc",
-    settings: defaultSettings({}, "/opt/science-agent"),
+    settings: defaultSettings({}, "/opt/sciencediscovery"),
     ...overrides,
   };
 }
@@ -136,7 +136,7 @@ describe("serve topology", () => {
 
   test("shares one runner token between the runner and the API", () => {
     const [runner, api] = planServices(contextFor());
-    assert.equal(runner?.env.SCIENCE_AGENT_RUNNER_TOKEN, "science-agent-runner-local");
+    assert.equal(runner?.env.SCIENCE_AGENT_RUNNER_TOKEN, "sciencediscovery-runner-local");
     assert.equal(api?.env.SCIENCE_AGENT_RUNNER_TOKEN, runner?.env.SCIENCE_AGENT_RUNNER_TOKEN);
     assert.equal(api?.env.SCIENCE_AGENT_RUNNER_URL, "http://127.0.0.1:4311");
   });
@@ -205,7 +205,7 @@ describe("micromamba seeding", () => {
   let workspace = "";
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-seed-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-seed-"));
   });
 
   after(async () => {

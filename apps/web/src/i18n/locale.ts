@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { LOCALE_STORAGE_KEY, readRenamedStorageItem } from "../browser-storage.js";
 import { en, type MessageKey, zhCN } from "./messages.js";
 
 export type Locale = "en" | "zh-CN";
-export const LOCALE_STORAGE_KEY = "science-agent-locale";
+export { LOCALE_STORAGE_KEY };
 
 interface LocaleEnvironment {
   languages?: readonly string[];
@@ -29,7 +30,7 @@ interface LocaleTarget {
 
 export function detectLocale(environment?: LocaleEnvironment): Locale {
   const storedLocale = environment?.storedLocale
-    ?? (typeof window !== "undefined" ? window.localStorage.getItem(LOCALE_STORAGE_KEY) : null);
+    ?? (typeof window !== "undefined" ? readRenamedStorageItem(window.localStorage, LOCALE_STORAGE_KEY) : null);
   if (storedLocale === "en" || storedLocale === "zh-CN") return storedLocale;
 
   const languages = environment?.languages

@@ -792,7 +792,7 @@ export class EnvironmentStore {
       channels: uniqueSorted(channels),
       createdAt,
       environmentId,
-      format: "science-agent-environment-revision-v1",
+      format: "sciencediscovery-environment-revision-v1",
       language,
       ...(localWheels.length ? { localWheels } : {}),
       packages,

@@ -52,7 +52,13 @@ const execFileAsync = promisify(execFile);
 const RUN_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const INSTALL_TIMEOUT_MS = 60 * 60_000;
 const LOCK_WAIT_TIMEOUT_MS = 60 * 60_000;
-const GATEWAY_ENV_MARKER_FILE = ".science-agent-bootstrap.json";
+const GATEWAY_ENV_MARKER_FILE = ".sciencediscovery-bootstrap.json";
+/**
+ * Marker name shipped before the product rename. Reading it keeps an existing
+ * gateway environment usable instead of forcing a full reinstall on upgrade;
+ * the next write uses the current name.
+ */
+const LEGACY_GATEWAY_ENV_MARKER_FILE = ".science-agent-bootstrap.json";
 
 export interface RunResult {
   stdout: string;
@@ -399,7 +405,11 @@ export async function ensureGatewayEnvironment(
     sentinels: sentinels.join(","),
     uvVersion: bootstrap.uv.version,
   };
-  const marker = await readJson<GatewayEnvironmentMarker>(markerPath);
+  let marker = await readJson<GatewayEnvironmentMarker>(markerPath);
+  if (!marker) {
+    marker = await readJson<GatewayEnvironmentMarker>(join(environmentDir, LEGACY_GATEWAY_ENV_MARKER_FILE));
+    if (marker) io.log(`[compat] Reading the former ${LEGACY_GATEWAY_ENV_MARKER_FILE} gateway marker.`);
+  }
   const markerMatches = Boolean(
     marker
     && (Object.keys(expected) as (keyof GatewayEnvironmentMarker)[]).every((key) => marker[key] === expected[key])

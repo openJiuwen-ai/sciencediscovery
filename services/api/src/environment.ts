@@ -23,7 +23,7 @@ const shellVersion = execFileSync("/usr/bin/bash", ["--version"], { encoding: "u
 
 export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
   executable: "/usr/bin/python3",
-  format: "science-agent-environment-v1",
+  format: "sciencediscovery-environment-v1",
   language: "python",
   packageSource: "read-only system /usr",
   pythonVersion,
@@ -36,7 +36,7 @@ export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC_HASH = createHash("sha256")
 
 export const DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
   executable: "/usr/bin/bash",
-  format: "science-agent-environment-v1",
+  format: "sciencediscovery-environment-v1",
   language: "shell",
   packageSource: "read-only system /usr",
   shellVersion,

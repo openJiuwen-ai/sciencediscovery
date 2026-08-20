@@ -164,7 +164,7 @@ describe("uv installation", () => {
   let workspace = "";
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-bootstrap-uv-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-bootstrap-uv-"));
   });
 
   after(async () => {
@@ -254,7 +254,7 @@ describe("gateway environment provisioning", () => {
   let workspace = "";
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-bootstrap-env-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-bootstrap-env-"));
   });
 
   after(async () => {
@@ -273,7 +273,7 @@ describe("gateway environment provisioning", () => {
       bootstrap,
       formatVersion: 2,
       node: { path: "node/bin/node", version: "v22.19.0" },
-      product: "science-agent",
+      product: "sciencediscovery",
       python: { path: "python/bin/python3", sitePackages: "python/lib/python3.12/site-packages", version: "3.12.13" },
       runtimeArchitecture: "x64",
       version: "0.0.0",
@@ -426,7 +426,7 @@ describe("gateway environment provisioning", () => {
       ),
       /External URL configuration not found.*missing-app-config-payload\/app\/config\/external-urls\.json/,
     );
-    await access(join(environmentDir, ".science-agent-bootstrap.json"));
+    await access(join(environmentDir, ".sciencediscovery-bootstrap.json"));
   });
 
   test("preserves an operator-provided external URL config path in the probe environment", async () => {
@@ -494,10 +494,42 @@ describe("gateway environment provisioning", () => {
     assert.deepEqual(secondLaunch.invocations.map(({ command }) => command), [join(environmentDir, "bin", "python")]);
   });
 
+  test("reuses an environment whose marker still carries the former product name", async () => {
+    const { appRoot, bootstrap, dataDir, payloadRoot, settings } = await gatewayFixture("legacy-marker");
+    const environmentDir = join(dataDir, "envs", "gateway");
+    await ensureGatewayEnvironment(
+      simulatedGatewayIo().io,
+      settings,
+      bootstrap,
+      payloadRoot,
+      manifestFixture(bootstrap),
+      "/tools/uv",
+      gatewayRuntime(appRoot),
+    );
+    await rename(
+      join(environmentDir, ".sciencediscovery-bootstrap.json"),
+      join(environmentDir, ".science-agent-bootstrap.json"),
+    );
+
+    const upgrade = simulatedGatewayIo();
+    await ensureGatewayEnvironment(
+      upgrade.io,
+      settings,
+      bootstrap,
+      payloadRoot,
+      manifestFixture(bootstrap),
+      "/tools/uv",
+      gatewayRuntime(appRoot),
+    );
+    // Only the sentinel import probe runs: no uv invocation means no reinstall.
+    assert.deepEqual(upgrade.invocations.map(({ command }) => command), [join(environmentDir, "bin", "python")]);
+    assert.ok(upgrade.io.logs.some((line) => line.includes(".science-agent-bootstrap.json")));
+  });
+
   test("keeps the previous environment recoverable when a rebuild fails", async () => {
     const { appRoot, bootstrap, dataDir, payloadRoot, settings } = await gatewayFixture("failed-rebuild");
     const environmentDir = join(dataDir, "envs", "gateway");
-    const markerPath = join(environmentDir, ".science-agent-bootstrap.json");
+    const markerPath = join(environmentDir, ".sciencediscovery-bootstrap.json");
     const python = join(environmentDir, "bin", "python");
     await ensureGatewayEnvironment(
       simulatedGatewayIo().io,
@@ -571,7 +603,7 @@ describe("gateway environment provisioning", () => {
 
 describe("bootstrap lock", () => {
   test("serializes concurrent bootstraps and recovers a dead holder's lock", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "science-agent-bootstrap-lock-"));
+    const workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-bootstrap-lock-"));
     try {
       const io = fakeIo({});
       const order: string[] = [];

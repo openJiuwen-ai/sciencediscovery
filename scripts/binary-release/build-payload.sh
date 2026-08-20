@@ -311,7 +311,7 @@ read -r uv_version uv_project uv_wheel_filename uv_wheel_sha256 < <(node -e '
 cat >"$output/manifest.json" <<EOF
 {
   "formatVersion": 2,
-  "product": "science-agent",
+  "product": "sciencediscovery",
   "version": "$version",
   "architecture": "$architecture",
   "runtimeArchitecture": "$runtime_architecture",

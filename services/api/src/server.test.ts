@@ -1018,9 +1018,9 @@ test("loadServerConfig preserves an explicit network bind", () => {
 });
 
 test("loadServerConfig derives the paper env from a relocated data dir", () => {
-  const config = loadServerConfig({ ...CONFIGURED_TOKENS, SCIENCE_AGENT_DATA_DIR: "/srv/science-agent" });
-  assert.equal(config.dataDir, "/srv/science-agent");
-  assert.equal(config.paperPythonPath, "/srv/science-agent/envs/paper/bin/python");
+  const config = loadServerConfig({ ...CONFIGURED_TOKENS, SCIENCE_AGENT_DATA_DIR: "/srv/sciencediscovery" });
+  assert.equal(config.dataDir, "/srv/sciencediscovery");
+  assert.equal(config.paperPythonPath, "/srv/sciencediscovery/envs/paper/bin/python");
 });
 
 test("loadServerConfig validates the port", () => {

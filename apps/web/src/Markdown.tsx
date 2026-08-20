@@ -212,7 +212,7 @@ export function resolveMarkdownImageSource(source: string, workspaceSessionId?: 
   const sessionFileUrl = value.match(/^\/?api\/sessions\/([^/]+)\/file(?:\?|$)/i);
   if (sessionFileUrl) {
     try {
-      const parsed = new URL(value.startsWith("/") ? value : `/${value}`, "https://science-agent.local");
+      const parsed = new URL(value.startsWith("/") ? value : `/${value}`, "https://sciencediscovery.local");
       const referencedSessionId = decodePath(sessionFileUrl[1]!);
       const path = parsed.searchParams.get("path");
       const normalized = path ? normalizeWorkspaceImagePath(path) : undefined;
