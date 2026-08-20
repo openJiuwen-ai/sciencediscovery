@@ -36,6 +36,7 @@ architecture="all"
 output_dir=""
 version=""
 keep_payload=0
+skip_smoke=0
 
 usage() {
   cat <<'EOF'
@@ -46,6 +47,11 @@ Options:
   --output <directory>         Output directory (default: dist/binary-release-<version>)
   --version <version>          Release version label (default: git describe)
   --keep-payload               Keep the uncompressed payload trees for inspection
+  --skip-smoke                 Skip the four-entry smoke gate on the built artifact.
+                               The gate boots the packaged app, which spawns the
+                               bubblewrap runner, so it cannot pass on a host
+                               without bwrap. Artifacts stay unverified — prefer
+                               installing bubblewrap over using this.
   -h, --help                   Show this help
 
 Both architectures build from either an x86_64 or an aarch64 host: the Node and
@@ -59,6 +65,7 @@ while (($#)); do
     --arch) architecture="${2:?--arch requires a value}"; shift 2 ;;
     --keep-payload) keep_payload=1; shift ;;
     --output) output_dir="${2:?--output requires a value}"; shift 2 ;;
+    --skip-smoke) skip_smoke=1; shift ;;
     --version) version="${2:?--version requires a value}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -151,7 +158,9 @@ rm -rf -- "$output_dir"/.work-* "$output_dir/.shared" "$output_dir/.downloads"
 
 (cd "$output_dir" && sha256sum "${artifact_names[@]}" >SHA256SUMS)
 
-if [[ -n "$native_artifact" ]]; then
+if ((skip_smoke)); then
+  echo "Skipping the four-entry smoke gate (--skip-smoke); $native_artifact is unverified."
+elif [[ -n "$native_artifact" ]]; then
   echo "Running four-entry smoke gate for $native_artifact..."
   SCIENCE_AGENT_UV_PATH="$(command -v uv)" \
     node "$script_dir/binary-release/smoke-binary.mjs" \
