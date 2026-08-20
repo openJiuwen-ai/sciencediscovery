@@ -190,17 +190,17 @@ export interface DeclareClaimInput {
   claimType: string;
   confidence: string;
   locator: string;
-  /** alias → evidence_id, e.g. {"ev1": "<uuid>"}; the alias is what the LLM
+  /** alias → evidence_id, e.g. {"evidence1": "<uuid>"}; the alias is what the LLM
    * writes into the report body, the evidence_id resolves it to an Evidence.
    * A Claim no longer cites a Paper directly — to cite a paper the LLM
    * declares an Evidence extracted from it and cites the Evidence here. */
   citesEvidenceAliases: Record<string, string>;
-  /** alias → artifact_id, e.g. {"a1": "<artifact_id>"}; the alias is what
+  /** alias → artifact_id, e.g. {"artifact1": "<artifact_id>"}; the alias is what
    * the LLM writes into the report body, the artifact_id resolves it to an
    * Artifact this session's code produced. Use this (not declare_evidence)
    * for code-execution findings that have no source paper. */
   citesArtifactAliases: Record<string, string>;
-  /** alias → version, e.g. {"a1": 1}; pins each cited artifact alias to the
+  /** alias → version, e.g. {"artifact1": 1}; pins each cited artifact alias to the
    * exact version it cites. Filled by the Node-side declare callback. */
   citesArtifactVersions?: Record<string, number>;
   /** The report Artifact this claim is asserted in; builds the states edge

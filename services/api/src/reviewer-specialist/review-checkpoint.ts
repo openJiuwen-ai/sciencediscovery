@@ -558,7 +558,7 @@ async function reviewArtifactSmart(
             `Governed literature result URL: ${source.url ?? "not reported"}`,
             `Governed literature search result: ${source.content ?? ""}`,
             "Return only one JSON object with this exact shape:",
-            JSON.stringify({ citation: { findings: [{ code: "CITATION_*", evidenceAliases: ["ev1"], message: "...", severity: "warning|critical" }], status: "COMPLETED|INCONCLUSIVE" } }),
+            JSON.stringify({ citation: { findings: [{ code: "CITATION_*", evidenceAliases: ["evidence1"], message: "...", severity: "warning|critical" }], status: "COMPLETED|INCONCLUSIVE" } }),
             "Use an empty findings array when no actionable problem exists. INCONCLUSIVE is not itself a finding.",
             "Target Artifact claim excerpt:",
             citationClaimExcerpt(text, candidate),

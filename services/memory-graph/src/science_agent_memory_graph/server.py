@@ -581,19 +581,19 @@ class DeclareClaimRequest(BaseModel):
     claim_type: str
     confidence: str
     locator: str
-    # alias → evidence_id, e.g. {"ev1": "<uuid>"}; the alias is what the LLM
+    # alias → evidence_id, e.g. {"evidence1": "<uuid>"}; the alias is what the LLM
     # writes into the report body, the evidence_id resolves it to an Evidence
     # node. The cited Evidence must already exist (declare_evidence first).
     # This is the ONLY way to cite an Evidence — there is no separate
     # node-id list; an evidence_id not placed here is not cited and renders
     # no chip.
     cites_evidence_aliases: dict[str, str] = Field(default_factory=dict)
-    # alias → artifact_id, e.g. {"a1": "<artifact_id>"}; the alias is what the
+    # alias → artifact_id, e.g. {"artifact1": "<artifact_id>"}; the alias is what the
     # LLM writes into the report body, the artifact_id resolves it to an
     # Artifact this session's code produced. Used for code-execution findings
     # that have no source paper (so declare_evidence does not apply).
     cites_artifact_aliases: dict[str, str] = Field(default_factory=dict)
-    # alias → version, e.g. {"a1": 1}; pins each cited artifact alias to the
+    # alias → version, e.g. {"artifact1": 1}; pins each cited artifact alias to the
     # EXACT version the LLM declared against (Artifact is keyed on the composite
     # (artifact_id, version), so the version is required to hit the right node —
     # a bare artifact_id is ambiguous across versions). Keys align with

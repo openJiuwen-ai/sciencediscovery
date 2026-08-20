@@ -515,11 +515,14 @@ async function executeAgentRun(
     if (claimIds.some((entry) => `${entry.turnId}#${entry.claimId}` === key)) return;
     claimIds.push({ turnId, claimId });
   };
-  provenanceRecorder.setReferencesProvider((turnId?: string) => {
-    // Drain + clear only the entries tagged with this turnId. Entries from
-    // other execution contexts stay buffered so a later report in that context
-    // still finds them. Without a turnId (legacy callers / non-contextual
-    // drain), drain everything to preserve prior behavior.
+  // Per-run drain closure: returns + clears only the entries tagged with this
+  // turnId, leaving other execution contexts buffered for a later report in
+  // that context. Without a turnId (legacy callers / non-contextual drain),
+  // drain everything to preserve prior behavior. Passed per-call into
+  // declareWorkspaceArtifact so concurrent runs in one process never overwrite
+  // each other's accumulator (the prior singleton instance field was stomped
+  // by whichever run called setReferencesProvider last).
+  const drainReferences = (turnId?: string): { references: ComposerReference[]; claimIds: string[] } => {
     const drainAll = turnId === undefined;
     const matching = (entry: { turnId: string }): boolean => drainAll || entry.turnId === turnId;
     const references = chipMapBuffer.filter(matching).map((entry) => entry.reference);
@@ -534,7 +537,7 @@ async function executeAgentRun(
     claimIds.length = 0;
     claimIds.push(...keepClaims);
     return { references, claimIds: claimIdsDrained };
-  });
+  };
   let assistantText = "";
   let workspaceSnapshot = new Map<string, string>();
   let workspaceRefreshQueue = Promise.resolve();
@@ -642,6 +645,7 @@ async function executeAgentRun(
         ...(input.description ? { description: input.description } : {}),
         name: input.name?.trim() || defaultName,
         path: input.path,
+        referencesProvider: drainReferences,
         sessionId,
         sourcePath,
         turnId,

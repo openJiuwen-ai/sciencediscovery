@@ -376,11 +376,11 @@ test("a report version drains the chip references + claim ids accumulated earlie
   // what matters). The provider mirrors server.ts: splice on drain so a later
   // report starts fresh.
   const recorder = new ProvenanceRecorder(dataDir, store);
-  recorder.setReferencesProvider(() => {
+  const referencesProvider = () => {
     const references = chipMap.splice(0, chipMap.length);
     const drained = claimIds.splice(0, claimIds.length);
     return { references, claimIds: drained };
-  });
+  };
 
   const runnerClient = {
     executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
@@ -401,7 +401,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
   });
   assert.equal(store.listArtifacts(session.id).length, 0, "generated report remains physical until declared");
   await recorder.declareWorkspaceArtifact({
-    name: "report.md", path: "report.md", sessionId: session.id,
+    name: "report.md", path: "report.md", referencesProvider, sessionId: session.id,
     sourcePath: "report.md", turnId: "t1", workspaceRoot,
   });
 
@@ -414,7 +414,8 @@ test("a report version drains the chip references + claim ids accumulated earlie
   assert.equal(claimIds.length, 0, "claim ids drained");
   // A non-report artifact never carries chips.
   const dataRecorder = new ProvenanceRecorder(dataDir, store);
-  dataRecorder.setReferencesProvider(() => ({ references: [{ id: "x", kind: "evidence", label: "evidence1" }], claimIds: [] }));
+  const dataProvider: (turnId?: string) => { references: ComposerReference[]; claimIds: string[] } = () =>
+    ({ references: [{ id: "x", kind: "evidence", label: "evidence1" }], claimIds: [] });
   const dataRunner = {
     executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
       await writeFile(resolve(workspaceRoot, "data.csv"), "a,b\n1,2\n");
@@ -433,7 +434,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
     code: "cat > data.csv", permissionEpoch, runnerClient: dataRunner, sessionId: session.id, turnId: "t2", workspaceRoot,
   });
   await dataRecorder.declareWorkspaceArtifact({
-    name: "data.csv", path: "data.csv", sessionId: session.id,
+    name: "data.csv", path: "data.csv", referencesProvider: dataProvider, sessionId: session.id,
     sourcePath: "data.csv", turnId: "t2", workspaceRoot,
   });
   const csvArtifact = store.listArtifacts(session.id).find((a) => a.logicalName === "data.csv");
@@ -469,17 +470,17 @@ test("a failed declare_artifact (missing path) does not swallow the chip buffer"
   const chipMap: ComposerReference[] = [{ id: "ev-id-1", kind: "evidence", label: "ev1" }];
   const claimIds: string[] = ["claim-id-1"];
   const recorder = new ProvenanceRecorder(dataDir, store);
-  recorder.setReferencesProvider(() => {
+  const referencesProvider = () => {
     const references = chipMap.splice(0, chipMap.length);
     const drained = claimIds.splice(0, claimIds.length);
     return { references, claimIds: drained };
-  });
+  };
 
   // 1. declare with a path that doesn't exist → ENOENT. Pre-fix this emptied
   //    the buffer; post-fix the drain never fires so the buffer survives.
   await assert.rejects(
     recorder.declareWorkspaceArtifact({
-      name: "report.md", path: "report.md", sessionId: session.id,
+      name: "report.md", path: "report.md", referencesProvider, sessionId: session.id,
       sourcePath: "report.md", turnId: "t1", workspaceRoot,
     }),
     /ENOENT|no such file/i,
@@ -491,7 +492,7 @@ test("a failed declare_artifact (missing path) does not swallow the chip buffer"
   // 2. retry with the correct subagent-prefixed path → version lands and now
   //    drains the surviving buffer onto itself.
   const { version } = await recorder.declareWorkspaceArtifact({
-    name: "report.md", path: "subagents/6a0d4dae/report.md", sessionId: session.id,
+    name: "report.md", path: "subagents/6a0d4dae/report.md", referencesProvider, sessionId: session.id,
     sourcePath: "subagents/6a0d4dae/report.md", turnId: "t1", workspaceRoot,
   });
   assert.equal(version.references?.length, 1, "retried declaration carries the surviving chip references");
@@ -534,7 +535,7 @@ test("drain is scoped by turnId: a report in one context does not absorb another
     { turnId: "sub", claimId: "claim-sub" },
   ];
   const recorder = new ProvenanceRecorder(dataDir, store);
-  recorder.setReferencesProvider((turnId?: string) => {
+  const referencesProvider = (turnId?: string) => {
     const drainAll = turnId === undefined;
     const matching = (entry: { turnId: string }): boolean => drainAll || entry.turnId === turnId;
     const references = buffer.filter(matching).map((entry) => entry.reference);
@@ -546,7 +547,7 @@ test("drain is scoped by turnId: a report in one context does not absorb another
     claimBuffer.length = 0;
     claimBuffer.push(...keepClaims);
     return { references, claimIds };
-  });
+  };
 
   const runnerClient = {
     executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
@@ -567,7 +568,7 @@ test("drain is scoped by turnId: a report in one context does not absorb another
   });
   // The leader declares its report — should drain ONLY the leader entry.
   await recorder.declareWorkspaceArtifact({
-    name: "report.md", path: "report.md", sessionId: session.id,
+    name: "report.md", path: "report.md", referencesProvider, sessionId: session.id,
     sourcePath: "report.md", turnId: "leader", workspaceRoot,
   });
   const reportArtifact = store.listArtifacts(session.id).find((a) => a.logicalName === "report.md");
@@ -906,4 +907,182 @@ test("recorder mirrors provenance addressing fields to the memory graph on shell
   } finally {
     await new Promise<void>((r) => fake.close(() => r()));
   }
+});
+
+test("concurrent runs drain their own chip buffer: a later run's provider never clobbers the earlier run's drain", async (context) => {
+  // Regression: the recorder used to hold referencesProvider as a singleton
+  // instance field set by setReferencesProvider at the start of each run. When
+  // two runs overlapped, the later run's setReferencesProvider overwrote the
+  // earlier run's provider, so the earlier run's declareWorkspaceArtifact
+  // drained the later run's (empty) buffer → report refs=null. Now the
+  // provider is passed per-call into declareWorkspaceArtifact, so each run
+  // drains its own closure-scoped buffer regardless of what other runs do.
+  const dataDir = resolve(process.cwd(), ".tmp", `concurrent-drain-${process.pid}-${Date.now()}`);
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  const model = await store.createModel({ apiToken: "test", baseUrl: "https://models.example.test/v1", model: "test", name: "Test" });
+  const project = await store.createProject("Concurrent drain");
+  const sessionA = await store.createSession(project.id, "Run A", { modelId: model.id });
+  const sessionB = await store.createSession(project.id, "Run B", { modelId: model.id });
+  const permissionEpochA = store.getSessionPermissionEpoch(sessionA.id)!;
+  const permissionEpochB = store.getSessionPermissionEpoch(sessionB.id)!;
+  const workspaceRootA = store.workspacePath(sessionA.id);
+  const workspaceRootB = store.workspacePath(sessionB.id);
+  await mkdir(workspaceRootA, { recursive: true });
+  await mkdir(workspaceRootB, { recursive: true });
+
+  // Two independent recorder instances share the same backing store, mirroring
+  // the production singleton. Each run owns its own chipMapBuffer + drain
+  // closure (exactly what runs/index.ts now wires per-run).
+  const recorder = new ProvenanceRecorder(dataDir, store);
+  const chipMapA: Array<{ turnId: string; reference: ComposerReference }> = [];
+  const claimIdsA: Array<{ turnId: string; claimId: string }> = [];
+  const drainA = (turnId?: string) => {
+    const drainAll = turnId === undefined;
+    const matching = (entry: { turnId: string }): boolean => drainAll || entry.turnId === turnId;
+    const references = chipMapA.filter(matching).map((entry) => entry.reference);
+    const claimIds = claimIdsA.filter(matching).map((entry) => entry.claimId);
+    const keepRefs = chipMapA.filter((entry) => !matching(entry));
+    const keepClaims = claimIdsA.filter((entry) => !matching(entry));
+    chipMapA.length = 0;
+    chipMapA.push(...keepRefs);
+    claimIdsA.length = 0;
+    claimIdsA.push(...keepClaims);
+    return { references, claimIds };
+  };
+  const chipMapB: Array<{ turnId: string; reference: ComposerReference }> = [];
+  const claimIdsB: Array<{ turnId: string; claimId: string }> = [];
+  const drainB = (turnId?: string) => {
+    const drainAll = turnId === undefined;
+    const matching = (entry: { turnId: string }): boolean => drainAll || entry.turnId === turnId;
+    const references = chipMapB.filter(matching).map((entry) => entry.reference);
+    const claimIds = claimIdsB.filter(matching).map((entry) => entry.claimId);
+    const keepRefs = chipMapB.filter((entry) => !matching(entry));
+    const keepClaims = claimIdsB.filter((entry) => !matching(entry));
+    chipMapB.length = 0;
+    chipMapB.push(...keepRefs);
+    claimIdsB.length = 0;
+    claimIdsB.push(...keepClaims);
+    return { references, claimIds };
+  };
+
+  // Run A pushes 4 chip references (turnId "runA"), then pauses before draining.
+  for (const label of ["a1", "a2", "a3", "a4"]) {
+    chipMapA.push({ turnId: "runA", reference: { id: `art-${label}`, kind: "artifact", label } });
+  }
+  // Run B starts AFTER run A has pushed — under the old singleton design this
+  // is the exact window where B's provider would overwrite A's. B pushes its
+  // own 3 references under turnId "runB".
+  for (const label of ["b1", "b2", "b3"]) {
+    chipMapB.push({ turnId: "runB", reference: { id: `art-${label}`, kind: "artifact", label } });
+  }
+
+  const runnerA = {
+    executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
+      await writeFile(resolve(workspaceRootA, "reportA.md"), "# A\n[a1]\n");
+      const timestamp = new Date().toISOString();
+      return {
+        cgroupMode: "none", createdFiles: ["reportA.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
+        kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
+        sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "done\n", workingDirectory: "/workspace",
+      } as ShellExecutionResult;
+    },
+  } as unknown as RunnerClient;
+  await recorder.executeShell({
+    agentId: "main",
+    code: "cat > reportA.md", permissionEpoch: permissionEpochA, runnerClient: runnerA,
+    sessionId: sessionA.id, turnId: "runA", workspaceRoot: workspaceRootA,
+  });
+
+  // Run A declares its report AFTER B has started/pushed. Per-call provider
+  // injection means A drains its own 4-entry buffer, not B's.
+  const { version: versionA } = await recorder.declareWorkspaceArtifact({
+    name: "reportA.md", path: "reportA.md", referencesProvider: drainA,
+    sessionId: sessionA.id, sourcePath: "reportA.md", turnId: "runA", workspaceRoot: workspaceRootA,
+  });
+  assert.equal(versionA.references?.length, 4, "run A drains its own 4 chip references, not run B's empty buffer");
+  assert.deepEqual(
+    (versionA.references ?? []).map((r) => r.label).sort(),
+    ["a1", "a2", "a3", "a4"],
+    "run A's references are its own, not run B's",
+  );
+  assert.equal(chipMapA.length, 0, "run A's buffer drained");
+  assert.equal(chipMapB.length, 3, "run B's buffer is untouched — provider isolation holds");
+
+  // Run B then drains its own buffer onto its own report.
+  const runnerB = {
+    executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
+      await writeFile(resolve(workspaceRootB, "reportB.md"), "# B\n[b1]\n");
+      const timestamp = new Date().toISOString();
+      return {
+        cgroupMode: "none", createdFiles: ["reportB.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
+        kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
+        sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "done\n", workingDirectory: "/workspace",
+      } as ShellExecutionResult;
+    },
+  } as unknown as RunnerClient;
+  await recorder.executeShell({
+    agentId: "main",
+    code: "cat > reportB.md", permissionEpoch: permissionEpochB, runnerClient: runnerB,
+    sessionId: sessionB.id, turnId: "runB", workspaceRoot: workspaceRootB,
+  });
+  const { version: versionB } = await recorder.declareWorkspaceArtifact({
+    name: "reportB.md", path: "reportB.md", referencesProvider: drainB,
+    sessionId: sessionB.id, sourcePath: "reportB.md", turnId: "runB", workspaceRoot: workspaceRootB,
+  });
+  assert.equal(versionB.references?.length, 3, "run B drains its own 3 chip references");
+  assert.deepEqual(
+    (versionB.references ?? []).map((r) => r.label).sort(),
+    ["b1", "b2", "b3"],
+  );
+  assert.equal(chipMapB.length, 0, "run B's buffer drained");
+  assert.equal(chipMapA.length, 0, "run A's buffer remains empty (no cross-contamination)");
+});
+
+test("a report declare without a referencesProvider degrades gracefully to empty references", async (context) => {
+  // The provider is now optional: callers that don't wire a chip accumulator
+  // (e.g. non-report paths, or a future caller) get a no-op drain instead of
+  // a crash. Verifies the ?? fallback in declareWorkspaceArtifact.
+  const dataDir = resolve(process.cwd(), ".tmp", `no-provider-${process.pid}-${Date.now()}`);
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  const model = await store.createModel({ apiToken: "test", baseUrl: "https://models.example.test/v1", model: "test", name: "Test" });
+  const project = await store.createProject("No provider");
+  const session = await store.createSession(project.id, "Brief", { modelId: model.id });
+  const permissionEpoch = store.getSessionPermissionEpoch(session.id)!;
+  const workspaceRoot = store.workspacePath(session.id);
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const recorder = new ProvenanceRecorder(dataDir, store);
+  const runnerClient = {
+    executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
+      await writeFile(resolve(workspaceRoot, "report.md"), "# Brief\n[ev1]\n");
+      const timestamp = new Date().toISOString();
+      return {
+        cgroupMode: "none", createdFiles: ["report.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
+        kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
+        sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "done\n", workingDirectory: "/workspace",
+      } as ShellExecutionResult;
+    },
+  } as unknown as RunnerClient;
+  await recorder.executeShell({
+    agentId: "main",
+    code: "cat > report.md", permissionEpoch, runnerClient, sessionId: session.id, turnId: "t1", workspaceRoot,
+  });
+  // No referencesProvider passed — drain degrades to empty, no throw.
+  const { version } = await recorder.declareWorkspaceArtifact({
+    name: "report.md", path: "report.md", sessionId: session.id,
+    sourcePath: "report.md", turnId: "t1", workspaceRoot,
+  });
+  assert.ok(!version.references?.length, "report without a provider carries no chip references and does not throw");
 });

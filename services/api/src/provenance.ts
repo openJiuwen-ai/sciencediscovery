@@ -85,22 +85,6 @@ export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environm
 export class ProvenanceRecorder {
   readonly cas: CasStore;
   private readonly memoryGraphSink: MemoryGraphSink | null;
-  /**
-   * Optional sink returning the chip references + claim ids accumulated for
-   * a given execution context (alias → graph node; claim ids → states edges).
-   * When a report Artifact version is persisted, the recorder drains the
-   * entries tagged with that version's ``turnId``: the references land on the
-   * version so chips survive reloads, and the claim ids are linked to the
-   * report via ``states`` edges. Empty when no declare calls ran in that
-   * context (non-report artifacts and plain data files unaffected).
-   *
-   * Tagging by ``turnId`` keeps a subagent's claims from being drained onto a
-   * report the leader declares (or vice versa): each execution context (leader
-   * run = runId, subagent run = child execution id) drains only its own
-   * accumulated references, so the leader's trace.md no longer absorbs a
-   * report-writer subagent's chipMap.
-   */
-  private referencesProvider: ((turnId?: string) => { references: ComposerReference[]; claimIds: string[] }) | null = null;
 
   constructor(
     dataDir: string,
@@ -109,11 +93,6 @@ export class ProvenanceRecorder {
   ) {
     this.cas = new CasStore(dataDir);
     this.memoryGraphSink = memoryGraphSink ?? null;
-  }
-
-  /** Wire the chip-reference + claim-id accumulator from the run scope. */
-  setReferencesProvider(provider: ((turnId?: string) => { references: ComposerReference[]; claimIds: string[] }) | null): void {
-    this.referencesProvider = provider;
   }
 
   /**
@@ -205,6 +184,15 @@ export class ProvenanceRecorder {
     description?: string;
     name: string;
     path: string;
+    /**
+     * Chip-reference + claim-id accumulator from the calling run scope. Drains
+     * the entries tagged with this version's ``turnId`` when a report Artifact
+     * version is persisted, so chips survive reloads and claim ids link to the
+     * report via ``states`` edges. Passed per-call by the run (``runs/index.ts``)
+     * rather than held as a singleton instance field so concurrent runs in one
+     * process never overwrite each other's accumulator.
+     */
+    referencesProvider?: (turnId?: string) => { references: ComposerReference[]; claimIds: string[] };
     sessionId: string;
     sourcePath: string;
     turnId?: string;
@@ -247,8 +235,8 @@ export class ProvenanceRecorder {
       turnId: options.turnId,
       workspaceRoot: options.workspaceRoot,
     });
-    const drained = isReportKind && this.referencesProvider
-      ? this.referencesProvider(options.turnId)
+    const drained = isReportKind && options.referencesProvider
+      ? options.referencesProvider(options.turnId)
       : { references: [] as ComposerReference[], claimIds: [] as string[] };
     if (drained.references.length) {
       // Write chips onto the persisted version (updateArtifactVersionReferences
