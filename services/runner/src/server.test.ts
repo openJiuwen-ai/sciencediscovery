@@ -20,6 +20,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, resolve } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import type {
   NpuJob,
@@ -43,6 +44,14 @@ import {
   EXECUTION_TIMESTAMP_HEADER,
 } from "./request-auth.js";
 import { createRunnerServer, loadRunnerConfig, startRunnerServer, type RunnerConfig } from "./server.js";
+
+const protenixPipelineScriptsDir = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../..",
+  "skills",
+  "antibody-protenix-pipeline",
+  "scripts",
+);
 
 test("appendBounded treats remaining room 0 as empty, not unlimited", () => {
   const exhausted = appendBounded("already-full", Buffer.from("more-stderr"), 10, 10);
@@ -1048,8 +1057,8 @@ test("runner NPU Broker rewrites workspace helper directory arguments even when 
 });
 
 test("Protenix full pipeline forwards user hotspots to the screening stage", async () => {
-  const script = await readFile(resolve(process.cwd(), "skills", "antibody-protenix-pipeline", "scripts", "run_full_antibody_pipeline.sh"), "utf8");
-  const downstream = await readFile(resolve(process.cwd(), "skills", "antibody-protenix-pipeline", "scripts", "run_after_rfdiffusion.sh"), "utf8");
+  const script = await readFile(resolve(protenixPipelineScriptsDir, "run_full_antibody_pipeline.sh"), "utf8");
+  const downstream = await readFile(resolve(protenixPipelineScriptsDir, "run_after_rfdiffusion.sh"), "utf8");
 
   assert.match(script, /--hotspots "\$HOTSPOTS"/);
   assert.match(script, /--target-pdb "\$TARGET_PDB"/);
@@ -1072,8 +1081,8 @@ test("Protenix shell scheduler enforces device concurrency and reports failed de
 
   const root = await mkdtemp(resolve(tmpdir(), "science-agent-protenix-scheduler-"));
   try {
-    const script = resolve(process.cwd(), "skills", "antibody-protenix-pipeline", "scripts", "run_after_rfdiffusion.sh");
-    const scriptsDir = resolve(process.cwd(), "skills", "antibody-protenix-pipeline", "scripts");
+    const script = resolve(protenixPipelineScriptsDir, "run_after_rfdiffusion.sh");
+    const scriptsDir = protenixPipelineScriptsDir;
     const runDir = resolve(root, "run");
     const rfDir = resolve(runDir, "01_rfdiffusion");
     const appDir = resolve(root, "app");
@@ -1276,7 +1285,7 @@ test("Protenix manager normalizes hotspot formats and rejects invalid diffuser s
     context.skip("Python interpreter unavailable");
     return;
   }
-  const managerScript = resolve(process.cwd(), "skills", "antibody-protenix-pipeline", "scripts", "antibody_pipeline_manager.py");
+  const managerScript = resolve(protenixPipelineScriptsDir, "antibody_pipeline_manager.py");
   const code = [
     "import importlib.util",
     "import sys",
@@ -1288,11 +1297,11 @@ test("Protenix manager normalizes hotspot formats and rejects invalid diffuser s
     "spec = importlib.util.spec_from_file_location('antibody_pipeline_manager', manager_script)",
     "manager = importlib.util.module_from_spec(spec)",
     "spec.loader.exec_module(manager)",
-    `screen_script = ${JSON.stringify(resolve(process.cwd(), "skills", "antibody-protenix-pipeline", "scripts", "screen_protenix_results.py"))}`,
+    `screen_script = ${JSON.stringify(resolve(protenixPipelineScriptsDir, "screen_protenix_results.py"))}`,
     "screen_spec = importlib.util.spec_from_file_location('screen_protenix_results', screen_script)",
     "screen = importlib.util.module_from_spec(screen_spec)",
     "screen_spec.loader.exec_module(screen)",
-    `pdb_to_json_script = ${JSON.stringify(resolve(process.cwd(), "skills", "antibody-protenix-pipeline", "scripts", "pdb_to_protenix_json.py"))}`,
+    `pdb_to_json_script = ${JSON.stringify(resolve(protenixPipelineScriptsDir, "pdb_to_protenix_json.py"))}`,
     "pdb_spec = importlib.util.spec_from_file_location('pdb_to_protenix_json', pdb_to_json_script)",
     "pdb_to_json = importlib.util.module_from_spec(pdb_spec)",
     "pdb_spec.loader.exec_module(pdb_to_json)",
