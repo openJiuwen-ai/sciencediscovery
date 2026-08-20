@@ -49,6 +49,34 @@ Current capability ownership:
 - `packages/workspace`: workspace paths and workspace tool implementations;
 - `packages/orchestration`: AgentRun profiles, lifecycle contracts, and
   subagent configuration;
+- `packages/governance`: permission epochs, matching/authorization policy,
+  and the independent permission-decision queue;
+- `packages/provenance`: provenance recording, review policy,
+  citation/computation review, Agent-initiated review checkpoints, and review
+  logging;
+- `packages/artifact-manager`: Artifact classification/registration, governed
+  download state, and Artifact-facing MCP tool bindings;
+- `packages/data-source`: MCP/Web brokers, provider clients, caches, outbound
+  proxy resolution, source catalogs, and Web tool bindings;
+- `packages/executor`: scientific/remote execution clients and reproducible
+  environment metadata;
+- `packages/memory`: Memory Graph client, observation sink, and operational
+  logging adapter;
+- `packages/specialist`: built-in specialist definitions and subagent
+  lifecycle transitions.
+
+`services/api/src/bootstrap/platform.ts` selects concrete storage, MCP,
+network, model, review, and execution adapters for these packages. The HTTP
+server consumes that assembled service set and translates HTTP/SSE requests;
+it does not own domain construction. `SessionStore`, the MCP Node process
+client, HTTP/SSE translation, and the small Reviewer-to-AgentRun bridge remain
+service adapters. Capability packages depend on narrow ports rather than on
+`SessionStore` or another service implementation.
+
+Review behavior remains explicit: Artifact registration never dispatches a
+review automatically. The main Agent invokes `review_checkpoint`, and the
+result returns through the ordinary Tool Result/SSE path. Runtime Core and the
+Artifact manager do not contain a Review outbox or implicit Review coordinator.
 
 The former private `packages/agent-runtime` aggregate has been removed after
 all repository imports were migrated to their owning capability package; no
@@ -60,4 +88,5 @@ events. They are not allowed to add control branches to Runtime Core.
 
 `pnpm architecture:check` enforces the direction: packages cannot import
 `services`/`apps`, production services cannot use the compatibility facade,
-and Runtime Core cannot use non-relative imports.
+Runtime Core cannot use non-relative imports, and domain sources already moved
+to packages cannot be recreated under `services/api`.

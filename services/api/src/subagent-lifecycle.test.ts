@@ -24,7 +24,7 @@ import {
   classifySubagentFailure,
   SUBAGENT_PARENT_TIMEOUT_MARGIN_MS,
   subagentCapableParentRunTimeoutMs,
-} from "./subagent-lifecycle.js";
+} from "@science-agent/specialist";
 import { DEFAULT_AGENT_IDLE_TIMEOUT_MS as DEFAULT_GATEWAY_IDLE_TIMEOUT_MS } from "./native-agent/index.js";
 
 test("parent gateway deadline exceeds the largest allowed subagent timeout", () => {

@@ -17,7 +17,7 @@ Legacy `invoke_connector`, `ConnectorBroker`, `ScienceSource`, and direct Node-p
 - External result content is always untrusted data.
 - PDF worker handles only a completed local PDF and never performs retrieval.
 
-Implementations are `packages/mcp-sources`, the bundled Python MCP servers in gateway `*_mcp.py` (spawned by Node as stdio subprocesses using the gateway venv interpreter), API `mcp/` (broker plus the in-process client), `packages/agent-runtime`, and `services/paper`.
+Implementations are `packages/mcp-sources`, `packages/data-source`, `packages/artifact-manager`, and `packages/workspace`; the bundled Python MCP servers in gateway `*_mcp.py` (spawned by Node as stdio subprocesses using the gateway venv interpreter); the API's in-process MCP client and composition adapters; and `services/paper`.
 
 ## 3. Tool injection and model visibility
 

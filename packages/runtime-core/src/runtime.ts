@@ -221,7 +221,7 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
       if (this.isTerminal(this.state.phase)) return;
       if (activeCount > 0 && this.state.phase !== "waiting_external") {
         this.transition("waiting_external", this.state.turn, false);
-      } else if (this.state.phase === "waiting_external") {
+      } else if (activeCount === 0 && this.state.phase === "waiting_external") {
         this.transition(this.activePhase, this.state.turn, false);
       }
     });

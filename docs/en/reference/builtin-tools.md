@@ -1,6 +1,6 @@
 # Built-in Tools Visible to the Model
 
-This page lists tools visible inside the agent loop. `createWorkspaceTools` in `packages/agent-runtime` builds them; implementations live in the Node control plane while the gateway receives only names, descriptions, and JSON Schema. Except for tools marked always available, Session configuration controls visibility, and `toolPolicy` can further restrict a subagent to a whitelist.
+This page lists tools visible inside the agent loop. `createWorkspaceTools` in `packages/workspace` builds them, while `packages/tools` owns registration and dispatch policy; implementations live in the Node control plane while the gateway receives only names, descriptions, and JSON Schema. Except for tools marked always available, Session configuration controls visibility, and `toolPolicy` can further restrict a subagent to a whitelist.
 
 ## Base tools (always available)
 
@@ -81,7 +81,7 @@ Download and extraction require different model turns because same-turn calls ar
 
 ## Consistency notes
 
-- Tool descriptions in `packages/agent-runtime/src/workspace.ts` are authoritative; this page is the reference overview.
+- Tool descriptions in `packages/workspace/src/workspace.ts` are authoritative; this page is the reference overview.
 - Disabled sources/capabilities are absent from `tools[]`; invisibility, not runtime rejection, is the governance boundary.
 - Permission and quota failures return structured `{ok:false,error:{code,message,retryable}}` results the model can explain or route around.
 

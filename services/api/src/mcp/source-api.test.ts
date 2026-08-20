@@ -24,7 +24,7 @@ import type { McpSourceManifest, McpSourceStatus } from "@science-agent/schema";
 import { createApiServer, type ServerConfig } from "../server.js";
 
 import type { McpCatalog } from "@science-agent/schema";
-import type { McpTransportClient } from "./transport.js";
+import type { McpTransportClient } from "@science-agent/data-source";
 
 /**
  * Minimal MCP transport stub. Tests drive the real catalog/broker path and only

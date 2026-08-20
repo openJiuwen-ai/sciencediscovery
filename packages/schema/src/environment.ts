@@ -22,6 +22,8 @@ import type { CasObjectRef } from "./provenance.js";
 
 export type ScientificLanguage = "python" | "r";
 
+export const DEFAULT_ENVIRONMENT_REVISION_ID = "system-python3-bwrap-v1";
+
 export type ExecutionLanguage = ScientificLanguage | "shell";
 
 export type EnvironmentKind = "starter" | "task";

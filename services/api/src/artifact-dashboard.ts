@@ -28,7 +28,7 @@ import type {
   Session,
 } from "@science-agent/schema";
 
-import type { ProvenanceRecorder } from "./provenance.js";
+import type { ProvenanceRecorder } from "@science-agent/provenance";
 import type { SessionStore } from "./store.js";
 
 /** Marker error codes the API catches and maps to specific HTTP statuses. */

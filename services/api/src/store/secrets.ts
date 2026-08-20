@@ -20,8 +20,7 @@ import type {
   ModelProfile,
   UpdateModelProfileRequest,
 } from "@science-agent/schema";
-
-import { cleanLabel } from "./permissions.js";
+import { cleanLabel } from "@science-agent/governance";
 
 const MODEL_SECRET_KEY_BYTES = 32;
 const MODEL_SECRET_VERSION = "v1";

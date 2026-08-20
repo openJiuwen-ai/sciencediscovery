@@ -30,7 +30,7 @@ import {
   SkillCatalogError,
   validateSkillPackage,
   validateGitSkillImportRequest,
-} from "./skills.js";
+} from "@science-agent/specialist";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 

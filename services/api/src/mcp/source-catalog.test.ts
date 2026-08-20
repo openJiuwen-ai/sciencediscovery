@@ -22,8 +22,8 @@ import type {
 } from "@science-agent/schema";
 import { createMcpSourceRegistry } from "@science-agent/mcp-sources";
 
-import type { McpTransportClient } from "./transport.js";
-import { inputSchemasCompatible, McpSourceCatalog } from "./source-catalog.js";
+import type { McpTransportClient } from "@science-agent/data-source";
+import { inputSchemasCompatible, McpSourceCatalog } from "@science-agent/data-source";
 
 function manifest(): McpSourceManifest {
   return {

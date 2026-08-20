@@ -26,9 +26,8 @@ import type {
   WorkspaceFile,
 } from "@science-agent/schema";
 
-import { MemoryGraphClient } from "../memory-graph.js";
-import type { ArtifactProvenanceGraphResult } from "../memory-graph.js";
-import { ProvenanceRecorder } from "../provenance.js";
+import { MemoryGraphClient, type ArtifactProvenanceGraphResult } from "@science-agent/memory";
+import { ProvenanceRecorder } from "@science-agent/provenance";
 import { SessionStore } from "../store.js";
 
 export function classifyWorkspaceFilePreview(path: string): WorkspaceFile["previewKind"] {

@@ -30,7 +30,7 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "./artifact-dashboard.js";
-import { ProvenanceRecorder } from "./provenance.js";
+import { ProvenanceRecorder } from "@science-agent/provenance";
 import { SessionStore } from "./store.js";
 import { createApiServer, type ServerConfig } from "./server.js";
 

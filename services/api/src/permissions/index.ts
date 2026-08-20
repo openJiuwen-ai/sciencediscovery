@@ -14,34 +14,16 @@
 
 import { setTimeout as delay } from "node:timers/promises";
 
+import { RemoteComputeClient } from "@science-agent/executor";
 import type { PermissionRequest, RemoteJob, RunStreamEvent } from "@science-agent/schema";
 
-import { ArtifactManager } from "../mcp/artifact-manager.js";
-import { ProvenanceRecorder } from "../provenance.js";
-import { RemoteComputeClient } from "../remote-compute.js";
+import { GovernedDownloadManager } from "@science-agent/artifact-manager";
+import { ProvenanceRecorder } from "@science-agent/provenance";
 import { SessionStore } from "../store.js";
 
 type RunEventSink = (event: RunStreamEvent) => void | Promise<void>;
 
-/** Serializes permission decisions within one Session without blocking other Sessions. */
-export class PermissionDecisionQueue {
-  private readonly tails = new Map<string, Promise<void>>();
-
-  async run<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.tails.get(sessionId) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => { release = resolve; });
-    const tail = previous.then(() => current);
-    this.tails.set(sessionId, tail);
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-      if (this.tails.get(sessionId) === tail) this.tails.delete(sessionId);
-    }
-  }
-}
+export { PermissionDecisionQueue } from "@science-agent/governance";
 
 export async function waitForPermissionDecision(
   store: SessionStore,
@@ -132,14 +114,14 @@ export async function startApprovedRemoteJob(
 export async function advanceResolvedPermissionRequests(
   requests: PermissionRequest[],
   store: SessionStore,
-  artifactManager: ArtifactManager,
+  artifactManager: GovernedDownloadManager,
   remoteCompute: RemoteComputeClient,
   provenanceRecorder: ProvenanceRecorder,
 ): Promise<{
-  artifactApprovals: Awaited<ReturnType<ArtifactManager["approveByPermissionRequest"]>>;
+  artifactApprovals: Awaited<ReturnType<GovernedDownloadManager["approveByPermissionRequest"]>>;
   remoteJobs: RemoteJob[];
 }> {
-  const artifactApprovals: Awaited<ReturnType<ArtifactManager["approveByPermissionRequest"]>> = [];
+  const artifactApprovals: Awaited<ReturnType<GovernedDownloadManager["approveByPermissionRequest"]>> = [];
   const remoteJobs: RemoteJob[] = [];
   for (const permissionRequest of requests) {
     if (permissionRequest.action === "artifact_download" && permissionRequest.state === "allowed") {

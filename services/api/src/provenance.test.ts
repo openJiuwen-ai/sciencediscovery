@@ -31,9 +31,9 @@ import {
   type ShellExecutionResult,
 } from "@science-agent/schema";
 
-import { MemoryGraphClient, MemoryGraphSink } from "./memory-graph.js";
-import { ProvenanceRecorder } from "./provenance.js";
-import type { RunnerClient } from "./runner-client.js";
+import { MemoryGraphClient, MemoryGraphSink } from "@science-agent/memory";
+import { ProvenanceRecorder } from "@science-agent/provenance";
+import type { RunnerClient } from "@science-agent/executor";
 import { SessionStore } from "./store.js";
 
 test("multi-step persistent R executions create separate runs and an artifact derivation", async (context) => {

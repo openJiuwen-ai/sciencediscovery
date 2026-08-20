@@ -30,7 +30,9 @@ Agent MCP tool
 | `packages/mcp-sources` | Source/Tool manifest、输入与信任边界校验 |
 | `services/gateway/src/science_agent_gateway/*_mcp.py` | 随包的 Python MCP server 实现(由 Node 以 stdio 子进程拉起,解释器取自 gateway venv) |
 | `services/api/src/mcp` | Broker、进程内 MCP 客户端(`node-client.ts`)、`extensions_config.json` 解析、Catalog、CAS 审计、缓存和 Artifact 下载 |
-| `packages/agent-runtime` | MCP 工具暴露、`artifact_download`、`paper_extract_pdf` |
+| `packages/data-source` | MCP Broker、Catalog、缓存、限流、代理与 Web 数据源 |
+| `packages/artifact-manager` | MCP 工具暴露、`artifact_download`、`paper_extract_pdf` 与受治理下载 |
+| `packages/workspace` | 将数据源能力装配为 Agent 工作区工具 |
 | `services/paper` | 有界 PDF 抽取 |
 
 ## 3. 工具注入与模型可见性
@@ -43,10 +45,10 @@ Agent 并不能直接看到全部 MCP 工具。从 connector 定义到进入模�
 | 步骤 | 实现模块 | 行为 |
 |---|---|---|
 | 1. 注册 | `packages/mcp-sources/src/registry.ts`、`builtins.ts` | 每个 connector 是一个 `McpSourceAdapter`,manifest 声明工具的 `inputSchema`、`mcpToolName`、权限模板、缓存策略和 prompt 片段,统一注册进 `McpSourceRegistry` |
-| 2. 可用性过滤 | `services/api/src/mcp/source-catalog.ts` | `McpSourceCatalog` 通过进程内 MCP 客户端 `listTools` 拉取真实 server/tool 目录,按 `mcpToolName` 匹配远端工具并用 `inputSchemasCompatible` 做 schema 兼容检查;匹配失败的进 `missingTools`,不会暴露给 Agent |
-| 3. 会话启用过滤与包装 | `services/api/src/mcp/workspace-tools.ts` | `createMcpWorkspaceTools` 只保留会话 `enabledConnectorIds` 中启用且 catalog 判定可用的工具,包装为 `mcp__<sourceId>__<toolId>`;description 拼接工具描述、`promptFragment` 与来源 summary/citationPolicy/caveats;execute 统一走 `McpGovernanceBroker.invoke`(权限门、输入校验、缓存、限流、CAS 审计,见 `services/api/src/mcp/broker.ts`) |
-| 4. 标记 deferred | `packages/agent-runtime/src/workspace.ts` | `createWorkspaceTools` 把每个 MCP 工具包成 `AgentTool` 时统一打 `deferred: true` 并携带 `routing`(keywords/mode/priority);内置工作区工具不打此标记 |
-| 5. 绑定给模型 | `services/api/src/native-agent/index.ts` | 原生 loop 用 `visibleToolSpecs()` 把当前可见工具(name/description/schema)随模型请求下发;工具执行时直接在进程内 `await` 同一个处理器,治理链路不变 |
+| 2. 可用性过滤 | `packages/data-source/src/catalog.ts` | `McpSourceCatalog` 通过进程内 MCP 客户端 `listTools` 拉取真实 server/tool 目录,按 `mcpToolName` 匹配远端工具并用 `inputSchemasCompatible` 做 schema 兼容检查;匹配失败的进 `missingTools`,不会暴露给 Agent |
+| 3. 会话启用过滤与包装 | `packages/artifact-manager/src/mcp-workspace-tools.ts` | `createMcpWorkspaceTools` 只保留会话 `enabledConnectorIds` 中启用且 catalog 判定可用的工具,包装为 `mcp__<sourceId>__<toolId>`;description 拼接工具描述、`promptFragment` 与来源 summary/citationPolicy/caveats;execute 统一走 `McpGovernanceBroker.invoke`(权限门、输入校验、缓存、限流、CAS 审计,见 `packages/data-source/src/broker.ts`) |
+| 4. 标记 deferred | `packages/workspace/src/workspace.ts` | `createWorkspaceTools` 把每个 MCP 工具包成 `AgentTool` 时统一打 `deferred: true` 并携带 `routing`(keywords/mode/priority);内置工作区工具不打此标记 |
+| 5. 绑定给模型 | `packages/tools/src/registry.ts`、`services/api/src/native-agent/index.ts` | `ToolRegistry.visibleSpecs()` 把当前可见工具(name/description/schema)随模型请求下发;工具执行时直接在进程内 `await` 同一个处理器,治理链路不变 |
 
 ### 3.2 模型可见性(Node 原生 loop 侧)
 

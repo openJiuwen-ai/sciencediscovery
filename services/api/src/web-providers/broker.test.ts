@@ -19,10 +19,15 @@ import test from "node:test";
 
 import type { FreeSearchEngine, PaidSearchProvider } from "@science-agent/schema";
 
-import type { AgentPermissionRuntime } from "../agent-run/permission-runtime.js";
+import type { AgentPermissionRuntime } from "@science-agent/governance";
 import type { SessionStore } from "../store.js";
-import { WebBroker, WebInvocationError } from "./broker.js";
-import { WebProviderError, type NativeWebProviderClient, type WebProviderResponse } from "./native/index.js";
+import {
+  WebBroker,
+  WebInvocationError,
+  WebProviderError,
+  type NativeWebProviderClient,
+  type WebProviderResponse,
+} from "@science-agent/data-source";
 
 const context = {
   forceRefresh: false,

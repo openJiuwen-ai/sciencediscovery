@@ -24,7 +24,7 @@ import {
   literatureCitationCandidates,
   quantitativeEvidenceClaims,
   semanticReviewFingerprint,
-} from "./review-policy.js";
+} from "@science-agent/provenance";
 
 test("Literature candidates split a bibliography into stable individual tasks", () => {
   const candidates = literatureCitationCandidates([

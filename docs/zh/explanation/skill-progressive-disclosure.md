@@ -42,7 +42,7 @@ read_skill_resource(skillId, path)
 | `read_skill` | Node 工作区工具 | 读取本次 run 的冻结 `SKILL.md` instructions，返回完整说明和 supporting resource 清单 |
 | `read_skill_resource` | Node 工作区工具 | 在读取完整技能后，按 path 读取有界 UTF-8 supporting resource；不执行脚本、不安装依赖 |
 
-三者都由 `packages/agent-runtime` 的 `createWorkspaceTools` 产出，和其他工作区工具一样由 Node 原生 loop 在进程内直接调用。
+三者都由 `packages/workspace` 的 `createWorkspaceTools` 产出，和其他工作区工具一样由 Node 原生 loop 在进程内直接调用。
 
 ## 为什么不用「给出文件路径、让模型自己读」
 
