@@ -56,7 +56,7 @@ import { SessionEnvProfileStore } from "./session-env-profile.js";
  * the sandboxed bash process itself so `cd` / `export` / `source` performed by
  * evaluated snippets persist in the session. Protocol: one request per stdin
  * line (`<id> <base64(code)>`); one response line
- * `__SA_RESULT__ <id> <exitCode> <b64 stdout> <b64 stderr> <b64 cwd> <b64 env -0>`.
+ * `__SA_RESULT__ <id> <exitCode> <b64 stdout> <b64 stderr> <b64 cwd> <b64 env -0> <terminal>`.
  * User code stdin is /dev/null and its stdout/stderr go to files, so the
  * protocol pipe stays driver-only. Unlike the ephemeral `-euo pipefail` shell,
  * a session behaves like an interactive shell: a failing command reports its
@@ -68,15 +68,15 @@ __sa_out=/tmp/.science-agent-shell-stdout
 __sa_err=/tmp/.science-agent-shell-stderr
 __sa_current=''
 __sa_emit() {
-  printf '%s %s %s %s %s %s %s\n' __SA_RESULT__ "$1" "$2" \
+  printf '%s %s %s %s %s %s %s %s\n' __SA_RESULT__ "$1" "$2" \
     "$(base64 -w0 <"$__sa_out" 2>/dev/null)" \
     "$(base64 -w0 <"$__sa_err" 2>/dev/null)" \
     "$(printf %s "$(pwd -P)" | base64 -w0)" \
-    "$(env -0 | base64 -w0)"
+    "$(env -0 | base64 -w0)" "$3"
 }
 __sa_on_exit() {
   __sa_rc=$?
-  if [ -n "$__sa_current" ]; then __sa_emit "$__sa_current" "$__sa_rc"; fi
+  if [ -n "$__sa_current" ]; then __sa_emit "$__sa_current" "$__sa_rc" 1; fi
 }
 trap __sa_on_exit EXIT
 while IFS=' ' read -r __sa_id __sa_code; do
@@ -88,7 +88,7 @@ while IFS=' ' read -r __sa_id __sa_code; do
   __sa_rc=$?
   { set +e +u +o pipefail; } 2>/dev/null
   __sa_current=''
-  __sa_emit "$__sa_id" "$__sa_rc"
+  __sa_emit "$__sa_id" "$__sa_rc" 0
 done
 `;
 
@@ -101,6 +101,7 @@ interface ShellEvalResponse {
   id: string;
   stderr: string;
   stdout: string;
+  terminal: boolean;
 }
 
 interface PendingShellEval {
@@ -149,9 +150,9 @@ class ManagedShellSession {
       const pending = this.pending;
       if (!pending) return;
       const parts = line.split(" ");
-      if (parts[0] !== RESULT_MARKER || parts.length !== 7) return;
-      const [, id, exitCodeText, stdoutField, stderrField, cwdField, envField] = parts as [
-        string, string, string, string, string, string, string,
+      if (parts[0] !== RESULT_MARKER || parts.length !== 8) return;
+      const [, id, exitCodeText, stdoutField, stderrField, cwdField, envField, terminalField] = parts as [
+        string, string, string, string, string, string, string, string,
       ];
       let stdout = decodeField(stdoutField);
       let stderr = decodeField(stderrField);
@@ -168,14 +169,19 @@ class ManagedShellSession {
       if (pending.timer) clearTimeout(pending.timer);
       if (pending.abort) pending.signal?.removeEventListener("abort", pending.abort);
       this.pending = undefined;
-      pending.resolve({
+      const response = {
         cwd: decodeField(cwdField),
         env: parseEnvDump(envField),
         exitCode: Number.parseInt(exitCodeText, 10) || 0,
         id,
         stderr,
         stdout,
-      });
+        terminal: terminalField === "1",
+      };
+      pending.resolve(response);
+      if (response.terminal) {
+        this.markStopped(`Persistent shell session exited (code ${response.exitCode})`);
+      }
     });
     child.stderr.on("data", (chunk: Buffer | string) => {
       this.stderrTail = `${this.stderrTail}${chunk.toString()}`.slice(-64 * 1024);
