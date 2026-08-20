@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { externalUrl, externalUrlList } from "@science-agent/external-urls";
+import { externalUrl, externalUrlList } from "@sciencediscovery/external-urls";
 
 import type { ScientificArtifactKind } from "./artifact-provenance.js";
 import type { NpuBrokerCapability } from "./npu-job.js";

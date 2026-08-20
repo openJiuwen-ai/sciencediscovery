@@ -17,7 +17,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import type { CasObjectRef, WebOperation } from "@science-agent/schema";
+import type { CasObjectRef, WebOperation } from "@sciencediscovery/schema";
 
 export interface WebCacheEntry {
   content: string;

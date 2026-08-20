@@ -61,7 +61,7 @@ Broker 的可扩展性来自“注册新的 workload manifest”，不是开放�
 Runner 侧针对 NPU Broker 的测试命令：
 
 ```bash
-pnpm --filter @science-agent/runner build
+pnpm --filter @sciencediscovery/runner build
 node --test --test-name-pattern "NPU Broker" services/runner/dist/server.test.js
 ```
 

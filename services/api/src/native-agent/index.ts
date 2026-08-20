@@ -35,7 +35,7 @@ import {
   DefaultContextAssembler,
   HistoryCompactor,
   type WorkspaceAgentOptions,
-} from "@science-agent/context";
+} from "@sciencediscovery/context";
 import {
   resolveModelClientPolicy,
   ProviderModelClient,
@@ -44,17 +44,17 @@ import {
   type ModelClientPolicy,
   type ModelEndpoint,
   type ModelUsage,
-} from "@science-agent/model";
-import type { Agent, AgentEvent, AgentHistoryMessage } from "@science-agent/orchestration";
+} from "@sciencediscovery/model";
+import type { Agent, AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 import {
   ExternalWaitController,
   type RunEvent,
-} from "@science-agent/runtime-core";
+} from "@sciencediscovery/runtime-core";
 import {
   type AgentTool,
   ToolRegistry,
-} from "@science-agent/tools";
-import { createWorkspaceTools, normalizeLegacyEnvironmentToolName } from "@science-agent/workspace";
+} from "@sciencediscovery/tools";
+import { createWorkspaceTools, normalizeLegacyEnvironmentToolName } from "@sciencediscovery/workspace";
 
 import { composeRuntime } from "../bootstrap/runtime.js";
 

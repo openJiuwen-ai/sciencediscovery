@@ -21,7 +21,7 @@ import {
   type McpSourceManifest,
   type McpToolResult,
   type ValidationResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { assertMcpProviderResult } from "./public-biomed.js";
 

@@ -31,7 +31,7 @@ import type {
   RunnerRuntimeStatus,
   ShellExecutionRequest,
   ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { appendBounded, executePython, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";

@@ -1,6 +1,6 @@
 # Content-addressed storage (CAS)
 
-ScienceDiscovery stores immutable audit and artifact payloads in the `@science-agent/cas` package. Business modules use the package API instead of implementing their own storage layout. CAS references use the shared `CasObjectRef { hash, size }` schema.
+ScienceDiscovery stores immutable audit and artifact payloads in the `@sciencediscovery/cas` package. Business modules use the package API instead of implementing their own storage layout. CAS references use the shared `CasObjectRef { hash, size }` schema.
 
 ## Addressing and layout
 

@@ -19,7 +19,7 @@ import type {
   PermissionRequest,
   RunStreamEvent,
   ToolTrace,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import React, { useEffect, useRef, useState } from "react";
 
 import { BrandIcon, CheckIcon, ChevronRightIcon, SpinnerIcon, WarningIcon } from "../icons.js";

@@ -19,7 +19,7 @@ import type {
   CreateModelProfileRequest,
   ModelProfile,
   UpdateModelProfileRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { cleanLabel } from "./permissions.js";
 

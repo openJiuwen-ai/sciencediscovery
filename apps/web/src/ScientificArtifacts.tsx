@@ -21,7 +21,7 @@ import type {
   MemorySubgraph,
   ScientificArtifact,
   ScientificArtifactVersion,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { artifactDownloadFileName, downloadBlob } from "./artifact-download.js";

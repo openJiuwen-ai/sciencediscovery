@@ -14,8 +14,8 @@
 
 import { randomUUID } from "node:crypto";
 
-import type { CasStore } from "@science-agent/cas";
-import type { ChatMessage, EffectiveRuntimeSettings, ModelProfile, ModelUsageStatus, PromptManifest } from "@science-agent/schema";
+import type { CasStore } from "@sciencediscovery/cas";
+import type { ChatMessage, EffectiveRuntimeSettings, ModelProfile, ModelUsageStatus, PromptManifest } from "@sciencediscovery/schema";
 
 export interface CreatePromptManifestOptions {
   cas: CasStore;

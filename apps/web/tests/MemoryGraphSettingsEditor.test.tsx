@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { MemoryGraphSettingsDetails } from "@science-agent/schema";
+import type { MemoryGraphSettingsDetails } from "@sciencediscovery/schema";
 
 import {
   createMemoryGraphSettingsDraft,

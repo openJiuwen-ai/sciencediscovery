@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import type { ModelProfile } from "@science-agent/schema";
+import type { ModelProfile } from "@sciencediscovery/schema";
 
 import {
   duplicateModelProfileId,

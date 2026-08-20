@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { PermissionDecision, PermissionRequest } from "@science-agent/schema";
+import type { PermissionDecision, PermissionRequest } from "@sciencediscovery/schema";
 import { useLocale } from "./i18n/index.js";
 
 /** UI-only grouping used to suppress duplicate clicks while allow-matching is in flight. */

@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
-import { resetSandboxCapabilityCache, type SandboxProcMode } from "@science-agent/sandbox-capability";
+import { resetSandboxCapabilityCache, type SandboxProcMode } from "@sciencediscovery/sandbox-capability";
 
 import { buildSandboxLaunch, sandboxLaunchProfile } from "./executor.js";
 

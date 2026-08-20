@@ -20,7 +20,7 @@ import {
   detectSandboxCapability,
   procMountArguments,
   type SandboxProcMode,
-} from "@science-agent/sandbox-capability";
+} from "@sciencediscovery/sandbox-capability";
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   epochSandboxNetworkAccess,
@@ -30,7 +30,7 @@ import {
   type ScientificLanguage,
   type ShellExecutionRequest,
   type ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import {
   EgressBridgeUnavailableError,

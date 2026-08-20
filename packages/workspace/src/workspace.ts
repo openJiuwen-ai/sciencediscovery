@@ -16,7 +16,7 @@ import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
-import type { AgentTool } from "@science-agent/tools";
+import type { AgentTool } from "@sciencediscovery/tools";
 import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
@@ -55,7 +55,7 @@ import type {
   SkillResourceContent,
   ShellExecutionResult,
   UninstallEnvironmentRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import { Type, type TSchema } from "typebox";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -63,7 +63,7 @@ import {
   GENERAL_PURPOSE_SUBAGENT,
   MAX_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 
 export interface WorkspaceFileInfo {

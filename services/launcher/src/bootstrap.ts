@@ -41,7 +41,7 @@ import { constants } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { externalUrl } from "@science-agent/external-urls";
+import { externalUrl } from "@sciencediscovery/external-urls";
 
 import { findExecutable } from "./preflight.js";
 import type { PayloadBootstrap, PayloadManifest } from "./payload-manifest.js";

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ToolTrace } from "@science-agent/schema";
+import type { ToolTrace } from "@sciencediscovery/schema";
 
 /**
  * Splits a tool result text into displayable I/O sections. Execution tools

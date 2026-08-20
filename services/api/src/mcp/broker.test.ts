@@ -17,7 +17,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { createBuiltinMcpSourceRegistry, createMcpSourceRegistry } from "@science-agent/mcp-sources";
+import { createBuiltinMcpSourceRegistry, createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import { SessionStore } from "../store.js";
 import {
@@ -28,7 +28,7 @@ import {
 } from "../rate-limit/resource-rate-limiter.js";
 import { McpGovernanceBroker } from "./broker.js";
 import type { McpTransportClient } from "./transport.js";
-import type { McpCatalog, McpInvokeResponse } from "@science-agent/schema";
+import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import { McpSourceCatalog } from "./source-catalog.js";
 
 test("governance broker invokes native UniProt MCP through the gateway and caches normalized records", async (context) => {

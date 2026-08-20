@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef } from "react";
 import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import dagre from "cytoscape-dagre";
 
-import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "@science-agent/schema";
+import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
 /**
  * One colour per node label. Kept in a plain map (not CSS variables) because

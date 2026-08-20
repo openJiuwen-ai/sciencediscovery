@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ScientificArtifactVersion } from "@science-agent/schema";
+import type { ScientificArtifactVersion } from "@sciencediscovery/schema";
 
 import {
   SMART_CITATION_REVIEW_INSTRUCTIONS,

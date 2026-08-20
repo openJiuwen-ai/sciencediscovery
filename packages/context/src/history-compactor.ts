@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
-import type { RuntimeMessage } from "@science-agent/runtime-core";
+import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
 
 import { buildSummaryPrompt, planCompaction, summaryCheckpointMessage } from "./compaction.js";
 

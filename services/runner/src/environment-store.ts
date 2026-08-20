@@ -28,12 +28,12 @@ import type {
   ScientificEnvironmentSetup,
   ScientificEnvsCapability,
   ScientificLanguage,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import {
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS,
   externalUrl,
   normalizePipIndexUrl,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import micromambaManifest from "./micromamba-releases.json" with { type: "json" };
 

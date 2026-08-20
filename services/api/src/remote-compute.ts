@@ -21,7 +21,7 @@ import type {
   RemoteHostCapabilities,
   RemoteJob,
   RemoteJobOutputRecord,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 const MAX_SSH_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_PULLED_OUTPUT_BYTES = 1024 * 1024;

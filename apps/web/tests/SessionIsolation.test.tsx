@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SessionRun } from "@science-agent/schema";
+import type { SessionRun } from "@sciencediscovery/schema";
 
 import { isSessionRunning, runsRequiringEventReplay, shouldApplySessionScopedUpdate } from "../src/App.js";
 

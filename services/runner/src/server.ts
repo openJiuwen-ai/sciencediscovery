@@ -20,13 +20,13 @@ import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { createOperationalLogger, shortErrorMessage } from "@science-agent/operational-logging";
+import { createOperationalLogger, shortErrorMessage } from "@sciencediscovery/operational-logging";
 import {
   detectSandboxCapability,
   disableUsernsOmittedMessage,
   procFallbackMessage,
   sandboxUnusableMessage,
-} from "@science-agent/sandbox-capability";
+} from "@sciencediscovery/sandbox-capability";
 
 import type {
   ApiError,
@@ -42,7 +42,7 @@ import type {
   SetupScientificEnvironmentsRequest,
   ShellExecutionRequest,
   UninstallEnvironmentRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import {
   DEFAULT_EXECUTION_TIMEOUT_MS,

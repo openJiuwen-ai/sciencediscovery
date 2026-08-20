@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
-import { resetSandboxCapabilityCache } from "@science-agent/sandbox-capability";
+import { resetSandboxCapabilityCache } from "@sciencediscovery/sandbox-capability";
 
 import { findExecutable, missingBwrapMessage, probeSandbox, runPreflight } from "./preflight.js";
 

@@ -22,7 +22,7 @@ import {
   type PermissionEpoch,
   type PermissionGrantScope,
   type SandboxNetworkAccess,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { DEFAULT_ENVIRONMENT_REVISION_ID } from "../environment.js";
 

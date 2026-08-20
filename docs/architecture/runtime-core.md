@@ -1,6 +1,6 @@
 # Runtime Core boundaries
 
-`@science-agent/runtime-core` is the stable, domain-neutral execution kernel.
+`@sciencediscovery/runtime-core` is the stable, domain-neutral execution kernel.
 It owns the Agent Loop state machine and only the invariants common to every
 agent execution:
 

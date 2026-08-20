@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ChatMessage, ComposerReference, WorkbenchSearchResult } from "@science-agent/schema";
+import type { ChatMessage, ComposerReference, WorkbenchSearchResult } from "@sciencediscovery/schema";
 
 import { SkillCatalog } from "../skills.js";
 import { SessionStore } from "../store.js";

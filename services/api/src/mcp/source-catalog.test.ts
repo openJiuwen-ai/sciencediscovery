@@ -19,8 +19,8 @@ import type {
   McpCatalog,
   McpSourceAdapter,
   McpSourceManifest,
-} from "@science-agent/schema";
-import { createMcpSourceRegistry } from "@science-agent/mcp-sources";
+} from "@sciencediscovery/schema";
+import { createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import type { McpTransportClient } from "./transport.js";
 import { inputSchemasCompatible, McpSourceCatalog } from "./source-catalog.js";

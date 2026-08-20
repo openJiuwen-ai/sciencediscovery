@@ -20,8 +20,8 @@ import type {
   ReviewCheckpointResult,
   ReviewerSpecialistLevel,
   ScientificArtifactVersion,
-} from "@science-agent/schema";
-import type { CasStore } from "@science-agent/cas";
+} from "@sciencediscovery/schema";
+import type { CasStore } from "@sciencediscovery/cas";
 
 import type { SessionStore } from "../store.js";
 import {

@@ -38,4 +38,4 @@ export * from "./mcp-source.js";
 export * from "./scientific-artifact.js";
 export * from "./web.js";
 export * from "./proxy.js";
-export * from "@science-agent/external-urls";
+export * from "@sciencediscovery/external-urls";

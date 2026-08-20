@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/runner",
+  "name": "@sciencediscovery/runner",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,9 +15,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/operational-logging": "workspace:*",
-    "@science-agent/sandbox-capability": "workspace:*",
-    "@science-agent/schema": "workspace:*"
+    "@sciencediscovery/operational-logging": "workspace:*",
+    "@sciencediscovery/sandbox-capability": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

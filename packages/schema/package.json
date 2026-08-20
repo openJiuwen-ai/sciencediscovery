@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/schema",
+  "name": "@sciencediscovery/schema",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
   },
   "types": "./src/index.ts",
   "dependencies": {
-    "@science-agent/external-urls": "workspace:*"
+    "@sciencediscovery/external-urls": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

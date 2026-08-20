@@ -17,7 +17,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import type { RemoteJob } from "@science-agent/schema";
+import type { RemoteJob } from "@sciencediscovery/schema";
 
 import { RemoteComputeClient, type RemoteCommandResult, type RemoteTransport } from "./remote-compute.js";
 

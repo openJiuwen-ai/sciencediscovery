@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { WorkspaceAgentOptions } from "@science-agent/context";
+import type { WorkspaceAgentOptions } from "@sciencediscovery/context";
 import type {
   ArtifactDownloadResult,
   JsonValue,
   McpToolResult,
   PermissionRequest,
-} from "@science-agent/schema";
-import type { McpSourceRegistry } from "@science-agent/mcp-sources";
+} from "@sciencediscovery/schema";
+import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import type { AgentPermissionRuntime } from "../agent-run/permission-runtime.js";
 import type { PaperService } from "../papers.js";

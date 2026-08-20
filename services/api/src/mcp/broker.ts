@@ -24,9 +24,9 @@ import {
   type PermissionAction,
   type PermissionAuthorization,
   type ResultCachePolicy,
-} from "@science-agent/schema";
-import type { McpSourceRegistry } from "@science-agent/mcp-sources";
-import { CasStore } from "@science-agent/cas";
+} from "@sciencediscovery/schema";
+import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { CasStore } from "@sciencediscovery/cas";
 
 import type { SessionStore } from "../store.js";
 import type { MemoryGraphSink } from "../memory-graph.js";

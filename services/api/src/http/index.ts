@@ -21,10 +21,10 @@ import {
   buildWorkspaceSystemPrompt,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@science-agent/context";
-import type { AgentConfig } from "@science-agent/model";
-import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@science-agent/orchestration";
-import { resolveWorkspaceFile } from "@science-agent/workspace";
+} from "@sciencediscovery/context";
+import type { AgentConfig } from "@sciencediscovery/model";
+import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
@@ -97,8 +97,8 @@ import type {
   RevisePlanRequest,
   SubagentStep,
   UpdateSpecialistRequest,
-} from "@science-agent/schema";
-import { UNTITLED_SESSION_TITLE } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
@@ -118,9 +118,9 @@ import {
 import { inferDomain, MemoryGraphClient, MemoryGraphSink } from "../memory-graph.js";
 import { mgLog } from "../memory-graph-log.js";
 import { apiLog, configureApiLogging, runLog } from "../logging.js";
-import { shortErrorMessage } from "@science-agent/operational-logging";
+import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { createPromptManifest } from "../prompt-manifest.js";
-import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
+import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { ArtifactManager } from "../mcp/artifact-manager.js";
 import { McpGovernanceBroker } from "../mcp/broker.js";
 import type { McpTransportClient } from "../mcp/transport.js";
@@ -478,7 +478,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           try {
             const result = JSON.parse(
               (await mcpBroker.cas.read(invocation.normalizedResult.hash)).toString("utf8"),
-            ) as import("@science-agent/schema").McpToolResult;
+            ) as import("@sciencediscovery/schema").McpToolResult;
             for (const candidate of result.artifacts ?? []) candidates.push({ candidate, invocationId: invocation.id });
           } catch {
             // The immutable invocation remains auditable; malformed result objects are not offered for download.

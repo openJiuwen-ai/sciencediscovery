@@ -22,7 +22,7 @@
  * credential.
  *
  * This duplicates `services/api/src/http/bootstrap-tokens.ts` on purpose: the
- * release script builds only `@science-agent/launcher` before esbuild bundles
+ * release script builds only `@sciencediscovery/launcher` before esbuild bundles
  * it into the executable, so a workspace dependency here would break packaging.
  * The file layout (one token per file under `<dataDir>/secrets/`) is the real
  * contract.

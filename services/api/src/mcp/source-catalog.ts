@@ -20,8 +20,8 @@ import type {
   McpSourceManifest,
   McpSourceStatus,
   ResolvedProxy,
-} from "@science-agent/schema";
-import type { McpSourceRegistry } from "@science-agent/mcp-sources";
+} from "@sciencediscovery/schema";
+import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import type { McpTransportClient } from "./transport.js";
 

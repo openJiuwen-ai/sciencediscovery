@@ -23,7 +23,7 @@ import type {
   SkillDetail,
   SkillResourceContent,
   UpdateSkillRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { SettingsApiClient } from "./settings.js";
 

@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/web",
+  "name": "@sciencediscovery/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/schema": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*",
     "@types/cytoscape": "^3.31.0",
     "cytoscape": "^3.34.0",
     "cytoscape-dagre": "^4.0.0",

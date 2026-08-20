@@ -21,7 +21,7 @@ import type {
   ScientificArtifact,
   ScientificArtifactKind,
   ScientificArtifactVersion,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export interface ArtifactDashboardContext {
   projectId: string;

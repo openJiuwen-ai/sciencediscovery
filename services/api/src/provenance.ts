@@ -16,8 +16,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 
-import { resolveWorkspaceFile } from "@science-agent/workspace";
-import { CasStore } from "@science-agent/cas";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { CasStore } from "@sciencediscovery/cas";
 import type {
   ArtifactDerivation,
   ArtifactOrigin,
@@ -32,12 +32,12 @@ import type {
   ScientificArtifactKind,
   ScientificArtifactVersion,
   ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   classifyScientificArtifact,
   epochSandboxNetworkAccess,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { RunnerClient } from "./runner-client.js";
 import { SessionStore } from "./store.js";

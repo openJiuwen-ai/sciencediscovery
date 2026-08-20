@@ -14,7 +14,7 @@
 
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { PermissionRequest, RemoteJob, RunStreamEvent } from "@science-agent/schema";
+import type { PermissionRequest, RemoteJob, RunStreamEvent } from "@sciencediscovery/schema";
 
 import { ArtifactManager } from "../mcp/artifact-manager.js";
 import { ProvenanceRecorder } from "../provenance.js";

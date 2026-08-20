@@ -14,8 +14,8 @@
 
 import { createHash } from "node:crypto";
 
-import { scanWorkspace } from "@science-agent/workspace";
-import { classifyScientificArtifact } from "@science-agent/schema";
+import { scanWorkspace } from "@sciencediscovery/workspace";
+import { classifyScientificArtifact } from "@sciencediscovery/schema";
 import type {
   ArtifactVersionDiff,
   ArtifactVersionProvenance,
@@ -24,7 +24,7 @@ import type {
   ExecutionRun,
   ScientificArtifactVersion,
   WorkspaceFile,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { MemoryGraphClient } from "../memory-graph.js";
 import type { ArtifactProvenanceGraphResult } from "../memory-graph.js";
@@ -282,7 +282,7 @@ export function aggregateToolText(result: unknown): string | undefined {
   return text || undefined;
 }
 
-export function mcpConnectorManifest(manifest: import("@science-agent/schema").McpSourceManifest): ConnectorManifest {
+export function mcpConnectorManifest(manifest: import("@sciencediscovery/schema").McpSourceManifest): ConnectorManifest {
   return {
     attributionTemplate: manifest.governance.attribution,
     cacheTtlSeconds: manifest.cache.ttlSeconds,

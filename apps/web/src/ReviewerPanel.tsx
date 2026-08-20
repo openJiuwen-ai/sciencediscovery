@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ArtifactReviewRun } from "@science-agent/schema";
+import type { ArtifactReviewRun } from "@sciencediscovery/schema";
 import React, { useEffect, useState } from "react";
 
 type ReviewerProgress = {

@@ -14,7 +14,7 @@
 
 import { useEffect, useState } from "react";
 
-import type { EnvironmentRevision, MemoryGraphEdgeType, MemoryGraphNode, MemorySubgraph } from "@science-agent/schema";
+import type { EnvironmentRevision, MemoryGraphEdgeType, MemoryGraphNode, MemorySubgraph } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { useLocale } from "./i18n/LocaleProvider.js";

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { RunFailureCode } from "@science-agent/schema";
+import type { RunFailureCode } from "@sciencediscovery/schema";
 
 /**
  * Render a failed run for the user: the stable class, then the original error.

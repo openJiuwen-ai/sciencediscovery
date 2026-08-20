@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { MemoryGraphTraceResult, ScientificArtifactVersion } from "@science-agent/schema";
+import type { MemoryGraphTraceResult, ScientificArtifactVersion } from "@sciencediscovery/schema";
 import type { MemoryGraphClient } from "../memory-graph.js";
 
 import {

@@ -115,7 +115,7 @@ import type {
   UpdateSpecialistRequest,
   UpdateWebSettingsRequest,
   WebSettingsDetails,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import {
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SKILL_SELECTION_MODE,
@@ -128,13 +128,13 @@ import {
   SKILL_SELECTION_FIELDS,
   epochSandboxNetworkAccess,
   UNTITLED_SESSION_TITLE,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 
-import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@science-agent/schema";
+import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@sciencediscovery/schema";
 import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   defaultEnvironmentRevision,

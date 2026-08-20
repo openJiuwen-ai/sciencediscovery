@@ -40,7 +40,7 @@ import type {
   SystemQuotaSettings,
   SystemTimeoutSettings,
   WebSettings,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import {
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
@@ -49,7 +49,7 @@ import {
   DEFAULT_SYSTEM_TIMEOUT_SETTINGS,
   DEFAULT_MEMORY_GRAPH_SETTINGS,
   DEFAULT_WEB_SETTINGS,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { defaultEnvironmentRevision, defaultShellEnvironmentRevision } from "../environment.js";
 import { BUILTIN_SPECIALISTS } from "../builtin-specialists.js";

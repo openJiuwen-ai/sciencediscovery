@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ReviewerSpecialistSettings } from "@science-agent/schema";
+import type { ReviewerSpecialistSettings } from "@sciencediscovery/schema";
 import React from "react";
 
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";

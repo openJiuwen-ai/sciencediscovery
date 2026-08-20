@@ -18,8 +18,8 @@ import { mkdir, readFile, rm, symlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import type { ArtifactJob, ArtifactPlan, McpInvocation, McpToolResult } from "@science-agent/schema";
-import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
+import type { ArtifactJob, ArtifactPlan, McpInvocation, McpToolResult } from "@sciencediscovery/schema";
+import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import { SessionStore } from "../store.js";
 import { ArtifactManager, assertSafeArtifactPath } from "./artifact-manager.js";

@@ -23,7 +23,7 @@ import { test, type TestContext } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 
-import { createRunnerServer, type RunnerConfig } from "@science-agent/runner";
+import { createRunnerServer, type RunnerConfig } from "@sciencediscovery/runner";
 import type {
   ApiError,
   ArtifactDerivation,
@@ -71,15 +71,15 @@ import type {
   WorkbenchSearchResult,
   WorkspaceFile,
   WorkspaceUploadResult,
-} from "@science-agent/schema";
-import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 import {
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-} from "@science-agent/context";
+} from "@sciencediscovery/context";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 import { strToU8, zipSync } from "fflate";
 
 import {
@@ -94,7 +94,7 @@ import {
   type ServerConfig,
 } from "./server.js";
 import { SessionStore } from "./store.js";
-import type { McpCatalog, McpInvokeResponse } from "@science-agent/schema";
+import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "./mcp/transport.js";
 
 const authorization = { authorization: "Bearer test-token" };

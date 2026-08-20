@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { RuntimeMessage } from "@science-agent/runtime-core";
+import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
 
 export type AgentKind = "main" | "subagent";
 export type AgentRunPurpose = "initial" | "reviewer_correction" | "subagent_task";

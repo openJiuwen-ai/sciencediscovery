@@ -23,4 +23,4 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 
 cd "$ROOT"
-pnpm --filter @science-agent/api exec tsx "$HERE/agent_loop_smoke.ts"
+pnpm --filter @sciencediscovery/api exec tsx "$HERE/agent_loop_smoke.ts"

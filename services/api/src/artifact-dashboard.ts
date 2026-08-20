@@ -26,7 +26,7 @@ import type {
   ScientificArtifactKind,
   ScientificArtifactVersion,
   Session,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import type { ProvenanceRecorder } from "./provenance.js";
 import type { SessionStore } from "./store.js";

@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { RunStreamEvent } from "@science-agent/schema";
+import type { RunStreamEvent } from "@sciencediscovery/schema";
 
 import { requestRunStop, routeRunStreamEvent } from "../src/App.js";
 import { reduceRunTimeline, type RunTimelineEntry } from "../src/RunTimeline.js";

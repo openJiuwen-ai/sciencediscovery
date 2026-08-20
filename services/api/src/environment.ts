@@ -15,7 +15,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
-import { SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, type EnvironmentRevision } from "@science-agent/schema";
+import { SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, type EnvironmentRevision } from "@sciencediscovery/schema";
 
 export const DEFAULT_ENVIRONMENT_REVISION_ID = "system-python3-bwrap-v1";
 const pythonVersion = execFileSync("/usr/bin/python3", ["--version"], { encoding: "utf8" }).trim();

@@ -19,9 +19,9 @@ import type {
   ArtifactReviewRun,
   ScientificArtifact,
   ScientificArtifactVersion,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
-import type { CasStore } from "@science-agent/cas";
+import type { CasStore } from "@sciencediscovery/cas";
 import type { SessionStore } from "../store.js";
 import {
   cancelReviewerCheckpoints,

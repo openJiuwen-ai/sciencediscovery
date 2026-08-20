@@ -24,7 +24,7 @@
 
 import { request } from "undici";
 
-import type { ResolvedProxy } from "@science-agent/schema";
+import type { ResolvedProxy } from "@sciencediscovery/schema";
 
 import { proxyDispatcher } from "../../proxy/index.js";
 

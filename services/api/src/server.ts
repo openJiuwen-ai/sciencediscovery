@@ -15,7 +15,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { shortErrorMessage } from "@science-agent/operational-logging";
+import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
 import { startApiServer } from "./http/index.js";
 import { apiLog } from "./logging.js";

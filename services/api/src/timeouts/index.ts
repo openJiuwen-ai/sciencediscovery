@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { TimeoutKind } from "@science-agent/schema";
+import type { TimeoutKind } from "@sciencediscovery/schema";
 
 export function timeoutFailure(error: unknown): { kind: TimeoutKind; reason: string; timeoutMs: number } | undefined {
   const reason = error instanceof Error ? error.message : String(error);

@@ -47,13 +47,13 @@ const layers = {
     ["pnpm", ["gateway:test"]],
     ["pnpm", ["build"]],
     ["pnpm", ["binary:test"]],
-    ["pnpm", ["--recursive", "--filter", "!@science-agent/runner", "test"]],
+    ["pnpm", ["--recursive", "--filter", "!@sciencediscovery/runner", "test"]],
     ["pnpm", ["memory-graph:test"]],
   ],
   "ut-runner": [
     ["pnpm", ["install", "--frozen-lockfile"]],
     ["pnpm", ["build"]],
-    ["pnpm", ["--filter", "@science-agent/runner", "test"]],
+    ["pnpm", ["--filter", "@sciencediscovery/runner", "test"]],
   ],
 };
 

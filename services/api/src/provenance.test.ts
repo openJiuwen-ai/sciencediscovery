@@ -29,7 +29,7 @@ import {
   type PythonExecutionResult,
   type ShellExecutionRequest,
   type ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { MemoryGraphClient, MemoryGraphSink } from "./memory-graph.js";
 import { ProvenanceRecorder } from "./provenance.js";

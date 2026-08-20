@@ -24,7 +24,7 @@ import {
   type SandboxNetworkAccess,
   type ShellExecutionRequest,
   type ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import type { EgressGatewayRegistry } from "./egress-gateway.js";
 import {

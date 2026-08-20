@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/launcher",
+  "name": "@sciencediscovery/launcher",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/external-urls": "workspace:*",
-    "@science-agent/sandbox-capability": "workspace:*"
+    "@sciencediscovery/external-urls": "workspace:*",
+    "@sciencediscovery/sandbox-capability": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

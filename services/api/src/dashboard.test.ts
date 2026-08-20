@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import type { ScientificArtifactKind } from "@science-agent/schema";
+import type { ScientificArtifactKind } from "@sciencediscovery/schema";
 
 import type {
   ArtifactDashboard,

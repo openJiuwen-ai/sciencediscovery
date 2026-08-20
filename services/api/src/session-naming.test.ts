@@ -19,7 +19,7 @@ import {
   createLocalSessionTitle,
   SESSION_TITLE_MAX_CHARACTERS,
   type ModelProfile,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import {
   generateRefinedSessionTitle,

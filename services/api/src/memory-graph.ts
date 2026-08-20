@@ -45,7 +45,7 @@ import type {
   MemoryGraphTraceNode,
   MemoryGraphTraceResult,
   MemorySubgraph,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export type {
   DeclareChipEntry,
@@ -55,7 +55,7 @@ export type {
   DeclareError,
   DeclareEvidenceInput,
   DeclareResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { mgLog } from "./memory-graph-log.js";
 
@@ -146,7 +146,7 @@ export interface ObserveExecutionPayload {
   envHash?: string | null;
 }
 
-// MemorySubgraph / MemoryGraphNode / MemoryGraphEdge live in @science-agent/schema
+// MemorySubgraph / MemoryGraphNode / MemoryGraphEdge live in @sciencediscovery/schema
 // (packages/schema/src/index.ts) and are shared with the frontend so the two
 // sides cannot silently drift when new node types or fields are added.
 

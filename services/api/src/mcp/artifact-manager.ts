@@ -18,7 +18,7 @@ import { lstat, mkdir, open, rename, rm, stat, statfs } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { resolveWorkspaceFile } from "@science-agent/workspace";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import type {
   ArtifactCandidate,
   ArtifactJob,
@@ -27,8 +27,8 @@ import type {
   McpError,
   McpToolResult,
   PermissionRequest,
-} from "@science-agent/schema";
-import type { McpSourceRegistry } from "@science-agent/mcp-sources";
+} from "@sciencediscovery/schema";
+import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import { proxyDispatcher } from "../proxy/index.js";
 import type { SessionStore } from "../store.js";

@@ -23,7 +23,7 @@
  * compaction feeds the previous summary back into the prompt.
  */
 
-import type { RuntimeMessage } from "@science-agent/runtime-core";
+import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
 
 type AgentHistoryMessage = RuntimeMessage;
 

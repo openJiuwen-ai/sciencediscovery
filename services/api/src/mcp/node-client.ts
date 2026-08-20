@@ -47,7 +47,7 @@ import type {
   McpInvokeRequest,
   McpInvokeResponse,
   ResolvedProxy,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { effectiveRouting, loadExtensionsConfig, type ExtensionsConfigFile, type McpServerEntry } from "./extensions-config.js";
 

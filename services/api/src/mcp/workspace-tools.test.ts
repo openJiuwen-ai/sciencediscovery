@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
+import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import type { AgentPermissionRuntime } from "../agent-run/permission-runtime.js";
 import type { PaperService } from "../papers.js";

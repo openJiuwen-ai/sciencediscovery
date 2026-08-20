@@ -16,9 +16,9 @@ import { access, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } 
 import type { IncomingMessage } from "node:http";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
 
-import { resolveWorkspaceFile } from "@science-agent/workspace";
-import { sha256, sha256File } from "@science-agent/cas";
-import type { WorkspaceFile } from "@science-agent/schema";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { sha256, sha256File } from "@sciencediscovery/cas";
+import type { WorkspaceFile } from "@sciencediscovery/schema";
 
 export type WorkspaceConflictPolicy = "reject" | "overwrite" | "rename";
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Specialist } from "@science-agent/schema";
+import type { Specialist } from "@sciencediscovery/schema";
 
 /**
  * Built-in specialists seeded by the application. Each mirrors one of the

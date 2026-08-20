@@ -168,7 +168,7 @@ prepare_shared() {
   echo "Deploying the Node services..." >&2
   for service in api runner; do
     rm -rf -- "$shared_dir/app/services/$service"
-    CI=true pnpm deploy --filter "@science-agent/$service" --prod --legacy "$shared_dir/app/services/$service"
+    CI=true pnpm deploy --filter "@sciencediscovery/$service" --prod --legacy "$shared_dir/app/services/$service"
   done
   CI=true pnpm install --frozen-lockfile --ignore-scripts
 

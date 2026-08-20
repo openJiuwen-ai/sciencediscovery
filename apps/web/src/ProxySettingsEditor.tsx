@@ -24,7 +24,7 @@ import type {
   ProxyServerKind,
   ProxySettingsDetails,
   UpdateProxyServerRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { InfoIcon } from "./icons.js";
 import { useLocale } from "./i18n/index.js";

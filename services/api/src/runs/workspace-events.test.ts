@@ -17,7 +17,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import type { RunStreamEvent } from "@science-agent/schema";
+import type { RunStreamEvent } from "@sciencediscovery/schema";
 
 import { SessionStore } from "../store.js";
 import { emitWorkspaceChanges } from "./index.js";

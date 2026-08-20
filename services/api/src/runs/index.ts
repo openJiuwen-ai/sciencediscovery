@@ -17,7 +17,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
-import { shortErrorMessage } from "@science-agent/operational-logging";
+import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
 import {
   buildWorkspaceSystemPrompt,
@@ -25,15 +25,15 @@ import {
   DEFAULT_MAX_TOTAL_SUBAGENTS,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@science-agent/context";
-import type { AgentConfig } from "@science-agent/model";
+} from "@sciencediscovery/context";
+import type { AgentConfig } from "@sciencediscovery/model";
 import {
   createMainAgentProfile,
   createSubagentProfile,
   resolveSubagentConfig,
   type AgentHistoryMessage,
-} from "@science-agent/orchestration";
-import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@science-agent/workspace";
+} from "@sciencediscovery/orchestration";
+import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { resolveProxyForUrl } from "../proxy/index.js";
 import type {
   ArtifactCandidate,
@@ -98,9 +98,9 @@ import type {
   RevisePlanRequest,
   SubagentStep,
   UpdateSpecialistRequest,
-} from "@science-agent/schema";
-import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@science-agent/schema";
-import { reviewerSpecialistSupportsLevel } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
+import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 import { RunnerClient } from "../runner-client.js";
@@ -116,7 +116,7 @@ import { inferDomain, MemoryGraphClient, MemoryGraphSink } from "../memory-graph
 import { mgLog } from "../memory-graph-log.js";
 import { runLog } from "../logging.js";
 import { createPromptManifest } from "../prompt-manifest.js";
-import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
+import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { ArtifactManager } from "../mcp/artifact-manager.js";
 import { McpGovernanceBroker } from "../mcp/broker.js";
 import { McpSourceCatalog } from "../mcp/source-catalog.js";

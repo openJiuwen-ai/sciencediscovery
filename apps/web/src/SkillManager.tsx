@@ -20,7 +20,7 @@ import type {
   SkillDescriptor,
   SkillDetail,
   SkillDraft as GeneratedSkillDraft,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { CloseIcon } from "./icons.js";

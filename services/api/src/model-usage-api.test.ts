@@ -19,7 +19,7 @@ import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 
-import type { GlobalModelUsageSummary, ModelProfile, Project, RunnerHealth, Session, SessionUsageSummary } from "@science-agent/schema";
+import type { GlobalModelUsageSummary, ModelProfile, Project, RunnerHealth, Session, SessionUsageSummary } from "@sciencediscovery/schema";
 
 import { createApiServer, type ServerConfig } from "./server.js";
 

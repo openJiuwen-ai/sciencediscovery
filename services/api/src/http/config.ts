@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_SYSTEM_QUOTA_SETTINGS, DEFAULT_SYSTEM_TIMEOUT_SETTINGS } from "@science-agent/schema";
+import { DEFAULT_SYSTEM_QUOTA_SETTINGS, DEFAULT_SYSTEM_TIMEOUT_SETTINGS } from "@sciencediscovery/schema";
 
 import {
   DEFAULT_AGENT_IDLE_TIMEOUT_MS as DEFAULT_GATEWAY_IDLE_TIMEOUT_MS,

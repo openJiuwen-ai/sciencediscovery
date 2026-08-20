@@ -19,11 +19,11 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import type { McpSourceManifest, McpSourceStatus } from "@science-agent/schema";
+import type { McpSourceManifest, McpSourceStatus } from "@sciencediscovery/schema";
 
 import { createApiServer, type ServerConfig } from "../server.js";
 
-import type { McpCatalog } from "@science-agent/schema";
+import type { McpCatalog } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "./transport.js";
 
 /**

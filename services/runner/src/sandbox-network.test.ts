@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { promisify } from "node:util";
 
-import { NO_SANDBOX_NETWORK_ACCESS, type RunnerHealth, type SandboxNetworkAccess } from "@science-agent/schema";
+import { NO_SANDBOX_NETWORK_ACCESS, type RunnerHealth, type SandboxNetworkAccess } from "@sciencediscovery/schema";
 
 import {
   EGRESS_BRIDGE_PORT,

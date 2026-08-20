@@ -26,7 +26,7 @@ import {
   type PythonExecutionResult,
   type RemoteJob,
   type ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
@@ -35,7 +35,7 @@ import {
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
   MAX_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 
 test("normalizeWorkspaceRelativePath preserves nested names within each agent writable root", () => {
   const sessionRoot = resolve(process.cwd(), ".tmp", "session-root");

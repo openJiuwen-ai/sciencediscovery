@@ -17,8 +17,8 @@ import Markdown, { type Components, defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import type { ComposerReference, MemoryGraphNodeLabel, ScientificArtifact } from "@science-agent/schema";
-import { evidenceCitationUrl, normalizeEvidenceCitationType } from "@science-agent/schema";
+import type { ComposerReference, MemoryGraphNodeLabel, ScientificArtifact } from "@sciencediscovery/schema";
+import { evidenceCitationUrl, normalizeEvidenceCitationType } from "@sciencediscovery/schema";
 
 import { CopyButton } from "./CopyButton.js";
 import { useLocale } from "./i18n/index.js";

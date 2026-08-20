@@ -17,7 +17,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { epochSandboxNetworkAccess } from "@science-agent/schema";
+import { epochSandboxNetworkAccess } from "@sciencediscovery/schema";
 
 import { SessionStore } from "./store.js";
 import {

@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import type { SandboxNetworkAccess } from "@science-agent/schema";
+import type { SandboxNetworkAccess } from "@sciencediscovery/schema";
 
 import { EgressGateway, EgressGatewayRegistry, isPrivateAddress } from "./egress-gateway.js";
 

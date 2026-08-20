@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { PermissionRequest } from "@science-agent/schema";
+import type { PermissionRequest } from "@sciencediscovery/schema";
 
 /** Permission requests are terminal once resolved; delayed SSE must not restore stale buttons. */
 export function mergePermissionRequestSnapshot(

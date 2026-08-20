@@ -79,8 +79,8 @@ import type {
   WorkspaceCapabilities,
   WorkspaceFile,
   WorkbenchSearchResult,
-} from "@science-agent/schema";
-import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificArtifactKind, UNTITLED_SESSION_TITLE } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificArtifactKind, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
 import { createSessionActivity } from "./run-stream/session-activity.js";

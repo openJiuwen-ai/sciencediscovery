@@ -4,7 +4,7 @@ Reviewer Specialist, claims/evidence, content-addressable storage (CAS), and Pro
 
 ## 1. CAS
 
-CAS stores verifiable content at its SHA-256 address, deduplicating identical bytes and allowing later re-hashing. `@science-agent/cas` uses `data/cas/sha256/<first-two>/<full-hash>` after validating 64 lowercase hex characters. `put`/`putFile` verify an existing object or atomically rename a pid/UUID temporary file and return `{hash,size}`. `read`, `verify`, and `has` retrieve, hash-check, or test presence. Objects are immutable and this iteration has no deletion/GC interface.
+CAS stores verifiable content at its SHA-256 address, deduplicating identical bytes and allowing later re-hashing. `@sciencediscovery/cas` uses `data/cas/sha256/<first-two>/<full-hash>` after validating 64 lowercase hex characters. `put`/`putFile` verify an existing object or atomically rename a pid/UUID temporary file and return `{hash,size}`. `read`, `verify`, and `has` retrieve, hash-check, or test presence. Objects are immutable and this iteration has no deletion/GC interface.
 
 Writers include provenance (code/stdout/stderr/files), Prompt Manifest (prompt/messages/response), MCP broker (request/raw/normalized result), and paper vision (request/raw response). Environment revisions use the same hash convention on the runner side. Review/provenance verifies references; previews/diffs/audit read content. Lightweight usage records refer indirectly through manifests. See [CAS](cas.md) for the package contract.
 

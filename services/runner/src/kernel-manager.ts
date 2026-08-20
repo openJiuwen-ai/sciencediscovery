@@ -24,7 +24,7 @@ import {
   type PythonExecutionResult,
   type SandboxNetworkAccess,
   type ScientificLanguage,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { EnvironmentStore } from "./environment-store.js";
 import type { EgressGatewayRegistry } from "./egress-gateway.js";

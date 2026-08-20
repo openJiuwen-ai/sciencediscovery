@@ -23,7 +23,7 @@ import type {
   RuntimeSettingsSource,
   SkillDescriptor,
   SkillSelectionMode,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";

@@ -26,7 +26,7 @@ import type {
   SessionRun,
   Subagent,
   WorkspaceFile,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { isArtifactPreviewFile } from "../src/App.js";
 import {

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "@playwright/test";
-import type { SessionRunEvent } from "@science-agent/schema";
+import type { SessionRunEvent } from "@sciencediscovery/schema";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 

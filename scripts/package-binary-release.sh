@@ -111,7 +111,7 @@ echo "Architectures: ${architectures[*]}"
 echo "Deployment mode: single-file binary (no Docker on this path)"
 
 # The launcher must be compiled before it can be bundled into the executables.
-CI=true pnpm --filter @science-agent/launcher build
+CI=true pnpm --filter @sciencediscovery/launcher build
 
 artifact_names=()
 native_artifact=""

@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { NpuJob } from "@science-agent/schema";
+import type { NpuJob } from "@sciencediscovery/schema";
 import type { ProvenanceRecorder } from "../provenance.js";
 import type { RunnerClient } from "../runner-client.js";
 import type { SessionStore } from "../store.js";

@@ -17,8 +17,8 @@ import { randomUUID } from "node:crypto";
 import {
   type RuntimeSkill,
   type WorkspaceAgentOptions,
-} from "@science-agent/context";
-import { createSubagentProfile, type AgentEvent } from "@science-agent/orchestration";
+} from "@sciencediscovery/context";
+import { createSubagentProfile, type AgentEvent } from "@sciencediscovery/orchestration";
 
 import { runSubagentTask } from "../agent-run/orchestrators.js";
 import type { LiteratureCitationCandidate, SemanticReviewOptions } from "./review-policy.js";

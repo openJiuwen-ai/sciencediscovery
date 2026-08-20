@@ -20,7 +20,7 @@ import {
   normalizePipIndexUrl,
   type EnvironmentSourceSettings,
   type InstallEnvironmentRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import type { RunnerInstallEnvironmentRequest } from "./runner-client.js";
 import { hasOwn, isRecord } from "./store/catalog.js";
