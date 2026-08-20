@@ -4174,7 +4174,7 @@ export function App() {
               /> : null}
               {systemSettingsGroup === "models" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.providerConfiguration")}</span><h3>{t("settings.modelRegistry")}</h3><p>{t("settings.modelHelp")}</p></div>
-                <div className="model-list-header"><span>{t("settings.configuredModels")}</span><button type="button" onClick={startNewModel}>{t("settings.addModel")}</button></div>
+                <div className="model-list-header"><span>{t("settings.configuredModels")}</span><button className="secondary-button compact-button" type="button" onClick={startNewModel}>{t("settings.addModel")}</button></div>
                 <div className="model-list">
                   {models.map((item) => {
                     const idHint = duplicateModelProfileId(item, models);

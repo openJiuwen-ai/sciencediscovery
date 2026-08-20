@@ -139,7 +139,7 @@ test("keeps the add form collapsed and preserves correction state on failed save
   const source = readFileSync(new URL("../src/ProxySettingsEditor.tsx", import.meta.url), "utf8");
   const styles = readFileSync(new URL("../src/styles/settings.css", import.meta.url), "utf8");
   assert.match(source, /useState\(false\)/);
-  assert.match(source, /!formOpen \? <button className="proxy-add-button"/);
+  assert.match(source, /!formOpen \? <button className="secondary-button proxy-add-button"/);
   assert.match(source, /formOpen \? <form[^>]+className="proxy-server-form"/);
   assert.match(source, /catch \(reason\)[\s\S]*setFormError/);
   assert.match(source, /await onCreate[\s\S]*closeForm\(\)/);

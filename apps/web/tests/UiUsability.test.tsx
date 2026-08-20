@@ -90,3 +90,17 @@ test("workspace resize wiring shares a viewport-driven maximum", () => {
   assert.match(app, /window\.addEventListener\("resize", updateWorkspaceBounds\)/);
   assert.match(app, /style=\{workspaceCollapsed \? undefined : \{ gridTemplateColumns:/);
 });
+
+test("dense settings and artifact layouts adapt without fixed-column overflow", () => {
+  const settings = source("styles/settings.css");
+  const responsive = source("styles/responsive.css");
+  const artifacts = source("styles/artifacts.css");
+
+  assert.match(settings, /\.skill-manager-toolbar \{[^}]*display: flex;[^}]*flex-wrap: wrap;/);
+  assert.match(settings, /\.environment-install \{[^}]*grid-template-columns: minmax\(112px, 128px\) minmax\(0, 1fr\) auto;/);
+  assert.match(responsive, /\.skill-manager-toolbar input \{ flex-basis: 100%; \}/);
+  assert.match(responsive, /\.environment-install \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(responsive, /\.dialog-actions \{ flex-wrap: wrap; \}/);
+  assert.match(responsive, /\.annotation-editor \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(artifacts, /\.artifact-provenance article header \{[^}]*flex-wrap: wrap;/);
+});

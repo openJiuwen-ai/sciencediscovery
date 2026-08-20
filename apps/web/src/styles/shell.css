@@ -85,12 +85,13 @@ h1, h2, h3, p { margin-top: 0; }
 .session-usage-chip small { overflow: hidden; color: var(--text-faint); font-size: 10px; font-weight: 600; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .session-usage-chip.muted { background: var(--surface); color: var(--text-faint); }
 .session-usage-chip.muted strong { color: var(--muted); }
-.secondary-button, .primary-button, .send-button, .danger-button { min-height: 40px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 650; }
+.secondary-button, .primary-button, .send-button, .danger-button { min-height: var(--control-min-height); border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 650; }
 .secondary-button { border: 1px solid var(--border-strong); background: var(--surface); padding: 8px 14px; color: var(--text-heading); }
 .secondary-button:hover { background: var(--surface-sunk); }
 .primary-button, .send-button { border: 1px solid var(--accent-strong); background: var(--accent); color: var(--surface); padding: 9px 16px; }
 .primary-button:hover, .send-button:hover { background: var(--accent-strong); }
 .send-button:disabled, .primary-button:disabled { border-color: var(--disabled-bg); background: var(--disabled-bg); opacity: 1; }
+.secondary-button:disabled, .danger-button:disabled { cursor: not-allowed; opacity: .55; }
 .archived-banner { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 12px 30px; border-bottom: 1px solid var(--warning-border); background: var(--warning-soft); color: var(--warning); font-size: 13px; line-height: 1.5; }
 
 

@@ -36,6 +36,45 @@
   white-space: nowrap;
 }
 
+/* System configuration editors share a safe default form skeleton. Feature
+   rules may refine it, while non-text inputs keep their native geometry. */
+.config-panel :where(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+  select,
+  textarea
+) {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-min-height);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 13px;
+  transition: border-color var(--motion-fast), background var(--motion-fast), box-shadow var(--motion-fast);
+}
+.config-panel :where(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+  select,
+  textarea
+):hover:not(:disabled) { border-color: var(--accent-border); }
+.config-panel :where(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+  select,
+  textarea
+):focus-visible { border-color: var(--accent); }
+.config-panel :where(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+  select,
+  textarea
+):disabled { background: var(--surface-soft); color: var(--text-faint); opacity: .72; }
+.config-panel textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
+
+/* Dense actions retain the semantic button skeleton at card scale. */
+.secondary-button.compact-button,
+.danger-button.compact-button { min-height: 34px; border-radius: var(--radius-s); padding: 6px 10px; font-size: 12px; }
+
 /* Dialog lists use one compact card rhythm while feature classes provide type color. */
 .model-card,
 .skill-card,

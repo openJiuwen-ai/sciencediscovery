@@ -325,11 +325,11 @@ export function SkillManager({
     <div className="settings-detail-header"><span className="eyebrow">Agent Skills</span><h3>Skill manager</h3><p>Author or import portable skills. Every installed skill is available by default — restrict the list per Project or Session runtime settings.</p></div>
     <div className="skill-manager-toolbar">
       <input aria-label="Search skills" onChange={(event) => setQuery(event.target.value)} placeholder="Search skills" type="search" value={query} />
-      <button disabled={busy} onClick={openCreate} type="button">+ New</button>
-      <button disabled={busy} onClick={() => setAuthoringMode("dialogue")} type="button">Describe workflow</button>
-      <button disabled={busy || !sessionId} onClick={() => void distillSession()} title={sessionId ? "Create a reviewable draft from the active Session" : "Open a Session first"} type="button">Distill Session</button>
-      <button disabled={busy} onClick={() => importInput.current?.click()} type="button">{busy ? "Working…" : "Import"}</button>
-      <button disabled={busy} onClick={() => setAuthoringMode("git")} type="button">Import Git</button>
+      <button className="secondary-button" disabled={busy} onClick={openCreate} type="button">+ New</button>
+      <button className="secondary-button" disabled={busy} onClick={() => setAuthoringMode("dialogue")} type="button">Describe workflow</button>
+      <button className="secondary-button" disabled={busy || !sessionId} onClick={() => void distillSession()} title={sessionId ? "Create a reviewable draft from the active Session" : "Open a Session first"} type="button">Distill Session</button>
+      <button className="secondary-button" disabled={busy} onClick={() => importInput.current?.click()} type="button">{busy ? "Working…" : "Import"}</button>
+      <button className="secondary-button" disabled={busy} onClick={() => setAuthoringMode("git")} type="button">Import Git</button>
       <input accept=".md,.zip,text/markdown,application/zip" aria-label="Import SKILL.md or ZIP" className="visually-hidden" onChange={(event) => void importSkill(event.target.files?.[0])} ref={importInput} type="file" />
     </div>
     {authoringMode === "dialogue" ? <form className="skill-authoring-panel" onSubmit={(event) => void createDialogueDraft(event)}>
@@ -354,7 +354,7 @@ export function SkillManager({
       </div>
       <div className="skill-detail">
         {!selectedId ? <p className="skill-empty">Create or import a skill to begin.</p> : !detail ? <p className="skill-empty">Loading skill…</p> : <>
-          <header><div><span className={`skill-source ${detail.source}`}>{detail.source === "built-in" ? "Built-in · read-only" : `Managed · revision ${detail.currentRevision}`}</span><h4>{detail.name}</h4><p>{detail.description}</p></div><div className="skill-detail-actions">{!detail.readOnly ? <><button disabled={busy} onClick={openEdit} type="button">Edit</button><button className="danger-button" disabled={busy} onClick={() => void inspectDeletion()} type="button">Delete</button></> : null}</div></header>
+          <header><div><span className={`skill-source ${detail.source}`}>{detail.source === "built-in" ? "Built-in · read-only" : `Managed · revision ${detail.currentRevision}`}</span><h4>{detail.name}</h4><p>{detail.description}</p></div><div className="skill-detail-actions">{!detail.readOnly ? <><button className="secondary-button compact-button" disabled={busy} onClick={openEdit} type="button">Edit</button><button className="danger-button compact-button" disabled={busy} onClick={() => void inspectDeletion()} type="button">Delete</button></> : null}</div></header>
           <dl className="skill-metadata"><div><dt>Version</dt><dd>{detail.version}</dd></div><div><dt>Package hash</dt><dd title={detail.hash}>{detail.hash.slice(0, 12)}…</dd></div><div><dt>Resources</dt><dd>{detail.resourceSummary.files} · {detail.resourceSummary.bytes} bytes</dd></div></dl>
           {detail.diagnostics.length ? <div className="skill-diagnostics">{detail.diagnostics.map((diagnostic) => <p key={`${diagnostic.code}-${diagnostic.path ?? ""}`}><strong>{diagnostic.level}</strong> {diagnostic.message}</p>)}</div> : null}
           <section className="skill-instructions"><h5>SKILL.md instructions</h5><pre>{detail.instructions}</pre></section>
