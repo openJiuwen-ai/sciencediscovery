@@ -28,8 +28,10 @@
 import { randomUUID } from "node:crypto";
 import { Agent as UndiciAgent, ProxyAgent, request, type Dispatcher } from "undici";
 
-import type { AgentHistoryMessage, AgentModelUsage } from "@science-agent/agent-runtime";
+import type { RuntimeMessage as AgentHistoryMessage } from "@science-agent/runtime-core";
 import type { ResolvedProxy } from "@science-agent/schema";
+
+import type { ModelUsage as AgentModelUsage } from "./types.js";
 
 export interface ModelEndpoint {
   apiToken?: string;

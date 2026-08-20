@@ -75,9 +75,11 @@ import type {
 import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@science-agent/schema";
 import {
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+} from "@science-agent/context";
+import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/orchestration";
 import { strToU8, zipSync } from "fflate";
 
 import {

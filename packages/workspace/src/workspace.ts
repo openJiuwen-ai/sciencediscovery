@@ -16,7 +16,7 @@ import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
-import type { AgentTool } from "./types.js";
+import type { AgentTool } from "@science-agent/tools";
 import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
@@ -63,7 +63,7 @@ import {
   GENERAL_PURPOSE_SUBAGENT,
   MAX_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_TIMEOUT_SECONDS,
-} from "./subagents.js";
+} from "@science-agent/orchestration";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 
 export interface WorkspaceFileInfo {

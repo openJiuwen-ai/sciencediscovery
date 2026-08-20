@@ -1,0 +1,20 @@
+{
+  "name": "@science-agent/orchestration",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { "types": "./src/index.ts", "default": "./dist/index.js" },
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@science-agent/model": "workspace:*",
+    "@science-agent/runtime-core": "workspace:*",
+    "@science-agent/schema": "workspace:*",
+    "@science-agent/tools": "workspace:*"
+  },
+  "devDependencies": { "@types/node": "26.1.1" }
+}

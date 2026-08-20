@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { WorkspaceAgentOptions } from "@science-agent/agent-runtime";
+import type { WorkspaceAgentOptions } from "@science-agent/context";
 import type {
   ArtifactDownloadResult,
   JsonValue,

@@ -20,7 +20,7 @@ import type {
   AgentRunResult,
   MainAgentProfile,
   SubagentProfile,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/orchestration";
 
 import {
   createAgentRun,

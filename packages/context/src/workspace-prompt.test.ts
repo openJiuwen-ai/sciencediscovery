@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildWorkspaceSystemPrompt } from "./runtime.js";
+import { buildWorkspaceSystemPrompt } from "./workspace-prompt.js";
 
 test("managed environment prompt directs mutations through governed tools", () => {
   const prompt = buildWorkspaceSystemPrompt([], true);

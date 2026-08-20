@@ -19,14 +19,12 @@ import { dirname, resolve } from "node:path";
 
 import {
   buildWorkspaceSystemPrompt,
-  createMainAgentProfile,
-  createSubagentProfile,
-  resolveSubagentConfig,
-  resolveWorkspaceFile,
-  type AgentConfig,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/context";
+import type { AgentConfig } from "@science-agent/model";
+import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@science-agent/orchestration";
+import { resolveWorkspaceFile } from "@science-agent/workspace";
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,

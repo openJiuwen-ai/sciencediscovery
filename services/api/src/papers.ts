@@ -26,7 +26,7 @@ import type {
   PaperSourceId,
   PaperVisionRun,
 } from "@science-agent/schema";
-import { resolveWorkspaceFile } from "@science-agent/agent-runtime";
+import { resolveWorkspaceFile } from "@science-agent/workspace";
 import { CasStore } from "@science-agent/cas";
 
 import { SessionStore } from "./store.js";

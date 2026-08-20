@@ -20,7 +20,7 @@ import {
   createSubagentProfile,
   type AgentEvent,
   type AgentHistoryMessage,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/orchestration";
 
 import type { NativeAgentHandle, NativeAgentOptions } from "../native-agent/index.js";
 import { createAgentRun, type AgentRunHandle } from "./create-agent-run.js";

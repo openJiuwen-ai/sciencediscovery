@@ -14,7 +14,7 @@
 
 import { createHash } from "node:crypto";
 
-import { scanWorkspace } from "@science-agent/agent-runtime";
+import { scanWorkspace } from "@science-agent/workspace";
 import { classifyScientificArtifact } from "@science-agent/schema";
 import type {
   ArtifactVersionDiff,

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { Subagent } from "@science-agent/schema";
-import { MAX_SUBAGENT_TIMEOUT_SECONDS } from "@science-agent/agent-runtime";
+import { MAX_SUBAGENT_TIMEOUT_SECONDS } from "@science-agent/orchestration";
 
 export const SUBAGENT_PARENT_TIMEOUT_MARGIN_MS = 60_000;
 

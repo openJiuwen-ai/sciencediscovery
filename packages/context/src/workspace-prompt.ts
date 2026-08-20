@@ -33,9 +33,8 @@ import type {
   ShellExecutionResult,
 } from "@science-agent/schema";
 
-import type { AgentConfig } from "./types.js";
-import type { WorkspaceToolOptions } from "./workspace.js";
-import type { ToolFilterPolicy } from "./workspace.js";
+import type { AgentConfig } from "@science-agent/model";
+import type { ToolFilterPolicy, WorkspaceToolOptions } from "@science-agent/workspace";
 
 export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.1";
 // Bump when the workspace prompt contract changes, including subagent orchestration or skill disclosure rules.

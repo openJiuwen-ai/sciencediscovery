@@ -18,7 +18,7 @@ import test from "node:test";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/orchestration";
 
 import {
   classifySubagentFailure,

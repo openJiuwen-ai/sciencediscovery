@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/orchestration";
 import type {
   ModelRunInfo,
   Subagent,

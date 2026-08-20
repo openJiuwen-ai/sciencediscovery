@@ -15,11 +15,10 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  createSubagentProfile,
-  type AgentEvent,
   type RuntimeSkill,
   type WorkspaceAgentOptions,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/context";
+import { createSubagentProfile, type AgentEvent } from "@science-agent/orchestration";
 
 import { runSubagentTask } from "../agent-run/orchestrators.js";
 import type { LiteratureCitationCandidate, SemanticReviewOptions } from "./review-policy.js";

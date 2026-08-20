@@ -23,7 +23,9 @@
  * compaction feeds the previous summary back into the prompt.
  */
 
-import type { AgentHistoryMessage } from "@science-agent/agent-runtime";
+import type { RuntimeMessage } from "@science-agent/runtime-core";
+
+type AgentHistoryMessage = RuntimeMessage;
 
 export const COMPACTION_TRIGGER_MESSAGES = 50;
 export const COMPACTION_KEEP_MESSAGES = 20;

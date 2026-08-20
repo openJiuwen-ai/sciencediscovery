@@ -21,17 +21,19 @@ import { shortErrorMessage } from "@science-agent/operational-logging";
 
 import {
   buildWorkspaceSystemPrompt,
-  createMainAgentProfile,
-  createSubagentProfile,
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
   DEFAULT_MAX_TOTAL_SUBAGENTS,
-  normalizeWorkspaceRelativePath,
-  resolveSubagentConfig,
-  resolveWorkspaceFile,
-  type AgentConfig,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/context";
+import type { AgentConfig } from "@science-agent/model";
+import {
+  createMainAgentProfile,
+  createSubagentProfile,
+  resolveSubagentConfig,
+  type AgentHistoryMessage,
+} from "@science-agent/orchestration";
+import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@science-agent/workspace";
 import { resolveProxyForUrl } from "../proxy/index.js";
 import type {
   ArtifactCandidate,
@@ -1465,7 +1467,7 @@ async function executeAgentRun(
   );
   try {
     assertRunActive();
-    const latestHistory: import("@science-agent/agent-runtime").AgentHistoryMessage[] =
+    const latestHistory: AgentHistoryMessage[] =
       (agentOptions.history ?? []).map(({ content, role }) => ({ content, role }));
     lastAgentUsage = unreportedModelUsage();
     await mainExecution.executeAgentRun({

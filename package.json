@@ -9,10 +9,11 @@
   },
   "scripts": {
     "api": "pnpm --filter @science-agent/api start",
+    "architecture:check": "node scripts/check-architecture.mjs",
     "binary:smoke": "node scripts/binary-release/smoke-binary.mjs",
     "binary:test": "node --test scripts/binary-release/*.test.mjs",
     "build": "pnpm --recursive build",
-    "check": "pnpm typecheck && pnpm paper:test && pnpm gateway:test && pnpm test",
+    "check": "pnpm architecture:check && pnpm typecheck && pnpm paper:test && pnpm gateway:test && pnpm test",
     "ci:e2e": "bash .ci/run-e2e.sh",
     "ci:e2e:legacy": "bash .ci/run-e2e.sh legacy",
     "ci:e2e:real": "bash .ci/run-e2e.sh real",

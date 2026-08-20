@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { RuntimeMessage } from "@science-agent/runtime-core";
+
 export type AgentKind = "main" | "subagent";
 export type AgentRunPurpose = "initial" | "reviewer_correction" | "subagent_task";
 
@@ -72,7 +74,7 @@ export interface SubagentProfile extends AgentBaseProfile {
 export type AgentProfile = MainAgentProfile | SubagentProfile;
 
 /** Opaque gateway history. The Node API owns and passes this transcript between AgentRuns. */
-export type AgentHistoryMessage = Record<string, unknown> & { role?: string };
+export type AgentHistoryMessage = RuntimeMessage;
 
 export interface AgentRunInput {
   agentRunId: string;

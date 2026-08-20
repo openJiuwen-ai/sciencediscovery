@@ -32,7 +32,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 
-import type { AgentEvent } from "@science-agent/agent-runtime";
+import type { AgentEvent } from "@science-agent/orchestration";
 
 import { createNativeAgent } from "../../services/api/src/native-agent/index.js";
 

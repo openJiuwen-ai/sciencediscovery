@@ -25,7 +25,7 @@
 
 import { createHash } from "node:crypto";
 
-import type { AgentTool } from "@science-agent/agent-runtime";
+import type { AgentTool } from "./types.js";
 
 export const TOOL_SEARCH_NAME = "tool_search";
 const MAX_RESULTS = 5;

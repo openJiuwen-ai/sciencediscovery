@@ -19,12 +19,12 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
-import type { ArtifactJob, ComposerReference, ModelInvocationUsage, Subagent } from "@science-agent/schema";
+import type { ArtifactJob, ComposerReference, ExecutionRun, ModelInvocationUsage, Subagent } from "@science-agent/schema";
 import { reviewerSpecialistSupportsLevel } from "@science-agent/schema";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/orchestration";
 
 import {
   SessionStore,
@@ -806,6 +806,30 @@ test("SessionStore serializes concurrent session run mutations without losing up
   assert.deepEqual(queueOrders, queueOrders.toSorted((left, right) => left - right), "listSessionRuns returns queue order");
   const persistedJson = await readFile(resolve(tempRoot, "session-runs", `${session.id}.json`), "utf8");
   assert.doesNotThrow(() => JSON.parse(persistedJson));
+});
+
+test("SessionStore serializes concurrent execution appends without losing provenance", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `execution-run-concurrency-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({ apiToken: "token", baseUrl: "https://models.example.test/v1", model: "model", name: "Model" });
+  const project = await store.createProject("Concurrent execution runs");
+  const session = await store.createSession(project.id, "Executions", model.id);
+  const timestamp = new Date().toISOString();
+  const ref = { hash: "0".repeat(64), size: 0 };
+  const runs: ExecutionRun[] = Array.from({ length: 12 }, (_, index) => ({
+    cgroupMode: "none", code: ref, createdFiles: [], environmentRevisionId: "system-python3-bwrap-v1",
+    envSnapshot: ref, exitCode: 0, finishedAt: timestamp, id: `execution-${index}`,
+    kernelId: `ephemeral:execution-${index}`, kernelMode: "ephemeral", language: "python",
+    modifiedFiles: [], networkPolicy: "none", permissionEpochId: session.permissionEpochId,
+    runnerVersion: "test", sandbox: "bubblewrap", sessionId: session.id, startedAt: timestamp,
+    status: "succeeded", stderr: ref, stdout: ref, tool: "run_python", toolVersion: "test",
+    turnId: `turn-${index}`, workingDirectory: `/workspace/subagents/${index}`,
+  }));
+  await Promise.all(runs.map((run) => store.appendExecutionRun(run)));
+  assert.deepEqual((await store.listExecutionRuns(session.id)).map((run) => run.id), runs.map((run) => run.id));
 });
 
 test("SessionStore encrypts model API tokens and preserves them across reloads", async (context) => {

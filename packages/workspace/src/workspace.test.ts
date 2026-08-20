@@ -35,7 +35,7 @@ import {
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
   MAX_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_TIMEOUT_SECONDS,
-} from "./subagents.js";
+} from "@science-agent/orchestration";
 
 test("normalizeWorkspaceRelativePath preserves nested names within each agent writable root", () => {
   const sessionRoot = resolve(process.cwd(), ".tmp", "session-root");

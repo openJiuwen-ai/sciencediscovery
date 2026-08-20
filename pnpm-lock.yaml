@@ -99,19 +99,6 @@ importers:
 
   config: {}
 
-  packages/agent-runtime:
-    dependencies:
-      '@science-agent/schema':
-        specifier: workspace:*
-        version: link:../schema
-      typebox:
-        specifier: 1.1.38
-        version: 1.1.38
-    devDependencies:
-      '@types/node':
-        specifier: 26.1.1
-        version: 26.1.1
-
   packages/cas:
     dependencies:
       '@science-agent/schema':
@@ -124,6 +111,25 @@ importers:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
+
+  packages/context:
+    dependencies:
+      '@science-agent/model':
+        specifier: workspace:*
+        version: link:../model
+      '@science-agent/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@science-agent/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
 
   packages/mcp-sources:
     dependencies:
@@ -138,6 +144,22 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
+  packages/model:
+    dependencies:
+      '@science-agent/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+      undici:
+        specifier: 8.7.0
+        version: 8.7.0
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/operational-logging:
     devDependencies:
       '@types/node':
@@ -146,6 +168,31 @@ importers:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
+
+  packages/orchestration:
+    dependencies:
+      '@science-agent/model':
+        specifier: workspace:*
+        version: link:../model
+      '@science-agent/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@science-agent/tools':
+        specifier: workspace:*
+        version: link:../tools
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
+  packages/runtime-core:
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
 
   packages/sandbox-capability:
     devDependencies:
@@ -162,29 +209,76 @@ importers:
         specifier: workspace:*
         version: link:../../config
 
+  packages/tools:
+    dependencies:
+      '@science-agent/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
+  packages/workspace:
+    dependencies:
+      '@science-agent/orchestration':
+        specifier: workspace:*
+        version: link:../orchestration
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@science-agent/tools':
+        specifier: workspace:*
+        version: link:../tools
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   services/api:
     dependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
-      '@science-agent/agent-runtime':
-        specifier: workspace:*
-        version: link:../../packages/agent-runtime
       '@science-agent/cas':
         specifier: workspace:*
         version: link:../../packages/cas
+      '@science-agent/context':
+        specifier: workspace:*
+        version: link:../../packages/context
       '@science-agent/mcp-sources':
         specifier: workspace:*
         version: link:../../packages/mcp-sources
+      '@science-agent/model':
+        specifier: workspace:*
+        version: link:../../packages/model
       '@science-agent/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
+      '@science-agent/orchestration':
+        specifier: workspace:*
+        version: link:../../packages/orchestration
       '@science-agent/runner':
         specifier: workspace:*
         version: link:../runner
+      '@science-agent/runtime-core':
+        specifier: workspace:*
+        version: link:../../packages/runtime-core
       '@science-agent/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@science-agent/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+      '@science-agent/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       ajv:
         specifier: 8.17.1
         version: 8.17.1

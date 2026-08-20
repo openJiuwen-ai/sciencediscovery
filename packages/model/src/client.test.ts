@@ -26,7 +26,7 @@ import {
   streamModelTurn,
   toAnthropicMessages,
   type ModelClientPolicy,
-} from "./model-client.js";
+} from "./client.js";
 
 const policy: ModelClientPolicy = { maxRetries: 1, maxTokens: 1_024, requestTimeoutMs: 5_000 };
 

@@ -22,7 +22,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AgentEvent } from "@science-agent/agent-runtime";
+import type { AgentEvent } from "@science-agent/orchestration";
 
 import { createNativeAgent } from "../../services/api/src/native-agent/index.js";
 

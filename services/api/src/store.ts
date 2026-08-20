@@ -132,7 +132,7 @@ import {
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/orchestration";
 
 import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@science-agent/schema";
 import {
@@ -3490,9 +3490,9 @@ export class SessionStore {
 
   async appendExecutionRun(run: ExecutionRun): Promise<void> {
     this.assertSessionWritable(run.sessionId);
-    const runs = await this.listExecutionRuns(run.sessionId);
-    runs.push(run);
-    await this.writeArray(this.executionRunsPath(run.sessionId), runs);
+    await this.mutateArray<ExecutionRun, void>(this.executionRunsPath(run.sessionId), (runs) => {
+      runs.push(run);
+    });
   }
 
   async listArtifactDerivations(sessionId: string): Promise<ArtifactDerivation[]> {

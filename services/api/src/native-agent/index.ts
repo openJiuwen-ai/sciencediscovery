@@ -30,47 +30,33 @@
  * compaction are provided by the sibling modules.
  */
 
-import { createHash, randomUUID } from "node:crypto";
-
 import {
   buildWorkspaceSystemPrompt,
-  createWorkspaceTools,
-  normalizeLegacyEnvironmentToolName,
-  type Agent,
-  type AgentEvent,
-  type AgentHistoryMessage,
-  type AgentModelUsage,
-  type AgentTool,
+  DefaultContextAssembler,
+  HistoryCompactor,
   type WorkspaceAgentOptions,
-} from "@science-agent/agent-runtime";
-
-import {
-  buildSummaryPrompt,
-  planCompaction,
-  summaryCheckpointMessage,
-} from "./compaction.js";
-import {
-  TOOL_SEARCH_NAME,
-  TOOL_SEARCH_SPEC,
-  autoPromoteFromRouting,
-  blockedDeferredToolResult,
-  buildDeferredToolState,
-  deferredToolsPromptSection,
-  hiddenDeferredNames,
-  routingHintsPromptSection,
-  runToolSearch,
-  type DeferredToolState,
-} from "./deferred-tools.js";
-import { isRemoteContentTool, neutralizeUntrustedTags } from "./sanitize.js";
+} from "@science-agent/context";
 import {
   resolveModelClientPolicy,
+  ProviderModelClient,
   streamModelTurn,
+  type ModelInput,
   type ModelClientPolicy,
   type ModelEndpoint,
-  type ModelTurn,
-  type NormalizedToolCall,
-  type WireToolSpec,
-} from "./model-client.js";
+  type ModelUsage,
+} from "@science-agent/model";
+import type { Agent, AgentEvent, AgentHistoryMessage } from "@science-agent/orchestration";
+import {
+  ExternalWaitController,
+  type RunEvent,
+} from "@science-agent/runtime-core";
+import {
+  type AgentTool,
+  ToolRegistry,
+} from "@science-agent/tools";
+import { createWorkspaceTools, normalizeLegacyEnvironmentToolName } from "@science-agent/workspace";
+
+import { composeRuntime } from "../bootstrap/runtime.js";
 
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 240_000;
 export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
@@ -78,9 +64,6 @@ export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
 /** Hard safety net against a runaway model loop; time budgets remain the
  *  primary bound (`runTimeoutMs` / `runIdleTimeoutMs`). */
 const MAX_MODEL_TURNS = 128;
-
-const LOOP_DETECTION_WARN_COUNT = 10;
-const LOOP_DETECTION_HARD_COUNT = 20;
 
 export interface NativeAgentOptions extends WorkspaceAgentOptions {
   /** Stable identity for logging/tracing; use the session id. */
@@ -145,50 +128,6 @@ function normalizeHistoryMessage(message: WireMessage): WireMessage {
   return normalized;
 }
 
-function stableJsonValue(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (Array.isArray(value)) return value.map((item) => stableJsonValue(item, seen));
-  if (isRecord(value)) {
-    if (seen.has(value)) return "[Circular]";
-    seen.add(value);
-    return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .map((key) => [key, stableJsonValue(value[key], seen)]),
-    );
-  }
-  return value;
-}
-
-function toolLoopKey(name: string, args: Record<string, unknown>): string {
-  return createHash("sha256")
-    .update(`${name}\n${JSON.stringify(stableJsonValue(args))}`)
-    .digest("hex");
-}
-
-function loopWarningContent(name: string, count: number): string {
-  return JSON.stringify({
-    ok: false,
-    warning: {
-      code: "REPEATED_TOOL_CALL",
-      count,
-      message: `Repeated ${name} call with identical arguments detected ${count} times. Reconsider your approach, use the previous result if available, or change arguments meaningfully before retrying.`,
-      retryable: true,
-    },
-  });
-}
-
-function loopHardStopContent(name: string, count: number): string {
-  return JSON.stringify({
-    error: {
-      attempts: count,
-      code: "TOOL_LOOP_DETECTED",
-      message: `Stopped repeated ${name} call with identical arguments after ${count} attempts. Do not call this same tool with the same arguments again; synthesize from existing results or choose a different action.`,
-      retryable: false,
-    },
-    ok: false,
-  });
-}
-
 function formatRunContract(contract: string): string {
   return [
     "<run_contract>",
@@ -202,19 +141,13 @@ function formatRunContract(contract: string): string {
   ].join("\n");
 }
 
-interface ToolOutcome {
-  content: string;
-  isError: boolean;
-}
-
 class NativeAgent implements NativeAgentHandle {
   private readonly listeners = new Set<Listener>();
-  private readonly tools = new Map<string, AgentTool>();
-  private readonly repeatedToolCalls = new Map<string, number>();
+  private readonly toolRegistry: ToolRegistry<WireMessage>;
   private readonly systemPrompt: string;
   private readonly endpoint: ModelEndpoint;
   private readonly policy: ModelClientPolicy;
-  private readonly deferredState: DeferredToolState | undefined;
+  private readonly waitController = new ExternalWaitController();
   private history: WireMessage[];
   private controller: AbortController | undefined;
   private externalWaitCount = 0;
@@ -224,12 +157,13 @@ class NativeAgent implements NativeAgentHandle {
   private executed = false;
 
   constructor(private readonly options: NativeAgentOptions) {
-    for (const tool of buildTools(options)) {
-      if (this.tools.has(tool.name)) throw new Error(`Duplicate workspace tool name: ${tool.name}`);
-      this.tools.set(tool.name, tool);
-    }
-    this.deferredState = buildDeferredToolState(this.tools.values());
-    const promptSkills = this.tools.has("describe_skill") && this.tools.has("read_skill")
+    this.toolRegistry = new ToolRegistry(buildTools(options), {
+      createResultMessage: (call, content) => ({
+        role: "tool", tool_call_id: call.id, name: call.name, content,
+      }),
+    });
+    const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
+    const promptSkills = toolNames.has("describe_skill") && toolNames.has("read_skill")
       ? options.skills
       : [];
     const baseSystemPrompt = buildWorkspaceSystemPrompt(
@@ -250,8 +184,7 @@ class NativeAgent implements NativeAgentHandle {
     this.systemPrompt = [
       baseSystemPrompt,
       options.runContract ? formatRunContract(options.runContract) : "",
-      deferredToolsPromptSection(this.deferredState),
-      routingHintsPromptSection(this.tools.values(), this.deferredState?.catalog.names ?? new Set()),
+      ...this.toolRegistry.promptSections(),
     ].filter(Boolean).join("\n\n");
     this.history = options.gatewayHistory
       ? options.gatewayHistory.map(normalizeHistoryMessage)
@@ -276,12 +209,14 @@ class NativeAgent implements NativeAgentHandle {
   }
 
   beginExternalWait(): () => void {
+    const wait = this.waitController.begin("agent-run");
     this.externalWaitCount += 1;
     if (this.externalWaitCount === 1) this.pauseRunDeadline?.();
     let released = false;
     return () => {
       if (released) return;
       released = true;
+      wait.release();
       this.externalWaitCount = Math.max(0, this.externalWaitCount - 1);
       if (this.externalWaitCount === 0) this.resumeRunDeadline?.();
     };
@@ -299,11 +234,12 @@ class NativeAgent implements NativeAgentHandle {
     this.controller = new AbortController();
     if (this.abortRequested) this.controller.abort();
     this.history.push({ role: "user", content: text });
-    autoPromoteFromRouting(this.deferredState, this.tools.values(), text);
+    this.toolRegistry.promoteForRequest(text);
 
     const controller = this.controller;
     const runTimeoutMs = this.options.runTimeoutMs ?? DEFAULT_AGENT_TURN_TIMEOUT_MS;
     const runIdleTimeoutMs = this.options.runIdleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS;
+    const startedWithExternalWait = this.externalWaitCount > 0;
     let timeoutKind: "idle" | "turn" | undefined;
     let remainingRunMs = runTimeoutMs;
     let activeSince = Date.now();
@@ -321,6 +257,10 @@ class NativeAgent implements NativeAgentHandle {
     };
     const markProgress = () => {
       if (idleTimeoutId) clearTimeout(idleTimeoutId);
+      if (startedWithExternalWait && this.externalWaitCount > 0) {
+        idleTimeoutId = undefined;
+        return;
+      }
       idleTimeoutId = runIdleTimeoutMs > 0
         ? setTimeout(() => abortForTimeout("idle"), runIdleTimeoutMs)
         : undefined;
@@ -343,7 +283,7 @@ class NativeAgent implements NativeAgentHandle {
     };
     armTurnDeadline();
     markProgress();
-
+    if (startedWithExternalWait) this.pauseRunDeadline();
     // Keep "timeout" in these errors: classifySubagentFailure matches
     // /timeout/i to preserve the public Subagent timed_out status.
     const timeoutError = () => timeoutKind === "idle"
@@ -355,65 +295,37 @@ class NativeAgent implements NativeAgentHandle {
       throw error instanceof Error ? error : new Error(String(error));
     };
 
-    let usage: AgentModelUsage | undefined;
     try {
-      for (let turn = 0; turn < MAX_MODEL_TURNS; turn += 1) {
-        if (controller.signal.aborted) raiseForAbort(new Error("Agent run cancelled"));
-        await this.maybeCompact(controller.signal, markProgress);
-        if (controller.signal.aborted) raiseForAbort(new Error("Agent run cancelled"));
-
-        this.emit({ type: "turn_start" });
-        let modelTurn: ModelTurn;
-        try {
-          modelTurn = await modelTurnStreamer(
-            this.endpoint,
-            this.systemPrompt,
-            this.history,
-            this.visibleToolSpecs(),
-            this.policy,
-            controller.signal,
-            {
-              onProgress: markProgress,
-              onTextDelta: (delta) => this.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } }),
-              onThinkingDelta: (delta) => this.emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta } }),
-            },
-          );
-        } catch (error) {
-          raiseForAbort(error);
-          throw error; // unreachable; narrows type
-        }
-        markProgress();
-        if (modelTurn.usage) usage = modelTurn.usage;
-        this.history.push(modelTurn.assistantMessage);
-        if (!modelTurn.toolCalls.length) break;
-
-        for (const call of modelTurn.toolCalls) {
-          this.emit({ type: "tool_execution_start", toolCallId: call.id, toolName: call.name, args: call.args });
-        }
-        // Tool calls within one assistant turn run concurrently (matching the
-        // previous engine's tool node); results append in call order.
-        const outcomes = await Promise.all(modelTurn.toolCalls.map((call) => this.executeToolCall(call)));
-        if (controller.signal.aborted) raiseForAbort(new Error("Agent run cancelled"));
-        for (const [index, outcome] of outcomes.entries()) {
-          const call = modelTurn.toolCalls[index];
-          if (!call) continue;
-          this.emit({
-            type: "tool_execution_end",
-            toolCallId: call.id,
-            toolName: call.name,
-            result: { content: [{ type: "text", text: outcome.content }], details: {} },
-            isError: outcome.isError,
-          });
-          this.history.push({
-            role: "tool",
-            tool_call_id: call.id,
-            name: call.name,
-            content: outcome.content,
-          });
-          markProgress();
-        }
-      }
-
+      const compactor = new HistoryCompactor<WireMessage>(async (prompt, signal, onProgress) => {
+        const summaryTurn = await modelTurnStreamer(
+          this.endpoint,
+          "You compact conversation history into dense, factual summaries.",
+          [{ role: "user", content: prompt }],
+          [],
+          this.policy,
+          signal,
+          { onProgress },
+        );
+        return typeof summaryTurn.assistantMessage.content === "string" ? summaryTurn.assistantMessage.content : "";
+      });
+      const contextAssembler = new DefaultContextAssembler<WireMessage>({
+        compactor,
+        systemPrompt: this.systemPrompt,
+        tools: () => this.toolRegistry.visibleSpecs(),
+      });
+      const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, modelTurnStreamer);
+      const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
+        maxModelTurns: MAX_MODEL_TURNS,
+        contextAssembler,
+        modelClient,
+        toolDispatcher: this.toolRegistry,
+        eventSink: (event) => this.emitRuntimeEvent(event),
+        waitController: this.waitController,
+      });
+      const result = await loop.run(this.history, controller.signal, markProgress)
+        .catch((error: unknown) => raiseForAbort(error));
+      this.history = result.history;
+      const usage = result.usage;
       this.emit({ type: "model_usage", ...(usage ? { usage, usageReported: true } : { usageReported: false }) });
       if (usage) this.emit({ type: "usage", usage });
       return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")) };
@@ -426,110 +338,44 @@ class NativeAgent implements NativeAgentHandle {
     }
   }
 
-  /** Compact older history into a summary checkpoint when over the trigger. */
-  private async maybeCompact(signal: AbortSignal, markProgress: () => void): Promise<void> {
-    const plan = planCompaction(this.history);
-    if (!plan) return;
-    let summaryText: string;
-    try {
-      const summaryTurn = await modelTurnStreamer(
-        this.endpoint,
-        "You compact conversation history into dense, factual summaries.",
-        [{ role: "user", content: buildSummaryPrompt(plan) }],
-        [],
-        this.policy,
-        signal,
-        { onProgress: markProgress },
-      );
-      summaryText = typeof summaryTurn.assistantMessage.content === "string" ? summaryTurn.assistantMessage.content : "";
-    } catch (error) {
-      if (signal.aborted) throw error;
-      return; // Summary failure skips compaction for this turn; the run continues.
-    }
-    const checkpoint = summaryCheckpointMessage(summaryText);
-    if (!checkpoint) return;
-    this.history = [checkpoint, ...plan.preserved];
-  }
-
-  private visibleToolSpecs(): WireToolSpec[] {
-    const hidden = hiddenDeferredNames(this.deferredState);
-    const specs: WireToolSpec[] = [];
-    for (const tool of this.tools.values()) {
-      if (hidden.has(tool.name)) continue;
-      specs.push({ name: tool.name, description: tool.description, parameters: tool.parameters as unknown });
-    }
-    if (this.deferredState) {
-      specs.push({ name: TOOL_SEARCH_SPEC.name, description: TOOL_SEARCH_SPEC.description, parameters: TOOL_SEARCH_SPEC.parameters });
-    }
-    return specs;
-  }
-
-  private async executeToolCall(call: NormalizedToolCall): Promise<ToolOutcome> {
-    if (call.argsParseError) {
-      return {
-        content: JSON.stringify({
-          error: { attempts: 1, code: "INVALID_TOOL_ARGUMENTS", message: `Invalid tool arguments: ${call.argsParseError}`.slice(0, 1_000), retryable: true },
-          ok: false,
-        }),
-        isError: true,
-      };
-    }
-    if (call.name === TOOL_SEARCH_NAME && this.deferredState) {
-      const query = typeof call.args.query === "string" ? call.args.query : "";
-      return { content: runToolSearch(this.deferredState, query), isError: false };
-    }
-    if (this.deferredState && hiddenDeferredNames(this.deferredState).has(call.name)) {
-      return { content: blockedDeferredToolResult(call.name), isError: true };
-    }
-    return this.executeTool(call.name, call.args, call.id);
-  }
-
-  private async executeTool(name: string, args: Record<string, unknown>, toolCallId: string): Promise<ToolOutcome> {
-    const loopKey = toolLoopKey(name, args);
-    const repeatedCount = (this.repeatedToolCalls.get(loopKey) ?? 0) + 1;
-    this.repeatedToolCalls.set(loopKey, repeatedCount);
-    if (repeatedCount >= LOOP_DETECTION_HARD_COUNT) {
-      return { content: loopHardStopContent(name, repeatedCount), isError: true };
-    }
-    if (repeatedCount >= LOOP_DETECTION_WARN_COUNT) {
-      return { content: loopWarningContent(name, repeatedCount), isError: false };
-    }
-    const tool = this.tools.get(name);
-    if (!tool) return { content: `Unknown tool: ${name}`, isError: true };
-    try {
-      const result = await tool.execute(toolCallId ?? randomUUID(), args as never, this.controller?.signal);
-      const text = result.content.map((item) => ("text" in item ? item.text : "")).join("\n");
-      // Remote content is attacker-influenceable and enters the model context
-      // verbatim: neutralize forged framework tags before it is stored or shown.
-      return { content: isRemoteContentTool(name) ? neutralizeUntrustedTags(text) : text, isError: false };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const invocationError = error && typeof error === "object" && "invocation" in error
-        ? (error as {
-            invocation?: {
-              attempts?: unknown[];
-              error?: { code?: string; retryAfterMs?: number; retryable?: boolean };
-            };
-          }).invocation
-        : undefined;
-      return {
-        content: JSON.stringify({
-          error: {
-            attempts: invocationError?.attempts?.length ?? 1,
-            code: invocationError?.error?.code ?? "TOOL_EXECUTION_FAILED",
-            message: message.slice(0, 1_000),
-            ...(invocationError?.error?.retryAfterMs !== undefined ? { retryAfterMs: invocationError.error.retryAfterMs } : {}),
-            retryable: invocationError?.error?.retryable ?? false,
-          },
-          ok: false,
-        }),
-        isError: true,
-      };
-    }
-  }
-
   private emit(event: AgentEvent): void {
     for (const listener of this.listeners) listener(event);
+  }
+
+  private emitRuntimeEvent(event: RunEvent<ModelUsage>): void {
+    switch (event.type) {
+      case "turn_start":
+        this.emit({ type: "turn_start" });
+        break;
+      case "model_delta":
+        this.emit({
+          type: "message_update",
+          assistantMessageEvent: event.kind === "text"
+            ? { type: "text_delta", delta: event.delta }
+            : { type: "thinking_delta", delta: event.delta },
+        });
+        break;
+      case "tool_execution_start":
+        this.emit({
+          type: "tool_execution_start",
+          toolCallId: event.call.id,
+          toolName: event.call.name,
+          args: event.call.args,
+        });
+        break;
+      case "tool_execution_end":
+        this.emit({
+          type: "tool_execution_end",
+          toolCallId: event.call.id,
+          toolName: event.call.name,
+          result: { content: [{ type: "text", text: event.content }], details: {} },
+          isError: event.isError,
+        });
+        break;
+      case "completed":
+      case "state_changed":
+        break;
+    }
   }
 }
 

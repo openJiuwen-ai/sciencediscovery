@@ -17,8 +17,8 @@ import type {
   AgentProfile,
   AgentRunInput,
   AgentRunResult,
-  WorkspaceAgentOptions,
-} from "@science-agent/agent-runtime";
+} from "@science-agent/orchestration";
+import type { WorkspaceAgentOptions } from "@science-agent/context";
 
 import {
   createNativeAgent,

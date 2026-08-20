@@ -18,7 +18,7 @@ import { lstat, mkdir, open, rename, rm, stat, statfs } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { resolveWorkspaceFile } from "@science-agent/agent-runtime";
+import { resolveWorkspaceFile } from "@science-agent/workspace";
 import type {
   ArtifactCandidate,
   ArtifactJob,

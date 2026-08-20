@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { RequestExecutionIdentity } from "@science-agent/agent-runtime";
+import type { RequestExecutionIdentity } from "@science-agent/orchestration";
 import type { RunStreamEvent } from "@science-agent/schema";
 
 import type { AgentPermissionRuntime } from "./permission-runtime.js";

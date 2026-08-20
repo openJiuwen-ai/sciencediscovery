@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 
-import { resolveWorkspaceFile } from "@science-agent/agent-runtime";
+import { resolveWorkspaceFile } from "@science-agent/workspace";
 import { CasStore } from "@science-agent/cas";
 import type {
   ArtifactDerivation,

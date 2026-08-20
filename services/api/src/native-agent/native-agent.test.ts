@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { AgentEvent, AgentHistoryMessage } from "@science-agent/agent-runtime";
+import type { AgentEvent, AgentHistoryMessage } from "@science-agent/orchestration";
 
 import {
   createNativeAgent,
@@ -26,7 +26,7 @@ import {
   type ModelTurnStreamer,
   type NativeAgentOptions,
 } from "./index.js";
-import type { ModelTurn, WireToolSpec } from "./model-client.js";
+import type { ModelTurn, WireToolSpec } from "@science-agent/model";
 
 function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" | "executePython" | "executeShell" | "sessionId" | "workspaceRoot"> {
   const root = mkdtempSync(join(tmpdir(), "native-agent-"));
