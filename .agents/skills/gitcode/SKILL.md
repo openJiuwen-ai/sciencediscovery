@@ -1,14 +1,13 @@
 ---
 name: gitcode
 description: >
-  Operate GitCode issues, PRs, wikis, code/MR refs, and MindSpore cached
-  templates. Use for GitCode, gitcode.com, atomgit.com, MindSpore issues/PRs,
-  wiki, or /gitcode.
+  Operate GitCode issues, PRs, wikis, code/MR refs, and cached org templates.
+  Use for gitcode.com, atomgit.com, GitCode issues/PRs, wiki, or /gitcode.
 ---
 
 # GitCode (Issue / PR)
 
-Project-local skill for **science_agent** on gitcode.com (not under `skills/`).
+Project-local skill for **sciencediscovery** on gitcode.com (not under `skills/`).
 
 Use the command table below, `gitcode schema`, or `gitcode <cmd> --help` to
 resolve flags. Only if a flag is still unclear, run
@@ -32,8 +31,8 @@ resolve flags. Only if a flag is still unclear, run
 
 `gitcode.com` and `atomgit.com` are hostnames for the same website/platform: repositories and their issue/PR numbers are identical. Do not treat AtomGit as a separate product. For authored or reported repo, issue, and PR URLs, prefer `https://gitcode.com/...`; rewrite AtomGit hosts and CLI `html_url` paths such as `/merge_requests/N` to these canonical forms:
 
-- Issue: `https://gitcode.com/mindspore/ScienceAgent/issues/9`
-- PR list: `https://gitcode.com/mindspore/ScienceAgent/pulls`
+- Issue: `https://gitcode.com/openJiuwen/sciencediscovery/issues/9`
+- PR list: `https://gitcode.com/openJiuwen/sciencediscovery/pulls`
 - PR detail: `https://gitcode.com/owner/repo/pull/N`
 - SSH: `git@gitcode.com:owner/repo.git` and `git@atomgit.com:owner/repo.git` are equivalent; prefer writing/configuring the `gitcode.com` form, even when an existing remote uses AtomGit.
 
@@ -121,12 +120,18 @@ For complete Issue inventories, treat `length == --limit` as “possibly truncat
 
 ### Cross-references and issue association
 
-- Ordinary issue/comment reference: `[#32](https://gitcode.com/mindspore/ScienceAgent/issues/32)`.
-- Ordinary PR reference: `[#10](https://gitcode.com/mindspore/ScienceAgent/pull/10)`. Write `/pull/N` in authored links even if CLI `html_url` says `/merge_requests/N`.
-- To associate an issue in a PR body, retain the trigger candidate and add a readable link: `Fixes #32 ([#32](https://gitcode.com/mindspore/ScienceAgent/issues/32))`.
+- Ordinary issue/comment reference: `[#32](https://gitcode.com/openJiuwen/sciencediscovery/issues/32)`.
+- Ordinary PR reference: `[#10](https://gitcode.com/openJiuwen/sciencediscovery/pull/10)`. Write `/pull/N` in authored links even if CLI `html_url` says `/merge_requests/N`.
+- To associate an issue in a PR body, retain the trigger candidate and add a readable link: `Fixes #32 ([#32](https://gitcode.com/openJiuwen/sciencediscovery/issues/32))`.
 - Automatic closing after merge is **not verified**. Never promise that `Fixes #N` or its Markdown link will close the issue; commit messages alone do not auto-close.
 
 ## MindSpore org templates
+
+**Default for this repo (`openJiuwen/sciencediscovery`)**: first check this
+repo's own `.gitcode` Issue/PR templates; it currently has none, so write the
+issue/PR body in Chinese directly. The mindspore org templates below are an
+**opt-in** reuse path, not the default; do **not** default to `-R mindspore/...`
+or assume a mindspore template applies to this repo.
 
 Upstream (do not vendor into git): `mindspore/.gitcode` @ `master`, tree `.gitcode/`.
 Local cache (gitignored): `{baseDir}/cache/mindspore-org-templates/`.
