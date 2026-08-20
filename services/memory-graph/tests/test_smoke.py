@@ -420,10 +420,10 @@ def test_persist_claim_artifact_alias_passes_cite_guard(client: TestClient) -> N
 
 def test_persist_claim_accepts_artifact_versions_and_report_version(client: TestClient) -> None:
     # The new cites_artifact_versions (alias→version) and artifact_version
-    # (report version, states target) fields are accepted by the request model
-    # and do not trip the no_cites_target guard; the degraded branch runs and
-    # returns no claim. Verifies the version-pinning extension is wired without
-    # a live Neo4j.
+    # (report version, stated_in target) fields are accepted by the request
+    # model and do not trip the no_cites_target guard; the degraded branch runs
+    # and returns no claim. Verifies the version-pinning extension is wired
+    # without a live Neo4j.
     response = client.post(
         "/persist/claim",
         json={
@@ -446,15 +446,16 @@ def test_persist_claim_accepts_artifact_versions_and_report_version(client: Test
     assert body["claim_id"] is None
 
 
-def test_persist_states_requires_artifact_version(client: TestClient) -> None:
-    # LinkClaimsRequest now requires artifact_version (composite key pins states
-    # to the report's exact version); omitting it is a 422, not a silent 200.
+def test_persist_stated_in_requires_artifact_version(client: TestClient) -> None:
+    # LinkClaimsRequest now requires artifact_version (composite key pins
+    # stated_in to the report's exact version); omitting it is a 422, not a
+    # silent 200.
     response = client.post(
-        "/persist/states",
+        "/persist/stated_in",
         json={
             "artifact_id": "art-report-1",
             "claim_ids": ["cl-1"],
-            "session_id": "sess-states-1",
+            "session_id": "sess-stated-in-1",
         },
         headers={"authorization": "Bearer test-token"},
     )
@@ -681,8 +682,8 @@ def test_artifact_versions_keep_both_nodes_and_supersedes(live_client: TestClien
 
 @needs_neo4j
 def test_cites_and_states_pin_to_specific_version(live_client: TestClient) -> None:
-    """cites and states edges land on the exact version declared, not the
-    latest (which would drift as the product is regenerated)."""
+    """supports and stated_in edges land on the exact version declared, not
+    the latest (which would drift as the product is regenerated)."""
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-cite"
     _wipe_session(sid)
@@ -711,8 +712,8 @@ def test_cites_and_states_pin_to_specific_version(live_client: TestClient) -> No
             },
             headers=headers,
         )
-    # Declare a claim citing fig v1 (explicit version), asserted in a report
-    # artifact v2 (states target = report v2).
+    # Declare a claim citing fig v1 (explicit version), stated in a report
+    # artifact v2 (stated_in target = report v2).
     claim = live_client.post("/persist/claim", json={
         "content": "curve peaks at 50 µM",
         "claim_type": "STATISTICAL",
@@ -725,7 +726,7 @@ def test_cites_and_states_pin_to_specific_version(live_client: TestClient) -> No
         "session_id": sid,
     }, headers=headers).json()
     assert claim["status"] == "ok"
-    # The report artifact version must be mirrored first for states to attach.
+    # The report artifact version must be mirrored first for stated_in to attach.
     live_client.post("/observe/execution", json={
         "execution_id": "exec-report",
         "session_id": sid,
@@ -745,7 +746,7 @@ def test_cites_and_states_pin_to_specific_version(live_client: TestClient) -> No
             "media_type": "text/markdown",
         }],
     }, headers=headers)
-    live_client.post("/persist/states", json={
+    live_client.post("/persist/stated_in", json={
         "artifact_id": "art-report",
         "artifact_version": 2,
         "claim_ids": [claim["claim_id"]],
@@ -757,12 +758,14 @@ def test_cites_and_states_pin_to_specific_version(live_client: TestClient) -> No
                   and n["extra"]["artifact_id"] == "art-fig" and n["extra"]["version"] == 1)
     report_v2 = next(n for n in sub["nodes"] if n["label"] == "Artifact"
                      and n["extra"]["artifact_id"] == "art-report" and n["extra"]["version"] == 2)
-    # cites → fig v1 (NOT v2).
-    cites = [e for e in sub["edges"] if e["type"] == "cites" and e["target"] == fig_v1["id"]]
-    assert len(cites) == 1
-    # states → report v2.
-    states = [e for e in sub["edges"] if e["type"] == "states" and e["source"] == report_v2["id"]]
-    assert len(states) == 1
+    # supports: fig v1 (NOT v2) is the edge source — supports runs Artifact →
+    # Claim, so the cited figure is the source.
+    sup = [e for e in sub["edges"] if e["type"] == "supports" and e["source"] == fig_v1["id"]]
+    assert len(sup) == 1, "supports must be anchored to fig v1 (the cited version)"
+    # stated_in → report v2. stated_in runs Claim → Artifact, so the report is
+    # the edge target.
+    stated = [e for e in sub["edges"] if e["type"] == "stated_in" and e["target"] == report_v2["id"]]
+    assert len(stated) == 1, "stated_in must be anchored to report v2"
 
 
 @needs_neo4j
@@ -1301,13 +1304,13 @@ def test_artifact_provenance_endpoint_returns_addressing(live_client: TestClient
 def test_get_chain_artifact_kind_centered_on_selected_node(live_client: TestClient) -> None:
     """chain_kind='artifact' is centered on the selected node itself — it does
     NOT anchor on the session report. The chain walks the selected node's own
-    citation entry (Paper → extracted_from / Claim → cites → Evidence → …) plus
+    citation entry (Paper → extracts → Evidence → supports → Claim → …) plus
     its produces/input derivation; a sibling citation branch that the selected
     node does not reference is structurally unreachable and stays out.
 
     Topology (one session, two Paper branches converging on one report):
-        paper-A -extracted_from<- ev-A <-cites- claim-A -states- report
-        paper-B -extracted_from<- ev-B <-cites- claim-B -states- report
+        paper-A -extracts-> ev-A -supports-> claim-A -stated_in-> report
+        paper-B -extracts-> ev-B -supports-> claim-B -stated_in-> report
     Selecting paper-A must keep paper-A's own branch (paper-A / ev-A) and drop
     paper-B's fork entirely — not by pruning to an anchor path, but because the
     artifact chain walks from paper-A's center and never crosses to paper-B.
@@ -1342,11 +1345,12 @@ def test_get_chain_artifact_kind_centered_on_selected_node(live_client: TestClie
             }],
         }, headers=headers)
     # Declare an Evidence extracted from each Paper, then a Claim citing that
-    # Evidence, asserted (states) in report v2. The graph stores Paper links
+    # Evidence, stated_in report v2. The graph stores Paper links
     # lowercased (see persistence._normalize_link), so seed + look up the
     # lowercased form.
     paper_links = {"A": "https://x.test/paper-a", "B": "https://x.test/paper-b"}
     claim_ids: dict[str, str] = {}
+    evidence_ids: dict[str, str] = {}
     for tag, link in paper_links.items():
         ev = live_client.post("/persist/evidence", json={
             "content": f"evidence {tag}", "source_paper_link": link,
@@ -1354,6 +1358,7 @@ def test_get_chain_artifact_kind_centered_on_selected_node(live_client: TestClie
             "confidence": "HIGH", "strength": "MODERATE", "session_id": sid,
         }, headers=headers).json()
         assert ev["status"] == "ok", ev
+        evidence_ids[tag] = ev["evidence_id"]
         claim = live_client.post("/persist/claim", json={
             "content": f"claim {tag}", "claim_type": "STATISTICAL",
             "confidence": "HIGH", "locator": tag,
@@ -1363,8 +1368,8 @@ def test_get_chain_artifact_kind_centered_on_selected_node(live_client: TestClie
         }, headers=headers).json()
         assert claim["status"] == "ok", claim
         claim_ids[tag] = claim["claim_id"]
-    # Link both claims to report v2 via states.
-    live_client.post("/persist/states", json={
+    # Link both claims to report v2 via stated_in.
+    live_client.post("/persist/stated_in", json={
         "artifact_id": AC_REPORT, "artifact_version": 2,
         "claim_ids": list(claim_ids.values()), "session_id": sid,
     }, headers=headers)
@@ -1376,9 +1381,9 @@ def test_get_chain_artifact_kind_centered_on_selected_node(live_client: TestClie
                   and n["extra"].get("link") == "https://x.test/paper-b")
 
     # chain_kind=artifact, selected node = paper-A: the chain is centered on
-    # paper-A. paper-A's own Evidence (extracted_from out) is walked as the
-    # citation entry; paper-B sits on a sibling fork the walk never crosses,
-    # so it (and its Evidence/Claim) stays out.
+    # paper-A. paper-A's own Evidence (extracts out — Paper → Evidence) is
+    # walked as the citation entry; paper-B sits on a sibling fork the walk
+    # never crosses, so it (and its Evidence/Claim) stays out.
     art_chain = live_client.post("/query/chain", json={
         "node_id": paper_a["id"], "session_id": sid, "chain_kind": "artifact",
     }, headers=headers).json()
@@ -1386,19 +1391,60 @@ def test_get_chain_artifact_kind_centered_on_selected_node(live_client: TestClie
     assert paper_a["id"] in art_ids, "selected node (the chain's center) must be present"
     assert paper_b["id"] not in art_ids, \
         "sibling Paper branch is unreachable from the selected node's center"
-    # The Evidence/Claim on paper-B's fork must also be gone.
+    # The Evidence/Claim on paper-B's fork must also be gone. extracts runs
+    # Paper → Evidence, so paper-B is the edge source and its Evidence the
+    # target (the inverse of the old extracted_from direction).
     ev_b = next(n for n in sub["nodes"] if n["label"] == "Evidence"
-                and any(e["type"] == "extracted_from" and e["source"] == n["id"]
-                        and e["target"] == paper_b["id"] for e in sub["edges"]))
+                and any(e["type"] == "extracts" and e["source"] == paper_b["id"]
+                        and e["target"] == n["id"] for e in sub["edges"]))
     assert ev_b["id"] not in art_ids, "sibling Evidence must be absent"
+
+    # --- Edge-direction verification: the rename+flip must orient each edge
+    # source→target exactly. A rename that forgot to flip direction would
+    # pass the node-presence asserts above (the same nodes appear either way)
+    # but fail here, because source/target swap. This is the only place that
+    # catches "renamed the edge but left it pointing the old way".
+    report_v2 = next(n for n in sub["nodes"] if n["label"] == "Artifact"
+                     and n["extra"]["artifact_id"] == AC_REPORT
+                     and n["extra"]["version"] == 2)
+    ev_a = next(n for n in sub["nodes"] if n["label"] == "Evidence"
+                and n["id"] == evidence_ids["A"])
+    claim_a = next(n for n in sub["nodes"] if n["label"] == "Claim"
+                   and n["id"] == claim_ids["A"])
+    # The artifact chain must surface paper-A's whole branch (Evidence + Claim
+    # + report) so the edges below render — guard before asserting on edges.
+    assert ev_a["id"] in art_ids, "paper-A's Evidence must be in its artifact chain"
+    assert claim_a["id"] in art_ids, "paper-A's Claim must be in its artifact chain"
+    assert report_v2["id"] in art_ids, "the report Artifact must be in paper-A's artifact chain"
+
+    ac_edges = art_chain["edges"]
+    # extracts: Paper → Evidence (Paper is source). Reaching paper-A's Evidence
+    # from paper-A walks extracts *out*.
+    ext = [e for e in ac_edges if e["type"] == "extracts"
+           and e["source"] == paper_a["id"] and e["target"] == ev_a["id"]]
+    assert len(ext) == 1, "extracts must point Paper → Evidence (Paper is source)"
+    # supports: Evidence → Claim (Evidence is source). supports is walked *out*
+    # from the Evidence just reached.
+    sup = [e for e in ac_edges if e["type"] == "supports"
+           and e["source"] == ev_a["id"] and e["target"] == claim_a["id"]]
+    assert len(sup) == 1, "supports must point Evidence → Claim (Evidence is source)"
+    # stated_in: Claim → report Artifact (Claim is source, report is target).
+    stated = [e for e in ac_edges if e["type"] == "stated_in"
+              and e["source"] == claim_a["id"] and e["target"] == report_v2["id"]]
+    assert len(stated) == 1, "stated_in must point Claim → report Artifact"
+    # Negative: the old edge names must not survive the rename anywhere in the
+    # chain's edges (guards against a half-finished rename leaving both).
+    assert not any(e["type"] in ("extracted_from", "cites", "states")
+                   for e in ac_edges), "old edge names must not appear in the chain"
 
     # chain_kind=full (default), same selected node: full is the legacy
     # directional hop-walk from the source. From paper_a it reaches paper_a's
-    # own Evidence (extracted_from in), the producing SubTask + next-chain
-    # SubTasks/Goal (produces in + next in/out). It does NOT cross to paper_b
-    # — paper_b sits on a sibling citation fork reached only through the
-    # report's states→Claim→cites→Evidence path, which the full hops don't
-    # walk. So paper_b's absence here is structural, not the result of pruning.
+    # own Evidence (extracts in — walking against Paper → Evidence), the
+    # producing SubTask + next-chain SubTasks/Goal (produces in + next in/out).
+    # It does NOT cross to paper_b — paper_b sits on a sibling citation fork
+    # reached only through the report's stated_in→Claim→supports→Evidence path,
+    # which the full hops don't walk. So paper_b's absence here is structural,
+    # not the result of pruning.
     full_chain = live_client.post("/query/chain", json={
         "node_id": paper_a["id"], "session_id": sid,
     }, headers=headers).json()
@@ -1408,22 +1454,22 @@ def test_get_chain_artifact_kind_centered_on_selected_node(live_client: TestClie
         "paper_b's fork is unreachable from paper_a via the full hops"
     # paper_a's Evidence is on paper_a's own fork — full reaches it.
     ev_a = next(n for n in sub["nodes"] if n["label"] == "Evidence"
-                and any(e["type"] == "extracted_from" and e["source"] == n["id"]
-                        and e["target"] == paper_a["id"] for e in sub["edges"]))
+                and any(e["type"] == "extracts" and e["source"] == paper_a["id"]
+                        and e["target"] == n["id"] for e in sub["edges"]))
     assert ev_a["id"] in full_ids, "paper_a's Evidence is on its own fork, full reaches it"
 
 
 @needs_neo4j
 def test_get_chain_artifact_kind_no_report_anchor_walks_centered_chain(live_client: TestClient) -> None:
     """chain_kind='artifact' is centered on the selected node itself — it does
-    NOT depend on a session report anchor (no Artifact-[:states]->Claim needed).
+    NOT depend on a session report anchor (no Claim-[:stated_in]->Artifact needed).
     An intermediate Paper produced mid-session (before any report exists) still
     resolves its own upstream tail (Paper <-[:produces]- SubTask), so "view
     artifact chain" works at any time, not only after a report is declared."""
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-noanchor"
     _wipe_session(sid)
-    # Seed one Paper via mcp-search but NO report artifact / no states edge —
+    # Seed one Paper via mcp-search but NO report artifact / no stated_in edge —
     # there is no report anchor in this session at all.
     live_client.post("/observe/mcp-search", json={
         "invocation_id": "search-na", "session_id": sid, "turn_id": "turn-na",
@@ -1447,7 +1493,7 @@ def test_get_chain_artifact_kind_no_report_anchor_walks_centered_chain(live_clie
 def test_get_chain_artifact_kind_anchor_itself_walks_own_derivation(live_client: TestClient) -> None:
     """Selecting a report Artifact ITSELF walks that Artifact's own produces/
     input derivation chain (Artifact <-[:produces]- Code <-[:input]- ...) AND
-    its citation downstream (states→Claim→cites→Evidence→extracted_from→Paper),
+    its citation downstream (stated_in→Claim→supports→Evidence→extracts→Paper),
     both centered on the selected node. A reviewer sees the report's references
     alongside the inputs that produced it. Regression guard for the case where
     clicking a report Artifact's "view artifact chain" surfaced only
@@ -1457,7 +1503,7 @@ def test_get_chain_artifact_kind_anchor_itself_walks_own_derivation(live_client:
     sid = "sess-anchor"
     _wipe_session(sid)
     # Two report versions; v2 is the report anchor (highest version with
-    # states→Claim). Session-unique artifact_id so the global (artifact_id,
+    # stated_in→Claim). Session-unique artifact_id so the global (artifact_id,
     # version) uniqueness constraint doesn't MERGE-hit another test's report.
     ANC_REPORT = "art-report-anc"
     for v in (1, 2):
@@ -1487,7 +1533,7 @@ def test_get_chain_artifact_kind_anchor_itself_walks_own_derivation(live_client:
         "cites_evidence_aliases": {"ev1": ev["evidence_id"]},
         "artifact_id": ANC_REPORT, "artifact_version": 2, "session_id": sid,
     }, headers=headers).json()
-    live_client.post("/persist/states", json={
+    live_client.post("/persist/stated_in", json={
         "artifact_id": ANC_REPORT, "artifact_version": 2,
         "claim_ids": [claim["claim_id"]], "session_id": sid,
     }, headers=headers)
@@ -1498,7 +1544,7 @@ def test_get_chain_artifact_kind_anchor_itself_walks_own_derivation(live_client:
     # Selecting the report Artifact itself: the artifact chain is centered on
     # it, walking its own produces/input derivation (the Code that produced the
     # report, reached via <-[:produces]-) AND its citation downstream (the
-    # Claims it states, the Evidence/Artifacts those Claims cite, the Papers
+    # Claims stated_in it, the Evidence/Artifacts those Claims cite, the Papers
     # the Evidence was extracted from). Both relationships belong on the
     # report's chain — a reviewer sees the report's references alongside the
     # inputs that produced it.
@@ -1510,8 +1556,8 @@ def test_get_chain_artifact_kind_anchor_itself_walks_own_derivation(live_client:
     labels = {n["label"] for n in chain["nodes"]}
     assert "Code" in labels, "the report's producing Code must be reached via <-[:produces]-"
     assert "Claim" in labels, "states→Claim: the report's cited Claims must appear"
-    assert "Evidence" in labels, "cites→Evidence: the Evidence the Claims cite must appear"
-    assert "Paper" in labels, "extracted_from→Paper: the source Papers must appear"
+    assert "Evidence" in labels, "supports→Evidence: the Evidence the Claims cite must appear"
+    assert "Paper" in labels, "extracts→Paper: the source Papers must appear"
 
 
 @needs_neo4j
@@ -1526,7 +1572,7 @@ def test_get_chain_artifact_kind_severed_paper_drops_orphan_anchor(live_client: 
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-orphan-paper"
     _wipe_session(sid)
-    # Report anchor (states->Claim) so there IS an anchor in the session — the
+    # Report anchor (stated_in->Claim) so there IS an anchor in the session — the
     # Paper below is severed from it precisely because nothing cites it. The
     # anchor's Claim must cite at least one target (a Claim with no cites is
     # rejected 422), so seed a SEPARATE cited Paper/Evidence for the anchor's
@@ -1559,12 +1605,12 @@ def test_get_chain_artifact_kind_severed_paper_drops_orphan_anchor(live_client: 
         "cites_evidence_aliases": {"ev1": ev["evidence_id"]},
         "artifact_id": ORP_REPORT, "artifact_version": 1, "session_id": sid,
     }, headers=headers).json()
-    live_client.post("/persist/states", json={
+    live_client.post("/persist/stated_in", json={
         "artifact_id": ORP_REPORT, "artifact_version": 1,
         "claim_ids": [claim["claim_id"]], "session_id": sid,
     }, headers=headers)
     # The ORPHAN Paper — produced by a SubTask via mcp-search, but no Evidence
-    # extracts from it and no Claim cites it, so it has no path back to the
+    # extracts from it (Paper→Evidence) and no Claim cites it, so it has no path back to the
     # report anchor (it is severed).
     live_client.post("/observe/mcp-search", json={
         "invocation_id": "search-orp", "session_id": sid, "turn_id": "turn-orp-s",
@@ -1601,7 +1647,7 @@ def test_get_chain_artifact_kind_walks_produces_input_backchain(live_client: Tes
     alternates recursively until the derivation bottoms out.
 
     A cited figure must ALSO surface the reverse citation (who cites it):
-    figure <-[:cites]- Claim <-[:states]- report, so the figure's own chain
+    figure -[:supports]-> Claim -[:stated_in]-> report, so the figure's own chain
     shows which report's which Claim references it, alongside its derivation.
     """
     headers = {"authorization": "Bearer test-token"}
@@ -1611,7 +1657,7 @@ def test_get_chain_artifact_kind_walks_produces_input_backchain(live_client: Tes
     # version) uniqueness constraint would otherwise MERGE-hit another test's
     # art-report/art-fig/art-base v1 and never write this session's copy.
     BC_REPORT, BC_BASE, BC_FIG = "art-report-bc", "art-base-bc", "art-fig-bc"
-    # Seed the report anchor (states→Claim) so the artifact chain has a start.
+    # Seed the report anchor (stated_in→Claim) so the artifact chain has a start.
     live_client.post("/observe/execution", json={
         "execution_id": "exec-bc-report", "session_id": sid, "turn_id": "turn-bc-report",
         "tool": "run_python", "language": "python", "code_hash": "hash-bc-report",
@@ -1655,7 +1701,7 @@ def test_get_chain_artifact_kind_walks_produces_input_backchain(live_client: Tes
             },
         ],
     }, headers=headers)
-    # A Claim cites the figure, asserted (states) in the report → report is anchor.
+    # A Claim cites the figure, stated_in the report → report is anchor.
     claim = live_client.post("/persist/claim", json={
         "content": "fig peaks at 50", "claim_type": "STATISTICAL",
         "confidence": "HIGH", "locator": "fig1",
@@ -1664,7 +1710,7 @@ def test_get_chain_artifact_kind_walks_produces_input_backchain(live_client: Tes
         "artifact_id": BC_REPORT, "artifact_version": 1, "session_id": sid,
     }, headers=headers).json()
     assert claim["status"] == "ok"
-    live_client.post("/persist/states", json={
+    live_client.post("/persist/stated_in", json={
         "artifact_id": BC_REPORT, "artifact_version": 1,
         "claim_ids": [claim["claim_id"]], "session_id": sid,
     }, headers=headers)
@@ -1700,14 +1746,14 @@ def test_get_chain_artifact_kind_walks_produces_input_backchain(live_client: Tes
     # The figure is CITED by the report's Claim — the reverse citation walk
     # (fig <-[:cites]- Claim <-[:states]- report) must surface the citing
     # Claim AND the citing report Artifact on the figure's own chain, not just
-    # its produces/input derivation. The cites + states edges render too.
+    # its produces/input derivation. The supports + stated_in edges render too.
     report_in_chain = any(n["label"] == "Artifact"
                           and n["extra"].get("artifact_id") == BC_REPORT
                           for n in chain["nodes"])
     assert report_in_chain, \
-        "the report Artifact that cites this figure must appear (reverse cites)"
-    assert "cites" in edge_types, "the citing Claim's cites edge must render"
-    assert "states" in edge_types, "the report's states edge must render"
+        "the report Artifact that supports this figure must appear (reverse supports)"
+    assert "supports" in edge_types, "the citing Claim's supports edge must render"
+    assert "stated_in" in edge_types, "the report's stated_in edge must render"
 
 
 @needs_neo4j
@@ -1778,8 +1824,235 @@ def test_get_chain_artifact_kind_uncited_artifact_walks_full_derivation(live_cli
     assert "produces" in edge_types and "input" in edge_types, \
         "uncited figure's derivation tail must carry produces + input edges"
     # No citation nodes — the figure was never cited, so states/cites/
-    # extracted_from reach nothing.
+    # extracts reach nothing.
     labels = {n["label"] for n in chain["nodes"]}
     assert "Claim" not in labels, "an uncited Artifact has no states→Claim citation"
     assert "Evidence" not in labels
     assert "Paper" not in labels
+
+
+@needs_neo4j
+def test_get_chain_artifact_kind_no_input_code_still_reaches_goal(live_client: TestClient) -> None:
+    """A cited Artifact whose producing Code read NO inputs (a leaf Code) must
+    still trace all the way to the ResearchGoal, not dead-end at the Code.
+
+    This is the supports-connected Artifact path's symmetry guarantee with the
+    Evidence path: the Evidence branch reaches the goal via the entry hops'
+    ``produces in SubTask`` + ``next`` chain, but the Artifact derivation tail
+    (_artifact_derivation_tail) only alternates produces/input between
+    Artifact↔Code — and a leaf Code (no input edges) bottoms the alternation
+    out at the Code itself. Before the tail anchored each producing Code to its
+    SubTask→next→goal chain, clicking a Claim's "view chain" left the Artifact
+    branch stuck at the Code node while the Evidence branch reached the goal —
+    an asymmetric chain the reviewer reads as a broken citation.
+
+    Topology (the minimal reproduction):
+        ResearchGoal -[:next]-> SubTask_fig -[:produces]-> Code_fig
+                                                Code_fig -[:produces]-> fig (no inputs)
+        fig <-[:supports]- Claim -[:stated_in]-> report
+    The figure's producing Code read no inputs, so without the SubTask→next→goal
+    tail the Artifact path stops at Code_fig. The fix runs that tail from each
+    newly-discovered producing Code, so fig now reaches the goal through the
+    same SubTask/next spine the Evidence branch uses.
+    """
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-leafcode"
+    _wipe_session(sid)
+    # Seed the ResearchGoal via the first-message fallback so the SubTask→goal
+    # next spine exists (observe/execution alone builds SubTasks but only the
+    # first-message/plan endpoints persist the ResearchGoal they link to).
+    live_client.post("/observe/session-first-message", json={
+        "session_id": sid, "goal_id": f"goal:session:{sid}",
+        "core_objective": "analyze the figure", "domain": "Biology",
+        "topic_scope": [], "created_at": "2026-08-19T00:00:00Z",
+    }, headers=headers)
+    # Session-unique artifact_ids (global composite-key constraint would
+    # otherwise MERGE-hit another test's art-* v1).
+    LC_REPORT, LC_FIG = "art-report-lc", "art-fig-lc"
+    # The report execution seeds the report Artifact + its own SubTask.
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-lc-report", "session_id": sid,
+        "turn_id": "turn-lc-report", "tool": "run_python", "language": "python",
+        "code_hash": "hash-lc-report", "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-19T00:00:01Z", "finished_at": "2026-08-19T00:00:01Z",
+        "produced_artifacts": [{
+            "artifact_id": LC_REPORT, "path": "report.md",
+            "logical_name": "report.md", "version": 1, "media_type": "text/markdown",
+        }],
+    }, headers=headers)
+    # The figure execution: NO input_artifact_versions, so Code_fig is a leaf
+    # (no input edges). This is the dead-end the tail must bridge.
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-lc-fig", "session_id": sid,
+        "turn_id": "turn-lc-fig", "tool": "run_python", "language": "python",
+        "code_hash": "hash-lc-fig", "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-19T00:00:02Z", "finished_at": "2026-08-19T00:00:02Z",
+        "produced_artifacts": [{
+            "artifact_id": LC_FIG, "path": "fig.svg",
+            "logical_name": "fig.svg", "version": 1, "media_type": "image/svg+xml",
+        }],
+    }, headers=headers)
+    # Claim cites the leaf-produced figure, stated_in the report → the figure
+    # sits on the report's supports-connected Artifact path.
+    claim = live_client.post("/persist/claim", json={
+        "content": "fig peaks at 50", "claim_type": "STATISTICAL",
+        "confidence": "HIGH", "locator": "fig1",
+        "cites_artifact_aliases": {"fig1": LC_FIG},
+        "cites_artifact_versions": {"fig1": 1},
+        "artifact_id": LC_REPORT, "artifact_version": 1, "session_id": sid,
+    }, headers=headers).json()
+    assert claim["status"] == "ok"
+    live_client.post("/persist/stated_in", json={
+        "artifact_id": LC_REPORT, "artifact_version": 1,
+        "claim_ids": [claim["claim_id"]], "session_id": sid,
+    }, headers=headers)
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    fig = next(n for n in sub["nodes"] if n["label"] == "Artifact"
+              and n["extra"]["artifact_id"] == LC_FIG)
+    # Query the figure's artifact chain — the path the Artifact branch of a
+    # Claim's "view chain" renders.
+    chain = live_client.post("/query/chain", json={
+        "node_id": fig["id"], "session_id": sid, "chain_kind": "artifact",
+    }, headers=headers).json()
+    nodes = {n["id"]: n for n in chain["nodes"]}
+    labels = {n["label"] for n in chain["nodes"]}
+    assert fig["id"] in nodes, "the selected figure must be present"
+    assert "Code" in labels, "the figure's producing Code must be reached"
+    # The producing SubTask AND the ResearchGoal must both be present — this
+    # is the regression: before the tail bridged the leaf Code to its task
+    # chain, neither appeared and the Artifact path stopped at the Code.
+    assert "SubTask" in labels, \
+        "the producing Code's SubTask must be reached (leaf-Code tail bridge)"
+    assert "ResearchGoal" in labels, \
+        "the Artifact path must reach the ResearchGoal, not stop at the Code"
+    # The Artifact path must be REACHABLE to the goal through the chain's edges
+    # (not just co-present) — proves the SubTask→next→goal spine actually links
+    # the Code to the goal, mirroring the Evidence branch's reach.
+    adj: dict[str, set[str]] = {n["id"]: set() for n in chain["nodes"]}
+    for e in chain["edges"]:
+        adj.setdefault(e["source"], set()).add(e["target"])
+        adj.setdefault(e["target"], set()).add(e["source"])
+    goal_id = next(n["id"] for n in chain["nodes"] if n["label"] == "ResearchGoal")
+    seen = {fig["id"]}
+    stack = [fig["id"]]
+    while stack:
+        x = stack.pop()
+        for y in adj.get(x, ()):
+            if y not in seen:
+                seen.add(y)
+                stack.append(y)
+    assert goal_id in seen, \
+        "the figure must be edge-reachable to the ResearchGoal through the chain"
+
+
+@needs_neo4j
+def test_get_chain_claim_source_cited_artifact_reaches_goal(live_client: TestClient) -> None:
+    """Clicking a Claim's own "View chain" (chain_kind=artifact, source IS the
+    Claim) must trace the supports-connected Artifact path all the way to the
+    ResearchGoal — not dead-end it at the producing Code.
+
+    This is the Claim-source counterpart of the leaf-Code regression. The
+    Claim source routes through ``_ENTRY_HOPS["Claim"]`` whose ``supports in``
+    reaches the cited Artifact AND whose ``produces in`` (run from the cited
+    Artifact) reaches the producing Code in one hop. But that second ``produces``
+    hop stops at the Code — the Code's OWN producing SubTask is a further
+    ``produces`` hop the entry hops don't take, and a leaf Code sits on no
+    ``next`` edge itself. So the SubTask→next→goal spine is reached ONLY if the
+    cited Artifact is seeded into ``_artifact_derivation_tail`` (whose
+    ``_CODE_TAIL_HOPS`` walks Code→produces→SubTask→next→goal). Before the fix,
+    ``seed_arts`` was computed from ``keep={claim_eid}`` alone — the Claim is
+    not an Artifact, so ``_cited_artifact_eids`` matched nothing, the
+    derivation tail was skipped (the early-return branch), and the Artifact
+    path stopped at the Code while the Evidence path reached the goal.
+
+    Topology (minimal reproduction of the user's report):
+        ResearchGoal -[:next]-> SubTask_fig -[:produces]-> Code_fig
+                                                    Code_fig -[:produces]-> fig (leaf)
+        fig -[:supports]-> Claim -[:stated_in]-> report
+    Viewing the Claim's chain: the supports-connected fig's path must reach
+    the goal through fig<-produces-Code<-produces-SubTask<-next-<-Goal, the
+    same reach the Evidence branch has.
+    """
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-claimsrc"
+    _wipe_session(sid)
+    live_client.post("/observe/session-first-message", json={
+        "session_id": sid, "goal_id": f"goal:session:{sid}",
+        "core_objective": "analyze the figure", "domain": "Biology",
+        "topic_scope": [], "created_at": "2026-08-19T00:00:00Z",
+    }, headers=headers)
+    CL_REPORT, CL_FIG = "art-report-cs", "art-fig-cs"
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-cs-report", "session_id": sid,
+        "turn_id": "turn-cs-report", "tool": "run_python", "language": "python",
+        "code_hash": "hash-cs-report", "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-19T00:00:01Z", "finished_at": "2026-08-19T00:00:01Z",
+        "produced_artifacts": [{
+            "artifact_id": CL_REPORT, "path": "report.md",
+            "logical_name": "report.md", "version": 1, "media_type": "text/markdown",
+        }],
+    }, headers=headers)
+    # Leaf Code: produces the cited figure, reads NO inputs (no input edges).
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-cs-fig", "session_id": sid,
+        "turn_id": "turn-cs-fig", "tool": "run_python", "language": "python",
+        "code_hash": "hash-cs-fig", "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-19T00:00:02Z", "finished_at": "2026-08-19T00:00:02Z",
+        "produced_artifacts": [{
+            "artifact_id": CL_FIG, "path": "fig.svg",
+            "logical_name": "fig.svg", "version": 1, "media_type": "image/svg+xml",
+        }],
+    }, headers=headers)
+    claim = live_client.post("/persist/claim", json={
+        "content": "fig peaks at 50", "claim_type": "STATISTICAL",
+        "confidence": "HIGH", "locator": "fig1",
+        "cites_artifact_aliases": {"fig1": CL_FIG},
+        "cites_artifact_versions": {"fig1": 1},
+        "artifact_id": CL_REPORT, "artifact_version": 1, "session_id": sid,
+    }, headers=headers).json()
+    assert claim["status"] == "ok"
+    live_client.post("/persist/stated_in", json={
+        "artifact_id": CL_REPORT, "artifact_version": 1,
+        "claim_ids": [claim["claim_id"]], "session_id": sid,
+    }, headers=headers)
+    # Resolve the Claim's graph id, then view the CLAIM's own chain (this is
+    # what "View chain" on a Claim node does — chain_kind=artifact).
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    claim_node = next(n for n in sub["nodes"] if n["label"] == "Claim")
+    chain = live_client.post("/query/chain", json={
+        "node_id": claim_node["id"], "session_id": sid, "chain_kind": "artifact",
+    }, headers=headers).json()
+    nodes = {n["id"]: n for n in chain["nodes"]}
+    labels = {n["label"] for n in chain["nodes"]}
+    # The cited figure + its producing Code are reached by the entry hops.
+    fig = next(n for n in chain["nodes"] if n["label"] == "Artifact"
+              and n["extra"]["artifact_id"] == CL_FIG)
+    assert fig["id"] in nodes, "the cited figure must be present"
+    assert "Code" in labels, "the figure's producing Code must be reached"
+    # The producing SubTask (Code<-produces-SubTask) AND the ResearchGoal must
+    # both be present — the regression: before the cited Artifact was seeded
+    # into the derivation tail, the entry hops reached the Code but NOT its
+    # producing SubTask, the Artifact path dead-ended at the Code, and the
+    # SubTask→Code produces edge did not render (one endpoint missing).
+    assert "SubTask" in labels, \
+        "the producing Code's SubTask must be reached (cited-Artifact seed fix)"
+    assert "ResearchGoal" in labels, \
+        "the Claim's supports-Artifact path must reach the ResearchGoal"
+    # Edge-reachability: fig must connect to the goal through the chain's edges
+    # (not just co-present) — the SubTask→produces→Code→produces→fig spine must
+    # actually link the goal to the cited Artifact path.
+    adj: dict[str, set[str]] = {n["id"]: set() for n in chain["nodes"]}
+    for e in chain["edges"]:
+        adj.setdefault(e["source"], set()).add(e["target"])
+        adj.setdefault(e["target"], set()).add(e["source"])
+    goal_id = next(n["id"] for n in chain["nodes"] if n["label"] == "ResearchGoal")
+    seen = {fig["id"]}
+    stack = [fig["id"]]
+    while stack:
+        x = stack.pop()
+        for y in adj.get(x, ()):
+            if y not in seen:
+                seen.add(y)
+                stack.append(y)
+    assert goal_id in seen, \
+        "the cited figure must be edge-reachable to the ResearchGoal via the Claim's chain"

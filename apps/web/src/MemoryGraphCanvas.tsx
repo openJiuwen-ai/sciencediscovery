@@ -35,9 +35,9 @@ export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
 export const EDGE_COLORS: Record<MemoryGraphEdgeType, string> = {
   produces: "#94a3b8",
   next: "#c4b5fd",
-  extracted_from: "#67e8f9",
-  cites: "#fdba74",
-  states: "#fcd34d",
+  extracts: "#67e8f9",
+  supports: "#fdba74",
+  stated_in: "#fcd34d",
   supersedes: "#a78bfa",
   input: "#5eead4",
 };

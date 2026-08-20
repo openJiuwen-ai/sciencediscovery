@@ -663,7 +663,7 @@ def declare_evidence(
     confidence: str,
     strength: str,
 ) -> str | None:
-    """CREATE one Evidence + ``extracted_from`` → Paper.
+    """CREATE one Evidence + ``extracts`` (Paper → Evidence).
 
     The caller already verified the Paper exists (by normalized link); this
     MATCHes it directly. Evidence is not deduped — each declaration gets its
@@ -697,7 +697,7 @@ def declare_evidence(
                   created_at:        datetime()
                 })
                 WITH e, p
-                MERGE (e)-[:extracted_from]->(p)
+                MERGE (p)-[:extracts]->(e)
                 RETURN e.evidence_id AS evidence_id
                 """,
                 evidence_id=evidence_id,
@@ -732,23 +732,24 @@ def declare_claim(
     artifact_id: str | None,
     artifact_version: int | None,
 ) -> list[dict[str, Any]]:
-    """CREATE one Claim + ``cites`` edges (Evidence/Artifact) + optional
-    ``states`` (Artifact→Claim).
+    """CREATE one Claim + ``supports`` edges (Evidence/Artifact → Claim) +
+    optional ``stated_in`` (Claim → report Artifact).
 
     Claim is not deduped — each declaration gets a fresh ``claim_id`` (the
     canonical pattern uses ``CREATE``, and content_hash is stored only for
     indexing / future dedup). ``cites_node_ids`` are Evidence(evidence_id) —
     a Claim no longer cites a Paper directly (that edge was removed: a Claim
-    reaches a Paper only via ``cites Evidence → extracted_from Paper``). To
-    cite a paper the LLM must first ``declare_evidence`` then cite the
-    Evidence here. ``cites_artifact_refs`` is a list of
+    reaches a Paper only via ``supports Evidence → extracts Paper``, walked
+    backward). To cite a paper the LLM must first ``declare_evidence`` then
+    cite the Evidence here. ``cites_artifact_refs`` is a list of
     ``{artifact_id, version}`` dicts — Artifact is keyed on the composite
     ``(artifact_id, version)`` (one node per version), so a cited figure/dataset
     is pinned to the exact version the LLM declared against (not the latest,
     which would drift as the product is regenerated). ``artifact_id`` +
     ``artifact_version`` (the report Artifact + its version) build the
-    ``states`` edge so the graph can navigate "which report asserts which
-    claim"; the caller verified the Artifact exists.
+    ``stated_in`` edge (Claim → report Artifact) so the graph can navigate
+    "which claim is stated in which report"; the caller verified the Artifact
+    exists.
 
     Returns the cited targets ``[{evidence_id?, artifact_id?, version?,
     labels?}]`` so the caller can assemble the chip_map (alias → node) returned
@@ -790,32 +791,36 @@ def declare_claim(
                 // cite batch runs in its own subquery so an empty list never
                 // drops the claim row — an empty UNWIND would otherwise zero
                 // out the rest of the query and lose the later cited_targets
-                // return.
+                // return. The edge is Evidence → Claim (supports: the cited
+                // evidence supports the claim), so it points target → cl.
                 CALL {
                   WITH cl
                   UNWIND $cites_node_ids AS ev_id
                   MATCH (target:Evidence { evidence_id: ev_id })
-                  MERGE (cl)-[:cites]->(target)
+                  MERGE (target)-[:supports]->(cl)
                 }
                 WITH cl
                 // cites_artifact_refs: Artifact pinned to (artifact_id, version)
                 // — the exact version the LLM declared against, not the latest.
+                // The edge is Artifact → Claim (supports: the cited artifact
+                // supports the claim), so it points target → cl.
                 CALL {
                   WITH cl
                   UNWIND $cites_artifact_refs AS ref
                   MATCH (target:Artifact { artifact_id: ref.artifact_id, version: ref.version })
-                  MERGE (cl)-[:cites]->(target)
+                  MERGE (target)-[:supports]->(cl)
                 }
                 WITH cl
-                // optional states from the report Artifact (Artifact→Claim: this
-                // report asserts this claim), pinned to the report's version. The
-                // caller verified the Artifact exists; the FOREACH guard is a
-                // belt-and-suspenders no-op when artifact_id/version is None or
-                // the Artifact is missing.
+                // optional stated_in from the Claim to the report Artifact
+                // (Claim → report Artifact: this claim is stated in this report),
+                // pinned to the report's version. The caller verified the
+                // Artifact exists; the FOREACH guard is a belt-and-suspenders
+                // no-op when artifact_id/version is None or the Artifact is
+                // missing.
                 OPTIONAL MATCH (a:Artifact { artifact_id: $artifact_id, version: $artifact_version })
-                FOREACH (_ IN CASE WHEN a IS NULL THEN [] ELSE [1] END | MERGE (a)-[:states]->(cl))
+                FOREACH (_ IN CASE WHEN a IS NULL THEN [] ELSE [1] END | MERGE (cl)-[:stated_in]->(a))
                 WITH cl
-                OPTIONAL MATCH (cl)-[:cites]->(cited)
+                OPTIONAL MATCH (cl)<-[:supports]-(cited)
                 RETURN cl.claim_id AS claim_id,
                        collect(DISTINCT {
                          evidence_id: cited.evidence_id,
@@ -848,14 +853,14 @@ def declare_claim(
 
 
 def link_claims_to_report(*, artifact_id: str, artifact_version: int, claim_ids: list[str]) -> int:
-    """MERGE ``states`` edges from one report Artifact version to each Claim.
+    """MERGE ``stated_in`` edges from each Claim to one report Artifact version.
 
-    Builds the ``Artifact -[:states]-> Claim`` link so the graph can navigate
-    "which report asserts which claim", pinned to the report's specific
-    version (Artifact is keyed on the composite ``(artifact_id, version)``,
-    so the version is required to hit the right node). The caller verified the
-    Artifact version and every Claim already exist; empty ``claim_ids`` is a
-    no-op. Returns the number of edges merged.
+    Builds the ``Claim -[:stated_in]-> Artifact`` link so the graph can
+    navigate "which claim is stated in which report", pinned to the report's
+    specific version (Artifact is keyed on the composite
+    ``(artifact_id, version)``, so the version is required to hit the right
+    node). The caller verified the Artifact version and every Claim already
+    exist; empty ``claim_ids`` is a no-op. Returns the number of edges merged.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -873,7 +878,7 @@ def link_claims_to_report(*, artifact_id: str, artifact_version: int, claim_ids:
                 MATCH (a:Artifact { artifact_id: $artifact_id, version: $artifact_version })
                 UNWIND ($claim_ids + []) AS cid
                 MATCH (cl:Claim { claim_id: cid })
-                MERGE (a)-[:states]->(cl)
+                MERGE (cl)-[:stated_in]->(a)
                 RETURN count(cl) AS linked
                 """,
                 artifact_id=artifact_id,

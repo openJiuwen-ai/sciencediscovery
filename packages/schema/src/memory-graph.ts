@@ -26,22 +26,24 @@ export type MemoryGraphNodeLabel =
 
 /**
  * Memory-graph edge types. `produces` is persisted by the MVP/SubTask mirror;
- * `extracted_from` / `cites` land with the declare tools; `states` links a
- * report Artifact to the Claim it asserts (Artifact → Claim). `supersedes`
- * links a new Artifact version to the one it replaces (Artifact → Artifact,
- * new → old), written whenever a version > 1 is produced. `input` links an
- * Artifact version that a Code run read to that Code (Artifact → Code),
- * symmetric to `produces` (Code → Artifact); together they form the
- * derived-from chain `input Artifact -[:input]-> Code -[:produces]-> output
- * Artifact`.
+ * `extracts` / `supports` land with the declare tools; `stated_in` links a
+ * Claim to the report Artifact it is stated in (Claim → Artifact). `extracts`
+ * runs Paper → Evidence (a paper extracts the evidence drawn from it);
+ * `supports` runs Evidence/Artifact → Claim (the cited evidence/produced
+ * artifact supports a claim). `supersedes` links a new Artifact version to the
+ * one it replaces (Artifact → Artifact, new → old), written whenever a
+ * version > 1 is produced. `input` links an Artifact version that a Code run
+ * read to that Code (Artifact → Code), symmetric to `produces`
+ * (Code → Artifact); together they form the derived-from chain `input
+ * Artifact -[:input]-> Code -[:produces]-> output Artifact`.
  */
 
 export type MemoryGraphEdgeType =
   | "next"
   | "produces"
-  | "extracted_from"
-  | "cites"
-  | "states"
+  | "extracts"
+  | "supports"
+  | "stated_in"
   | "supersedes"
   | "input";
 
@@ -203,10 +205,10 @@ export interface DeclareClaimInput {
   /** alias → version, e.g. {"artifact1": 1}; pins each cited artifact alias to the
    * exact version it cites. Filled by the Node-side declare callback. */
   citesArtifactVersions?: Record<string, number>;
-  /** The report Artifact this claim is asserted in; builds the states edge
-   * (Artifact → Claim) so the graph can navigate report → its claims. */
+  /** The report Artifact this claim is stated in; builds the stated_in edge
+   * (Claim → Artifact) so the graph can navigate claim → its report. */
   artifactId?: string;
-  /** The report Artifact's version; pins the states edge to the specific
+  /** The report Artifact's version; pins the stated_in edge to the specific
    * report version. Filled by the Node-side declare callback when available. */
   artifactVersion?: number;
 }

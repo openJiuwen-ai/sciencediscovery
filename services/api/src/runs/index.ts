@@ -494,7 +494,7 @@ async function executeAgentRun(
   }
   const traces = new Map<string, ToolTrace>();
   // Chip references + claim ids accumulated during this run by the declare
-  // tools (alias → graph node; claim id → states edge). Each entry is tagged
+  // tools (alias → graph node; claim id → stated_in edge). Each entry is tagged
   // with the execution context (turnId) that produced it: the leader run tags
   // with ``runId``; a subagent run tags with its child execution id. Drained
   // onto a report Artifact version when the LLM writes one — but only the
@@ -847,7 +847,7 @@ async function executeAgentRun(
         // The cited nodes are registered with the alias the LLM chose as the
         // label, so the report's [alias] tokens match these entries and render
         // as clickable chips. The claim_id is held separately so the report
-        // version links to its claims via ``states`` edges once the report
+        // version links to its claims via ``stated_in`` edges once the report
         // version lands later this run (provenance recorder drains both the
         // references and the claim ids onto the report version then, because
         // declare_claim runs in an earlier turn than the report-write run).

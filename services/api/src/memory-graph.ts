@@ -691,8 +691,9 @@ export class MemoryGraphClient {
         // never sees versions. Absent → sidecar falls back to latest.
         ...(input.citesArtifactVersions ? { cites_artifact_versions: input.citesArtifactVersions } : {}),
         ...(input.artifactId ? { artifact_id: input.artifactId } : {}),
-        // The report version pins states to the report's exact version; may be
-        // absent at declare time (report not landed), re-linked by persist/states.
+        // The report version pins stated_in to the report's exact version; may
+        // be absent at declare time (report not landed), re-linked by
+        // persist/stated_in.
         ...(input.artifactId && input.artifactVersion != null ? { artifact_version: input.artifactVersion } : {}),
         session_id: sessionId,
       }) as Record<string, unknown>;
@@ -706,13 +707,13 @@ export class MemoryGraphClient {
     }
   }
 
-  /** Link a report Artifact version to the Claims declared in its turn via
-   * ``states`` edges. Called by the provenance recorder after a report version
-   * lands; never throws into the report write path (the sink wraps this).
-   * ``artifactVersion`` pins the states edge to the report's exact version
-   * (composite key). */
+  /** Link the Claims declared in a turn to the report Artifact version via
+   * ``stated_in`` edges (Claim → Artifact). Called by the provenance recorder
+   * after a report version lands; never throws into the report write path
+   * (the sink wraps this). ``artifactVersion`` pins the stated_in edge to the
+   * report's exact version (composite key). */
   async linkClaimsToReport(artifactId: string, artifactVersion: number, claimIds: string[], sessionId: string): Promise<void> {
-    await this.postJsonWithBody("/persist/states", {
+    await this.postJsonWithBody("/persist/stated_in", {
       artifact_id: artifactId,
       artifact_version: artifactVersion,
       claim_ids: claimIds,
@@ -934,22 +935,22 @@ export class MemoryGraphSink {
   }
 
   /** Link a just-landed report Artifact version to its turn's Claims via
-   * ``states`` edges. Fire-and-forget; a degraded or unreachable graph never
-   * blocks the report write. ``artifactVersion`` pins states to the report's
-   * exact version (composite key). */
+   * ``stated_in`` edges (Claim → Artifact). Fire-and-forget; a degraded or
+   * unreachable graph never blocks the report write. ``artifactVersion`` pins
+   * stated_in to the report's exact version (composite key). */
   linkClaimsToReport(artifactId: string, artifactVersion: number, claimIds: string[], sessionId: string): void {
     if (!this.enabled || !this.client || !claimIds.length) {
-      mgLog.debug("states link skipped: memory graph not enabled or no claims (artifact=%s v%s)",
+      mgLog.debug("stated_in link skipped: memory graph not enabled or no claims (artifact=%s v%s)",
         artifactId, artifactVersion);
       return;
     }
-    mgLog.info("report landed, linking states to claims: artifact=%s v%s session=%s claims=%d",
+    mgLog.info("report landed, linking stated_in to claims: artifact=%s v%s session=%s claims=%d",
       artifactId, artifactVersion, sessionId, claimIds.length);
     void this.client
       .linkClaimsToReport(artifactId, artifactVersion, claimIds, sessionId)
       .then(() => undefined)
       .catch((error: unknown) => {
-        mgLog.warn("states link failed: artifact=%s v%s session=%s, error %s",
+        mgLog.warn("stated_in link failed: artifact=%s v%s session=%s, error %s",
           artifactId, artifactVersion, sessionId,
           error instanceof Error ? error.message : String(error));
       });

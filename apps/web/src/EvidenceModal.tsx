@@ -78,7 +78,7 @@ export function EvidenceModal({ client, evidenceId, onClose, sessionId }: Eviden
       if (!active) return;
       setEvidence(hit);
       const chainResult = chain as MemoryGraphChainResult;
-      // The Paper upstream of this Evidence (extracted_from) surfaces in the
+      // The Paper upstream of this Evidence (extracts, walked in) surfaces in the
       // chain nodes; collect any Paper nodes that appear.
       setPapers((chainResult?.nodes ?? []).filter((node) => node.label === "Paper"));
     }).catch((err: Error) => {

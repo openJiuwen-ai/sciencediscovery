@@ -25,7 +25,7 @@ import { Field, humanizeKey, LinkField, LongText, partitionEvidenceExtra, TimeFi
  *  "this node made that" claim and reads first; next is the temporal chain
  *  (a sibling produced later) and reads beneath it. Others follow the schema
  *  order; any unknown type lands last. */
-const EDGE_DISPLAY_ORDER: MemoryGraphEdgeType[] = ["produces", "next", "extracted_from", "cites", "states", "supersedes", "input"];
+const EDGE_DISPLAY_ORDER: MemoryGraphEdgeType[] = ["produces", "next", "extracts", "supports", "stated_in", "supersedes", "input"];
 
 export type ResolveState = "idle" | "loading" | "missing" | "resolved";
 

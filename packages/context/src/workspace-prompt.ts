@@ -251,11 +251,12 @@ export interface WorkspaceAgentOptions {
   ) => Promise<SessionPlan>;
   /** Cross-session memory-graph substring search (`query_graph` tool). */
   queryGraph?: WorkspaceToolOptions["queryGraph"];
-  /** Create an Evidence node + extracted_from edge (`declare_evidence` tool). */
+  /** Create an Evidence node + extracts edge, Paper → Evidence
+   * (`declare_evidence` tool). */
   declareEvidence?: (input: DeclareEvidenceInput) => Promise<DeclareResult>;
-  /** Create a Claim node + cites edges + optional states/produces edges
-   * (`declare_claim` tool). Returns a chip_map the LLM uses to write aliases
-   * into the report body. */
+  /** Create a Claim node + supports edges (Evidence/Artifact → Claim) +
+   * optional stated_in/produces edges (`declare_claim` tool). Returns a
+   * chip_map the LLM uses to write aliases into the report body. */
   declareClaim?: (input: DeclareClaimInput) => Promise<DeclareClaimResult>;
   reviewCheckpoint?: WorkspaceToolOptions["reviewCheckpoint"];
   /** Trace provenance chain + broken signal (`trace_provenance` tool). */

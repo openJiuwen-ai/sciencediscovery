@@ -353,15 +353,17 @@ test("Quick computation review marks unavailable or truncated Evidence queries a
   assert.equal(result.findings[0]?.code, "CITATION_EVIDENCE_QUERY_FAILED");
 });
 
-test("Quick computation Evidence tracer reuses one extracted_from edge query", async () => {
+test("Quick computation Evidence tracer reuses one extracts edge query", async () => {
   let edgeQueries = 0;
   const client = {
     byEdgeType: async () => {
       edgeQueries += 1;
       return {
+        // extracts runs Paper → Evidence: Paper is the source, Evidence the
+        // target (the inverse of the old extracted_from direction).
         edges: [
-          { source: "evidence-1", target: "paper-1", type: "extracted_from" as const },
-          { source: "evidence-2", target: "paper-1", type: "extracted_from" as const },
+          { source: "paper-1", target: "evidence-1", type: "extracts" as const },
+          { source: "paper-1", target: "evidence-2", type: "extracts" as const },
         ],
         nodes: [{ id: "paper-1", label: "Paper" as const }],
         total: 2,

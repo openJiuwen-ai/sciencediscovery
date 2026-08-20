@@ -30,7 +30,7 @@ const NODE_LABELS: MemoryGraphNodeLabel[] = ["ResearchGoal", "SubTask", "Paper",
 // type in the schema but missing here silently disappears from the filter
 // (the count is computed from graph.edges, then filtered by this list). Keep
 // the order aligned with EDGE_COLORS so chip colors read top-to-bottom.
-const EDGE_TYPES: MemoryGraphEdgeType[] = ["produces", "next", "extracted_from", "cites", "states", "input"];
+const EDGE_TYPES: MemoryGraphEdgeType[] = ["produces", "next", "extracts", "supports", "stated_in", "input"];
 // Module-level so the embedded artifact panel keeps a stable prop identity
 // across the explorer's poll-driven re-renders.
 const NOOP = () => undefined;

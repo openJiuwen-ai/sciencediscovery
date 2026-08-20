@@ -509,7 +509,7 @@ export async function quickEvidenceReferenceReview(
     } else if (!trace.paperLinked) {
       findings.push(evidenceFinding(
         "CITATION_EVIDENCE_CHAIN_BROKEN",
-        `Evidence marker [${alias}] does not have an extracted_from link to a Paper node.`,
+        `Evidence marker [${alias}] does not have an extracts link from a Paper node.`,
         version.id,
         reference.id,
       ));
@@ -540,15 +540,18 @@ export function createEvidenceReferenceTracer(
     }
     if (!evidence) return { evidenceFound: false, paperLinked: false };
     try {
-      extractedFromQuery ??= memoryGraphClient.byEdgeType(["extracted_from"], sessionId);
+      extractedFromQuery ??= memoryGraphClient.byEdgeType(["extracts"], sessionId);
       const graph = await extractedFromQuery;
       if (graph.reason) {
         return { evidenceFound: true, paperLinked: false, reason: graph.reason, truncated: graph.truncated };
       }
+      // extracts runs Paper → Evidence (Paper is the source, Evidence the
+      // target), so the Paper this Evidence was extracted from is the edge's
+      // source — the inverse of the old extracted_from direction.
       const linkedPaperId = graph.edges.find((edge) =>
-        edge.type === "extracted_from"
-        && edge.source === evidenceId
-        && graph.nodes.some((node) => node.label === "Paper" && node.id === edge.target))?.target;
+        edge.type === "extracts"
+        && edge.target === evidenceId
+        && graph.nodes.some((node) => node.label === "Paper" && node.id === edge.source))?.source;
       const paper = linkedPaperId
         ? graph.nodes.find((node) => node.label === "Paper" && node.id === linkedPaperId)
         : undefined;

@@ -77,12 +77,12 @@ app = FastAPI(title="science-agent-memory-graph")
 
 # Node/edge label vocabularies mirrored from ``packages/schema`` (7 + 7).
 # Used for request validation so a bad_request response is returned before
-# any Cypher runs. ``states`` links a report Artifact to the Claim it asserts
-# (Artifact → Claim); the legacy ``presents``/Report hop has been removed in
-# favor of ``states`` (a report Artifact states a Claim directly, no separate
-# Report label).
+# any Cypher runs. ``stated_in`` links a Claim to the report Artifact it is
+# stated in (Claim → Artifact); the legacy ``presents``/Report hop has been
+# removed in favor of ``stated_in`` (a Claim is stated in a report Artifact
+# directly, no separate Report label).
 _NODE_LABELS = {"ResearchGoal", "SubTask", "Paper", "Evidence", "Claim", "Code", "Artifact"}
-_EDGE_TYPES = {"next", "produces", "extracted_from", "cites", "states", "supersedes", "input"}
+_EDGE_TYPES = {"next", "produces", "extracts", "supports", "stated_in", "supersedes", "input"}
 
 
 def _error(code: str, http: int, message: str, instruction: str | None = None) -> None:
@@ -463,7 +463,7 @@ def _artifact_version_exists(artifact_id: str, version: int) -> bool:
     """Probe for a specific Artifact version node (composite key).
 
     Artifact is keyed on ``(artifact_id, version)`` — a bare artifact_id no
-    longer identifies one node, so existence checks for the declare/states
+    longer identifies one node, so existence checks for the declare/stated_in
     paths must pin the version.
     """
     driver = handle()
@@ -481,7 +481,7 @@ def _artifact_version_exists(artifact_id: str, version: int) -> bool:
 def _latest_artifact_version(artifact_id: str) -> int | None:
     """Return the highest ``version`` of an artifact, or None if absent.
 
-    Fallback for cite/states paths that were not given an explicit version
+    Fallback for cite/stated_in paths that were not given an explicit version
     (partial migration): pin to the latest so a missing version does not 422.
     The Node side is expected to always supply the explicit version.
     """
@@ -501,11 +501,11 @@ def _latest_artifact_version(artifact_id: str) -> int | None:
 def _await_node(label: str, id_field: str, value: str, attempts: int = 10, delay_s: float = 0.3) -> bool:
     """Poll for a node's existence with short sleeps.
 
-    ``persist/states`` can land before ``observeExecution`` mirrors the report
-    Artifact (the states call fires the instant the report version is
-    persisted; the mirror runs after). Polling lets the states edge attach
-    once the report node arrives instead of 422'ing on the race. Returns True
-    once present, False if still absent after the attempts.
+    ``persist/stated_in`` can land before ``observeExecution`` mirrors the
+    report Artifact (the stated_in call fires the instant the report version
+    is persisted; the mirror runs after). Polling lets the stated_in edge
+    attach once the report node arrives instead of 422'ing on the race.
+    Returns True once present, False if still absent after the attempts.
     """
     import time
     for i in range(attempts):
@@ -521,9 +521,10 @@ def _await_node(label: str, id_field: str, value: str, attempts: int = 10, delay
 def _await_artifact_version(artifact_id: str, version: int, attempts: int = 10, delay_s: float = 0.3) -> bool:
     """Poll for a specific Artifact version node (composite key).
 
-    ``persist/states`` pins states to the report's exact version; the report
-    version node may not be mirrored yet (same race ``_await_node`` was built
-    for), so poll on the composite ``(artifact_id, version)`` until it arrives.
+    ``persist/stated_in`` pins stated_in to the report's exact version; the
+    report version node may not be mirrored yet (same race ``_await_node`` was
+    built for), so poll on the composite ``(artifact_id, version)`` until it
+    arrives.
     """
     import time
     for i in range(attempts):
@@ -600,14 +601,15 @@ class DeclareClaimRequest(BaseModel):
     # ``cites_artifact_aliases``. Filled in by the Node side (the LLM never sees
     # versions — the declare callback looks them up from the store).
     cites_artifact_versions: dict[str, int] = Field(default_factory=dict)
-    # The report Artifact this claim is asserted in; builds states (Artifact→Claim).
+    # The report Artifact this claim is stated in; builds stated_in (Claim→Artifact).
     artifact_id: str | None = None
-    # The report Artifact's version; pins the states edge to the report's
+    # The report Artifact's version; pins the stated_in edge to the report's
     # specific version (same composite-key rationale as cites_artifact_versions).
-    # The report version is only known once the report version lands, so states
-    # via ``artifact_id``+``artifact_version`` here is best-effort (declare runs
-    # in an earlier turn than the report write); the ``persist/states`` route
-    # re-links with the authoritative version once the report lands.
+    # The report version is only known once the report version lands, so
+    # stated_in via ``artifact_id``+``artifact_version`` here is best-effort
+    # (declare runs in an earlier turn than the report write); the
+    # ``persist/stated_in`` route re-links with the authoritative version once
+    # the report lands.
     artifact_version: int | None = None
     session_id: str
 
@@ -687,13 +689,13 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
     cites_artifact_refs = [r for r in cites_artifact_refs
                            if (r["artifact_id"], r["version"]) not in seen_refs
                            and not seen_refs.add((r["artifact_id"], r["version"]))]
-    # NOTE: the report Artifact (states target) is keyed on (artifact_id,
+    # NOTE: the report Artifact (stated_in target) is keyed on (artifact_id,
     # version) too, but it is NOT existence-checked here. declare_claim runs
     # in an EARLIER turn than the report write, so the report version node
     # has not been mirrored yet — 422'ing would reject every legitimate
-    # declare. declare_claim's states subquery uses a FOREACH guard that is a
-    # no-op when the Artifact is absent, and persist/states re-links the
-    # states edge authoritatively once the report version lands.
+    # declare. declare_claim's stated_in subquery uses a FOREACH guard that
+    # is a no-op when the Artifact is absent, and persist/stated_in re-links
+    # the stated_in edge authoritatively once the report version lands.
     claim_id = str(uuid4())
     content_hash = hashlib.sha256(req.content.encode("utf-8")).hexdigest()
     try:
@@ -746,7 +748,7 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
 
 class LinkClaimsRequest(BaseModel):
     artifact_id: str
-    # The report Artifact's version — pins the states edge to the report's
+    # The report Artifact's version — pins the stated_in edge to the report's
     # specific version (composite key). Required: the report version is known
     # when this fires (the report version has just landed — this call is the
     # drain step after recordGeneratedFiles).
@@ -755,18 +757,18 @@ class LinkClaimsRequest(BaseModel):
     session_id: str
 
 
-@app.post("/persist/states", dependencies=[Depends(require_internal_token)])
-def persist_states(req: LinkClaimsRequest) -> dict[str, Any]:
+@app.post("/persist/stated_in", dependencies=[Depends(require_internal_token)])
+def persist_stated_in(req: LinkClaimsRequest) -> dict[str, Any]:
     driver = handle()
-    log.info("persist/states in: session=%s artifact=%s v%s claims=%d",
+    log.info("persist/stated_in in: session=%s artifact=%s v%s claims=%d",
              req.session_id, req.artifact_id, req.artifact_version, len(req.claim_ids))
     if not driver.is_reachable():
         return {"status": "degraded", "linked": 0, "reason": "memory_graph_unreachable"}
     # The report Artifact version may not be mirrored yet — observeExecution
-    # runs AFTER recordGeneratedFiles, which fires this states call the instant
-    # the report version lands. Retry briefly (on the composite key) so the
-    # states edge attaches once the report version node arrives, instead of
-    # 422'ing on a race.
+    # runs AFTER recordGeneratedFiles, which fires this stated_in call the
+    # instant the report version lands. Retry briefly (on the composite key)
+    # so the stated_in edge attaches once the report version node arrives,
+    # instead of 422'ing on a race.
     artifact_ready = _await_artifact_version(req.artifact_id, req.artifact_version)
     if not artifact_ready:
         _error("artifact_not_found", 422, "Artifact version not found")
@@ -779,11 +781,11 @@ def persist_states(req: LinkClaimsRequest) -> dict[str, Any]:
             artifact_version=req.artifact_version,
             claim_ids=req.claim_ids,
         )
-        log.info("persist/states done: artifact=%s v%s claims=%d linked=%d",
+        log.info("persist/stated_in done: artifact=%s v%s claims=%d linked=%d",
                  req.artifact_id, req.artifact_version, len(req.claim_ids), linked)
         return {"status": "ok", "artifact_id": req.artifact_id, "linked": linked}
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
-        log.exception("persist/states failed: session=%s: %s", req.session_id, exc)
+        log.exception("persist/stated_in failed: session=%s: %s", req.session_id, exc)
         raise HTTPException(status_code=500, detail=f"link_claims_to_report failed: {exc}")
 
 

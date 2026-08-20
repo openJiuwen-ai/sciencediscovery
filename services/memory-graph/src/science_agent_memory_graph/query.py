@@ -88,14 +88,14 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
         # (inferred/basis/method for temporal_chain, or absent for produces)
         # are forwarded via ``extra`` so the frontend can style temporal_chain
         # links as a fallback rather than a real dependency.
-        # cites/extracted_from/states are also returned so the full
+        # supports/extracts/stated_in are also returned so the full
         # claim↔evidence↔paper↔report chain renders in the graph view, not just
         # in a per-node chain lookup.
         edges_result = session.run(
             """
             MATCH (a)-[r]->(b)
             WHERE a.session_id = $sid AND b.session_id = $sid
-              AND type(r) IN ['produces', 'next', 'extracted_from', 'cites', 'states', 'supersedes', 'input']
+              AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input']
             RETURN a AS src, b AS dst, labels(a)[0] AS src_label,
                    labels(b)[0] AS dst_label, type(r) AS edge_type, r AS rel
             """,
@@ -729,8 +729,8 @@ def _artifact_chain(
        Code's sibling ``produces`` branches to OTHER Artifacts.
 
     2. The citation downstream, walked forward from the center when it is an
-       Artifact that ``states`` Claims (a report): states→Claim→cites→Evidence
-       /Artifact, then Evidence→extracted_from→Paper. Every node reached this
+       Artifact that Claims are ``stated_in`` (a report): stated_in→Claim→
+       supports→Evidence/Artifact, then Evidence←extracts←Paper. Every node reached this
        way (Claims, Evidence, cited Artifacts, source Papers) joins the chain
        so the report's references are visible alongside its derivation. A
        cited Artifact is also a derivation seed — its own produces/input
@@ -739,8 +739,8 @@ def _artifact_chain(
     For an Artifact source this is the whole chain — an intermediate product
     produced mid-session (before any report/Claim exists) still resolves its
     full input ancestry, so "View artifact chain" works at any time. For
-    Paper/Evidence/Claim sources the citation entry (source → cites/
-    extracted_from → … → a cited Artifact) seeds the derivation walk; the
+    Paper/Evidence/Claim sources the citation entry (source → supports/
+    extracts → … → a cited Artifact) seeds the derivation walk; the
     source's own upstream task-chain tail (← produces ← SubTask ← next ←
     ResearchGoal) is appended. These entries also run without a report anchor.
     """
@@ -752,42 +752,42 @@ def _artifact_chain(
     # it (toward the producing task / goal).
     _ENTRY_HOPS: dict[str, list[tuple]] = {
         # Paper ←produces← SubTask ←next(1..)← ResearchGoal, PLUS the reverse
-        # citation side: Paper ←[:extracted_from]← Evidence ←[:cites]← Claim
-        # ←[:states]← report Artifact, so a paper's artifact chain shows the
+        # citation side: Paper -[:extracts]-> Evidence -[:supports]-> Claim
+        # -[:stated_in]-> report Artifact, so a paper's artifact chain shows the
         # reports that reference it through the Evidence/Claims built from it.
         "Paper": [
             ("produces", "in", "SubTask"),
             ("next", "in", "ResearchGoal", "1.."),
-            ("extracted_from", "in", "Evidence"),
-            ("cites", "in", "Claim"),
-            ("states", "in", "Artifact"),
+            ("extracts", "out", "Evidence"),
+            ("supports", "out", "Claim"),
+            ("stated_in", "out", "Artifact"),
         ],
-        # Evidence →extracted_from→ Paper ←produces← SubTask ←next(1..)← Goal,
-        # PLUS the reverse citation side: Evidence ←[:cites]← Claim ←[:states]
+        # Evidence ←extracts← Paper ←produces← SubTask ←next(1..)← Goal,
+        # PLUS the forward citation side: Evidence -[:supports]-> Claim -[:stated_in]
         # ← report Artifact, so an evidence node's artifact chain also shows
         # the report(s) that reference it via the Claims backing it. Without
         # these two reverse hops the evidence chain stops at the source Paper
         # and the 报告→claim→evidence path is invisible from this entry point.
         "Evidence": [
-            ("extracted_from", "out", "Paper"),
+            ("extracts", "in", "Paper"),
             ("produces", "in", "SubTask"),
             ("next", "in", "ResearchGoal", "1.."),
-            ("cites", "in", "Claim"),
-            ("states", "in", "Artifact"),
+            ("supports", "out", "Claim"),
+            ("stated_in", "out", "Artifact"),
         ],
-        # Claim →cites→ Evidence →extracted_from→ Paper ←produces← SubTask
-        # ←next(1..)← Goal, PLUS Claim ←[:states]← report Artifact (the report
+        # Claim ←supports← Evidence ←extracts← Paper ←produces← SubTask
+        # ←next(1..)← Goal, PLUS Claim -[:stated_in]-> report Artifact (the report
         # that asserts this claim), so a claim's artifact chain shows the
         # report it appears in alongside the Evidence/Paper it is built from.
         "Claim": [
-            ("cites", "out", "Evidence"),
-            ("extracted_from", "out", "Paper"),
+            ("supports", "in", "Evidence"),
+            ("extracts", "in", "Paper"),
             ("produces", "in", "SubTask"),
             ("next", "in", "ResearchGoal", "1.."),
-            ("states", "in", "Artifact"),
+            ("stated_in", "out", "Artifact"),
         ],
     }
-    # Citation hops walked forward from an Artifact source that ``states``
+    # Citation hops walked forward from an Artifact source that Claims are ``stated_in``
     # Claims (a report): report → its Claims → what they cite (Evidence /
     # Artifact / Code), then Evidence → the Paper it was extracted from.
     # These are the report's references; they join the derivation chain so a
@@ -795,13 +795,13 @@ def _artifact_chain(
     # that produced the report. Edge types are the citation vocabulary; depth
     # is single-hop (the recursion below fans out across Claims/Evidence).
     _REPORT_CITATION_HOPS: list[tuple] = [
-        ("states", "out", "Claim"),
-        ("cites", "out", "Evidence"),
-        ("cites", "out", "Artifact"),
-        ("extracted_from", "out", "Paper"),
+        ("stated_in", "in", "Claim"),
+        ("supports", "in", "Evidence"),
+        ("supports", "in", "Artifact"),
+        ("extracts", "in", "Paper"),
     ]
     # Reverse citation hops walked backward from ANY Artifact source that a
-    # Claim cites (a cited figure): fig ←[:cites]← Claim ←[:states]← report.
+    # Claim supports (a cited figure): fig -[:supports]-> Claim -[:stated_in]-> report.
     # This surfaces "which report's which Claim references this figure" on the
     # figure's own chain — without it, a cited figure shows only its produces/
     # input derivation and hides the citing relationship. The walk stops at the
@@ -809,8 +809,8 @@ def _artifact_chain(
     # (that would explode the chain with every other figure/evidence the report
     # references). ``direction = "in"`` walks against edge orientation.
     _CITED_BY_HOPS: list[tuple] = [
-        ("cites", "in", "Claim"),
-        ("states", "in", "Artifact"),
+        ("supports", "out", "Claim"),
+        ("stated_in", "out", "Artifact"),
     ]
 
     keep: set[str] = {src_eid}
@@ -826,12 +826,12 @@ def _artifact_chain(
 
     # Citation for an Artifact source — two directions, both centered on the
     # selected Artifact itself:
-    #  - forward (the report's own references): if this Artifact ``states``
-    #    Claims (a report), walk states→Claim→cites→Evidence/Artifact and
-    #    Evidence→extracted_from→Paper. The report's references join the chain.
-    #  - reverse (who cites this Artifact): walk fig←[:cites]←Claim←[:states]
-    #    ←report. A cited figure surfaces the citing Claim + its report.
-    # Every node reached joins the chain; the states/cites/extracted_from
+    #  - forward (the report's own references): if this Artifact has Claims
+    #    ``stated_in`` it (a report), walk stated_in→Claim→supports→Evidence/Artifact
+    #    and Evidence←extracts←Paper. The report's references join the chain.
+    #  - forward (who supports this Artifact): walk fig-[:supports]->Claim-[:stated_in]
+    #    ->report. A cited figure surfaces the citing Claim + its report.
+    # Every node reached joins the chain; the stated_in/supports/extracts
     # edges render automatically (their endpoints are both in the eid set, and
     # the allowed_edges whitelist only gates Code→Artifact ``produces`` sibling
     # branches, never citation edges).
@@ -848,17 +848,35 @@ def _artifact_chain(
     # walk above) are also seeds — each cited figure's own produces/input
     # ancestry is walked too. Falls back to the source eid when no cited
     # Artifact was reached so the chain still shows the center.
-    seed_arts = ([src_eid] if src_label == "Artifact"
-                 else _cited_artifact_eids(session, keep, None, session_id))
+    #
+    # NOTE: the seed for a non-Artifact source must come from the entry hops'
+    # *result* (``tail_eids``), NOT from ``keep`` (which is just ``{src_eid}``).
+    # A Claim source's own eid is not an Artifact, so ``_cited_artifact_eids``
+    # over ``{claim_eid}`` matches nothing and would skip the derivation walk —
+    # the cited figure's producing Code/SubTask/goal chain would never be
+    # walked, dead-ending the Artifact path at the Code (the Code IS reached
+    # by the entry hops' ``produces in`` from the cited Artifact, but the
+    # Code's producing SubTask is a second ``produces`` hop the entry hops
+    # don't take). Passing the Artifacts the entry hops actually reached
+    # (``tail_eids`` filtered to Artifact labels) seeds the derivation tail
+    # so each cited figure traces its full ancestry to the goal.
     if src_label == "Artifact":
-        # Add cited Artifacts reached via the report's Claims (states→cites→
+        seed_arts = [src_eid]
+    else:
+        # Candidate seeds = every Artifact the entry hops reached (in
+        # ``tail_eids``), plus the source eid itself in case it is an Artifact
+        # (Paper/Evidence/Claim are not, but this stays correct for any label).
+        candidates = set(tail_eids) | keep
+        seed_arts = _cited_artifact_eids(session, candidates, None, session_id)
+    if src_label == "Artifact":
+        # Add cited Artifacts reached via the report's Claims (stated_in→supports→
         # Artifact) as extra derivation seeds.
         cited_via_claims = _cited_artifact_eids(session, set(citation_eids), None, session_id)
         for e in cited_via_claims:
             if e not in seed_arts:
                 seed_arts.append(e)
     if src_label != "Artifact" and not seed_arts:
-        # No cited Artifact reached from the source (e.g. a Claim that cites
+        # No cited Artifact reached from the source (e.g. a Claim that supports
         # only non-Artifact nodes). Keep the center + its entry tail only.
         all_eids = list(keep) + [e for e in tail_eids if e not in keep]
         return _serialize_subgraph(session, all_eids, session_id)
@@ -876,13 +894,15 @@ def _cited_artifact_eids(
     session_id: str | None,
 ) -> list[str]:
     """Return the elementIds of Artifacts in ``candidate_eids`` that a Claim
-    cites (``Claim -[:cites]-> Artifact``), excluding the report anchor.
+    supports (``Artifact -[:supports]-> Claim``), excluding the report anchor.
 
     These are the cited products whose derivation (the Code that produced
     them, the inputs that Code read) the artifact chain must trace. The
     anchor is excluded because it is the report itself, not a cited product —
     its own input edges are out of scope (the chain shows how cited figures
-    were produced, not what the report consumed).
+    were produced, not what the report consumed). The supports edge is now
+    Artifact → Claim, so the MATCH walks (a:Artifact)-[:supports]->(cl:Claim)
+    with the candidate Artifact on the source side.
     """
     if not candidate_eids:
         return []
@@ -891,7 +911,7 @@ def _cited_artifact_eids(
         return []
     rows = session.run(
         """
-        MATCH (cl:Claim)-[:cites]->(a:Artifact)
+        MATCH (a:Artifact)-[:supports]->(cl:Claim)
         WHERE elementId(a) IN $arts
           AND ($sid IS NULL OR cl.session_id = $sid)
         RETURN collect(DISTINCT elementId(a)) AS cited
@@ -915,7 +935,14 @@ def _artifact_derivation_tail(
       input_Artifact <-produces- Code_Q (the Code that produced each input)
       Code_Q <-input- ...           (recurse until a pass adds nothing)
 
-    The walked edges (Code→Artifact ``produces``, Artifact→Code ``input``)
+    Each producing Code is ALSO anchored to its task-chain tail — the
+    SubTask that produced it (SubTask -[:produces]-> Code, walked ``in``),
+    then the ``next`` chain up to the ResearchGoal and back down to every
+    SubTask — so a cited Artifact whose Code read no inputs still traces all
+    the way to the goal instead of dead-ending at the Code. This mirrors the
+    ``produces``+``next`` entry hops ``_ENTRY_HOPS`` walks for non-Artifact
+    sources, keeping the artifact chain's reach symmetric with theirs. The
+    walked edges (Code→Artifact ``produces``, Artifact→Code ``input``)
     are recorded so ``_serialize_subgraph`` can whitelist them and prune
     sibling ``produces`` branches a Code emits to OTHER uncited Artifacts —
     a Code may produce several sibling Artifacts; only the one this tail
@@ -930,6 +957,16 @@ def _artifact_derivation_tail(
     # Artifacts)→(find those inputs' producing Code)… until convergence.
     artifact_frontier: list[str] = list(seed_artifact_eids)
     allowed: set[tuple[str, str, str]] = set()
+    # Task-chain tail hops, run from each newly-discovered producing Code so a
+    # derivation that dead-ends at a Code (no input edges) still reaches the
+    # goal. ``produces in`` finds the producing SubTask (SubTask→Code), then
+    # the next-chain up to ResearchGoal and back down to every SubTask — the
+    # same hops ``_ENTRY_HOPS`` uses for the non-Artifact sources' own tails.
+    _CODE_TAIL_HOPS: list[tuple] = [
+        ("produces", "in", "SubTask"),
+        ("next", "in", "ResearchGoal", "1.."),
+        ("next", "out", "SubTask", "1.."),
+    ]
     while artifact_frontier:
         # Artifact <-produces- Code: for each frontier Artifact, the Code(s)
         # that produced it. Records (Code_eid, Artifact_eid, "produces") only
@@ -964,6 +1001,17 @@ def _artifact_derivation_tail(
                 allowed.add((code_eid, art_eid, "produces"))
         if not new_codes:
             break
+        # Each newly-discovered producing Code anchors to its task-chain tail
+        # (producing SubTask → next-chain → ResearchGoal), so the cited
+        # Artifact's chain reaches the goal even when the Code read no inputs
+        # and the produces/input alternation dead-ends here. The reached
+        # SubTasks/ResearchGoal are added to the eid set; the produces/next
+        # edges between them render automatically in serialization (both
+        # endpoints are in the set, and the allowed_edges whitelist only gates
+        # Code→Artifact produces sibling branches, never task-chain edges).
+        tail_eids = _walk_hops(session, _CODE_TAIL_HOPS, new_codes, session_id)
+        for e in tail_eids:
+            reached.add(e)
         # Code <-input- Artifact: for each newly-reached Code, the Artifacts
         # it read as inputs. Records (input_Artifact_eid, Code_eid, "input")
         # — note edge orientation is Artifact -[:input]-> Code, so the source
@@ -1190,7 +1238,7 @@ def get_trace(
 
 # Preset chain hops per source label: each source label has a fixed list
 # of hops walking upstream toward ResearchGoal and downstream toward the
-# report Artifact that states a Claim.
+# report Artifact a Claim is stated_in.
 #
 # Each entry is (edge_type, direction, target_label[, depth]).
 # ``direction = "in"``  walks against edge orientation (toward ResearchGoal,
@@ -1212,11 +1260,11 @@ def get_trace(
 # that matches nothing (labels not yet persisted) simply adds nothing —
 # the chain short-stops there without erroring.
 #
-# ``next``/``produces``/``extracted_from``/``cites``/``states``/``input``/
+# ``next``/``produces``/``extracts``/``supports``/``stated_in``/``input``/
 # ``supersedes`` are all persisted today (SubTask/Code/Artifact/Paper via the
 # observe mirror; Evidence/Claim via the declare tools; input/supersedes via
-# the execution upsert). A Claim no longer ``cites`` a Paper directly — it
-# reaches a Paper only via ``cites Evidence → extracted_from Paper``.
+# the execution upsert). A Claim no longer ``supports`` a Paper directly — it
+# reaches a Paper only via ``supports Evidence → extracts Paper`` (walked backward).
 _CHAIN_HOPS: dict[str, list[tuple]] = {
     "Paper": [
         # upstream: Paper <-produces- SubTask, then walk the `next` chain
@@ -1225,16 +1273,16 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         ("produces", "in", "SubTask"),
         ("next", "in", "ResearchGoal", "1.."),
         ("next", "out", "SubTask", "1.."),
-        # downstream: the `extracted_from` edge is Evidence -> Paper (Evidence
-        # extracted from Paper), so from a Paper we walk it *against* its
-        # orientation (in) to reach the Evidence extracted from it. Then the
-        # citation side: Claim -[:cites]-> Evidence (walk cites *in* from the
-        # Evidence just reached), and report Artifact -[:states]-> Claim (walk
-        # states *in* once Claim is in the eid set). A Claim no longer cites a
-        # Paper directly — a Claim reaches a Paper only via Evidence.
-        ("extracted_from", "in", "Evidence"),
-        ("cites", "in", "Claim"),
-        ("states", "in", "Artifact"),
+        # downstream: the `extracts` edge is Paper -> Evidence (Paper extracts
+        # Evidence), so from a Paper we walk it *along* its orientation (out)
+        # to reach the Evidence extracted from it. Then the citation side:
+        # Evidence -[:supports]-> Claim (walk supports *out* from the Evidence
+        # just reached), and Claim -[:stated_in]-> report Artifact (walk
+        # stated_in *out* once Claim is in the eid set). A Claim no longer
+        # supports a Paper directly — a Claim reaches a Paper only via Evidence.
+        ("extracts", "out", "Evidence"),
+        ("supports", "out", "Claim"),
+        ("stated_in", "out", "Artifact"),
     ],
     "SubTask": [
         # This SubTask's OWN produces subtree first, while the eid set is
@@ -1252,7 +1300,7 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         # Variable-length because the source can sit in the middle of the chain.
         ("next", "in", "ResearchGoal", "1.."),
         ("next", "out", "SubTask", "1.."),
-        ("cites", "out", "Claim"),
+        ("supports", "in", "Claim"),
     ],
     "Code": [
         # This Code's OWN produces (Artifacts) first, while eid set is just
@@ -1269,7 +1317,7 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         # the middle of the chain.
         ("next", "in", "ResearchGoal", "1.."),
         ("next", "out", "SubTask", "1.."),
-        ("cites", "out", "Claim"),
+        ("supports", "in", "Claim"),
     ],
     "Artifact": [
         # Own produces first (Code that produced this Artifact), then the
@@ -1284,18 +1332,19 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         ("produces", "in", "SubTask"),
         ("next", "in", "ResearchGoal", "1.."),
         ("next", "out", "SubTask", "1.."),
-        ("cites", "in", "Claim"),
-        # A report Artifact states a Claim (Artifact → Claim): walking the
-        # states edge *out* reaches the Claims the report asserts.
-        ("states", "out", "Claim"),
+        ("supports", "out", "Claim"),
+        # A Claim is stated_in a report Artifact (Claim → Artifact): walking
+        # the stated_in edge *in* (against Claim→Artifact) reaches the Claims the
+        # report contains, from the report side.
+        ("stated_in", "in", "Claim"),
         # Citation continuation: once the Claims are in the eid set (reached
-        # via cites-in or states-out above), walk Claim -[:cites]-> Evidence
-        # (cites *out*) to surface the Evidence backing those Claims, then
-        # Evidence -[:extracted_from]-> Paper (extracted_from *out*) to surface
-        # the source Papers. This makes a report Artifact's view chain show the
+        # via supports-out or stated_in-in above), walk Evidence -[:supports]-> Claim
+        # backwards (supports *in*) to surface the Evidence backing those Claims,
+        # then Paper -[:extracts]-> Evidence (extracts *in*) to surface the
+        # source Papers. This makes a report Artifact's view chain show the
         # full 报告→claim→evidence→paper citation path.
-        ("cites", "out", "Evidence"),
-        ("extracted_from", "out", "Paper"),
+        ("supports", "in", "Evidence"),
+        ("extracts", "in", "Paper"),
     ],
     # ResearchGoal: only the task chain — Goal → head → ... → last SubTask.
     # No produces subtree (each SubTask's produces is shown when *its* chain
@@ -1304,26 +1353,26 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         ("next", "out", "SubTask", "1.."),
     ],
     "Evidence": [
-        # extracted_from is Evidence -> Paper, so walking *out* reaches the
-        # Paper this evidence was extracted from.
-        ("extracted_from", "out", "Paper"),
+        # extracts is Paper -> Evidence, so walking *in* (against it) reaches
+        # the Paper this evidence was extracted from.
+        ("extracts", "in", "Paper"),
         ("produces", "in", "SubTask"),
         ("next", "in", "ResearchGoal", "1.."),
         ("next", "out", "SubTask", "1.."),
-        # Citation side: Claim -[:cites]-> Evidence, so walk cites *in* from
-        # this Evidence to reach the Claim(s) it backs; then report Artifact
-        # -[:states]-> Claim (states *in* once Claim is in the eid set).
-        ("cites", "in", "Claim"),
-        ("states", "in", "Artifact"),
+        # Citation side: Evidence -[:supports]-> Claim, so walk supports *out*
+        # from this Evidence to reach the Claim(s) it backs; then Claim
+        # -[:stated_in]-> report Artifact (stated_in *out* once Claim is in the eid set).
+        ("supports", "out", "Claim"),
+        ("stated_in", "out", "Artifact"),
     ],
     "Claim": [
-        # Basis: Claim -[:cites]-> Evidence (walk cites *out* to the Evidence it
-        # backs), then Evidence -[:extracted_from]-> Paper (walk extracted_from
-        # *out* once Evidence is in the eid set) to surface the source Paper.
-        ("cites", "out", "Evidence"),
-        ("extracted_from", "out", "Paper"),
-        # Output: report Artifact -[:states]-> Claim (walk states *in*).
-        ("states", "in", "Artifact"),
+        # Basis: Evidence -[:supports]-> Claim (walk supports *in* to the
+        # Evidence it backs), then Paper -[:extracts]-> Evidence (walk extracts
+        # *in* once Evidence is in the eid set) to surface the source Paper.
+        ("supports", "in", "Evidence"),
+        ("extracts", "in", "Paper"),
+        # Output: Claim -[:stated_in]-> report Artifact (walk stated_in *out*).
+        ("stated_in", "out", "Artifact"),
         ("produces", "in", "SubTask"),
         ("next", "in", "ResearchGoal", "1.."),
         ("next", "out", "SubTask", "1.."),

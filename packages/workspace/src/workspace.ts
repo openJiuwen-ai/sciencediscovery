@@ -259,12 +259,14 @@ export interface WorkspaceToolOptions {
   ) => Promise<SessionPlan>;
   /** Cross-session memory-graph substring search (the `query_graph` LLM tool). */
   queryGraph?: (query: string) => Promise<MemoryGraphMatchResponse>;
-  /** Create an Evidence node + extracted_from edge (the `declare_evidence`
-   * LLM tool). Returns a structured error code instead of degrading. */
+  /** Create an Evidence node + extracts edge, Paper → Evidence (the
+   * `declare_evidence` LLM tool). Returns a structured error code instead of
+   * degrading. */
   declareEvidence?: (input: DeclareEvidenceInput) => Promise<DeclareResult>;
-  /** Create a Claim node + cites edges + optional states/produces edges (the
-   * `declare_claim` LLM tool). Returns the alias → node chip_map the LLM uses
-   * to write chip aliases into the report body. */
+  /** Create a Claim node + supports edges (Evidence/Artifact → Claim) +
+   * optional stated_in/produces edges (the `declare_claim` LLM tool). Returns
+   * the alias → node chip_map the LLM uses to write chip aliases into the
+   * report body. */
   declareClaim?: (input: DeclareClaimInput) => Promise<DeclareClaimResult>;
   listArtifacts?: () => Promise<ScientificArtifact[]>;
   readArtifact?: (input: { artifactId?: string; name?: string; version?: number }) => Promise<ArtifactReadResult>;

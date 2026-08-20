@@ -188,7 +188,7 @@ export class ProvenanceRecorder {
      * Chip-reference + claim-id accumulator from the calling run scope. Drains
      * the entries tagged with this version's ``turnId`` when a report Artifact
      * version is persisted, so chips survive reloads and claim ids link to the
-     * report via ``states`` edges. Passed per-call by the run (``runs/index.ts``)
+     * report via ``stated_in`` edges. Passed per-call by the run (``runs/index.ts``)
      * rather than held as a singleton instance field so concurrent runs in one
      * process never overwrite each other's accumulator.
      */
