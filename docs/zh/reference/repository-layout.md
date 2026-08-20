@@ -21,9 +21,10 @@ science_agent/
 │   └── mcp-sources/          # 科研 MCP Source/Tool manifest 与信任边界
 ├── skills/                   # 内置 Agent Skills 包
 ├── third_party/deer-flow/    # git submodule：deer-flow（gateway 可编辑依赖）
-├── scripts/                  # 内部打包与启动脚本（不作为用户安装入口）
-│   ├── start-stack.sh
-│   └── run-local.sh
+├── scripts/
+│   ├── start-stack.sh        # 本地与 Docker 共用的三进程启动入口
+│   ├── run-local.sh          # 本地模式兼容包装
+│   └── docker-entrypoint.sh  # Docker 模式兼容包装
 ├── test/                     # 集成与 e2e（不在 pnpm check 内）
 │   ├── *.spec.ts             # Playwright 用例
 │   ├── api/                  # Node 适配层 smoke
@@ -39,7 +40,7 @@ science_agent/
 
 ### 1.1 进程与默认端口
 
-由二进制 `./ScienceDiscovery serve` 拉起（启动器后台拉起前两个进程，前台跑 API；Ctrl-C 一并清理）：
+由 `./scripts/start-stack.sh --mode local` 启动（也可继续使用 `./scripts/run-local.sh`）：
 
 | 进程 | 默认地址 | 说明 |
 |------|----------|------|
@@ -47,7 +48,7 @@ science_agent/
 | `services/runner` | `127.0.0.1:4311` | 沙箱执行；仅回环 |
 | `services/api` | `127.0.0.1:4310` | 控制 API + 静态 UI；默认仅本机 |
 
-首次 `serve` 会解包内嵌运行时并准备 gateway 的 Python 环境；详见[部署指南](../how-to/deployment.md)。
+首次启动会初始化 `third_party/deer-flow` submodule，并在 `data/envs/gateway`、`data/envs/paper` 下用 uv 准备 Python 环境。
 
 ## 2. 模块划分与主要功能
 

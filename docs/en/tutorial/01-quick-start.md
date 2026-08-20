@@ -37,7 +37,7 @@ curl --fail http://127.0.0.1:4310/api/health
 
 The top-level `status` is `ok` after a normal startup and `degraded` when the Runner is unavailable. See [REST API reference](../reference/rest-api.md#health) for field details.
 
-See the [deployment guide](../how-to/deployment.md) for the complete deployment.
+Binary packaging, source mode, and Docker are separate deployment paths; their prerequisites and complete commands are in the [deployment guide](../how-to/deployment.md).
 
 ## 3. Configure a task model
 

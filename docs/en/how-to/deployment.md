@@ -2,26 +2,45 @@
 
 The root [README](../../../README.md) provides the shortest startup path. This guide covers deployment operations; see [Configuration reference](../reference/configuration.md) for environment variables, default ports, quotas, and storage layout.
 
-## Use the preprovided binary
+## Three deployment modes
 
-ScienceDiscovery is distributed as a preprovided executable matching the host architecture. This section explains how to install and run the `ScienceDiscovery` executable. This release does not provide source-build steps; use the provided executable.
+| Mode | What the user receives | Host dependencies | Intended use |
+|---|---|---|---|
+| [Source-built single-file binary](#single-file-binary-deployment) | **One** executable per architecture | Source toolchain at build time; Bubblewrap at runtime | Portable internal release artifacts |
+| [Docker image](#docker-deployment) | Container image and Compose file | Docker Engine 24+ and Compose v2 | Container-based operations |
+| [Local mode](#local-mode-host-processes) | Source repository | Node, pnpm, uv, Python, and Bubblewrap | Development and debugging |
 
-ScienceDiscovery does not bundle Neo4j. Science Memory needs an external Neo4j server and remains disabled when it is not configured; this does not affect the web or conversation path.
+**These paths are independent. Choose one and do not mix them.** The binary path never uses Docker: the executable embeds Node, CPython, gateway dependencies, the web assets, and micromamba. Use the image path for container deployment instead of putting the binary inside an image.
 
-### Start the service
+None of the modes bundles Neo4j. Science Memory needs an external Neo4j server and remains disabled when it is not configured; this does not affect the web or conversation path.
 
-```bash
-chmod +x ./ScienceDiscovery
-./ScienceDiscovery serve
+## Single-file binary deployment
+
+### Build and run
+
+This section explains how to build, verify, and run the artifact from the current source. The packaging output contains one file per architecture plus `VERSION` and `SHA256SUMS`:
+
+```text
+ScienceDiscovery-<version>-linux-x86_64
+ScienceDiscovery-<version>-linux-aarch64
 ```
 
-`serve` starts the agent-loop gateway, Bubblewrap runner, and control API with the Web UI in that order, then prints the UI URL. It listens on <http://127.0.0.1:4310> by default. Sign in with `SCIENCE_AGENT_AUTH_TOKEN`; when it is unset, `serve` prints the token generated on first start. Ctrl-C stops all services in reverse order.
-
-In a second terminal, verify the service:
+Build, verify, and run for the host architecture from the repository root:
 
 ```bash
-curl -fsS http://127.0.0.1:4310/health
+case "$(uname -m)" in
+  x86_64|amd64|x64) arch=x86_64 ;;
+  aarch64|arm64) arch=aarch64 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+./scripts/package-binary-release.sh \
+  --arch "$arch" --version local --output dist/binary-release-local
+artifact="dist/binary-release-local/ScienceDiscovery-local-linux-$arch"
+(cd dist/binary-release-local && sha256sum --check SHA256SUMS)
+"$artifact" serve
 ```
+
+`serve` starts the agent-loop gateway, Bubblewrap runner, and control API with the Web UI in that order, using the same health checks as [local mode](#local-mode-host-processes), then prints the UI URL. It listens on <http://127.0.0.1:4310> by default. Sign in with `SCIENCE_AGENT_AUTH_TOKEN`; when it is unset, `serve` prints the token generated on first start. Ctrl-C stops all services in reverse order.
 
 The first `serve` extracts the embedded runtime to `~/.cache/science-agent/payload/<payload-id>` (change it with `XDG_CACHE_HOME` or `SCIENCE_AGENT_PAYLOAD_CACHE_DIR`). Later runs reuse it. The directory contains the payload digest, so an upgrade does not overwrite an older extraction.
 
@@ -56,11 +75,7 @@ sudo pacman -S bubblewrap            # Arch
 sudo apk add bubblewrap              # Alpine
 ```
 
-To inspect the UI without sandbox execution, start with `--skip-sandbox-check`; `run_python` and `run_shell` will fail while other functions remain available. If Bubblewrap exists but unprivileged user namespaces are restricted, `serve` warns and continues: the API and UI still start and `GET /health` reports runner state, but every `run_python` and `run_shell` fails. On Ubuntu 24.04+, the usual fix is:
-
-```bash
-sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-```
+To inspect the UI without sandbox execution, start with `--skip-sandbox-check`; `run_python` and `run_shell` will fail while other functions remain available. If Bubblewrap exists but unprivileged user namespaces are restricted, `serve` warns and continues. Diagnose it as described under [Sandbox and host requirements](#sandbox-and-host-requirements).
 
 ### Commands and options
 
@@ -83,7 +98,7 @@ ScienceDiscovery help                  Show help
 | `--skip-sandbox-check` | off | Start without Bubblewrap; sandbox execution is unavailable |
 | `--no-scientific-envs` | off | Do not initialize managed scientific environments |
 
-The variables in [Configuration reference](../reference/configuration.md#environment-variables) also apply and can be exported or placed in `--env-file`. The API, gateway, and runner bind to loopback by default. To expose the API, first replace `SCIENCE_AGENT_AUTH_TOKEN`, then explicitly use `--host 0.0.0.0` only on a trusted, protected network.
+The variables in [Configuration reference](../reference/configuration.md#environment-variables-local-mode) also apply and can be exported or placed in `--env-file`. The API, gateway, and runner bind to loopback by default. To expose the API, first replace `SCIENCE_AGENT_AUTH_TOKEN`, then explicitly use `--host 0.0.0.0` only on a trusted, protected network.
 
 ### What the binary contains
 
@@ -98,6 +113,128 @@ The variables in [Configuration reference](../reference/configuration.md#environ
 
 It does not contain uv, deer-flow, or the gateway's third-party Python dependencies (see [Dependencies installed on first launch](#dependencies-installed-on-first-launch)), nor Neo4j, starter Python/R scientific environments, or a conda package cache. Creating a starter environment for the first time still needs access to permitted package channels.
 
+### Build both architecture packages
+
+```bash
+./scripts/package-binary-release.sh \
+  --version local --output dist/binary-release-local       # x86_64 and aarch64
+(cd dist/binary-release-local && sha256sum --check SHA256SUMS)
+
+./scripts/package-binary-release.sh \
+  --arch x86_64 --version local --output dist/binary-release-local
+```
+
+The build host needs `node`, `pnpm`, `uv`, `tar`, `zstd`, and `sha256sum`; it needs **neither Docker nor QEMU** (uv is a build tool only — it exports the locked dependency list and builds the gateway wheel, and is not shipped). Both architectures can be produced on one x86_64 or aarch64 host. Node and CPython runtimes are downloaded with pinned versions and SHA256 values from `scripts/binary-release/runtimes.json`; the gateway's third-party dependencies are no longer embedded and instead install natively on the user's machine at first launch; TypeScript outputs, web assets, and the gateway wheel are architecture independent. The packager still checks the bundled CPython extension modules' ELF architecture and fails the build on a mismatch. The build requires the `third_party/deer-flow` submodule to be checked out at the commit its gitlink records — the packager pins that commit and a content digest for first-launch verification.
+
+The output contains both executables, `VERSION`, and `SHA256SUMS`. The gateway dependency tree (duckdb, pandas, numpy, onnxruntime, and others) is no longer shipped, so the artifacts are much smaller than the older format that embedded it; that tree is downloaded through the configured mirror at first launch instead. Compression defaults to zstd level 19; use `SCIENCE_AGENT_PAYLOAD_ZSTD_LEVEL` to lower it during iteration.
+
+## Local mode (host processes)
+
+```bash
+./scripts/start-stack.sh --mode local              # install, build, and start all services
+./scripts/start-stack.sh --mode local --no-build   # start only after a previous build
+```
+
+In local mode the shared entry point reads the root `.env`, checks the dependencies from [Requirements](../../../README.md#requirements), installs and builds when needed, and starts ordinary host processes:
+
+| Service | Address | Purpose |
+|---|---|---|
+| `services/gateway` | 127.0.0.1:4312 | Agent-loop sidecar (background) |
+| `services/runner` | 127.0.0.1:4311 | Rootless Bubblewrap executor (background) |
+| `services/api` | 127.0.0.1:4310 | Control API and Web UI (foreground) |
+
+Ctrl-C stops its background services. `./scripts/run-local.sh [--no-build]` remains a thin compatibility wrapper, and `pnpm start` and `pnpm server` continue to use it. For unattended use, run it under a process manager such as a systemd user unit or tmux, or use [Docker deployment](#docker-deployment). The runner and gateway always bind only to loopback.
+
+The first start initializes the `third_party/deer-flow` submodule and prepares a Python 3.12 gateway environment under `data/envs/gateway`.
+
+Ascend host NPU workloads use the same local-mode entry point. The Runner exposes `run_npu_job` only after an administrator explicitly sets `SCIENCE_AGENT_NPU_BROKER=1` and configures the workload entry points in `.env`. Before enabling it, create and verify a managed Python scientific environment revision for the Ascend stack; built-in NPU workloads, including smoke tests, submit against that revision rather than `SCIENCE_AGENT_NPU_PYTHON`. See [Configuration reference](../reference/configuration.md#environment-variables-local-mode) for variables and [Ascend NPU Host Broker](../explanation/ascend-npu-runner.md) for the design boundary.
+
+## Docker deployment
+
+One image contains the complete stack. `docker-entrypoint.sh` wraps `scripts/start-stack.sh --mode docker` and starts the same gateway, runner, and control API/Web UI processes in one container; Docker-specific checks run only in this mode. The builder uses pnpm and uv. The runtime image contains Node, prebuilt service Python environments, Bubblewrap, and a fixed micromamba selected and verified for `TARGETARCH`. The host needs only Docker.
+
+### Prerequisites
+
+- A Linux x86_64 or aarch64 host with Docker Engine 24+ and the Compose v2 plugin. The runner needs usable host-kernel user namespaces.
+- Unprivileged user namespaces available to the container:
+
+  ```bash
+  sysctl kernel.unprivileged_userns_clone            # should be 1 where exposed
+  sysctl kernel.apparmor_restrict_unprivileged_userns # must be 0 on Ubuntu 24.04+
+  ```
+
+- The `third_party/deer-flow` submodule checked out, because the gateway installs its harness from there:
+
+  ```bash
+  git submodule update --init --recursive
+  ```
+
+### Build and start
+
+```bash
+cp .env.docker.example .env   # or merge its keys into an existing .env
+mkdir -p data                 # host directory for all runtime state
+docker compose build
+docker compose up -d
+curl -fsS http://127.0.0.1:4310/health
+```
+
+Open <http://127.0.0.1:4310> and sign in with `SCIENCE_AGENT_AUTH_TOKEN`; when it is unset, the container log prints the token generated on first start. The first build compiles the Web UI, resolves both service Python environments, and downloads micromamba, so it takes longer and needs network access. Starting services and obtaining micromamba from the completed image do not. The package-network boundary for managed starter Python is described under [Limitations](#limitations).
+
+BuildKit selects the `linux/amd64` or `linux/arm64` micromamba for `TARGETARCH` and verifies it against the runner's shared release manifest. The binary is stored at `/opt/science-agent/provisioner/micromamba`; when `/app/data` is an empty bind mount, the first start copies it to the managed default path and the runner verifies it again. This does not access GitHub at **runtime**.
+
+```bash
+docker compose logs -f        # startup order: gateway -> runner -> API
+docker compose ps             # status and health result
+docker compose down           # remove the container; preserve ./data
+docker compose up -d --build  # rebuild and restart after updating source
+```
+
 ### Data directory
 
-`serve` writes runtime data to `./science-agent-data` in the current directory by default; change it with `--data-dir <path>` (or `SCIENCE_AGENT_DATA_DIR`). This directory is the only runtime root: projects, sessions, workspaces, keys, service environments, and logs all live in it, so back it up as a unit. Deleting it removes all projects, sessions, credentials, and audit records. See [Storage layout](../reference/configuration.md#storage-layout) for the full layout.
+The host `./data` bind mount maps to `/app/data` and is the only persistent location. Its layout matches [Storage layout](../reference/configuration.md#storage-layout). There are **no Docker named volumes**: projects, sessions, workspaces, credentials, and audit records are ordinary host files that can be inspected, backed up, and removed, and survive `docker compose down` and image rebuilds.
+
+To separate container state from an existing local `data/`, change the host side of the bind mount in `docker-compose.yml`, for example to `- ./docker-data:/app/data`.
+
+The container runs as uid/gid `1000:1000`. If the account IDs differ, set `SCIENCE_AGENT_UID` and `SCIENCE_AGENT_GID` (`id -u`, `id -g`) in `.env` and rebuild. Otherwise, the entry point exits immediately with an explicit unwritable-directory error.
+
+Three locations differ from a host installation:
+
+- uv-managed environments are baked into `/opt/science-agent/envs/{gateway,paper}`, not the data directory. A fresh `compose up` therefore needs no network access for them.
+- Fixed micromamba is baked into `/opt/science-agent/provisioner/micromamba` and seeded to `data/scientific-envs/bin/micromamba` for an empty data directory. When `SCIENCE_AGENT_PROVISIONER_PATH` is explicitly set, seeding is skipped and the runner uses that administrator override.
+- Deer-flow harness state that normally appears beside the working tree in `.deer-flow/` is redirected to `data/deer-flow/` through `DEER_FLOW_HOME`, because the image application directory is read-only to the service user.
+
+### Sandbox and host requirements
+
+The container does not replace or weaken the Bubblewrap sandbox. Agent Python, R, and shell commands still run under `bwrap` with separate namespaces, seccomp filtering, and no network. Docker's default security configuration blocks the user-namespace mounts Bubblewrap needs, so Compose relaxes exactly these two container settings:
+
+| Setting | Reason |
+|---|---|
+| `seccomp=unconfined` | Docker's default seccomp permits `mount`/`pivot_root` only with `CAP_SYS_ADMIN`; Bubblewrap invokes them inside its own namespace |
+| `apparmor=unconfined` | The `docker-default` AppArmor profile on Debian/Ubuntu denies `mount` |
+
+No capability is added and `privileged: true` is not used. These settings relax the **container** boundary, not the agent sandbox. Treat this container as trusted local software, like the host installation.
+
+If the host still restricts user namespaces, the API and UI start and `GET /health` reports runner state, but every `run_python` and `run_shell` fails. Startup runs a Bubblewrap preflight and prints a warning with the checks above. On Ubuntu 24.04+, the usual fix is:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+### Limitations
+
+- This is a single-user trust model: one static bearer token, no TLS, and no multi-user accounts. The port is published only on `127.0.0.1` by default because Docker-published ports bypass many host firewall rules. Set `SCIENCE_AGENT_PUBLISH_HOST=0.0.0.0` only on a trusted network and replace the token first.
+- The image contains no API tokens, model credentials, or host `data/` content. `.dockerignore` excludes `data/`, `.env`, `node_modules/`, build outputs, and local caches. Credentials enter only through Compose variables and the bind-mounted data directory.
+- The image includes fixed micromamba and does not access GitHub for it at runtime, but this iteration does **not** bundle starter Python/R environments or a conda package cache. First-time starter Python creation still needs permitted package channels. Package resolution becomes offline only after an administrator populates and selects `SCIENCE_AGENT_PACKAGE_CACHE_DIR`.
+- The image is a convenience package, not a hardened multi-tenant deployment. Containerization does not change the security boundaries of a static bearer token, no TLS, and no runner CPU/memory quotas.
+
+### Build micromamba packages for both architectures
+
+```bash
+./scripts/package-micromamba-release.sh --output dist/micromamba-release
+sha256sum --check dist/micromamba-release/SHA256SUMS
+```
+
+The defaults are `science-agent-micromamba-<version>-linux-x86_64.tar.gz` and `science-agent-micromamba-<version>-linux-aarch64.tar.gz`. Each contains only `bin/micromamba` and a `manifest.json` recording the target architecture, upstream filename, and binary SHA256; the output also contains `VERSION` and `SHA256SUMS`. The script does **not** create or collect starter Python/R environments, conda caches, or other Python trees.
+
+Use `--arch x86_64` or `--arch aarch64` for one architecture, or `--dry-run` to inspect versions, URLs, and SHA256 values without downloading. On a restricted builder, prepare both raw binaries from the release manifest and use `--source-dir <directory>` for local verification and packaging.

@@ -1,12 +1,13 @@
 # 配置、端口、配额与存储参考
 
-本文集中列出 `ScienceDiscovery serve` 的环境变量、默认端口、工作区相关配额及存储布局。实际部署步骤见[部署指南](../how-to/deployment.md)。
+本文集中列出本地模式和 Docker 的环境变量、默认端口、工作区相关配额及存储布局。实际部署步骤见[部署指南](../how-to/deployment.md)。
 
-## 环境变量
+## 环境变量（本地模式）
 
 ```bash
-./ScienceDiscovery serve                   # 直接启动；已导出的 SCIENCE_AGENT_* 变量同样生效
-./ScienceDiscovery serve --env-file .env   # 或从 KEY=VALUE 文件注入配置
+cp .env.example .env
+set -a && source .env && set +a
+./scripts/run-local.sh
 ```
 
 | 变量 | 默认值 | 用途 |
@@ -36,7 +37,8 @@
 | `SCIENCE_AGENT_NPU_PYTHON` | `python3` | 仅供自定义白名单中显式使用 `${python}` 的兼容 workload；仓内默认 NPU workload 使用 Agent 选定的 scientific environment revision，不读取此值 |
 | `SCIENCE_AGENT_NPU_SMOKE_SCRIPT` | 空 | 可选管理员自定义 Ascend smoke probe；留空时使用仓内 `services/runner/workloads/npu-smoke-test.py` |
 | `SCIENCE_AGENT_NPU_PROTENIX_SCRIPT` | 空 | Protenix 抗体 pipeline 的宿主 manager 入口；通常指向已部署 skill 的 `scripts/antibody_pipeline_manager.py`。该 manager 由 ScienceDiscovery scientific environment revision 解析出的 Python 启动 |
-| `SCIENCE_AGENT_PYPI_INDEX` | 华为云 PyPI 镜像 | 首次 `serve` 安装 gateway Python 依赖与 uv wheel 时使用的 package index；如华为云 `https://mirrors.huaweicloud.com/repository/pypi/simple`。完整首启依赖变量见[部署指南](../how-to/deployment.md#首次启动安装的依赖) |
+| `SCIENCE_AGENT_NPM_REGISTRY` | 空（官方 registry） | 构建步骤的 npm 镜像，仅作用于 `start-stack.sh` 内的 `pnpm install --registry`，不改用户/全局 npm 配置；如华为云 `https://mirrors.huaweicloud.com/repository/npm/` |
+| `SCIENCE_AGENT_PYPI_INDEX` | 空（PyPI 官方） | 构建步骤的 PyPI 镜像，仅作用于 `start-stack.sh` 内 `uv sync` 的 `UV_DEFAULT_INDEX`，不改用户/全局 uv 配置；如华为云 `https://mirrors.huaweicloud.com/repository/pypi/simple`。注意：`uv.lock` 记录 index 来源，设置镜像后 uv 会按镜像重新 resolve（版本仍受 `pyproject.toml` 约束但可能偏离 lock），脚本会自动备份并恢复 lockfile，工作区不会被改动 |
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | memory-graph 监听地址（服务进程使用） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | memory-graph 监听端口（服务进程使用） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | memory-graph 端点（API 客户端） |
@@ -58,7 +60,7 @@
 | `SCIENCE_AGENT_PAPER_PYTHON_PATH` | `<data dir>/envs/paper/bin/python` | PDF worker Python |
 | `SCIENCE_AGENT_PAPER_WORKER_PATH` | `services/paper/paper_worker.py` | PDF worker 入口 |
 
-Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管理员明确开启。没有 Ascend NPU、未安装 CANN/MindSpore，或不希望 Agent 调用宿主 NPU 时，请保持 `SCIENCE_AGENT_NPU_BROKER=0`；此时工具表不会包含 `run_npu_job`。启用后仍使用正常启动入口（`./ScienceDiscovery serve`），在 `--env-file` 或已导出环境变量中设置 `SCIENCE_AGENT_NPU_BROKER=1`。启用 Broker 前，应先创建并验证至少一个可导入所需 CANN/MindSpore 栈的 ScienceDiscovery 托管 Python scientific environment revision。内置 NPU workload（包括 `npu.smoke_test`）都要求 `environment_revision_id`；Agent 未显式传入时，API 使用当前 Session revision。`SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` 留空时使用仓内默认白名单，当前包含 `npu.smoke_test` 与 `antibody.protenix.v1`；如需新增模型，提供自定义 JSON 白名单并固定 entrypoint，而不是让 Agent 传任意命令。`SCIENCE_AGENT_NPU_PYTHON` 仅保留给显式使用 `${python}` 的自定义白名单；仓内默认白名单使用 `${managedPython}`，不会读取它。修改白名单 JSON 等价于修改可执行代码入口，应作为部署变更审查；模型权重、数据库、HMMER、CANN、MindScience checkout 等站点资产不进入仓库，通常通过上面的环境变量或 workload 配置引用。
+Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管理员明确开启。没有 Ascend NPU、未安装 CANN/MindSpore，或不希望 Agent 调用宿主 NPU 时，请保持 `SCIENCE_AGENT_NPU_BROKER=0`；此时工具表不会包含 `run_npu_job`。本地模式启用后仍使用正常启动入口。启用 Broker 前，应先创建并验证至少一个可导入所需 CANN/MindSpore 栈的 ScienceDiscovery 托管 Python scientific environment revision。内置 NPU workload（包括 `npu.smoke_test`）都要求 `environment_revision_id`；Agent 未显式传入时，API 使用当前 Session revision。`SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` 留空时使用仓内默认白名单，当前包含 `npu.smoke_test` 与 `antibody.protenix.v1`；如需新增模型，提供自定义 JSON 白名单并固定 entrypoint，而不是让 Agent 传任意命令。`SCIENCE_AGENT_NPU_PYTHON` 仅保留给显式使用 `${python}` 的自定义白名单；仓内默认白名单使用 `${managedPython}`，不会读取它。修改白名单 JSON 等价于修改可执行代码入口，应作为部署变更审查；模型权重、数据库、HMMER、CANN、MindScience checkout 等站点资产不进入仓库，通常通过上面的环境变量或 workload 配置引用。
 
 浏览器仅将 API token 保存在 local storage。模型凭证只存在于后端存储。
 
@@ -76,6 +78,27 @@ Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管
 | Runner 单个执行文件 | 不单独限制 | 当前 `MAX_RUNNER_FILE_BYTES=0`；仍受 Runner 工作区总量约束 |
 
 `GET /health` 的 `workspace.maxFileBytes`、`maxRequestBytes`、`maxWorkspaceBytes` 分别报告 API 上传单文件、上传请求和 Runner 工作区上限。它不报告 stdout/stderr 上限。
+
+## Docker 环境变量
+
+Compose 读取仓库根目录 `.env`，并把以下键插值到 `docker-compose.yml`：
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | 容器 uid/gid；必须能写宿主的 `./data` |
+| `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | UI/API 在宿主上发布到的网卡 |
+| `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | 映射到容器 `4310` 的宿主端口 |
+| `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器/API bearer token；不设置时使用 `<数据目录>/secrets/auth-token` 中保存的值 |
+| `SCIENCE_AGENT_RUNNER_TOKEN` | `science-agent-runner-local` | API→runner token（仅容器回环） |
+| `SCIENTIFIC_ENVS` | `1` | 托管 Python/R 环境与持久内核 |
+| `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | 单次沙箱执行的墙钟上限 |
+| `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | 持久内核空闲超时（最小 1000 ms） |
+| `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单 |
+| `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员 micromamba 路径；留空使用镜像内已校验副本 |
+| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存路径；离线 provision 前需填充内容 |
+| `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | 镜像内 bubblewrap 可执行文件 |
+
+API 在容器内监听 `0.0.0.0:4310`，gateway `4312` 与 runner `4311` 保持在容器回环，对外只发布 API 端口。操作步骤与沙箱放权边界见[Docker 部署](../how-to/deployment.md#docker-部署)。
 
 ## 存储布局
 
@@ -99,4 +122,4 @@ Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管
 | `data/logs/{api,run,gateway,runner,memory-graph}.log` | 分级、按类别和大小滚动的运行日志；memory-graph 文件仅在功能启用时使用 |
 | 浏览器 local storage | 仅 API bearer token——模型凭证从不离开后端 |
 
-数据目录是唯一运行时根：通过设置 `SCIENCE_AGENT_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_AGENT_DATA_DIR=/srv/science-agent ./ScienceDiscovery serve`）。删除该目录会清除所有项目、会话、凭证与审计记录。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `data/envs/` 下的环境。
+数据目录是唯一运行时根：通过设置 `SCIENCE_AGENT_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_AGENT_DATA_DIR=/srv/science-agent ./scripts/run-local.sh`）。删除该目录会清除所有项目、会话、凭证与审计记录。在 [Docker 部署](../how-to/deployment.md#docker-部署)中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `data/envs/` 下的环境。

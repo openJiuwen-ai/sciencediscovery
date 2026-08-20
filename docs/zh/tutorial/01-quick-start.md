@@ -39,7 +39,7 @@ curl -fsS http://127.0.0.1:4310/health
 
 正常启动时响应中的顶层 `status` 为 `ok`；如果 Runner 不可用，则为 `degraded`。字段说明见 [REST API 参考](../reference/rest-api.md#健康检查)。
 
-完整部署步骤见[部署指南](../how-to/deployment.md)。
+二进制打包、源码模式和 Docker 是独立的部署路径，其前置条件与完整命令都在[部署指南](../how-to/deployment.md)中。
 
 ## 3. 配置任务模型
 

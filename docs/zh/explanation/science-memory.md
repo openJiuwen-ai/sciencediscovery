@@ -232,4 +232,4 @@ sidecar 与 Node 客户端的连接、鉴权、日志变量：
 
 > Science Memory 的启停、Neo4j 连接地址、用户与密码都在 **System Settings → Science Memory** 里管理（单一 toggle，无需改 `.env`、无需重启 stack）。
 
-启动：`./ScienceDiscovery serve` 启动时无条件用 `data/envs/memory-graph/bin/python -m science_agent_memory_graph.server` 拉起 sidecar，并 `wait_healthy` 等 `http://127.0.0.1:17674/health`。toggle 关时 sidecar 空跑，sink 写入与读路径 short-circuit 返回 `memory_graph_disabled`。
+启动：`scripts/start-stack.sh` 无条件用 `data/envs/memory-graph/bin/python -m science_agent_memory_graph.server` 拉起 sidecar（环境随栈启动无条件 provision），并 `wait_healthy` 等 `http://127.0.0.1:17674/health`。toggle 关时 sidecar 空跑，sink 写入与读路径 short-circuit 返回 `memory_graph_disabled`。

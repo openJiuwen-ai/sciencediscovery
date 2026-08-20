@@ -52,7 +52,7 @@ Runner therefore keeps the normal sandbox boundary and exposes an opt-in Host NP
 - Protenix adapters also validate paths inside Agent-authored config files, including `workspace`, `run_dir`, `target_pdb`, and `framework_pdb`; only Session workspace paths and explicit read-only skill/deployment resource roots are allowed.
 - status, logs, result, and cancel operations verify the Session id. Phase 1 marks active jobs as `interrupted` on Runner restart.
 
-The exception is “allowlisted host model job,” not “host shell for the Agent.” NPU deployment variables live in [Configuration reference](../reference/configuration.md#environment-variables), and the model-visible tool contract lives in [Built-in tools](../reference/builtin-tools.md#other-conditional-tools).
+The exception is “allowlisted host model job,” not “host shell for the Agent.” NPU deployment variables live in [Configuration reference](../reference/configuration.md#environment-variables-local-mode), and the model-visible tool contract lives in [Built-in tools](../reference/builtin-tools.md#other-conditional-tools).
 
 ## 4. Execution model and quotas
 
@@ -85,7 +85,7 @@ Interpreters come from host `/usr/bin` or managed `/opt/science-env/bin`.
 
 ## 6. Scientific environments
 
-- A fixed micromamba release and SHA256 are shared by runner and packaging. The binary downloads and caches it on the first `serve`, so runtime need not fetch GitHub. Administrators may override the path.
+- A fixed micromamba release and SHA256 are shared by runner, Docker, and packaging. Host mode downloads/caches on setup; Docker bakes and seeds it, so runtime need not fetch GitHub. Administrators may override the path.
 - Bootstrap is asynchronous after health becomes available. Setup endpoints report phase/state/error and trigger serialized retry without terminating runner.
 - Cold start creates only a read-only Python 3.12 base with numpy/pandas/scipy/matplotlib. The first explicit R named environment lazily creates an R 4.4 base with tidyverse/data.table.
 - Catalog and source settings are instance-global. Bases are read-only; named environment mutations create immutable revisions.

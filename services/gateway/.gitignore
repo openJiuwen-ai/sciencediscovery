@@ -1,0 +1,5 @@
+.venv/
+.deer-flow/
+__pycache__/
+*.pyc
+data/

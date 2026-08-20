@@ -4,7 +4,8 @@ This page records the key HTTP interfaces used by the current Web UI, based on `
 
 ## Address, authentication, and common responses
 
-- Default base and bind address: `http://127.0.0.1:4310`.
+- Local default base and bind address: `http://127.0.0.1:4310`.
+- Docker default published address: `http://127.0.0.1:4310`.
 - `GET /health` and `GET /api/health` do not require authentication.
 - Other `/api/*` requests require `Authorization: Bearer <SCIENCE_AGENT_AUTH_TOKEN>`. There is no default token: when the variable is unset the server generates one on its first start, prints it, and stores it in `<data-dir>/secrets/auth-token`.
 - JSON clients send `Content-Type: application/json`; generic JSON bodies are limited to 1,500,000 bytes. Workspace multipart uploads have separate quotas.

@@ -1,6 +1,6 @@
 # ScienceDiscovery
 
-ScienceDiscovery is a one‑stop AI research workspace built specifically for scientific research. Leveraging this platform, researchers can efficiently complete the highly cumbersome research exploration workflow of "literature review, hypothesis formulation, code development, experimental trial‑and‑error, and parameter tuning" in a single unified environment.
+ScienceDiscovery is a one‑stop AI research workspace built specifically for scientific research. Leveraging this platform, researchers can efficiently complete the highly cumbersome research exploration workflow of "literature review, hypothesis formulation, code development, experimental trial‑and‑error, and parameter tuning" in a single unified environment..
 
 English | [中文](README_zh.md)
 
@@ -21,21 +21,23 @@ A browser UI communicates with a Node control API. Each agent run is driven by a
 ## Related documents
 
 - [Documentation](docs/README.md) — complete English and Chinese Tutorial / How-to / Reference / Explanation indexes.
-- [Contributing](CONTRIBUTING.md) — documentation and contribution notes for this branch.
+- [Contributing](CONTRIBUTING.md) — development setup and test commands.
 
 ## Requirements
 
-ScienceDiscovery is distributed as a prepackaged binary, the only user path: take the executable matching the host architecture, install Bubblewrap, then run `./ScienceDiscovery serve`.
+The prepackaged binary is the primary user path. Other deployment modes are documented separately.
 
 | Path | Host requirements |
 |---|---|
 | Prepackaged binary | Linux x86_64/aarch64 and bubblewrap |
+| Local source mode | Linux x86_64/aarch64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, bubblewrap, and Git with submodule support |
+| Docker | Linux x86_64/aarch64, Docker Engine 24+, Compose v2, and host support for unprivileged user namespaces |
 
-Managed scientific environments use the application's pinned micromamba and do not require system Python, R, or conda. Deployment also requires Linux and the user-namespace capabilities described in the deployment guide.
+The Gateway requires Python 3.12 in source mode; `uv` installs it into the service environment when needed. Managed scientific environments use the application's pinned micromamba and do not require system Python, R, or conda. All supported deployment paths require Linux and the user-namespace capabilities described in the deployment guide.
 
 ## Installation
 
-Prepare a ScienceDiscovery executable for the host architecture; see the [deployment guide](docs/en/how-to/deployment.md) for installation and run steps.
+Prepare a ScienceDiscovery executable for the host architecture. Binary packaging, source mode, and Docker procedures are documented in the [deployment guide](docs/en/how-to/deployment.md).
 
 ## Quick start
 
@@ -46,7 +48,7 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-In another terminal, run `curl -fsS http://127.0.0.1:4310/health`. Then open <http://127.0.0.1:4310>, log in with the access token the server printed on startup, and configure a task model under **System configuration → Global defaults**. See the [Quick Start tutorial](docs/en/tutorial/01-quick-start.md) for the first task; see the [deployment guide](docs/en/how-to/deployment.md) for the complete deployment.
+In another terminal, run `curl -fsS http://127.0.0.1:4310/health`. Then open <http://127.0.0.1:4310>, log in with the access token the server printed on startup, and configure a task model under **System configuration → Global defaults**. See the [Quick Start tutorial](docs/en/tutorial/01-quick-start.md) for the first task; see the [deployment guide](docs/en/how-to/deployment.md) for binary packaging, source mode, and Docker.
 
 ## License
 

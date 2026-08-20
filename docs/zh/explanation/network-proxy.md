@@ -1,6 +1,6 @@
 # 网络代理机制
 
-ScienceDiscovery 提供实例级代理注册表和统一代理策略。本页解释策略解析、出站接入与安全边界；具体配置步骤见[配置网络代理](../how-to/configure-network-proxy.md)，接口字段见 [REST API 参考](../reference/rest-api.md#代理配置)。
+ScienceDiscovery 提供实例级代理注册表和统一代理策略。本页解释策略解析、出站接入与安全边界；具体配置步骤见[配置企业网络代理](../how-to/configure-network-proxy.md)，接口字段见 [REST API 参考](../reference/rest-api.md#代理配置)。
 
 ## 配置模型
 

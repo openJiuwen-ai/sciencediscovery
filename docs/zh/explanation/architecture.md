@@ -10,13 +10,13 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 
 ### 2.1 有几个常驻进程？
 
-用 `./ScienceDiscovery serve` 启动时，**产品本身常驻 3 个进程**（启动器后台拉起前两个，前台跑第三个；Ctrl-C 会一并清理后台）：
+本地用 `./scripts/start-stack.sh --mode local` 启动时，**产品本身常驻 3 个进程**（脚本后台拉起前两个，前台跑第三个；Ctrl-C 会一并清理后台）。原有 `./scripts/run-local.sh` 仍是转调该模式的兼容入口：
 
 | # | 进程 | 启动方式 | 默认监听 | 协议角色 |
 |---|------|----------|----------|----------|
 | 1 | **Gateway** | `data/envs/gateway/bin/python -m science_agent_gateway.server` | `127.0.0.1:4312` | 接收 API 的 `POST /run`，跑 agent 环，流式 NDJSON |
 | 2 | **Runner** | `node services/runner/dist/server.js` | `127.0.0.1:4311` | 接收 API 的执行请求，在 bubblewrap 里跑 Python/R/shell；启用时管理白名单 Host NPU job |
-| 3 | **API** | `node services/api/dist/server.js` | `127.0.0.1:4310` | 浏览器入口：REST + SSE + 静态 UI；并回调收工具执行 |
+| 3 | **API** | `pnpm api` → `node services/api/dist/server.js` | `127.0.0.1:4310` | 浏览器入口：REST + SSE + 静态 UI；并回调收工具执行 |
 
 ```
                     浏览器（不是本仓库起的服务进程）

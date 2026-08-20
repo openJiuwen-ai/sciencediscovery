@@ -1,0 +1,81 @@
+# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ScienceDiscovery — single-user local deployment.
+#
+# One service runs the whole stack (gateway + runner + control API/UI), mirroring
+# the process topology of scripts/run-local.sh.
+#
+# Persistence is a plain host bind mount of ./data. There is deliberately NO
+# Docker named volume: all runtime state stays as ordinary files that can be
+# inspected, backed up, and deleted from the host.
+#
+# Values below are interpolated from a .env file in this directory; see
+# .env.docker.example. Documentation: README.md → "Docker deployment".
+
+services:
+  science-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: science-agent:local
+    container_name: science-agent
+    # Must match the owner of the bind-mounted ./data on the host (id -u / id -g),
+    # otherwise the container cannot write its state.
+    user: "${SCIENCE_AGENT_UID:-1000}:${SCIENCE_AGENT_GID:-1000}"
+    ports:
+      # Published on loopback by default: auth is a single bearer token without
+      # TLS, and Docker's published ports bypass most host firewall rules. Set
+      # SCIENCE_AGENT_PUBLISH_HOST=0.0.0.0 to reach the UI from other machines
+      # on a trusted network.
+      - "${SCIENCE_AGENT_PUBLISH_HOST:-127.0.0.1}:${SCIENCE_AGENT_PUBLISH_PORT:-4310}:4310"
+    environment:
+      SCIENCE_AGENT_DATA_DIR: /app/data
+      SCIENCE_AGENT_HOST: "0.0.0.0"
+      SCIENCE_AGENT_PORT: "4310"
+      # Empty = generated on first start and stored under /app/data/secrets;
+      # the container log prints it. Set the variable to pin your own value.
+      SCIENCE_AGENT_AUTH_TOKEN: "${SCIENCE_AGENT_AUTH_TOKEN:-}"
+      SCIENCE_AGENT_LOG_LEVEL: "${SCIENCE_AGENT_LOG_LEVEL:-INFO}"
+      SCIENCE_AGENT_LOG_DIR: "${SCIENCE_AGENT_LOG_DIR:-}"
+      SCIENCE_AGENT_LOG_MAX_BYTES: "${SCIENCE_AGENT_LOG_MAX_BYTES:-10485760}"
+      SCIENCE_AGENT_LOG_BACKUP_COUNT: "${SCIENCE_AGENT_LOG_BACKUP_COUNT:-5}"
+      SCIENCE_AGENT_RUNNER_TOKEN: "${SCIENCE_AGENT_RUNNER_TOKEN:-science-agent-runner-local}"
+      SCIENTIFIC_ENVS: "${SCIENTIFIC_ENVS:-1}"
+      SCIENCE_AGENT_EXEC_TIMEOUT_MS: "${SCIENCE_AGENT_EXEC_TIMEOUT_MS:-7200000}"
+      SCIENCE_AGENT_KERNEL_IDLE_MS: "${SCIENCE_AGENT_KERNEL_IDLE_MS:-1800000}"
+      SCIENCE_AGENT_SCIENTIFIC_CHANNELS: "${SCIENCE_AGENT_SCIENTIFIC_CHANNELS:-conda-forge}"
+      SCIENCE_AGENT_PROVISIONER_PATH: "${SCIENCE_AGENT_PROVISIONER_PATH:-}"
+      SCIENCE_AGENT_PACKAGE_CACHE_DIR: "${SCIENCE_AGENT_PACKAGE_CACHE_DIR:-}"
+      SCIENCE_AGENT_BWRAP_PATH: "${SCIENCE_AGENT_BWRAP_PATH:-/usr/bin/bwrap}"
+      SCIENCE_AGENT_SSH_CONFIG_PATH: "${SCIENCE_AGENT_SSH_CONFIG_PATH:-}"
+    volumes:
+      # Bind mount only — no named volume. Change the host side (left of the
+      # colon) to keep container state away from a host-side data/ you already use.
+      - ./data:/app/data
+    security_opt:
+      # The runner still sandboxes agent code with bubblewrap; bubblewrap needs
+      # mount/pivot_root inside its own user namespace. Docker's default seccomp
+      # profile only allows those for containers holding CAP_SYS_ADMIN, and the
+      # docker-default AppArmor profile denies mount outright. These two are the
+      # minimum needed — no added capabilities, no privileged: true.
+      - seccomp=unconfined
+      - apparmor=unconfined
+    restart: "on-failure:3"
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://127.0.0.1:4310/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 5

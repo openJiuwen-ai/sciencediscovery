@@ -10,7 +10,7 @@ It is not a multi-tenant cloud service. The API binds to loopback by default. Au
 
 ### 2.1 How many resident processes?
 
-`./ScienceDiscovery serve` keeps three product processes resident:
+`./scripts/start-stack.sh --mode local` keeps three product processes resident; `run-local.sh` is a compatibility wrapper:
 
 | # | Process | Startup | Default listener | Role |
 |---|---|---|---|---|

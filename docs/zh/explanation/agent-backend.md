@@ -234,3 +234,4 @@ Gateway 只收到 **规格**（名称、描述、JSON Schema）。因此：
 - [science-connectors.md](science-connectors.md) — 科研 MCP、治理与文件生命周期
 - [subagent-orchestration.md](subagent-orchestration.md) — 主 Agent / 子 Agent 编排、结果契约与 DeerFlow 取舍
 - [skill-progressive-disclosure.md](skill-progressive-disclosure.md) — 技能渐进式披露与 DeerFlow catalog 复用
+- [services/gateway/README.md](../../../services/gateway/README.md) — gateway 英文说明

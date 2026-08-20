@@ -1,12 +1,13 @@
 # Configuration, Ports, Quotas, and Storage Reference
 
-This page lists `ScienceDiscovery serve` environment variables, default ports, workspace-related quotas, and storage locations. See [Deployment](../how-to/deployment.md) for operational steps.
+This page lists local and Docker environment variables, default ports, workspace-related quotas, and storage locations. See [Deployment](../how-to/deployment.md) for operational steps.
 
-## Environment variables
+## Environment variables (local mode)
 
 ```bash
-./ScienceDiscovery serve                   # start directly; exported SCIENCE_AGENT_* variables also apply
-./ScienceDiscovery serve --env-file .env   # or inject settings from a KEY=VALUE file
+cp .env.example .env
+set -a && source .env && set +a
+./scripts/run-local.sh
 ```
 
 | Variable | Default | Purpose |
@@ -36,7 +37,8 @@ This page lists `ScienceDiscovery serve` environment variables, default ports, w
 | `SCIENCE_AGENT_NPU_PYTHON` | `python3` | Compatibility Python only for custom allowlisted workloads that explicitly use `${python}`; built-in NPU workloads use the Agent-selected scientific environment revision instead |
 | `SCIENCE_AGENT_NPU_SMOKE_SCRIPT` | empty | Optional administrator-owned Ascend smoke probe; empty uses `services/runner/workloads/npu-smoke-test.py` |
 | `SCIENCE_AGENT_NPU_PROTENIX_SCRIPT` | empty | Host manager entry point for the Protenix antibody pipeline, usually a deployed skill `scripts/antibody_pipeline_manager.py`. The manager is launched with the Python resolved from the ScienceDiscovery scientific environment revision |
-| `SCIENCE_AGENT_PYPI_INDEX` | Huawei Cloud PyPI mirror | Package index used when the first `serve` installs the gateway Python dependencies and the uv wheel. See [Deployment](../how-to/deployment.md#dependencies-installed-on-first-launch) for the full first-launch variables |
+| `SCIENCE_AGENT_NPM_REGISTRY` | empty (official registry) | Build-only registry passed to `pnpm install --registry`; does not alter user/global npm configuration |
+| `SCIENCE_AGENT_PYPI_INDEX` | empty (official PyPI) | Build-only `UV_DEFAULT_INDEX` for `uv sync`; the script backs up and restores `uv.lock` if the mirror causes re-resolution |
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | Memory-graph service bind address |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | Memory-graph port |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | Memory-graph endpoint used by the API |
@@ -58,7 +60,7 @@ This page lists `ScienceDiscovery serve` environment variables, default ports, w
 | `SCIENCE_AGENT_PAPER_PYTHON_PATH` | `<data-dir>/envs/paper/bin/python` | PDF-worker Python |
 | `SCIENCE_AGENT_PAPER_WORKER_PATH` | `services/paper/paper_worker.py` | PDF-worker entry point |
 
-The Ascend NPU Broker is for deployments that need host Ascend devices, and administrators must enable it explicitly. Keep `SCIENCE_AGENT_NPU_BROKER=0` when the host has no Ascend NPU, lacks CANN/MindSpore, or should not expose NPU jobs to the Agent; then `run_npu_job` is absent from the tool table. Enabling it does not change the normal startup command (`./ScienceDiscovery serve`); set `SCIENCE_AGENT_NPU_BROKER=1` in `--env-file` or as an exported variable. Before enabling the Broker, create and verify at least one ScienceDiscovery managed Python scientific environment revision that can import the required CANN/MindSpore stack. Built-in NPU workloads, including `npu.smoke_test`, require `environment_revision_id`; when the Agent does not pass one explicitly, the API uses the current Session revision. When `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` is empty, the built-in allowlist currently contains `npu.smoke_test` and `antibody.protenix.v1`. Add models through a custom JSON allowlist with fixed entry points, not arbitrary Agent-supplied commands. `SCIENCE_AGENT_NPU_PYTHON` is kept only for custom allowlists that explicitly use `${python}`; the built-in allowlist uses `${managedPython}` and ignores it. Changing the allowlist is equivalent to changing executable host-code entry points and should be reviewed as a deployment change. Model weights, databases, HMMER, CANN, MindScience checkouts, and similar site assets stay outside the repository and are normally referenced through the environment variables or workload configuration above.
+The Ascend NPU Broker is for deployments that need host Ascend devices, and administrators must enable it explicitly. Keep `SCIENCE_AGENT_NPU_BROKER=0` when the host has no Ascend NPU, lacks CANN/MindSpore, or should not expose NPU jobs to the Agent; then `run_npu_job` is absent from the tool table. Enabling it does not change the normal local-mode startup command. Before enabling the Broker, create and verify at least one ScienceDiscovery managed Python scientific environment revision that can import the required CANN/MindSpore stack. Built-in NPU workloads, including `npu.smoke_test`, require `environment_revision_id`; when the Agent does not pass one explicitly, the API uses the current Session revision. When `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` is empty, the built-in allowlist currently contains `npu.smoke_test` and `antibody.protenix.v1`. Add models through a custom JSON allowlist with fixed entry points, not arbitrary Agent-supplied commands. `SCIENCE_AGENT_NPU_PYTHON` is kept only for custom allowlists that explicitly use `${python}`; the built-in allowlist uses `${managedPython}` and ignores it. Changing the allowlist is equivalent to changing executable host-code entry points and should be reviewed as a deployment change. Model weights, databases, HMMER, CANN, MindScience checkouts, and similar site assets stay outside the repository and are normally referenced through the environment variables or workload configuration above.
 
 The browser stores only the API token in local storage. Model credentials stay in backend storage.
 
@@ -76,6 +78,27 @@ These defaults come from `services/api/src/workspace-upload.ts`, `services/runne
 | Runner execution file | no separate limit | `MAX_RUNNER_FILE_BYTES=0`; files still count against the runner workspace total |
 
 In `GET /health`, `workspace.maxFileBytes`, `maxRequestBytes`, and `maxWorkspaceBytes` report the API file, API request, and runner workspace limits. The endpoint does not report the stdout/stderr limit.
+
+## Docker environment variables
+
+Compose reads the root `.env` and interpolates these keys into `docker-compose.yml`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | Container uid/gid; must write host `./data` |
+| `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | Host interface publishing the UI/API |
+| `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | Host port mapped to container `4310` |
+| `SCIENCE_AGENT_AUTH_TOKEN` | generated on first start | Browser/API bearer token; unset means the value stored in `<data-dir>/secrets/auth-token` |
+| `SCIENCE_AGENT_RUNNER_TOKEN` | `science-agent-runner-local` | API-to-runner token on container loopback |
+| `SCIENTIFIC_ENVS` | `1` | Managed Python/R environments and persistent kernels |
+| `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | Sandbox wall-clock timeout |
+| `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | Persistent-kernel idle timeout (minimum 1000 ms) |
+| `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated channel allowlist |
+| `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator micromamba path |
+| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache |
+| `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | Bubblewrap in the image |
+
+The API explicitly listens on `0.0.0.0:4310` **inside the container**, while gateway `4312` and runner `4311` remain on container loopback. Only the API port is published, and its host-side default is `127.0.0.1`. See [Docker deployment](../how-to/deployment.md#docker-deployment).
 
 ## Storage layout
 
@@ -99,4 +122,4 @@ Unless overridden, persistent application data is kept in the repository:
 | `data/logs/{api,run,gateway,runner,memory-graph}.log` | Rotating category logs; Science Memory exists only when enabled |
 | Browser local storage | API bearer token only; model credentials never leave the backend |
 
-The data directory is the only runtime root. `SCIENCE_AGENT_DATA_DIR=/srv/science-agent ./ScienceDiscovery serve` moves state and service environments together. Deleting it removes projects, sessions, credentials, and audit records. `services/paper/.venv` and `services/gateway/.venv` are used only by standalone development or smoke commands.
+The data directory is the only runtime root. `SCIENCE_AGENT_DATA_DIR=/srv/science-agent ./scripts/run-local.sh` moves state and service environments together. Deleting it removes projects, sessions, credentials, and audit records. Under [Docker deployment](../how-to/deployment.md#docker-deployment), it is the host `./data` bind mount; only service `envs/` live in the image. `services/paper/.venv` and `services/gateway/.venv` are used only by standalone development or smoke commands.

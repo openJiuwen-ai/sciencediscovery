@@ -4,7 +4,8 @@
 
 ## 地址、认证与通用响应
 
-- 默认基址与绑定地址：`http://127.0.0.1:4310`。
+- 本地模式默认基址与绑定地址：`http://127.0.0.1:4310`。
+- Docker 默认发布地址：`http://127.0.0.1:4310`。
 - `GET /health` 与 `GET /api/health` 无需认证。
 - 其他 `/api/*` 请求必须携带 `Authorization: Bearer <SCIENCE_AGENT_AUTH_TOKEN>`。没有默认 token：该变量未设置时，服务端在首次启动生成并打印一个随机 token，并保存在 `<数据目录>/secrets/auth-token`。
 - JSON 客户端应发送 `Content-Type: application/json`；服务端对通用 JSON body 设置 1,500,000 bytes 上限。工作区上传使用 multipart 及独立配额。
@@ -99,7 +100,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 
 ## 代理配置
 
-以下接口均需 bearer 认证。配置步骤与凭据注意事项见[配置网络代理](../how-to/configure-network-proxy.md)。
+以下接口均需 bearer 认证。配置步骤与凭据注意事项见[配置企业网络代理](../how-to/configure-network-proxy.md)。
 
 | 方法与路径 | 请求 | 成功响应 |
 |---|---|---|

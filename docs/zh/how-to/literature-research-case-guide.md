@@ -122,7 +122,7 @@
 
 启用与使用方式：
 
-1. **准备 Neo4j**：记忆图谱需要外部 Neo4j 服务（不随二进制分发）。在 **系统配置 → Memory graph** 中填写 Bolt 地址、用户名与密码。
+1. **准备 Neo4j**：记忆图谱需要外部 Neo4j 服务（不在镜像中打包）。在 **系统配置 → Memory graph** 中填写 Bolt 地址、用户名与密码。
 2. **启用服务**：在系统设置中开启记忆图谱功能。启用后，Python 侧车 `services/memory-graph`（仅回环 `:17674`）会被启动，并随 Runner 启动而自检健康状态。
 3. **Agent 侧自动镜像**：启用后，执行事件（MCP 检索、`run_python`）会被自动镜像到图中，形成"任务链"；Agent 在写最终报告时通过 `declare_evidence`、`declare_artifact`、`declare_claim` 三个工具建立"引用链"。
 4. **查询与查看**：Agent 可调用 `query_graph` 工具对图做大小写不敏感子串检索；前端会在报告里把 `[alias]` 渲染为可点击 chip，点击后跳转到对应证据或产物。

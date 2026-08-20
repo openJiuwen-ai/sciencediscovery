@@ -21,7 +21,7 @@ science_agent/
 │   └── mcp-sources/          # scientific MCP manifests and trust boundary
 ├── skills/                   # built-in Agent Skills
 ├── third_party/deer-flow/    # deer-flow git submodule
-├── scripts/                  # internal launch and packaging scripts (not a user install path)
+├── scripts/                  # shared launcher and mode wrappers
 ├── test/                     # integration and browser E2E outside pnpm check
 ├── docs/                     # complete English and Chinese documentation
 ├── data/                     # gitignored runtime state
@@ -32,7 +32,7 @@ science_agent/
 
 ### 1.1 Processes and default ports
 
-`./ScienceDiscovery serve` starts (the launcher starts the first two in the background and the API in the foreground; Ctrl-C stops all):
+`./scripts/start-stack.sh --mode local` (or compatibility wrapper `run-local.sh`) starts:
 
 | Process | Default address | Purpose |
 |---|---|---|
@@ -40,7 +40,7 @@ science_agent/
 | `services/runner` | `127.0.0.1:4311` | Sandbox execution, loopback only |
 | `services/api` | `127.0.0.1:4310` | Control API and static UI, local-only by default |
 
-The first `serve` extracts the embedded runtime and prepares the gateway Python environment; see the [deployment guide](../how-to/deployment.md).
+First startup initializes `third_party/deer-flow` and prepares uv environments under `data/envs/gateway` and `data/envs/paper`.
 
 ## 2. Modules and responsibilities
 

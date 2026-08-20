@@ -30,7 +30,7 @@ Container ID verify failed (session ct_id=0; device ct_id=...)
 
 | 需要查什么 | 应看哪里 |
 |---|---|
-| 如何启用 / 关闭 Broker，以及 `.env` 参数含义 | [配置参考](../reference/configuration.md#环境变量) |
+| 如何启用 / 关闭 Broker，以及 `.env` 参数含义 | [配置参考](../reference/configuration.md#环境变量本地模式) |
 | Agent 能看到什么 NPU 工具、参数怎么填 | [内置工具清单](../reference/builtin-tools.md#其他条件工具) |
 | 为什么 NPU 是沙箱外例外，以及有哪些安全校验 | [沙箱执行](sandbox-execution.md#31-ascend-npu-broker可选宿主执行) |
 | Broker 在整体进程模型里的位置 | [整体运行时架构](architecture.md#25-职责切分核心原则) |
@@ -58,6 +58,11 @@ Broker 的可扩展性来自“注册新的 workload manifest”，不是开放�
 
 ## 6. 测试入口
 
-NPU Broker 的 Runner 端测试位于 `services/runner/dist/server.test.js`（用 `node --test --test-name-pattern "NPU Broker"` 运行）。该测试需要完整源码检出与构建，本发布分支不提供源码构建步骤；如需运行，请在包含完整源码的检出中操作。
+Runner 侧针对 NPU Broker 的测试命令：
+
+```bash
+pnpm --filter @science-agent/runner build
+node --test --test-name-pattern "NPU Broker" services/runner/dist/server.test.js
+```
 
 覆盖重点包括默认关闭、显式启用、HMAC submit、workload 白名单、workspace 路径逃逸拒绝、`${repo:...}` realpath 边界、Protenix workload 执行、Protenix 入口拒绝 AF3 intent 配置、产物收集与 Runner 重启后的 interrupted 状态。

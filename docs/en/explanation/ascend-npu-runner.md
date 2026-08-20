@@ -30,7 +30,7 @@ The current design therefore does not keep pushing NPU devices into bwrap. Norma
 
 | Need | Document |
 |---|---|
-| Enable/disable Broker and `.env` variables | [Configuration reference](../reference/configuration.md#environment-variables) |
+| Enable/disable Broker and `.env` variables | [Configuration reference](../reference/configuration.md#environment-variables-local-mode) |
 | Model-visible NPU tool and parameters | [Built-in tools](../reference/builtin-tools.md#other-conditional-tools) |
 | Why NPU is a sandbox exception and how it is constrained | [Sandbox execution](sandbox-execution.md#31-ascend-npu-broker-optional-host-execution) |
 | Broker placement in the runtime model | [Runtime architecture](architecture.md#25-responsibility-split) |
@@ -58,6 +58,11 @@ Direct NPU passthrough into bwrap may be a future optimization only after a real
 
 ## 6. Test entry point
 
-The Runner-side NPU Broker tests live in `services/runner/dist/server.test.js` (run with `node --test --test-name-pattern "NPU Broker"`). They require a full source checkout and build, which this release branch does not provide; run them from a checkout that contains the complete source tree.
+Runner-side NPU Broker tests:
+
+```bash
+pnpm --filter @science-agent/runner build
+node --test --test-name-pattern "NPU Broker" services/runner/dist/server.test.js
+```
 
 Coverage includes default-off behavior, explicit enablement, HMAC submit, workload allowlist, workspace path escape rejection, `${repo:...}` realpath boundaries, Protenix workload execution, AF3-intent rejection for the Protenix entry point, artifact collection, and interrupted state after Runner restart.
