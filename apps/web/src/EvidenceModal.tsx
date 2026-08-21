@@ -25,6 +25,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import type { MemoryGraphChainResult, MemoryGraphNode, MemorySubgraph } from "@science-agent/schema";
 
 import type { ApiClient } from "./api.js";
+import { ErrorBoundary } from "./ErrorBoundary.js";
 import { firstContentValue, humanizeKey, partitionEvidenceExtra } from "./NodeField.js";
 import { useLocale } from "./i18n/index.js";
 
@@ -197,6 +198,7 @@ export function EvidenceModal({ client, evidenceId, onClose, sessionId }: Eviden
         </div>
       </section>
       {chainExplorer ? (
+        <ErrorBoundary label="Science Memory" onError={(message) => { setError(message); setChainExplorer(null); }}>
         <Suspense fallback={null}>
           <MemoryGraphExplorer
             client={client}
@@ -208,6 +210,7 @@ export function EvidenceModal({ client, evidenceId, onClose, sessionId }: Eviden
             subgraph={chainExplorer.subgraph}
           />
         </Suspense>
+        </ErrorBoundary>
       ) : null}
     </div>
   );
