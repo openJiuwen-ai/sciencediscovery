@@ -18,9 +18,12 @@ import test from "node:test";
 import type { SkillDescriptor } from "@science-agent/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { ApiClient } from "../src/api.js";
 import { SkillManager, validateSkillDraft } from "../src/SkillManager.js";
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const skill = {
   currentRevision: 1,
@@ -68,6 +71,9 @@ test("renders an accessible searchable skill catalog with author and import acti
   }));
 
   assert.match(html, /Skill manager/);
+  assert.match(html, /role="tab"/);
+  assert.match(html, />Skills</);
+  assert.match(html, />Libraries</);
   assert.match(html, /aria-label="Search skills"/);
   assert.match(html, /\+ New/);
   assert.match(html, />Import</);
@@ -77,4 +83,45 @@ test("renders an accessible searchable skill catalog with author and import acti
   assert.match(html, /life-science-evidence-brief/);
   assert.match(html, /Built-in/);
   assert.match(html, /aria-label="Skill catalog"/);
+});
+
+test("renders skill library cards with pinned head version metadata", async () => {
+  const client = {
+    listSkillLibraries: async () => [{
+      createdAt: "2026-01-01T00:00:00.000Z",
+      headVersionId: "version-alpha",
+      id: "evaluation-skills",
+      name: "Evaluation Skills",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    }],
+    listSkillLibraryVersions: async () => [{
+      author: { kind: "user" as const },
+      contentHash: "abcdef1234567890",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      id: "version-alpha",
+      libraryId: "evaluation-skills",
+      skills: [
+        { description: "Alpha", hash: "a".repeat(64), id: "alpha-skill", version: "1.0.0" },
+        { description: "Beta", hash: "b".repeat(64), id: "beta-skill", version: "1.0.0" },
+      ],
+    }],
+  } as Partial<ApiClient> as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(SkillManager, {
+      client,
+      initialView: "libraries",
+      onCatalogChange: () => undefined,
+      onError: () => undefined,
+      skills: [skill],
+    }));
+  });
+  await act(async () => undefined);
+
+  const text = JSON.stringify(renderer!.toJSON()).replace(/","/g, "");
+  assert.match(text, /Evaluation Skills/);
+  assert.match(text, /Head version/);
+  assert.match(text, /2 skills/);
+  assert.match(text, /abcdef123456/);
+  await act(async () => renderer!.unmount());
 });

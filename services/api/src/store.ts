@@ -3298,6 +3298,7 @@ export class SessionStore {
     retryOfRunId?: string;
     sessionId: string;
     settingsSnapshot: SessionRun["settingsSnapshot"];
+    skillLibraryRefs?: SessionRun["skillLibraryRefs"];
     webForceRefresh?: boolean;
   }): Promise<SessionRun> {
     this.assertSessionWritable(input.sessionId);
@@ -3318,6 +3319,7 @@ export class SessionStore {
         ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
         sessionId: input.sessionId,
         settingsSnapshot: structuredClone(input.settingsSnapshot),
+        ...(input.skillLibraryRefs?.length ? { skillLibraryRefs: structuredClone(input.skillLibraryRefs) } : {}),
         ...(input.webForceRefresh ? { webForceRefresh: true } : {}),
         status: "queued",
       };

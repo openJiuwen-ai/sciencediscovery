@@ -72,6 +72,7 @@
   .skill-manager-grid { grid-template-columns: minmax(0, 1fr); }
   .skill-catalog-list { max-height: 180px; border-right: 0; border-bottom: 1px solid var(--border); }
   .skill-manager-toolbar { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .skill-library-create, .skill-library-diff-controls, .skill-library-diff { grid-template-columns: minmax(0, 1fr); }
   .skill-metadata { grid-template-columns: minmax(0, 1fr); }
   .skill-editor-columns { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .settings-choices { grid-template-columns: 1fr; }

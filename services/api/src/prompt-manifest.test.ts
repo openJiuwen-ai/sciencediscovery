@@ -80,3 +80,40 @@ test("USG-006 prompt manifests backfill reported usage fields", async (context) 
   assert.equal(manifest.totalTokens, 30);
   assert.equal(manifest.costUsd, null);
 });
+
+test("prompt manifests record version-pinned skill library references", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `prompt-manifest-skill-library-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+
+  const manifest = await createPromptManifest({
+    cas: new CasStore(dataDir),
+    messages: [message],
+    model,
+    response: "Answer",
+    runtimeSettings,
+    sessionId: "session-a",
+    skillLibraryRefs: [{
+      contentHash: "a".repeat(64),
+      libraryId: "evaluation-skills",
+      versionId: "version-a",
+    }],
+    skillRefs: [],
+    startedAt: "2026-01-01T00:00:00.000Z",
+    systemPrompt: "System",
+    systemPromptVersion: "test",
+    turnId: "run-a",
+    usage: {
+      inputTokens: 1,
+      outputTokens: 2,
+      totalTokens: 3,
+      usageStatus: "reported",
+    },
+  });
+
+  assert.deepEqual(manifest.skillLibraryRefs, [{
+    contentHash: "a".repeat(64),
+    libraryId: "evaluation-skills",
+    versionId: "version-a",
+  }]);
+});

@@ -115,6 +115,7 @@ import {
 import { inferDomain, MemoryGraphClient, MemoryGraphSink, mgLog } from "@science-agent/memory";
 import { runLog } from "../logging.js";
 import { createPromptManifest } from "../prompt-manifest.js";
+import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
 import { GovernedDownloadManager } from "@science-agent/artifact-manager";
 import { McpGovernanceBroker } from "@science-agent/data-source";
@@ -428,6 +429,7 @@ async function executeAgentRun(
       subagentOrchestration: true,
     },
   );
+  const skillLibraryRefs = body.skillLibraryRefs?.length ? structuredClone(body.skillLibraryRefs) : undefined;
   const runStartedAt = new Date().toISOString();
   const assertRunActive = () => {
     if (cancelledRuns.has(runId) || requestAbortController.signal.aborted) {
@@ -1490,6 +1492,7 @@ async function executeAgentRun(
       startedAt: runStartedAt,
       systemPrompt,
       systemPromptVersion: WORKSPACE_SYSTEM_PROMPT_VERSION,
+      ...(skillLibraryRefs ? { skillLibraryRefs } : {}),
       skillRefs: activeSkills.map(({ hash, id, revision, version }) => ({ hash, id, revision, version })),
       ...(sessionSpecialist ? { specialistRef: { id: sessionSpecialist.id, name: sessionSpecialist.name } } : {}),
       turnId: runId,
@@ -1547,6 +1550,7 @@ async function executeAgentRun(
           startedAt: runStartedAt,
           systemPrompt,
           systemPromptVersion: WORKSPACE_SYSTEM_PROMPT_VERSION,
+          ...(skillLibraryRefs ? { skillLibraryRefs } : {}),
           skillRefs: activeSkills.map(({ hash, id, revision, version }) => ({ hash, id, revision, version })),
           ...(sessionSpecialist ? { specialistRef: { id: sessionSpecialist.id, name: sessionSpecialist.name } } : {}),
           turnId: runId,
@@ -1879,6 +1883,7 @@ function computeSettingsSnapshot(store: SessionStore, sessionId: string): Effect
 export async function createQueuedRun(
   store: SessionStore,
   skillCatalog: SkillCatalog,
+  skillLibraryCatalog: SkillLibraryCatalog,
   sessionId: string,
   body: SendMessageRequest,
 ): Promise<SessionRun> {
@@ -1894,12 +1899,19 @@ export async function createQueuedRun(
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Composer references are invalid");
   }
+  let skillLibraryRefs: SessionRun["skillLibraryRefs"];
+  try {
+    skillLibraryRefs = await skillLibraryCatalog.validateRefs(body.skillLibraryRefs);
+  } catch (error) {
+    throw new ApiStatusError(400, error instanceof Error ? error.message : "Skill library references are invalid");
+  }
   const run = await store.createSessionRun({
     annotationIds: body.annotationIds,
     prompt,
     references,
     sessionId,
     settingsSnapshot: computeSettingsSnapshot(store, sessionId),
+    ...(skillLibraryRefs.length ? { skillLibraryRefs } : {}),
     webForceRefresh: body.webForceRefresh === true || slashRefresh,
   });
   const renamedSession = await applyInitialSessionTitle(store, run);
@@ -1980,6 +1992,7 @@ export function scheduleSessionRuns(
               annotationIds: next.annotationIds,
               content: next.prompt,
               references: next.references,
+              skillLibraryRefs: next.skillLibraryRefs,
               webForceRefresh: next.webForceRefresh,
             },
             requestAbortController,
@@ -2155,13 +2168,14 @@ export async function streamAgentRun(
   paperService: PaperService,
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
+  skillLibraryCatalog: SkillLibraryCatalog,
   memoryGraphSink: MemoryGraphSink,
   sessionId: string,
   body: SendMessageRequest,
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
 ): Promise<void> {
-  const run = await createQueuedRun(store, skillCatalog, sessionId, body);
+  const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, body);
   scheduleSessionRuns(
     store,
     runnerClient,

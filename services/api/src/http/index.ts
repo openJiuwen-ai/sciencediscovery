@@ -125,6 +125,8 @@ import {
   SkillCatalogError,
   type RuntimeSkillSnapshot,
 } from "@science-agent/specialist";
+import { SkillLibraryCatalog } from "../skill-library-catalog.js";
+import { handleSkillLibraryRequest } from "./skill-libraries.js";
 import {
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
@@ -220,6 +222,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     store,
     webBroker,
   } = platform;
+  const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const patchEphemeralCallback = (server: Server) => {
     // With an ephemeral port (tests), the configured tool-callback URL cannot
     // know the real port in advance; rewrite it from the bound address.
@@ -229,7 +232,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
     });
   };
-  const ready = initializePlatformServices(platform, config);
+  const ready = Promise.all([
+    initializePlatformServices(platform, config),
+    skillLibraryCatalog.load(),
+  ]).then(() => undefined);
 
   const server = createServer(async (request, response) => {
     const requestPath = (request.url ?? "/").split("?", 1)[0] || "/";
@@ -692,6 +698,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (request.method === "GET" && url.pathname === "/api/skills") {
         sendJson(response, 200, skillCatalog.list());
         return;
+      }
+      if (url.pathname.startsWith("/api/skill-libraries")) {
+        if (await handleSkillLibraryRequest({ catalog: skillLibraryCatalog, request, response, url })) return;
       }
       if (request.method === "GET" && url.pathname === "/api/specialists") {
         sendJson(response, 200, store.listSpecialists());
@@ -1452,7 +1461,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (sessionRunsMatch && request.method === "POST") {
         const sessionId = sessionRunsMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        const run = await createQueuedRun(store, skillCatalog, sessionId, await readJson<SendMessageRequest>(request));
+        const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, await readJson<SendMessageRequest>(request));
         scheduleSessionRuns(
           store,
           runnerClient,
@@ -1949,6 +1958,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           paperService,
           remoteCompute,
           skillCatalog,
+          skillLibraryCatalog,
           memoryGraphSink,
           messagesMatch[1]!,
           await readJson<SendMessageRequest>(request),
@@ -1979,6 +1989,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (code === "UNSUPPORTED_MEDIA_TYPE") sendError(response, 415, message);
       else if (code === "SKILL_NOT_FOUND") sendError(response, 404, message);
       else if (code === "SKILL_CONFLICT" || code === "SKILL_READ_ONLY") sendError(response, 409, message);
+      else if (code === "SKILL_LIBRARY_NOT_FOUND") sendError(response, 404, message);
+      else if (code === "SKILL_LIBRARY_CONFLICT") sendError(response, 409, message);
+      else if (code === "SKILL_LIBRARY_VALIDATION") sendError(response, 400, message);
       else if (/^(Project|Session|Proxy server) not found$/.test(message)) sendError(response, 404, message);
       else if (message === "Session is archived and read-only") sendError(response, 409, message);
       else if (message.startsWith("Proxy server is referenced by ")) sendError(response, 409, message);

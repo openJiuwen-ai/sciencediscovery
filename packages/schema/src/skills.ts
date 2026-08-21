@@ -120,6 +120,92 @@ export interface SkillResourceContent {
   size: number;
 }
 
+export interface SkillLibrary {
+  createdAt: string;
+  headVersionId?: string;
+  id: string;
+  name: string;
+  updatedAt: string;
+}
+
+export interface SkillLibraryVersionSkill {
+  declaredVersion?: string;
+  description: string;
+  hash: string;
+  id: string;
+  version: string;
+}
+
+export interface SkillLibraryVersion {
+  author: {
+    id?: string;
+    kind: "self-evolution" | "system" | "user";
+    name?: string;
+  };
+  baseVersionId?: string;
+  contentHash: string;
+  createdAt: string;
+  evaluation?: Record<string, unknown>;
+  id: string;
+  libraryId: string;
+  parentVersionId?: string;
+  rollbackOfVersionId?: string;
+  skills: SkillLibraryVersionSkill[];
+}
+
+export interface SkillLibraryPackageInput {
+  files: Array<{
+    content: string;
+    encoding?: "base64" | "utf8";
+    path: string;
+  }>;
+}
+
+export type CommitSkillLibraryOperation =
+  | { package: SkillLibraryPackageInput; type: "upsert" }
+  | { skillId: string; type: "delete" };
+
+export interface CommitSkillLibraryVersionRequest {
+  author: SkillLibraryVersion["author"];
+  baseVersionId?: string;
+  dryRun?: boolean;
+  evaluation?: Record<string, unknown>;
+  operations: CommitSkillLibraryOperation[];
+}
+
+export interface SkillLibraryDiffEntry {
+  after?: SkillLibraryVersionSkill;
+  before?: SkillLibraryVersionSkill;
+  skillId: string;
+}
+
+export interface SkillLibraryDiff {
+  added: SkillLibraryDiffEntry[];
+  deleted: SkillLibraryDiffEntry[];
+  modified: SkillLibraryDiffEntry[];
+}
+
+export interface SkillLibraryConflict {
+  code: string;
+  message: string;
+  skillId?: string;
+}
+
+export interface CommitSkillLibraryVersionResult {
+  conflicts: SkillLibraryConflict[];
+  diagnostics: SkillValidationDiagnostic[];
+  diff: SkillLibraryDiff;
+  dryRun: boolean;
+  version?: SkillLibraryVersion;
+}
+
+export interface RollbackSkillLibraryVersionRequest {
+  author: SkillLibraryVersion["author"];
+  baseVersionId?: string;
+  evaluation?: Record<string, unknown>;
+  targetVersionId: string;
+}
+
 /**
  * Stable id of a registered science source (built-in or extension).
  * Built-ins: arxiv | europe-pmc | pubmed | uniprot.

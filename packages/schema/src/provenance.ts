@@ -91,6 +91,12 @@ export interface PromptSkillRef {
   version: string;
 }
 
+export interface PromptSkillLibraryRef {
+  contentHash: string;
+  libraryId: string;
+  versionId: string;
+}
+
 export interface PromptManifest {
   costUsd: number | null;
   createdAt: string;
@@ -108,6 +114,8 @@ export interface PromptManifest {
   response?: CasObjectRef;
   runtimeSettings: EffectiveRuntimeSettings;
   sessionId: string;
+  /** Version-pinned skill libraries used to assemble this prompt. */
+  skillLibraryRefs?: PromptSkillLibraryRef[];
   skillRefs: PromptSkillRef[];
   specialistRef?: { id: string; name: string };
   status: "failed" | "succeeded";

@@ -94,6 +94,57 @@ test("listArtifactReviews uses the Session-scoped review endpoint", async () => 
   }
 });
 
+test("skill library client methods target versioned library endpoints", async () => {
+  const previousFetch = globalThis.fetch;
+  const requests: Array<{ body?: BodyInit | null; method: string; url: string }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ body: init?.body, method: init?.method ?? "GET", url: String(input) });
+    if (String(input).endsWith("/versions") && init?.method === "POST") {
+      return Response.json({ conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: true });
+    }
+    if (String(input).endsWith("/rollback")) {
+      return Response.json({ conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: false });
+    }
+    if (String(input).includes("/diff/")) return Response.json({ added: [], deleted: [], modified: [] });
+    return Response.json([]);
+  };
+  try {
+    const client = new ApiClient("test-token");
+    await client.listSkillLibraries();
+    await client.createSkillLibrary({ id: "library/a", name: "Library A" });
+    await client.getSkillLibrary("library/a");
+    await client.listSkillLibraryVersions("library/a");
+    await client.commitSkillLibraryVersion("library/a", {
+      author: { kind: "user" },
+      dryRun: true,
+      operations: [],
+    });
+    await client.getSkillLibraryVersion("library/a", "version/1");
+    await client.diffSkillLibraryVersions("library/a", "version/1", "version/2");
+    await client.rollbackSkillLibrary("library/a", {
+      author: { kind: "user" },
+      targetVersionId: "version/1",
+    });
+    assert.deepEqual(requests.map((request) => [request.method, request.url]), [
+      ["GET", "/api/skill-libraries"],
+      ["POST", "/api/skill-libraries"],
+      ["GET", "/api/skill-libraries/library%2Fa"],
+      ["GET", "/api/skill-libraries/library%2Fa/versions"],
+      ["POST", "/api/skill-libraries/library%2Fa/versions"],
+      ["GET", "/api/skill-libraries/library%2Fa/versions/version%2F1"],
+      ["GET", "/api/skill-libraries/library%2Fa/versions/version%2F1/diff/version%2F2"],
+      ["POST", "/api/skill-libraries/library%2Fa/rollback"],
+    ]);
+    assert.equal(requests[4]?.body, JSON.stringify({
+      author: { kind: "user" },
+      dryRun: true,
+      operations: [],
+    }));
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("readProjectArtifactVersion downloads retained content from the Project endpoint", async () => {
   const previousFetch = globalThis.fetch;
   let requestedUrl = "";

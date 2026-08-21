@@ -15,6 +15,10 @@
  */
 
 .skill-manager { min-width: 0; }
+.skill-manager-tabs { display: inline-flex; gap: 4px; margin: -12px 0 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); padding: 3px; }
+.skill-manager-tabs button { min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: 750; }
+.skill-manager-tabs button:hover { background: var(--surface-hover); color: var(--text-heading); }
+.skill-manager-tabs button.active { background: var(--surface); color: var(--accent-ink); box-shadow: 0 0 0 1px var(--accent-border-soft); }
 .skill-manager-toolbar { display: grid; grid-template-columns: minmax(160px, 1fr) auto auto; gap: 8px; margin-bottom: 14px; }
 .skill-manager-toolbar input { min-height: 38px; }
 .skill-manager-toolbar button, .skill-detail-actions button { min-height: 38px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text-heading); padding: 7px 11px; cursor: pointer; font-weight: 650; }
@@ -67,6 +71,28 @@
 .skill-preservation-note { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
 .skill-delete-dialog > p, .skill-delete-dialog li { color: var(--muted); font-size: 13px; line-height: 1.55; }
 .skill-delete-dialog ul { margin: 12px 0 20px; padding-left: 20px; }
+.skill-library-create { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) auto; align-items: end; gap: 10px; margin-bottom: 14px; }
+.skill-library-create label, .skill-library-section label { display: grid; gap: 5px; color: var(--text-heading); font-size: 12px; font-weight: 700; }
+.skill-library-create input, .skill-library-section textarea, .skill-library-diff-controls select { width: 100%; min-height: 38px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text-heading); padding: 8px 10px; }
+.skill-library-create button, .skill-library-section button { min-height: 38px; border-radius: 8px; padding: 7px 11px; font-weight: 700; }
+.skill-library-grid { min-height: 500px; }
+.skill-library-detail { display: grid; align-content: start; gap: 16px; }
+.skill-library-section { display: grid; gap: 10px; min-width: 0; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); padding: 13px; }
+.skill-library-section h5 { margin: 0; color: var(--text-heading); font-size: 12px; }
+.skill-library-section textarea { resize: vertical; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.skill-version-list { display: grid; gap: 6px; }
+.skill-version-list button { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; min-height: 0; border: 1px solid var(--border); background: var(--surface); color: var(--text-heading); text-align: left; }
+.skill-version-list button.active, .skill-version-list button:hover { border-color: var(--accent-border-soft); background: var(--accent-softer); }
+.skill-version-list strong, .skill-version-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-version-list small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.skill-library-checkbox { display: flex !important; grid-template-columns: none !important; align-items: center; gap: 8px; }
+.skill-library-checkbox input { width: 18px; height: 18px; accent-color: var(--accent); }
+.skill-library-diff-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
+.skill-library-diff { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.skill-library-diff > div { min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 10px; }
+.skill-library-diff strong { color: var(--text-heading); font-size: 12px; text-transform: capitalize; }
+.skill-library-diff ul { display: grid; gap: 4px; margin: 8px 0 0; padding-left: 16px; color: var(--text-secondary); font-size: 12px; }
+.skill-library-diff p { margin: 8px 0 0; color: var(--text-faint); font-size: 12px; }
 .settings-choices label > span small { display: block; margin-top: 3px; color: var(--text-faint); font-size: 10px; font-weight: 500; }
 .proxy-settings-editor { display: grid; gap: 16px; }
 .proxy-page-header { margin-bottom: 0; }

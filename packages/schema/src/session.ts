@@ -23,7 +23,7 @@ import type { ConnectorId } from "./connectors.js";
 import type { ModelRunInfo } from "./model-usage.js";
 import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, SessionPlan } from "./plan.js";
-import type { ArtifactReviewRun } from "./provenance.js";
+import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
 import type { EffectiveRuntimeSettings, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
 import type { Subagent, SubagentStep, SubagentUsage } from "./subagent.js";
@@ -201,6 +201,8 @@ export interface SessionRun {
   retryOfRunId?: string;
   sessionId: string;
   settingsSnapshot: EffectiveRuntimeSettings;
+  /** Version-pinned skill libraries declared as prompt sources for this run. */
+  skillLibraryRefs?: PromptSkillLibraryRef[];
   startedAt?: string;
   status: SessionRunStatus;
   userMessageId?: string;
@@ -292,6 +294,8 @@ export interface SendMessageRequest {
   annotationIds?: string[];
   content: string;
   references?: ComposerReference[];
+  /** Version-pinned skill libraries the application used to assemble this prompt. */
+  skillLibraryRefs?: PromptSkillLibraryRef[];
   webForceRefresh?: boolean;
 }
 
