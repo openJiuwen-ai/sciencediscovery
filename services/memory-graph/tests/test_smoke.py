@@ -2099,7 +2099,7 @@ def test_cleanup_session_soft_marks_artifacts_and_deletes_private(live_client: T
     """delete_session_graph physically deletes a session's private nodes but
     soft-marks (does NOT delete) its Artifact version nodes, and severs the
     edges whose private endpoint was deleted (produces, stated_in)."""
-    from science_agent_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.neo4j_driver import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-cleanup-soft"
@@ -2188,7 +2188,7 @@ def test_cleanup_session_leaves_cross_session_input_edge_buildable(live_client: 
     as an input still builds the ``Artifact(v1)-[:input]->Code(D)`` edge —
     because the version node was retained (matchable), not hard-deleted. This
     is the regression a hard-delete design would break."""
-    from science_agent_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.neo4j_driver import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid_a = "sess-cleanup-a"
@@ -2245,7 +2245,7 @@ def test_cleanup_project_physically_deletes_all_nodes(live_client: TestClient) -
     """delete_project_graph physically removes every node of a project's
     sessions (including Artifact versions — no soft-mark: the project is gone,
     there is no future cross-project reference)."""
-    from science_agent_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.neo4j_driver import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid1 = "sess-cleanup-p1"
@@ -2300,7 +2300,7 @@ def test_get_subgraph_hides_soft_marked_artifact_versions(live_client: TestClien
     ``get_subgraph`` node and edge Cypher, which filter
     ``NOT coalesce(n.deleted_session, false)``. The version nodes being
     retained (soft-mark, not hard-delete) is asserted separately below."""
-    from science_agent_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.neo4j_driver import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-subgraph-soft"
@@ -2346,7 +2346,7 @@ def test_cleanup_project_falls_back_to_project_id_when_sessions_already_deleted(
     soft-marked Artifact leftovers by ``project_id`` so no orphans remain.
     This is the regression the single-pass (session_ids-only) design would
     leave behind."""
-    from science_agent_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.neo4j_driver import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-proj-fallback"
