@@ -169,7 +169,7 @@ Science Memory adds three kinds of HTTP interfaces: **sidecar native routes** (P
 |-------------|------|
 | `GET /health` | State: `disabled`/`needs-password`/`degraded`/`healthy` (no auth) |
 | `GET /subgraph?session_id=` | All nodes + all "meaningful" edges (whitelist includes produces/next/extracted_from/cites/states/supersedes/input; the frontend filters out `supersedes` when drawing, version lineage not in the chain view) |
-| `POST /query/match` | Cross-session substring search (term-AND, ranked by hit count + field priority); `session_id=null` crosses sessions |
+| `POST /query/match` | Cross-session substring search (ranked by hit count + field priority); `mode=all_terms` term-AND (frontend search box — typing a paper's full title returns just that paper), `mode=any_term` OR (default, the agent `query_graph` tool — loose recall to avoid zero results); `session_id=null` crosses sessions |
 | `POST /query/by-node-type` | Filter nodes by label |
 | `POST /query/by-edge-type` | Filter by edge type, returns edges + deduped endpoints |
 | `POST /query/chain` | Chain traversal (`node_id` + optional `session_id`/`version`/`chain_kind`: `full` joint / `task` pure task chain / `artifact` pruned from report anchor to clicked node); not found → 404 |

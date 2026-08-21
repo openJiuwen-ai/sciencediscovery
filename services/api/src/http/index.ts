@@ -1750,8 +1750,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (request.method === "POST" && url.pathname === "/api/memory/query/match") {
         const body = await readJson<{ query: string; session_id?: string }>(request);
         if (!body.query?.trim()) return sendError(response, 400, "query must be non-empty");
+        // Frontend search box: term-AND so typing a paper's full title returns
+        // just that paper (and nodes sharing its title words), not the whole
+        // corpus. The agent query_graph path pins any_term (OR) separately.
         const result = memoryGraphEnabled()
-          ? await memoryGraphClient.queryMatch(body.query, body.session_id).catch(() => emptyMatch("memory_graph_unreachable"))
+          ? await memoryGraphClient.queryMatch(body.query, body.session_id, "all_terms").catch(() => emptyMatch("memory_graph_unreachable"))
           : emptyMatch("memory_graph_disabled");
         sendJson(response, 200, result);
         return;
