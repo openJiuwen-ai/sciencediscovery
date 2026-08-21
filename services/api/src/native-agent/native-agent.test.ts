@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import type { ContextContributorFactory } from "@sciencediscovery/context";
 import type { AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 
 import {
@@ -112,6 +113,173 @@ test("loop streams a tool round trip and returns wire-format final messages", as
     // The second model call saw the tool result in history.
     assert.equal(calls.length, 2);
     assert.equal(calls[1]!.history.at(-1)?.role, "tool");
+  } finally {
+    restore();
+  }
+});
+
+test("main-agent model turns receive one stable workspace and run-contract prompt", async () => {
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("list_files", { path: "." }),
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      runContract: "Compare the supplied evidence without changing the requested scope.",
+    } as NativeAgentOptions);
+    await agent.execute("inspect the workspace");
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]!.systemPrompt, calls[1]!.systemPrompt);
+    assert.match(calls[0]!.systemPrompt, /You are a local science analysis agent/);
+    assert.match(calls[0]!.systemPrompt, /<run_contract>/);
+    assert.match(calls[0]!.systemPrompt, /Compare the supplied evidence without changing the requested scope/);
+    assert.ok(
+      calls[0]!.systemPrompt.indexOf("You are a local science analysis agent") < calls[0]!.systemPrompt.indexOf("<run_contract>"),
+      "workspace instructions must precede the immutable run contract",
+    );
+    assert.ok(calls[0]!.tools.some((tool) => tool.name === "list_files"));
+    assert.equal(calls[1]!.history.at(-1)?.role, "tool");
+  } finally {
+    restore();
+  }
+});
+
+test("dynamic context mode is wired into model input without an external worker", async () => {
+  const { calls, streamer } = scriptStreamer([() => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "dynamic",
+    } as NativeAgentOptions);
+    await agent.execute("inspect");
+    assert.match(calls[0]!.systemPrompt, /You are a local science analysis agent/u);
+  } finally {
+    restore();
+  }
+});
+
+test("capability-package contributor factories are scoped and included without editing NativeAgent", async () => {
+  const { calls, streamer } = scriptStreamer([() => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  const factoryCalls: Array<{ contextId: string; scope: string }> = [];
+  const factory: ContextContributorFactory<AgentHistoryMessage> = {
+    id: "memory.dynamic-context",
+    create(request) {
+      factoryCalls.push(request);
+      return {
+        id: "memory.run-snapshot",
+        scopes: [request.scope],
+        async contribute() {
+          return { systemSections: [{ content: "Package-owned memory snapshot", id: "memory.run-snapshot", slot: "working_context" }] };
+        },
+      };
+    },
+  };
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "dynamic",
+      contextContributorFactories: [factory],
+      contextScope: "subagent",
+    } as NativeAgentOptions);
+    await agent.execute("inspect");
+    assert.equal(factoryCalls.length, 1);
+    assert.match(factoryCalls[0]?.contextId ?? "", /^session-1:/u);
+    assert.equal(factoryCalls[0]?.scope, "subagent");
+    assert.match(calls[0]!.systemPrompt, /Package-owned memory snapshot/u);
+  } finally {
+    restore();
+  }
+});
+
+test("shadow context mode runs native assembly but sends byte-compatible legacy prompt", async () => {
+  let contributions = 0;
+  const { calls, streamer } = scriptStreamer([() => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "shadow",
+      contextContributorFactories: [{
+        id: "shadow.probe",
+        create: ({ scope }) => ({
+          id: "shadow.probe",
+          scopes: [scope],
+          async contribute() {
+            contributions += 1;
+            return { systemSections: [{ content: "shadow-only", id: "shadow.probe", slot: "working_context" }] };
+          },
+        }),
+      }],
+    } as NativeAgentOptions);
+    await agent.execute("inspect");
+    assert.equal(contributions, 1);
+    assert.doesNotMatch(calls[0]!.systemPrompt, /shadow-only/u);
+    assert.match(calls[0]!.systemPrompt, /You are a local science analysis agent/u);
+  } finally {
+    restore();
+  }
+});
+
+test("dynamic context reloads a committed Skill as bounded working context", async () => {
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("read_skill", { skillId: "literature-review" }),
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "dynamic",
+      skills: [{
+        content: "Follow the frozen literature workflow.",
+        description: "Review scientific literature",
+        hash: "a".repeat(64),
+        id: "literature-review",
+        readResource: async () => { throw new Error("not called"); },
+        resources: [],
+        revision: 1,
+        version: "1.0.0",
+      }],
+    } as NativeAgentOptions);
+    await agent.execute("review the literature");
+    assert.doesNotMatch(calls[0]!.systemPrompt, /<loaded_skill/u);
+    assert.match(calls[1]!.systemPrompt, /<loaded_skill id="literature-review"/u);
+    assert.match(calls[1]!.systemPrompt, /Follow the frozen literature workflow/u);
+  } finally {
+    restore();
+  }
+});
+
+test("dynamic capability assembly follows deferred tool promotion on the next turn", async () => {
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("tool_search", { query: "select:mcp__biomed__search" }),
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "dynamic",
+      mcpTools: [{
+        description: "Search biomedical literature",
+        displayName: "Biomedical search",
+        execute: async () => ({ content: [], details: {}, mcpInvocationId: "inv" }),
+        inputSchema: { type: "object" },
+        name: "mcp__biomed__search",
+        routing: { keywords: [], mode: "off", priority: 0 },
+        sourceId: "biomed",
+        toolId: "search",
+      }],
+    } as NativeAgentOptions);
+    await agent.execute("find literature");
+    assert.equal(calls[0]!.tools.some((tool) => tool.name === "mcp__biomed__search"), false);
+    assert.equal(calls[1]!.tools.some((tool) => tool.name === "mcp__biomed__search"), true);
+    assert.match(calls[1]!.systemPrompt, /mcp__biomed__search/u);
   } finally {
     restore();
   }

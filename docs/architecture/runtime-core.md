@@ -40,8 +40,13 @@ provenance, specialists, or other ScienceDiscovery domain packages.
 
 Current capability ownership:
 
-- `packages/context`: `DefaultContextAssembler`, prompt/context construction,
-  and history compaction;
+- `packages/context`: history compaction, scoped `ContextContributor`
+  contracts, the stable `DefaultContextAssembler`, and the optional
+  `DynamicContextAssembler`. In `shadow`/`dynamic` mode, Node performs
+  contributor admission, deterministic prompt rendering, invocation-local
+  message composition, atomic history-window selection, and final validation.
+  Canonical history and the governed tool set remain authoritative. The
+  default `legacy` mode preserves the established model-input path;
 - `packages/model`: `ProviderModelClient`, provider-neutral model types,
   normalized streaming transport, proxy, timeout, and retry policy;
 - `packages/tools`: frozen tool registry, deferred discovery, remote-content
@@ -72,6 +77,9 @@ it does not own domain construction. `SessionStore`, the MCP Node process
 client, HTTP/SSE translation, and the small Reviewer-to-AgentRun bridge remain
 service adapters. Capability packages depend on narrow ports rather than on
 `SessionStore` or another service implementation.
+
+Dynamic context modes, Contributor boundaries, budgets, and full-input trace
+export are documented in [Dynamic context assembly](context-assembly.md).
 
 Review behavior remains explicit: Artifact registration never dispatches a
 review automatically. The main Agent invokes `review_checkpoint`, and the

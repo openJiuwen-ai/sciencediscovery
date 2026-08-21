@@ -15,6 +15,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { ContextContributorFactory } from "@sciencediscovery/context";
+
 import {
   createMainAgentProfile,
   createSubagentProfile,
@@ -35,6 +37,39 @@ function workspaceBindings() {
     workspaceRoot: "/ignored",
   };
 }
+
+test("createAgentRun forwards capability-package context factories through the composition root", async () => {
+  const factory: ContextContributorFactory<AgentHistoryMessage> = {
+    id: "memory.context",
+    create: () => ({ id: "memory.snapshot", scopes: ["main"], async contribute() { return {}; } }),
+  };
+  let received: NativeAgentOptions["contextContributorFactories"];
+  const profile = createMainAgentProfile({
+    connectorIds: [], gatewayThreadId: "session-context", runTimeoutMs: 30_000, workspaceRoot: "/workspace",
+  });
+  const handle = createAgentRun(profile, {
+    contextContributorFactories: [factory],
+    createAgent(options) {
+      received = options.contextContributorFactories;
+      return {
+        abort() {},
+        beginExternalWait: () => () => undefined,
+        async execute() { return { finalMessages: [] }; },
+        async prompt() {},
+        subscribe: () => () => undefined,
+      };
+    },
+    workspace: workspaceBindings(),
+  }, {
+    agentRunId: "agent-run-context",
+    history: [],
+    prompt: "inspect",
+    purpose: "initial",
+    requestExecutionId: "execution-context",
+  });
+  await handle.execute();
+  assert.equal(received?.[0], factory);
+});
 
 test("createAgentRun executes once and returns the canonical final history", async () => {
   const observed: AgentEvent[] = [];
