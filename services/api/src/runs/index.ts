@@ -34,7 +34,7 @@ import {
   type AgentHistoryMessage,
 } from "@science-agent/orchestration";
 import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@science-agent/workspace";
-import { resolveProxyForUrl } from "../proxy/index.js";
+import { resolveProxyForUrl } from "@science-agent/data-source";
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
@@ -103,49 +103,48 @@ import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@science-agent/
 import { reviewerSpecialistSupportsLevel } from "@science-agent/schema";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
-import { RunnerClient } from "../runner-client.js";
+import { RunnerClient } from "@science-agent/executor";
 import { classifyRunFailure, runFailureMessage } from "../run-failure.js";
-import { ProvenanceRecorder } from "../provenance.js";
+import { ProvenanceRecorder } from "@science-agent/provenance";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 import {
   ArtifactDashboardError,
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { inferDomain, MemoryGraphClient, MemoryGraphSink } from "../memory-graph.js";
-import { mgLog } from "../memory-graph-log.js";
+import { inferDomain, MemoryGraphClient, MemoryGraphSink, mgLog } from "@science-agent/memory";
 import { runLog } from "../logging.js";
 import { createPromptManifest } from "../prompt-manifest.js";
 import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
-import { ArtifactManager } from "../mcp/artifact-manager.js";
-import { McpGovernanceBroker } from "../mcp/broker.js";
-import { McpSourceCatalog } from "../mcp/source-catalog.js";
-import { createMcpWorkspaceTools } from "../mcp/workspace-tools.js";
-import { WebBroker } from "../web-providers/broker.js";
-import { createWebWorkspaceTools } from "../web-providers/workspace-tools.js";
+import { GovernedDownloadManager } from "@science-agent/artifact-manager";
+import { McpGovernanceBroker } from "@science-agent/data-source";
+import { McpSourceCatalog } from "@science-agent/data-source";
+import { createMcpWorkspaceTools } from "@science-agent/artifact-manager";
+import { WebBroker } from "@science-agent/data-source";
+import { createWebWorkspaceTools } from "@science-agent/data-source";
 import {
   createDialogueSkillDraft,
   createSessionSkillDraft,
   SkillCatalog,
   SkillCatalogError,
   type RuntimeSkillSnapshot,
-} from "../skills.js";
+} from "@science-agent/specialist";
 import { MAX_PAPER_PDF_BYTES, PaperService } from "../papers.js";
-import { RemoteComputeClient } from "../remote-compute.js";
-import { classifySubagentFailure } from "../subagent-lifecycle.js";
+import { RemoteComputeClient } from "@science-agent/executor";
+import { classifySubagentFailure } from "@science-agent/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
-import { createAgentPermissionRuntime } from "../agent-run/permission-runtime.js";
+import { createAgentPermissionRuntime } from "@science-agent/governance";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
 import { createWorkspaceExecutionBindings } from "../agent-run/workspace-bindings.js";
 import {
   reviewerSpecialistAvailable,
-} from "../reviewer-specialist/citation-review.js";
+  createEvidenceReferenceTracer,
+} from "@science-agent/provenance";
 import {
   cancelReviewerCheckpoints,
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
-} from "../reviewer-specialist/review-checkpoint.js";
-import { createEvidenceReferenceTracer } from "../reviewer-specialist/computation-review.js";
+} from "@science-agent/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
 
 import {
@@ -201,7 +200,7 @@ function formatSubagentToolInput(args: Record<string, unknown>): string {
 }
 import { generateRefinedSessionTitle } from "../session-naming.js";
 
-import { type ServerConfig } from "../http/config.js";
+import { type ServerConfig } from "../bootstrap/config.js";
 import { sendError, sendJson } from "../http/response.js";
 
 const SUBAGENT_PROGRESS_FLUSH_MS = 250;
@@ -322,7 +321,7 @@ async function executeAgentRun(
   webBroker: WebBroker,
   mcpRegistry: ReturnType<typeof createBuiltinMcpSourceRegistry>,
   mcpCatalog: McpSourceCatalog,
-  artifactManager: ArtifactManager,
+  artifactManager: GovernedDownloadManager,
   paperService: PaperService,
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
@@ -1921,7 +1920,7 @@ export function scheduleSessionRuns(
   webBroker: WebBroker,
   mcpRegistry: ReturnType<typeof createBuiltinMcpSourceRegistry>,
   mcpCatalog: McpSourceCatalog,
-  artifactManager: ArtifactManager,
+  artifactManager: GovernedDownloadManager,
   paperService: PaperService,
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
@@ -2152,7 +2151,7 @@ export async function streamAgentRun(
   webBroker: WebBroker,
   mcpRegistry: ReturnType<typeof createBuiltinMcpSourceRegistry>,
   mcpCatalog: McpSourceCatalog,
-  artifactManager: ArtifactManager,
+  artifactManager: GovernedDownloadManager,
   paperService: PaperService,
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,

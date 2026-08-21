@@ -1,0 +1,22 @@
+{
+  "name": "@science-agent/artifact-manager",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { "types": "./src/index.ts", "default": "./dist/index.js" },
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@science-agent/data-source": "workspace:*",
+    "@science-agent/context": "workspace:*",
+    "@science-agent/governance": "workspace:*",
+    "@science-agent/mcp-sources": "workspace:*",
+    "@science-agent/schema": "workspace:*",
+    "@science-agent/workspace": "workspace:*"
+  },
+  "devDependencies": { "@types/node": "26.1.1" }
+}

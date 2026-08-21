@@ -99,6 +99,31 @@ importers:
 
   config: {}
 
+  packages/artifact-manager:
+    dependencies:
+      '@science-agent/context':
+        specifier: workspace:*
+        version: link:../context
+      '@science-agent/data-source':
+        specifier: workspace:*
+        version: link:../data-source
+      '@science-agent/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@science-agent/mcp-sources':
+        specifier: workspace:*
+        version: link:../mcp-sources
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@science-agent/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/cas:
     dependencies:
       '@science-agent/schema':
@@ -131,6 +156,54 @@ importers:
         specifier: 26.1.1
         version: 26.1.1
 
+  packages/data-source:
+    dependencies:
+      '@science-agent/cas':
+        specifier: workspace:*
+        version: link:../cas
+      '@science-agent/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@science-agent/mcp-sources':
+        specifier: workspace:*
+        version: link:../mcp-sources
+      '@science-agent/memory':
+        specifier: workspace:*
+        version: link:../memory
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+      undici:
+        specifier: 8.7.0
+        version: 8.7.0
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
+  packages/executor:
+    dependencies:
+      '@science-agent/runner':
+        specifier: workspace:*
+        version: link:../../services/runner
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
+  packages/governance:
+    dependencies:
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/mcp-sources:
     dependencies:
       '@science-agent/schema':
@@ -143,6 +216,19 @@ importers:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
+
+  packages/memory:
+    dependencies:
+      '@science-agent/operational-logging':
+        specifier: workspace:*
+        version: link:../operational-logging
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
 
   packages/model:
     dependencies:
@@ -188,6 +274,31 @@ importers:
         specifier: 26.1.1
         version: 26.1.1
 
+  packages/provenance:
+    dependencies:
+      '@science-agent/artifact-manager':
+        specifier: workspace:*
+        version: link:../artifact-manager
+      '@science-agent/cas':
+        specifier: workspace:*
+        version: link:../cas
+      '@science-agent/executor':
+        specifier: workspace:*
+        version: link:../executor
+      '@science-agent/memory':
+        specifier: workspace:*
+        version: link:../memory
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@science-agent/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/runtime-core:
     devDependencies:
       '@types/node':
@@ -208,6 +319,34 @@ importers:
       '@science-agent/external-urls':
         specifier: workspace:*
         version: link:../../config
+
+  packages/specialist:
+    dependencies:
+      '@science-agent/cas':
+        specifier: workspace:*
+        version: link:../cas
+      '@science-agent/context':
+        specifier: workspace:*
+        version: link:../context
+      '@science-agent/orchestration':
+        specifier: workspace:*
+        version: link:../orchestration
+      '@science-agent/provenance':
+        specifier: workspace:*
+        version: link:../provenance
+      '@science-agent/schema':
+        specifier: workspace:*
+        version: link:../schema
+      fflate:
+        specifier: 0.8.2
+        version: 0.8.2
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
 
   packages/tools:
     dependencies:
@@ -246,15 +385,30 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
+      '@science-agent/artifact-manager':
+        specifier: workspace:*
+        version: link:../../packages/artifact-manager
       '@science-agent/cas':
         specifier: workspace:*
         version: link:../../packages/cas
       '@science-agent/context':
         specifier: workspace:*
         version: link:../../packages/context
+      '@science-agent/data-source':
+        specifier: workspace:*
+        version: link:../../packages/data-source
+      '@science-agent/executor':
+        specifier: workspace:*
+        version: link:../../packages/executor
+      '@science-agent/governance':
+        specifier: workspace:*
+        version: link:../../packages/governance
       '@science-agent/mcp-sources':
         specifier: workspace:*
         version: link:../../packages/mcp-sources
+      '@science-agent/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@science-agent/model':
         specifier: workspace:*
         version: link:../../packages/model
@@ -264,6 +418,9 @@ importers:
       '@science-agent/orchestration':
         specifier: workspace:*
         version: link:../../packages/orchestration
+      '@science-agent/provenance':
+        specifier: workspace:*
+        version: link:../../packages/provenance
       '@science-agent/runner':
         specifier: workspace:*
         version: link:../runner
@@ -273,6 +430,9 @@ importers:
       '@science-agent/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@science-agent/specialist':
+        specifier: workspace:*
+        version: link:../../packages/specialist
       '@science-agent/tools':
         specifier: workspace:*
         version: link:../../packages/tools

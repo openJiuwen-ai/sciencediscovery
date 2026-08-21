@@ -15,7 +15,7 @@
 import type { RequestExecutionIdentity } from "@science-agent/orchestration";
 import type { RunStreamEvent } from "@science-agent/schema";
 
-import type { AgentPermissionRuntime } from "./permission-runtime.js";
+import type { AgentPermissionRuntime } from "@science-agent/governance";
 
 export interface OuterResponseSink {
   emit(event: RunStreamEvent): void;

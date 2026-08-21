@@ -22,7 +22,7 @@ import {
   type InstallEnvironmentRequest,
 } from "@science-agent/schema";
 
-import type { RunnerInstallEnvironmentRequest } from "./runner-client.js";
+import type { RunnerInstallEnvironmentRequest } from "@science-agent/executor";
 import { hasOwn, isRecord } from "./store/catalog.js";
 
 const CONDA_SOURCE_IDS = new Set<string>(ENVIRONMENT_CONDA_SOURCE_PRESETS.map((preset) => preset.id));

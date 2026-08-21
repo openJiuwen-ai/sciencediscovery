@@ -54,7 +54,9 @@ Shared state and re-nesting would add orchestration power but require a shared c
 - [Agent backend](agent-backend.md)
 - [Built-in tools](../reference/builtin-tools.md)
 - [Skill progressive disclosure](skill-progressive-disclosure.md)
-- `packages/agent-runtime/src/runtime.ts`, `workspace.ts`
+- `packages/context/src/workspace-prompt.ts`
+- `packages/workspace/src/workspace.ts`
+- `packages/orchestration/src/subagents.ts`, `run-profile.ts`
 - `services/api/src/runs/index.ts`
 - `services/api/src/native-agent/index.ts`, `compaction.ts`
 - `services/runner/src/executor.ts`

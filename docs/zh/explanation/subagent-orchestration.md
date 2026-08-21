@@ -162,8 +162,9 @@ Runner 会把父 Session workspace 以只读方式挂载给子 Agent。即使 `i
 - [agent-backend.md](agent-backend.md) — Node 原生 loop 的模块结构、历史压缩与工具调度
 - [builtin-tools.md](../reference/builtin-tools.md) — `task`、`describe_skill` 等模型可见工具
 - [skill-progressive-disclosure.md](skill-progressive-disclosure.md) — skill 渐进式披露与 frozen snapshot
-- `packages/agent-runtime/src/runtime.ts` — `<subagent_system>` 与 prompt 版本
-- `packages/agent-runtime/src/workspace.ts` — `task` 工具与结果契约
+- `packages/context/src/workspace-prompt.ts` — `<subagent_system>` 与 prompt 版本
+- `packages/workspace/src/workspace.ts` — `task` 工具入口
+- `packages/orchestration/src/subagents.ts`、`run-profile.ts` — 子 Agent 配置与运行契约
 - `services/api/src/runs/index.ts` — 子 Agent 限流、handoff、Brief 校验、嵌套禁用
 - `services/api/src/native-agent/index.ts` — run contract 注入、工具循环检测、超时与取消
 - `services/api/src/native-agent/compaction.ts` — summary checkpoint 与历史压缩

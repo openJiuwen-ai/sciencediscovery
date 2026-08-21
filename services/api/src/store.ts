@@ -139,11 +139,11 @@ import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   defaultEnvironmentRevision,
   defaultShellEnvironmentRevision,
-} from "./environment.js";
+} from "@science-agent/executor";
 import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
-import { BUNDLED_SKILL_IDS } from "./skills.js";
-import { BUILTIN_SPECIALISTS } from "./builtin-specialists.js";
+import { BUNDLED_SKILL_IDS } from "@science-agent/specialist";
+import { BUILTIN_SPECIALISTS } from "@science-agent/specialist";
 import { normalizeSubagentBrief } from "./subagent-brief.js";
 import {
   emptyCatalog,
@@ -153,13 +153,13 @@ import {
   isRecord,
   type Catalog,
 } from "./store/catalog.js";
-import { proxyEnvironmentDetails, resolveProxyEnvironment, resolveProxyPolicy, type ProxyRegistryView } from "./proxy/index.js";
+import { proxyEnvironmentDetails, resolveProxyEnvironment, resolveProxyPolicy, type ProxyRegistryView } from "@science-agent/data-source";
 import {
   cleanLabel,
   createPermissionEpoch,
   parsePermissionAuthorization,
   permissionMatcherResource,
-} from "./store/permissions.js";
+} from "@science-agent/governance";
 import {
   normalizeSandboxNetworkSettings,
   resolveSandboxNetworkSettings,

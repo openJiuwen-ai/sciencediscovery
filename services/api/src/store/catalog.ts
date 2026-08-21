@@ -51,8 +51,8 @@ import {
   DEFAULT_WEB_SETTINGS,
 } from "@science-agent/schema";
 
-import { defaultEnvironmentRevision, defaultShellEnvironmentRevision } from "../environment.js";
-import { BUILTIN_SPECIALISTS } from "../builtin-specialists.js";
+import { defaultEnvironmentRevision, defaultShellEnvironmentRevision } from "@science-agent/executor";
+import { BUILTIN_SPECIALISTS } from "@science-agent/specialist";
 
 export interface Catalog {
   artifactAnnotations: ArtifactAnnotation[];

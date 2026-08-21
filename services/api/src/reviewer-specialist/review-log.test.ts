@@ -18,7 +18,7 @@ import test from "node:test";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import { reviewerLog } from "./review-log.js";
+import { reviewerLog } from "@science-agent/provenance";
 
 test("Reviewer execution log preserves trace context and redacts credentials", async (context) => {
   const directory = await mkdtemp(resolve(tmpdir(), "science-agent-reviewer-log-"));

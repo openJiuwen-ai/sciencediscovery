@@ -171,8 +171,8 @@ export interface MemoryGraphTraceResult {
 
 // --- declare_* tool contracts (Claim + Evidence writes) --------------------
 //
-// Shared between the Node memory-graph client (services/api) and the agent
-// runtime tool options (packages/agent-runtime), so the two cannot drift on
+// Shared between the Node memory-graph client and the workspace tool contracts
+// (`packages/memory` and `packages/workspace`), so the two cannot drift on
 // the LLM tool's input/output shape. Business errors surface as a structured
 // {status:"error", code} so the LLM can react (swap a Paper, add a cite, give
 // up); availability failures use code:"memory_graph_disabled".

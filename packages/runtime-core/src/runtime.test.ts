@@ -155,9 +155,11 @@ test("multiple external waits are independent and restore the active phase only 
   await Promise.resolve();
   const first = waits.begin("permission");
   const second = waits.begin("permission");
+  assert.deepEqual(states.slice(-1), ["waiting_external"], "adding a second wait must not emit a false resume");
   first.release();
   first.release();
   assert.equal(loop.snapshot().phase, "waiting_external");
+  assert.deepEqual(states.slice(-1), ["waiting_external"], "releasing one of two waits must not resume the run");
   second.release();
   assert.equal(loop.snapshot().phase, "calling_model");
   releaseModel();
