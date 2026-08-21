@@ -29,6 +29,10 @@ Routes:
 - ``POST /query/match`` (Bearer) → full-graph case-insensitive substring search
 - ``POST /query/chain`` (Bearer) → preset upstream↔downstream chain from a node
 - ``POST /trace/provenance`` (Bearer) → ordered provenance chain + ``broken``/``truncated``/``reason`` (reviewer authenticity check)
+- ``POST /cleanup/session`` (Bearer) → soft-mark that session's Artifact
+  versions + physically delete its private nodes (called after deleteSession)
+- ``POST /cleanup/project`` (Bearer) → physically delete all of a project's
+  nodes, keyed by its session-id snapshot (called after deleteProject)
 - ``POST /internal/neo4j-password`` (Bearer) → push plaintext password, run
   ``ensure_schema()`` if reachable
 
@@ -53,6 +57,8 @@ from .persistence import (
     _normalize_link,
     declare_claim,
     declare_evidence,
+    delete_project_graph,
+    delete_session_graph,
     link_claims_to_report,
     upsert_execution,
     upsert_mcp_search,
@@ -771,6 +777,56 @@ def persist_stated_in(req: LinkClaimsRequest) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("persist/stated_in failed: session=%s: %s", req.session_id, exc)
         raise HTTPException(status_code=500, detail=f"link_claims_to_report failed: {exc}")
+
+
+# --- Cleanup: session/project deletion mirrors ------------------------------
+#
+# Called by the Node API's deleteSession / deleteProject handlers AFTER the
+# store deletion has committed. Mirrors the observe_* contract: never throws
+# into the caller — a degraded/unreachable graph returns {status:"degraded"}
+# so the HTTP deletion response is unaffected (the store op already
+# succeeded, the graph is a mirror).
+
+class CleanupSessionRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/cleanup/session", dependencies=[Depends(require_internal_token)])
+def cleanup_session(req: CleanupSessionRequest) -> dict[str, Any]:
+    driver = handle()
+    log.info("cleanup/session in: session=%s", req.session_id)
+    if not driver.is_reachable():
+        log.warning("cleanup/session skipped: Neo4j not reachable, orphan nodes will remain")
+        return {"status": "degraded", "reason": "memory_graph_unreachable", "marked": 0, "deleted": 0}
+    try:
+        result = delete_session_graph(session_id=req.session_id)
+        log.info("cleanup/session done: session=%s marked=%d deleted=%d",
+                 req.session_id, result.get("marked"), result.get("deleted"))
+        return result
+    except Exception as exc:  # pragma: no cover - belt-and-suspenders
+        log.exception("cleanup/session failed: session=%s: %s", req.session_id, exc)
+        raise HTTPException(status_code=500, detail=f"cleanup failed: {exc}")
+
+
+class CleanupProjectRequest(BaseModel):
+    project_id: str
+    session_ids: list[str] = Field(default_factory=list)
+
+
+@app.post("/cleanup/project", dependencies=[Depends(require_internal_token)])
+def cleanup_project(req: CleanupProjectRequest) -> dict[str, Any]:
+    driver = handle()
+    log.info("cleanup/project in: project=%s sessions=%d", req.project_id, len(req.session_ids))
+    if not driver.is_reachable():
+        log.warning("cleanup/project skipped: Neo4j not reachable, orphan nodes will remain")
+        return {"status": "degraded", "reason": "memory_graph_unreachable", "deleted": 0}
+    try:
+        result = delete_project_graph(project_id=req.project_id, session_ids=req.session_ids)
+        log.info("cleanup/project done: project=%s deleted=%d", req.project_id, result.get("deleted"))
+        return result
+    except Exception as exc:  # pragma: no cover - belt-and-suspenders
+        log.exception("cleanup/project failed: project=%s: %s", req.project_id, exc)
+        raise HTTPException(status_code=500, detail=f"cleanup failed: {exc}")
 
 
 # --- Write: observeSessionFirstMessage (ResearchGoal fallback) ----------------
