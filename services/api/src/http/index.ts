@@ -965,6 +965,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           }
         }
         await store.deleteProject(projectMatch[1]!, body.confirmationId ?? "");
+        // Physically delete every node of this project in the memory graph,
+        // keyed by the pre-deletion session-id snapshot (private nodes carry
+        // no project_id, so the session_ids set is the complete footprint).
+        // Fire-and-forget: the store deletion has already committed.
+        memoryGraphSink.cleanupProject(projectMatch[1]!, impact.sessionIds);
         sendJson(response, 200, { deleted: projectMatch[1] });
         return;
       }
@@ -1217,6 +1222,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           await runnerClient.teardownKernels(sessionMatch[1]!, "Session was deleted; persistent memory was lost");
         }
         await store.deleteSession(sessionMatch[1]!, body.confirmationId ?? "");
+        // Soft-mark this session's Artifact versions + physically delete its
+        // private nodes in the memory graph. Fire-and-forget: the store deletion
+        // has already committed; a degraded/unreachable graph never blocks the
+        // HTTP response (the sink swallows errors — graph is a mirror).
+        memoryGraphSink.cleanupSession(sessionMatch[1]!);
         sendJson(response, 200, { deleted: sessionMatch[1] });
         return;
       }

@@ -394,6 +394,36 @@ export class MemoryGraphClient {
     }
   }
 
+  /** Delete a session's graph footprint: soft-mark its Artifact versions +
+   *  physically delete its private nodes. Called by the sink after
+   *  deleteSession commits on the store. Mirrors observe*'s contract — a
+   *  degraded/unreachable graph returns without erroring. */
+  async cleanupSession(sessionId: string): Promise<void> {
+    mgLog.info("cleanupSession in: session=%s", sessionId);
+    try {
+      await this.post("/cleanup/session", { session_id: sessionId });
+      mgLog.info("cleanupSession done: session=%s", sessionId);
+    } catch (error) {
+      mgLog.warn("cleanupSession failed: session=%s, error %s",
+        sessionId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
+  /** Physically delete every node of a project (by its session-id snapshot).
+   *  Called by the sink after deleteProject commits on the store. */
+  async cleanupProject(projectId: string, sessionIds: string[]): Promise<void> {
+    mgLog.info("cleanupProject in: project=%s sessions=%d", projectId, sessionIds.length);
+    try {
+      await this.post("/cleanup/project", { project_id: projectId, session_ids: sessionIds });
+      mgLog.info("cleanupProject done: project=%s", projectId);
+    } catch (error) {
+      mgLog.warn("cleanupProject failed: project=%s, error %s",
+        projectId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
   async getSubgraph(sessionId: string): Promise<MemorySubgraph> {
     const url = `${this.baseUrl}/subgraph?session_id=${encodeURIComponent(sessionId)}`;
     let response: Response;
@@ -930,6 +960,42 @@ export class MemoryGraphSink {
         mgLog.warn("stated_in link failed: artifact=%s v%s session=%s, error %s",
           artifactId, artifactVersion, sessionId,
           error instanceof Error ? error.message : String(error));
+      });
+  }
+
+  /** Delete a session's graph footprint (soft-mark its Artifact versions,
+   *  physically delete private nodes). Fire-and-forget; a degraded or
+   *  unreachable graph never blocks the HTTP deletion response — the store
+   *  deletion has already committed, the graph is a mirror. */
+  cleanupSession(sessionId: string): void {
+    if (!this.enabled || !this.client) {
+      mgLog.debug("cleanup skipped: memory graph not enabled (session=%s)", sessionId);
+      return;
+    }
+    mgLog.info("session deleted, cleaning graph: session=%s", sessionId);
+    void this.client
+      .cleanupSession(sessionId)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        mgLog.warn("cleanup failed: session=%s, error %s",
+          sessionId, error instanceof Error ? error.message : String(error));
+      });
+  }
+
+  /** Delete every node of a project (by its session-id snapshot).
+   *  Fire-and-forget; never blocks the HTTP deletion response. */
+  cleanupProject(projectId: string, sessionIds: string[]): void {
+    if (!this.enabled || !this.client) {
+      mgLog.debug("cleanup skipped: memory graph not enabled (project=%s)", projectId);
+      return;
+    }
+    mgLog.info("project deleted, cleaning graph: project=%s sessions=%d", projectId, sessionIds.length);
+    void this.client
+      .cleanupProject(projectId, sessionIds)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        mgLog.warn("cleanup failed: project=%s, error %s",
+          projectId, error instanceof Error ? error.message : String(error));
       });
   }
 }

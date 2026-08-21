@@ -492,6 +492,57 @@ def test_persist_claim_rejects_missing_token(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+# --- cleanup/session + cleanup/project (degraded + token guards) ----------
+
+def test_cleanup_session_degrades_without_neo4j(client: TestClient) -> None:
+    """With no reachable Neo4j the cleanup endpoint returns degraded (the
+    store deletion on the Node side has already committed; the orphan graph
+    state stays but the HTTP deletion response is unaffected)."""
+    response = client.post(
+        "/cleanup/session",
+        json={"session_id": "sess-cleanup"},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["reason"] == "memory_graph_unreachable"
+    assert body["marked"] == 0 and body["deleted"] == 0
+
+
+def test_cleanup_project_degrades_without_neo4j(client: TestClient) -> None:
+    response = client.post(
+        "/cleanup/project",
+        json={"project_id": "proj-cleanup", "session_ids": ["s1", "s2"]},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["reason"] == "memory_graph_unreachable"
+    assert body["deleted"] == 0
+
+
+def test_cleanup_project_accepts_empty_session_ids(client: TestClient) -> None:
+    """A project with no sessions is a no-op (UNWIND over an empty list)."""
+    response = client.post(
+        "/cleanup/project",
+        json={"project_id": "proj-empty", "session_ids": []},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"  # unreachable short-circuits
+
+
+def test_cleanup_session_rejects_missing_token(client: TestClient) -> None:
+    assert client.post("/cleanup/session", json={"session_id": "s"}).status_code == 401
+
+
+def test_cleanup_project_rejects_missing_token(client: TestClient) -> None:
+    assert client.post("/cleanup/project",
+                       json={"project_id": "p", "session_ids": []}).status_code == 401
+
+
 # --- existence-checked cite targets (need a live graph to probe) -----------
 
 @needs_neo4j
@@ -2031,3 +2082,300 @@ def test_get_chain_claim_source_cited_artifact_reaches_goal(live_client: TestCli
                 stack.append(y)
     assert goal_id in seen, \
         "the cited figure must be edge-reachable to the ResearchGoal via the Claim's chain"
+
+
+# --- cleanup/session: soft-mark Artifact versions + physically delete private
+#
+# The core guarantee of the soft-mark design: deleting a session physically
+# removes its private nodes (SubTask/Code/Paper/Evidence/Claim) but LEAVES
+# that session's Artifact *version* nodes (soft-marked deleted_session=true) so
+# a future cross-session run that reads one of those versions can still build
+# an ``input`` edge against it (the version node must remain matchable). A
+# hard delete would orphan the cross-session input edge forever.
+
+
+@needs_neo4j
+def test_cleanup_session_soft_marks_artifacts_and_deletes_private(live_client: TestClient) -> None:
+    """delete_session_graph physically deletes a session's private nodes but
+    soft-marks (does NOT delete) its Artifact version nodes, and severs the
+    edges whose private endpoint was deleted (produces, stated_in)."""
+    from science_agent_memory_graph.neo4j_driver import handle
+
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-cleanup-soft"
+    CL_REPORT, CL_FIG = "art-cl-report", "art-cl-fig"
+    _wipe_session(sid)
+    # Seed: one Code producing a report + one Evidence + one Claim citing the
+    # figure, stated_in the report.
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-cl-fig", "session_id": sid, "turn_id": "turn-cl-fig",
+        "tool": "run_python", "language": "python", "code_hash": "hash-cl-fig",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-20T00:00:01Z", "finished_at": "2026-08-20T00:00:01Z",
+        "produced_artifacts": [{
+            "artifact_id": CL_FIG, "path": "fig.svg", "logical_name": "fig.svg",
+            "version": 1, "media_type": "image/svg+xml",
+        }],
+    }, headers=headers)
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-cl-report", "session_id": sid, "turn_id": "turn-cl-report",
+        "tool": "run_python", "language": "python", "code_hash": "hash-cl-report",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-20T00:00:02Z", "finished_at": "2026-08-20T00:00:02Z",
+        "produced_artifacts": [{
+            "artifact_id": CL_REPORT, "path": "report.md", "logical_name": "report.md",
+            "version": 1, "media_type": "text/markdown",
+        }],
+    }, headers=headers)
+    claim = live_client.post("/persist/claim", json={
+        "content": "fig peaks", "claim_type": "STATISTICAL", "confidence": "HIGH",
+        "locator": "fig1", "cites_artifact_aliases": {"fig1": CL_FIG},
+        "cites_artifact_versions": {"fig1": 1},
+        "artifact_id": CL_REPORT, "artifact_version": 1, "session_id": sid,
+    }, headers=headers).json()
+    assert claim["status"] == "ok"
+    live_client.post("/persist/stated_in", json={
+        "artifact_id": CL_REPORT, "artifact_version": 1,
+        "claim_ids": [claim["claim_id"]], "session_id": sid,
+    }, headers=headers)
+
+    # Before cleanup: the version node + Code + Claim + stated_in all present.
+    with handle().session() as s:
+        assert s.run("MATCH (a:Artifact {artifact_id:$a,version:1}) RETURN count(a) AS c",
+                     a=CL_FIG).single()["c"] == 1
+        assert s.run("MATCH (c:Code {code_hash:$h}) RETURN count(c) AS c",
+                     h="hash-cl-fig").single()["c"] == 1
+        assert s.run("MATCH (cl:Claim {claim_id:$cid}) RETURN count(cl) AS c",
+                     cid=claim["claim_id"]).single()["c"] == 1
+        assert s.run(
+            "MATCH (a:Artifact {artifact_id:$a,version:1})-[:stated_in]-(cl:Claim {claim_id:$cid}) "
+            "RETURN count(*) AS c", a=CL_REPORT, cid=claim["claim_id"]).single()["c"] == 1
+
+    resp = live_client.post("/cleanup/session", json={"session_id": sid}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "healthy"
+    assert body["marked"] >= 2, "both Artifact versions should be soft-marked"
+    assert body["deleted"] >= 3, "SubTask/Code/Claim (at least) should be physically deleted"
+
+    with handle().session() as s:
+        # Artifact version nodes STILL THERE and soft-marked (the whole point).
+        for aid in (CL_FIG, CL_REPORT):
+            rec = s.run("MATCH (a:Artifact {artifact_id:$a,version:1}) "
+                        "RETURN a.deleted_session AS d", a=aid).single()
+            assert rec is not None, f"Artifact version {aid} must NOT be physically deleted"
+            assert rec["d"] is True, f"Artifact version {aid} must be soft-marked"
+        # Private nodes physically gone.
+        assert s.run("MATCH (c:Code {code_hash:$h}) RETURN count(c) AS c",
+                     h="hash-cl-fig").single()["c"] == 0
+        assert s.run("MATCH (cl:Claim {claim_id:$cid}) RETURN count(cl) AS c",
+                     cid=claim["claim_id"]).single()["c"] == 0
+        # stated_in severed (Claim endpoint deleted; DETACH DELETE drops the edge).
+        assert s.run(
+            "MATCH (a:Artifact {artifact_id:$a,version:1})-[:stated_in]-(cl:Claim) "
+            "RETURN count(*) AS c", a=CL_REPORT).single()["c"] == 0
+        # The soft-marked version's produces edge is also gone (Code deleted).
+        assert s.run(
+            "MATCH (c:Code)-[:produces]->(a:Artifact {artifact_id:$a,version:1}) "
+            "RETURN count(*) AS c", a=CL_FIG).single()["c"] == 0
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_cleanup_session_leaves_cross_session_input_edge_buildable(live_client: TestClient) -> None:
+    """The soft-mark guarantee in action: AFTER session A is deleted (its
+    Artifact version soft-marked), a NEW session D that reads A's old version
+    as an input still builds the ``Artifact(v1)-[:input]->Code(D)`` edge —
+    because the version node was retained (matchable), not hard-deleted. This
+    is the regression a hard-delete design would break."""
+    from science_agent_memory_graph.neo4j_driver import handle
+
+    headers = {"authorization": "Bearer test-token"}
+    sid_a = "sess-cleanup-a"
+    sid_d = "sess-cleanup-d"
+    SHARED = "art-cleanup-shared"
+    _wipe_session(sid_a)
+    _wipe_session(sid_d)
+    # Session A produces version v1 of SHARED.
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-cl-a", "session_id": sid_a, "turn_id": "turn-cl-a",
+        "tool": "run_python", "language": "python", "code_hash": "hash-cl-a",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-20T00:00:10Z", "finished_at": "2026-08-20T00:00:10Z",
+        "produced_artifacts": [{
+            "artifact_id": SHARED, "path": "shared.csv", "logical_name": "shared.csv",
+            "version": 1, "media_type": "text/csv",
+        }],
+    }, headers=headers)
+    # Delete session A → its SHARED v1 node is soft-marked (retained).
+    live_client.post("/cleanup/session", json={"session_id": sid_a}, headers=headers)
+
+    # Session D reads A's SHARED v1 as an input. The upsert's input-edge
+    # Cypher does MATCH (inA:Artifact {artifact_id,version}) — the soft-marked
+    # node is still there, so the edge builds.
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-cl-d", "session_id": sid_d, "turn_id": "turn-cl-d",
+        "tool": "run_python", "language": "python", "code_hash": "hash-cl-d",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-20T00:00:20Z", "finished_at": "2026-08-20T00:00:20Z",
+        "produced_artifacts": [{
+            "artifact_id": "art-cl-d-out", "path": "out.csv", "logical_name": "out.csv",
+            "version": 1, "media_type": "text/csv",
+            "input_artifact_versions": [{"artifact_id": SHARED, "version": 1}],
+        }],
+    }, headers=headers)
+
+    with handle().session() as s:
+        # The cross-session input edge built against the soft-marked version.
+        c = s.run(
+            "MATCH (inA:Artifact {artifact_id:$a,version:1})-[:input]->(c:Code {code_hash:$h}) "
+            "RETURN count(*) AS c", a=SHARED, h="hash-cl-d").single()["c"]
+        assert c == 1, "cross-session input edge must build against the soft-marked version"
+        # And the soft-mark survived the second session's upsert (ON MATCH only
+        # refreshes path/logical_name/etc., it does NOT clear deleted_session).
+        rec = s.run("MATCH (a:Artifact {artifact_id:$a,version:1}) RETURN a.deleted_session AS d",
+                    a=SHARED).single()
+        assert rec is not None and rec["d"] is True
+    _wipe_session(sid_a)
+    _wipe_session(sid_d)
+
+
+@needs_neo4j
+def test_cleanup_project_physically_deletes_all_nodes(live_client: TestClient) -> None:
+    """delete_project_graph physically removes every node of a project's
+    sessions (including Artifact versions — no soft-mark: the project is gone,
+    there is no future cross-project reference)."""
+    from science_agent_memory_graph.neo4j_driver import handle
+
+    headers = {"authorization": "Bearer test-token"}
+    sid1 = "sess-cleanup-p1"
+    sid2 = "sess-cleanup-p2"
+    for s in (sid1, sid2):
+        _wipe_session(s)
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-cl-p1", "session_id": sid1, "turn_id": "turn-cl-p1",
+        "tool": "run_python", "language": "python", "code_hash": "hash-cl-p1",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-20T00:00:30Z", "finished_at": "2026-08-20T00:00:30Z",
+        "produced_artifacts": [{
+            "artifact_id": "art-cl-p1", "path": "p1.svg", "logical_name": "p1.svg",
+            "version": 1, "media_type": "image/svg+xml",
+        }],
+    }, headers=headers)
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-cl-p2", "session_id": sid2, "turn_id": "turn-cl-p2",
+        "tool": "run_python", "language": "python", "code_hash": "hash-cl-p2",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-20T00:00:31Z", "finished_at": "2026-08-20T00:00:31Z",
+        "produced_artifacts": [{
+            "artifact_id": "art-cl-p2", "path": "p2.svg", "logical_name": "p2.svg",
+            "version": 1, "media_type": "image/svg+xml",
+        }],
+    }, headers=headers)
+
+    resp = live_client.post("/cleanup/project", json={
+        "project_id": "proj-cleanup", "session_ids": [sid1, sid2],
+    }, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "healthy"
+    assert resp.json()["deleted"] >= 4  # 2 SubTask + 2 Code + 2 Artifact ≥ 6, be loose
+
+    with handle().session() as s:
+        c = s.run("MATCH (n) WHERE n.session_id IN $sids RETURN count(n) AS c",
+                  sids=[sid1, sid2]).single()["c"]
+        assert c == 0, "every node of the project's sessions must be physically deleted"
+        # Artifact versions are gone (no soft-mark residue — unlike session cleanup).
+        assert s.run("MATCH (a:Artifact {artifact_id:$a,version:1}) RETURN count(a) AS c",
+                     a="art-cl-p1").single()["c"] == 0
+    _wipe_session(sid1)
+    _wipe_session(sid2)
+
+
+@needs_neo4j
+def test_get_subgraph_hides_soft_marked_artifact_versions(live_client: TestClient) -> None:
+    """After a session is deleted (its Artifact version nodes soft-marked),
+    ``GET /subgraph`` must NOT return those soft-marked nodes — the view the
+    frontend renders should look empty even though the version nodes are
+    physically retained (for cross-session input edges). This covers the
+    ``get_subgraph`` node and edge Cypher, which filter
+    ``NOT coalesce(n.deleted_session, false)``. The version nodes being
+    retained (soft-mark, not hard-delete) is asserted separately below."""
+    from science_agent_memory_graph.neo4j_driver import handle
+
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-subgraph-soft"
+    _wipe_session(sid)
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-subgraph-soft", "session_id": sid, "turn_id": "turn-subgraph-soft",
+        "tool": "run_python", "language": "python", "code_hash": "hash-subgraph-soft",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-20T00:00:40Z", "finished_at": "2026-08-20T00:00:40Z",
+        "produced_artifacts": [{
+            "artifact_id": "art-subgraph-soft", "path": "out.csv", "logical_name": "out.csv",
+            "version": 1, "media_type": "text/csv", "project_id": "proj-subgraph-soft",
+        }],
+    }, headers=headers)
+
+    # Pre-delete: subgraph shows the Artifact (and the SubTask/Code that produced it).
+    before = live_client.get(f"/subgraph?session_id={sid}", headers=headers).json()
+    assert before["total"] > 0, "fixture should have written nodes"
+    assert any(n["label"] == "Artifact" for n in before["nodes"])
+
+    live_client.post("/cleanup/session", json={"session_id": sid}, headers=headers)
+
+    after = live_client.get(f"/subgraph?session_id={sid}", headers=headers).json()
+    # View looks empty: soft-marked Artifact filtered out, private nodes physically deleted.
+    assert after["total"] == 0, "soft-marked Artifact versions must not leak into the subgraph view"
+    assert after["nodes"] == []
+    assert after["edges"] == []
+
+    # But the version node is still physically there (soft-mark, not hard-delete).
+    with handle().session() as s:
+        rec = s.run("MATCH (a:Artifact {artifact_id:$a,version:1}) RETURN a.deleted_session AS d",
+                    a="art-subgraph-soft").single()
+        assert rec is not None and rec["d"] is True, "version node must be retained as soft-marked"
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_cleanup_project_falls_back_to_project_id_when_sessions_already_deleted(live_client: TestClient) -> None:
+    """The session-sweep alone cannot clean Artifact version nodes whose
+    session was deleted EARLIER: the store no longer knows that session, so
+    ``deletion-impact`` returns an empty ``session_ids`` list, and the sweep
+    matches nothing. The ``project_id`` fallback pass then sweeps those
+    soft-marked Artifact leftovers by ``project_id`` so no orphans remain.
+    This is the regression the single-pass (session_ids-only) design would
+    leave behind."""
+    from science_agent_memory_graph.neo4j_driver import handle
+
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-proj-fallback"
+    PID = "proj-fallback"
+    _wipe_session(sid)
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-proj-fallback", "session_id": sid, "turn_id": "turn-proj-fallback",
+        "tool": "run_python", "language": "python", "code_hash": "hash-proj-fallback",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-20T00:00:50Z", "finished_at": "2026-08-20T00:00:50Z",
+        "produced_artifacts": [{
+            "artifact_id": "art-proj-fallback", "path": "out.csv", "logical_name": "out.csv",
+            "version": 1, "media_type": "text/csv", "project_id": PID,
+        }],
+    }, headers=headers)
+    # Delete the session first → Artifact v1 is soft-marked (retained).
+    live_client.post("/cleanup/session", json={"session_id": sid}, headers=headers)
+
+    # The store would now return session_ids=[] for this project (the session
+    # is gone). Simulate that: pass an EMPTY session_ids list.
+    resp = live_client.post("/cleanup/project", json={
+        "project_id": PID, "session_ids": [],
+    }, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "healthy"
+    assert resp.json()["deleted"] == 1, "project_id fallback must sweep the soft-marked Artifact leftover"
+
+    with handle().session() as s:
+        c = s.run("MATCH (n:Artifact) WHERE n.project_id=$pid RETURN count(n) AS c",
+                  pid=PID).single()["c"]
+        assert c == 0, "no Artifact nodes for the project may remain after cleanup"
+    _wipe_session(sid)

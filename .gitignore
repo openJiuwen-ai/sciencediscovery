@@ -58,5 +58,5 @@ Thumbs.db
 .worktrees/
 
 # Note: .agents/ is tracked (project agent skills, e.g. gitcode)
-# Local caches under skills (e.g. MindSpore org issue/PR templates) stay untracked
+# Local caches under skills (e.g. openJiuwen org issue/PR templates) stay untracked
 .agents/skills/gitcode/cache/

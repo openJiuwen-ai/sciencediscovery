@@ -893,3 +893,128 @@ def link_claims_to_report(*, artifact_id: str, artifact_version: int, claim_ids:
         log.exception("link_claims_to_report failed: artifact=%s v%s: %s",
                        artifact_id, artifact_version, exc)
         raise
+
+
+# --- Cleanup: session/project deletion mirrors --------------------------------
+#
+# Called by the sidecar's ``/cleanup/session`` and ``/cleanup/project``
+# routes, which the Node API's deleteSession / deleteProject handlers invoke
+# AFTER the store deletion has committed. Mirrors the upsert/declare contract:
+# ``is_reachable()`` guard + ``with driver.session()`` + try/except log, and a
+# degraded (unreachable) graph returns a ``{status:"degraded"}`` shell rather
+# than erroring — the HTTP deletion response must never be blocked by a
+# mirror-layer cleanup (the store op already succeeded; the graph is a
+# directory, the store is the warehouse).
+
+
+def delete_session_graph(*, session_id: str) -> dict[str, Any]:
+    """Delete a session's graph footprint.
+
+    Session-private nodes (ResearchGoal / SubTask / Code / Paper / Evidence /
+    Claim) are physically ``DETACH DELETE``d. That session's Artifact
+    *version* nodes are SOFT-MARKED (``deleted_session = true``) instead: the
+    Artifact is a project-scoped asset that survives in the store, and a
+    future cross-session run may still reference this version via an ``input``
+    edge or walk the ``supersedes`` chain — so the version node must remain
+    matchable. Evidence / Claim use fresh uuids (never deduped), so a
+    physical delete is permanent and intended (a declaration has no meaning
+    once its producing session's transcript is gone).
+
+    ``DETACH DELETE`` on the private nodes drops their in/out edges too,
+    including the Claim endpoint of ``stated_in`` (the report version node is
+    soft-marked but its stated_in inbound edge is severed — expected: the
+    version node is retained for input/supersedes, not stated_in). Returns
+    ``{status, marked, deleted}``; ``status="degraded"`` when Neo4j is
+    unreachable.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        log.warning("delete_session_graph skipped: Neo4j not reachable (session=%s)", session_id)
+        return {"status": "degraded", "reason": "memory_graph_unreachable", "marked": 0, "deleted": 0}
+    log.debug("delete_session_graph starting: session=%s", session_id)
+    try:
+        with driver.session() as session:
+            marked_rec = session.run(
+                """
+                MATCH (a:Artifact {session_id: $sid})
+                SET a.deleted_session = true
+                RETURN count(a) AS marked
+                """,
+                sid=session_id,
+            ).single()
+            deleted_rec = session.run(
+                """
+                MATCH (n)
+                WHERE n.session_id = $sid AND NOT (n:Artifact)
+                DETACH DELETE n
+                RETURN count(n) AS deleted
+                """,
+                sid=session_id,
+            ).single()
+            marked = int(marked_rec["marked"]) if marked_rec else 0
+            deleted = int(deleted_rec["deleted"]) if deleted_rec else 0
+        log.info("delete_session_graph done: session=%s marked=%d artifacts, deleted=%d private nodes",
+                 session_id, marked, deleted)
+        return {"status": "healthy", "marked": marked, "deleted": deleted}
+    except Exception as exc:
+        log.exception("delete_session_graph failed: session=%s: %s", session_id, exc)
+        raise
+
+
+def delete_project_graph(*, project_id: str, session_ids: list[str]) -> dict[str, Any]:
+    """Physically delete every node belonging to a project.
+
+    Two-pass: first sweep every node whose ``session_id`` is in the project's
+    pre-deletion session-id snapshot (active + archived) from the Node side's
+    ``getProjectDeletionImpact`` — private nodes (SubTask / Code / Paper /
+    Evidence / Claim / ResearchGoal) carry no ``project_id``, so the
+    ``session_ids`` set is their complete footprint. Then a ``project_id``
+    fallback deletes any Artifact version nodes that survived the first sweep:
+    Artifact is project-scoped and carries ``project_id``, but a version node
+    may persist after its session was deleted earlier (soft-marked) — the
+    store no longer knows that session, so the snapshot misses it. Store-side
+    artifacts / versions are physically deleted by ``deleteProject``, so graph
+    mirrors must go too — no soft-mark: the project is gone, there is no
+    future cross-project reference. An empty ``session_ids`` with a known
+    ``project_id`` still sweeps Artifact leftovers. Returns
+    ``{status, deleted}``; ``status="degraded"`` when Neo4j is unreachable.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        log.warning("delete_project_graph skipped: Neo4j not reachable (project=%s sessions=%d)", project_id, len(session_ids))
+        return {"status": "degraded", "reason": "memory_graph_unreachable", "deleted": 0}
+    log.debug("delete_project_graph starting: project=%s sessions=%d", project_id, len(session_ids))
+    try:
+        with driver.session() as session:
+            sid_deleted = 0
+            if session_ids:
+                sid_rec = session.run(
+                    """
+                    UNWIND $sids AS sid
+                    MATCH (n) WHERE n.session_id = sid
+                    DETACH DELETE n
+                    RETURN count(n) AS deleted
+                    """,
+                    sids=session_ids,
+                ).single()
+                sid_deleted = int(sid_rec["deleted"]) if sid_rec else 0
+            # Fallback: Artifact version nodes are project-scoped (carry
+            # project_id) and may survive the session sweep when their session
+            # was deleted earlier (soft-marked). Sweep by project_id to leave
+            # no orphans. Idempotent with the session sweep above.
+            pid_rec = session.run(
+                """
+                MATCH (n:Artifact) WHERE n.project_id = $pid
+                DETACH DELETE n
+                RETURN count(n) AS deleted
+                """,
+                pid=project_id,
+            ).single()
+            pid_deleted = int(pid_rec["deleted"]) if pid_rec else 0
+            deleted = sid_deleted + pid_deleted
+        log.info("delete_project_graph done: project=%s deleted=%d nodes (sessions=%d, artifact-fallback=%d)",
+                 project_id, deleted, sid_deleted, pid_deleted)
+        return {"status": "healthy", "deleted": deleted}
+    except Exception as exc:
+        log.exception("delete_project_graph failed: project=%s sessions=%d: %s", project_id, len(session_ids), exc)
+        raise
