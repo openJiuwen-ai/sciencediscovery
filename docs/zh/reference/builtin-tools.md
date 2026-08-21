@@ -1,6 +1,6 @@
 # 内置工具清单（模型可见）
 
-本文列出 Agent 循环中模型可见的全部工具。工具由 `packages/agent-runtime` 的 `createWorkspaceTools` 构建：**实现全部在 Node 控制面**，模型请求里只带名称、描述与 JSON Schema（见 [agent-backend.md](../explanation/agent-backend.md)）。除标注「恒有」外，工具是否出现取决于会话配置；最终列表还会经 `toolPolicy` 过滤（子 Agent 可被限制为白名单子集）。
+本文列出 Agent 循环中模型可见的全部工具。工具由 `packages/workspace` 的 `createWorkspaceTools` 构建，并由 `packages/tools` 注册和调度：**实现全部在 Node 控制面**，模型请求里只带名称、描述与 JSON Schema（见 [agent-backend.md](../explanation/agent-backend.md)）。除标注「恒有」外，工具是否出现取决于会话配置；最终列表还会经 `toolPolicy` 过滤（子 Agent 可被限制为白名单子集）。
 
 ## 基础工具（恒有）
 
@@ -85,7 +85,7 @@
 
 ## 一致性说明
 
-- 工具描述文本以 `packages/agent-runtime/src/workspace.ts` 中的 `description` 字段为准，本文为摘要。
+- 工具描述文本以 `packages/workspace/src/workspace.ts` 中的 `description` 字段为准，本文为摘要。
 - 会话禁用某来源/能力时，相应工具不进入 `tools[]`，模型完全看不到——这是「不可见即不可调」的治理边界，而非运行时拒绝。
 - 权限拒绝、配额超限等失败以结构化工具错误（`{ok: false, error: {code, message, retryable}}`）返回给模型，模型可解释或换路径。
 

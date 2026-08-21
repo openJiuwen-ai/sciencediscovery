@@ -16,10 +16,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { NpuJob } from "@sciencediscovery/schema";
-import type { ProvenanceRecorder } from "../provenance.js";
-import type { RunnerClient } from "../runner-client.js";
+import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import type { RunnerClient } from "@sciencediscovery/executor";
 import type { SessionStore } from "../store.js";
-import type { AgentPermissionRuntime } from "./permission-runtime.js";
+import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
 test("execution bindings apply stable Agent identity with the same permission and provenance path", async () => {

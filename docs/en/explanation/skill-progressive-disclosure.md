@@ -31,7 +31,7 @@ read_skill_resource(skillId,path) → referenced supporting text only
 | `read_skill` | Node workspace tool | Return full instructions and supporting-resource list from the run snapshot |
 | `read_skill_resource` | Node workspace tool | Read bounded UTF-8 snapshot resource; never execute scripts or install dependencies |
 
-All three come from `createWorkspaceTools` in `packages/agent-runtime` and are invoked in-process by the Node-native loop like any other workspace tool.
+All three come from `createWorkspaceTools` in `packages/workspace` and are invoked in-process by the Node-native loop like any other workspace tool.
 
 ## Why not hand the model a file path?
 

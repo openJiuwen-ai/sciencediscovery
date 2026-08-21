@@ -17,18 +17,18 @@ import test from "node:test";
 
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
-import type { AgentPermissionRuntime } from "../agent-run/permission-runtime.js";
+import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { PaperService } from "../papers.js";
 import type { SessionStore } from "../store.js";
-import type { ArtifactManager } from "./artifact-manager.js";
-import type { McpGovernanceBroker } from "./broker.js";
-import type { McpSourceCatalog } from "./source-catalog.js";
-import { createMcpWorkspaceTools } from "./workspace-tools.js";
+import type { GovernedDownloadManager } from "@sciencediscovery/artifact-manager";
+import type { McpGovernanceBroker } from "@sciencediscovery/data-source";
+import type { McpSourceCatalog } from "@sciencediscovery/data-source";
+import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
 
 test("Reviewer MCP tools suppress Memory Graph mirroring", async () => {
   const requests: Array<{ suppressMemoryGraphMirror?: boolean }> = [];
   const tools = createMcpWorkspaceTools({
-    artifactManager: {} as ArtifactManager,
+    artifactManager: {} as GovernedDownloadManager,
     broker: {
       async invoke(request: { suppressMemoryGraphMirror?: boolean }) {
         requests.push(request);
@@ -98,7 +98,7 @@ test("artifact download waits for its terminal job and releases the AgentRun dea
           status: "completed",
         };
       },
-    } as unknown as ArtifactManager,
+    } as unknown as GovernedDownloadManager,
     broker: {
       cas: {
         async read() {
@@ -187,7 +187,7 @@ test("artifact download scopes subagent workspace paths to the private prefix", 
           status: "completed",
         };
       },
-    } as unknown as ArtifactManager,
+    } as unknown as GovernedDownloadManager,
     broker: {
       cas: {
         async read() {

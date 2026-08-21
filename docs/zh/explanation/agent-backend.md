@@ -6,7 +6,7 @@
 - 循环、模型流式传输、工具调度、延迟工具发现、历史压缩全部是本仓库自己的 TypeScript 实现，**不使用 LangChain / LangGraph，也不依赖 deer-flow 跑 loop**。
 - 模型调用由 Node 直接发出（`undici`），支持 **OpenAI 兼容** 与 **Anthropic Messages** 两种方言。
 - MCP 由 Node 用官方 TypeScript SDK **在进程内**连接（stdio / SSE / streamable-HTTP），不再经 gateway HTTP。
-- 工具的**实现、权限门、沙箱执行、溯源**位置没有变化：仍然是 `packages/agent-runtime` 的 `createWorkspaceTools` 加 API 侧注入的处理器。原生 loop 直接 `await` 这些处理器，因此不再需要 `POST /internal/tool-exec` 回调。
+- 工具实现仍在 Node 控制面：`packages/workspace` 构建工作区工具，`packages/tools` 负责注册与调度策略，API 注入治理、溯源、执行和数据源适配器。原生 loop 直接 `await` 这些处理器，因此不再需要 `POST /internal/tool-exec` 回调。
 - **Python 侧车已不再是服务**：web provider 也已原生化到 Node，gateway 的 HTTP 服务随之删除；`services/gateway` 现在只是随包 Python MCP server（biomed、UniProt）的宿主包与解释器环境。详见 §8。
 
 历史架构（Python gateway 跑 LangChain `create_agent`、Node `POST /run`、gateway 回调 `/internal/tool-exec`）已退役，见 §9。
@@ -31,7 +31,7 @@
       │         └─onTextDelta / onThinkingDelta ─▶ AgentEvent ─▶ SSE   │
       │    3. 无 tool_calls → 跳出循环                                  │
       │    4. 并发执行本轮全部 tool_calls                               │
-      │         └─▶ AgentTool.execute(...)   ← packages/agent-runtime  │
+      │         └─▶ AgentTool.execute(...)   ← workspace + tools      │
       │              └─▶ 权限门 / Runner:4311 / MCP / 连接器 / 溯源      │
       │    5. tool 结果按调用顺序 append 回 history，回到第 1 步         │
       └────────────────────────────────────────────────────────────────┘
@@ -164,7 +164,7 @@ return { finalMessages: history 中剔除 system 的深拷贝 }
 
 ### 4.5 事件如何变成 SSE
 
-`NativeAgent` 只向订阅者 emit `AgentEvent`（定义在 `packages/agent-runtime/src/types.ts`）。`services/api/src/runs/index.ts` 的 observer 负责翻译成前端 SSE：
+`NativeAgent` 只向订阅者 emit `AgentEvent`（定义在 `packages/orchestration/src/agent.ts`）。`services/api/src/runs/index.ts` 的 observer 负责翻译成前端 SSE：
 
 | AgentEvent | 触发点 | SSE 事件 |
 |---|---|---|
@@ -236,7 +236,7 @@ streamModelTurn(endpoint, systemPrompt, history, tools, policy, signal, callback
 
 **问题**：MCP 工具的 JSON Schema 往往很大，全部绑定会挤占上下文。
 
-**做法**：标了 `deferred` 的工具（目前是全部 MCP 工具，见 `packages/agent-runtime/src/workspace.ts`）默认**不绑定给模型**，只在 system prompt 的 `<available-deferred-tools>` 里列名字；模型需要时调用合成工具 `tool_search` 取回完整 schema，取回即「提升」（promote），本轮后续可直接调用。
+**做法**：标了 `deferred` 的工具（目前是全部 MCP 工具，见 `packages/workspace/src/workspace.ts`）默认**不绑定给模型**，只在 system prompt 的 `<available-deferred-tools>` 里列名字；模型需要时调用合成工具 `tool_search` 取回完整 schema，取回即「提升」（promote），本轮后续可直接调用。
 
 | 符号 | 作用 |
 |---|---|
@@ -316,19 +316,18 @@ streamModelTurn(endpoint, systemPrompt, history, tools, policy, signal, callback
 - **退避**：指数 `initialDelayMs * multiplier^(n-1)`，封顶 `maxDelayMs`，叠加 `jitterRatio` 抖动；`respectRetryAfter` 为真且解析到 retry-after 时优先用它。**若退避会超出总截止则直接放弃**。
 - **返回形状**：成功/失败都返回 `McpInvokeResponse`，`attempts[]` 逐次记录状态、耗时、错误码；失败时 `isError: true` 且 content 为截断到 1000 字符的错误文本。未知或未启用的 server 抛带 `statusCode: 404` 的错误。
 
-## 9. `packages/agent-runtime` 与 loop 的边界
+## 9. 能力 Package 与 loop 的边界
 
-`packages/agent-runtime` 是**与循环实现无关**的共享层，原生化没有改动它（本次变更对 `packages/` 零 diff）。
+原 `packages/agent-runtime` 聚合包已按职责拆分。`packages/runtime-core` 驱动通用循环，各能力 Package 实现类型化的 Context、Model、Tool Port，且不反向依赖 Service。
 
 | 导出 | 归属 | 与 loop 的关系 |
 |---|---|---|
-| `buildWorkspaceSystemPrompt(skills, envsAvailable, governance)` | agent-runtime | loop 在构造期调用一次，再拼接 `<run_contract>` / deferred / routing 三段 |
-| `createWorkspaceTools(root, options)` | agent-runtime | 产出 `AgentTool[]`；**工具真实行为、权限门、溯源都在这里和 API 注入的处理器里**，loop 只负责调度 |
-| `AgentTool` | agent-runtime | `execute(toolCallId, params, signal)`；`deferred` 与 `routing` 字段驱动 §6 |
-| `AgentEvent` | agent-runtime | loop 只 emit，`runs/index.ts` 负责翻成 SSE（§4.5） |
-| `Agent` 接口 | agent-runtime | `NativeAgentHandle extends Agent`，额外提供 `execute()` 返回 `finalMessages` |
-| `AgentHistoryMessage` | agent-runtime | OpenAI wire 格式的历史条目 |
-| `normalizeLegacyEnvironmentToolName` | agent-runtime | 历史回放时的工具改名兼容 |
+| `buildWorkspaceSystemPrompt(...)` | `packages/context` | 构建由 Context Assembler 使用的工作区/System Prompt 片段 |
+| `createWorkspaceTools(root, options)` | `packages/workspace` | 产出 `AgentTool[]`；具体 Port 由 API Composition Root 注入 |
+| `AgentTool`、`ToolRegistry` | `packages/tools` | 定义工具执行并负责 deferred 发现、净化和循环策略 |
+| `AgentEvent`、`Agent` | `packages/orchestration` | 定义运行生命周期契约；`runs/index.ts` 负责翻成 SSE（§4.5） |
+| `AgentHistoryMessage` | `packages/orchestration` | Provider 无关的 Runtime 历史条目 |
+| `normalizeLegacyEnvironmentToolName` | `packages/workspace` | 历史回放时的工具改名兼容 |
 
 **边界原则**：loop **不**决定工具语义、不做权限判断、不写溯源；工具层**不**知道自己被哪种循环驱动。这条边界是原生化能做到「换掉引擎但治理不变」的前提。
 

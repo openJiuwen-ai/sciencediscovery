@@ -95,7 +95,7 @@ import {
 } from "./server.js";
 import { SessionStore } from "./store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
-import type { McpTransportClient } from "./mcp/transport.js";
+import type { McpTransportClient } from "@sciencediscovery/data-source";
 
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);

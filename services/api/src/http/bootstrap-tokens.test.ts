@@ -23,7 +23,7 @@ import {
   bootstrapTokenPath,
   resolveBootstrapToken,
 } from "./bootstrap-tokens.js";
-import { loadServerConfig } from "./config.js";
+import { loadServerConfig } from "../bootstrap/config.js";
 
 async function temporaryDataDir(context: TestContext, name: string): Promise<string> {
   const dataDir = resolve(process.cwd(), ".tmp", `${name}-${Date.now()}-${process.pid}`);

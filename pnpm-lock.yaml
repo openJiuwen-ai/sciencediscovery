@@ -99,6 +99,31 @@ importers:
 
   config: {}
 
+  packages/artifact-manager:
+    dependencies:
+      '@sciencediscovery/context':
+        specifier: workspace:*
+        version: link:../context
+      '@sciencediscovery/data-source':
+        specifier: workspace:*
+        version: link:../data-source
+      '@sciencediscovery/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@sciencediscovery/mcp-sources':
+        specifier: workspace:*
+        version: link:../mcp-sources
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@sciencediscovery/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/cas:
     dependencies:
       '@sciencediscovery/schema':
@@ -131,6 +156,54 @@ importers:
         specifier: 26.1.1
         version: 26.1.1
 
+  packages/data-source:
+    dependencies:
+      '@sciencediscovery/cas':
+        specifier: workspace:*
+        version: link:../cas
+      '@sciencediscovery/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@sciencediscovery/mcp-sources':
+        specifier: workspace:*
+        version: link:../mcp-sources
+      '@sciencediscovery/memory':
+        specifier: workspace:*
+        version: link:../memory
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+      undici:
+        specifier: 8.7.0
+        version: 8.7.0
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
+  packages/executor:
+    dependencies:
+      '@sciencediscovery/runner':
+        specifier: workspace:*
+        version: link:../../services/runner
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
+  packages/governance:
+    dependencies:
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/mcp-sources:
     dependencies:
       '@sciencediscovery/schema':
@@ -143,6 +216,19 @@ importers:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
+
+  packages/memory:
+    dependencies:
+      '@sciencediscovery/operational-logging':
+        specifier: workspace:*
+        version: link:../operational-logging
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
 
   packages/model:
     dependencies:
@@ -188,6 +274,31 @@ importers:
         specifier: 26.1.1
         version: 26.1.1
 
+  packages/provenance:
+    dependencies:
+      '@sciencediscovery/artifact-manager':
+        specifier: workspace:*
+        version: link:../artifact-manager
+      '@sciencediscovery/cas':
+        specifier: workspace:*
+        version: link:../cas
+      '@sciencediscovery/executor':
+        specifier: workspace:*
+        version: link:../executor
+      '@sciencediscovery/memory':
+        specifier: workspace:*
+        version: link:../memory
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@sciencediscovery/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/runtime-core:
     devDependencies:
       '@types/node':
@@ -208,6 +319,34 @@ importers:
       '@sciencediscovery/external-urls':
         specifier: workspace:*
         version: link:../../config
+
+  packages/specialist:
+    dependencies:
+      '@sciencediscovery/cas':
+        specifier: workspace:*
+        version: link:../cas
+      '@sciencediscovery/context':
+        specifier: workspace:*
+        version: link:../context
+      '@sciencediscovery/orchestration':
+        specifier: workspace:*
+        version: link:../orchestration
+      '@sciencediscovery/provenance':
+        specifier: workspace:*
+        version: link:../provenance
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+      fflate:
+        specifier: 0.8.2
+        version: 0.8.2
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
 
   packages/tools:
     dependencies:
@@ -246,15 +385,30 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
+      '@sciencediscovery/artifact-manager':
+        specifier: workspace:*
+        version: link:../../packages/artifact-manager
       '@sciencediscovery/cas':
         specifier: workspace:*
         version: link:../../packages/cas
       '@sciencediscovery/context':
         specifier: workspace:*
         version: link:../../packages/context
+      '@sciencediscovery/data-source':
+        specifier: workspace:*
+        version: link:../../packages/data-source
+      '@sciencediscovery/executor':
+        specifier: workspace:*
+        version: link:../../packages/executor
+      '@sciencediscovery/governance':
+        specifier: workspace:*
+        version: link:../../packages/governance
       '@sciencediscovery/mcp-sources':
         specifier: workspace:*
         version: link:../../packages/mcp-sources
+      '@sciencediscovery/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@sciencediscovery/model':
         specifier: workspace:*
         version: link:../../packages/model
@@ -264,6 +418,9 @@ importers:
       '@sciencediscovery/orchestration':
         specifier: workspace:*
         version: link:../../packages/orchestration
+      '@sciencediscovery/provenance':
+        specifier: workspace:*
+        version: link:../../packages/provenance
       '@sciencediscovery/runner':
         specifier: workspace:*
         version: link:../runner
@@ -273,6 +430,9 @@ importers:
       '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@sciencediscovery/specialist':
+        specifier: workspace:*
+        version: link:../../packages/specialist
       '@sciencediscovery/tools':
         specifier: workspace:*
         version: link:../../packages/tools

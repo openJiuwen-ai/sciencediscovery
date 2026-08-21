@@ -19,7 +19,7 @@ import { test } from "node:test";
 
 import type { RemoteJob } from "@sciencediscovery/schema";
 
-import { RemoteComputeClient, type RemoteCommandResult, type RemoteTransport } from "./remote-compute.js";
+import { RemoteComputeClient, type RemoteCommandResult, type RemoteTransport } from "@sciencediscovery/executor";
 
 class FakeTransport implements RemoteTransport {
   readonly calls: Array<{ alias: string; script: string; timeoutMs: number }> = [];

@@ -14,7 +14,7 @@
 
 import type { IncomingMessage } from "node:http";
 
-import { SKILL_LIMITS } from "../skills.js";
+import { SKILL_LIMITS } from "@sciencediscovery/specialist";
 
 const MAX_BODY_BYTES = 1_500_000;
 const MAX_SKILL_IMPORT_BODY_BYTES = SKILL_LIMITS.archiveBytes + 1024 * 1024;

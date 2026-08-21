@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ProvenanceRecorder } from "./provenance.js";
-import type { RunnerClient } from "./runner-client.js";
+import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import type { RunnerClient } from "@sciencediscovery/executor";
 import type { SessionStore } from "./store.js";
 
 /** Mirror the runner's immutable environment catalog and verified snapshots into the API store. */

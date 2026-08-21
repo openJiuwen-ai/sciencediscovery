@@ -6,7 +6,7 @@
 - The loop, model streaming, tool scheduling, deferred-tool discovery, and history compaction are this repository's own TypeScript. **No LangChain or LangGraph, and deer-flow does not drive the loop.**
 - Model calls go out from Node directly (`undici`) in two dialects: **OpenAI-compatible** and **Anthropic Messages**.
 - MCP servers are connected **in-process** with the official TypeScript SDK (stdio / SSE / streamable HTTP), not through a gateway HTTP hop.
-- Tool **implementations, the permission gate, sandbox execution, and provenance are unchanged**: still `createWorkspaceTools` from `packages/agent-runtime` plus API-injected handlers. The native loop `await`s those handlers directly, so `POST /internal/tool-exec` is no longer needed.
+- Tool implementations remain in the Node control plane: `packages/workspace` builds workspace tools, `packages/tools` owns registration and dispatch policy, and the API injects governance, provenance, execution, and data-source adapters. The native loop `await`s those handlers directly, so `POST /internal/tool-exec` is no longer needed.
 - **The Python sidecar is no longer a service**: web providers are native too, so the gateway's HTTP service is gone; `services/gateway` is now only the host package and interpreter environment for the bundled Python MCP servers. See §10.
 
 The former architecture (Python gateway running LangChain `create_agent`, Node `POST /run`, gateway callback to `/internal/tool-exec`) is retired; see §11.
@@ -31,7 +31,7 @@ Browser ──SSE/REST──▶ services/api
       │         └─onTextDelta / onThinkingDelta ─▶ AgentEvent ─▶ SSE   │
       │    3. no tool_calls → break                                    │
       │    4. run every tool call of this turn concurrently            │
-      │         └─▶ AgentTool.execute(...)   ← packages/agent-runtime  │
+      │         └─▶ AgentTool.execute(...)   ← workspace + tools      │
       │              └─▶ permission gate / Runner:4311 / MCP / connectors│
       │    5. append tool results in call order, go back to step 1     │
       └────────────────────────────────────────────────────────────────┘
@@ -161,7 +161,7 @@ The denylist covers every authority block this product injects (`available-defer
 
 ### 4.5 How events become SSE
 
-`NativeAgent` only emits `AgentEvent` (defined in `packages/agent-runtime/src/types.ts`). The observer in `services/api/src/runs/index.ts` translates them:
+`NativeAgent` only emits `AgentEvent` (defined in `packages/orchestration/src/agent.ts`). The observer in `services/api/src/runs/index.ts` translates them:
 
 | AgentEvent | Emitted when | SSE event |
 |---|---|---|
@@ -233,7 +233,7 @@ If any of the three token counts still cannot be derived, the whole result is `u
 
 **Problem.** MCP tool schemas are large; binding all of them crowds the context window.
 
-**Approach.** Tools flagged `deferred` (currently every MCP tool, see `packages/agent-runtime/src/workspace.ts`) are **not bound** to the model. Their names appear in `<available-deferred-tools>` in the system prompt; the model fetches full schemas through the synthetic `tool_search` tool, which **promotes** them for the rest of the run.
+**Approach.** Tools flagged `deferred` (currently every MCP tool, see `packages/workspace/src/workspace.ts`) are **not bound** to the model. Their names appear in `<available-deferred-tools>` in the system prompt; the model fetches full schemas through the synthetic `tool_search` tool, which **promotes** them for the rest of the run.
 
 | Symbol | Role |
 |---|---|
@@ -313,19 +313,18 @@ Three query forms:
 - **Backoff**: exponential `initialDelayMs * multiplier^(n-1)` capped at `maxDelayMs`, with `jitterRatio` jitter; `respectRetryAfter` prefers a parsed retry-after. **If the delay would cross the deadline the loop gives up instead.**
 - **Response shape**: success and failure both return `McpInvokeResponse` with a per-attempt `attempts[]` (status, duration, error code). Failures set `isError: true` with the error text truncated to 1000 chars. An unknown or disabled server throws with `statusCode: 404`.
 
-## 9. `packages/agent-runtime` and the loop boundary
+## 9. Capability packages and the loop boundary
 
-`packages/agent-runtime` is the shared layer that is **independent of the loop implementation**; going native did not change it (this change has zero diff under `packages/`).
+The former `packages/agent-runtime` aggregate has been split by ownership. `packages/runtime-core` drives the generic loop; capability packages provide its typed context, model, and tool ports without importing service code.
 
 | Export | Owner | Relationship to the loop |
 |---|---|---|
-| `buildWorkspaceSystemPrompt(skills, envsAvailable, governance)` | agent-runtime | Called once at construction; the loop then appends the `<run_contract>`, deferred, and routing sections |
-| `createWorkspaceTools(root, options)` | agent-runtime | Produces `AgentTool[]`; **real tool behaviour, the permission gate, and provenance live here and in the API-injected handlers**, the loop only schedules |
-| `AgentTool` | agent-runtime | `execute(toolCallId, params, signal)`; the `deferred` and `routing` fields drive §6 |
-| `AgentEvent` | agent-runtime | The loop only emits; `runs/index.ts` maps to SSE (§4.5) |
-| `Agent` interface | agent-runtime | `NativeAgentHandle extends Agent`, adding `execute()` that returns `finalMessages` |
-| `AgentHistoryMessage` | agent-runtime | One OpenAI-wire-format history entry |
-| `normalizeLegacyEnvironmentToolName` | agent-runtime | Tool-rename compatibility during history replay |
+| `buildWorkspaceSystemPrompt(...)` | `packages/context` | Builds the workspace/system-prompt contribution consumed by the context assembler |
+| `createWorkspaceTools(root, options)` | `packages/workspace` | Produces `AgentTool[]`; concrete ports are supplied by the API composition root |
+| `AgentTool`, `ToolRegistry` | `packages/tools` | Define tool execution and own deferred discovery, sanitization, and loop policy |
+| `AgentEvent`, `Agent` | `packages/orchestration` | Define run-facing lifecycle contracts; `runs/index.ts` maps events to SSE (§4.5) |
+| `AgentHistoryMessage` | `packages/orchestration` | One provider-neutral runtime history entry |
+| `normalizeLegacyEnvironmentToolName` | `packages/workspace` | Tool-rename compatibility during history replay |
 
 **Boundary principle.** The loop does **not** decide tool semantics, permissions, or provenance; the tool layer does **not** know which loop drives it. That boundary is what let the engine be replaced while governance stayed put.
 

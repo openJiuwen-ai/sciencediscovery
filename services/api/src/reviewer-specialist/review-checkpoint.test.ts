@@ -27,7 +27,7 @@ import {
   cancelReviewerCheckpoints,
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
-} from "./review-checkpoint.js";
+} from "@sciencediscovery/provenance";
 
 function fixture(contentText = "分析结果支持该结论 [1].\n[1] Study. arXiv:1706.03762") {
   const content = Buffer.from(contentText);

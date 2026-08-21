@@ -119,10 +119,10 @@ describe("serve topology", () => {
 
   test("the bootstrap probe runs in the app root and keeps an operator URL config", () => {
     const runtime = mcpProbeRuntime(contextFor({
-      baseEnv: { SCIENCE_AGENT_EXTERNAL_URLS_PATH: "/srv/science-agent/external-urls.json" },
+      baseEnv: { SCIENCE_AGENT_EXTERNAL_URLS_PATH: "/srv/sciencediscovery/external-urls.json" },
     }));
     assert.equal(runtime.cwd, "/cache/payload/abc/app");
-    assert.equal(runtime.env.SCIENCE_AGENT_EXTERNAL_URLS_PATH, "/srv/science-agent/external-urls.json");
+    assert.equal(runtime.env.SCIENCE_AGENT_EXTERNAL_URLS_PATH, "/srv/sciencediscovery/external-urls.json");
   });
 
   test("no service carries the retired vendor state directory", () => {

@@ -51,8 +51,8 @@ import {
   DEFAULT_WEB_SETTINGS,
 } from "@sciencediscovery/schema";
 
-import { defaultEnvironmentRevision, defaultShellEnvironmentRevision } from "../environment.js";
-import { BUILTIN_SPECIALISTS } from "../builtin-specialists.js";
+import { defaultEnvironmentRevision, defaultShellEnvironmentRevision } from "@sciencediscovery/executor";
+import { BUILTIN_SPECIALISTS } from "@sciencediscovery/specialist";
 
 export interface Catalog {
   artifactAnnotations: ArtifactAnnotation[];

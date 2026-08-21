@@ -15,19 +15,17 @@
 /**
  * The Node-native agent loop.
  *
- * One `execute()` drives the whole model loop in this process: build the
- * workspace system prompt and tools, then repeatedly stream one model turn,
- * append the wire-format assistant message to history, execute any tool calls
- * through the SAME `createWorkspaceTools` handlers (permission gate, sandbox
- * runner, provenance — all in place), append the tool results, and call the
- * model again until a turn produces no tool calls.
+ * One `execute()` composes the domain-neutral Runtime Core with the context,
+ * model, tool, and workspace capability packages. Runtime Core drives model
+ * turns and tool scheduling; this service adapter owns request-scoped timeout,
+ * event translation, and the concrete port wiring.
  *
  * History is kept in OpenAI wire format and returned as `finalMessages` for
  * the explicit RequestExecution handoff, exactly like the previous engine.
  * Because assistant messages are stored verbatim (including raw tool-call
  * fields such as Gemini `thought_signature`), provider quirks replay without
- * a patch layer. Deferred tools, keyword auto-promotion, and history
- * compaction are provided by the sibling modules.
+ * a patch layer. Deferred tools and keyword auto-promotion come from
+ * `packages/tools`; history compaction comes from `packages/context`.
  */
 
 import {

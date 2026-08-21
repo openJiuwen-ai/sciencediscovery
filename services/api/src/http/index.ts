@@ -24,6 +24,7 @@ import {
 } from "@sciencediscovery/context";
 import type { AgentConfig } from "@sciencediscovery/model";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
+import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import type {
   ArtifactCandidate,
@@ -67,7 +68,6 @@ import type {
   UninstallEnvironmentRequest,
   RunStreamEvent,
   RuntimeSessionRun,
-  ResolvedProxy,
   RuntimeSettingsOverrides,
   RuntimeStatus,
   SendMessageRequest,
@@ -100,55 +100,40 @@ import type {
 } from "@sciencediscovery/schema";
 import { UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 
-import { SessionStore, SessionStoreHttpError } from "../store.js";
+import { SessionStoreHttpError } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import {
   parseConflictPolicy,
   readMultipartUploads,
   uploadWorkspaceParts,
 } from "../workspace-upload.js";
-import { RunnerClient } from "../runner-client.js";
 import { sandboxNetworkRevision } from "../store/sandbox-network.js";
-import { ProvenanceRecorder } from "../provenance.js";
 import {
   ArtifactDashboardError,
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { inferDomain, MemoryGraphClient, MemoryGraphSink } from "../memory-graph.js";
-import { mgLog } from "../memory-graph-log.js";
-import { apiLog, configureApiLogging, runLog } from "../logging.js";
+import { inferDomain, mgLog } from "@sciencediscovery/memory";
+import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { createPromptManifest } from "../prompt-manifest.js";
-import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
-import { ArtifactManager } from "../mcp/artifact-manager.js";
-import { McpGovernanceBroker } from "../mcp/broker.js";
-import type { McpTransportClient } from "../mcp/transport.js";
-import { McpNodeClient } from "../mcp/node-client.js";
-import { McpSourceCatalog } from "../mcp/source-catalog.js";
-import { createMcpWorkspaceTools } from "../mcp/workspace-tools.js";
-import { WebBroker } from "../web-providers/broker.js";
-import { NativeWebProviderClient } from "../web-providers/native/index.js";
-import { createWebWorkspaceTools } from "../web-providers/workspace-tools.js";
+import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
+import { createWebWorkspaceTools } from "@sciencediscovery/data-source";
 import {
   createDialogueSkillDraft,
   createSessionSkillDraft,
-  SkillCatalog,
   SkillCatalogError,
   type RuntimeSkillSnapshot,
-} from "../skills.js";
+} from "@sciencediscovery/specialist";
 import {
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
-} from "../reviewer-specialist/review-checkpoint.js";
-import { createEvidenceReferenceTracer } from "../reviewer-specialist/computation-review.js";
+} from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
-import { reviewerLog } from "../reviewer-specialist/review-log.js";
-import { MAX_PAPER_PDF_BYTES, PaperService } from "../papers.js";
-import { RemoteComputeClient } from "../remote-compute.js";
-import { classifySubagentFailure } from "../subagent-lifecycle.js";
+import { MAX_PAPER_PDF_BYTES } from "../papers.js";
+import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
-import { createAgentPermissionRuntime } from "../agent-run/permission-runtime.js";
+import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
 import { createWorkspaceExecutionBindings } from "../agent-run/workspace-bindings.js";
 
@@ -162,7 +147,6 @@ import {
 } from "../artifacts/index.js";
 import {
   advanceResolvedPermissionRequests,
-  PermissionDecisionQueue,
   startApprovedRemoteJob,
   waitForPermissionDecision,
 } from "../permissions/index.js";
@@ -185,7 +169,7 @@ import { timeoutFailure, timeoutMessage } from "../timeouts/index.js";
 import { isAuthorized } from "./auth.js";
 import { readBytes, readJson, readMultipartSkill } from "./body.js";
 import { accessTokenBanner } from "./bootstrap-tokens.js";
-import { loadServerConfig, repositoryRoot, type ServerConfig } from "./config.js";
+import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
 import { isKnownClientInputError } from "./error-classification.js";
 import { send, sendError, sendJson } from "./response.js";
 import { contentTypeForPath, serveStatic } from "./static.js";
@@ -197,41 +181,45 @@ import {
   emptyMatch,
   emptyTrace,
   getActiveSessionRun,
-  recoverSessionRuns,
   scheduleSessionRuns,
   sessionHasActiveRun,
   streamAgentRun,
   streamStoredRunEvents,
 } from "../runs/index.js";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
+import {
+  createPlatformServices,
+  initializePlatformServices,
+  type ApiServerDependencies,
+} from "../bootstrap/platform.js";
 
 export { aggregateToolText } from "../artifacts/index.js";
 export { waitForPermissionDecision } from "../permissions/index.js";
 export { prepareSubagentHandoff } from "../subagents/index.js";
-export { loadServerConfig, type ServerConfig } from "./config.js";
+export { loadServerConfig, type ServerConfig } from "../bootstrap/config.js";
 export * from "../runs/index.js";
 
-export interface ApiServerDependencies {
-  connectorFetch?: typeof fetch;
-  /** Test seam: drive MCP through a stub transport instead of live servers. */
-  mcpTransport?: McpTransportClient;
-}
+export type { ApiServerDependencies } from "../bootstrap/platform.js";
 
 export function createApiServer(config = loadServerConfig(), dependencies: ApiServerDependencies = {}): Server {
-  configureApiLogging(config.dataDir);
-  const store = new SessionStore(config.dataDir, {
-    gatewayIdleTimeoutMs: config.gatewayIdleTimeoutMs,
-    gatewayTurnTimeoutMs: config.gatewayTurnTimeoutMs,
-    kernelIdleTimeoutMs: config.kernelIdleTimeoutMs,
-    permissionWaitTimeoutMs: config.permissionWaitTimeoutMs,
-    runnerExecTimeoutMs: config.runnerExecTimeoutMs,
-  }, {
-    runnerMaxOutputBytes: config.runnerMaxOutputBytes,
-    runnerMaxWorkspaceBytes: config.runnerMaxWorkspaceBytes,
-    uploadMaxFileBytes: config.workspaceUpload.maxFileBytes,
-    uploadMaxRequestBytes: config.workspaceUpload.maxRequestBytes,
-  }, config.memoryGraph.neo4jPassword);
-  const skillCatalog = new SkillCatalog(config.dataDir, repositoryRoot);
+  const platform = createPlatformServices(config, repositoryRoot, dependencies);
+  const {
+    artifactManager,
+    mcpBroker,
+    mcpCatalog,
+    mcpRegistry,
+    memoryGraphClient,
+    memoryGraphEnabled,
+    memoryGraphSink,
+    paperService,
+    permissionDecisions,
+    provenanceRecorder,
+    remoteCompute,
+    runnerClient,
+    skillCatalog,
+    store,
+    webBroker,
+  } = platform;
   const patchEphemeralCallback = (server: Server) => {
     // With an ephemeral port (tests), the configured tool-callback URL cannot
     // know the real port in advance; rewrite it from the bound address.
@@ -241,134 +229,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
     });
   };
-  const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken);
-  mgLog.setDataDir(config.dataDir);
-  reviewerLog.setLogDir(resolve(config.dataDir, "logs"));
-  // The log gate reads the live System Settings toggle so flipping it off in
-  // the UI silences the skip-line chatter, and on restores it — no restart.
-  mgLog.setToggle(() => store.getMemoryGraphSettings().enabled);
-  // The client is constructed unconditionally — it is cheap (no connection
-  // until health()/observe*). The System Settings toggle gates whether reads
-  // short-circuit and the sink actually mirrors, not whether the client exists.
-  const memoryGraphClient = new MemoryGraphClient({
-    url: config.memoryGraph.url,
-    token: config.memoryGraph.internalToken,
-  });
-  const memoryGraphSink = new MemoryGraphSink(memoryGraphClient, () => store.getMemoryGraphSettings().enabled);
-  // Read paths short-circuit to the disabled reason when the toggle is off
-  // (client null never happens now, but the guard reads the live store toggle).
-  const memoryGraphEnabled = () => store.getMemoryGraphSettings().enabled;
-  const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
-  const mcpRegistry = createBuiltinMcpSourceRegistry();
-  // MCP runs in-process via the official SDK. Tests substitute the transport
-  // itself rather than a fake HTTP peer, so they exercise the real seam.
-  const mcpGateway: McpTransportClient = dependencies.mcpTransport ?? new McpNodeClient();
-  // Resolved per-server proxies sent with MCP reloads so the gateway rebuilds
-  // connections under the current proxy configuration. Unresolvable policies
-  // are skipped here; they still fail loudly at invoke time.
-  const mcpProxyMap = (): Record<string, ResolvedProxy> => {
-    const serverIds = new Set<string>();
-    for (const manifest of mcpRegistry.listManifests()) serverIds.add(manifest.transport.mcpServerId);
-    for (const serverId of Object.keys(store.getMcpProxyPolicies())) serverIds.add(serverId);
-    const map: Record<string, ResolvedProxy> = {};
-    for (const serverId of serverIds) {
-      try {
-        map[serverId] = store.resolveProxy(store.mcpProxyPolicy(serverId));
-      } catch {
-        // Skipped: resolution errors surface on the invoke path instead.
-      }
-    }
-    return map;
-  };
-  const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap);
-  const webBroker = new WebBroker(config.dataDir, store, new NativeWebProviderClient());
-  const mcpBroker = new McpGovernanceBroker(
-    config.dataDir,
-    store,
-    mcpRegistry,
-    mcpCatalog,
-    mcpGateway,
-    { memoryGraphSink },
-  );
-  const paperService = new PaperService(store, config.paperPythonPath, config.paperWorkerPath);
-  const artifactManager = new ArtifactManager(
-    store,
-    mcpRegistry,
-    mcpBroker,
-    dependencies.connectorFetch ?? fetch,
-  );
-  artifactManager.setCompletedHandler(async ({ candidate, job, plan }) => {
-    await provenanceRecorder.registerWorkspaceArtifact({
-      logicalName: candidate.logicalName,
-      origin: "mcp_download",
-      originMeta: {
-        artifactJobId: job.id,
-        license: candidate.license,
-        sourceId: candidate.sourceId,
-        sourceRecordId: candidate.sourceRecordId,
-        sourceUrl: candidate.sourceUrl,
-      },
-      path: plan.destination.path,
-      sessionId: job.sessionId,
-      sourcePath: plan.destination.path,
-      title: candidate.logicalName,
-      workspaceRoot: store.workspacePath(job.sessionId),
-    });
-  });
-  const remoteCompute = new RemoteComputeClient(config.sshConfigPath);
-  const permissionDecisions = new PermissionDecisionQueue();
-  const ready = skillCatalog.load().then(async () => {
-    store.setAvailableSkillIds(skillCatalog.ids());
-    await store.load();
-    await mcpCatalog.refresh().catch((error) => {
-      apiLog.warn("mcp_catalog_startup_failed", { errorMessage: shortErrorMessage(error) });
-      console.warn("MCP catalog was unavailable during API startup:", error);
-    });
-    await artifactManager.resumeInterrupted();
-    await recoverSessionRuns(store, memoryGraphClient);
-    // Push the stored Neo4j password to the memory-graph service (best-effort;
-    // the service runs ensure_schema() on the Python side once reachable).
-    // Failure is non-fatal — the sink degrades to no-op and chat stays
-    // unblocked. The password source is the encrypted store (set via System
-    // Settings), not env; env only seeds the store once on first catalog load.
-    const storedNeo4jPassword = store.getMemoryGraphNeo4jPassword();
-    if (storedNeo4jPassword) {
-      mgLog.info("startup: pushing stored Neo4j credential to memory-graph");
-      const conn = store.getMemoryGraphSettings();
-      await memoryGraphClient
-        .pushNeo4jPassword(storedNeo4jPassword, { httpUri: conn.neo4jHttp, user: conn.neo4jUser })
-        .then(() => mgLog.info("startup: credential push complete"))
-        .catch((error) => {
-          mgLog.warn("startup: credential push failed (non-fatal): %s",
-            error instanceof Error ? error.message : String(error));
-        });
-    } else {
-      mgLog.info("startup: no stored Neo4j password, skipping push (set it in System Settings → Memory graph)");
-    }
-    for (const project of store.listProjects()) {
-      for (const session of store.listSessions(project.id, "all")) {
-        if ((await store.listSessionRuns(session.id)).some((run) => run.status === "queued")) {
-          scheduleSessionRuns(
-            store,
-            runnerClient,
-            provenanceRecorder,
-            mcpBroker,
-            webBroker,
-            mcpRegistry,
-            mcpCatalog,
-            artifactManager,
-            paperService,
-            remoteCompute,
-            skillCatalog,
-            memoryGraphSink,
-            session.id,
-            config,
-            memoryGraphClient,
-          );
-        }
-      }
-    }
-  });
+  const ready = initializePlatformServices(platform, config);
 
   const server = createServer(async (request, response) => {
     const requestPath = (request.url ?? "/").split("?", 1)[0] || "/";

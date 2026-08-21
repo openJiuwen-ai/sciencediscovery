@@ -26,7 +26,7 @@ import {
   parseSmartCitationReview,
   reviewerSpecialistAvailable,
   reviewerSpecialistRequested,
-} from "./citation-review.js";
+} from "@sciencediscovery/provenance";
 
 const semanticVersion = {
   artifactId: "artifact-1",

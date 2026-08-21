@@ -193,7 +193,7 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 
 > declare/persist 类**不在浏览器客户端上**：`declareEvidence`/`declareClaim`/`linkClaimsToReport` 是 Node 内 LLM 工具回调（见 4.3），经 `MemoryGraphClient` 直接打 sidecar `/persist/*`。
 
-### 3.3 LLM 工具（`packages/agent-runtime/src/workspace.ts`，功能开启时注册）
+### 3.3 LLM 工具（`packages/workspace/src/workspace.ts`，功能开启时注册）
 
 | 工具名 | 输入 | 作用 |
 |--------|------|------|

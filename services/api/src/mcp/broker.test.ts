@@ -25,11 +25,11 @@ import {
   ResourceRateLimitQueueFullError,
   ResourceRateLimitQueueTimeoutError,
   type ResourceRateLimitOptions,
-} from "../rate-limit/resource-rate-limiter.js";
-import { McpGovernanceBroker } from "./broker.js";
-import type { McpTransportClient } from "./transport.js";
+} from "@sciencediscovery/data-source";
+import { McpGovernanceBroker } from "@sciencediscovery/data-source";
+import type { McpTransportClient } from "@sciencediscovery/data-source";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
-import { McpSourceCatalog } from "./source-catalog.js";
+import { McpSourceCatalog } from "@sciencediscovery/data-source";
 
 test("governance broker invokes native UniProt MCP through the gateway and caches normalized records", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `mcp-native-${Date.now()}-${process.pid}`);

@@ -18,11 +18,11 @@ import type {
 } from "@sciencediscovery/schema";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/context";
 
-import type { ProvenanceRecorder } from "../provenance.js";
-import type { RunnerClient } from "../runner-client.js";
+import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import type { RunnerClient } from "@sciencediscovery/executor";
 import type { SessionStore } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
-import type { AgentPermissionRuntime } from "./permission-runtime.js";
+import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 
 type ExecutionBindings = Pick<

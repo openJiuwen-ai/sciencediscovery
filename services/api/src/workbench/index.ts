@@ -14,7 +14,7 @@
 
 import type { ChatMessage, ComposerReference, WorkbenchSearchResult } from "@sciencediscovery/schema";
 
-import { SkillCatalog } from "../skills.js";
+import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
 
 export async function searchWorkbench(store: SessionStore, query: string): Promise<WorkbenchSearchResult[]> {

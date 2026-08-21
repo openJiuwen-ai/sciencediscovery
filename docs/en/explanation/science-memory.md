@@ -193,7 +193,7 @@ Browser is read-only, all reverse-proxied to the sidecar; feature off (client=nu
 
 > declare/persist classes are **not on the browser client**: `declareEvidence`/`declareClaim`/`linkClaimsToReport` are Node-internal LLM tool callbacks (see 3.3), calling the sidecar `/persist/*` directly via `MemoryGraphClient`.
 
-### 3.3 LLM tools (`packages/agent-runtime/src/workspace.ts`, registered when the feature is on)
+### 3.3 LLM tools (`packages/workspace/src/workspace.ts`, registered when the feature is on)
 
 | Tool | Input | Purpose |
 |--------|------|------|

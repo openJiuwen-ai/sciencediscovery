@@ -77,7 +77,7 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 
 - 循环实现是本仓库自己的 TypeScript：`services/api/src/native-agent/`，入口 `createNativeAgent`。**不使用 LangChain / LangGraph**。
 - 模型调用由 API 进程用 `undici` 直接发出，支持 OpenAI 兼容与 Anthropic Messages 两种方言。
-- 模型要调工具时，循环**直接在进程内 `await` 工具处理器**，工具实现仍是 `packages/agent-runtime` 的 `createWorkspaceTools` 加 API 注入的处理器；不存在跨进程回调。
+- 模型要调工具时，循环**直接在进程内 `await` 工具处理器**；`packages/workspace` 构建工作区工具，`packages/tools` 负责注册与调度，API 注入具体基础设施适配器，不存在跨进程回调。
 - MCP 由 API 进程用官方 TypeScript SDK 直连（stdio 子进程 / SSE / streamable-HTTP）。随包的 Python MCP server（biomed、UniProt）以 stdio 子进程启动，**解释器来自 gateway venv**——这是 gateway 环境仍需存在的第二个原因。
 
 模块级说明见 [agent-backend.md](agent-backend.md)。
