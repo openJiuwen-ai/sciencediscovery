@@ -73,6 +73,19 @@ test("settings checkboxes expose a 24px control inside clickable labels", () => 
   assert.match(responsive, /\.specialist-layout \{ grid-template-columns: minmax\(0, 1fr\); \}/);
 });
 
+test("the shared form skeleton also covers scoped settings outside config panels", () => {
+  const primitives = source("styles/primitives.css");
+  const managementControls = source("session/ManagementControls.tsx");
+
+  // The project creation dialog mounts ScopedSettingsEditor without a
+  // `.config-panel` ancestor, so the primitive must scope `.scoped-settings`
+  // directly to keep its selects and text fields off browser defaults.
+  assert.match(primitives, /\.scoped-settings :where\(\s*input:not\(\[type="checkbox"\]\)[\s\S]*?select,\s*textarea\s*\) \{/);
+  assert.match(primitives, /\.scoped-settings textarea \{[^}]*min-height: 96px;/);
+  assert.match(managementControls, /<section[^>]*className="creation-dialog"[^>]*>/);
+  assert.match(managementControls, /<ScopedSettingsEditor/);
+});
+
 test("sidebar ellipsis text nodes carry their full visible names", () => {
   const app = source("App.tsx");
 
