@@ -1,0 +1,214 @@
+# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# UT / ST / E2E on GitHub-hosted Linux runners. The jobs only call the
+# repository entry points documented in .ci/README.md, so CI cannot drift into
+# a second, GitHub-only test definition. Every layer is hermetic: no model
+# credentials, no live endpoints, no NPU. The opt-in live layers
+# (ci:st:real, ci:e2e:real, ci:st:npu, ci:e2e:legacy) stay out of this file.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ut:
+    name: UT
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # ut-runner executes real bubblewrap. Ubuntu 24.04 runners ship an
+      # AppArmor policy that denies unprivileged user namespaces, which the
+      # sandbox needs; without this the Runner tests fail on the host policy
+      # rather than on product behaviour.
+      - name: Provision the bubblewrap sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --dev /dev true
+          bwrap --version
+
+      - name: Run UT
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+          CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
+        run: pnpm ci:ut
+
+      - name: Upload UT results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ut-results
+          path: .ci-results/ut
+          if-no-files-found: warn
+
+  st:
+    name: ST
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # The hermetic agent loop drives a scripted local endpoint and performs a
+      # real workspace tool round trip; no sandbox and no model credential.
+      - name: Run ST
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+          CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
+        run: pnpm ci:st
+
+      - name: Upload ST results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: st-results
+          path: .ci-results/st
+          if-no-files-found: warn
+
+  e2e:
+    name: E2E (mocked)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # Mocked journeys start the product stack, whose Runner executes
+      # bubblewrap, and Chromium's own sandbox needs the same capability.
+      - name: Provision the bubblewrap sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --dev /dev true
+          bwrap --version
+
+      # Keyed on the committed E2E lockfile, which pins the only Playwright
+      # version .ci/run-e2e.sh is allowed to install.
+      - name: Cache the pinned Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('test/e2e.package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      # run-e2e.sh owns the whole lifecycle: it syncs .e2e, installs Chromium,
+      # generates an ephemeral token, starts and stops its own isolated stack,
+      # runs the @mocked project and collects reports. E2E_COMMIT_SHA stamps
+      # journey reports with the revision under test.
+      - name: Run mocked E2E
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+          CI_RUNTIME_DIR: ${{ runner.temp }}/ci-e2e
+          E2E_COMMIT_SHA: ${{ github.sha }}
+        run: pnpm ci:e2e
+
+      # Playwright exits 0 on skips, so a BLOCKED journey — J3 whenever the
+      # default run keeps SCIENTIFIC_ENVS=0 — would otherwise vanish behind a
+      # green check. The repository rule is that blocked is not passed, so the
+      # counts and every not-passed title go into the run summary.
+      - name: Summarize the E2E outcome
+        if: always()
+        run: |
+          results=.ci-results/e2e/test-results/results.json
+          if [[ ! -f "$results" ]]; then
+            echo "### E2E (mocked)" >> "$GITHUB_STEP_SUMMARY"
+            echo "No Playwright results.json; the layer stopped before test execution." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node -e '
+            const fs = require("node:fs");
+            const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const stats = report.stats;
+            const notPassed = [];
+            const walk = (suite) => {
+              for (const spec of suite.specs ?? []) {
+                const status = spec.tests?.[0]?.results?.[0]?.status ?? "unknown";
+                if (!spec.ok || status === "skipped") notPassed.push(`${status} — ${spec.title}`);
+              }
+              for (const child of suite.suites ?? []) walk(child);
+            };
+            for (const suite of report.suites ?? []) walk(suite);
+            const lines = [
+              "### E2E (mocked)",
+              "",
+              `passed **${stats.expected}** · skipped/blocked **${stats.skipped}** · failed **${stats.unexpected}** · flaky **${stats.flaky}**`,
+            ];
+            if (notPassed.length > 0) {
+              lines.push("", "Not passed (a skip may be a BLOCKED precondition, not a success):", "");
+              for (const entry of notPassed) lines.push(`- ${entry}`);
+            }
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          ' "$results"
+
+      # Failure evidence — Playwright report, traces, screenshots, journey
+      # reports, and the stack log that attributes a stack-side failure.
+      - name: Upload E2E results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: .ci-results/e2e
+          if-no-files-found: warn
+          retention-days: 14
