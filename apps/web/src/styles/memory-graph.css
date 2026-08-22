@@ -30,6 +30,38 @@
 /* --- Memory graph canvas, thumbnail card and full-screen explorer --------- */
 .memory-canvas { width: 100%; height: 100%; }
 .memory-canvas-thumb { height: 156px; }
+
+/* D3-rendered SVG fills the container; cursor hints separate drag-canvas
+   (background, grab) from select-or-move-node (over the disc, pointer).
+   Text and edges never grab pointer events so the disc owns the hit-test. */
+.memory-canvas svg { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.memory-canvas svg:active { cursor: grabbing; }
+.memory-canvas-thumb svg { cursor: default; }
+.memory-canvas-thumb svg:active { cursor: default; }
+.memory-canvas-node { cursor: pointer; }
+.memory-canvas-node text { pointer-events: none; user-select: none; }
+/* The edge group wraps the line plus its inline label. The group itself
+   never grabs the pointer; the line individually does not receive events,
+   so the click target is the disc of the two endpoint nodes. */
+.memory-canvas-edge-group { pointer-events: none; }
+.memory-canvas-edge { pointer-events: none; }
+.memory-canvas-edge-label { pointer-events: none; user-select: none; font-family: inherit; }
+.memory-canvas .dimmed { opacity: 0.14; }
+.memory-canvas .dimmed text { opacity: 0; }
+/* Search hits stay full-opacity and get an accent ring so the user can spot
+   them among the dimmed non-matches. Pairs with the `search-hit` class the
+   canvas applies when a `matchIds` search narrows the view. */
+.memory-canvas-node.search-hit circle:first-of-type { stroke: var(--accent); stroke-width: 2.5; }
+.memory-canvas .search-hit { opacity: 1; }
+
+/* Selected node: the two pulsing rings stay hidden until the group gets
+   the `selected-node` class. A loose drop-shadow on the group gives a
+   soft halo that pairs with the SMIL ripple animation. */
+.memory-canvas-selected-ring { visibility: hidden; }
+.memory-canvas-node.selected-node .memory-canvas-selected-ring { visibility: visible; }
+.memory-canvas-node.selected-node {
+  filter: drop-shadow(0 0 5px rgba(59, 130, 246, 0.55));
+}
 .memory-graph-thumb-card { display: block; width: 100%; margin: 10px 0 4px; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); cursor: pointer; text-align: left; }
 .memory-graph-thumb-card:hover { border-color: var(--accent-border); box-shadow: var(--shadow-1); }
 .memory-graph-thumb-cta { display: block; border-top: 1px solid var(--border); background: var(--surface); padding: 6px 9px; color: var(--muted); font-size: 10px; }

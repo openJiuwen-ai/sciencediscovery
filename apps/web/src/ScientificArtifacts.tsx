@@ -28,6 +28,7 @@ import { artifactDownloadFileName, downloadBlob } from "./artifact-download.js";
 import { previewOf, type ArtifactPreviewPayload, type NotebookCell } from "./artifact-dashboard.js";
 import { detectCsvArtifact } from "./csvArtifact.js";
 import { DownloadIcon } from "./icons.js";
+import { ErrorBoundary } from "./ErrorBoundary.js";
 import { useLocale } from "./i18n/index.js";
 import { MarkdownRenderer } from "./Markdown.js";
 import { detectStructureFormat, isStructureJson, type StructureFormat } from "./molecular.js";
@@ -811,7 +812,7 @@ export function ArtifactModal({
       <div className="artifact-modal-body">{artifactContent}</div>
       {csvWorkspace}
     </section>
-    {chainExplorer ? <Suspense fallback={null}><MemoryGraphExplorer
+    {chainExplorer ? <ErrorBoundary label="Science Memory" onError={(message) => { onError(message); setChainExplorer(null); }}><Suspense fallback={null}><MemoryGraphExplorer
       client={client}
       initialNodeId={chainExplorer.nodeId}
       initialVersion={chainExplorer.version}
@@ -822,7 +823,7 @@ export function ArtifactModal({
       onPendingAnnotation={onPendingAnnotation}
       sessionId={graphSessionId}
       subgraph={chainExplorer.subgraph}
-    /></Suspense> : null}
+    /></Suspense></ErrorBoundary> : null}
   </div>;
 }
 

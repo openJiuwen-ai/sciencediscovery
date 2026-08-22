@@ -50,6 +50,12 @@ export function translate(
   key: MessageKey,
   variables: Record<string, string | number> = {},
 ): string {
-  const template = (locale === "zh-CN" ? zhCN[key] : undefined) ?? en[key];
+  // A key with no catalogue entry falls back to the key itself rather than
+  // throwing. Call sites build keys dynamically from server data
+  // (`node.relation.${edgeType}` in MemoryGraphProduct, `settings.groups.${id}`
+  // in App), so an unrecognised value must degrade to a readable string — not
+  // take down the whole tree on a `undefined.replace`. Callers that want a
+  // nicer fallback compare the result against the key they passed in.
+  const template = (locale === "zh-CN" ? zhCN[key] : undefined) ?? en[key] ?? key;
   return template.replace(/\{(\w+)\}/g, (match, name: string) => String(variables[name] ?? match));
 }

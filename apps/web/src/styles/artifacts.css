@@ -140,3 +140,9 @@
   .paper-search { grid-template-columns: 1fr; }
   .process-environment-row { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* Panel-level failure surface (see ErrorBoundary.tsx): shown in place of the
+   panel that threw, so one bad field no longer blanks the whole app. */
+.error-boundary-fallback { margin: 12px; border: 1px solid var(--warning-accent); border-radius: 9px; background: var(--warning-soft); padding: 12px 14px; color: var(--warning); }
+.error-boundary-fallback strong { display: block; margin-bottom: 4px; font-size: 12px; }
+.error-boundary-fallback p { margin: 0; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }

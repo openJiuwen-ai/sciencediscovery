@@ -309,6 +309,15 @@ export function MemoryGraphExplorer({
         sourceName: graphNodeName(selected),
       });
       clearSearch();
+      // The chain view replaces the visible graph with one node's upstream /
+      // downstream chain, which is fixed in shape (the backend already
+      // resolved it). Any previously-active node-label or edge-type filter
+      // would silently hide members of that chain and leave the user looking
+      // at a partial view with no obvious cause. Drop both filters so the
+      // chain renders in full; clearing here (not at click time) means a
+      // failed fetch leaves the prior view intact.
+      setActiveLabels(new Set());
+      setActiveEdges(new Set());
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not load the chain");
     } finally {
