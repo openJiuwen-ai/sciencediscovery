@@ -723,30 +723,50 @@ export function ModelDraftFields({
     "deepseek",
     "responses",
   ].includes(draft.apiVariant);
+  const effortHint = effortSupported
+    ? (draft.thinkingMode === "enabled" ? undefined : t("settings.thinkingEffort.requiresEnabled"))
+    : t("settings.thinkingEffort.unsupportedHint");
   return <>
-    <label><span>{t("settings.displayName")}</span><input required value={draft.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Fast analysis" /></label>
-    <label><span>{t("settings.apiProtocol")}</span><select value={draft.apiProtocol} onChange={(event) => {
-      const apiProtocol = event.target.value as ModelApiProtocol;
-      onChange({ apiProtocol, apiVariant: DEFAULT_MODEL_API_VARIANT[apiProtocol] });
-    }}>
-      <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
-      <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
-      <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
-    </select></label>
-    <label><span>{t("settings.apiVariant")}</span><select value={draft.apiVariant} onChange={(event) => onChange({ apiVariant: event.target.value as ModelApiVariant })}>
-      {MODEL_API_VARIANTS[draft.apiProtocol].map((variant) => <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>)}
-    </select></label>
-    <label><span>{baseUrlLabel}</span><input required value={draft.baseUrl} onChange={(event) => onChange({ baseUrl: event.target.value })} placeholder={draft.apiProtocol === "anthropic-messages" ? t("settings.baseUrlHint.anthropic") : t("settings.baseUrlHint")} /></label>
-    <label><span>{t("settings.modelId")}</span><input required value={draft.model} onChange={(event) => onChange({ model: event.target.value })} /></label>
-    <label><span>{t("settings.thinkingMode")}</span><select value={draft.thinkingMode} onChange={(event) => onChange({ thinkingMode: event.target.value as ModelThinkingMode })}>
-      <option value="auto">{t("settings.thinkingMode.auto")}</option>
-      <option value="enabled">{t("settings.thinkingMode.enabled")}</option>
-      <option value="disabled">{t("settings.thinkingMode.disabled")}</option>
-    </select></label>
-    <label><span>{t(effortSupported ? "settings.thinkingEffort" : "settings.thinkingEffort.unsupported")}</span><select disabled={draft.thinkingMode !== "enabled" || !effortSupported} value={draft.thinkingEffort} onChange={(event) => onChange({ thinkingEffort: event.target.value as ModelThinkingEffort })}>
-      <option value="high">{t("settings.thinkingEffort.high")}</option>
-      <option value="max">{t("settings.thinkingEffort.max")}</option>
-    </select></label>
+    <section className="model-editor-section">
+      <h4>{t("settings.modelSection.identity")}</h4>
+      <label><span>{t("settings.displayName")}</span><input required value={draft.name} onChange={(event) => onChange({ name: event.target.value })} placeholder={t("settings.displayNamePlaceholder")} /></label>
+      <div className="model-editor-row">
+        <label><span>{baseUrlLabel}</span><input required value={draft.baseUrl} onChange={(event) => onChange({ baseUrl: event.target.value })} placeholder={draft.apiProtocol === "anthropic-messages" ? t("settings.baseUrlHint.anthropic") : t("settings.baseUrlHint")} /></label>
+        <label><span>{t("settings.modelId")}</span><input required value={draft.model} onChange={(event) => onChange({ model: event.target.value })} /></label>
+      </div>
+    </section>
+    <section className="model-editor-section">
+      <h4>{t("settings.modelSection.api")}</h4>
+      <div className="model-editor-row">
+        <label><span>{t("settings.apiProtocol")}</span><select value={draft.apiProtocol} onChange={(event) => {
+          const apiProtocol = event.target.value as ModelApiProtocol;
+          onChange({ apiProtocol, apiVariant: DEFAULT_MODEL_API_VARIANT[apiProtocol] });
+        }}>
+          <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
+          <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
+          <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
+        </select></label>
+        <label><span>{t("settings.apiVariant")}</span><select value={draft.apiVariant} onChange={(event) => onChange({ apiVariant: event.target.value as ModelApiVariant })}>
+          {MODEL_API_VARIANTS[draft.apiProtocol].map((variant) => <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>)}
+        </select></label>
+      </div>
+      <small className="model-editor-hint">{t(`settings.apiVariant.${draft.apiVariant}.hint`)}</small>
+    </section>
+    <section className="model-editor-section">
+      <h4>{t("settings.modelSection.thinking")}</h4>
+      <div className="model-editor-row">
+        <label><span>{t("settings.thinkingMode")}</span><select value={draft.thinkingMode} onChange={(event) => onChange({ thinkingMode: event.target.value as ModelThinkingMode })}>
+          <option value="auto">{t("settings.thinkingMode.auto")}</option>
+          <option value="enabled">{t("settings.thinkingMode.enabled")}</option>
+          <option value="disabled">{t("settings.thinkingMode.disabled")}</option>
+        </select></label>
+        <label><span>{t("settings.thinkingEffort")}</span><select disabled={draft.thinkingMode !== "enabled" || !effortSupported} value={draft.thinkingEffort} onChange={(event) => onChange({ thinkingEffort: event.target.value as ModelThinkingEffort })}>
+          <option value="high">{t("settings.thinkingEffort.high")}</option>
+          <option value="max">{t("settings.thinkingEffort.max")}</option>
+        </select></label>
+      </div>
+      {effortHint ? <small className={effortSupported ? "model-editor-hint" : "model-editor-hint warning"}>{effortHint}</small> : null}
+    </section>
   </>;
 }
 
@@ -4440,10 +4460,22 @@ export function App() {
                 <div className="model-list">
                   {models.map((item) => {
                     const idHint = duplicateModelProfileId(item, models);
+                    const protocol = item.apiProtocol ?? (item.baseUrl.includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions");
+                    const variant = item.apiVariant ?? (protocol === "anthropic-messages" ? "anthropic-adaptive" : "openai");
+                    const thinking = item.thinkingMode ?? "auto";
                     return <div className={item.id === editingModelId ? "model-card active" : "model-card"} key={item.id} title={modelOptionLabel(item, models)}>
                       <button className="model-card-main" type="button" onClick={() => editModel(item)}>
-                        <span className={item.hasApiToken ? "model-status" : "model-status missing"} />
-                        <span><strong>{item.name}</strong><small>{item.model}{idHint ? ` · ${idHint}` : ""} · {item.apiProtocol ?? (item.baseUrl.includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions")} / {item.apiVariant ?? (item.baseUrl.includes("/api/plan") ? "anthropic-adaptive" : "openai")} · thinking {item.thinkingMode ?? "auto"}{item.thinkingMode === "enabled" ? `:${item.thinkingEffort ?? "high"}` : ""}{item.vision ? " · Vision" : ""} · {item.hasApiToken ? "Key saved" : "Key missing"}</small></span>
+                        <span className={item.hasApiToken ? "model-status" : "model-status missing"} title={item.hasApiToken ? t("settings.keySaved") : t("settings.keyMissing")} />
+                        <span className="model-card-body">
+                          <strong>{item.name}</strong>
+                          <small>{item.model}{idHint ? ` · ${idHint}` : ""}</small>
+                          <span className="model-card-badges">
+                            <span className="model-badge">{t(`settings.apiVariant.${variant}`)}</span>
+                            <span className="model-badge">{t(`settings.thinkingMode.${thinking}`)}{thinking === "enabled" ? ` · ${t(`settings.thinkingEffort.${item.thinkingEffort ?? "high"}`)}` : ""}</span>
+                            {item.vision ? <span className="model-badge">{t("settings.visionCapable")}</span> : null}
+                            {item.hasApiToken ? null : <span className="model-badge warning">{t("settings.keyMissing")}</span>}
+                          </span>
+                        </span>
                       </button>
                       <ModelConnectivityButton
                         disabled={item.id === editingModelId && modelSettingsDirty}
@@ -4459,22 +4491,25 @@ export function App() {
                   })}
                 </div>
                 <form className="model-editor" onSubmit={(event) => event.preventDefault()}>
-                  <div className="editor-heading"><strong>{editingModelId ? t("settings.editModel") : t("settings.newModel")}</strong><small>Profile settings and an encrypted provider credential are stored by the backend.</small></div>
+                  <div className="editor-heading"><strong>{editingModelId ? t("settings.editModel") : t("settings.newModel")}</strong><small>{t("settings.modelEditorHelp")}</small></div>
                   <ModelDraftFields draft={modelDraft} onChange={updateModelDraft} />
-                  {proxySettings ? <ProxyPolicySelect label="LLM proxy" onChange={(proxyPolicy) => updateModelDraft({ proxyPolicy })} settings={proxySettings} value={modelDraft.proxyPolicy} /> : null}
-                  <label className="vision-capability"><input type="checkbox" checked={modelDraft.vision} onChange={(event) => updateModelDraft({ vision: event.target.checked })} /><span><strong>Vision capable</strong><small>Allow this profile to receive extracted paper page and figure images.</small></span></label>
-                  <label><span>{t("settings.apiToken")}</span><input required={!editingModelId} type="password" value={draftToken} onChange={(event) => { setDraftToken(event.target.value); setRemoveStoredToken(false); setModelSettingsDirty(true); }} placeholder={models.find((item) => item.id === editingModelId)?.hasApiToken ? "Saved · enter a new token to replace it" : "Required for model runs"} /></label>
-                  {editingModelId && models.find((item) => item.id === editingModelId)?.hasApiToken ? (
-                    <button className={removeStoredToken ? "credential-remove pending" : "credential-remove"} type="button" onClick={() => { setDraftToken(""); setRemoveStoredToken((current) => !current); setModelSettingsDirty(true); }}>
-                      {removeStoredToken ? "Saved token will be removed" : "Remove saved token"}
-                    </button>
-                  ) : null}
+                  <section className="model-editor-section">
+                    <h4>{t("settings.modelSection.access")}</h4>
+                    <label><span>{t("settings.apiToken")}</span><input required={!editingModelId} type="password" value={draftToken} onChange={(event) => { setDraftToken(event.target.value); setRemoveStoredToken(false); setModelSettingsDirty(true); }} placeholder={models.find((item) => item.id === editingModelId)?.hasApiToken ? t("settings.apiTokenPlaceholder.saved") : t("settings.apiTokenPlaceholder.required")} /></label>
+                    {editingModelId && models.find((item) => item.id === editingModelId)?.hasApiToken ? (
+                      <button className={removeStoredToken ? "credential-remove pending" : "credential-remove"} type="button" onClick={() => { setDraftToken(""); setRemoveStoredToken((current) => !current); setModelSettingsDirty(true); }}>
+                        {removeStoredToken ? t("settings.removeTokenPending") : t("settings.removeToken")}
+                      </button>
+                    ) : null}
+                    {proxySettings ? <ProxyPolicySelect label={t("settings.llmProxy")} onChange={(proxyPolicy) => updateModelDraft({ proxyPolicy })} settings={proxySettings} value={modelDraft.proxyPolicy} /> : null}
+                    <label className="vision-capability"><input type="checkbox" checked={modelDraft.vision} onChange={(event) => updateModelDraft({ vision: event.target.checked })} /><span><strong>{t("settings.visionCapable")}</strong><small>{t("settings.visionHelp")}</small></span></label>
+                  </section>
                   <div className="model-editor-actions">
                     {editingModelId ? <button className="danger-button" type="button" onClick={() => void deleteModel()}>{t("settings.delete")}</button> : <span />}
-                    <span className="settings-source">Use the dialog Save action to apply this draft.</span>
+                    <span className="settings-source">{t("settings.modelEditorSaveHint")}</span>
                   </div>
                 </form>
-                <div className="config-note">Model profiles and provider tokens are stored by the local backend. Tokens are encrypted before database persistence, never returned to the browser, and resolved by model ID for chat, review, and vision runs.</div>
+                <div className="config-note">{t("settings.modelStorageNote")}</div>
               </> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings

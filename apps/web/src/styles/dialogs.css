@@ -104,6 +104,20 @@
 .model-status { width: 8px; height: 8px; border-radius: 50%; background: var(--success-bright); }
 .model-status.missing { background: var(--warning-accent); }
 .model-editor { margin-bottom: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+.model-editor-section { display: grid; gap: 12px; margin-bottom: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); padding: 14px; }
+.model-editor-section > h4 { margin: 0; color: var(--text-heading); font-size: 13px; font-weight: 750; }
+.model-editor-section label { margin-bottom: 0; }
+.model-editor-section .credential-remove { margin: 0; }
+.model-editor-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.model-editor-row > label { min-width: 0; }
+.model-editor select { width: 100%; min-height: 43px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); padding: 10px 12px; font-size: 15px; }
+.model-editor select:disabled { background: var(--surface-soft); color: var(--text-faint); opacity: .8; }
+.model-editor-hint { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.model-editor-hint.warning { color: var(--warning); }
+.model-card-body { display: grid; min-width: 0; }
+.model-card-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.model-badge { border-radius: 999px; background: var(--surface-track); color: var(--text-secondary); padding: 2px 8px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.model-badge.warning { background: var(--warning-soft); color: var(--warning); }
 .config-panel .vision-capability { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 11px; border: 1px solid var(--border-strong); border-radius: 8px; padding: 12px; cursor: pointer; }
 .config-panel .vision-capability input { width: 24px; min-width: 24px; min-height: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
 .config-panel .vision-capability > span { margin: 0; }

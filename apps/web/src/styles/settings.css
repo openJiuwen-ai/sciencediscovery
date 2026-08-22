@@ -727,6 +727,7 @@
 .creation-dialog, .deletion-dialog, .config-panel, .document-panel, .global-search-dialog, .skill-editor-dialog, .skill-delete-dialog, .artifact-modal-panel, .memory-explorer-panel { animation: panel-in .22s ease; }
 @media (max-width: 600px) {
   .creation-dialog, .deletion-dialog { padding: 22px 18px; }
+  .model-editor-row { grid-template-columns: 1fr; }
   .settings-library-row, .settings-library-controls { grid-template-columns: 1fr; }
   .settings-library-controls { padding-left: 0; }
   .proxy-server-summary { grid-template-columns: 1fr; }
