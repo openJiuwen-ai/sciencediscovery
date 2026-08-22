@@ -1,7 +1,7 @@
 ---
 name: e2e-testing
 description: >
-  Write, group, select, and run browser E2E tests for science_agent
+  Write, group, select, and run browser E2E tests for ScienceDiscovery
   (Playwright specs in test/). Use when adding or changing an E2E spec,
   filtering E2E CI cases by environment tags, running the mocked or real E2E
   group, isolating a test stack (worktree, ports, data dir), collecting
@@ -10,7 +10,7 @@ description: >
 
 # Browser E2E testing (Playwright)
 
-Project-local skill for **science_agent**. Scope: browser E2E specs in
+Project-local skill for **ScienceDiscovery**. Scope: browser E2E specs in
 [`test/`](../../../test). Unit tests (`pnpm check`) and the gateway/adapter
 smoke scripts (`test/api/`) are covered by
 [`CONTRIBUTING.md`](../../../CONTRIBUTING.md), not here.

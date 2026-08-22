@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ScientificExecutionRequest, ShellExecutionRequest } from "@science-agent/schema";
+import type { ScientificExecutionRequest, ShellExecutionRequest } from "@sciencediscovery/schema";
 
 type AgentExecutionRequest = ScientificExecutionRequest | ShellExecutionRequest;
 

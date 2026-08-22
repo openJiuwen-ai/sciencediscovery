@@ -61,7 +61,7 @@ Direct NPU passthrough into bwrap may be a future optimization only after a real
 Runner-side NPU Broker tests:
 
 ```bash
-pnpm --filter @science-agent/runner build
+pnpm --filter @sciencediscovery/runner build
 node --test --test-name-pattern "NPU Broker" services/runner/dist/server.test.js
 ```
 

@@ -17,8 +17,8 @@ import Markdown, { type Components, defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import type { ComposerReference, MemoryGraphNodeLabel, ScientificArtifact } from "@science-agent/schema";
-import { evidenceCitationUrl, normalizeEvidenceCitationType } from "@science-agent/schema";
+import type { ComposerReference, MemoryGraphNodeLabel, ScientificArtifact } from "@sciencediscovery/schema";
+import { evidenceCitationUrl, normalizeEvidenceCitationType } from "@sciencediscovery/schema";
 
 import { CopyButton } from "./CopyButton.js";
 import { useLocale } from "./i18n/index.js";
@@ -212,7 +212,7 @@ export function resolveMarkdownImageSource(source: string, workspaceSessionId?: 
   const sessionFileUrl = value.match(/^\/?api\/sessions\/([^/]+)\/file(?:\?|$)/i);
   if (sessionFileUrl) {
     try {
-      const parsed = new URL(value.startsWith("/") ? value : `/${value}`, "https://science-agent.local");
+      const parsed = new URL(value.startsWith("/") ? value : `/${value}`, "https://sciencediscovery.local");
       const referencedSessionId = decodePath(sessionFileUrl[1]!);
       const path = parsed.searchParams.get("path");
       const normalized = path ? normalizeWorkspaceImagePath(path) : undefined;

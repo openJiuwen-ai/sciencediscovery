@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ProxyDefaultPolicy, ProxyServerKind } from "@science-agent/schema";
+import type { ProxyDefaultPolicy, ProxyServerKind } from "@sciencediscovery/schema";
 
 import {
   proxyEnvironmentDetails,

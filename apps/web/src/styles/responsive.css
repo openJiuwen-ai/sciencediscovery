@@ -71,12 +71,18 @@
   .settings-group-detail { padding: 22px 18px 30px; }
   .skill-manager-grid { grid-template-columns: minmax(0, 1fr); }
   .skill-catalog-list { max-height: 180px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .skill-manager-toolbar { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .skill-manager-toolbar input { flex-basis: 100%; }
+  .skill-manager-toolbar button { flex: 1 1 140px; }
+  .skill-detail > header, .environment-setup-state, .environment-card-heading { align-items: stretch; flex-direction: column; }
+  .skill-detail-actions { width: 100%; }
+  .skill-detail-actions button { flex: 1 1 140px; }
   .skill-metadata { grid-template-columns: minmax(0, 1fr); }
   .skill-editor-columns { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .settings-choices { grid-template-columns: 1fr; }
   .timeout-grid, .runtime-status-summary { grid-template-columns: 1fr; }
   .environment-starter-plan, .environment-create { grid-template-columns: 1fr; }
+  .environment-install { grid-template-columns: minmax(0, 1fr); }
+  .environment-install .secondary-button, .environment-card-heading .danger-button { width: 100%; }
   .environment-source-settings { grid-template-areas: "intro" "pip" "conda" "save"; grid-template-columns: minmax(0, 1fr); }
   .environment-source-save { justify-self: stretch; width: 100%; }
   .specialist-layout { grid-template-columns: minmax(0, 1fr); }
@@ -85,6 +91,10 @@
   .permission-card .plan-actions { grid-column: auto; }
   .permission-decision-actions > button { flex: 1 1 130px; }
   .deletion-impact { grid-template-columns: 1fr; }
+  .dialog-actions { flex-wrap: wrap; }
+  .dialog-actions > button { flex: 1 1 140px; }
+  .annotation-editor { grid-template-columns: minmax(0, 1fr); }
+  .annotation-editor .secondary-button { width: 100%; }
   .dialog-backdrop { padding: 12px; }
   .creation-dialog, .deletion-dialog, .rename-dialog { padding: 22px 18px; }
   .document-header small { max-width: 220px; }

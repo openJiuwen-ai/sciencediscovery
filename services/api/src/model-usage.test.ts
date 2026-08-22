@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ModelInvocationUsage } from "@science-agent/schema";
+import type { ModelInvocationUsage } from "@sciencediscovery/schema";
 
 import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
 

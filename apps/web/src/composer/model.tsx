@@ -15,7 +15,7 @@
 import type {
   CreateSessionRequest,
   RuntimeSettingsOverrides,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { SendIcon, StopIcon } from "../icons.js";
 import { useLocale } from "../i18n/index.js";

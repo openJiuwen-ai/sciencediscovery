@@ -21,11 +21,11 @@ import {
   buildWorkspaceSystemPrompt,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@science-agent/context";
-import type { AgentConfig } from "@science-agent/model";
-import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@science-agent/orchestration";
-import { createEvidenceReferenceTracer } from "@science-agent/provenance";
-import { resolveWorkspaceFile } from "@science-agent/workspace";
+} from "@sciencediscovery/context";
+import type { AgentConfig } from "@sciencediscovery/model";
+import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
+import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
@@ -97,8 +97,8 @@ import type {
   RevisePlanRequest,
   SubagentStep,
   UpdateSpecialistRequest,
-} from "@science-agent/schema";
-import { UNTITLED_SESSION_TITLE } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 
 import { SessionStoreHttpError } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
@@ -113,27 +113,27 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { inferDomain, mgLog } from "@science-agent/memory";
+import { inferDomain, mgLog } from "@sciencediscovery/memory";
 import { apiLog, runLog } from "../logging.js";
-import { shortErrorMessage } from "@science-agent/operational-logging";
+import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { createPromptManifest } from "../prompt-manifest.js";
-import { createMcpWorkspaceTools } from "@science-agent/artifact-manager";
-import { createWebWorkspaceTools } from "@science-agent/data-source";
+import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
+import { createWebWorkspaceTools } from "@sciencediscovery/data-source";
 import {
   createDialogueSkillDraft,
   createSessionSkillDraft,
   SkillCatalogError,
   type RuntimeSkillSnapshot,
-} from "@science-agent/specialist";
+} from "@sciencediscovery/specialist";
 import {
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
-} from "@science-agent/provenance";
+} from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
-import { classifySubagentFailure } from "@science-agent/specialist";
+import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
-import { createAgentPermissionRuntime } from "@science-agent/governance";
+import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
 import { createWorkspaceExecutionBindings } from "../agent-run/workspace-bindings.js";
 
@@ -259,7 +259,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             runner: runner?.sandboxNetwork,
           },
           runner: runner ?? { status: "unavailable" },
-          service: "science-agent-api",
+          service: "sciencediscovery-api",
           status: runner ? "ok" : "degraded",
           workspace,
         });
@@ -339,7 +339,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           try {
             const result = JSON.parse(
               (await mcpBroker.cas.read(invocation.normalizedResult.hash)).toString("utf8"),
-            ) as import("@science-agent/schema").McpToolResult;
+            ) as import("@sciencediscovery/schema").McpToolResult;
             for (const candidate of result.artifacts ?? []) candidates.push({ candidate, invocationId: invocation.id });
           } catch {
             // The immutable invocation remains auditable; malformed result objects are not offered for download.
@@ -965,6 +965,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           }
         }
         await store.deleteProject(projectMatch[1]!, body.confirmationId ?? "");
+        // Physically delete every node of this project in the memory graph,
+        // keyed by the pre-deletion session-id snapshot (private nodes carry
+        // no project_id, so the session_ids set is the complete footprint).
+        // Fire-and-forget: the store deletion has already committed.
+        memoryGraphSink.cleanupProject(projectMatch[1]!, impact.sessionIds);
         sendJson(response, 200, { deleted: projectMatch[1] });
         return;
       }
@@ -1217,6 +1222,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           await runnerClient.teardownKernels(sessionMatch[1]!, "Session was deleted; persistent memory was lost");
         }
         await store.deleteSession(sessionMatch[1]!, body.confirmationId ?? "");
+        // Soft-mark this session's Artifact versions + physically delete its
+        // private nodes in the memory graph. Fire-and-forget: the store deletion
+        // has already committed; a degraded/unreachable graph never blocks the
+        // HTTP response (the sink swallows errors — graph is a mirror).
+        memoryGraphSink.cleanupSession(sessionMatch[1]!);
         sendJson(response, 200, { deleted: sessionMatch[1] });
         return;
       }

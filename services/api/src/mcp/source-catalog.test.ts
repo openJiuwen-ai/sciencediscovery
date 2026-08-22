@@ -19,11 +19,11 @@ import type {
   McpCatalog,
   McpSourceAdapter,
   McpSourceManifest,
-} from "@science-agent/schema";
-import { createMcpSourceRegistry } from "@science-agent/mcp-sources";
+} from "@sciencediscovery/schema";
+import { createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
-import type { McpTransportClient } from "@science-agent/data-source";
-import { inputSchemasCompatible, McpSourceCatalog } from "@science-agent/data-source";
+import type { McpTransportClient } from "@sciencediscovery/data-source";
+import { inputSchemasCompatible, McpSourceCatalog } from "@sciencediscovery/data-source";
 
 function manifest(): McpSourceManifest {
   return {

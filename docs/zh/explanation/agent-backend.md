@@ -269,7 +269,7 @@ streamModelTurn(endpoint, systemPrompt, history, tools, policy, signal, callback
 
 **摘要**：用本轮同一个模型 endpoint 发一次独立请求（system prompt 为 `You are compacting…`，不带工具）。`buildSummaryPrompt` 把待压缩片段渲染成 transcript（assistant 附 `[tool calls: name(args前300字符)]`，tool 结果按 600 字符截断），整体截到 `SUMMARY_INPUT_CHAR_BUDGET = 16_000`，并对内容做 HTML 转义后包进 `<new_messages>`；若存在上一份摘要则再包一个 `<existing_summary>`（预算减半）——**转义是安全要求**，被摘要的内容不得闭合这两个标签来伪造结构。
 
-**checkpoint**：`summaryCheckpointMessage` 生成一条 `role:"user"`、`name:"summary"` 的消息，正文以 `[ScienceAgent summary checkpoint]` 开头并包在 `<durable_context_data>` 里，`additional_kwargs` 带 `hide_from_ui: true` 与 `science_agent_summary_checkpoint: true`。渲染预算 `SUMMARY_RENDER_CHAR_BUDGET = 6_000`，超出用 `boundText` 保头保尾（2/3 头 + 尾，中间 `\n...\n`）。
+**checkpoint**：`summaryCheckpointMessage` 生成一条 `role:"user"`、`name:"summary"` 的消息，正文以 `[ScienceDiscovery summary checkpoint]` 开头并包在 `<durable_context_data>` 里，`additional_kwargs` 带 `hide_from_ui: true` 与 `sciencediscovery_summary_checkpoint: true`。渲染预算 `SUMMARY_RENDER_CHAR_BUDGET = 6_000`，超出用 `boundText` 保头保尾（2/3 头 + 尾，中间 `\n...\n`）。
 
 **链式**：下一次压缩通过 `extractCheckpointSummary` 把上一份摘要读回来一起合并，所以摘要是**滚动更新**而不是层层叠加。格式与旧引擎一致，**旧会话历史仍能被识别**。
 

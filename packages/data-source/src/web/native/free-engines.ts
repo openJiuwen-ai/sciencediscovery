@@ -21,7 +21,7 @@
  * being blocked, rate-limited, or restyled should not take web search down.
  */
 
-import { externalUrl } from "@science-agent/schema";
+import { externalUrl } from "@sciencediscovery/schema";
 
 import { ProviderRequestError, providerRequest, statusErrorCode } from "./http.js";
 import { decodeEntities, firstMatch, sliceBlocks, textOf } from "./html.js";

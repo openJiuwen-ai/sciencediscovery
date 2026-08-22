@@ -22,7 +22,7 @@
  */
 import { open } from "node:fs/promises";
 
-export const PAYLOAD_MAGIC = Buffer.from("SCIENCEAGENTPL01", "ascii");
+export const PAYLOAD_MAGIC = Buffer.from("SCIDISCOVERYPL01", "ascii");
 /** magic(16) + payloadOffset(8) + payloadSize(8) + payloadId(16). */
 export const PAYLOAD_FOOTER_BYTES = 48;
 const PAYLOAD_ID_BYTES = 16;

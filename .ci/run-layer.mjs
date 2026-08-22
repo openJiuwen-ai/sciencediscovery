@@ -47,13 +47,13 @@ const layers = {
     ["pnpm", ["gateway:test"]],
     ["pnpm", ["build"]],
     ["pnpm", ["binary:test"]],
-    ["pnpm", ["--recursive", "--filter", "!@science-agent/runner", "test"]],
+    ["pnpm", ["--recursive", "--filter", "!@sciencediscovery/runner", "test"]],
     ["pnpm", ["memory-graph:test"]],
   ],
   "ut-runner": [
     ["pnpm", ["install", "--frozen-lockfile"]],
     ["pnpm", ["build"]],
-    ["pnpm", ["--filter", "@science-agent/runner", "test"]],
+    ["pnpm", ["--filter", "@sciencediscovery/runner", "test"]],
   ],
 };
 
@@ -139,7 +139,7 @@ try {
       throw new Error("missing SCIENCE_AGENT_NPU_PYTHON");
     }
   }
-  const configuredRuntimeRoot = process.env.CI_RUNTIME_DIR?.trim() || "/ci-cache/science-agent-tests";
+  const configuredRuntimeRoot = process.env.CI_RUNTIME_DIR?.trim() || "/ci-cache/sciencediscovery-tests";
   await mkdir(configuredRuntimeRoot, { recursive: true });
   runtimeRoot = await mkdtemp(join(configuredRuntimeRoot, `${layer}-`));
   await stat(join(repositoryRoot, "package.json"));

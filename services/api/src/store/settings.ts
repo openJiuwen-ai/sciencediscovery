@@ -34,7 +34,7 @@ import {
   type SystemTimeoutSettings,
   type WebFetchProvider,
   type WebSettings,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { hasOwn, isRecord } from "./catalog.js";
 

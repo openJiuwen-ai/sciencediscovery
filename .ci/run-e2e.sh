@@ -31,7 +31,7 @@ esac
 results_suffix="e2e"
 if [[ "$group" != "mocked" ]]; then results_suffix="e2e-$group"; fi
 results_root="${CI_RESULTS_DIR:-/ci-results}/$results_suffix"
-runtime_root="${CI_RUNTIME_DIR:-/ci-cache/science-agent-e2e}"
+runtime_root="${CI_RUNTIME_DIR:-/ci-cache/sciencediscovery-e2e}"
 stack_log="$results_root/stack.log"
 test_log="$results_root/run.log"
 summary="$results_root/summary.txt"

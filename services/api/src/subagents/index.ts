@@ -15,8 +15,8 @@
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { resolveWorkspaceFile } from "@science-agent/workspace";
-import type { Subagent, SubagentBrief, SubagentInput, WorkspaceFile } from "@science-agent/schema";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import type { Subagent, SubagentBrief, SubagentInput, WorkspaceFile } from "@sciencediscovery/schema";
 
 import { validateSubagentOutputValue } from "../subagent-brief.js";
 import { SessionStore } from "../store.js";

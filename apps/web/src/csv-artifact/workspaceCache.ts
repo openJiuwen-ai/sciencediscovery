@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { readRenamedStorageItem } from "../browser-storage.js";
 import type { ChartSpec, ChartType, DataTable } from "./types.js";
 
 const CACHE_VERSION = 1;
@@ -68,7 +69,7 @@ function normalizeSpec(value: unknown, table: DataTable): ChartSpec | undefined 
 }
 
 export function workspaceCacheKey(artifactVersionId: string): string {
-  return `science-agent:csv-workspace:v${CACHE_VERSION}:${artifactVersionId}`;
+  return `sciencediscovery:csv-workspace:v${CACHE_VERSION}:${artifactVersionId}`;
 }
 
 export function removeChartFromWorkspace(
@@ -95,7 +96,10 @@ export function loadWorkspaceState(
     specs: structuredClone(defaultSpecs),
   };
   try {
-    const raw = storage.getItem(workspaceCacheKey(table.source.sourceArtifactVersionId));
+    const key = workspaceCacheKey(table.source.sourceArtifactVersionId);
+    // Chart layouts saved under the former key prefix are imported once so an
+    // upgrade does not silently discard the user's saved comparisons.
+    const raw = readRenamedStorageItem(storage, key);
     if (!raw) return fallback;
     const cached = JSON.parse(raw) as unknown;
     if (!isRecord(cached) || cached.cacheVersion !== CACHE_VERSION || !Array.isArray(cached.specs)) {

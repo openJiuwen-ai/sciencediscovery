@@ -115,7 +115,7 @@ export async function requireRealStack(
     response = await fetch(new URL("/health", apiOrigin), { signal: AbortSignal.timeout(3_000) });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    const reason = `BLOCKED: science_agent stack is unavailable at configured E2E API origin (${detail})`;
+    const reason = `BLOCKED: ScienceDiscovery stack is unavailable at configured E2E API origin (${detail})`;
     console.warn(reason);
     testInfo.skip(true, reason);
     return;
@@ -123,8 +123,8 @@ export async function requireRealStack(
   if (!response.ok) throw new Error(`Real stack health check failed with HTTP ${response.status}`);
 
   const health = await response.json() as { runner?: { status?: string }; service?: string; status?: string };
-  if (health.service !== "science-agent-api" || health.status !== "ok" || health.runner?.status === "unavailable") {
-    const reason = `BLOCKED: science_agent stack health is incomplete (service=${health.service ?? "unknown"}, status=${health.status ?? "unknown"}, runner=${health.runner?.status ?? "unknown"})`;
+  if (health.service !== "sciencediscovery-api" || health.status !== "ok" || health.runner?.status === "unavailable") {
+    const reason = `BLOCKED: ScienceDiscovery stack health is incomplete (service=${health.service ?? "unknown"}, status=${health.status ?? "unknown"}, runner=${health.runner?.status ?? "unknown"})`;
     console.warn(reason);
     testInfo.skip(true, reason);
   }

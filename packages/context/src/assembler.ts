@@ -1,8 +1,8 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
-import type { ModelInput, WireToolSpec } from "@science-agent/model";
-import type { ContextAssembler, ContextAssembly, RuntimeMessage } from "@science-agent/runtime-core";
+import type { ModelInput, WireToolSpec } from "@sciencediscovery/model";
+import type { ContextAssembler, ContextAssembly, RuntimeMessage } from "@sciencediscovery/runtime-core";
 
 import type { HistoryCompactor } from "./history-compactor.js";
 

@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/specialist",
+  "name": "@sciencediscovery/specialist",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,11 +7,11 @@
   "types": "./src/index.ts",
   "scripts": { "build": "tsc -p tsconfig.json", "test": "node --test dist/*.test.js", "typecheck": "tsc -p tsconfig.json --noEmit" },
   "dependencies": {
-    "@science-agent/cas": "workspace:*",
-    "@science-agent/context": "workspace:*",
-    "@science-agent/orchestration": "workspace:*",
-    "@science-agent/provenance": "workspace:*",
-    "@science-agent/schema": "workspace:*",
+    "@sciencediscovery/cas": "workspace:*",
+    "@sciencediscovery/context": "workspace:*",
+    "@sciencediscovery/orchestration": "workspace:*",
+    "@sciencediscovery/provenance": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*",
     "fflate": "0.8.2",
     "yaml": "2.9.0"
   },

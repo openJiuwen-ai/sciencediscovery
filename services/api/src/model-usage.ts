@@ -21,7 +21,7 @@ import type {
   ModelInvocationUsage,
   ModelUsageBucket,
   SessionUsageSummary,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export function createUsageBucket(key: string, label: string): ModelUsageBucket {
   return {

@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_SYSTEM_QUOTA_SETTINGS, DEFAULT_SYSTEM_TIMEOUT_SETTINGS } from "@science-agent/schema";
+import { DEFAULT_SYSTEM_QUOTA_SETTINGS, DEFAULT_SYSTEM_TIMEOUT_SETTINGS } from "@sciencediscovery/schema";
 
 import {
   DEFAULT_AGENT_IDLE_TIMEOUT_MS as DEFAULT_GATEWAY_IDLE_TIMEOUT_MS,
@@ -166,7 +166,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     runnerExecTimeoutMs,
     runnerMaxOutputBytes,
     runnerMaxWorkspaceBytes,
-    runnerToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "science-agent-runner-local",
+    runnerToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "sciencediscovery-runner-local",
     runnerUrl: env.SCIENCE_AGENT_RUNNER_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:4311",
     sshConfigPath: resolve(env.SCIENCE_AGENT_SSH_CONFIG_PATH?.trim() || resolve(homedir(), ".ssh/config")),
     staticDir: resolve(repositoryRoot, env.SCIENCE_AGENT_WEB_DIR?.trim() || "apps/web/dist"),
@@ -186,7 +186,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     },
     memoryGraph: {
       url: env.SCIENCE_AGENT_MEMORY_GRAPH_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:17674",
-      internalToken: env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN?.trim() || "science-agent-memory-graph-local",
+      internalToken: env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN?.trim() || "sciencediscovery-memory-graph-local",
       neo4jPassword: env.SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD?.trim() || undefined,
     },
   };

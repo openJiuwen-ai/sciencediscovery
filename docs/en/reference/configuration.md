@@ -25,7 +25,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner bind address |
 | `SCIENCE_AGENT_RUNNER_PORT` | `4311` | Runner port |
 | `SCIENCE_AGENT_RUNNER_URL` | `http://127.0.0.1:4311` | Runner endpoint used by the API |
-| `SCIENCE_AGENT_RUNNER_TOKEN` | `science-agent-runner-local` | API-to-runner token |
+| `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API-to-runner token |
 | `SCIENCE_AGENT_BWRAP_PATH` | `bwrap` resolved from `PATH` | Bubblewrap executable; runner startup validates required options |
 | `SCIENCE_AGENT_NPU_BROKER` | `0` | Enables the host Ascend NPU Broker. Disabled by default; only `1`, `true`, or `yes` exposes `run_npu_job` to the Agent |
 | `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` | empty | NPU workload allowlist JSON; empty uses `services/runner/workloads/npu-workloads.default.json` |
@@ -37,7 +37,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | Memory-graph service bind address |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | Memory-graph port |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | Memory-graph endpoint used by the API |
-| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `science-agent-memory-graph-local` | API-to-memory-graph token |
+| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API-to-memory-graph token |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | Memory-graph log level |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `0` | Initial sandbox wall-clock timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_MAX_WORKSPACE_BYTES` | `10737418240` (10 GiB) | Runner workspace quota (`0` is unlimited); also seeds system settings |
@@ -84,7 +84,7 @@ Compose reads the root `.env` and interpolates these keys into `docker-compose.y
 | `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | Host interface publishing the UI/API |
 | `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | Host port mapped to container `4310` |
 | `SCIENCE_AGENT_AUTH_TOKEN` | generated on first start | Browser/API bearer token; unset means the value stored in `<data-dir>/secrets/auth-token` |
-| `SCIENCE_AGENT_RUNNER_TOKEN` | `science-agent-runner-local` | API-to-runner token on container loopback |
+| `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API-to-runner token on container loopback |
 | `SCIENTIFIC_ENVS` | `1` | Managed Python/R environments and persistent kernels |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | Sandbox wall-clock timeout |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | Persistent-kernel idle timeout (minimum 1000 ms) |

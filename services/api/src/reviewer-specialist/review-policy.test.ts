@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ScientificArtifactVersion } from "@science-agent/schema";
+import type { ScientificArtifactVersion } from "@sciencediscovery/schema";
 
 import {
   artifactEvidenceAliases,
@@ -24,7 +24,7 @@ import {
   literatureCitationCandidates,
   quantitativeEvidenceClaims,
   semanticReviewFingerprint,
-} from "@science-agent/provenance";
+} from "@sciencediscovery/provenance";
 
 test("Literature candidates split a bibliography into stable individual tasks", () => {
   const candidates = literatureCitationCandidates([

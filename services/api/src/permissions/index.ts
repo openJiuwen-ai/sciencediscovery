@@ -14,16 +14,16 @@
 
 import { setTimeout as delay } from "node:timers/promises";
 
-import { RemoteComputeClient } from "@science-agent/executor";
-import type { PermissionRequest, RemoteJob, RunStreamEvent } from "@science-agent/schema";
+import { RemoteComputeClient } from "@sciencediscovery/executor";
+import type { PermissionRequest, RemoteJob, RunStreamEvent } from "@sciencediscovery/schema";
 
-import { GovernedDownloadManager } from "@science-agent/artifact-manager";
-import { ProvenanceRecorder } from "@science-agent/provenance";
+import { GovernedDownloadManager } from "@sciencediscovery/artifact-manager";
+import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { SessionStore } from "../store.js";
 
 type RunEventSink = (event: RunStreamEvent) => void | Promise<void>;
 
-export { PermissionDecisionQueue } from "@science-agent/governance";
+export { PermissionDecisionQueue } from "@sciencediscovery/governance";
 
 export async function waitForPermissionDecision(
   store: SessionStore,

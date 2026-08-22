@@ -168,7 +168,7 @@ prepare_shared() {
   echo "Deploying the Node services..." >&2
   for service in api runner; do
     rm -rf -- "$shared_dir/app/services/$service"
-    CI=true pnpm deploy --filter "@science-agent/$service" --prod --legacy "$shared_dir/app/services/$service"
+    CI=true pnpm deploy --filter "@sciencediscovery/$service" --prod --legacy "$shared_dir/app/services/$service"
   done
   CI=true pnpm install --frozen-lockfile --ignore-scripts
 
@@ -274,8 +274,8 @@ site_packages="python/lib/python3.12/site-packages"
 echo "Staging the first-launch bootstrap inputs..." >&2
 mkdir -p "$output/bootstrap/wheels"
 cp "$shared_dir/requirements-gateway.txt" "$output/bootstrap/requirements-gateway.txt"
-cp "$shared_dir"/wheels/science_agent_gateway-*.whl "$output/bootstrap/wheels/"
-gateway_wheel_name="$(basename "$(ls "$output"/bootstrap/wheels/science_agent_gateway-*.whl)")"
+cp "$shared_dir"/wheels/sciencediscovery_gateway-*.whl "$output/bootstrap/wheels/"
+gateway_wheel_name="$(basename "$(ls "$output"/bootstrap/wheels/sciencediscovery_gateway-*.whl)")"
 
 # A pyvenv.cfg makes site.py treat the prefix as an environment, which disables
 # the host user site directory (~/.local/lib/pythonX.Y/site-packages). Omitting
@@ -311,7 +311,7 @@ read -r uv_version uv_project uv_wheel_filename uv_wheel_sha256 < <(node -e '
 cat >"$output/manifest.json" <<EOF
 {
   "formatVersion": 2,
-  "product": "science-agent",
+  "product": "sciencediscovery",
   "version": "$version",
   "architecture": "$architecture",
   "runtimeArchitecture": "$runtime_architecture",

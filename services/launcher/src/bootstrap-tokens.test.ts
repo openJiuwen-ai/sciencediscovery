@@ -30,7 +30,7 @@ describe("launcher bootstrap credentials", () => {
   let workspace: string;
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-launcher-tokens-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-launcher-tokens-"));
   });
 
   after(async () => {

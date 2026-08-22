@@ -115,7 +115,7 @@ import type {
   UpdateSpecialistRequest,
   UpdateWebSettingsRequest,
   WebSettingsDetails,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import {
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SKILL_SELECTION_MODE,
@@ -128,22 +128,22 @@ import {
   SKILL_SELECTION_FIELDS,
   epochSandboxNetworkAccess,
   UNTITLED_SESSION_TITLE,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 
-import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@science-agent/schema";
+import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@sciencediscovery/schema";
 import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   defaultEnvironmentRevision,
   defaultShellEnvironmentRevision,
-} from "@science-agent/executor";
+} from "@sciencediscovery/executor";
 import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
-import { BUNDLED_SKILL_IDS } from "@science-agent/specialist";
-import { BUILTIN_SPECIALISTS } from "@science-agent/specialist";
+import { BUNDLED_SKILL_IDS } from "@sciencediscovery/specialist";
+import { BUILTIN_SPECIALISTS } from "@sciencediscovery/specialist";
 import { normalizeSubagentBrief } from "./subagent-brief.js";
 import {
   emptyCatalog,
@@ -153,13 +153,13 @@ import {
   isRecord,
   type Catalog,
 } from "./store/catalog.js";
-import { proxyEnvironmentDetails, resolveProxyEnvironment, resolveProxyPolicy, type ProxyRegistryView } from "@science-agent/data-source";
+import { proxyEnvironmentDetails, resolveProxyEnvironment, resolveProxyPolicy, type ProxyRegistryView } from "@sciencediscovery/data-source";
 import {
   cleanLabel,
   createPermissionEpoch,
   parsePermissionAuthorization,
   permissionMatcherResource,
-} from "@science-agent/governance";
+} from "@sciencediscovery/governance";
 import {
   normalizeSandboxNetworkSettings,
   resolveSandboxNetworkSettings,

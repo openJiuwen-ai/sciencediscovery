@@ -17,9 +17,9 @@ import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import type { FreeSearchEngine, PaidSearchProvider } from "@science-agent/schema";
+import type { FreeSearchEngine, PaidSearchProvider } from "@sciencediscovery/schema";
 
-import type { AgentPermissionRuntime } from "@science-agent/governance";
+import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { SessionStore } from "../store.js";
 import {
   WebBroker,
@@ -27,7 +27,7 @@ import {
   WebProviderError,
   type NativeWebProviderClient,
   type WebProviderResponse,
-} from "@science-agent/data-source";
+} from "@sciencediscovery/data-source";
 
 const context = {
   forceRefresh: false,

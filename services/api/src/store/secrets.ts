@@ -19,8 +19,8 @@ import type {
   CreateModelProfileRequest,
   ModelProfile,
   UpdateModelProfileRequest,
-} from "@science-agent/schema";
-import { cleanLabel } from "@science-agent/governance";
+} from "@sciencediscovery/schema";
+import { cleanLabel } from "@sciencediscovery/governance";
 
 const MODEL_SECRET_KEY_BYTES = 32;
 const MODEL_SECRET_VERSION = "v1";

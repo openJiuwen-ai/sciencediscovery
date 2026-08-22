@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/data-source",
+  "name": "@sciencediscovery/data-source",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,11 +11,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/cas": "workspace:*",
-    "@science-agent/governance": "workspace:*",
-    "@science-agent/mcp-sources": "workspace:*",
-    "@science-agent/memory": "workspace:*",
-    "@science-agent/schema": "workspace:*",
+    "@sciencediscovery/cas": "workspace:*",
+    "@sciencediscovery/governance": "workspace:*",
+    "@sciencediscovery/mcp-sources": "workspace:*",
+    "@sciencediscovery/memory": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*",
     "undici": "8.7.0"
   },
   "devDependencies": { "@types/node": "26.1.1" }

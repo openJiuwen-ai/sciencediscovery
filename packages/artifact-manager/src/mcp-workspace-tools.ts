@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { WorkspaceAgentOptions } from "@science-agent/context";
+import type { WorkspaceAgentOptions } from "@sciencediscovery/context";
 import type {
   ArtifactDownloadResult,
   ArtifactCandidate,
@@ -22,13 +22,13 @@ import type {
   McpInvocation,
   PaperAcquisition,
   PermissionRequest,
-} from "@science-agent/schema";
-import type { McpSourceRegistry } from "@science-agent/mcp-sources";
+} from "@sciencediscovery/schema";
+import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
-import type { AgentPermissionRuntime } from "@science-agent/governance";
+import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { GovernedDownloadManager } from "./governed-download-manager.js";
-import type { McpGovernanceBroker } from "@science-agent/data-source";
-import type { McpSourceCatalog } from "@science-agent/data-source";
+import type { McpGovernanceBroker } from "@sciencediscovery/data-source";
+import type { McpSourceCatalog } from "@sciencediscovery/data-source";
 
 type McpWorkspaceTools = Pick<
   WorkspaceAgentOptions,

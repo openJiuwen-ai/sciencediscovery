@@ -17,7 +17,7 @@ import { describe, test } from "node:test";
 
 import { defaultSettings, parseEnvFile, parseInvocation, USAGE } from "./cli-options.js";
 
-const cwd = "/opt/science-agent";
+const cwd = "/opt/sciencediscovery";
 
 describe("launcher option parsing", () => {
   test("uses the release binary name in help output", () => {
@@ -29,7 +29,7 @@ describe("launcher option parsing", () => {
     assert.equal(settings.host, "127.0.0.1");
     assert.equal(settings.port, 4310);
     assert.equal(settings.runnerPort, 4311);
-    assert.equal(settings.dataDir, "/opt/science-agent/science-discovery-data");
+    assert.equal(settings.dataDir, "/opt/sciencediscovery/science-discovery-data");
     assert.equal(settings.bwrapPath, "bwrap");
     assert.equal(settings.scientificEnvironments, true);
     assert.equal(settings.skipSandboxCheck, false);
@@ -86,7 +86,7 @@ describe("launcher option parsing", () => {
       (message) => messages.push(message),
     );
     assert.equal(invocation.command, "serve");
-    assert.equal(invocation.settings.dataDir, "/opt/science-agent/state");
+    assert.equal(invocation.settings.dataDir, "/opt/sciencediscovery/state");
     assert.equal(invocation.settings.port, 9000);
     assert.equal(invocation.settings.host, "0.0.0.0");
     assert.equal(invocation.settings.skipSandboxCheck, true);
@@ -110,7 +110,7 @@ describe("launcher option parsing", () => {
 
   test("extract demands a destination", () => {
     assert.throws(() => parseInvocation(["extract"], {}, cwd), /requires --to/);
-    assert.equal(parseInvocation(["extract", "--to", "out"], {}, cwd).extractTo, "/opt/science-agent/out");
+    assert.equal(parseInvocation(["extract", "--to", "out"], {}, cwd).extractTo, "/opt/sciencediscovery/out");
   });
 });
 

@@ -19,7 +19,7 @@ import type {
   GlobalUsageSessionGroup,
   ModelInvocationUsage,
   ModelUsageBucket,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import React, { useMemo, useState } from "react";
 
 import { ChevronDownIcon, ChevronRightIcon, ProjectIcon, SessionIcon, SparkleIcon } from "./icons.js";

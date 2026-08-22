@@ -17,7 +17,7 @@ import type {
   RunStreamEvent,
   SessionRun,
   SessionRunEvent,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { mergePermissionRequestSnapshot } from "../permission-state.js";
 import { reduceRunTimeline, type RunTimelineEntry } from "./RunTimeline.js";

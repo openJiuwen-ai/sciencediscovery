@@ -10,7 +10,7 @@ import {
   type RunEventSink,
   type RuntimeMessage,
   type ToolDispatcher,
-} from "@science-agent/runtime-core";
+} from "@sciencediscovery/runtime-core";
 
 export interface RuntimeComposition<TMessage extends RuntimeMessage, TModelInput, TUsage> {
   contextAssembler: ContextAssembler<TMessage, TModelInput>;

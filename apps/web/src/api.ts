@@ -13,4 +13,4 @@
 // limitations under the License.
 
 export { ApiClient, ApiRequestError, isAbortError } from "./api/client.js";
-export type { ChatMessage } from "@science-agent/schema";
+export type { ChatMessage } from "@sciencediscovery/schema";

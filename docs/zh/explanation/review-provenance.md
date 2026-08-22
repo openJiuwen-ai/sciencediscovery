@@ -6,7 +6,7 @@
 
 CAS 是溯源体系的地基：所有需要事后核验的内容都以「SHA-256 哈希 = 地址」的方式落盘，记录里只保留引用。这样同一内容天然去重，任何记录都可以在之后重新哈希校验。
 
-实现位于独立的 `@science-agent/cas` 包；API、Runner 相关调用方共享同一地址与校验口径，公开边界见英文 [CAS 说明](../../en/explanation/cas.md)：
+实现位于独立的 `@sciencediscovery/cas` 包；API、Runner 相关调用方共享同一地址与校验口径，公开边界见英文 [CAS 说明](../../en/explanation/cas.md)：
 
 - **地址**：`hash(content)` = 内容字节的 SHA-256 十六进制（64 字符）。对象路径为 `data/cas/sha256/<hash 前 2 位>/<完整 hash>`，前 2 位作扇出目录，避免单目录文件过多。路径构造前先用 `/^[a-f0-9]{64}$/` 校验哈希，杜绝路径注入。
 - **写入 `put(content)` / `putFile(path)`**：

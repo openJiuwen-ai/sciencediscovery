@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { ArtifactAnnotation, ComposerReference, MemoryGraphEdgeType, MemoryGraphNode, MemoryGraphNodeLabel, MemorySubgraph } from "@science-agent/schema";
+import type { ArtifactAnnotation, ComposerReference, MemoryGraphEdgeType, MemoryGraphNode, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { CloseIcon } from "./icons.js";

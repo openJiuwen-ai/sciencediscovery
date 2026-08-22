@@ -24,7 +24,7 @@ import type {
   ProxyServerKind,
   ProxySettingsDetails,
   UpdateProxyServerRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { InfoIcon } from "./icons.js";
 import { useLocale } from "./i18n/index.js";
@@ -363,8 +363,8 @@ export function ProxySettingsEditor({
           <div className="proxy-server-summary">
             <span><strong>{server.name}</strong><small>{kindLabel(server.kind, t)}{server.kind === "custom_url" && !server.hasUrl ? ` · ${t("proxy.server.urlMissing")}` : ""}</small></span>
             <span className="proxy-server-actions">
-              <button type="button" onClick={() => beginEdit(server)}>{t("proxy.server.edit")}</button>
-              <button className="danger-button" type="button" onClick={() => void onDelete(server)}>{t("proxy.server.delete")}</button>
+              <button className="secondary-button compact-button" type="button" onClick={() => beginEdit(server)}>{t("proxy.server.edit")}</button>
+              <button className="danger-button compact-button" type="button" onClick={() => void onDelete(server)}>{t("proxy.server.delete")}</button>
             </span>
           </div>
           {server.kind === "custom_url" && server.url ? <code className="proxy-server-url">{server.url}</code> : null}
@@ -373,7 +373,7 @@ export function ProxySettingsEditor({
       </div>
     </section>
 
-    {!formOpen ? <button className="proxy-add-button" type="button" onClick={beginCreate}>{t("proxy.add.open")}</button> : null}
+    {!formOpen ? <button className="secondary-button proxy-add-button" type="button" onClick={beginCreate}>{t("proxy.add.open")}</button> : null}
     {formOpen ? <form aria-label={editing ? t("proxy.form.editAria", { name: editing.name }) : t("proxy.form.addAria")} className="proxy-server-form" onSubmit={(event) => void submit(event)}>
       <div className="editor-heading"><strong>{editing ? t("proxy.form.editTitle", { name: editing.name }) : t("proxy.form.addTitle")}</strong><small>{t("proxy.form.help")}</small></div>
       <label><span>{t("proxy.form.name")}</span><input required maxLength={200} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>

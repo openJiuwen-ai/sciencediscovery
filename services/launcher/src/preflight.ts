@@ -30,7 +30,7 @@ import {
   procFallbackMessage,
   SANDBOX_UNUSABLE_HINT,
   type SandboxProcMode,
-} from "@science-agent/sandbox-capability";
+} from "@sciencediscovery/sandbox-capability";
 
 export const BWRAP_INSTALL_HINT = [
   "Install bubblewrap with your system package manager, then run serve again:",

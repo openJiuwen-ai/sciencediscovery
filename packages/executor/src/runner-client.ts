@@ -16,7 +16,7 @@ import {
   createExecutionSignature,
   EXECUTION_SIGNATURE_HEADER,
   EXECUTION_TIMESTAMP_HEADER,
-} from "@science-agent/runner";
+} from "@sciencediscovery/runner";
 import type {
   CreateEnvironmentRequest,
   Environment,
@@ -36,7 +36,7 @@ import type {
   ShellExecutionRequest,
   ShellExecutionResult,
   UninstallEnvironmentRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string };
 

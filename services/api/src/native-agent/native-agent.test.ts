@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { AgentEvent, AgentHistoryMessage } from "@science-agent/orchestration";
+import type { AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 
 import {
   createNativeAgent,
@@ -26,7 +26,7 @@ import {
   type ModelTurnStreamer,
   type NativeAgentOptions,
 } from "./index.js";
-import type { ModelTurn, WireToolSpec } from "@science-agent/model";
+import type { ModelTurn, WireToolSpec } from "@sciencediscovery/model";
 
 function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" | "executePython" | "executeShell" | "sessionId" | "workspaceRoot"> {
   const root = mkdtempSync(join(tmpdir(), "native-agent-"));
@@ -334,7 +334,7 @@ test("history over the trigger compacts into a summary checkpoint", async () => 
 
     const checkpoint = result.finalMessages[0]!;
     assert.equal(checkpoint.name, "summary");
-    assert.match(String(checkpoint.content), /\[ScienceAgent summary checkpoint\]/);
+    assert.match(String(checkpoint.content), /\[ScienceDiscovery summary checkpoint\]/);
     assert.match(String(checkpoint.content), /SUMMARY: goals and results/);
     assert((result.finalMessages.length) < longHistory.length);
 

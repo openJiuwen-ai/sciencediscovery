@@ -19,7 +19,7 @@ import type {
   ModelInvocationUsage,
   ModelUsageStatus,
   PromptManifest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { SessionStore } from "../store.js";
 

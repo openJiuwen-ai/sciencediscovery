@@ -18,14 +18,14 @@ import { mkdir, readFile, rm, symlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import type { ArtifactJob, ArtifactPlan, McpInvocation, McpToolResult } from "@science-agent/schema";
-import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
+import type { ArtifactJob, ArtifactPlan, McpInvocation, McpToolResult } from "@sciencediscovery/schema";
+import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import { SessionStore } from "../store.js";
-import { GovernedDownloadManager, assertSafeArtifactPath } from "@science-agent/artifact-manager";
-import { McpGovernanceBroker } from "@science-agent/data-source";
-import type { McpTransportClient } from "@science-agent/data-source";
-import { McpSourceCatalog } from "@science-agent/data-source";
+import { GovernedDownloadManager, assertSafeArtifactPath } from "@sciencediscovery/artifact-manager";
+import { McpGovernanceBroker } from "@sciencediscovery/data-source";
+import type { McpTransportClient } from "@sciencediscovery/data-source";
+import { McpSourceCatalog } from "@sciencediscovery/data-source";
 
 /** These flows never reach MCP; any call is a test-setup mistake, not a stub gap. */
 function unusedTransport(): McpTransportClient {

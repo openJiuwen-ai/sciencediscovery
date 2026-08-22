@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/web",
+  "name": "@sciencediscovery/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/schema": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*",
+    "cytoscape": "^3.34.0",
+    "cytoscape-dagre": "^4.0.0",
     "d3-drag": "^3.0.0",
     "d3-force": "^3.0.0",
     "d3-selection": "^3.0.0",
@@ -30,6 +32,7 @@
     "remark-math": "^6.0.0"
   },
   "devDependencies": {
+    "@types/cytoscape": "^3.31.0",
     "@types/d3": "^7.4.3",
     "@types/d3-drag": "^3.0.7",
     "@types/d3-force": "^3.0.10",

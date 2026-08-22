@@ -19,7 +19,7 @@ import type {
   MemoryGraphByEdgeResult,
   MemoryGraphTraceResult,
   ScientificArtifactVersion,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { normalizeEvidenceAlias } from "./review-policy.js";
 

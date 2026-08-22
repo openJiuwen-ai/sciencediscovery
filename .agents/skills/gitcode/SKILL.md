@@ -125,29 +125,42 @@ For complete Issue inventories, treat `length == --limit` as “possibly truncat
 - To associate an issue in a PR body, retain the trigger candidate and add a readable link: `Fixes #32 ([#32](https://gitcode.com/openJiuwen/sciencediscovery/issues/32))`.
 - Automatic closing after merge is **not verified**. Never promise that `Fixes #N` or its Markdown link will close the issue; commit messages alone do not auto-close.
 
-## MindSpore org templates
+## openJiuwen org templates
 
-**Default for this repo (`openJiuwen/sciencediscovery`)**: first check this
-repo's own `.gitcode` Issue/PR templates; it currently has none, so write the
-issue/PR body in Chinese directly. The mindspore org templates below are an
-**opt-in** reuse path, not the default; do **not** default to `-R mindspore/...`
-or assume a mindspore template applies to this repo.
+**Template source order** when filing an Issue/PR:
 
-Upstream (do not vendor into git): `mindspore/.gitcode` @ `master`, tree `.gitcode/`.
-Local cache (gitignored): `{baseDir}/cache/mindspore-org-templates/`.
+1. This repo's own `.gitcode/` Issue/PR templates, if present (`openJiuwen/sciencediscovery` currently has none).
+2. Otherwise the **openJiuwen org templates** below — this is the default source, not an opt-in path.
+
+**Language**: default to the **Chinese** templates (`ISSUE_TEMPLATE.zh/` + `PULL_REQUEST_TEMPLATE.md` / `PULL_REQUEST_TEMPLATE.zh-CN.md`). Use the English set (`ISSUE_TEMPLATE.en/`, `PULL_REQUEST_TEMPLATE.en.md`) **only when the user explicitly asks for English**.
+
+Upstream (do not vendor into git): `openJiuwen/.gitcode` @ `master`, tree `.gitcode/`
+(web: https://gitcode.com/openJiuwen/.gitcode).
+Local cache (gitignored): `{baseDir}/cache/openjiuwen-org-templates/`.
 
 ```bash
-FETCH="{baseDir}/scripts/fetch_mindspore_templates.py"
+FETCH="{baseDir}/scripts/fetch_openjiuwen_templates.py"
 uv run --no-project "$FETCH"          # ensure cache exists
 uv run --no-project "$FETCH" --force  # refresh after upstream changes
+```
+
+Layout is **split per locale** — there is no single `ISSUE_TEMPLATE/` directory:
+
+```
+.gitcode/ISSUE_TEMPLATE.zh/*.yml        # Chinese issue forms (default)
+.gitcode/ISSUE_TEMPLATE.en/*.yml        # English issue forms (+ config.yml)
+.gitcode/PULL_REQUEST_TEMPLATE.md
+.gitcode/PULL_REQUEST_TEMPLATE.zh-CN.md
+.gitcode/PULL_REQUEST_TEMPLATE.en.md
 ```
 
 **Do not rely on any template inventory in this skill** — lists go stale. At filing time:
 
 1. Ensure cache is present (run fetch if needed).
-2. List and **read** the actual files under `…/cache/mindspore-org-templates/.gitcode/` (`ISSUE_TEMPLATE/`, `PULL_REQUEST_TEMPLATE*`).
-3. Pick the matching template for the intent; fill required fields from that file; create with `--body-file`.
+2. List and **read** the actual files under `…/cache/openjiuwen-org-templates/.gitcode/` (`ISSUE_TEMPLATE.zh/`, `ISSUE_TEMPLATE.en/`, `PULL_REQUEST_TEMPLATE*`). `FETCH_META.json` records what the last fetch wrote (`issue_template_dirs`, `pr_templates`), but read the files themselves before filling one in.
+3. Pick the matching template for the intent from the language directory chosen above; fill required fields from that file; create with `--body-file`.
 4. If the issue template is an issue form (YAML), convert it to Markdown in `body` order: write each `attributes.label` as a `###` heading and put the answer below it; every item with `validations.required: true` is mandatory.
+5. `config.yml` is issue-form chooser config, not a template — never file it as an issue body.
 
 ## Images in bodies/comments
 

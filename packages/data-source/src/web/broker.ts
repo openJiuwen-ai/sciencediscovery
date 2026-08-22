@@ -20,7 +20,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   FREE_SEARCH_ORDER,
   PAID_SEARCH_ORDER,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import type {
   WebAttemptStatus,
   WebError,
@@ -33,10 +33,10 @@ import type {
   WebSearchProvider,
   WebSettingsDetails,
   WebUsageSummary,
-} from "@science-agent/schema";
-import { CasStore } from "@science-agent/cas";
+} from "@sciencediscovery/schema";
+import { CasStore } from "@sciencediscovery/cas";
 
-import type { AgentPermissionRuntime } from "@science-agent/governance";
+import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { proxyEnvOverlay, type ProxyEnvironment } from "../proxy/index.js";
 import { WebCache, webCacheKey } from "./cache.js";
 import { NativeWebProviderClient, WebProviderError, isPaidSearchProvider } from "./native/index.js";

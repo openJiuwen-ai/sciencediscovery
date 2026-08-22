@@ -60,7 +60,7 @@ test("baseline seccomp rejects unsupported architectures", () => {
 });
 
 test("baseline seccomp writes architecture-specific filter files", async () => {
-  const root = await mkdtemp(join(tmpdir(), "science-agent-seccomp-"));
+  const root = await mkdtemp(join(tmpdir(), "sciencediscovery-seccomp-"));
   try {
     const x64Path = await ensureBaselineSeccompFilter(root, "x64");
     const arm64Path = await ensureBaselineSeccompFilter(root, "arm64");

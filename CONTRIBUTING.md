@@ -19,11 +19,11 @@ Alternatively, provide a standalone `services/gateway/.venv`.
 ```bash
 pnpm check        # typecheck, paper tests, build, and package unit tests
 pnpm test         # build + recursive package unit tests
-pnpm smoke        # build + @science-agent/api unit tests only
+pnpm smoke        # build + @sciencediscovery/api unit tests only
 pnpm paper:setup  # locked PDF parser venv (project-local; app runtime uses data/envs/paper)
 pnpm paper:test   # PDF extraction tests
 pnpm dev          # API watch (after build; does not start runner/gateway by itself)
-pnpm --filter @science-agent/web dev   # UI hot reload on :5173 (proxies API :4310)
+pnpm --filter @sciencediscovery/web dev   # UI hot reload on :5173 (proxies API :4310)
 ```
 
 ## Agent-loop smoke tests

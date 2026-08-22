@@ -1,6 +1,6 @@
 # Runtime Core boundaries
 
-`@science-agent/runtime-core` is the stable, domain-neutral execution kernel.
+`@sciencediscovery/runtime-core` is the stable, domain-neutral execution kernel.
 It owns the Agent Loop state machine and only the invariants common to every
 agent execution:
 
@@ -36,7 +36,7 @@ apps -> services/api -> capability adapters -> packages/runtime-core
 
 Capability code may implement Runtime Core ports. Runtime Core must never
 import HTTP/SSE, provider clients, tools, MCP, permissions, artifacts,
-provenance, specialists, or other ScienceAgent domain packages.
+provenance, specialists, or other ScienceDiscovery domain packages.
 
 Current capability ownership:
 

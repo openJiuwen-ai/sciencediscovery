@@ -98,6 +98,7 @@
   --motion-fast: .15s ease;
 
   /* Shared component dimensions */
+  --control-min-height: 40px;
   --activity-card-min-height: 58px;
   --dialog-list-card-height: 72px;
   --sidebar-split: 50%;

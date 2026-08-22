@@ -27,11 +27,11 @@ import {
   type ResolvedProxy,
   type ResolvedRuntimeSettings,
   type ResultCachePolicy,
-} from "@science-agent/schema";
-import type { McpSourceRegistry } from "@science-agent/mcp-sources";
-import { CasStore } from "@science-agent/cas";
+} from "@sciencediscovery/schema";
+import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { CasStore } from "@sciencediscovery/cas";
 
-import type { MemoryGraphSink } from "@science-agent/memory";
+import type { MemoryGraphSink } from "@sciencediscovery/memory";
 import {
   ResourceRateLimiter,
   ResourceRateLimitQueueFullError,

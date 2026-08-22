@@ -588,7 +588,7 @@ wheels = [
 ]
 
 [[package]]
-name = "science-agent-gateway"
+name = "sciencediscovery-gateway"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [

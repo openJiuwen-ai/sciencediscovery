@@ -25,9 +25,9 @@ import type {
   PaperExtractionManifest,
   PaperSourceId,
   PaperVisionRun,
-} from "@science-agent/schema";
-import { resolveWorkspaceFile } from "@science-agent/workspace";
-import { CasStore } from "@science-agent/cas";
+} from "@sciencediscovery/schema";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { CasStore } from "@sciencediscovery/cas";
 
 import { SessionStore } from "./store.js";
 

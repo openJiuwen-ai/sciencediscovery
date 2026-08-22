@@ -45,7 +45,7 @@ import type {
   WorkspaceCapabilities,
   WorkspaceFile,
   WorkspaceUploadResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import type { ArtifactDashboard, ArtifactPreviewPayload } from "../artifact-dashboard.js";
 
 import { RunsApiClient } from "./runs.js";

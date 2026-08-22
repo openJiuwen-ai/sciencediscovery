@@ -18,10 +18,10 @@ import test from "node:test";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import { reviewerLog } from "@science-agent/provenance";
+import { reviewerLog } from "@sciencediscovery/provenance";
 
 test("Reviewer execution log preserves trace context and redacts credentials", async (context) => {
-  const directory = await mkdtemp(resolve(tmpdir(), "science-agent-reviewer-log-"));
+  const directory = await mkdtemp(resolve(tmpdir(), "sciencediscovery-reviewer-log-"));
   context.after(() => rm(directory, { force: true, recursive: true }));
   reviewerLog.setLogDir(directory);
 
@@ -47,7 +47,7 @@ test("Reviewer execution log preserves trace context and redacts credentials", a
 });
 
 test("Reviewer execution log writes stage progress synchronously", async (context) => {
-  const directory = await mkdtemp(resolve(tmpdir(), "science-agent-reviewer-log-"));
+  const directory = await mkdtemp(resolve(tmpdir(), "sciencediscovery-reviewer-log-"));
   context.after(() => rm(directory, { force: true, recursive: true }));
   reviewerLog.setLogDir(directory);
   const logContext = {

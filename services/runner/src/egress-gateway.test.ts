@@ -20,14 +20,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import type { SandboxNetworkAccess } from "@science-agent/schema";
+import type { SandboxNetworkAccess } from "@sciencediscovery/schema";
 
 import { EgressGateway, EgressGatewayRegistry, isPrivateAddress } from "./egress-gateway.js";
 
 const temporaryDirectories: string[] = [];
 
 async function scratchDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "science-agent-egress-"));
+  const directory = await mkdtemp(join(tmpdir(), "sciencediscovery-egress-"));
   temporaryDirectories.push(directory);
   return directory;
 }

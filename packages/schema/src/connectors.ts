@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { formatExternalUrl } from "@science-agent/external-urls";
+import { formatExternalUrl } from "@sciencediscovery/external-urls";
 
 import type { CasObjectRef } from "./provenance.js";
 

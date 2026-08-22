@@ -38,7 +38,7 @@ curl -fsS http://127.0.0.1:4310/health
   "memoryGraph": "disabled",
   "milestone": "M4",
   "runner": { "status": "ok" },
-  "service": "science-agent-api",
+  "service": "sciencediscovery-api",
   "status": "ok",
   "workspace": {
     "maxFileBytes": 1073741824,

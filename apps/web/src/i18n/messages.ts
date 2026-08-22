@@ -374,10 +374,6 @@ export const en = {
   "memory.stats.done": "done",
   "chain.backToFullGraph": "← Back to full graph",
   "chain.for": "Chain for {name}",
-  "chain.viewRelatedSubTasks": "Show related SubTasks",
-  "chain.collapseSubTasks": "Collapse intermediates",
-  "chain.collapsedCount": "{count} intermediate SubTask(s)",
-  "chain.expand": "Expand",
   "test.englishFallback": "English fallback",
 
   // Memory-graph node detail panel: field labels, section titles, relations.
@@ -839,10 +835,6 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "chain.loading": "正在加载链路…",
   "chain.backToFullGraph": "← 返回全图",
   "chain.for": "{name} 的链路",
-  "chain.viewRelatedSubTasks": "查看相关的subtask",
-  "chain.collapseSubTasks": "折叠中间 subtask",
-  "chain.collapsedCount": "{count} 个中间 subtask",
-  "chain.expand": "展开",
   "memory.hint.chainEntry": "查看链路请从具体产物进入：打开产物预览 → 点击「查看链路」。",
   "memory.stats.nodes": "节点",
   "memory.stats.edges": "边",

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 
-import type { ApiError } from "@science-agent/schema";
+import type { ApiError } from "@sciencediscovery/schema";
 
 export class ApiRequestError extends Error {
   constructor(

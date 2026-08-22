@@ -15,8 +15,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { MemoryGraphTraceResult, ScientificArtifactVersion } from "@science-agent/schema";
-import type { MemoryGraphClient } from "@science-agent/memory";
+import type { MemoryGraphTraceResult, ScientificArtifactVersion } from "@sciencediscovery/schema";
+import type { MemoryGraphClient } from "@sciencediscovery/memory";
 
 import {
   artifactProvenanceReference,
@@ -27,7 +27,7 @@ import {
   quickEvidenceReferenceReview,
   quickNumericEvidenceCoverageReview,
   type EvidenceReferenceTraceResult,
-} from "@science-agent/provenance";
+} from "@sciencediscovery/provenance";
 
 function version(overrides: Partial<ScientificArtifactVersion> = {}): ScientificArtifactVersion {
   return {

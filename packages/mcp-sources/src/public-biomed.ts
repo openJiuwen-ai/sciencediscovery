@@ -25,7 +25,7 @@ import {
   type McpToolResult,
   type ValidationIssue,
   type ValidationResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 interface ToolDefinition {
   description: string;

@@ -28,7 +28,7 @@ import { select, type EnterElement, type Selection } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomTransform } from "d3-zoom";
 
-import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "@science-agent/schema";
+import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
 /**
  * One colour per node label, drawn from a Morandi palette (low-saturation,
@@ -58,9 +58,9 @@ export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
 export const EDGE_COLORS: Record<MemoryGraphEdgeType, string> = {
   produces: "#94a3b8",
   next: "#94a3b8",
-  extracted_from: "#94a3b8",
-  cites: "#94a3b8",
-  states: "#94a3b8",
+  extracts: "#94a3b8",
+  supports: "#94a3b8",
+  stated_in: "#94a3b8",
   supersedes: "#94a3b8",
   input: "#94a3b8",
 };
@@ -698,14 +698,14 @@ export function MemoryGraphCanvas({
       const bboxH = (maxY - minY) || 1;
       const padding = interactive ? 30 : 8;
       const scale = Math.min(
-        (width - padding * 2) / (bboxW + nodeSize * 2),
-        (height - padding * 2) / (bboxH + nodeSize * 2),
+        (ref.width - padding * 2) / (bboxW + nodeSize * 2),
+        (ref.height - padding * 2) / (bboxH + nodeSize * 2),
         interactive ? 1.5 : 1.1,
       );
       const centerX = (minX + maxX) / 2;
       const centerY = (minY + maxY) / 2;
       const transform = zoomIdentity
-        .translate(width / 2 - centerX * scale, height / 2 - centerY * scale)
+        .translate(ref.width / 2 - centerX * scale, ref.height / 2 - centerY * scale)
         .scale(scale);
       svgSel.transition().duration(duration).call(ref.zoomBehavior.transform, transform);
     };

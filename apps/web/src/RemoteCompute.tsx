@@ -14,7 +14,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 
-import type { PermissionDecision, PermissionRequest, RemoteHostTarget, RemoteJob } from "@science-agent/schema";
+import type { PermissionDecision, PermissionRequest, RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { ChevronRightIcon } from "./icons.js";

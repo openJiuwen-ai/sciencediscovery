@@ -45,7 +45,7 @@ import type {
   UpdateProxyServerRequest,
   UpdateProxySettingsRequest,
   UpdateSpecialistRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { ArtifactsApiClient } from "./artifacts.js";
 

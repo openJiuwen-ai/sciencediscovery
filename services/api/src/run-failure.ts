@@ -22,7 +22,7 @@
  * so a failing run stays diagnosable.
  */
 
-import type { RunFailureCode } from "@science-agent/schema";
+import type { RunFailureCode } from "@sciencediscovery/schema";
 
 /** Classify a run error into a stable code. The message is never consumed. */
 export function classifyRunFailure(error: unknown): RunFailureCode {

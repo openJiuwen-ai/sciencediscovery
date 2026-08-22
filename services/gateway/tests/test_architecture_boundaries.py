@@ -26,7 +26,7 @@ NODE_ROOTS = (
     REPOSITORY_ROOT / "apps" / "web",
     REPOSITORY_ROOT / "test" / "api",
 )
-GATEWAY_PACKAGE = REPOSITORY_ROOT / "services" / "gateway" / "src" / "science_agent_gateway"
+GATEWAY_PACKAGE = REPOSITORY_ROOT / "services" / "gateway" / "src" / "sciencediscovery_gateway"
 VENDOR_NAME = re.compile(r"deer[-_ ]?flow", re.IGNORECASE)
 VENDOR_PYTHON_REFERENCE = re.compile(
     r"(?:^|\n)\s*(?:from|import)\s+deerflow\b|deerflow\.",

@@ -23,7 +23,7 @@ import { test, type TestContext } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 
-import { createRunnerServer, type RunnerConfig } from "@science-agent/runner";
+import { createRunnerServer, type RunnerConfig } from "@sciencediscovery/runner";
 import type {
   ApiError,
   ArtifactDerivation,
@@ -71,15 +71,15 @@ import type {
   WorkbenchSearchResult,
   WorkspaceFile,
   WorkspaceUploadResult,
-} from "@science-agent/schema";
-import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 import {
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-} from "@science-agent/context";
+} from "@sciencediscovery/context";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 import { strToU8, zipSync } from "fflate";
 
 import {
@@ -94,8 +94,8 @@ import {
   type ServerConfig,
 } from "./server.js";
 import { SessionStore } from "./store.js";
-import type { McpCatalog, McpInvokeResponse } from "@science-agent/schema";
-import type { McpTransportClient } from "@science-agent/data-source";
+import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
+import type { McpTransportClient } from "@sciencediscovery/data-source";
 
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
@@ -1018,9 +1018,9 @@ test("loadServerConfig preserves an explicit network bind", () => {
 });
 
 test("loadServerConfig derives the paper env from a relocated data dir", () => {
-  const config = loadServerConfig({ ...CONFIGURED_TOKENS, SCIENCE_AGENT_DATA_DIR: "/srv/science-agent" });
-  assert.equal(config.dataDir, "/srv/science-agent");
-  assert.equal(config.paperPythonPath, "/srv/science-agent/envs/paper/bin/python");
+  const config = loadServerConfig({ ...CONFIGURED_TOKENS, SCIENCE_AGENT_DATA_DIR: "/srv/sciencediscovery" });
+  assert.equal(config.dataDir, "/srv/sciencediscovery");
+  assert.equal(config.paperPythonPath, "/srv/sciencediscovery/envs/paper/bin/python");
 });
 
 test("loadServerConfig validates the port", () => {
@@ -4640,6 +4640,128 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
   assert.equal(deletedProject.status, 200);
   assert.equal((await fetch(`${origin}/api/projects/${project.body.id}/settings`, { headers: authorization })).status, 404);
   await assert.rejects(stat(resolve(tempRoot, "projects", project.body.id)), { code: "ENOENT" });
+});
+
+test("deleting a session/project mirrors the cleanup to the memory-graph sidecar", async (context) => {
+  // Verifies the handler wiring: after deleteSession/deleteProject commit on
+  // the store, the fire-and-forget sink posts /cleanup/session and
+  // /cleanup/project to the sidecar. The sidecar is a fake loopback that
+  // records requests; the memory-graph toggle is flipped on so the sink is
+  // not short-circuited (default is off).
+  const tempRoot = resolve(process.cwd(), ".tmp", `cleanup-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const received: { path: string; body: unknown }[] = [];
+  const fakeSidecar = createHttpServer((request, response) => {
+    let data = "";
+    request.on("data", (chunk) => { data += chunk; });
+    request.on("end", () => {
+      let body: unknown = null;
+      try { body = data ? JSON.parse(data) : null; } catch { /* null */ }
+      received.push({ path: request.url ?? "/", body });
+      response.writeHead(200, { "content-type": "application/json" });
+      const path = request.url ?? "";
+      if (path === "/health") response.end(JSON.stringify({ status: "healthy" }));
+      else if (path === "/internal/neo4j-password") response.end(JSON.stringify({ status: "healthy" }));
+      else if (path === "/cleanup/session") response.end(JSON.stringify({ status: "healthy", "marked": 1, "deleted": 1 }));
+      else if (path === "/cleanup/project") response.end(JSON.stringify({ status: "healthy", "deleted": 1 }));
+      else response.end("{}");
+    });
+  });
+  await new Promise<void>((resolveListen) => fakeSidecar.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => fakeSidecar.close(() => resolveClose())));
+  const sidecarUrl = `http://127.0.0.1:${(fakeSidecar.address() as AddressInfo).port}`;
+
+  const server = createApiServer({ ...testConfig(tempRoot, "http://127.0.0.1:1"), memoryGraph: { url: sidecarUrl, internalToken: "test" } });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); server.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  // Two independent projects so the session-delete and project-delete checks
+  // don't interfere (deleting a session mutates the other project's impact
+  // snapshot). Each project gets a second session so project-cleanup carries
+  // >1 session id.
+  const projectA = await jsonRequest<{ project: { id: string }; firstSession: { id: string } }>(
+    `${origin}/api/projects`, {
+      body: JSON.stringify({ name: "Cleanup mirror A" }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "POST",
+    });
+  assert.equal(projectA.response.status, 201);
+  const sessionId = projectA.body.firstSession.id;
+  const projectAId = projectA.body.project.id;
+
+  const projectB = await jsonRequest<{ project: { id: string }; firstSession: { id: string } }>(
+    `${origin}/api/projects`, {
+      body: JSON.stringify({ name: "Cleanup mirror B" }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "POST",
+    });
+  assert.equal(projectB.response.status, 201);
+  const projectBId = projectB.body.project.id;
+  const secondB = await jsonRequest<{ id: string }>(`${origin}/api/projects/${projectBId}/sessions`, {
+    body: JSON.stringify({ title: "Second" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(secondB.response.status, 201);
+
+  // Flip the memory-graph toggle ON (no password push — only enabled is set,
+  // so the sidecar receives just a /health probe).
+  const toggled = await fetch(`${origin}/api/memory/settings`, {
+    body: JSON.stringify({ enabled: true }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+  assert.equal(toggled.status, 200);
+
+  // Delete the session → handler fires cleanupSession(sessionId).
+  const deletedSession = await fetch(`${origin}/api/sessions/${sessionId}`, {
+    body: JSON.stringify({ confirmationId: sessionId }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "DELETE",
+  });
+  assert.equal(deletedSession.status, 200);
+
+  // Capture the project's deletion-impact snapshot (its session ids at this
+  // moment) BEFORE deleting it — the handler reads impact before deleteProject,
+  // and cleanupProject must receive exactly this snapshot.
+  const projectImpact = await jsonRequest<{ sessionIds: string[] }>(
+    `${origin}/api/projects/${projectBId}/deletion-impact`, { headers: authorization });
+  assert.equal(projectImpact.response.status, 200);
+  const expectedProjectSessionIds = projectImpact.body.sessionIds.toSorted();
+
+  // Delete the project → handler fires cleanupProject(projectId, impact.sessionIds).
+  const deletedProject = await fetch(`${origin}/api/projects/${projectBId}`, {
+    body: JSON.stringify({ confirmationId: projectBId }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "DELETE",
+  });
+  assert.equal(deletedProject.status, 200);
+
+  // Wait for the two fire-and-forget posts to land (fire-and-forget does not
+  // await; poll until both /cleanup calls appear on the fake sidecar).
+  const deadline = Date.now() + 2_000;
+  let cleanups: { path: string; body: unknown }[] = [];
+  while (Date.now() < deadline) {
+    cleanups = received.filter((r) => r.path === "/cleanup/session" || r.path === "/cleanup/project");
+    if (cleanups.length >= 2) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 15));
+  }
+  assert.ok(cleanups.some((c) => c.path === "/cleanup/session"),
+    "deleteSession must fire cleanupSession → POST /cleanup/session");
+  assert.ok(cleanups.some((c) => c.path === "/cleanup/project"),
+    "deleteProject must fire cleanupProject → POST /cleanup/project");
+
+  const sessionCall = cleanups.find((c) => c.path === "/cleanup/session")!.body as Record<string, unknown>;
+  assert.equal(sessionCall.session_id, sessionId);
+
+  const projectCall = cleanups.find((c) => c.path === "/cleanup/project")!.body as Record<string, unknown>;
+  assert.equal(projectCall.project_id, projectBId);
+  // impact.sessionIds mirrors the pre-deletion snapshot (both of projectB's
+  // sessions); order-independent.
+  assert.deepEqual((projectCall.session_ids as string[]).toSorted(), expectedProjectSessionIds);
 });
 
 test("model registry persists multiple profiles and assigns them per session", async (context) => {

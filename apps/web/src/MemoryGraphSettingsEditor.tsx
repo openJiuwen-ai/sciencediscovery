@@ -16,7 +16,7 @@ import { useLocale, type MessageKey } from "./i18n/index.js";
 import type {
   MemoryGraphSettingsDetails,
   UpdateMemoryGraphSettingsRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export interface MemoryGraphSettingsDraft {
   enabled: boolean;

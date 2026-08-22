@@ -1,15 +1,15 @@
 ---
 name: deploy
 description: >
-  Deploy or run the science_agent stack, either as host processes
+  Deploy or run the ScienceDiscovery stack, either as host processes
   (scripts/start-stack.sh) or with Docker Compose. Use when the user asks to
-  deploy, start, run, or containerize science_agent, or asks for the UI URL,
+  deploy, start, run, or containerize ScienceDiscovery, or asks for the UI URL,
   SSH port forwarding, or start/stop/restart/log commands.
 ---
 
-# Deploy science_agent (local or Docker)
+# Deploy ScienceDiscovery (local or Docker)
 
-Project-local skill for **science_agent**. Authoritative facts live in
+Project-local skill for **ScienceDiscovery**. Authoritative facts live in
 [`README.md`](../../../README.md) → **Quick start**, in
 [`docs/zh/how-to/deployment.md`](../../../docs/zh/how-to/deployment.md) (Chinese) → local
 mode and Docker deployment, and in [`docs/zh/reference/configuration.md`](../../../docs/zh/reference/configuration.md) → variable tables. Read the matching section before

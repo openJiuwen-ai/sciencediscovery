@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ModelInvocationUsage, ModelUsageBucket } from "@science-agent/schema";
+import type { ModelInvocationUsage, ModelUsageBucket } from "@sciencediscovery/schema";
 
 export function formatCompactTokenValue(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";

@@ -22,7 +22,7 @@
 
 import { lazy, Suspense, useEffect, useState } from "react";
 
-import type { MemoryGraphChainResult, MemoryGraphNode, MemorySubgraph } from "@science-agent/schema";
+import type { MemoryGraphChainResult, MemoryGraphNode, MemorySubgraph } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";

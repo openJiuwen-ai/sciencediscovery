@@ -30,4 +30,4 @@ if [[ -f "$ROOT/.env" ]]; then set -a; # shellcheck disable=SC1091
 : "${SCIENCE_AGENT_LLM_API_TOKEN:?}"
 
 cd "$ROOT"
-pnpm --filter @science-agent/api exec tsx "$HERE/agent_loop_real_smoke.ts"
+pnpm --filter @sciencediscovery/api exec tsx "$HERE/agent_loop_real_smoke.ts"

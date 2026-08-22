@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ExecutionRun, ScientificArtifactVersion } from "@science-agent/schema";
+import type { ExecutionRun, ScientificArtifactVersion } from "@sciencediscovery/schema";
 
 import { artifactVersionProvenance } from "./index.js";
 

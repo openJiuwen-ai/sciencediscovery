@@ -17,7 +17,7 @@ import type {
   ProxyEnvironmentStatus,
   ProxyEnvironmentVariableDetails,
   ResolvedProxy,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export const PROXY_ENV_VARS = [
   "HTTP_PROXY",

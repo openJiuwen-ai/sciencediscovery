@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ConnectorManifest, ModelProfile, RuntimeSettingsDetails, SkillDescriptor } from "@science-agent/schema";
+import type { ConnectorManifest, ModelProfile, RuntimeSettingsDetails, SkillDescriptor } from "@sciencediscovery/schema";
 import { createElement, useState } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 

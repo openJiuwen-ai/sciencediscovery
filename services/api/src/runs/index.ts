@@ -17,7 +17,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
-import { shortErrorMessage } from "@science-agent/operational-logging";
+import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
 import {
   buildWorkspaceSystemPrompt,
@@ -25,16 +25,16 @@ import {
   DEFAULT_MAX_TOTAL_SUBAGENTS,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@science-agent/context";
-import type { AgentConfig } from "@science-agent/model";
+} from "@sciencediscovery/context";
+import type { AgentConfig } from "@sciencediscovery/model";
 import {
   createMainAgentProfile,
   createSubagentProfile,
   resolveSubagentConfig,
   type AgentHistoryMessage,
-} from "@science-agent/orchestration";
-import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@science-agent/workspace";
-import { resolveProxyForUrl } from "@science-agent/data-source";
+} from "@sciencediscovery/orchestration";
+import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
@@ -98,53 +98,53 @@ import type {
   RevisePlanRequest,
   SubagentStep,
   UpdateSpecialistRequest,
-} from "@science-agent/schema";
-import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@science-agent/schema";
-import { reviewerSpecialistSupportsLevel } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
+import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
-import { RunnerClient } from "@science-agent/executor";
+import { RunnerClient } from "@sciencediscovery/executor";
 import { classifyRunFailure, runFailureMessage } from "../run-failure.js";
-import { ProvenanceRecorder } from "@science-agent/provenance";
+import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 import {
   ArtifactDashboardError,
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { inferDomain, MemoryGraphClient, MemoryGraphSink, mgLog } from "@science-agent/memory";
+import { inferDomain, MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
 import { runLog } from "../logging.js";
 import { createPromptManifest } from "../prompt-manifest.js";
-import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
-import { GovernedDownloadManager } from "@science-agent/artifact-manager";
-import { McpGovernanceBroker } from "@science-agent/data-source";
-import { McpSourceCatalog } from "@science-agent/data-source";
-import { createMcpWorkspaceTools } from "@science-agent/artifact-manager";
-import { WebBroker } from "@science-agent/data-source";
-import { createWebWorkspaceTools } from "@science-agent/data-source";
+import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { GovernedDownloadManager } from "@sciencediscovery/artifact-manager";
+import { McpGovernanceBroker } from "@sciencediscovery/data-source";
+import { McpSourceCatalog } from "@sciencediscovery/data-source";
+import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
+import { WebBroker } from "@sciencediscovery/data-source";
+import { createWebWorkspaceTools } from "@sciencediscovery/data-source";
 import {
   createDialogueSkillDraft,
   createSessionSkillDraft,
   SkillCatalog,
   SkillCatalogError,
   type RuntimeSkillSnapshot,
-} from "@science-agent/specialist";
+} from "@sciencediscovery/specialist";
 import { MAX_PAPER_PDF_BYTES, PaperService } from "../papers.js";
-import { RemoteComputeClient } from "@science-agent/executor";
-import { classifySubagentFailure } from "@science-agent/specialist";
+import { RemoteComputeClient } from "@sciencediscovery/executor";
+import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
-import { createAgentPermissionRuntime } from "@science-agent/governance";
+import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
 import { createWorkspaceExecutionBindings } from "../agent-run/workspace-bindings.js";
 import {
   reviewerSpecialistAvailable,
   createEvidenceReferenceTracer,
-} from "@science-agent/provenance";
+} from "@sciencediscovery/provenance";
 import {
   cancelReviewerCheckpoints,
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
-} from "@science-agent/provenance";
+} from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
 
 import {

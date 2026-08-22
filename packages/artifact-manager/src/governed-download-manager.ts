@@ -18,7 +18,7 @@ import { lstat, mkdir, open, rename, rm, stat, statfs } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { resolveWorkspaceFile } from "@science-agent/workspace";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import type {
   ArtifactCandidate,
   ArtifactJob,
@@ -34,11 +34,11 @@ import type {
   ProxyPolicy,
   ResolvedProxy,
   Session,
-} from "@science-agent/schema";
-import type { McpSourceRegistry } from "@science-agent/mcp-sources";
+} from "@sciencediscovery/schema";
+import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
-import { proxyDispatcher } from "@science-agent/data-source";
-import type { McpGovernanceBroker } from "@science-agent/data-source";
+import { proxyDispatcher } from "@sciencediscovery/data-source";
+import type { McpGovernanceBroker } from "@sciencediscovery/data-source";
 
 /** Persistence/settings boundary for the governed download state machine. */
 export interface GovernedDownloadStore {
@@ -538,7 +538,7 @@ export class GovernedDownloadManager {
     }
     const workspaceRoot = this.store.workspacePath(job.sessionId);
     const finalPath = resolveWorkspaceFile(workspaceRoot, plan.destination.path);
-    const stagingPath = resolve(workspaceRoot, ".science-agent", "staging", `${job.id}.part`);
+    const stagingPath = resolve(workspaceRoot, ".sciencediscovery", "staging", `${job.id}.part`);
     await assertSafeArtifactPath(workspaceRoot, finalPath);
     await assertSafeArtifactPath(workspaceRoot, stagingPath);
     await mkdir(dirname(stagingPath), { recursive: true });

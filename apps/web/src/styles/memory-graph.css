@@ -48,6 +48,11 @@
 .memory-canvas-edge-label { pointer-events: none; user-select: none; font-family: inherit; }
 .memory-canvas .dimmed { opacity: 0.14; }
 .memory-canvas .dimmed text { opacity: 0; }
+/* Search hits stay full-opacity and get an accent ring so the user can spot
+   them among the dimmed non-matches. Pairs with the `search-hit` class the
+   canvas applies when a `matchIds` search narrows the view. */
+.memory-canvas-node.search-hit circle:first-of-type { stroke: var(--accent); stroke-width: 2.5; }
+.memory-canvas .search-hit { opacity: 1; }
 
 /* Selected node: the two pulsing rings stay hidden until the group gets
    the `selected-node` class. A loose drop-shadow on the group gives a
@@ -87,13 +92,6 @@
 /* Sits above the canvas: a bottom border, and a plain surface so the chips
    read as controls rather than as a footer legend. */
 .memory-explorer-filters { display: grid; gap: 9px; flex: 0 0 auto; border-bottom: 1px solid var(--border); background: var(--surface); padding: 11px 18px; }
-/* Paper-chain affordance: a third row below the filter chips, only populated
-   when a Paper node is selected or the chain view is already open. Styled
-   like the chain-bar row so the affordance reads as a related control. */
-.memory-paper-chain-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 0 0 auto; border-bottom: 1px solid var(--border); background: var(--surface); padding: 7px 18px; }
-.memory-paper-chain-row button { border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-secondary); padding: 4px 11px; cursor: pointer; font-size: 11px; }
-.memory-paper-chain-row button:hover { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-softer); }
-.memory-paper-chain-row button.memory-chain-back { margin-left: auto; border-style: dashed; }
 .memory-filter-block { display: flex; align-items: center; gap: 10px; }
 .memory-filter-title { flex: 0 0 auto; min-width: 118px; color: var(--text-heading); font-size: 11px; font-weight: 700; }
 .memory-filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }

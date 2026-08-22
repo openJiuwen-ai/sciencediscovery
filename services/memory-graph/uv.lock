@@ -359,7 +359,7 @@ wheels = [
 ]
 
 [[package]]
-name = "science-agent-memory-graph"
+name = "sciencediscovery-memory-graph"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [

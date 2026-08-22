@@ -227,9 +227,9 @@ Connection, auth, and log variables for the sidecar and Node client:
 |------|------|------|
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` / `_PORT` | `127.0.0.1` / `17674` | Sidecar bind address and port (service process) |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | Endpoint the Node API client uses to reach the sidecar (trailing slash trimmed) |
-| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `science-agent-memory-graph-local` | Sidecar Bearer token; verified by both Node and sidecar |
+| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | Sidecar Bearer token; verified by both Node and sidecar |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | Log level shared by the sidecar and the Node side (propagated) |
 
 > Enabling Science Memory, plus the Neo4j connection address, user, and password, are all managed in **System Settings → Science Memory** (single toggle; no `.env` edit or stack restart needed).
 
-Startup: `scripts/start-stack.sh` unconditionally launches the sidecar with `data/envs/memory-graph/bin/python -m science_agent_memory_graph.server` (the environment is provisioned unconditionally with the stack) and `wait_healthy` waits for `http://127.0.0.1:17674/health`. When the toggle is off the sidecar runs idle; sink writes and read paths short-circuit to return `memory_graph_disabled`.
+Startup: `scripts/start-stack.sh` unconditionally launches the sidecar with `data/envs/memory-graph/bin/python -m sciencediscovery_memory_graph.server` (the environment is provisioned unconditionally with the stack) and `wait_healthy` waits for `http://127.0.0.1:17674/health`. When the toggle is off the sidecar runs idle; sink writes and read paths short-circuit to return `memory_graph_disabled`.

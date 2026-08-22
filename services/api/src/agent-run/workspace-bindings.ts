@@ -15,14 +15,14 @@
 import type {
   Environment,
   KernelMode,
-} from "@science-agent/schema";
-import type { WorkspaceAgentOptions } from "@science-agent/context";
+} from "@sciencediscovery/schema";
+import type { WorkspaceAgentOptions } from "@sciencediscovery/context";
 
-import type { ProvenanceRecorder } from "@science-agent/provenance";
-import type { RunnerClient } from "@science-agent/executor";
+import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import type { RunnerClient } from "@sciencediscovery/executor";
 import type { SessionStore } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
-import type { AgentPermissionRuntime } from "@science-agent/governance";
+import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 
 type ExecutionBindings = Pick<

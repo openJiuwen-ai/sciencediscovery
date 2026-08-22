@@ -20,7 +20,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../../packages/schema
       d3-drag:
@@ -125,22 +125,22 @@ importers:
 
   packages/artifact-manager:
     dependencies:
-      '@science-agent/context':
+      '@sciencediscovery/context':
         specifier: workspace:*
         version: link:../context
-      '@science-agent/data-source':
+      '@sciencediscovery/data-source':
         specifier: workspace:*
         version: link:../data-source
-      '@science-agent/governance':
+      '@sciencediscovery/governance':
         specifier: workspace:*
         version: link:../governance
-      '@science-agent/mcp-sources':
+      '@sciencediscovery/mcp-sources':
         specifier: workspace:*
         version: link:../mcp-sources
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
-      '@science-agent/workspace':
+      '@sciencediscovery/workspace':
         specifier: workspace:*
         version: link:../workspace
     devDependencies:
@@ -150,7 +150,7 @@ importers:
 
   packages/cas:
     dependencies:
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
     devDependencies:
@@ -163,16 +163,16 @@ importers:
 
   packages/context:
     dependencies:
-      '@science-agent/model':
+      '@sciencediscovery/model':
         specifier: workspace:*
         version: link:../model
-      '@science-agent/runtime-core':
+      '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
-      '@science-agent/workspace':
+      '@sciencediscovery/workspace':
         specifier: workspace:*
         version: link:../workspace
     devDependencies:
@@ -182,19 +182,19 @@ importers:
 
   packages/data-source:
     dependencies:
-      '@science-agent/cas':
+      '@sciencediscovery/cas':
         specifier: workspace:*
         version: link:../cas
-      '@science-agent/governance':
+      '@sciencediscovery/governance':
         specifier: workspace:*
         version: link:../governance
-      '@science-agent/mcp-sources':
+      '@sciencediscovery/mcp-sources':
         specifier: workspace:*
         version: link:../mcp-sources
-      '@science-agent/memory':
+      '@sciencediscovery/memory':
         specifier: workspace:*
         version: link:../memory
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
       undici:
@@ -207,10 +207,10 @@ importers:
 
   packages/executor:
     dependencies:
-      '@science-agent/runner':
+      '@sciencediscovery/runner':
         specifier: workspace:*
         version: link:../../services/runner
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
     devDependencies:
@@ -220,7 +220,7 @@ importers:
 
   packages/governance:
     dependencies:
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
     devDependencies:
@@ -230,7 +230,7 @@ importers:
 
   packages/mcp-sources:
     dependencies:
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
     devDependencies:
@@ -243,10 +243,10 @@ importers:
 
   packages/memory:
     dependencies:
-      '@science-agent/operational-logging':
+      '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../operational-logging
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
     devDependencies:
@@ -256,10 +256,10 @@ importers:
 
   packages/model:
     dependencies:
-      '@science-agent/runtime-core':
+      '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
       undici:
@@ -281,16 +281,16 @@ importers:
 
   packages/orchestration:
     dependencies:
-      '@science-agent/model':
+      '@sciencediscovery/model':
         specifier: workspace:*
         version: link:../model
-      '@science-agent/runtime-core':
+      '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
-      '@science-agent/tools':
+      '@sciencediscovery/tools':
         specifier: workspace:*
         version: link:../tools
     devDependencies:
@@ -300,22 +300,22 @@ importers:
 
   packages/provenance:
     dependencies:
-      '@science-agent/artifact-manager':
+      '@sciencediscovery/artifact-manager':
         specifier: workspace:*
         version: link:../artifact-manager
-      '@science-agent/cas':
+      '@sciencediscovery/cas':
         specifier: workspace:*
         version: link:../cas
-      '@science-agent/executor':
+      '@sciencediscovery/executor':
         specifier: workspace:*
         version: link:../executor
-      '@science-agent/memory':
+      '@sciencediscovery/memory':
         specifier: workspace:*
         version: link:../memory
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
-      '@science-agent/workspace':
+      '@sciencediscovery/workspace':
         specifier: workspace:*
         version: link:../workspace
     devDependencies:
@@ -340,25 +340,25 @@ importers:
 
   packages/schema:
     dependencies:
-      '@science-agent/external-urls':
+      '@sciencediscovery/external-urls':
         specifier: workspace:*
         version: link:../../config
 
   packages/specialist:
     dependencies:
-      '@science-agent/cas':
+      '@sciencediscovery/cas':
         specifier: workspace:*
         version: link:../cas
-      '@science-agent/context':
+      '@sciencediscovery/context':
         specifier: workspace:*
         version: link:../context
-      '@science-agent/orchestration':
+      '@sciencediscovery/orchestration':
         specifier: workspace:*
         version: link:../orchestration
-      '@science-agent/provenance':
+      '@sciencediscovery/provenance':
         specifier: workspace:*
         version: link:../provenance
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
       fflate:
@@ -374,7 +374,7 @@ importers:
 
   packages/tools:
     dependencies:
-      '@science-agent/runtime-core':
+      '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
       typebox:
@@ -387,13 +387,13 @@ importers:
 
   packages/workspace:
     dependencies:
-      '@science-agent/orchestration':
+      '@sciencediscovery/orchestration':
         specifier: workspace:*
         version: link:../orchestration
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
-      '@science-agent/tools':
+      '@sciencediscovery/tools':
         specifier: workspace:*
         version: link:../tools
       typebox:
@@ -409,58 +409,58 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
-      '@science-agent/artifact-manager':
+      '@sciencediscovery/artifact-manager':
         specifier: workspace:*
         version: link:../../packages/artifact-manager
-      '@science-agent/cas':
+      '@sciencediscovery/cas':
         specifier: workspace:*
         version: link:../../packages/cas
-      '@science-agent/context':
+      '@sciencediscovery/context':
         specifier: workspace:*
         version: link:../../packages/context
-      '@science-agent/data-source':
+      '@sciencediscovery/data-source':
         specifier: workspace:*
         version: link:../../packages/data-source
-      '@science-agent/executor':
+      '@sciencediscovery/executor':
         specifier: workspace:*
         version: link:../../packages/executor
-      '@science-agent/governance':
+      '@sciencediscovery/governance':
         specifier: workspace:*
         version: link:../../packages/governance
-      '@science-agent/mcp-sources':
+      '@sciencediscovery/mcp-sources':
         specifier: workspace:*
         version: link:../../packages/mcp-sources
-      '@science-agent/memory':
+      '@sciencediscovery/memory':
         specifier: workspace:*
         version: link:../../packages/memory
-      '@science-agent/model':
+      '@sciencediscovery/model':
         specifier: workspace:*
         version: link:../../packages/model
-      '@science-agent/operational-logging':
+      '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
-      '@science-agent/orchestration':
+      '@sciencediscovery/orchestration':
         specifier: workspace:*
         version: link:../../packages/orchestration
-      '@science-agent/provenance':
+      '@sciencediscovery/provenance':
         specifier: workspace:*
         version: link:../../packages/provenance
-      '@science-agent/runner':
+      '@sciencediscovery/runner':
         specifier: workspace:*
         version: link:../runner
-      '@science-agent/runtime-core':
+      '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../../packages/runtime-core
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../../packages/schema
-      '@science-agent/specialist':
+      '@sciencediscovery/specialist':
         specifier: workspace:*
         version: link:../../packages/specialist
-      '@science-agent/tools':
+      '@sciencediscovery/tools':
         specifier: workspace:*
         version: link:../../packages/tools
-      '@science-agent/workspace':
+      '@sciencediscovery/workspace':
         specifier: workspace:*
         version: link:../../packages/workspace
       ajv:
@@ -488,10 +488,10 @@ importers:
 
   services/launcher:
     dependencies:
-      '@science-agent/external-urls':
+      '@sciencediscovery/external-urls':
         specifier: workspace:*
         version: link:../../config
-      '@science-agent/sandbox-capability':
+      '@sciencediscovery/sandbox-capability':
         specifier: workspace:*
         version: link:../../packages/sandbox-capability
     devDependencies:
@@ -510,13 +510,13 @@ importers:
 
   services/runner:
     dependencies:
-      '@science-agent/operational-logging':
+      '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
-      '@science-agent/sandbox-capability':
+      '@sciencediscovery/sandbox-capability':
         specifier: workspace:*
         version: link:../../packages/sandbox-capability
-      '@science-agent/schema':
+      '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../../packages/schema
     devDependencies:

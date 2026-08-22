@@ -15,15 +15,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
+import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
-import type { AgentPermissionRuntime } from "@science-agent/governance";
+import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { PaperService } from "../papers.js";
 import type { SessionStore } from "../store.js";
-import type { GovernedDownloadManager } from "@science-agent/artifact-manager";
-import type { McpGovernanceBroker } from "@science-agent/data-source";
-import type { McpSourceCatalog } from "@science-agent/data-source";
-import { createMcpWorkspaceTools } from "@science-agent/artifact-manager";
+import type { GovernedDownloadManager } from "@sciencediscovery/artifact-manager";
+import type { McpGovernanceBroker } from "@sciencediscovery/data-source";
+import type { McpSourceCatalog } from "@sciencediscovery/data-source";
+import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
 
 test("Reviewer MCP tools suppress Memory Graph mirroring", async () => {
   const requests: Array<{ suppressMemoryGraphMirror?: boolean }> = [];

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ChatMessage, ComposerReference, WorkbenchSearchResult } from "@science-agent/schema";
+import type { ChatMessage, ComposerReference, WorkbenchSearchResult } from "@sciencediscovery/schema";
 
-import { SkillCatalog } from "@science-agent/specialist";
+import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
 
 export async function searchWorkbench(store: SessionStore, query: string): Promise<WorkbenchSearchResult[]> {

@@ -14,7 +14,7 @@
 
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 
-import type { JsonSchema, SubagentBrief } from "@science-agent/schema";
+import type { JsonSchema, SubagentBrief } from "@sciencediscovery/schema";
 
 const BRIEF_GOAL_LIMIT = 2_000;
 const BRIEF_ITEM_LIMIT = 1_000;

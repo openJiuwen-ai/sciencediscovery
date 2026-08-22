@@ -7,7 +7,7 @@
 Monorepo（pnpm workspace + 若干 Python 子项目）：
 
 ```
-science_agent/
+sciencediscovery/
 ├── apps/web/                 # React 浏览器 UI（Vite）
 ├── services/
 │   ├── api/                  # Node 控制 API（主业务）

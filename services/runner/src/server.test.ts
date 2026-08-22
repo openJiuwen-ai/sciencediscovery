@@ -31,7 +31,7 @@ import type {
   RunnerRuntimeStatus,
   ShellExecutionRequest,
   ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { appendBounded, executePython, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
@@ -139,7 +139,7 @@ function createNpuTestServer(runnerConfig: RunnerConfig, pythonPath: string) {
 }
 
 test("loadRunnerConfig resolves runtime data from the repository root", () => {
-  const repositoryRoot = resolve(process.cwd(), ".tmp", "relocated-ScienceAgent");
+  const repositoryRoot = resolve(process.cwd(), ".tmp", "relocated-ScienceDiscovery");
   const loaded = loadRunnerConfig({}, repositoryRoot);
   assert.equal(loaded.bwrapPath, "bwrap");
   assert.equal(loaded.dataDir, resolve(repositoryRoot, "data"));
@@ -1079,7 +1079,7 @@ test("Protenix shell scheduler enforces device concurrency and reports failed de
     return;
   }
 
-  const root = await mkdtemp(resolve(tmpdir(), "science-agent-protenix-scheduler-"));
+  const root = await mkdtemp(resolve(tmpdir(), "sciencediscovery-protenix-scheduler-"));
   try {
     const script = resolve(protenixPipelineScriptsDir, "run_after_rfdiffusion.sh");
     const scriptsDir = protenixPipelineScriptsDir;
@@ -1218,7 +1218,7 @@ exit 2
       encoding: "utf8",
       env: {
         ...process.env,
-        ANTIBODY_REQUIRE_SCIENCEAGENT_ENV: "0",
+        ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV: "0",
         SCIENCE_AGENT_PROTENIX_TEST_EVENTS: eventsPath,
       },
     });
@@ -1261,7 +1261,7 @@ exit 2
         encoding: "utf8",
         env: {
           ...process.env,
-          ANTIBODY_REQUIRE_SCIENCEAGENT_ENV: "0",
+          ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV: "0",
           SCIENCE_AGENT_PROTENIX_TEST_EVENTS: eventsPath,
           SCIENCE_AGENT_PROTENIX_FAIL_NAME: "output_000004_dldesign_0",
         },

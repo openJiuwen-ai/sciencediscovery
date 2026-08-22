@@ -14,26 +14,26 @@
 
 import { resolve } from "node:path";
 
-import { McpSourceCatalog, type McpTransportClient } from "@science-agent/data-source";
-import { RemoteComputeClient } from "@science-agent/executor";
-import { createBuiltinMcpSourceRegistry } from "@science-agent/mcp-sources";
-import { shortErrorMessage } from "@science-agent/operational-logging";
-import { reviewerLog } from "@science-agent/provenance";
-import type { ResolvedProxy } from "@science-agent/schema";
+import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
+import { RemoteComputeClient } from "@sciencediscovery/executor";
+import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { shortErrorMessage } from "@sciencediscovery/operational-logging";
+import { reviewerLog } from "@sciencediscovery/provenance";
+import type { ResolvedProxy } from "@sciencediscovery/schema";
 
 import { apiLog, configureApiLogging } from "../logging.js";
-import { MemoryGraphClient, MemoryGraphSink, mgLog } from "@science-agent/memory";
-import { GovernedDownloadManager } from "@science-agent/artifact-manager";
-import { McpGovernanceBroker } from "@science-agent/data-source";
+import { MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
+import { GovernedDownloadManager } from "@sciencediscovery/artifact-manager";
+import { McpGovernanceBroker } from "@sciencediscovery/data-source";
 import { McpNodeClient } from "../mcp/node-client.js";
 import { PaperService } from "../papers.js";
-import { PermissionDecisionQueue } from "@science-agent/governance";
-import { ProvenanceRecorder } from "@science-agent/provenance";
-import { RunnerClient } from "@science-agent/executor";
+import { PermissionDecisionQueue } from "@sciencediscovery/governance";
+import { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import { RunnerClient } from "@sciencediscovery/executor";
 import { recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
-import { SkillCatalog } from "@science-agent/specialist";
+import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
-import { NativeWebProviderClient, WebBroker } from "@science-agent/data-source";
+import { NativeWebProviderClient, WebBroker } from "@sciencediscovery/data-source";
 import type { ServerConfig } from "./config.js";
 
 export interface ApiServerDependencies {

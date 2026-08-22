@@ -26,7 +26,7 @@
  * the walk instead of burning the budget on endpoints that will answer the same.
  */
 
-import { externalUrl, externalUrlList } from "@science-agent/schema";
+import { externalUrl, externalUrlList } from "@sciencediscovery/schema";
 
 import { ProviderRequestError, providerRequest, statusErrorCode, thrownErrorCode } from "./http.js";
 import { buildTavilyAuthHeaders } from "./search.js";

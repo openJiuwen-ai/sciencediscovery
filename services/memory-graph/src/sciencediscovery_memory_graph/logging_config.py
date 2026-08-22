@@ -30,7 +30,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-_LOGGER_NAME = "science_agent_memory_graph"
+_LOGGER_NAME = "sciencediscovery_memory_graph"
 _DEFAULT_FILENAME = "memory-graph.log"
 _SENSITIVE_ASSIGNMENT = re.compile(
     r'''\b(authorization|api[-_]?key|token|password|secret)\b["']?\s*[:=]\s*["']?(?:bearer\s+)?[^\s,;"'}]+''',

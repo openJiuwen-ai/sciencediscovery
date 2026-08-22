@@ -18,13 +18,13 @@ import test from "node:test";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 
 import {
   classifySubagentFailure,
   SUBAGENT_PARENT_TIMEOUT_MARGIN_MS,
   subagentCapableParentRunTimeoutMs,
-} from "@science-agent/specialist";
+} from "@sciencediscovery/specialist";
 import { DEFAULT_AGENT_IDLE_TIMEOUT_MS as DEFAULT_GATEWAY_IDLE_TIMEOUT_MS } from "./native-agent/index.js";
 
 test("parent gateway deadline exceeds the largest allowed subagent timeout", () => {

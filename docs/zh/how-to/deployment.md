@@ -106,7 +106,7 @@ ScienceDiscovery help                显示帮助
 | Node 运行时 | 供控制 API 与 runner 使用 |
 | CPython 3.12 | 可重定位发行版，无需宿主 Python；同时作为首启 gateway venv 的基础解释器 |
 | Web 静态资源 | 预构建的 `apps/web/dist` |
-| gateway wheel 与首启清单 | 自有代码的 `science-agent-gateway` wheel、带哈希的锁定依赖清单、uv wheel 的版本 pin |
+| gateway wheel 与首启清单 | 自有代码的 `sciencediscovery-gateway` wheel、带哈希的锁定依赖清单、uv wheel 的版本 pin |
 | micromamba | 固定版本，首次 `serve` 播种到 `<数据目录>/scientific-envs/bin/micromamba`，之后 Runner 按同一发布清单校验 |
 
 不含 uv 与 gateway 的第三方 Python 依赖（见[首次启动安装的依赖](#首次启动安装的依赖)），不含 Neo4j，也不含 starter Python/R 科学环境与 conda 包缓存：首次创建 starter 环境仍需访问允许的软件包渠道。
@@ -173,7 +173,7 @@ curl -fsS http://127.0.0.1:4310/health
 
 打开 <http://127.0.0.1:4310>，使用 `SCIENCE_AGENT_AUTH_TOKEN` 登录；未设置时，容器日志会打印首次启动生成的 token。首次构建会编译 Web UI、解析两个服务 Python 环境并下载 micromamba，耗时较长且需要外网；之后启动镜像内服务和取得 micromamba 不再需要联网。托管 starter Python 的软件包网络边界见下方“限制”。
 
-Docker 构建会根据 BuildKit 的 `TARGETARCH` 选择 `linux/amd64` 或 `linux/arm64` 对应的 micromamba，并用 Runner 共用的发布清单校验 SHA256。二进制保存在镜像的 `/opt/science-agent/provisioner/micromamba`；容器首次面对空的 `/app/data` bind mount 时，会把它复制到默认托管路径，Runner 随后再次按同一清单校验。这个流程不需要在**运行时**访问 GitHub。
+Docker 构建会根据 BuildKit 的 `TARGETARCH` 选择 `linux/amd64` 或 `linux/arm64` 对应的 micromamba，并用 Runner 共用的发布清单校验 SHA256。二进制保存在镜像的 `/opt/sciencediscovery/provisioner/micromamba`；容器首次面对空的 `/app/data` bind mount 时，会把它复制到默认托管路径，Runner 随后再次按同一清单校验。这个流程不需要在**运行时**访问 GitHub。
 
 ```bash
 docker compose logs -f        # 跟踪启动顺序：runner → API
@@ -192,8 +192,8 @@ docker compose up -d --build  # 拉取新代码后重建并重启
 
 有两处与宿主机安装不同：
 
-- uv 管理的 Python 环境**不**写入数据目录，而是烘焙在镜像的 `/opt/science-agent/envs/{gateway,paper}` 中。这样 bind mount 只保存应用状态，全新的 `compose up` 也无需联网。
-- 固定版本 micromamba 烘焙在 `/opt/science-agent/provisioner/micromamba`，空数据目录首次启动时播种到 `data/scientific-envs/bin/micromamba`。显式设置 `SCIENCE_AGENT_PROVISIONER_PATH` 时不播种，Runner 继续使用该管理员覆盖路径。
+- uv 管理的 Python 环境**不**写入数据目录，而是烘焙在镜像的 `/opt/sciencediscovery/envs/{gateway,paper}` 中。这样 bind mount 只保存应用状态，全新的 `compose up` 也无需联网。
+- 固定版本 micromamba 烘焙在 `/opt/sciencediscovery/provisioner/micromamba`，空数据目录首次启动时播种到 `data/scientific-envs/bin/micromamba`。显式设置 `SCIENCE_AGENT_PROVISIONER_PATH` 时不播种，Runner 继续使用该管理员覆盖路径。
 
 ### 沙箱与宿主要求
 
@@ -231,6 +231,6 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 sha256sum --check dist/micromamba-release/SHA256SUMS
 ```
 
-默认产物为 `science-agent-micromamba-<版本>-linux-x86_64.tar.gz` 与 `science-agent-micromamba-<版本>-linux-aarch64.tar.gz`。每个包只含 `bin/micromamba` 和记录目标架构、上游文件名及二进制 SHA256 的 `manifest.json`；输出目录另含 `VERSION`、`SHA256SUMS`。脚本**不会**创建或收集 starter Python/R 环境、conda 软件包缓存或其他 Python 树。
+默认产物为 `sciencediscovery-micromamba-<版本>-linux-x86_64.tar.gz` 与 `sciencediscovery-micromamba-<版本>-linux-aarch64.tar.gz`。每个包只含 `bin/micromamba` 和记录目标架构、上游文件名及二进制 SHA256 的 `manifest.json`；输出目录另含 `VERSION`、`SHA256SUMS`。脚本**不会**创建或收集 starter Python/R 环境、conda 软件包缓存或其他 Python 树。
 
 可用 `--arch x86_64` / `--arch aarch64` 只生成一种架构，或用 `--dry-run` 在不下载的情况下核对版本、URL 与 SHA256。受限构建机也可先按发布清单准备两个原始二进制，再通过 `--source-dir <目录>` 进行本地校验与打包。

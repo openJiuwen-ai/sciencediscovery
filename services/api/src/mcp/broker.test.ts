@@ -17,7 +17,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { createBuiltinMcpSourceRegistry, createMcpSourceRegistry } from "@science-agent/mcp-sources";
+import { createBuiltinMcpSourceRegistry, createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import { SessionStore } from "../store.js";
 import {
@@ -25,11 +25,11 @@ import {
   ResourceRateLimitQueueFullError,
   ResourceRateLimitQueueTimeoutError,
   type ResourceRateLimitOptions,
-} from "@science-agent/data-source";
-import { McpGovernanceBroker } from "@science-agent/data-source";
-import type { McpTransportClient } from "@science-agent/data-source";
-import type { McpCatalog, McpInvokeResponse } from "@science-agent/schema";
-import { McpSourceCatalog } from "@science-agent/data-source";
+} from "@sciencediscovery/data-source";
+import { McpGovernanceBroker } from "@sciencediscovery/data-source";
+import type { McpTransportClient } from "@sciencediscovery/data-source";
+import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
+import { McpSourceCatalog } from "@sciencediscovery/data-source";
 
 test("governance broker invokes native UniProt MCP through the gateway and caches normalized records", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `mcp-native-${Date.now()}-${process.pid}`);

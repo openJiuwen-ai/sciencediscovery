@@ -13,11 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Download MindSpore org issue/PR templates into a local gitignored cache.
+"""Download openJiuwen org issue/PR templates into a local gitignored cache.
 
 Source (no git clone):
-  https://gitcode.com/mindspore/.gitcode  (default ref: master)
-  tree: .gitcode/  (ISSUE_TEMPLATE/*.yml, PULL_REQUEST_TEMPLATE*.md)
+  https://gitcode.com/openJiuwen/.gitcode  (default ref: master)
+  tree: .gitcode/
+    ISSUE_TEMPLATE.zh/*.yml          Chinese issue forms (default for this repo)
+    ISSUE_TEMPLATE.en/*.yml          English issue forms (+ config.yml)
+    PULL_REQUEST_TEMPLATE.md         PR template (Chinese)
+    PULL_REQUEST_TEMPLATE.zh-CN.md
+    PULL_REQUEST_TEMPLATE.en.md
 
 Token resolution matches gitcode CLI:
   1. GC_TOKEN
@@ -25,9 +30,9 @@ Token resolution matches gitcode CLI:
   3. ~/.config/gc/auth.json (or $GC_CONFIG_DIR/auth.json)
 
 Usage:
-  uv run --no-project fetch_mindspore_templates.py
-  uv run --no-project fetch_mindspore_templates.py --force
-  uv run --no-project fetch_mindspore_templates.py --ref master --out /path/to/cache
+  uv run --no-project fetch_openjiuwen_templates.py
+  uv run --no-project fetch_openjiuwen_templates.py --force
+  uv run --no-project fetch_openjiuwen_templates.py --ref master --out /path/to/cache
 
 Never prints the token.
 """
@@ -48,7 +53,7 @@ from typing import Any
 from urllib.parse import quote
 
 DEFAULT_HOST = "gitcode.com"
-DEFAULT_OWNER = "mindspore"
+DEFAULT_OWNER = "openJiuwen"
 DEFAULT_REPO = ".gitcode"
 DEFAULT_REF = "master"
 DEFAULT_TREE = ".gitcode"  # path inside the templates repo
@@ -59,7 +64,7 @@ HOST_ENV = "GC_HOST"
 
 # Skill layout: scripts/ -> parent is skill root; cache next to scripts/
 SKILL_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CACHE = SKILL_ROOT / "cache" / "mindspore-org-templates"
+DEFAULT_CACHE = SKILL_ROOT / "cache" / "openjiuwen-org-templates"
 
 
 def eprint(*args: object) -> None:
@@ -211,15 +216,41 @@ def _write_file(
     eprint(f"  wrote {path} ({len(raw)} bytes)")
 
 
-def cache_looks_complete(cache: Path) -> bool:
-    marker = cache / ".gitcode" / "ISSUE_TEMPLATE"
-    pr = list((cache / ".gitcode").glob("PULL_REQUEST_TEMPLATE*.md")) if (cache / ".gitcode").is_dir() else []
-    return marker.is_dir() and any(marker.glob("*.yml")) and bool(pr)
+def survey_cache(cache: Path, tree_path: str = DEFAULT_TREE) -> dict[str, Any]:
+    """Describe the cached template layout.
+
+    openJiuwen splits issue forms per locale (`ISSUE_TEMPLATE.zh`,
+    `ISSUE_TEMPLATE.en`), so match the `ISSUE_TEMPLATE*` prefix rather than a
+    single `ISSUE_TEMPLATE/` directory. Complete means: at least one locale
+    directory holding `*.yml` forms, plus at least one PR template.
+    """
+    root = cache / tree_path
+    issue_dirs: dict[str, list[str]] = {}
+    if root.is_dir():
+        for entry in sorted(root.iterdir()):
+            if entry.is_dir() and entry.name.startswith("ISSUE_TEMPLATE"):
+                ymls = sorted(p.name for p in entry.glob("*.yml"))
+                if ymls:
+                    issue_dirs[entry.name] = ymls
+    pr_templates = (
+        sorted(p.name for p in root.glob("PULL_REQUEST_TEMPLATE*.md"))
+        if root.is_dir()
+        else []
+    )
+    return {
+        "issue_template_dirs": issue_dirs,
+        "pr_templates": pr_templates,
+        "complete": bool(issue_dirs) and bool(pr_templates),
+    }
+
+
+def cache_looks_complete(cache: Path, tree_path: str = DEFAULT_TREE) -> bool:
+    return bool(survey_cache(cache, tree_path)["complete"])
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fetch MindSpore org .gitcode issue/PR templates into a local cache (no git clone).",
+        description="Fetch openJiuwen org .gitcode issue/PR templates into a local cache (no git clone).",
     )
     parser.add_argument(
         "--out",
@@ -231,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tree",
         default=DEFAULT_TREE,
-        help=f"Path inside mindspore/.gitcode to download (default: {DEFAULT_TREE})",
+        help=f"Path inside openJiuwen/.gitcode to download (default: {DEFAULT_TREE})",
     )
     parser.add_argument(
         "--owner",
@@ -263,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
     out: Path = args.out.expanduser().resolve()
     host = resolve_host(args.hostname)
 
-    if out.exists() and not args.force and cache_looks_complete(out):
+    if out.exists() and not args.force and cache_looks_complete(out, args.tree):
         eprint(f"cache already present: {out} (use --force to refresh)")
         if args.json:
             meta_path = out / "FETCH_META.json"
@@ -298,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit:
         pass  # optional
 
+    survey = survey_cache(out, args.tree)
     meta = {
         "source_web": f"https://{host}/{args.owner}/{args.repo}/tree/{args.ref}/{args.tree}",
         "source_repo": f"{args.owner}/{args.repo}",
@@ -309,14 +341,21 @@ def main(argv: list[str] | None = None) -> int:
         "files": sorted(written),
         "cache": str(out),
         "method": "GitCode Contents API (no git clone)",
+        **survey,
     }
     (out / "FETCH_META.json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     eprint(f"done: {len(written)} files -> {out}")
+    for name, ymls in survey["issue_template_dirs"].items():
+        eprint(f"  {name}: {len(ymls)} yml file(s)")
+    eprint(f"  PR templates: {', '.join(survey['pr_templates']) or '(none)'}")
 
-    if not cache_looks_complete(out):
-        eprint("warning: cache may be incomplete (missing ISSUE_TEMPLATE yml or PR templates)")
+    if not survey["complete"]:
+        eprint(
+            "warning: cache may be incomplete (expected ISSUE_TEMPLATE.zh / "
+            "ISSUE_TEMPLATE.en with *.yml plus PULL_REQUEST_TEMPLATE*.md)"
+        )
 
     if args.json:
         print(json.dumps(meta, ensure_ascii=False))

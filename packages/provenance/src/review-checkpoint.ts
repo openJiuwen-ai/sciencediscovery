@@ -21,8 +21,8 @@ import type {
   ReviewerSpecialistLevel,
   ScientificArtifact,
   ScientificArtifactVersion,
-} from "@science-agent/schema";
-import type { CasStore } from "@science-agent/cas";
+} from "@sciencediscovery/schema";
+import type { CasStore } from "@sciencediscovery/cas";
 import {
   offlineCitationPrecheck,
   parseSmartCitationReview,

@@ -28,7 +28,7 @@
 .annotatable-figure > i { position: absolute; width: 16px; height: 16px; border: 3px solid var(--surface); border-radius: 999px; background: var(--danger-bright); box-shadow: 0 0 0 2px var(--danger-bright); transform: translate(-50%, -50%); pointer-events: none; }
 .annotation-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin-top: 7px; }
 .annotation-editor input { min-width: 0; border: 1px solid var(--border-strong); border-radius: 7px; padding: 7px; font-size: 11px; }
-.annotation-editor button { font-size: 10px; }
+.annotation-editor button { align-self: stretch; }
 .annotation-chips { display: flex; flex-wrap: wrap; min-height: 30px; max-height: 56px; overflow-y: auto; gap: 4px; padding: 4px 12px; }
 .annotation-chips button { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; overflow: hidden; border: 1px solid var(--warning-border); border-radius: 999px; background: var(--warning-soft); color: var(--warning); padding: 2px 7px; cursor: pointer; font-size: 10px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-controls { display: flex; align-items: center; justify-content: flex-end; gap: 7px; margin-bottom: 6px; }
@@ -99,7 +99,7 @@
 .provenance-section { display: grid; gap: 6px; }
 .provenance-section-title { margin: 0; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
 .artifact-provenance article { display: grid; gap: 6px; margin-top: 7px; border: 1px solid var(--border); border-radius: 8px; padding: 9px; }
-.artifact-provenance article header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.artifact-provenance article header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .artifact-provenance article p, .artifact-provenance article small { margin: 0; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .artifact-provenance article pre { overflow: auto; max-height: 240px; margin: 0; background: var(--surface-sunk); padding: 8px; font: 10px/1.45 ui-monospace, monospace; white-space: pre-wrap; }
 .provenance-working-directory { display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }

@@ -20,7 +20,7 @@ import type {
   WebSettingsDetails,
   WebUsageSummary,
   WorkbenchSearchResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { SkillsApiClient } from "./skills.js";
 

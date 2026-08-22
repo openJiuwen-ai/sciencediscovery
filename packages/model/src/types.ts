@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
-import type { ResolvedProxy } from "@science-agent/schema";
+import type { ResolvedProxy } from "@sciencediscovery/schema";
 
 export interface AgentConfig {
   apiToken?: string;

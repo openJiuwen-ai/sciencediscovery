@@ -25,7 +25,7 @@ import {
   type EnvironmentRevision,
   type PermissionEpoch,
   type ScientificLanguage,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { EnvironmentStore, type EnvironmentRuntime } from "./environment-store.js";
 import { executePython, executeShell } from "./executor.js";

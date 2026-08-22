@@ -227,9 +227,9 @@ sidecar 与 Node 客户端的连接、鉴权、日志变量：
 |------|------|------|
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` / `_PORT` | `127.0.0.1` / `17674` | sidecar 绑定地址与端口（服务进程使用） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | Node API 客户端访问 sidecar 的端点（尾斜杠会被裁掉） |
-| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `science-agent-memory-graph-local` | sidecar Bearer token；Node 与 sidecar 双向校验 |
+| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | sidecar Bearer token；Node 与 sidecar 双向校验 |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | sidecar 与 Node 两侧的日志级别（同源传递） |
 
 > Science Memory 的启停、Neo4j 连接地址、用户与密码都在 **System Settings → Science Memory** 里管理（单一 toggle，无需改 `.env`、无需重启 stack）。
 
-启动：`scripts/start-stack.sh` 无条件用 `data/envs/memory-graph/bin/python -m science_agent_memory_graph.server` 拉起 sidecar（环境随栈启动无条件 provision），并 `wait_healthy` 等 `http://127.0.0.1:17674/health`。toggle 关时 sidecar 空跑，sink 写入与读路径 short-circuit 返回 `memory_graph_disabled`。
+启动：`scripts/start-stack.sh` 无条件用 `data/envs/memory-graph/bin/python -m sciencediscovery_memory_graph.server` 拉起 sidecar（环境随栈启动无条件 provision），并 `wait_healthy` 等 `http://127.0.0.1:17674/health`。toggle 关时 sidecar 空跑，sink 写入与读路径 short-circuit 返回 `memory_graph_disabled`。

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ScientificArtifact, WorkspaceFile } from "@science-agent/schema";
+import type { ScientificArtifact, WorkspaceFile } from "@sciencediscovery/schema";
 
 export type ArtifactTreeEntry = ArtifactTreeDirectory | ArtifactTreeLeaf;
 export type WorkspaceFileTreeEntry = WorkspaceFileTreeDirectory | WorkspaceFileTreeLeaf;

@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import type { ScientificArtifactKind } from "@science-agent/schema";
+import type { ScientificArtifactKind } from "@sciencediscovery/schema";
 
 import type {
   ArtifactDashboard,
@@ -30,7 +30,7 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "./artifact-dashboard.js";
-import { ProvenanceRecorder } from "@science-agent/provenance";
+import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { SessionStore } from "./store.js";
 import { createApiServer, type ServerConfig } from "./server.js";
 
@@ -42,7 +42,7 @@ interface Fixture {
 }
 
 async function createFixture(context: TestContext): Promise<Fixture> {
-  const dataDir = await mkdtemp(resolve(tmpdir(), "science-agent-dashboard-"));
+  const dataDir = await mkdtemp(resolve(tmpdir(), "sciencediscovery-dashboard-"));
   context.after(() => rm(dataDir, { force: true, recursive: true }));
   const store = new SessionStore(dataDir);
   store.setAvailableSkillIds([]);

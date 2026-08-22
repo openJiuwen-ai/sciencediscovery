@@ -24,7 +24,7 @@ import type {
   SessionRun,
   Subagent,
   WorkspaceFile,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export interface GovernedDownloadCandidate {
   candidate: ArtifactCandidate;

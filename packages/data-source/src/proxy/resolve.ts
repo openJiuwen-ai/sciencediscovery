@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ProxyDefaultPolicy, ProxyPolicy, ProxyServerKind, ResolvedProxy } from "@science-agent/schema";
+import type { ProxyDefaultPolicy, ProxyPolicy, ProxyServerKind, ResolvedProxy } from "@sciencediscovery/schema";
 
 import { assertValidProxyEnvironment, resolveProxyEnvironment, type ProxyEnvironment } from "./env.js";
 import { resolveSystemProxy } from "./system.js";

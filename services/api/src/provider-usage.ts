@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ModelUsageStatus } from "@science-agent/schema";
+import type { ModelUsageStatus } from "@sciencediscovery/schema";
 
 export interface ProviderUsageBreakdown {
   cacheReadTokens: number | null;

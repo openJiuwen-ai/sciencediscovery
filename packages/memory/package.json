@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/memory",
+  "name": "@sciencediscovery/memory",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,8 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/operational-logging": "workspace:*",
-    "@science-agent/schema": "workspace:*"
+    "@sciencediscovery/operational-logging": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*"
   },
   "devDependencies": { "@types/node": "26.1.1" }
 }

@@ -17,15 +17,15 @@ import { randomUUID } from "node:crypto";
 import {
   type RuntimeSkill,
   type WorkspaceAgentOptions,
-} from "@science-agent/context";
-import { createSubagentProfile, type AgentEvent } from "@science-agent/orchestration";
-import type { AgentHistoryMessage, SubagentProfile } from "@science-agent/orchestration";
+} from "@sciencediscovery/context";
+import { createSubagentProfile, type AgentEvent } from "@sciencediscovery/orchestration";
+import type { AgentHistoryMessage, SubagentProfile } from "@sciencediscovery/orchestration";
 import {
   reviewerLog,
   type LiteratureCitationCandidate,
   type ReviewerLogContext,
   type SemanticReviewOptions,
-} from "@science-agent/provenance";
+} from "@sciencediscovery/provenance";
 
 // Deep review receives preselected evidence. One model response is enough and
 // prevents a Reviewer from spending the whole gateway budget planning tool calls.

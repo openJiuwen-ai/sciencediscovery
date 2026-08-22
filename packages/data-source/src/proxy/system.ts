@@ -14,7 +14,7 @@
 
 import { execFileSync } from "node:child_process";
 
-import type { ResolvedProxy } from "@science-agent/schema";
+import type { ResolvedProxy } from "@sciencediscovery/schema";
 
 const CACHE_TTL_MS = 60_000;
 

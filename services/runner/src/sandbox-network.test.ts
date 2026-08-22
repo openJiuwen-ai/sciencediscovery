@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { promisify } from "node:util";
 
-import { NO_SANDBOX_NETWORK_ACCESS, type RunnerHealth, type SandboxNetworkAccess } from "@science-agent/schema";
+import { NO_SANDBOX_NETWORK_ACCESS, type RunnerHealth, type SandboxNetworkAccess } from "@sciencediscovery/schema";
 
 import {
   EGRESS_BRIDGE_PORT,
@@ -40,7 +40,7 @@ const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
 
 async function scratchDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "science-agent-sandbox-network-"));
+  const directory = await mkdtemp(join(tmpdir(), "sciencediscovery-sandbox-network-"));
   temporaryDirectories.push(directory);
   return directory;
 }
