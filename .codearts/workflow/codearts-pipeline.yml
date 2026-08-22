@@ -1,0 +1,35 @@
+concurrency:
+  max: 5
+  enable: false
+  preemption:
+    enable: false
+    events:
+    - mr_id
+  exceed-action: IGNORE
+sources:
+  sciencediscovery:
+    type: gitcode
+    name: sciencediscovery
+    branch: main
+    git_url: https://gitcode.com/openJiuwen/sciencediscovery.git
+    ssh_git_url: git@gitcode.com:openJiuwen/sciencediscovery.git
+    endpoint_id: c4451a2a11af48baacd6b2af5eee3075
+    repo_id: 10597680
+on:
+  sources: {}
+stages:
+  1787408436254dc0bce78-f2e3-4077-9747-9882b5a1fb12:
+    jobs:
+      JOB_teGni:
+        select: selected_by_default
+        name: 新建任务
+        needs: []
+        steps: []
+        if: "${{ default() }}"
+        runs-on:
+        - default
+    pre:
+    - type: auto
+    name: 阶段_1
+    select: selected_by_default
+    fail-fast: false
