@@ -86,6 +86,21 @@ test("the shared form skeleton also covers scoped settings outside config panels
   assert.match(managementControls, /<ScopedSettingsEditor/);
 });
 
+test("model registry editor groups fields and cards use scannable badges", () => {
+  const dialogs = source("styles/dialogs.css");
+  const settings = source("styles/settings.css");
+  const app = source("App.tsx");
+
+  assert.match(dialogs, /\.model-editor-section \{[^}]*display: grid;[^}]*border: 1px solid var\(--border\)/);
+  assert.match(dialogs, /\.model-editor-row \{[^}]*grid-template-columns: 1fr 1fr;/);
+  assert.match(dialogs, /\.model-editor-hint\.warning \{[^}]*color: var\(--warning\)/);
+  assert.match(dialogs, /\.model-badge \{[^}]*border-radius: 999px;/);
+  assert.match(dialogs, /\.model-badge\.warning \{[^}]*background: var\(--warning-soft\)/);
+  assert.match(settings, /\.model-editor-row \{ grid-template-columns: 1fr; \}/);
+  assert.match(app, /className="model-card-badges"/);
+  assert.match(app, /className="model-editor-hint"/);
+});
+
 test("sidebar ellipsis text nodes carry their full visible names", () => {
   const app = source("App.tsx");
 

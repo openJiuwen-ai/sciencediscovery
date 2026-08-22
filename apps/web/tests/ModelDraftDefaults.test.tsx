@@ -122,8 +122,50 @@ test("saved protocol, variant, thinking mode, and effort are shown again", () =>
   const html = renderFields("en", draft);
 
   assert.match(html, /<option value="anthropic-messages" selected="">Anthropic Messages<\/option>/);
-  assert.match(html, /<option value="anthropic-legacy" selected="">Anthropic legacy thinking budget<\/option>/);
+  assert.match(html, /<option value="anthropic-legacy" selected="">Legacy thinking budget<\/option>/);
   assert.match(html, /<option value="enabled" selected="">Enabled<\/option>/);
   assert.match(html, /<option value="max" selected="">Max<\/option>/);
   assert.match(inputForLabel(html, "Anthropic API base URL"), /placeholder="API root or v1 endpoint"/);
+});
+
+test("fields are grouped into labeled sections with paired rows", () => {
+  const html = renderFields("en");
+
+  for (const heading of ["Identity", "API", "Thinking"]) {
+    assert.match(html, new RegExp(`<section class="model-editor-section"><h4>${heading}</h4>`));
+  }
+  // Protocol and variant share one row; URL and model ID share another.
+  assert.match(html, /<div class="model-editor-row"><label><span>Base API<\/span><select/);
+  assert.match(html, /<label><span>API variant<\/span><select[^>]*>.+?<\/select><\/label><\/div>/);
+  assert.match(html, /<div class="model-editor-row"><label><span>Chat Completions base URL<\/span><input/);
+  assert.match(html, /<label><span>Model ID<\/span><input[^>]*/);
+});
+
+test("the selected variant shows a short label plus a behavior hint", () => {
+  const html = renderFields("en");
+
+  assert.match(html, /<option value="openai" selected="">OpenAI standard<\/option>/);
+  assert.match(html, /<small class="model-editor-hint">Standard Chat Completions request; no thinking control field is sent\.<\/small>/);
+
+  const chinese = renderFields("zh-CN");
+  assert.match(chinese, /<option value="openai" selected="">OpenAI 标准<\/option>/);
+  assert.match(chinese, /<small class="model-editor-hint">标准 Chat Completions 请求，不发送思考控制字段。<\/small>/);
+});
+
+test("unsupported effort is disabled with an explicit reason, not a cryptic label", () => {
+  const unsupported = renderFields("en", { ...EMPTY_MODEL_DRAFT, thinkingMode: "enabled" });
+  assert.match(unsupported, /<label><span>Thinking effort<\/span><select disabled=""/);
+  assert.match(unsupported, /<small class="model-editor-hint warning">This variant has no effort field — the effort value is never sent\.<\/small>/);
+  assert.doesNotMatch(unsupported, /not sent for this variant/);
+
+  const supportedButOff = renderFields("en", { ...EMPTY_MODEL_DRAFT, apiVariant: "deepseek" });
+  assert.match(supportedButOff, /<label><span>Thinking effort<\/span><select disabled=""/);
+  assert.match(supportedButOff, /<small class="model-editor-hint">Sent only when thinking is Enabled\.<\/small>/);
+
+  const supportedAndOn = renderFields("en", { ...EMPTY_MODEL_DRAFT, apiVariant: "deepseek", thinkingMode: "enabled" });
+  assert.match(supportedAndOn, /<label><span>Thinking effort<\/span><select>/);
+  assert.doesNotMatch(supportedAndOn, /model-editor-hint warning/);
+
+  const chinese = renderFields("zh-CN", { ...EMPTY_MODEL_DRAFT, thinkingMode: "enabled" });
+  assert.match(chinese, /<small class="model-editor-hint warning">此变种没有强度字段——不会发送思考强度。<\/small>/);
 });
