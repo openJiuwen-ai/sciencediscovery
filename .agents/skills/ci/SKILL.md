@@ -38,6 +38,28 @@ contract; `.ci/README.md` documents the toolchain image behind them.
 GitHub is the only platform with full coverage. What GitCode omits, and why, is
 in *Why GitCode cannot sandbox*.
 
+## Two repositories, not one remote
+
+GitCode and GitHub host **separate repositories**, and GitCode periodically
+syncs to GitHub. They are not two remotes of one history: the same change lands
+in each under a different SHA, so a commit id is only meaningful alongside the
+host it came from.
+
+```
+gitcode.com/openJiuwen/sciencediscovery   c151f58  refactor: move domain capabilities into packages
+github.com/openJiuwen-ai/sciencediscovery 625d7e0  refactor: move domain capabilities into packages
+```
+
+Neither id resolves on the other host. Practical consequences:
+
+- **Propose changes on GitCode.** GitHub receives them through the sync.
+- **`git push` to a GitHub remote will look diverged** even when the trees
+  match, because the graphs differ. Check the tree (`git diff --stat`) before
+  concluding work is missing, and never force-push a GitHub mirror to "fix" it
+  without confirming what is unique there.
+- Both pipelines run because both files are in the tree that syncs, so a
+  workflow change reaches GitHub Actions only after the sync carries it.
+
 A **fourth** pipeline exists and is not in this repository: the one whose result
 table `openJiuwen-bot` posts on every merge request —
 静态检查 / 禁用词扫描 / 防投毒检查 / 开源合规检查 / UT测试 / build. It is configured
