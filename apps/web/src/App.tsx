@@ -206,6 +206,7 @@ import {
   ComposerReferenceMenu,
   composerReferenceToken,
   composerSkillSuggestions,
+  GLOBAL_SEARCH_DEBOUNCE_MS,
   getComposerTrigger,
   GlobalSearchDialog,
   insertComposerReference,
@@ -1024,6 +1025,10 @@ export function App() {
   const [workbenchIndex, setWorkbenchIndex] = useState<WorkbenchSearchResult[]>([]);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [globalSearchResults, setGlobalSearchResults] = useState<WorkbenchSearchResult[]>([]);
+  const [globalSearchHasMore, setGlobalSearchHasMore] = useState(false);
+  const [globalSearchTotal, setGlobalSearchTotal] = useState(0);
+  const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
   const [showConfig, setShowConfig] = useState(() => initialView.settingsKind === "system");
   const [systemSettingsGroup, setSystemSettingsGroup] = useState<SystemSettingsGroup>(() => isSystemSettingsGroup(initialView.settingsGroup) ? initialView.settingsGroup : "global");
   const [globalSettings, setGlobalSettings] = useState<RuntimeSettingsDetails>();
@@ -1119,6 +1124,7 @@ export function App() {
   const renameRevision = useRef(0);
   const renameSavesInFlight = useRef(new Set<string>());
   const sessionCreationInFlight = useRef(false);
+  const globalSearchRequestId = useRef(0);
   const activeProjectIdRef = useRef<string | undefined>(undefined);
   // Project/Session requested by the URL but not yet validated against the
   // loaded lists; consumed by the list-load effects below.
@@ -1615,10 +1621,36 @@ export function App() {
   }, [client, initialView.settingsKind, reportSystemSettingsError]);
 
   useEffect(() => {
-    void client.searchWorkbench().then(setWorkbenchIndex).catch((reason: Error) => setError(reason.message));
+    void client.searchWorkbench().then((response) => setWorkbenchIndex(response.results)).catch((reason: Error) => setError(reason.message));
     void client.listSpecialists().then(setSpecialists).catch((reason: Error) => setError(reason.message));
     void client.listPermissionGrants().then(setPermissionGrants).catch((reason: Error) => setError(reason.message));
   }, [client]);
+
+  useEffect(() => {
+    if (!globalSearchOpen) return;
+    const requestId = ++globalSearchRequestId.current;
+    setGlobalSearchLoading(true);
+    setGlobalSearchResults([]);
+    setGlobalSearchHasMore(false);
+    setGlobalSearchTotal(0);
+    const timeoutId = window.setTimeout(() => {
+      void client.searchWorkbench(globalSearchQuery).then((response) => {
+        if (globalSearchRequestId.current !== requestId) return;
+        setGlobalSearchResults(response.results);
+        setGlobalSearchHasMore(response.hasMore);
+        setGlobalSearchTotal(response.total);
+        setGlobalSearchLoading(false);
+      }).catch((reason: Error) => {
+        if (globalSearchRequestId.current !== requestId) return;
+        setGlobalSearchLoading(false);
+        setError(reason.message);
+      });
+    }, globalSearchQuery.trim() ? GLOBAL_SEARCH_DEBOUNCE_MS : 0);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (globalSearchRequestId.current === requestId) globalSearchRequestId.current += 1;
+    };
+  }, [client, globalSearchOpen, globalSearchQuery]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3176,14 +3208,9 @@ export function App() {
     }
   }
 
-  async function openGlobalSearch(): Promise<void> {
+  function openGlobalSearch(): void {
     setGlobalSearchOpen(true);
     setGlobalSearchQuery("");
-    try {
-      setWorkbenchIndex(await client.searchWorkbench());
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not search the workbench");
-    }
   }
 
   function openUsageView(): void {
@@ -3207,7 +3234,7 @@ export function App() {
 
   async function openSessionFromUsage(sessionId: string): Promise<void> {
     const match = workbenchIndex.find((item) => item.sessionId === sessionId)
-      ?? (await client.searchWorkbench()).find((item) => item.sessionId === sessionId);
+      ?? (await client.searchWorkbench(sessionId)).results.find((item) => item.sessionId === sessionId);
     setWorkspaceView("session");
     if (!match?.projectId) {
       setActiveSessionId(sessionId);
@@ -4270,11 +4297,14 @@ export function App() {
         skills={skills}
       /> : null}
       {globalSearchOpen ? <GlobalSearchDialog
+        hasMore={globalSearchHasMore}
+        loading={globalSearchLoading}
         onClose={() => setGlobalSearchOpen(false)}
         onQueryChange={setGlobalSearchQuery}
         onSelect={(result) => void navigateToSearchResult(result)}
         query={globalSearchQuery}
-        results={workbenchIndex}
+        results={globalSearchResults}
+        total={globalSearchTotal}
       /> : null}
 
       {settingsTarget ? (

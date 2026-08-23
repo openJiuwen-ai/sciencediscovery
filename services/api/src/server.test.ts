@@ -68,7 +68,7 @@ import type {
   Subagent,
   SubagentStep,
   SystemTimeoutSettings,
-  WorkbenchSearchResult,
+  WorkbenchSearchResponse,
   WorkspaceFile,
   WorkspaceUploadResult,
 } from "@sciencediscovery/schema";
@@ -2166,11 +2166,15 @@ test("workbench search and Composer references use authenticated authoritative i
   assert.equal(upload.status, 201);
 
   assert.equal((await fetch(`${origin}/api/search?q=result`)).status, 401);
-  const search = await jsonRequest<WorkbenchSearchResult[]>(`${origin}/api/search?q=result`, { headers: authorization });
-  assert.deepEqual(search.body.map((result) => result.kind), ["artifact"]);
-  assert.equal(search.body[0]?.path, "reports/result.md");
-  assert.match(search.body[0]?.id ?? "", /^artifact:/);
-  assert.equal(search.body[0]?.sessionId, session.body.id);
+  const search = await jsonRequest<WorkbenchSearchResponse>(`${origin}/api/search?q=result&limit=1&offset=0`, { headers: authorization });
+  assert.deepEqual(search.body.results.map((result) => result.kind), ["artifact"]);
+  assert.equal(search.body.results[0]?.path, "reports/result.md");
+  assert.match(search.body.results[0]?.id ?? "", /^artifact:/);
+  assert.equal(search.body.results[0]?.sessionId, session.body.id);
+  assert.deepEqual(
+    { hasMore: search.body.hasMore, limit: search.body.limit, offset: search.body.offset, total: search.body.total },
+    { hasMore: false, limit: 1, offset: 0, total: 1 },
+  );
 
   const catalog = await jsonRequest<ScientificArtifact[]>(
     `${origin}/api/projects/${project.body.id}/artifacts`,
