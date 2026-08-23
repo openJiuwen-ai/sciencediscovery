@@ -9,120 +9,30 @@ description: >
 
 # CI layers and the three pipelines
 
-Project-local skill for **ScienceDiscovery**. The layer entry points are the
-contract; `.ci/README.md` documents the toolchain image behind them.
+Project-local skill for **ScienceDiscovery**.
+
+**Read [CONTRIBUTING.md](../../../CONTRIBUTING.md) first.** It owns the parts a
+contributor needs: the layer entry points and their `CI_RESULTS_DIR` /
+`CI_RUNTIME_DIR` overrides, which pipeline covers which layer, the GitCode and
+GitHub repository split, and the rule that all three layers run locally before a
+merge request opens. `.ci/README.md` documents the toolchain image.
+
+This skill covers what CONTRIBUTING deliberately leaves out: diagnosing a
+pipeline, reaching results and logs through each platform's API, and validating
+a workflow change before merging it.
 
 ## Rules
 
-1. **Run the layers locally before opening a merge request.** No pipeline runs
-   the full set, so a green CI does not mean the change is covered.
-2. **Never weaken a sandbox assertion to make a pipeline green.** Tests that
+1. **Never weaken a sandbox assertion to make a pipeline green.** Tests that
    assert isolation or the sandbox's `/workspace` view must run where a sandbox
    exists. Moving them to a stand-in deletes what they verify.
-3. **Call the `pnpm ci:*` entry points, never the underlying commands.** A
+2. **Call the `pnpm ci:*` entry points, never the underlying commands.** A
    pipeline that inlines `pnpm test` becomes a second, platform-specific test
    definition that drifts from the repository's.
-4. **Validate a GitCode workflow change by dispatching it against a branch**
+3. **Validate a GitCode workflow change by dispatching it against a branch**
    before merging (see *Test a workflow change*). The dispatch endpoint
    validates the YAML and names the offending key.
-5. Read a failing job's log before theorising. Every platform here exposes one.
-
-## The three pipelines
-
-| File | Platform | Jobs | Sandbox |
-| --- | --- | --- | --- |
-| `.github/workflows/ci.yml` | GitHub Actions | `ut`, `st`, `e2e`, `binary` (x86_64 + aarch64) | yes |
-| `.gitcode/workflows/ci.yml` | GitCode Actions | `ut` (core), `st`, `binary` (x86_64) | **no** |
-| `.codearts/workflow/codearts-pipeline.yml` | CodeArts (PaC) | merge-request smoke test | no |
-
-GitHub is the only platform with full coverage. What GitCode omits, and why, is
-in *Why GitCode cannot sandbox*.
-
-## Two repositories, not one remote
-
-GitCode and GitHub host **separate repositories**, and GitCode periodically
-syncs to GitHub. They are not two remotes of one history: the same change lands
-in each under a different SHA, so a commit id is only meaningful alongside the
-host it came from.
-
-```
-gitcode.com/openJiuwen/sciencediscovery   c151f58  refactor: move domain capabilities into packages
-github.com/openJiuwen-ai/sciencediscovery 625d7e0  refactor: move domain capabilities into packages
-```
-
-Neither id resolves on the other host. Practical consequences:
-
-- **Propose changes on GitCode.** GitHub receives them through the sync.
-- **`git push` to a GitHub remote will look diverged** even when the trees
-  match, because the graphs differ. Check the tree (`git diff --stat`) before
-  concluding work is missing, and never force-push a GitHub mirror to "fix" it
-  without confirming what is unique there.
-- Both pipelines run because both files are in the tree that syncs, so a
-  workflow change reaches GitHub Actions only after the sync carries it.
-
-A **fourth** pipeline exists and is not in this repository: the one whose result
-table `openJiuwen-bot` posts on every merge request —
-静态检查 / 禁用词扫描 / 防投毒检查 / 开源合规检查 / UT测试 / build. It is configured
-in the CodeArts console and each step delegates to a CodeArts Build task by
-`jobId`, so its behaviour cannot be changed from this repository. Do not
-confuse its `UT测试` with the `ut` job in `.gitcode/workflows/ci.yml`.
-
-## Run the layers
-
-```bash
-pnpm ci:ut     # architecture check, typecheck, paper/gateway, build, binary, all package tests
-pnpm ci:st     # build, then the hermetic agent-loop smoke (no credentials, no sandbox)
-pnpm ci:e2e    # starts an isolated stack and runs the @mocked journeys
-```
-
-Both default to paths that exist only inside the `.ci` image, so outside it
-point them somewhere writable. Keep the runtime directory **outside the
-checkout**, or the Runner sandbox mounts over it:
-
-```bash
-CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=~/ci-runtime pnpm ci:st
-```
-
-Split layers, for when the host has no working sandbox:
-
-```bash
-pnpm ci:ut:core     # ci:ut minus @sciencediscovery/runner — needs no sandbox
-pnpm ci:ut:runner   # only that package — needs real bubblewrap
-```
-
-The live layers (`ci:st:real`, `ci:e2e:real`, `ci:st:npu`, `ci:e2e:legacy`)
-need credentials or hardware and fail closed behind their `CI_ALLOW_*` gates.
-
-## Before opening a merge request
-
-Run these three. They take longer than CI does, and they cover what CI cannot:
-
-```bash
-pnpm ci:ut     # NOT ci:ut:core — the runner package tests only run here and on GitHub
-pnpm ci:st
-pnpm ci:e2e
-```
-
-`pnpm ci:ut` requires a working sandbox. Check first:
-
-```bash
-bwrap --ro-bind / / --dev /dev true && echo sandbox ok
-```
-
-If that fails, the host cannot run `ci:ut:runner` or `ci:e2e` at all. On Ubuntu
-24.04 the usual cause is the AppArmor restriction on unprivileged user
-namespaces:
-
-```bash
-sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
-```
-
-Inside a container it is normally unfixable — see below.
-
-To reproduce a pipeline exactly, use the toolchain image. Mount the checkout at
-`/src`, never `/workspace`: the Runner's sandbox mounts over that path and five
-Runner tests fail in ways that look like product defects. `.ci/README.md` has
-the per-layer commands.
+4. Read a failing job's log before theorising. Every platform here exposes one.
 
 ## Why GitCode cannot sandbox
 

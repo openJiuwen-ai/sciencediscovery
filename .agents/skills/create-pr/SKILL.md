@@ -9,95 +9,34 @@ description: >
 
 # Create a merge request (GitCode)
 
-Project-local skill for **ScienceDiscovery**. Changes are proposed on GitCode;
-GitHub receives them through a periodic sync and is not where review happens.
+Project-local skill for **ScienceDiscovery**.
 
-Command surface: [.agents/skills/gitcode/SKILL.md](../gitcode/SKILL.md).
-What CI does and does not cover: [.agents/skills/ci/SKILL.md](../ci/SKILL.md).
+**Read [CONTRIBUTING.md](../../../CONTRIBUTING.md) first** — *Opening a merge
+request* and *Repositories* carry the process and the reason changes are
+proposed on GitCode rather than GitHub. Command surface:
+[.agents/skills/gitcode/SKILL.md](../gitcode/SKILL.md). Diagnosing a failed
+check: [.agents/skills/ci/SKILL.md](../ci/SKILL.md).
 
 ## Rules
 
-1. **Run the three layers locally before opening.** No pipeline runs the full
-   set, so review starts from an unverified change otherwise. Step 1 is a gate,
-   not a suggestion.
+1. **The layers are a gate, not a suggestion.** CONTRIBUTING says run all
+   three; do not open a merge request without them.
 2. **Target `openJiuwen/sciencediscovery` on gitcode.com.** GitHub is a synced
    mirror with its own SHAs; a merge request opened there is in the wrong place.
-3. **Never push to `main`.** Branch, push the branch, open a merge request.
-4. **Branch from an up-to-date `origin/main`**, and rebase rather than merge
-   when it moves — a merge commit makes the diff unreadable.
-5. **Say what was verified in the body**, with the actual numbers. "Tests pass"
+3. **Read the merge request back after creating it.** The create response is
+   thin and will not tell you whether it landed as intended.
+4. **Say what was verified in the body**, with the actual numbers. "Tests pass"
    is not reviewable; "382 API tests, 100 runner tests, mocked E2E 5 passed /
    2 skipped" is.
-6. If the change cannot pass a layer, say so in the body and why. Do not weaken
-   an assertion to get a green run.
 
-## Step 1 — Run the layers (gate)
+## The process
 
-```bash
-pnpm ci:ut     # not ci:ut:core — the sandbox tests only run here and on GitHub
-pnpm ci:st
-pnpm ci:e2e
-```
+[CONTRIBUTING.md](../../../CONTRIBUTING.md) owns it — *Opening a merge request*
+gives the gate (all three layers locally), the sandbox precheck, the branch and
+push commands, and the `pr create` invocation. Follow it. This skill covers what
+the CLI does not make obvious once you get there.
 
-`ci:ut` and `ci:e2e` need a working sandbox. Check before blaming the change:
-
-```bash
-bwrap --ro-bind / / --dev /dev true && echo sandbox ok
-```
-
-Outside the `.ci` image, redirect the layer directories and keep the runtime
-one outside the checkout:
-
-```bash
-CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=~/ci-runtime pnpm ci:st
-```
-
-Record what each layer reported. Those numbers go in the body.
-
-## Step 2 — Branch and commit
-
-```bash
-git fetch origin
-git checkout -b <type>/<short-topic> origin/main
-```
-
-Check `git status` before committing: no `.tmp/`, no local agent or editor
-config, no private notes. Commit messages state what changed and why, not the
-process that produced them.
-
-## Step 3 — Push the branch
-
-```bash
-git push -u origin <branch>
-```
-
-Write to `openJiuwen/sciencediscovery` directly if you have access; otherwise
-push to a personal GitCode fork and open the merge request from there.
-
-## Step 4 — Open the merge request
-
-Long bodies go in a file — the CLI's inline `--body` mangles multi-line text.
-
-```bash
-gitcode pr create -R openJiuwen/sciencediscovery \
-  --head <branch> --base main \
-  --title "<type>: <what changed>" \
-  --body-file .tmp/pr.md --json
-```
-
-**The create response is thin** — `html_url` comes back empty and some fields
-are null. Always read the merge request back to confirm what was actually
-created:
-
-```bash
-gitcode pr view <n> -R openJiuwen/sciencediscovery --json
-```
-
-Check `head.sha` matches what you pushed, `base.ref` is `main`, and
-`changed_files` is what you expect. A 409 means a merge request already exists
-for that branch — read it before retrying; the gitcode skill covers the cases.
-
-### Body shape
+## Body shape
 
 ```markdown
 <One paragraph: what changes and why. Lead with the problem, not the patch.>
@@ -112,7 +51,7 @@ for that branch — read it before retrying; the gitcode skill covers the cases.
 Mark a merge request that must not land — a CI experiment, a spike — in both
 the title and the body, and say what to delete before it could be merged.
 
-## Step 5 — After it opens
+## After it opens
 
 Three bots respond within a minute or two:
 

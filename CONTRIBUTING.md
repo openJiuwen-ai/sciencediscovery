@@ -126,11 +126,87 @@ part of a default command. See [.ci/README.md](.ci/README.md) for the toolchain
 image, the per-layer Docker commands, and the tag catalog used to select cases
 (`pnpm ci:tags`, `pnpm ci:list`, `pnpm ci:run`).
 
-Run all three before opening a merge request. No pipeline runs the full set:
-GitCode's runner cannot build a sandbox, so it runs `ci:ut:core` and no E2E,
-and only GitHub Actions covers the `@sciencediscovery/runner` tests and the
-mocked journeys. See [.agents/skills/ci/SKILL.md](.agents/skills/ci/SKILL.md)
-for which platform covers what, and for reading a CI result and its logs.
+Two split layers exist for hosts without a working sandbox: `ci:ut:core` is
+`ci:ut` minus the `@sciencediscovery/runner` package, and `ci:ut:runner` is only
+that package.
+
+### What each pipeline covers
+
+Three pipelines run, and **none of them runs everything**:
+
+| Pipeline | UT | ST | E2E | Release binaries |
+| --- | --- | --- | --- | --- |
+| GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
+| GitCode — `.gitcode/workflows/ci.yml` | `ci:ut:core` | yes | — | x86_64, `--skip-smoke` |
+| CodeArts — `.codearts/workflow/` | — | — | — | — |
+
+GitCode's hosted runner is a container whose capability bounding set drops
+`CAP_SYS_ADMIN`, so bubblewrap installs but cannot create a namespace. That
+removes the `@sciencediscovery/runner` tests, the `services/api` tests that
+execute code, and E2E entirely — the Runner refuses to serve without a usable
+sandbox, so its stack never becomes healthy.
+
+A **fourth** pipeline posts a result table on every merge request
+(静态检查 / 禁用词扫描 / 防投毒检查 / 开源合规检查 / UT测试 / build). It is
+configured in the CodeArts console rather than in this repository, and its
+`UT测试` is not the `ut` job above.
+
+## Repositories
+
+GitCode and GitHub host **separate repositories**, and GitCode syncs to GitHub
+periodically. They are not two remotes of one history: the same change lands
+under a different SHA on each host.
+
+| Host | Repository | Role |
+| --- | --- | --- |
+| gitcode.com | `openJiuwen/sciencediscovery` | where changes are proposed and reviewed |
+| github.com | `openJiuwen-ai/sciencediscovery` | synced mirror |
+
+Two consequences. A commit id is only meaningful alongside the host it came
+from — `refactor: move domain capabilities into packages` is `c151f58` on
+GitCode and `625d7e0` on GitHub, and neither resolves on the other. And a GitHub
+remote can look diverged when the trees are identical, so compare trees
+(`git diff --stat`) rather than SHAs before concluding that work is missing.
+
+## Opening a merge request
+
+**Run all three layers locally first.** No pipeline runs the full set, so review
+otherwise starts from a change nothing has exercised:
+
+```bash
+pnpm ci:ut     # not ci:ut:core — the sandbox tests run only here and on GitHub
+pnpm ci:st
+pnpm ci:e2e
+```
+
+`ci:ut` and `ci:e2e` need a working sandbox. Check before blaming a change:
+
+```bash
+bwrap --ro-bind / / --dev /dev true && echo sandbox ok
+```
+
+On Ubuntu 24.04 a failure here is usually the AppArmor restriction on
+unprivileged user namespaces, cleared with
+`sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0`. Inside a
+container it is normally unfixable.
+
+Then branch from an up-to-date `main`, push the branch, and open the merge
+request on GitCode. Never push to `main`; rebase rather than merge when it
+moves, so the diff stays readable.
+
+```bash
+git fetch origin && git checkout -b <type>/<short-topic> origin/main
+git push -u origin <branch>
+gitcode pr create -R openJiuwen/sciencediscovery \
+  --head <branch> --base main --title "<type>: <what changed>" --body-file <file>
+```
+
+State in the body what was verified, with the numbers each layer reported.
+"Tests pass" is not reviewable. If the change cannot pass a layer, say which and
+why — do not weaken an assertion to get a green run.
+
+Check `git status` before committing: no `.tmp/`, no local editor or tooling
+config, no private notes.
 
 ## License headers
 
