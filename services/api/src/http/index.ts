@@ -23,6 +23,18 @@ import {
   WORKSPACE_SYSTEM_PROMPT_VERSION,
 } from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
+import { listProviderModels, ModelDiscoveryError, type DiscoveredModel } from "@sciencediscovery/model";
+import {
+  listCatalogModelsForPreset,
+  lookupModelCatalog,
+  MODEL_PROVIDER_PRESETS,
+  type CreateModelProviderRequest,
+  type ModelProvider,
+  type ProviderModelEntry,
+  type ProviderModelList,
+  type RemoteModelFacts,
+  type UpdateModelProviderRequest,
+} from "@sciencediscovery/schema";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
 import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
@@ -237,6 +249,41 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   } = platform;
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
+  // Provider model listings are cached briefly so composer and settings reads
+  // do not hammer vendor endpoints; provider edits invalidate the entry and
+  // `?refresh=1` forces a live fetch.
+  const providerModelListCache = new Map<string, { fetchedAt: string; models: DiscoveredModel[] }>();
+  const PROVIDER_MODEL_CACHE_TTL_MS = 5 * 60_000;
+  const providerModelEntry = (
+    provider: ModelProvider,
+    model: DiscoveredModel,
+    fetchedAt: string,
+    profileId: string | undefined,
+  ): ProviderModelEntry => {
+    const remote: RemoteModelFacts = {
+      ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+      ...(model.maxOutputTokens !== undefined ? { maxOutputTokens: model.maxOutputTokens } : {}),
+      ...(model.thinkingSupported !== undefined ? { thinkingSupported: model.thinkingSupported } : {}),
+      ...(model.vision !== undefined ? { vision: model.vision } : {}),
+      ...(model.pricing
+        ? {
+          pricing: {
+            ...model.pricing,
+            source: { retrievedAt: fetchedAt, url: provider.baseUrl },
+            unit: "per-1m-tokens" as const,
+          },
+        }
+        : {}),
+    };
+    const catalog = lookupModelCatalog(model.id, provider.presetId);
+    return {
+      id: model.id,
+      ...(model.displayName ? { displayName: model.displayName } : {}),
+      ...(Object.keys(remote).length ? { remote } : {}),
+      ...(catalog ? { catalog } : {}),
+      ...(profileId ? { profileId } : {}),
+    };
+  };
   const patchEphemeralCallback = (server: Server) => {
     // With an ephemeral port (tests), the configured tool-callback URL cannot
     // know the real port in advance; rewrite it from the bound address.
@@ -1042,6 +1089,105 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (modelMatch && request.method === "DELETE") {
         await store.deleteModel(modelMatch[1]!);
         sendJson(response, 200, { deleted: modelMatch[1] });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/providers") {
+        sendJson(response, 200, { presets: MODEL_PROVIDER_PRESETS, providers: store.listProviders() });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/providers") {
+        const body = await readJson<CreateModelProviderRequest>(request);
+        sendJson(response, 201, await store.createProvider(body));
+        return;
+      }
+      const providerMatch = url.pathname.match(/^\/api\/providers\/([^/]+)$/);
+      if (providerMatch && request.method === "PUT") {
+        const body = await readJson<UpdateModelProviderRequest>(request);
+        providerModelListCache.delete(providerMatch[1]!);
+        sendJson(response, 200, await store.updateProvider(providerMatch[1]!, body));
+        return;
+      }
+      if (providerMatch && request.method === "DELETE") {
+        await store.deleteProvider(providerMatch[1]!);
+        providerModelListCache.delete(providerMatch[1]!);
+        sendJson(response, 200, { deleted: providerMatch[1] });
+        return;
+      }
+      const providerModelsMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/models$/);
+      if (providerModelsMatch && request.method === "GET") {
+        const providerId = providerModelsMatch[1]!;
+        const provider = store.getProvider(providerId);
+        if (!provider) throw new ApiStatusError(404, "Provider not found");
+        const profileFor = (modelId: string) =>
+          store.listModels().find((profile) => profile.providerId === providerId && profile.model === modelId)?.id;
+        if (provider.modelDiscovery === "manual") {
+          // No listing endpoint: offer curated catalog suggestions instead of
+          // pretending the vendor reported a list.
+          const models: ProviderModelEntry[] = listCatalogModelsForPreset(provider.presetId ?? "").map((record) => {
+            const profileId = profileFor(record.key);
+            const catalog = lookupModelCatalog(record.key, provider.presetId);
+            return {
+              id: record.key,
+              ...(record.label !== record.key ? { displayName: record.label } : {}),
+              ...(catalog ? { catalog } : {}),
+              ...(profileId ? { profileId } : {}),
+            };
+          });
+          const listing: ProviderModelList = {
+            fetchedAt: new Date().toISOString(),
+            models,
+            providerId,
+            source: "catalog",
+          };
+          sendJson(response, 200, listing);
+          return;
+        }
+        const refresh = url.searchParams.get("refresh") === "1";
+        let cached = providerModelListCache.get(providerId);
+        if (refresh || !cached || Date.now() - Date.parse(cached.fetchedAt) > PROVIDER_MODEL_CACHE_TTL_MS) {
+          try {
+            const models = await listProviderModels({
+              apiToken: store.getProviderApiToken(providerId),
+              baseUrl: provider.baseUrl,
+              discovery: provider.modelDiscovery,
+              proxy: resolveProxyForUrl(store.resolveProxy(provider.proxyPolicy), provider.baseUrl),
+            });
+            cached = { fetchedAt: new Date().toISOString(), models };
+            providerModelListCache.set(providerId, cached);
+          } catch (error) {
+            if (error instanceof ModelDiscoveryError) {
+              // Surface the upstream failure honestly; the UI keeps manual
+              // model entry available as the fallback path.
+              throw new ApiStatusError(502, error.message);
+            }
+            throw error;
+          }
+        }
+        const listing: ProviderModelList = {
+          fetchedAt: cached.fetchedAt,
+          models: cached.models.map((model) => providerModelEntry(provider, model, cached.fetchedAt, profileFor(model.id))),
+          providerId,
+          source: "remote",
+        };
+        sendJson(response, 200, listing);
+        return;
+      }
+      if (providerModelsMatch && request.method === "POST") {
+        const providerId = providerModelsMatch[1]!;
+        const provider = store.getProvider(providerId);
+        if (!provider) throw new ApiStatusError(404, "Provider not found");
+        const body = await readJson<{ label?: string; model?: string; vision?: boolean }>(request);
+        const modelId = body.model?.trim() ?? "";
+        // Seed the profile from the best facts available: explicit request,
+        // then the live listing, then the curated catalog.
+        const remote = providerModelListCache.get(providerId)?.models.find((model) => model.id === modelId);
+        const catalog = modelId ? lookupModelCatalog(modelId, provider.presetId) : undefined;
+        const vision = body.vision ?? remote?.vision ?? catalog?.vision;
+        const label = body.label ?? remote?.displayName ?? catalog?.label;
+        sendJson(response, 201, await store.materializeProviderModel(providerId, modelId, {
+          ...(label !== undefined ? { label } : {}),
+          ...(vision !== undefined ? { vision } : {}),
+        }));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/projects") {
@@ -2250,7 +2396,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (code === "SKILL_LIBRARY_NOT_FOUND") sendError(response, 404, message);
       else if (code === "SKILL_LIBRARY_CONFLICT") sendError(response, 409, message);
       else if (code === "SKILL_LIBRARY_VALIDATION") sendError(response, 400, message);
-      else if (/^(Project|Session|Proxy server) not found$/.test(message)) sendError(response, 404, message);
+      else if (/^(Project|Session|Proxy server|Provider|Model) not found$/.test(message)) sendError(response, 404, message);
       else if (message === "Session is archived and read-only") sendError(response, 409, message);
       else if (message.startsWith("Proxy server is referenced by ")) sendError(response, 409, message);
       else if (isKnownClientInputError(error)) sendError(response, 400, message);

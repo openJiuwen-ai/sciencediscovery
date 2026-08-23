@@ -439,7 +439,7 @@ async function executeAgentRun(
     throw new ApiStatusError(500, "The session Permission Epoch is not available");
   }
   const apiToken = store.getModelApiToken(selectedModel.id);
-  if (!apiToken) {
+  if (!apiToken && !store.modelAllowsMissingToken(selectedModel)) {
     throw new ApiStatusError(400, "The selected model does not have a saved API token");
   }
   if (cancelledRuns.has(runId) || requestAbortController.signal.aborted) {
@@ -659,8 +659,11 @@ async function executeAgentRun(
     baseUrl: selectedModel.baseUrl,
     dataDir: store.dataDir,
     model: selectedModel.model,
-    thinkingEffort: selectedModel.thinkingEffort,
-    thinkingMode: selectedModel.thinkingMode,
+    // Conversation-level thinking choices override the profile defaults; the
+    // variant mapping in the model client still decides whether any wire
+    // field is actually sent.
+    thinkingEffort: settingsSnapshot.thinkingEffort ?? selectedModel.thinkingEffort,
+    thinkingMode: settingsSnapshot.thinkingMode ?? selectedModel.thinkingMode,
     // Resolve the profile's proxy policy up front so a broken policy fails
     // the run start with a diagnosable message instead of a hung request.
     // The Gateway receives the one effective URL/direct decision instead of

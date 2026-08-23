@@ -64,6 +64,8 @@ export const RUNTIME_SETTINGS_FIELDS = [
   "reviewModelId",
   "semanticReviewEnabled",
   "skillSelectionMode",
+  "thinkingEffort",
+  "thinkingMode",
 ] as const satisfies readonly RuntimeSettingsField[];
 
 /** Global defaults no longer configure skills; strip the fields instead of merging them. */
@@ -197,6 +199,20 @@ export function normalizeRuntimeSettings(
       if (strict) throw new Error("skillSelectionMode must be all or selected");
     } else {
       normalized.skillSelectionMode = value.skillSelectionMode;
+    }
+  }
+  if (hasOwn(value, "thinkingMode")) {
+    if (!(["auto", "disabled", "enabled"] as const).includes(value.thinkingMode as never)) {
+      if (strict) throw new Error("thinkingMode must be auto, enabled, or disabled");
+    } else {
+      normalized.thinkingMode = value.thinkingMode as RuntimeSettingsOverrides["thinkingMode"];
+    }
+  }
+  if (hasOwn(value, "thinkingEffort")) {
+    if (!(["high", "max"] as const).includes(value.thinkingEffort as never)) {
+      if (strict) throw new Error("thinkingEffort must be high or max");
+    } else {
+      normalized.thinkingEffort = value.thinkingEffort as RuntimeSettingsOverrides["thinkingEffort"];
     }
   }
   return normalized;

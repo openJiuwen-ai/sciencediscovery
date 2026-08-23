@@ -207,6 +207,7 @@ test("chat variants preserve only their required reasoning replay payload", asyn
         type: "function",
         function: { name: "lookup", arguments: "{}" },
         thought_signature: "gemini-signature",
+        extra_content: { google: { thought_signature: "sig-extra" } },
       }],
     }];
     for (const apiVariant of ["deepseek", "qwen", "minimax", "gemini", "openai"] as const) {
@@ -230,8 +231,12 @@ test("chat variants preserve only their required reasoning replay payload", asyn
   assert.equal(assistants[2]!.reasoning_details, undefined);
   const geminiCall = (assistants[3]!.tool_calls as Array<Record<string, unknown>>)[0]!;
   assert.equal(geminiCall.thought_signature, "gemini-signature");
+  // Current Gemini OpenAI-compat nests the signature in extra_content and
+  // requires it back verbatim.
+  assert.deepEqual(geminiCall.extra_content, { google: { thought_signature: "sig-extra" } });
   const openAiCall = (assistants[4]!.tool_calls as Array<Record<string, unknown>>)[0]!;
   assert.equal(openAiCall.thought_signature, undefined);
+  assert.equal(openAiCall.extra_content, undefined);
 });
 
 test("MiniMax extracts reasoning_details and inline think without replaying it", async () => {

@@ -266,7 +266,7 @@ function trimBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function endpointRoot(baseUrl: string): string {
+export function endpointRoot(baseUrl: string): string {
   return trimBase(baseUrl).replace(/\/(?:chat\/completions|responses|messages)$/, "");
 }
 
@@ -392,6 +392,10 @@ function chatHistory(history: AgentHistoryMessage[], variant: ModelApiVariant): 
           if (variant === "gemini") {
             if (raw.thought_signature !== undefined) call.thought_signature = raw.thought_signature;
             if (raw.thoughtSignature !== undefined) call.thoughtSignature = raw.thoughtSignature;
+            // Current Gemini OpenAI-compat places the signature at
+            // tool_calls[].extra_content.google.thought_signature and requires
+            // it back verbatim in history, or multi-turn tool calls fail 400.
+            if (raw.extra_content !== undefined) call.extra_content = structuredClone(raw.extra_content);
           }
           return call;
         });

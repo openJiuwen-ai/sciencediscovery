@@ -45,6 +45,26 @@ export const DEFAULT_MODEL_API_VARIANT: Record<ModelApiProtocol, ModelApiVariant
   "anthropic-messages": "anthropic-adaptive",
 };
 
+/** Variants whose thinking toggle maps to real wire fields. The rest treat
+ *  `enabled`/`disabled` as display-only because their endpoints have no
+ *  compatible control field. */
+export const THINKING_CONTROL_VARIANTS: readonly ModelApiVariant[] = [
+  "anthropic-adaptive",
+  "anthropic-legacy",
+  "deepseek",
+  "minimax",
+  "qwen",
+  "responses",
+];
+
+/** Variants that send a thinking-effort field when thinking is enabled. */
+export const THINKING_EFFORT_VARIANTS: readonly ModelApiVariant[] = [
+  "anthropic-adaptive",
+  "anthropic-legacy",
+  "deepseek",
+  "responses",
+];
+
 export interface ModelProfile {
   apiProtocol?: ModelApiProtocol;
   apiVariant?: ModelApiVariant;
@@ -54,6 +74,10 @@ export interface ModelProfile {
   id: string;
   model: string;
   name: string;
+  /** Provider this profile belongs to. Connection fields (base URL, protocol,
+   *  variant, proxy) mirror the provider and the provider's token is used
+   *  when the profile has none of its own. Absent for standalone profiles. */
+  providerId?: string;
   proxyPolicy: ProxyPolicy;
   thinkingEffort?: ModelThinkingEffort;
   thinkingMode?: ModelThinkingMode;

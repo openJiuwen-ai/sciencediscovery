@@ -1180,6 +1180,8 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       reviewModelId: "session",
       semanticReviewEnabled: "session",
       skillSelectionMode: "unset",
+      thinkingEffort: "unset",
+      thinkingMode: "unset",
     },
   });
   const firstPersisted = await readPersistedCatalog(tempRoot);
@@ -1278,6 +1280,8 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
       reviewModelId: "session",
       semanticReviewEnabled: "global",
       skillSelectionMode: "project",
+      thinkingEffort: "unset",
+      thinkingMode: "unset",
     },
   });
 
@@ -2746,4 +2750,144 @@ test("updateMessageReferences leaves a failed run's assistant message with chips
   const stored = (await store.readMessages(session.id)).find((entry) => entry.id === message.id);
   assert.ok(stored?.references?.length, "the failed run's assistant message carries chip references");
   assert.equal(stored!.references![0]!.label, "evidence1");
+});
+
+test("model providers: preset creation, token fallback, sync, and lifecycle", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `providers-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  // A built-in preset needs only a token: endpoint facts come from the preset.
+  const provider = await store.createProvider({ apiToken: "sk-deepseek", presetId: "deepseek" });
+  assert.equal(provider.name, "DeepSeek");
+  assert.equal(provider.baseUrl, "https://api.deepseek.com");
+  assert.equal(provider.apiProtocol, "openai-chat-completions");
+  assert.equal(provider.apiVariant, "deepseek");
+  assert.equal(provider.modelDiscovery, "openai-models");
+  assert.equal(provider.hasApiToken, true);
+  assert.equal(store.getProviderApiToken(provider.id), "sk-deepseek");
+
+  // Materialized models copy the connection and inherit the provider token.
+  const profile = await store.materializeProviderModel(provider.id, "deepseek-v4-flash");
+  assert.equal(profile.providerId, provider.id);
+  assert.equal(profile.baseUrl, provider.baseUrl);
+  assert.equal(profile.apiVariant, "deepseek");
+  assert.equal(profile.hasApiToken, true);
+  assert.equal(store.getModelApiToken(profile.id), "sk-deepseek");
+  const again = await store.materializeProviderModel(provider.id, "deepseek-v4-flash");
+  assert.equal(again.id, profile.id, "re-materializing the same pair reuses the profile");
+  assert.equal(store.getGlobalSettings().effective.modelId, profile.id, "first usable model claims the task-model slot");
+
+  // Per-model variant edits survive same-protocol provider edits; the
+  // connection itself stays provider-managed.
+  await store.updateModel(profile.id, {
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "openai",
+    baseUrl: provider.baseUrl,
+    model: profile.model,
+    name: profile.name,
+  });
+  await store.updateProvider(provider.id, { baseUrl: "https://gateway.example/v1" });
+  const synced = store.getModel(profile.id)!;
+  assert.equal(synced.baseUrl, "https://gateway.example/v1");
+  assert.equal(synced.apiVariant, "openai");
+  await assert.rejects(
+    store.updateModel(profile.id, {
+      apiProtocol: "openai-chat-completions",
+      baseUrl: "https://elsewhere.example/v1",
+      model: profile.model,
+      name: profile.name,
+    }),
+    /cannot be changed here/,
+  );
+
+  // Removing the provider token turns off effective availability everywhere.
+  await store.updateProvider(provider.id, { apiToken: null });
+  assert.equal(store.getModelApiToken(profile.id), undefined);
+  assert.equal(store.getModel(profile.id)!.hasApiToken, false);
+
+  // Deletion is guarded while any child profile is referenced by settings.
+  await assert.rejects(store.deleteProvider(provider.id), /referenced by runtime settings/);
+  await store.replaceGlobalSettings({});
+  await store.deleteProvider(provider.id);
+  assert.equal(store.listProviders().length, 0);
+  assert.equal(store.getModel(profile.id), undefined);
+  assert.equal(store.getProviderApiToken(provider.id), undefined);
+});
+
+test("model providers: custom provider persistence and token-optional runs", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `providers-custom-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const custom = await store.createProvider({
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "qwen",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    modelDiscovery: "manual",
+    name: "本地网关",
+    tokenOptional: true,
+  });
+  assert.equal(custom.presetId, undefined);
+  const localModel = await store.materializeProviderModel(custom.id, "qwen3-local");
+  assert.equal(store.modelAllowsMissingToken(localModel), true);
+  assert.equal(localModel.hasApiToken, false);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const reProvider = reopened.listProviders()[0]!;
+  assert.equal(reProvider.name, "本地网关");
+  assert.equal(reProvider.tokenOptional, true);
+  assert.equal(reProvider.modelDiscovery, "manual");
+  const reProfile = reopened.listModels().find((model) => model.model === "qwen3-local")!;
+  assert.equal(reProfile.providerId, reProvider.id);
+  assert.equal(reopened.modelAllowsMissingToken(reProfile), true);
+});
+
+test("runtime settings carry thinking overrides through scopes", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-overrides-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const model = await store.createModel({
+    apiToken: "tok",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.example/v1",
+    model: "deepseek-v4-flash",
+    name: "示例模型",
+  });
+  const project = await store.createProject("thinking");
+  const session = await store.createSession(project.id, "会话", { modelId: model.id });
+
+  await store.replaceSessionSettings(session.id, {
+    modelId: model.id,
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+  });
+  const details = store.getSessionSettings(session.id);
+  assert.equal(details.effective.thinkingMode, "enabled");
+  assert.equal(details.effective.thinkingEffort, "max");
+  assert.equal(details.sources.thinkingMode, "session");
+  assert.equal(details.sources.thinkingEffort, "session");
+
+  await assert.rejects(
+    store.replaceSessionSettings(session.id, { thinkingMode: "sometimes" as never }),
+    /thinkingMode must be/,
+  );
+  await assert.rejects(
+    store.replaceSessionSettings(session.id, { thinkingEffort: "ultra" as never }),
+    /thinkingEffort must be/,
+  );
+
+  // Clearing the override falls back to unset — the profile default applies.
+  await store.replaceSessionSettings(session.id, { modelId: model.id });
+  const cleared = store.getSessionSettings(session.id);
+  assert.equal(cleared.effective.thinkingMode, undefined);
+  assert.equal(cleared.sources.thinkingMode, "unset");
 });

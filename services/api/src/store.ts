@@ -54,6 +54,11 @@ import type {
   ModelInvocationUsage,
   ModelRunInfo,
   ModelProfile,
+  ModelProvider,
+  ModelThinkingEffort,
+  ModelThinkingMode,
+  CreateModelProviderRequest,
+  UpdateModelProviderRequest,
   PaperAcquisition,
   PaperVisionRun,
   PermissionAction,
@@ -137,6 +142,7 @@ import {
 } from "@sciencediscovery/orchestration";
 
 import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@sciencediscovery/schema";
+import { getModelProviderPreset } from "@sciencediscovery/schema";
 import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   defaultEnvironmentRevision,
@@ -176,6 +182,7 @@ import {
   normalizeApiToken,
   validateLiveModel,
 } from "./store/secrets.js";
+import { providerSecretKey, validateLiveProvider } from "./store/providers.js";
 import {
   knownConnectorIdSet,
   normalizeMcpProxyPolicies,
@@ -502,6 +509,20 @@ export class SessionStore {
       }
     };
 
+    const savedProviders = Array.isArray(saved.providers) ? saved.providers : [];
+    const providers = savedProviders.map((provider) => ({
+      ...validateLiveProvider(provider),
+      createdAt: provider.createdAt,
+      hasApiToken: modelIdsWithSecrets.has(providerSecretKey(provider.id)),
+      id: provider.id,
+      proxyPolicy: normalizeSavedProxyPolicy(provider.proxyPolicy),
+      tokenOptional: provider.tokenOptional === true,
+      updatedAt: provider.updatedAt,
+    }));
+    const migratedProviders = JSON.stringify(providers) !== JSON.stringify(savedProviders);
+    const providerIds = new Set(providers.map((provider) => provider.id));
+    const providerHasToken = new Map(providers.map((provider) => [provider.id, provider.hasApiToken]));
+
     const savedModels = Array.isArray(saved.models) ? saved.models : [];
     const models = savedModels
       .filter((model) => {
@@ -511,8 +532,14 @@ export class SessionStore {
       .map((model) => ({
         ...validateLiveModel(model),
         createdAt: model.createdAt,
-        hasApiToken: modelIdsWithSecrets.has(model.id),
+        hasApiToken: modelIdsWithSecrets.has(model.id)
+          || (typeof model.providerId === "string" && providerHasToken.get(model.providerId) === true),
         id: model.id,
+        // A profile whose provider disappeared keeps working standalone: its
+        // connection fields were always stored on the profile itself.
+        ...(typeof model.providerId === "string" && providerIds.has(model.providerId)
+          ? { providerId: model.providerId }
+          : {}),
         proxyPolicy: normalizeSavedProxyPolicy(model.proxyPolicy),
         updatedAt: model.updatedAt,
       }));
@@ -805,6 +832,7 @@ export class SessionStore {
       permissionGrants,
       permissionRequests,
       projects,
+      providers,
       proxyDefaultPolicy,
       proxyServers,
       quotaSettings,
@@ -822,6 +850,8 @@ export class SessionStore {
     for (const session of sessions) this.syncSessionCompatibility(session);
     const migratedSessionOverrides = JSON.stringify(sessions) !== JSON.stringify(savedSessions);
     if (!Array.isArray(saved.models)
+      || !Array.isArray(saved.providers)
+      || migratedProviders
       || !Array.isArray(saved.artifacts)
       || !Array.isArray(saved.artifactVersions)
       || !Array.isArray(saved.artifactAnnotations)
@@ -1248,6 +1278,8 @@ export class SessionStore {
         else if (field === "enabledSkillIds") effective.enabledSkillIds = [...value as string[]];
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
+        else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;
+        else if (field === "thinkingEffort") effective.thinkingEffort = value as ModelThinkingEffort;
         else effective[field] = value as string;
         sources[field] = source;
       }
@@ -1746,7 +1778,23 @@ export class SessionStore {
   getModelApiToken(modelId?: string): string | undefined {
     if (!modelId || !this.database) return undefined;
     const row = this.database.prepare("SELECT encrypted_token FROM model_secrets WHERE model_id = ?").get(modelId) as { encrypted_token: string } | undefined;
-    return row ? this.decryptModelApiToken(modelId, row.encrypted_token) : undefined;
+    if (row) return this.decryptModelApiToken(modelId, row.encrypted_token);
+    // Provider-backed profiles without a token of their own use the
+    // provider's shared token.
+    const providerId = this.getModel(modelId)?.providerId;
+    return providerId ? this.getProviderApiToken(providerId) : undefined;
+  }
+
+  getProviderApiToken(providerId?: string): string | undefined {
+    if (!providerId || !this.database) return undefined;
+    const key = providerSecretKey(providerId);
+    const row = this.database.prepare("SELECT encrypted_token FROM model_secrets WHERE model_id = ?").get(key) as { encrypted_token: string } | undefined;
+    return row ? this.decryptModelApiToken(key, row.encrypted_token) : undefined;
+  }
+
+  /** Whether a run may start without any saved token (local endpoints). */
+  modelAllowsMissingToken(profile: ModelProfile): boolean {
+    return this.getProvider(profile.providerId)?.tokenOptional === true;
   }
 
   /** Validate an optional model proxy policy (default inherit) against the
@@ -1792,13 +1840,18 @@ export class SessionStore {
   async updateModel(modelId: string, input: UpdateModelProfileRequest): Promise<ModelProfile> {
     const profile = this.getModel(modelId);
     if (!profile) throw new Error("Model not found");
-    Object.assign(profile, validateLiveModel(input), { updatedAt: new Date().toISOString() });
+    const normalized = validateLiveModel(input);
+    const provider = this.getProvider(profile.providerId);
+    if (provider && (normalized.baseUrl !== provider.baseUrl || normalized.apiProtocol !== provider.apiProtocol)) {
+      throw new Error("The base URL and API protocol of a provider model cannot be changed here; edit the provider instead");
+    }
+    Object.assign(profile, normalized, { updatedAt: new Date().toISOString() });
     if (input.proxyPolicy !== undefined) {
       profile.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
     }
     if (input.apiToken === null) {
       this.setModelApiToken(modelId, undefined);
-      profile.hasApiToken = false;
+      profile.hasApiToken = provider?.hasApiToken === true;
     } else if (input.apiToken !== undefined) {
       this.setModelApiToken(modelId, normalizeApiToken(input.apiToken));
       profile.hasApiToken = true;
@@ -1824,6 +1877,150 @@ export class SessionStore {
     this.setModelApiToken(modelId, undefined);
     this.catalog.models = this.catalog.models.filter((model) => model.id !== modelId);
     await this.saveCatalog();
+  }
+
+  listProviders(): ModelProvider[] {
+    return this.catalog.providers.toSorted((left, right) => left.name.localeCompare(right.name));
+  }
+
+  getProvider(providerId?: string): ModelProvider | undefined {
+    if (!providerId) return undefined;
+    return this.catalog.providers.find((provider) => provider.id === providerId);
+  }
+
+  private setProviderApiToken(providerId: string, apiToken: string | undefined): void {
+    this.setModelApiToken(providerSecretKey(providerId), apiToken);
+  }
+
+  private profileHasOwnToken(modelId: string): boolean {
+    if (!this.database) return false;
+    return Boolean(this.database.prepare("SELECT 1 FROM model_secrets WHERE model_id = ?").get(modelId));
+  }
+
+  /** Mirror provider connection changes onto its profiles. The API variant is
+   *  only reset when the protocol family changed, so a per-model variant
+   *  choice under the same protocol survives provider edits. */
+  private syncProviderModels(provider: ModelProvider, previousProtocol: ModelProfile["apiProtocol"]): void {
+    for (const profile of this.catalog.models) {
+      if (profile.providerId !== provider.id) continue;
+      profile.baseUrl = provider.baseUrl;
+      profile.apiProtocol = provider.apiProtocol;
+      if (provider.apiProtocol !== previousProtocol) profile.apiVariant = provider.apiVariant;
+      profile.proxyPolicy = provider.proxyPolicy;
+      profile.hasApiToken = this.profileHasOwnToken(profile.id) || provider.hasApiToken;
+      profile.updatedAt = provider.updatedAt;
+    }
+  }
+
+  async createProvider(input: CreateModelProviderRequest): Promise<ModelProvider> {
+    const normalized = validateLiveProvider(input);
+    const preset = input.presetId === undefined ? undefined : getModelProviderPreset(input.presetId);
+    const now = new Date().toISOString();
+    const provider: ModelProvider = {
+      ...normalized,
+      createdAt: now,
+      hasApiToken: false,
+      id: randomUUID(),
+      proxyPolicy: this.normalizeModelProxyPolicy(input.proxyPolicy),
+      tokenOptional: input.tokenOptional ?? preset?.tokenOptional ?? false,
+      updatedAt: now,
+    };
+    const apiToken = normalizeApiToken(input.apiToken);
+    if (apiToken) {
+      this.setProviderApiToken(provider.id, apiToken);
+      provider.hasApiToken = true;
+    }
+    this.catalog.providers.push(provider);
+    await this.saveCatalog();
+    return provider;
+  }
+
+  async updateProvider(providerId: string, input: UpdateModelProviderRequest): Promise<ModelProvider> {
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const previousProtocol = provider.apiProtocol;
+    const normalized = validateLiveProvider({
+      apiProtocol: input.apiProtocol ?? provider.apiProtocol,
+      apiVariant: input.apiVariant
+        ?? (input.apiProtocol !== undefined && input.apiProtocol !== provider.apiProtocol ? undefined : provider.apiVariant),
+      baseUrl: input.baseUrl ?? provider.baseUrl,
+      modelDiscovery: input.modelDiscovery ?? provider.modelDiscovery,
+      name: input.name ?? provider.name,
+      presetId: provider.presetId,
+    });
+    Object.assign(provider, normalized, { updatedAt: new Date().toISOString() });
+    if (input.tokenOptional !== undefined) provider.tokenOptional = input.tokenOptional === true;
+    if (input.proxyPolicy !== undefined) {
+      provider.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
+    }
+    if (input.apiToken === null) {
+      this.setProviderApiToken(providerId, undefined);
+      provider.hasApiToken = false;
+    } else if (input.apiToken !== undefined) {
+      this.setProviderApiToken(providerId, normalizeApiToken(input.apiToken));
+      provider.hasApiToken = true;
+    }
+    this.syncProviderModels(provider, previousProtocol);
+    await this.saveCatalog();
+    return provider;
+  }
+
+  async deleteProvider(providerId: string): Promise<void> {
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const children = this.catalog.models.filter((model) => model.providerId === providerId);
+    const referencesModel = (settings: RuntimeSettingsOverrides, id: string) =>
+      settings.modelId === id || settings.reviewModelId === id;
+    for (const child of children) {
+      if (referencesModel(this.catalog.globalSettings, child.id)
+        || this.catalog.projects.some((project) => referencesModel(project.settingsOverrides, child.id))
+        || this.catalog.sessions.some((session) =>
+          session.modelId === child.id || session.reviewModelId === child.id || referencesModel(session.settingsOverrides, child.id))) {
+        throw new Error("Provider models are referenced by runtime settings and cannot be deleted");
+      }
+    }
+    for (const child of children) this.setModelApiToken(child.id, undefined);
+    this.setProviderApiToken(providerId, undefined);
+    this.catalog.models = this.catalog.models.filter((model) => model.providerId !== providerId);
+    this.catalog.providers = this.catalog.providers.filter((entry) => entry.id !== providerId);
+    await this.saveCatalog();
+  }
+
+  /** Ensure a profile backs the given provider/model pair so the rest of the
+   *  product (runs, usage, review model) keeps operating on profile ids. */
+  async materializeProviderModel(
+    providerId: string,
+    modelId: string,
+    options: { label?: string; vision?: boolean } = {},
+  ): Promise<ModelProfile> {
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const model = modelId.trim();
+    if (!model) throw new Error("Model ID is required");
+    if (model.length > 512) throw new Error("Model ID is too long");
+    const existing = this.catalog.models.find((profile) => profile.providerId === providerId && profile.model === model);
+    if (existing) return existing;
+    const now = new Date().toISOString();
+    const profile: ModelProfile = {
+      apiProtocol: provider.apiProtocol,
+      apiVariant: provider.apiVariant,
+      baseUrl: provider.baseUrl,
+      createdAt: now,
+      hasApiToken: provider.hasApiToken,
+      id: randomUUID(),
+      model,
+      name: cleanLabel(`${provider.name} · ${options.label ?? model}`, model),
+      providerId,
+      proxyPolicy: provider.proxyPolicy,
+      thinkingEffort: "high",
+      thinkingMode: "auto",
+      updatedAt: now,
+      vision: options.vision === true,
+    };
+    this.catalog.models.push(profile);
+    this.defaultGlobalTaskModel(profile);
+    await this.saveCatalog();
+    return profile;
   }
 
   async createProject(name: string, input: RuntimeSettingsOverrides = {}): Promise<Project> {
@@ -1883,7 +2080,8 @@ export class SessionStore {
     ]);
     const selectedModel = this.getModel(resolved.effective.modelId);
     if (!selectedModel && !options.allowUnconfiguredModel) throw new Error("A task model is required");
-    if (selectedModel && !this.getModelApiToken(selectedModel.id) && !options.allowUnconfiguredModel) {
+    if (selectedModel && !this.getModelApiToken(selectedModel.id)
+      && !this.modelAllowsMissingToken(selectedModel) && !options.allowUnconfiguredModel) {
       throw new Error("The task model must have a saved API token");
     }
     const now = new Date().toISOString();

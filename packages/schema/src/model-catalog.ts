@@ -1,0 +1,551 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * Curated metadata for well-known models. Every number was copied from the
+ * official vendor page in `source`/`pricing.source` on the recorded date;
+ * absent fields mean the vendor does not publish the fact, never a guess.
+ *
+ * Precedence when the UI assembles a model's fact sheet:
+ *   live listing endpoint facts (`RemoteModelFacts`) > this catalog > unknown.
+ * Pricing is provider-scoped — a rehosted model (e.g. DeepSeek on
+ * SiliconFlow) never inherits the original vendor's prices.
+ */
+
+import type {
+  ModelCatalogEntry,
+  ModelCatalogPricing,
+  ModelCatalogThinking,
+  ModelProviderPresetId,
+} from "./model-provider.js";
+
+export interface ModelCatalogRecord {
+  /** Additional normalized ids that resolve to this record. */
+  aliases?: readonly string[];
+  contextWindow?: number;
+  /** Normalized primary id: lower-case, no vendor path prefix. */
+  key: string;
+  label: string;
+  maxOutputTokens?: number;
+  pricing?: Readonly<Partial<Record<ModelProviderPresetId, ModelCatalogPricing>>>;
+  source: { retrievedAt: string; url: string };
+  thinking?: ModelCatalogThinking;
+  vision?: boolean;
+}
+
+const RETRIEVED = "2026-08-23";
+
+const src = (url: string) => ({ retrievedAt: RETRIEVED, url });
+
+const THINKING_TOGGLE: ModelCatalogThinking = { supported: true };
+const THINKING_WITH_EFFORT: ModelCatalogThinking = { efforts: ["high", "max"], supported: true };
+
+export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
+  // ---- DeepSeek (api-docs.deepseek.com) ----
+  {
+    contextWindow: 1_000_000,
+    key: "deepseek-v4-flash",
+    label: "DeepSeek V4 Flash",
+    maxOutputTokens: 384_000,
+    pricing: {
+      deepseek: {
+        cachedInput: 0.1,
+        currency: "CNY",
+        input: 3,
+        notes: "峰时价；闲时（北京时间非高峰）约为峰时 5 折",
+        output: 9,
+        source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
+        unit: "per-1m-tokens",
+      },
+      siliconflow: {
+        currency: "CNY",
+        input: 1,
+        output: 2,
+        source: src("https://siliconflow.cn/pricing"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: false,
+  },
+  {
+    contextWindow: 1_000_000,
+    key: "deepseek-v4-pro",
+    label: "DeepSeek V4 Pro",
+    maxOutputTokens: 384_000,
+    pricing: {
+      deepseek: {
+        cachedInput: 0.3,
+        currency: "CNY",
+        input: 9,
+        notes: "峰时价；闲时约为峰时 5 折",
+        output: 27,
+        source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: false,
+  },
+
+  // ---- Moonshot Kimi (platform.kimi.com) ----
+  {
+    contextWindow: 1_048_576,
+    key: "kimi-k3",
+    label: "Kimi K3",
+    pricing: {
+      moonshot: {
+        cachedInput: 2,
+        currency: "CNY",
+        input: 20,
+        output: 100,
+        source: src("https://platform.kimi.com/docs/pricing/chat-k3.md"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://platform.kimi.com/docs/models.md"),
+    thinking: { ...THINKING_WITH_EFFORT, supported: true },
+    vision: true,
+  },
+  {
+    contextWindow: 262_144,
+    key: "kimi-k2.6",
+    label: "Kimi K2.6",
+    pricing: {
+      moonshot: {
+        cachedInput: 1.1,
+        currency: "CNY",
+        input: 6.5,
+        output: 27,
+        source: src("https://platform.kimi.com/docs/pricing/chat-k26.md"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://platform.kimi.com/docs/models.md"),
+    thinking: THINKING_TOGGLE,
+    vision: true,
+  },
+  {
+    contextWindow: 262_144,
+    key: "kimi-k2.5",
+    label: "Kimi K2.5",
+    pricing: {
+      moonshot: {
+        cachedInput: 0.7,
+        currency: "CNY",
+        input: 4,
+        output: 21,
+        source: src("https://platform.kimi.com/docs/pricing/chat-k25.md"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://platform.kimi.com/docs/models.md"),
+    thinking: THINKING_TOGGLE,
+    vision: true,
+  },
+
+  // ---- Zhipu GLM (docs.bigmodel.cn; USD prices from docs.z.ai) ----
+  {
+    contextWindow: 1_000_000,
+    key: "glm-5.3",
+    label: "GLM-5.3",
+    maxOutputTokens: 128_000,
+    pricing: {
+      zhipu: {
+        cachedInput: 0.26,
+        currency: "USD",
+        input: 1.4,
+        notes: "国际站美元价；人民币价见 bigmodel.cn 定价页",
+        output: 4.4,
+        source: src("https://docs.z.ai/guides/overview/pricing"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://docs.bigmodel.cn/cn/guide/start/model-overview"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: false,
+  },
+  {
+    contextWindow: 1_000_000,
+    key: "glm-5.2",
+    label: "GLM-5.2",
+    maxOutputTokens: 128_000,
+    pricing: {
+      zhipu: {
+        cachedInput: 0.26,
+        currency: "USD",
+        input: 1.4,
+        notes: "国际站美元价；人民币价见 bigmodel.cn 定价页",
+        output: 4.4,
+        source: src("https://docs.z.ai/guides/overview/pricing"),
+        unit: "per-1m-tokens",
+      },
+      siliconflow: {
+        currency: "CNY",
+        input: 8,
+        output: 28,
+        source: src("https://siliconflow.cn/pricing"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://docs.bigmodel.cn/cn/guide/start/model-overview"),
+    thinking: THINKING_TOGGLE,
+    vision: false,
+  },
+  {
+    contextWindow: 200_000,
+    key: "glm-4.7",
+    label: "GLM-4.7",
+    maxOutputTokens: 128_000,
+    pricing: {
+      zhipu: {
+        cachedInput: 0.11,
+        currency: "USD",
+        input: 0.6,
+        notes: "国际站美元价；人民币价见 bigmodel.cn 定价页",
+        output: 2.2,
+        source: src("https://docs.z.ai/guides/overview/pricing"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://docs.bigmodel.cn/cn/guide/start/model-overview"),
+    thinking: THINKING_TOGGLE,
+    vision: false,
+  },
+  {
+    contextWindow: 200_000,
+    key: "glm-5v-turbo",
+    label: "GLM-5V Turbo",
+    maxOutputTokens: 128_000,
+    pricing: {
+      zhipu: {
+        cachedInput: 0.24,
+        currency: "USD",
+        input: 1.2,
+        notes: "国际站美元价；人民币价见 bigmodel.cn 定价页",
+        output: 4,
+        source: src("https://docs.z.ai/guides/overview/pricing"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://docs.bigmodel.cn/cn/guide/start/model-overview"),
+    thinking: THINKING_TOGGLE,
+    vision: true,
+  },
+
+  // ---- MiniMax (platform.minimaxi.com / platform.minimax.io) ----
+  {
+    contextWindow: 1_000_000,
+    key: "minimax-m3",
+    label: "MiniMax M3",
+    maxOutputTokens: 524_288,
+    pricing: {
+      minimax: {
+        cachedInput: 0.42,
+        currency: "CNY",
+        input: 2.1,
+        notes: "输入 ≤512K 档价；超过 512K 输入的部分价格翻倍",
+        output: 8.4,
+        source: src("https://platform.minimaxi.com/docs/guides/pricing-paygo.md"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://platform.minimax.io/docs/api-reference/text-chat-openai.md"),
+    thinking: THINKING_TOGGLE,
+    vision: true,
+  },
+  {
+    contextWindow: 204_800,
+    key: "minimax-m2.7",
+    label: "MiniMax M2.7",
+    maxOutputTokens: 204_800,
+    pricing: {
+      minimax: {
+        cachedInput: 0.42,
+        currency: "CNY",
+        input: 2.1,
+        output: 8.4,
+        source: src("https://platform.minimaxi.com/docs/guides/pricing-paygo.md"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://platform.minimax.io/docs/api-reference/text-chat-openai.md"),
+    thinking: { supported: true },
+    vision: false,
+  },
+
+  // ---- OpenAI (developers.openai.com) ----
+  {
+    aliases: ["gpt-5.6"],
+    contextWindow: 1_050_000,
+    key: "gpt-5.6-sol",
+    label: "GPT-5.6 Sol",
+    maxOutputTokens: 128_000,
+    pricing: {
+      openai: {
+        cachedInput: 0.4,
+        currency: "USD",
+        input: 4,
+        notes: "输入超过 272K tokens 的部分：输入 2 倍、输出 1.5 倍计价",
+        output: 20,
+        source: src("https://developers.openai.com/api/docs/models/gpt-5.6-sol"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://developers.openai.com/api/docs/models/gpt-5.6-sol"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: true,
+  },
+  {
+    contextWindow: 1_050_000,
+    key: "gpt-5.6-terra",
+    label: "GPT-5.6 Terra",
+    maxOutputTokens: 128_000,
+    pricing: {
+      openai: {
+        cachedInput: 0.2,
+        currency: "USD",
+        input: 2,
+        notes: "输入超过 272K tokens 的部分：输入 2 倍、输出 1.5 倍计价",
+        output: 12,
+        source: src("https://developers.openai.com/api/docs/models/gpt-5.6-terra"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://developers.openai.com/api/docs/models/gpt-5.6-terra"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: true,
+  },
+  {
+    contextWindow: 1_050_000,
+    key: "gpt-5.6-luna",
+    label: "GPT-5.6 Luna",
+    maxOutputTokens: 128_000,
+    pricing: {
+      openai: {
+        cachedInput: 0.02,
+        currency: "USD",
+        input: 0.2,
+        output: 1.2,
+        source: src("https://developers.openai.com/api/docs/models/gpt-5.6-luna"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://developers.openai.com/api/docs/models/gpt-5.6-luna"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: true,
+  },
+  {
+    contextWindow: 1_050_000,
+    key: "gpt-5.5",
+    label: "GPT-5.5",
+    maxOutputTokens: 128_000,
+    pricing: {
+      openai: {
+        cachedInput: 0.5,
+        currency: "USD",
+        input: 5,
+        notes: "输入超过 272K tokens 的部分适用更高档价",
+        output: 30,
+        source: src("https://developers.openai.com/api/docs/pricing"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://developers.openai.com/api/docs/models/gpt-5.5"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: true,
+  },
+  {
+    contextWindow: 400_000,
+    key: "gpt-5.4-mini",
+    label: "GPT-5.4 mini",
+    maxOutputTokens: 128_000,
+    pricing: {
+      openai: {
+        cachedInput: 0.075,
+        currency: "USD",
+        input: 0.75,
+        output: 4.5,
+        source: src("https://developers.openai.com/api/docs/models/gpt-5.4-mini"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://developers.openai.com/api/docs/models/gpt-5.4-mini"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: true,
+  },
+
+  // ---- Anthropic (platform.claude.com) ----
+  {
+    contextWindow: 1_000_000,
+    key: "claude-fable-5",
+    label: "Claude Fable 5",
+    maxOutputTokens: 128_000,
+    pricing: {
+      anthropic: {
+        cachedInput: 1,
+        currency: "USD",
+        input: 10,
+        notes: "缓存写入另计（5 分钟 1.25 倍 / 1 小时 2 倍输入价）",
+        output: 50,
+        source: src("https://platform.claude.com/docs/en/about-claude/pricing.md"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: true,
+  },
+  {
+    contextWindow: 1_000_000,
+    key: "claude-opus-5",
+    label: "Claude Opus 5",
+    maxOutputTokens: 128_000,
+    pricing: {
+      anthropic: {
+        cachedInput: 0.5,
+        currency: "USD",
+        input: 5,
+        output: 25,
+        source: src("https://platform.claude.com/docs/en/about-claude/pricing.md"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: true,
+  },
+  {
+    contextWindow: 1_000_000,
+    key: "claude-sonnet-5",
+    label: "Claude Sonnet 5",
+    maxOutputTokens: 128_000,
+    pricing: {
+      anthropic: {
+        cachedInput: 0.2,
+        currency: "USD",
+        input: 2,
+        output: 10,
+        source: src("https://platform.claude.com/docs/en/about-claude/pricing.md"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
+    thinking: THINKING_WITH_EFFORT,
+    vision: true,
+  },
+  {
+    aliases: ["claude-haiku-4-5-20251001"],
+    contextWindow: 200_000,
+    key: "claude-haiku-4-5",
+    label: "Claude Haiku 4.5",
+    maxOutputTokens: 64_000,
+    pricing: {
+      anthropic: {
+        cachedInput: 0.1,
+        currency: "USD",
+        input: 1,
+        output: 5,
+        source: src("https://platform.claude.com/docs/en/about-claude/pricing.md"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
+    thinking: { efforts: ["high", "max"], supported: true },
+    vision: true,
+  },
+
+  // ---- Google Gemini (ai.google.dev) ----
+  {
+    contextWindow: 1_048_576,
+    key: "gemini-3.7-flash",
+    label: "Gemini 3.7 Flash",
+    maxOutputTokens: 65_536,
+    pricing: {
+      gemini: {
+        cachedInput: 0.075,
+        currency: "USD",
+        input: 0.75,
+        notes: "2026-12-31 前价格；2027-01-01 起翻倍",
+        output: 3.75,
+        source: src("https://ai.google.dev/gemini-api/docs/pricing"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash"),
+    thinking: { supported: true },
+    vision: true,
+  },
+  {
+    contextWindow: 1_048_576,
+    key: "gemini-3.1-pro-preview",
+    label: "Gemini 3.1 Pro Preview",
+    maxOutputTokens: 65_536,
+    pricing: {
+      gemini: {
+        cachedInput: 0.2,
+        currency: "USD",
+        input: 2,
+        notes: "提示 ≤200K tokens 档价；超过 200K 适用更高档",
+        output: 12,
+        source: src("https://ai.google.dev/gemini-api/docs/pricing"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"),
+    thinking: { supported: true },
+    vision: true,
+  },
+];
+
+/** Lower-case the id and strip a vendor path prefix ("org/model") plus common
+ *  hosted-variant suffixes so rehosted ids match their canonical record. */
+export function normalizeCatalogModelId(modelId: string): string {
+  const lower = modelId.trim().toLowerCase();
+  const slash = lower.lastIndexOf("/");
+  const bare = slash === -1 ? lower : lower.slice(slash + 1);
+  return bare.replace(/:(free|extended|exacto)$/, "");
+}
+
+/** Curated suggestions for providers without a listing endpoint: the models
+ *  whose pricing table names this preset. */
+export function listCatalogModelsForPreset(presetId: string): ModelCatalogRecord[] {
+  return MODEL_CATALOG.filter((record) => record.pricing?.[presetId as ModelProviderPresetId] !== undefined);
+}
+
+/**
+ * Resolve curated metadata for a model id. Pricing is only returned when it
+ * was recorded for the given preset — a rehosted model keeps its capability
+ * facts but never inherits another vendor's prices.
+ */
+export function lookupModelCatalog(modelId: string, presetId?: string): ModelCatalogEntry | undefined {
+  const normalized = normalizeCatalogModelId(modelId);
+  const record = MODEL_CATALOG.find((entry) => entry.key === normalized || entry.aliases?.includes(normalized))
+    // Date-suffixed snapshots ("<id>-20260423" / "<id>-2026-04-23") match
+    // their base record.
+    ?? MODEL_CATALOG.find((entry) => normalized.startsWith(`${entry.key}-2`));
+  if (!record) return undefined;
+  const pricing = presetId === undefined ? undefined : record.pricing?.[presetId as ModelProviderPresetId];
+  return {
+    label: record.label,
+    source: record.source,
+    ...(record.contextWindow !== undefined ? { contextWindow: record.contextWindow } : {}),
+    ...(record.maxOutputTokens !== undefined ? { maxOutputTokens: record.maxOutputTokens } : {}),
+    ...(record.vision !== undefined ? { vision: record.vision } : {}),
+    ...(record.thinking ? { thinking: record.thinking } : {}),
+    ...(pricing ? { pricing } : {}),
+  };
+}
