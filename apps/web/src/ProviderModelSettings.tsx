@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import type {
   ModelApiProtocol,
@@ -102,6 +102,65 @@ function tokenCount(value: number | undefined, unknown: string): string {
   return value === undefined ? unknown : new Intl.NumberFormat().format(value);
 }
 
+export function canonicalSourceUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/u, "") || "/";
+    return parsed.toString();
+  } catch {
+    return value.replace(/\/+$/u, "");
+  }
+}
+
+export function sourceDate(value: string): string {
+  const match = value.match(/^\d{4}-\d{2}-\d{2}/u);
+  return match?.[0] ?? value;
+}
+
+export function providerOperationError(
+  reason: unknown,
+  fallback: string,
+  referencedProviderMessage: string,
+): string {
+  const detail = reason instanceof Error ? reason.message : "";
+  if (detail.includes("Provider models are referenced by runtime settings")) {
+    return referencedProviderMessage;
+  }
+  return detail ? `${fallback}: ${detail}` : fallback;
+}
+
+export interface ProviderModelSettingsHandle {
+  hasUnsavedDraft: () => boolean;
+  saveDraft: () => Promise<boolean>;
+}
+
+interface ProviderListingRequest {
+  providerId: string;
+  sequence: number;
+}
+
+export function createProviderListingRequestGuard() {
+  let sequence = 0;
+  return {
+    begin(providerId: string): ProviderListingRequest {
+      sequence += 1;
+      return { providerId, sequence };
+    },
+    invalidate(): void {
+      sequence += 1;
+    },
+    isCurrent(request: ProviderListingRequest, providerId: string): boolean {
+      return request.sequence === sequence && request.providerId === providerId;
+    },
+  };
+}
+
+function draftFingerprint(draft: ProviderDraft | undefined): string {
+  return draft ? JSON.stringify(draft) : "";
+}
+
 export function PriceSummary({ model }: { model: ProviderModelEntry }) {
   const { t } = useLocale();
   const pricing = model.remote?.pricing ?? model.catalog?.pricing;
@@ -111,7 +170,11 @@ export function PriceSummary({ model }: { model: ProviderModelEntry }) {
       {pricing.periods.map((period) => <span key={period.id}>
         {t(`providers.metadata.pricePeriod.${period.id}`)}: {pricing.currency} {period.input} / {period.output}
         {period.cachedInput !== undefined ? ` · ${t("providers.metadata.cachedInput")} ${period.cachedInput}` : ""}
-        {` · ${t("providers.metadata.perMillion")} · ${period.schedule}`}
+        {` · ${t("providers.metadata.perMillion")} · ${period.schedule.kind === "weekdays"
+          ? t("providers.metadata.priceSchedule.weekdays", {
+              intervals: period.schedule.intervals.map(({ end, start }) => `${start}–${end}`).join(", "),
+            })
+          : t("providers.metadata.priceSchedule.remainder")}`}
       </span>)}
     </span>;
   }
@@ -133,7 +196,7 @@ function ModelFacts({ model }: { model: ProviderModelEntry }) {
     <div><dt>{t("providers.metadata.context")}</dt><dd>{tokenCount(contextWindow, unknown)}</dd></div>
     <div><dt>{t("providers.metadata.output")}</dt><dd>{tokenCount(maxOutputTokens, unknown)}</dd></div>
     <div><dt>{t("providers.metadata.vision")}</dt><dd>{vision === undefined ? unknown : vision ? t("common.yes") : t("common.no")}</dd></div>
-    <div><dt>{t("providers.metadata.thinking")}</dt><dd>{thinking === undefined ? unknown : thinking ? t("common.yes") : t("common.no")}{efforts?.length ? ` · ${efforts.join(" / ")}` : ""}</dd></div>
+    <div><dt>{t("providers.metadata.thinking")}</dt><dd>{thinking === undefined ? unknown : thinking ? t("common.yes") : t("common.no")}{efforts?.length ? ` · ${efforts.map((effort) => t(`settings.thinkingEffort.${effort}`)).join(" / ")}` : ""}</dd></div>
     <div className="provider-model-price"><dt>{t("providers.metadata.price")}</dt><dd><PriceSummary model={model} /></dd></div>
   </dl>;
 }
@@ -141,28 +204,20 @@ function ModelFacts({ model }: { model: ProviderModelEntry }) {
 function SourceLinks({ model }: { model: ProviderModelEntry }) {
   const { t } = useLocale();
   const sources = [model.remote?.pricing?.source, model.catalog?.source, model.catalog?.pricing?.source]
-    .filter((source, index, all) => source && all.findIndex((candidate) => candidate?.url === source.url) === index);
+    .filter((source, index, all) => source && all.findIndex((candidate) =>
+      candidate && canonicalSourceUrl(candidate.url) === canonicalSourceUrl(source.url)) === index);
   if (!sources.length) return <small>{t("providers.metadata.remoteSource")}</small>;
   return <small className="provider-model-sources">
-    {sources.map((source) => source ? <a href={source.url} key={source.url} rel="noreferrer" target="_blank">
-      {t("providers.metadata.officialSource")} · {source.retrievedAt}
+    {sources.map((source) => source ? <a href={canonicalSourceUrl(source.url)} key={canonicalSourceUrl(source.url)} rel="noreferrer" target="_blank">
+      {t("providers.metadata.officialSource")} · {sourceDate(source.retrievedAt)}
     </a> : null)}
   </small>;
 }
 
-export function ProviderModelSettings({
-  client,
-  models,
-  onError,
-  onModelsChange,
-  onNotice,
-  onProvidersChange,
-  presets,
-  providers,
-  proxySettings,
-}: {
+export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   client: SettingsApiClient;
   models: ModelProfile[];
+  onDraftStateChange?: (dirty: boolean) => void;
   onError: (message: string) => void;
   onModelsChange: (models: ModelProfile[]) => void;
   onNotice: (message: string, detail?: string) => void;
@@ -170,18 +225,42 @@ export function ProviderModelSettings({
   presets: ModelProviderPreset[];
   providers: ModelProvider[];
   proxySettings?: ProxySettingsDetails;
-}) {
+}>(function ProviderModelSettings({
+  client,
+  models,
+  onDraftStateChange,
+  onError,
+  onModelsChange,
+  onNotice,
+  onProvidersChange,
+  presets,
+  providers,
+  proxySettings,
+}, ref) {
   const { t } = useLocale();
   const [draft, setDraft] = useState<ProviderDraft>();
   const [listing, setListing] = useState<ProviderModelList>();
   const [manualModelId, setManualModelId] = useState("");
   const [discoveryError, setDiscoveryError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const baselineDraft = useRef<ProviderDraft | undefined>(undefined);
+  const listingGuard = useRef(createProviderListingRequestGuard());
+  const draftDirty = draftFingerprint(draft) !== draftFingerprint(baselineDraft.current);
+
+  useEffect(() => onDraftStateChange?.(draftDirty), [draftDirty, onDraftStateChange]);
+  useEffect(() => () => onDraftStateChange?.(false), [onDraftStateChange]);
+
+  useImperativeHandle(ref, () => ({
+    hasUnsavedDraft: () => draftDirty,
+    saveDraft: saveProvider,
+  }), [draftDirty, draft, busy, providers]);
 
   useEffect(() => {
     if (draft || !providers.length) return;
     const first = providers[0]!;
-    setDraft(providerDraft(first));
+    const next = providerDraft(first);
+    baselineDraft.current = next;
+    setDraft(next);
     void loadModels(first.id);
     // The first-provider selection is only a hydration default. User edits
     // are never reset merely because a parent list received a fresh object.
@@ -192,23 +271,41 @@ export function ProviderModelSettings({
     setDraft((current) => current ? { ...current, ...update } : current);
   }
 
+  function selectDraft(next: ProviderDraft): void {
+    listingGuard.current.invalidate();
+    baselineDraft.current = next;
+    setDraft(next);
+    setBusy(false);
+  }
+
+  function allowDraftReplacement(): boolean {
+    return !draftDirty || window.confirm(t("providers.unsaved.confirm"));
+  }
+
+  function operationError(reason: unknown, fallback: string): string {
+    return providerOperationError(reason, fallback, t("providers.delete.referenced"));
+  }
+
   async function loadModels(providerId: string, refresh = false): Promise<void> {
+    const request = listingGuard.current.begin(providerId);
     setBusy(true);
     setDiscoveryError(undefined);
     try {
-      setListing(await client.listProviderModels(providerId, refresh));
+      const next = await client.listProviderModels(providerId, refresh);
+      if (listingGuard.current.isCurrent(request, providerId)) setListing(next);
     } catch (reason) {
       // Keep the last successful listing visible. The manual ID path below is
       // intentionally independent of discovery so an outage is recoverable.
       const message = reason instanceof Error ? reason.message : t("providers.discovery.failed");
-      setDiscoveryError(message);
+      if (listingGuard.current.isCurrent(request, providerId)) setDiscoveryError(message);
     } finally {
-      setBusy(false);
+      if (listingGuard.current.isCurrent(request, providerId)) setBusy(false);
     }
   }
 
   function selectProvider(provider: ModelProvider): void {
-    setDraft(providerDraft(provider));
+    if (!allowDraftReplacement()) return;
+    selectDraft(providerDraft(provider));
     setListing(undefined);
     setManualModelId("");
     setDiscoveryError(undefined);
@@ -216,22 +313,23 @@ export function ProviderModelSettings({
   }
 
   function selectPreset(preset: ModelProviderPreset): void {
-    setDraft(presetDraft(preset));
+    if (!allowDraftReplacement()) return;
+    selectDraft(presetDraft(preset));
     setListing(undefined);
     setManualModelId("");
     setDiscoveryError(undefined);
   }
 
-  async function saveProvider(): Promise<void> {
-    if (!draft || busy) return;
+  async function saveProvider(): Promise<boolean> {
+    if (!draft || busy) return false;
     if (!draft.name.trim() || !draft.baseUrl.trim()) {
       onError(t("providers.validation.identity"));
-      return;
+      return false;
     }
     const existing = draft.providerId ? providers.find((provider) => provider.id === draft.providerId) : undefined;
     if (!existing && !draft.tokenOptional && !draft.apiToken.trim()) {
       onError(t("providers.validation.token"));
-      return;
+      return false;
     }
     setBusy(true);
     try {
@@ -251,13 +349,22 @@ export function ProviderModelSettings({
             ...(draft.removeToken ? { apiToken: null } : {}),
           })
         : await client.createProvider({ ...input, presetId: draft.presetId });
-      const registry = await client.listProviders();
-      onProvidersChange(registry.providers);
-      setDraft(providerDraft(saved));
+      const savedDraft = providerDraft(saved);
+      baselineDraft.current = savedDraft;
+      setDraft(savedDraft);
       onNotice(existing ? t("providers.notice.updated") : t("providers.notice.created"), saved.name);
+      try {
+        const registry = await client.listProviders();
+        onProvidersChange(registry.providers);
+      } catch (reason) {
+        onError(operationError(reason, t("providers.load.providersFailed")));
+        return false;
+      }
       await loadModels(saved.id, true);
+      return true;
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("providers.validation.saveFailed"));
+      onError(operationError(reason, t("providers.validation.saveFailed")));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -269,16 +376,31 @@ export function ProviderModelSettings({
     setBusy(true);
     try {
       await client.deleteProvider(draft.providerId);
-      const registry = await client.listProviders();
-      const next = registry.providers[0];
-      onProvidersChange(registry.providers);
-      onModelsChange(await client.listModels());
-      setDraft(next ? providerDraft(next) : undefined);
+      const remaining = providers.filter((provider) => provider.id !== draft.providerId);
+      let nextProviders = remaining;
+      try {
+        nextProviders = (await client.listProviders()).providers;
+      } catch (reason) {
+        onError(operationError(reason, t("providers.load.providersFailed")));
+      }
+      onProvidersChange(nextProviders);
+      try {
+        onModelsChange(await client.listModels());
+      } catch (reason) {
+        onError(operationError(reason, t("providers.load.modelsFailed")));
+      }
+      const next = nextProviders[0];
+      if (next) selectDraft(providerDraft(next));
+      else {
+        listingGuard.current.invalidate();
+        baselineDraft.current = undefined;
+        setDraft(undefined);
+      }
       setListing(undefined);
       if (next) await loadModels(next.id);
       onNotice(t("providers.notice.deleted"), draft.name);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("providers.delete.failed"));
+      onError(operationError(reason, t("providers.delete.failed")));
     } finally {
       setBusy(false);
     }
@@ -315,7 +437,8 @@ export function ProviderModelSettings({
       <div className="provider-section-heading">
         <div><h4>{t("providers.presets.title")}</h4><p>{t("providers.presets.help")}</p></div>
         <button className="secondary-button compact-button" onClick={() => {
-          setDraft({ ...CUSTOM_PROVIDER });
+          if (!allowDraftReplacement()) return;
+          selectDraft({ ...CUSTOM_PROVIDER });
           setListing(undefined);
           setDiscoveryError(undefined);
         }} type="button">{t("providers.custom.new")}</button>
@@ -338,7 +461,12 @@ export function ProviderModelSettings({
         onClick={() => selectProvider(provider)}
         type="button"
       >
-        <span className={provider.hasApiToken || provider.tokenOptional ? "model-status" : "model-status missing"} />
+        <span
+          aria-label={provider.hasApiToken || provider.tokenOptional ? t("providers.status.ready") : t("providers.status.missingToken")}
+          className={provider.hasApiToken || provider.tokenOptional ? "model-status" : "model-status missing"}
+          role="img"
+          title={provider.hasApiToken || provider.tokenOptional ? t("providers.status.ready") : t("providers.status.missingToken")}
+        />
         <span><strong>{provider.name}</strong><small>{provider.baseUrl}</small></span>
         <em>{provider.presetId ? t("providers.kind.builtIn") : t("providers.kind.custom")}</em>
       </button>)}</div>
@@ -413,4 +541,4 @@ export function ProviderModelSettings({
       </div>
     </section> : null}
   </div>;
-}
+});

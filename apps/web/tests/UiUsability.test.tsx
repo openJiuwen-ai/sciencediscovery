@@ -23,6 +23,7 @@ import {
   modelOptionLabel,
   shortModelProfileId,
 } from "../src/modelLabels.js";
+import { translate } from "../src/i18n/index.js";
 
 const sourceRoot = new URL("../src/", import.meta.url);
 
@@ -51,9 +52,10 @@ test("model labels add a short profile ID only when visible identities collide",
 
   assert.equal(shortModelProfileId(first.id), "model-…1111");
   assert.equal(duplicateModelProfileId(first, models), "model-…1111");
-  assert.equal(modelOptionLabel(first, models), "Shared · test-model · openai-chat-completions/openai · thinking auto · model-…1111");
-  assert.equal(modelOptionLabel(second, models), "Shared · test-model · openai-chat-completions/openai · thinking auto · model-…2222");
-  assert.equal(modelOptionLabel(unique, models), "Unique · test-model · openai-chat-completions/openai · thinking auto");
+  const t = (key: Parameters<typeof translate>[1]) => translate("en", key);
+  assert.equal(modelOptionLabel(first, models, t), "Shared · test-model · OpenAI standard · Auto · model-…1111");
+  assert.equal(modelOptionLabel(second, models, t), "Shared · test-model · OpenAI standard · Auto · model-…2222");
+  assert.equal(modelOptionLabel(unique, models, t), "Unique · test-model · OpenAI standard · Auto");
 });
 
 test("settings checkboxes expose a 24px control inside clickable labels", () => {
@@ -106,7 +108,7 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
 
   assert.match(app, /<span title=\{project\.name\}>\{label\}<\/span>/);
   assert.match(app, /<span title=\{`\$\{item\.title\}\$\{item\.archivedAt/);
-  assert.equal(app.match(/modelOptionLabel\(item, (?:models|visionModels)\)/g)?.length, 3);
+  assert.equal(app.match(/modelOptionLabel\(item, (?:models|visionModels), t\)/g)?.length, 3);
 });
 
 test("workspace resize wiring shares a viewport-driven maximum", () => {
@@ -131,4 +133,16 @@ test("dense settings and artifact layouts adapt without fixed-column overflow", 
   assert.match(responsive, /\.dialog-actions \{ flex-wrap: wrap; \}/);
   assert.match(responsive, /\.annotation-editor \{ grid-template-columns: minmax\(0, 1fr\); \}/);
   assert.match(artifacts, /\.artifact-provenance article header \{[^}]*flex-wrap: wrap;/);
+});
+
+test("Composer controls wrap by available container width instead of overlapping", () => {
+  const conversation = source("styles/conversation.css");
+  const responsive = source("styles/responsive.css");
+
+  assert.match(conversation, /\.composer-footer \{[^}]*flex-wrap: wrap;/);
+  assert.match(conversation, /\.task-model-picker \{[^}]*flex: 1 1 280px;[^}]*min-width: 0;/);
+  assert.match(conversation, /\.task-model-picker select \{[^}]*width: 100%;[^}]*min-width: 0;/);
+  assert.match(conversation, /\.orchestration-controls \{[^}]*flex-wrap: wrap;/);
+  assert.match(responsive, /@container \(max-width: 1024px\)[\s\S]*?\.task-model-picker \{ flex-basis: 100%; \}/);
+  assert.match(responsive, /@container \(max-width: 900px\)[\s\S]*?\.orchestration-controls \{ flex-basis: 100%; \}/);
 });

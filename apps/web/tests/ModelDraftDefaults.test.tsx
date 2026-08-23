@@ -152,10 +152,11 @@ test("the selected variant shows a short label plus a behavior hint", () => {
   assert.match(chinese, /<small class="model-editor-hint">标准 Chat Completions 请求，不发送思考控制字段。<\/small>/);
 });
 
-test("unsupported effort is disabled with an explicit reason, not a cryptic label", () => {
+test("unsupported thinking controls are hidden with an explicit reason", () => {
   const unsupported = renderFields("en", { ...EMPTY_MODEL_DRAFT, thinkingMode: "enabled" });
-  assert.match(unsupported, /<label><span>Thinking effort<\/span><select disabled=""/);
-  assert.match(unsupported, /<small class="model-editor-hint warning">This variant has no effort field — the effort value is never sent\.<\/small>/);
+  assert.doesNotMatch(unsupported, /<label><span>Thinking<\/span><select/);
+  assert.doesNotMatch(unsupported, /<label><span>Thinking effort<\/span><select/);
+  assert.match(unsupported, /<small class="model-editor-hint warning">This API variant has no thinking control field\. Thinking mode and effort are not saved because the provider would ignore them\.<\/small>/);
   assert.doesNotMatch(unsupported, /not sent for this variant/);
 
   const supportedButOff = renderFields("en", { ...EMPTY_MODEL_DRAFT, apiVariant: "deepseek" });
@@ -167,7 +168,7 @@ test("unsupported effort is disabled with an explicit reason, not a cryptic labe
   assert.doesNotMatch(supportedAndOn, /model-editor-hint warning/);
 
   const chinese = renderFields("zh-CN", { ...EMPTY_MODEL_DRAFT, thinkingMode: "enabled" });
-  assert.match(chinese, /<small class="model-editor-hint warning">此变种没有强度字段——不会发送思考强度。<\/small>/);
+  assert.match(chinese, /<small class="model-editor-hint warning">此接口变种没有思考控制字段。服务商会忽略思考开关与强度，因此不会保存这些设置。<\/small>/);
 });
 
 test("known Kimi K3 and GPT-5.5 drafts render only legal thinking choices", () => {
@@ -202,4 +203,28 @@ test("known Kimi K3 and GPT-5.5 drafts render only legal thinking choices", () =
     thinkingMode: "enabled",
   });
   assert.match(legacyMax, /<option value="xhigh" selected="">Extra high<\/option>/);
+});
+
+test("Haiku 4.5 hides effort consistently and explains its legacy budget while newer adaptive models keep effort", () => {
+  const haiku = renderFields("en", {
+    ...EMPTY_MODEL_DRAFT,
+    apiProtocol: "anthropic-messages",
+    apiVariant: "anthropic-adaptive",
+    model: "claude-haiku-4-5",
+    thinkingMode: "enabled",
+  });
+  assert.match(haiku, /<label><span>Thinking<\/span><select/);
+  assert.doesNotMatch(haiku, /<label><span>Thinking effort<\/span><select/);
+  assert.match(haiku, /This model requires Anthropic&#x27;s legacy fixed thinking budget; Adaptive effort is not available\./);
+
+  const adaptive = renderFields("en", {
+    ...EMPTY_MODEL_DRAFT,
+    apiProtocol: "anthropic-messages",
+    apiVariant: "anthropic-adaptive",
+    model: "claude-sonnet-4-7",
+    thinkingMode: "enabled",
+  });
+  assert.match(adaptive, /<label><span>Thinking effort<\/span><select>/);
+  assert.match(adaptive, /<option value="max">Max<\/option>/);
+  assert.doesNotMatch(adaptive, /legacy fixed thinking budget/);
 });

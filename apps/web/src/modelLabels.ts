@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { ModelProfile } from "@sciencediscovery/schema";
+import type { MessageKey } from "./i18n/index.js";
 
 function modelIdentity(profile: ModelProfile): string {
   return `${profile.name.trim()}\u0000${profile.model.trim()}`;
@@ -32,14 +33,21 @@ export function duplicateModelProfileId(
     : undefined;
 }
 
-export function modelOptionLabel(profile: ModelProfile, profiles: ModelProfile[]): string {
+export function modelOptionLabel(
+  profile: ModelProfile,
+  profiles: ModelProfile[],
+  t: (key: MessageKey) => string,
+): string {
   const protocol = profile.apiProtocol ?? (profile.baseUrl.includes("/api/plan")
     ? "anthropic-messages"
     : "openai-chat-completions");
   const variant = profile.apiVariant ?? (protocol === "anthropic-messages" ? "anthropic-adaptive" : "openai");
   const thinking = profile.thinkingMode ?? "auto";
   const effort = profile.thinkingEffort ?? "high";
-  const base = `${profile.name} · ${profile.model} · ${protocol}/${variant} · thinking ${thinking}${thinking === "enabled" ? `:${effort}` : ""}`;
+  const variantLabel = t(`settings.apiVariant.${variant}`);
+  const thinkingLabel = t(`settings.thinkingMode.${thinking}`);
+  const effortLabel = t(`settings.thinkingEffort.${effort}`);
+  const base = `${profile.name} · ${profile.model} · ${variantLabel} · ${thinkingLabel}${thinking === "enabled" ? `: ${effortLabel}` : ""}`;
   const idHint = duplicateModelProfileId(profile, profiles);
   return idHint ? `${base} · ${idHint}` : base;
 }

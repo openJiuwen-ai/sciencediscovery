@@ -17,7 +17,7 @@ import test from "node:test";
 
 import type { ModelProfile, ModelProvider } from "@sciencediscovery/schema";
 
-import { modelThinkingControls } from "../src/modelThinking.js";
+import { modelThinkingControls, normalizeSessionThinking } from "../src/modelThinking.js";
 
 const profile = (update: Partial<ModelProfile>): ModelProfile => ({
   baseUrl: "https://example.test/v1",
@@ -45,6 +45,7 @@ test("known provider catalog narrows Gemini to supported modes and efforts", () 
   }), [provider]);
   assert.deepEqual(controls, {
     efforts: ["low", "medium", "high"],
+    legacyBudget: false,
     modes: ["auto", "enabled"],
     supported: true,
   });
@@ -53,6 +54,7 @@ test("known provider catalog narrows Gemini to supported modes and efforts", () 
 test("a protocol without compatible controls never exposes thinking choices", () => {
   assert.deepEqual(modelThinkingControls(profile({ apiVariant: "openai" }), []), {
     efforts: [],
+    legacyBudget: false,
     modes: [],
     supported: false,
   });
@@ -64,6 +66,7 @@ test("custom Responses endpoints use dialect capabilities without inventing cata
     apiVariant: "responses",
   }), []), {
     efforts: ["low", "medium", "high", "xhigh", "max"],
+    legacyBudget: false,
     modes: ["auto", "enabled", "disabled"],
     supported: true,
   });
@@ -88,7 +91,51 @@ test("known OpenAI and Kimi models expose only legal model-level controls", () =
     providerId: moonshot.id,
   }), [moonshot]), {
     efforts: ["low", "high", "max"],
+    legacyBudget: false,
     modes: ["enabled"],
     supported: true,
+  });
+});
+
+test("Haiku 4.5 and adaptive Anthropic profiles share transparent model-level controls", () => {
+  const anthropic = { id: "anthropic-provider", presetId: "anthropic" } as ModelProvider;
+  assert.deepEqual(modelThinkingControls(profile({
+    apiProtocol: "anthropic-messages",
+    apiVariant: "anthropic-adaptive",
+    model: "claude-haiku-4-5",
+    providerId: anthropic.id,
+  }), [anthropic]), {
+    efforts: [],
+    legacyBudget: true,
+    modes: ["auto", "enabled", "disabled"],
+    supported: true,
+  });
+  assert.deepEqual(modelThinkingControls(profile({
+    apiProtocol: "anthropic-messages",
+    apiVariant: "anthropic-adaptive",
+    model: "claude-sonnet-4-7",
+    providerId: anthropic.id,
+  }), [anthropic]), {
+    efforts: ["low", "medium", "high", "max"],
+    legacyBudget: false,
+    modes: ["auto", "enabled", "disabled"],
+    supported: true,
+  });
+});
+
+test("Session normalization persists the nearest legal effort after a model switch", () => {
+  const openai = { id: "openai-provider", presetId: "openai" } as ModelProvider;
+  const gpt55 = profile({
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    model: "gpt-5.5",
+    providerId: openai.id,
+  });
+  assert.deepEqual(normalizeSessionThinking(gpt55, [openai], "enabled", "max"), {
+    thinkingEffort: "xhigh",
+  });
+  assert.deepEqual(normalizeSessionThinking(gpt55, [openai], "enabled", "xhigh"), {});
+  assert.deepEqual(normalizeSessionThinking(profile({ apiVariant: "openai" }), [], "enabled", "max"), {
+    thinkingMode: "auto",
   });
 });

@@ -114,6 +114,7 @@
 .model-editor select:disabled { background: var(--surface-soft); color: var(--text-faint); opacity: .8; }
 .model-editor-hint { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .model-editor-hint.warning { color: var(--warning); }
+.model-editor-hint.legacy-notice { border-left: 3px solid var(--accent-border); background: var(--accent-soft); padding: 8px 10px; color: var(--accent-ink); }
 .model-card-body { display: grid; min-width: 0; }
 .model-card-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .model-badge { border-radius: 999px; background: var(--surface-track); color: var(--text-secondary); padding: 2px 8px; font-size: 10px; font-weight: 700; white-space: nowrap; }

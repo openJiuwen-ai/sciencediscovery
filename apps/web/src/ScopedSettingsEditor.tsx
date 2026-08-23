@@ -54,11 +54,15 @@ function sourceLabel(source: RuntimeSettingsSource | undefined): string {
   return `${source[0]!.toUpperCase()}${source.slice(1)} setting`;
 }
 
-function effectiveModelName(modelId: string | undefined, models: ModelProfile[]): string {
+function effectiveModelName(
+  modelId: string | undefined,
+  models: ModelProfile[],
+  t: ReturnType<typeof useLocale>["t"],
+): string {
   if (!modelId) return "Not configured";
   const model = models.find((candidate) => candidate.id === modelId);
   if (!model) return modelId;
-  return modelOptionLabel(model, models);
+  return modelOptionLabel(model, models, t);
 }
 
 function normalizeSkillLibraryMount(mount: EnabledSkillLibrary): EnabledSkillLibrary {
@@ -247,8 +251,8 @@ export function ScopedSettingsEditor({
       <label className="settings-field">
         <span>{t(FIELD_LABELS.modelId)}</span>
         <select disabled={disabled || saving} value={draft.modelId ?? ""} onChange={(event) => setScalar("modelId", event.target.value)}>
-          <option value="">{allowInheritance ? inheritedLabel("modelId", effectiveModelName(details.effective.modelId, models)) : "Not configured"}</option>
-          {models.map((model) => <option key={model.id} value={model.id}>{allowInheritance ? "Override · " : ""}{modelOptionLabel(model, models)}</option>)}
+          <option value="">{allowInheritance ? inheritedLabel("modelId", effectiveModelName(details.effective.modelId, models, t)) : "Not configured"}</option>
+          {models.map((model) => <option key={model.id} value={model.id}>{allowInheritance ? "Override · " : ""}{modelOptionLabel(model, models, t)}</option>)}
         </select>
         {allowInheritance ? <SettingsSource details={details} field="modelId" /> : null}
       </label>

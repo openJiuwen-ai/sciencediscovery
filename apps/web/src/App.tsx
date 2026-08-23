@@ -95,7 +95,7 @@ import type {
   WorkspaceFile,
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
-import { constrainCatalogThinking, lookupModelCatalog } from "@sciencediscovery/schema";
+import { constrainCatalogThinking } from "@sciencediscovery/schema";
 import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificArtifactKind, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 
@@ -197,8 +197,8 @@ import {
 } from "./artifactTree.js";
 import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest, type WebSettingsDraft } from "./WebSettingsEditor.js";
 import { ProxyPolicySelect, ProxySettingsEditor } from "./ProxySettingsEditor.js";
-import { ProviderModelSettings } from "./ProviderModelSettings.js";
-import { modelThinkingControls } from "./modelThinking.js";
+import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
+import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { EvidenceModal } from "./EvidenceModal.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
@@ -722,34 +722,16 @@ export function ModelDraftFields({
     : draft.apiProtocol === "openai-responses"
       ? t("settings.baseUrl.responses")
       : t("settings.baseUrl.chatCompletions");
-  const catalogThinking = lookupModelCatalog(draft.model)?.thinking;
-  const effortSupported = catalogThinking?.supported ?? [
-    "anthropic-adaptive",
-    "anthropic-legacy",
-    "deepseek",
-    "gemini",
-    "kimi-k3",
-    "responses",
-  ].includes(draft.apiVariant);
-  const effortOptions: ModelThinkingEffort[] = catalogThinking?.efforts
-    ?? (draft.apiVariant === "gemini"
-      ? ["low", "medium", "high"]
-      : draft.apiVariant === "responses"
-        ? ["low", "medium", "high", "xhigh", "max"]
-        : draft.apiVariant === "anthropic-adaptive"
-          ? ["low", "medium", "high", "max"]
-          : draft.apiVariant === "kimi-k3"
-            ? ["low", "high", "max"]
-            : ["high", "max"]);
-  const modeOptions: ModelThinkingMode[] = catalogThinking?.modes
-    ?? (draft.apiVariant === "kimi-k3" ? ["auto", "enabled"] : ["auto", "enabled", "disabled"]);
+  const thinkingControls = modelVariantThinkingControls(draft.model, draft.apiVariant);
+  const effortOptions = thinkingControls.efforts;
+  const modeOptions = thinkingControls.modes;
   const constrainedDraftThinking = constrainCatalogThinking(draft.model, draft.thinkingMode, draft.thinkingEffort);
   const displayedThinkingMode = modeOptions.includes(draft.thinkingMode)
     ? draft.thinkingMode
     : constrainedDraftThinking.mode;
-  const effortHint = effortSupported
-    ? (displayedThinkingMode === "enabled" ? undefined : t("settings.thinkingEffort.requiresEnabled"))
-    : t("settings.thinkingEffort.unsupportedHint");
+  const effortHint = thinkingControls.supported && effortOptions.length && displayedThinkingMode !== "enabled"
+    ? t("settings.thinkingEffort.requiresEnabled")
+    : undefined;
   return <>
     <section className="model-editor-section">
       <h4>{t("settings.modelSection.identity")}</h4>
@@ -770,7 +752,11 @@ export function ModelDraftFields({
           <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
           <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
         </select></label>
-        <label><span>{t("settings.apiVariant")}</span><select value={draft.apiVariant} onChange={(event) => onChange({ apiVariant: event.target.value as ModelApiVariant })}>
+        <label><span>{t("settings.apiVariant")}</span><select value={draft.apiVariant} onChange={(event) => {
+          const apiVariant = event.target.value as ModelApiVariant;
+          const supported = modelVariantThinkingControls(draft.model, apiVariant).supported;
+          onChange({ apiVariant, ...(!supported ? { thinkingMode: "auto" as const } : {}) });
+        }}>
           {MODEL_API_VARIANTS[draft.apiProtocol].map((variant) => <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>)}
         </select></label>
       </div>
@@ -778,15 +764,18 @@ export function ModelDraftFields({
     </section>
     <section className="model-editor-section">
       <h4>{t("settings.modelSection.thinking")}</h4>
-      <div className="model-editor-row">
-        <label><span>{t("settings.thinkingMode")}</span><select value={displayedThinkingMode} onChange={(event) => onChange({ thinkingMode: event.target.value as ModelThinkingMode })}>
-          {modeOptions.map((mode) => <option key={mode} value={mode}>{t(`settings.thinkingMode.${mode}`)}</option>)}
-        </select></label>
-        <label><span>{t("settings.thinkingEffort")}</span><select disabled={displayedThinkingMode !== "enabled" || !effortSupported} value={effortOptions.includes(draft.thinkingEffort) ? draft.thinkingEffort : constrainedDraftThinking.effort} onChange={(event) => onChange({ thinkingEffort: event.target.value as ModelThinkingEffort })}>
-          {effortOptions.map((effort) => <option key={effort} value={effort}>{t(`settings.thinkingEffort.${effort}`)}</option>)}
-        </select></label>
-      </div>
-      {effortHint ? <small className={effortSupported ? "model-editor-hint" : "model-editor-hint warning"}>{effortHint}</small> : null}
+      {thinkingControls.supported ? <>
+        <div className="model-editor-row">
+          <label><span>{t("settings.thinkingMode")}</span><select value={displayedThinkingMode} onChange={(event) => onChange({ thinkingMode: event.target.value as ModelThinkingMode })}>
+            {modeOptions.map((mode) => <option key={mode} value={mode}>{t(`settings.thinkingMode.${mode}`)}</option>)}
+          </select></label>
+          {effortOptions.length ? <label><span>{t("settings.thinkingEffort")}</span><select disabled={displayedThinkingMode !== "enabled"} value={effortOptions.includes(draft.thinkingEffort) ? draft.thinkingEffort : constrainedDraftThinking.effort} onChange={(event) => onChange({ thinkingEffort: event.target.value as ModelThinkingEffort })}>
+            {effortOptions.map((effort) => <option key={effort} value={effort}>{t(`settings.thinkingEffort.${effort}`)}</option>)}
+          </select></label> : null}
+        </div>
+        {thinkingControls.legacyBudget ? <small className="model-editor-hint legacy-notice">{t("settings.thinking.anthropicLegacyNotice")}</small> : null}
+        {effortHint ? <small className="model-editor-hint">{effortHint}</small> : null}
+      </> : <small className="model-editor-hint warning">{t("settings.thinking.unsupportedHint")}</small>}
     </section>
   </>;
 }
@@ -1191,6 +1180,7 @@ export function App() {
   // say why it opened instead of looking like an ordinary settings visit.
   const [tokenRejected, setTokenRejected] = useState(false);
   const [systemSettingsSaving, setSystemSettingsSaving] = useState(false);
+  const [providerDraftDirty, setProviderDraftDirty] = useState(false);
   const [projectSettings, setProjectSettings] = useState<RuntimeSettingsDetails>();
   const [settingsTarget, setSettingsTarget] = useState<ResourceTarget>();
   const [scopedSettings, setScopedSettings] = useState<RuntimeSettingsDetails>();
@@ -1227,6 +1217,8 @@ export function App() {
   const [runningSessionIds, setRunningSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [stoppingSessionIds, setStoppingSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const runAbortControllers = useRef(new Map<string, AbortController>());
+  const providerSettingsRef = useRef<ProviderModelSettingsHandle>(null);
+  const thinkingNormalizationInFlight = useRef<string | undefined>(undefined);
   const [error, setErrorState] = useState<string>();
   const [systemSettingsErrors, setSystemSettingsErrors] = useState<string[]>([]);
   const [scopedSettingsErrors, setScopedSettingsErrors] = useState<string[]>([]);
@@ -2287,12 +2279,30 @@ export function App() {
   async function saveModel(): Promise<void> {
     reportSystemSettingsError();
     try {
+      const thinkingControls = modelVariantThinkingControls(modelDraft.model, modelDraft.apiVariant);
+      const constrainedThinking = constrainCatalogThinking(
+        modelDraft.model,
+        modelDraft.thinkingMode,
+        modelDraft.thinkingEffort,
+      );
+      const {
+        thinkingEffort: _draftThinkingEffort,
+        thinkingMode: _draftThinkingMode,
+        ...draftWithoutThinking
+      } = modelDraft;
+      const normalizedDraft = thinkingControls.supported
+        ? {
+            ...draftWithoutThinking,
+            thinkingEffort: constrainedThinking.effort,
+            thinkingMode: constrainedThinking.mode,
+          }
+        : draftWithoutThinking;
       const saved = editingModelId
         ? await client.updateModel(editingModelId, {
-            ...modelDraft,
+            ...normalizedDraft,
             ...(removeStoredToken ? { apiToken: null } : draftToken.trim() ? { apiToken: draftToken.trim() } : {}),
           })
-        : await client.createModel({ ...modelDraft, apiToken: draftToken.trim() });
+        : await client.createModel({ ...normalizedDraft, apiToken: draftToken.trim() });
       setModels((current) => [...current.filter((item) => item.id !== saved.id), saved]
         .toSorted((left, right) => left.name.localeCompare(right.name)));
       setEditingModelId(saved.id);
@@ -2431,11 +2441,21 @@ export function App() {
     setShowConfig(true);
   }
 
+  function confirmProviderDraftDiscard(): boolean {
+    return !providerDraftDirty || window.confirm(t("providers.unsaved.confirm"));
+  }
+
   function cancelSystemSettings(): void {
+    if (!confirmProviderDraftDiscard()) return;
     clearSystemSettingsDrafts();
     reportSystemSettingsError();
     setSkillWorkspaceLaunch(undefined);
     setShowConfig(false);
+  }
+
+  function selectSystemSettingsGroup(group: SystemSettingsGroup): void {
+    if (group !== systemSettingsGroup && systemSettingsGroup === "models" && !confirmProviderDraftDiscard()) return;
+    setSystemSettingsGroup(group);
   }
 
   async function saveSystemSettings(closeAfterSave: boolean): Promise<void> {
@@ -2463,6 +2483,10 @@ export function App() {
       if (sandboxNetworkSettingsEdit) await saveSandboxNetworkSettings(sandboxNetworkSettingsEdit);
       if (webSettingsEdit) await saveWebSettings(webSettingsRequest(webSettingsEdit));
       if (memoryGraphSettingsEdit) await saveMemoryGraphSettings(memoryGraphSettingsRequest(memoryGraphSettingsEdit));
+      if (providerSettingsRef.current?.hasUnsavedDraft()) {
+        const saved = await providerSettingsRef.current.saveDraft();
+        if (!saved) return;
+      }
       if (modelSettingsDirty) await saveModel();
       if (localeEdit) setLocale(localeEdit);
       if (tokenEdit !== undefined) setToken(tokenEdit);
@@ -2519,15 +2543,12 @@ export function App() {
 
   async function updateConversationModel(modelId: string): Promise<void> {
     const nextModel = models.find((model) => model.id === modelId);
-    const controls = modelThinkingControls(nextModel, modelProviders);
     const currentMode = session?.thinkingMode ?? nextModel?.thinkingMode ?? "auto";
     const currentEffort = session?.thinkingEffort ?? nextModel?.thinkingEffort ?? "high";
-    const constrained = constrainCatalogThinking(nextModel?.model ?? "", currentMode, currentEffort);
-    const changes: UpdateSessionRequest = { modelId };
-    if (!controls.supported || !controls.modes.includes(currentMode)) changes.thinkingMode = constrained.mode;
-    if (controls.efforts.length && !controls.efforts.includes(currentEffort)) {
-      changes.thinkingEffort = constrained.effort;
-    }
+    const changes: UpdateSessionRequest = {
+      modelId,
+      ...normalizeSessionThinking(nextModel, modelProviders, currentMode, currentEffort),
+    };
     await updateSessionSettings(changes);
   }
 
@@ -3559,6 +3580,44 @@ export function App() {
   const activeThinkingEffort = activeThinkingControls.efforts.includes(requestedThinkingEffort)
     ? requestedThinkingEffort
     : constrainedActiveThinking.effort;
+  useEffect(() => {
+    if (!session || !activeModel || isRunning || session.archivedAt) return;
+    const changes = normalizeSessionThinking(
+      activeModel,
+      modelProviders,
+      session.thinkingMode,
+      session.thinkingEffort,
+    );
+    if (!Object.keys(changes).length) return;
+    const key = `${session.id}:${session.modelId}:${session.thinkingMode}:${session.thinkingEffort}`;
+    if (thinkingNormalizationInFlight.current === key) return;
+    thinkingNormalizationInFlight.current = key;
+    void client.updateSession(session.id, changes)
+      .then((updated) => {
+        syncSessionSummary(updated);
+        setError(undefined);
+      })
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t("error.updateSession")))
+      .finally(() => {
+        if (thinkingNormalizationInFlight.current === key) thinkingNormalizationInFlight.current = undefined;
+      });
+    // This effect deliberately follows persisted Session/model facts; the
+    // update callbacks themselves are stable App operations, not triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeModel, client, isRunning, modelProviders, session?.archivedAt, session?.id, session?.modelId, session?.thinkingEffort, session?.thinkingMode]);
+  useEffect(() => {
+    if (!showConfig) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancelSystemSettings();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+    // The handler must observe the current provider dirty flag; the remaining
+    // close routine state is read only after Escape is pressed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerDraftDirty, showConfig]);
   const visionModels = models.filter((item) => item.vision);
   const latestExecution = executionRuns.at(-1);
   const latestEnvironmentRevision = environmentRevisions.find((revision) => revision.id === latestExecution?.environmentRevisionId);
@@ -4151,12 +4210,15 @@ export function App() {
                     onOpenModelSettings={() => openSystemSettings("models")}
                     reason={composerRunAction.noModelReason}
                   /> : null}
+                  {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
+                    {t("composer.thinkingLegacyNotice")}
+                  </div> : null}
                   <div className="composer-footer">
                     <label className="task-model-picker">
                       <span><i className="live-dot" />{t("composer.taskModel")}</span>
                       <select value={session.modelId ?? ""} onChange={(event) => void updateConversationModel(event.target.value)} disabled={isRunning || sessionArchived || !models.length} aria-label={t("composer.modelAria")}>
                         {!session.modelId ? <option value="">{t("composer.noModel")}</option> : null}
-                        {models.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, models)}</option>)}
+                        {models.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, models, t)}</option>)}
                       </select>
                     </label>
                     {activeThinkingControls.supported ? <div className="conversation-thinking-picker">
@@ -4381,7 +4443,7 @@ export function App() {
                     <span><UploadIcon size={14} /> Upload full PDF</span><small>50 MiB · 200 pages max</small>
                   </label>
                   {visionModels.length ? (
-                    <label className="vision-picker"><span>Optional vision model</span><select disabled={sessionArchived} value={visionModelId ?? ""} onChange={(event) => setVisionModelId(event.target.value)}>{visionModels.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, visionModels)}</option>)}</select></label>
+                    <label className="vision-picker"><span>Optional vision model</span><select disabled={sessionArchived} value={visionModelId ?? ""} onChange={(event) => setVisionModelId(event.target.value)}>{visionModels.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, visionModels, t)}</option>)}</select></label>
                   ) : <p className="paper-note">Mark a model as vision capable in Model settings to analyze scanned pages or extracted figures. OCR is not run.</p>}
                   <div className="paper-library">
                     {papers.map((paper) => {
@@ -4498,7 +4560,7 @@ export function App() {
               key={detail}
               onDismiss={() => setSystemSettingsErrors((current) => current.filter((item) => item !== detail))}
             />)}
-            <SystemSettingsLayout activeGroup={systemSettingsGroup} onSelect={setSystemSettingsGroup}>
+            <SystemSettingsLayout activeGroup={systemSettingsGroup} onSelect={selectSystemSettingsGroup}>
               {systemSettingsGroup === "global" ? (
                 globalSettings ? <ScopedSettingsEditor allowInheritance={false} connectors={connectors} details={globalSettings} draft={globalSettingsEdit ?? globalSettingsDraft(globalSettings)} models={models} onDraftChange={setGlobalSettingsEdit} onSave={saveGlobalSettings} scopeLabel={t("settings.global")} showActions={false} skillScope="global" skills={skills} /> : <p className="muted">{t("settings.loadingGlobal")}</p>
               ) : null}
@@ -4536,6 +4598,7 @@ export function App() {
                 <ProviderModelSettings
                   client={client}
                   models={models}
+                  onDraftStateChange={setProviderDraftDirty}
                   onError={reportSystemSettingsError}
                   onModelsChange={setModels}
                   onNotice={(message, detail) => pushToast("success", message, detail)}
@@ -4543,6 +4606,7 @@ export function App() {
                   presets={modelProviderPresets}
                   providers={modelProviders}
                   proxySettings={proxySettings}
+                  ref={providerSettingsRef}
                 />
                 <details className="provider-advanced-profiles">
                   <summary><strong>{t("providers.advancedProfiles")}</strong><small>{t("providers.advancedProfiles.help")}</small></summary>
@@ -4553,9 +4617,9 @@ export function App() {
                     const protocol = item.apiProtocol ?? (item.baseUrl.includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions");
                     const variant = item.apiVariant ?? (protocol === "anthropic-messages" ? "anthropic-adaptive" : "openai");
                     const thinking = item.thinkingMode ?? "auto";
-                    return <div className={item.id === editingModelId ? "model-card active" : "model-card"} key={item.id} title={modelOptionLabel(item, models)}>
+                    return <div className={item.id === editingModelId ? "model-card active" : "model-card"} key={item.id} title={modelOptionLabel(item, models, t)}>
                       <button className="model-card-main" type="button" onClick={() => editModel(item)}>
-                        <span className={item.hasApiToken ? "model-status" : "model-status missing"} title={item.hasApiToken ? t("settings.keySaved") : t("settings.keyMissing")} />
+                        <span aria-label={item.hasApiToken ? t("settings.keySaved") : t("settings.keyMissing")} className={item.hasApiToken ? "model-status" : "model-status missing"} role="img" title={item.hasApiToken ? t("settings.keySaved") : t("settings.keyMissing")} />
                         <span className="model-card-body">
                           <strong>{item.name}</strong>
                           <small>{item.model}{idHint ? ` · ${idHint}` : ""}</small>

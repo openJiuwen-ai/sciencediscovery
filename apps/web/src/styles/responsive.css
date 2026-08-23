@@ -54,6 +54,7 @@
 
 @media (max-width: 600px) {
   :root { --timeline-gutter: 45px; }
+  .composer { max-height: none; }
   .session-bar-meta { width: 100%; }
   .session-bar-project { max-width: 40vw; }
   .session-bar-session-rename { min-width: 0; max-width: none; width: 100%; flex: none; }
@@ -157,10 +158,14 @@
 /* Keep the composer compact so the message list owns the vertical space. */
 @container (max-width: 1024px) {
   .composer-hint { display: none; }
+  .task-model-picker { flex-basis: 100%; }
+  .task-model-picker select { max-width: none; }
 }
 
 @container (max-width: 900px) {
-  .task-model-picker select { max-width: 200px; }
+  .conversation-thinking-picker, .orchestration-controls { flex-basis: 100%; }
+  .conversation-thinking-picker select { width: 100%; max-width: none; }
+  .composer-run-actions { margin-left: auto; }
 }
 
 @container (max-width: 720px) {
