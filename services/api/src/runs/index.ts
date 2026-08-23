@@ -104,7 +104,11 @@ import type {
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
   createLocalSessionTitle,
+  DEFAULT_MODEL_API_VARIANT,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
+  lookupModelCatalog,
+  THINKING_CONTROL_VARIANTS,
+  THINKING_EFFORT_VARIANTS,
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
 import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
@@ -2108,11 +2112,46 @@ function computeSettingsSnapshot(store: SessionStore, sessionId: string): Effect
   const session = store.assertSessionWritable(sessionId);
   const sessionSpecialist = store.getSpecialist(session.specialistId);
   const resolved = store.resolveRuntimeSettings(sessionId).effective;
-  return {
+  const snapshot: EffectiveRuntimeSettings = {
     ...structuredClone(resolved),
     enabledConnectorIds: [...new Set([...resolved.enabledConnectorIds, ...(sessionSpecialist?.connectorIds ?? [])])],
     enabledSkillIds: [...new Set([...resolved.enabledSkillIds, ...(sessionSpecialist?.enabledSkillIds ?? [])])],
   };
+  const model = store.getModel(snapshot.modelId);
+  if (!model) return snapshot;
+  const protocol = model.apiProtocol ?? (model.baseUrl.includes("/api/plan")
+    ? "anthropic-messages"
+    : "openai-chat-completions");
+  const variant = model.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
+  const provider = store.getProvider(model.providerId);
+  const catalog = lookupModelCatalog(model.model, provider?.presetId);
+  const canControlThinking = THINKING_CONTROL_VARIANTS.includes(variant)
+    && catalog?.thinking?.supported !== false;
+  if (!canControlThinking) {
+    snapshot.thinkingMode = "auto";
+    delete snapshot.thinkingEffort;
+    return snapshot;
+  }
+  const modes = catalog?.thinking?.modes
+    ?? (variant === "gemini" ? ["auto", "enabled"] as const : ["auto", "enabled", "disabled"] as const);
+  const requestedMode = snapshot.thinkingMode ?? model.thinkingMode ?? "auto";
+  snapshot.thinkingMode = modes.includes(requestedMode as never) ? requestedMode : "auto";
+
+  let efforts = catalog?.thinking?.efforts ?? [];
+  if (!catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(variant)) {
+    if (variant === "gemini") efforts = ["low", "medium", "high"];
+    else if (variant === "anthropic-adaptive" || variant === "responses") efforts = ["low", "medium", "high", "max"];
+    else efforts = ["high", "max"];
+  }
+  if (!efforts.length) {
+    delete snapshot.thinkingEffort;
+  } else {
+    const requestedEffort = snapshot.thinkingEffort ?? model.thinkingEffort ?? "high";
+    snapshot.thinkingEffort = efforts.includes(requestedEffort)
+      ? requestedEffort
+      : efforts.includes("high") ? "high" : efforts[0];
+  }
+  return snapshot;
 }
 
 export async function createQueuedRun(
