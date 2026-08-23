@@ -2877,7 +2877,7 @@ test("model providers: custom provider persistence and token-optional runs", asy
   assert.equal(reopened.modelAllowsMissingToken(reProfile), true);
 });
 
-test("runtime settings carry thinking overrides through scopes", async (context) => {
+test("runtime settings carry legal thinking overrides through scopes and narrow invalid updates", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `thinking-overrides-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -2908,9 +2908,9 @@ test("runtime settings carry thinking overrides through scopes", async (context)
   assert.equal(store.getSession(session.id)?.thinkingEffort, "max");
 
   await store.updateSession(session.id, { thinkingEffort: "low", thinkingMode: "enabled" });
-  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "low");
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "high");
   await store.updateSession(session.id, { thinkingEffort: "xhigh", thinkingMode: "enabled" });
-  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "xhigh");
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "high");
 
   await assert.rejects(
     store.replaceSessionSettings(session.id, { thinkingMode: "sometimes" as never }),
@@ -2926,4 +2926,43 @@ test("runtime settings carry thinking overrides through scopes", async (context)
   const cleared = store.getSessionSettings(session.id);
   assert.equal(cleared.effective.thinkingMode, undefined);
   assert.equal(cleared.sources.thinkingMode, "unset");
+});
+
+test("switching Session models persists a legal model-level effort across reloads", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-model-switch-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const source = await store.createModel({
+    apiToken: "tok",
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    baseUrl: "https://api.example.test/v1",
+    model: "gpt-5.6-sol",
+    name: "GPT 5.6",
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+  });
+  const target = await store.createModel({
+    apiToken: "tok",
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    baseUrl: "https://api.example.test/v1",
+    model: "gpt-5.5",
+    name: "GPT 5.5",
+  });
+  const project = await store.createProject("thinking switch");
+  const session = await store.createSession(project.id, "session", { modelId: source.id });
+  await store.updateSession(session.id, { thinkingEffort: "max", thinkingMode: "enabled" });
+
+  const switched = await store.updateSession(session.id, { modelId: target.id });
+  assert.equal(switched.thinkingEffort, "xhigh");
+  assert.equal(store.getSessionSettings(session.id).overrides.thinkingEffort, "xhigh");
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getSession(session.id)?.modelId, target.id);
+  assert.equal(reopened.getSession(session.id)?.thinkingEffort, "xhigh");
+  assert.equal(reopened.getSessionSettings(session.id).overrides.thinkingEffort, "xhigh");
 });

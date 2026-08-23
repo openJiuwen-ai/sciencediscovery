@@ -88,7 +88,6 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
         cachedInput: 0.1,
         currency: "CNY",
         input: 3,
-        notes: "顶层字段为保守高峰价；分时价格见 periods",
         output: 9,
         periods: [
           {
@@ -96,14 +95,18 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
             id: "peak",
             input: 3,
             output: 9,
-            schedule: "Beijing time, Monday-Friday 09:00-12:00 and 14:00-18:00",
+            schedule: {
+              intervals: [{ start: "09:00", end: "12:00" }, { start: "14:00", end: "18:00" }],
+              kind: "weekdays",
+              timeZone: "Asia/Shanghai",
+            },
           },
           {
             cachedInput: 0.05,
             id: "off-peak",
             input: 1.5,
             output: 4.5,
-            schedule: "All other times (Beijing time)",
+            schedule: { kind: "remainder", timeZone: "Asia/Shanghai" },
           },
         ],
         source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"),
@@ -131,7 +134,6 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
         cachedInput: 0.3,
         currency: "CNY",
         input: 9,
-        notes: "顶层字段为保守高峰价；分时价格见 periods",
         output: 27,
         periods: [
           {
@@ -139,14 +141,18 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
             id: "peak",
             input: 9,
             output: 27,
-            schedule: "Beijing time, Monday-Friday 09:00-12:00 and 14:00-18:00",
+            schedule: {
+              intervals: [{ start: "09:00", end: "12:00" }, { start: "14:00", end: "18:00" }],
+              kind: "weekdays",
+              timeZone: "Asia/Shanghai",
+            },
           },
           {
             cachedInput: 0.15,
             id: "off-peak",
             input: 4.5,
             output: 13.5,
-            schedule: "All other times (Beijing time)",
+            schedule: { kind: "remainder", timeZone: "Asia/Shanghai" },
           },
         ],
         source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"),

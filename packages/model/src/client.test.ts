@@ -51,6 +51,15 @@ test("catalog preserves official period prices and exact model thinking capabili
   assert.equal(flash.unit, "per-1m-tokens");
   assert.equal(flash.source.retrievedAt, "2026-08-23");
   assert.match(flash.source.url, /^https:\/\/api-docs\.deepseek\.com\//);
+  assert.deepEqual(flash.periods?.map(({ schedule }) => schedule), [
+    {
+      intervals: [{ start: "09:00", end: "12:00" }, { start: "14:00", end: "18:00" }],
+      kind: "weekdays",
+      timeZone: "Asia/Shanghai",
+    },
+    { kind: "remainder", timeZone: "Asia/Shanghai" },
+  ]);
+  assert.equal(flash.notes, undefined, "catalog-internal period notes must not leak into the UI");
   assert.equal(lookupModelCatalog("deepseek-v4-pro", "siliconflow")?.pricing, undefined);
 
   assert.deepEqual(lookupModelCatalog("gpt-5.5", "openai")!.thinking!.efforts, ["low", "medium", "high", "xhigh"]);

@@ -125,6 +125,17 @@ export interface ModelCatalogThinking {
 
 export type ModelCatalogPricePeriodId = "off-peak" | "peak";
 
+export type ModelCatalogPriceSchedule =
+  | {
+      intervals: Array<{ end: string; start: string }>;
+      kind: "weekdays";
+      timeZone: "Asia/Shanghai";
+    }
+  | {
+      kind: "remainder";
+      timeZone: "Asia/Shanghai";
+    };
+
 /** A vendor-published time period whose rates differ from the conservative
  * top-level price. Periods are never merged across provider presets. */
 export interface ModelCatalogPricePeriod {
@@ -132,8 +143,9 @@ export interface ModelCatalogPricePeriod {
   id: ModelCatalogPricePeriodId;
   input: number;
   output: number;
-  /** Human-readable schedule copied from the vendor page, including timezone. */
-  schedule: string;
+  /** Structured vendor schedule. The Web layer localizes it instead of
+   * leaking a catalog-internal or single-language note. */
+  schedule: ModelCatalogPriceSchedule;
 }
 
 /**

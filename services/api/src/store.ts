@@ -3070,6 +3070,16 @@ export class SessionStore {
     const { approvalMode, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
     const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
     const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
+    const nextModel = this.getModel(nextSettings.modelId);
+    if (nextModel && (nextSettings.thinkingMode !== undefined || nextSettings.thinkingEffort !== undefined)) {
+      const constrained = constrainCatalogThinking(
+        nextModel.model,
+        nextSettings.thinkingMode,
+        nextSettings.thinkingEffort,
+      );
+      if (nextSettings.thinkingMode !== undefined) nextSettings.thinkingMode = constrained.mode;
+      if (nextSettings.thinkingEffort !== undefined) nextSettings.thinkingEffort = constrained.effort;
+    }
     if (approvalMode !== undefined) throw new Error("Use setApprovalMode to change approval policy");
     if (reviewMode !== undefined && reviewMode !== "auto" && reviewMode !== "manual") throw new Error("Invalid review mode");
     if (specialistId && !this.getSpecialist(specialistId)) throw new Error("Specialist not found");
