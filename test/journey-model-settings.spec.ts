@@ -40,7 +40,7 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN（隔离实例）与新建模型的本地演示令牌（无外部访问）。
  * CostSideEffects: none；创建的模型记录在 finally 中删除。
  */
-test("J2 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" }, async ({ journey, page }) => {
+test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" }, async ({ journey, page }) => {
   test.setTimeout(180_000);
   journey.scenario({
     goal: "一位用户要为模型服务商配置策略，先确认模型设置的入口与分组清楚可读，"
@@ -54,7 +54,7 @@ test("J2 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
   });
   await page.addInitScript(() => window.localStorage.setItem("science-agent-locale", "zh-CN"));
 
-  const modelName = `J2 紧凑配置 ${Date.now()}`;
+  const modelName = `J6 紧凑配置 ${Date.now()}`;
   const demoToken = "sk-e2e-demo-local";
   let createdModelId: string | undefined;
 
