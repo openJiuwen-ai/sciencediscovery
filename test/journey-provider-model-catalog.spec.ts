@@ -15,7 +15,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
 
 import type { ModelProfile, ModelProvider } from "@sciencediscovery/schema";
 
@@ -38,6 +38,9 @@ interface ProviderStub {
   chatBodies: Array<Record<string, unknown>>;
   failListing: () => void;
   listAuth: Array<string | undefined>;
+  listPaths: string[];
+  origin: string;
+  restoreListing: () => void;
   responsesBodies: Array<Record<string, unknown>>;
   stop: () => Promise<void>;
 }
@@ -47,32 +50,41 @@ function providerStub(): Promise<ProviderStub> {
   const anthropicBodies: Array<Record<string, unknown>> = [];
   const chatBodies: Array<Record<string, unknown>> = [];
   const listAuth: Array<string | undefined> = [];
+  const listPaths: string[] = [];
   const responsesBodies: Array<Record<string, unknown>> = [];
   let sequence = 0;
   const server: Server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     request.on("end", () => {
-      if (request.method === "GET" && request.url === "/v1/models") {
+      if (request.method === "GET" && ["/v1/models", "/slow/v1/models", "/fast/v1/models"].includes(request.url ?? "")) {
         listAuth.push(request.headers.authorization);
+        listPaths.push(request.url!);
         if (failListing) {
           response.writeHead(403, { "content-type": "application/json" });
           response.end(JSON.stringify({ error: { message: "fixture model-list permission denied" } }));
           return;
         }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({
-          data: [
-            {
-              id: "deepseek-v4-flash",
-              context_length: 131_072,
-              pricing: { completion: "0.000003", input_cache_read: "0.0000002", prompt: "0.0000015" },
-              supports_image_in: true,
-              supports_reasoning: true,
-            },
-            { id: "fixture-unknown" },
-          ],
-        }));
+        const data = request.url === "/slow/v1/models"
+          ? [{ id: "race-provider-a-model" }]
+          : request.url === "/fast/v1/models"
+            ? [{ id: "race-provider-b-model" }]
+            : [
+                {
+                  id: "deepseek-v4-flash",
+                  context_length: 131_072,
+                  pricing: { completion: "0.000003", input_cache_read: "0.0000002", prompt: "0.0000015" },
+                  supports_image_in: true,
+                  supports_reasoning: true,
+                },
+                { id: "fixture-unknown" },
+              ];
+        const send = () => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ data }));
+        };
+        if (request.url === "/slow/v1/models") setTimeout(send, 350);
+        else send();
         return;
       }
       if (request.method === "POST" && request.url === "/v1/chat/completions") {
@@ -132,18 +144,24 @@ function providerStub(): Promise<ProviderStub> {
   });
 
   return new Promise((resolve, reject) => {
-    server.listen(0, "127.0.0.1", () => resolve({
-      anthropicBodies,
-      baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
-      chatBodies,
-      failListing: () => { failListing = true; },
-      listAuth,
-      responsesBodies,
-      stop: () => new Promise<void>((resolveStop) => {
-        server.closeAllConnections?.();
-        server.close(() => resolveStop());
-      }),
-    }));
+    server.listen(0, "127.0.0.1", () => {
+      const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      resolve({
+        anthropicBodies,
+        baseUrl: `${origin}/v1`,
+        chatBodies,
+        failListing: () => { failListing = true; },
+        listAuth,
+        listPaths,
+        origin,
+        restoreListing: () => { failListing = false; },
+        responsesBodies,
+        stop: () => new Promise<void>((resolveStop) => {
+          server.closeAllConnections?.();
+          server.close(() => resolveStop());
+        }),
+      });
+    });
     server.on("error", reject);
   });
 }
@@ -160,28 +178,33 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
 
 /**
  * E2E-META
- * Purpose: Provider 与模型目录完整用户旅程——内置预设只填令牌、自定义 Provider、模型发现成功/失败降级、可溯源能力价格、会话模型和思考强度真实进入 Run，以及中英文和窄屏可用。
+ * Purpose: Provider 与模型目录完整用户旅程——草稿安全、内置预设只填令牌、自定义 Provider、发现成功/失败/乱序、双语可溯源价格、模型级思考能力与 Session/wire 一致性，以及桌面/窄屏真实几何。
  * Steps:
  *   1. 打开模型注册表，确认常见 Provider 预设与自定义入口。
- *   2. 选择智谱内置预设，仅填令牌连接；核对默认 endpoint/协议未要求用户填写，令牌不回传。
- *   3. 查看维护目录的 GLM-5.2 上下文、视觉、思考、美元输入/输出/缓存价、官方来源与更新时间，并添加模型。
- *   4. 新建自定义 DeepSeek 兼容 Provider，填写 endpoint、令牌、协议变种与模型列表策略，发现模拟服务返回的模型。
- *   5. 验证远端事实逐字段覆盖、未知事实保持未知、价格单位与来源清楚，并添加 DeepSeek 模型。
- *   6. 刷新模型列表遭遇 403 时显示明确错误、保留上次结果，并可手动添加精确模型 ID。
- *   7. 在 600px 窄屏确认 Provider 表单、目录卡片无横向溢出且仍可操作。
- *   8. 新建会话并在对话框切换模型；不支持模型隐藏思考控件，DeepSeek 显示模式/强度，选择 enabled/max 后刷新仍保存。
- *   9. 发送一条消息并从模拟服务收到答复，核对实际请求使用所选模型且携带 DeepSeek thinking.type=enabled 与 reasoning_effort=max。
- *   10. 选择 GPT-5.5，确认 UI 只提供 low/medium/high/xhigh，且 Responses wire 发送 xhigh 而非 max。
- *   11. 选择始终推理的 Kimi K3，确认 UI 仅允许 enabled 和 low/high/max，且 wire 只发送 reasoning_effort=low。
- *   12. 从 Anthropic 预设选择 Claude Haiku 4.5，确认自动具体化为 legacy 变种，开启后发送合法 thinking budget。
- *   13. 通过设置切换英文，确认 Provider 设置和对话内模型/思考控件的英文标签。
+ *   2. MiniMax 仅填令牌；Escape 取消关闭保留草稿，底部保存并关闭提交；请求在浏览器边界改写为 loopback/manual。
+ *   3. 选择智谱内置预设，仅填令牌连接；核对默认 endpoint/协议未要求用户填写，令牌不回传。
+ *   4. 查看维护目录的 GLM-5.2 能力、美元价、官方来源与更新时间，并添加模型。
+ *   5. 新建自定义兼容 Provider；标题栏取消关闭保留草稿，底部保存发现 loopback 模型，状态提供文本可访问名。
+ *   6. 验证远端事实逐字段覆盖、未知事实保持未知、价格单位与来源清楚，并添加 DeepSeek 模型。
+ *   7. 用 DeepSeek 预设目录核对中文高峰/闲时价格、CNY/每百万 token、规范去重来源与日期。
+ *   8. 刷新模型列表遭遇 403 时显示明确错误、保留上次结果，并可手动添加精确模型 ID。
+ *   9. 让 Provider A 迟到、B 先回，确认界面只保留 B 且添加请求发往 B。
+ *   10. 删除被全局默认模型引用的 B，确认中文错误提供可恢复操作且不会误报保存/刷新失败。
+ *   11. 在 600px 窄屏确认 Provider 表单、目录卡片无横向溢出且仍可操作。
+ *   12. 新建会话切换模型；不支持模型隐藏思考控件，DeepSeek enabled/max 跨刷新保存。
+ *   13. 工作区展开时分别在 1440×900、600×900 对 Composer 做两两无重叠、命中、边界与标签几何断言。
+ *   14. 发送消息，核对 DeepSeek 所选模型、thinking.type=enabled 与 reasoning_effort=max 真实进入 wire。
+ *   15. 选择 GPT-5.5，把旧 max 持久化收窄为 xhigh；刷新一致且 Responses wire 合法。
+ *   16. 选择始终推理 Kimi K3，确认仅 enabled 和 low/high/max，wire 只发送 reasoning_effort=low。
+ *   17. 选择 Claude Haiku 4.5，Composer/高级编辑器统一隐藏 effort 并提示 legacy，wire 使用合法固定预算。
+ *   18. 切换英文，确认模型/effort 标签及 DeepSeek 分时价格自然本地化。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；模型列表、Chat Completions、Responses 与 Anthropic Messages 均由本 spec 的 loopback mock 提供。
  * Type: mocked
  * LLM: local deterministic HTTP/SSE fixture only；不调用真实或付费模型 API。
  * WebSearch: none
  * PaperSources: none
  * MCP: none
- * OtherExternal: none — 非本地浏览器请求被拦截。
+ * OtherExternal: none — 非本地浏览器请求被拦截；MiniMax 浏览器请求在进入 API 前强制改写为 loopback/manual。
  * Credentials: E2E_API_TOKEN（隔离实例）与仅供本地 fixture 使用的演示令牌；断言令牌不从 Provider API 回传。
  * CostSideEffects: none；创建的项目、Provider 与模型配置在 finally 中清理。
  */
@@ -203,10 +226,14 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
   const providerIds: string[] = [];
   const modelIds: string[] = [];
   let fixture: JourneyFixture | undefined;
+  let raceModelId = "";
+  let raceProviderBId = "";
 
   const openModelRegistry = async () => {
-    await page.getByRole("button", { name: /^(系统设置|System configuration)/ }).click();
     const dialog = page.getByRole("dialog", { name: /^(系统设置|System configuration)$/ });
+    if (!await dialog.isVisible()) {
+      await page.getByRole("button", { name: /^(系统设置|System configuration)/ }).click();
+    }
     await dialog.getByRole("navigation", { name: /^(设置分组|Setting groups)$/ })
       .getByRole("button", { name: /^(模型注册表|Model registry)/ })
       .click();
@@ -227,6 +254,71 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         }
         await expect(presets.getByRole("button", { name: "+ 自定义服务商" })).toBeVisible();
         await expect(presets.getByRole("button", { name: /智谱 GLM.*只需令牌/ })).toBeVisible();
+      },
+    );
+
+    await journey.step(
+      "MiniMax 只填令牌且底部动作不会丢失草稿",
+      "选择 MiniMax 预设后只填写令牌。按 Escape 时出现明确的未保存确认；取消关闭后令牌仍在。点击对话框底部“保存并关闭”会提交同一草稿并关闭设置。测试在浏览器边界核对预设原始 endpoint/发现策略，再把请求改写到本地 manual fixture，保证服务端绝不访问厂商网络。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.getByRole("region", { name: "常见服务商" })
+          .getByRole("button", { name: /MiniMax.*只需令牌/ })
+          .click();
+        const editor = dialog.getByRole("region", { name: "服务商编辑器" });
+        await editor.getByLabel("LLM API 令牌").fill("j7-minimax-local-token");
+
+        let confirmationType = "";
+        let confirmationMessage = "";
+        page.once("dialog", (confirmation) => {
+          confirmationType = confirmation.type();
+          confirmationMessage = confirmation.message();
+          void confirmation.dismiss();
+        });
+        await page.keyboard.press("Escape");
+        expect(confirmationType).toBe("confirm");
+        expect(confirmationMessage).toContain("放弃尚未保存的服务商修改");
+        await expect(dialog).toBeVisible();
+        await expect(editor.getByLabel("LLM API 令牌")).toHaveValue("j7-minimax-local-token");
+
+        let originalBody: Record<string, unknown> | undefined;
+        const providerRoute = async (route: Route) => {
+          const request = route.request();
+          const body = request.method() === "POST" ? request.postDataJSON() as Record<string, unknown> : undefined;
+          if (body?.presetId !== "minimax") {
+            await route.continue();
+            return;
+          }
+          originalBody = body;
+          const localResponse = await page.request.post(`${apiBaseUrl()}/api/providers`, {
+            data: { ...body, baseUrl: stub.baseUrl, modelDiscovery: "manual" },
+            headers: authorizationHeader(),
+          });
+          await route.fulfill({
+            body: await localResponse.body(),
+            contentType: localResponse.headers()["content-type"],
+            status: localResponse.status(),
+          });
+        };
+        await page.route("**/api/providers", providerRoute);
+        try {
+          const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
+            && new URL(response.url()).pathname === "/api/providers");
+          await dialog.getByRole("button", { name: "保存并关闭" }).click();
+          const provider = await (await responsePromise).json() as ModelProvider;
+          providerIds.push(provider.id);
+          expect(originalBody).toMatchObject({
+            apiProtocol: "openai-chat-completions",
+            apiVariant: "minimax",
+            baseUrl: "https://api.minimaxi.com/v1",
+            modelDiscovery: "openai-models",
+            presetId: "minimax",
+          });
+          await expect(dialog).toBeHidden();
+        } finally {
+          await page.unroute("**/api/providers", providerRoute);
+        }
+        await openModelRegistry();
       },
     );
 
@@ -290,7 +382,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     let deepseekModelId = "";
     await journey.step(
       "自定义 Provider 获取并规范化模型列表",
-      "新建自定义服务商，填写本地 endpoint、令牌、OpenAI Chat Completions、DeepSeek 变种和 /models 策略。保存后目录显示服务商真实返回的 deepseek-v4-flash 与 fixture-unknown，且模型列表请求携带 Bearer 令牌。",
+      "新建自定义服务商，填写本地 endpoint、令牌、OpenAI Chat Completions、DeepSeek 变种和 /models 策略。点击标题栏关闭时确认未保存且取消后字段仍在；随后使用对话框底部“保存”提交。目录显示服务商真实返回的 deepseek-v4-flash 与 fixture-unknown，且模型列表请求携带 Bearer 令牌。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.getByRole("button", { name: "+ 自定义服务商" }).click();
@@ -301,12 +393,26 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await editor.getByLabel("基础接口").selectOption("openai-chat-completions");
         await editor.getByLabel("接口变种").selectOption("deepseek");
         await editor.getByLabel("模型列表").selectOption("openai-models");
+
+        let confirmationMessage = "";
+        page.once("dialog", (confirmation) => {
+          confirmationMessage = confirmation.message();
+          void confirmation.dismiss();
+        });
+        await dialog.getByRole("button", { name: "取消并关闭" }).first().click();
+        expect(confirmationMessage).toContain("放弃尚未保存的服务商修改");
+        await expect(editor.getByLabel("服务商名称")).toHaveValue(customName);
+        await expect(editor.getByLabel("基础 URL")).toHaveValue(stub.baseUrl);
+
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
           && new URL(response.url()).pathname === "/api/providers");
-        await editor.getByRole("button", { name: "保存", exact: true }).click();
+        await dialog.locator(".system-config-footer").getByRole("button", { name: "保存", exact: true }).click();
         const provider = await (await responsePromise).json() as ModelProvider & Record<string, unknown>;
         providerIds.push(provider.id);
         expect(provider).not.toHaveProperty("apiToken");
+        await expect(dialog.getByRole("region", { name: "已配置服务商" })
+          .getByRole("button", { name: new RegExp(customName) })
+          .getByRole("img", { name: "可用" })).toBeVisible();
         await expect(dialog.getByText(/服务商返回/)).toBeVisible();
         await expect(dialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" })).toBeVisible();
         await expect(dialog.locator("article.provider-model-card").filter({ hasText: "fixture-unknown" })).toBeVisible();
@@ -322,7 +428,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const known = dialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" });
         await expect(known).toContainText("131,072");
         await expect(known).toContainText("视觉是");
-        await expect(known).toContainText("思考是 · high / max");
+        await expect(known).toContainText("思考是 · 高 / 最大");
         await expect(known).toContainText("USD 1.5 / 3");
         await expect(known).toContainText("缓存输入 0.2");
         await expect(known).toContainText("每百万 tokens");
@@ -337,6 +443,42 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const profile = await (await responsePromise).json() as ModelProfile;
         deepseekModelId = profile.id;
         modelIds.push(profile.id);
+      },
+    );
+
+    await journey.step(
+      "DeepSeek 分时价格以结构化事实本地化展示",
+      "使用 DeepSeek 内置预设的维护目录（连接参数由测试改为本地 manual）展示 CNY/每百万 token，并明确区分北京时间工作日 09:00–12:00、14:00–18:00 高峰和其余闲时。官方来源按规范 URL 去重，核对日期统一为 YYYY-MM-DD；界面不暴露 periods 等内部字段名。",
+      async () => {
+        const deepseekProvider = await apiJson<ModelProvider>(page, "/api/providers", {
+          data: {
+            apiToken: "j7-deepseek-catalog-local-token",
+            baseUrl: stub.baseUrl,
+            modelDiscovery: "manual",
+            presetId: "deepseek",
+          },
+          method: "POST",
+        });
+        providerIds.push(deepseekProvider.id);
+        await page.reload();
+        const dialog = await openModelRegistry();
+        const registry = dialog.getByRole("region", { name: "已配置服务商" });
+        await registry.getByRole("button", { name: /DeepSeek/ }).click();
+        const flash = dialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" });
+        await expect(flash).toContainText("高峰: CNY 3 / 9");
+        await expect(flash).toContainText("缓存输入 0.1");
+        await expect(flash).toContainText("北京时间工作日 09:00–12:00, 14:00–18:00");
+        await expect(flash).toContainText("闲时: CNY 1.5 / 4.5");
+        await expect(flash).toContainText("缓存输入 0.05");
+        await expect(flash).toContainText("其余时间（北京时间）");
+        await expect(flash).toContainText("每百万 tokens");
+        await expect(flash).not.toContainText("periods");
+        const sources = flash.getByRole("link", { name: "官方来源 · 2026-08-23" });
+        await expect(sources).toHaveCount(1);
+        await expect(sources).toHaveAttribute("href", "https://api-docs.deepseek.com/zh-cn/quick_start/pricing");
+
+        await registry.getByRole("button", { name: new RegExp(customName) }).click();
+        await expect(dialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" })).toBeVisible();
       },
     );
 
@@ -359,6 +501,90 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const profile = await (await responsePromise).json() as ModelProfile;
         modelIds.push(profile.id);
         expect(profile.model).toBe("fixture-manual");
+        stub.restoreListing();
+      },
+    );
+
+    await journey.step(
+      "快速切换 Provider 时迟到结果不会串目录",
+      "本地 Provider A 的 /models 故意延迟，Provider B 立即返回。用户连续选择 A、B 后，即使 A 最后到达，目录仍只显示 B 的模型；点击添加的 POST 也明确发往 B，不能把 A 的模型挂到 B。",
+      async () => {
+        const providerA = await apiJson<ModelProvider>(page, "/api/providers", {
+          data: {
+            apiToken: "j7-race-a-local-token",
+            apiProtocol: "openai-chat-completions",
+            apiVariant: "openai",
+            baseUrl: `${stub.origin}/slow/v1`,
+            modelDiscovery: "openai-models",
+            name: "J7 Race Provider A",
+          },
+          method: "POST",
+        });
+        const providerB = await apiJson<ModelProvider>(page, "/api/providers", {
+          data: {
+            apiToken: "j7-race-b-local-token",
+            apiProtocol: "openai-chat-completions",
+            apiVariant: "openai",
+            baseUrl: `${stub.origin}/fast/v1`,
+            modelDiscovery: "openai-models",
+            name: "J7 Race Provider B",
+          },
+          method: "POST",
+        });
+        providerIds.push(providerA.id, providerB.id);
+        raceProviderBId = providerB.id;
+        await page.reload();
+        const dialog = await openModelRegistry();
+        const registry = dialog.getByRole("region", { name: "已配置服务商" });
+        const responseA = page.waitForResponse((response) => new URL(response.url()).pathname
+          === `/api/providers/${providerA.id}/models`);
+        const responseB = page.waitForResponse((response) => new URL(response.url()).pathname
+          === `/api/providers/${providerB.id}/models`);
+        await registry.getByRole("button", { name: /J7 Race Provider A/ }).click();
+        await registry.getByRole("button", { name: /J7 Race Provider B/ }).click();
+        await Promise.all([responseA, responseB]);
+        await expect(dialog.locator("article.provider-model-card").filter({ hasText: "race-provider-b-model" })).toBeVisible();
+        await expect(dialog.locator("article.provider-model-card").filter({ hasText: "race-provider-a-model" })).toHaveCount(0);
+        expect(stub.listPaths).toContain("/slow/v1/models");
+        expect(stub.listPaths).toContain("/fast/v1/models");
+
+        const addResponse = page.waitForResponse((response) => response.request().method() === "POST"
+          && new URL(response.url()).pathname === `/api/providers/${providerB.id}/models`);
+        await dialog.locator("article.provider-model-card")
+          .filter({ hasText: "race-provider-b-model" })
+          .getByRole("button", { name: "添加模型" })
+          .click();
+        const profile = await (await addResponse).json() as ModelProfile;
+        modelIds.push(profile.id);
+        raceModelId = profile.id;
+        expect(profile.providerId).toBe(providerB.id);
+        expect(profile.model).toBe("race-provider-b-model");
+      },
+    );
+
+    await journey.step(
+      "被全局默认模型引用的 Provider 给出本地化恢复提示",
+      "把 Provider B 的模型设为全局默认后尝试删除 B。中文错误明确说明该服务商正被运行时设置引用，并指导先更换全局默认任务模型或评审模型；Provider 保持可用，恢复默认设置后用户可以继续操作。",
+      async () => {
+        const before = await apiJson<{ overrides: Record<string, unknown> }>(page, "/api/settings");
+        await apiJson(page, "/api/settings", {
+          data: { ...before.overrides, modelId: raceModelId },
+          method: "PUT",
+        });
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        page.once("dialog", (confirmation) => {
+          void confirmation.accept();
+        });
+        await dialog.getByRole("region", { name: "服务商编辑器" })
+          .getByRole("button", { name: "删除" })
+          .click();
+        await expect(dialog.getByRole("alert")).toContainText(
+          "此服务商正被运行时设置引用。请先更换全局默认任务模型或评审模型，再删除服务商。",
+        );
+        await expect(dialog.getByRole("region", { name: "已配置服务商" })
+          .getByRole("button", { name: /J7 Race Provider B/ })).toBeVisible();
+        await apiJson(page, "/api/settings", { data: before.overrides, method: "PUT" });
+        expect(raceProviderBId).toBeTruthy();
       },
     );
 
@@ -434,6 +660,78 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     );
 
     await journey.step(
+      "Composer 在默认桌面与 600px 窄屏按可用容器换行",
+      "工作区面板保持展开，在 1440×900 和 600×900 两个真实视口分别滚动到 Composer。模型、思考、强度、审批、专家和运行控件都有可读标签/可访问名称，控件矩形两两不相交、中心命中自身、全部位于 Composer 和视口内，页面无横向溢出。",
+      async () => {
+        const verifyComposerGeometry = async (width: number) => {
+          await page.setViewportSize({ width, height: 900 });
+          const footer = page.locator(".composer-footer");
+          await footer.scrollIntoViewIfNeeded();
+          const geometry = await footer.evaluate((node) => {
+            const footerRect = node.getBoundingClientRect();
+            const controls = Array.from(node.querySelectorAll("select, button"))
+              .filter((element) => {
+                const rect = element.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              });
+            const rectangles = controls.map((element) => {
+              const rect = element.getBoundingClientRect();
+              return { bottom: rect.bottom, height: rect.height, left: rect.left, right: rect.right, top: rect.top, width: rect.width };
+            });
+            const overlaps: Array<[number, number]> = [];
+            for (let left = 0; left < rectangles.length; left += 1) {
+              for (let right = left + 1; right < rectangles.length; right += 1) {
+                const a = rectangles[left]!;
+                const b = rectangles[right]!;
+                if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1
+                  && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1) overlaps.push([left, right]);
+              }
+            }
+            const labelSpans = Array.from(node.querySelectorAll("label > span"))
+              .filter((element) => element.getBoundingClientRect().width > 0);
+            return {
+              centerTargetFailures: controls.flatMap((control, index) => {
+                const rect = control.getBoundingClientRect();
+                const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                return hit === control || (hit !== null && control.contains(hit))
+                  ? []
+                  : [{
+                      control: `${index}:${control.tagName.toLowerCase()}:${control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40) ?? ""}`,
+                      hit: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : "none",
+                    }];
+              }),
+              controlsInside: rectangles.every((rect) => rect.left >= footerRect.left - 1
+                && rect.right <= footerRect.right + 1
+                && rect.left >= -1
+                && rect.right <= window.innerWidth + 1),
+              labelsUnclipped: labelSpans.every((span) => span.scrollWidth <= span.clientWidth + 1),
+              overlaps,
+              pageScrollWidth: document.documentElement.scrollWidth,
+              viewportWidth: window.innerWidth,
+            };
+          });
+          expect(geometry.overlaps).toEqual([]);
+          expect(geometry.centerTargetFailures).toEqual([]);
+          expect(geometry.controlsInside).toBe(true);
+          expect(geometry.labelsUnclipped).toBe(true);
+          expect(geometry.pageScrollWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+          for (const label of ["本任务使用的模型", "当前对话的思考模式", "当前对话的思考强度", "审批", "专家"]) {
+            await expect(page.getByLabel(label)).toBeVisible();
+          }
+          await expect(page.getByRole("button", { name: "运行分析" })).toBeVisible();
+        };
+
+        await page.setViewportSize({ width: 1440, height: 900 });
+        const showWorkspace = page.getByRole("button", { name: "显示工作区" });
+        if (await showWorkspace.count()) await showWorkspace.click();
+        await expect(page.getByRole("button", { name: "隐藏工作区" })).toBeVisible();
+        await verifyComposerGeometry(1440);
+        await verifyComposerGeometry(600);
+        await page.setViewportSize({ width: 1280, height: 720 });
+      },
+    );
+
+    await journey.step(
       "所选模型与 DeepSeek 思考配置真实进入 Run",
       "发送消息后页面收到本地模拟模型的确定性答复；模拟服务捕获的真实 Chat Completions 请求 model=deepseek-v4-flash，thinking.type=enabled 且 reasoning_effort=max，证明选择不是仅界面展示。",
       async () => {
@@ -451,7 +749,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "GPT-5.5 只展示并发送合法 xhigh 强度",
-      "通过 OpenAI 预设具体化 GPT-5.5 后，对话思考强度只显示 low、medium、high、xhigh，不出现 max；选择 xhigh 后本地 Responses fixture 收到 reasoning.effort=xhigh。",
+      "通过 OpenAI 预设具体化 GPT-5.5 后，从 DeepSeek/max 切换模型会把 Session 的旧非法 max 原子归一化并持久化为 xhigh；刷新后模型与 xhigh 均保持。对话强度只显示 low、medium、high、xhigh，不出现 max，本地 Responses fixture 收到 reasoning.effort=xhigh。",
       async () => {
         const provider = await apiJson<ModelProvider>(page, "/api/providers", {
           data: {
@@ -471,6 +769,17 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await page.reload();
         await openProjectSession(page, fixture!);
         await page.getByLabel("本任务使用的模型").selectOption(gpt55.id);
+        await expect.poll(async () => {
+          const session = await apiJson<{ modelId?: string; thinkingEffort?: string }>(
+            page,
+            `/api/sessions/${encodeURIComponent(fixture!.session.id)}`,
+          );
+          return `${session.modelId}/${session.thinkingEffort}`;
+        }).toBe(`${gpt55.id}/xhigh`);
+        await page.reload();
+        await openProjectSession(page, fixture!);
+        await expect(page.getByLabel("本任务使用的模型")).toHaveValue(gpt55.id);
+        await expect(page.getByLabel("当前对话的思考强度")).toHaveValue("xhigh");
         await page.getByLabel("当前对话的思考模式").selectOption("enabled");
         const effort = page.getByLabel("当前对话的思考强度");
         expect(await effort.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
@@ -525,7 +834,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "Claude Haiku 4.5 自动使用合法 legacy 思考预算",
-      "通过默认 adaptive 的 Anthropic 预设具体化 Claude Haiku 4.5 时，模型自动落为 anthropic-legacy。对话中开启思考后，Messages wire 使用 enabled+budget_tokens，且不发送仅 adaptive 支持的 output_config。",
+      "通过默认 adaptive 的 Anthropic 预设具体化 Claude Haiku 4.5 时，模型自动落为 anthropic-legacy。Composer 与高级独立模型编辑器都展示旧式固定预算提示、保留模式控件并隐藏 effort，用户可预期实际 wire。开启后 Messages wire 使用 enabled+budget_tokens，且不发送仅 adaptive 支持的 output_config。",
       async () => {
         const provider = await apiJson<ModelProvider>(page, "/api/providers", {
           data: {
@@ -548,6 +857,18 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await page.getByLabel("本任务使用的模型").selectOption(haiku.id);
         await page.getByLabel("当前对话的思考模式").selectOption("enabled");
         await expect(page.getByLabel("当前对话的思考强度")).toHaveCount(0);
+        await expect(page.getByRole("note")).toContainText("此模型使用 Anthropic 旧式固定思考预算");
+
+        const dialog = await openModelRegistry();
+        await dialog.locator("details.provider-advanced-profiles > summary").click();
+        await dialog.locator(".model-list .model-card").filter({ hasText: "claude-haiku-4-5" }).click();
+        const advancedEditor = dialog.locator("form.model-editor");
+        await expect(advancedEditor.getByLabel("思考开关")).toBeVisible();
+        await expect(advancedEditor.getByLabel("思考强度")).toHaveCount(0);
+        await expect(advancedEditor).toContainText("此模型必须使用 Anthropic 旧式固定思考预算，不支持 Adaptive 强度");
+        await dialog.getByRole("button", { name: "取消并关闭" }).first().click();
+        await expect(dialog).toBeHidden();
+
         const run = await sendUserMessage(page, fixture!.session.id, "Verify Claude Haiku 4.5 legacy thinking.");
         expect((await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000)).status).toBe("completed");
         await expect(page.getByText("Claude Haiku 4.5 legacy thinking is active.")).toBeVisible();
@@ -566,6 +887,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       async () => {
         await page.getByLabel("本任务使用的模型").selectOption(deepseekModelId);
         await page.getByLabel("当前对话的思考模式").selectOption("enabled");
+        await page.getByLabel("当前对话的思考强度").selectOption("max");
         const dialog = await openModelRegistry();
         await dialog.getByRole("navigation", { name: "设置分组" })
           .getByRole("button", { name: /^语言/ })
@@ -575,10 +897,21 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(page.getByLabel("Model for this task")).toBeVisible();
         await expect(page.getByLabel("Thinking mode for this conversation")).toBeVisible();
         await expect(page.getByLabel("Thinking effort for this conversation")).toBeVisible();
+        await expect(page.getByLabel("Thinking effort for this conversation").locator("option:checked")).toHaveText("Max");
+        await expect(page.getByLabel("Model for this task").locator("option:checked")).toContainText("DeepSeek · Auto");
+        await expect(page.getByLabel("Model for this task").locator("option:checked")).not.toContainText("自动");
         const englishDialog = await openModelRegistry();
         await expect(englishDialog.getByRole("region", { name: "Common providers" })).toBeVisible();
         await expect(englishDialog.getByRole("button", { name: "+ Custom provider" })).toBeVisible();
         await expect(englishDialog.getByRole("region", { name: "Provider model catalog" })).toBeVisible();
+        const registry = englishDialog.getByRole("region", { name: "Configured providers" });
+        await registry.getByRole("button", { name: /DeepSeek/ }).click();
+        const flash = englishDialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" });
+        await expect(flash).toContainText("Peak: CNY 3 / 9");
+        await expect(flash).toContainText("Beijing time, weekdays 09:00–12:00, 14:00–18:00");
+        await expect(flash).toContainText("Off-peak: CNY 1.5 / 4.5");
+        await expect(flash).toContainText("All other times (Beijing time)");
+        await expect(flash).not.toContainText(/工作日|闲时|periods/);
       },
     );
   } finally {

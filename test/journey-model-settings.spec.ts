@@ -21,12 +21,12 @@ test.use({ locale: "zh-CN" });
 
 /**
  * E2E-META
- * Purpose: 模型设置分组紧凑表单——四个配置项一次短滚动同屏可配、变种行为提示清楚、不支持强度的变种原因明确、模型卡片可扫读、桌面与窄屏布局可用。
+ * Purpose: 模型设置分组紧凑表单——支持思考的四个配置项一次短滚动同屏可配、不支持思考控制的变种不保存无效开关、模型卡片可扫读、桌面与窄屏布局可用。
  * Steps:
  *   1. 打开系统设置并进入模型注册表，确认这是配置模型的位置。
- *   2. 新建模型：身份/接口/思考/访问分组清楚；接口与思考两组四个下拉框一次短滚动即可同屏、且两两同行。
+ *   2. 新建模型：身份/接口/思考/访问分组清楚；OpenAI 标准不展示会被 wire 忽略的思考控件并说明原因。
  *   3. 选择 DeepSeek 变种：出现行为提示，开启思考后强度可选、选最大。
- *   4. 换成 OpenAI 标准变种：强度下拉被禁用并出现醒目说明（不会发送强度），换回 DeepSeek 后强度值保留。
+ *   4. 换成 OpenAI 标准变种：思考模式与强度均隐藏并出现准确原因；换回 DeepSeek 后可重新配置合法值。
  *   5. 填写身份与凭证并保存，再打开模型注册表，卡片徽标可扫读变种/思考/密钥状态。
  *   6. 再次打开该模型的编辑，四个配置值与保存时一致。
  *   7. 窄屏（600px）下设置对话框单列排布、控件不越界、四个配置仍可达。
@@ -90,9 +90,9 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     );
 
     await journey.step(
-      "新建模型，分组清楚且四个配置项一次短滚动即同屏",
-      "「+ 添加模型」后出现新建模型表单，身份信息/接口/思考/访问与能力分组标题可见；"
-      + "把接口与思考两个分组滚入同一画面，基础接口与接口变种同行、思考开关与思考强度同行，四个下拉框不用长滚动就能一起看到。",
+      "新建标准 OpenAI 模型时不提供无效思考开关",
+      "「+ 添加模型」后出现身份信息/接口/思考/访问与能力分组；基础接口与接口变种同行。"
+      + "OpenAI 标准没有可发送的思考控制字段，因此思考模式和强度都不显示，并给出不会保存无效配置的准确原因。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.getByRole("button", { name: "+ 添加模型" }).click();
@@ -100,11 +100,13 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
           await expect(dialog.getByRole("heading", { name: heading, exact: true })).toBeVisible();
         }
         await expect(dialog.getByLabel("显示名称")).toBeInViewport();
-        // 一次短滚动：把「思考强度」带进可视区，同一画面应同时容纳四个关键控件
-        await dialog.getByLabel("思考强度").scrollIntoViewIfNeeded();
-        for (const label of ["基础接口", "接口变种", "思考开关", "思考强度"]) {
+        await dialog.getByLabel("接口变种").scrollIntoViewIfNeeded();
+        for (const label of ["基础接口", "接口变种"]) {
           await expect(dialog.getByLabel(label)).toBeInViewport();
         }
+        await expect(dialog.getByLabel("思考开关")).toHaveCount(0);
+        await expect(dialog.getByLabel("思考强度")).toHaveCount(0);
+        await expect(dialog.getByText("此接口变种没有思考控制字段。服务商会忽略思考开关与强度，因此不会保存这些设置。")).toBeVisible();
         const pairings = await dialog.evaluate(() => {
           const rowOf = (label: string) => {
             const s = Array.from(document.querySelectorAll(".config-panel label > span"))
@@ -113,15 +115,11 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
           };
           const api = rowOf("基础接口");
           const variant = rowOf("接口变种");
-          const mode = rowOf("思考开关");
-          const effort = rowOf("思考强度");
           return {
             apiVariantSameRow: api && variant && Math.abs(api.top - variant.top) < 2,
-            modeEffortSameRow: mode && effort && Math.abs(mode.top - effort.top) < 2,
           };
         });
         expect(pairings.apiVariantSameRow).toBe(true);
-        expect(pairings.modeEffortSameRow).toBe(true);
       },
     );
 
@@ -140,23 +138,32 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await expect(effort).toBeEnabled();
         await expect(effort).toHaveValue("max");
         await expect(dialog.getByText("仅在思考开关为“开启”时发送。")).toBeHidden();
+        const pairings = await dialog.evaluate(() => {
+          const rowOf = (label: string) => Array.from(document.querySelectorAll(".config-panel label > span"))
+            .find((node) => node.textContent?.trim() === label)?.parentElement?.getBoundingClientRect();
+          const mode = rowOf("思考开关");
+          const effortRect = rowOf("思考强度");
+          return Boolean(mode && effortRect && Math.abs(mode.top - effortRect.top) < 2);
+        });
+        expect(pairings).toBe(true);
       },
     );
 
     await journey.step(
-      "换 OpenAI 标准变种：强度不可用且原因明确",
-      "换到 OpenAI 标准后，思考强度下拉变为禁用，同时出现醒目说明「此变种没有强度字段——不会发送思考强度。」；"
-      + "换回 DeepSeek 后强度下拉恢复可用，强度值仍是之前选的「最大」。",
+      "换 OpenAI 标准变种：无效思考配置不可保存",
+      "换到 OpenAI 标准后，思考开关与强度都隐藏，并说明服务商会忽略这些字段；"
+      + "换回 DeepSeek 后可重新开启思考并选择最大强度。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.getByLabel("接口变种").selectOption("openai");
-        await expect(dialog.getByLabel("思考强度")).toBeDisabled();
-        await expect(dialog.getByText("此变种没有强度字段——不会发送思考强度。")).toBeVisible();
+        await expect(dialog.getByLabel("思考开关")).toHaveCount(0);
+        await expect(dialog.getByLabel("思考强度")).toHaveCount(0);
+        await expect(dialog.getByText("此接口变种没有思考控制字段。服务商会忽略思考开关与强度，因此不会保存这些设置。")).toBeVisible();
         await expect(dialog.getByText("标准 Chat Completions 请求，不发送思考控制字段。")).toBeVisible();
         await dialog.getByLabel("接口变种").selectOption("deepseek");
-        await expect(dialog.getByLabel("思考强度")).toBeEnabled();
+        await dialog.getByLabel("思考开关").selectOption("enabled");
+        await dialog.getByLabel("思考强度").selectOption("max");
         await expect(dialog.getByLabel("思考强度")).toHaveValue("max");
-        await expect(dialog.getByLabel("思考开关")).toHaveValue("enabled");
       },
     );
 
