@@ -131,7 +131,7 @@ function ModelFacts({ model }: { model: ProviderModelEntry }) {
 
 function SourceLinks({ model }: { model: ProviderModelEntry }) {
   const { t } = useLocale();
-  const sources = [model.catalog?.source, model.catalog?.pricing?.source]
+  const sources = [model.remote?.pricing?.source, model.catalog?.source, model.catalog?.pricing?.source]
     .filter((source, index, all) => source && all.findIndex((candidate) => candidate?.url === source.url) === index);
   if (!sources.length) return <small>{t("providers.metadata.remoteSource")}</small>;
   return <small className="provider-model-sources">

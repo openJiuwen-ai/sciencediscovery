@@ -64,6 +64,10 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     await dialog.getByRole("navigation", { name: "设置分组" })
       .getByRole("button", { name: /^模型注册表/ })
       .click();
+    const advancedProfiles = dialog.locator("details.provider-advanced-profiles");
+    if (await advancedProfiles.getAttribute("open") === null) {
+      await advancedProfiles.locator(":scope > summary").click();
+    }
     return dialog;
   };
 
