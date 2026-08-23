@@ -17,7 +17,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { AddressInfo } from "node:net";
 import test from "node:test";
 
-import type { ResolvedProxy } from "@sciencediscovery/schema";
+import { constrainCatalogThinking, lookupModelCatalog, type ResolvedProxy } from "@sciencediscovery/schema";
 
 import {
   normalizeUsage,
@@ -29,6 +29,49 @@ import {
 } from "./client.js";
 
 const policy: ModelClientPolicy = { maxRetries: 1, maxTokens: 1_024, requestTimeoutMs: 5_000 };
+
+test("catalog preserves official period prices and exact model thinking capabilities", () => {
+  const flash = lookupModelCatalog("deepseek-v4-flash", "deepseek")!.pricing!;
+  const pro = lookupModelCatalog("deepseek-v4-pro", "deepseek")!.pricing!;
+  assert.deepEqual(
+    flash.periods?.map(({ cachedInput, id, input, output }) => ({ cachedInput, id, input, output })),
+    [
+      { cachedInput: 0.1, id: "peak", input: 3, output: 9 },
+      { cachedInput: 0.05, id: "off-peak", input: 1.5, output: 4.5 },
+    ],
+  );
+  assert.deepEqual(
+    pro.periods?.map(({ cachedInput, id, input, output }) => ({ cachedInput, id, input, output })),
+    [
+      { cachedInput: 0.3, id: "peak", input: 9, output: 27 },
+      { cachedInput: 0.15, id: "off-peak", input: 4.5, output: 13.5 },
+    ],
+  );
+  assert.equal(flash.currency, "CNY");
+  assert.equal(flash.unit, "per-1m-tokens");
+  assert.equal(flash.source.retrievedAt, "2026-08-23");
+  assert.match(flash.source.url, /^https:\/\/api-docs\.deepseek\.com\//);
+  assert.equal(lookupModelCatalog("deepseek-v4-pro", "siliconflow")?.pricing, undefined);
+
+  assert.deepEqual(lookupModelCatalog("gpt-5.5", "openai")!.thinking!.efforts, ["low", "medium", "high", "xhigh"]);
+  assert.deepEqual(lookupModelCatalog("gpt-5.4-mini", "openai")!.thinking!.efforts, ["low", "medium", "high", "xhigh"]);
+  for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+    assert.deepEqual(lookupModelCatalog(model, "openai")!.thinking!.efforts, ["low", "medium", "high", "xhigh", "max"]);
+  }
+  assert.deepEqual(constrainCatalogThinking("gpt-5.5", "enabled", "max"), { effort: "xhigh", mode: "enabled" });
+
+  const k3 = lookupModelCatalog("kimi-k3", "moonshot")!;
+  assert.equal(k3.apiVariant, "kimi-k3");
+  assert.deepEqual(k3.thinking, {
+    defaultEffort: "max",
+    defaultMode: "enabled",
+    efforts: ["low", "high", "max"],
+    modes: ["enabled"],
+    supported: true,
+  });
+  assert.deepEqual(constrainCatalogThinking("kimi-k3", "disabled"), { effort: "max", mode: "enabled" });
+  assert.equal(lookupModelCatalog("claude-haiku-4-5-20251001", "anthropic")!.apiVariant, "anthropic-legacy");
+});
 
 async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -441,6 +484,122 @@ test("Responses uses item protocol and replays reasoning plus function call IDs"
   assert.equal(replayInput[2]!.call_id, "call-1");
   assert.deepEqual(replayInput[3], { type: "function_call_output", call_id: "call-1", output: "result" });
   assert.deepEqual(requests[1]!.payload.reasoning, { effort: "none" });
+});
+
+test("Responses sends only the selected model's legal xhigh/max wire value", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    requests.push(JSON.parse(await readBody(request)) as Record<string, unknown>);
+    sse(response, [{ type: "response.output_text.delta", delta: "ok" }]);
+  }, async (baseUrl) => {
+    for (const [model, thinkingEffort] of [
+      ["gpt-5.5", "max"],
+      ["gpt-5.4-mini", "xhigh"],
+      ["gpt-5.6-sol", "max"],
+    ] as const) {
+      await streamModelTurn(
+        {
+          apiProtocol: "openai-responses",
+          apiVariant: "responses",
+          baseUrl,
+          model,
+          thinkingEffort,
+          thinkingMode: "enabled",
+        },
+        "system",
+        [{ role: "user", content: "hi" }],
+        [],
+        policy,
+        new AbortController().signal,
+      );
+    }
+  });
+  assert.deepEqual(requests.map((payload) => payload.reasoning), [
+    { effort: "xhigh", summary: "auto" },
+    { effort: "xhigh", summary: "auto" },
+    { effort: "max", summary: "auto" },
+  ]);
+});
+
+test("Kimi K3 sends official reasoning_effort without a toggle and replays reasoning_content", async () => {
+  const requests: Record<string, unknown>[] = [];
+  let attempt = 0;
+  await withServer(async (request, response) => {
+    requests.push(JSON.parse(await readBody(request)) as Record<string, unknown>);
+    attempt += 1;
+    sse(response, attempt === 1
+      ? [
+        { choices: [{ delta: { reasoning_content: "think" } }] },
+        { choices: [{ delta: { content: "answer" } }] },
+      ]
+      : [{ choices: [{ delta: { content: "done" } }] }]);
+  }, async (baseUrl) => {
+    const first = await streamModelTurn(
+      {
+        apiProtocol: "openai-chat-completions",
+        apiVariant: "deepseek",
+        baseUrl,
+        model: "kimi-k3",
+        thinkingEffort: "low",
+        thinkingMode: "enabled",
+      },
+      "system",
+      [{ role: "user", content: "hi" }],
+      [],
+      policy,
+      new AbortController().signal,
+    );
+    assert.equal(first.assistantMessage.reasoning_content, "think");
+    await streamModelTurn(
+      {
+        apiProtocol: "openai-chat-completions",
+        apiVariant: "deepseek",
+        baseUrl,
+        model: "kimi-k3",
+        thinkingMode: "disabled",
+      },
+      "system",
+      [first.assistantMessage, { role: "user", content: "again" }],
+      [],
+      policy,
+      new AbortController().signal,
+    );
+  });
+  assert.equal(requests[0]!.reasoning_effort, "low");
+  assert.equal(requests[0]!.thinking, undefined);
+  assert.equal(requests[1]!.reasoning_effort, "max", "legacy disabled is narrowed to K3 always-reasoning default max");
+  assert.equal(requests[1]!.thinking, undefined);
+  const replay = requests[1]!.messages as Array<Record<string, unknown>>;
+  assert.equal(replay[1]!.reasoning_content, "think");
+});
+
+test("Claude Haiku 4.5 overrides an adaptive profile with legal legacy thinking", async () => {
+  let payload: Record<string, unknown> | undefined;
+  await withServer(async (request, response) => {
+    payload = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    sse(response, [
+      { type: "message_start", message: { usage: { input_tokens: 1 } } },
+      { type: "message_delta", usage: { output_tokens: 1 } },
+    ]);
+  }, async (baseUrl) => {
+    await streamModelTurn(
+      {
+        apiProtocol: "anthropic-messages",
+        apiVariant: "anthropic-adaptive",
+        baseUrl,
+        model: "claude-haiku-4-5",
+        thinkingEffort: "high",
+        thinkingMode: "enabled",
+      },
+      "system",
+      [{ role: "user", content: "hi" }],
+      [],
+      { ...policy, maxTokens: 16_384 },
+      new AbortController().signal,
+    );
+  });
+  assert.deepEqual(payload!.thinking, { type: "enabled", budget_tokens: 8_192 });
+  assert.equal(payload!.output_config, undefined);
 });
 
 test("Anthropic thinking blocks and signatures replay verbatim", async () => {

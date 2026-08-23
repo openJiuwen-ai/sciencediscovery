@@ -24,6 +24,7 @@ export type ModelApiVariant =
   | "anthropic-legacy"
   | "deepseek"
   | "gemini"
+  | "kimi-k3"
   | "minimax"
   | "ollama"
   | "openai"
@@ -31,10 +32,10 @@ export type ModelApiVariant =
   | "responses";
 
 export type ModelThinkingMode = "auto" | "disabled" | "enabled";
-export type ModelThinkingEffort = "low" | "medium" | "high" | "max";
+export type ModelThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export const MODEL_API_VARIANTS: Record<ModelApiProtocol, readonly ModelApiVariant[]> = {
-  "openai-chat-completions": ["openai", "deepseek", "qwen", "minimax", "gemini", "ollama"],
+  "openai-chat-completions": ["openai", "deepseek", "kimi-k3", "qwen", "minimax", "gemini", "ollama"],
   "openai-responses": ["responses"],
   "anthropic-messages": ["anthropic-adaptive", "anthropic-legacy"],
 };
@@ -53,6 +54,7 @@ export const THINKING_CONTROL_VARIANTS: readonly ModelApiVariant[] = [
   "anthropic-legacy",
   "deepseek",
   "gemini",
+  "kimi-k3",
   "minimax",
   "qwen",
   "responses",
@@ -64,6 +66,7 @@ export const THINKING_EFFORT_VARIANTS: readonly ModelApiVariant[] = [
   "anthropic-legacy",
   "deepseek",
   "gemini",
+  "kimi-k3",
   "responses",
 ];
 

@@ -25,7 +25,10 @@ import { Agent as UndiciAgent, ProxyAgent, request, type Dispatcher } from "undi
 
 import type { RuntimeMessage as AgentHistoryMessage } from "@sciencediscovery/runtime-core";
 import {
+  constrainCatalogThinking,
   DEFAULT_MODEL_API_VARIANT,
+  lookupModelCatalog,
+  MODEL_API_VARIANTS,
   type ModelApiProtocol,
   type ModelApiVariant,
   type ModelThinkingEffort,
@@ -281,15 +284,20 @@ function endpointProtocol(endpoint: ModelEndpoint): ModelApiProtocol {
 }
 
 function endpointVariant(endpoint: ModelEndpoint): ModelApiVariant {
-  return endpoint.apiVariant ?? DEFAULT_MODEL_API_VARIANT[endpointProtocol(endpoint)];
+  const protocol = endpointProtocol(endpoint);
+  const configured = endpoint.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
+  const catalogVariant = lookupModelCatalog(endpoint.model)?.apiVariant;
+  return catalogVariant && MODEL_API_VARIANTS[protocol].includes(catalogVariant)
+    ? catalogVariant
+    : configured;
 }
 
 function thinkingMode(endpoint: ModelEndpoint): ModelThinkingMode {
-  return endpoint.thinkingMode ?? "auto";
+  return constrainCatalogThinking(endpoint.model, endpoint.thinkingMode, endpoint.thinkingEffort).mode;
 }
 
 function thinkingEffort(endpoint: ModelEndpoint): ModelThinkingEffort {
-  return endpoint.thinkingEffort ?? "high";
+  return constrainCatalogThinking(endpoint.model, endpoint.thinkingMode, endpoint.thinkingEffort).effort;
 }
 
 function chatUrl(baseUrl: string): string {
@@ -351,13 +359,17 @@ function chatThinkingFields(endpoint: ModelEndpoint): Record<string, unknown> {
         thinking: { type: mode },
         ...(enabled ? { reasoning_effort: thinkingEffort(endpoint) } : {}),
       };
+    case "kimi-k3":
+      // K3 is always reasoning. `auto` omits the field and lets the official
+      // default (`max`) apply; enabled sends only its top-level effort field.
+      return enabled ? { reasoning_effort: thinkingEffort(endpoint) } : {};
     case "qwen":
       return { chat_template_kwargs: { enable_thinking: enabled } };
     case "minimax":
       return { reasoning_split: enabled };
     case "gemini":
       return enabled
-        ? { reasoning_effort: thinkingEffort(endpoint) === "max" ? "high" : thinkingEffort(endpoint) }
+        ? { reasoning_effort: ["xhigh", "max"].includes(thinkingEffort(endpoint)) ? "high" : thinkingEffort(endpoint) }
         : { reasoning_effort: "none" };
     default:
       return {};
@@ -381,7 +393,8 @@ function chatHistory(history: AgentHistoryMessage[], variant: ModelApiVariant): 
     if (typeof message.name === "string") result.name = message.name;
     if (typeof message.tool_call_id === "string") result.tool_call_id = message.tool_call_id;
     if (message.role === "assistant") {
-      if (variant === "deepseek" && typeof message.reasoning_content === "string" && message.reasoning_content) {
+      if ((variant === "deepseek" || variant === "kimi-k3")
+        && typeof message.reasoning_content === "string" && message.reasoning_content) {
         result.reasoning_content = message.reasoning_content;
       }
       if (variant === "qwen" && message.reasoning !== undefined) result.reasoning = structuredClone(message.reasoning);
@@ -462,7 +475,7 @@ async function streamOpenAiTurn(
       : undefined;
     if (!delta) continue;
 
-    if (variant === "deepseek" && typeof delta.reasoning_content === "string") {
+    if ((variant === "deepseek" || variant === "kimi-k3") && typeof delta.reasoning_content === "string") {
       deepseekReasoning += delta.reasoning_content;
       callbacks.onThinkingDelta?.(delta.reasoning_content);
     } else if (variant === "qwen" && delta.reasoning !== undefined) {
@@ -526,7 +539,9 @@ async function streamOpenAiTurn(
     role: "assistant",
     content: text,
     ...(wireToolCalls.length ? { tool_calls: wireToolCalls } : {}),
-    ...(variant === "deepseek" && deepseekReasoning ? { reasoning_content: deepseekReasoning } : {}),
+    ...((variant === "deepseek" || variant === "kimi-k3") && deepseekReasoning
+      ? { reasoning_content: deepseekReasoning }
+      : {}),
     ...(variant === "qwen" && qwenReasoning !== undefined ? { reasoning: qwenReasoning } : {}),
     ...(variant === "minimax" && minimaxReasoning.length ? { reasoning_details: minimaxReasoning } : {}),
   };

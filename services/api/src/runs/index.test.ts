@@ -13,9 +13,12 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
+import { mkdir, rm } from "node:fs/promises";
+import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { skillAuthoringCommandPrompt, splitArtifactVersionSuffix } from "./index.js";
+import { SessionStore } from "../store.js";
+import { computeSettingsSnapshot, skillAuthoringCommandPrompt, splitArtifactVersionSuffix } from "./index.js";
 
 // Regression for the artifact-chip failure: some models collapse the
 // artifact_id and version into one string ("uuid#v1") inside
@@ -75,4 +78,21 @@ test("Skill authoring slash commands expand into guarded Agent workflows", () =>
   assert.match(distill ?? "", /complete prior Session conversation and execution history/);
   assert.match(distill ?? "", /keep the validation steps/);
   assert.equal(skillAuthoringCommandPrompt("ordinary message"), undefined);
+});
+
+test("run snapshots narrow legacy Responses max to the selected model wire capability", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "test-token", presetId: "openai" });
+  const model = await store.materializeProviderModel(provider.id, "gpt-5.5");
+  const project = await store.createProject("Responses effort");
+  const session = await store.createSession(project.id, "Responses effort", model.id);
+  await store.updateSession(session.id, { thinkingEffort: "max", thinkingMode: "enabled" });
+
+  const snapshot = computeSettingsSnapshot(store, session.id);
+  assert.equal(snapshot.thinkingMode, "enabled");
+  assert.equal(snapshot.thinkingEffort, "xhigh");
 });

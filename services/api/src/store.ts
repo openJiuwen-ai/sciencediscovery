@@ -142,7 +142,12 @@ import {
 } from "@sciencediscovery/orchestration";
 
 import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@sciencediscovery/schema";
-import { getModelProviderPreset } from "@sciencediscovery/schema";
+import {
+  constrainCatalogThinking,
+  getModelProviderPreset,
+  lookupModelCatalog,
+  MODEL_API_VARIANTS,
+} from "@sciencediscovery/schema";
 import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   defaultEnvironmentRevision,
@@ -2000,12 +2005,31 @@ export class SessionStore {
     const model = modelId.trim();
     if (!model) throw new Error("Model ID is required");
     if (model.length > 512) throw new Error("Model ID is too long");
+    const catalog = lookupModelCatalog(model, provider.presetId);
+    const { effort: defaultEffort, mode: defaultMode } = constrainCatalogThinking(model);
+    const apiVariant = catalog?.apiVariant && MODEL_API_VARIANTS[provider.apiProtocol].includes(catalog.apiVariant)
+      ? catalog.apiVariant
+      : provider.apiVariant;
     const existing = this.catalog.models.find((profile) => profile.providerId === providerId && profile.model === model);
-    if (existing) return existing;
+    if (existing) {
+      const constrained = constrainCatalogThinking(model, existing.thinkingMode, existing.thinkingEffort);
+      if (existing.apiVariant !== apiVariant
+        || existing.thinkingMode !== constrained.mode
+        || existing.thinkingEffort !== constrained.effort) {
+        Object.assign(existing, {
+          apiVariant,
+          thinkingEffort: constrained.effort,
+          thinkingMode: constrained.mode,
+          updatedAt: new Date().toISOString(),
+        });
+        await this.saveCatalog();
+      }
+      return existing;
+    }
     const now = new Date().toISOString();
     const profile: ModelProfile = {
       apiProtocol: provider.apiProtocol,
-      apiVariant: provider.apiVariant,
+      apiVariant,
       baseUrl: provider.baseUrl,
       createdAt: now,
       hasApiToken: provider.hasApiToken,
@@ -2014,8 +2038,8 @@ export class SessionStore {
       name: cleanLabel(`${provider.name} · ${options.label ?? model}`, model),
       providerId,
       proxyPolicy: provider.proxyPolicy,
-      thinkingEffort: "high",
-      thinkingMode: "auto",
+      thinkingEffort: defaultEffort,
+      thinkingMode: defaultMode,
       updatedAt: now,
       vision: options.vision === true,
     };

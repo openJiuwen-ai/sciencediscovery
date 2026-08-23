@@ -29,10 +29,13 @@ import type {
   ModelCatalogThinking,
   ModelProviderPresetId,
 } from "./model-provider.js";
+import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 
 export interface ModelCatalogRecord {
   /** Additional normalized ids that resolve to this record. */
   aliases?: readonly string[];
+  /** Model-specific wire dialect required by the official endpoint. */
+  apiVariant?: ModelCatalogEntry["apiVariant"];
   contextWindow?: number;
   /** Normalized primary id: lower-case, no vendor path prefix. */
   key: string;
@@ -57,8 +60,18 @@ const THINKING_HIGH_MAX: ModelCatalogThinking = {
   modes: ["auto", "enabled", "disabled"],
   supported: true,
 };
-const THINKING_ALL_EFFORTS: ModelCatalogThinking = {
+const THINKING_ANTHROPIC_EFFORTS: ModelCatalogThinking = {
   efforts: ["low", "medium", "high", "max"],
+  modes: ["auto", "enabled", "disabled"],
+  supported: true,
+};
+const THINKING_OPENAI_55: ModelCatalogThinking = {
+  efforts: ["low", "medium", "high", "xhigh"],
+  modes: ["auto", "enabled", "disabled"],
+  supported: true,
+};
+const THINKING_OPENAI_56: ModelCatalogThinking = {
+  efforts: ["low", "medium", "high", "xhigh", "max"],
   modes: ["auto", "enabled", "disabled"],
   supported: true,
 };
@@ -72,11 +85,28 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
     maxOutputTokens: 384_000,
     pricing: {
       deepseek: {
-        cachedInput: 0.02,
+        cachedInput: 0.1,
         currency: "CNY",
-        input: 1,
-        output: 2,
-        source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
+        input: 3,
+        notes: "顶层字段为保守高峰价；分时价格见 periods",
+        output: 9,
+        periods: [
+          {
+            cachedInput: 0.1,
+            id: "peak",
+            input: 3,
+            output: 9,
+            schedule: "Beijing time, Monday-Friday 09:00-12:00 and 14:00-18:00",
+          },
+          {
+            cachedInput: 0.05,
+            id: "off-peak",
+            input: 1.5,
+            output: 4.5,
+            schedule: "All other times (Beijing time)",
+          },
+        ],
+        source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"),
         unit: "per-1m-tokens",
       },
       siliconflow: {
@@ -98,11 +128,28 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
     maxOutputTokens: 384_000,
     pricing: {
       deepseek: {
-        cachedInput: 0.025,
+        cachedInput: 0.3,
         currency: "CNY",
-        input: 3,
-        output: 6,
-        source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
+        input: 9,
+        notes: "顶层字段为保守高峰价；分时价格见 periods",
+        output: 27,
+        periods: [
+          {
+            cachedInput: 0.3,
+            id: "peak",
+            input: 9,
+            output: 27,
+            schedule: "Beijing time, Monday-Friday 09:00-12:00 and 14:00-18:00",
+          },
+          {
+            cachedInput: 0.15,
+            id: "off-peak",
+            input: 4.5,
+            output: 13.5,
+            schedule: "All other times (Beijing time)",
+          },
+        ],
+        source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"),
         unit: "per-1m-tokens",
       },
     },
@@ -113,6 +160,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
 
   // ---- Moonshot Kimi (platform.kimi.com) ----
   {
+    apiVariant: "kimi-k3",
     contextWindow: 1_048_576,
     key: "kimi-k3",
     label: "Kimi K3",
@@ -127,7 +175,13 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://platform.kimi.com/docs/models.md"),
-    thinking: THINKING_HIGH_MAX,
+    thinking: {
+      defaultEffort: "max",
+      defaultMode: "enabled",
+      efforts: ["low", "high", "max"],
+      modes: ["enabled"],
+      supported: true,
+    },
     vision: true,
   },
   {
@@ -298,7 +352,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.6-sol"),
-    thinking: THINKING_ALL_EFFORTS,
+    thinking: THINKING_OPENAI_56,
     vision: true,
   },
   {
@@ -318,7 +372,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.6-terra"),
-    thinking: THINKING_ALL_EFFORTS,
+    thinking: THINKING_OPENAI_56,
     vision: true,
   },
   {
@@ -337,7 +391,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.6-luna"),
-    thinking: THINKING_ALL_EFFORTS,
+    thinking: THINKING_OPENAI_56,
     vision: true,
   },
   {
@@ -357,7 +411,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.5"),
-    thinking: THINKING_ALL_EFFORTS,
+    thinking: THINKING_OPENAI_55,
     vision: true,
   },
   {
@@ -376,7 +430,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.4-mini"),
-    thinking: THINKING_ALL_EFFORTS,
+    thinking: THINKING_OPENAI_55,
     vision: true,
   },
 
@@ -399,7 +453,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
     },
     source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
     thinking: {
-      ...THINKING_ALL_EFFORTS,
+      ...THINKING_ANTHROPIC_EFFORTS,
       modes: ["auto", "enabled"],
     },
     vision: true,
@@ -420,7 +474,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
-    thinking: THINKING_ALL_EFFORTS,
+    thinking: THINKING_ANTHROPIC_EFFORTS,
     vision: true,
   },
   {
@@ -439,11 +493,12 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
-    thinking: THINKING_ALL_EFFORTS,
+    thinking: THINKING_ANTHROPIC_EFFORTS,
     vision: true,
   },
   {
     aliases: ["claude-haiku-4-5-20251001"],
+    apiVariant: "anthropic-legacy",
     contextWindow: 200_000,
     key: "claude-haiku-4-5",
     label: "Claude Haiku 4.5",
@@ -543,6 +598,7 @@ export function lookupModelCatalog(modelId: string, presetId?: string): ModelCat
   if (!record) return undefined;
   const pricing = presetId === undefined ? undefined : record.pricing?.[presetId as ModelProviderPresetId];
   return {
+    ...(record.apiVariant ? { apiVariant: record.apiVariant } : {}),
     label: record.label,
     source: record.source,
     ...(record.contextWindow !== undefined ? { contextWindow: record.contextWindow } : {}),
@@ -551,4 +607,32 @@ export function lookupModelCatalog(modelId: string, presetId?: string): ModelCat
     ...(record.thinking ? { thinking: record.thinking } : {}),
     ...(pricing ? { pricing } : {}),
   };
+}
+
+/** Narrow saved/user-selected thinking values to the official per-model
+ * capability. This is also the migration path for legacy values such as
+ * GPT-5.5 `max`, which safely becomes its nearest legal `xhigh` value. */
+export function constrainCatalogThinking(
+  modelId: string,
+  mode?: ModelThinkingMode,
+  effort?: ModelThinkingEffort,
+): { effort: ModelThinkingEffort; mode: ModelThinkingMode } {
+  const thinking = lookupModelCatalog(modelId)?.thinking;
+  const requestedMode = mode ?? thinking?.defaultMode ?? "auto";
+  const requestedEffort = effort ?? thinking?.defaultEffort ?? "high";
+  if (!thinking?.supported) return { effort: requestedEffort, mode: requestedMode };
+
+  const modes = thinking.modes;
+  const legalMode = modes?.length && !modes.includes(requestedMode)
+    ? thinking.defaultMode ?? (modes.includes("auto") ? "auto" : modes[0]!)
+    : requestedMode;
+  const efforts = thinking.efforts;
+  let legalEffort = requestedEffort;
+  if (efforts?.length && !efforts.includes(requestedEffort)) {
+    legalEffort = requestedEffort === "max" && efforts.includes("xhigh")
+      ? "xhigh"
+      : thinking.defaultEffort
+        ?? (efforts.includes("high") ? "high" : efforts[0]!);
+  }
+  return { effort: legalEffort, mode: legalMode };
 }

@@ -33,8 +33,8 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     name: "DeepSeek",
   },
   {
-    // Kimi speaks the DeepSeek-style thinking dialect: `thinking.type`,
-    // `reasoning_effort` and streamed `reasoning_content`.
+    // K2.5/K2.6 use the DeepSeek-style thinking toggle. K3 is materialized
+    // with its model-specific always-reasoning `kimi-k3` variant.
     apiProtocol: "openai-chat-completions",
     apiVariant: "deepseek",
     baseUrl: "https://api.moonshot.cn/v1",

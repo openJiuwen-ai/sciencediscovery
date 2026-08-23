@@ -111,12 +111,29 @@ export interface ProviderModelList {
 
 /** Thinking capability recorded for a catalog model. */
 export interface ModelCatalogThinking {
+  /** Provider default used when a saved effort is absent or no longer legal. */
+  defaultEffort?: ModelThinkingEffort;
+  /** Provider default used when a saved mode is absent or no longer legal. */
+  defaultMode?: ModelThinkingMode;
   /** Effort levels the product exposes for this model, when supported. */
   efforts?: ModelThinkingEffort[];
   /** Modes the provider accepts. Omitted means the model supports the normal
    *  auto/enabled/disabled toggle for its protocol variant. */
   modes?: ModelThinkingMode[];
   supported: boolean;
+}
+
+export type ModelCatalogPricePeriodId = "off-peak" | "peak";
+
+/** A vendor-published time period whose rates differ from the conservative
+ * top-level price. Periods are never merged across provider presets. */
+export interface ModelCatalogPricePeriod {
+  cachedInput?: number;
+  id: ModelCatalogPricePeriodId;
+  input: number;
+  output: number;
+  /** Human-readable schedule copied from the vendor page, including timezone. */
+  schedule: string;
 }
 
 /**
@@ -132,6 +149,8 @@ export interface ModelCatalogPricing {
   /** Qualifiers such as off-peak discounts or tiered long-context pricing. */
   notes?: string;
   output: number;
+  /** Time-varying rates. Top-level fields remain the conservative peak rate. */
+  periods?: ModelCatalogPricePeriod[];
   source: { retrievedAt: string; url: string };
   unit: "per-1m-tokens";
 }
@@ -142,6 +161,8 @@ export interface ModelCatalogPricing {
  * windows, vision, thinking and pricing come from vendor documentation.
  */
 export interface ModelCatalogEntry {
+  /** Model-specific wire dialect required by the official endpoint. */
+  apiVariant?: ModelApiVariant;
   contextWindow?: number;
   label: string;
   maxOutputTokens?: number;

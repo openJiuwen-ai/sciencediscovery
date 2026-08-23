@@ -2817,6 +2817,35 @@ test("model providers: preset creation, token fallback, sync, and lifecycle", as
   assert.equal(store.getProviderApiToken(provider.id), undefined);
 });
 
+test("provider models materialize exact Kimi, Responses, and Anthropic capabilities", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-capabilities-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const moonshot = await store.createProvider({ apiToken: "moonshot-test", presetId: "moonshot" });
+  const k3 = await store.materializeProviderModel(moonshot.id, "kimi-k3");
+  assert.equal(k3.apiVariant, "kimi-k3");
+  assert.equal(k3.thinkingMode, "enabled");
+  assert.equal(k3.thinkingEffort, "max");
+
+  const anthropic = await store.createProvider({ apiToken: "anthropic-test", presetId: "anthropic" });
+  const haiku = await store.materializeProviderModel(anthropic.id, "claude-haiku-4-5");
+  assert.equal(haiku.apiVariant, "anthropic-legacy");
+
+  const gpt55 = await store.createModel({
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-5.5",
+    name: "Legacy max GPT-5.5",
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+  });
+  assert.equal(gpt55.thinkingEffort, "xhigh", "legacy max is migrated to the nearest legal effort");
+});
+
 test("model providers: custom provider persistence and token-optional runs", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `providers-custom-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
@@ -2880,6 +2909,8 @@ test("runtime settings carry thinking overrides through scopes", async (context)
 
   await store.updateSession(session.id, { thinkingEffort: "low", thinkingMode: "enabled" });
   assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "low");
+  await store.updateSession(session.id, { thinkingEffort: "xhigh", thinkingMode: "enabled" });
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "xhigh");
 
   await assert.rejects(
     store.replaceSessionSettings(session.id, { thinkingMode: "sometimes" as never }),

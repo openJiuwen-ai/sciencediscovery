@@ -103,6 +103,7 @@ import type {
 } from "@sciencediscovery/schema";
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
+  constrainCatalogThinking,
   createLocalSessionTitle,
   DEFAULT_MODEL_API_VARIANT,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
@@ -142,6 +143,7 @@ import {
   type RuntimeSkillSnapshot,
 } from "@sciencediscovery/specialist";
 import { MAX_PAPER_PDF_BYTES, PaperService } from "../papers.js";
+import { closedModelContext } from "./model-context.js";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
@@ -537,7 +539,7 @@ async function executeAgentRun(
   }
   const promptHistory: AgentHistoryMessage[] = previousMessages.flatMap((message) => {
     if (message.role === "assistant" && message.modelContext?.length) {
-      return structuredClone(message.modelContext);
+      return closedModelContext(message.modelContext as AgentHistoryMessage[]);
     }
     return [{ role: message.role, content: messagePromptContent(message) }];
   });
@@ -1704,7 +1706,7 @@ async function executeAgentRun(
       message.role === "user" && message.content === promptUserMessage.content
     ));
     assistantModelContext = promptIndex >= 0
-      ? structuredClone(initialResult.finalMessages.slice(promptIndex + 1))
+      ? closedModelContext(initialResult.finalMessages.slice(promptIndex + 1))
       : [];
     const taskUsage = lastAgentUsage;
     assertRunActive();
@@ -2108,7 +2110,7 @@ function refineSessionTitleInBackground(
     });
 }
 
-function computeSettingsSnapshot(store: SessionStore, sessionId: string): EffectiveRuntimeSettings {
+export function computeSettingsSnapshot(store: SessionStore, sessionId: string): EffectiveRuntimeSettings {
   const session = store.assertSessionWritable(sessionId);
   const sessionSpecialist = store.getSpecialist(session.specialistId);
   const resolved = store.resolveRuntimeSettings(sessionId).effective;
@@ -2133,22 +2135,27 @@ function computeSettingsSnapshot(store: SessionStore, sessionId: string): Effect
     return snapshot;
   }
   const modes = catalog?.thinking?.modes
-    ?? (variant === "gemini" ? ["auto", "enabled"] as const : ["auto", "enabled", "disabled"] as const);
+    ?? (["gemini", "kimi-k3"].includes(variant)
+      ? ["auto", "enabled"] as const
+      : ["auto", "enabled", "disabled"] as const);
   const requestedMode = snapshot.thinkingMode ?? model.thinkingMode ?? "auto";
-  snapshot.thinkingMode = modes.includes(requestedMode as never) ? requestedMode : "auto";
+  const requestedEffort = snapshot.thinkingEffort ?? model.thinkingEffort ?? "high";
+  const constrained = constrainCatalogThinking(model.model, requestedMode, requestedEffort);
+  snapshot.thinkingMode = modes.includes(constrained.mode as never) ? constrained.mode : "auto";
 
   let efforts = catalog?.thinking?.efforts ?? [];
   if (!catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(variant)) {
     if (variant === "gemini") efforts = ["low", "medium", "high"];
-    else if (variant === "anthropic-adaptive" || variant === "responses") efforts = ["low", "medium", "high", "max"];
+    else if (variant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
+    else if (variant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
+    else if (variant === "kimi-k3") efforts = ["low", "high", "max"];
     else efforts = ["high", "max"];
   }
   if (!efforts.length) {
     delete snapshot.thinkingEffort;
   } else {
-    const requestedEffort = snapshot.thinkingEffort ?? model.thinkingEffort ?? "high";
-    snapshot.thinkingEffort = efforts.includes(requestedEffort)
-      ? requestedEffort
+    snapshot.thinkingEffort = efforts.includes(constrained.effort)
+      ? constrained.effort
       : efforts.includes("high") ? "high" : efforts[0];
   }
   return snapshot;

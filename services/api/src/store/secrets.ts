@@ -24,7 +24,12 @@ import type {
   ModelThinkingMode,
   UpdateModelProfileRequest,
 } from "@sciencediscovery/schema";
-import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
+import {
+  constrainCatalogThinking,
+  DEFAULT_MODEL_API_VARIANT,
+  lookupModelCatalog,
+  MODEL_API_VARIANTS,
+} from "@sciencediscovery/schema";
 import { cleanLabel } from "@sciencediscovery/governance";
 
 const MODEL_SECRET_KEY_BYTES = 32;
@@ -50,18 +55,27 @@ export function validateLiveModel(
     endpoint.toString().includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions"
   );
   if (!Object.hasOwn(MODEL_API_VARIANTS, apiProtocol)) throw new Error("The model API protocol is invalid");
-  const apiVariant: ModelApiVariant = input.apiVariant ?? DEFAULT_MODEL_API_VARIANT[apiProtocol];
+  let apiVariant: ModelApiVariant = input.apiVariant ?? DEFAULT_MODEL_API_VARIANT[apiProtocol];
   if (!MODEL_API_VARIANTS[apiProtocol].includes(apiVariant)) {
     throw new Error(`Model API variant ${apiVariant} is not valid for ${apiProtocol}`);
   }
-  const thinkingMode: ModelThinkingMode = input.thinkingMode ?? "auto";
-  if (!(["auto", "enabled", "disabled"] as const).includes(thinkingMode)) {
+  const catalogVariant = lookupModelCatalog(model)?.apiVariant;
+  if (catalogVariant && MODEL_API_VARIANTS[apiProtocol].includes(catalogVariant)) {
+    apiVariant = catalogVariant;
+  }
+  const requestedMode: ModelThinkingMode = input.thinkingMode ?? "auto";
+  if (!(["auto", "enabled", "disabled"] as const).includes(requestedMode)) {
     throw new Error("The model thinking mode is invalid");
   }
-  const thinkingEffort: ModelThinkingEffort = input.thinkingEffort ?? "high";
-  if (!(["low", "medium", "high", "max"] as const).includes(thinkingEffort)) {
+  const requestedEffort: ModelThinkingEffort = input.thinkingEffort ?? "high";
+  if (!(["low", "medium", "high", "xhigh", "max"] as const).includes(requestedEffort)) {
     throw new Error("The model thinking effort is invalid");
   }
+  const { effort: thinkingEffort, mode: thinkingMode } = constrainCatalogThinking(
+    model,
+    input.thinkingMode === undefined ? undefined : requestedMode,
+    input.thinkingEffort === undefined ? undefined : requestedEffort,
+  );
   return {
     apiProtocol,
     apiVariant,
