@@ -126,6 +126,12 @@ part of a default command. See [.ci/README.md](.ci/README.md) for the toolchain
 image, the per-layer Docker commands, and the tag catalog used to select cases
 (`pnpm ci:tags`, `pnpm ci:list`, `pnpm ci:run`).
 
+Run all three before opening a merge request. No pipeline runs the full set:
+GitCode's runner cannot build a sandbox, so it runs `ci:ut:core` and no E2E,
+and only GitHub Actions covers the `@sciencediscovery/runner` tests and the
+mocked journeys. See [.agents/skills/ci/SKILL.md](.agents/skills/ci/SKILL.md)
+for which platform covers what, and for reading a CI result and its logs.
+
 ## License headers
 
 Every source file starts with the Apache-2.0 header below, written in that
