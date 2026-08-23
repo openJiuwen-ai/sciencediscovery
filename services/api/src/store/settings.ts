@@ -209,8 +209,8 @@ export function normalizeRuntimeSettings(
     }
   }
   if (hasOwn(value, "thinkingEffort")) {
-    if (!(["high", "max"] as const).includes(value.thinkingEffort as never)) {
-      if (strict) throw new Error("thinkingEffort must be high or max");
+    if (!(["low", "medium", "high", "max"] as const).includes(value.thinkingEffort as never)) {
+      if (strict) throw new Error("thinkingEffort must be low, medium, high, or max");
     } else {
       normalized.thinkingEffort = value.thinkingEffort as RuntimeSettingsOverrides["thinkingEffort"];
     }

@@ -48,8 +48,20 @@ const RETRIEVED = "2026-08-23";
 
 const src = (url: string) => ({ retrievedAt: RETRIEVED, url });
 
-const THINKING_TOGGLE: ModelCatalogThinking = { supported: true };
-const THINKING_WITH_EFFORT: ModelCatalogThinking = { efforts: ["high", "max"], supported: true };
+const THINKING_TOGGLE: ModelCatalogThinking = {
+  modes: ["auto", "enabled", "disabled"],
+  supported: true,
+};
+const THINKING_HIGH_MAX: ModelCatalogThinking = {
+  efforts: ["high", "max"],
+  modes: ["auto", "enabled", "disabled"],
+  supported: true,
+};
+const THINKING_ALL_EFFORTS: ModelCatalogThinking = {
+  efforts: ["low", "medium", "high", "max"],
+  modes: ["auto", "enabled", "disabled"],
+  supported: true,
+};
 
 export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
   // ---- DeepSeek (api-docs.deepseek.com) ----
@@ -60,11 +72,10 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
     maxOutputTokens: 384_000,
     pricing: {
       deepseek: {
-        cachedInput: 0.1,
+        cachedInput: 0.02,
         currency: "CNY",
-        input: 3,
-        notes: "峰时价；闲时（北京时间非高峰）约为峰时 5 折",
-        output: 9,
+        input: 1,
+        output: 2,
         source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
         unit: "per-1m-tokens",
       },
@@ -77,7 +88,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: THINKING_HIGH_MAX,
     vision: false,
   },
   {
@@ -87,17 +98,16 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
     maxOutputTokens: 384_000,
     pricing: {
       deepseek: {
-        cachedInput: 0.3,
+        cachedInput: 0.025,
         currency: "CNY",
-        input: 9,
-        notes: "峰时价；闲时约为峰时 5 折",
-        output: 27,
+        input: 3,
+        output: 6,
         source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
         unit: "per-1m-tokens",
       },
     },
     source: src("https://api-docs.deepseek.com/zh-cn/quick_start/pricing"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: THINKING_HIGH_MAX,
     vision: false,
   },
 
@@ -117,7 +127,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://platform.kimi.com/docs/models.md"),
-    thinking: { ...THINKING_WITH_EFFORT, supported: true },
+    thinking: THINKING_HIGH_MAX,
     vision: true,
   },
   {
@@ -158,26 +168,6 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
   },
 
   // ---- Zhipu GLM (docs.bigmodel.cn; USD prices from docs.z.ai) ----
-  {
-    contextWindow: 1_000_000,
-    key: "glm-5.3",
-    label: "GLM-5.3",
-    maxOutputTokens: 128_000,
-    pricing: {
-      zhipu: {
-        cachedInput: 0.26,
-        currency: "USD",
-        input: 1.4,
-        notes: "国际站美元价；人民币价见 bigmodel.cn 定价页",
-        output: 4.4,
-        source: src("https://docs.z.ai/guides/overview/pricing"),
-        unit: "per-1m-tokens",
-      },
-    },
-    source: src("https://docs.bigmodel.cn/cn/guide/start/model-overview"),
-    thinking: THINKING_WITH_EFFORT,
-    vision: false,
-  },
   {
     contextWindow: 1_000_000,
     key: "glm-5.2",
@@ -248,26 +238,6 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
 
   // ---- MiniMax (platform.minimaxi.com / platform.minimax.io) ----
   {
-    contextWindow: 1_000_000,
-    key: "minimax-m3",
-    label: "MiniMax M3",
-    maxOutputTokens: 524_288,
-    pricing: {
-      minimax: {
-        cachedInput: 0.42,
-        currency: "CNY",
-        input: 2.1,
-        notes: "输入 ≤512K 档价；超过 512K 输入的部分价格翻倍",
-        output: 8.4,
-        source: src("https://platform.minimaxi.com/docs/guides/pricing-paygo.md"),
-        unit: "per-1m-tokens",
-      },
-    },
-    source: src("https://platform.minimax.io/docs/api-reference/text-chat-openai.md"),
-    thinking: THINKING_TOGGLE,
-    vision: true,
-  },
-  {
     contextWindow: 204_800,
     key: "minimax-m2.7",
     label: "MiniMax M2.7",
@@ -283,8 +253,30 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://platform.minimax.io/docs/api-reference/text-chat-openai.md"),
-    thinking: { supported: true },
+    thinking: THINKING_TOGGLE,
     vision: false,
+  },
+
+  // ---- Alibaba Cloud Model Studio (help.aliyun.com) ----
+  {
+    contextWindow: 1_000_000,
+    key: "qwen3.5-plus",
+    label: "Qwen3.5 Plus",
+    maxOutputTokens: 65_536,
+    pricing: {
+      dashscope: {
+        cachedInput: 0.08,
+        currency: "CNY",
+        input: 0.8,
+        notes: "输入不超过 128K tokens 档价；更长输入按官方阶梯价格计费",
+        output: 4.8,
+        source: src("https://help.aliyun.com/en/model-studio/qwen3-5-plus"),
+        unit: "per-1m-tokens",
+      },
+    },
+    source: src("https://help.aliyun.com/en/model-studio/qwen3-5-plus"),
+    thinking: THINKING_TOGGLE,
+    vision: true,
   },
 
   // ---- OpenAI (developers.openai.com) ----
@@ -306,7 +298,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.6-sol"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: THINKING_ALL_EFFORTS,
     vision: true,
   },
   {
@@ -326,7 +318,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.6-terra"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: THINKING_ALL_EFFORTS,
     vision: true,
   },
   {
@@ -345,7 +337,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.6-luna"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: THINKING_ALL_EFFORTS,
     vision: true,
   },
   {
@@ -365,7 +357,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.5"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: THINKING_ALL_EFFORTS,
     vision: true,
   },
   {
@@ -384,7 +376,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://developers.openai.com/api/docs/models/gpt-5.4-mini"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: THINKING_ALL_EFFORTS,
     vision: true,
   },
 
@@ -406,7 +398,10 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: {
+      ...THINKING_ALL_EFFORTS,
+      modes: ["auto", "enabled"],
+    },
     vision: true,
   },
   {
@@ -425,7 +420,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: THINKING_ALL_EFFORTS,
     vision: true,
   },
   {
@@ -444,7 +439,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
-    thinking: THINKING_WITH_EFFORT,
+    thinking: THINKING_ALL_EFFORTS,
     vision: true,
   },
   {
@@ -464,7 +459,7 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://platform.claude.com/docs/en/about-claude/models/overview.md"),
-    thinking: { efforts: ["high", "max"], supported: true },
+    thinking: THINKING_TOGGLE,
     vision: true,
   },
 
@@ -486,7 +481,11 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash"),
-    thinking: { supported: true },
+    thinking: {
+      efforts: ["low", "medium", "high"],
+      modes: ["auto", "enabled"],
+      supported: true,
+    },
     vision: true,
   },
   {
@@ -506,7 +505,11 @@ export const MODEL_CATALOG: readonly ModelCatalogRecord[] = [
       },
     },
     source: src("https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"),
-    thinking: { supported: true },
+    thinking: {
+      efforts: ["low", "medium", "high"],
+      modes: ["auto", "enabled"],
+      supported: true,
+    },
     vision: true,
   },
 ];

@@ -355,6 +355,10 @@ function chatThinkingFields(endpoint: ModelEndpoint): Record<string, unknown> {
       return { chat_template_kwargs: { enable_thinking: enabled } };
     case "minimax":
       return { reasoning_split: enabled };
+    case "gemini":
+      return enabled
+        ? { reasoning_effort: thinkingEffort(endpoint) === "max" ? "high" : thinkingEffort(endpoint) }
+        : { reasoning_effort: "none" };
     default:
       return {};
   }
@@ -555,10 +559,7 @@ function responsesReasoning(endpoint: ModelEndpoint): Record<string, unknown> {
   const mode = thinkingMode(endpoint);
   if (mode === "auto") return {};
   if (mode === "disabled") return { reasoning: { effort: "none" } };
-  // Responses names its tier above `high` as `xhigh`; the product's `max`
-  // choice is translated instead of sending an invalid provider enum.
-  const effort = thinkingEffort(endpoint) === "max" ? "xhigh" : "high";
-  return { reasoning: { effort, summary: "auto" } };
+  return { reasoning: { effort: thinkingEffort(endpoint), summary: "auto" } };
 }
 
 async function streamResponsesTurn(

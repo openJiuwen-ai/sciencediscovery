@@ -2875,6 +2875,11 @@ test("runtime settings carry thinking overrides through scopes", async (context)
   assert.equal(details.effective.thinkingEffort, "max");
   assert.equal(details.sources.thinkingMode, "session");
   assert.equal(details.sources.thinkingEffort, "session");
+  assert.equal(store.getSession(session.id)?.thinkingMode, "enabled");
+  assert.equal(store.getSession(session.id)?.thinkingEffort, "max");
+
+  await store.updateSession(session.id, { thinkingEffort: "low", thinkingMode: "enabled" });
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "low");
 
   await assert.rejects(
     store.replaceSessionSettings(session.id, { thinkingMode: "sometimes" as never }),

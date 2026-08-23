@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ModelApiProtocol, ModelApiVariant } from "./model-usage.js";
+import type {
+  ModelApiProtocol,
+  ModelApiVariant,
+  ModelThinkingEffort,
+  ModelThinkingMode,
+} from "./model-usage.js";
 import type { ProxyPolicy } from "./proxy.js";
 
 /**
@@ -107,7 +112,10 @@ export interface ProviderModelList {
 /** Thinking capability recorded for a catalog model. */
 export interface ModelCatalogThinking {
   /** Effort levels the product exposes for this model, when supported. */
-  efforts?: Array<"high" | "max">;
+  efforts?: ModelThinkingEffort[];
+  /** Modes the provider accepts. Omitted means the model supports the normal
+   *  auto/enabled/disabled toggle for its protocol variant. */
+  modes?: ModelThinkingMode[];
   supported: boolean;
 }
 

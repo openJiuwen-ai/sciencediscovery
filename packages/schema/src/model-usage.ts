@@ -31,7 +31,7 @@ export type ModelApiVariant =
   | "responses";
 
 export type ModelThinkingMode = "auto" | "disabled" | "enabled";
-export type ModelThinkingEffort = "high" | "max";
+export type ModelThinkingEffort = "low" | "medium" | "high" | "max";
 
 export const MODEL_API_VARIANTS: Record<ModelApiProtocol, readonly ModelApiVariant[]> = {
   "openai-chat-completions": ["openai", "deepseek", "qwen", "minimax", "gemini", "ollama"],
@@ -52,6 +52,7 @@ export const THINKING_CONTROL_VARIANTS: readonly ModelApiVariant[] = [
   "anthropic-adaptive",
   "anthropic-legacy",
   "deepseek",
+  "gemini",
   "minimax",
   "qwen",
   "responses",
@@ -62,6 +63,7 @@ export const THINKING_EFFORT_VARIANTS: readonly ModelApiVariant[] = [
   "anthropic-adaptive",
   "anthropic-legacy",
   "deepseek",
+  "gemini",
   "responses",
 ];
 

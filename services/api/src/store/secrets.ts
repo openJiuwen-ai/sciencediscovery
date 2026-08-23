@@ -59,7 +59,7 @@ export function validateLiveModel(
     throw new Error("The model thinking mode is invalid");
   }
   const thinkingEffort: ModelThinkingEffort = input.thinkingEffort ?? "high";
-  if (!(["high", "max"] as const).includes(thinkingEffort)) {
+  if (!(["low", "medium", "high", "max"] as const).includes(thinkingEffort)) {
     throw new Error("The model thinking effort is invalid");
   }
   return {

@@ -64,6 +64,15 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     name: "MiniMax",
   },
   {
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "qwen",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    docsUrl: "https://help.aliyun.com/en/model-studio/base-url",
+    id: "dashscope",
+    modelDiscovery: "openai-models",
+    name: "Alibaba Cloud Model Studio",
+  },
+  {
     apiProtocol: "openai-responses",
     apiVariant: "responses",
     baseUrl: "https://api.openai.com/v1",

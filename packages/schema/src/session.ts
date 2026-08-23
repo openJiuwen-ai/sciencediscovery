@@ -20,7 +20,7 @@ import type {
   ScientificArtifactVersion,
 } from "./artifact-provenance.js";
 import type { ConnectorId } from "./connectors.js";
-import type { ModelRunInfo } from "./model-usage.js";
+import type { ModelRunInfo, ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, SessionPlan } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
@@ -60,6 +60,10 @@ export interface Session {
   id: string;
   /** Compatibility mirror of the effective modelId. */
   modelId?: string;
+  /** Compatibility mirror of the effective conversation thinking effort. */
+  thinkingEffort?: ModelThinkingEffort;
+  /** Compatibility mirror of the effective conversation thinking mode. */
+  thinkingMode?: ModelThinkingMode;
   permissionEpochId: string;
   projectId: string;
   /** @deprecated Legacy Semantic Review catalog compatibility; no runtime reviewer consumes it. */
@@ -299,6 +303,8 @@ export interface UpdateSessionRequest {
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;
   specialistId?: string | null;
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
   title?: string;
 }
 

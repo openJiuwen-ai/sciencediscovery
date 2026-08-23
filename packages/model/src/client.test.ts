@@ -150,12 +150,12 @@ test("chat variants map thinking controls without cross-provider fields", async 
   assert.equal(requests[3]!.thinking, undefined);
   assert.equal(requests[3]!.reasoning_effort, undefined);
   assert.equal(requests[4]!.reasoning_split, false);
-  for (const request of requests.slice(5)) {
-    assert.equal(request.thinking, undefined);
-    assert.equal(request.reasoning_effort, undefined);
-    assert.equal(request.chat_template_kwargs, undefined);
-    assert.equal(request.reasoning_split, undefined);
-  }
+  assert.equal(requests[5]!.reasoning_effort, "high");
+  assert.equal(requests[5]!.thinking, undefined);
+  assert.equal(requests[6]!.thinking, undefined);
+  assert.equal(requests[6]!.reasoning_effort, undefined);
+  assert.equal(requests[6]!.chat_template_kwargs, undefined);
+  assert.equal(requests[6]!.reasoning_split, undefined);
 });
 
 test("explicit protocol changes the endpoint even when the saved URL has an old suffix", async () => {
@@ -432,7 +432,7 @@ test("Responses uses item protocol and replays reasoning plus function call IDs"
   assert.match(requests[0]!.path, /\/responses$/);
   assert.equal(requests[0]!.payload.instructions, "system");
   assert.equal(requests[0]!.payload.messages, undefined);
-  assert.deepEqual(requests[0]!.payload.reasoning, { effort: "xhigh", summary: "auto" });
+  assert.deepEqual(requests[0]!.payload.reasoning, { effort: "max", summary: "auto" });
   assert.deepEqual(requests[0]!.payload.include, ["reasoning.encrypted_content"]);
   const replayInput = requests[1]!.payload.input as Array<Record<string, unknown>>;
   assert.equal(replayInput[1]!.id, "rs-1");

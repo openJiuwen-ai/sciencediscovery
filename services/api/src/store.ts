@@ -1310,6 +1310,8 @@ export class SessionStore {
     session.modelId = effective.modelId;
     session.reviewModelId = effective.reviewModelId;
     session.semanticReviewEnabled = effective.semanticReviewEnabled;
+    session.thinkingEffort = effective.thinkingEffort;
+    session.thinkingMode = effective.thinkingMode;
   }
 
   private syncSessionCompatibilityForProject(projectId?: string): void {
