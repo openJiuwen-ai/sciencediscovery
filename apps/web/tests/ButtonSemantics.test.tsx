@@ -75,8 +75,9 @@ test("environment settings poll bootstrap progress and expose a failed retry act
   const environments = source("EnvironmentManager.tsx");
   assert.match(environments, /setup\?\.state !== "installing"/);
   assert.match(environments, /window\.setInterval/);
-  assert.match(environments, /\{setup\.message\} · Phase: \{setup\.phase\}/);
-  assert.match(environments, /Retry Python environment setup/);
-  assert.match(environments, /setup\.error/);
+  assert.match(environments, /setup\.components\[card\.key\]/);
+  assert.match(environments, /Reported error/);
+  assert.match(environments, /Retry micromamba setup/);
+  assert.match(environments, /Retry Conda environment setup/);
   assert.doesNotMatch(environments, /Install managed Python and R environments/);
 });

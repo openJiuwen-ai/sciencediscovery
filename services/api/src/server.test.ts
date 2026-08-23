@@ -329,6 +329,28 @@ async function startScientificTestApi(
       const setup: ScientificEnvironmentSetup = {
         allowedChannels: ["conda-forge"],
         completedAt: new Date().toISOString(),
+        components: {
+          conda: {
+            action: null,
+            completedAt: new Date().toISOString(),
+            error: null,
+            message: "Conda environments are ready",
+            phase: "complete",
+            startedAt: new Date().toISOString(),
+            state: "ready",
+            updatedAt: new Date().toISOString(),
+          },
+          micromamba: {
+            action: null,
+            completedAt: new Date().toISOString(),
+            error: null,
+            message: "micromamba is ready",
+            phase: "complete",
+            startedAt: new Date().toISOString(),
+            state: "ready",
+            updatedAt: new Date().toISOString(),
+          },
+        },
         error: null,
         managedProvisioner: true,
         message: "Python base environment is ready",
@@ -2377,6 +2399,8 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
     method: "POST",
   });
   assert.equal(setup.body.state, "ready");
+  assert.equal(setup.body.components.micromamba.state, "ready");
+  assert.equal(setup.body.components.conda.state, "ready");
   const initial = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
   assert.deepEqual(initial.body.map((environment) => environment.id), ["starter-python", "starter-r"]);
   const created = await jsonRequest<Environment>(`${origin}/api/environments`, {
