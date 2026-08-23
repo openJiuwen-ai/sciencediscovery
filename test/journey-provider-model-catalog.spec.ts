@@ -182,7 +182,7 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  * PaperSources: none
  * MCP: none
  * OtherExternal: none — 非本地浏览器请求被拦截。
- * Credentials: E2E_API_TOKEN（隔离实例）与两个仅供本地 fixture 使用的演示令牌；断言令牌不从 Provider API 回传。
+ * Credentials: E2E_API_TOKEN（隔离实例）与仅供本地 fixture 使用的演示令牌；断言令牌不从 Provider API 回传。
  * CostSideEffects: none；创建的项目、Provider 与模型配置在 finally 中清理。
  */
 test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mocked" }, async ({ journey, page }) => {
