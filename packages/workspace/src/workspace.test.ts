@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
@@ -123,16 +123,23 @@ test("web search and fetch are stable first-class tools when handlers are provid
 });
 
 test("run_shell executes an existing workspace script without rewriting or path escape", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `workspace-shell-${process.pid}-${Date.now()}`);
-  await mkdir(root, { recursive: true });
-  await writeFile(resolve(root, "run_all.sh"), "printf '%s\\n' \"$1\"\n");
-  context.after(() => rm(root, { force: true, recursive: true }));
-  let executedCode = "";
+  const fixtureRoot = resolve(process.cwd(), ".tmp", `workspace-shell-${process.pid}-${Date.now()}`);
+  const root = resolve(fixtureRoot, "workspace");
+  const subagentRoot = resolve(root, "subagents", "subagent-1");
+  await mkdir(resolve(root, "scripts"), { recursive: true });
+  await mkdir(subagentRoot, { recursive: true });
+  await writeFile(resolve(root, "root script.sh"), "printf '%s\\n' \"$@\"\n");
+  await writeFile(resolve(root, "scripts", "child script.sh"), "printf 'child\\n'\n");
+  await writeFile(resolve(subagentRoot, "agent script.sh"), "printf 'agent\\n'\n");
+  await writeFile(resolve(fixtureRoot, "outside.sh"), "printf 'outside\\n'\n");
+  await symlink(resolve(fixtureRoot, "outside.sh"), resolve(root, "outside-link.sh"));
+  context.after(() => rm(fixtureRoot, { force: true, recursive: true }));
+  const executedCodes: string[] = [];
   const tools = createWorkspaceTools(root, {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
     executeShell: async (code): Promise<ShellExecutionResult> => {
-      executedCode = code;
+      executedCodes.push(code);
       const timestamp = new Date().toISOString();
       return {
         cgroupMode: "none", createdFiles: [],
@@ -148,12 +155,53 @@ test("run_shell executes an existing workspace script without rewriting or path 
   });
   const tool = tools.find((candidate) => candidate.name === "run_shell");
   assert.ok(tool);
-  await tool.execute("shell-call", { arguments: ["value with spaces"], scriptPath: "run_all.sh" });
-  assert.equal(executedCode, "/usr/bin/bash 'run_all.sh' 'value with spaces'");
+  await tool.execute("shell-root", {
+    arguments: ["value with spaces", "quote'value", "$HOME; touch never"],
+    scriptPath: "root script.sh",
+  });
+  await tool.execute("shell-child", { scriptPath: "scripts/child script.sh" });
+  assert.deepEqual(executedCodes, [
+    "/usr/bin/bash '/workspace/root script.sh' 'value with spaces' 'quote'\"'\"'value' '$HOME; touch never'",
+    "/usr/bin/bash '/workspace/scripts/child script.sh'",
+  ]);
+  await assert.rejects(
+    tool.execute("shell-missing", { scriptPath: "missing.sh" }),
+    /scriptPath does not exist in the workspace/,
+  );
+  await assert.rejects(
+    tool.execute("shell-directory", { scriptPath: "scripts" }),
+    /scriptPath must reference a workspace file/,
+  );
   await assert.rejects(
     tool.execute("shell-call", { scriptPath: "../outside.sh" }),
     /escapes the workspace/,
   );
+  await assert.rejects(
+    tool.execute("shell-symlink", { scriptPath: "outside-link.sh" }),
+    /scriptPath escapes the workspace/,
+  );
+
+  let subagentCode = "";
+  const subagentTools = createWorkspaceTools(subagentRoot, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    executeShell: async (code) => {
+      subagentCode = code;
+      return {
+        cgroupMode: "none", createdFiles: [], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" }, executionId: "subagent-shell", exitCode: 0,
+        finishedAt: new Date().toISOString(), kernelId: "persistent:shell", kernelMode: "persistent", language: "shell",
+        modifiedFiles: [], networkPolicy: "none", runnerVersion: "test", sandbox: "bubblewrap",
+        startedAt: new Date().toISOString(), stderr: "", stdout: "agent\n",
+        workingDirectory: "/workspace/subagents/subagent-1",
+      };
+    },
+    readOnlyWorkspaceRoot: root,
+  });
+  const subagentTool = subagentTools.find((candidate) => candidate.name === "run_shell");
+  assert.ok(subagentTool);
+  await subagentTool.execute("subagent-script", { scriptPath: "agent script.sh" });
+  assert.equal(subagentCode, "/usr/bin/bash '/workspace/subagents/subagent-1/agent script.sh'");
 });
 
 test("run_npu_job submits only allowlisted workloads with workspace-scoped inputs", async (context) => {
