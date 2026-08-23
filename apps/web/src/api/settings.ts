@@ -14,10 +14,14 @@
 
 import type {
   CreateModelProfileRequest,
+  CreateModelProviderRequest,
   CreateProxyServerRequest,
   CreateEnvironmentRequest,
   CreateSpecialistRequest,
   ModelProfile,
+  ModelProvider,
+  ModelProviderPreset,
+  ProviderModelList,
   McpProxyPolicies,
   ProxyServer,
   ProxySettingsDetails,
@@ -42,6 +46,7 @@ import type {
   UpdateMemoryGraphSettingsRequest,
   UpdateEnvironmentSourceSettingsRequest,
   UpdateModelProfileRequest,
+  UpdateModelProviderRequest,
   UpdateMcpProxyPoliciesRequest,
   UpdateProxyServerRequest,
   UpdateProxySettingsRequest,
@@ -167,6 +172,40 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   listModels(): Promise<ModelProfile[]> {
     return this.request("/api/models");
+  }
+
+  listProviders(): Promise<{ presets: ModelProviderPreset[]; providers: ModelProvider[] }> {
+    return this.request("/api/providers");
+  }
+
+  createProvider(body: CreateModelProviderRequest): Promise<ModelProvider> {
+    return this.request("/api/providers", { body: JSON.stringify(body), method: "POST" });
+  }
+
+  updateProvider(providerId: string, body: UpdateModelProviderRequest): Promise<ModelProvider> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}`, {
+      body: JSON.stringify(body),
+      method: "PUT",
+    });
+  }
+
+  deleteProvider(providerId: string): Promise<{ deleted: string }> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
+  }
+
+  listProviderModels(providerId: string, refresh = false): Promise<ProviderModelList> {
+    const query = refresh ? "?refresh=1" : "";
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}/models${query}`);
+  }
+
+  addProviderModel(
+    providerId: string,
+    body: { label?: string; model: string; vision?: boolean },
+  ): Promise<ModelProfile> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}/models`, {
+      body: JSON.stringify(body),
+      method: "POST",
+    });
   }
 
   listEnvironmentRevisions(): Promise<EnvironmentRevision[]> {

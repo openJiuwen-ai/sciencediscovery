@@ -43,6 +43,8 @@ import type {
   McpInvocation,
   McpSourceManifest,
   ModelProfile,
+  ModelProvider,
+  ModelProviderPreset,
   ModelApiProtocol,
   ModelApiVariant,
   ModelThinkingEffort,
@@ -194,6 +196,8 @@ import {
 } from "./artifactTree.js";
 import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest, type WebSettingsDraft } from "./WebSettingsEditor.js";
 import { ProxyPolicySelect, ProxySettingsEditor } from "./ProxySettingsEditor.js";
+import { ProviderModelSettings } from "./ProviderModelSettings.js";
+import { modelThinkingControls } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { EvidenceModal } from "./EvidenceModal.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
@@ -721,8 +725,14 @@ export function ModelDraftFields({
     "anthropic-adaptive",
     "anthropic-legacy",
     "deepseek",
+    "gemini",
     "responses",
   ].includes(draft.apiVariant);
+  const effortOptions: ModelThinkingEffort[] = draft.apiVariant === "gemini"
+    ? ["low", "medium", "high"]
+    : ["anthropic-adaptive", "responses"].includes(draft.apiVariant)
+      ? ["low", "medium", "high", "max"]
+      : ["high", "max"];
   const effortHint = effortSupported
     ? (draft.thinkingMode === "enabled" ? undefined : t("settings.thinkingEffort.requiresEnabled"))
     : t("settings.thinkingEffort.unsupportedHint");
@@ -761,8 +771,7 @@ export function ModelDraftFields({
           <option value="disabled">{t("settings.thinkingMode.disabled")}</option>
         </select></label>
         <label><span>{t("settings.thinkingEffort")}</span><select disabled={draft.thinkingMode !== "enabled" || !effortSupported} value={draft.thinkingEffort} onChange={(event) => onChange({ thinkingEffort: event.target.value as ModelThinkingEffort })}>
-          <option value="high">{t("settings.thinkingEffort.high")}</option>
-          <option value="max">{t("settings.thinkingEffort.max")}</option>
+          {effortOptions.map((effort) => <option key={effort} value={effort}>{t(`settings.thinkingEffort.${effort}`)}</option>)}
         </select></label>
       </div>
       {effortHint ? <small className={effortSupported ? "model-editor-hint" : "model-editor-hint warning"}>{effortHint}</small> : null}
@@ -1051,6 +1060,8 @@ export function App() {
   // rejected with 401, and is handed the Connection settings dialog.
   const [token, setToken] = useState(() => readRenamedStorageItem(localStorage, TOKEN_STORAGE_KEY) ?? "");
   const [models, setModels] = useState<ModelProfile[]>([]);
+  const [modelProviders, setModelProviders] = useState<ModelProvider[]>([]);
+  const [modelProviderPresets, setModelProviderPresets] = useState<ModelProviderPreset[]>([]);
   const [connectors, setConnectors] = useState<ConnectorManifest[]>([]);
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
   const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
@@ -1346,6 +1357,7 @@ export function App() {
     let active = true;
     void Promise.all([
       client.listModels(),
+      client.listProviders(),
       client.listConnectors(),
       client.listSkills(),
       client.listSkillLibraries(),
@@ -1355,9 +1367,11 @@ export function App() {
       client.getSandboxNetworkSettings(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
+    ]).then(([modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
       if (!active) return;
       setModels(modelItems);
+      setModelProviders(providerRegistry.providers);
+      setModelProviderPresets(providerRegistry.presets);
       setConnectors(connectorItems);
       setSkills(skillItems);
       setSkillLibraries(skillLibraryItems);
@@ -1672,6 +1686,7 @@ export function App() {
     void Promise.all([
       client.listProjects(),
       client.listModels(),
+      client.listProviders(),
       client.listConnectors(),
       client.listSkills(),
       client.listSkillLibraries(),
@@ -1684,9 +1699,11 @@ export function App() {
       client.listMcpSources(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([projectItems, modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
+    ]).then(([projectItems, modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
       setProjects(projectItems);
       setModels(modelItems);
+      setModelProviders(providerRegistry.providers);
+      setModelProviderPresets(providerRegistry.presets);
       setConnectors(connectorItems);
       setSkills(skillItems);
       setSkillLibraries(skillLibraryItems);
@@ -2486,6 +2503,19 @@ export function App() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("error.updateSession"));
     }
+  }
+
+  async function updateConversationModel(modelId: string): Promise<void> {
+    const nextModel = models.find((model) => model.id === modelId);
+    const controls = modelThinkingControls(nextModel, modelProviders);
+    const currentMode = session?.thinkingMode ?? nextModel?.thinkingMode ?? "auto";
+    const currentEffort = session?.thinkingEffort ?? nextModel?.thinkingEffort ?? "high";
+    const changes: UpdateSessionRequest = { modelId };
+    if (!controls.supported || !controls.modes.includes(currentMode)) changes.thinkingMode = "auto";
+    if (controls.efforts.length && !controls.efforts.includes(currentEffort)) {
+      changes.thinkingEffort = controls.efforts.includes("high") ? "high" : controls.efforts[0];
+    }
+    await updateSessionSettings(changes);
   }
 
   function reconcilePermissionSnapshots(
@@ -3506,6 +3536,13 @@ export function App() {
 
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const activeModel = models.find((item) => item.id === session?.modelId);
+  const activeThinkingControls = modelThinkingControls(activeModel, modelProviders);
+  const requestedThinkingMode = session?.thinkingMode ?? activeModel?.thinkingMode ?? "auto";
+  const requestedThinkingEffort = session?.thinkingEffort ?? activeModel?.thinkingEffort ?? "high";
+  const activeThinkingMode = activeThinkingControls.modes.includes(requestedThinkingMode) ? requestedThinkingMode : "auto";
+  const activeThinkingEffort = activeThinkingControls.efforts.includes(requestedThinkingEffort)
+    ? requestedThinkingEffort
+    : activeThinkingControls.efforts.includes("high") ? "high" : activeThinkingControls.efforts[0] ?? "high";
   const visionModels = models.filter((item) => item.vision);
   const latestExecution = executionRuns.at(-1);
   const latestEnvironmentRevision = environmentRevisions.find((revision) => revision.id === latestExecution?.environmentRevisionId);
@@ -4101,11 +4138,35 @@ export function App() {
                   <div className="composer-footer">
                     <label className="task-model-picker">
                       <span><i className="live-dot" />{t("composer.taskModel")}</span>
-                      <select value={session.modelId ?? ""} onChange={(event) => void updateSessionSettings({ modelId: event.target.value })} disabled={isRunning || sessionArchived || !models.length} aria-label={t("composer.modelAria")}>
+                      <select value={session.modelId ?? ""} onChange={(event) => void updateConversationModel(event.target.value)} disabled={isRunning || sessionArchived || !models.length} aria-label={t("composer.modelAria")}>
                         {!session.modelId ? <option value="">{t("composer.noModel")}</option> : null}
                         {models.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, models)}</option>)}
                       </select>
                     </label>
+                    {activeThinkingControls.supported ? <div className="conversation-thinking-picker">
+                      <label>
+                        <span>{t("composer.thinking")}</span>
+                        <select
+                          aria-label={t("composer.thinkingAria")}
+                          disabled={isRunning || sessionArchived}
+                          onChange={(event) => void updateSessionSettings({ thinkingMode: event.target.value as ModelThinkingMode })}
+                          value={activeThinkingMode}
+                        >
+                          {activeThinkingControls.modes.map((mode) => <option key={mode} value={mode}>{t(`settings.thinkingMode.${mode}`)}</option>)}
+                        </select>
+                      </label>
+                      {activeThinkingMode === "enabled" && activeThinkingControls.efforts.length ? <label>
+                        <span>{t("composer.thinkingEffort")}</span>
+                        <select
+                          aria-label={t("composer.thinkingEffortAria")}
+                          disabled={isRunning || sessionArchived}
+                          onChange={(event) => void updateSessionSettings({ thinkingEffort: event.target.value as ModelThinkingEffort })}
+                          value={activeThinkingEffort}
+                        >
+                          {activeThinkingControls.efforts.map((effort) => <option key={effort} value={effort}>{t(`settings.thinkingEffort.${effort}`)}</option>)}
+                        </select>
+                      </label> : null}
+                    </div> : null}
                     <span className="composer-hint" title={t("composer.keyboardHint")}>{t("composer.keyboardHint")}</span>
                     <div className="orchestration-controls">
                       <ConnectorPicker
@@ -4456,6 +4517,19 @@ export function App() {
               /> : null}
               {systemSettingsGroup === "models" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.providerConfiguration")}</span><h3>{t("settings.modelRegistry")}</h3><p>{t("settings.modelHelp")}</p></div>
+                <ProviderModelSettings
+                  client={client}
+                  models={models}
+                  onError={reportSystemSettingsError}
+                  onModelsChange={setModels}
+                  onNotice={(message, detail) => pushToast("success", message, detail)}
+                  onProvidersChange={setModelProviders}
+                  presets={modelProviderPresets}
+                  providers={modelProviders}
+                  proxySettings={proxySettings}
+                />
+                <details className="provider-advanced-profiles">
+                  <summary><strong>{t("providers.advancedProfiles")}</strong><small>{t("providers.advancedProfiles.help")}</small></summary>
                 <div className="model-list-header"><span>{t("settings.configuredModels")}</span><button className="secondary-button compact-button" type="button" onClick={startNewModel}>{t("settings.addModel")}</button></div>
                 <div className="model-list">
                   {models.map((item) => {
@@ -4510,6 +4584,7 @@ export function App() {
                   </div>
                 </form>
                 <div className="config-note">{t("settings.modelStorageNote")}</div>
+                </details>
               </> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings

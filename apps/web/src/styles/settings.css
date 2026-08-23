@@ -592,6 +592,59 @@
 .credential-remove { width: 100%; min-height: 38px; margin: -8px 0 18px; border: 1px solid var(--danger-border); border-radius: 8px; background: var(--surface); color: var(--danger); padding: 8px 11px; cursor: pointer; font-size: 13px; font-weight: 650; }
 .credential-remove:hover, .credential-remove.pending { background: var(--danger-soft); }
 
+.provider-settings { display: grid; gap: 22px; min-width: 0; }
+.provider-settings h4, .provider-settings p { margin: 0; }
+.provider-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.provider-section-heading h4, .provider-registry > h4 { color: var(--text-heading); font-size: 14px; }
+.provider-section-heading p { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.provider-presets, .provider-registry, .provider-editor, .provider-model-catalog { display: grid; gap: 12px; min-width: 0; }
+.provider-preset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.provider-preset-card { display: grid; min-width: 0; gap: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); padding: 10px 11px; color: var(--text-heading); cursor: pointer; text-align: left; }
+.provider-preset-card:hover, .provider-preset-card.active { border-color: var(--accent-border); background: var(--accent-soft); }
+.provider-preset-card strong, .provider-preset-card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-preset-card strong { font-size: 12px; }
+.provider-preset-card small { color: var(--muted); font-size: 10px; }
+.provider-registry-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.provider-registry-card { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 10px; cursor: pointer; text-align: left; }
+.provider-registry-card:hover, .provider-registry-card.active { border-color: var(--accent-border); background: var(--accent-soft); }
+.provider-registry-card strong, .provider-registry-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-registry-card strong { color: var(--text-heading); font-size: 12px; }
+.provider-registry-card small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.provider-registry-card em { border-radius: 999px; background: var(--surface-track); padding: 3px 6px; color: var(--text-secondary); font-size: 9px; font-style: normal; white-space: nowrap; }
+.provider-editor { border: 1px solid var(--accent-border-soft); border-radius: 10px; background: var(--accent-softer); padding: 14px; }
+.provider-editor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.provider-editor-primary, .provider-advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.provider-editor label, .provider-manual-model label { display: grid; gap: 5px; min-width: 0; }
+.provider-editor label > span, .provider-manual-model label > span { color: var(--text-heading); font-size: 11px; font-weight: 700; }
+.provider-editor input, .provider-editor select, .provider-manual-model input { width: 100%; min-height: 39px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); padding: 7px 9px; }
+.provider-editor .credential-remove { width: fit-content; min-height: 31px; margin: -3px 0 0; padding: 5px 9px; font-size: 11px; }
+.provider-advanced { border-top: 1px solid var(--accent-border-soft); padding-top: 10px; }
+.provider-advanced > summary, .provider-advanced-profiles > summary { color: var(--accent-ink); cursor: pointer; font-size: 12px; font-weight: 750; }
+.provider-advanced-grid { margin-top: 12px; }
+.provider-token-optional { display: flex !important; align-items: center; gap: 8px; }
+.provider-token-optional input { width: 18px; min-height: 18px; height: 18px; accent-color: var(--accent); }
+.provider-model-catalog { border-top: 1px solid var(--border); padding-top: 20px; }
+.provider-list-source { color: var(--text-faint); font-size: 10px; }
+.provider-discovery-error { display: grid; gap: 4px; border-left: 3px solid var(--danger-bright); background: var(--danger-soft); padding: 10px 12px; color: var(--danger); font-size: 11px; line-height: 1.45; }
+.provider-manual-model { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.provider-model-list { display: grid; gap: 8px; }
+.provider-model-card { display: grid; gap: 9px; min-width: 0; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); padding: 12px; }
+.provider-model-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.provider-model-card header > div { display: grid; min-width: 0; gap: 3px; }
+.provider-model-card strong { color: var(--text-heading); font-size: 13px; }
+.provider-model-card code { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.provider-model-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0; }
+.provider-model-facts > div { min-width: 0; border-radius: 6px; background: var(--surface); padding: 7px; }
+.provider-model-facts dt { color: var(--text-faint); font-size: 9px; text-transform: uppercase; }
+.provider-model-facts dd { overflow-wrap: anywhere; margin: 3px 0 0; color: var(--text-secondary); font-size: 10px; font-weight: 650; }
+.provider-model-facts .provider-model-price { grid-column: span 2; }
+.provider-model-sources { display: flex; flex-wrap: wrap; gap: 5px 10px; }
+.provider-model-sources a { color: var(--accent-ink); font-size: 10px; }
+.provider-price-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.provider-advanced-profiles { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px; }
+.provider-advanced-profiles > summary { display: grid; gap: 3px; }
+.provider-advanced-profiles > summary small { color: var(--muted); font-weight: 500; }
+
 .scoped-settings { margin: 22px 0 28px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); }
 .scoped-settings label { margin: 0; }
 .settings-field, .settings-array { display: block; margin: 0 0 18px; }

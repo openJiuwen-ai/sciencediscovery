@@ -67,6 +67,9 @@
   .composer-footer { align-items: stretch; flex-direction: column; }
   .task-model-picker { align-items: stretch; flex-direction: column; }
   .task-model-picker select { width: 100%; max-width: none; }
+  .conversation-thinking-picker { width: 100%; }
+  .conversation-thinking-picker label { flex: 1 1 0; }
+  .conversation-thinking-picker select { width: 100%; max-width: none; }
   .composer-run-actions { width: 100%; flex-direction: column; }
   .send-button { width: 100%; }
   .trust-metrics { grid-template-columns: repeat(2, 1fr); }
@@ -78,6 +81,11 @@
   .settings-group-nav { max-width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
   .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
   .settings-group-detail { padding: 22px 18px 30px; }
+  .provider-preset-grid, .provider-registry-list, .provider-editor-primary, .provider-advanced-grid { grid-template-columns: minmax(0, 1fr); }
+  .provider-model-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .provider-section-heading { align-items: stretch; flex-direction: column; }
+  .provider-editor-actions { justify-content: stretch; }
+  .provider-editor-actions button { flex: 1 1 120px; }
   .skill-library-grid { grid-template-columns: minmax(0, 1fr); }
   .skill-library-catalog { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--border); }
   .skill-library-create, .skill-library-diff-controls, .skill-library-diff { grid-template-columns: minmax(0, 1fr); }

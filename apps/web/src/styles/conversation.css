@@ -122,6 +122,9 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .task-model-picker > span { display: flex; align-items: center; flex: 0 0 auto; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .task-model-picker select { min-width: 120px; max-width: 320px; min-height: 36px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--surface-subtle); color: var(--text-heading); padding: 6px 30px 6px 9px; font-size: 13px; }
 .task-model-picker select:disabled { opacity: .65; }
+.conversation-thinking-picker { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.conversation-thinking-picker label { display: grid; gap: 2px; color: var(--muted); font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.conversation-thinking-picker select { min-width: 78px; max-width: 105px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); padding: 4px 6px; color: var(--text-heading); font-size: 11px; text-transform: none; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success-bright); }
 .send-button { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 8px 14px; white-space: nowrap; }
 .composer-run-actions { display: inline-flex; align-items: center; gap: 8px; }
