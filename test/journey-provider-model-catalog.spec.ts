@@ -33,17 +33,21 @@ import {
 test.use({ locale: "zh-CN" });
 
 interface ProviderStub {
+  anthropicBodies: Array<Record<string, unknown>>;
   baseUrl: string;
   chatBodies: Array<Record<string, unknown>>;
   failListing: () => void;
   listAuth: Array<string | undefined>;
+  responsesBodies: Array<Record<string, unknown>>;
   stop: () => Promise<void>;
 }
 
 function providerStub(): Promise<ProviderStub> {
   let failListing = false;
+  const anthropicBodies: Array<Record<string, unknown>> = [];
   const chatBodies: Array<Record<string, unknown>> = [];
   const listAuth: Array<string | undefined> = [];
+  const responsesBodies: Array<Record<string, unknown>> = [];
   let sequence = 0;
   const server: Server = createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -93,6 +97,35 @@ function providerStub(): Promise<ProviderStub> {
         response.end("data: [DONE]\n\n");
         return;
       }
+      if (request.method === "POST" && request.url === "/v1/responses") {
+        responsesBodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+        response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+        response.write(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "GPT-5.5 xhigh is active." })}\n\n`);
+        response.write(`data: ${JSON.stringify({
+          type: "response.completed",
+          response: { usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 } },
+        })}\n\n`);
+        response.end("data: [DONE]\n\n");
+        return;
+      }
+      if (request.method === "POST" && request.url === "/v1/messages") {
+        anthropicBodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+        response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+        response.write(`data: ${JSON.stringify({ type: "message_start", message: { usage: { input_tokens: 6 } } })}\n\n`);
+        response.write(`data: ${JSON.stringify({
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        })}\n\n`);
+        response.write(`data: ${JSON.stringify({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Claude Haiku 4.5 legacy thinking is active." },
+        })}\n\n`);
+        response.write(`data: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 5 } })}\n\n`);
+        response.end("data: [DONE]\n\n");
+        return;
+      }
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "fixture route not found" }));
     });
@@ -100,10 +133,12 @@ function providerStub(): Promise<ProviderStub> {
 
   return new Promise((resolve, reject) => {
     server.listen(0, "127.0.0.1", () => resolve({
+      anthropicBodies,
       baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
       chatBodies,
       failListing: () => { failListing = true; },
       listAuth,
+      responsesBodies,
       stop: () => new Promise<void>((resolveStop) => {
         server.closeAllConnections?.();
         server.close(() => resolveStop());
@@ -136,8 +171,11 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  *   7. 在 600px 窄屏确认 Provider 表单、目录卡片无横向溢出且仍可操作。
  *   8. 新建会话并在对话框切换模型；不支持模型隐藏思考控件，DeepSeek 显示模式/强度，选择 enabled/max 后刷新仍保存。
  *   9. 发送一条消息并从模拟服务收到答复，核对实际请求使用所选模型且携带 DeepSeek thinking.type=enabled 与 reasoning_effort=max。
- *   10. 通过设置切换英文，确认 Provider 设置和对话内模型/思考控件的英文标签。
- * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；模型列表与 Chat Completions 均由本 spec 的 loopback mock 提供。
+ *   10. 选择 GPT-5.5，确认 UI 只提供 low/medium/high/xhigh，且 Responses wire 发送 xhigh 而非 max。
+ *   11. 选择始终推理的 Kimi K3，确认 UI 仅允许 enabled 和 low/high/max，且 wire 只发送 reasoning_effort=low。
+ *   12. 从 Anthropic 预设选择 Claude Haiku 4.5，确认自动具体化为 legacy 变种，开启后发送合法 thinking budget。
+ *   13. 通过设置切换英文，确认 Provider 设置和对话内模型/思考控件的英文标签。
+ * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；模型列表、Chat Completions、Responses 与 Anthropic Messages 均由本 spec 的 loopback mock 提供。
  * Type: mocked
  * LLM: local deterministic HTTP/SSE fixture only；不调用真实或付费模型 API。
  * WebSearch: none
@@ -412,9 +450,122 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     );
 
     await journey.step(
+      "GPT-5.5 只展示并发送合法 xhigh 强度",
+      "通过 OpenAI 预设具体化 GPT-5.5 后，对话思考强度只显示 low、medium、high、xhigh，不出现 max；选择 xhigh 后本地 Responses fixture 收到 reasoning.effort=xhigh。",
+      async () => {
+        const provider = await apiJson<ModelProvider>(page, "/api/providers", {
+          data: {
+            apiToken: "j7-openai-local-token",
+            baseUrl: stub.baseUrl,
+            modelDiscovery: "manual",
+            presetId: "openai",
+          },
+          method: "POST",
+        });
+        providerIds.push(provider.id);
+        const gpt55 = await apiJson<ModelProfile>(page, `/api/providers/${encodeURIComponent(provider.id)}/models`, {
+          data: { model: "gpt-5.5" },
+          method: "POST",
+        });
+        modelIds.push(gpt55.id);
+        await page.reload();
+        await openProjectSession(page, fixture!);
+        await page.getByLabel("本任务使用的模型").selectOption(gpt55.id);
+        await page.getByLabel("当前对话的思考模式").selectOption("enabled");
+        const effort = page.getByLabel("当前对话的思考强度");
+        expect(await effort.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
+          .toEqual(["low", "medium", "high", "xhigh"]);
+        await effort.selectOption("xhigh");
+        const run = await sendUserMessage(page, fixture!.session.id, "Verify the GPT-5.5 Responses effort.");
+        expect((await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000)).status).toBe("completed");
+        await expect(page.getByText("GPT-5.5 xhigh is active.")).toBeVisible();
+        expect(stub.responsesBodies.at(-1)?.model).toBe("gpt-5.5");
+        expect(stub.responsesBodies.at(-1)?.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+      },
+    );
+
+    await journey.step(
+      "Kimi K3 始终推理且 low 强度真实进入请求",
+      "通过 Moonshot Kimi 预设具体化 Kimi K3 后，模式只有 enabled，没有 auto/disabled；强度恰为 low、high、max。选择 low 后 Chat Completions wire 发送 reasoning_effort=low，且不发送无效 thinking.type。",
+      async () => {
+        const provider = await apiJson<ModelProvider>(page, "/api/providers", {
+          data: {
+            apiToken: "j7-kimi-local-token",
+            baseUrl: stub.baseUrl,
+            modelDiscovery: "manual",
+            presetId: "moonshot",
+          },
+          method: "POST",
+        });
+        providerIds.push(provider.id);
+        const k3 = await apiJson<ModelProfile>(page, `/api/providers/${encodeURIComponent(provider.id)}/models`, {
+          data: { model: "kimi-k3" },
+          method: "POST",
+        });
+        modelIds.push(k3.id);
+        expect(k3.apiVariant).toBe("kimi-k3");
+        await page.reload();
+        await openProjectSession(page, fixture!);
+        await page.getByLabel("本任务使用的模型").selectOption(k3.id);
+        const mode = page.getByLabel("当前对话的思考模式");
+        expect(await mode.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
+          .toEqual(["enabled"]);
+        const effort = page.getByLabel("当前对话的思考强度");
+        expect(await effort.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
+          .toEqual(["low", "high", "max"]);
+        await effort.selectOption("low");
+        const run = await sendUserMessage(page, fixture!.session.id, "Verify the Kimi K3 effort.");
+        expect((await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000)).status).toBe("completed");
+        const request = stub.chatBodies.at(-1)!;
+        expect(request.model).toBe("kimi-k3");
+        expect(request.reasoning_effort).toBe("low");
+        expect(request).not.toHaveProperty("thinking");
+      },
+    );
+
+    await journey.step(
+      "Claude Haiku 4.5 自动使用合法 legacy 思考预算",
+      "通过默认 adaptive 的 Anthropic 预设具体化 Claude Haiku 4.5 时，模型自动落为 anthropic-legacy。对话中开启思考后，Messages wire 使用 enabled+budget_tokens，且不发送仅 adaptive 支持的 output_config。",
+      async () => {
+        const provider = await apiJson<ModelProvider>(page, "/api/providers", {
+          data: {
+            apiToken: "j7-anthropic-local-token",
+            baseUrl: stub.baseUrl,
+            modelDiscovery: "manual",
+            presetId: "anthropic",
+          },
+          method: "POST",
+        });
+        providerIds.push(provider.id);
+        const haiku = await apiJson<ModelProfile>(page, `/api/providers/${encodeURIComponent(provider.id)}/models`, {
+          data: { model: "claude-haiku-4-5" },
+          method: "POST",
+        });
+        modelIds.push(haiku.id);
+        expect(haiku.apiVariant).toBe("anthropic-legacy");
+        await page.reload();
+        await openProjectSession(page, fixture!);
+        await page.getByLabel("本任务使用的模型").selectOption(haiku.id);
+        await page.getByLabel("当前对话的思考模式").selectOption("enabled");
+        await expect(page.getByLabel("当前对话的思考强度")).toHaveCount(0);
+        const run = await sendUserMessage(page, fixture!.session.id, "Verify Claude Haiku 4.5 legacy thinking.");
+        expect((await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000)).status).toBe("completed");
+        await expect(page.getByText("Claude Haiku 4.5 legacy thinking is active.")).toBeVisible();
+        const request = stub.anthropicBodies.at(-1)!;
+        expect(request.model).toBe("claude-haiku-4-5");
+        expect(request.thinking).toMatchObject({ type: "enabled" });
+        expect((request.thinking as { budget_tokens: number }).budget_tokens).toBeGreaterThan(0);
+        expect((request.thinking as { budget_tokens: number }).budget_tokens).toBeLessThan(request.max_tokens as number);
+        expect(request).not.toHaveProperty("output_config");
+      },
+    );
+
+    await journey.step(
       "设置与对话控件提供英文界面",
       "在系统设置的语言页选择 English 并保存关闭；对话区显示 Model for this task、Thinking mode for this conversation 和 Thinking effort for this conversation，重新打开模型注册表可见 Common providers、Custom provider 与 Provider model catalog。",
       async () => {
+        await page.getByLabel("本任务使用的模型").selectOption(deepseekModelId);
+        await page.getByLabel("当前对话的思考模式").selectOption("enabled");
         const dialog = await openModelRegistry();
         await dialog.getByRole("navigation", { name: "设置分组" })
           .getByRole("button", { name: /^语言/ })
