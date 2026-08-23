@@ -63,8 +63,32 @@ test("custom Responses endpoints use dialect capabilities without inventing cata
     apiProtocol: "openai-responses",
     apiVariant: "responses",
   }), []), {
-    efforts: ["low", "medium", "high", "max"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     modes: ["auto", "enabled", "disabled"],
+    supported: true,
+  });
+});
+
+test("known OpenAI and Kimi models expose only legal model-level controls", () => {
+  const openai = { id: "openai-provider", presetId: "openai" } as ModelProvider;
+  const gpt55 = modelThinkingControls(profile({
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    model: "gpt-5.5",
+    providerId: openai.id,
+  }), [openai]);
+  assert.deepEqual(gpt55.efforts, ["low", "medium", "high", "xhigh"]);
+  assert.equal(gpt55.efforts.includes("max"), false);
+
+  const moonshot = { id: "moonshot-provider", presetId: "moonshot" } as ModelProvider;
+  assert.deepEqual(modelThinkingControls(profile({
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "kimi-k3",
+    model: "kimi-k3",
+    providerId: moonshot.id,
+  }), [moonshot]), {
+    efforts: ["low", "high", "max"],
+    modes: ["enabled"],
     supported: true,
   });
 });

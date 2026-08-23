@@ -95,6 +95,7 @@ import type {
   WorkspaceFile,
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
+import { constrainCatalogThinking, lookupModelCatalog } from "@sciencediscovery/schema";
 import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificArtifactKind, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 
@@ -721,20 +722,33 @@ export function ModelDraftFields({
     : draft.apiProtocol === "openai-responses"
       ? t("settings.baseUrl.responses")
       : t("settings.baseUrl.chatCompletions");
-  const effortSupported = [
+  const catalogThinking = lookupModelCatalog(draft.model)?.thinking;
+  const effortSupported = catalogThinking?.supported ?? [
     "anthropic-adaptive",
     "anthropic-legacy",
     "deepseek",
     "gemini",
+    "kimi-k3",
     "responses",
   ].includes(draft.apiVariant);
-  const effortOptions: ModelThinkingEffort[] = draft.apiVariant === "gemini"
-    ? ["low", "medium", "high"]
-    : ["anthropic-adaptive", "responses"].includes(draft.apiVariant)
-      ? ["low", "medium", "high", "max"]
-      : ["high", "max"];
+  const effortOptions: ModelThinkingEffort[] = catalogThinking?.efforts
+    ?? (draft.apiVariant === "gemini"
+      ? ["low", "medium", "high"]
+      : draft.apiVariant === "responses"
+        ? ["low", "medium", "high", "xhigh", "max"]
+        : draft.apiVariant === "anthropic-adaptive"
+          ? ["low", "medium", "high", "max"]
+          : draft.apiVariant === "kimi-k3"
+            ? ["low", "high", "max"]
+            : ["high", "max"]);
+  const modeOptions: ModelThinkingMode[] = catalogThinking?.modes
+    ?? (draft.apiVariant === "kimi-k3" ? ["auto", "enabled"] : ["auto", "enabled", "disabled"]);
+  const constrainedDraftThinking = constrainCatalogThinking(draft.model, draft.thinkingMode, draft.thinkingEffort);
+  const displayedThinkingMode = modeOptions.includes(draft.thinkingMode)
+    ? draft.thinkingMode
+    : constrainedDraftThinking.mode;
   const effortHint = effortSupported
-    ? (draft.thinkingMode === "enabled" ? undefined : t("settings.thinkingEffort.requiresEnabled"))
+    ? (displayedThinkingMode === "enabled" ? undefined : t("settings.thinkingEffort.requiresEnabled"))
     : t("settings.thinkingEffort.unsupportedHint");
   return <>
     <section className="model-editor-section">
@@ -765,12 +779,10 @@ export function ModelDraftFields({
     <section className="model-editor-section">
       <h4>{t("settings.modelSection.thinking")}</h4>
       <div className="model-editor-row">
-        <label><span>{t("settings.thinkingMode")}</span><select value={draft.thinkingMode} onChange={(event) => onChange({ thinkingMode: event.target.value as ModelThinkingMode })}>
-          <option value="auto">{t("settings.thinkingMode.auto")}</option>
-          <option value="enabled">{t("settings.thinkingMode.enabled")}</option>
-          <option value="disabled">{t("settings.thinkingMode.disabled")}</option>
+        <label><span>{t("settings.thinkingMode")}</span><select value={displayedThinkingMode} onChange={(event) => onChange({ thinkingMode: event.target.value as ModelThinkingMode })}>
+          {modeOptions.map((mode) => <option key={mode} value={mode}>{t(`settings.thinkingMode.${mode}`)}</option>)}
         </select></label>
-        <label><span>{t("settings.thinkingEffort")}</span><select disabled={draft.thinkingMode !== "enabled" || !effortSupported} value={draft.thinkingEffort} onChange={(event) => onChange({ thinkingEffort: event.target.value as ModelThinkingEffort })}>
+        <label><span>{t("settings.thinkingEffort")}</span><select disabled={displayedThinkingMode !== "enabled" || !effortSupported} value={effortOptions.includes(draft.thinkingEffort) ? draft.thinkingEffort : constrainedDraftThinking.effort} onChange={(event) => onChange({ thinkingEffort: event.target.value as ModelThinkingEffort })}>
           {effortOptions.map((effort) => <option key={effort} value={effort}>{t(`settings.thinkingEffort.${effort}`)}</option>)}
         </select></label>
       </div>
@@ -2510,10 +2522,11 @@ export function App() {
     const controls = modelThinkingControls(nextModel, modelProviders);
     const currentMode = session?.thinkingMode ?? nextModel?.thinkingMode ?? "auto";
     const currentEffort = session?.thinkingEffort ?? nextModel?.thinkingEffort ?? "high";
+    const constrained = constrainCatalogThinking(nextModel?.model ?? "", currentMode, currentEffort);
     const changes: UpdateSessionRequest = { modelId };
-    if (!controls.supported || !controls.modes.includes(currentMode)) changes.thinkingMode = "auto";
+    if (!controls.supported || !controls.modes.includes(currentMode)) changes.thinkingMode = constrained.mode;
     if (controls.efforts.length && !controls.efforts.includes(currentEffort)) {
-      changes.thinkingEffort = controls.efforts.includes("high") ? "high" : controls.efforts[0];
+      changes.thinkingEffort = constrained.effort;
     }
     await updateSessionSettings(changes);
   }
@@ -3539,10 +3552,13 @@ export function App() {
   const activeThinkingControls = modelThinkingControls(activeModel, modelProviders);
   const requestedThinkingMode = session?.thinkingMode ?? activeModel?.thinkingMode ?? "auto";
   const requestedThinkingEffort = session?.thinkingEffort ?? activeModel?.thinkingEffort ?? "high";
-  const activeThinkingMode = activeThinkingControls.modes.includes(requestedThinkingMode) ? requestedThinkingMode : "auto";
+  const constrainedActiveThinking = constrainCatalogThinking(activeModel?.model ?? "", requestedThinkingMode, requestedThinkingEffort);
+  const activeThinkingMode = activeThinkingControls.modes.includes(requestedThinkingMode)
+    ? requestedThinkingMode
+    : constrainedActiveThinking.mode;
   const activeThinkingEffort = activeThinkingControls.efforts.includes(requestedThinkingEffort)
     ? requestedThinkingEffort
-    : activeThinkingControls.efforts.includes("high") ? "high" : activeThinkingControls.efforts[0] ?? "high";
+    : constrainedActiveThinking.effort;
   const visionModels = models.filter((item) => item.vision);
   const latestExecution = executionRuns.at(-1);
   const latestEnvironmentRevision = environmentRevisions.find((revision) => revision.id === latestExecution?.environmentRevisionId);

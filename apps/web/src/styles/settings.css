@@ -638,6 +638,7 @@
 .provider-model-facts dt { color: var(--text-faint); font-size: 9px; text-transform: uppercase; }
 .provider-model-facts dd { overflow-wrap: anywhere; margin: 3px 0 0; color: var(--text-secondary); font-size: 10px; font-weight: 650; }
 .provider-model-facts .provider-model-price { grid-column: span 2; }
+.provider-model-price-periods { display: grid; gap: 3px; }
 .provider-model-sources { display: flex; flex-wrap: wrap; gap: 5px 10px; }
 .provider-model-sources a { color: var(--accent-ink); font-size: 10px; }
 .provider-price-note { color: var(--muted); font-size: 10px; line-height: 1.45; }

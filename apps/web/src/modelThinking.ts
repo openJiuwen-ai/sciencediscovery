@@ -54,11 +54,13 @@ export function modelThinkingControls(
     return { efforts: [], modes: [], supported: false };
   }
   const modes = catalog?.thinking?.modes
-    ?? (variant === "gemini" ? ["auto", "enabled"] : DEFAULT_MODES);
+    ?? (["gemini", "kimi-k3"].includes(variant) ? ["auto", "enabled"] : DEFAULT_MODES);
   let efforts = catalog?.thinking?.efforts ?? [];
   if (!catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(variant)) {
     if (variant === "gemini") efforts = ["low", "medium", "high"];
-    else if (variant === "anthropic-adaptive" || variant === "responses") efforts = ["low", "medium", "high", "max"];
+    else if (variant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
+    else if (variant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
+    else if (variant === "kimi-k3") efforts = ["low", "high", "max"];
     else efforts = ["high", "max"];
   }
   return { efforts: [...efforts], modes: [...modes], supported: true };

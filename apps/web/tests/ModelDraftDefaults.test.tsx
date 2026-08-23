@@ -169,3 +169,37 @@ test("unsupported effort is disabled with an explicit reason, not a cryptic labe
   const chinese = renderFields("zh-CN", { ...EMPTY_MODEL_DRAFT, thinkingMode: "enabled" });
   assert.match(chinese, /<small class="model-editor-hint warning">此变种没有强度字段——不会发送思考强度。<\/small>/);
 });
+
+test("known Kimi K3 and GPT-5.5 drafts render only legal thinking choices", () => {
+  const k3 = renderFields("en", {
+    ...EMPTY_MODEL_DRAFT,
+    apiVariant: "kimi-k3",
+    model: "kimi-k3",
+    thinkingEffort: "low",
+    thinkingMode: "enabled",
+  });
+  assert.match(k3, /<option value="low" selected="">Low<\/option>/);
+  assert.doesNotMatch(k3, /<option value="medium"/);
+  assert.doesNotMatch(k3, /<option value="disabled"/);
+
+  const gpt55 = renderFields("en", {
+    ...EMPTY_MODEL_DRAFT,
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    model: "gpt-5.5",
+    thinkingEffort: "xhigh",
+    thinkingMode: "enabled",
+  });
+  assert.match(gpt55, /<option value="xhigh" selected="">Extra high<\/option>/);
+  assert.doesNotMatch(gpt55, /<option value="max"/);
+
+  const legacyMax = renderFields("en", {
+    ...EMPTY_MODEL_DRAFT,
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    model: "gpt-5.5",
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+  });
+  assert.match(legacyMax, /<option value="xhigh" selected="">Extra high<\/option>/);
+});

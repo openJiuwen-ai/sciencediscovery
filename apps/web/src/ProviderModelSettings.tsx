@@ -102,10 +102,19 @@ function tokenCount(value: number | undefined, unknown: string): string {
   return value === undefined ? unknown : new Intl.NumberFormat().format(value);
 }
 
-function PriceSummary({ model }: { model: ProviderModelEntry }) {
+export function PriceSummary({ model }: { model: ProviderModelEntry }) {
   const { t } = useLocale();
   const pricing = model.remote?.pricing ?? model.catalog?.pricing;
   if (!pricing) return <span>{t("providers.metadata.unknown")}</span>;
+  if (pricing.periods?.length) {
+    return <span className="provider-model-price-periods">
+      {pricing.periods.map((period) => <span key={period.id}>
+        {t(`providers.metadata.pricePeriod.${period.id}`)}: {pricing.currency} {period.input} / {period.output}
+        {period.cachedInput !== undefined ? ` · ${t("providers.metadata.cachedInput")} ${period.cachedInput}` : ""}
+        {` · ${t("providers.metadata.perMillion")} · ${period.schedule}`}
+      </span>)}
+    </span>;
+  }
   return <span>
     {pricing.currency} {pricing.input} / {pricing.output} · {t("providers.metadata.perMillion")}
     {pricing.cachedInput !== undefined ? ` · ${t("providers.metadata.cachedInput")} ${pricing.cachedInput}` : ""}
