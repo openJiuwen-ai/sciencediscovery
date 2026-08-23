@@ -92,6 +92,7 @@ import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificA
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
 import { createSessionActivity } from "./run-stream/session-activity.js";
+import { groupArtifactsBySession, upsertArtifactSession } from "./artifact-session-groups.js";
 import { mergePermissionRequestSnapshot } from "./permission-state.js";
 import {
   clampWorkspaceWidth,
@@ -964,6 +965,7 @@ export function App() {
   const [session, setSession] = useState<SessionDetail>();
   const [artifacts, setArtifacts] = useState<ScientificArtifact[]>([]);
   const [artifactSessions, setArtifactSessions] = useState<Session[]>([]);
+  const [artifactSessionCatalogProjectId, setArtifactSessionCatalogProjectId] = useState<string>();
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [workspaceCapabilities, setWorkspaceCapabilities] = useState<WorkspaceCapabilities>();
   const [permissionEpoch, setPermissionEpoch] = useState<PermissionEpoch>();
@@ -1624,6 +1626,7 @@ export function App() {
       setSessions([]);
       setArtifacts([]);
       setArtifactSessions([]);
+      setArtifactSessionCatalogProjectId(undefined);
       setActiveSessionId(undefined);
       setProjectSettings(undefined);
       // Only settled once the Project list has resolved (and stayed empty).
@@ -1634,6 +1637,9 @@ export function App() {
       return () => { cancelled = true; };
     }
     setSessionsLoaded(false);
+    setArtifacts([]);
+    setArtifactSessions([]);
+    setArtifactSessionCatalogProjectId(undefined);
     void Promise.all([
       client.listSessions(activeProjectId, sessionListState),
       client.listSessions(activeProjectId, "all"),
@@ -1643,6 +1649,7 @@ export function App() {
       if (cancelled) return;
       setSessions(items);
       setArtifactSessions(allSessions);
+      setArtifactSessionCatalogProjectId(activeProjectId);
       setArtifacts(projectArtifacts);
       setProjectSettings(settings);
       // A Session named by the URL wins over the "first item" default, but
@@ -1946,6 +1953,9 @@ export function App() {
       summary,
     });
     setSessions((current) => current.map((item) => item.id === summary.id ? summary : item));
+    if (summary.projectId === activeProjectIdRef.current) {
+      setArtifactSessions((current) => upsertArtifactSession(current, summary));
+    }
     setSession((current) => current?.id === summary.id ? mergeSessionDetailWithSummary(current, summary) : current);
   }
 
@@ -1955,6 +1965,9 @@ export function App() {
       setProjects((current) => [...current, project]);
       setSessionListState("active");
       setSessions([firstSession]);
+      setArtifactSessions([firstSession]);
+      setArtifactSessionCatalogProjectId(project.id);
+      setArtifacts([]);
       setActiveProjectId(project.id);
       setActiveSessionId(firstSession.id);
       focusComposerSessionId.current = firstSession.id;
@@ -1984,6 +1997,7 @@ export function App() {
           return;
         }
         setSessions((current) => sessionListState === "archived" ? [created] : [created, ...current]);
+        setArtifactSessions((current) => upsertArtifactSession(current, created));
         if (sessionListState === "archived") setSessionListState("active");
         setActiveSessionId(created.id);
         focusComposerSessionId.current = created.id;
@@ -2609,6 +2623,7 @@ export function App() {
         setTimelineMessageIds((current) => forgetSession(current, deletionTarget.id));
         if (activeProjectId) {
           setArtifactSessions(await client.listSessions(activeProjectId, "all"));
+          setArtifactSessionCatalogProjectId(activeProjectId);
           setArtifacts(await client.listProjectArtifacts(activeProjectId));
         }
       }
@@ -3325,18 +3340,13 @@ export function App() {
   }
   const sessionArchived = Boolean(session?.archivedAt);
   const sessionPending = Boolean(activeSessionId) && session?.id !== activeSessionId;
-  const artifactGroups = [...artifacts.reduce((groups, artifact) => {
-    const liveSession = artifactSessions.find((item) => item.id === artifact.createdInSessionId);
-    const key = liveSession?.id ?? "deleted";
-    const group = groups.get(key) ?? {
-      id: key,
-      items: [] as ScientificArtifact[],
-      label: liveSession?.title ?? t("app.deletedSession"),
-    };
-    group.items.push(artifact);
-    groups.set(key, group);
-    return groups;
-  }, new Map<string, { id: string; items: ScientificArtifact[]; label: string }>()).values()];
+  const artifactGroups = groupArtifactsBySession({
+    artifacts,
+    catalogProjectId: artifactSessionCatalogProjectId,
+    deletedSessionLabel: t("app.deletedSession"),
+    projectId: activeProjectId,
+    sessions: artifactSessions,
+  });
   const visibleProjects = getVisibleProjects(projects, activeProjectId, projectsExpanded);
   const activeProjectLabel = activeProject
     ? resourceLabelWithDraft(renameTarget, renameDraft, "project", activeProject.id, activeProject.name)
