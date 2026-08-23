@@ -472,11 +472,19 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<{ body: 
 
 async function createTestModel(
   origin: string,
-  input: { apiToken?: string; baseUrl?: string; model?: string; name?: string; vision?: boolean } = {},
+  input: {
+    apiToken?: string;
+    apiVariant?: ModelProfile["apiVariant"];
+    baseUrl?: string;
+    model?: string;
+    name?: string;
+    vision?: boolean;
+  } = {},
 ): Promise<ModelProfile> {
   const result = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
     body: JSON.stringify({
       apiToken: input.apiToken ?? "test-model-token",
+      ...(input.apiVariant ? { apiVariant: input.apiVariant } : {}),
       baseUrl: input.baseUrl ?? "https://models.example.test/v1",
       model: input.model ?? "test-model",
       name: input.name ?? "Test model",
@@ -3157,6 +3165,7 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
   const toolModel = await startToolModel(context);
   const configuredModel = await createTestModel(origin, {
     apiToken: "ephemeral-test-token",
+    apiVariant: "deepseek",
     baseUrl: toolModel.baseUrl,
     model: "test-tool-model",
     name: "Tool test model",
