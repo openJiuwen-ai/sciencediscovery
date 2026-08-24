@@ -177,3 +177,49 @@ def test_a_starting_point_already_at_the_solved_threshold_is_refused(
         run_probe(judged_spec())
 
     assert "没有坡可以爬" in str(caught.value)
+
+
+def test_a_scoring_that_wobbles_as_much_as_the_damage_is_refused() -> None:
+    """Counting shards cannot answer "is this stable"; measuring can.
+
+    A deterministic evaluator is steady on three shards and a sampling one is
+    not steady on thirty, so the probe scores the *same* starting point twice
+    and compares the spread against the damage signal it already paid for.
+    """
+    from sciencediscovery_evolve.probe import ProbeError, _refuse_noisy
+
+    # The single call this makes is the repeat; baseline and damaged are passed in.
+    def evaluate(_code, _shards):
+        return True, {"score": 0.55}, ""
+
+    with pytest.raises(ProbeError) as caught:
+        # baseline 0.80, damaged 0.62 → signal 0.18; the repeat moves 0.25.
+        _refuse_noisy(evaluate, "def solve():\n    return 1\n", (0, 1, 2), 0.80, 0.62)
+
+    said = str(caught.value)
+    assert "0.8000" in said and "0.5500" in said  # both numbers, so it is checkable
+    assert "噪声" in said
+
+
+def test_a_steady_scoring_is_left_alone() -> None:
+    """The common case: a deterministic evaluator repeats exactly, on any size."""
+    from sciencediscovery_evolve.probe import _refuse_noisy
+
+    def evaluate(_code, _shards):
+        return True, {"score": 0.80}, ""
+
+    _refuse_noisy(evaluate, "def solve():\n    return 1\n", (0, 1, 2), 0.80, 0.62)
+
+
+def test_a_flat_scoring_is_not_re_measured() -> None:
+    """Already refused as flat; a second reading costs an evaluation and adds nothing."""
+    from sciencediscovery_evolve.probe import _refuse_noisy
+
+    calls = []
+
+    def evaluate(_code, _shards):
+        calls.append(1)
+        return True, {"score": 0.80}, ""
+
+    _refuse_noisy(evaluate, "code", (0,), 0.80, 0.7995)
+    assert calls == []

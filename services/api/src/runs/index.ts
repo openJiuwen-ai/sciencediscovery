@@ -990,17 +990,29 @@ async function executeAgentRun(
       },
       createEvolveRun: async (input: EvolveRunProposal) => {
         store.assertSessionWritable(sessionId);
-        const result = await startProposedRun(input, {
-          casHas: evolve.casHas,
-          model: evolve.model,
-          modelId: selectedModel.id,
-          orchestrator: evolve.orchestrator,
-          probes: evolve.probes,
-          sessionId,
-          store: evolve.store(sessionId),
-        });
-        if (result.run) await emit({ run: result.run, type: "evolve_run.created" });
-        return result;
+        // The probe runs real evaluations in the sandbox — two or three, each
+        // with the candidate timeout as its ceiling. That is minutes, and the
+        // agent's idle clock is four: without pausing it the turn dies with
+        // "no gateway progress" while the probe is doing exactly what it was
+        // asked to do, and the design work of the whole turn is lost. Same
+        // treatment a permission prompt gets, for the same reason — the wait is
+        // real work, not a stall.
+        const releaseWait = mainExecution?.beginExternalWait();
+        try {
+          const result = await startProposedRun(input, {
+            casHas: evolve.casHas,
+            model: evolve.model,
+            modelId: selectedModel.id,
+            orchestrator: evolve.orchestrator,
+            probes: evolve.probes,
+            sessionId,
+            store: evolve.store(sessionId),
+          });
+          if (result.run) await emit({ run: result.run, type: "evolve_run.created" });
+          return result;
+        } finally {
+          releaseWait?.();
+        }
       },
     } : {}),
     ...(remoteHosts.length ? {

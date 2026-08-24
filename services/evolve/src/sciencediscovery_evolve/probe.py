@@ -143,6 +143,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
             ) from error
         flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
         _refuse_saturated(spec, baseline)
+        _refuse_noisy(domain.evaluate, spec.baseline_code, shards, baseline, worsened)
         return {"baseline": baseline, "flat": flat,
                 "label": "把每个函数体掏空", "worsened": worsened}
 
@@ -384,3 +385,41 @@ def _script_data_dir(spec) -> Optional[str]:
         return None
     candidate = os.path.join(spec.dataset_dir, str(criteria[0].get("id") or "score"))
     return candidate if os.path.isdir(candidate) else None
+
+
+def _refuse_noisy(evaluate, baseline_code: str, shards, baseline: float,
+                  worsened: Optional[float]) -> None:
+    """Refuse a scoring that moves as much on a re-run as it does on real damage.
+
+    "Are the shards enough?" cannot be answered by counting them. A deterministic
+    evaluator is stable on three; one that samples, times, or asks a model can be
+    unstable on thirty. So it is measured: score the *same* starting point a
+    second time and compare the spread against the damage signal the probe has
+    already paid for.
+
+    When the two are comparable the tree is climbing noise. Every selection
+    afterwards is a coin flip, the run finishes, reports an improvement, and the
+    number does not survive a re-run — the most expensive way to learn nothing.
+    """
+    if worsened is None:
+        return
+    signal = abs(baseline - worsened)
+    if signal <= TOLERANCE:
+        return  # Already refused as flat; a noise reading adds nothing.
+    from .script_domain import ScriptError
+
+    try:
+        repeat = _score(evaluate, baseline_code, shards)
+    except ScriptError:
+        return  # The first measurement worked; a flaky second one is not this check's call.
+    if repeat is None:
+        return
+    noise = abs(baseline - repeat)
+    if noise < signal / 2:
+        return
+    raise ProbeError(
+        f"同一个起点评两次得到 {baseline:.4f} 和 {repeat:.4f}（差 {noise:.4f}），"
+        f"而把它改坏只让分数动了 {signal:.4f}——抖动和真实差异一样大，"
+        "搜索会在噪声上爬坡：跑完会报出一个提升，但那个数字重跑就没了。"
+        "把每一片做大，或者把评分里随机的部分固定住（定住种子、取多次的中位数）"
+    )

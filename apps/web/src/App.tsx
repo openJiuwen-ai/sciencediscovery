@@ -1181,17 +1181,21 @@ export function App() {
     }
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Backs off. A search runs for minutes to hours, and the only event this
+    // side gets is `evolve_run.created` — which arrives while the run is still
+    // `pending`, so without re-reading the card sits on "queued" for ever.
+    // But a run that has been going for half an hour does not need looking at
+    // every five seconds: the interval starts short, where the status is
+    // actually changing, and settles at a minute. Polling stops entirely as
+    // soon as nothing is active, so an idle session costs nothing.
+    let waitMs = 5_000;
     const load = () => client.listEvolveRuns(activeSessionId)
       .then((runs) => {
         if (!live) return;
         setEvolveRuns(runs);
-        // A search runs for minutes after the turn that started it ends, and
-        // the only event this side gets is `evolve_run.created` — which arrives
-        // while the run is still `pending`. Without this the card sits on
-        // "queued" for the whole run and then for ever after, whether the
-        // search is healthy, finished, or wedged. Polling stops as soon as
-        // nothing is active, so an idle session costs nothing.
-        if (runs.some((run) => isEvolveRunActive(run.status))) timer = setTimeout(load, 5_000);
+        if (!runs.some((run) => isEvolveRunActive(run.status))) return;
+        timer = setTimeout(load, waitMs);
+        waitMs = Math.min(waitMs * 2, 60_000);
       })
       // A session with no runs is the common case and 404s nothing; a failure
       // here must not take the workspace panel down with it.
