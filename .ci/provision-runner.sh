@@ -123,10 +123,13 @@ pnpm_spec="$(node -p "require('./package.json').packageManager || 'pnpm@latest'"
 # prefix. When CI supplies an npm-compatible registry, installing the pinned
 # package tarball directly avoids both failure modes and stays under $PNPM_HOME.
 install_pnpm_from_registry() {
-  local registry="$1" version="${pnpm_spec#pnpm@}" archive install_dir
+  local registry="$1" version="${pnpm_spec#pnpm@}" archive install_dir expected_sha512 actual_sha512
   case "$version" in
-    ""|*[!0-9A-Za-z.+-]*)
-      echo "direct registry install does not support pnpm version '$version'" >&2
+    11.1.2)
+      expected_sha512=415a1cc25974731e75455c1468371be74c5aa5fb7621b50d4056d222451609f11412f23fd602e6169f1e060466641f798597e1be961a10688836a67b16569499
+      ;;
+    *)
+      echo "direct registry install has no pinned checksum for pnpm '$version'" >&2
       return 1
       ;;
   esac
@@ -141,6 +144,12 @@ install_pnpm_from_registry() {
   elif have wget; then
     wget -O "$archive" "${registry%/}/pnpm/-/pnpm-$version.tgz" || return 1
   else
+    return 1
+  fi
+  have sha512sum || return 1
+  actual_sha512="$(sha512sum "$archive" | awk '{print $1}')" || return 1
+  if [ "$actual_sha512" != "$expected_sha512" ]; then
+    echo "pnpm tarball checksum mismatch: expected $expected_sha512, got $actual_sha512" >&2
     return 1
   fi
   tar -xzf "$archive" -C "$install_dir" --strip-components=1 || return 1
