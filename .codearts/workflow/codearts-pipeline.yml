@@ -378,7 +378,7 @@ stages:
         - name: code_check
           uses: official_devcloud_subPipeline
           with:
-            PR_ID: "${PR_ID}"
+            PR_ID: "${MERGE_ID}"
             repo_url: "${REPO_URL}"
             branch: "${test-agentcore_REPOSITORY_BRANCH}"
             repo_name: "${test-agentcore_REPOSITORY_NAME}"
@@ -387,11 +387,11 @@ stages:
             webhook_payload: "${WEBHOOK_PAYLOAD}"
             __sameProject__: "true"
             __projectId__: ""
-            SYSTEM_DEVCLOUD_SUBPIPELINE_TRIGGER_ID: 3a80cbaf5dec4e0b8804ce1401787f5f
+            SYSTEM_DEVCLOUD_SUBPIPELINE_TRIGGER_ID: 2dce32a1e91949d4872f6d10a9d86b2e
             SYSTEM_DEVCLOUD_SUBPIPELINE_BRANCH: PARENT
             SYSTEM_DEVCLOUD_SUBPIPELINE_EXECUTE_BRANCH: ""
-            _OFFICIAL_DEVCLOUD_JOB_NAME_: sciencediscovery-jiuwen-check
-            _OFFICIAL_DEVCLOUD_JOB_VERSION_: 4.0
+            _OFFICIAL_DEVCLOUD_JOB_NAME_: sciencediscovery-jiuwen-codecheck
+            _OFFICIAL_DEVCLOUD_JOB_VERSION_: 3.0
           identifier: 1787572530852dd5a9499-1b45-4378-bf48-082dc7948978
         if: "${{ pipeline.trigger_type == 'MR' || inputs.PR_ID != '' }}"
         runs-on:
