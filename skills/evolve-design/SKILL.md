@@ -2,7 +2,7 @@
 name: evolve-design
 description: Use when the user wants to improve something by repeated search rather than one edit — a program, a prompt, a document, a pipeline, a configuration, an experimental protocol. Triggers on `/evolve`, "把这个做得更好", "搜索一个更好的方案", or any request to optimise against a measurable target. Walks through agreeing what "better" means, verifies the scoring can rank candidates, then calls `create_evolve_run`. Not for a single fix, a refactor, or a question about existing code.
 metadata:
-  version: 2.0.0
+  version: 1.0.0
 ---
 
 # Designing an evolution search
