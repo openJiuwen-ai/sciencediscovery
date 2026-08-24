@@ -565,6 +565,7 @@ async function executeAgentRun(
     return { references, claimIds: claimIdsDrained };
   };
   let assistantText = "";
+  let turnTruncated = false;
   let workspaceSnapshot = new Map<string, string>();
   let workspaceRefreshQueue = Promise.resolve();
   const flushWorkspaceRefresh = async () => {
@@ -1453,6 +1454,7 @@ async function executeAgentRun(
         type: "assistant.thinking.delta",
       });
     }
+    if (event.type === "turn_truncated") turnTruncated = true;
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       assistantText += event.assistantMessageEvent.delta;
       void emit({ delta: event.assistantMessageEvent.delta, type: "assistant.delta" });
@@ -1529,7 +1531,17 @@ async function executeAgentRun(
     await flushWorkspaceRefresh();
     assertRunActive();
     await persistObservedTimeouts();
-    if (!assistantText) assistantText = "The run completed without a text response.";
+    if (!assistantText) {
+      // A reasoning model can spend the whole per-call budget on hidden thought
+      // and come back with neither text nor a tool call. Saying "completed
+      // without a text response" describes that as a non-event and sends the
+      // reader looking for a bug; saying it was cut at the limit names the one
+      // knob that fixes it.
+      assistantText = turnTruncated
+        ? "模型这一轮把整个 token 额度用在了思考上，被 max_tokens 截断，没能输出正文。"
+          + "把 SCIENCE_AGENT_LLM_MAX_TOKENS 调大（默认 16384）再试。"
+        : "The run completed without a text response.";
+    }
     promptManifest = await createPromptManifest({
       cas: provenanceRecorder.cas,
       messages: promptMessages,

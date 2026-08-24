@@ -371,6 +371,8 @@ class NativeAgent implements NativeAgentHandle {
         });
         break;
       case "completed":
+        if (event.truncated) this.emit({ type: "turn_truncated" });
+        break;
       case "state_changed":
         break;
     }

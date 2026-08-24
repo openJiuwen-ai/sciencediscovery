@@ -15,7 +15,10 @@ export type AgentEvent =
   | { type: "model_usage"; usage?: ModelUsage; usageReported: boolean }
   | { args: Record<string, unknown>; toolCallId: string; toolName: string; type: "tool_execution_start" }
   | { isError: boolean; result: AgentToolResult; toolCallId: string; toolName: string; type: "tool_execution_end" }
-  | { type: "usage"; usage: SubagentUsage };
+  | { type: "usage"; usage: SubagentUsage }
+  /** The last turn was cut at `max_tokens`. Emitted only when it was, so a
+   *  consumer that ignores it behaves exactly as before. */
+  | { type: "turn_truncated" };
 
 export interface Agent {
   abort(): void;

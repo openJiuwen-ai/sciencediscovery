@@ -55,6 +55,9 @@ export interface ModelTurn<TMessage extends RuntimeMessage, TUsage> {
   assistantMessage: TMessage;
   toolCalls: RuntimeToolCall[];
   usage?: TUsage;
+  /** The provider cut this turn at `max_tokens`. Carried so a run that ends
+   *  with neither text nor a tool call can say why instead of looking idle. */
+  truncated?: boolean;
 }
 
 export interface ModelClient<TMessage extends RuntimeMessage, TModelInput, TUsage> {
@@ -129,7 +132,7 @@ export type RunEvent<TUsage> =
   | { delta: string; kind: "text" | "thinking"; type: "model_delta" }
   | { call: RuntimeToolCall; type: "tool_execution_start" }
   | { call: RuntimeToolCall; content: string; isError: boolean; type: "tool_execution_end" }
-  | { type: "completed"; usage?: TUsage };
+  | { type: "completed"; truncated?: boolean; usage?: TUsage };
 
 export type RunEventSink<TUsage> = (event: RunEvent<TUsage>) => void;
 
@@ -251,7 +254,11 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         this.state.history.push(modelTurn.assistantMessage);
         if (modelTurn.toolCalls.length === 0) {
           this.transition("completed", turn);
-          this.emit({ type: "completed", ...(usage !== undefined ? { usage } : {}) });
+          this.emit({
+            type: "completed",
+            ...(usage !== undefined ? { usage } : {}),
+            ...(modelTurn.truncated ? { truncated: true } : {}),
+          });
           return { history: structuredClone(this.state.history), turns: turn + 1, ...(usage !== undefined ? { usage } : {}) };
         }
 

@@ -65,6 +65,16 @@ export interface ModelTurn {
   assistantMessage: AgentHistoryMessage;
   toolCalls: NormalizedToolCall[];
   usage?: AgentModelUsage;
+  /**
+   * The turn hit `max_tokens` and was cut mid-sentence.
+   *
+   * Worth carrying because a reasoning model can spend the whole budget on
+   * hidden thought and return no visible text and no tool call at all — which
+   * otherwise surfaces as "the run completed without a text response", a
+   * sentence that describes a truncation as a non-event and sends the reader
+   * looking for a bug that is not there.
+   */
+  truncated?: boolean;
 }
 
 export interface ModelStreamCallbacks {
@@ -86,15 +96,24 @@ export function resolveModelClientPolicy(env: NodeJS.ProcessEnv = process.env): 
   // budget for outbound model calls.
   const timeoutRaw = env.SCIENCE_AGENT_LLM_TIMEOUT_SECONDS?.trim();
   const retriesRaw = env.SCIENCE_AGENT_LLM_MAX_RETRIES?.trim();
+  const maxTokensRaw = env.SCIENCE_AGENT_LLM_MAX_TOKENS?.trim();
   const timeoutSeconds = timeoutRaw ? Number(timeoutRaw) : 600;
   const maxRetries = retriesRaw ? Number(retriesRaw) : 2;
+  const maxTokens = maxTokensRaw ? Number(maxTokensRaw) : DEFAULT_MODEL_MAX_TOKENS;
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
     throw new Error("SCIENCE_AGENT_LLM_TIMEOUT_SECONDS must be positive");
   }
   if (!Number.isInteger(maxRetries) || maxRetries < 0) {
     throw new Error("SCIENCE_AGENT_LLM_MAX_RETRIES must be a non-negative integer");
   }
-  return { maxRetries, maxTokens: DEFAULT_MODEL_MAX_TOKENS, requestTimeoutMs: timeoutSeconds * 1_000 };
+  // A reasoning model bills its hidden thought against this same budget, so the
+  // default that is comfortable for a chat reply can be exhausted before the
+  // first visible character. Raising it is the fix; leaving it unreachable was
+  // the reason the symptom read as "the model returned nothing".
+  if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
+    throw new Error("SCIENCE_AGENT_LLM_MAX_TOKENS must be a positive integer");
+  }
+  return { maxRetries, maxTokens, requestTimeoutMs: timeoutSeconds * 1_000 };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -320,6 +339,7 @@ async function streamOpenAiTurn(
   let text = "";
   const fragments = new Map<number, OpenAiToolCallFragment>();
   let usage: AgentModelUsage | undefined;
+  let truncated = false;
 
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let chunk: Record<string, unknown>;
@@ -331,6 +351,12 @@ async function streamOpenAiTurn(
     const chunkUsage = normalizeUsage(chunk.usage);
     if (chunkUsage) usage = chunkUsage;
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+    // Read before the `delta` guard below: the chunk that carries
+    // `finish_reason` is the closing one, and it has no delta.
+    if (choices.length && isRecord(choices[0])
+      && (choices[0] as Record<string, unknown>).finish_reason === "length") {
+      truncated = true;
+    }
     const delta = choices.length && isRecord(choices[0]) && isRecord((choices[0] as Record<string, unknown>).delta)
       ? (choices[0] as { delta: Record<string, unknown> }).delta
       : undefined;
@@ -387,7 +413,7 @@ async function streamOpenAiTurn(
     content: text,
     ...(wireToolCalls.length ? { tool_calls: wireToolCalls } : {}),
   };
-  return { assistantMessage, toolCalls, ...(usage ? { usage } : {}) };
+  return { assistantMessage, toolCalls, ...(usage ? { usage } : {}), ...(truncated ? { truncated } : {}) };
 }
 
 // ── Anthropic Messages dialect (internal /api/plan endpoint) ──
@@ -482,6 +508,7 @@ async function streamAnthropicTurn(
   let text = "";
   let inputTokens = 0;
   let outputTokens = 0;
+  let truncated = false;
   let cacheReadTokens: number | null = null;
   let cacheWriteTokens: number | null = null;
   interface ToolUseState { id: string; json: string; name: string }
@@ -517,8 +544,12 @@ async function streamAnthropicTurn(
         const state = toolUses.get(event.index);
         if (state) state.json += event.delta.partial_json;
       }
-    } else if (type === "message_delta" && isRecord(event.usage)) {
-      outputTokens = numberField(event.usage, ["output_tokens"]) ?? outputTokens;
+    } else if (type === "message_delta") {
+      if (isRecord(event.usage)) {
+        outputTokens = numberField(event.usage, ["output_tokens"]) ?? outputTokens;
+      }
+      // Anthropic's equivalent of `finish_reason: "length"`.
+      if (isRecord(event.delta) && event.delta.stop_reason === "max_tokens") truncated = true;
     }
   }
 
@@ -547,6 +578,7 @@ async function streamAnthropicTurn(
     },
     toolCalls,
     usage,
+    ...(truncated ? { truncated } : {}),
   };
 }
 
