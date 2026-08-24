@@ -19,7 +19,7 @@
 #
 # Every job downloads the source-context commit with CodeArts' built-in clone
 # task before provisioning its own tools. The clone task handles repository
-# credentials and places this source at ${SHARE_PATH}/sciencediscovery.
+# credentials and places this source directly at ${SHARE_PATH}.
 #
 # Shell steps use `official_shell_plugin`, with the script under
 # `with.OFFICIAL_SHELL_SCRIPT_INPUT`. CodeArts has no GitHub-style `run:` key:
@@ -84,7 +84,7 @@ stages:
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
               set -eu
-              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}/sciencediscovery"
+              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
               echo "source directory: $SOURCE_DIR"
               if [ ! -f "$SOURCE_DIR/pnpm-workspace.yaml" ]; then
                 echo "FATAL: the download task did not create the expected source directory"
@@ -98,7 +98,7 @@ stages:
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
               set -eu
-              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}/sciencediscovery"
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
               export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_RUNTIME_DIR="$HOME/ci-runtime-ut"
@@ -124,7 +124,7 @@ stages:
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
               set -eu
-              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}/sciencediscovery"
+              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
               echo "source directory: $SOURCE_DIR"
               if [ ! -f "$SOURCE_DIR/pnpm-workspace.yaml" ]; then
                 echo "FATAL: the download task did not create the expected source directory"
@@ -140,7 +140,7 @@ stages:
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
               set -eu
-              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}/sciencediscovery"
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
               export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_RUNTIME_DIR="$HOME/ci-runtime-st"
