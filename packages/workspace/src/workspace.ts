@@ -1186,7 +1186,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         + "and against a deliberately broken copy, and check the starting point lands well inside the "
         + "range rather than at 0 or at full marks. The server runs the same discrimination probe and "
         + "refuses the run if the scoring cannot separate them, so a call that skipped this step is a "
-        + "round trip you paid for. Load the evolve-design skill first — it carries the sizing rules "
+        + "round trip you paid for. What you verify is the SCORING, never the answer: do not go "
+        + "looking for a candidate that beats the starting point first — that is this tool's entire "
+        + "job, and doing it by hand costs the turn and then forces you to either discard the result "
+        + "or seed it, which spends the search space before the search starts. Load the evolve-design "
+        + "skill first — it carries the sizing rules "
         + "and the failure modes worth knowing. Consult it, not your instincts, for how much data to "
         + "hold out.",
       execute: async (_toolCallId, params, signal) => {

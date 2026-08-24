@@ -142,7 +142,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
                 "算作答错而不是让脚本挂掉"
             ) from error
         flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
-        _refuse_saturated(spec, baseline)
+        _refuse_saturated(spec, baseline, worsened)
         _refuse_noisy(domain.evaluate, spec.baseline_code, shards, baseline, worsened)
         return {"baseline": baseline, "flat": flat,
                 "label": "把每个函数体掏空", "worsened": worsened}
@@ -212,7 +212,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
     # A damaged copy that will not run says nothing about discrimination, so it
     # is reported rather than counted as a pass.
     flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
-    _refuse_saturated(spec, baseline)
+    _refuse_saturated(spec, baseline, worsened)
     log.info("probe %s: baseline=%.4f worsened=%s flat=%s",
              spec.search_id, baseline, worsened, flat)
     return {"baseline": baseline, "flat": flat, "label": label, "worsened": worsened}
@@ -257,11 +257,11 @@ def _probe_gated(spec: RunSpec) -> Dict[str, Any]:
     worsened = _score(domain.evaluate, _hollow_out(original), groups)
 
     flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
-    _refuse_saturated(spec, baseline)
+    _refuse_saturated(spec, baseline, worsened)
     return {"baseline": baseline, "flat": flat, "label": "把每个函数体掏空", "worsened": worsened}
 
 
-def _refuse_saturated(spec: RunSpec, baseline: float) -> None:
+def _refuse_saturated(spec: RunSpec, baseline: float, worsened: Optional[float] = None) -> None:
     """A starting point already at the solved threshold has nowhere to climb.
 
     The third way a scoring scheme can be useless, next to flat and broken —
@@ -273,6 +273,7 @@ def _refuse_saturated(spec: RunSpec, baseline: float) -> None:
     """
     threshold = float(spec.scorecard.get("solvedThreshold") or 0.999)
     if baseline < threshold:
+        _refuse_thin_headroom(spec, baseline, worsened, threshold)
         return
     raise ProbeError(
         f"起点一上来就把这套评分打到了 {baseline:.4f}，已经过了「算解决」的阈值"
@@ -422,4 +423,34 @@ def _refuse_noisy(evaluate, baseline_code: str, shards, baseline: float,
         f"而把它改坏只让分数动了 {signal:.4f}——抖动和真实差异一样大，"
         "搜索会在噪声上爬坡：跑完会报出一个提升，但那个数字重跑就没了。"
         "把每一片做大，或者把评分里随机的部分固定住（定住种子、取多次的中位数）"
+    )
+
+def _refuse_thin_headroom(spec: RunSpec, baseline: float, worsened: Optional[float],
+                          threshold: float) -> None:
+    """Refuse a start with less room above it than the scoring can resolve.
+
+    Past the solved threshold is the obvious case and `_refuse_saturated` has it.
+    The quieter one is a start that is merely *close*: seen live on a SQL
+    normaliser that began at 0.8477 against a 0.999 threshold and finished with
+    `bestNodeIndex: 0` — four candidates, none of which beat the seed, because
+    there was almost nothing left to win.
+
+    Judged against the probe's own damage signal rather than a second invented
+    threshold: that signal is roughly what one real change is worth on this
+    scoring, so headroom smaller than a fraction of it means the search is
+    working inside its own measurement error. A quarter, not a half — half would
+    refuse a start at 0.7, which is inside the range the design guidance asks
+    for.
+    """
+    if worsened is None:
+        return
+    signal = abs(baseline - worsened)
+    headroom = threshold - baseline
+    if signal <= TOLERANCE or headroom >= signal / 4:
+        return
+    raise ProbeError(
+        f"起点已经拿到 {baseline:.4f}，离「算解决」的 {threshold:.3f} 只剩 {headroom:.4f}，"
+        f"而把起点改坏也才让分数动了 {signal:.4f}——能赢的空间比这套评分自己的分辨率还小，"
+        "搜索多半会以「没有候选超过起点」收场。"
+        "把样例出难一点、容差收紧，或者换一个更挑剔的指标，让起点落回 0.3–0.7 之间。"
     )

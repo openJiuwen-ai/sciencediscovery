@@ -60,6 +60,14 @@ Write the starting point and the evaluator, then use `run_python` to check three
 The evaluator must survive bad candidates: wrap each case in try/except and count it wrong. If
 the script itself crashes, nothing runs.
 
+**You are checking the ruler, not looking for the answer.** These three checks are about the
+scoring: does it run, does it separate good from bad, is there room to climb. Do not go looking
+for a candidate that beats the starting point — "let me first confirm a better heuristic exists"
+is the search's entire job, done by hand, at the cost of the turn. And succeeding is worse than
+failing: you then either throw the answer away or seed it, and a strong seed spends the search
+space before the search begins. A starting point that no obvious variation beats is a *good*
+starting point, not a problem to solve first.
+
 The server runs the same probe and refuses on failure, so skipping this only moves the discovery
 to after the budget is spent.
 

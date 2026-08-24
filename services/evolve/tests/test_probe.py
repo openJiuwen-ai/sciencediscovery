@@ -223,3 +223,48 @@ def test_a_flat_scoring_is_not_re_measured() -> None:
 
     _refuse_noisy(evaluate, "code", (0,), 0.80, 0.7995)
     assert calls == []
+
+
+def test_a_start_with_almost_nothing_left_to_win_is_refused() -> None:
+    """Close to the threshold is as useless as past it, and quieter.
+
+    Seen live: a SQL normaliser started at 0.8477 against a 0.999 threshold and
+    finished `bestNodeIndex: 0` — four candidates, none of which beat the seed.
+    Everything "worked"; there was just nothing left to win.
+    """
+    from sciencediscovery_evolve.probe import ProbeError, _refuse_thin_headroom
+
+    class _Spec:
+        scorecard = {"solvedThreshold": 0.999}
+
+    with pytest.raises(ProbeError) as caught:
+        _refuse_thin_headroom(_Spec(), 0.8477, 0.0, 0.999)
+
+    said = str(caught.value)
+    assert "0.8477" in said and "0.999" in said  # checkable numbers, not a verdict
+
+
+def test_a_start_inside_the_recommended_band_is_left_alone() -> None:
+    """0.3-0.7 is what the design guidance asks for; refusing it would be absurd."""
+    from sciencediscovery_evolve.probe import _refuse_thin_headroom
+
+    class _Spec:
+        scorecard = {"solvedThreshold": 0.999}
+
+    for baseline in (0.30, 0.45, 0.70):
+        _refuse_thin_headroom(_Spec(), baseline, 0.0, 0.999)
+
+
+def test_headroom_is_judged_against_the_scoring_s_own_resolution() -> None:
+    """A high score is fine when the scoring cannot resolve much anyway.
+
+    Judged against the damage signal rather than a second invented threshold: if
+    breaking the start only moves it 0.05, then 0.099 of headroom is two real
+    changes' worth, not a dead end.
+    """
+    from sciencediscovery_evolve.probe import _refuse_thin_headroom
+
+    class _Spec:
+        scorecard = {"solvedThreshold": 0.999}
+
+    _refuse_thin_headroom(_Spec(), 0.90, 0.85, 0.999)
