@@ -114,6 +114,7 @@ stages:
               export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
               export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
+              echo "python install mirror: $UV_PYTHON_INSTALL_MIRROR"
               for PYTHON_PROJECT in services/gateway services/paper services/memory-graph; do
                 LOCK_FILE="$PYTHON_PROJECT/uv.lock"
                 echo "retargeting $LOCK_FILE to $UV_DEFAULT_INDEX"
