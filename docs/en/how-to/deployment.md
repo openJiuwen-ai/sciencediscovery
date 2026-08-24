@@ -87,7 +87,7 @@ ScienceDiscovery help                  Show help
 
 | Option | Default | Purpose |
 |---|---|---|
-| `--data-dir <path>` | `./science-discovery-data` | Runtime data; see [Storage layout](../reference/configuration.md#storage-layout) |
+| `--data-dir <path>` | `./.sciencediscovery-data` | Runtime data; see [Storage layout](../reference/configuration.md#storage-layout) |
 | `--host <address>` | `127.0.0.1` | Web UI/API bind address |
 | `--port <port>` | `4310` | Web UI/API port |
 | `--runner-port <port>` | `4311` | Runner port (loopback only) |
@@ -106,7 +106,7 @@ The variables in [Configuration reference](../reference/configuration.md#environ
 | Node runtime | Runs the control API and runner |
 | CPython 3.12 | Relocatable distribution; no host Python needed, and it is the base interpreter for the first-launch gateway venv |
 | Web assets | Prebuilt `apps/web/dist` |
-| Gateway wheel and bootstrap pins | The `science-agent-gateway` wheel (our own code), the hash-locked dependency export, and the uv wheel pin |
+| Gateway wheel and bootstrap pins | The `sciencediscovery-gateway` wheel (our own code), the hash-locked dependency export, and the uv wheel pin |
 | micromamba | Fixed version, seeded to `<data-dir>/scientific-envs/bin/micromamba` on first `serve`, then checked by the runner against the same release manifest |
 
 It does not contain uv or the gateway's third-party Python dependencies (see [Dependencies installed on first launch](#dependencies-installed-on-first-launch)), nor Neo4j, starter Python/R scientific environments, or a conda package cache. Creating a starter environment for the first time still needs access to permitted package channels.
@@ -143,7 +143,7 @@ In local mode the shared entry point reads the root `.env`, checks the dependenc
 
 Ctrl-C stops its background services. `./scripts/run-local.sh [--no-build]` remains a thin compatibility wrapper, and `pnpm start` and `pnpm server` continue to use it. For unattended use, run it under a process manager such as a systemd user unit or tmux, or use [Docker deployment](#docker-deployment). The runner always binds only to loopback.
 
-The first start prepares a Python 3.12 gateway environment under `data/envs/gateway`. It holds the interpreter for the bundled Python MCP servers (biomed, UniProt); the repository has no submodules.
+The first start prepares a Python 3.12 gateway environment under `.sciencediscovery-data/envs/gateway`. It holds the interpreter for the bundled Python MCP servers (biomed, UniProt); the repository has no submodules.
 
 Ascend host NPU workloads use the same local-mode entry point. The Runner exposes `run_npu_job` only after an administrator explicitly sets `SCIENCE_AGENT_NPU_BROKER=1` and configures the workload entry points in `.env`. Before enabling it, create and verify a managed Python scientific environment revision for the Ascend stack; built-in NPU workloads, including smoke tests, submit against that revision rather than `SCIENCE_AGENT_NPU_PYTHON`. See [Configuration reference](../reference/configuration.md#environment-variables-local-mode) for variables and [Ascend NPU Host Broker](../explanation/ascend-npu-runner.md) for the design boundary.
 
@@ -173,7 +173,7 @@ curl -fsS http://127.0.0.1:4310/health
 
 Open <http://127.0.0.1:4310> and sign in with `SCIENCE_AGENT_AUTH_TOKEN`; when it is unset, the container log prints the token generated on first start. The first build compiles the Web UI, resolves both service Python environments, and downloads micromamba, so it takes longer and needs network access. Starting services and obtaining micromamba from the completed image do not. The package-network boundary for managed starter Python is described under [Limitations](#limitations).
 
-BuildKit selects the `linux/amd64` or `linux/arm64` micromamba for `TARGETARCH` and verifies it against the runner's shared release manifest. The binary is stored at `/opt/science-agent/provisioner/micromamba`; when `/app/data` is an empty bind mount, the first start copies it to the managed default path and the runner verifies it again. This does not access GitHub at **runtime**.
+BuildKit selects the `linux/amd64` or `linux/arm64` micromamba for `TARGETARCH` and verifies it against the runner's shared release manifest. The binary is stored at `/opt/sciencediscovery/provisioner/micromamba`; when `/app/data` is an empty bind mount, the first start copies it to the managed default path and the runner verifies it again. This does not access GitHub at **runtime**.
 
 ```bash
 docker compose logs -f        # startup order: runner -> API
@@ -192,8 +192,8 @@ The container runs as uid/gid `1000:1000`. If the account IDs differ, set `SCIEN
 
 Two locations differ from a host installation:
 
-- uv-managed environments are baked into `/opt/science-agent/envs/{gateway,paper}`, not the data directory. A fresh `compose up` therefore needs no network access for them.
-- Fixed micromamba is baked into `/opt/science-agent/provisioner/micromamba` and seeded to `data/scientific-envs/bin/micromamba` for an empty data directory. When `SCIENCE_AGENT_PROVISIONER_PATH` is explicitly set, seeding is skipped and the runner uses that administrator override.
+- uv-managed environments are baked into `/opt/sciencediscovery/envs/{gateway,paper}`, not the data directory. A fresh `compose up` therefore needs no network access for them.
+- Fixed micromamba is baked into `/opt/sciencediscovery/provisioner/micromamba` and seeded to `.sciencediscovery-data/scientific-envs/bin/micromamba` for an empty data directory. When `SCIENCE_AGENT_PROVISIONER_PATH` is explicitly set, seeding is skipped and the runner uses that administrator override.
 
 ### Sandbox and host requirements
 
@@ -218,7 +218,7 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 ### Limitations
 
 - This is a single-user trust model: one static bearer token, no TLS, and no multi-user accounts. The port is published only on `127.0.0.1` by default because Docker-published ports bypass many host firewall rules. Set `SCIENCE_AGENT_PUBLISH_HOST=0.0.0.0` only on a trusted network and replace the token first.
-- The image contains no API tokens, model credentials, or host `data/` content. `.dockerignore` excludes `data/`, `.env`, `node_modules/`, build outputs, and local caches. Credentials enter only through Compose variables and the bind-mounted data directory.
+- The image contains no API tokens, model credentials, or host `.sciencediscovery-data/` content. `.dockerignore` excludes `.sciencediscovery-data/`, `.env`, `node_modules/`, build outputs, and local caches. Credentials enter only through Compose variables and the bind-mounted data directory.
 - The image includes fixed micromamba and does not access GitHub for it at runtime, but this iteration does **not** bundle starter Python/R environments or a conda package cache. First-time starter Python creation still needs permitted package channels. Package resolution becomes offline only after an administrator populates and selects `SCIENCE_AGENT_PACKAGE_CACHE_DIR`.
 - The image is a convenience package, not a hardened multi-tenant deployment. Containerization does not change the security boundaries of a static bearer token, no TLS, and no runner CPU/memory quotas.
 
@@ -229,6 +229,6 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 sha256sum --check dist/micromamba-release/SHA256SUMS
 ```
 
-The defaults are `science-agent-micromamba-<version>-linux-x86_64.tar.gz` and `science-agent-micromamba-<version>-linux-aarch64.tar.gz`. Each contains only `bin/micromamba` and a `manifest.json` recording the target architecture, upstream filename, and binary SHA256; the output also contains `VERSION` and `SHA256SUMS`. The script does **not** create or collect starter Python/R environments, conda caches, or other Python trees.
+The defaults are `sciencediscovery-micromamba-<version>-linux-x86_64.tar.gz` and `sciencediscovery-micromamba-<version>-linux-aarch64.tar.gz`. Each contains only `bin/micromamba` and a `manifest.json` recording the target architecture, upstream filename, and binary SHA256; the output also contains `VERSION` and `SHA256SUMS`. The script does **not** create or collect starter Python/R environments, conda caches, or other Python trees.
 
 Use `--arch x86_64` or `--arch aarch64` for one architecture, or `--dry-run` to inspect versions, URLs, and SHA256 values without downloading. On a restricted builder, prepare both raw binaries from the release manifest and use `--source-dir <directory>` for local verification and packaging.

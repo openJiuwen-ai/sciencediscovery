@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { DeletionImpact, RuntimeSettingsDetails } from "@science-agent/schema";
+import type { DeletionImpact, RuntimeSettingsDetails } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 

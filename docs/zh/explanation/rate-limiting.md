@@ -138,7 +138,7 @@ per-source 配置在 source manifest 的 `governance` 字段（`packages/schema/
 
 LLM 出站与数据源出站不在同一进程：
 
-- 主 Agent 循环的模型请求由 Python Gateway 发出（`services/gateway/src/science_agent_gateway/server.py` 的 `_build_model` 是唯一构造点），HTTP 由 openai/anthropic SDK 负责，SDK 自带 429 指数退避与 `Retry-After` 尊重。
+- 主 Agent 循环的模型请求由 Python Gateway 发出（`services/gateway/src/sciencediscovery_gateway/server.py` 的 `_build_model` 是唯一构造点），HTTP 由 openai/anthropic SDK 负责，SDK 自带 429 指数退避与 `Retry-After` 尊重。
 - Node 侧另有少量辅助模型调用（会话命名、语义评审、论文视觉），与底座同进程，后续可按 `llm:<host>` 键直接接入。
 
 当前不把 LLM 请求纳入排队：provider 配额语义是 TPM/RPM（token 维度），请求级排队收益有限且直接推高首 token 延迟。本期提供最小配置面（经 Gateway 环境变量，默认与 SDK 一致）：

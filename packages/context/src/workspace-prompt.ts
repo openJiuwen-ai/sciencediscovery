@@ -31,10 +31,10 @@ import type {
   SkillResource,
   SkillResourceContent,
   ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
-import type { AgentConfig } from "@science-agent/model";
-import type { ToolFilterPolicy, WorkspaceToolOptions } from "@science-agent/workspace";
+import type { AgentConfig } from "@sciencediscovery/model";
+import type { ToolFilterPolicy, WorkspaceToolOptions } from "@sciencediscovery/workspace";
 
 export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.1";
 // Bump when the workspace prompt contract changes, including subagent orchestration or skill disclosure rules.
@@ -221,7 +221,7 @@ export interface WorkspaceAgentOptions {
   environments?: Environment[];
   environmentManagement?: WorkspaceToolOptions["environmentManagement"];
   runSubagent?: (input: SubagentInput, signal?: AbortSignal) => Promise<Subagent>;
-  executePython: (code: string, signal?: AbortSignal) => Promise<import("@science-agent/schema").PythonExecutionResult>;
+  executePython: (code: string, signal?: AbortSignal) => Promise<import("@sciencediscovery/schema").PythonExecutionResult>;
   executeShell: (code: string, kernelMode: KernelMode, signal?: AbortSignal) => Promise<ShellExecutionResult>;
   executeScientific?: (
     language: ScientificLanguage,

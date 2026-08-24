@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 
-import type { ConnectorManifest, DeletionImpact, ModelProfile, RuntimeSettingsDetails, RuntimeSettingsOverrides, SessionListState, SkillDescriptor, SkillLibrary } from "@science-agent/schema";
+import type { ConnectorManifest, DeletionImpact, ModelProfile, RuntimeSettingsDetails, RuntimeSettingsOverrides, SessionListState, SkillDescriptor, SkillLibrary } from "@sciencediscovery/schema";
 
 import { ArchiveIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, EditIcon, EllipsisIcon, PlusIcon, RestoreIcon, SettingsIcon, TrashIcon } from "../icons.js";
 import { ScopedSettingsEditor } from "../ScopedSettingsEditor.js";

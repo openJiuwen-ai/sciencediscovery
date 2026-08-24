@@ -28,8 +28,8 @@
 import { randomUUID } from "node:crypto";
 import { Agent as UndiciAgent, ProxyAgent, request, type Dispatcher } from "undici";
 
-import type { RuntimeMessage as AgentHistoryMessage } from "@science-agent/runtime-core";
-import type { ResolvedProxy } from "@science-agent/schema";
+import type { RuntimeMessage as AgentHistoryMessage } from "@sciencediscovery/runtime-core";
+import type { ResolvedProxy } from "@sciencediscovery/schema";
 
 import type { ModelUsage as AgentModelUsage } from "./types.js";
 

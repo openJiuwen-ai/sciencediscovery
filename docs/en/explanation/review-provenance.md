@@ -4,13 +4,13 @@ Reviewer Specialist, claims/evidence, content-addressable storage (CAS), and Pro
 
 ## 1. CAS
 
-CAS stores verifiable content at its SHA-256 address, deduplicating identical bytes and allowing later re-hashing. `@science-agent/cas` uses `data/cas/sha256/<first-two>/<full-hash>` after validating 64 lowercase hex characters. `put`/`putFile` verify an existing object or atomically rename a pid/UUID temporary file and return `{hash,size}`. `read`, `verify`, and `has` retrieve, hash-check, or test presence. Objects are immutable and this iteration has no deletion/GC interface.
+CAS stores verifiable content at its SHA-256 address, deduplicating identical bytes and allowing later re-hashing. `@sciencediscovery/cas` uses `.sciencediscovery-data/cas/sha256/<first-two>/<full-hash>` after validating 64 lowercase hex characters. `put`/`putFile` verify an existing object or atomically rename a pid/UUID temporary file and return `{hash,size}`. `read`, `verify`, and `has` retrieve, hash-check, or test presence. Objects are immutable and this iteration has no deletion/GC interface.
 
 Writers include provenance (code/stdout/stderr/files), Prompt Manifest (prompt/messages/response), MCP broker (request/raw/normalized result), and paper vision (request/raw response). Environment revisions use the same hash convention on the runner side. Review/provenance verifies references; previews/diffs/audit read content. Lightweight usage records refer indirectly through manifests. See [CAS](cas.md) for the package contract.
 
 ## 2. Execution records and Artifact association
 
-Each sandbox run appends an `ExecutionRun` under `data/execution-runs/<sessionId>.json`: tool/language, CAS references, exit code/times, environment revision, kernel mode/id, permission epoch, `networkPolicy` (the sandbox network mode the run actually used, `"none"` by default) and `networkAccessRevision` (the policy revision when an allowlist applied), `sandbox: "bubblewrap"`, changed files, status, plus:
+Each sandbox run appends an `ExecutionRun` under `.sciencediscovery-data/execution-runs/<sessionId>.json`: tool/language, CAS references, exit code/times, environment revision, kernel mode/id, permission epoch, `networkPolicy` (the sandbox network mode the run actually used, `"none"` by default) and `networkAccessRevision` (the policy revision when an allowlist applied), `sandbox: "bubblewrap"`, changed files, status, plus:
 
 - `workingDirectory`: actual sandbox cwd, legacy placeholder `workspace`, or `unavailable` before execution.
 - `envSnapshot`: CAS reference to canonical sorted JSON of the effective environment, `null` when unavailable, absent in legacy records.

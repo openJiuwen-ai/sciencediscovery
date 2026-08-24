@@ -4,7 +4,7 @@ This directory defines a source-free CI toolchain image and the repository
 entry points for unit tests (UT), hermetic system tests (ST), and browser E2E.
 The image contains Node.js 22.19, pnpm 11.1.2, Python 3.12, uv, bubblewrap,
 build tools, and Playwright's Chromium system libraries. Product source and
-test dependencies are supplied only by the checkout mounted at `/workspace`.
+test dependencies are supplied only by the checkout mounted at `/src`.
 
 ## Existing tests and CI mapping
 
@@ -77,7 +77,7 @@ Build the current host architecture. Using `.ci` as the build context makes it
 impossible for the Dockerfile to copy the product checkout into a layer.
 
 ```bash
-docker build --file .ci/Dockerfile --tag science-agent-ci:test .ci
+docker build --file .ci/Dockerfile --tag sciencediscovery-ci:test .ci
 ```
 
 Build both supported Linux architectures and publish a manifest:
@@ -86,13 +86,13 @@ Build both supported Linux architectures and publish a manifest:
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   --file .ci/Dockerfile \
-  --tag <registry>/science-agent-ci:<tag> \
+  --tag <registry>/sciencediscovery-ci:<tag> \
   --push \
   .ci
 ```
 
 For a local, non-pushed multi-architecture artifact, replace `--push` with
-`--output type=oci,dest=science-agent-ci.oci`. Docker cannot `--load` a
+`--output type=oci,dest=sciencediscovery-ci.oci`. Docker cannot `--load` a
 multi-platform manifest into its classic local image store.
 
 ## Source and result mounts
@@ -102,12 +102,29 @@ checkout rather than a linked Git worktree: a worktree's `.git` file points at
 the main repository and is not portable into the container.
 
 All commands use the same mounts. `<host-results>` should be a new or empty
-directory for the run.
+directory for the run, and it must already exist and be owned by the invoking
+identity: Docker creates a missing bind-mount source as root, and the container
+then cannot write its reports.
+
+Mount the checkout at `/src`, which is also the image's `WORKDIR`. Do not mount
+it at `/workspace`: the Runner's bubblewrap sandbox mounts the Session
+workspace over that exact path, so a checkout there is shadowed inside the
+sandbox. Five Runner tests fail that way — the two `scientific-execution`
+subcases lose their fake managed interpreter and exit 127, and the three NPU
+Broker cases see their `/workspace`-prefixed arguments re-anchored into
+doubled paths.
 
 ```text
--v <repo>:/workspace
+-v <repo>:/src
 -v <host-results>:/ci-results
 ```
+
+The container installs into the mounted checkout, so `node_modules` ends up
+bound to the container's pnpm store. The next host command then aborts with
+`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`, because pnpm wants to purge the
+modules directory and refuses to do so without a TTY. Rebind it with
+`CI=1 pnpm install --frozen-lockfile` before working on the host again, or give
+the container a checkout of its own.
 
 Run with the checkout owner's numeric identity so generated dependencies,
 build output, and reports remain writable on the host and permission-sensitive
@@ -137,8 +154,17 @@ unprivileged user namespaces still blocks the real sandbox; see
 Optional cache volumes speed up repeated dependency and browser installs:
 
 ```text
---mount type=volume,source=science-agent-ci-cache,target=/ci-cache
+--mount type=volume,source=sciencediscovery-ci-cache,target=/ci-cache
 ```
+
+That volume is not only a cache: `CI_RUNTIME_DIR` defaults below it, so it also
+holds the E2E stack's `data/envs`. Those service environments are *editable*
+installs whose `.pth` files record the absolute source path, so a volume
+populated from one checkout location is unusable from another. After changing
+the mount path, drop `/ci-cache/sciencediscovery-e2e` and
+`/ci-cache/sciencediscovery-tests` (or the whole volume); otherwise the stack
+starts and the service dies with `ModuleNotFoundError`, and the E2E layer
+reports BLOCKED because it never became healthy.
 
 ## One command per layer
 
@@ -153,9 +179,9 @@ docker run --rm \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
   --security-opt systempaths=unconfined \
-  -v <repo>:/workspace \
+  -v <repo>:/src \
   -v <host-results>:/ci-results \
-  science-agent-ci:test pnpm ci:ut
+  sciencediscovery-ci:test pnpm ci:ut
 ```
 
 ST:
@@ -166,9 +192,9 @@ docker run --rm \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
   --security-opt systempaths=unconfined \
-  -v <repo>:/workspace \
+  -v <repo>:/src \
   -v <host-results>:/ci-results \
-  science-agent-ci:test pnpm ci:st
+  sciencediscovery-ci:test pnpm ci:st
 ```
 
 E2E (mocked only):
@@ -180,9 +206,9 @@ docker run --rm \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
   --security-opt systempaths=unconfined \
-  -v <repo>:/workspace \
+  -v <repo>:/src \
   -v <host-results>:/ci-results \
-  science-agent-ci:test pnpm ci:e2e
+  sciencediscovery-ci:test pnpm ci:e2e
 ```
 
 The selector can replace the final command on capability-driven workers. For
@@ -191,9 +217,9 @@ example, this runs only hermetic ST cases compatible with amd64 and no NPU:
 ```bash
 docker run --rm \
   --user "$(id -u):$(id -g)" \
-  -v <repo>:/workspace \
+  -v <repo>:/src \
   -v <host-results>:/ci-results \
-  science-agent-ci:test \
+  sciencediscovery-ci:test \
   pnpm ci:run -- --tag layer:st --tag llm:stub --tag arch:amd64 --exclude npu:required
 ```
 
@@ -242,7 +268,7 @@ selection/
 `run-layer.mjs` stops at the first failing UT/ST command and records every
 attempted command, exit code, and duration. It gives each run a unique
 `SCIENCE_AGENT_DATA_DIR` below `CI_RUNTIME_DIR` (default
-`/ci-cache/science-agent-tests`) and removes it afterward, so tests cannot
+`/ci-cache/sciencediscovery-tests`) and removes it afterward, so tests cannot
 leave generated logs or bootstrap tokens in the source mount. The E2E entry propagates
 Playwright's exit code after copying reports, including failure evidence.
 
@@ -264,7 +290,6 @@ container cannot safely or reliably provide.
 | Real NPU workloads such as `services/runner/workloads/npu-smoke-test.py` | Vendor device nodes, drivers, runtime libraries, model/data assets, and usually a native aarch64/NPU host | Hardware-specific runner with explicit device mounts and its own acceptance record |
 | Full bubblewrap execution when the host denies unprivileged user namespaces | Docker flags cannot override a host kernel/AppArmor policy that rejects user namespace creation | Run on a Linux worker with user namespaces enabled; record UT/E2E as BLOCKED if the bwrap preflight fails |
 | Host-only sandbox fallback/full-profile validation | A container cannot reproduce every host `/proc/sys`, AppArmor, LXC, and distribution-specific bwrap combination | Keep the existing stubbed capability/unit tests in UT; run real preflight/fallback checks on representative native hosts |
-| `services/runner/src/scientific-execution.test.ts` managed R subcase when the checkout is mounted at `/workspace` | The fixture creates its fake managed prefix below `process.cwd()`, while the nested runner sandbox mounts the Session workspace over `/workspace`; that hides the fake R script's absolute interpreter path and it exits 127 | Keep the failure visible in the UT log and run this host-path-sensitive subcase on a native checkout until the fixture places its managed prefix outside the sandbox mount target |
 | Playwright or sandbox runs for the other CPU architecture under QEMU | Browser sandboxing and timing under emulation are not representative and may not be supported by the downloaded browser | Build the two-platform manifest with buildx, but execute amd64 and arm64 jobs on native workers |
 | Docker Desktop on macOS/Windows | The product runner requires Linux user/mount namespaces and bubblewrap | Use a native Linux CI worker or VM |
 | J3 in the default mocked job | J3 intentionally does not install the base or access conda channels; the generic E2E command sets `SCIENTIFIC_ENVS=0` so startup cannot turn a user journey into environment provisioning | In a separate, explicitly network-enabled job, set `E2E_SCIENTIFIC_ENVS=1` and reuse a pre-seeded `CI_RUNTIME_DIR`; keep that opt-in out of the default command |

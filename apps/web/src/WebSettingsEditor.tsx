@@ -21,7 +21,7 @@ import {
   type PaidSearchProvider,
   type UpdateWebSettingsRequest,
   type WebSettingsDetails,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { useLocale } from "./i18n/index.js";
 

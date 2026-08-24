@@ -32,7 +32,7 @@ export interface PayloadBootstrap {
   uv: { version: string; project: string; wheelFilename: string; wheelSha256: string };
   /** Payload-relative path of the hash-pinned gateway requirements export. */
   requirementsPath: string;
-  /** Payload-relative path of the prebuilt science-agent-gateway wheel. */
+  /** Payload-relative path of the prebuilt sciencediscovery-gateway wheel. */
   gatewayWheelPath: string;
 }
 

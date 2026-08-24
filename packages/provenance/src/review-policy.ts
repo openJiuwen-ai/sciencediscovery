@@ -14,7 +14,7 @@
 
 import { createHash } from "node:crypto";
 
-import type { ScientificArtifactVersion } from "@science-agent/schema";
+import type { ScientificArtifactVersion } from "@sciencediscovery/schema";
 
 import type { EvidenceReferenceTraceResult, TraceEvidenceReference } from "./computation-review.js";
 

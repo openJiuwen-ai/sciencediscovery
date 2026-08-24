@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DEFAULT_WEB_SETTINGS } from "@science-agent/schema";
+import { DEFAULT_WEB_SETTINGS } from "@sciencediscovery/schema";
 
 import { normalizeWebSettings } from "./settings.js";
 

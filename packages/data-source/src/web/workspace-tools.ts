@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { AgentPermissionRuntime } from "@science-agent/governance";
+import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { WebBroker, WebCallContext } from "./broker.js";
 
 export function createWebWorkspaceTools(options: {

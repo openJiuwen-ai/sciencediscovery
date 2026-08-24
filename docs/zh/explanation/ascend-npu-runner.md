@@ -54,14 +54,14 @@ Broker 的可扩展性来自“注册新的 workload manifest”，不是开放�
 
 - Phase 1 采用全局单 Broker worker：不同 Session 的 NPU job 也是跨 Session FIFO，因此某个 Session 里的长作业或卡住的作业会让其他 Session 后续作业继续排队。
 - NPU Broker job 暂无 wall-clock 超时；运维应让 workload entrypoint 自身有边界，或通过 cancel 显式取消作业。
-- 持久化 catalog `data/npu-jobs/jobs.json` 暂不自动清理，并且每次追加 job 输出都会全量重写。catalog 读取是 best-effort：文件损坏不会阻止 Runner 启动。
+- 持久化 catalog `.sciencediscovery-data/npu-jobs/jobs.json` 暂不自动清理，并且每次追加 job 输出都会全量重写。catalog 读取是 best-effort：文件损坏不会阻止 Runner 启动。
 
 ## 6. 测试入口
 
 Runner 侧针对 NPU Broker 的测试命令：
 
 ```bash
-pnpm --filter @science-agent/runner build
+pnpm --filter @sciencediscovery/runner build
 node --test --test-name-pattern "NPU Broker" services/runner/dist/server.test.js
 ```
 

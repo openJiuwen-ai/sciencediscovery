@@ -17,7 +17,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { AddressInfo } from "node:net";
 import test from "node:test";
 
-import type { ResolvedProxy } from "@science-agent/schema";
+import type { ResolvedProxy } from "@sciencediscovery/schema";
 
 import {
   normalizeUsage,

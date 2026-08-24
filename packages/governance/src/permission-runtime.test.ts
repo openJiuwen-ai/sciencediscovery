@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { PermissionAuthorization, PermissionEpoch, PermissionRequest } from "@science-agent/schema";
+import type { PermissionAuthorization, PermissionEpoch, PermissionRequest } from "@sciencediscovery/schema";
 
 import { createAgentPermissionRuntime } from "./permission-runtime.js";
 

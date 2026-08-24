@@ -22,7 +22,7 @@
  * tier answered.
  */
 
-import { externalUrl } from "@science-agent/schema";
+import { externalUrl } from "@sciencediscovery/schema";
 
 import { ProviderRequestError, providerRequest, statusErrorCode } from "./http.js";
 import { textOf } from "./html.js";

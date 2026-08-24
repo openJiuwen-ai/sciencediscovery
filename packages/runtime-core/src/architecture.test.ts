@@ -23,6 +23,6 @@ test("runtime-core has no product or third-party runtime dependencies", async ()
   assert.deepEqual(manifest.dependencies ?? {}, {});
 
   const source = await readFile(new URL("../src/runtime.ts", import.meta.url), "utf8");
-  assert.equal(/from\s+["']@science-agent\//.test(source), false);
+  assert.equal(/from\s+["']@sciencediscovery\//.test(source), false);
   assert.equal(/from\s+["'][^./]/.test(source), false);
 });

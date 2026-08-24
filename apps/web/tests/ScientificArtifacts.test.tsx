@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ArtifactVersionProvenance, MemoryGraphNode, ScientificArtifact, ScientificArtifactVersion } from "@science-agent/schema";
+import type { ArtifactVersionProvenance, MemoryGraphNode, ScientificArtifact, ScientificArtifactVersion } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 

@@ -20,7 +20,7 @@ import type {
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,
   UpdateProjectRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { AuthApiClient } from "./auth.js";
 

@@ -42,8 +42,8 @@ import type {
   SkillDraft,
   SkillValidationDiagnostic,
   UpdateSkillRequest,
-} from "@science-agent/schema";
-import { sha256 } from "@science-agent/cas";
+} from "@sciencediscovery/schema";
+import { sha256 } from "@sciencediscovery/cas";
 import { Unzip, UnzipInflate } from "fflate";
 import { parseDocument, stringify } from "yaml";
 

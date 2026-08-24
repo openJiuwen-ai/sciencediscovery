@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from science_agent_gateway.public_biomed_mcp import (
+from sciencediscovery_gateway.public_biomed_mcp import (
     SERVER,
     _arxiv_search,
     _raise_for_status,
@@ -49,7 +49,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
                 "version": "2",
             }]}
             with patch(
-                "science_agent_gateway.public_biomed_mcp._get_json",
+                "sciencediscovery_gateway.public_biomed_mcp._get_json",
                 new=AsyncMock(return_value=payload),
             ):
                 search = await _preprint_search(source, "bounded", 30, 5, None)
@@ -82,43 +82,43 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
     async def test_database_results_use_manifest_source_identity(self) -> None:
         cases = []
         with patch(
-            "science_agent_gateway.public_biomed_mcp._pdb_entry",
+            "sciencediscovery_gateway.public_biomed_mcp._pdb_entry",
             new=AsyncMock(return_value={"struct": {"title": "Structure"}}),
         ):
             cases.append(("pdb", await pdb_lookup_structure("1abc")))
         with patch(
-            "science_agent_gateway.public_biomed_mcp._get_json",
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
             new=AsyncMock(return_value={"display_name": "Gene"}),
         ):
             cases.append(("ensembl", await ensembl_lookup_gene("ENSG00000141510")))
         with patch(
-            "science_agent_gateway.public_biomed_mcp._get_json",
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
             new=AsyncMock(return_value={"displayName": "Pathway"}),
         ):
             cases.append(("reactome", await reactome_lookup_pathway("R-HSA-123")))
         with (
             patch(
-                "science_agent_gateway.public_biomed_mcp._entrez_search",
+                "sciencediscovery_gateway.public_biomed_mcp._entrez_search",
                 new=AsyncMock(return_value=["1"]),
             ),
             patch(
-                "science_agent_gateway.public_biomed_mcp._entrez_summary",
+                "sciencediscovery_gateway.public_biomed_mcp._entrez_summary",
                 new=AsyncMock(return_value=[{"accession": "VCV0001", "variation_id": "1"}]),
             ),
         ):
             cases.append(("clinvar", await clinvar_search_variants("VCV0001")))
         with patch(
-            "science_agent_gateway.public_biomed_mcp._get_json",
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
             new=AsyncMock(return_value={"molecules": [{"molecule_chembl_id": "CHEMBL25"}]}),
         ):
             cases.append(("chembl", await chembl_search_molecules("aspirin")))
         with (
             patch(
-                "science_agent_gateway.public_biomed_mcp._entrez_search",
+                "sciencediscovery_gateway.public_biomed_mcp._entrez_search",
                 new=AsyncMock(return_value=["2"]),
             ),
             patch(
-                "science_agent_gateway.public_biomed_mcp._entrez_summary",
+                "sciencediscovery_gateway.public_biomed_mcp._entrez_summary",
                 new=AsyncMock(return_value=[{"accession": "GSE2", "title": "Study"}]),
             ),
         ):
@@ -142,7 +142,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
           </entry>
         </feed>"""
         with patch(
-            "science_agent_gateway.public_biomed_mcp._get_text",
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
             new=AsyncMock(return_value=atom),
         ):
             result = await _arxiv_search("example", 5)
@@ -155,7 +155,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pubmed_empty_search_does_not_make_a_summary_request(self) -> None:
         getter = AsyncMock(return_value={"esearchresult": {"idlist": []}})
-        with patch("science_agent_gateway.public_biomed_mcp._get_json", new=getter):
+        with patch("sciencediscovery_gateway.public_biomed_mcp._get_json", new=getter):
             result = await _pubmed_search("missing", 5)
         self.assertEqual(result["records"], [])
         self.assertEqual(getter.await_count, 1)
@@ -175,7 +175,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         with patch(
-            "science_agent_gateway.public_biomed_mcp._get_json",
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
             new=AsyncMock(return_value=payload),
         ):
             result = await _europe_pmc_search("open", 5)
@@ -187,7 +187,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
           <link format="pdf" href="https://attacker.example/paper.pdf"/>
         </record></records></OA>"""
         with patch(
-            "science_agent_gateway.public_biomed_mcp._get_text",
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
             new=AsyncMock(return_value=locator),
         ):
             with self.assertRaisesRegex(ValueError, "host allowlist"):

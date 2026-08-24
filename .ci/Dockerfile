@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Repository test toolchain only. The build context is .ci/ and no product
-# source is copied into the image; CI bind-mounts a checkout at /workspace.
+# source is copied into the image; CI bind-mounts a checkout at /src.
 ARG NODE_IMAGE=node:22.19.0-bookworm
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.9.26
 
@@ -60,9 +60,14 @@ ENV CI=1 \
     PNPM_HOME=/usr/local/share/pnpm \
     UV_CACHE_DIR=/ci-cache/uv
 
-RUN mkdir -p /workspace /ci-results /ci-cache /ci-home \
+RUN mkdir -p /src /ci-results /ci-cache /ci-home \
  && chmod 1777 /ci-results /ci-cache /ci-home
 
-WORKDIR /workspace
+# The checkout must not live at /workspace: the Runner's bubblewrap sandbox
+# mounts the Session workspace over that exact path. Fixtures that build
+# absolute paths below process.cwd() would then be shadowed inside the sandbox,
+# and the NPU Broker's workspace-relative argument rewriting would re-anchor
+# paths that already start with /workspace, doubling the prefix.
+WORKDIR /src
 USER node
 CMD ["bash"]

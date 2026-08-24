@@ -15,7 +15,7 @@
 import type {
   ArtifactVersionProvenance,
   ScientificArtifactVersion,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import {
   Braces,
   Check,

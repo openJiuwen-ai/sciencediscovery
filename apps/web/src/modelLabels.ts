@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ModelProfile } from "@science-agent/schema";
+import type { ModelProfile } from "@sciencediscovery/schema";
 
 function modelIdentity(profile: ModelProfile): string {
   return `${profile.name.trim()}\u0000${profile.model.trim()}`;

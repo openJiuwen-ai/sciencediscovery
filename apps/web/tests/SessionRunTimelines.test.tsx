@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ChatMessage, RunStreamEvent, SessionRun, SessionRunEvent } from "@science-agent/schema";
+import type { ChatMessage, RunStreamEvent, SessionRun, SessionRunEvent } from "@sciencediscovery/schema";
 import { ApiRequestError } from "../src/api.js";
 import { mergePermissionRequestSnapshot } from "../src/permission-state.js";
 

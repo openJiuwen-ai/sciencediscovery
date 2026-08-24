@@ -25,7 +25,7 @@ The React browser UI is served as static assets by the control API after build a
 
 ## 3. Server communication
 
-`ApiClient.request()` injects `authorization: Bearer <token>` from local-storage key `science-agent-token`. `streamMessage()` posts `/api/sessions/:id/runs` with `accept: text/event-stream` and manually parses `data: <json>\n\n` through `body.getReader()`, rather than EventSource, to support Authorization and abort.
+`ApiClient.request()` injects `authorization: Bearer <token>` from local-storage key `sciencediscovery-token`. `streamMessage()` posts `/api/sessions/:id/runs` with `accept: text/event-stream` and manually parses `data: <json>\n\n` through `body.getReader()`, rather than EventSource, to support Authorization and abort.
 
 ## 4. Event-to-UI mapping
 
@@ -41,7 +41,7 @@ The React browser UI is served as static assets by the control API after build a
 
 ## 5. Development and tests
 
-- `pnpm --filter @science-agent/web dev` starts Vite at `127.0.0.1:5173` and proxies `/api` and `/health` to `127.0.0.1:4310`.
+- `pnpm --filter @sciencediscovery/web dev` starts Vite at `127.0.0.1:5173` and proxies `/api` and `/health` to `127.0.0.1:4310`.
 - `tsx --test tests/*.test.tsx` covers reducers, stop flow, composer state, and multi-Session stream isolation.
 - Root `test/` contains Playwright scenarios; see [CONTRIBUTING](../../../CONTRIBUTING.md).
 

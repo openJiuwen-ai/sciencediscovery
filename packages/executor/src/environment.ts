@@ -15,15 +15,15 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
-import { DEFAULT_ENVIRONMENT_REVISION_ID, SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, type EnvironmentRevision } from "@science-agent/schema";
+import { DEFAULT_ENVIRONMENT_REVISION_ID, SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, type EnvironmentRevision } from "@sciencediscovery/schema";
 
-export { DEFAULT_ENVIRONMENT_REVISION_ID } from "@science-agent/schema";
+export { DEFAULT_ENVIRONMENT_REVISION_ID } from "@sciencediscovery/schema";
 const pythonVersion = execFileSync("/usr/bin/python3", ["--version"], { encoding: "utf8" }).trim();
 const shellVersion = execFileSync("/usr/bin/bash", ["--version"], { encoding: "utf8" }).split("\n")[0]!.trim();
 
 export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
   executable: "/usr/bin/python3",
-  format: "science-agent-environment-v1",
+  format: "sciencediscovery-environment-v1",
   language: "python",
   packageSource: "read-only system /usr",
   pythonVersion,
@@ -36,7 +36,7 @@ export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC_HASH = createHash("sha256")
 
 export const DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
   executable: "/usr/bin/bash",
-  format: "science-agent-environment-v1",
+  format: "sciencediscovery-environment-v1",
   language: "shell",
   packageSource: "read-only system /usr",
   shellVersion,

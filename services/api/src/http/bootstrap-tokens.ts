@@ -21,7 +21,7 @@
  * and every process in the stack agrees on the same value.
  *
  * The file layout is a cross-language contract: the Python Gateway
- * (`science_agent_gateway.bootstrap_tokens`) and the single-binary launcher
+ * (`sciencediscovery_gateway.bootstrap_tokens`) and the single-binary launcher
  * (`services/launcher/src/bootstrap-tokens.ts`) implement the same resolution
  * chain against the same paths. One token per file keeps creation a single
  * atomic `O_CREAT|O_EXCL` call, so two services starting at once cannot end up

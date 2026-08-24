@@ -54,14 +54,14 @@ Direct NPU passthrough into bwrap may be a future optimization only after a real
 
 - Phase 1 uses a single global Broker worker: jobs are FIFO across Sessions, so a long or stuck job in one Session can keep later jobs from other Sessions queued.
 - NPU Broker jobs do not have a wall-clock timeout yet; operators should keep workload entry points bounded or cancel jobs explicitly.
-- The persisted catalog at `data/npu-jobs/jobs.json` is not garbage-collected yet and is rewritten in full when job output is appended. Catalog load is best-effort so a corrupt file does not prevent the Runner from starting.
+- The persisted catalog at `.sciencediscovery-data/npu-jobs/jobs.json` is not garbage-collected yet and is rewritten in full when job output is appended. Catalog load is best-effort so a corrupt file does not prevent the Runner from starting.
 
 ## 6. Test entry point
 
 Runner-side NPU Broker tests:
 
 ```bash
-pnpm --filter @science-agent/runner build
+pnpm --filter @sciencediscovery/runner build
 node --test --test-name-pattern "NPU Broker" services/runner/dist/server.test.js
 ```
 

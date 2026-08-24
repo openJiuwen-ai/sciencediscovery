@@ -21,7 +21,7 @@ import {
   normalizeAllowedDomains,
   type SandboxNetworkAccess,
   type SandboxNetworkSettings,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 /**
  * Sandbox network access settings: the admin-owned policy that decides whether

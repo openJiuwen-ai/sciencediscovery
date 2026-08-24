@@ -16,7 +16,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import type { CasObjectRef, McpToolResult, ResultCachePolicy } from "@science-agent/schema";
+import type { CasObjectRef, McpToolResult, ResultCachePolicy } from "@sciencediscovery/schema";
 
 export interface McpResultCacheEntry {
   normalizedResult: CasObjectRef;

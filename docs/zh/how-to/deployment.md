@@ -87,7 +87,7 @@ ScienceDiscovery help                显示帮助
 
 | 选项 | 默认值 | 作用 |
 |---|---|---|
-| `--data-dir <路径>` | `./science-discovery-data` | 运行时数据目录，布局同[配置参考的存储布局](../reference/configuration.md#存储布局) |
+| `--data-dir <路径>` | `./.sciencediscovery-data` | 运行时数据目录，布局同[配置参考的存储布局](../reference/configuration.md#存储布局) |
 | `--host <地址>` | `127.0.0.1` | Web UI / API 绑定地址 |
 | `--port <端口>` | `4310` | Web UI / API 端口 |
 | `--runner-port <端口>` | `4311` | runner 端口（仅回环） |
@@ -106,7 +106,7 @@ ScienceDiscovery help                显示帮助
 | Node 运行时 | 供控制 API 与 runner 使用 |
 | CPython 3.12 | 可重定位发行版，无需宿主 Python；同时作为首启 gateway venv 的基础解释器 |
 | Web 静态资源 | 预构建的 `apps/web/dist` |
-| gateway wheel 与首启清单 | 自有代码的 `science-agent-gateway` wheel、带哈希的锁定依赖清单、uv wheel 的版本 pin |
+| gateway wheel 与首启清单 | 自有代码的 `sciencediscovery-gateway` wheel、带哈希的锁定依赖清单、uv wheel 的版本 pin |
 | micromamba | 固定版本，首次 `serve` 播种到 `<数据目录>/scientific-envs/bin/micromamba`，之后 Runner 按同一发布清单校验 |
 
 不含 uv 与 gateway 的第三方 Python 依赖（见[首次启动安装的依赖](#首次启动安装的依赖)），不含 Neo4j，也不含 starter Python/R 科学环境与 conda 包缓存：首次创建 starter 环境仍需访问允许的软件包渠道。
@@ -143,7 +143,7 @@ ScienceDiscovery help                显示帮助
 
 停止脚本（Ctrl-C）会一并停止其启动的后台服务。原有 `./scripts/run-local.sh [--no-build]` 命令仍受支持，它只是转调本地模式的薄包装；`pnpm start` 与 `pnpm server` 继续使用这一兼容入口。无人值守部署时可把脚本交给进程管理器（如 systemd user unit 或 tmux），也可以改用 [Docker 部署](#docker-部署)；runner 设计上始终只监听回环。
 
-首次启动会在 `data/envs/gateway` 下准备 Python 3.12 环境，它提供随包的 Python MCP server（biomed、UniProt）所用的解释器；本仓已无 submodule。
+首次启动会在 `.sciencediscovery-data/envs/gateway` 下准备 Python 3.12 环境，它提供随包的 Python MCP server（biomed、UniProt）所用的解释器；本仓已无 submodule。
 
 需要在 Ascend 主机上运行宿主 NPU workload 时，启动方式仍是本地模式入口；管理员在 `.env` 中显式设置 `SCIENCE_AGENT_NPU_BROKER=1` 及对应 workload 入口后，Runner 才会向 Agent 暴露 `run_npu_job`。启用前应先创建并验证一个面向 Ascend 栈的托管 Python scientific environment revision；内置 NPU workload（包括 smoke test）会提交到该 revision，而不是读取 `SCIENCE_AGENT_NPU_PYTHON`。完整参数见[配置参考](../reference/configuration.md#环境变量本地模式)，设计边界见 [Ascend NPU 宿主 Broker](../explanation/ascend-npu-runner.md)。
 
@@ -173,7 +173,7 @@ curl -fsS http://127.0.0.1:4310/health
 
 打开 <http://127.0.0.1:4310>，使用 `SCIENCE_AGENT_AUTH_TOKEN` 登录；未设置时，容器日志会打印首次启动生成的 token。首次构建会编译 Web UI、解析两个服务 Python 环境并下载 micromamba，耗时较长且需要外网；之后启动镜像内服务和取得 micromamba 不再需要联网。托管 starter Python 的软件包网络边界见下方“限制”。
 
-Docker 构建会根据 BuildKit 的 `TARGETARCH` 选择 `linux/amd64` 或 `linux/arm64` 对应的 micromamba，并用 Runner 共用的发布清单校验 SHA256。二进制保存在镜像的 `/opt/science-agent/provisioner/micromamba`；容器首次面对空的 `/app/data` bind mount 时，会把它复制到默认托管路径，Runner 随后再次按同一清单校验。这个流程不需要在**运行时**访问 GitHub。
+Docker 构建会根据 BuildKit 的 `TARGETARCH` 选择 `linux/amd64` 或 `linux/arm64` 对应的 micromamba，并用 Runner 共用的发布清单校验 SHA256。二进制保存在镜像的 `/opt/sciencediscovery/provisioner/micromamba`；容器首次面对空的 `/app/data` bind mount 时，会把它复制到默认托管路径，Runner 随后再次按同一清单校验。这个流程不需要在**运行时**访问 GitHub。
 
 ```bash
 docker compose logs -f        # 跟踪启动顺序：runner → API
@@ -192,8 +192,8 @@ docker compose up -d --build  # 拉取新代码后重建并重启
 
 有两处与宿主机安装不同：
 
-- uv 管理的 Python 环境**不**写入数据目录，而是烘焙在镜像的 `/opt/science-agent/envs/{gateway,paper}` 中。这样 bind mount 只保存应用状态，全新的 `compose up` 也无需联网。
-- 固定版本 micromamba 烘焙在 `/opt/science-agent/provisioner/micromamba`，空数据目录首次启动时播种到 `data/scientific-envs/bin/micromamba`。显式设置 `SCIENCE_AGENT_PROVISIONER_PATH` 时不播种，Runner 继续使用该管理员覆盖路径。
+- uv 管理的 Python 环境**不**写入数据目录，而是烘焙在镜像的 `/opt/sciencediscovery/envs/{gateway,paper}` 中。这样 bind mount 只保存应用状态，全新的 `compose up` 也无需联网。
+- 固定版本 micromamba 烘焙在 `/opt/sciencediscovery/provisioner/micromamba`，空数据目录首次启动时播种到 `.sciencediscovery-data/scientific-envs/bin/micromamba`。显式设置 `SCIENCE_AGENT_PROVISIONER_PATH` 时不播种，Runner 继续使用该管理员覆盖路径。
 
 ### 沙箱与宿主要求
 
@@ -218,7 +218,7 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 ### 限制
 
 - 单用户，信任模型与宿主机安装一致：一个静态 bearer token、无 TLS、无多用户账号。默认只发布到 `127.0.0.1`，因为 Docker 发布的端口会绕过宿主上大多数防火墙规则；只有在可信网络中才设置 `SCIENCE_AGENT_PUBLISH_HOST=0.0.0.0`，并请先更换 token。
-- 镜像中不含任何 API token、模型凭证或宿主 `data/` 内容——`.dockerignore` 排除了 `data/`、`.env`、`node_modules/`、构建产物与本地缓存。凭证只通过 Compose 环境变量和 bind mount 的数据目录进入容器。
+- 镜像中不含任何 API token、模型凭证或宿主 `.sciencediscovery-data/` 内容——`.dockerignore` 排除了 `.sciencediscovery-data/`、`.env`、`node_modules/`、构建产物与本地缓存。凭证只通过 Compose 环境变量和 bind mount 的数据目录进入容器。
 - 镜像已包含固定版本 micromamba，运行时不再为该二进制访问 GitHub；但本迭代**没有**打包 starter Python/R 科学环境或 conda package cache。首次创建 starter Python 仍需访问允许的软件包渠道；只有另行填充并设置 `SCIENCE_AGENT_PACKAGE_CACHE_DIR` 后，软件包解析才可离线进行。
 - 该镜像是便捷封装，不是经过加固的多租户部署；单静态 bearer token、无 TLS、runner 无 CPU/内存配额等安全边界不因容器化而改变。
 
@@ -231,6 +231,6 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 sha256sum --check dist/micromamba-release/SHA256SUMS
 ```
 
-默认产物为 `science-agent-micromamba-<版本>-linux-x86_64.tar.gz` 与 `science-agent-micromamba-<版本>-linux-aarch64.tar.gz`。每个包只含 `bin/micromamba` 和记录目标架构、上游文件名及二进制 SHA256 的 `manifest.json`；输出目录另含 `VERSION`、`SHA256SUMS`。脚本**不会**创建或收集 starter Python/R 环境、conda 软件包缓存或其他 Python 树。
+默认产物为 `sciencediscovery-micromamba-<版本>-linux-x86_64.tar.gz` 与 `sciencediscovery-micromamba-<版本>-linux-aarch64.tar.gz`。每个包只含 `bin/micromamba` 和记录目标架构、上游文件名及二进制 SHA256 的 `manifest.json`；输出目录另含 `VERSION`、`SHA256SUMS`。脚本**不会**创建或收集 starter Python/R 环境、conda 软件包缓存或其他 Python 树。
 
 可用 `--arch x86_64` / `--arch aarch64` 只生成一种架构，或用 `--dry-run` 在不下载的情况下核对版本、URL 与 SHA256。受限构建机也可先按发布清单准备两个原始二进制，再通过 `--source-dir <目录>` 进行本地校验与打包。

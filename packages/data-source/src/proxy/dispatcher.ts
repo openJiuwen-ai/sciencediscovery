@@ -14,7 +14,7 @@
 
 import { ProxyAgent, type Dispatcher } from "undici";
 
-import type { ResolvedProxy } from "@science-agent/schema";
+import type { ResolvedProxy } from "@sciencediscovery/schema";
 
 import { resolveProxyForUrl } from "./env.js";
 

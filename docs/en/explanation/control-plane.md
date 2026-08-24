@@ -35,8 +35,8 @@ SSE uses fetch-stream `data: <json>\n\n` frames; see [Web frontend](../reference
 
 ## 3. Storage
 
-- SQLite `data/catalog.sqlite` stores catalog entities: projects, sessions, runs, messages, Artifact versions, permission requests/grants/epochs/authorizations, plans, subagents, specialists, and model configuration.
-- Files under `data/` store execution records, prompt manifests, claims/evidence, MCP/derivation/model-usage audit, and CAS blobs under `data/cas/sha256/…`.
+- SQLite `.sciencediscovery-data/catalog.sqlite` stores catalog entities: projects, sessions, runs, messages, Artifact versions, permission requests/grants/epochs/authorizations, plans, subagents, specialists, and model configuration.
+- Files under `.sciencediscovery-data/` store execution records, prompt manifests, claims/evidence, MCP/derivation/model-usage audit, and CAS blobs under `.sciencediscovery-data/cas/sha256/…`.
 - See [Storage layout](../reference/configuration.md#storage-layout).
 
 ## 4. Run lifecycle

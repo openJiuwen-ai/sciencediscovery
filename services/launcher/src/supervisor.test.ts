@@ -44,7 +44,7 @@ describe("service supervision", () => {
   let basePort = 0;
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-supervisor-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-supervisor-"));
     await writeFile(join(workspace, "healthy.cjs"), HEALTHY_SERVICE);
     await writeFile(join(workspace, "exits.cjs"), IMMEDIATE_EXIT);
     await writeFile(join(workspace, "stubborn.cjs"), IGNORES_SIGTERM);

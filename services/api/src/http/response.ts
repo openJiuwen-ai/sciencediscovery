@@ -14,7 +14,7 @@
 
 import type { ServerResponse } from "node:http";
 
-import type { ApiError } from "@science-agent/schema";
+import type { ApiError } from "@sciencediscovery/schema";
 
 export function send(
   response: ServerResponse,

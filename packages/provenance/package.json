@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/provenance",
+  "name": "@sciencediscovery/provenance",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,12 +11,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/artifact-manager": "workspace:*",
-    "@science-agent/cas": "workspace:*",
-    "@science-agent/executor": "workspace:*",
-    "@science-agent/memory": "workspace:*",
-    "@science-agent/schema": "workspace:*",
-    "@science-agent/workspace": "workspace:*"
+    "@sciencediscovery/artifact-manager": "workspace:*",
+    "@sciencediscovery/cas": "workspace:*",
+    "@sciencediscovery/executor": "workspace:*",
+    "@sciencediscovery/memory": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*",
+    "@sciencediscovery/workspace": "workspace:*"
   },
   "devDependencies": { "@types/node": "26.1.1" }
 }

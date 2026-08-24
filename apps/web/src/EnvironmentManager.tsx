@@ -26,7 +26,7 @@ import {
   type EnvironmentSourceSettings,
   type ScientificEnvironmentSetup,
   type ScientificLanguage,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 

@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
-import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
@@ -23,7 +23,7 @@ import { test, type TestContext } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 
-import { createRunnerServer, type RunnerConfig } from "@science-agent/runner";
+import { createRunnerServer, type RunnerConfig } from "@sciencediscovery/runner";
 import type {
   ApiError,
   ArtifactDerivation,
@@ -71,15 +71,15 @@ import type {
   WorkbenchSearchResult,
   WorkspaceFile,
   WorkspaceUploadResult,
-} from "@science-agent/schema";
-import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 import {
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-} from "@science-agent/context";
+} from "@sciencediscovery/context";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 import { strToU8, zipSync } from "fflate";
 
 import {
@@ -94,8 +94,8 @@ import {
   type ServerConfig,
 } from "./server.js";
 import { SessionStore } from "./store.js";
-import type { McpCatalog, McpInvokeResponse } from "@science-agent/schema";
-import type { McpTransportClient } from "@science-agent/data-source";
+import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
+import type { McpTransportClient } from "@sciencediscovery/data-source";
 
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
@@ -161,6 +161,91 @@ function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1"): ServerCo
   };
 }
 
+/**
+ * bubblewrap option arities, so the stand-in can find where the sandbox
+ * arguments end and the command begins. An unknown option aborts rather than
+ * guessing: a silently misparsed launch would run the wrong argv.
+ */
+const BWRAP_ARITY: Record<string, number> = {
+  "--args": 1, "--argv0": 1, "--as-pid-1": 0, "--bind": 2, "--bind-data": 2,
+  "--bind-try": 2, "--block-fd": 1, "--cap-add": 1, "--cap-drop": 1, "--chdir": 1,
+  "--chmod": 2, "--clearenv": 0, "--dev": 1, "--dev-bind": 2, "--dev-bind-try": 2,
+  "--die-with-parent": 0, "--dir": 1, "--disable-userns": 0, "--file": 2,
+  "--gid": 1, "--hostname": 1, "--info-fd": 1, "--json-status-fd": 1,
+  "--lock-file": 1, "--mqueue": 1, "--new-session": 0, "--perms": 1, "--pidns": 1,
+  "--proc": 1, "--remount-ro": 1, "--ro-bind": 2, "--ro-bind-data": 2,
+  "--ro-bind-try": 2, "--seccomp": 1, "--setenv": 2, "--share-net": 0, "--size": 1,
+  "--symlink": 2, "--sync-fd": 1, "--tmpfs": 1, "--uid": 1, "--unsetenv": 1,
+  "--unshare-all": 0, "--unshare-cgroup": 0, "--unshare-cgroup-try": 0,
+  "--unshare-ipc": 0, "--unshare-net": 0, "--unshare-pid": 0, "--unshare-user": 0,
+  "--unshare-user-try": 0, "--unshare-uts": 0, "--userns": 1, "--userns2": 1,
+};
+
+/**
+ * A bubblewrap stand-in that runs the command for real but without namespaces.
+ *
+ * These tests assert on what an execution produces — stdout, exit codes,
+ * timeout notices, subagent step contents — not on whether it was isolated.
+ * Isolation is covered by services/runner's own suite and by the mocked E2E
+ * journeys, both of which need a working sandbox. Using this stand-in here
+ * makes the API suite deterministic on any host, including CI runners whose
+ * container drops CAP_SYS_ADMIN and so cannot create a namespace at all.
+ *
+ * It translates the sandbox's view back to the host: bind destinations map to
+ * their sources, so `--chdir /workspace` lands in the real workspace directory
+ * and arguments naming sandbox paths resolve to the files they were bound from.
+ */
+async function writePassthroughBwrap(root: string): Promise<string> {
+  await mkdir(root, { recursive: true });
+  const implementation = resolve(root, "bwrap-passthrough.mjs");
+  await writeFile(implementation, `${[
+    'import { spawn } from "node:child_process";',
+    `const ARITY = ${JSON.stringify(BWRAP_ARITY)};`,
+    'const argv = process.argv.slice(2);',
+    'if (argv[0] === "--help") { console.log("usage: bwrap --cap-drop --die-with-parent --new-session --seccomp --unshare-all --unshare-user --disable-userns"); process.exit(0); }',
+    'if (argv[0] === "--version") { console.log("bubblewrap 0.9.0"); process.exit(0); }',
+    'const binds = []; const env = { ...process.env }; let cleared = false; let chdir; let index = 0;',
+    'for (; index < argv.length; index += 1) {',
+    '  const option = argv[index];',
+    '  if (!option.startsWith("--")) break;',
+    '  const arity = ARITY[option];',
+    '  if (arity === undefined) { console.error(`bwrap-passthrough: unknown option ${option}`); process.exit(2); }',
+    '  const values = argv.slice(index + 1, index + 1 + arity);',
+    '  if (option === "--bind" || option === "--ro-bind" || option === "--dev-bind"',
+    '   || option === "--bind-try" || option === "--ro-bind-try" || option === "--dev-bind-try") binds.push([values[1], values[0]]);',
+    '  else if (option === "--chdir") chdir = values[0];',
+    '  else if (option === "--clearenv") cleared = true;',
+    '  else if (option === "--setenv") env[values[0]] = values[1];',
+    '  else if (option === "--unsetenv") delete env[values[0]];',
+    '  index += arity;',
+    '}',
+    '// Longest destination first so /workspace/sub wins over /workspace.',
+    'binds.sort((a, b) => b[0].length - a[0].length);',
+    'const toHost = (value) => {',
+    '  for (const [destination, source] of binds) {',
+    '    if (value === destination) return source;',
+    '    if (value.startsWith(`${destination}/`)) return source + value.slice(destination.length);',
+    '  }',
+    '  return value;',
+    '};',
+    'const command = argv.slice(index).map(toHost);',
+    'if (command.length === 0) { console.error("bwrap-passthrough: no command"); process.exit(2); }',
+    '// --clearenv wipes PATH too; without it the shim could not resolve an',
+    '// interpreter that the real sandbox reaches through its own /usr mount.',
+    'const childEnv = cleared ? { ...Object.fromEntries(Object.entries(env).filter(([key]) => key === "PATH")), ...env } : env;',
+    'if (!childEnv.PATH) childEnv.PATH = process.env.PATH ?? "/usr/bin:/bin";',
+    'const child = spawn(command[0], command.slice(1), {',
+    '  cwd: chdir ? toHost(chdir) : undefined, env: childEnv, stdio: "inherit",',
+    '});',
+    'child.on("error", (error) => { console.error(`bwrap-passthrough: ${error.message}`); process.exit(127); });',
+    'child.on("exit", (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exit(code ?? 0); });',
+  ].join("\n")}\n`);
+  const launcher = resolve(root, "bwrap");
+  await writeFile(launcher, `#!/bin/sh\nexec node ${JSON.stringify(implementation)} "$@"\n`);
+  await chmod(launcher, 0o755);
+  return launcher;
+}
+
 async function startTestApi(
   context: TestContext,
   dataDir: string,
@@ -168,7 +253,7 @@ async function startTestApi(
 ): Promise<{ origin: string }> {
   const runnerConfig: RunnerConfig = {
     authToken: "runner-test-token",
-    bwrapPath: process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
+    bwrapPath: await writePassthroughBwrap(resolve(dataDir, "sandbox-stub")),
     dataDir,
     execTimeoutMs: 60_000,
     host: "127.0.0.1",
@@ -1009,7 +1094,7 @@ test("loadServerConfig uses safe local defaults", async (context) => {
 
 test("loadServerConfig defaults the data directory to the repository data dir", () => {
   const config = loadServerConfig({ ...CONFIGURED_TOKENS });
-  assert.equal(config.dataDir.endsWith("/data"), true);
+  assert.equal(config.dataDir.endsWith("/.sciencediscovery-data"), true);
 });
 
 test("loadServerConfig preserves an explicit network bind", () => {
@@ -1018,9 +1103,9 @@ test("loadServerConfig preserves an explicit network bind", () => {
 });
 
 test("loadServerConfig derives the paper env from a relocated data dir", () => {
-  const config = loadServerConfig({ ...CONFIGURED_TOKENS, SCIENCE_AGENT_DATA_DIR: "/srv/science-agent" });
-  assert.equal(config.dataDir, "/srv/science-agent");
-  assert.equal(config.paperPythonPath, "/srv/science-agent/envs/paper/bin/python");
+  const config = loadServerConfig({ ...CONFIGURED_TOKENS, SCIENCE_AGENT_DATA_DIR: "/srv/sciencediscovery" });
+  assert.equal(config.dataDir, "/srv/sciencediscovery");
+  assert.equal(config.paperPythonPath, "/srv/sciencediscovery/envs/paper/bin/python");
 });
 
 test("loadServerConfig validates the port", () => {
@@ -1637,7 +1722,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
 
   const runner = createRunnerServer({
     authToken: "runner-test-token",
-    bwrapPath: "/usr/bin/bwrap",
+    bwrapPath: await writePassthroughBwrap(resolve(tempRoot, "sandbox-stub")),
     dataDir: tempRoot,
     execTimeoutMs: 0,
     host: "127.0.0.1",
@@ -4640,6 +4725,128 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
   assert.equal(deletedProject.status, 200);
   assert.equal((await fetch(`${origin}/api/projects/${project.body.id}/settings`, { headers: authorization })).status, 404);
   await assert.rejects(stat(resolve(tempRoot, "projects", project.body.id)), { code: "ENOENT" });
+});
+
+test("deleting a session/project mirrors the cleanup to the memory-graph sidecar", async (context) => {
+  // Verifies the handler wiring: after deleteSession/deleteProject commit on
+  // the store, the fire-and-forget sink posts /cleanup/session and
+  // /cleanup/project to the sidecar. The sidecar is a fake loopback that
+  // records requests; the memory-graph toggle is flipped on so the sink is
+  // not short-circuited (default is off).
+  const tempRoot = resolve(process.cwd(), ".tmp", `cleanup-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const received: { path: string; body: unknown }[] = [];
+  const fakeSidecar = createHttpServer((request, response) => {
+    let data = "";
+    request.on("data", (chunk) => { data += chunk; });
+    request.on("end", () => {
+      let body: unknown = null;
+      try { body = data ? JSON.parse(data) : null; } catch { /* null */ }
+      received.push({ path: request.url ?? "/", body });
+      response.writeHead(200, { "content-type": "application/json" });
+      const path = request.url ?? "";
+      if (path === "/health") response.end(JSON.stringify({ status: "healthy" }));
+      else if (path === "/internal/neo4j-password") response.end(JSON.stringify({ status: "healthy" }));
+      else if (path === "/cleanup/session") response.end(JSON.stringify({ status: "healthy", "marked": 1, "deleted": 1 }));
+      else if (path === "/cleanup/project") response.end(JSON.stringify({ status: "healthy", "deleted": 1 }));
+      else response.end("{}");
+    });
+  });
+  await new Promise<void>((resolveListen) => fakeSidecar.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => fakeSidecar.close(() => resolveClose())));
+  const sidecarUrl = `http://127.0.0.1:${(fakeSidecar.address() as AddressInfo).port}`;
+
+  const server = createApiServer({ ...testConfig(tempRoot, "http://127.0.0.1:1"), memoryGraph: { url: sidecarUrl, internalToken: "test" } });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); server.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  // Two independent projects so the session-delete and project-delete checks
+  // don't interfere (deleting a session mutates the other project's impact
+  // snapshot). Each project gets a second session so project-cleanup carries
+  // >1 session id.
+  const projectA = await jsonRequest<{ project: { id: string }; firstSession: { id: string } }>(
+    `${origin}/api/projects`, {
+      body: JSON.stringify({ name: "Cleanup mirror A" }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "POST",
+    });
+  assert.equal(projectA.response.status, 201);
+  const sessionId = projectA.body.firstSession.id;
+  const projectAId = projectA.body.project.id;
+
+  const projectB = await jsonRequest<{ project: { id: string }; firstSession: { id: string } }>(
+    `${origin}/api/projects`, {
+      body: JSON.stringify({ name: "Cleanup mirror B" }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "POST",
+    });
+  assert.equal(projectB.response.status, 201);
+  const projectBId = projectB.body.project.id;
+  const secondB = await jsonRequest<{ id: string }>(`${origin}/api/projects/${projectBId}/sessions`, {
+    body: JSON.stringify({ title: "Second" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(secondB.response.status, 201);
+
+  // Flip the memory-graph toggle ON (no password push — only enabled is set,
+  // so the sidecar receives just a /health probe).
+  const toggled = await fetch(`${origin}/api/memory/settings`, {
+    body: JSON.stringify({ enabled: true }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+  assert.equal(toggled.status, 200);
+
+  // Delete the session → handler fires cleanupSession(sessionId).
+  const deletedSession = await fetch(`${origin}/api/sessions/${sessionId}`, {
+    body: JSON.stringify({ confirmationId: sessionId }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "DELETE",
+  });
+  assert.equal(deletedSession.status, 200);
+
+  // Capture the project's deletion-impact snapshot (its session ids at this
+  // moment) BEFORE deleting it — the handler reads impact before deleteProject,
+  // and cleanupProject must receive exactly this snapshot.
+  const projectImpact = await jsonRequest<{ sessionIds: string[] }>(
+    `${origin}/api/projects/${projectBId}/deletion-impact`, { headers: authorization });
+  assert.equal(projectImpact.response.status, 200);
+  const expectedProjectSessionIds = projectImpact.body.sessionIds.toSorted();
+
+  // Delete the project → handler fires cleanupProject(projectId, impact.sessionIds).
+  const deletedProject = await fetch(`${origin}/api/projects/${projectBId}`, {
+    body: JSON.stringify({ confirmationId: projectBId }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "DELETE",
+  });
+  assert.equal(deletedProject.status, 200);
+
+  // Wait for the two fire-and-forget posts to land (fire-and-forget does not
+  // await; poll until both /cleanup calls appear on the fake sidecar).
+  const deadline = Date.now() + 2_000;
+  let cleanups: { path: string; body: unknown }[] = [];
+  while (Date.now() < deadline) {
+    cleanups = received.filter((r) => r.path === "/cleanup/session" || r.path === "/cleanup/project");
+    if (cleanups.length >= 2) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 15));
+  }
+  assert.ok(cleanups.some((c) => c.path === "/cleanup/session"),
+    "deleteSession must fire cleanupSession → POST /cleanup/session");
+  assert.ok(cleanups.some((c) => c.path === "/cleanup/project"),
+    "deleteProject must fire cleanupProject → POST /cleanup/project");
+
+  const sessionCall = cleanups.find((c) => c.path === "/cleanup/session")!.body as Record<string, unknown>;
+  assert.equal(sessionCall.session_id, sessionId);
+
+  const projectCall = cleanups.find((c) => c.path === "/cleanup/project")!.body as Record<string, unknown>;
+  assert.equal(projectCall.project_id, projectBId);
+  // impact.sessionIds mirrors the pre-deletion snapshot (both of projectB's
+  // sessions); order-independent.
+  assert.deepEqual((projectCall.session_ids as string[]).toSorted(), expectedProjectSessionIds);
 });
 
 test("model registry persists multiple profiles and assigns them per session", async (context) => {

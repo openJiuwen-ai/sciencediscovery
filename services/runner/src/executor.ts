@@ -20,7 +20,7 @@ import {
   detectSandboxCapability,
   procMountArguments,
   type SandboxProcMode,
-} from "@science-agent/sandbox-capability";
+} from "@sciencediscovery/sandbox-capability";
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   epochSandboxNetworkAccess,
@@ -30,7 +30,7 @@ import {
   type ScientificLanguage,
   type ShellExecutionRequest,
   type ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import {
   EgressBridgeUnavailableError,
@@ -280,7 +280,7 @@ async function assertWorkspaceWithinQuota(workspaceRoot: string, maxWorkspaceByt
   }
 }
 
-const LOCAL_PYTHON_PACKAGES_MOUNT = "/opt/science-agent-python-packages";
+const LOCAL_PYTHON_PACKAGES_MOUNT = "/opt/sciencediscovery-python-packages";
 
 export async function localPythonPackageCandidatePaths(dataDir: string): Promise<string[]> {
   const packageRoot = resolve(dataDir, "python-packages");

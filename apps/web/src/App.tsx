@@ -14,6 +14,14 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 
+import {
+  readRenamedStorageItem,
+  SHOW_PHYSICAL_FILES_STORAGE_KEY,
+  TOKEN_STORAGE_KEY,
+  WORKSPACE_COLLAPSED_STORAGE_KEY,
+  WORKSPACE_WIDTH_STORAGE_KEY,
+} from "./browser-storage.js";
+
 import type {
   ArtifactDerivation,
   ArtifactJob,
@@ -80,8 +88,8 @@ import type {
   WorkspaceCapabilities,
   WorkspaceFile,
   WorkbenchSearchResult,
-} from "@science-agent/schema";
-import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificArtifactKind, UNTITLED_SESSION_TITLE } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificArtifactKind, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
 import { createSessionActivity } from "./run-stream/session-activity.js";
@@ -931,7 +939,7 @@ export function App() {
   // No built-in fallback token: the server generates one on its first start and
   // prints it, so a browser that has never been given a token starts empty, is
   // rejected with 401, and is handed the Connection settings dialog.
-  const [token, setToken] = useState(() => localStorage.getItem("science-agent-token") ?? "");
+  const [token, setToken] = useState(() => readRenamedStorageItem(localStorage, TOKEN_STORAGE_KEY) ?? "");
   const [models, setModels] = useState<ModelProfile[]>([]);
   const [connectors, setConnectors] = useState<ConnectorManifest[]>([]);
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
@@ -1085,9 +1093,9 @@ export function App() {
   const [isFollowingOutput, setIsFollowingOutput] = useState(true);
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(() => initialView.workspaceOpen !== undefined
     ? !initialView.workspaceOpen
-    : localStorage.getItem("science-agent-workspace-collapsed") === "1");
+    : readRenamedStorageItem(localStorage, WORKSPACE_COLLAPSED_STORAGE_KEY) === "1");
   const [showPhysicalFiles, setShowPhysicalFiles] = useState(() =>
-    localStorage.getItem("science-agent-show-physical-files") === "1");
+    readRenamedStorageItem(localStorage, SHOW_PHYSICAL_FILES_STORAGE_KEY) === "1");
   const [artifactSelectionMode, setArtifactSelectionMode] = useState(false);
   const [selectedArtifactIds, setSelectedArtifactIds] = useState<ReadonlySet<string>>(() => new Set());
   const [artifactArchiveBusy, setArtifactArchiveBusy] = useState(false);
@@ -1096,7 +1104,7 @@ export function App() {
   const [workspaceResizing, setWorkspaceResizing] = useState(false);
   const [workspaceMaxWidth, setWorkspaceMaxWidth] = useState(() => measureWorkspaceMaxWidth());
   const [workspaceWidth, setWorkspaceWidth] = useState(() => {
-    const stored = Number(localStorage.getItem("science-agent-workspace-width"));
+    const stored = Number(readRenamedStorageItem(localStorage, WORKSPACE_WIDTH_STORAGE_KEY));
     const maxWidth = measureWorkspaceMaxWidth();
     return clampWorkspaceWidth(stored > 0 ? stored : DEFAULT_WORKSPACE_WIDTH, maxWidth);
   });
@@ -1353,22 +1361,22 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("science-agent-token", token);
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
     // A new token deserves a fresh verdict; the next 401 (if any) re-arms both
     // the rejection notice and the automatic prompt.
     setTokenRejected(false);
   }, [token]);
 
   useEffect(() => {
-    localStorage.setItem("science-agent-workspace-collapsed", workspaceCollapsed ? "1" : "0");
+    localStorage.setItem(WORKSPACE_COLLAPSED_STORAGE_KEY, workspaceCollapsed ? "1" : "0");
   }, [workspaceCollapsed]);
 
   useEffect(() => {
-    localStorage.setItem("science-agent-workspace-width", String(workspaceWidth));
+    localStorage.setItem(WORKSPACE_WIDTH_STORAGE_KEY, String(workspaceWidth));
   }, [workspaceWidth]);
 
   useEffect(() => {
-    localStorage.setItem("science-agent-show-physical-files", showPhysicalFiles ? "1" : "0");
+    localStorage.setItem(SHOW_PHYSICAL_FILES_STORAGE_KEY, showPhysicalFiles ? "1" : "0");
   }, [showPhysicalFiles]);
 
   useEffect(() => {
@@ -4172,7 +4180,7 @@ export function App() {
               /> : null}
               {systemSettingsGroup === "models" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.providerConfiguration")}</span><h3>{t("settings.modelRegistry")}</h3><p>{t("settings.modelHelp")}</p></div>
-                <div className="model-list-header"><span>{t("settings.configuredModels")}</span><button type="button" onClick={startNewModel}>{t("settings.addModel")}</button></div>
+                <div className="model-list-header"><span>{t("settings.configuredModels")}</span><button className="secondary-button compact-button" type="button" onClick={startNewModel}>{t("settings.addModel")}</button></div>
                 <div className="model-list">
                   {models.map((item) => {
                     const idHint = duplicateModelProfileId(item, models);

@@ -4,7 +4,7 @@
 import {
   createReviewAgentOptions as createReviewAgentDomainOptions,
   type CreateReviewAgentOptionsInput,
-} from "@science-agent/specialist";
+} from "@sciencediscovery/specialist";
 
 import { runSubagentTask } from "../agent-run/orchestrators.js";
 

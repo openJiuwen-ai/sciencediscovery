@@ -15,7 +15,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_HOST` | `127.0.0.1` | HTTP 绑定地址；监听其他网卡必须显式配置 |
 | `SCIENCE_AGENT_PORT` | `4310` | HTTP 端口 |
 | `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器/API bearer token；不设置时使用 `<数据目录>/secrets/auth-token` 中保存的值 |
-| `SCIENCE_DISCOVERY_DATA_DIR` | 仓库启动器为 `data`；单文件 launcher 为 `./science-discovery-data` | 项目、会话、工作区、密钥、服务环境。原 `SCIENCE_AGENT_DATA_DIR` 保留为带日志的兼容回退。 |
+| `SCIENCE_DISCOVERY_DATA_DIR` | 均为 `.sciencediscovery-data`：仓库启动器相对仓库根目录解析，单文件 launcher 相对当前工作目录解析 | 项目、会话、工作区、密钥、服务环境。原 `SCIENCE_AGENT_DATA_DIR` 保留为带日志的兼容回退。 |
 | `SCIENCE_AGENT_LOG_LEVEL` | `INFO` | 运行日志级别阈值（`DEBUG` / `INFO` / `WARNING` / `ERROR`） |
 | `SCIENCE_AGENT_LOG_DIR` | `<数据目录>/logs` | 可选日志目录覆盖；通常保持默认以随数据目录持久化 |
 | `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | 单个类别日志滚动前的最大字节数 |
@@ -25,7 +25,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner 监听地址 |
 | `SCIENCE_AGENT_RUNNER_PORT` | `4311` | Runner 监听端口 |
 | `SCIENCE_AGENT_RUNNER_URL` | `http://127.0.0.1:4311` | Runner 端点（API 客户端） |
-| `SCIENCE_AGENT_RUNNER_TOKEN` | `science-agent-runner-local` | API→runner token |
+| `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API→runner token |
 | `SCIENCE_AGENT_BWRAP_PATH` | `bwrap`（通过 `PATH` 解析） | bubblewrap 可执行文件；Runner 启动时校验所需沙箱参数 |
 | `SCIENCE_AGENT_NPU_BROKER` | `0` | 是否启用宿主 Ascend NPU Broker。默认关闭；只有 `1` / `true` / `yes` 会让 Agent 看到 `run_npu_job` |
 | `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` | 空 | NPU workload 白名单 JSON；留空时使用 `services/runner/workloads/npu-workloads.default.json` |
@@ -37,7 +37,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | memory-graph 监听地址（服务进程使用） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | memory-graph 监听端口（服务进程使用） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | memory-graph 端点（API 客户端） |
-| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `science-agent-memory-graph-local` | API→memory-graph token |
+| `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API→memory-graph token |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | memory-graph 日志级别 |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `0` | 初始单次沙箱执行墙钟上限（`0` = 无限） |
 | `SCIENCE_AGENT_MAX_WORKSPACE_BYTES` | `10737418240`（10 GiB） | Runner 工作区总量上限（`0` = 无限）；亦播种系统设置 |
@@ -84,7 +84,7 @@ Compose 读取仓库根目录 `.env`，并把以下键插值到 `docker-compose.
 | `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | UI/API 在宿主上发布到的网卡 |
 | `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | 映射到容器 `4310` 的宿主端口 |
 | `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器/API bearer token；不设置时使用 `<数据目录>/secrets/auth-token` 中保存的值 |
-| `SCIENCE_AGENT_RUNNER_TOKEN` | `science-agent-runner-local` | API→runner token（仅容器回环） |
+| `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API→runner token（仅容器回环） |
 | `SCIENTIFIC_ENVS` | `1` | 托管 Python/R 环境与持久内核 |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | 单次沙箱执行的墙钟上限 |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | 持久内核空闲超时（最小 1000 ms） |
@@ -101,22 +101,22 @@ API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，�
 
 | 位置 | 内容 |
 |---|---|
-| `data/`（`SCIENCE_DISCOVERY_DATA_DIR`） | 全部运行时状态。请将该目录作为整体备份。 |
-| `data/catalog.sqlite` | 目录库：项目、会话、设置、模型配置、权限、specialists（遗留 `catalog.json` 会自动导入） |
-| `data/mcp-result-cache.sqlite` | MCP 连接器结果缓存 |
-| `data/web-cache.sqlite`、`data/web-audit.sqlite` | Web Search/Fetch 缓存与 `WebInvocation` 审计 |
-| `data/model-secrets.key` | 提供方 token 的 AES-256-GCM 密钥（仅属主可读；无密钥则 token 无用） |
-| `data/projects/<project-id>/sessions/<session-id>/workspace/` | 每会话工作区：上传/生成文件、`papers/<paper-id>/` 抽取结果 |
-| `data/cas/`、`data/execution-runs/`、`data/prompt-manifests/`、`data/reviews/`、`data/messages/` | 内容寻址 blob、执行记录、prompt manifest、聊天、评审 |
-| `data/claims/`、`data/evidence-items/`、`data/evidence-links/`、`data/mcp-invocations/`、`data/artifact-derivations/` | claim/证据溯源与 MCP 审计 |
-| `data/session-runs/`、`data/run-events/<session>/<run>/main.jsonl`（及 `tool-<id>`/`subagent-<id>` 子流）、`data/model-usage/`、`data/connector-invocations/` | 会话运行记录、运行时间线（无损 append-only JSONL；遗留扁平 `<run>.json` 只读兼容）、模型用量与连接器调用审计 |
-| `data/artifact-plans/`、`data/artifact-jobs/`、`data/artifact-extraction-jobs/` | 下载与 PDF 抽取任务状态 |
-| `data/scientific-envs/`、`data/runner-runtime/` | 托管 Python/R 环境与 runner 临时状态 |
-| `data/skills/` | 本地托管技能包与 revision |
-| `data/envs/paper/`、`data/envs/gateway/` | uv 管理的 PDF worker 与 agent gateway Python 环境（可由运行脚本重建；非业务状态） |
-| `data/logs/{api,run,gateway,runner,memory-graph}.log` | 分级、按类别和大小滚动的运行日志；memory-graph 文件仅在功能启用时使用 |
+| `.sciencediscovery-data/`（`SCIENCE_DISCOVERY_DATA_DIR`） | 全部运行时状态。请将该目录作为整体备份。 |
+| `.sciencediscovery-data/catalog.sqlite` | 目录库：项目、会话、设置、模型配置、权限、specialists（遗留 `catalog.json` 会自动导入） |
+| `.sciencediscovery-data/mcp-result-cache.sqlite` | MCP 连接器结果缓存 |
+| `.sciencediscovery-data/web-cache.sqlite`、`.sciencediscovery-data/web-audit.sqlite` | Web Search/Fetch 缓存与 `WebInvocation` 审计 |
+| `.sciencediscovery-data/model-secrets.key` | 提供方 token 的 AES-256-GCM 密钥（仅属主可读；无密钥则 token 无用） |
+| `.sciencediscovery-data/projects/<project-id>/sessions/<session-id>/workspace/` | 每会话工作区：上传/生成文件、`papers/<paper-id>/` 抽取结果 |
+| `.sciencediscovery-data/cas/`、`.sciencediscovery-data/execution-runs/`、`.sciencediscovery-data/prompt-manifests/`、`.sciencediscovery-data/reviews/`、`.sciencediscovery-data/messages/` | 内容寻址 blob、执行记录、prompt manifest、聊天、评审 |
+| `.sciencediscovery-data/claims/`、`.sciencediscovery-data/evidence-items/`、`.sciencediscovery-data/evidence-links/`、`.sciencediscovery-data/mcp-invocations/`、`.sciencediscovery-data/artifact-derivations/` | claim/证据溯源与 MCP 审计 |
+| `.sciencediscovery-data/session-runs/`、`.sciencediscovery-data/run-events/<session>/<run>/main.jsonl`（及 `tool-<id>`/`subagent-<id>` 子流）、`.sciencediscovery-data/model-usage/`、`.sciencediscovery-data/connector-invocations/` | 会话运行记录、运行时间线（无损 append-only JSONL；遗留扁平 `<run>.json` 只读兼容）、模型用量与连接器调用审计 |
+| `.sciencediscovery-data/artifact-plans/`、`.sciencediscovery-data/artifact-jobs/`、`.sciencediscovery-data/artifact-extraction-jobs/` | 下载与 PDF 抽取任务状态 |
+| `.sciencediscovery-data/scientific-envs/`、`.sciencediscovery-data/runner-runtime/` | 托管 Python/R 环境与 runner 临时状态 |
+| `.sciencediscovery-data/skills/` | 本地托管技能包与 revision |
+| `.sciencediscovery-data/envs/paper/`、`.sciencediscovery-data/envs/gateway/` | uv 管理的 PDF worker 与 agent gateway Python 环境（可由运行脚本重建；非业务状态） |
+| `.sciencediscovery-data/logs/{api,run,gateway,runner,memory-graph}.log` | 分级、按类别和大小滚动的运行日志；memory-graph 文件仅在功能启用时使用 |
 | 浏览器 local storage | 仅 API bearer token——模型凭证从不离开后端 |
 
-数据目录是唯一运行时根：通过设置 `SCIENCE_DISCOVERY_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh`）。原 `SCIENCE_AGENT_DATA_DIR` 仍作为兼容回退读取并打印日志；新旧同时设置时 `SCIENCE_DISCOVERY_DATA_DIR` 优先，且会记录该选择。对于单文件 launcher，已有默认 `./science-agent-data` 会一次性导入 `./science-discovery-data`；目标已存在时绝不覆盖并打印跳过原因。删除当前生效的数据目录会清除所有项目、会话、凭证与审计记录。在 [Docker 部署](../how-to/deployment.md#docker-部署)中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `data/envs/` 下的环境。
+数据目录是唯一运行时根：通过设置 `SCIENCE_DISCOVERY_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh`）。原 `SCIENCE_AGENT_DATA_DIR` 仍作为兼容回退读取并打印日志；新旧同时设置时 `SCIENCE_DISCOVERY_DATA_DIR` 优先，且会记录该选择。对于仓库启动器，已有默认 `data` 目录会一次性移动到 `.sciencediscovery-data`。对于单文件 launcher，已有默认 `./science-discovery-data` 或更早的 `./science-agent-data` 会按由新到旧的顺序一次性导入 `./.sciencediscovery-data`；目标已存在时绝不覆盖并打印跳过原因。删除当前生效的数据目录会清除所有项目、会话、凭证与审计记录。在 [Docker 部署](../how-to/deployment.md#docker-部署)中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `.sciencediscovery-data/envs/` 下的环境。
 
 单文件 payload 覆盖变量遵循同一命名和优先级：用 `SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR` 指定解包缓存，或用 `SCIENCE_DISCOVERY_PAYLOAD_DIR` 指定已解包 payload；对应的 `SCIENCE_AGENT_*` 名称继续作为带日志的兼容回退。

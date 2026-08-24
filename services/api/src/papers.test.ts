@@ -20,7 +20,7 @@ import { dirname, resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 
-import type { ArtifactCandidate } from "@science-agent/schema";
+import type { ArtifactCandidate } from "@sciencediscovery/schema";
 
 import { PaperService } from "./papers.js";
 import { SessionStore } from "./store.js";

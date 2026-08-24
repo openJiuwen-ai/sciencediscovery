@@ -81,7 +81,7 @@
 
 技能加载流程见 [skill-progressive-disclosure.md](../explanation/skill-progressive-disclosure.md)：`describe_skill` 检索本次运行的技能目录，`read_skill` 和 `read_skill_resource` 读取本次运行的冻结快照。
 
-`run_npu_job` 不是通用宿主 shell。它只把 Agent 请求转成 Runner 内 Host NPU Broker 的作业操作，由 Broker 按 JSON 白名单启动固定 entrypoint，并按当前 Session 校验 job 的 status / logs / result / cancel。默认 NPU workload 的 Python 由 Runner 根据 `environment_revision_id` 在 `data/scientific-envs/` 中解析，Agent 不能提交任意解释器路径。技能应先用 `environment.list` 和指定 revision 的 `run_python` 验证依赖；没有满足条件的环境时，通过 `environment.create` / `environment.install` 创建新 revision，再把返回的 revision ID 交给 `run_npu_job`。内置抗体 workload 使用 Protenix 路径 `antibody.protenix.v1`；其他模型后端需要显式自定义白名单或后续扩展。
+`run_npu_job` 不是通用宿主 shell。它只把 Agent 请求转成 Runner 内 Host NPU Broker 的作业操作，由 Broker 按 JSON 白名单启动固定 entrypoint，并按当前 Session 校验 job 的 status / logs / result / cancel。默认 NPU workload 的 Python 由 Runner 根据 `environment_revision_id` 在 `.sciencediscovery-data/scientific-envs/` 中解析，Agent 不能提交任意解释器路径。技能应先用 `environment.list` 和指定 revision 的 `run_python` 验证依赖；没有满足条件的环境时，通过 `environment.create` / `environment.install` 创建新 revision，再把返回的 revision ID 交给 `run_npu_job`。内置抗体 workload 使用 Protenix 路径 `antibody.protenix.v1`；其他模型后端需要显式自定义白名单或后续扩展。
 
 ## 一致性说明
 

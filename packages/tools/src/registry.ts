@@ -3,7 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import type { RuntimeMessage, RuntimeToolCall, ToolDispatchResult, ToolDispatcher } from "@science-agent/runtime-core";
+import type { RuntimeMessage, RuntimeToolCall, ToolDispatchResult, ToolDispatcher } from "@sciencediscovery/runtime-core";
 
 import {
   autoPromoteFromRouting,

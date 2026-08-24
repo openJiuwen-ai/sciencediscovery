@@ -31,7 +31,7 @@ import type {
   NpuJob,
   NpuJobLogs,
   NpuWorkloadDescriptor,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { appendBounded, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.js";
 

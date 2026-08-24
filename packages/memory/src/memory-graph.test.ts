@@ -664,3 +664,67 @@ test("traceProvenance degrades to broken:true when the sidecar is unreachable", 
     await close(server);
   }
 });
+
+test("MemoryGraphSink.cleanupSession posts the right shape and never throws when the service errors", async () => {
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((_path, body) => {
+    captured = { path: _path, body };
+    // Even a 500 must not throw into the HTTP deletion response.
+    return { status: 500, json: { detail: "boom" } };
+  });
+  const url = `http://127.0.0.1:${portOf(server)}`;
+  try {
+    const client = new MemoryGraphClient({ url, token: "test-token" });
+    const sink = new MemoryGraphSink(client, () => true);
+    sink.cleanupSession("sess-del");
+    for (let attempt = 0; attempt < 50 && !captured; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(captured, "the sink should have posted to the sidecar");
+    const c = captured as { path: string; body: unknown };
+    assert.equal(c.path, "/cleanup/session");
+    assert.equal((c.body as Record<string, unknown>).session_id, "sess-del");
+  } finally {
+    await close(server);
+  }
+});
+
+test("MemoryGraphSink.cleanupProject posts the right shape and never throws when the service errors", async () => {
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((_path, body) => {
+    captured = { path: _path, body };
+    return { status: 500, json: { detail: "boom" } };
+  });
+  const url = `http://127.0.0.1:${portOf(server)}`;
+  try {
+    const client = new MemoryGraphClient({ url, token: "test-token" });
+    const sink = new MemoryGraphSink(client, () => true);
+    sink.cleanupProject("proj-del", ["s1", "s2"]);
+    for (let attempt = 0; attempt < 50 && !captured; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(captured, "the sink should have posted to the sidecar");
+    const c = captured as { path: string; body: unknown };
+    assert.equal(c.path, "/cleanup/project");
+    const body = c.body as Record<string, unknown>;
+    assert.equal(body.project_id, "proj-del");
+    assert.deepEqual(body.session_ids, ["s1", "s2"]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("MemoryGraphSink.cleanup* is a no-op when disabled (no network call)", async () => {
+  let calls = 0;
+  const server = await startFakeMemoryGraph(() => { calls += 1; return { status: 200, json: { status: "healthy" } }; });
+  const url = `http://127.0.0.1:${portOf(server)}`;
+  try {
+    const sink = new MemoryGraphSink(null, () => false);
+    sink.cleanupSession("sess-x");
+    sink.cleanupProject("proj-x", ["s1"]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 0, "a disabled sink must not touch the network");
+  } finally {
+    await close(server);
+  }
+});

@@ -10,7 +10,7 @@ import {
   type ScientificArtifact,
   type ScientificArtifactKind,
   type ScientificArtifactVersion,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export interface ArtifactVersionInput {
   content: CasObjectRef;

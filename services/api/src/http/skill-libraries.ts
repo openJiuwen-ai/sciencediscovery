@@ -18,7 +18,7 @@ import type {
   CommitSkillLibraryVersionRequest,
   RollbackSkillLibraryVersionRequest,
   SkillLibrarySearchRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { SkillLibraryCatalog, SkillLibraryCatalogError } from "../skill-library-catalog.js";
 import { readJson } from "./body.js";

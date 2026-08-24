@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/model",
+  "name": "@sciencediscovery/model",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,8 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/runtime-core": "workspace:*",
-    "@science-agent/schema": "workspace:*",
+    "@sciencediscovery/runtime-core": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*",
     "undici": "8.7.0"
   },
   "devDependencies": { "@types/node": "26.1.1" }

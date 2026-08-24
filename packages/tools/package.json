@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/tools",
+  "name": "@sciencediscovery/tools",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/runtime-core": "workspace:*",
+    "@sciencediscovery/runtime-core": "workspace:*",
     "typebox": "1.1.38"
   },
   "devDependencies": { "@types/node": "26.1.1" }

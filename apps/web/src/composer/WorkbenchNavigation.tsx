@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ComposerReference, SkillDescriptor, WorkbenchSearchResult } from "@science-agent/schema";
+import type { ComposerReference, SkillDescriptor, WorkbenchSearchResult } from "@sciencediscovery/schema";
 
 import { CloseIcon, FileIcon, ProjectIcon, SearchIcon, SessionIcon } from "../icons.js";
 import { useLocale } from "../i18n/index.js";

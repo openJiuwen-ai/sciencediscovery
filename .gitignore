@@ -33,6 +33,13 @@ coverage/
 .tmp/
 .local/
 *.log
+# packages/provenance falls back to <cwd>/logs when no data directory is
+# configured, so the reviewer NDJSON can land next to whichever service ran.
+logs/
+
+# Local stack runtime: the repository launcher defaults its data directory
+# here, holding service venvs, session data and bootstrap tokens.
+/.sciencediscovery-data/
 
 # Local Playwright environment and reports
 .e2e/
@@ -58,5 +65,5 @@ Thumbs.db
 .worktrees/
 
 # Note: .agents/ is tracked (project agent skills, e.g. gitcode)
-# Local caches under skills (e.g. MindSpore org issue/PR templates) stay untracked
+# Local caches under skills (e.g. openJiuwen org issue/PR templates) stay untracked
 .agents/skills/gitcode/cache/

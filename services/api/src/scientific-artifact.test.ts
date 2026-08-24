@@ -25,7 +25,7 @@ import {
   SCIENTIFIC_ARTIFACT_KIND_SET,
   classifyScientificArtifact,
   resolveScientificArtifactKind,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 test("SCIENTIFIC_ARTIFACT_KINDS matches the canonical kinds", () => {
   assert.deepEqual(SCIENTIFIC_ARTIFACT_KINDS, [

@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-/** Contract tests for the shared sandbox network policy logic in @science-agent/schema. */
+/** Contract tests for the shared sandbox network policy logic in @sciencediscovery/schema. */
 
 import {
   allowedDomainMatches,
@@ -23,7 +23,7 @@ import {
   normalizeAllowedDomains,
   parseAllowedDomain,
   type PermissionEpoch,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 test("allowed domain entries are normalized, de-duplicated and sorted", () => {
   assert.deepEqual(

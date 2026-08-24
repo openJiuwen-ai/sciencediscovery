@@ -18,7 +18,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 
 import { SessionStore } from "./store.js";
-import { BUILTIN_SPECIALISTS, BUILTIN_SPECIALIST_IDS } from "@science-agent/specialist";
+import { BUILTIN_SPECIALISTS, BUILTIN_SPECIALIST_IDS } from "@sciencediscovery/specialist";
 
 async function withStore(
   fn: (store: SessionStore) => Promise<void>,

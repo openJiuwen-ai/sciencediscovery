@@ -20,9 +20,9 @@ import {
   normalizePipIndexUrl,
   type EnvironmentSourceSettings,
   type InstallEnvironmentRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
-import type { RunnerInstallEnvironmentRequest } from "@science-agent/executor";
+import type { RunnerInstallEnvironmentRequest } from "@sciencediscovery/executor";
 import { hasOwn, isRecord } from "./store/catalog.js";
 
 const CONDA_SOURCE_IDS = new Set<string>(ENVIRONMENT_CONDA_SOURCE_PRESETS.map((preset) => preset.id));

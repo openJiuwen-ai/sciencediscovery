@@ -17,9 +17,9 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import type { RemoteJob } from "@science-agent/schema";
+import type { RemoteJob } from "@sciencediscovery/schema";
 
-import { RemoteComputeClient, type RemoteCommandResult, type RemoteTransport } from "@science-agent/executor";
+import { RemoteComputeClient, type RemoteCommandResult, type RemoteTransport } from "@sciencediscovery/executor";
 
 class FakeTransport implements RemoteTransport {
   readonly calls: Array<{ alias: string; script: string; timeoutMs: number }> = [];
@@ -108,7 +108,7 @@ test("SLURM submission records the scheduler id and remote script without waitin
 
   assert.equal(submitted.state, "submitted");
   assert.equal(submitted.remoteJobId, "8421");
-  assert.equal(submitted.scriptReference, "/scratch/study/.science-agent/jobs/job-1.sh");
+  assert.equal(submitted.scriptReference, "/scratch/study/.sciencediscovery/jobs/job-1.sh");
   assert.deepEqual(submitted.outputRecords.map((output) => output.status), ["pending", "remote"]);
   assert.match(transport.calls[0]!.script, /sbatch --parsable/);
 });

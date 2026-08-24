@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
-import type { ModelClient, ModelClientObserver, ModelTurn as RuntimeModelTurn, RuntimeMessage } from "@science-agent/runtime-core";
+import type { ModelClient, ModelClientObserver, ModelTurn as RuntimeModelTurn, RuntimeMessage } from "@sciencediscovery/runtime-core";
 
 import {
   streamModelTurn,

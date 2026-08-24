@@ -62,7 +62,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
       "模型由旅程自带的本地 stub 驱动，不访问任何外部服务",
     ],
   });
-  await page.addInitScript(() => window.localStorage.setItem("science-agent-locale", "zh-CN"));
+  await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-locale", "zh-CN"));
 
   const firstMarker = `J1-FIRST-${Date.now()}`;
   const persistentValue = `J1-PERSIST-${Date.now()}`;

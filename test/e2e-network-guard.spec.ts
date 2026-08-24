@@ -45,7 +45,7 @@ async function webSocketOutcome(page: import("@playwright/test").Page, url: stri
  *   1. Start one local HTTP/WebSocket server.
  *   2. Assert an HTTPS navigation is blocked and local HTTP still responds.
  *   3. Assert a non-local WebSocket is policy-closed and local WebSocket opens.
- * Environment: Pinned Chromium only; no running science_agent stack or test
+ * Environment: Pinned Chromium only; no running ScienceDiscovery stack or test
  *   data is required.
  * Type: mocked
  * LLM: none

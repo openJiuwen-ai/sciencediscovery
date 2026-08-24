@@ -18,7 +18,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 
-import type { CasObjectRef } from "@science-agent/schema";
+import type { CasObjectRef } from "@sciencediscovery/schema";
 
 export interface ContentStore {
   hash(content: string | Buffer): string;

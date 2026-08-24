@@ -1,6 +1,6 @@
 # 内容寻址存储（CAS）
 
-ScienceDiscovery 通过 `@science-agent/cas` 包保存不可变的审计与产物内容。业务模块调用统一 API，不各自实现存储布局；引用统一使用 `CasObjectRef { hash, size }`。
+ScienceDiscovery 通过 `@sciencediscovery/cas` 包保存不可变的审计与产物内容。业务模块调用统一 API，不各自实现存储布局；引用统一使用 `CasObjectRef { hash, size }`。
 
 ## 地址与布局
 

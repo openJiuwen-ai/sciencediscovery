@@ -55,7 +55,7 @@ test.beforeEach(async ({ page }) => {
   // access token into every context; this is the one spec that must start from
   // the real cold-start state, so it clears that key again on every navigation.
   await page.addInitScript((tokenKey) => {
-    window.localStorage.setItem("science-agent-locale", "en");
+    window.localStorage.setItem("sciencediscovery-locale", "en");
     window.localStorage.removeItem(tokenKey);
   }, BROWSER_TOKEN_STORAGE_KEY);
 });

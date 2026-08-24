@@ -17,7 +17,7 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { GlobalModelUsageSummary, ModelInvocationUsage, ModelUsageBucket } from "@science-agent/schema";
+import type { GlobalModelUsageSummary, ModelInvocationUsage, ModelUsageBucket } from "@sciencediscovery/schema";
 
 import { InvocationTable, RunUsageInline, UsagePage } from "../src/UsagePage.js";
 import { formatCompactTokenValue, usageBreakdownLabel, usageInlineLabel, usageInOutLabel } from "../src/usageFormat.js";

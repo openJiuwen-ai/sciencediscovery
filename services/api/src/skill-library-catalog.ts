@@ -33,11 +33,11 @@ import type {
   SkillLibraryVersionSkill,
   SkillValidationDiagnostic,
   RollbackSkillLibraryVersionRequest,
-} from "@science-agent/schema";
-import { BUILT_IN_SKILL_LIBRARY_ID } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { BUILT_IN_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
 
-import { BUNDLED_SKILL_IDS, validateSkillPackage } from "@science-agent/specialist";
-import type { RuntimeSkillSnapshot } from "@science-agent/specialist";
+import { BUNDLED_SKILL_IDS, validateSkillPackage } from "@sciencediscovery/specialist";
+import type { RuntimeSkillSnapshot } from "@sciencediscovery/specialist";
 
 const LIBRARY_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DEFAULT_LIBRARY_RECALL_LIMIT = 12;

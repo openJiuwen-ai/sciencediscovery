@@ -18,8 +18,8 @@ import type {
   ArtifactReviewFinding,
   ArtifactReviewRun,
   ScientificArtifactVersion,
-} from "@science-agent/schema";
-import { formatExternalUrl } from "@science-agent/schema";
+} from "@sciencediscovery/schema";
+import { formatExternalUrl } from "@sciencediscovery/schema";
 
 import { normalizeEvidenceAlias } from "./review-policy.js";
 import type { CitationSourceProbe, LiteratureCitationCandidate } from "./review-policy.js";

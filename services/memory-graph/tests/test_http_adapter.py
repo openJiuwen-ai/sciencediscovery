@@ -30,7 +30,7 @@ from typing import Any
 import httpx
 import pytest
 
-from science_agent_memory_graph._neo4j_http import _HttpResult, _HttpRecord, _HttpSession
+from sciencediscovery_memory_graph._neo4j_http import _HttpResult, _HttpRecord, _HttpSession
 
 
 # --- _HttpResult / _HttpRecord (no HTTP needed) ---------------------------

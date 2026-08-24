@@ -66,7 +66,7 @@ require_managed_python() {
         ;;
     esac
   fi
-  if truthy_env "${ANTIBODY_REQUIRE_SCIENCEAGENT_ENV:-1}"; then
+  if truthy_env "${ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV:-${ANTIBODY_REQUIRE_SCIENCEAGENT_ENV:-1}}"; then
     case "$PYTHON_BIN" in
       */scientific-envs/revisions/*/bin/python|*/scientific-envs/revisions/*/bin/python3|*/scientific-envs/revisions/*/bin/python3.*) ;;
       *)
@@ -77,7 +77,7 @@ require_managed_python() {
   fi
 }
 require_no_host_pipeline_env() {
-  if truthy_env "${ANTIBODY_REQUIRE_SCIENCEAGENT_ENV:-1}" && [[ -n "${PIPELINE_ENV:-}" ]]; then
+  if truthy_env "${ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV:-${ANTIBODY_REQUIRE_SCIENCEAGENT_ENV:-1}}" && [[ -n "${PIPELINE_ENV:-}" ]]; then
     echo "error: refusing --pipeline-env in ScienceDiscovery managed-env mode: $PIPELINE_ENV" >&2
     echo "       do not source host env.sh; install Python deps into the ScienceDiscovery scientific environment" >&2
     exit 2

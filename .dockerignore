@@ -1,6 +1,6 @@
-# Build-context exclusions. Two goals: keep the context small (the host `data/`
-# alone is multi-GB) and make the image reproducible by never shipping host
-# build output, local state, or secrets.
+# Build-context exclusions. Two goals: keep the context small (the host data
+# directory alone is multi-GB) and make the image reproducible by never
+# shipping host build output, local state, or secrets.
 
 # Version control and host build output — everything is rebuilt in the image.
 .git
@@ -12,11 +12,15 @@
 **/__pycache__
 **/*.pyc
 
-# Runtime state and credentials. `data/` is bind-mounted at run time instead.
+# Runtime state and credentials. The data directory is bind-mounted at run time
+# instead; `.sciencediscovery-data/` is the repository default and `data/` is the
+# former one, still excluded so an un-migrated checkout cannot ship its tokens
+# and `model-secrets.key` in the image.
 # `.deer-flow/` is state the retired vendor harness used to write beside the
 # services; the pattern stays so a stale directory on a developer machine
 # cannot re-enter the build context. Unlike .gitignore, Docker patterns are
 # anchored at the context root, so it needs `**`.
+.sciencediscovery-data/
 data/
 **/.deer-flow/
 **/.env

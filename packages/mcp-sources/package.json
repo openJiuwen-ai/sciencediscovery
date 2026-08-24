@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/mcp-sources",
+  "name": "@sciencediscovery/mcp-sources",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/schema": "workspace:*"
+    "@sciencediscovery/schema": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

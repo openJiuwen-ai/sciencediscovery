@@ -31,7 +31,7 @@ import type {
   SkillLibraryVersion,
   SkillResourceContent,
   UpdateSkillRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { SettingsApiClient } from "./settings.js";
 

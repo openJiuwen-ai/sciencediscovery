@@ -18,7 +18,7 @@ import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { PermissionEpoch } from "@science-agent/schema";
+import type { PermissionEpoch } from "@sciencediscovery/schema";
 
 import { executePython, executeShell } from "./executor.js";
 import { SessionEnvProfileStore, sedimentableVariables } from "./session-env-profile.js";

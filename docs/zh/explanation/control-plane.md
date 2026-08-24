@@ -41,8 +41,8 @@ SSE 传输为 fetch 流（`data: <json>\n\n` 帧），前端消费方式见[Web 
 
 ## 3. 存储
 
-- **SQLite**（`node:sqlite`，`data/catalog.sqlite`）：项目、会话、运行、消息、artifact 与版本、权限（请求/授权/epoch）、计划、子 Agent、specialists、模型配置、`permission_authorizations` 审计表等目录实体。
-- **文件**（`data/` 下按会话分文件）：execution-runs、prompt-manifests、claims、evidence-items/links、mcp-invocations、artifact-derivations、model-usage 等审计记录，以及 CAS blob（`data/cas/sha256/…`）。
+- **SQLite**（`node:sqlite`，`.sciencediscovery-data/catalog.sqlite`）：项目、会话、运行、消息、artifact 与版本、权限（请求/授权/epoch）、计划、子 Agent、specialists、模型配置、`permission_authorizations` 审计表等目录实体。
+- **文件**（`.sciencediscovery-data/` 下按会话分文件）：execution-runs、prompt-manifests、claims、evidence-items/links、mcp-invocations、artifact-derivations、model-usage 等审计记录，以及 CAS blob（`.sciencediscovery-data/cas/sha256/…`）。
 - 完整落点见[配置参考](../reference/configuration.md#存储布局)。
 
 ## 4. 运行生命周期

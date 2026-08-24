@@ -20,7 +20,7 @@ import {
   type SandboxNetworkSettings,
   type SystemQuotaSettings,
   type SystemTimeoutSettings,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 

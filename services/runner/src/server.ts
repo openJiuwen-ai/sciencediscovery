@@ -20,13 +20,13 @@ import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { createOperationalLogger, shortErrorMessage } from "@science-agent/operational-logging";
+import { createOperationalLogger, shortErrorMessage } from "@sciencediscovery/operational-logging";
 import {
   detectSandboxCapability,
   disableUsernsOmittedMessage,
   procFallbackMessage,
   sandboxUnusableMessage,
-} from "@science-agent/sandbox-capability";
+} from "@sciencediscovery/sandbox-capability";
 
 import type {
   ApiError,
@@ -42,7 +42,7 @@ import type {
   SetupScientificEnvironmentsRequest,
   ShellExecutionRequest,
   UninstallEnvironmentRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import {
   DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -189,9 +189,9 @@ export function loadRunnerConfig(env: NodeJS.ProcessEnv = process.env, cwd = rep
     return value;
   };
   return {
-    authToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "science-agent-runner-local",
+    authToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "sciencediscovery-runner-local",
     bwrapPath: env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
-    dataDir: resolve(cwd, env.SCIENCE_AGENT_DATA_DIR?.trim() || "data"),
+    dataDir: resolve(cwd, env.SCIENCE_AGENT_DATA_DIR?.trim() || ".sciencediscovery-data"),
     execTimeoutMs,
     maxOutputBytes: parseByteQuota("SCIENCE_AGENT_MAX_OUTPUT_BYTES", DEFAULT_MAX_OUTPUT_BYTES),
     maxWorkspaceBytes: parseByteQuota("SCIENCE_AGENT_MAX_WORKSPACE_BYTES", DEFAULT_MAX_WORKSPACE_BYTES),

@@ -30,7 +30,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-_LOGGER_NAME = "science_agent_memory_graph"
+_LOGGER_NAME = "sciencediscovery_memory_graph"
 _DEFAULT_FILENAME = "memory-graph.log"
 _SENSITIVE_ASSIGNMENT = re.compile(
     r'''\b(authorization|api[-_]?key|token|password|secret)\b["']?\s*[:=]\s*["']?(?:bearer\s+)?[^\s,;"'}]+''',
@@ -48,7 +48,7 @@ class _RedactingFormatter(logging.Formatter):
 
 def _resolve_log_path() -> Path:
     """Resolve the category file beneath the configured runtime data root."""
-    data_dir = Path(os.environ.get("SCIENCE_AGENT_DATA_DIR") or "data")
+    data_dir = Path(os.environ.get("SCIENCE_AGENT_DATA_DIR") or ".sciencediscovery-data")
     configured_dir = os.environ.get("SCIENCE_AGENT_LOG_DIR", "").strip()
     logs_dir = Path(configured_dir) if configured_dir else data_dir / "logs"
     path = logs_dir / _DEFAULT_FILENAME

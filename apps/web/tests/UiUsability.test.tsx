@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import type { ModelProfile } from "@science-agent/schema";
+import type { ModelProfile } from "@sciencediscovery/schema";
 
 import {
   duplicateModelProfileId,
@@ -73,6 +73,19 @@ test("settings checkboxes expose a 24px control inside clickable labels", () => 
   assert.match(responsive, /\.specialist-layout \{ grid-template-columns: minmax\(0, 1fr\); \}/);
 });
 
+test("the shared form skeleton also covers scoped settings outside config panels", () => {
+  const primitives = source("styles/primitives.css");
+  const managementControls = source("session/ManagementControls.tsx");
+
+  // The project creation dialog mounts ScopedSettingsEditor without a
+  // `.config-panel` ancestor, so the primitive must scope `.scoped-settings`
+  // directly to keep its selects and text fields off browser defaults.
+  assert.match(primitives, /\.scoped-settings :where\(\s*input:not\(\[type="checkbox"\]\)[\s\S]*?select,\s*textarea\s*\) \{/);
+  assert.match(primitives, /\.scoped-settings textarea \{[^}]*min-height: 96px;/);
+  assert.match(managementControls, /<section[^>]*className="creation-dialog"[^>]*>/);
+  assert.match(managementControls, /<ScopedSettingsEditor/);
+});
+
 test("sidebar ellipsis text nodes carry their full visible names", () => {
   const app = source("App.tsx");
 
@@ -89,4 +102,18 @@ test("workspace resize wiring shares a viewport-driven maximum", () => {
   assert.match(app, /event\.key === "End"\) resizeWorkspace\(Number\.POSITIVE_INFINITY\)/);
   assert.match(app, /window\.addEventListener\("resize", updateWorkspaceBounds\)/);
   assert.match(app, /style=\{workspaceCollapsed \? undefined : \{ gridTemplateColumns:/);
+});
+
+test("dense settings and artifact layouts adapt without fixed-column overflow", () => {
+  const settings = source("styles/settings.css");
+  const responsive = source("styles/responsive.css");
+  const artifacts = source("styles/artifacts.css");
+
+  assert.match(settings, /\.skill-manager-toolbar \{[^}]*display: flex;[^}]*flex-wrap: wrap;/);
+  assert.match(settings, /\.environment-install \{[^}]*grid-template-columns: minmax\(112px, 128px\) minmax\(0, 1fr\) auto;/);
+  assert.match(responsive, /\.skill-manager-toolbar input \{ flex-basis: 100%; \}/);
+  assert.match(responsive, /\.environment-install \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(responsive, /\.dialog-actions \{ flex-wrap: wrap; \}/);
+  assert.match(responsive, /\.annotation-editor \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(artifacts, /\.artifact-provenance article header \{[^}]*flex-wrap: wrap;/);
 });

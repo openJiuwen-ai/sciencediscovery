@@ -17,7 +17,7 @@ import type {
   Project,
   Session,
   SessionRun,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export function messageForSessionTitle(content: string): string {
   const prefix = "/web-refresh ";

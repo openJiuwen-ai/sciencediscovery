@@ -20,7 +20,7 @@
  * redacted, level-filtered, and size-rotated.
  */
 
-import { createOperationalLogger, type OperationalLogger } from "@science-agent/operational-logging";
+import { createOperationalLogger, type OperationalLogger } from "@sciencediscovery/operational-logging";
 
 // The on/off switch moved out of env into the store (System Settings → Memory
 // graph). The API boot wires the live toggle here via ``setToggle``; until

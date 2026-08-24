@@ -14,7 +14,7 @@
 
 import { useState } from "react";
 
-import type { ArtifactJob, ArtifactPlan } from "@science-agent/schema";
+import type { ArtifactJob, ArtifactPlan } from "@sciencediscovery/schema";
 
 import { ChevronRightIcon } from "./icons.js";
 import {

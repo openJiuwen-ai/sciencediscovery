@@ -23,7 +23,7 @@ import type {
   RuntimeStatus,
   SendMessageRequest,
   PromptManifest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { SessionsApiClient } from "./sessions.js";
 

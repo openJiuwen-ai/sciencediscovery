@@ -36,7 +36,7 @@ A successful response is `200` and includes:
   "memoryGraph": "disabled",
   "milestone": "M4",
   "runner": { "status": "ok" },
-  "service": "science-agent-api",
+  "service": "sciencediscovery-api",
   "status": "ok",
   "workspace": {
     "maxFileBytes": 1073741824,

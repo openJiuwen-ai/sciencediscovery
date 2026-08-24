@@ -19,12 +19,12 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
-import type { ArtifactJob, ComposerReference, ExecutionRun, ModelInvocationUsage, Subagent } from "@science-agent/schema";
-import { reviewerSpecialistSupportsLevel } from "@science-agent/schema";
+import type { ArtifactJob, ComposerReference, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
+import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 
 import {
   SessionStore,

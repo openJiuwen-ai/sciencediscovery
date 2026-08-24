@@ -266,7 +266,7 @@ Three query forms:
 
 **Summarization.** One separate request to the same model endpoint (system prompt `You are compacting…`, no tools). `buildSummaryPrompt` renders the segment as a transcript (assistant lines carry `[tool calls: name(first 300 chars of args)]`, tool results are bounded to 600 chars), bounds the whole thing to `SUMMARY_INPUT_CHAR_BUDGET = 16_000`, HTML-escapes it, and wraps it in `<new_messages>`; a previous summary is wrapped in `<existing_summary>` with half that budget. **Escaping is a security requirement** — summarized content must not be able to close those tags and forge structure.
 
-**Checkpoint.** `summaryCheckpointMessage` builds a `role:"user"`, `name:"summary"` message whose body starts with `[ScienceAgent summary checkpoint]` inside `<durable_context_data>`, with `additional_kwargs` carrying `hide_from_ui: true` and `science_agent_summary_checkpoint: true`. The render budget is `SUMMARY_RENDER_CHAR_BUDGET = 6_000`; `boundText` keeps head and tail (two-thirds head, then `\n...\n`, then tail).
+**Checkpoint.** `summaryCheckpointMessage` builds a `role:"user"`, `name:"summary"` message whose body starts with `[ScienceDiscovery summary checkpoint]` inside `<durable_context_data>`, with `additional_kwargs` carrying `hide_from_ui: true` and `sciencediscovery_summary_checkpoint: true`. The render budget is `SUMMARY_RENDER_CHAR_BUDGET = 6_000`; `boundText` keeps head and tail (two-thirds head, then `\n...\n`, then tail).
 
 **Chaining.** The next compaction reads the previous summary back through `extractCheckpointSummary` and merges it, so the summary **rolls forward** rather than stacking. The format matches the previous engine, so **older histories still parse**.
 
@@ -288,7 +288,7 @@ Three query forms:
 | `sse` | `SSEClientTransport(new URL(url), { requestInit: { headers } })` |
 | `http` / `streamable_http` | `StreamableHTTPClientTransport(...)` |
 
-**Interpreter resolution.** For stdio servers whose `command` is a bare `python` / `python3`, `resolveMcpPython()` tries `SCIENCE_AGENT_GATEWAY_PYTHON_PATH`, `$SCIENCE_AGENT_DATA_DIR/envs/gateway/bin/python`, `data/envs/gateway/bin/python`, and `services/gateway/.venv/bin/python` before falling back to `python`. **This is why the bundled biomed / UniProt MCP servers still depend on the gateway venv.**
+**Interpreter resolution.** For stdio servers whose `command` is a bare `python` / `python3`, `resolveMcpPython()` tries `SCIENCE_AGENT_GATEWAY_PYTHON_PATH`, `$SCIENCE_AGENT_DATA_DIR/envs/gateway/bin/python`, `.sciencediscovery-data/envs/gateway/bin/python`, and `services/gateway/.venv/bin/python` before falling back to `python`. **This is why the bundled biomed / UniProt MCP servers still depend on the gateway venv.**
 
 **Environment projection.** The child environment starts from `getDefaultEnvironment()`, adds the configured `env` (**proxy variables are filtered out**), then applies `proxyEnvOverlay(proxy)`: `direct` injects nothing, `environment` copies the current process's proxy variables, and `url` pins `HTTP_PROXY` and friends to that URL while preserving `NO_PROXY`.
 

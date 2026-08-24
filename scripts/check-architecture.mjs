@@ -29,7 +29,7 @@ for (const file of packageFiles) {
   if (/from\s+["'][^"']*(?:services|apps)\//u.test(source)) {
     failures.push(`${file}: packages must not import services/ or apps/`);
   }
-  if (source.includes("@science-agent/agent-runtime")) {
+  if (source.includes("@sciencediscovery/agent-runtime")) {
     failures.push(`${file}: capability packages must not depend on the compatibility facade`);
   }
 }
@@ -37,14 +37,14 @@ for (const file of packageFiles) {
 for (const file of await sourceFiles("services")) {
   if (file.endsWith(".test.ts")) continue;
   const source = await readFile(new URL(file, root), "utf8");
-  if (source.includes("@science-agent/agent-runtime")) {
+  if (source.includes("@sciencediscovery/agent-runtime")) {
     failures.push(`${file}: production services must import the owning capability package directly`);
   }
 }
 
 for (const file of await sourceFiles("test")) {
   const source = await readFile(new URL(file, root), "utf8");
-  if (source.includes("@science-agent/agent-runtime")) {
+  if (source.includes("@sciencediscovery/agent-runtime")) {
     failures.push(`${file}: tests must import the owning capability package directly`);
   }
 }

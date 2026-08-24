@@ -22,7 +22,7 @@ import {
   allowedDomainMatches,
   isIpLiteral,
   type SandboxNetworkAccess,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 /**
  * Egress gateway: the single outbound exit of a `domain-allowlist` sandbox.

@@ -17,7 +17,7 @@ import test from "node:test";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { SessionRun } from "@science-agent/schema";
+import type { SessionRun } from "@sciencediscovery/schema";
 
 import { ComposerNoModelNotice, ComposerRunButton, QueuedRunsPanel, queuedCancelToast, resolveComposerRunAction } from "../src/App.js";
 

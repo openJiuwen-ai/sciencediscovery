@@ -7,7 +7,7 @@ This page maps directories, modules, default ports, and data locations. See [Run
 The repository is a pnpm monorepo with several Python subprojects:
 
 ```text
-science_agent/
+sciencediscovery/
 ├── apps/web/                 # React/Vite browser UI
 ├── services/
 │   ├── api/                  # Node control API
@@ -39,7 +39,7 @@ science_agent/
 | `services/runner` | `127.0.0.1:4311` | Sandbox execution, loopback only |
 | `services/api` | `127.0.0.1:4310` | Control API and static UI, local-only by default |
 
-First startup prepares uv environments under `data/envs/gateway` and `data/envs/paper`. The repository has no submodules.
+First startup prepares uv environments under `.sciencediscovery-data/envs/gateway` and `.sciencediscovery-data/envs/paper`. The repository has no submodules.
 
 ## 2. Modules and responsibilities
 
@@ -100,12 +100,12 @@ Root tests contain Playwright browser E2E plus gateway/API mock and real smoke s
 
 | Location | Contents |
 |---|---|
-| `data/catalog.sqlite`, `model-secrets.key` | Metadata/settings/permissions and token-encryption key |
-| `data/projects/.../workspace/` | Per-Session files and paper extraction |
-| `data/cas/`, claims/evidence/MCP paths | Immutable content and provenance/audit |
-| `data/artifact-jobs/`, `artifact-extraction-jobs/` | Download and extraction state |
-| `data/scientific-envs/` | Managed Python/R prefixes |
-| `data/envs/gateway`, `data/envs/paper` | Rebuildable service environments |
+| `.sciencediscovery-data/catalog.sqlite`, `model-secrets.key` | Metadata/settings/permissions and token-encryption key |
+| `.sciencediscovery-data/projects/.../workspace/` | Per-Session files and paper extraction |
+| `.sciencediscovery-data/cas/`, claims/evidence/MCP paths | Immutable content and provenance/audit |
+| `.sciencediscovery-data/artifact-jobs/`, `artifact-extraction-jobs/` | Download and extraction state |
+| `.sciencediscovery-data/scientific-envs/` | Managed Python/R prefixes |
+| `.sciencediscovery-data/envs/gateway`, `.sciencediscovery-data/envs/paper` | Rebuildable service environments |
 
 See [Configuration reference](configuration.md) for the full layout.
 

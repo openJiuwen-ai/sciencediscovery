@@ -19,12 +19,12 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import type { McpSourceManifest, McpSourceStatus } from "@science-agent/schema";
+import type { McpSourceManifest, McpSourceStatus } from "@sciencediscovery/schema";
 
 import { createApiServer, type ServerConfig } from "../server.js";
 
-import type { McpCatalog } from "@science-agent/schema";
-import type { McpTransportClient } from "@science-agent/data-source";
+import type { McpCatalog } from "@sciencediscovery/schema";
+import type { McpTransportClient } from "@sciencediscovery/data-source";
 
 /**
  * Minimal MCP transport stub. Tests drive the real catalog/broker path and only
@@ -39,7 +39,7 @@ function stubTransport(catalog: McpCatalog): McpTransportClient {
 }
 
 test("MCP source API exposes only native MCP sources", async (context) => {
-  const dataDir = await mkdtemp(resolve(tmpdir(), "science-agent-mcp-api-"));
+  const dataDir = await mkdtemp(resolve(tmpdir(), "sciencediscovery-mcp-api-"));
   context.after(() => rm(dataDir, { force: true, recursive: true }));
   const config: ServerConfig = {
     authToken: "test-token",

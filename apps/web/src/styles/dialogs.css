@@ -62,8 +62,6 @@
 .config-header button:hover { border-color: var(--border); background: var(--surface-soft); }
 .config-panel label { display: block; margin-bottom: 19px; }
 .config-panel label > span { display: block; margin-bottom: 7px; color: var(--text-secondary); font-size: 13px; font-weight: 700; }
-.config-panel input { width: 100%; min-height: 43px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); padding: 10px 12px; font-size: 15px; }
-.config-panel input:disabled { background: var(--surface-soft); opacity: .7; }
 .config-note { margin: 25px 0; padding: 14px; border-left: 3px solid var(--accent-border); background: var(--accent-soft); color: var(--text-secondary); font-size: 13px; line-height: 1.65; }
 .config-panel .primary-button { width: 100%; }
 .system-config-dialog { width: min(1080px, 100%); height: min(760px, calc(100vh - 56px)); display: flex; overflow: hidden; flex-direction: column; padding: 0; }
@@ -85,7 +83,7 @@
 .system-config-footer { display: flex; flex: 0 0 auto; gap: 10px; justify-content: flex-end; padding: 13px 20px; border-top: 1px solid var(--border); background: var(--surface-subtle); }
 .system-config-footer .primary-button { width: auto; min-width: 96px; }
 .model-list-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 26px 0 10px; color: var(--text-secondary); font-size: 13px; font-weight: 700; }
-.model-list-header button { min-height: 34px; border: 1px solid var(--accent-border-soft); border-radius: 7px; background: var(--accent-soft); color: var(--accent-ink); padding: 6px 10px; cursor: pointer; font-size: 13px; font-weight: 650; }
+.model-list-header button { flex: 0 0 auto; }
 .model-list { display: grid; gap: 7px; max-height: 250px; overflow-y: auto; margin-bottom: 24px; }
 .model-card { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 13px; color: var(--muted); text-align: left; cursor: pointer; }
 .model-card:hover, .model-card.active { border-color: var(--accent-border); background: var(--accent-soft); }
@@ -133,4 +131,3 @@
 .deletion-dialog label > span { display: block; margin-bottom: 7px; color: var(--text-secondary); font-size: 13px; }
 .deletion-dialog input { width: 100%; min-height: 42px; border: 1px solid var(--border-strong); border-radius: 8px; padding: 9px 11px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
-.danger-button:disabled { cursor: not-allowed; opacity: .48; }

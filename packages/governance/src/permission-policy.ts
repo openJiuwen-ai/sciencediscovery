@@ -23,7 +23,7 @@ import {
   type PermissionEpoch,
   type PermissionGrantScope,
   type SandboxNetworkAccess,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export function createPermissionEpoch(
   sessionId: string,

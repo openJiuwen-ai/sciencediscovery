@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import unittest
 
-from science_agent_gateway.external_urls import external_url, external_url_list, format_external_url
+from sciencediscovery_gateway.external_urls import external_url, external_url_list, format_external_url
 
 
 class ExternalUrlsTests(unittest.TestCase):

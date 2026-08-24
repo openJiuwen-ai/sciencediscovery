@@ -109,7 +109,7 @@ async function setupSession(page: Page, options: { alwaysAllow?: boolean } = {})
  * WebSearch: None.
  * PaperSources: None.
  * MCP: None required by the test.
- * OtherExternal: Local science_agent API, gateway, browser UI, and runner.
+ * OtherExternal: Local ScienceDiscovery API, gateway, browser UI, and runner.
  * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; optional E2E_API_TOKEN.
  * CostSideEffects: Billable tokens, model rate limits, local projects/sessions/models, screenshots.
  */
@@ -210,7 +210,7 @@ test("plan and subagent cards anchor to their run, collapse by default, and surv
  * WebSearch: None.
  * PaperSources: None.
  * MCP: None required by the test.
- * OtherExternal: Local science_agent API, gateway, browser UI, and runner-executed Python.
+ * OtherExternal: Local ScienceDiscovery API, gateway, browser UI, and runner-executed Python.
  * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; optional E2E_API_TOKEN.
  * CostSideEffects: Billable tokens, model rate limits, local models/projects/sessions/files, screenshots.
  */

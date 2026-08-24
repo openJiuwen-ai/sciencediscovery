@@ -51,6 +51,7 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
         nodes_result = session.run(
             """
             MATCH (n) WHERE n.session_id = $sid
+              AND NOT coalesce(n.deleted_session, false)
             RETURN labels(n)[0] AS label, n AS node
             ORDER BY n.created_at DESC
             LIMIT $limit
@@ -95,6 +96,8 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
             """
             MATCH (a)-[r]->(b)
             WHERE a.session_id = $sid AND b.session_id = $sid
+              AND NOT coalesce(a.deleted_session, false)
+              AND NOT coalesce(b.deleted_session, false)
               AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input']
             RETURN a AS src, b AS dst, labels(a)[0] AS src_label,
                    labels(b)[0] AS dst_label, type(r) AS edge_type, r AS rel
@@ -173,6 +176,7 @@ def query_match(query: str, session_id: str | None = None) -> dict[str, Any]:
             """
             MATCH (n)
             WHERE ($sid IS NULL OR n.session_id = $sid)
+              AND NOT coalesce(n.deleted_session, false)
             WITH n, labels(n)[0] AS label,
                  toLower(coalesce(toString(n.title), '') + ' '
                    + coalesce(toString(n.abstract), '') + ' '
@@ -226,6 +230,7 @@ def by_node_type(node_types: list[str], session_id: str | None = None) -> dict[s
             """
             MATCH (n) WHERE labels(n)[0] IN $types
               AND ($sid IS NULL OR n.session_id = $sid)
+              AND NOT coalesce(n.deleted_session, false)
             RETURN n, labels(n)[0] AS label
             ORDER BY n.created_at DESC
             LIMIT $limit
@@ -261,6 +266,8 @@ def by_edge_type(edge_types: list[str], session_id: str | None = None) -> dict[s
             WHERE type(r) IN $types
               AND ($sid IS NULL OR a.session_id = $sid)
               AND ($sid IS NULL OR b.session_id = $sid)
+              AND NOT coalesce(a.deleted_session, false)
+              AND NOT coalesce(b.deleted_session, false)
             RETURN a, b, labels(a)[0] AS a_label, labels(b)[0] AS b_label,
                    type(r) AS edge_type, properties(r) AS edge_props
             ORDER BY a.created_at DESC

@@ -19,9 +19,9 @@ import { resolve } from "node:path";
 import {
   ArtifactManager as ArtifactRegistry,
   type ArtifactVersionInput,
-} from "@science-agent/artifact-manager";
-import { resolveWorkspaceFile } from "@science-agent/workspace";
-import { CasStore } from "@science-agent/cas";
+} from "@sciencediscovery/artifact-manager";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { CasStore } from "@sciencediscovery/cas";
 import type {
   ArtifactDerivation,
   ArtifactOrigin,
@@ -39,22 +39,22 @@ import type {
   ScientificArtifactKind,
   ScientificArtifactVersion,
   ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   classifyScientificArtifact,
   epochSandboxNetworkAccess,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
-import { RunnerClient } from "@science-agent/executor";
-import type { MemoryGraphSink, ObserveExecutionPayload } from "@science-agent/memory";
+import { RunnerClient } from "@sciencediscovery/executor";
+import type { MemoryGraphSink, ObserveExecutionPayload } from "@sciencediscovery/memory";
 import {
   DEFAULT_ENVIRONMENT_PACKAGE_SPEC,
   DEFAULT_ENVIRONMENT_PACKAGE_SPEC_HASH,
   DEFAULT_ENVIRONMENT_REVISION_ID,
   DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC,
   DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH,
-} from "@science-agent/executor";
+} from "@sciencediscovery/executor";
 
 /** Persistence boundary consumed by provenance recording. */
 export interface ProvenanceStore {

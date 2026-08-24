@@ -60,14 +60,14 @@ The `domain-allowlist` data path:
 sandbox process (own netns, no interface)
   └─ HTTP_PROXY=http://127.0.0.1:18118
        └─ egress bridge (inside the sandbox, on the sandbox's own loopback)
-            └─ /run/science-agent/egress.sock (bind mount)
+            └─ /run/sciencediscovery/egress.sock (bind mount)
                  └─ egress gateway (in the runner process, runner's own user)
                       └─ allowed domains only → internet
 ```
 
 Properties:
 
-- **No root, no CAP_NET_ADMIN, no socat dependency.** The bridge is a product-owned stdlib Python script; its interpreter and standard library are bind-mounted read-only under `/opt/science-agent-net/`. When the host has no usable python3 the mode fails closed and `/health.sandboxNetwork` reports why.
+- **No root, no CAP_NET_ADMIN, no socat dependency.** The bridge is a product-owned stdlib Python script; its interpreter and standard library are bind-mounted read-only under `/opt/sciencediscovery-net/`. When the host has no usable python3 the mode fails closed and `/health.sandboxNetwork` reports why.
 - The bridge listens before it forks and runs the real workload as its child with inherited stdio, so the persistent kernel and shell line protocols are unaffected; the child's exit status is passed through.
 - seccomp switches to the network profile: it allows only the socket family (`socket/connect/bind/listen/accept/accept4/socketpair`) and keeps denying ptrace, mount, setns, bpf, keyring, io_uring and the rest. Raw and packet sockets need `CAP_NET_RAW`, which `--cap-drop ALL` already removes.
 - Entries are `example.org` or `*.example.org` (label-boundary match, never the apex), optionally with `:443` to pin a port. IP literals are rejected both as entries and as request targets.
@@ -128,7 +128,7 @@ Interpreters come from host `/usr/bin` or managed `/opt/science-env/bin`.
 - Cold start creates only a read-only Python 3.12 base with numpy/pandas/scipy/matplotlib. The first explicit R named environment lazily creates an R 4.4 base with tidyverse/data.table.
 - Catalog and source settings are instance-global. Bases are read-only; named environment mutations create immutable revisions.
 - Pip presets are upstream, TUNA, USTC, and Huawei Cloud; conda omits Huawei. Precedence is explicit request, global preset, upstream. Conda uses override/strict priority and an operator channel allowlist; exact built-in mirror URLs are accepted. Offline cache validates sources but uses local no-index/offline operation; CRAN/Bioconductor are rejected offline.
-- Layout includes catalog, provisioner, micromamba, immutable revision prefixes/snapshots, and SHA256-addressed wheel copies under `data/scientific-envs/`.
+- Layout includes catalog, provisioner, micromamba, immutable revision prefixes/snapshots, and SHA256-addressed wheel copies under `.sciencediscovery-data/scientific-envs/`.
 - Pip `indexUrl` must be credential-free HTTPS, at most 2048 characters, without query/fragment/whitespace/control characters. Package lists reject option injection and remote URLs. A Session-relative wheel is copied to persistent hash storage and its source/hash/distribution/version enter the revision snapshot.
 - Direct package-manager mutation in `run_shell` is unsupported and the managed prefix is read-only in the sandbox.
 

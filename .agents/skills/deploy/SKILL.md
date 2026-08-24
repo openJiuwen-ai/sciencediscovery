@@ -1,15 +1,15 @@
 ---
 name: deploy
 description: >
-  Deploy or run the science_agent stack, either as host processes
+  Deploy or run the ScienceDiscovery stack, either as host processes
   (scripts/start-stack.sh) or with Docker Compose. Use when the user asks to
-  deploy, start, run, or containerize science_agent, or asks for the UI URL,
+  deploy, start, run, or containerize ScienceDiscovery, or asks for the UI URL,
   SSH port forwarding, or start/stop/restart/log commands.
 ---
 
-# Deploy science_agent (local or Docker)
+# Deploy ScienceDiscovery (local or Docker)
 
-Project-local skill for **science_agent**. Authoritative facts live in
+Project-local skill for **ScienceDiscovery**. Authoritative facts live in
 [`README.md`](../../../README.md) → **Quick start**, in
 [`docs/zh/how-to/deployment.md`](../../../docs/zh/how-to/deployment.md) (Chinese) → local
 mode and Docker deployment, and in [`docs/zh/reference/configuration.md`](../../../docs/zh/reference/configuration.md) → variable tables. Read the matching section before
@@ -33,7 +33,7 @@ their machine.
    (`uv`/`pnpm`/`corepack`) over system-wide ones.
 5. **Environment must pass before deploying.** On any failed check, stop, report,
    and wait for the user's decision.
-6. Repository-local writes are fine (`.env`, `data/`),
+6. Repository-local writes are fine (`.env`, `.sciencediscovery-data/`),
    but say what you are writing before you write it.
 7. After a successful start, always report the **URL and the bearer token
    source**, then the management commands for the mode actually used.
@@ -136,7 +136,7 @@ cp .env.example .env                               # first time only; never over
 - Runs in the **foreground**; it starts the runner (127.0.0.1:4311) in the
   background and the API (0.0.0.0:4310) in front. Those two are the whole
   resident stack.
-- First run provisions `data/envs/gateway` and `data/envs/paper` through `uv`
+- First run provisions `.sciencediscovery-data/envs/gateway` and `.sciencediscovery-data/envs/paper` through `uv`
   and needs outbound network.
 - `./scripts/run-local.sh [--no-build]` is the compatibility wrapper; `pnpm start`
   and `pnpm server` go through it.
@@ -226,7 +226,7 @@ echoes the runner status, so it is usually the only one worth checking.
 |---|---|
 | `data ... is not writable by uid ...` | Docker uid/gid mismatch → set `SCIENCE_AGENT_UID` / `_GID`, recreate |
 | `WARNING: bubblewrap cannot create a sandbox` in logs | Host restricts user namespaces → quote the `sysctl` fix, let the user run it |
-| `data/envs/gateway is missing` | Started with `--no-build` before a build → run once without it (that venv holds the interpreter for the bundled Python MCP servers) |
+| `.sciencediscovery-data/envs/gateway is missing` | Started with `--no-build` before a build → run once without it (that venv holds the interpreter for the bundled Python MCP servers) |
 | API up but every run fails | Usually the sandbox warning above, or no model profile configured |
 | Port already bound | Change `SCIENCE_AGENT_PORT` / `SCIENCE_AGENT_PUBLISH_PORT` |
 | `does not support --disable-userns` warning at runner startup | Expected on bwrap < 0.8 (e.g. Ubuntu 22.04's 0.6): nested-userns hardening is skipped, everything else isolates normally. Upgrade bubblewrap for the stronger profile |

@@ -116,7 +116,7 @@ artifact_names=()
 for requested_arch in "${architectures[@]}"; do
   IFS=$'\t' read -r release_version runtime_arch docker_arch package_arch filename expected_sha256 url \
     < <(node "$fetcher" --arch "$requested_arch" --print-tsv)
-  bundle_name="science-agent-micromamba-${release_version}-linux-${package_arch}"
+  bundle_name="sciencediscovery-micromamba-${release_version}-linux-${package_arch}"
   bundle_dir="$stage_dir/$bundle_name"
   mkdir -p "$bundle_dir/bin"
 
@@ -129,7 +129,7 @@ for requested_arch in "${architectures[@]}"; do
   cat >"$bundle_dir/manifest.json" <<EOF
 {
   "formatVersion": 1,
-  "name": "science-agent-micromamba",
+  "name": "sciencediscovery-micromamba",
   "version": "$release_version",
   "platform": "linux",
   "architecture": "$package_arch",
@@ -150,7 +150,7 @@ done
 
 {
   echo "micromamba=$version"
-  echo "format=science-agent-micromamba-bundle-v1"
+  echo "format=sciencediscovery-micromamba-bundle-v1"
   echo "contents=micromamba-only"
   printf 'architectures='
   local_separator=""

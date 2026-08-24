@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { SubagentInput } from "@science-agent/schema";
+import type { SubagentInput } from "@sciencediscovery/schema";
 
 export interface SubagentPreset {
   description: string;

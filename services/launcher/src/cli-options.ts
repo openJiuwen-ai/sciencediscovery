@@ -43,7 +43,7 @@ Commands:
   help                     Show this message
 
 serve options:
-  --data-dir <path>        Runtime data directory (default: ./science-discovery-data)
+  --data-dir <path>        Runtime data directory (default: ./.sciencediscovery-data)
   --host <address>         Web UI / API bind address (default: 127.0.0.1)
   --port <number>          Web UI / API port (default: 4310)
   --runner-port <number>   Loopback runner port (default: 4311)
@@ -97,7 +97,7 @@ export function defaultSettings(
         "SCIENCE_DISCOVERY_DATA_DIR",
         "SCIENCE_AGENT_DATA_DIR",
         onCompatibility,
-      ) || "science-discovery-data",
+      ) || ".sciencediscovery-data",
     ),
     // A downloadable binary binds loopback unless the operator opts in: the
     // product's default API token is well known, so exposing the UI on every

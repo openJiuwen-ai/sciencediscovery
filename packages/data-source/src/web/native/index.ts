@@ -31,7 +31,7 @@ import type {
   WebFetchProvider,
   WebOperation,
   WebSearchProvider,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { MAX_PROVIDER_RESPONSE_BYTES, ProviderRequestError, thrownErrorCode, type ProviderErrorCode } from "./http.js";
 import { fetchExa, fetchJina, fetchTavily } from "./fetch.js";

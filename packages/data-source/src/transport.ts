@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { McpCatalog, McpInvokeRequest, McpInvokeResponse, ResolvedProxy } from "@science-agent/schema";
+import type { McpCatalog, McpInvokeRequest, McpInvokeResponse, ResolvedProxy } from "@sciencediscovery/schema";
 
 /**
  * The MCP client surface the catalog and governance broker consume.

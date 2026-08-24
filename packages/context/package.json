@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/context",
+  "name": "@sciencediscovery/context",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,10 +11,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/model": "workspace:*",
-    "@science-agent/runtime-core": "workspace:*",
-    "@science-agent/schema": "workspace:*",
-    "@science-agent/workspace": "workspace:*"
+    "@sciencediscovery/model": "workspace:*",
+    "@sciencediscovery/runtime-core": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*",
+    "@sciencediscovery/workspace": "workspace:*"
   },
   "devDependencies": { "@types/node": "26.1.1" }
 }

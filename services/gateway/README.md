@@ -8,9 +8,9 @@ and web providers all run natively in the Node control plane (see
 What remains is the two bundled provider-facing MCP servers and the external-URL
 registry they share:
 
-- `src/science_agent_gateway/public_biomed_mcp.py` — public biomedical sources
-- `src/science_agent_gateway/uniprot_mcp.py` — UniProt records
-- `src/science_agent_gateway/external_urls.py` — the operator-visible URL registry
+- `src/sciencediscovery_gateway/public_biomed_mcp.py` — public biomedical sources
+- `src/sciencediscovery_gateway/uniprot_mcp.py` — UniProt records
+- `src/sciencediscovery_gateway/external_urls.py` — the operator-visible URL registry
 
 Both speak MCP over stdio. The Node control plane spawns them as subprocesses
 using this environment's interpreter (`resolveMcpPython()` in
@@ -35,7 +35,7 @@ For standalone development:
 ```bash
 cd services/gateway
 uv sync                                   # creates ./.venv
-.venv/bin/python -m science_agent_gateway.uniprot_mcp   # speaks MCP on stdio
+.venv/bin/python -m sciencediscovery_gateway.uniprot_mcp   # speaks MCP on stdio
 ```
 
 ## Tests

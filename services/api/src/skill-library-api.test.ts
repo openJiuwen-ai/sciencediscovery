@@ -26,7 +26,7 @@ import type {
   SkillLibraryDiff,
   SkillLibrarySearchResult,
   SkillLibraryVersion,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { SkillLibraryCatalog } from "./skill-library-catalog.js";
 import { handleSkillLibraryRequest } from "./http/skill-libraries.js";

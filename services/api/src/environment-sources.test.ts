@@ -20,7 +20,7 @@ import {
   ENVIRONMENT_CONDA_SOURCE_PRESETS,
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS,
   ENVIRONMENT_PIP_SOURCE_PRESETS,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import {
   normalizeEnvironmentSourceSettings,

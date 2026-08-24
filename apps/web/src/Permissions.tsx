@@ -14,7 +14,7 @@
 
 import { useState } from "react";
 
-import type { PermissionDecision, PermissionGrant, PermissionRequest } from "@science-agent/schema";
+import type { PermissionDecision, PermissionGrant, PermissionRequest } from "@sciencediscovery/schema";
 
 import { PermissionDecisionActions, permissionMatchingKey } from "./PermissionDecisionActions.js";
 

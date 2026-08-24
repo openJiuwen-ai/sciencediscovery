@@ -112,6 +112,26 @@ require_command() { # <command> <failure message>
   command -v "$1" >/dev/null || { echo "$2" >&2; exit 1; }
 }
 
+# The repository default moved from `data` to `.sciencediscovery-data`. Move an
+# existing default once so a checkout keeps its projects, tokens and service
+# environments, and never replace a directory that already exists.
+migrate_legacy_data_dir() { # <target-data-dir>
+  local target="$1"
+  local legacy="$repository_root/data"
+  [[ -n "${SCIENCE_DISCOVERY_DATA_DIR:-}" ]] && return 0
+  [[ -e "$legacy" ]] || return 0
+  if [[ ! -d "$legacy" ]]; then
+    echo "[compat] Skipped moving legacy data directory $legacy to $target: source is not a directory." >&2
+    return 0
+  fi
+  if [[ -e "$target" ]]; then
+    echo "[compat] Skipped moving legacy data directory $legacy to $target: target already exists." >&2
+    return 0
+  fi
+  mv "$legacy" "$target"
+  echo "[compat] Moved legacy data directory $legacy to $target." >&2
+}
+
 absolute_from_repository() { # <path>
   if [[ "$1" == /* ]]; then
     printf '%s\n' "$1"
@@ -172,7 +192,8 @@ prepare_local() {
   require_command bwrap "bubblewrap is required for isolated Python execution."
   require_command curl "curl is required for local service startup checks."
 
-  data_dir="$(absolute_from_repository "${SCIENCE_DISCOVERY_DATA_DIR:-data}")"
+  data_dir="$(absolute_from_repository "${SCIENCE_DISCOVERY_DATA_DIR:-.sciencediscovery-data}")"
+  migrate_legacy_data_dir "$data_dir"
   local envs_dir="$data_dir/envs"
 
   if [[ "$no_build" -eq 0 ]]; then
@@ -224,7 +245,7 @@ prepare_local() {
     "SCIENCE_AGENT_DATA_DIR=$data_dir"
     "SCIENCE_AGENT_RUNNER_HOST=${SCIENCE_AGENT_RUNNER_HOST:-127.0.0.1}"
     "SCIENCE_AGENT_RUNNER_PORT=${SCIENCE_AGENT_RUNNER_PORT:-4311}"
-    "SCIENCE_AGENT_RUNNER_TOKEN=${SCIENCE_AGENT_RUNNER_TOKEN:-science-agent-runner-local}"
+    "SCIENCE_AGENT_RUNNER_TOKEN=${SCIENCE_AGENT_RUNNER_TOKEN:-sciencediscovery-runner-local}"
     "SCIENTIFIC_ENVS=${SCIENTIFIC_ENVS:-1}"
   )
   # Keep SCIENCE_AGENT_NPU_PYTHON passthrough for custom allowlists that still
@@ -261,7 +282,7 @@ prepare_local() {
 }
 
 prepare_docker() {
-  local envs_root="${SCIENCE_AGENT_ENVS_ROOT:-/opt/science-agent/envs}"
+  local envs_root="${SCIENCE_AGENT_ENVS_ROOT:-/opt/sciencediscovery/envs}"
   gateway_python="${SCIENCE_AGENT_GATEWAY_PYTHON_PATH:-$envs_root/gateway/bin/python}"
 
   data_dir="${SCIENCE_AGENT_DATA_DIR:-/app/data}"
@@ -350,8 +371,8 @@ start_stack() {
     echo "Starting the memory-graph service..." >&2
     SCIENCE_AGENT_DATA_DIR="$data_dir" \
     SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP="${SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP:-http://127.0.0.1:7474}" \
-    SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN="${SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN:-science-agent-memory-graph-local}" \
-    "$memory_graph_python" -m science_agent_memory_graph.server &
+    SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN="${SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN:-sciencediscovery-memory-graph-local}" \
+    "$memory_graph_python" -m sciencediscovery_memory_graph.server &
     pids+=("$!")
     wait_healthy "memory-graph" "http://127.0.0.1:17674/health"
   fi

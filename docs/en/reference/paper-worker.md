@@ -10,9 +10,9 @@ This isolated, non-resident Python worker is launched once per request by the co
 <python> services/paper/paper_worker.py <input-pdf> <output-directory>
 ```
 
-- Python defaults to `data/envs/paper/bin/python` and can be overridden by `SCIENCE_AGENT_PAPER_PYTHON_PATH`; the worker path is `SCIENCE_AGENT_PAPER_WORKER_PATH`.
+- Python defaults to `.sciencediscovery-data/envs/paper/bin/python` and can be overridden by `SCIENCE_AGENT_PAPER_PYTHON_PATH`; the worker path is `SCIENCE_AGENT_PAPER_WORKER_PATH`.
 - The worker writes a `PaperExtractionManifest` JSON object to stdout. The API limits stdout to 10 MiB and each invocation to 120 seconds.
-- The API records failure/cancellation in `data/artifact-extraction-jobs/` as `CANCELLED` or `NORMALIZATION_FAILED`; it does not retry automatically.
+- The API records failure/cancellation in `.sciencediscovery-data/artifact-extraction-jobs/` as `CANCELLED` or `NORMALIZATION_FAILED`; it does not retry automatically.
 
 ## 2. Extraction pipeline
 

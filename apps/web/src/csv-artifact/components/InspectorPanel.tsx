@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import type { ArtifactVersionProvenance } from "@science-agent/schema";
+import type { ArtifactVersionProvenance } from "@sciencediscovery/schema";
 
 import { formatBytes } from "../csv/inferCsv.js";
 import type {

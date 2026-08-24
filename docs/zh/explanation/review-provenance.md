@@ -6,9 +6,9 @@
 
 CAS 是溯源体系的地基：所有需要事后核验的内容都以「SHA-256 哈希 = 地址」的方式落盘，记录里只保留引用。这样同一内容天然去重，任何记录都可以在之后重新哈希校验。
 
-实现位于独立的 `@science-agent/cas` 包；API、Runner 相关调用方共享同一地址与校验口径，公开边界见英文 [CAS 说明](../../en/explanation/cas.md)：
+实现位于独立的 `@sciencediscovery/cas` 包；API、Runner 相关调用方共享同一地址与校验口径，公开边界见英文 [CAS 说明](../../en/explanation/cas.md)：
 
-- **地址**：`hash(content)` = 内容字节的 SHA-256 十六进制（64 字符）。对象路径为 `data/cas/sha256/<hash 前 2 位>/<完整 hash>`，前 2 位作扇出目录，避免单目录文件过多。路径构造前先用 `/^[a-f0-9]{64}$/` 校验哈希，杜绝路径注入。
+- **地址**：`hash(content)` = 内容字节的 SHA-256 十六进制（64 字符）。对象路径为 `.sciencediscovery-data/cas/sha256/<hash 前 2 位>/<完整 hash>`，前 2 位作扇出目录，避免单目录文件过多。路径构造前先用 `/^[a-f0-9]{64}$/` 校验哈希，杜绝路径注入。
 - **写入 `put(content)` / `putFile(path)`**：
   1. 先 `stat` 目标路径——已存在则重新哈希校验一次（`verify`），通过即直接复用（去重），校验失败抛错而不是覆盖；
   2. 不存在则写临时文件 `<path>.<pid>.<uuid>.tmp` 再 `rename` 到最终路径。rename 在同一文件系统上原子，因此并发写同一对象或进程中途崩溃都不会留下半截对象——最坏情况只剩可忽略的 `.tmp` 残留。
@@ -30,7 +30,7 @@ CAS 是溯源体系的地基：所有需要事后核验的内容都以「SHA-256
 
 ## 2. 执行记录与产物关联
 
-每次沙箱运行落一条 `ExecutionRun`（`data/execution-runs/<sessionId>.json`）：工具名与语言、code/stdout/stderr 的 CAS 引用、exitCode、起止时间、`environmentRevisionId`、`kernelMode`/`kernelId`、`permissionEpochId`、`networkPolicy`（生效的沙箱网络模式，默认 `"none"`）与 `networkAccessRevision`（有允许列表时的策略 revision）、`sandbox: "bubblewrap"`、`createdFiles`/`modifiedFiles`、状态（succeeded/failed/cancelled），以及执行环境溯源两字段：
+每次沙箱运行落一条 `ExecutionRun`（`.sciencediscovery-data/execution-runs/<sessionId>.json`）：工具名与语言、code/stdout/stderr 的 CAS 引用、exitCode、起止时间、`environmentRevisionId`、`kernelMode`/`kernelId`、`permissionEpochId`、`networkPolicy`（生效的沙箱网络模式，默认 `"none"`）与 `networkAccessRevision`（有允许列表时的策略 revision）、`sandbox: "bubblewrap"`、`createdFiles`/`modifiedFiles`、状态（succeeded/failed/cancelled），以及执行环境溯源两字段：
 
 - `workingDirectory`：Runner 回报的沙箱内实际工作目录（如 `/workspace/subdir`；持久 shell 为求值结束后的 cwd）。历史记录为占位 `"workspace"`；执行前失败的记录为 `"unavailable"`。
 - `envSnapshot`：本次执行有效环境变量的 CAS 引用（内容为按键排序的规范 JSON）——相同 env 自动去重，不同 env 哈希可区分，`cas.read(hash)` 可取回全量键值。Runner 未回报（执行前失败）时为 `null`；历史记录缺省该字段。
@@ -39,7 +39,7 @@ CAS 是溯源体系的地基：所有需要事后核验的内容都以「SHA-256
 
 Artifact 的 Provenance 页会在每条 Execution log 下展示该次运行的 cwd，并以默认折叠的 **Process environment** 列出进程环境变量；托管包 revision 则独立显示为 **Managed package environment**。历史执行没有 `envSnapshot` 时，页面明确标记为未记录而不会报错。
 
-运行产生的每个文件追加 `ArtifactDerivation`（`data/artifact-derivations/`）：路径、内容 CAS 引用、`executionRunIds`。这条审计链不等于用户可见产物目录：普通执行 diff 不自动建 `ScientificArtifactVersion`；只有用户上传、MCP 下载、远程任务拉回输出，或主/子 Agent 调用 `declare_artifact` 后，控制面才创建或追加 Project 级产物版本。
+运行产生的每个文件追加 `ArtifactDerivation`（`.sciencediscovery-data/artifact-derivations/`）：路径、内容 CAS 引用、`executionRunIds`。这条审计链不等于用户可见产物目录：普通执行 diff 不自动建 `ScientificArtifactVersion`；只有用户上传、MCP 下载、远程任务拉回输出，或主/子 Agent 调用 `declare_artifact` 后，控制面才创建或追加 Project 级产物版本。
 
 产物目录以 `(projectId, name)` 识别跨 Session 的版本链，保留稳定 `artifact_id`，并记录 `origin`（`user_upload` / `mcp_download` / `llm_declared` / `legacy_auto`）与创建 Session 快照。删除 Session 可清理物理工作区，但保留 Artifact、Version 与 CAS；溯源接口会把来源 Session 已删除作为可解释状态返回。
 
@@ -47,9 +47,9 @@ Artifact 的 Provenance 页会在每条 Execution log 下展示该次运行的 c
 
 ## 3. Prompt Manifest
 
-每个模型轮次一条（`prompt-manifest.ts`，存 `data/prompt-manifests/`）：模型与 endpoint host、系统提示/输入消息/响应的 CAS 引用、`skillRefs`（技能 ID、内容哈希、version、revision）、可选 specialist、token 用量与成本、运行时设置快照、`redactionStatus: "not-applied" | "not-required"`（无自动密钥脱敏）。
+每个模型轮次一条（`prompt-manifest.ts`，存 `.sciencediscovery-data/prompt-manifests/`）：模型与 endpoint host、系统提示/输入消息/响应的 CAS 引用、`skillRefs`（技能 ID、内容哈希、version、revision）、可选 specialist、token 用量与成本、运行时设置快照、`redactionStatus: "not-applied" | "not-required"`（无自动密钥脱敏）。
 
-`data/model-usage/` 中的 `ModelInvocationUsage` 只存 token/成本/时间与 manifest 引用，**不存原文**；当前调用主要区分 `task` 与 `paper-vision`，历史记录中的旧调用类型仍可读取。
+`.sciencediscovery-data/model-usage/` 中的 `ModelInvocationUsage` 只存 token/成本/时间与 manifest 引用，**不存原文**；当前调用主要区分 `task` 与 `paper-vision`，历史记录中的旧调用类型仍可读取。
 
 ## 4. Reviewer Specialist
 
@@ -65,9 +65,9 @@ Quick 档位包含：
 
 ## 5. Claims 与 Evidence
 
-- **Claim**（`data/claims/`）：从助手回复中按句提取的带结构化引用（`[TYPE:ID]`）的断言，关联 `reviewRunId` 与 `turnId`。
-- **EvidenceItem**（`data/evidence-items/`）：去重后的证据实体，`origin` 为判别联合：`mcp-record`（数据库/文献记录）、`paper`（PDF 定位：页码/引文哈希）、`execution`（运行输出）、`artifact`（生成文件版本）、`remote-job`、`user-input`。
-- **EvidenceLink**（`data/evidence-links/`）：claim ↔ evidence 关联，relation 为 `supports` / `context` / `contradicts`。
+- **Claim**（`.sciencediscovery-data/claims/`）：从助手回复中按句提取的带结构化引用（`[TYPE:ID]`）的断言，关联 `reviewRunId` 与 `turnId`。
+- **EvidenceItem**（`.sciencediscovery-data/evidence-items/`）：去重后的证据实体，`origin` 为判别联合：`mcp-record`（数据库/文献记录）、`paper`（PDF 定位：页码/引文哈希）、`execution`（运行输出）、`artifact`（生成文件版本）、`remote-job`、`user-input`。
+- **EvidenceLink**（`.sciencediscovery-data/evidence-links/`）：claim ↔ evidence 关联，relation 为 `supports` / `context` / `contradicts`。
 - **contentScope**：MCP 记录区分 `curated-record`（结构化全量）/ `abstract` / `metadata`；`fullTextRetrieved` 仅在 `paper_extract_pdf` 成功后为 true——只有此时才能声称读过全文。
 
 ## 相关文档

@@ -15,8 +15,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ConnectorManifest, ModelProfile, RuntimeSettingsDetails, SkillDescriptor, SkillLibrary } from "@science-agent/schema";
-import { BUILT_IN_SKILL_LIBRARY_ID } from "@science-agent/schema";
+import type { ConnectorManifest, ModelProfile, RuntimeSettingsDetails, SkillDescriptor, SkillLibrary } from "@sciencediscovery/schema";
+import { BUILT_IN_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 

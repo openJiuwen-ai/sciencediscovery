@@ -19,7 +19,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
-import type { McpInvokeRequest, ResolvedProxy } from "@science-agent/schema";
+import type { McpInvokeRequest, ResolvedProxy } from "@sciencediscovery/schema";
 
 import { effectiveRouting, loadExtensionsConfig } from "./extensions-config.js";
 import { McpNodeClient, proxyEnvOverlay, resolveMcpPython } from "./node-client.js";

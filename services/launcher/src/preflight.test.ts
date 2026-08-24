@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
-import { resetSandboxCapabilityCache } from "@science-agent/sandbox-capability";
+import { resetSandboxCapabilityCache } from "@sciencediscovery/sandbox-capability";
 
 import { findExecutable, missingBwrapMessage, probeSandbox, runPreflight } from "./preflight.js";
 
@@ -27,7 +27,7 @@ describe("host preflight", () => {
   let fakeBinDirectory = "";
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-preflight-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-preflight-"));
     fakeBinDirectory = join(workspace, "bin");
     await mkdir(fakeBinDirectory, { recursive: true });
     // A bwrap stand-in that always fails the sandbox probe, so preflight has

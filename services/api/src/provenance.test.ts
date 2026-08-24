@@ -29,11 +29,11 @@ import {
   type PythonExecutionResult,
   type ShellExecutionRequest,
   type ShellExecutionResult,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
-import { MemoryGraphClient, MemoryGraphSink } from "@science-agent/memory";
-import { ProvenanceRecorder } from "@science-agent/provenance";
-import type { RunnerClient } from "@science-agent/executor";
+import { MemoryGraphClient, MemoryGraphSink } from "@sciencediscovery/memory";
+import { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import type { RunnerClient } from "@sciencediscovery/executor";
 import { SessionStore } from "./store.js";
 
 test("multi-step persistent R executions create separate runs and an artifact derivation", async (context) => {

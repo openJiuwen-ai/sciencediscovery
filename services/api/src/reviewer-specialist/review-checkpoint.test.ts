@@ -19,15 +19,15 @@ import type {
   ArtifactReviewRun,
   ScientificArtifact,
   ScientificArtifactVersion,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
-import type { CasStore } from "@science-agent/cas";
+import type { CasStore } from "@sciencediscovery/cas";
 import type { SessionStore } from "../store.js";
 import {
   cancelReviewerCheckpoints,
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
-} from "@science-agent/provenance";
+} from "@sciencediscovery/provenance";
 
 function fixture(contentText = "分析结果支持该结论 [1].\n[1] Study. arXiv:1706.03762") {
   const content = Buffer.from(contentText);

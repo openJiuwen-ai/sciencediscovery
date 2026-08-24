@@ -12,7 +12,7 @@ Runner 是无 root 的代码执行器：所有 `run_python` / `run_r` / `run_she
 | `shell-session-manager.ts` | 持久 Shell 会话：沙箱内 bash 驱动循环，保留 cwd/export，空闲超时回收 |
 | `session-env-profile.ts` | Session env profile：从 shell 沉淀白名单变量与 cwd，注入后续执行 |
 | `environment-store.ts` | 科学环境 provisioning：micromamba、目录 catalog、不可变 revision |
-| `seccomp.ts` | x86_64/aarch64 seccomp BPF（拒绝同一类高风险 syscall，`EPERM`），baseline 与 network 两套 profile 按宿主架构写入 `data/runner-runtime/seccomp-*.bpf` |
+| `seccomp.ts` | x86_64/aarch64 seccomp BPF（拒绝同一类高风险 syscall，`EPERM`），baseline 与 network 两套 profile 按宿主架构写入 `.sciencediscovery-data/runner-runtime/seccomp-*.bpf` |
 | `egress-gateway.ts` | 沙箱网络访问的宿主侧出口：按 policy revision 复用的 UDS HTTP 服务，域名允许列表与地址分类 |
 | `egress-bridge.ts` | 沙箱内 TCP→UDS 桥接脚本、宿主解释器探测与 bwrap 绑定参数 |
 | `request-auth.ts` | HMAC-SHA256（token + 时间戳 + body SHA256），30 秒新鲜度窗口 |
@@ -93,14 +93,14 @@ Docker 默认的 readonlyPaths / maskedPaths 会让内核拒绝在沙箱自己�
 沙箱进程（独立 netns，无网卡）
   └─ HTTP_PROXY=http://127.0.0.1:18118
        └─ egress bridge（沙箱内，监听沙箱自己的回环）
-            └─ /run/science-agent/egress.sock（bind-mount）
+            └─ /run/sciencediscovery/egress.sock（bind-mount）
                  └─ egress gateway（Runner 进程内，与 Runner 同用户）
                       └─ 按域名允许列表放行 → 公网
 ```
 
 要点：
 
-- **无 root、无 CAP_NET_ADMIN、不依赖 socat**。bridge 是产品自带的标准库 Python 脚本，解释器与标准库以只读方式绑到 `/opt/science-agent-net/`；宿主没有可用 python3 时该模式直接失败（fail-closed），并在 `/health.sandboxNetwork` 报告原因。
+- **无 root、无 CAP_NET_ADMIN、不依赖 socat**。bridge 是产品自带的标准库 Python 脚本，解释器与标准库以只读方式绑到 `/opt/sciencediscovery-net/`；宿主没有可用 python3 时该模式直接失败（fail-closed），并在 `/health.sandboxNetwork` 报告原因。
 - bridge 先监听再 fork，真实负载是它的子进程并继承 stdin/stdout/stderr，因此持久内核与持久 shell 的行协议不受影响；退出码透传。
 - seccomp 换成 network profile：只放行 socket 族调用（`socket/connect/bind/listen/accept/accept4/socketpair`），ptrace、mount、setns、bpf、keyring、io_uring 等继续拒绝；raw/packet socket 需要 `CAP_NET_RAW`，已被 `--cap-drop ALL` 挡住。
 - 允许列表条目为 `example.org`、`*.example.org`（只在 label 边界匹配，且不含 apex），可加 `:443` 限定端口；IP 字面量既不能作为条目，也不能作为请求目标。
@@ -158,12 +158,12 @@ curl -s -X PUT -H "authorization: Bearer $TOKEN" -H "content-type: application/j
 
 ## 6. 科学环境
 
-- **Provisioner**：固定版本 micromamba（Linux x86_64/aarch64 URL + SHA256 来自 Runner、Docker 与发布脚本共用的 `micromamba-releases.json`）。宿主机进程模式首次 setup 按架构下载校验后缓存到 `data/scientific-envs/bin/micromamba`；Docker 镜像构建期下载校验，并在空 data bind mount 首启时从 `/opt/science-agent/provisioner/micromamba` 播种到同一默认路径，所以运行时无需为 micromamba 访问 GitHub。`SCIENCE_AGENT_PROVISIONER_PATH` 可覆盖默认路径。
+- **Provisioner**：固定版本 micromamba（Linux x86_64/aarch64 URL + SHA256 来自 Runner、Docker 与发布脚本共用的 `micromamba-releases.json`）。宿主机进程模式首次 setup 按架构下载校验后缓存到 `.sciencediscovery-data/scientific-envs/bin/micromamba`；Docker 镜像构建期下载校验，并在空 data bind mount 首启时从 `/opt/sciencediscovery/provisioner/micromamba` 播种到同一默认路径，所以运行时无需为 micromamba 访问 GitHub。`SCIENCE_AGENT_PROVISIONER_PATH` 可覆盖默认路径。
 - **异步 bootstrap**：Runner 监听并可响应 `/health` 后，在后台准备 Python base；`GET /environment-setup` 返回 state、phase、message、error 与时间戳，`POST` 只触发串行重试/补装并立即返回进度。失败不会终止 Runner。
 - **基础环境**（固定版本）：冷启动默认只创建只读 Python base（Python 3.12 + numpy/pandas/scipy/matplotlib），不默认下载 R。用户或 Agent 显式创建第一个 R 命名环境时，才按需创建只读 R base（R 4.4 + tidyverse/data.table）。升级前已有的 `starter-r` 会保留。
 - **全局 catalog**：base 与命名环境是实例级共享资源，不按 Project 隔离。兼容性上 catalog 仍使用 `starter` / `task` kind；产品语义分别是 base / named。
 - **受控软件源**（实例级/全局，不按 Project 隔离）：源设置存于系统级 catalog，不进 Project/Session 覆盖；`condaSource` 与 `pipSource` 各自独立。pip 可选 `Official upstream`（`upstream`）、`Tsinghua TUNA`（`tsinghua`）、`USTC`（`ustc`）或 `Huawei Cloud`（`huawei`），其中 Huawei Cloud 的精确 index 为 `https://mirrors.huaweicloud.com/repository/pypi/simple`；conda 可选前三项，不提供 Huawei Cloud 预设。设置页只显示来源名称，不附加地区描述。解析优先级全程为 **单次显式源 > 全局默认 > 官方上游**：pip 取 `environment_install` 的 `indexUrl`，缺省回落到所选 `pipSource` 预设，再缺省为 `https://pypi.org/simple`；conda 取请求 `channels`，缺省回落到所选 `condaSource` 预设，再缺省为 `conda-forge`。Browser 环境安装入口与 Agent 安装入口共用同一 resolver；`GET|PUT /api/environment-source-settings` 负责读取和保存全局预设。旧 catalog 缺字段或含未知预设时按非严格模式回落 `upstream` 并回写迁移后的设置。conda 安装以 `--override-channels --strict-channel-priority` 强制；`SCIENCE_AGENT_SCIENTIFIC_CHANNELS`（兼容默认仍为 `conda-forge`）依旧是 operator 侧的频道白名单，但 TUNA/USTC 内置预设中的精确频道 URL 始终被 Runner 视作受控白名单的一部分，即便 operator 仅列出 `conda-forge` 也会接受——这是落实全局镜像选择的必要扩展，副作用是 operator 无法仅凭该变量完全禁止这些预设镜像；自定义任意频道仍须显式列入 operator 白名单，否则被拒绝。设置 `SCIENCE_AGENT_PACKAGE_CACHE_DIR` 后进入离线缓存模式：pip `indexUrl` 仍执行 HTTPS 安全校验，conda channel 仍执行白名单校验；校验通过后，安装命令不访问网络源，而是分别使用 `--no-index --find-links <dir>` 和 `--offline`。pip 网络 index 因而被静默忽略，revision 记 `offline-cache:pip`；CRAN/Bioconductor 在离线模式下被拒绝；本地 wheel 仍从内容寻址副本安装。
-- **布局**：`data/scientific-envs/{catalog.json, provisioner/, bin/micromamba, revisions/<env>/rev-<uuid>/, snapshots/rev-<uuid>.json, wheels/<sha256>/<filename>.whl}`。
+- **布局**：`.sciencediscovery-data/scientific-envs/{catalog.json, provisioner/, bin/micromamba, revisions/<env>/rev-<uuid>/, snapshots/rev-<uuid>.json, wheels/<sha256>/<filename>.whl}`。
 - **不可变 revision**：base 不可删除或直接安装/卸载包；命名环境的每次 install/uninstall 都先克隆 current revision，成功后生成新快照并前移 `currentRevisionId`，旧 revision 上的内核被回收。
 - **受控变更**：设置页和 Agent 的 `environment_create/environment_delete/environment_install/environment_uninstall` 都经 API、权限门禁与 Runner 校验；`environment_install` 默认使用 conda，Python 命名环境也可选 pip。pip 的显式源是单独校验的 HTTPS `indexUrl`：仅允许 HTTPS、非空 hostname、不得含凭据、query 或 fragment、长度 ≤2048、无空白/控制字符（首尾空白会被裁剪），Runner 用参数数组传入，不拼接 shell；包列表不接受选项式注入或远程 URL。Agent 可提交当前 Session workspace 相对 `.whl`，Runner 会拒绝路径逃逸/URL，复制到内容寻址 wheel store，复核 SHA-256 后只从持久副本安装，并把来源路径、hash、发行名/版本写入 revision snapshot。设置页没有 Session workspace 上下文，只允许 pip 名称规格。不要用 `run_shell` 直接执行 conda/mamba/micromamba/pip 修改托管前缀；沙箱只读挂载也会阻止该旁路成为正式变更方式。
 

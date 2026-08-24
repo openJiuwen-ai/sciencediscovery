@@ -16,7 +16,7 @@ import {
   createOperationalLogger,
   type LogFields,
   type OperationalLogger,
-} from "@science-agent/operational-logging";
+} from "@sciencediscovery/operational-logging";
 
 const noopLogger: OperationalLogger = {
   path: "",

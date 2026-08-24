@@ -1,9 +1,9 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
-import type { ModelUsage } from "@science-agent/model";
-import type { SubagentUsage } from "@science-agent/schema";
-import type { AgentToolResult } from "@science-agent/tools";
+import type { ModelUsage } from "@sciencediscovery/model";
+import type { SubagentUsage } from "@sciencediscovery/schema";
+import type { AgentToolResult } from "@sciencediscovery/tools";
 
 export type AssistantMessageEvent =
   | { delta: string; type: "text_delta" }

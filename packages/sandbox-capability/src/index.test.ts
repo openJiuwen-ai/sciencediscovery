@@ -64,7 +64,7 @@ describe("sandbox capability detection", () => {
   let workspace = "";
 
   before(async () => {
-    workspace = await mkdtemp(join(tmpdir(), "science-agent-sandbox-capability-"));
+    workspace = await mkdtemp(join(tmpdir(), "sciencediscovery-sandbox-capability-"));
   });
 
   after(async () => {

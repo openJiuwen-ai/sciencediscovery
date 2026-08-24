@@ -17,14 +17,14 @@ import { randomUUID } from "node:crypto";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-} from "@science-agent/orchestration";
+} from "@sciencediscovery/orchestration";
 import type {
   ModelRunInfo,
   Subagent,
   SubagentBrief,
   SubagentInput,
   SubagentResultValidation,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { normalizeSubagentBrief } from "../subagent-brief.js";
 import { hasOwn, isRecord } from "./catalog.js";

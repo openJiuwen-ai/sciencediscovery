@@ -10,9 +10,9 @@ API 侧（`papers.ts`）用 `execFile` 拉起：
 <python> services/paper/paper_worker.py <输入 PDF 路径> <输出目录>
 ```
 
-- Python 解释器默认 `data/envs/paper/bin/python`（`SCIENCE_AGENT_PAPER_PYTHON_PATH` 可覆盖）；worker 路径 `SCIENCE_AGENT_PAPER_WORKER_PATH`。
+- Python 解释器默认 `.sciencediscovery-data/envs/paper/bin/python`（`SCIENCE_AGENT_PAPER_PYTHON_PATH` 可覆盖）；worker 路径 `SCIENCE_AGENT_PAPER_WORKER_PATH`。
 - worker 把 `PaperExtractionManifest` JSON 写到 stdout；API 侧 stdout 上限 10 MiB、单次调用超时 120 秒。
-- 失败/取消由 API 写回 extraction job（`data/artifact-extraction-jobs/`），错误码 `CANCELLED` / `NORMALIZATION_FAILED`，不自动重试。
+- 失败/取消由 API 写回 extraction job（`.sciencediscovery-data/artifact-extraction-jobs/`），错误码 `CANCELLED` / `NORMALIZATION_FAILED`，不自动重试。
 
 ## 2. 抽取管线（`paper_worker.py`，基于 pdfplumber）
 

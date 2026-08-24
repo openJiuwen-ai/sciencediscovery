@@ -87,17 +87,18 @@ mkdir -p "$shared_dir"
 # reused for every architecture.
 # --------------------------------------------------------------------------
 
-# The requirements export ships to users, so prove it is a pure pinned set:
-# real pins with hashes, no index or artifact URLs (mirror choice stays with
-# the user), and no build-machine paths of any form.
+# The requirements export ships to users, so prove it carries nothing it must
+# not: no index or artifact URLs (mirror choice stays with the user) and no
+# build-machine paths of any form.
+#
+# The set itself is not asserted here. `uv export --frozen` derives it from the
+# committed services/gateway/uv.lock, so it cannot change without a lockfile
+# change, which is visible in review. A hardcoded pin and hash count was tried
+# and only rotted: it was written against a 201-package tree, the gateway's
+# dependencies moved into the Node control plane, and every release build then
+# failed on the count until someone noticed.
 assert_requirements_clean() { # <requirements file>
-  local requirements="$1" pins hashes
-  pins="$(grep -Ec '^[A-Za-z0-9._-]+==' "$requirements" || true)"
-  hashes="$(grep -c -- '--hash=sha256:' "$requirements" || true)"
-  if [[ "$pins" -ne 201 || "$hashes" -ne 2427 ]]; then
-    echo "The requirements export changed: expected 201 pins and 2427 hashes, found $pins pins and $hashes hashes." >&2
-    exit 1
-  fi
+  local requirements="$1"
   if grep -nE '(^|[[:space:]])(--index-url|--extra-index-url|--find-links|-e)([[:space:]]|$)|[[:alpha:]][[:alnum:]+.-]*://|[[:space:]]@[[:space:]]' "$requirements" >&2; then
     echo "The requirements export must not contain registry, artifact, direct, or editable URLs." >&2
     exit 1
@@ -106,7 +107,10 @@ assert_requirements_clean() { # <requirements file>
     echo "The requirements export leaks a build-machine path." >&2
     exit 1
   fi
-  echo "Requirements export verified: $pins pins, $hashes hashes, no URLs, no local paths." >&2
+  # Reported, not asserted: the numbers make a dependency change visible in
+  # the build log without turning one into a build failure.
+  echo "Requirements export verified: $(grep -Ec '^[A-Za-z0-9._-]+==' "$requirements" || true) pins,"\
+    "$(grep -c -- '--hash=sha256:' "$requirements" || true) hashes, no URLs, no local paths." >&2
 }
 
 # Shipped bytes must not reference this build machine. Text files across the
@@ -168,7 +172,7 @@ prepare_shared() {
   echo "Deploying the Node services..." >&2
   for service in api runner; do
     rm -rf -- "$shared_dir/app/services/$service"
-    CI=true pnpm deploy --filter "@science-agent/$service" --prod --legacy "$shared_dir/app/services/$service"
+    CI=true pnpm deploy --filter "@sciencediscovery/$service" --prod --legacy "$shared_dir/app/services/$service"
   done
   CI=true pnpm install --frozen-lockfile --ignore-scripts
 
@@ -274,8 +278,8 @@ site_packages="python/lib/python3.12/site-packages"
 echo "Staging the first-launch bootstrap inputs..." >&2
 mkdir -p "$output/bootstrap/wheels"
 cp "$shared_dir/requirements-gateway.txt" "$output/bootstrap/requirements-gateway.txt"
-cp "$shared_dir"/wheels/science_agent_gateway-*.whl "$output/bootstrap/wheels/"
-gateway_wheel_name="$(basename "$(ls "$output"/bootstrap/wheels/science_agent_gateway-*.whl)")"
+cp "$shared_dir"/wheels/sciencediscovery_gateway-*.whl "$output/bootstrap/wheels/"
+gateway_wheel_name="$(basename "$(ls "$output"/bootstrap/wheels/sciencediscovery_gateway-*.whl)")"
 
 # A pyvenv.cfg makes site.py treat the prefix as an environment, which disables
 # the host user site directory (~/.local/lib/pythonX.Y/site-packages). Omitting
@@ -311,7 +315,7 @@ read -r uv_version uv_project uv_wheel_filename uv_wheel_sha256 < <(node -e '
 cat >"$output/manifest.json" <<EOF
 {
   "formatVersion": 2,
-  "product": "science-agent",
+  "product": "sciencediscovery",
   "version": "$version",
   "architecture": "$architecture",
   "runtimeArchitecture": "$runtime_architecture",

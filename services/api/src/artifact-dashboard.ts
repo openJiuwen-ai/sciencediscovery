@@ -26,9 +26,9 @@ import type {
   ScientificArtifactKind,
   ScientificArtifactVersion,
   Session,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
-import type { ProvenanceRecorder } from "@science-agent/provenance";
+import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { SessionStore } from "./store.js";
 
 /** Marker error codes the API catches and maps to specific HTTP statuses. */

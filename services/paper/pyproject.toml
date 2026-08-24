@@ -13,7 +13,7 @@
 # limitations under the License.
 
 [project]
-name = "science-agent-paper-worker"
+name = "sciencediscovery-paper-worker"
 version = "0.1.0"
 description = "Bounded local PDF extraction worker for ScienceDiscovery"
 requires-python = ">=3.11"

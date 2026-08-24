@@ -15,7 +15,7 @@
 import type {
   RunStreamEvent,
   SessionRun,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 const STOP_STREAM_GRACE_MS = 5_000;
 

@@ -32,7 +32,7 @@
 export const API_TOKEN_VARIABLE = "E2E_API_TOKEN";
 
 /** Where the Web UI keeps the token it sends with every request. */
-export const BROWSER_TOKEN_STORAGE_KEY = "science-agent-token";
+export const BROWSER_TOKEN_STORAGE_KEY = "sciencediscovery-token";
 
 /** The variable the E2E guideline treats as authoritative for the target. */
 export const BASE_URL_VARIABLE = "E2E_BASE_URL";

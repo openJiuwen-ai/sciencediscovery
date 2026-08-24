@@ -36,7 +36,7 @@ describe("legacy directory migration", () => {
   test("moves a legacy directory once and logs the import", async () => {
     const root = await temporaryRoot();
     const legacyPath = join(root, "science-agent-data");
-    const targetPath = join(root, "science-discovery-data");
+    const targetPath = join(root, ".sciencediscovery-data");
     await mkdir(legacyPath);
     await writeFile(join(legacyPath, "state.json"), "legacy");
     const messages: string[] = [];

@@ -91,12 +91,16 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   }
 
   if (invocation.command === "serve" && invocation.usesDefaultDataDir) {
-    await migrateLegacyDirectory({
-      label: "runtime data",
-      legacyPath: resolve(cwd, "science-agent-data"),
-      targetPath: invocation.settings.dataDir,
-      log: write,
-    });
+    // Newest former default first: when a host carries both, the more recent
+    // one wins and the older move logs a skip instead of overwriting it.
+    for (const legacyName of ["science-discovery-data", "science-agent-data"]) {
+      await migrateLegacyDirectory({
+        label: "runtime data",
+        legacyPath: resolve(cwd, legacyName),
+        targetPath: invocation.settings.dataDir,
+        log: write,
+      });
+    }
   }
 
   const { manifest, root } = await resolvePayload({ env: process.env, onProgress: write });

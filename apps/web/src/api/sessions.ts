@@ -34,7 +34,7 @@ import type {
   SessionPlan,
   UpdateSessionRequest,
   RotatePermissionEpochRequest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 import { ProjectsApiClient } from "./projects.js";
 

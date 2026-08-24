@@ -1,5 +1,5 @@
 {
-  "name": "@science-agent/artifact-manager",
+  "name": "@sciencediscovery/artifact-manager",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,12 +11,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@science-agent/data-source": "workspace:*",
-    "@science-agent/context": "workspace:*",
-    "@science-agent/governance": "workspace:*",
-    "@science-agent/mcp-sources": "workspace:*",
-    "@science-agent/schema": "workspace:*",
-    "@science-agent/workspace": "workspace:*"
+    "@sciencediscovery/data-source": "workspace:*",
+    "@sciencediscovery/context": "workspace:*",
+    "@sciencediscovery/governance": "workspace:*",
+    "@sciencediscovery/mcp-sources": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*",
+    "@sciencediscovery/workspace": "workspace:*"
   },
   "devDependencies": { "@types/node": "26.1.1" }
 }

@@ -18,7 +18,7 @@ import type {
   McpSourceManifest,
   McpToolId,
   McpToolManifest,
-} from "@science-agent/schema";
+} from "@sciencediscovery/schema";
 
 export class McpSourceRegistry {
   private readonly sources = new Map<McpSourceId, McpSourceAdapter>();

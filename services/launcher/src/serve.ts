@@ -132,7 +132,7 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
     SCIENCE_AGENT_DATA_DIR: settings.dataDir,
     SCIENCE_AGENT_RUNNER_HOST: settings.runnerHost,
     SCIENCE_AGENT_RUNNER_PORT: String(settings.runnerPort),
-    SCIENCE_AGENT_RUNNER_TOKEN: baseEnv.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "science-agent-runner-local",
+    SCIENCE_AGENT_RUNNER_TOKEN: baseEnv.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "sciencediscovery-runner-local",
     SCIENTIFIC_ENVS: settings.scientificEnvironments ? "1" : "0",
   };
 

@@ -17,10 +17,10 @@ import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import type { ChatMessage, EffectiveRuntimeSettings, ModelProfile } from "@science-agent/schema";
+import type { ChatMessage, EffectiveRuntimeSettings, ModelProfile } from "@sciencediscovery/schema";
 
 import { createPromptManifest } from "./prompt-manifest.js";
-import { CasStore } from "@science-agent/cas";
+import { CasStore } from "@sciencediscovery/cas";
 
 const runtimeSettings: EffectiveRuntimeSettings = {
   enabledConnectorIds: [],

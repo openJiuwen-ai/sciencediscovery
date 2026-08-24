@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { MemoryGraphEdge, MemoryGraphNode, MemorySubgraph } from "@science-agent/schema";
+import type { MemoryGraphEdge, MemoryGraphNode, MemorySubgraph } from "@sciencediscovery/schema";
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 

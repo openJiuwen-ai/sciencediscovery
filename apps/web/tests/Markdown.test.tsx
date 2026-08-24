@@ -25,7 +25,7 @@ import {
   resolveMarkdownImageSource,
   type MarkdownRendererProps,
 } from "../src/Markdown.js";
-import type { ComposerReference, ScientificArtifact } from "@science-agent/schema";
+import type { ComposerReference, ScientificArtifact } from "@sciencediscovery/schema";
 import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

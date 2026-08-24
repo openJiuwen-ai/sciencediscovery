@@ -9,7 +9,7 @@ Everything listed under [README → Quick start → Requirements](README.md#requ
 Run the stack once before running the full check suite — the API agent-path tests spawn the gateway and need its Python environment:
 
 ```bash
-./scripts/start-stack.sh --mode local   # provisions data/envs/gateway and data/envs/paper
+./scripts/start-stack.sh --mode local   # provisions .sciencediscovery-data/envs/{gateway,paper}
 ```
 
 Alternatively, provide a standalone `services/gateway/.venv`.
@@ -19,11 +19,11 @@ Alternatively, provide a standalone `services/gateway/.venv`.
 ```bash
 pnpm check        # typecheck, paper tests, build, and package unit tests
 pnpm test         # build + recursive package unit tests
-pnpm smoke        # build + @science-agent/api unit tests only
-pnpm paper:setup  # locked PDF parser venv (project-local; app runtime uses data/envs/paper)
+pnpm smoke        # build + @sciencediscovery/api unit tests only
+pnpm paper:setup  # locked PDF parser venv (project-local; app runtime uses .sciencediscovery-data/envs/paper)
 pnpm paper:test   # PDF extraction tests
 pnpm dev          # API watch (after build; does not start runner/gateway by itself)
-pnpm --filter @science-agent/web dev   # UI hot reload on :5173 (proxies API :4310)
+pnpm --filter @sciencediscovery/web dev   # UI hot reload on :5173 (proxies API :4310)
 ```
 
 ## Agent-loop smoke tests
@@ -99,6 +99,83 @@ HTTP/WebSocket guard, isolation, failure attribution, and
 discovered/executed/skipped reporting.
 
 Integration/e2e tests under `test/` are **not** part of `pnpm check`.
+
+## CI layers
+
+CI groups the commands above into three layer entry points. Reproducing a
+pipeline failure locally means running the same one:
+
+```bash
+pnpm ci:ut    # pnpm check, then the memory-graph pytest suite
+pnpm ci:st    # build, then the hermetic agent-loop smoke
+pnpm ci:e2e   # starts its own isolated stack and runs the @mocked journeys
+```
+
+Each writes `run.log` and a machine-readable summary below `CI_RESULTS_DIR`,
+and gives the run a scratch data directory below `CI_RUNTIME_DIR`. Both default
+to paths that exist only inside the `.ci` toolchain image, so outside that image
+point them somewhere writable:
+
+```bash
+CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:st
+```
+
+Live and hardware layers (`ci:st:real`, `ci:e2e:real`, `ci:st:npu`,
+`ci:e2e:legacy`) fail closed behind their `CI_ALLOW_*` variables and are never
+part of a default command. See [.ci/README.md](.ci/README.md) for the toolchain
+image, the per-layer Docker commands, and the tag catalog used to select cases
+(`pnpm ci:tags`, `pnpm ci:list`, `pnpm ci:run`).
+
+## License headers
+
+Every source file starts with the Apache-2.0 header below, written in that
+file's comment syntax:
+
+```text
+Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+Comment markers, matching what is already in the tree:
+
+| Files | Marker | Reference |
+| --- | --- | --- |
+| `.ts`, `.tsx`, `.js`, `.mjs` | `//` on every line | [apps/web/src/session-activity.ts](apps/web/src/session-activity.ts) |
+| `.py`, `.sh`, `.yml`, `.toml`, `Dockerfile` | `#` on every line | [.ci/run-e2e.sh](.ci/run-e2e.sh) |
+| `.css` | `/*` block with ` * ` continuation lines | [apps/web/src/styles/conversation.css](apps/web/src/styles/conversation.css) |
+| `.html` | one `<!-- -->` block | [apps/web/index.html](apps/web/index.html) |
+
+The header is the first thing in the file, except where the format demands
+something earlier — a shebang (`#!/usr/bin/env bash`) or a doctype
+(`<!doctype html>`) — in which case it follows on the next line. Blank lines
+inside the header stay commented (`//` or `#` with nothing after it), and one
+uncommented blank line separates the header from the code.
+
+### Exceptions
+
+These do not carry a header:
+
+- **Documentation and plain text** — `.md`, `.txt`, `LICENSE`, `CODEOWNERS`.
+- **Formats with no comment syntax** — `.json` (including `package.json` and
+  `tsconfig*.json`), `.python-version`, and similar. Do not invent a `//`
+  comment to work around strict JSON.
+- **Files generated in full by a script** — lockfiles such as `pnpm-lock.yaml`,
+  and any artifact a generator writes end to end. Put the header in the
+  generator instead, and have it emit one only when the output format supports
+  comments. A file that is merely scaffolded and then edited by hand is not
+  generated: it needs the header.
+- **Binary assets** — images, fonts, PDFs.
 
 ## Architecture and docs
 

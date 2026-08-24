@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { PermissionAuthorization, PermissionEpoch, PermissionRequest } from "@science-agent/schema";
+import type { PermissionAuthorization, PermissionEpoch, PermissionRequest } from "@sciencediscovery/schema";
 
 /** Privileged action classes understood by the Agent-facing governance port. */
 export type PrivilegedAction = "code" | "connector" | "host";

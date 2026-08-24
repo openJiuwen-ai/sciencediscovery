@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { useEffect, useRef, useState } from "react";
-import type { ConnectorId, ConnectorManifest } from "@science-agent/schema";
+import type { ConnectorId, ConnectorManifest } from "@sciencediscovery/schema";
 import { DatabaseIcon, ExternalIcon } from "../icons.js";
 import { useLocale } from "../i18n/index.js";
 

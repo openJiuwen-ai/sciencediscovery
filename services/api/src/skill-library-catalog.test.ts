@@ -18,8 +18,8 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { BUNDLED_SKILL_IDS, SkillCatalog } from "@science-agent/specialist";
-import { BUILT_IN_SKILL_LIBRARY_ID } from "@science-agent/schema";
+import { BUNDLED_SKILL_IDS, SkillCatalog } from "@sciencediscovery/specialist";
+import { BUILT_IN_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
 
 import { createQueuedRun } from "./runs/index.js";
 import { SessionStore } from "./store.js";
