@@ -187,7 +187,8 @@
 /* Keep the stacked narrow-screen layout (max-width: 600px) winning over the
    composer container bands above: same specificity, so this must come last. */
 @media (max-width: 600px) {
-  .task-model-picker select { width: 100%; max-width: none; }
+  .task-model-picker, .conversation-thinking-picker, .orchestration-controls { flex: 0 0 auto; }
+  .task-model-picker select { width: 100%; max-width: none; flex: 0 0 auto; }
 }
 
 @media (max-height: 900px) {

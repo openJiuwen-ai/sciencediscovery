@@ -145,4 +145,5 @@ test("Composer controls wrap by available container width instead of overlapping
   assert.match(conversation, /\.orchestration-controls \{[^}]*flex-wrap: wrap;/);
   assert.match(responsive, /@container \(max-width: 1024px\)[\s\S]*?\.task-model-picker \{ flex-basis: 100%; \}/);
   assert.match(responsive, /@container \(max-width: 900px\)[\s\S]*?\.orchestration-controls \{ flex-basis: 100%; \}/);
+  assert.match(responsive, /@media \(max-width: 600px\) \{\s*\.task-model-picker, \.conversation-thinking-picker, \.orchestration-controls \{ flex: 0 0 auto; \}\s*\.task-model-picker select \{[^}]*flex: 0 0 auto;/);
 });

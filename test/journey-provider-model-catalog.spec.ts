@@ -192,12 +192,12 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  *   10. 删除被全局默认模型引用的 B，确认中文错误提供可恢复操作且不会误报保存/刷新失败。
  *   11. 在 600px 窄屏确认 Provider 表单、目录卡片无横向溢出且仍可操作。
  *   12. 新建会话切换模型；不支持模型隐藏思考控件，DeepSeek enabled/max 跨刷新保存。
- *   13. 工作区展开时分别在 1440×900、600×900 对 Composer 做两两无重叠、命中、边界与标签几何断言。
+ *   13. 工作区展开时分别在 1440×900、600×900 对中文 Composer 做两两无重叠、紧凑高度、命中、边界与标签几何断言。
  *   14. 发送消息，核对 DeepSeek 所选模型、thinking.type=enabled 与 reasoning_effort=max 真实进入 wire。
  *   15. 选择 GPT-5.5，把旧 max 持久化收窄为 xhigh；刷新一致且 Responses wire 合法。
  *   16. 选择始终推理 Kimi K3，确认仅 enabled 和 low/high/max，wire 只发送 reasoning_effort=low。
  *   17. 选择 Claude Haiku 4.5，Composer/高级编辑器统一隐藏 effort 并提示 legacy，wire 使用合法固定预算。
- *   18. 切换英文，确认模型/effort 标签及 DeepSeek 分时价格自然本地化。
+ *   18. 切换英文，复核两档 Composer 几何，再确认模型/effort 标签及 DeepSeek 分时价格自然本地化。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；模型列表、Chat Completions、Responses 与 Anthropic Messages 均由本 spec 的 loopback mock 提供。
  * Type: mocked
  * LLM: local deterministic HTTP/SSE fixture only；不调用真实或付费模型 API。
@@ -238,6 +238,97 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       .getByRole("button", { name: /^(模型注册表|Model registry)/ })
       .click();
     return dialog;
+  };
+
+  const verifyComposerGeometry = async ({
+    labels,
+    runButton,
+    width,
+  }: {
+    labels: string[];
+    runButton: string;
+    width: number;
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const footer = page.locator(".composer-footer");
+    await footer.scrollIntoViewIfNeeded();
+    const geometry = await footer.evaluate((node) => {
+      const footerRect = node.getBoundingClientRect();
+      const groupSelectors = [
+        { group: "model", selector: ".task-model-picker select" },
+        { group: "thinking", selector: ".conversation-thinking-picker select" },
+        { group: "orchestration", selector: ".orchestration-controls select, .orchestration-controls button" },
+        { group: "run", selector: ".composer-run-actions button" },
+      ];
+      const controls = groupSelectors.flatMap(({ group, selector }) => (
+        Array.from(node.querySelectorAll<HTMLElement>(selector)).map((element) => ({ element, group }))
+      )).filter(({ element }) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      const rectangles = controls.map(({ element, group }) => {
+        const rect = element.getBoundingClientRect();
+        return { bottom: rect.bottom, group, height: rect.height, left: rect.left, right: rect.right, top: rect.top, width: rect.width };
+      });
+      const overlaps: Array<{ left: string; right: string }> = [];
+      for (let left = 0; left < rectangles.length; left += 1) {
+        for (let right = left + 1; right < rectangles.length; right += 1) {
+          const a = rectangles[left]!;
+          const b = rectangles[right]!;
+          if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1
+            && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1) {
+            overlaps.push({ left: `${left}:${a.group}`, right: `${right}:${b.group}` });
+          }
+        }
+      }
+      const labelSpans = Array.from(node.querySelectorAll<HTMLElement>("label > span"))
+        .filter((element) => element.getBoundingClientRect().width > 0);
+      return {
+        centerTargetFailures: controls.flatMap(({ element, group }, index) => {
+          const rect = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return hit === element || (hit !== null && element.contains(hit))
+            ? []
+            : [{
+                control: `${index}:${group}:${element.tagName.toLowerCase()}:${element.getAttribute("aria-label") ?? element.textContent?.trim().slice(0, 40) ?? ""}`,
+                hit: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : "none",
+              }];
+        }),
+        controlsInside: rectangles.every((rect) => rect.left >= footerRect.left - 1
+          && rect.right <= footerRect.right + 1
+          && rect.left >= -1
+          && rect.right <= window.innerWidth + 1),
+        groupCounts: Object.fromEntries(groupSelectors.map(({ group }) => [
+          group,
+          rectangles.filter((rect) => rect.group === group).length,
+        ])),
+        labelsUnclipped: labelSpans.every((span) => span.scrollWidth <= span.clientWidth + 1),
+        modelSelectHeight: node.querySelector<HTMLSelectElement>(".task-model-picker select")?.getBoundingClientRect().height ?? 0,
+        overlaps,
+        pageScrollWidth: document.documentElement.scrollWidth,
+        selectHeights: controls
+          .filter(({ element }) => element.tagName === "SELECT")
+          .map(({ element }) => element.getBoundingClientRect().height),
+        viewportWidth: window.innerWidth,
+      };
+    });
+    expect(geometry.overlaps).toEqual([]);
+    expect(geometry.centerTargetFailures).toEqual([]);
+    expect(geometry.controlsInside).toBe(true);
+    expect(geometry.labelsUnclipped).toBe(true);
+    expect(geometry.pageScrollWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+    for (const group of ["model", "thinking", "orchestration", "run"]) {
+      expect(geometry.groupCounts[group]).toBeGreaterThan(0);
+    }
+    if (width <= 600) {
+      expect(geometry.modelSelectHeight).toBeGreaterThanOrEqual(24);
+      expect(geometry.modelSelectHeight).toBeLessThanOrEqual(48);
+      expect(geometry.selectHeights.length).toBeGreaterThanOrEqual(5);
+      expect(geometry.selectHeights.every((height) => height >= 24 && height <= 48)).toBe(true);
+    }
+    for (const label of labels) await expect(page.getByLabel(label)).toBeVisible();
+    await expect(page.getByRole("button", { name: runButton })).toBeVisible();
+    return geometry;
   };
 
   try {
@@ -661,73 +752,15 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "Composer 在默认桌面与 600px 窄屏按可用容器换行",
-      "工作区面板保持展开，在 1440×900 和 600×900 两个真实视口分别滚动到 Composer。模型、思考、强度、审批、专家和运行控件都有可读标签/可访问名称，控件矩形两两不相交、中心命中自身、全部位于 Composer 和视口内，页面无横向溢出。",
+      "工作区面板保持展开，在 1440×900 和 600×900 两个真实视口分别滚动到中文 Composer。模型、思考、强度、审批、专家和运行控件都有可读标签/可访问名称，四类控件矩形两两不相交、中心命中自身、全部位于 Composer 和视口内；窄屏所有下拉框保持 24–48px 紧凑高度，页面无横向溢出。",
       async () => {
-        const verifyComposerGeometry = async (width: number) => {
-          await page.setViewportSize({ width, height: 900 });
-          const footer = page.locator(".composer-footer");
-          await footer.scrollIntoViewIfNeeded();
-          const geometry = await footer.evaluate((node) => {
-            const footerRect = node.getBoundingClientRect();
-            const controls = Array.from(node.querySelectorAll("select, button"))
-              .filter((element) => {
-                const rect = element.getBoundingClientRect();
-                return rect.width > 0 && rect.height > 0;
-              });
-            const rectangles = controls.map((element) => {
-              const rect = element.getBoundingClientRect();
-              return { bottom: rect.bottom, height: rect.height, left: rect.left, right: rect.right, top: rect.top, width: rect.width };
-            });
-            const overlaps: Array<[number, number]> = [];
-            for (let left = 0; left < rectangles.length; left += 1) {
-              for (let right = left + 1; right < rectangles.length; right += 1) {
-                const a = rectangles[left]!;
-                const b = rectangles[right]!;
-                if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1
-                  && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1) overlaps.push([left, right]);
-              }
-            }
-            const labelSpans = Array.from(node.querySelectorAll("label > span"))
-              .filter((element) => element.getBoundingClientRect().width > 0);
-            return {
-              centerTargetFailures: controls.flatMap((control, index) => {
-                const rect = control.getBoundingClientRect();
-                const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-                return hit === control || (hit !== null && control.contains(hit))
-                  ? []
-                  : [{
-                      control: `${index}:${control.tagName.toLowerCase()}:${control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40) ?? ""}`,
-                      hit: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : "none",
-                    }];
-              }),
-              controlsInside: rectangles.every((rect) => rect.left >= footerRect.left - 1
-                && rect.right <= footerRect.right + 1
-                && rect.left >= -1
-                && rect.right <= window.innerWidth + 1),
-              labelsUnclipped: labelSpans.every((span) => span.scrollWidth <= span.clientWidth + 1),
-              overlaps,
-              pageScrollWidth: document.documentElement.scrollWidth,
-              viewportWidth: window.innerWidth,
-            };
-          });
-          expect(geometry.overlaps).toEqual([]);
-          expect(geometry.centerTargetFailures).toEqual([]);
-          expect(geometry.controlsInside).toBe(true);
-          expect(geometry.labelsUnclipped).toBe(true);
-          expect(geometry.pageScrollWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
-          for (const label of ["本任务使用的模型", "当前对话的思考模式", "当前对话的思考强度", "审批", "专家"]) {
-            await expect(page.getByLabel(label)).toBeVisible();
-          }
-          await expect(page.getByRole("button", { name: "运行分析" })).toBeVisible();
-        };
-
         await page.setViewportSize({ width: 1440, height: 900 });
         const showWorkspace = page.getByRole("button", { name: "显示工作区" });
         if (await showWorkspace.count()) await showWorkspace.click();
         await expect(page.getByRole("button", { name: "隐藏工作区" })).toBeVisible();
-        await verifyComposerGeometry(1440);
-        await verifyComposerGeometry(600);
-        await page.setViewportSize({ width: 1280, height: 720 });
+        const labels = ["本任务使用的模型", "当前对话的思考模式", "当前对话的思考强度", "审批", "专家"];
+        await verifyComposerGeometry({ labels, runButton: "运行分析", width: 1440 });
+        await verifyComposerGeometry({ labels, runButton: "运行分析", width: 600 });
       },
     );
 
@@ -735,6 +768,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       "所选模型与 DeepSeek 思考配置真实进入 Run",
       "发送消息后页面收到本地模拟模型的确定性答复；模拟服务捕获的真实 Chat Completions 请求 model=deepseek-v4-flash，thinking.type=enabled 且 reasoning_effort=max，证明选择不是仅界面展示。",
       async () => {
+        await page.setViewportSize({ width: 1280, height: 720 });
         const run = await sendUserMessage(page, fixture!.session.id, "Verify the selected provider model and thinking controls.");
         const terminal = await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000);
         expect(terminal.status).toBe("completed");
@@ -883,7 +917,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "设置与对话控件提供英文界面",
-      "在系统设置的语言页选择 English 并保存关闭；对话区显示 Model for this task、Thinking mode for this conversation 和 Thinking effort for this conversation，重新打开模型注册表可见 Common providers、Custom provider 与 Provider model catalog。",
+      "在系统设置的语言页选择 English 并保存关闭；对话区显示本地化模型与思考标签，并在 1440×900、600×900 重复无重叠、紧凑高度、命中和溢出几何断言；重新打开模型注册表可见 Common providers、Custom provider 与 Provider model catalog。",
       async () => {
         await page.getByLabel("本任务使用的模型").selectOption(deepseekModelId);
         await page.getByLabel("当前对话的思考模式").selectOption("enabled");
@@ -900,6 +934,9 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(page.getByLabel("Thinking effort for this conversation").locator("option:checked")).toHaveText("Max");
         await expect(page.getByLabel("Model for this task").locator("option:checked")).toContainText("DeepSeek · Auto");
         await expect(page.getByLabel("Model for this task").locator("option:checked")).not.toContainText("自动");
+        const labels = ["Model for this task", "Thinking mode for this conversation", "Thinking effort for this conversation", "Approvals", "Specialist"];
+        await verifyComposerGeometry({ labels, runButton: "Run analysis", width: 1440 });
+        await verifyComposerGeometry({ labels, runButton: "Run analysis", width: 600 });
         const englishDialog = await openModelRegistry();
         await expect(englishDialog.getByRole("region", { name: "Common providers" })).toBeVisible();
         await expect(englishDialog.getByRole("button", { name: "+ Custom provider" })).toBeVisible();
