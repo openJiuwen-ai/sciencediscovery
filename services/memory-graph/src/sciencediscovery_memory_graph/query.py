@@ -52,6 +52,13 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
             """
             MATCH (n) WHERE n.session_id = $sid
               AND NOT coalesce(n.deleted_session, false)
+              // A search contributes hundreds of SearchNodes and up to a few
+              // dozen SearchCells. Left in, one /evolve run would eat a fifth of
+              // the node budget and push the nodes a session is actually about
+              // out of the window. The run is still visible: its SubTask and the
+              // SearchRun handle it `searches` both stay, so the session graph
+              // gains exactly two nodes per search and the tree opens from there.
+              AND NOT n:SearchNode AND NOT n:SearchCell
             RETURN labels(n)[0] AS label, n AS node
             ORDER BY n.created_at DESC
             LIMIT $limit
@@ -98,7 +105,11 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
             WHERE a.session_id = $sid AND b.session_id = $sid
               AND NOT coalesce(a.deleted_session, false)
               AND NOT coalesce(b.deleted_session, false)
-              AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input']
+              // `searches` is in: it is the one edge that shows a session had a
+              // search at all. The structural ones (expands/root/inspires/
+              // occupies) are not — same reason `supersedes` is filtered in the
+              // frontend, and their endpoints are excluded above anyway.
+              AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input', 'searches']
             RETURN a AS src, b AS dst, labels(a)[0] AS src_label,
                    labels(b)[0] AS dst_label, type(r) AS edge_type, r AS rel
             """,
@@ -1246,6 +1257,11 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         ("stated_in", "out", "Artifact"),
     ],
     "SubTask": [
+        # The search this SubTask ran, when it ran one. Only the handle: the
+        # `expands` fan-out is deliberately absent, so "view chain" on a search
+        # SubTask returns a subgraph whose size is independent of how many
+        # candidates the search produced.
+        ("searches", "out", "SearchRun"),
         # This SubTask's OWN produces subtree first, while the eid set is
         # still just the source — so only this SubTask's Code/Artifact/Paper
         # are pulled in. Doing produces *after* the next-chain unfold would
@@ -1312,6 +1328,24 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
     # is viewed; the goal view stays a clean task skeleton).
     "ResearchGoal": [
         ("next", "out", "SubTask", "1.."),
+    ],
+    # A search run walks back to the goal, and forward only to its elected
+    # candidate. `expands` never appears in an `out` direction anywhere in this
+    # table: one "view chain" must not pull a whole tree into the picture.
+    "SearchRun": [
+        ("searches", "in", "SubTask"),
+        ("elected", "out", "SearchNode"),
+        ("next", "in", "ResearchGoal", "1.."),
+        ("next", "out", "SubTask", "1.."),
+    ],
+    # Upstream-only, so `trace_provenance` can walk a candidate back to the
+    # ResearchGoal without the tree fanning out beneath it.
+    "SearchNode": [
+        ("expands", "in", "SearchNode", "1.."),
+        ("root", "in", "SearchRun"),
+        ("elected", "in", "SearchRun"),
+        ("searches", "in", "SubTask"),
+        ("next", "in", "ResearchGoal", "1.."),
     ],
     "Evidence": [
         # extracts is Paper -> Evidence, so walking *in* (against it) reaches
@@ -1450,6 +1484,13 @@ _ID_FIELDS: dict[str, str] = {
     "Claim": "claim_id",
     "Code": "code_id",
     "Artifact": "artifact_id",
+    # /evolve search graph. Without these `_node_identity` returns None and the
+    # node is **silently dropped** from every read — which is how a SearchRun
+    # that was written correctly still failed to appear in the session subgraph.
+    # `test_every_readable_label_has_an_id_field` now pins the whole table.
+    "SearchRun": "search_id",
+    "SearchNode": "search_id",
+    "SearchCell": "search_id",
 }
 
 # Per-label field holding the node's body-content CAS hash, so the trace can
@@ -1482,6 +1523,22 @@ def _node_identity(label: str, node: dict[str, Any]) -> str | None:
     field = _ID_FIELDS.get(label)
     if field is None:
         return None
+    # A search's nodes and cells share `search_id`, so the identity has to carry
+    # the rest of the composite key or every node of one search would collapse
+    # onto one id.
+    if label == "SearchNode":
+        index = node.get("node_index")
+        base = node.get(field)
+        return None if base is None or index is None else f"{base}#n{index}"
+    if label == "SearchCell":
+        base = node.get(field)
+        island, complexity, diversity = (
+            node.get("island"), node.get("complexity_bin"), node.get("diversity_bin"),
+        )
+        if base is None or island is None or complexity is None or diversity is None:
+            return None
+        return f"{base}#c{island}.{complexity}.{diversity}"
+
     base = node.get(field)
     if base is None:
         return None

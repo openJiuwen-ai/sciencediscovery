@@ -75,3 +75,7 @@ services/api/logs/
 # A candidate is not an artifact — most are refused, and the ones a user keeps
 # are copied into content-addressed storage by that decision, not by having run.
 services/evolve/data/
+
+# Local run data from ad-hoc stacks (data-demo/, data-pr21/, …). Never
+# committed: these hold a session's own secrets and CAS blobs.
+data-*/

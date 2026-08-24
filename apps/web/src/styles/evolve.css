@@ -212,57 +212,11 @@
   transition: width 200ms ease;
 }
 
-.evolve-candidates {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.evolve-candidate {
-  align-items: baseline;
-  display: grid;
-  font-size: 12px;
-  gap: 10px;
-  grid-template-columns: 44px 72px 1fr auto;
-  padding: 5px 8px;
-}
-
-.evolve-candidate:nth-child(odd) {
-  background: var(--surface-subtle);
-}
-
-.evolve-candidate-index {
-  color: var(--muted);
-  font-family: var(--font-mono);
-}
-
-.evolve-candidate-score {
-  font-family: var(--font-mono);
-}
-
 /* A failed expansion is still a node in the tree — dropping it would change the
  * rank denominator of every later iteration — so it is shown, dimmed, rather
  * than hidden. Hiding it makes "the model returned nothing" indistinguishable
  * from "the program did not run". */
 .evolve-candidate-failed .evolve-candidate-score,
-.evolve-candidate-failed .evolve-candidate-summary {
-  color: var(--muted);
-  font-style: italic;
-}
-
-.evolve-candidate-summary {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.evolve-candidate-refusal {
-  color: #b45309;
-  font-size: 11px;
-}
 
 .evolve-panel-error {
   background: color-mix(in srgb, #dc2626 8%, transparent);
@@ -274,13 +228,7 @@
 }
 
 @media (max-width: 900px) {
-  .evolve-candidate {
-    grid-template-columns: 40px 64px 1fr;
-  }
 
-  .evolve-candidate-refusal {
-    grid-column: 2 / -1;
-  }
 }
 
 /* --- search graph --------------------------------------------------------- */
@@ -554,24 +502,6 @@
 
 /* The panel's identity row. These four went unstyled from the day the panel
    was built — the stylesheet-coverage test now refuses that arrangement. */
-.evolve-panel-eyebrow {
-  color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  margin: 0 0 2px;
-  text-transform: uppercase;
-}
-.evolve-panel-heading { font-size: 17px; font-weight: 600; margin: 0; }
-.evolve-panel-close {
-  background: none;
-  border: none;
-  border-radius: 6px;
-  color: var(--muted);
-  cursor: pointer;
-  line-height: 0;
-  padding: 6px;
-}
-.evolve-panel-close:hover { background: var(--surface-subtle); color: var(--text); }
 
 .evolve-detail-diff h4 { margin: 14px 0 6px; }
 .evolve-detail-diff { min-width: 0; }
@@ -586,184 +516,34 @@
    something must not lose what is ahead, so the nav is buttons rather than a
    forward-only stepper. */
 
-.evolve-wizard-steps {
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  gap: 4px;
-  padding: 0 16px;
-}
-
-.evolve-wizard-steps button {
-  align-items: center;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--muted);
-  cursor: pointer;
-  display: flex;
-  font-size: 13px;
-  gap: 6px;
-  padding: 8px 10px;
-}
-.evolve-wizard-steps button.is-current { border-bottom-color: var(--accent); color: var(--text); }
-.evolve-wizard-steps button.has-issues { color: var(--danger, #c62828); }
-
-.evolve-wizard-step-index {
-  background: var(--surface-subtle);
-  border-radius: 50%;
-  font-size: 11px;
-  height: 18px;
-  line-height: 18px;
-  text-align: center;
-  width: 18px;
-}
 /* The count, not a dot: "three things wrong here" is a different errand from
    "one thing wrong here". */
-.evolve-wizard-step-count {
-  background: var(--danger, #c62828);
-  border-radius: 8px;
-  color: #fff;
-  font-size: 10px;
-  padding: 0 5px;
-}
 
-.evolve-wizard-form { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
-.evolve-wizard-field { display: flex; flex-direction: column; gap: 4px; }
-.evolve-wizard-label { color: var(--muted); font-size: 12px; }
-.evolve-wizard-hint { color: var(--muted); font-size: 11px; }
-.evolve-wizard-issue { color: var(--danger, #c62828); font-size: 12px; }
-
-.evolve-wizard-row { align-items: flex-end; display: flex; gap: 8px; }
-.evolve-wizard-row > input, .evolve-wizard-row > select { flex: 1; min-width: 0; }
-.evolve-wizard-mini { display: flex; flex-direction: column; font-size: 11px; gap: 2px; }
-.evolve-wizard-mini input { width: 74px; }
-
-.evolve-wizard-refusals {
-  background: color-mix(in srgb, var(--danger, #c62828) 8%, transparent);
-  border: 1px solid var(--danger, #c62828);
-  border-radius: 8px;
-  margin-top: 12px;
-  padding: 8px 12px;
-}
-.evolve-wizard-refusals h4 { font-size: 13px; margin: 0 0 4px; }
-.evolve-wizard-refusals ul { margin: 0; padding-left: 18px; }
-.evolve-wizard-refusals li { font-size: 12px; margin-bottom: 4px; }
 /* Every refusal names a knob; being told no with no direction is a dead end. */
-.evolve-wizard-fix { color: var(--muted); display: block; font-size: 11px; }
 
-.evolve-wizard-footer {
-  border-top: 1px solid var(--border);
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  padding: 12px 16px;
-}
-.evolve-wizard-footer button {
-  background: var(--surface-subtle);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  padding: 6px 14px;
-}
 /* Scoped to the footer so it out-specifies `.evolve-wizard-footer button`
    above. Without the extra class this rule lost the background and kept the
    colour — white text on the subtle surface — and the wizard's primary action
    rendered as an empty rounded rectangle. */
-.evolve-wizard-footer .evolve-wizard-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-.evolve-wizard-footer button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 /* --- Drafted proposals -----------------------------------------------------
    Side by side, because a user cannot judge whether one scoring scheme is
    right but can choose between two that each say what they would make the
    search prefer. */
 
-.evolve-draft {
-  background: var(--surface-subtle);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 6px;
-  padding: 10px 12px;
-}
-
-.evolve-draft-proposals {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  margin-top: 10px;
-}
-
-.evolve-draft-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-}
-.evolve-draft-card h4 { font-size: 13px; margin: 0; }
 /* The reasoning is the half that makes choosing possible, so it gets the room
    rather than being clipped to a line. */
-.evolve-draft-rationale { font-size: 12px; margin: 0; }
-.evolve-draft-card button {
-  background: var(--surface-subtle);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
-  margin-top: auto;
-  padding: 4px 10px;
-}
-
-.evolve-draft-refusal {
-  color: var(--warning, #ef6c00);
-  font-size: 12px;
-  margin: 8px 0 0;
-}
-.evolve-draft-risks {
-  color: var(--muted);
-  display: flex;
-  flex-direction: column;
-  font-size: 13px;
-  gap: 4px;
-  line-height: 1.6;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.evolve-draft-risks li::before { color: var(--warning, #ef6c00); content: "⚠ "; }
 
 /* --- One page ---------------------------------------------------------------
    The four questions are one decision: the mode decides which of the others
    even apply, and a user who has to walk forward to discover that cannot see
    it. Sections rather than steps, everything visible, nothing behind a nav. */
 
-.evolve-wizard-page { display: flex; flex-direction: column; gap: 18px; }
-
 /* The wizard reads as a page of prose, and 1100px prose is unreadable. The
    dashboard keeps the wide panel; this caps only the wizard. */
-.evolve-panel:has(.evolve-wizard-page) { max-width: 720px; }
-
-.evolve-wizard-section {
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-}
-.evolve-wizard-section:first-of-type { border-top: none; padding-top: 0; }
 
 /* The model's reasoning for the shape it chose. A default nobody can see the
    reasoning for is a default nobody can disagree with. */
-.evolve-wizard-plan {
-  background: var(--surface-subtle);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 6px 6px 0;
-  font-size: 13px;
-  margin: 0;
-  padding: 8px 12px;
-}
 
 /* What the model decided, before any of the controls.
    Four lines, and that is the design: the version this replaced ran fifteen —
@@ -771,38 +551,10 @@
    cautions — and pushed the buttons off the bottom of the screen. Nobody reads
    to the fifth line of a form they did not ask for. Everything longer than a
    line lives one disclosure away. */
-.evolve-wizard-plan-card {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
 /* The lead. It is the model talking, and it should read like a person's
    sentence, not like a caption. */
-.evolve-wizard-plan-note { font-size: 15px; line-height: 1.7; margin: 0; }
 
 /* The one line that says what a candidate is judged by. */
-.evolve-wizard-scored {
-  background: var(--surface-subtle);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 8px 8px 0;
-  font-size: 14px;
-  line-height: 1.7;
-  margin: 0;
-  padding: 10px 14px;
-}
-.evolve-wizard-scored span {
-  color: var(--accent);
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  margin-bottom: 2px;
-}
-
-.evolve-wizard-plan-facts {
-  color: var(--muted);
-  font-size: 13px;
-  margin: 0;
-}
 
 /* "Improve this", on the artifact you are looking at. The version's stored
    hash becomes the starting point, so this button is the whole entry: no
@@ -826,62 +578,12 @@
    the same edits, but nobody holds an opinion in gate shards. (Restored: an
    earlier block replacement swallowed these rules, and the box rendered as a
    bare 2-row textarea with its placeholder cut off.) */
-.evolve-wizard-note { align-items: stretch; display: flex; gap: 10px; }
-.evolve-wizard-note textarea {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  flex: 1;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.5;
-  min-height: 48px;
-  padding: 10px 12px;
-  resize: none;
-}
-.evolve-wizard-note textarea:focus { border-color: var(--accent); outline: none; }
-.evolve-wizard-note button {
-  background: var(--surface-subtle);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 0 18px;
-  white-space: nowrap;
-}
-.evolve-wizard-note button:disabled { cursor: not-allowed; opacity: 0.45; }
 
 /* The drafting agent's live trail. Muted history, one bright current line:
    the point is motion in the right vocabulary — it is reading your files —
    not a progress percentage nobody could compute anyway. */
-.evolve-wizard-steps { display: flex; flex-direction: column; gap: 2px; }
-.evolve-wizard-step { color: var(--muted); font-size: 12px; margin: 0; opacity: 0.7; }
-.evolve-wizard-step-live { color: var(--text); opacity: 1; }
-.evolve-wizard-step-live::after { content: "…"; }
-
-.evolve-wizard-disclose {
-  align-self: flex-start;
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 2px 0;
-}
-.evolve-wizard-disclose:hover { color: var(--text); text-decoration: underline; }
 
 /* An unsearchable goal is an answer, not a failure to answer. */
-.evolve-wizard-refusal {
-  border-left: 3px solid var(--warning, #ef6c00);
-  font-size: 13px;
-  margin: 0;
-  padding: 8px 12px;
-}
-
-.evolve-wizard-remaining {
-  color: var(--danger, #c62828);
-  font-size: 12px;
-  margin-right: auto;
-}
 
 /* The folded-runs line is a control, not a label: the older runs are the ones a
    user comes back for, and they are already loaded. */
@@ -900,21 +602,6 @@
 /* The strip between the body and the buttons: probe verdicts, failures,
    refusals. Empty when there is nothing to say, and never scrolled away —
    these are the reasons the buttons are in the state they are in. */
-.evolve-wizard-verdicts:empty { display: none; }
-.evolve-wizard-verdicts {
-  border-top: 1px solid var(--border);
-  padding: 10px 20px 0;
-}
 
 /* The probe's verdict. Flat is the one that blocks starting, so it reads as a
    refusal rather than as a note. */
-.evolve-probe-ok { color: var(--success, #2e7d32); font-size: 12px; margin: 8px 0 0; }
-.evolve-probe-flat {
-  background: color-mix(in srgb, var(--danger, #c62828) 8%, transparent);
-  border: 1px solid var(--danger, #c62828);
-  border-radius: 6px;
-  color: var(--danger, #c62828);
-  font-size: 12px;
-  margin: 8px 0 0;
-  padding: 8px 10px;
-}

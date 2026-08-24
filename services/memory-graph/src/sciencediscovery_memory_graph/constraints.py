@@ -67,6 +67,21 @@ _SCHEMA = [
     "CREATE INDEX IF NOT EXISTS FOR (n:Evidence)     ON (n.session_id)",
     "CREATE INDEX IF NOT EXISTS FOR (n:Claim)        ON (n.session_id)",
     "CREATE INDEX IF NOT EXISTS FOR (n:Claim)        ON (n.content_hash)",
+    # /evolve search graph. SearchNode is keyed on (search_id, node_index): the
+    # insertion ordinal is the unified key for both algorithms — ERA's upstream
+    # node index already is one, and OpenEvolve's archive history append order
+    # is one too (its own program_id rides along as a property).
+    "CREATE CONSTRAINT IF NOT EXISTS FOR (n:SearchRun)  REQUIRE n.search_id IS UNIQUE",
+    "CREATE CONSTRAINT IF NOT EXISTS FOR (n:SearchNode) REQUIRE (n.search_id, n.node_index) IS UNIQUE",
+    "CREATE CONSTRAINT IF NOT EXISTS FOR (n:SearchCell) "
+    "REQUIRE (n.search_id, n.island, n.complexity_bin, n.diversity_bin) IS UNIQUE",
+    # search_id is how a whole tree is fetched (one indexed scan, no variable
+    # length path); session_id keeps deletion and cross-session search working
+    # even though these labels are excluded from the session subgraph.
+    "CREATE INDEX IF NOT EXISTS FOR (n:SearchNode) ON (n.search_id)",
+    "CREATE INDEX IF NOT EXISTS FOR (n:SearchCell) ON (n.search_id)",
+    "CREATE INDEX IF NOT EXISTS FOR (n:SearchRun)  ON (n.session_id)",
+    "CREATE INDEX IF NOT EXISTS FOR (n:SearchNode) ON (n.session_id)",
 ]
 
 

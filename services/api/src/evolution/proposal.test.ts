@@ -26,6 +26,7 @@ import { test } from "node:test";
 
 import type { EvolveRunProposal } from "@sciencediscovery/schema";
 
+import { EvolveSidecarError } from "./sidecar.js";
 import { startProposedRun, summariseRun, type ProposalDeps } from "./proposal.js";
 
 const SPLIT = {
@@ -78,6 +79,43 @@ test("a coherent proposal becomes a run, and the probe's numbers come back with 
   assert.equal(result.run?.id, "run-1");
   assert.equal(result.probe?.baseline, 0.4);
   assert.equal(result.refusedBecause, undefined);
+});
+
+test("the probe's own verdict reaches the agent unwrapped", async () => {
+  // A 4xx from the sidecar is what the probe found, not a failure to probe.
+  // Wrapping it in "the probe could not be carried out" contradicts the
+  // sentence inside it and sends the agent looking at the environment when the
+  // thing to fix is its own starting point.
+  const { deps: d } = deps({
+    orchestrator: {
+      probe: async () => {
+        throw new EvolveSidecarError("评测脚本连起点都跑不完：NameError: name 'foo' is not defined", 400);
+      },
+      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+      start: async () => ({ id: "run-1", status: "running" }),
+    } as never,
+  });
+  const result = await startProposedRun(proposal(), d);
+
+  assert.equal(result.run, undefined);
+  assert.equal(result.refusedBecause, "评测脚本连起点都跑不完：NameError: name 'foo' is not defined");
+  assert.ok(!result.refusedBecause?.startsWith("判别力探针没能进行"));
+});
+
+test("a probe that genuinely could not run is reported as the incident it is", async () => {
+  const { deps: d } = deps({
+    orchestrator: {
+      probe: async () => {
+        throw new EvolveSidecarError("connect ECONNREFUSED 127.0.0.1:4313", 503);
+      },
+      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+      start: async () => ({ id: "run-1", status: "running" }),
+    } as never,
+  });
+  const result = await startProposedRun(proposal(), d);
+
+  assert.ok(result.refusedBecause?.startsWith("判别力探针没能进行"));
+  assert.ok(result.refusedBecause?.includes("ECONNREFUSED"));
 });
 
 test("a flat scoring is refused with the numbers that make the refusal checkable", async () => {

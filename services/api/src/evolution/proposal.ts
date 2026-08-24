@@ -48,8 +48,10 @@ import type {
   EvolveSplit,
   ScorecardCriterion,
 } from "@sciencediscovery/schema";
+import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
 
 import type { EvolveOrchestrator } from "./orchestrator.js";
+import { EvolveSidecarError } from "./sidecar.js";
 import { preflight, type PreflightIssue } from "./preflight.js";
 import type { ProbeRegistry } from "./discrimination.js";
 
@@ -69,8 +71,6 @@ export interface ProposalDeps {
 /** Held-out sizing this side refuses below, whatever a proposal asks for. The
  *  agent is told the reasoning in the skill; this is the floor under it. */
 const MIN_GATE = 4;
-
-export class ProposalError extends Error {}
 
 /**
  * Assemble, probe, pre-flight, start.
@@ -100,16 +100,25 @@ export async function startProposedRun(
   try {
     probe = await deps.orchestrator.probe(goal, deps.sessionId);
   } catch (error) {
-    return {
-      refusedBecause: `判别力探针没能进行：${
-        error instanceof Error ? error.message : String(error)}`,
-    };
+    // A 4xx is the probe's verdict on this design — "the starting point does
+    // not run", "it is already past the threshold" — and the sidecar client
+    // has already unwrapped it down to that sentence. Framing it again as
+    // "the probe could not be carried out" contradicts it: the probe ran, and
+    // this is what it found. Anything else really is an incident, and gets
+    // said as one.
+    const verdict = error instanceof EvolveSidecarError
+      && error.status !== undefined && error.status >= 400 && error.status < 500;
+    const said = error instanceof Error ? error.message : String(error);
+    return { refusedBecause: verdict ? said : `判别力探针没能进行：${said}` };
   }
   if (probe.flat) {
     return {
       probe,
+      // `flat` requires both numbers, so `worsened` is never null here — a
+      // starting point that does not run is refused by the probe itself and
+      // arrives on the catch path above with its own sentence.
       refusedBecause: `把起点${probe.label}之后分数几乎没动（${probe.baseline.toFixed(4)} vs ${
-        probe.worsened === null ? "跑不起来" : probe.worsened.toFixed(4)
+        probe.worsened!.toFixed(4)
       }）——这套评分分不出好坏，搜索会在平坦地形上随机游走。`
         + "把样例出难一点、细则写得更机械，或者换个更敏感的指标。",
     };
@@ -251,8 +260,10 @@ async function assembleGoal(
       schemaVersion: 1,
       // A graded scorer rarely reaches 0.999, and at the default every rollout
       // asks for a proposal and the run reports below-threshold — which reads
-      // as the reflector failing when nothing was ever counted as done.
-      solvedThreshold: proposal.mode === "llm_judge" ? 0.85 : 0.999,
+      // as the reflector failing when nothing was ever counted as done. The
+      // per-mode values live in the schema, so a fifth scoring mode gets its
+      // threshold from one place instead of two that drift apart.
+      solvedThreshold: SOLVED_THRESHOLD_BY_SCORING[proposal.mode],
     },
     schemaVersion: 2,
     statement: proposal.statement,

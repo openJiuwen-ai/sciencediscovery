@@ -65,6 +65,7 @@ from .persistence import (
     upsert_session_first_message,
     upsert_session_plan,
 )
+from .search_graph import bind_subtask, get_search_graph, upsert_search_progress
 from .query import (
     by_edge_type,
     by_node_type,
@@ -85,8 +86,10 @@ app = FastAPI(title="sciencediscovery-memory-graph")
 # stated in (Claim → Artifact); the legacy ``presents``/Report hop has been
 # removed in favor of ``stated_in`` (a Claim is stated in a report Artifact
 # directly, no separate Report label).
-_NODE_LABELS = {"ResearchGoal", "SubTask", "Paper", "Evidence", "Claim", "Code", "Artifact"}
-_EDGE_TYPES = {"next", "produces", "extracts", "supports", "stated_in", "supersedes", "input"}
+_NODE_LABELS = {"ResearchGoal", "SubTask", "Paper", "Evidence", "Claim", "Code", "Artifact",
+                "SearchRun", "SearchNode", "SearchCell"}
+_EDGE_TYPES = {"next", "produces", "extracts", "supports", "stated_in", "supersedes", "input",
+               "searches", "root", "expands", "inspires", "elected", "occupies"}
 
 
 def _error(code: str, http: int, message: str, instruction: str | None = None) -> None:
@@ -926,6 +929,74 @@ class Neo4jPasswordRequest(BaseModel):
     #: edits the connection fields.
     http_uri: str | None = None
     user: str | None = None
+
+
+class SearchProgressRequest(BaseModel):
+    """One batch of a search's events.
+
+    Batched rather than one call per event: a search emits four to six events
+    per expansion, and a request each would be hundreds of round trips for a run
+    that takes minutes. The producer assigns ``sequence``; anything at or below
+    the stored watermark is dropped, so a reconnecting producer replaying its
+    buffer is a no-op.
+    """
+
+    search_id: str
+    session_id: str
+    records: list[dict[str, Any]]
+    #: The SubTask that owns this search. Sent with the batch that starts it so
+    #: the `searches` binding lands without a second call.
+    task_id: str | None = None
+
+
+class SearchGraphRequest(BaseModel):
+    search_id: str
+    max_nodes: int | None = None
+
+
+def _finished_at(records: list[dict[str, Any]]) -> str | None:
+    """The timestamp of this batch's terminal event, when it carried one."""
+    for record in records:
+        if (record.get("event") or {}).get("type") == "search_finished":
+            return record.get("createdAt")
+    return None
+
+
+@app.post("/observe/search-progress", dependencies=[Depends(require_internal_token)])
+def observe_search_progress(req: SearchProgressRequest) -> dict[str, Any]:
+    if not req.records:
+        return {"applied": 0, "skipped": 0}
+    try:
+        result = upsert_search_progress(
+            search_id=req.search_id, session_id=req.session_id, records=req.records,
+        )
+        if req.task_id:
+            # The terminal event is what stamps `finished_at` and puts the search
+            # into the session's temporal chain.
+            finished = _finished_at(req.records)
+            bind_subtask(
+                search_id=req.search_id,
+                task_id=req.task_id,
+                session_id=req.session_id,
+                status="completed" if finished else "running",
+                finished_at=finished,
+            )
+        return result
+    except Exception as exc:  # noqa: BLE001
+        # Degrade rather than fail: the graph is a projection of the control
+        # plane's event log, so a write that does not land can be replayed later
+        # and must never surface as an error on the run.
+        log.exception("search progress failed: search=%s: %s", req.search_id, exc)
+        return {"applied": 0, "reason": "memory_graph_write_failed", "skipped": len(req.records)}
+
+
+@app.post("/query/search-graph", dependencies=[Depends(require_internal_token)])
+def read_search_graph(req: SearchGraphRequest) -> dict[str, Any]:
+    limit = req.max_nodes if req.max_nodes and req.max_nodes > 0 else None
+    result = get_search_graph(req.search_id) if limit is None else get_search_graph(req.search_id, limit)
+    if result.get("reason") == "search_not_found":
+        _error("search_not_found", 404, f"no search graph for {req.search_id}")
+    return result
 
 
 @app.post("/internal/neo4j-password", dependencies=[Depends(require_internal_token)])
