@@ -27,6 +27,8 @@
 # rejects the pipeline before it starts.
 # Test steps save their exit code before uploading run.log to OBS; a final shell
 # step restores that exit code so failed tests still publish their diagnostics.
+# OBS objects are scoped by commit and pipeline run because one commit can be
+# executed more than once. upload-obs accepts only absolute paths in SHARE_PATH.
 #
 # Editing this pipeline in the CodeArts web editor may rewrite the file and
 # drop these comments; keep this file the source of truth.
@@ -159,8 +161,8 @@ stages:
             endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
             endpoint: obs.cn-north-4.myhuaweicloud.com
             bucket: openjiuwen-ci
-            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/ut/run.log"
-            source_file: .ci-results/ut-core/run.log
+            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
+            source_file: "${SHARE_PATH}/.ci-results/ut-core/run.log"
             self_folder: "false"
         - name: Report UT result
           uses: official_shell_plugin
@@ -232,8 +234,8 @@ stages:
             endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
             endpoint: obs.cn-north-4.myhuaweicloud.com
             bucket: openjiuwen-ci
-            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/st/run.log"
-            source_file: .ci-results/st/run.log
+            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
+            source_file: "${SHARE_PATH}/.ci-results/st/run.log"
             self_folder: "false"
         - name: Report ST result
           uses: official_shell_plugin
