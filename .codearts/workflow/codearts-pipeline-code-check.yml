@@ -1,0 +1,186 @@
+concurrency:
+  max: 120
+  enable: true
+  preemption:
+    enable: true
+    events:
+    - mr_id
+  exceed-action: QUEUE
+sources:
+  sciencediscovery:
+    type: gitcode
+    name: sciencediscovery
+    branch: main
+    git_url: https://gitcode.com/openJiuwen/sciencediscovery.git
+    ssh_git_url: git@gitcode.com:openJiuwen/sciencediscovery.git
+    endpoint_id: c4451a2a11af48baacd6b2af5eee3075
+    repo_id: 10597680
+inputs:
+  PR_ID:
+    type: string
+    default: "${MERGE_ID}"
+    manual_override: true
+  repo_url:
+    type: string
+    description: ""
+    default: "${REPO_URL}"
+    manual_override: true
+  branch:
+    type: string
+    description: ""
+    default: "${test-agentcore_REPOSITORY_BRANCH}"
+    manual_override: true
+  repo_name:
+    type: string
+    description: ""
+    default: "${test-agentcore_REPOSITORY_NAME}"
+    manual_override: true
+  pipeline_name:
+    type: string
+    description: ""
+    default: "${PIPELINE_NAME}"
+    manual_override: true
+  number:
+    type: string
+    default: "${PR_ID}"
+    manual_override: true
+  webhook_payload:
+    type: string
+    description: 中软蓝区看板对接参数
+    default: "${WEBHOOK_PAYLOAD}"
+    manual_override: true
+stages:
+  176464703972462e4780d-56ca-4c54-9c49-29291c471dfd:
+    jobs:
+      JOB_AeyHi:
+        select: selected_by_default
+        name: create_label
+        needs: []
+        steps:
+        - name: create_label
+          uses: official_devcloud_cloudBuild
+          with:
+            number: "${MERGE_ID}"
+            WEBHOOK_PAYLOAD: "${webhook_payload}"
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: dc2f05de339b410a972184a84b9f1c6f
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 17736446667235cd01d5c-c29e-41f5-ab85-52bba5fce5ed
+        if: "${{ default() }}"
+        runs-on:
+        - default
+    pre:
+    - type: auto
+    name: 阶段_1
+    select: selected_by_default
+    fail-fast: false
+  1760954519095a0a4b18d-315d-432b-9eec-5651a0eb2e69:
+    jobs:
+      JOB_EcFGE:
+        select: always
+        name: sca
+        needs: []
+        steps:
+        - name: sca
+          uses: official_devcloud_cloudBuild
+          with:
+            PR_ID: "${MERGE_ID}"
+            WEBHOOK_PAYLOAD: "${webhook_payload}"
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: c1ef4206098b4d99b1c432da03f17dd0
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 1764647095502eb216dce-61de-4e13-a72c-276122edbc0e
+        if: "${{ default() }}"
+        runs-on:
+        - default
+      JOB_KEeZj:
+        select: always
+        name: anti_poison
+        needs: []
+        steps:
+        - name: anti_poison
+          uses: official_devcloud_cloudBuild
+          with:
+            PR_ID: "${MERGE_ID}"
+            WEBHOOK_PAYLOAD: "${webhook_payload}"
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: 53e717c466a14436b392f15c6ebde40e
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 1764647129551a5082829-073c-4a34-8f03-3bb993cb9c33
+        if: "${{ default() }}"
+        runs-on:
+        - default
+      JOB_WkYCJ:
+        select: always
+        name: codecheck
+        needs: []
+        steps:
+        - name: codecheck
+          uses: official_devcloud_cloudBuild
+          with:
+            PR_ID: "${MERGE_ID}"
+            WEBHOOK_PAYLOAD: "${webhook_payload}"
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: 575680bcb5f84720adda7a7f3d330359
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 177011952628853cc9abb-064c-49ab-95e9-2666363f6d56
+        if: "${{ default() }}"
+        runs-on:
+        - default
+      JOB_BwBjf:
+        select: always
+        name: blacklist
+        needs: []
+        steps:
+        - name: blacklist
+          uses: official_devcloud_cloudBuild
+          with:
+            number: "${MERGE_ID}"
+            WEBHOOK_PAYLOAD: "${webhook_payload}"
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: 9cb8b944663243df8bdea62a295fca8c
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 1786690122894dd1de869-1d7c-4b4d-857d-de2fedd09eea
+        if: "${{ default() }}"
+        runs-on:
+        - default
+    pre:
+    - type: auto
+    name: 阶段_2
+    select: always
+    fail-fast: false
+post:
+  jobs:
+    JOB_cHrfj:
+      select: always
+      name: getlabel
+      needs: []
+      steps:
+      - name: getlabel
+        uses: official_devcloud_cloudBuild
+        with:
+          number: "${MERGE_ID}"
+          WEBHOOK_PAYLOAD: "${webhook_payload}"
+          __sameProject__: "true"
+          __projectId__: ""
+          jobId: 215834b7550740b89a70d4fd9f55b4d2
+          __repository__: sciencediscovery
+          artifactIdentifier: ""
+        identifier: 17646737830615fa277f2-7774-46a9-9222-bdd6236e9912
+      if: "${{ default() }}"
+      runs-on:
+      - default
+  pre:
+  - type: auto
+  select: always
+  fail-fast: false
