@@ -412,8 +412,15 @@ post:
         uses: official_devcloud_cloudBuild
         with:
           number: "${MERGE_ID}"
-          result_html: EMPTY
-          final_label: FAILED
+          result_html: |
+            <p>&#9989; CodeArts 流水线 <a href="${PASS_CONDITIONS_LINK}">${{ pipeline.run_id }}</a> 执行成功。</p>
+            <table style="border-collapse: collapse">
+              <tr><th>任务名称</th><th>CodeArts 状态</th><th>CodeArts 日志</th><th>OBS 日志路径</th></tr>
+              <tr><td>代码检查</td><td>${{ jobs.code_check.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td>-</td></tr>
+              <tr><td>UT</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><code>obs://openjiuwen-ci/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log</code></td></tr>
+              <tr><td>ST</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><code>obs://openjiuwen-ci/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log</code></td></tr>
+            </table>
+          final_label: ci-successful
           __sameProject__: "true"
           __projectId__: ""
           jobId: 52d1699f53ca463ab77c4c4398be7e5a
@@ -432,8 +439,15 @@ post:
         uses: official_devcloud_cloudBuild
         with:
           number: "${MERGE_ID}"
-          result_html: EMPTY
-          final_label: FAILED
+          result_html: |
+            <p>&#10060; CodeArts 流水线 <a href="${PASS_CONDITIONS_LINK}">${{ pipeline.run_id }}</a> 执行失败。</p>
+            <table style="border-collapse: collapse">
+              <tr><th>任务名称</th><th>CodeArts 状态</th><th>CodeArts 日志</th><th>OBS 日志路径</th></tr>
+              <tr><td>代码检查</td><td>${{ jobs.code_check.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td>-</td></tr>
+              <tr><td>UT</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><code>obs://openjiuwen-ci/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log</code></td></tr>
+              <tr><td>ST</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><code>obs://openjiuwen-ci/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log</code></td></tr>
+            </table>
+          final_label: ci-failed
           __sameProject__: "true"
           __projectId__: ""
           jobId: 52d1699f53ca463ab77c4c4398be7e5a
