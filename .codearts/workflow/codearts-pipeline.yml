@@ -1,17 +1,3 @@
-# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 concurrency:
   max: 5
   enable: false
@@ -41,9 +27,6 @@ on:
         paths-ignore: []
         code-update: false
 inputs:
-  # The child run has no MERGE_ID of its own. Bridge the parent's MR ID through
-  # an explicit child input; a manual run may supply one or leave it empty to
-  # run only UT/ST.
   PR_ID:
     type: string
     default: "${MERGE_ID}"
@@ -307,15 +290,6 @@ post:
         uses: official_devcloud_cloudBuild
         with:
           number: "${MERGE_ID}"
-          result_html: |
-            <p>&#9989; CodeArts 流水线 <a href="${PASS_CONDITIONS_LINK}">${{ pipeline.run_id }}</a> 执行成功。</p>
-            <table style="border-collapse: collapse">
-              <tr><th>任务名称</th><th>CodeArts 状态</th><th>日志</th></tr>
-              <tr><td>代码检查</td><td>${{ jobs.code_check.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
-              <tr><td>UT</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
-              <tr><td>ST</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
-            </table>
-          final_label: ci-successful
           WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
           __sameProject__: "true"
           __projectId__: ""
@@ -335,15 +309,6 @@ post:
         uses: official_devcloud_cloudBuild
         with:
           number: "${MERGE_ID}"
-          result_html: |
-            <p>&#10060; CodeArts 流水线 <a href="${PASS_CONDITIONS_LINK}">${{ pipeline.run_id }}</a> 执行失败。</p>
-            <table style="border-collapse: collapse">
-              <tr><th>任务名称</th><th>CodeArts 状态</th><th>日志</th></tr>
-              <tr><td>代码检查</td><td>${{ jobs.code_check.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
-              <tr><td>UT</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
-              <tr><td>ST</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
-            </table>
-          final_label: ci-failed
           WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
           __sameProject__: "true"
           __projectId__: ""
