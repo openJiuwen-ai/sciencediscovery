@@ -53,6 +53,8 @@ import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
 import type { EvolveOrchestrator } from "./orchestrator.js";
 import { EvolveSidecarError } from "./sidecar.js";
 import { preflight, type PreflightIssue } from "./preflight.js";
+import { basename } from "node:path";
+
 import type { ProbeRegistry } from "./discrimination.js";
 
 /** What the assembler needs from the world. Injected so the unit tests need no
@@ -318,10 +320,18 @@ async function measureOf(
         target: proposal.targetColumn!,
       };
     }
-    case "custom_script":
+    case "custom_script": {
+      // Only when the proposal names one. An evaluator that derives its cases
+      // from the shard index is the common shape and stages nothing; requiring
+      // a file here would mean inventing a dataset to fill a field.
+      const files = proposal.datasetPath
+        ? [{ cas: await deps.store({ path: proposal.datasetPath }), name: basename(proposal.datasetPath) }]
+        : [];
       return {
+        ...(files.length ? { datasetFiles: files } : {}),
         kind: "custom_script", scriptCas: scoringCas, split, timeoutSeconds: 180,
       };
+    }
     case "llm_judge":
       return {
         blind: true,

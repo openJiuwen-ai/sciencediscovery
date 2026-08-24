@@ -59,6 +59,7 @@ exactly the shape the probe refuses to start.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -115,6 +116,7 @@ def script_domain(
     baseline_code: str = "",
     candidate_timeout: float = 120.0,
     baseline: Optional[MutableMapping[str, float]] = None,
+    data_dir: Optional[str] = None,
 ) -> Domain:
     """Build a domain that scores a candidate by running the drafted evaluator."""
     reference: MutableMapping[str, float] = {} if baseline is None else baseline
@@ -130,6 +132,7 @@ def script_domain(
         try:
             payload = _run_evaluator(
                 code, script, shards, capability=capability, timeout=candidate_timeout,
+                data_dir=data_dir,
             )
         except ScriptError:
             # A broken evaluator is not a bad candidate. Raised so the run
@@ -242,6 +245,7 @@ def _run_evaluator(
     *,
     capability: SandboxCapability,
     timeout: float,
+    data_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Materialise both programs in a throwaway directory and read the result.
 
@@ -256,6 +260,16 @@ def _run_evaluator(
         (scratch / _SHIM_FILE).write_text(
             _SHIM.format(evaluator=EVALUATOR_FILE), encoding="utf-8",
         )
+        # Whatever the control plane staged for this criterion, laid down beside
+        # the evaluator under its own name. The evaluator opens these by name and
+        # has no way to reach the workspace, so a file that is not copied here is
+        # a FileNotFoundError on every single candidate.
+        if data_dir:
+            source = Path(data_dir)
+            if source.is_dir():
+                for entry in sorted(source.iterdir()):
+                    if entry.is_file():
+                        shutil.copy2(entry, scratch / entry.name)
         result = scratch / "result.json"
 
         extra = {

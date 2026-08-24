@@ -129,6 +129,15 @@ By what you have to judge with, not by what the task resembles:
   0–1, larger-is-better. The module docstring is the contract the search sees when rewriting
   candidates. Write the `error` field even when valid — it is the feedback channel to the
   improving model.
+
+  **The evaluator runs alone.** It gets a scratch directory containing itself, the candidate,
+  and nothing else — not the workspace, not the file you read while designing. A shard is an
+  *index*, and what index `i` means is the evaluator's choice: most of the time it builds case
+  `i` (an equation with a known analytic solution, a generated input, a property to check) and
+  needs no files at all. When there is genuine material to score against, name it in
+  `datasetPath` and it is staged beside the evaluator under its own file name. An evaluator that
+  opens a path you did not declare fails on every candidate, and the probe catches it before the
+  run starts — but only after you have written the whole thing.
 - **Only another model can judge it** → `llm_judge`. For prose, explanations, anything whose
   quality is a reading. Most gameable and the only non-deterministic option; ask once whether it
   could be a `custom_script` instead.

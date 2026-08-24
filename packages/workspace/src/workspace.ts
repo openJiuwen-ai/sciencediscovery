@@ -1102,10 +1102,25 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         rolloutGroups: Type.Integer({ maximum: 64, minimum: 1 }),
         testGroups: Type.Integer({ maximum: 64, minimum: 0 }),
       })),
-      datasetPath: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      datasetPath: Type.Optional(Type.String({
+        description: "Workspace file to score against. Required for dataset_metric (a CSV). "
+          + "Optional for custom_script, where it is staged beside the evaluator under its own "
+          + "file name — leave it out when the evaluator builds its cases from the shard index "
+          + "instead of reading them, which is the common shape.",
+        maxLength: 2_000, minLength: 1,
+      })),
       direction: Type.Optional(Type.Union([Type.Literal("maximize"), Type.Literal("minimize")])),
       entrypointPath: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
-      evaluatorSource: Type.Optional(Type.String({ maxLength: 200_000, minLength: 1 })),
+      evaluatorSource: Type.Optional(Type.String({
+        description: "custom_script only: the whole evaluator, verbatim. It runs ALONE in a "
+          + "scratch directory with the candidate — it cannot see the workspace, and the only "
+          + "other file present is the one named by datasetPath, if any. Import the candidate "
+          + "as `candidate`; score only the shards listed in SCIENCE_AGENT_SHARDS (the shard is "
+          + "an index, and what index i means is the evaluator's choice — generate case i, or "
+          + "look it up); write {\"valid\": true, \"metrics\": {\"score\": 0.83}} to the path "
+          + "in SCIENCE_AGENT_RESULT. Score is 0-1, larger is better.",
+        maxLength: 200_000, minLength: 1,
+      })),
       expansions: Type.Integer({ maximum: 40, minimum: 1 }),
       frozenGlobs: Type.Optional(Type.Array(Type.String({ maxLength: 500, minLength: 1 }), { maxItems: 50 })),
       howScored: Type.String({ maxLength: 400, minLength: 1 }),

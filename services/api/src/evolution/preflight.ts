@@ -278,11 +278,27 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
 
   for (const criterion of input.goal.scorecard.criteria) {
     if (!needsData(criterion)) continue;
+    // A scripted evaluator's files are staged verbatim under their own names:
+    // there is no target column to check and no table to parse, so the only
+    // question is whether the bytes are still in the store.
+    if (criterion.measure.kind === "custom_script") {
+      if (input.casHas) {
+        for (const file of criterion.measure.datasetFiles ?? []) {
+          if (await input.casHas(casHash(file.cas))) continue;
+          issues.push({
+            code: "dataset_not_in_store",
+            fix: "确认这个文件还在工作区里，或换一个",
+            message: `判据「${criterion.name}」要的数据文件 ${file.name} 不在内容库里`,
+          });
+        }
+      }
+      continue;
+    }
     const measure = criterion.measure as Extract<typeof criterion.measure, { kind: "dataset_metric" }>;
     if (measure.datasetCas.length === 0) {
       issues.push({
         code: "dataset_missing",
-        fix: "在向导里为这个判据选一份数据集",
+        fix: "给这个判据指一份数据集：dataset_metric 要一个 datasetPath",
         message: `判据「${criterion.name}」没有指定数据集，无从测量`,
       });
       continue;

@@ -243,3 +243,56 @@ def test_the_evaluators_diagnosis_reaches_the_mutation_prompt():
         change_summary="", metrics={"score": 0.5}, valid=True, error="",
     )
     assert "评测对它的诊断" not in d.prompt(quiet)
+
+
+def test_declared_data_files_land_beside_the_evaluator(tmp_path):
+    """A file the control plane staged is openable by name from the evaluator.
+
+    The evaluator runs alone in a scratch directory — it cannot reach the
+    workspace — so a file that is not copied in is a FileNotFoundError on every
+    single candidate, and the whole run scores zero for a reason that has
+    nothing to do with the candidates.
+    """
+    data_dir = tmp_path / "staged"
+    data_dir.mkdir()
+    (data_dir / "cases.json").write_text('{"answer": 7}', encoding="utf-8")
+
+    script = (
+        "import json, os\n"
+        "here = os.path.dirname(os.path.abspath(__file__))\n"
+        "with open(os.path.join(here, 'cases.json')) as fh:\n"
+        "    cases = json.load(fh)\n"
+        "shards = os.environ['SCIENCE_AGENT_SHARDS'].split(',')\n"
+        "score = 1.0 if cases['answer'] == 7 else 0.0\n"
+        "with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as fh:\n"
+        "    json.dump({'valid': True, 'metrics': {'exact_match': score}}, fh)\n"
+    )
+    domain = script_domain(
+        scorecard=CARD, script=script, capability=detect_local_capability(),
+        data_dir=str(data_dir),
+    )
+
+    ok, metrics, error = domain.evaluate("value = 1\n", (0, 1))
+
+    assert ok, error
+    assert metrics["exact_match"] == 1.0
+
+
+def test_an_evaluator_that_needs_no_files_runs_with_none_staged(tmp_path):
+    """The common shape: case `i` is built from the shard index, not read."""
+    script = (
+        "import json, os\n"
+        "shards = [int(s) for s in os.environ['SCIENCE_AGENT_SHARDS'].split(',')]\n"
+        "# case i is generated, not looked up\n"
+        "score = sum(1 for i in shards if (i * i) % 2 == i % 2) / max(len(shards), 1)\n"
+        "with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as fh:\n"
+        "    json.dump({'valid': True, 'metrics': {'exact_match': score}}, fh)\n"
+    )
+    domain = script_domain(
+        scorecard=CARD, script=script, capability=detect_local_capability(),
+    )
+
+    ok, metrics, error = domain.evaluate("value = 1\n", (0, 1, 2))
+
+    assert ok, error
+    assert metrics["exact_match"] == 1.0
