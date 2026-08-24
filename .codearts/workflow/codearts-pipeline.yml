@@ -267,10 +267,10 @@ stages:
         - large
       code_check:
         select: always
-        name: 子流水线
+        name: code_check
         needs: []
         steps:
-        - name: 子流水线
+        - name: code_check
           uses: official_devcloud_subPipeline
           with:
             PR_ID: "${PR_ID}"
