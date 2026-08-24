@@ -78,7 +78,7 @@ stages:
         - name: sca
           uses: official_devcloud_cloudBuild
           with:
-            PR_ID: "${MERGE_ID}"
+            PR_ID: "${PR_ID}"
             WEBHOOK_PAYLOAD: "${webhook_payload}"
             __sameProject__: "true"
             __projectId__: ""
@@ -97,7 +97,7 @@ stages:
         - name: anti_poison
           uses: official_devcloud_cloudBuild
           with:
-            PR_ID: "${MERGE_ID}"
+            PR_ID: "${PR_ID}"
             WEBHOOK_PAYLOAD: "${webhook_payload}"
             __sameProject__: "true"
             __projectId__: ""
@@ -116,7 +116,7 @@ stages:
         - name: codecheck
           uses: official_devcloud_cloudBuild
           with:
-            PR_ID: "${MERGE_ID}"
+            PR_ID: "${PR_ID}"
             WEBHOOK_PAYLOAD: "${webhook_payload}"
             __sameProject__: "true"
             __projectId__: ""
@@ -135,7 +135,7 @@ stages:
         - name: blacklist
           uses: official_devcloud_cloudBuild
           with:
-            number: "${MERGE_ID}"
+            number: "${PR_ID}"
             WEBHOOK_PAYLOAD: "${webhook_payload}"
             __sameProject__: "true"
             __projectId__: ""

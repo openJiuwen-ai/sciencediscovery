@@ -20,15 +20,26 @@ definition: GitCode merge-request CI is CodeArts-only.
 ## Parent and child orchestration
 
 The parent invokes registered child pipeline
-`3a80cbaf5dec4e0b8804ce1401787f5f` with the documented `SubPipeline` plugin:
+`3a80cbaf5dec4e0b8804ce1401787f5f`. The manual documents a minimal
+`SubPipeline` form, but the CodeArts editor expands this repository's step to
+the platform plugin below. Preserve the generated fields when editing it:
 
 ```yaml
 - name: Run the reusable code-check pipeline
-  uses: SubPipeline
+  uses: official_devcloud_subPipeline
   with:
-    pipelineId: 3a80cbaf5dec4e0b8804ce1401787f5f
-    branch: "${{ sources.sciencediscovery.target_branch }}"
+    PR_ID: "${PR_ID}"
+    number: "${PR_ID}"
+    SYSTEM_DEVCLOUD_SUBPIPELINE_TRIGGER_ID: 3a80cbaf5dec4e0b8804ce1401787f5f
+    SYSTEM_DEVCLOUD_SUBPIPELINE_BRANCH: PARENT
 ```
+
+A sub-pipeline run does not inherit the parent's `${MERGE_ID}`. Define a parent
+`PR_ID` input whose default is `${MERGE_ID}`, pass `${PR_ID}` through the
+expanded plugin, and make every child CloudBuild task consume the child input
+`${PR_ID}`. Reading `${MERGE_ID}` inside the child expands to empty and produces
+commands such as `--pr_id` with no argument. A manual run may provide `PR_ID`;
+when it is empty, skip the PR-oriented child and run UT/ST only.
 
 CodeArts supports manual execution without an `on` entry. Guard GitCode writes
 with `${{ pipeline.trigger_type == 'MR' }}` so a manual run does not use an
@@ -135,3 +146,4 @@ first failing step and its inner command or plugin error.
 | `target path should be absolutely path which start with:[.../share]` | An `upload-obs` source is relative or outside `${SHARE_PATH}`. |
 | `sudo: /bin/sudo must be owned by uid 0 and have the setuid bit set` | The default pool has no usable root; install user-space tools under `$HOME` or the workspace. |
 | YAML requests `ubuntu-latest`, but logs show `octopus_container` and EulerOS | The default CCE execution mode ignored or overrode the OS label; use a dedicated pool for an actual Ubuntu rootfs. |
+| A child CloudBuild command ends with bare `--pr_id` | The child read `${MERGE_ID}`, which is not inherited from the parent. Pass the parent's MR ID as `PR_ID` and consume `${PR_ID}` inside every child task. |

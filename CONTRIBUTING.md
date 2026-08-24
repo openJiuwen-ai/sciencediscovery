@@ -156,7 +156,8 @@ anti-poison, static-analysis, and blacklist CloudBuild tasks whose complete
 commands remain in CodeArts; it does not write PR labels or comments. On
 merge-request runs, the parent renders one result table from the overall code
 check, UT, and ST job statuses and publishes the final PR label. Manual runs
-execute the checks without modifying a PR.
+always execute UT/ST without modifying a PR; they run the PR-oriented child
+only when a `PR_ID` is supplied.
 
 ## Repositories
 
