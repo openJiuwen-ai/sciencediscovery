@@ -1165,7 +1165,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       statement: Type.String({ maxLength: 2_000, minLength: 1 }),
       targetColumn: Type.Optional(Type.String({ maxLength: 200, minLength: 1 })),
       testCmd: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
-      thinking: Type.Optional(Type.Union([Type.Literal("disabled"), Type.Literal("enabled")])),
+      thinking: Type.Optional(Type.Union([Type.Literal("disabled"), Type.Literal("enabled")], {
+        description: "Default \"disabled\", and leave it there unless the user asks. Enabling it "
+          + "raises the per-call ceiling to 96k and has been measured turning a 20-second "
+          + "mutation into one that never returns: the model spends the whole budget reasoning "
+          + "and the search makes no progress at all.",
+      })),
       workers: Type.Integer({ maximum: 8, minimum: 1 }),
     });
     const createEvolveRun: AgentTool<typeof evolveParameters> = {

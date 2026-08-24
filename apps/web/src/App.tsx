@@ -89,7 +89,13 @@ import type {
   WorkspaceFile,
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
-import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificArtifactKind, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
+import {
+  classifyScientificArtifact,
+  createLocalSessionTitle,
+  isEvolveRunActive,
+  resolveScientificArtifactKind,
+  UNTITLED_SESSION_TITLE,
+} from "@sciencediscovery/schema";
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
 import { createSessionActivity } from "./run-stream/session-activity.js";
@@ -1174,12 +1180,27 @@ export function App() {
       return;
     }
     let live = true;
-    void client.listEvolveRuns(activeSessionId)
-      .then((runs) => { if (live) setEvolveRuns(runs); })
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => client.listEvolveRuns(activeSessionId)
+      .then((runs) => {
+        if (!live) return;
+        setEvolveRuns(runs);
+        // A search runs for minutes after the turn that started it ends, and
+        // the only event this side gets is `evolve_run.created` — which arrives
+        // while the run is still `pending`. Without this the card sits on
+        // "queued" for the whole run and then for ever after, whether the
+        // search is healthy, finished, or wedged. Polling stops as soon as
+        // nothing is active, so an idle session costs nothing.
+        if (runs.some((run) => isEvolveRunActive(run.status))) timer = setTimeout(load, 5_000);
+      })
       // A session with no runs is the common case and 404s nothing; a failure
       // here must not take the workspace panel down with it.
       .catch(() => { if (live) setEvolveRuns([]); });
-    return () => { live = false; };
+    void load();
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+    };
   }, [activeSessionId, client, evolveRefreshKey]);
   const loadMarkdownImage = useCallback(async (path: string, signal: AbortSignal): Promise<Blob> => {
     const sessionId = session?.id;

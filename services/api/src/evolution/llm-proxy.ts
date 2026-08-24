@@ -148,6 +148,20 @@ interface CompletionBody {
  */
 const LONG_CALL_DISPATCHER = new UndiciAgent({ bodyTimeout: 0, headersTimeout: 15 * 60_000 });
 
+/**
+ * A wall-clock ceiling on one mutation, because the dispatcher's is not one.
+ *
+ * `bodyTimeout: 0` is deliberate — a reasoning model streams for minutes and a
+ * body timeout would cut a call that is working. But that leaves nothing at all
+ * bounding a call whose headers arrived and whose body never ends, and with
+ * thinking on that is the observed shape: two calls out, neither finished,
+ * a search that reported "running" for as long as anyone watched it.
+ *
+ * Generous on purpose. This is not tuning, it is the difference between a slow
+ * expansion and a run that never reports anything again.
+ */
+const CALL_CEILING_MS = 20 * 60_000;
+
 /** Calls this process currently has open to a provider, by start time. Only for
  *  the log line: how many were already in flight is what tells a serialised
  *  proxy apart from a slow provider. */
@@ -201,7 +215,9 @@ export async function handleEvolveCompletion(
     // `.../api/coding/v3/v1/chat/completions` and a 404 that the proxy
     // faithfully forwarded — so every expansion became an empty reply, and the
     // search read as a model that could not write code.
+    const ceiling = AbortSignal.timeout(CALL_CEILING_MS);
     upstream = await call(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      signal: ceiling,
       body: JSON.stringify({
         max_tokens: body.max_tokens,
         messages: body.messages,
