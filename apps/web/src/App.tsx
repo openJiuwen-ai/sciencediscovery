@@ -709,6 +709,37 @@ export function modelDraftFromProfile(profile: ModelProfile): ModelDraft {
   };
 }
 
+export function modelDraftIsDirty(
+  draft: ModelDraft,
+  baseline: ModelDraft,
+  draftToken: string,
+  removeStoredToken: boolean,
+): boolean {
+  return removeStoredToken
+    || draftToken.trim().length > 0
+    || draft.apiProtocol !== baseline.apiProtocol
+    || draft.apiVariant !== baseline.apiVariant
+    || draft.baseUrl !== baseline.baseUrl
+    || draft.model !== baseline.model
+    || draft.name !== baseline.name
+    || draft.proxyPolicy !== baseline.proxyPolicy
+    || draft.thinkingEffort !== baseline.thinkingEffort
+    || draft.thinkingMode !== baseline.thinkingMode
+    || draft.vision !== baseline.vision;
+}
+
+export type ModelRegistryDraftScope = "both" | "model" | "provider" | undefined;
+
+export function modelRegistryDraftScope(
+  providerDraftDirty: boolean,
+  modelDraftDirty: boolean,
+): ModelRegistryDraftScope {
+  if (providerDraftDirty && modelDraftDirty) return "both";
+  if (providerDraftDirty) return "provider";
+  if (modelDraftDirty) return "model";
+  return undefined;
+}
+
 export function ModelDraftFields({
   draft,
   onChange,
@@ -1068,9 +1099,10 @@ export function App() {
   const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
   const [editingModelId, setEditingModelId] = useState<string>();
   const [modelDraft, setModelDraft] = useState<ModelDraft>(EMPTY_MODEL_DRAFT);
+  const [modelDraftBaseline, setModelDraftBaseline] = useState<ModelDraft>(EMPTY_MODEL_DRAFT);
   const [draftToken, setDraftToken] = useState("");
   const [removeStoredToken, setRemoveStoredToken] = useState(false);
-  const [modelSettingsDirty, setModelSettingsDirty] = useState(false);
+  const modelSettingsDirty = modelDraftIsDirty(modelDraft, modelDraftBaseline, draftToken, removeStoredToken);
   const [papers, setPapers] = useState<PaperAcquisition[]>([]);
   const [paperVisionRuns, setPaperVisionRuns] = useState<PaperVisionRun[]>([]);
   const [visionModelId, setVisionModelId] = useState<string>();
@@ -1741,8 +1773,10 @@ export function App() {
       }
       const selected = modelItems.find((item) => item.id === editingModelId) ?? modelItems[0];
       if (selected) {
+        const selectedDraft = modelDraftFromProfile(selected);
         setEditingModelId(selected.id);
-        setModelDraft(modelDraftFromProfile(selected));
+        setModelDraft(selectedDraft);
+        setModelDraftBaseline(selectedDraft);
         setDraftToken("");
         setRemoveStoredToken(false);
       }
@@ -2255,25 +2289,33 @@ export function App() {
     }
   }
 
-  function editModel(profile: ModelProfile): void {
-    setEditingModelId(profile.id);
-    setModelDraft(modelDraftFromProfile(profile));
+  function replaceModelDraft(profile?: ModelProfile): void {
+    const nextDraft = profile ? modelDraftFromProfile(profile) : EMPTY_MODEL_DRAFT;
+    setEditingModelId(profile?.id);
+    setModelDraft(nextDraft);
+    setModelDraftBaseline(nextDraft);
     setDraftToken("");
     setRemoveStoredToken(false);
-    setModelSettingsDirty(false);
+  }
+
+  function confirmModelDraftDiscard(): boolean {
+    return !modelSettingsDirty || window.confirm(t("settings.unsaved.model.confirm"));
+  }
+
+  function editModel(profile: ModelProfile): void {
+    if (profile.id === editingModelId) return;
+    if (!confirmModelDraftDiscard()) return;
+    replaceModelDraft(profile);
   }
 
   function startNewModel(): void {
-    setEditingModelId(undefined);
-    setModelDraft(EMPTY_MODEL_DRAFT);
-    setDraftToken("");
-    setRemoveStoredToken(false);
-    setModelSettingsDirty(false);
+    if (!editingModelId) return;
+    if (!confirmModelDraftDiscard()) return;
+    replaceModelDraft();
   }
 
   function updateModelDraft(update: Partial<ModelDraft>): void {
     setModelDraft((current) => ({ ...current, ...update }));
-    setModelSettingsDirty(true);
   }
 
   async function saveModel(): Promise<void> {
@@ -2303,12 +2345,14 @@ export function App() {
             ...(removeStoredToken ? { apiToken: null } : draftToken.trim() ? { apiToken: draftToken.trim() } : {}),
           })
         : await client.createModel({ ...normalizedDraft, apiToken: draftToken.trim() });
+      const savedDraft = modelDraftFromProfile(saved);
       setModels((current) => [...current.filter((item) => item.id !== saved.id), saved]
         .toSorted((left, right) => left.name.localeCompare(right.name)));
       setEditingModelId(saved.id);
+      setModelDraft(savedDraft);
+      setModelDraftBaseline(savedDraft);
       setDraftToken("");
       setRemoveStoredToken(false);
-      setModelSettingsDirty(false);
       pushToast("success", editingModelId ? "Model updated" : "Model added", saved.name);
     } catch (reason) {
       reportSystemSettingsError(reason instanceof Error ? reason.message : t("error.saveModel"));
@@ -2424,15 +2468,12 @@ export function App() {
     setTokenEdit(undefined);
     if (discardModel) {
       const savedModel = models.find((item) => item.id === editingModelId);
-      if (savedModel) {
-        setModelDraft(modelDraftFromProfile(savedModel));
-      } else {
-        setModelDraft(EMPTY_MODEL_DRAFT);
-      }
+      const savedDraft = savedModel ? modelDraftFromProfile(savedModel) : EMPTY_MODEL_DRAFT;
+      setModelDraft(savedDraft);
+      setModelDraftBaseline(savedDraft);
     }
     setDraftToken("");
     setRemoveStoredToken(false);
-    setModelSettingsDirty(false);
   }
 
   function openSystemSettings(group?: SystemSettingsGroup): void {
@@ -2441,12 +2482,16 @@ export function App() {
     setShowConfig(true);
   }
 
-  function confirmProviderDraftDiscard(): boolean {
-    return !providerDraftDirty || window.confirm(t("providers.unsaved.confirm"));
+  function confirmModelRegistryDraftDiscard(): boolean {
+    const scope = modelRegistryDraftScope(providerDraftDirty, modelSettingsDirty);
+    if (!scope) return true;
+    if (scope === "both") return window.confirm(t("settings.unsaved.providerAndModel.confirm"));
+    if (scope === "model") return window.confirm(t("settings.unsaved.model.confirm"));
+    return window.confirm(t("providers.unsaved.confirm"));
   }
 
   function cancelSystemSettings(): void {
-    if (!confirmProviderDraftDiscard()) return;
+    if (!confirmModelRegistryDraftDiscard()) return;
     clearSystemSettingsDrafts();
     reportSystemSettingsError();
     setSkillWorkspaceLaunch(undefined);
@@ -2454,7 +2499,10 @@ export function App() {
   }
 
   function selectSystemSettingsGroup(group: SystemSettingsGroup): void {
-    if (group !== systemSettingsGroup && systemSettingsGroup === "models" && !confirmProviderDraftDiscard()) return;
+    if (group !== systemSettingsGroup && systemSettingsGroup === "models") {
+      if (!confirmModelRegistryDraftDiscard()) return;
+      replaceModelDraft(models.find((item) => item.id === editingModelId));
+    }
     setSystemSettingsGroup(group);
   }
 
@@ -2511,8 +2559,7 @@ export function App() {
       const remaining = models.filter((item) => item.id !== editingModelId);
       setModels(remaining);
       const next = remaining[0];
-      if (next) editModel(next);
-      else startNewModel();
+      replaceModelDraft(next);
       pushToast("success", "Model deleted");
     } catch (reason) {
       reportSystemSettingsError(reason instanceof Error ? reason.message : t("error.deleteModel"));
@@ -3614,10 +3661,9 @@ export function App() {
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-    // The handler must observe the current provider dirty flag; the remaining
-    // close routine state is read only after Escape is pressed.
+    // The handler must observe both Model registry draft scopes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerDraftDirty, showConfig]);
+  }, [modelSettingsDirty, providerDraftDirty, showConfig]);
   const visionModels = models.filter((item) => item.vision);
   const latestExecution = executionRuns.at(-1);
   const latestEnvironmentRevision = environmentRevisions.find((revision) => revision.id === latestExecution?.environmentRevisionId);
@@ -4649,9 +4695,9 @@ export function App() {
                   <ModelDraftFields draft={modelDraft} onChange={updateModelDraft} />
                   <section className="model-editor-section">
                     <h4>{t("settings.modelSection.access")}</h4>
-                    <label><span>{t("settings.apiToken")}</span><input required={!editingModelId} type="password" value={draftToken} onChange={(event) => { setDraftToken(event.target.value); setRemoveStoredToken(false); setModelSettingsDirty(true); }} placeholder={models.find((item) => item.id === editingModelId)?.hasApiToken ? t("settings.apiTokenPlaceholder.saved") : t("settings.apiTokenPlaceholder.required")} /></label>
+                    <label><span>{t("settings.apiToken")}</span><input required={!editingModelId} type="password" value={draftToken} onChange={(event) => { setDraftToken(event.target.value); setRemoveStoredToken(false); }} placeholder={models.find((item) => item.id === editingModelId)?.hasApiToken ? t("settings.apiTokenPlaceholder.saved") : t("settings.apiTokenPlaceholder.required")} /></label>
                     {editingModelId && models.find((item) => item.id === editingModelId)?.hasApiToken ? (
-                      <button className={removeStoredToken ? "credential-remove pending" : "credential-remove"} type="button" onClick={() => { setDraftToken(""); setRemoveStoredToken((current) => !current); setModelSettingsDirty(true); }}>
+                      <button className={removeStoredToken ? "credential-remove pending" : "credential-remove"} type="button" onClick={() => { setDraftToken(""); setRemoveStoredToken((current) => !current); }}>
                         {removeStoredToken ? t("settings.removeTokenPending") : t("settings.removeToken")}
                       </button>
                     ) : null}
