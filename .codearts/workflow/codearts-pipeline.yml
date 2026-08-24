@@ -408,11 +408,15 @@ post:
       name: Publish successful PR result
       needs: []
       steps:
-      - name: Comment and mark the PR successful
-        uses: official_devcloud_cloudBuild
+      - name: Render successful PR result
+        uses: official_shell_plugin
         with:
-          number: "${MERGE_ID}"
-          result_html: |
+          OFFICIAL_SHELL_SCRIPT_INPUT: |
+            set -eu
+            RESULT_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}/.ci-results/pr-result"
+            RESULT_FILE="$RESULT_DIR/result.html"
+            mkdir -p "$RESULT_DIR"
+            cat > "$RESULT_FILE" <<RESULT_HTML
             <p>&#9989; CodeArts 流水线 <a href="${PASS_CONDITIONS_LINK}">${{ pipeline.run_id }}</a> 执行成功。</p>
             <table style="border-collapse: collapse">
               <tr><th>任务名称</th><th>子任务</th><th>CodeArts 状态</th><th>CodeArts 日志</th><th>OBS 日志路径</th></tr>
@@ -420,9 +424,28 @@ post:
               <tr><td>Anti-poison（防投毒）</td></tr>
               <tr><td>CodeCheck（静态检查）</td></tr>
               <tr><td>Blacklist（禁用词）</td></tr>
-              <tr><td>UT</td><td>-</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><code>obs://openjiuwen-ci/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log</code></td></tr>
-              <tr><td>ST</td><td>-</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><code>obs://openjiuwen-ci/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log</code></td></tr>
+              <tr><td>UT</td><td>-</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log">公开日志</a></td></tr>
+              <tr><td>ST</td><td>-</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log">公开日志</a></td></tr>
             </table>
+            RESULT_HTML
+            test -s "$RESULT_FILE"
+            echo "rendered PR result: $RESULT_FILE"
+        identifier: 1790000000001f3bdf0d-9082-493c-b505-da94b01fd1ef
+      - name: Upload successful PR result to OBS
+        uses: upload-obs
+        with:
+          endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+          endpoint: obs.cn-north-4.myhuaweicloud.com
+          bucket: openjiuwen-ci
+          key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/pr/result.html"
+          source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
+          self_folder: "false"
+        identifier: 1790000000002ca71171-679f-4414-948c-ff6497de4ab7
+      - name: Comment and mark the PR successful
+        uses: official_devcloud_cloudBuild
+        with:
+          number: "${MERGE_ID}"
+          result_html: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/pr/result.html"
           final_label: ci-successful
           __sameProject__: "true"
           __projectId__: ""
@@ -438,11 +461,15 @@ post:
       name: Publish failed PR result
       needs: []
       steps:
-      - name: Comment and mark the PR failed
-        uses: official_devcloud_cloudBuild
+      - name: Render failed PR result
+        uses: official_shell_plugin
         with:
-          number: "${MERGE_ID}"
-          result_html: |
+          OFFICIAL_SHELL_SCRIPT_INPUT: |
+            set -eu
+            RESULT_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}/.ci-results/pr-result"
+            RESULT_FILE="$RESULT_DIR/result.html"
+            mkdir -p "$RESULT_DIR"
+            cat > "$RESULT_FILE" <<RESULT_HTML
             <p>&#10060; CodeArts 流水线 <a href="${PASS_CONDITIONS_LINK}">${{ pipeline.run_id }}</a> 执行失败。</p>
             <table style="border-collapse: collapse">
               <tr><th>任务名称</th><th>子任务</th><th>CodeArts 状态</th><th>CodeArts 日志</th><th>OBS 日志路径</th></tr>
@@ -450,9 +477,28 @@ post:
               <tr><td>Anti-poison（防投毒）</td></tr>
               <tr><td>CodeCheck（静态检查）</td></tr>
               <tr><td>Blacklist（禁用词）</td></tr>
-              <tr><td>UT</td><td>-</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><code>obs://openjiuwen-ci/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log</code></td></tr>
-              <tr><td>ST</td><td>-</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><code>obs://openjiuwen-ci/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log</code></td></tr>
+              <tr><td>UT</td><td>-</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log">公开日志</a></td></tr>
+              <tr><td>ST</td><td>-</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td><td><a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log">公开日志</a></td></tr>
             </table>
+            RESULT_HTML
+            test -s "$RESULT_FILE"
+            echo "rendered PR result: $RESULT_FILE"
+        identifier: 1790000000003e93ccb2-c3d7-4246-a79c-6e6079bb59cd
+      - name: Upload failed PR result to OBS
+        uses: upload-obs
+        with:
+          endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+          endpoint: obs.cn-north-4.myhuaweicloud.com
+          bucket: openjiuwen-ci
+          key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/pr/result.html"
+          source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
+          self_folder: "false"
+        identifier: 1790000000004756cae3-f5a6-4a02-a0e8-ab67c922ed75
+      - name: Comment and mark the PR failed
+        uses: official_devcloud_cloudBuild
+        with:
+          number: "${MERGE_ID}"
+          result_html: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/pr/result.html"
           final_label: ci-failed
           __sameProject__: "true"
           __projectId__: ""
