@@ -1,132 +1,116 @@
 ---
 name: evolve-design
-description: Use this skill when the user wants to evolve something — improve a program, a piece of writing, a solver, or an implementation by repeated search rather than by one edit. Triggers on `/evolve`, "把这个做得更好", "搜索一个更好的方案", or any request to optimise something against a measurable target. Walks the user through agreeing on what "better" means, verifies the scoring can actually rank candidates, then calls `create_evolve_run`. Not for a single fix, a refactor, or a question about existing code.
+description: Use when the user wants to improve something by repeated search rather than one edit — a program, a prompt, a document, a pipeline, a configuration, an experimental protocol. Triggers on `/evolve`, "把这个做得更好", "搜索一个更好的方案", or any request to optimise against a measurable target. Walks through agreeing what "better" means, verifies the scoring can rank candidates, then calls `create_evolve_run`. Not for a single fix, a refactor, or a question about existing code.
 metadata:
-  version: 1.0.0
+  version: 2.0.0
 ---
 
-# 设计一次演进搜索
+# Designing an evolution search
 
-演进搜索会把一个程序（或一段文字）反复改写几十次，每个候选在留出的数据上打分，只留分数更高的。
-一次搜索花掉的是真金白银的模型调用和沙箱执行，而**它的成败几乎完全取决于打分设计得对不对**——
-分不出好坏的评分让搜索在平坦地形上随机游走，而看板上什么都不会显示为异常。
+A search rewrites a candidate dozens of times and keeps what scores higher. The candidate can be
+anything text-shaped: a function, a whole program, a prompt, a report section, a config file, a
+protocol. It succeeds or fails on whether the scoring can tell a good candidate from a bad one —
+scoring that cannot shows up as a flat run, not as an error.
 
-所以这个 skill 的产物不是一份配置，是**一次和用户的对话**：先把「更好」谈清楚，再动手。
+**Work in steps.** Ask, write files, run them, then decide the numbers. Do not design the whole
+thing in one thinking pass: a turn spent planning it all produces no candidate and no result.
 
-## 第一件事：不要直接开跑
+## 1. Ask
 
-用户那句话通常不足以定义一次搜索。缺的不是参数，是**判据**。
+Read what is free first — this conversation, the workspace, science memory. Then say back what
+you understood and ask for what is missing, all at once. If the user says "you decide", decide
+and state the defaults.
 
-先读免费的东西：这次对话说过什么（指代——「按刚才说的」「就是上面那份」——答案在对话里）、
-工作区里有什么、科学记忆里有没有相关结论。读完之后，**把你的理解说回去，并问缺的那一两件事**。
+1. **What "better" means, measurably.** "More accurate" — which error measure? "Less
+   AI-sounding" — which specific tic? "Cleaner protocol" — fewer steps, or fewer failure modes?
+   The criterion must separate the complaint from its opposite. "Well-structured and readable"
+   fails: it is true of any document.
+2. **What must not change.** Inputs unavailable at the time the thing actually runs, files that
+   define the score, hard limits (budget, runtime, memory, safety constraints).
+3. **The starting point.** Use what is in the workspace. Otherwise write **the most boring thing
+   that works** — a dozen lines, no tuning, no edge cases. A strong seed is not an advantage: it
+   spends the search space before the search begins.
 
-问什么取决于缺什么，但值得问的通常是这三类：
+## 2. Verify the scoring with `run_python`
 
-1. **「更好」的可测口径。** 用户说「更准」，是 MAE 还是分类准确率？说「去掉 AI 味」，
-   他讨厌的具体是排比三连、模板过渡句，还是空洞总结？——细则必须能把他抱怨的那个毛病和它的
-   反面分开，写成「结构是否清晰／语言是否通顺」就是失败：那四条对任何文档都成立。
-2. **不许动的东西。** 哪些列拿不到（事后填的、真实预测时不存在）、哪些文件是判分依据、
-   有没有硬约束（时间预算、内存、必须纯函数）。
-3. **起点。** 工作区里有现成的就用；没有就你写一份**最无聊的能跑版本**——十几行，
-   固定步长、简单规则、最普通的模型，写完就走，不调参、不加分支、不处理边角情况。
+Before calling `create_evolve_run`:
 
-   起点写好了不是优点，是**把搜索空间提前占掉**。你知道 RK45 比欧拉法好，不代表该把 RK45
-   写成起点：那样几十次扩展只能在你已经想到的东西周围打转。起点的唯一职责是给出一个能打分的
-   非零基线，剩下的是搜索的活——把「想到更好的写法」这件事让给它，是这套机制存在的理由。
-
-一次问完，别挤牙膏。用户说「你定」就自己定并说清默认值，别卡住。
-
-**一步一步做，别在脑子里把整套方案设计完。** 下面三件事是按顺序执行的动作，不是一份要先想
-周全的规划：问完就写文件、写完就用 `run_python` 跑、跑出数字再定量。想清楚再动手在这里是反的
-——你验证评分要花的那几次执行，比任何推演都便宜也更可靠，而一轮把额度全花在思考上的结果是
-既没有候选也没有结论。
-
-## 第二件事：把打分跑一遍
-
-你有 `run_python`。**这是这套设计相对「盲写配置」的全部优势，不用等于白给。**
-在调 `create_evolve_run` 之前，自己验三件事：
-
-| 验什么 | 怎么验 | 不合格的样子 |
+| Check | How | Failure |
 |---|---|---|
-| 评分跑得起来 | 拿起点跑一遍打分 | 抛异常、除零、缺依赖 |
-| 评分分得出好坏 | 拿一个**故意改坏**的副本再跑（把函数体掏空、返回常数、换成一段空话） | 两次分数一样 → 评分是瞎的 |
-| 起点有坡可爬 | 看起点分数 | 0 分是从地板起跑；满分（或过了解决阈值）是没坡可爬。**目标 0.3–0.7** |
+| It runs | Score the starting point | Raises, missing dep |
+| It discriminates | Score a **deliberately broken** copy (gut the logic, return a constant, replace the text with filler) | Same score twice |
+| There is slope | Look at the starting score | 0 is a floor, solved is a ceiling. **Aim 0.3–0.7** |
 
-服务端会跑同一道判别力探针并在不合格时拒绝，所以跳过这一步只是把发现问题的时间推迟到花过钱之后。
+The server runs the same probe and refuses on failure, so skipping this only delays the finding
+until after the budget is spent.
 
-评测脚本还要扛得住坏候选：候选大多会抛异常或返回 None，每条样例 try/except 兜住算答错，
-**别让脚本自己崩**。脚本一崩就是整次跑不动。
+The evaluator must survive bad candidates: wrap each case in try/except and count it wrong. If
+the script itself crashes, nothing runs.
 
-## 第三件事：定量——回答四个问题
+## 3. Size it
 
-不要照抄默认值。任何任务都先回答这四问，每个数字要能在 rationale 里站得住：
+1. **What is one unit?** Whatever one measurement consumes: rows, a test case, a document
+   section, one input scenario, one grading pass.
+2. **How big must one be to be stable?** Enough that the same candidate scores the same twice.
+   Averaged measures get noisier as units shrink; a unit holding a single item is almost always
+   too small.
+3. **How many held out?** Deterministic scoring 4–6 units; anything with randomness 8–12. Too
+   few misreads noise as improvement — silently, for the whole run.
+4. **Does the candidate learn from data?** If it fits before it produces, the fitting volume
+   must match the evaluation volume. Skip when nothing is fitted.
 
-1. **「一份」是什么？** 先定测量单位：几行数据、一条测试用例、一组样例、一次评分。
-2. **一份要多大，单次测量才稳？** 均值类指标样本越少越抖——回归一片 15–20 行、
-   分类 20–30 行、样例类一片至少 3 组。症状是同一个候选评两次分数不一样。
-3. **留出几份才判得出提升是真的？** 确定性打分（跑测试、跑脚本、算指标）4–6 份；
-   有随机性的（模型评审、带采样的评测）8–12 份。留出大的代价只是多评几次；
-   判错一次提升的代价是整个搜索顺着错的方向走下去，而且没有报错。
-4. **候选要学习吗？** 只要是「先拟合再预测」，学习用的量至少和评测同量级——
-   320 行给训练留 20 行，训出来的每个候选都是废的，分数贴地且无报错。纯算法跳过这条。
+If the total will not fit, shrink each unit — do not cut held-out or fitting data.
 
-总量装不下就**缩每份的大小**，不砍留出、不挤训练。份数和大小对不上量
-（8 条用例切 10 组、每片只剩 1 组样例）就回到第 2 问重定单位。
+`expansions` must be at least `4 × workers`, or the first sweep forks only the root and the tree
+is flat. Expansions by search space: a known defect 4–6; swapping approach or restructuring
+12–20; writing something from scratch 20+.
 
-**并行不是免费的。** 第一轮所有 worker 都只能从起点分叉，`expansions` 至少是 `workers` 的
-4 倍，否则树是平的——等于把同一个起点独立改 N 次，根本没有搜索。
+**Thinking off unless asked** — with it on, one whole-candidate rewrite can exceed the proxy
+limit and return nothing.
 
-**扩展次数按搜索空间定**：改一个明确的 bug 4–6 次；特征工程、换模型这类方向多的 12–20 次；
-从零写一套方法 20 次往上。
+## 4. Pick a scoring mode
 
-**思考默认关掉**，除非用户明确要开：开着思考一次整程序改写可能十几分钟不返回，撞上代理上限被
-掐断，那次扩展既没有候选也没有 token。
+By what you have to judge with, not by what the task resembles:
 
-## 四种打分方式，怎么选
+- **A table of known answers and a number to improve** → `dataset_metric`. Deterministic and
+  cheapest. Metrics: accuracy / mae / r2 / rmse / seconds; larger-is-better after normalisation.
+- **Correctness defined by a test command** → `test_gate`. `frozenGlobs` **must** include the
+  test paths, or the shortest path to a higher score is to weaken the tests. Shards ≤ half the
+  case count.
+- **Deterministic, but no table and no test suite** → `custom_script`, which you write. This is
+  the general case and covers most non-tabular work: simulations, parsers, generated
+  configuration, anything you can check by running it. Contract: import the candidate as
+  `candidate`; score only the shards in `SCIENCE_AGENT_SHARDS` (comma-separated); write
+  `{"valid": true, "metrics": {"score": 0.83}}` to the path in `SCIENCE_AGENT_RESULT` (a file,
+  not stdout — the candidate prints too); score 0–1, larger-is-better. The module docstring is
+  the contract the search sees when rewriting candidates. Write the `error` field even when
+  valid — it is the feedback channel to the improving model.
+- **Only another model can judge it** → `llm_judge`. For prose, explanations, and anything whose
+  quality is a reading. Most gameable and the only non-deterministic option; ask once whether it
+  could be a `custom_script` instead.
 
-按「有什么可以判分」选，不是按任务像什么：
+**Score on a gradient, not a cliff.** For hard limits prefer "stop and score what you have" over
+"violation scores zero" — zeroing lands every failure on the same 0 and leaves nothing to climb.
 
-- **有数据、目标是把某个数字做好** → `dataset_metric`。确定性、最便宜，能用就用。
-  指标只有 accuracy / mae / r2 / rmse / seconds；归一化之后必须越大越好。
-- **正确性由测试定义** → `test_gate`。失败文本就是模型学习的信号。
-  `frozenGlobs` **必须**包含测试路径，否则候选最短的提分路径是把测试改弱。
-  定组数之前先数用例：组数总和不超过用例数的一半。
-- **确定性可判，但既没有表也没有测试套件** → `custom_script`，**你来写评测脚本**。契约四条：
-  候选在旁边用 `import candidate` 拿；`SCIENCE_AGENT_SHARDS` 是逗号分隔的分片号，只评这几片；
-  把 `{"valid": true, "metrics": {"score": 0.83}}` 写到 `SCIENCE_AGENT_RESULT` 指的路径
-  （写文件，不是打印——候选自己也会打印）；score 是 0–1 越大越好。
-  脚本的模块 docstring 要写清候选该暴露的接口——搜索改写候选时看到的契约就是这段 docstring。
-  **`error` 字段是给改进模型的反馈通道，valid 是 true 也要写**：一句话说清哪几条差、差在哪。
-- **只能让另一个模型读着评** → `llm_judge`。最容易被 game、唯一非确定性的一种，
-  **选它之前先问一遍能不能写成 `custom_script`**。
+**Never reward a property the candidate can fake.** Rewarding "gives specific numbers" produces
+invented numbers; reward agreement with the given source instead.
 
-**评分要有坡，不要悬崖。** 硬约束优先「截断后计分」而不是「违约清零」：超出预算就停止计算、
-按当前状态算误差，而不是该条记零分。清零让超限 1 次和超 1000 次一样惨，所有失败摔在同一个 0 上，
-树没有梯度可爬——一次真跑里六个正经的方法全部因此得 0。
+## 5. Environment
 
-**凡是候选自己能伪造的属性，不要直接奖励它。** 奖励「给出了具体数字」会让模型凭空编数字；
-正确的写法是「与给定原始材料一致，且不引入材料中没有的事实」。
+Candidates get numpy / pandas / scipy / sklearn and the standard library. Anything else goes in
+`packages` — **bare names only** (optionally `==version`), no paths, URLs, or pip options. Your
+`run_python` environment and the candidate sandbox are not the same.
 
-## 环境
+## 6. Call it, then report
 
-候选运行时保底有 numpy / pandas / scipy / sklearn 和标准库。还需要别的就写进 `packages`，
-探针之前会装好。**只写包名**（可带 `==版本`），路径、URL、索引地址、pip 选项一律不行。
+`howScored` is **one sentence** for the user: what it measures, how much is held out.
 
-你自己的 `run_python` 环境和候选的沙箱**不是一个**——你验证时能 import 不代表候选也能，
-`packages` 该写还是要写。
+`risks`: at most two, only ones that change a decision. Empty is fine.
 
-## 最后：调 create_evolve_run，然后说清楚
+After the tool returns, say the result in the conversation: the probe's two numbers and how the
+search will proceed. The search is asynchronous; when the user asks later, call `get_evolve_run`
+and report actual numbers rather than promising an improvement.
 
-`howScored` 是**一句话**，四十来个字，给用户看的——说清拿什么衡量、留出几份判真假。
-细则、脚本、指标他点开就能看，这一句是给他一眼扫过去用的。写成一整段等于没写。
-
-`risks` 最多两条，只留真正会改变他决定的。「LLM 评审有随机性」这种每次都成立的通用告示不算，
-读者第二次见到就不看了。没有值得说的就给空数组。
-
-工具返回后**在对话里说结果**：探针的两个数（起点多少、改坏后多少）、以及这次搜索会怎么进行。
-搜索是异步的，卡片会出现在会话里；跑完之后如果用户问起，用 `get_evolve_run` 取结果再汇报——
-不要凭空说「应该会提升」。
-
-被拒绝不是异常，是设计反馈。探针说分不出好坏，就是你的评分需要更狠的样例或更机械的细则；
-说没坡可爬，就是起点太强。改掉再调一次，**不要把服务端的拒绝原文丢给用户当维修工单**——
-那是你的活。
+A refusal is design feedback. "Cannot discriminate" means the scoring needs harder cases or a
+more mechanical rubric; "no slope" means the starting point is too strong. Fix it and call again
+— do not hand the user the server's refusal text as a work order.
