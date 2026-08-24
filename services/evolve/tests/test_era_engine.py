@@ -628,3 +628,56 @@ def test_a_crash_inside_the_domain_is_not_a_successful_run() -> None:
 
     assert harness.of("search_finished")[0]["status"] == "failed"
     assert harness.of("expanded") == []
+
+
+def test_the_framework_s_stop_reason_reaches_the_run() -> None:
+    """A search that stops at 7 of 24 has to say why.
+
+    `stop_reason` / `error` / `retired_workers` come back on the framework's
+    result and were being dropped on the floor: the status line then read
+    "succeeded" for a run whose workers had died on their second call, with
+    nothing anywhere to contradict it.
+    """
+    from sciencediscovery_evolve.era_engine import _Reporter
+
+    class _Tree:
+        nodes = [object()] * 8   # seed + 7 expansions
+
+    emitted: List[Dict[str, Any]] = []
+    reporter = _Reporter.__new__(_Reporter)
+    reporter.tree = _Tree()
+    reporter.emit = emitted.append
+
+    class _Outcome:
+        stop_reason = "patience"
+        error = ""
+        retired_workers = 3
+
+    reporter.note_outcome(_Outcome(), planned=24)
+
+    said = " ".join(json.dumps(event, ensure_ascii=False) for event in emitted)
+    assert "3 个 worker" in said          # the workers that died
+    assert "24" in said and "7" in said   # planned versus actual
+    assert "patience" in said             # the framework's own word for it
+
+
+def test_a_run_that_spent_its_budget_says_nothing_extra() -> None:
+    """max_iters is the ordinary ending; narrating it would be noise."""
+    from sciencediscovery_evolve.era_engine import _Reporter
+
+    class _Tree:
+        nodes = [object()] * 25
+
+    emitted: List[Dict[str, Any]] = []
+    reporter = _Reporter.__new__(_Reporter)
+    reporter.tree = _Tree()
+    reporter.emit = emitted.append
+
+    class _Outcome:
+        stop_reason = "max_iters"
+        error = ""
+        retired_workers = 0
+
+    reporter.note_outcome(_Outcome(), planned=24)
+
+    assert emitted == []

@@ -321,8 +321,9 @@ class EraEngine:
         mode = _mode(spec)
         reward = make_reward(domain)
         try:
+            outcome = None
             if mode == "async":
-                async_evolve(
+                outcome = async_evolve(
                     tasks, reward,
                     async_ratio=int(spec.options.get("async_ratio", 1)),
                     max_iters=spec.expansions,
@@ -337,7 +338,7 @@ class EraEngine:
                     **common,
                 )
             else:
-                evolve(
+                outcome = evolve(
                     tasks, reward,
                     rounds=max(1, spec.expansions // max(1, common["n_workers"])),
                     max_concurrency=1 if mode == "serial" else common["n_workers"],
@@ -350,6 +351,11 @@ class EraEngine:
             # the root, so without it there is nothing for "better" to mean.
             raise _Refusal(str(error)) from error
 
+        # Whatever the framework decided is the only account of why a run of 24
+        # expansions stopped at 7. Discarding it — which this did — leaves the
+        # status line saying "succeeded" for a search whose workers died on the
+        # second call, and nothing anywhere that says otherwise.
+        reporter.note_outcome(outcome, spec.expansions)
         reporter.finish("stopped" if should_stop() else "succeeded")
 
     def _model_call(
@@ -551,6 +557,35 @@ class _Reporter:
         # replayed absolute does not. Cents stay 0 — this system has no price
         # table, and a fabricated number would be shown to the user as fact.
         self.emit(events.cost(self.usage.read(), 0))
+
+    def note_outcome(self, outcome: Any, planned: int) -> None:
+        """Say why the search stopped, when that is not "it ran out of budget".
+
+        `stop_reason` and `retired_workers` come back on the framework's result
+        and were being dropped. A run that ends early because every worker
+        retired, or because a backend error killed it, is not the same event as
+        one that spent its expansions — and told apart only here.
+        """
+        if outcome is None:
+            return
+        reason = str(getattr(outcome, "stop_reason", "") or "")
+        error = str(getattr(outcome, "error", "") or "")
+        retired = int(getattr(outcome, "retired_workers", 0) or 0)
+        done = len(self.tree.nodes) - 1  # the seed is not an expansion
+
+        if error:
+            self.emit(events.log("warn", f"搜索是被一个错误结束的：{error[:300]}"))
+        if retired:
+            self.emit(events.log(
+                "warn",
+                f"{retired} 个 worker 中途退出了——模型调用连续失败到框架认为它们不该再试。"
+                "这次搜索用掉的扩展次数会明显少于计划。",
+            ))
+        if 0 <= done < planned and reason and reason not in ("max_iters", "max_calls"):
+            self.emit(events.log(
+                "info",
+                f"计划 {planned} 次扩展，实际跑了 {done} 次，停下的原因是 {reason}。",
+            ))
 
     def finish(self, status: str) -> None:
         if status == "succeeded" and len(self._distinct_scores) == 1 and len(self.tree.nodes) > 3:
