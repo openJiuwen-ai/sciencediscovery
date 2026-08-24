@@ -17,10 +17,9 @@
 # namespaces bubblewrap needs, so UT deliberately runs ci:ut:core and E2E is
 # left to GitHub. The hermetic ci:st layer needs neither a sandbox nor secrets.
 #
-# Every job checks out the exact source-context commit before provisioning its
-# own tools. CodeArts documents a "Download repository" plugin but not its YAML
-# identifier; using git through the already verified official shell plugin
-# keeps this repository-hosted definition self-contained and reviewable.
+# Every job downloads the source-context commit with CodeArts' built-in clone
+# task before provisioning its own tools. The clone task handles repository
+# credentials and places this source at ${SHARE_PATH}/sciencediscovery.
 #
 # Shell steps use `official_shell_plugin`, with the script under
 # `with.OFFICIAL_SHELL_SCRIPT_INPUT`. CodeArts has no GitHub-style `run:` key:
@@ -78,50 +77,28 @@ stages:
         name: UT
         needs: []
         steps:
-        - name: Checkout the source commit
-          uses: official_shell_plugin
-          with:
-            OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -eu
-              SOURCE_REPO_URL="${{ sources.sciencediscovery.repo_url }}"
-              SOURCE_COMMIT_ID="${{ sources.sciencediscovery.commit_id }}"
-              SOURCE_BRANCH="${{ sources.sciencediscovery.source_branch }}"
-              CHECKOUT_DIR="$PWD/sciencediscovery-src"
-              command -v git >/dev/null 2>&1 || {
-                echo "FATAL: git is not installed on the CodeArts runner." >&2
-                exit 1
-              }
-              test -n "$SOURCE_REPO_URL"
-              test -n "$SOURCE_COMMIT_ID"
-              mkdir -p "$CHECKOUT_DIR"
-              cd "$CHECKOUT_DIR"
-              if [ ! -d .git ]; then
-                git init --quiet
-                git remote add origin "$SOURCE_REPO_URL"
-              else
-                git remote set-url origin "$SOURCE_REPO_URL"
-              fi
-              if ! git fetch --no-tags --depth=1 origin "$SOURCE_COMMIT_ID"; then
-                test -n "$SOURCE_BRANCH"
-                git fetch --no-tags --depth=1 origin "$SOURCE_BRANCH"
-              fi
-              git -c advice.detachedHead=false checkout --detach "$SOURCE_COMMIT_ID"
-              ACTUAL_COMMIT=$(git rev-parse HEAD)
-              test "$ACTUAL_COMMIT" = "$SOURCE_COMMIT_ID"
-              echo "checked out $ACTUAL_COMMIT from $SOURCE_REPO_URL"
+        - name: Download the source commit
+          uses: official_git_clone
         - name: Provision the runner
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
               set -eu
-              cd sciencediscovery-src
+              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}/sciencediscovery"
+              echo "source directory: $SOURCE_DIR"
+              if [ ! -f "$SOURCE_DIR/pnpm-workspace.yaml" ]; then
+                echo "FATAL: the download task did not create the expected source directory"
+                ls -la "$SHARE_PATH" || true
+                exit 1
+              fi
+              cd "$SOURCE_DIR"
               bash .ci/provision-runner.sh
         - name: Run and report UT
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -u
-              cd sciencediscovery-src
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}/sciencediscovery"
               export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_RUNTIME_DIR="$HOME/ci-runtime-ut"
@@ -140,43 +117,21 @@ stages:
         name: ST
         needs: []
         steps:
-        - name: Checkout the source commit
-          uses: official_shell_plugin
-          with:
-            OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -eu
-              SOURCE_REPO_URL="${{ sources.sciencediscovery.repo_url }}"
-              SOURCE_COMMIT_ID="${{ sources.sciencediscovery.commit_id }}"
-              SOURCE_BRANCH="${{ sources.sciencediscovery.source_branch }}"
-              CHECKOUT_DIR="$PWD/sciencediscovery-src"
-              command -v git >/dev/null 2>&1 || {
-                echo "FATAL: git is not installed on the CodeArts runner." >&2
-                exit 1
-              }
-              test -n "$SOURCE_REPO_URL"
-              test -n "$SOURCE_COMMIT_ID"
-              mkdir -p "$CHECKOUT_DIR"
-              cd "$CHECKOUT_DIR"
-              if [ ! -d .git ]; then
-                git init --quiet
-                git remote add origin "$SOURCE_REPO_URL"
-              else
-                git remote set-url origin "$SOURCE_REPO_URL"
-              fi
-              if ! git fetch --no-tags --depth=1 origin "$SOURCE_COMMIT_ID"; then
-                test -n "$SOURCE_BRANCH"
-                git fetch --no-tags --depth=1 origin "$SOURCE_BRANCH"
-              fi
-              git -c advice.detachedHead=false checkout --detach "$SOURCE_COMMIT_ID"
-              ACTUAL_COMMIT=$(git rev-parse HEAD)
-              test "$ACTUAL_COMMIT" = "$SOURCE_COMMIT_ID"
-              echo "checked out $ACTUAL_COMMIT from $SOURCE_REPO_URL"
+        - name: Download the source commit
+          uses: official_git_clone
         - name: Provision the runner
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
               set -eu
-              cd sciencediscovery-src
+              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}/sciencediscovery"
+              echo "source directory: $SOURCE_DIR"
+              if [ ! -f "$SOURCE_DIR/pnpm-workspace.yaml" ]; then
+                echo "FATAL: the download task did not create the expected source directory"
+                ls -la "$SHARE_PATH" || true
+                exit 1
+              fi
+              cd "$SOURCE_DIR"
               bash .ci/provision-runner.sh
         # The hermetic agent loop drives a scripted local endpoint and performs
         # a real workspace tool round trip without a model credential.
@@ -184,8 +139,8 @@ stages:
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -u
-              cd sciencediscovery-src
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}/sciencediscovery"
               export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_RUNTIME_DIR="$HOME/ci-runtime-st"
