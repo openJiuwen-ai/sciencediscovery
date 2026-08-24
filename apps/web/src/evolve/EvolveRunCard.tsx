@@ -69,7 +69,16 @@ export function EvolveRunCard({ onOpenRun, runs }: EvolveRunCardProps) {
           title={run.goal.statement}
           type="button"
         >
-          <span className={`evolve-status evolve-status-${run.status}`}>{t(statusKey(run.status))}</span>
+          {/* An active run's status here is whatever it was when the list was
+              read, and this side never reads it again — live progress belongs
+              to the panel, which streams the run's own event log. Printing
+              "queued" for a search that has been expanding for ten minutes is
+              worse than saying nothing, so an active run gets one honest label
+              and the invitation to open it. Finished statuses are terminal and
+              stay accurate once loaded. */}
+          <span className={`evolve-status evolve-status-${run.status}`}>
+            {isEvolveRunActive(run.status) ? t("evolve.status.live") : t(statusKey(run.status))}
+          </span>
           <span className="evolve-run-statement">{run.goal.statement}</span>
           <span className="evolve-run-meta">
             {t("evolve.card.expansions", { done: run.candidates, total: run.goal.budget.expansions })}

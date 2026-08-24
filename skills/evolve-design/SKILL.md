@@ -101,10 +101,15 @@ Call `create_evolve_run`.
 `howScored` is **one sentence** for the user: what it measures, how much is held out.
 `risks`: at most two, only ones that change a decision. Empty is fine.
 
-> **Checkpoint 4.** Report what came back: the probe's two numbers and how the search will
-> proceed. The search is asynchronous and its card appears in the session. When the user asks
-> later, call `get_evolve_run` and report the actual numbers — never promise an improvement you
-> have not read.
+> **Checkpoint 4.** Report what came back — the probe's two numbers and what the search will do
+> — and then **end the turn**. Do not wait for it, do not call `get_evolve_run` to check on it,
+> do not loop until it finishes. The search runs for minutes to hours; its card appears in the
+> session and the panel behind that card streams live progress, which is where the user watches
+> it. Sitting on the turn shows them nothing they cannot already see and burns the run's own
+> budget.
+>
+> `get_evolve_run` is for **later**, when the user asks how it went — then read it and report the
+> actual numbers, never an improvement you have not read.
 
 A refusal is design feedback, not an error. "Cannot discriminate" means the scoring needs harder
 cases or a more mechanical rubric; "no slope" means the starting point is too strong. Fix it and

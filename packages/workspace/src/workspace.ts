@@ -1084,7 +1084,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         + "against the starting point, and the score on the test split that never took part in "
         + "the search. Call this when the user asks how a search went, or before summarising one "
         + "— a search runs for minutes after the turn that started it, so its result is never in "
-        + "your context. Never describe an outcome you have not read.",
+        + "your context. Never describe an outcome you have not read. Do NOT call this to wait "
+        + "for a search you just started: end that turn instead. The run's card streams live "
+        + "progress to the user on its own, and polling here shows them nothing new while "
+        + "spending the budget the search itself needs.",
       execute: async (_toolCallId, params) => {
         const summary = await options.getEvolveRun!(params.runId);
         return { content: [{ type: "text", text: JSON.stringify(summary) }], details: summary };
@@ -1205,7 +1208,14 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           : "";
         return {
           content: [{ type: "text", text: [
-            `搜索已创建：${result.run?.id ?? "(无 id)"}`, verdict,
+            `搜索已创建：${result.run?.id ?? "(无 id)"}`,
+            verdict,
+            // The last thing the model reads before deciding what to do next.
+            // Left off, it waits: calls get_evolve_run, sees "running", calls it
+            // again — showing the user nothing the live card is not already
+            // showing them, and spending the budget the search itself needs.
+            "把上面这两个数报给用户，然后结束这一轮。搜索要跑几分钟到几小时，"
+            + "它的卡片会自己实时显示进度，不要在这里等它、也不要轮询 get_evolve_run。",
           ].filter(Boolean).join("\n") }],
           details: result,
         };

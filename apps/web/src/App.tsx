@@ -92,7 +92,6 @@ import type {
 import {
   classifyScientificArtifact,
   createLocalSessionTitle,
-  isEvolveRunActive,
   resolveScientificArtifactKind,
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
@@ -1180,31 +1179,16 @@ export function App() {
       return;
     }
     let live = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // Backs off. A search runs for minutes to hours, and the only event this
-    // side gets is `evolve_run.created` — which arrives while the run is still
-    // `pending`, so without re-reading the card sits on "queued" for ever.
-    // But a run that has been going for half an hour does not need looking at
-    // every five seconds: the interval starts short, where the status is
-    // actually changing, and settles at a minute. Polling stops entirely as
-    // soon as nothing is active, so an idle session costs nothing.
-    let waitMs = 5_000;
-    const load = () => client.listEvolveRuns(activeSessionId)
-      .then((runs) => {
-        if (!live) return;
-        setEvolveRuns(runs);
-        if (!runs.some((run) => isEvolveRunActive(run.status))) return;
-        timer = setTimeout(load, waitMs);
-        waitMs = Math.min(waitMs * 2, 60_000);
-      })
+    // Read once. Progress belongs to the panel, which replays the run's event
+    // log over SSE and is live for as long as it is open; polling the list
+    // behind it would be a second, worse copy of that. The card's job is to say
+    // a search exists and let it be opened.
+    void client.listEvolveRuns(activeSessionId)
+      .then((runs) => { if (live) setEvolveRuns(runs); })
       // A session with no runs is the common case and 404s nothing; a failure
       // here must not take the workspace panel down with it.
       .catch(() => { if (live) setEvolveRuns([]); });
-    void load();
-    return () => {
-      live = false;
-      if (timer) clearTimeout(timer);
-    };
+    return () => { live = false; };
   }, [activeSessionId, client, evolveRefreshKey]);
   const loadMarkdownImage = useCallback(async (path: string, signal: AbortSignal): Promise<Blob> => {
     const sessionId = session?.id;
