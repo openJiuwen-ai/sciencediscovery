@@ -18,8 +18,11 @@ import { execFileSync } from "node:child_process";
 import { DEFAULT_ENVIRONMENT_REVISION_ID, SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, type EnvironmentRevision } from "@sciencediscovery/schema";
 
 export { DEFAULT_ENVIRONMENT_REVISION_ID } from "@sciencediscovery/schema";
-const pythonVersion = execFileSync("/usr/bin/python3", ["--version"], { encoding: "utf8" }).trim();
-const shellVersion = execFileSync("/usr/bin/bash", ["--version"], { encoding: "utf8" }).split("\n")[0]!.trim();
+
+// The package spec records paths inside the Runner's sandbox. Probe versions
+// through PATH because the API host may install the same tools elsewhere.
+const pythonVersion = execFileSync("python3", ["--version"], { encoding: "utf8" }).trim();
+const shellVersion = execFileSync("bash", ["--version"], { encoding: "utf8" }).split("\n")[0]!.trim();
 
 export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
   executable: "/usr/bin/python3",
