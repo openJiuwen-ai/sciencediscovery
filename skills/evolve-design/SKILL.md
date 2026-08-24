@@ -133,16 +133,26 @@ call again — do not hand the user the server's refusal text as a work order.
 
 ## Choosing a scoring mode (during step 2)
 
-By what you have to judge with, not by what the task resembles:
+Work down this list and take the first that fits. **`custom_script` is the fallback, not the
+default** — it is the one where you write and maintain the measuring apparatus yourself, so
+every mistake in it is yours. The two above it are cheaper to get right because the framework
+already handles the splitting and the freezing.
 
-- **A table of known answers and a number to improve** → `dataset_metric`. Deterministic and
-  cheapest. Metrics: accuracy / mae / r2 / rmse / seconds; larger-is-better after normalisation.
-- **Correctness defined by a test command** → `test_gate`. `frozenGlobs` **must** include the
-  test paths, or the shortest path to a higher score is to weaken the tests. Shards ≤ half the
-  case count.
-- **Deterministic, but no table and no test suite** → `custom_script`, which you write. The
-  general case: simulations, parsers, generated configuration, anything you can check by running
-  it. Contract: import the candidate as `candidate`; score only the shards in
+Judge by what the task *is*, not by what you happen to have in the workspace right now: "there
+is no table yet" is not a reason to skip `dataset_metric` when the task is to predict a column —
+write the table, then use it.
+
+- **Cases with known answers, and a number to minimise or maximise** → `dataset_metric`.
+  Deterministic and cheapest, and the framework owns the split so you cannot get it wrong.
+  Metrics: accuracy / mae / r2 / rmse / seconds; larger-is-better after normalisation. Generate
+  the data if it does not exist yet — that is still this mode.
+- **Correctness pinned down by tests** → `test_gate`. Take it whenever the user says "write
+  tests", "make these cases pass", or describes behaviour case by case. The failure text is the
+  learning signal, which is richer than a number, and `frozenGlobs` **must** include the test
+  paths, or the shortest path to a higher score is to weaken the tests. Shards ≤ half the case
+  count.
+- **Neither fits** → `custom_script`, which you write. Simulations, optimisation heuristics,
+  anything whose quality is a computation with no natural table and no test suite. Contract: import the candidate as `candidate`; score only the shards in
   `SCIENCE_AGENT_SHARDS` (comma-separated); write `{"valid": true, "metrics": {"score": 0.83}}`
   to the path in `SCIENCE_AGENT_RESULT` (a file, not stdout — the candidate prints too); score
   0–1, larger-is-better. The module docstring is the contract the search sees when rewriting

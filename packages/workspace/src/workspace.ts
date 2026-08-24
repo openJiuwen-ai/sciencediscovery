@@ -1141,7 +1141,15 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       mode: Type.Union([
         Type.Literal("dataset_metric"), Type.Literal("test_gate"),
         Type.Literal("custom_script"), Type.Literal("llm_judge"),
-      ]),
+      ], {
+        description: "Take the first that fits, in this order. dataset_metric: cases with known "
+          + "answers and a number to move — generate the table if it does not exist yet, that is "
+          + "still this mode. test_gate: correctness pinned down by tests, and whenever the user "
+          + "says \"write tests\" or \"make these pass\". custom_script: the FALLBACK, for when "
+          + "neither fits — you write and own the measuring apparatus, so every mistake in it is "
+          + "yours, and the framework can no longer do the splitting or the freezing for you. "
+          + "llm_judge: only when quality is a reading rather than a computation.",
+      }),
       normalize: Type.Optional(Type.Union([
         Type.Literal("identity"), Type.Literal("reciprocal"),
         Type.Literal("relative_to_baseline"), Type.Literal("clamp"),
