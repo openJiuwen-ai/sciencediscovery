@@ -159,6 +159,10 @@ write the table, then use it.
   candidates. Write the `error` field even when valid — it is the feedback channel to the
   improving model.
 
+  **How it runs:** as a script, with `__name__ == "__main__"` (`runpy.run_path`), and the
+  scratch directory first on `sys.path`. So top-level code runs, a `if __name__ == "__main__":`
+  guard runs, and `import candidate` resolves. You do not need to reverse-engineer this.
+
   **The evaluator runs alone.** It gets a scratch directory containing itself, the candidate,
   and nothing else — not the workspace, not the file you read while designing. A shard is an
   *index*, and what index `i` means is the evaluator's choice: most of the time it builds case

@@ -1121,7 +1121,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         maxLength: 2_000, minLength: 1,
       })),
       evaluatorSource: Type.Optional(Type.String({
-        description: "custom_script only: the whole evaluator, verbatim. It runs ALONE in a "
+        description: "custom_script only: the whole evaluator, verbatim. It is executed as a "
+          + "script with __name__ == \"__main__\" (runpy.run_path), with the scratch directory "
+          + "first on sys.path — so top-level code runs, a `if __name__ == \"__main__\":` guard "
+          + "runs, and `import candidate` resolves. It runs ALONE in that "
           + "scratch directory with the candidate — it cannot see the workspace, and the only "
           + "other file present is the one named by datasetPath, if any. Import the candidate "
           + "as `candidate`; score only the shards listed in SCIENCE_AGENT_SHARDS (the shard is "

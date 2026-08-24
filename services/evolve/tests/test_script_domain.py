@@ -379,3 +379,31 @@ def test_a_real_diagnosis_is_not_padded_with_process_noise():
 
     assert "budget exhausted" in error
     assert "unrelated chatter" not in error
+
+
+def test_the_evaluator_runs_as_main_with_the_scratch_dir_importable():
+    """The contract the author has to know without being able to try it first.
+
+    A `if __name__ == "__main__":` guard is the commonest shape in Python, and
+    whether it fires depends on how the runner invokes the file — which nothing
+    stated. One run was spent reverse-engineering it by experiment.
+    """
+    script = (
+        "import json, os, sys\n"
+        "import candidate\n"
+        "def _run():\n"
+        "    with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as fh:\n"
+        "        json.dump({'valid': True, 'metrics': {'exact_match': 1.0},\n"
+        "                   'error': 'name=%s cwd_on_path=%s cand=%s'\n"
+        "                            % (__name__, os.getcwd() in sys.path or '.' in sys.path,\n"
+        "                               candidate.value)}, fh)\n"
+        "if __name__ == '__main__':\n"
+        "    _run()\n"
+    )
+    domain = script_domain(scorecard=CARD, script=script, capability=detect_local_capability())
+
+    ok, _metrics, error = domain.evaluate("value = 7\n", (0,))
+
+    assert ok, error
+    assert "name=__main__" in error       # the guard fires
+    assert "cand=7" in error              # and the candidate is importable

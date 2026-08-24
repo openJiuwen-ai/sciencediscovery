@@ -185,7 +185,24 @@ export async function stageDataset(input: StageDatasetInput): Promise<StagedData
       const base = resolve(input.directory, criterion.id);
       await mkdir(base, { recursive: true });
       for (const file of criterion.measure.datasetFiles ?? []) {
-        await writeFile(resolve(base, safeStagedName(file.name, criterion)), await input.cas.read(file.cas));
+        // `casHash`, not the raw ref: the store keeps bare hashes and these
+        // arrive with the `sha256:` prefix the proposal layer puts on. Reading
+        // one unstripped fails with "Invalid CAS hash", which reaches the agent
+        // as a probe that could not run — a sentence it can do nothing with.
+        let bytes: Buffer;
+        try {
+          bytes = await input.cas.read(casHash(file.cas));
+        } catch (error) {
+          // The store's own errors are invariants — "Invalid CAS hash", ENOENT —
+          // and say nothing about which of a proposal's files went missing. The
+          // reader is an agent deciding what to change next, and a bare
+          // invariant leaves it nothing to change.
+          throw new DatasetStagingError(
+            `判据「${criterion.name}」的数据文件 ${file.name} 读不出来：${
+              error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        await writeFile(resolve(base, safeStagedName(file.name, criterion)), bytes);
       }
       manifest.criteria[criterion.id] = {
         files: (criterion.measure.datasetFiles ?? []).map((file) => file.name),

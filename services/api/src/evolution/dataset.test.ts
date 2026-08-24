@@ -285,3 +285,84 @@ test("a dataset that is not in the store is named, not swallowed", async () => {
     },
   );
 });
+
+test("a scripted evaluator's files are staged under their own names", async () => {
+  // The ref carries a `sha256:` prefix and the store keys on the bare hash.
+  // Reading one unstripped fails with "Invalid CAS hash", which surfaced to the
+  // agent as "the probe could not run" — a sentence it can do nothing with, on
+  // a proposal that was completely correct.
+  const hash = "b".repeat(64);
+  const directory = await mkdtemp(resolve(tmpdir(), "stage-script-"));
+  try {
+    const staged = await stageDataset({
+      cas: fakeCas({ [hash]: '{"cases": [1, 2, 3]}' }),
+      directory,
+      scorecard: {
+        aggregate: "weighted_sum",
+        constraints: [],
+        criteria: [{
+          direction: "maximize",
+          id: "score",
+          measure: {
+            datasetFiles: [{ cas: `sha256:${hash}`, name: "cases.json" }],
+            kind: "custom_script",
+            scriptCas: "sha256:script",
+            split: SPLIT,
+            timeoutSeconds: 180,
+          },
+          name: "得分",
+          normalize: { kind: "identity" },
+          weight: 1,
+        }],
+        derivedFrom: { draftRunId: "", statement: "" },
+        hash: "sha256:x",
+        schemaVersion: 1,
+        solvedThreshold: 0.999,
+      } as never,
+    });
+
+    assert.equal(staged.staged[0]?.files, 1);
+    // Under the name the evaluator opens, not under a hash.
+    assert.equal(await readFile(resolve(directory, "score", "cases.json"), "utf-8"),
+      '{"cases": [1, 2, 3]}');
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("a staged file name that is not a bare file name is refused", async () => {
+  // The name comes from a field the agent filled in and is joined onto a path
+  // this side owns.
+  const hash = "c".repeat(64);
+  const directory = await mkdtemp(resolve(tmpdir(), "stage-escape-"));
+  try {
+    await assert.rejects(stageDataset({
+      cas: fakeCas({ [hash]: "x" }),
+      directory,
+      scorecard: {
+        aggregate: "weighted_sum",
+        constraints: [],
+        criteria: [{
+          direction: "maximize",
+          id: "score",
+          measure: {
+            datasetFiles: [{ cas: `sha256:${hash}`, name: "../escape.json" }],
+            kind: "custom_script",
+            scriptCas: "sha256:script",
+            split: SPLIT,
+            timeoutSeconds: 180,
+          },
+          name: "得分",
+          normalize: { kind: "identity" },
+          weight: 1,
+        }],
+        derivedFrom: { draftRunId: "", statement: "" },
+        hash: "sha256:x",
+        schemaVersion: 1,
+        solvedThreshold: 0.999,
+      } as never,
+    }), /不是一个纯文件名/);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
