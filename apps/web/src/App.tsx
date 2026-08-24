@@ -26,6 +26,7 @@ import type {
   ArtifactDerivation,
   ArtifactJob,
   ArtifactPlan,
+  EvolveRun,
   ArtifactAnnotation,
   ArtifactReviewRun,
   ChatMessage,
@@ -189,6 +190,8 @@ import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphS
 import { EvidenceModal } from "./EvidenceModal.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
 import { MemoryGraphView } from "./MemoryGraphView.js";
+import { EvolvePanel } from "./evolve/EvolvePanel.js";
+import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ReviewerPanel } from "./ReviewerPanel.js";
@@ -991,6 +994,16 @@ export function App() {
   const [sessionUsage, setSessionUsage] = useState<SessionUsageSummary>();
   const [globalUsage, setGlobalUsage] = useState<GlobalModelUsageSummary>();
   const [workspaceView, setWorkspaceView] = useState<"session" | "usage">(() => initialView.view === "usage" ? "usage" : "session");
+  // `/evolve` runs for the active session, plus which one the panel shows. The
+  // card is the only persistent handle a search has (the command never creates
+  // a chat run), so the list is kept even when the panel is closed.
+  const [evolveRuns, setEvolveRuns] = useState<EvolveRun[]>([]);
+  const [openEvolveRunId, setOpenEvolveRunId] = useState<string>();
+  /** The sentence a `/evolve` command carried, while its wizard is open. */
+  const [evolveRefreshKey, setEvolveRefreshKey] = useState(0);
+
+
+
   // A graph node a report chip asked to open; MemoryGraphView selects it on
   // change, then clears the pending state. Set by handleChipClick (paper chips).
   const [pendingMemoryNode, setPendingMemoryNode] = useState<{ label: MemoryGraphNodeLabel; id: string } | undefined>();
@@ -1149,6 +1162,25 @@ export function App() {
     setShowConfig(true);
   }, [token]);
   const client = useMemo(() => new ApiClient(token, promptForToken), [promptForToken, token]);
+
+  // Derived rather than stored: the panel must show the *current* record, so a
+  // status that changed while it was open (a budget gate, a stop) is reflected
+  // without the panel holding its own stale copy.
+  const openEvolveRun = evolveRuns.find((run) => run.id === openEvolveRunId);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      setEvolveRuns([]);
+      return;
+    }
+    let live = true;
+    void client.listEvolveRuns(activeSessionId)
+      .then((runs) => { if (live) setEvolveRuns(runs); })
+      // A session with no runs is the common case and 404s nothing; a failure
+      // here must not take the workspace panel down with it.
+      .catch(() => { if (live) setEvolveRuns([]); });
+    return () => { live = false; };
+  }, [activeSessionId, client, evolveRefreshKey]);
   const loadMarkdownImage = useCallback(async (path: string, signal: AbortSignal): Promise<Blob> => {
     const sessionId = session?.id;
     if (!sessionId) throw new Error("No active Session is available for this image");
@@ -2798,6 +2830,17 @@ export function App() {
       setSubagents((current) => [...current.filter((item) => item.id !== streamEvent.subagent.id), streamEvent.subagent]
         .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)));
     }
+    if (streamEvent.type === "evolve_run.created") {
+      // Into the same list the workspace card reads, so a search the agent
+      // started mid-conversation is reachable the same way as any other. It is
+      // not opened for the user: they asked a question and got an answer that
+      // happens to include a running search, and hijacking the screen for it
+      // would interrupt the conversation they are still having.
+      setEvolveRuns((current) => [
+        streamEvent.run,
+        ...current.filter((item) => item.id !== streamEvent.run.id),
+      ]);
+    }
     if (streamEvent.type === "remote_job.proposed") {
       setRemoteJobs((current) => [...current.filter((item) => item.id !== streamEvent.job.id), streamEvent.job]
         .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)));
@@ -4003,6 +4046,8 @@ export function App() {
 
             {session ? <MemoryGraphView client={client} onError={reportError} refreshKey={`exec:${executionRuns.length}:msg:${session.messages.length}:plans:${plans.length}:mg:${memoryGraphSettings ? `${memoryGraphSettings.enabled ? 1 : 0}:${memoryGraphSettings.memoryGraphStatus}` : "none"}`} sessionId={session.id} /> : null}
 
+            {session ? <EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /> : null}
+
             {session ? <ReviewerControlCard
               busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning}
               disabled={sessionArchived}
@@ -4105,6 +4150,17 @@ export function App() {
             setArtifactModalVersion(undefined);
             setArtifactModalSessionId(undefined);
           }}
+          onEvolve={(seed) => {
+            // Into the composer, not into a form. The agent designs the run in
+            // conversation — it can read this artifact, ask what "better" means
+            // here, and *run* its own scoring before spending a budget — so the
+            // only thing this button owes the user is a sentence pointing at
+            // the thing they were looking at. Left unsent on purpose: what
+            // "better" means is the one question only they can answer.
+            setArtifactModalName(undefined);
+            setArtifactModalVersion(undefined);
+            setMessage(`/evolve 把产物 ${seed.label} 做得更好：`);
+          }}
           onMissing={closeMissingArtifact}
           onNavigateArtifact={(name) => {
             // Navigating to a different artifact via a parent link: that
@@ -4118,6 +4174,16 @@ export function App() {
           onPendingAnnotation={addPendingAnnotation}
           sessionId={activeSessionId}
           artifactSessionId={artifactModalSessionId}
+        />
+      ) : null}
+
+      {openEvolveRun ? (
+        <EvolvePanel
+          client={client}
+          onClose={() => setOpenEvolveRunId(undefined)}
+          onError={reportError}
+          onRunChanged={() => setEvolveRefreshKey((value) => value + 1)}
+          run={openEvolveRun}
         />
       ) : null}
 

@@ -24,6 +24,7 @@
 @import "./styles/workspace.css";
 @import "./styles/artifacts.css";
 @import "./styles/memory-graph.css";
+@import "./styles/evolve.css";
 @import "./styles/dialogs.css";
 @import "./styles/settings.css";
 @import "./styles/usage.css";

@@ -46,6 +46,11 @@ export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
   Claim: "#c0b08a",        // warm beige
   Code: "#bf9aa8",         // dusty rose
   Artifact: "#9aab85",     // muted moss
+  // /evolve search graph. SearchNode/SearchCell are excluded from the session
+  // subgraph, so these only render inside the search view itself.
+  SearchRun: "#c0a98a",    // muted ochre
+  SearchNode: "#bfb08f",   // pale straw
+  SearchCell: "#ab9c7e",   // dusty gold
 };
 
 /**
@@ -63,6 +68,12 @@ export const EDGE_COLORS: Record<MemoryGraphEdgeType, string> = {
   stated_in: "#94a3b8",
   supersedes: "#94a3b8",
   input: "#94a3b8",
+  searches: "#94a3b8",
+  root: "#94a3b8",
+  expands: "#94a3b8",
+  inspires: "#94a3b8",
+  elected: "#94a3b8",
+  occupies: "#94a3b8",
 };
 
 /** Lighter slate used when the canvas is zoomed out, so edges recede. */
@@ -80,6 +91,9 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
     : node.label === "SubTask" ? pick("task_type") ?? pick("task_id")
     : node.label === "Paper" ? pick("title") ?? pick("link")
     : node.label === "ResearchGoal" ? pick("core_objective") ?? pick("goal_id")
+    : node.label === "SearchRun" ? pick("algorithm") ?? pick("search_id")
+    : node.label === "SearchNode" ? `#${String(extra.node_index ?? "?")}`
+    : node.label === "SearchCell" ? `i${String(extra.island ?? "?")} (${String(extra.complexity_bin ?? "?")},${String(extra.diversity_bin ?? "?")})`
     : pick("title") ?? pick("name");
   const resolved = name ?? node.id;
   // Long paths/URLs read better from the tail (basename) than the head.

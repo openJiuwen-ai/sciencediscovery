@@ -1,0 +1,903 @@
+{
+  "note": "Generated from the TypeScript implementation; both sides assert against it. See services/evolve/src/sciencediscovery_evolve/scorecard.py.",
+  "cases": [
+    {
+      "name": "identity, single criterion",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "maximize",
+            "id": "f1",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "f1": 0.62
+      },
+      "baseline": {
+        "f1": 0.5
+      },
+      "expected": {
+        "reward": 0.62,
+        "criteria": {
+          "f1": 0.62
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "weights are fractions of their sum",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "maximize",
+            "id": "a",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 3
+          },
+          {
+            "direction": "maximize",
+            "id": "b",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "a": 1,
+        "b": 0
+      },
+      "baseline": {
+        "a": 0.5,
+        "b": 0.5
+      },
+      "expected": {
+        "reward": 0.75,
+        "criteria": {
+          "a": 1,
+          "b": 0
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "reciprocal turns a minimised quantity around",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "minimize",
+            "id": "rmse",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "reciprocal"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "rmse": 0.59
+      },
+      "baseline": {
+        "rmse": 0.73
+      },
+      "expected": {
+        "reward": 0.628930817610063,
+        "criteria": {
+          "rmse": 0.628930817610063
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "relative to baseline",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "minimize",
+            "id": "runtime",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "relative_to_baseline"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "runtime": 400
+      },
+      "baseline": {
+        "runtime": 200
+      },
+      "expected": {
+        "reward": 0.3333333333333333,
+        "criteria": {
+          "runtime": 0.3333333333333333
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "clamp, minimised",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "minimize",
+            "id": "mem",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "clamp",
+              "lo": 0,
+              "hi": 10
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "mem": 2
+      },
+      "baseline": {
+        "mem": 5
+      },
+      "expected": {
+        "reward": 0.8,
+        "criteria": {
+          "mem": 0.8
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "geometric mean is dragged to zero by a weak dimension",
+      "scorecard": {
+        "aggregate": "weighted_geomean",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "maximize",
+            "id": "a",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 0.9
+          },
+          {
+            "direction": "maximize",
+            "id": "b",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 0.1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "a": 0.9,
+        "b": 0
+      },
+      "baseline": {
+        "a": 0.5,
+        "b": 0.5
+      },
+      "expected": {
+        "reward": 0,
+        "criteria": {
+          "a": 0.9,
+          "b": 0
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "a violating candidate keeps its score",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [
+          {
+            "criterionId": "runtime",
+            "id": "too-slow",
+            "name": "太慢",
+            "op": "<",
+            "value": 300
+          }
+        ],
+        "criteria": [
+          {
+            "direction": "maximize",
+            "id": "f1",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 0.7
+          },
+          {
+            "direction": "minimize",
+            "id": "runtime",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "relative_to_baseline"
+            },
+            "weight": 0.3
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "f1": 0.83,
+        "runtime": 412
+      },
+      "baseline": {
+        "f1": 0.6,
+        "runtime": 200
+      },
+      "expected": {
+        "reward": 0.6790392156862745,
+        "criteria": {
+          "f1": 0.83,
+          "runtime": 0.32679738562091504
+        },
+        "violations": [
+          "too-slow"
+        ]
+      }
+    },
+    {
+      "name": "a constraint relative to the baseline",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [
+          {
+            "criterionId": "rare",
+            "id": "no-sacrifice",
+            "name": "牺牲稀有类",
+            "op": ">=",
+            "value": {
+              "relativeToBaseline": 0.8
+            }
+          }
+        ],
+        "criteria": [
+          {
+            "direction": "maximize",
+            "id": "rare",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "rare": 0.32
+      },
+      "baseline": {
+        "rare": 0.5
+      },
+      "expected": {
+        "reward": 0.32,
+        "criteria": {
+          "rare": 0.32
+        },
+        "violations": [
+          "no-sacrifice"
+        ]
+      }
+    },
+    {
+      "name": "an unmeasured criterion neither violates nor scores",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [
+          {
+            "criterionId": "runtime",
+            "id": "too-slow",
+            "name": "太慢",
+            "op": "<",
+            "value": 300
+          }
+        ],
+        "criteria": [
+          {
+            "direction": "maximize",
+            "id": "f1",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 1
+          },
+          {
+            "direction": "maximize",
+            "id": "runtime",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "f1": 0.7
+      },
+      "baseline": {
+        "f1": 0.5
+      },
+      "expected": {
+        "reward": 0.35,
+        "criteria": {
+          "f1": 0.7,
+          "runtime": 0
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "out-of-range and junk input clamp rather than escape",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "maximize",
+            "id": "a",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 1
+          },
+          {
+            "direction": "maximize",
+            "id": "b",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "identity"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "a": 4,
+        "b": -1
+      },
+      "baseline": {
+        "a": 0.5,
+        "b": 0.5
+      },
+      "expected": {
+        "reward": 0.5,
+        "criteria": {
+          "a": 1,
+          "b": 0
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "relative to baseline, candidate matches it",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "minimize",
+            "id": "runtime",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "relative_to_baseline"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "runtime": 200
+      },
+      "baseline": {
+        "runtime": 200
+      },
+      "expected": {
+        "reward": 0.5,
+        "criteria": {
+          "runtime": 0.5
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "relative to baseline, candidate is twice as good",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "minimize",
+            "id": "runtime",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "relative_to_baseline"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "runtime": 100
+      },
+      "baseline": {
+        "runtime": 200
+      },
+      "expected": {
+        "reward": 0.6666666666666666,
+        "criteria": {
+          "runtime": 0.6666666666666666
+        },
+        "violations": []
+      }
+    },
+    {
+      "name": "relative to baseline, candidate is ten times as good",
+      "scorecard": {
+        "aggregate": "weighted_sum",
+        "confirmedAt": "",
+        "confirmedBy": "",
+        "constraints": [],
+        "criteria": [
+          {
+            "direction": "minimize",
+            "id": "runtime",
+            "name": "f1",
+            "measure": {
+              "kind": "dataset_metric",
+              "datasetCas": [],
+              "metric": {
+                "direction": "maximize",
+                "name": "f1"
+              },
+              "split": {
+                "gateShards": 4,
+                "rolloutShards": 4,
+                "seed": 0,
+                "shardRows": 10,
+                "testShards": 4,
+                "trainRows": null
+              }
+            },
+            "normalize": {
+              "kind": "relative_to_baseline"
+            },
+            "weight": 1
+          }
+        ],
+        "derivedFrom": {
+          "draftRunId": "",
+          "statement": ""
+        },
+        "hash": "sha256:c",
+        "schemaVersion": 1,
+        "solvedThreshold": 0.999
+      },
+      "raw": {
+        "runtime": 20
+      },
+      "baseline": {
+        "runtime": 200
+      },
+      "expected": {
+        "reward": 0.9090909090909091,
+        "criteria": {
+          "runtime": 0.9090909090909091
+        },
+        "violations": []
+      }
+    }
+  ]
+}

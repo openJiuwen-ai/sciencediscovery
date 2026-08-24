@@ -624,6 +624,7 @@ async function startHttpFixture<T>(
       maxWorkspaceBytes: 10_737_418_240,
     },
     memoryGraph: { url: "http://127.0.0.1:17674", internalToken: "test" },
+    evolve: { url: "http://127.0.0.1:4313", internalToken: "test" },
   };
   const server = createApiServer(config);
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));

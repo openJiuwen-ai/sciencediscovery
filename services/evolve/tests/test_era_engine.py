@@ -1,0 +1,630 @@
+# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""The ERA search, with the model and the measurement substituted.
+
+Everything between them is the shipping path and is not mocked: `EraTree`,
+`EraStrategy`, `EraTreeAggregator`, a real `Ledger` (a real git repo), and
+`evolve` / `async_evolve` themselves. What these tests are for is the contract
+the rest of the system reads — which events come out, in what order, carrying
+what — and that it survives being driven by the framework rather than by a loop
+of ours.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+import pytest
+
+from sciencediscovery_evolve.completion import CompletionUsage
+from sciencediscovery_evolve.engine import RunSpec
+from sciencediscovery_evolve.era_engine import EraEngine
+from sciencediscovery_evolve.vendor.era.domain import Domain
+from sciencediscovery_evolve.vendor.era.program import Program
+from sciencediscovery_evolve.vendor.era.sandbox import SandboxCapability
+
+BASELINE = '''"""基线。"""
+
+
+def train_and_predict(train_path, test_path):
+    return [0.0]
+'''
+
+CANDIDATE = '''```python
+"""换成梯度提升。"""
+
+
+def train_and_predict(train_path, test_path):
+    return [1.0]
+```'''
+
+SCORECARD: Dict[str, Any] = {
+    "aggregate": "weighted_sum",
+    "constraints": [],
+    "criteria": [{
+        "direction": "maximize", "id": "acc", "name": "准确率",
+        "measure": {
+            "datasetCas": ["sha256:d"], "kind": "dataset_metric",
+            "metric": {"direction": "maximize", "name": "accuracy"},
+            "split": {"gateShards": 4, "rolloutShards": 4, "seed": 0,
+                      "shardRows": 4, "testShards": 2, "trainRows": None},
+            "target": "y",
+        },
+        "normalize": {"kind": "identity"}, "weight": 1.0,
+    }],
+    "hash": "sha256:card", "schemaVersion": 1, "solvedThreshold": 0.999,
+}
+
+
+def spec(**overrides: Any) -> RunSpec:
+    base: Dict[str, Any] = {
+        "algorithm": "era", "expansions": 2, "scorecard": SCORECARD,
+        "scorecard_hash": "sha256:card", "search_id": "run-1",
+        "statement": "把准确率做上去", "dataset_dir": "/staged",
+        "baseline_code": BASELINE, "workers": 1,
+        "llm_url": "http://127.0.0.1:4310/x", "llm_token": "run-token",
+        "sandbox": SandboxCapability(backend="seatbelt"),
+        "options": {"mode": "serial"},
+    }
+    base.update(overrides)
+    return RunSpec(**base)
+
+
+class Harness:
+    """A fake model and a fake measurement; everything between them is real."""
+
+    def __init__(
+        self,
+        replies: Optional[List[str]] = None,
+        scores: Optional[List[float]] = None,
+        *,
+        capped: bool = False,
+        completion_tokens: int = 300,
+        violate_from: Optional[int] = None,
+        test_shards: Tuple[int, ...] = (8, 9),
+    ) -> None:
+        self.replies = replies if replies is not None else [CANDIDATE] * 12
+        self.scores = scores or [0.4, 0.6, 0.7, 0.8, 0.9]
+        self.capped = capped
+        self.completion_tokens = completion_tokens
+        self.violate_from = violate_from
+        self.test_shards = test_shards
+        self.prompts: List[str] = []
+        self.events: List[Dict[str, Any]] = []
+        self.evaluated: List[Tuple[str, Tuple[int, ...]]] = []
+        self._reply = 0
+        self._score = 0
+        #: Set to make the injected model report that the call never returned,
+        #: as opposed to returning an empty string.
+        self.call_failure = ""
+        #: Whether this domain scores an empty candidate as an ordinary zero,
+        #: the way three of the four real ones do.
+        self.scores_empty_as_zero = False
+
+    # -- injected model --------------------------------------------------------
+    def completion_factory(self, run_spec: RunSpec, on_usage: Any, should_stop: Any):
+        def complete(
+            prompt: str,
+            sink: Optional[Callable[[CompletionUsage], None]] = None,
+            on_failure: Any = None,
+        ) -> str:
+            self.prompts.append(prompt)
+            reply = self.replies[min(self._reply, len(self.replies) - 1)]
+            self._reply += 1
+            if sink is not None:
+                sink(CompletionUsage(total=1_000, completion=self.completion_tokens,
+                                     capped=self.capped))
+            if self.call_failure and on_failure is not None:
+                on_failure(self.call_failure)
+            return reply
+        return complete
+
+    # -- injected measurement --------------------------------------------------
+    def domain_factory(self, **_kwargs: Any) -> Domain:
+        def evaluate(code: str, shards: Sequence[int]) -> Tuple[bool, Dict[str, Any], str]:
+            self.evaluated.append((code, tuple(shards)))
+            if not code.strip():
+                if self.scores_empty_as_zero:
+                    # What the judged, gated and scripted domains all do: an
+                    # empty candidate is a blank page to mark, an emptied
+                    # entrypoint to test, a module with nothing in it to import.
+                    # Each of them comes back a perfectly ordinary zero.
+                    return True, {"acc": 0.0, "score": 0.0, "seconds": 0.1}, ""
+                # And what the measured domain does, only because its AST gate
+                # happens to refuse an empty source.
+                return False, {"score": float("-inf")}, "gate: empty source"
+            if "0.0" in code and "1.0" not in code:      # the baseline
+                return True, {"acc": 0.3, "score": 0.3, "seconds": 1.0}, ""
+            index = self._score
+            self._score += 1
+            value = self.scores[min(index, len(self.scores) - 1)]
+            if value < 0:
+                return False, {"score": float("-inf")}, "候选执行失败：ZeroDivisionError"
+            if self.violate_from is not None and index >= self.violate_from:
+                return False, {"acc": value, "score": float("-inf"), "violated": "too-slow"}, \
+                    "训练时长 412s 超过否决项上限 300s"
+            return True, {"acc": value, "score": value, "seconds": 1.0}, ""
+
+        return Domain(
+            name="test", entrypoint="train_and_predict", metric_key="acc",
+            metric_better="higher", initial_program=BASELINE, initial_summary="基线程序",
+            evaluate=evaluate,
+            reward=lambda metrics: max(0.0, min(1.0, float(metrics.get("score") or 0.0))),
+            prompt=lambda program: f"改进这个程序：{program.change_summary}",
+            task_prompt=lambda shard: f"分片 {shard}",
+            test_shards=self.test_shards,
+        )
+
+    def run(self, run_spec: Optional[RunSpec] = None,
+            stop: Callable[[], bool] = lambda: False) -> List[Dict[str, Any]]:
+        engine = EraEngine(
+            completion_factory=self.completion_factory,
+            domain_factory=self.domain_factory,
+            store_root=Path(self._store),
+        )
+        engine.run(run_spec or spec(), self.events.append, stop)
+        return self.events
+
+    _store = "/tmp"
+
+    def of(self, kind: str) -> List[Dict[str, Any]]:
+        return [event for event in self.events if event["type"] == kind]
+
+    def types(self) -> List[str]:
+        return [event["type"] for event in self.events]
+
+
+@pytest.fixture(autouse=True)
+def staged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The dataset and the candidate runtime are other files' contracts."""
+    from sciencediscovery_evolve import era_engine
+    from sciencediscovery_evolve.measurement import CriterionPlan, Dataset, Shard
+
+    shards = tuple(
+        Shard(index=index, role=role, train=tmp_path / "t.csv",
+              test=tmp_path / "x.csv", truth=(1.0,))
+        for index, role in [(0, "rollout"), (1, "rollout"), (2, "rollout"), (3, "rollout"),
+                            (4, "gate"), (5, "gate"), (6, "gate"), (7, "gate"),
+                            (8, "test"), (9, "test")]
+    )
+    dataset = Dataset((CriterionPlan("acc", "accuracy", shards),))
+    monkeypatch.setattr(era_engine, "load_dataset", lambda root, card: dataset)
+    monkeypatch.setattr(era_engine, "missing_candidate_runtime", lambda: [])
+    Harness._store = str(tmp_path / "candidates")
+
+
+# --- The event sequence -------------------------------------------------------
+
+
+def test_a_search_emits_the_sequence_the_rest_of_the_system_reads() -> None:
+    harness = Harness()
+    harness.run(spec(expansions=2))
+
+    kinds = harness.types()
+    assert kinds[0] == "search_started"
+    assert "seeded" in kinds
+    assert kinds[-1] == "search_finished"
+    assert len(harness.of("expanded")) == 2
+    # One selection per expansion: a search that emits two nodes for one
+    # selection has a tree the graph cannot draw.
+    assert len(harness.of("selected")) == len(harness.of("expanded"))
+    assert harness.of("search_finished")[0]["status"] == "succeeded"
+
+
+def test_the_held_out_shards_are_the_scorecard_s_gate_shards() -> None:
+    # The engine splits its task list by *position*, so ordering rollout before
+    # gate is what makes its held-out set exactly the gate shards rather than an
+    # arbitrary fraction. Getting this wrong would score every node on shards
+    # the search had already optimised against, silently.
+    harness = Harness()
+    harness.run(spec(expansions=1))
+
+    scored = [shards for _, shards in harness.evaluated if len(shards) > 1]
+    assert scored, "nodes are scored on a shard set, not one shard at a time"
+    assert all(set(shards) == {4, 5, 6, 7} for shards in scored[:-1]), scored
+
+
+def test_the_winner_is_measured_once_on_shards_that_took_no_part() -> None:
+    harness = Harness(test_shards=(8, 9))
+    harness.run(spec(expansions=1))
+
+    assert harness.evaluated[-1][1] == (8, 9)
+    # The only number in the run the search never optimised against.
+    assert harness.of("search_finished")[0]["bestTestScore"] is not None
+
+
+# --- What a node's fate means under ERA ---------------------------------------
+
+
+def test_becoming_the_best_is_what_acceptance_means_here() -> None:
+    # There is no per-candidate statistical gate in ERA: every candidate becomes
+    # a node, the tree's rank ordering is the selection pressure, and the ledger
+    # publishes the best. So "accepted" is "this node became the best".
+    harness = Harness(scores=[0.9, 0.5])
+    harness.run(spec(expansions=2))
+
+    merged = harness.of("merged")
+    assert merged[0]["accepted"] is True
+    assert merged[1]["accepted"] is False
+    assert merged[1]["category"] == "below-threshold"
+
+
+def test_a_failed_candidate_still_enters_the_tree() -> None:
+    harness = Harness(scores=[-1.0, 0.7])
+    harness.run(spec(expansions=2))
+
+    expanded = harness.of("expanded")
+    # Upstream scores a failure -inf and appends it anyway: dropping it would
+    # change the rank denominator and the prior on every later iteration.
+    assert expanded[0]["valid"] is False
+    assert expanded[0]["score"] is None
+    assert len(expanded) == 2
+    assert harness.of("merged")[0]["category"] == "candidate-failed"
+
+
+def test_a_constraint_violation_is_a_refusal_that_names_the_constraint() -> None:
+    # A veto is a wall, not a cost: the candidate scored well and is refused
+    # anyway. Under ERA that has to look like a failed node — `-inf` keeps it out
+    # of `best()` the same way a crash does — but it stays distinguishable.
+    harness = Harness(violate_from=0)
+    harness.run(spec(expansions=1))
+
+    merged = harness.of("merged")[0]
+    assert merged["accepted"] is False
+    assert merged["category"] == "constraint-violated"
+    assert merged["rejectedBy"] == "too-slow"
+
+
+def test_an_empty_reply_cut_off_by_the_thinking_budget_says_so() -> None:
+    harness = Harness(replies=[""], capped=True, completion_tokens=16_001)
+    harness.run(spec(expansions=1, max_tokens_per_call=16_000))
+
+    error = harness.of("expanded")[0]["error"]
+    assert "16001" in error and "思考" in error
+
+
+def test_a_call_that_never_returned_is_not_reported_as_an_empty_reply() -> None:
+    # Measured on a real endpoint: a thinking-enabled whole-program rewrite ran
+    # 900 seconds without the provider sending a response header, the proxy's
+    # ceiling cut it off, and the search recorded "模型返回了空回复" — which
+    # sends the reader looking for output that was never produced. The two need
+    # opposite fixes: one is the provider or the ceiling, one is the prompt.
+    harness = Harness(replies=[""])
+    harness.call_failure = "fetch failed"
+    harness.run(spec(expansions=1))
+
+    error = harness.of("expanded")[0]["error"]
+    assert "没有返回" in error and "fetch failed" in error
+
+
+def test_a_thinking_cutoff_is_not_overwritten_by_the_generic_empty_reply() -> None:
+    # The capped-thinking explanation is the more specific one and arrives
+    # second; the generic note must not clobber it, and neither must it clobber
+    # a call that failed outright.
+    harness = Harness(replies=[""], capped=True, completion_tokens=16_001)
+    harness.run(spec(expansions=1, max_tokens_per_call=16_000))
+
+    assert "思考" in harness.of("expanded")[0]["error"]
+
+
+def test_an_empty_reply_is_an_invalid_node_not_a_node_that_scored_zero() -> None:
+    """A model call that returned nothing produced no program.
+
+    Three of the four scoring modes would score that as an ordinary zero — the
+    judge marks a blank page, the suite fails against an emptied entrypoint, the
+    drafted evaluator imports a module with nothing in it — and a zero-scoring
+    valid node is the search claiming it tried this direction and it was
+    worthless. It tried nothing, and the tree would rank accordingly.
+    """
+    harness = Harness(replies=[""])
+    # A domain that would happily score the blank page, like three of the four
+    # real ones. The guard has to be above the domain, or each of them needs its
+    # own copy of it and one will be forgotten.
+    harness.scores_empty_as_zero = True
+    harness.run(spec(expansions=1))
+
+    expanded = harness.of("expanded")[0]
+    assert expanded["valid"] is False
+    assert expanded["score"] is None
+
+
+def test_a_run_whose_scores_never_moved_says_so_out_loud() -> None:
+    """Watched live: nine candidates, every score 0.6666667, "succeeded".
+
+    The mutation prompt was describing a different contract than the evaluator
+    was calling, so no edit ever touched the thing being measured — and nothing
+    in the run said so. A flat score set is a scoring problem, and it has to be
+    named before the status line frames the run as an achievement.
+    """
+    harness = Harness(replies=["```python\ndef train_and_predict(a, b):\n    return [0.5]\n```"] * 4,
+                      scores=[0.3, 0.3, 0.3, 0.3])
+    harness.run(spec(expansions=4))
+
+    message = " ".join(event.get("message", "") for event in harness.of("log"))
+    assert "分数全都一样" in message
+
+
+def test_a_run_whose_scores_did_move_is_not_nagged(): 
+    harness = Harness(replies=["```python\ndef train_and_predict(a, b):\n    return [0.5]\n```"] * 4,
+                      scores=[0.3, 0.5, 0.6, 0.7])
+    harness.run(spec(expansions=4))
+
+    message = " ".join(event.get("message", "") for event in harness.of("log"))
+    assert "分数全都一样" not in message
+
+
+def test_a_search_in_which_nothing_ran_is_a_failure_not_a_success() -> None:
+    harness = Harness(replies=[""])
+    harness.run(spec(expansions=2))
+
+    assert harness.of("search_finished")[0]["status"] == "failed"
+    message = " ".join(event.get("message", "") for event in harness.of("log"))
+    assert "没有一个候选跑起来" in message
+
+
+# --- Refusals -----------------------------------------------------------------
+
+
+def test_a_resumed_search_is_refused_rather_than_renumbering_nodes() -> None:
+    harness = Harness()
+    harness.run(spec(resume_from_sequence=42))
+
+    assert harness.of("search_finished")[0]["status"] == "failed"
+    assert harness.of("search_started") == []
+    assert any("续跑" in event.get("message", "") for event in harness.of("log"))
+
+
+def test_a_search_without_a_scorecard_is_refused() -> None:
+    harness = Harness()
+    harness.run(spec(scorecard={}))
+    assert harness.of("search_finished")[0]["status"] == "failed"
+
+
+def test_a_normalisation_this_side_does_not_implement_refuses_the_run() -> None:
+    carded = json.loads(json.dumps(SCORECARD))
+    carded["criteria"][0]["normalize"] = {"kind": "linear"}
+    harness = Harness()
+    harness.run(spec(scorecard=carded))
+
+    assert harness.of("search_finished")[0]["status"] == "failed"
+    assert any("linear" in event.get("message", "") for event in harness.of("log"))
+
+
+# --- Counters -----------------------------------------------------------------
+
+
+def test_visits_are_absolute_and_backpropagate_to_the_root() -> None:
+    harness = Harness()
+    harness.run(spec(expansions=3))
+
+    for event in harness.of("selected"):
+        assert event["ancestorVisits"][-1]["nodeIndex"] == 0, "the chain must reach the root"
+    root = [event["ancestorVisits"][-1]["visits"] for event in harness.of("selected")]
+    # Absolute counters, monotonically rising — a replayed delta double-counts.
+    assert root == sorted(root)
+
+
+def test_cost_reports_absolute_tokens_and_leaves_price_to_the_control_plane() -> None:
+    harness = Harness()
+    harness.run(spec(expansions=2))
+
+    tokens = [event["tokens"] for event in harness.of("cost")]
+    assert tokens == sorted(tokens)
+    assert tokens[-1] == 2_000
+    # No price table exists anywhere in this system; a fabricated cents figure
+    # would be shown to the user as fact.
+    assert all(event["cents"] == 0 for event in harness.of("cost"))
+
+
+# --- What the framework buys ---------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["serial", "sync", "async"])
+def test_every_mode_runs_the_same_search(mode: str) -> None:
+    """`serial`, `sync` and `async` are one set of plug-ins under three drivers.
+
+    Upstream runs all three to show the parallel ones are the same search rather
+    than a different one that happens to be faster. Here it also means a real
+    engine can be driven single-threaded for a reproduction, without falling
+    back to the stub.
+    """
+    harness = Harness(scores=[0.5, 0.6, 0.7, 0.8])
+    harness.run(spec(expansions=2, workers=2, options={"mode": mode}))
+
+    assert harness.of("search_finished")[0]["status"] == "succeeded"
+    assert len(harness.of("expanded")) == 2
+    # Every node hangs off a parent that exists, whichever driver produced it.
+    indices = {event["nodeIndex"] for event in harness.of("expanded")} | {0}
+    for event in harness.of("expanded"):
+        assert event["parentIndex"] in indices
+
+
+def test_parallel_workers_do_not_collide_on_sequence_or_parent() -> None:
+    # The tree reserves a visit at *selection* — upstream's virtual loss — so N
+    # workers in flight get different parents rather than all being handed the
+    # root. Without it `argmax(puct)` is deterministic and a wave is N copies of
+    # one expansion.
+    harness = Harness(scores=[0.5, 0.6, 0.7, 0.8, 0.9, 0.95])
+    harness.run(spec(expansions=4, workers=2, options={"mode": "async"}))
+
+    expanded = harness.of("expanded")
+    assert len(expanded) == 4
+    # Node indices are assigned by one thread (the merger), so they are unique
+    # and contiguous however many workers produced them.
+    assert sorted(event["nodeIndex"] for event in expanded) == [1, 2, 3, 4]
+    # Root visits only ever rise, and every selection reserved one.
+    root = [event["ancestorVisits"][-1]["visits"] for event in harness.of("selected")]
+    assert root == sorted(root)
+    assert len(set(root)) == len(root), "two selections must not report the same count"
+
+
+# --- the judged mode, through the whole engine -----------------------------------
+
+JUDGED_CARD: Dict[str, Any] = {
+    "aggregate": "weighted_sum",
+    "constraints": [],
+    "criteria": [{
+        "direction": "maximize", "id": "quality", "name": "质量",
+        "measure": {
+            "blind": True, "judgeModelId": "judge-1", "kind": "llm_judge",
+            "rubricCas": "sha256:r", "samplesPerCandidate": 1,
+            "scale": {"max": 9, "min": 0},
+            "split": {"gateShards": 4, "rolloutShards": 4, "seed": 0,
+                      "shardRows": 1, "testShards": 0, "trainRows": None},
+            "varianceThreshold": 0.3,
+        },
+        "normalize": {"kind": "identity"}, "weight": 1.0,
+    }],
+    "hash": "sha256:judge", "schemaVersion": 1, "solvedThreshold": 0.85,
+}
+
+
+class JudgeHarness(Harness):
+    """The real judge domain, with only the two model calls faked.
+
+    Deliberately *not* injecting the domain: the bug this covers was that the
+    domain worked and the wiring around it did not — a judged run has no staged
+    dataset, so the task list has to come from the scorecard instead, and
+    nothing that stubbed the domain would have noticed.
+    """
+
+    def __init__(self, marks: List[float], replies: Optional[List[str]] = None) -> None:
+        super().__init__(replies=replies or ["改得更具体。\n\n```\n新的摘要正文\n```"] * 12)
+        self.marks = marks
+        self._mark = 0
+        self.judge_prompts: List[str] = []
+
+    def completion_factory(self, run_spec: RunSpec, on_usage: Any, should_stop: Any):
+        def complete(prompt: str, sink: Any = None, on_failure: Any = None) -> str:
+            # Both prompts carry the rubric — the mutator should know what it
+            # is aiming at — so the grader is told apart by its own opening.
+            if prompt.startswith("按下面这份评分细则给这段内容打分"):
+                self.judge_prompts.append(prompt)
+                mark = self.marks[min(self._mark, len(self.marks) - 1)]
+                self._mark += 1
+                return str(mark)
+            self.prompts.append(prompt)
+            reply = self.replies[min(self._reply, len(self.replies) - 1)]
+            self._reply += 1
+            if sink is not None:
+                sink(CompletionUsage(total=1_000, completion=300, capped=False))
+            return reply
+        return complete
+
+
+def judged_spec(**overrides: Any) -> RunSpec:
+    base: Dict[str, Any] = {
+        "scorecard": JUDGED_CARD,
+        "rubric": "结论是否在开头（0-3）；论证是否有据（0-3）；有无冗余（0-3）",
+        "baseline_code": "这是一段很空洞的初稿。",
+        "judge_url": "http://127.0.0.1:4310/x",
+        "judge_token": "judge-token",
+        "dataset_dir": "",
+    }
+    base.update(overrides)
+    return spec(**base)
+
+
+def test_a_judged_search_runs_without_a_dataset() -> None:
+    # The mode exists for searches that have none. The task list has to come
+    # from the scorecard's shard counts instead of from staged shards.
+    harness = JudgeHarness(marks=[3, 3, 3, 3, 7, 7, 7, 7, 7, 7, 7, 7])
+    harness.run(judged_spec(expansions=1))
+
+    assert harness.of("search_finished")[0]["status"] == "succeeded", \
+        " ".join(event.get("message", "") for event in harness.of("log"))
+    assert len(harness.of("expanded")) == 1
+    assert harness.of("expanded")[0]["valid"] is True
+
+
+def test_more_gradings_are_asked_for_when_the_card_asks_for_more() -> None:
+    # The shard counts are the only place a judged search says how many
+    # independent gradings it wants, so they have to reach the judge.
+    lean = JudgeHarness(marks=[5] * 60)
+    lean.run(judged_spec(expansions=1))
+    assert lean.judge_prompts, "the judge was never called"
+
+    thorough_card = json.loads(json.dumps(JUDGED_CARD))
+    thorough_card["criteria"][0]["measure"]["split"]["gateShards"] = 8
+    thorough = JudgeHarness(marks=[5] * 60)
+    thorough.run(judged_spec(expansions=1, scorecard=thorough_card))
+
+    assert len(thorough.judge_prompts) > len(lean.judge_prompts)
+
+
+def test_the_judge_never_sees_which_candidate_it_is_marking() -> None:
+    harness = JudgeHarness(marks=[6] * 40)
+    harness.run(judged_spec(expansions=2))
+
+    for prompt in harness.judge_prompts:
+        for leak in ("nodeIndex", "父节点", "迭代", "上一版", "#1", "#2"):
+            assert leak not in prompt, leak
+
+
+def test_a_judged_run_without_a_rubric_is_refused_before_anything_is_spent() -> None:
+    harness = JudgeHarness(marks=[5] * 8)
+    harness.run(judged_spec(rubric="   "))
+
+    assert harness.of("search_finished")[0]["status"] == "failed"
+    assert any("评分细则" in event.get("message", "") for event in harness.of("log"))
+    assert harness.judge_prompts == []
+
+
+def test_a_judged_run_without_a_judge_token_is_refused_rather_than_silent() -> None:
+    harness = JudgeHarness(marks=[5] * 8)
+    harness.run(judged_spec(judge_token=""))
+
+    assert harness.of("search_finished")[0]["status"] == "failed"
+    assert any("评审模型" in event.get("message", "") for event in harness.of("log"))
+
+
+def test_too_few_gradings_is_refused_with_the_number() -> None:
+    thin = json.loads(json.dumps(JUDGED_CARD))
+    thin["criteria"][0]["measure"]["split"]["gateShards"] = 2
+    harness = JudgeHarness(marks=[5] * 8)
+    harness.run(judged_spec(scorecard=thin))
+
+    assert harness.of("search_finished")[0]["status"] == "failed"
+    # The unit is now "group" for both modes — a repeated grading here, a set of
+    # test ids under a test gate — so the message says group.
+    assert any("2 组" in event.get("message", "") for event in harness.of("log"))
+
+
+def test_a_crash_inside_the_domain_is_not_a_successful_run() -> None:
+    """Found by breaking an import while deduplicating helpers.
+
+    The framework catches whatever a worker raises, so a `NameError` in our own
+    code becomes "no proposals" — and a run that produced nothing at all must
+    not report success. The distinction matters because the two have opposite
+    fixes: a search that found nothing is a hard problem, and a search that
+    crashed is a bug in this repository.
+    """
+    class Broken(Harness):
+        def domain_factory(self, **kwargs: Any) -> Domain:
+            built = super().domain_factory(**kwargs)
+            from dataclasses import replace
+
+            def explode(program: Any) -> str:
+                raise NameError("_finite is not defined")
+
+            return replace(built, prompt=explode)
+
+    harness = Broken()
+    harness.run(spec(expansions=2))
+
+    assert harness.of("search_finished")[0]["status"] == "failed"
+    assert harness.of("expanded") == []

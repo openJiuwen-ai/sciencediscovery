@@ -43,6 +43,9 @@ logs/
 
 # Local Playwright environment and reports
 .e2e/
+# The stack's default data dir (`SCIENCE_AGENT_DATA_DIR`): envs, logs, CAS,
+# run state, staged datasets. Running anything locally creates it.
+/data/
 .e2e-data/
 test/node_modules
 test/playwright-report/
@@ -67,3 +70,8 @@ Thumbs.db
 # Note: .agents/ is tracked (project agent skills, e.g. gitcode)
 # Local caches under skills (e.g. openJiuwen org issue/PR templates) stay untracked
 .agents/skills/gitcode/cache/
+services/api/logs/
+# Whatever a local sidecar run leaves behind: candidate sources and its log.
+# A candidate is not an artifact — most are refused, and the ones a user keeps
+# are copied into content-addressed storage by that decision, not by having run.
+services/evolve/data/

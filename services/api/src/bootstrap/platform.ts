@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
@@ -20,6 +21,7 @@ import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { reviewerLog } from "@sciencediscovery/provenance";
 import type { ResolvedProxy } from "@sciencediscovery/schema";
+import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 
 import { apiLog, configureApiLogging } from "../logging.js";
 import { MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
@@ -30,6 +32,13 @@ import { PaperService } from "../papers.js";
 import { PermissionDecisionQueue } from "@sciencediscovery/governance";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { RunnerClient } from "@sciencediscovery/executor";
+import { CasStore } from "@sciencediscovery/cas";
+import { CandidateSources } from "../evolution/candidates.js";
+import { ProbeRegistry } from "../evolution/discrimination.js";
+import { RunTokenRegistry } from "../evolution/llm-proxy.js";
+import { EvolveOrchestrator } from "../evolution/orchestrator.js";
+import { EvolveSidecarClient } from "../evolution/sidecar.js";
+import { EvolutionStore } from "../evolution/store.js";
 import { recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
@@ -130,8 +139,66 @@ export function createPlatformServices(
     });
   });
 
+  // The evolve store/orchestrator are constructed unconditionally and cost
+  // nothing until a run is created: no connection is opened, no directory is
+  // touched until `initialize()`.
+  const evolutionStore = new EvolutionStore(config.dataDir);
+  // Run-scoped model tokens. In memory only: a token that outlived the process
+  // would outlive the run it belongs to, and that is the property it exists for.
+  const evolveRunTokens = new RunTokenRegistry();
+  const evolveCas = new CasStore(config.dataDir);
+  const evolveProbes = new ProbeRegistry();
+  const evolveCandidates = new CandidateSources(
+    config.dataDir, process.env.SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR?.trim() || undefined,
+  );
+  const evolveOrchestrator = new EvolveOrchestrator(
+    evolutionStore,
+    new EvolveSidecarClient({ internalToken: config.evolve.internalToken, url: config.evolve.url }),
+    memoryGraphSink,
+    undefined,
+    evolveRunTokens,
+    // The sidecar reaches the model proxy at this origin. `0.0.0.0` is a bind
+    // address, not somewhere to connect to, so it is dialled back to loopback —
+    // the sidecar is loopback-only anyway.
+    {
+      apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
+      cas: evolveCas,
+      workspacePath: (sessionId: string) => store.workspacePath(sessionId),
+    },
+  );
+
+  /** What `create_evolve_run` needs. The agent designs a run; this is the only
+   *  path that turns a design into one, and every gate lives behind it. */
+  const evolveToolDeps = {
+    evolutionStore,
+    casHas: async (hash: string) => {
+      try {
+        await evolveCas.read(hash);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    model: (id: string) => store.getModel(id),
+    orchestrator: evolveOrchestrator,
+    probes: evolveProbes,
+    store: (sessionId: string) => async (input: { content?: string; path?: string }) => {
+      const bytes = input.content !== undefined
+        ? Buffer.from(input.content, "utf-8")
+        : await readFile(resolveWorkspaceFile(store.workspacePath(sessionId), input.path ?? ""));
+      return `sha256:${(await evolveCas.put(bytes)).hash}`;
+    },
+  };
+
   return {
     artifactManager,
+    evolutionStore,
+    evolveCandidates,
+    evolveCas,
+    evolveOrchestrator,
+    evolveProbes,
+    evolveRunTokens,
+    evolveToolDeps,
     mcpBroker,
     mcpCatalog,
     mcpGateway,
@@ -159,6 +226,9 @@ export async function initializePlatformServices(
 ): Promise<void> {
   const {
     artifactManager,
+    evolutionStore,
+    evolveOrchestrator,
+    evolveToolDeps,
     mcpBroker,
     mcpCatalog,
     mcpRegistry,
@@ -181,6 +251,14 @@ export async function initializePlatformServices(
   });
   await artifactManager.resumeInterrupted();
   await recoverSessionRuns(store, memoryGraphClient);
+  // A run left "running" by a previous process is never going to finish: the
+  // sidecar's stream died with that connection. Settle them at boot so the UI
+  // never shows a spinner for a run nobody is driving.
+  void evolutionStore.initialize()
+    .then(() => evolveOrchestrator.adoptOrphanedRuns())
+    .catch((error: unknown) => {
+      apiLog.warn("evolve_boot_failed", { reason: error instanceof Error ? error.message : String(error) });
+    });
 
   const storedNeo4jPassword = store.getMemoryGraphNeo4jPassword();
   if (storedNeo4jPassword) {
@@ -218,6 +296,7 @@ export async function initializePlatformServices(
         session.id,
         config,
         memoryGraphClient,
+        evolveToolDeps,
       );
     }
   }

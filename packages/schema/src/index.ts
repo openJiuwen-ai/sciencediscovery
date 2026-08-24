@@ -21,6 +21,8 @@ export * from "./remote-job.js";
 export * from "./npu-job.js";
 export * from "./artifact-provenance.js";
 export * from "./memory-graph.js";
+export * from "./evolution.js";
+export * from "./search-graph.js";
 export * from "./session.js";
 export * from "./permission.js";
 export * from "./sandbox-network.js";

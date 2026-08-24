@@ -79,6 +79,13 @@ export interface ServerConfig {
     internalToken: string;
     neo4jPassword?: string;
   };
+  /** Evolve search sidecar (services/evolve, Python FastAPI, loopback). It
+   *  holds no business state and never receives a model key, so there is
+   *  nothing here but where to reach it and the shared loopback token. */
+  evolve: {
+    url: string;
+    internalToken: string;
+  };
 }
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -188,6 +195,10 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       url: env.SCIENCE_AGENT_MEMORY_GRAPH_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:17674",
       internalToken: env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN?.trim() || "sciencediscovery-memory-graph-local",
       neo4jPassword: env.SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD?.trim() || undefined,
+    },
+    evolve: {
+      url: env.SCIENCE_AGENT_EVOLVE_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:4313",
+      internalToken: env.SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN?.trim() || "sciencediscovery-evolve-local",
     },
   };
 }

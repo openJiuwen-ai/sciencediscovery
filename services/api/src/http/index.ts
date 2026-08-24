@@ -26,6 +26,17 @@ import type { AgentConfig } from "@sciencediscovery/model";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
 import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { handleEvolveCompletion } from "../evolution/llm-proxy.js";
+import {
+  handleCreateRun as handleEvolveCreateRun,
+  handleGetCandidate as handleEvolveGetCandidate,
+  handleProbe as handleEvolveProbe,
+  handleIngestDataset as handleEvolveIngestDataset,
+  handleGetRun as handleEvolveGetRun,
+  handleListRuns as handleEvolveListRuns,
+  handleRunEvents as handleEvolveRunEvents,
+  handleStopRun as handleEvolveStopRun,
+} from "../evolution/routes.js";
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
@@ -205,6 +216,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const platform = createPlatformServices(config, repositoryRoot, dependencies);
   const {
     artifactManager,
+    evolutionStore,
+    evolveCandidates,
+    evolveCas,
+    evolveOrchestrator,
+    evolveProbes,
+    evolveRunTokens,
     mcpBroker,
     mcpCatalog,
     mcpRegistry,
@@ -265,6 +282,20 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         });
         return;
       }
+      // Authenticated by a run-scoped token rather than the user's, so it sits
+      // ahead of the `/api/` gate. It is not open: an invalid or expired run
+      // token is a 401, and the token grants this endpoint and nothing else.
+      const evolveLlmMatch = url.pathname.match(
+        /^\/internal\/evolve-llm\/([^/]+)\/v1\/chat\/completions$/,
+      );
+      if (evolveLlmMatch && request.method === "POST") {
+        await handleEvolveCompletion(request, response, decodeURIComponent(evolveLlmMatch[1]!), {
+          store,
+          tokens: evolveRunTokens,
+        });
+        return;
+      }
+
       if (url.pathname.startsWith("/api/") && !isAuthorized(request, config.authToken)) {
         sendError(response, 401, "Unauthorized");
         return;
@@ -1489,6 +1520,80 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const run = await store.getSessionRun(sessionRunMatch[1]!, sessionRunMatch[2]!);
         if (!run) return sendError(response, 404, "Run not found");
         sendJson(response, 200, run);
+        return;
+      }
+
+      const searchGraphMatch = url.pathname.match(/^\/api\/memory\/search-graph\/([^/]+)$/);
+      if (searchGraphMatch && request.method === "GET") {
+        if (!memoryGraphEnabled() || !memoryGraphClient) {
+          sendJson(response, 200, { cells: [], edges: [], nodes: [], reason: "memory_graph_disabled", truncated: false });
+          return;
+        }
+        const maxNodes = Number(url.searchParams.get("maxNodes") ?? "0");
+        sendJson(response, 200, await memoryGraphClient.getSearchGraph(
+          decodeURIComponent(searchGraphMatch[1]!),
+          Number.isFinite(maxNodes) && maxNodes > 0 ? Math.floor(maxNodes) : undefined,
+        ));
+        return;
+      }
+
+      if (url.pathname === "/api/evolve/runs" && request.method === "POST") {
+        await handleEvolveCreateRun(request, response, evolveOrchestrator, {
+          model: (id) => store.getModel(id),
+        });
+        return;
+      }
+
+      if (url.pathname === "/api/evolve/runs" && request.method === "GET") {
+        await handleEvolveListRuns(response, evolutionStore, url.searchParams.get("sessionId"));
+        return;
+      }
+
+      const evolveRunEventsMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/events$/);
+      if (evolveRunEventsMatch && request.method === "GET") {
+        const after = Number(url.searchParams.get("after") ?? request.headers["last-event-id"] ?? "0");
+        if (!Number.isFinite(after) || after < 0) return sendError(response, 400, "after must be a non-negative number");
+        await handleEvolveRunEvents(
+          request, response, evolutionStore, evolveOrchestrator,
+          decodeURIComponent(evolveRunEventsMatch[1]!), Math.floor(after),
+        );
+        return;
+      }
+
+      if (url.pathname === "/api/evolve/probe" && request.method === "POST") {
+        await handleEvolveProbe(request, response, evolveOrchestrator, evolveProbes);
+        return;
+      }
+
+      if (url.pathname === "/api/evolve/datasets" && request.method === "POST") {
+        await handleEvolveIngestDataset(request, response, {
+          cas: evolveCas,
+          resolve: (sessionId, path) => resolveWorkspaceFile(store.workspacePath(sessionId), path),
+        });
+        return;
+      }
+
+      const evolveCandidateMatch = url.pathname.match(
+        /^\/api\/evolve\/runs\/([^/]+)\/candidates\/([^/]+)$/,
+      );
+      if (evolveCandidateMatch && request.method === "GET") {
+        await handleEvolveGetCandidate(
+          response, evolutionStore, evolveCandidates,
+          decodeURIComponent(evolveCandidateMatch[1]!),
+          decodeURIComponent(evolveCandidateMatch[2]!),
+        );
+        return;
+      }
+
+      const evolveRunStopMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/stop$/);
+      if (evolveRunStopMatch && request.method === "POST") {
+        await handleEvolveStopRun(response, evolutionStore, evolveOrchestrator, decodeURIComponent(evolveRunStopMatch[1]!));
+        return;
+      }
+
+      const evolveRunMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)$/);
+      if (evolveRunMatch && request.method === "GET") {
+        await handleEvolveGetRun(response, evolutionStore, decodeURIComponent(evolveRunMatch[1]!));
         return;
       }
 

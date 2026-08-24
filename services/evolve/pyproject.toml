@@ -1,0 +1,63 @@
+# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[project]
+name = "sciencediscovery-evolve"
+version = "0.0.0"
+description = "Search sidecar for /evolve. The Node control API is its only client. Loopback only; never sees a model key."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.12.5",
+    # The engine: evolve()/async_evolve(), FlatPuct, Ledger, the verifier and
+    # the policies. Zero required dependencies of its own, Python >= 3.9. Only
+    # the *ports* are vendored (see vendor/era/__init__.py) — they live under
+    # examples/, which the wheel does not package.
+    "agentdescent>=0.4.5",
+]
+
+[project.optional-dependencies]
+# The candidate's runtime, not the sidecar's. A candidate is executed with this
+# process's own interpreter, so this venv *is* the environment the AST gate
+# makes promises about: the gate admits pandas, numpy, scipy and sklearn, and
+# without them every candidate fails with ModuleNotFoundError — a run that looks
+# like a model which cannot write code. Optional because a deployment that only
+# ever runs the stub does not need ~200MB of wheels; `EraEngine` refuses to
+# start when they are missing rather than failing every expansion.
+candidates = [
+    "numpy>=1.26",
+    # A test-gated search runs the project's suite with *this* interpreter, so
+    # the runner has to be here. pytest is not universal, but it is what almost
+    # every Python project uses and it is small; a project on another runner
+    # gets a refusal that names the missing module rather than a silent zero.
+    "pytest>=8.0.0",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "scipy>=1.13",
+]
+test = [
+    "pytest>=8.0.0",
+    "httpx>=0.28.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sciencediscovery_evolve"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

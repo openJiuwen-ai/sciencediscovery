@@ -22,7 +22,15 @@ export type MemoryGraphNodeLabel =
   | "Evidence"
   | "Claim"
   | "Code"
-  | "Artifact";
+  | "Artifact"
+  /** One `/evolve` search: run-level identity and aggregates. A resumed run is a
+   * second SubTask pointing at the same SearchRun. */
+  | "SearchRun"
+  /** One candidate, including a failed one. Excluded from the session subgraph —
+   * hundreds of them would crowd out the nodes a session is actually about. */
+  | "SearchNode"
+  /** One MAP-Elites cell (openevolve only); bounded by islands x bins^2. */
+  | "SearchCell";
 
 /**
  * Memory-graph edge types. `produces` is persisted by the MVP/SubTask mirror;
@@ -45,7 +53,22 @@ export type MemoryGraphEdgeType =
   | "supports"
   | "stated_in"
   | "supersedes"
-  | "input";
+  | "input"
+  /** SubTask -> SearchRun: the binding between one step of work and the search
+   * graph it produced. */
+  | "searches"
+  /** SearchRun -> SearchNode: the seed (baseline) candidate. */
+  | "root"
+  /** SearchNode -> SearchNode: parent to child. The lineage in both algorithms. */
+  | "expands"
+  /** SearchNode -> SearchNode: openevolve's prompt also carries `best` and an
+   * `inspiration`; what the model saw is the only thing that explains a jump. */
+  | "inspires"
+  /** SearchRun -> SearchNode: the current best, re-pointed when it changes. */
+  | "elected"
+  /** SearchNode -> SearchCell: openevolve grid occupancy, carrying `current`
+   * and `via` so an eviction is history rather than a deletion. */
+  | "occupies";
 
 export interface MemoryGraphNode {
   label: MemoryGraphNodeLabel;

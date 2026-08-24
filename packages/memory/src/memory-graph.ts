@@ -828,6 +828,50 @@ export class MemoryGraphClient {
     return response.json();
   }
 
+  /**
+   * Mirror one batch of a search's events.
+   *
+   * Batched rather than one call per event: a search emits four to six events
+   * per expansion, so a request each would be hundreds of round trips for a run
+   * that takes minutes. The producer owns the sequence numbers and the sidecar
+   * drops anything at or below its stored watermark, which is what makes a
+   * replay — after a reconnect, or a whole-log backfill once Neo4j comes back —
+   * a no-op rather than a double-count.
+   */
+  async observeSearchProgress(payload: ObserveSearchProgressPayload): Promise<void> {
+    mgLog.info("observeSearchProgress in: search=%s records=%d", payload.searchId, payload.records.length);
+    try {
+      await this.post("/observe/search-progress", {
+        records: payload.records,
+        search_id: payload.searchId,
+        session_id: payload.sessionId,
+        task_id: payload.taskId ?? null,
+      });
+      mgLog.info("observeSearchProgress done: search=%s delivered", payload.searchId);
+    } catch (error) {
+      mgLog.warn("observeSearchProgress failed: search=%s, error %s",
+        payload.searchId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
+  /** Read one search's graph back. Degrades to a reason rather than throwing,
+   *  like every other read path here. */
+  async getSearchGraph(searchId: string, maxNodes?: number): Promise<unknown> {
+    try {
+      const response = await fetch(`${this.baseUrl}/query/search-graph`, {
+        body: JSON.stringify({ max_nodes: maxNodes ?? null, search_id: searchId }),
+        headers: this.initHeaders(true),
+        method: "POST",
+      });
+      if (response.status === 404) return { cells: [], edges: [], nodes: [], reason: "search_not_found", truncated: false };
+      if (!response.ok) return { cells: [], edges: [], nodes: [], reason: "memory_graph_unreachable", truncated: false };
+      return await response.json();
+    } catch {
+      return { cells: [], edges: [], nodes: [], reason: "memory_graph_unreachable", truncated: false };
+    }
+  }
+
   private async post(path: string, body: unknown): Promise<void> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
@@ -848,9 +892,26 @@ export class MemoryGraphClient {
   }
 }
 
+/** One batch of a search's events, as the sidecar's `/observe/search-progress`
+ *  expects them. `taskId` rides along with the first batch so the
+ *  `SubTask -[:searches]-> SearchRun` binding lands without a second call. */
+export interface ObserveSearchProgressPayload {
+  records: unknown[];
+  searchId: string;
+  sessionId: string;
+  taskId?: string;
+}
+
 export class MemoryGraphSink {
   private readonly client: MemoryGraphClient | null;
   private readonly isEnabled: () => boolean;
+  /** Per-search event buffers; see `observeSearchProgress`. */
+  private readonly searchBuffers = new Map<string, {
+    records: unknown[];
+    sessionId: string;
+    taskId?: string;
+    timer?: NodeJS.Timeout;
+  }>();
 
   constructor(client: MemoryGraphClient | null, enabled: () => boolean) {
     this.client = client;
@@ -998,4 +1059,72 @@ export class MemoryGraphSink {
           projectId, error instanceof Error ? error.message : String(error));
       });
   }
+
+  /**
+   * Buffer a search's events and mirror them in batches.
+   *
+   * A search emits several events per second; a POST each would be hundreds of
+   * round trips, and every one of them on the path of a run that must not be
+   * slowed down by its own bookkeeping. Records accumulate until the batch is
+   * full or the timer fires, and a terminal event flushes immediately so the
+   * graph is not left a beat behind a finished run.
+   *
+   * Never throws into the caller, like every other sink method: the graph is a
+   * projection of `events.ndjson`, so a write that does not land is repaired by
+   * a replay rather than by failing the run.
+   */
+  observeSearchProgress(payload: ObserveSearchProgressPayload): void {
+    if (!this.enabled || !this.client || !payload.records.length) return;
+    const buffer = this.searchBuffers.get(payload.searchId) ?? {
+      records: [] as unknown[],
+      sessionId: payload.sessionId,
+      taskId: payload.taskId,
+      timer: undefined as NodeJS.Timeout | undefined,
+    };
+    buffer.records.push(...payload.records);
+    buffer.taskId = buffer.taskId ?? payload.taskId;
+    this.searchBuffers.set(payload.searchId, buffer);
+
+    const terminal = payload.records.some((record) => isTerminalSearchRecord(record));
+    if (terminal || buffer.records.length >= SEARCH_BATCH_SIZE) {
+      this.flushSearchProgress(payload.searchId);
+      return;
+    }
+    buffer.timer ??= setTimeout(() => this.flushSearchProgress(payload.searchId), SEARCH_FLUSH_MS);
+  }
+
+  /** Send whatever has accumulated for one search. Safe to call at any time. */
+  flushSearchProgress(searchId: string): void {
+    const buffer = this.searchBuffers.get(searchId);
+    if (!buffer) return;
+    if (buffer.timer) clearTimeout(buffer.timer);
+    this.searchBuffers.delete(searchId);
+    if (!this.enabled || !this.client || !buffer.records.length) return;
+    mgLog.info("search progress, mirroring to memory graph: search=%s records=%d",
+      searchId, buffer.records.length);
+    void this.client
+      .observeSearchProgress({
+        records: buffer.records,
+        searchId,
+        sessionId: buffer.sessionId,
+        ...(buffer.taskId ? { taskId: buffer.taskId } : {}),
+      })
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        mgLog.warn("search progress mirror failed: search=%s, error %s",
+          searchId, error instanceof Error ? error.message : String(error));
+      });
+  }
+}
+
+/** Flush at this many buffered records even if the timer has not fired. */
+const SEARCH_BATCH_SIZE = 50;
+/** How long a partial batch waits. Long enough to coalesce one expansion's
+ *  worth of events, short enough that a retrospective view opened right after a
+ *  run is already complete. */
+const SEARCH_FLUSH_MS = 250;
+
+function isTerminalSearchRecord(record: unknown): boolean {
+  const event = (record as { event?: { type?: string } } | null)?.event;
+  return event?.type === "search_finished";
 }

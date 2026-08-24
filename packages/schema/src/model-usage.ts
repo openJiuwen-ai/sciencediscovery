@@ -34,6 +34,10 @@ export interface ModelRunInfo {
 
 export type ModelInvocationKind =
   | "delegation-track"
+  /** A `/evolve` search's mutation calls. Its own kind because a search's spend
+   *  is not a chat turn: the usage page has to be able to say "this went on
+   *  evolution" rather than burying it among the turns. */
+  | "evolve"
   | "paper-vision"
   | "review-correction"
   | "semantic-review"

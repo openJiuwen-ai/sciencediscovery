@@ -32,8 +32,16 @@ import {
 // extracted_from/cites/states left over after the schema renamed them to
 // extracts/supports/stated_in) fails loudly here instead of silently dropping
 // arrow markers and filter-chip swatches.
-const EDGE_TYPES: MemoryGraphEdgeType[] = ["next", "produces", "extracts", "supports", "stated_in", "supersedes", "input"];
-const NODE_LABELS: MemoryGraphNodeLabel[] = ["ResearchGoal", "SubTask", "Paper", "Evidence", "Claim", "Code", "Artifact"];
+const EDGE_TYPES: MemoryGraphEdgeType[] = [
+  "next", "produces", "extracts", "supports", "stated_in", "supersedes", "input",
+  // /evolve search graph.
+  "searches", "root", "expands", "inspires", "elected", "occupies",
+];
+const NODE_LABELS: MemoryGraphNodeLabel[] = [
+  "ResearchGoal", "SubTask", "Paper", "Evidence", "Claim", "Code", "Artifact",
+  // /evolve search graph.
+  "SearchRun", "SearchNode", "SearchCell",
+];
 
 test("EDGE_COLORS has exactly the schema edge types as keys", () => {
   assert.deepEqual(

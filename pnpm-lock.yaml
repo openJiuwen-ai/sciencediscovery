@@ -460,6 +460,9 @@ importers:
       '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../../packages/runtime-core
+      '@sciencediscovery/sandbox-capability':
+        specifier: workspace:*
+        version: link:../../packages/sandbox-capability
       '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../../packages/schema

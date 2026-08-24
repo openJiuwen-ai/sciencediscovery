@@ -363,6 +363,7 @@ export function ArtifactModal({
   initialVersion,
   onClose,
   onMissing,
+  onEvolve,
   onNavigateArtifact,
   onNavigateCode,
   onChipClick,
@@ -387,6 +388,9 @@ export function ArtifactModal({
     * the first artifact.
     */
   onMissing?: (logicalName: string) => void;
+  /** Take the version on screen as the starting point for a search. Absent
+   *  where there is nowhere to open the wizard. */
+  onEvolve?: (seed: { cas: string; label: string }) => void;
   onNavigateArtifact: (logicalName: string, version?: number) => void;
   /** Embedded mode only (MemoryGraphExplorer): called when the user clicks a
     * provenance code-header to drive the canvas to the producing Code node.
@@ -805,6 +809,21 @@ export function ArtifactModal({
             <select aria-label="Artifact version" onChange={(event) => setVersionId(event.target.value)} value={versionId}>{versions.toReversed().map((item) => <option key={item.id} value={item.id}>v{item.version} · {new Date(item.createdAt).toLocaleString()}</option>)}</select>
           </label>
           <ArtifactDownloadButton busy={downloadBusy} disabled={!version} label={t("artifact.downloadCurrent")} onDownload={() => void downloadCurrentVersion()} />
+          {/* The version on screen becomes the starting point, by its stored
+              hash — nothing to upload, nothing to pick. "Improve this" is a
+              sentence about a thing you are looking at, and having to go
+              somewhere else and name a file is where that thought dies. */}
+          {onEvolve && version ? <button
+            className="artifact-evolve"
+            onClick={() => onEvolve({
+              cas: version.content.hash,
+              label: `${artifact?.name || logicalName} v${version.version}`,
+            })}
+            title={t("artifact.evolveHint")}
+            type="button"
+          >
+            {t("artifact.evolve")}
+          </button> : null}
           <button aria-label="Close artifact viewer" className="icon-button" onClick={onClose} title="Close artifact viewer" type="button">✕</button>
         </div>
       </header>
@@ -830,12 +849,14 @@ export function ArtifactModal({
 export function ScientificArtifacts({
   client,
   onError,
+  onEvolve,
   onPendingAnnotation,
   refreshKey,
   sessionId,
 }: {
   client: ApiClient;
   onError: (message: string) => void;
+  onEvolve?: (seed: { cas: string; label: string }) => void;
   onPendingAnnotation: (annotation: ArtifactAnnotation) => void;
   refreshKey: string;
   sessionId: string;
@@ -846,6 +867,7 @@ export function ScientificArtifacts({
     logicalName=""
     onClose={NOOP}
     onError={onError}
+    {...(onEvolve ? { onEvolve } : {})}
     onNavigateArtifact={NOOP}
     onPendingAnnotation={onPendingAnnotation}
     refreshKey={refreshKey}

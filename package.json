@@ -32,6 +32,7 @@
     "paper:test": "uv run --project services/paper --locked python -m unittest discover -s services/paper/tests",
     "gateway:test": "uv run --project services/gateway python -m unittest discover -s services/gateway/tests -p 'test_*.py'",
     "memory-graph:test": "uv run --project services/memory-graph --extra test pytest services/memory-graph/tests",
+    "evolve:test": "uv run --project services/evolve --extra test --extra candidates pytest services/evolve/tests",
     "runner": "pnpm --filter @sciencediscovery/runner start",
     "server": "bash scripts/run-local.sh --no-build",
     "start": "bash scripts/run-local.sh",

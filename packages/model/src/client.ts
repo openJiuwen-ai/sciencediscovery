@@ -38,6 +38,13 @@ export interface ModelEndpoint {
   baseUrl: string;
   model: string;
   proxy?: ResolvedProxy;
+  /** Sent verbatim as `thinking` on OpenAI-compatible endpoints that honour it.
+   *  Left unset for the agent loop, whose whole job is to reason; set to
+   *  "disabled" by one-shot callers, where a reasoning model has been observed
+   *  to spend the entire `max_tokens` on hidden thought and return no content
+   *  at all. Anthropic's dialect defaults to no extended thinking, so the flag
+   *  has nothing to say there. */
+  thinking?: "disabled" | "enabled";
 }
 
 export interface WireToolSpec {
@@ -303,6 +310,7 @@ async function streamOpenAiTurn(
       stream: true,
       stream_options: { include_usage: true },
       max_tokens: policy.maxTokens,
+      ...(endpoint.thinking ? { thinking: { type: endpoint.thinking } } : {}),
     }),
     policy,
     proxy: endpoint.proxy,

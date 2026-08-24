@@ -86,6 +86,7 @@ pids=()
 health_attempts=50
 gateway_python=""
 memory_graph_python=""
+evolve_python=""
 runner_url=""
 data_dir=""
 runner_command=()
@@ -240,6 +241,26 @@ prepare_local() {
     (cd services/memory-graph && UV_PROJECT_ENVIRONMENT="$envs_dir/memory-graph" uv sync)
   fi
 
+  # Provision the evolve search sidecar environment. Same rationale as the
+  # memory-graph one above: the feature is reached from the UI, so it must be
+  # ready without a rebuild. Docker mode leaves this unset because the image
+  # does not provision that service environment.
+  #
+  # `--extra candidates` installs the candidate's runtime, not the sidecar's: a
+  # candidate is executed with this environment's interpreter, and the AST gate
+  # admits pandas/numpy/scipy/sklearn. Without them every candidate fails with
+  # ModuleNotFoundError. Set SCIENCE_AGENT_EVOLVE_STUB_ONLY=1 to skip the ~200MB
+  # when only the stub engine will ever run.
+  evolve_python="$envs_dir/evolve/bin/python"
+  if [[ ! -x "$evolve_python" ]]; then
+    echo "Provisioning the evolve Python environment..." >&2
+    if [[ "${SCIENCE_AGENT_EVOLVE_STUB_ONLY:-0}" == "1" ]]; then
+      (cd services/evolve && UV_PROJECT_ENVIRONMENT="$envs_dir/evolve" uv sync)
+    else
+      (cd services/evolve && UV_PROJECT_ENVIRONMENT="$envs_dir/evolve" uv sync --extra candidates)
+    fi
+  fi
+
   local runner_environment=(
     "SCIENCE_AGENT_BWRAP_PATH=${SCIENCE_AGENT_BWRAP_PATH:-bwrap}"
     "SCIENCE_AGENT_DATA_DIR=$data_dir"
@@ -375,6 +396,19 @@ start_stack() {
     "$memory_graph_python" -m sciencediscovery_memory_graph.server &
     pids+=("$!")
     wait_healthy "memory-graph" "http://127.0.0.1:17674/health"
+  fi
+
+  # Start the evolve search sidecar. It holds no persistent business state and
+  # never sees a model key: model calls go back through the API's loopback
+  # proxy with a one-shot run token, and everything needed to replay or resume
+  # a run lives in the API's data/evolution/runs/<runId>/events.ndjson.
+  if [[ -x "$evolve_python" ]]; then
+    echo "Starting the evolve service..." >&2
+    SCIENCE_AGENT_DATA_DIR="$data_dir" \
+    SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN="${SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN:-sciencediscovery-evolve-local}" \
+    "$evolve_python" -m sciencediscovery_evolve.server &
+    pids+=("$!")
+    wait_healthy "evolve" "http://127.0.0.1:4313/health"
   fi
 
   echo "Starting the control API..." >&2

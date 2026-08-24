@@ -22,9 +22,9 @@ import type {
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
 
-import { SkillsApiClient } from "./skills.js";
+import { EvolveApiClient } from "./evolve.js";
 
-export class WebApiClient extends SkillsApiClient {
+export class WebApiClient extends EvolveApiClient {
   listMcpSources(): Promise<Array<{ manifest: McpSourceManifest; status: McpSourceStatus }>> {
     return this.request("/api/mcp/sources");
   }

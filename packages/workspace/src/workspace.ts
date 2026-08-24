@@ -55,6 +55,9 @@ import type {
   SkillResourceContent,
   ShellExecutionResult,
   UninstallEnvironmentRequest,
+  EvolveRunProposal,
+  EvolveRunProposalResult,
+  EvolveRunSummary,
 } from "@sciencediscovery/schema";
 import { Type, type TSchema } from "typebox";
 import {
@@ -257,6 +260,34 @@ export interface WorkspaceToolOptions {
     input: { caveats?: string[]; feasibilityConfidence: "high" | "low" | "medium"; scope: string; steps: string[] },
     signal?: AbortSignal,
   ) => Promise<SessionPlan>;
+  /**
+   * Start an evolution search from a design the agent worked out itself (the
+   * `create_evolve_run` LLM tool).
+   *
+   * A proposal, like `proposeRemoteJob`: the control plane runs the
+   * discrimination probe and the pre-flight checks, then puts the run behind
+   * the ordinary permission gate. The agent is the designer, never the
+   * authority — it says "I checked the scoring separates good from bad" and the
+   * server checks anyway, because a claim from the thing being graded is not
+   * evidence. A refusal comes back as a tool error, which is a shape the agent
+   * already knows how to fix.
+   *
+   * This replaces a separate drafting agent with its own loop, its own progress
+   * stream, its own revision channel and its own workspace tools — every one of
+   * which was a reimplementation of something the main loop already has, and
+   * none of which could do the one thing that mattered: *run* the evaluator it
+   * had just written before betting a budget on it.
+   */
+  createEvolveRun?: (input: EvolveRunProposal, signal?: AbortSignal) => Promise<EvolveRunProposalResult>;
+  /**
+   * Read back a search's outcome (the `get_evolve_run` LLM tool).
+   *
+   * A search runs for minutes after the turn that started it ends, so without
+   * this the agent can only promise an improvement and never report one. The
+   * summary is what a person would want said out loud: did it beat the start,
+   * by how much, on the split that never took part.
+   */
+  getEvolveRun?: (runId: string) => Promise<EvolveRunSummary>;
   /** Cross-session memory-graph substring search (the `query_graph` LLM tool). */
   queryGraph?: (query: string) => Promise<MemoryGraphMatchResponse>;
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
@@ -1042,6 +1073,114 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: remoteJobParameters,
     };
     tools.push(proposeRemoteJob);
+  }
+  if (options.getEvolveRun) {
+    const getEvolveParameters = Type.Object({
+      runId: Type.String({ maxLength: 200, minLength: 1 }),
+    });
+    const getEvolveRun: AgentTool<typeof getEvolveParameters> = {
+      description:
+        "Read an evolution search's outcome: status, how many candidates ran, the best score "
+        + "against the starting point, and the score on the test split that never took part in "
+        + "the search. Call this when the user asks how a search went, or before summarising one "
+        + "— a search runs for minutes after the turn that started it, so its result is never in "
+        + "your context. Never describe an outcome you have not read.",
+      execute: async (_toolCallId, params) => {
+        const summary = await options.getEvolveRun!(params.runId);
+        return { content: [{ type: "text", text: JSON.stringify(summary) }], details: summary };
+      },
+      label: "Read evolution run",
+      name: "get_evolve_run",
+      parameters: getEvolveParameters,
+    };
+    tools.push(getEvolveRun);
+  }
+  if (options.createEvolveRun) {
+    const evolveParameters = Type.Object({
+      caseSplit: Type.Optional(Type.Object({
+        gateGroups: Type.Integer({ maximum: 64, minimum: 4 }),
+        rolloutGroups: Type.Integer({ maximum: 64, minimum: 1 }),
+        testGroups: Type.Integer({ maximum: 64, minimum: 0 }),
+      })),
+      datasetPath: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      direction: Type.Optional(Type.Union([Type.Literal("maximize"), Type.Literal("minimize")])),
+      entrypointPath: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      evaluatorSource: Type.Optional(Type.String({ maxLength: 200_000, minLength: 1 })),
+      expansions: Type.Integer({ maximum: 40, minimum: 1 }),
+      frozenGlobs: Type.Optional(Type.Array(Type.String({ maxLength: 500, minLength: 1 }), { maxItems: 50 })),
+      howScored: Type.String({ maxLength: 400, minLength: 1 }),
+      judgeModelId: Type.Optional(Type.String({ maxLength: 200, minLength: 1 })),
+      metric: Type.Optional(Type.String({ maxLength: 40, minLength: 1 })),
+      mode: Type.Union([
+        Type.Literal("dataset_metric"), Type.Literal("test_gate"),
+        Type.Literal("custom_script"), Type.Literal("llm_judge"),
+      ]),
+      normalize: Type.Optional(Type.Union([
+        Type.Literal("identity"), Type.Literal("reciprocal"),
+        Type.Literal("relative_to_baseline"), Type.Literal("clamp"),
+      ])),
+      packages: Type.Optional(Type.Array(Type.String({ maxLength: 80, minLength: 1 }), { maxItems: 20 })),
+      risks: Type.Optional(Type.Array(Type.String({ maxLength: 400, minLength: 1 }), { maxItems: 2 })),
+      rubric: Type.Optional(Type.String({ maxLength: 100_000, minLength: 1 })),
+      scaleMax: Type.Optional(Type.Number({ maximum: 100, minimum: 1 })),
+      split: Type.Optional(Type.Object({
+        gateShards: Type.Integer({ maximum: 64, minimum: 4 }),
+        rolloutShards: Type.Integer({ maximum: 64, minimum: 1 }),
+        seed: Type.Integer({ maximum: 2 ** 31, minimum: 0 }),
+        shardRows: Type.Integer({ maximum: 100_000, minimum: 1 }),
+        testShards: Type.Integer({ maximum: 64, minimum: 0 }),
+        trainRows: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
+      })),
+      startingPointPath: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      startingPointText: Type.Optional(Type.String({ maxLength: 200_000, minLength: 1 })),
+      statement: Type.String({ maxLength: 2_000, minLength: 1 }),
+      targetColumn: Type.Optional(Type.String({ maxLength: 200, minLength: 1 })),
+      testCmd: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      thinking: Type.Optional(Type.Union([Type.Literal("disabled"), Type.Literal("enabled")])),
+      workers: Type.Integer({ maximum: 8, minimum: 1 }),
+    });
+    const createEvolveRun: AgentTool<typeof evolveParameters> = {
+      description:
+        "Start an evolution search: repeatedly rewrite a program (or a piece of writing) "
+        + "and keep what scores better on a held-out split. "
+        + `${options.approvalMode === "always_allow" ? "Starts immediately." : "Creates an approval card the user confirms."} `
+        + "You design the whole run — read the workspace and the conversation, then **verify your own "
+        + "scoring with run_python before calling this**: run the evaluator against the starting point "
+        + "and against a deliberately broken copy, and check the starting point lands well inside the "
+        + "range rather than at 0 or at full marks. The server runs the same discrimination probe and "
+        + "refuses the run if the scoring cannot separate them, so a call that skipped this step is a "
+        + "round trip you paid for. Load the evolve-design skill first — it carries the sizing rules "
+        + "and the failure modes worth knowing. Consult it, not your instincts, for how much data to "
+        + "hold out.",
+      execute: async (_toolCallId, params, signal) => {
+        const proposal = params as unknown as EvolveRunProposal;
+        const result = await options.createEvolveRun!(proposal, signal);
+        // A refusal is data, not an exception: the probe is *meant* to catch a
+        // scoring scheme that cannot rank, and throwing would make the agent
+        // treat its own design mistake as a broken tool.
+        if (result.refusedBecause) {
+          return {
+            content: [{ type: "text", text: `这次搜索没有起跑：${result.refusedBecause}` }],
+            details: result,
+          };
+        }
+        const probe = result.probe;
+        const verdict = probe
+          ? `判别力探针：起点 ${probe.baseline.toFixed(4)}，${probe.label}后 ${
+            probe.worsened === null ? "跑不起来" : probe.worsened.toFixed(4)}`
+          : "";
+        return {
+          content: [{ type: "text", text: [
+            `搜索已创建：${result.run?.id ?? "(无 id)"}`, verdict,
+          ].filter(Boolean).join("\n") }],
+          details: result,
+        };
+      },
+      label: "Create evolution run",
+      name: "create_evolve_run",
+      parameters: evolveParameters,
+    };
+    tools.push(createEvolveRun);
   }
   if (options.executeShell) {
     const shellParameters = Type.Object({

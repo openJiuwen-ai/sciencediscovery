@@ -134,6 +134,11 @@ import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
 import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
+import type { EvolveRunProposal } from "@sciencediscovery/schema";
+import type { ProbeRegistry } from "../evolution/discrimination.js";
+import type { EvolveOrchestrator } from "../evolution/orchestrator.js";
+import { startProposedRun, summariseRun } from "../evolution/proposal.js";
+import type { EvolutionStore } from "../evolution/store.js";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
 import { createWorkspaceExecutionBindings } from "../agent-run/workspace-bindings.js";
 import {
@@ -313,6 +318,25 @@ export function splitArtifactVersionSuffix(raw: string): { id: string; version: 
   return { id: raw, version: undefined };
 }
 
+/**
+ * What the `create_evolve_run` tool needs from the server.
+ *
+ * Bundled rather than threaded as four more positional parameters: this call
+ * chain already carries twenty, and the next reader deserves better than
+ * counting commas. Optional throughout, so a deployment without the evolve
+ * sidecar simply does not offer the tool.
+ */
+export interface EvolveToolDeps {
+  casHas?: (hash: string) => Promise<boolean>;
+  /** The run store, for reading a finished search back into the conversation. */
+  evolutionStore: EvolutionStore;
+  model?: (id: string) => unknown;
+  orchestrator: EvolveOrchestrator;
+  probes?: ProbeRegistry;
+  /** Per-session storer: text or a workspace path in, `sha256:` ref out. */
+  store: (sessionId: string) => (input: { content?: string; path?: string }) => Promise<string>;
+}
+
 async function executeAgentRun(
   store: SessionStore,
   runnerClient: RunnerClient,
@@ -334,6 +358,7 @@ async function executeAgentRun(
   emit: RunEventSink,
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
+  evolve?: EvolveToolDeps,
 ): Promise<SessionRunStatus> {
   if (activeSessions.has(sessionId)) {
     throw new ApiStatusError(409, "A run is already active for this session");
@@ -950,6 +975,31 @@ async function executeAgentRun(
           await publishCheckpoint(failedCheckpoint);
           throw error;
         }
+      },
+    } : {}),
+    ...(evolve ? {
+      // The main loop designs the run; this only turns the design into one.
+      // Every gate the wizard used to sit in front of still runs on this side —
+      // the probe, pre-flight, the frozen scoring — because the agent is the
+      // designer and never the authority on whether its own scoring can rank.
+      getEvolveRun: async (runId: string) => {
+        const run = await evolve.evolutionStore.readRun(runId);
+        if (!run) throw new Error(`没有这个搜索：${runId}`);
+        return summariseRun(run, await evolve.evolutionStore.readEvents(runId));
+      },
+      createEvolveRun: async (input: EvolveRunProposal) => {
+        store.assertSessionWritable(sessionId);
+        const result = await startProposedRun(input, {
+          casHas: evolve.casHas,
+          model: evolve.model,
+          modelId: selectedModel.id,
+          orchestrator: evolve.orchestrator,
+          probes: evolve.probes,
+          sessionId,
+          store: evolve.store(sessionId),
+        });
+        if (result.run) await emit({ run: result.run, type: "evolve_run.created" });
+        return result;
       },
     } : {}),
     ...(remoteHosts.length ? {
@@ -1928,6 +1978,7 @@ export function scheduleSessionRuns(
   sessionId: string,
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
+  evolve?: EvolveToolDeps,
 ): void {
   if (scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
@@ -1987,6 +2038,7 @@ export function scheduleSessionRuns(
             emit,
             serverConfig,
             memoryGraphClient,
+            evolve,
           );
         } catch (reason) {
           error = runFailureMessage(reason);

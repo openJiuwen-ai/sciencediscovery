@@ -38,6 +38,7 @@ const layers = {
     ["uv", ["sync", "--project", "services/gateway"]],
     ["pnpm", ["check"]],
     ["pnpm", ["memory-graph:test"]],
+    ["pnpm", ["evolve:test"]],
   ],
   // `ut` minus the sandbox: everything `pnpm check` runs, except the
   // @sciencediscovery/runner package, whose tests assert isolation and the
@@ -53,6 +54,7 @@ const layers = {
     ["pnpm", ["binary:test"]],
     ["pnpm", ["--recursive", "--filter", "!@sciencediscovery/runner", "test"]],
     ["pnpm", ["memory-graph:test"]],
+    ["pnpm", ["evolve:test"]],
   ],
   "ut-runner": [
     ["pnpm", ["install", "--frozen-lockfile"]],

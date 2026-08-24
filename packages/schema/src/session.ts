@@ -20,6 +20,7 @@ import type {
   ScientificArtifactVersion,
 } from "./artifact-provenance.js";
 import type { ConnectorId } from "./connectors.js";
+import type { EvolveRun } from "./evolution.js";
 import type { ModelRunInfo } from "./model-usage.js";
 import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, SessionPlan } from "./plan.js";
@@ -229,6 +230,10 @@ export type RunStreamEvent =
   | { step: SubagentStep; subagentId: string; type: "subagent.step" }
   | { subagentId: string; type: "subagent.usage"; usage: SubagentUsage }
   | { job: RemoteJob; type: "remote_job.proposed" }
+  /** An evolution search the agent designed and started from inside the
+   *  conversation. The card renders in the transcript where it was asked
+   *  for, so the search sits next to the sentence that motivated it. */
+  | { run: EvolveRun; type: "evolve_run.created" }
   | { request: PermissionRequest; type: "permission.required" }
   | { request: PermissionRequest; type: "permission.resolved" }
   | { review: ArtifactReviewRun; type: "artifact_review.completed" }
