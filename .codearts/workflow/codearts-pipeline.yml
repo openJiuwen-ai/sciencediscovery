@@ -25,6 +25,8 @@
 # `with.OFFICIAL_SHELL_SCRIPT_INPUT`. CodeArts has no GitHub-style `run:` key:
 # the server rewrites one into a nonexistent plugin named `official_shell` and
 # rejects the pipeline before it starts.
+# Test steps save their exit code before uploading run.log to OBS; a final shell
+# step restores that exit code so failed tests still publish their diagnostics.
 #
 # Editing this pipeline in the CodeArts web editor may rewrite the file and
 # drop these comments; keep this file the source of truth.
@@ -126,7 +128,7 @@ stages:
                   exit 1
                 fi
               done
-        - name: Run and report UT
+        - name: Run and stage UT log
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
@@ -138,12 +140,36 @@ stages:
               export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
               echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX, python=$UV_PYTHON_INSTALL_MIRROR"
+              RESULT_DIR=.ci-results/ut-core
+              RESULT_LOG="$RESULT_DIR/run.log"
+              mkdir -p "$RESULT_DIR"
               set +e
               pnpm ci:ut:core
               TEST_RC=$?
               set -e
+              printf '%s\n' "$TEST_RC" > "$RESULT_DIR/exit-code"
+              if [ ! -f "$RESULT_LOG" ]; then
+                printf 'pnpm ci:ut:core exited with status %s before run.log was created.\n' "$TEST_RC" > "$RESULT_LOG"
+              fi
               echo "=== UT run.log (last 80 lines) ==="
-              tail -n 80 .ci-results/ut-core/run.log 2>/dev/null || echo "no run.log produced"
+              tail -n 80 "$RESULT_LOG"
+        - name: Upload UT log to OBS
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/ut/run.log"
+            source_file: .ci-results/ut-core/run.log
+            self_folder: "false"
+        - name: Report UT result
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              TEST_RC=$(cat .ci-results/ut-core/exit-code)
+              echo "UT exited with status $TEST_RC"
               exit "$TEST_RC"
         if: "${{ default() }}"
         runs-on:
@@ -175,7 +201,7 @@ stages:
               bash .ci/provision-runner.sh
         # The hermetic agent loop drives a scripted local endpoint and performs
         # a real workspace tool round trip without a model credential.
-        - name: Run and report ST
+        - name: Run and stage ST log
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
@@ -187,12 +213,36 @@ stages:
               export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
               echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX, python=$UV_PYTHON_INSTALL_MIRROR"
+              RESULT_DIR=.ci-results/st
+              RESULT_LOG="$RESULT_DIR/run.log"
+              mkdir -p "$RESULT_DIR"
               set +e
               pnpm ci:st
               TEST_RC=$?
               set -e
+              printf '%s\n' "$TEST_RC" > "$RESULT_DIR/exit-code"
+              if [ ! -f "$RESULT_LOG" ]; then
+                printf 'pnpm ci:st exited with status %s before run.log was created.\n' "$TEST_RC" > "$RESULT_LOG"
+              fi
               echo "=== ST run.log (last 80 lines) ==="
-              tail -n 80 .ci-results/st/run.log 2>/dev/null || echo "no run.log produced"
+              tail -n 80 "$RESULT_LOG"
+        - name: Upload ST log to OBS
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/st/run.log"
+            source_file: .ci-results/st/run.log
+            self_folder: "false"
+        - name: Report ST result
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              TEST_RC=$(cat .ci-results/st/exit-code)
+              echo "ST exited with status $TEST_RC"
               exit "$TEST_RC"
         if: "${{ default() }}"
         runs-on:
