@@ -80,6 +80,63 @@ stages:
         - name: Download the source commit
           uses: official_git_clone
           identifier: 0
+        - name: Checkout the PR source commit
+          uses: official_shell_plugin
+          env:
+            CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              if [ "${{ pipeline.trigger_type }}" != "MR" ]; then
+                echo "not an MR run; keeping the downloaded source commit"
+                exit 0
+              fi
+
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              # GitCode's MR payload carries the source head that triggered this run.
+              SOURCE_METADATA=$(node <<'NODE'
+              const payloadText = process.env.CODEARTS_WEBHOOK_PAYLOAD;
+              if (!payloadText) throw new Error("CODEARTS_WEBHOOK_PAYLOAD is empty");
+              const payload = JSON.parse(payloadText);
+              const attributes = payload.object_attributes;
+              const sourceBranch = attributes?.source_branch;
+              const sourceSha = attributes?.last_commit?.id;
+              if (payload.event_type !== "merge_request" || !attributes) {
+                throw new Error(`expected a merge_request payload, received ${String(payload.event_type)}`);
+              }
+              if (typeof sourceBranch !== "string" || sourceBranch.length === 0 || /[\r\n]/.test(sourceBranch)) {
+                throw new Error("the MR payload has no valid source branch");
+              }
+              if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/i.test(sourceSha)) {
+                throw new Error("the MR payload has no valid source commit SHA");
+              }
+              process.stdout.write(`${sourceBranch}\n${sourceSha.toLowerCase()}\n`);
+              NODE
+              )
+              SOURCE_BRANCH=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '1p')
+              SOURCE_SHA=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '2p')
+              git check-ref-format --branch "$SOURCE_BRANCH" >/dev/null
+
+              # Fetch the branch for reachability, then detach at the event SHA so a
+              # later PR update cannot change the code covered by this pipeline run.
+              FETCH_REF=refs/remotes/origin/codearts-pr-source
+              git fetch --no-tags --force origin "+refs/heads/$SOURCE_BRANCH:$FETCH_REF"
+              if ! git cat-file -e "$SOURCE_SHA^{commit}" 2>/dev/null; then
+                git fetch --no-tags origin "$SOURCE_SHA"
+              fi
+              if ! git merge-base --is-ancestor "$SOURCE_SHA" "$FETCH_REF"; then
+                echo "FATAL: trigger commit $SOURCE_SHA is not reachable from source branch $SOURCE_BRANCH" >&2
+                exit 1
+              fi
+              git checkout --detach "$SOURCE_SHA"
+              ACTUAL_SHA=$(git rev-parse HEAD)
+              if [ "$ACTUAL_SHA" != "$SOURCE_SHA" ]; then
+                echo "FATAL: expected PR source $SOURCE_SHA, checked out $ACTUAL_SHA" >&2
+                exit 1
+              fi
+              echo "checked out PR source: branch=$SOURCE_BRANCH sha=$ACTUAL_SHA"
+              git show -s --format='subject: %s'
+          identifier: 6
         - name: Provision the runner
           uses: official_shell_plugin
           with:
@@ -179,6 +236,63 @@ stages:
         - name: Download the source commit
           uses: official_git_clone
           identifier: 0
+        - name: Checkout the PR source commit
+          uses: official_shell_plugin
+          env:
+            CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              if [ "${{ pipeline.trigger_type }}" != "MR" ]; then
+                echo "not an MR run; keeping the downloaded source commit"
+                exit 0
+              fi
+
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              # GitCode's MR payload carries the source head that triggered this run.
+              SOURCE_METADATA=$(node <<'NODE'
+              const payloadText = process.env.CODEARTS_WEBHOOK_PAYLOAD;
+              if (!payloadText) throw new Error("CODEARTS_WEBHOOK_PAYLOAD is empty");
+              const payload = JSON.parse(payloadText);
+              const attributes = payload.object_attributes;
+              const sourceBranch = attributes?.source_branch;
+              const sourceSha = attributes?.last_commit?.id;
+              if (payload.event_type !== "merge_request" || !attributes) {
+                throw new Error(`expected a merge_request payload, received ${String(payload.event_type)}`);
+              }
+              if (typeof sourceBranch !== "string" || sourceBranch.length === 0 || /[\r\n]/.test(sourceBranch)) {
+                throw new Error("the MR payload has no valid source branch");
+              }
+              if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/i.test(sourceSha)) {
+                throw new Error("the MR payload has no valid source commit SHA");
+              }
+              process.stdout.write(`${sourceBranch}\n${sourceSha.toLowerCase()}\n`);
+              NODE
+              )
+              SOURCE_BRANCH=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '1p')
+              SOURCE_SHA=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '2p')
+              git check-ref-format --branch "$SOURCE_BRANCH" >/dev/null
+
+              # Fetch the branch for reachability, then detach at the event SHA so a
+              # later PR update cannot change the code covered by this pipeline run.
+              FETCH_REF=refs/remotes/origin/codearts-pr-source
+              git fetch --no-tags --force origin "+refs/heads/$SOURCE_BRANCH:$FETCH_REF"
+              if ! git cat-file -e "$SOURCE_SHA^{commit}" 2>/dev/null; then
+                git fetch --no-tags origin "$SOURCE_SHA"
+              fi
+              if ! git merge-base --is-ancestor "$SOURCE_SHA" "$FETCH_REF"; then
+                echo "FATAL: trigger commit $SOURCE_SHA is not reachable from source branch $SOURCE_BRANCH" >&2
+                exit 1
+              fi
+              git checkout --detach "$SOURCE_SHA"
+              ACTUAL_SHA=$(git rev-parse HEAD)
+              if [ "$ACTUAL_SHA" != "$SOURCE_SHA" ]; then
+                echo "FATAL: expected PR source $SOURCE_SHA, checked out $ACTUAL_SHA" >&2
+                exit 1
+              fi
+              echo "checked out PR source: branch=$SOURCE_BRANCH sha=$ACTUAL_SHA"
+              git show -s --format='subject: %s'
+          identifier: 5
         - name: Provision the runner
           uses: official_shell_plugin
           with:
