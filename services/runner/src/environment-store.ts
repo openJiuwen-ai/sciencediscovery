@@ -830,8 +830,19 @@ export class EnvironmentStore {
 
   private requiredRevision(id: string): EnvironmentRevision {
     const revision = this.catalog.revisions.find((candidate) => candidate.id === id);
-    if (!revision) throw new Error(`Unknown environment revision: ${id}`);
-    return revision;
+    if (revision) return revision;
+    // The caller reads these ids out of a listing and types one back, and they
+    // are 36-character UUIDs: a single transposed character is the likely
+    // mistake, and "unknown revision" alone leaves nothing to correct with —
+    // seen live, an agent guessing at a second id after the first was a typo of
+    // a revision that did exist. The known ids are right here, so say them.
+    const known = this.catalog.revisions.map((candidate) => candidate.id);
+    throw new Error(
+      `Unknown environment revision: ${id}.`
+      + (known.length
+        ? ` Known revisions: ${known.slice(0, 10).join(", ")}${known.length > 10 ? ", …" : ""}`
+        : " No environment revisions exist yet; create one before running against it."),
+    );
   }
 
   private revisionPath(environmentId: string, revisionId: string): string {

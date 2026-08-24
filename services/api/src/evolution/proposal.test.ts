@@ -303,3 +303,28 @@ test("a path that cannot be read names the field it came from", async () => {
   assert.match(result.refusedBecause!, /startingPointPath/);
   assert.match(result.refusedBecause!, /escapes the workspace/);
 });
+
+test("a rollout too thin to rank on is refused", async () => {
+  // The split people forget: the gate had a floor and the rollout had none.
+  // Observed live — rolloutShards 1, five candidates, every one scoring exactly
+  // 0.6000, the whole budget spent and nothing for the tree to choose by.
+  const { deps: d } = deps();
+  const result = await startProposedRun({
+    ...proposal(),
+    split: { gateShards: 6, rolloutShards: 1, seed: 0, shardRows: 20, testShards: 2, trainRows: 200 },
+  }, d);
+
+  assert.equal(result.run, undefined);
+  assert.match(result.refusedBecause!, /rollout/);
+  assert.match(result.refusedBecause!, /排名/);
+});
+
+test("a rollout at the floor is accepted", async () => {
+  const { deps: d } = deps();
+  const result = await startProposedRun({
+    ...proposal(),
+    split: { gateShards: 6, rolloutShards: 4, seed: 0, shardRows: 20, testShards: 2, trainRows: 200 },
+  }, d);
+
+  assert.equal(result.run?.id, "run-1");
+});

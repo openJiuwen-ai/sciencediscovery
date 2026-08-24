@@ -1152,7 +1152,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       scaleMax: Type.Optional(Type.Number({ maximum: 100, minimum: 1 })),
       split: Type.Optional(Type.Object({
         gateShards: Type.Integer({ maximum: 64, minimum: 4 }),
-        rolloutShards: Type.Integer({ maximum: 64, minimum: 1 }),
+        // Minimum 4, like the gate. These are what the tree ranks candidates
+        // with, and one of them means every candidate is compared on a single
+        // measurement — a coarse metric then gives them all the same number.
+        // Observed: rolloutShards 1, five candidates, all exactly 0.6000.
+        rolloutShards: Type.Integer({ maximum: 64, minimum: 4 }),
         seed: Type.Integer({ maximum: 2 ** 31, minimum: 0 }),
         shardRows: Type.Integer({ maximum: 100_000, minimum: 1 }),
         testShards: Type.Integer({ maximum: 64, minimum: 0 }),

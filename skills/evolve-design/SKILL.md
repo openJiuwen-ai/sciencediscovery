@@ -85,6 +85,12 @@ to after the budget is spent.
    too small.
 3. **How many held out?** Deterministic scoring 4–6 units; anything with randomness 8–12. Too
    few misreads noise as improvement — silently, for the whole run.
+   **And how many to rank on.** The rollout units are what the tree compares candidates with, and
+   they are the ones people forget: a run with `rolloutShards: 1` ranks every candidate on a
+   single measurement, so a coarse metric gives the same number to everything and the search has
+   nothing to choose by. Observed: five candidates, all exactly 0.6000, budget spent, no signal.
+   Give the rollout at least as many units as it takes for two genuinely different candidates to
+   land on different numbers — usually 4 or more, and never 1.
 4. **Does the candidate learn from data?** If it fits before it produces, the fitting volume
    must match the evaluation volume. Skip when nothing is fitted.
 

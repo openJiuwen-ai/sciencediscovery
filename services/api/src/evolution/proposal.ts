@@ -74,6 +74,18 @@ export interface ProposalDeps {
  *  agent is told the reasoning in the skill; this is the floor under it. */
 const MIN_GATE = 4;
 
+/** The rollout is what the tree ranks candidates with, and it is the split
+ *  people forget: the gate has a floor and this had none. One rollout unit
+ *  means every candidate is compared on a single measurement, and a coarse
+ *  metric then hands them all the same number — observed as five candidates
+ *  scoring exactly 0.6000 with the whole budget spent. */
+function rolloutTooThin(split: EvolveSplit): string | undefined {
+  if (split.rolloutShards >= MIN_GATE) return undefined;
+  return `rollout 只有 ${split.rolloutShards} 片。搜索就是靠这几片给候选排名的，`
+    + `片太少时不同的候选会拿到同一个分数，树就没有可选的了——至少 ${MIN_GATE} 片`;
+}
+
+
 
 
 /**
@@ -193,6 +205,8 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     if (proposal.split.gateShards < MIN_GATE) {
       return `留出只有 ${proposal.split.gateShards} 片，判不出一次提升是不是噪声`;
     }
+    const rollout = rolloutTooThin(proposal.split);
+    if (rollout) return rollout;
   }
   if (proposal.mode === "custom_script") {
     if (!proposal.evaluatorSource?.trim()) return "custom_script 要给评测脚本";
@@ -205,6 +219,8 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     if (proposal.split.gateShards < MIN_GATE) {
       return `留出只有 ${proposal.split.gateShards} 片，判不出一次提升是不是噪声`;
     }
+    const rollout = rolloutTooThin(proposal.split);
+    if (rollout) return rollout;
   }
   if (proposal.mode === "llm_judge") {
     if (!proposal.rubric?.trim()) return "llm_judge 要写评分细则";
