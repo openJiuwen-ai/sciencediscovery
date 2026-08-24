@@ -15,7 +15,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ConnectorManifest, ModelProfile, RuntimeSettingsDetails, SkillDescriptor } from "@science-agent/schema";
+import type { ConnectorManifest, ModelProfile, RuntimeSettingsDetails, SkillDescriptor, SkillLibrary } from "@science-agent/schema";
+import { BUILT_IN_SKILL_LIBRARY_ID } from "@science-agent/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -61,6 +62,20 @@ const skills = [{
   version: "revision:2",
 }] satisfies SkillDescriptor[];
 
+const skillLibraries = [{
+  createdAt: "2026-01-01T00:00:00.000Z",
+  headVersionId: "version-built-in",
+  id: BUILT_IN_SKILL_LIBRARY_ID,
+  name: "Built-in Skills",
+  updatedAt: "2026-01-02T00:00:00.000Z",
+}, {
+  createdAt: "2026-01-01T00:00:00.000Z",
+  headVersionId: "version-alpha",
+  id: "evaluation-skills",
+  name: "Evaluation Skills",
+  updatedAt: "2026-01-02T00:00:00.000Z",
+}] satisfies SkillLibrary[];
+
 function details(
   overrides: RuntimeSettingsDetails["overrides"] = {},
   effective: Partial<RuntimeSettingsDetails["effective"]> = {},
@@ -68,6 +83,7 @@ function details(
   return {
     effective: {
       enabledConnectorIds: ["pubmed"],
+      enabledSkillLibraries: [],
       enabledSkillIds: skills.map((skill) => skill.id),
       modelId: model.id,
       reviewModelId: model.id,
@@ -78,6 +94,7 @@ function details(
     overrides,
     sources: {
       enabledConnectorIds: "project",
+      enabledSkillLibraries: "unset",
       enabledSkillIds: "unset",
       modelId: "global",
       reviewModelId: "project",
@@ -94,6 +111,7 @@ function render(settings: RuntimeSettingsDetails): string {
     models: [model],
     onSave: () => undefined,
     scopeLabel: "Session",
+    skillLibraries,
     skills,
   }));
 }
@@ -109,10 +127,11 @@ test("renders inherited effective values and their field sources", () => {
 
 test("preserves and renders an explicit empty-list override", () => {
   const html = render(details({ enabledConnectorIds: [] }));
+  const connectorsFieldset = html.slice(html.indexOf("<legend>Connectors</legend>"), html.indexOf("<legend>Skills</legend>"));
 
   assert.match(html, /<option value="override" selected="">Override · 0 selected<\/option>/);
-  assert.match(html, /type="checkbox"/);
-  assert.doesNotMatch(html, /type="checkbox"[^>]*checked=""/);
+  assert.match(connectorsFieldset, /type="checkbox"/);
+  assert.doesNotMatch(connectorsFieldset, /type="checkbox"[^>]*checked=""/);
 });
 
 test("renders Global settings as direct defaults without inheritance or skill controls", () => {
@@ -124,6 +143,7 @@ test("renders Global settings as direct defaults without inheritance or skill co
     onSave: () => undefined,
     scopeLabel: "Global",
     skillScope: "global",
+    skillLibraries,
     skills,
   }));
 
@@ -148,7 +168,8 @@ test("Session override to selected shows the whitelist with only the checked ski
 
   assert.match(html, /<option value="selected" selected="">Only use selected skills<\/option>/);
   assert.match(html, /managed-workflow/);
-  assert.equal(html.match(/type="checkbox" checked=""/g)?.length, 1);
+  const skillsFieldset = html.slice(html.indexOf("<legend>Skills</legend>"), html.indexOf("<legend>Skill libraries</legend>"));
+  assert.equal(skillsFieldset.match(/type="checkbox" checked=""/g)?.length, 1);
   assert.doesNotMatch(html, /Every installed skill stays available/);
 });
 
@@ -159,14 +180,41 @@ test("Project is the root skill layer, so it offers no inherit option and defaul
     models: [model],
     onSave: () => undefined,
     scopeLabel: "Project",
+    skillLibraries,
     skillScope: "project",
     skills,
   }));
 
-  const skillFieldset = html.slice(html.indexOf("<legend>Skills</legend>"));
+  const skillFieldset = html.slice(html.indexOf("<legend>Skills</legend>"), html.indexOf("<legend>Skill libraries</legend>"));
   assert.match(skillFieldset, /<option value="all" selected="">Allow all skills<\/option>/);
   assert.doesNotMatch(skillFieldset, /Inherit/);
   assert.doesNotMatch(skillFieldset, /settings-source/);
+});
+
+test("renders skill library mounts with override controls", () => {
+  const html = renderToStaticMarkup(createElement(ScopedSettingsEditor, {
+    connectors: [connector],
+    details: details({
+      enabledSkillLibraries: [{ libraryId: "evaluation-skills", limit: 8, priority: 3, versionId: "head" }],
+    }, {
+      enabledSkillLibraries: [{ libraryId: "evaluation-skills", limit: 8, priority: 3, versionId: "head" }],
+    }),
+    models: [model],
+    onSave: () => undefined,
+    scopeLabel: "Session",
+    skillLibraries,
+    skills,
+  }));
+
+  assert.match(html, /Skill libraries/);
+  assert.match(html, /Built-in Skills/);
+  assert.doesNotMatch(html, /Required · default recall library/);
+  assert.match(html, /Evaluation Skills/);
+  assert.match(html, /value="head"/);
+  assert.match(html, /value="3"/);
+  assert.match(html, /value="8"/);
+  assert.doesNotMatch(html, />Remove</);
+  assert.doesNotMatch(html, />Add</);
 });
 
 test("disambiguates duplicate model options without removing either profile", () => {
@@ -178,6 +226,7 @@ test("disambiguates duplicate model options without removing either profile", ()
     models: [model, duplicate],
     onSave: () => undefined,
     scopeLabel: "Global",
+    skillLibraries,
     skills,
   }));
 
@@ -191,6 +240,7 @@ test("disambiguates duplicate model options without removing either profile", ()
     models: [model, duplicate],
     onSave: () => undefined,
     scopeLabel: "Session",
+    skillLibraries,
     skills,
   }));
   assert.match(inheritedHtml, /Inherit · Primary model · test-model · model-1 \(Global setting\)/);

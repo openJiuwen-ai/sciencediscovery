@@ -79,6 +79,7 @@ import type {
   ReviewerSpecialistLevel,
   ReviewerSpecialistSettings,
   RevisePlanRequest,
+  EffectiveRuntimeSettings,
   ResolvedRuntimeSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsField,
@@ -214,6 +215,22 @@ interface StagedDeletion {
   entries: Array<{ source: string; staged: string }>;
   root: string;
   sessionIds: string[];
+}
+
+function withDefaultProjectSkillSettings(input: RuntimeSettingsOverrides): RuntimeSettingsOverrides {
+  if (
+    hasOwn(input, "enabledSkillIds")
+    || hasOwn(input, "enabledSkillLibraries")
+    || hasOwn(input, "skillSelectionMode")
+  ) {
+    return input;
+  }
+  return {
+    ...input,
+    enabledSkillIds: [],
+    enabledSkillLibraries: [],
+    skillSelectionMode: "selected",
+  };
 }
 
 function requiredLabel(value: unknown, field: string): string {
@@ -1202,6 +1219,7 @@ export class SessionStore {
   ): ResolvedRuntimeSettings {
     const effective: ResolvedRuntimeSettings["effective"] = {
       enabledConnectorIds: [],
+      enabledSkillLibraries: [],
       enabledSkillIds: [],
       semanticReviewEnabled: true,
       skillSelectionMode: DEFAULT_SKILL_SELECTION_MODE,
@@ -1218,6 +1236,7 @@ export class SessionStore {
         const value = overrides[field];
         if (value === undefined) continue;
         if (field === "enabledConnectorIds") effective.enabledConnectorIds = [...value as ConnectorId[]];
+        else if (field === "enabledSkillLibraries") effective.enabledSkillLibraries = structuredClone(value) as EffectiveRuntimeSettings["enabledSkillLibraries"];
         else if (field === "enabledSkillIds") effective.enabledSkillIds = [...value as string[]];
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
@@ -1800,7 +1819,7 @@ export class SessionStore {
   }
 
   async createProject(name: string, input: RuntimeSettingsOverrides = {}): Promise<Project> {
-    const settingsOverrides = this.normalizeSettings(input);
+    const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
     const project: Project = {
       createdAt: new Date().toISOString(),
       id: randomUUID(),

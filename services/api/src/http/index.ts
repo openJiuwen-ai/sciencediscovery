@@ -232,10 +232,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
     });
   };
-  const ready = Promise.all([
-    initializePlatformServices(platform, config),
-    skillLibraryCatalog.load(),
-  ]).then(() => undefined);
+  const ready = skillLibraryCatalog.load()
+    .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
+    .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
+    .then(() => undefined);
 
   const server = createServer(async (request, response) => {
     const requestPath = (request.url ?? "/").split("?", 1)[0] || "/";
@@ -1474,6 +1474,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           paperService,
           remoteCompute,
           skillCatalog,
+          skillLibraryCatalog,
           memoryGraphSink,
           sessionId,
           config,

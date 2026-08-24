@@ -24,6 +24,7 @@ import { CasStore } from "@science-agent/cas";
 
 const runtimeSettings: EffectiveRuntimeSettings = {
   enabledConnectorIds: [],
+  enabledSkillLibraries: [],
   enabledSkillIds: [],
   modelId: "model-a",
   semanticReviewEnabled: false,

@@ -14,6 +14,8 @@
 
 export type SkillSource = "built-in" | "managed";
 
+export const BUILT_IN_SKILL_LIBRARY_ID = "built-in-skills";
+
 export type SkillResourceKind = "asset" | "other" | "reference" | "script";
 
 export interface SkillValidationDiagnostic {
@@ -204,6 +206,37 @@ export interface RollbackSkillLibraryVersionRequest {
   baseVersionId?: string;
   evaluation?: Record<string, unknown>;
   targetVersionId: string;
+}
+
+export interface SkillLibrarySearchLibrary {
+  contentHash?: string;
+  libraryId: string;
+  limit?: number;
+  priority?: number;
+  versionId: string;
+}
+
+export interface SkillLibrarySearchRequest {
+  filters?: {
+    domainTags?: string[];
+  };
+  libraries: SkillLibrarySearchLibrary[];
+  limit?: number;
+  query: string;
+}
+
+export interface SkillLibrarySearchCandidate {
+  libraryId: string;
+  priority: number;
+  score: number;
+  skill: SkillLibraryVersionSkill;
+  versionId: string;
+}
+
+export interface SkillLibrarySearchResult {
+  candidates: SkillLibrarySearchCandidate[];
+  conflicts: SkillLibraryConflict[];
+  skillLibraryRefs: import("./provenance.js").PromptSkillLibraryRef[];
 }
 
 /**

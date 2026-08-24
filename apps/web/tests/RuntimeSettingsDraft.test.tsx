@@ -15,7 +15,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ConnectorManifest, ModelProfile, RuntimeSettingsDetails, SkillDescriptor } from "@science-agent/schema";
+import type { ConnectorManifest, ModelProfile, RuntimeSettingsDetails, RuntimeSettingsOverrides, SkillDescriptor, SkillLibrary } from "@science-agent/schema";
+import { BUILT_IN_SKILL_LIBRARY_ID } from "@science-agent/schema";
 import { createElement, useState } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 
@@ -53,6 +54,22 @@ const skill = {
   version: "1.0.0",
 } satisfies SkillDescriptor;
 
+const skillLibrary = {
+  createdAt: "2026-08-11T00:00:00.000Z",
+  headVersionId: "version-a",
+  id: "evaluation-skills",
+  name: "Evaluation Skills",
+  updatedAt: "2026-08-11T00:00:00.000Z",
+} satisfies SkillLibrary;
+
+const builtInSkillLibrary = {
+  createdAt: "2026-08-11T00:00:00.000Z",
+  headVersionId: "version-built-in",
+  id: BUILT_IN_SKILL_LIBRARY_ID,
+  name: "Built-in Skills",
+  updatedAt: "2026-08-11T00:00:00.000Z",
+} satisfies SkillLibrary;
+
 function details(
   overrides: RuntimeSettingsDetails["overrides"] = {},
   effective: Partial<RuntimeSettingsDetails["effective"]> = {},
@@ -60,6 +77,7 @@ function details(
   return {
     effective: {
       enabledConnectorIds: [],
+      enabledSkillLibraries: [],
       enabledSkillIds: [],
       modelId: undefined,
       semanticReviewEnabled: false,
@@ -69,6 +87,7 @@ function details(
     overrides,
     sources: {
       enabledConnectorIds: "global",
+      enabledSkillLibraries: "unset",
       enabledSkillIds: "unset",
       modelId: "global",
       reviewModelId: "unset",
@@ -86,6 +105,7 @@ function editor(settings: RuntimeSettingsDetails, key?: string) {
     models: [model],
     onSave: () => undefined,
     scopeLabel: "Session",
+    skillLibraries: [skillLibrary],
     skills: [skill],
   });
 }
@@ -101,7 +121,7 @@ function settingsControls(root: ReactTestInstance) {
 }
 
 function selectedCheckboxes(root: ReactTestInstance): ReactTestInstance[] {
-  return root.findAllByType("input").filter((input) => input.props.type === "checkbox" && input.props.checked);
+  return root.findAllByType("input").filter((input) => input.props.type === "checkbox" && !input.props["aria-label"] && input.props.checked);
 }
 
 async function chooseRuntimeDraft(root: ReactTestInstance): Promise<void> {
@@ -114,7 +134,7 @@ async function chooseRuntimeDraft(root: ReactTestInstance): Promise<void> {
   await act(async () => connectorCheckbox.props.onChange());
   controls = settingsControls(root);
   await act(async () => controls.skillMode.props.onChange({ target: { value: "selected" } }));
-  const checkboxes = root.findAllByType("input").filter((input) => input.props.type === "checkbox");
+  const checkboxes = root.findAllByType("input").filter((input) => input.props.type === "checkbox" && !input.props["aria-label"]);
   assert.equal(checkboxes.length, 2);
   await act(async () => checkboxes[1]!.props.onChange());
 }
@@ -136,6 +156,7 @@ test("Project name input preserves the complete unsubmitted Runtime Settings dra
       models: [model],
       onCancel: () => undefined,
       onCreate: () => undefined,
+      skillLibraries: [skillLibrary],
       skills: [skill],
     }));
   });
@@ -182,6 +203,62 @@ test("an ordinary parent state rerender does not reset the Runtime Settings draf
   await act(async () => renderer!.unmount());
 });
 
+test("skill library checkbox persists a mounted library selection", async () => {
+  let saved: RuntimeSettingsOverrides | undefined;
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(ScopedSettingsEditor, {
+      connectors: [connector],
+      details: details(),
+      models: [model],
+      onSave: (draft) => { saved = draft; },
+      scopeLabel: "Session",
+      skillLibraries: [skillLibrary],
+      skills: [skill],
+    }));
+  });
+  const checkbox = renderer!.root.findByProps({ "aria-label": "Use Evaluation Skills" });
+  await act(async () => checkbox.props.onChange());
+  await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault: () => undefined }));
+
+  assert.deepEqual(saved?.enabledSkillLibraries, [{
+    libraryId: "evaluation-skills",
+    limit: 12,
+    priority: 0,
+    versionId: "head",
+  }]);
+  await act(async () => renderer!.unmount());
+});
+
+test("built-in skill library can be unchecked and saved", async () => {
+  let saved: RuntimeSettingsOverrides | undefined;
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(ScopedSettingsEditor, {
+      connectors: [connector],
+      details: details({
+        enabledSkillLibraries: [{ libraryId: BUILT_IN_SKILL_LIBRARY_ID, versionId: "head" }],
+      }, {
+        enabledSkillLibraries: [{ libraryId: BUILT_IN_SKILL_LIBRARY_ID, versionId: "head" }],
+      }),
+      models: [model],
+      onSave: (draft) => { saved = draft; },
+      scopeLabel: "Project",
+      skillLibraries: [builtInSkillLibrary, skillLibrary],
+      skillScope: "project",
+      skills: [skill],
+    }));
+  });
+  const checkbox = renderer!.root.findByProps({ "aria-label": "Use Built-in Skills" });
+  assert.equal(checkbox.props.checked, true);
+  assert.equal(Boolean(checkbox.props.disabled), false);
+  await act(async () => checkbox.props.onChange());
+  await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault: () => undefined }));
+
+  assert.deepEqual(saved?.enabledSkillLibraries, []);
+  await act(async () => renderer!.unmount());
+});
+
 test("switching the Project or Session target initializes the new target overrides", async () => {
   let renderer: ReactTestRenderer;
   await act(async () => { renderer = create(editor(details(), "project:project-1")); });
@@ -212,6 +289,7 @@ test("closing and reopening Project creation starts again with empty overrides",
     models: [model],
     onCancel: () => undefined,
     onCreate: () => undefined,
+    skillLibraries: [skillLibrary],
     skills: [skill],
   });
   let renderer: ReactTestRenderer;

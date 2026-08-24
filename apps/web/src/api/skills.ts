@@ -26,6 +26,8 @@ import type {
   SkillDetail,
   SkillLibrary,
   SkillLibraryDiff,
+  SkillLibrarySearchRequest,
+  SkillLibrarySearchResult,
   SkillLibraryVersion,
   SkillResourceContent,
   UpdateSkillRequest,
@@ -44,6 +46,10 @@ export class SkillsApiClient extends SettingsApiClient {
 
   createSkillLibrary(body: { id?: string; name?: string } = {}): Promise<SkillLibrary> {
     return this.request("/api/skill-libraries", { body: JSON.stringify(body), method: "POST" });
+  }
+
+  searchSkillLibraries(body: SkillLibrarySearchRequest): Promise<SkillLibrarySearchResult> {
+    return this.request("/api/skill-libraries/search", { body: JSON.stringify(body), method: "POST" });
   }
 
   getSkillLibrary(libraryId: string): Promise<SkillLibrary> {

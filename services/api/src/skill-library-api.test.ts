@@ -24,6 +24,7 @@ import type {
   CommitSkillLibraryVersionResult,
   SkillLibrary,
   SkillLibraryDiff,
+  SkillLibrarySearchResult,
   SkillLibraryVersion,
 } from "@science-agent/schema";
 
@@ -141,6 +142,22 @@ test("skill library HTTP APIs create, dry-run, commit, diff, and rollback versio
       method: "POST",
     });
     assert.equal(second.status, 201);
+
+    const search = await apiJsonRequest<SkillLibrarySearchResult>(catalog, "/api/skill-libraries/search", {
+      body: {
+        libraries: [{
+          contentHash: second.body.version!.contentHash,
+          libraryId: "http-library",
+          priority: 2,
+          versionId: second.body.version!.id,
+        }],
+        limit: 1,
+        query: "revised test skill",
+      },
+      method: "POST",
+    });
+    assert.equal(search.status, 200);
+    assert.deepEqual(search.body.candidates.map((candidate) => candidate.skill.id), ["alpha-http-skill"]);
 
     const diff = await apiJsonRequest<SkillLibraryDiff>(
       catalog,

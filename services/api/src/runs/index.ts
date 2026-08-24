@@ -94,6 +94,7 @@ import type {
   UploadFileRequest,
   RegisterRemoteHostRequest,
   PromptManifest,
+  PromptSkillLibraryRef,
   ProposePlanRequest,
   RevisePlanRequest,
   SubagentStep,
@@ -225,6 +226,42 @@ function skillIdForSubagentType(skillCatalog: SkillCatalog, subagentType: string
   return [requested, normalized].find((candidate) => available.has(candidate));
 }
 
+function mergeSkillLibraryRefs(...groups: Array<readonly PromptSkillLibraryRef[] | undefined>): PromptSkillLibraryRef[] {
+  const merged = new Map<string, PromptSkillLibraryRef>();
+  for (const refs of groups) {
+    for (const ref of refs ?? []) merged.set(`${ref.libraryId}\0${ref.versionId}`, structuredClone(ref));
+  }
+  return [...merged.values()].toSorted((left, right) => `${left.libraryId}/${left.versionId}`.localeCompare(`${right.libraryId}/${right.versionId}`));
+}
+
+async function recallSkillLibrarySkills(
+  skillLibraryCatalog: SkillLibraryCatalog,
+  settingsSnapshot: EffectiveRuntimeSettings,
+  skillLibraryRefs: readonly PromptSkillLibraryRef[],
+  query: string,
+): Promise<RuntimeSkillSnapshot[]> {
+  const result = await skillLibraryCatalog.search({
+    libraries: skillLibraryRefs.map((ref) => {
+      const mount = settingsSnapshot.enabledSkillLibraries.find((candidate) => (
+        candidate.libraryId === ref.libraryId
+        && (!candidate.versionId || candidate.versionId === "head" || candidate.versionId === ref.versionId)
+      ));
+      return {
+        contentHash: ref.contentHash,
+        libraryId: ref.libraryId,
+        ...(mount?.limit === undefined ? {} : { limit: mount.limit }),
+        priority: mount?.priority ?? 0,
+        versionId: ref.versionId,
+      };
+    }),
+    query,
+  });
+  if (result.conflicts.length) {
+    throw new Error(result.conflicts.map((conflict) => conflict.message).join(" "));
+  }
+  return await skillLibraryCatalog.resolveSkills(result.candidates);
+}
+
 function resolveSubagentSpecialist(store: SessionStore, sessionSpecialistId: string | undefined, input: SubagentInput): Specialist | undefined {
   const requestedSpecialistId = input.specialistId?.trim();
   if (requestedSpecialistId) return store.getSpecialist(requestedSpecialistId);
@@ -326,6 +363,7 @@ async function executeAgentRun(
   paperService: PaperService,
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
+  skillLibraryCatalog: SkillLibraryCatalog,
   memoryGraphSink: MemoryGraphSink,
   sessionId: string,
   runId: string,
@@ -396,7 +434,15 @@ async function executeAgentRun(
     if (blockedSkillIds.length) {
       throw new Error(`These skills are not enabled for this Session: ${blockedSkillIds.join(", ")}`);
     }
-    activeSkills = skillCatalog.resolve([...effectiveSkillIds]);
+    const manualSkills = skillCatalog.resolve([...effectiveSkillIds]);
+    const librarySkills = body.skillLibraryRefs?.length
+      ? await recallSkillLibrarySkills(skillLibraryCatalog, settingsSnapshot, body.skillLibraryRefs, body.content)
+      : [];
+    const manualSkillIds = new Set(manualSkills.map((skill) => skill.id));
+    activeSkills = [
+      ...manualSkills,
+      ...librarySkills.filter((skill) => !manualSkillIds.has(skill.id)),
+    ];
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "The selected skills are not available");
   }
@@ -1900,8 +1946,11 @@ export async function createQueuedRun(
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Composer references are invalid");
   }
   let skillLibraryRefs: SessionRun["skillLibraryRefs"];
+  const settingsSnapshot = computeSettingsSnapshot(store, sessionId);
   try {
-    skillLibraryRefs = await skillLibraryCatalog.validateRefs(body.skillLibraryRefs);
+    const configuredRefs = await skillLibraryCatalog.resolveEnabledRefs(settingsSnapshot.enabledSkillLibraries);
+    const declaredRefs = await skillLibraryCatalog.validateRefs(body.skillLibraryRefs);
+    skillLibraryRefs = mergeSkillLibraryRefs(configuredRefs, declaredRefs);
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Skill library references are invalid");
   }
@@ -1910,7 +1959,7 @@ export async function createQueuedRun(
     prompt,
     references,
     sessionId,
-    settingsSnapshot: computeSettingsSnapshot(store, sessionId),
+    settingsSnapshot,
     ...(skillLibraryRefs.length ? { skillLibraryRefs } : {}),
     webForceRefresh: body.webForceRefresh === true || slashRefresh,
   });
@@ -1936,6 +1985,7 @@ export function scheduleSessionRuns(
   paperService: PaperService,
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
+  skillLibraryCatalog: SkillLibraryCatalog,
   memoryGraphSink: MemoryGraphSink,
   sessionId: string,
   serverConfig: ServerConfig,
@@ -1985,6 +2035,7 @@ export function scheduleSessionRuns(
             paperService,
             remoteCompute,
             skillCatalog,
+            skillLibraryCatalog,
             memoryGraphSink,
             sessionId,
             next.id,
@@ -2046,6 +2097,7 @@ export function scheduleSessionRuns(
         paperService,
         remoteCompute,
         skillCatalog,
+        skillLibraryCatalog,
         memoryGraphSink,
         sessionId,
         serverConfig,
@@ -2188,6 +2240,7 @@ export async function streamAgentRun(
     paperService,
     remoteCompute,
     skillCatalog,
+    skillLibraryCatalog,
     memoryGraphSink,
     sessionId,
     serverConfig,

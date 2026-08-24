@@ -18,6 +18,7 @@ import type { NpuJob } from "./npu-job.js";
 
 export type RuntimeSettingsField =
   | "enabledConnectorIds"
+  | "enabledSkillLibraries"
   | "enabledSkillIds"
   | "modelId"
   | "reviewModelId"
@@ -38,7 +39,7 @@ export type SkillSelectionMode = typeof SKILL_SELECTION_MODES[number];
 export const DEFAULT_SKILL_SELECTION_MODE: SkillSelectionMode = "all";
 
 /** Runtime settings fields that only Project and Session layers may set. */
-export const SKILL_SELECTION_FIELDS: readonly RuntimeSettingsField[] = ["enabledSkillIds", "skillSelectionMode"];
+export const SKILL_SELECTION_FIELDS: readonly RuntimeSettingsField[] = ["enabledSkillIds", "enabledSkillLibraries", "skillSelectionMode"];
 
 export function isSkillSelectionMode(value: unknown): value is SkillSelectionMode {
   return SKILL_SELECTION_MODES.includes(value as SkillSelectionMode);
@@ -46,6 +47,7 @@ export function isSkillSelectionMode(value: unknown): value is SkillSelectionMod
 
 export interface RuntimeSettingsOverrides {
   enabledConnectorIds?: ConnectorId[];
+  enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
   modelId?: string;
   reviewModelId?: string;
@@ -55,12 +57,24 @@ export interface RuntimeSettingsOverrides {
 
 export interface EffectiveRuntimeSettings {
   enabledConnectorIds: ConnectorId[];
+  /** Versioned skill libraries searched at run creation/execution time. */
+  enabledSkillLibraries: EnabledSkillLibrary[];
   /** Resolved skill set: the whole catalog in `all` mode, the whitelist in `selected`. */
   enabledSkillIds: string[];
   modelId?: string;
   reviewModelId?: string;
   semanticReviewEnabled: boolean;
   skillSelectionMode: SkillSelectionMode;
+}
+
+export interface EnabledSkillLibrary {
+  libraryId: string;
+  /** Omit or set to "head" to pin the current head when the run is queued. */
+  versionId?: string;
+  /** Higher priority wins when multiple libraries contain the same skill id. */
+  priority?: number;
+  /** Per-library candidate cap before the run-wide recall limit is applied. */
+  limit?: number;
 }
 
 export interface ResolvedRuntimeSettings {

@@ -19,8 +19,13 @@ import { resolve } from "node:path";
 import type {
   CommitSkillLibraryVersionRequest,
   CommitSkillLibraryVersionResult,
+  EnabledSkillLibrary,
   PromptSkillLibraryRef,
   SkillLibrary,
+  SkillLibrarySearchCandidate,
+  SkillLibrarySearchLibrary,
+  SkillLibrarySearchRequest,
+  SkillLibrarySearchResult,
   SkillLibraryConflict,
   SkillLibraryDiff,
   SkillLibraryPackageInput,
@@ -29,10 +34,13 @@ import type {
   SkillValidationDiagnostic,
   RollbackSkillLibraryVersionRequest,
 } from "@science-agent/schema";
+import { BUILT_IN_SKILL_LIBRARY_ID } from "@science-agent/schema";
 
-import { validateSkillPackage } from "@science-agent/specialist";
+import { BUNDLED_SKILL_IDS, validateSkillPackage } from "@science-agent/specialist";
+import type { RuntimeSkillSnapshot } from "@science-agent/specialist";
 
 const LIBRARY_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DEFAULT_LIBRARY_RECALL_LIMIT = 12;
 
 interface CatalogIndex {
   libraries: Record<string, SkillLibrary>;
@@ -126,6 +134,39 @@ async function validateStoredPackageHash(directory: string, expectedHash: string
   if (loaded.detail.hash !== expectedHash) {
     throw validationError(`Stored skill package hash does not match content: ${expectedHash}`);
   }
+}
+
+function queryTerms(query: string): string[] {
+  return [...new Set(query.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length >= 2))];
+}
+
+function scoreSkill(skill: SkillLibraryVersionSkill, query: string): number {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return 0;
+  const id = skill.id.toLowerCase();
+  const description = skill.description.toLowerCase();
+  if (id === normalizedQuery) return 100;
+  let score = id.includes(normalizedQuery) ? 40 : description.includes(normalizedQuery) ? 20 : 0;
+  for (const term of queryTerms(query)) {
+    if (id === term) score += 12;
+    else if (id.includes(term)) score += 6;
+    if (description.includes(term)) score += 3;
+  }
+  return score;
+}
+
+function packageInputFromFiles(files: ReadonlyMap<string, Buffer>): SkillLibraryPackageInput {
+  return {
+    files: [...files].map(([path, content]) => ({
+      content: content.toString("base64"),
+      encoding: "base64" as const,
+      path,
+    })).toSorted((left, right) => left.path.localeCompare(right.path)),
+  };
+}
+
+function diffCount(diff: SkillLibraryDiff): number {
+  return diff.added.length + diff.deleted.length + diff.modified.length;
 }
 
 export class SkillLibraryCatalog {
@@ -232,6 +273,40 @@ export class SkillLibraryCatalog {
       }
       return structuredClone(library);
     });
+  }
+
+  async seedBuiltInSkillLibrary(repositoryRoot: string): Promise<SkillLibrary> {
+    this.assertLoaded();
+    const library = this.get(BUILT_IN_SKILL_LIBRARY_ID)
+      ?? await this.create({ id: BUILT_IN_SKILL_LIBRARY_ID, name: "Built-in Skills" });
+    const current = library.headVersionId ? await this.getVersion(library.id, library.headVersionId) : undefined;
+    const bundledIds = new Set<string>(BUNDLED_SKILL_IDS);
+    const operations: CommitSkillLibraryVersionRequest["operations"] = [];
+    for (const id of BUNDLED_SKILL_IDS) {
+      operations.push({
+        package: packageInputFromFiles(await readPackageDirectory(resolve(repositoryRoot, "skills", id))),
+        type: "upsert",
+      });
+    }
+    for (const skill of current?.skills ?? []) {
+      if (!bundledIds.has(skill.id)) operations.push({ skillId: skill.id, type: "delete" });
+    }
+    const preview = await this.commitVersion(library.id, {
+      author: { kind: "system", name: "Built-in skill catalog" },
+      baseVersionId: library.headVersionId,
+      dryRun: true,
+      operations,
+    });
+    if (!diffCount(preview.diff)) return this.get(library.id)!;
+    const committed = await this.commitVersion(library.id, {
+      author: { kind: "system", name: "Built-in skill catalog" },
+      baseVersionId: library.headVersionId,
+      operations,
+    });
+    if (committed.conflicts.length) {
+      throw validationError(committed.conflicts.map((conflict) => conflict.message).join(" "));
+    }
+    return this.get(library.id)!;
   }
 
   async getVersion(libraryId: string, versionId: string): Promise<SkillLibraryVersion> {
@@ -413,6 +488,111 @@ export class SkillLibraryCatalog {
       this.getVersion(libraryId, toVersionId),
     ]);
     return diffSkills(fromVersion.skills, toVersion.skills);
+  }
+
+  async resolveEnabledRefs(libraries: readonly EnabledSkillLibrary[] | undefined): Promise<PromptSkillLibraryRef[]> {
+    this.assertLoaded();
+    if (!libraries?.length) return [];
+    const refs: PromptSkillLibraryRef[] = [];
+    const seen = new Set<string>();
+    for (const mount of libraries) {
+      const libraryId = mount.libraryId.trim();
+      const library = this.index.libraries[libraryId];
+      if (!library) throw new SkillLibraryCatalogError("SKILL_LIBRARY_NOT_FOUND", `Skill library not found: ${libraryId}`);
+      const requestedVersionId = mount.versionId?.trim();
+      const versionId = !requestedVersionId || requestedVersionId === "head" ? library.headVersionId : requestedVersionId;
+      if (!versionId) throw validationError(`Skill library has no head version: ${libraryId}`);
+      const version = await this.getVersion(libraryId, versionId);
+      const key = `${libraryId}\0${version.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      refs.push({ contentHash: version.contentHash, libraryId, versionId: version.id });
+    }
+    return refs;
+  }
+
+  async search(request: SkillLibrarySearchRequest): Promise<SkillLibrarySearchResult> {
+    this.assertLoaded();
+    const limit = Math.min(Math.max(request.limit ?? DEFAULT_LIBRARY_RECALL_LIMIT, 1), 100);
+    const refs: PromptSkillLibraryRef[] = [];
+    const candidates: SkillLibrarySearchCandidate[] = [];
+    const conflicts: SkillLibraryConflict[] = [];
+    const bestBySkillId = new Map<string, SkillLibrarySearchCandidate>();
+    const seenRefs = new Set<string>();
+
+    for (const libraryRef of request.libraries) {
+      const libraryId = libraryRef.libraryId.trim();
+      const versionId = libraryRef.versionId.trim();
+      const version = await this.getVersion(libraryId, versionId);
+      if (libraryRef.contentHash && libraryRef.contentHash !== version.contentHash) {
+        throw validationError(`Skill library reference hash mismatch for ${libraryId}@${versionId}`);
+      }
+      const refKey = `${libraryId}\0${versionId}`;
+      if (!seenRefs.has(refKey)) {
+        refs.push({ contentHash: version.contentHash, libraryId, versionId });
+        seenRefs.add(refKey);
+      }
+      const priority = libraryRef.priority ?? 0;
+      const perLibraryLimit = Math.min(Math.max((libraryRef as SkillLibrarySearchLibrary & { limit?: number }).limit ?? limit, 1), 100);
+      for (const candidate of version.skills
+        .map((skill) => ({ libraryId, priority, score: scoreSkill(skill, request.query), skill, versionId }))
+        .filter((candidate) => candidate.score > 0)
+        .toSorted((left, right) => right.score - left.score || left.skill.id.localeCompare(right.skill.id))
+        .slice(0, perLibraryLimit)) {
+        const current = bestBySkillId.get(candidate.skill.id);
+        if (!current || candidate.priority > current.priority || (candidate.priority === current.priority && candidate.score > current.score)) {
+          bestBySkillId.set(candidate.skill.id, candidate);
+        } else if (current.priority === candidate.priority && current.skill.hash !== candidate.skill.hash) {
+          conflicts.push({
+            code: "DUPLICATE_SKILL_PRIORITY_CONFLICT",
+            message: `Skill ${candidate.skill.id} appears with different hashes at priority ${candidate.priority}`,
+            skillId: candidate.skill.id,
+          });
+        }
+      }
+    }
+
+    candidates.push(...bestBySkillId.values());
+    candidates.sort((left, right) => right.priority - left.priority || right.score - left.score || left.skill.id.localeCompare(right.skill.id));
+    return {
+      candidates: candidates.slice(0, limit).map((candidate) => structuredClone(candidate)),
+      conflicts,
+      skillLibraryRefs: refs.toSorted((left, right) => `${left.libraryId}/${left.versionId}`.localeCompare(`${right.libraryId}/${right.versionId}`)),
+    };
+  }
+
+  async resolveSkills(candidates: readonly SkillLibrarySearchCandidate[]): Promise<RuntimeSkillSnapshot[]> {
+    this.assertLoaded();
+    const snapshots: RuntimeSkillSnapshot[] = [];
+    for (const candidate of candidates) {
+      const files = await this.readStoredPackage(candidate.skill.hash);
+      const loaded = validateSkillPackage(files);
+      const detail = structuredClone(loaded.detail);
+      const clonedFiles = new Map([...loaded.files].map(([path, bytes]) => [path, Buffer.from(bytes)]));
+      snapshots.push({
+        content: detail.instructions,
+        description: detail.description,
+        hash: detail.hash,
+        id: detail.id,
+        readResource: (path: string) => {
+          const resource = detail.resources.find((item) => item.path === path);
+          const bytes = clonedFiles.get(path);
+          if (!resource || !bytes) throw validationError(`Skill resource not found: ${path}`);
+          return {
+            content: bytes.toString("utf8"),
+            hash: resource.hash,
+            path: resource.path,
+            revision: detail.currentRevision,
+            skillId: detail.id,
+            size: resource.size,
+          };
+        },
+        resources: structuredClone(detail.resources),
+        revision: detail.currentRevision,
+        version: detail.version,
+      });
+    }
+    return snapshots;
   }
 
   async validateRefs(refs: readonly PromptSkillLibraryRef[] | undefined): Promise<PromptSkillLibraryRef[]> {

@@ -17,6 +17,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   CommitSkillLibraryVersionRequest,
   RollbackSkillLibraryVersionRequest,
+  SkillLibrarySearchRequest,
 } from "@science-agent/schema";
 
 import { SkillLibraryCatalog, SkillLibraryCatalogError } from "../skill-library-catalog.js";
@@ -36,6 +37,10 @@ export async function handleSkillLibraryRequest(options: {
   }
   if (request.method === "POST" && url.pathname === "/api/skill-libraries") {
     sendJson(response, 201, await catalog.create(await readJson<{ id?: string; name?: string }>(request)));
+    return true;
+  }
+  if (request.method === "POST" && url.pathname === "/api/skill-libraries/search") {
+    sendJson(response, 200, await catalog.search(await readJson<SkillLibrarySearchRequest>(request)));
     return true;
   }
 

@@ -31,6 +31,7 @@ import { PermissionDecisionQueue } from "@science-agent/governance";
 import { ProvenanceRecorder } from "@science-agent/provenance";
 import { RunnerClient } from "@science-agent/executor";
 import { recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
+import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SkillCatalog } from "@science-agent/specialist";
 import { SessionStore } from "../store.js";
 import { NativeWebProviderClient, WebBroker } from "@science-agent/data-source";
@@ -156,6 +157,7 @@ export type PlatformServices = ReturnType<typeof createPlatformServices>;
 export async function initializePlatformServices(
   services: PlatformServices,
   config: ServerConfig,
+  skillLibraryCatalog: SkillLibraryCatalog,
 ): Promise<void> {
   const {
     artifactManager,
@@ -214,6 +216,7 @@ export async function initializePlatformServices(
         paperService,
         remoteCompute,
         skillCatalog,
+        skillLibraryCatalog,
         memoryGraphSink,
         session.id,
         config,

@@ -52,6 +52,7 @@ import type {
   ReviewerSpecialistSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,
+  SkillLibrary,
   RunStreamEvent,
   SessionRun,
   ToolTrace,
@@ -934,6 +935,7 @@ export function App() {
   const [models, setModels] = useState<ModelProfile[]>([]);
   const [connectors, setConnectors] = useState<ConnectorManifest[]>([]);
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
+  const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
   const [editingModelId, setEditingModelId] = useState<string>();
   const [modelDraft, setModelDraft] = useState<ModelDraft>(EMPTY_MODEL_DRAFT);
   const [draftToken, setDraftToken] = useState("");
@@ -1219,17 +1221,19 @@ export function App() {
       client.listModels(),
       client.listConnectors(),
       client.listSkills(),
+      client.listSkillLibraries(),
       client.getGlobalSettings(),
       client.getTimeoutSettings(),
       client.getQuotaSettings(),
       client.getSandboxNetworkSettings(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([modelItems, connectorItems, skillItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
+    ]).then(([modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
       if (!active) return;
       setModels(modelItems);
       setConnectors(connectorItems);
       setSkills(skillItems);
+      setSkillLibraries(skillLibraryItems);
       setGlobalSettings(settings);
       setTimeoutSettings(timeouts);
       setQuotaSettings(quotas);
@@ -1543,6 +1547,7 @@ export function App() {
       client.listModels(),
       client.listConnectors(),
       client.listSkills(),
+      client.listSkillLibraries(),
       client.getGlobalSettings(),
       client.getTimeoutSettings(),
       client.getQuotaSettings(),
@@ -1552,11 +1557,12 @@ export function App() {
       client.listMcpSources(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([projectItems, modelItems, connectorItems, skillItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
+    ]).then(([projectItems, modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
       setProjects(projectItems);
       setModels(modelItems);
       setConnectors(connectorItems);
       setSkills(skillItems);
+      setSkillLibraries(skillLibraryItems);
       setGlobalSettings(settings);
       setTimeoutSettings(timeouts);
       setQuotaSettings(quotas);
@@ -4249,6 +4255,7 @@ export function App() {
         models={models}
         onCancel={() => setProjectCreationOpen(false)}
         onCreate={createProject}
+        skillLibraries={skillLibraries}
         skills={skills}
       /> : null}
       {globalSearchOpen ? <GlobalSearchDialog
@@ -4276,6 +4283,7 @@ export function App() {
               models={models}
               onSave={saveScopedSettings}
               scopeLabel={settingsTarget.kind === "project" ? "Project" : "Session"}
+              skillLibraries={skillLibraries}
               skillScope={settingsTarget.kind === "project" ? "project" : "session"}
               skills={skills}
             /> : <p className="muted">Loading effective settings and sources…</p>}

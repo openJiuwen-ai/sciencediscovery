@@ -25,7 +25,7 @@ import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, SessionPlan } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
-import type { EffectiveRuntimeSettings, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
+import type { EffectiveRuntimeSettings, EnabledSkillLibrary, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
 import type { Subagent, SubagentStep, SubagentUsage } from "./subagent.js";
 
 export const SESSION_TITLE_MAX_CHARACTERS = 24;
@@ -279,6 +279,7 @@ export interface CreateSessionRequest {
 export interface UpdateSessionRequest {
   approvalMode?: ApprovalMode;
   enabledConnectorIds?: ConnectorId[];
+  enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
   modelId?: string;
   reviewCriteria?: string[];

@@ -168,6 +168,18 @@
 .settings-choices label { display: flex; align-items: center; gap: 8px; min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); padding: 8px; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
 .settings-choices label > span { margin: 0; }
 .settings-choices input { flex: 0 0 24px; width: 24px; min-width: 24px; min-height: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
+.settings-library-list { display: grid; gap: 8px; margin-top: 9px; }
+.settings-library-row { display: grid; gap: 10px; align-items: center; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 10px; }
+.settings-library-row.selected { border-color: var(--border-strong); background: var(--surface-subtle); }
+.settings-library-picker { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--text-secondary); cursor: pointer; }
+.settings-library-picker input { flex: 0 0 24px; width: 24px; min-width: 24px; height: 24px; min-height: 24px; margin: 0; accent-color: var(--accent); }
+.settings-library-picker input:disabled { cursor: not-allowed; opacity: .75; }
+.settings-library-main { min-width: 0; }
+.settings-library-main strong { display: block; overflow: hidden; color: var(--text-heading); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.settings-library-main small { display: block; margin-top: 3px; color: var(--text-faint); font-size: 11px; }
+.settings-library-controls { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(80px, .5fr) minmax(80px, .5fr); gap: 8px; padding-left: 34px; }
+.settings-library-controls label { display: grid; gap: 4px; min-width: 0; color: var(--text-secondary); font-size: 11px; font-weight: 700; }
+.settings-library-controls input { width: 100%; min-height: 36px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); padding: 7px 9px; }
 .settings-readonly { margin: 0 0 16px; padding: 11px; border-left: 3px solid var(--warning-accent); background: var(--warning-soft); color: var(--warning); font-size: 12px; line-height: 1.55; }
 .timeout-settings { display: grid; gap: 18px; }
 .timeout-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -272,6 +284,8 @@
 .creation-dialog, .deletion-dialog, .config-panel, .document-panel, .global-search-dialog, .skill-editor-dialog, .skill-delete-dialog, .artifact-modal-panel, .memory-explorer-panel { animation: panel-in .22s ease; }
 @media (max-width: 600px) {
   .creation-dialog, .deletion-dialog { padding: 22px 18px; }
+  .settings-library-row, .settings-library-controls { grid-template-columns: 1fr; }
+  .settings-library-controls { padding-left: 0; }
   .proxy-server-summary { grid-template-columns: 1fr; }
   .proxy-server-actions { flex-wrap: wrap; }
   .proxy-environment-variables > div { grid-template-columns: minmax(0, 1fr) auto; }
