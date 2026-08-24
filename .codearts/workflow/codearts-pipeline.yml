@@ -143,7 +143,9 @@ stages:
               exit "$TEST_RC"
         if: "${{ default() }}"
         runs-on:
-        - default
+        - ubuntu-latest
+        - x64
+        - large
       st:
         select: selected_by_default
         name: ST
@@ -189,7 +191,9 @@ stages:
               exit "$TEST_RC"
         if: "${{ default() }}"
         runs-on:
-        - default
+        - ubuntu-latest
+        - x64
+        - large
     pre:
     - type: auto
     name: CI
