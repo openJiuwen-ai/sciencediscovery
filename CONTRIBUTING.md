@@ -138,13 +138,22 @@ Three pipelines run, and **none of them runs everything**:
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
 | GitCode — `.gitcode/workflows/ci.yml` | `ci:ut:core` | yes | — | x86_64, `--skip-smoke` |
-| CodeArts — `.codearts/workflow/` | — | — | — | — |
+| CodeArts — `.codearts/workflow/` | `ci:ut:core` | yes | — | — |
 
 GitCode's hosted runner is a container whose capability bounding set drops
 `CAP_SYS_ADMIN`, so bubblewrap installs but cannot create a namespace. That
 removes the `@sciencediscovery/runner` tests, the `services/api` tests that
 execute code, and E2E entirely — the Runner refuses to serve without a usable
 sandbox, so its stack never becomes healthy.
+
+CodeArts's `default` pool has the same shape. The job is a pod on a CCE
+Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
+the unprivileged user `octopus` with Docker's default capability bounding set
+and an active seccomp filter, so `unshare` and bubblewrap are refused outright;
+`sudo` is not setuid, so nothing can be installed with `dnf` either. The
+checked-in workflow therefore runs `ci:ut:core` and the hermetic `ci:st` layer.
+A sandboxed layer needs a self-hosted resource pool
+(`runs-on: [self-hosted, <pool-id>]`) on a machine that allows user namespaces.
 
 A **fourth** pipeline posts a result table on every merge request
 (静态检查 / 禁用词扫描 / 防投毒检查 / 开源合规检查 / UT测试 / build). It is

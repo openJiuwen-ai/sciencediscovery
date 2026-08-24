@@ -12,21 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Smoke test for the GitCode side of CI, the counterpart of
-# .github/workflows/ci.yml. It does not run UT/ST/E2E yet. It answers the three
-# questions that have to be settled before those layers can be ported here:
-# does the merge-request trigger actually fire, what does the pipeline context
-# carry, and what does the runner already have installed. The artifact file is
-# written and then read back, so both the workspace and the log are verified.
-# The runtime_probe job then asks what the port will run on: container or VM,
-# which namespaces the job may create, and whether bubblewrap can build the
-# Runner's sandbox there.
+# UT and ST on CodeArts Pipeline, using the same repository entry points as
+# .gitcode/workflows/ci.yml. The default CodeArts pool cannot create the user
+# namespaces bubblewrap needs, so UT deliberately runs ci:ut:core and E2E is
+# left to GitHub. The hermetic ci:st layer needs neither a sandbox nor secrets.
 #
-# Shell steps use the platform's own plugin, `official_shell_plugin`, with the
-# script under `with.OFFICIAL_SHELL_SCRIPT_INPUT`. The GitHub-style `run:` key
-# is not part of the CodeArts step schema: the server rewrites it into a plugin
-# named `official_shell`, which does not exist, and the pipeline is rejected
-# before it runs.
+# Every job checks out the exact source-context commit before provisioning its
+# own tools. CodeArts documents a "Download repository" plugin but not its YAML
+# identifier; using git through the already verified official shell plugin
+# keeps this repository-hosted definition self-contained and reviewable.
+#
+# Shell steps use `official_shell_plugin`, with the script under
+# `with.OFFICIAL_SHELL_SCRIPT_INPUT`. CodeArts has no GitHub-style `run:` key:
+# the server rewrites one into a nonexistent plugin named `official_shell` and
+# rejects the pipeline before it starts.
 #
 # Editing this pipeline in the CodeArts web editor may rewrite the file and
 # drop these comments; keep this file the source of truth.
@@ -54,7 +53,7 @@ sources:
 # fires once when it lands on main. code-update stays false so a settings-only
 # change is checked too, matching how GitHub re-runs on every synchronize.
 on:
-  sources: 
+  sources:
     sciencediscovery:
       merge_requests:
         branches:
@@ -70,233 +69,138 @@ on:
         code-update: false
 stages:
   # The stage identifier was generated when pipeline 08f5be37851e45f9a2cbe41ea6dcb07a
-  # was converted to a repository-hosted definition. It is kept verbatim so the
+  # was converted to a repository-hosted definition. Keep it verbatim so the
   # file still matches the pipeline record on the server.
   1787542687692903221df-b13e-4e04-a571-d9790b3d3f2d:
     jobs:
-      smoke_test:
+      ut:
         select: selected_by_default
-        name: Smoke test
+        name: UT
         needs: []
         steps:
-        - name: Report the trigger and the runner
+        - name: Checkout the source commit
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
-              echo "=== trigger ==="
-              echo "pipeline run  : #${{ pipeline.run_number }} (${{ pipeline.trigger_type }})"
-              echo "repository    : ${{ sources.sciencediscovery.repo_name }}"
-              echo "merge request : ${{ sources.sciencediscovery.merge_id }}"
-              echo "source branch : ${{ sources.sciencediscovery.source_branch }}"
-              echo "target branch : ${{ sources.sciencediscovery.target_branch }}"
-              echo "commit        : ${{ sources.sciencediscovery.commit_id_short }}"
-              echo
-              echo "=== runner ==="
-              echo "working dir   : $(pwd)"
-              echo "kernel        : $(uname -srm)"
-              # Whether the source is already checked out decides if the ported
-              # layers need an explicit clone step in front of them.
-              echo "checkout here : $(test -f package.json && echo yes || echo no)"
-              for tool in git node pnpm uv docker bwrap; do
-                printf '%-14s: %s\n' "$tool" "$(command -v "$tool" || echo 'not installed')"
-              done
-        - name: Write the artifact file
+              set -eu
+              SOURCE_REPO_URL="${{ sources.sciencediscovery.repo_url }}"
+              SOURCE_COMMIT_ID="${{ sources.sciencediscovery.commit_id }}"
+              SOURCE_BRANCH="${{ sources.sciencediscovery.source_branch }}"
+              CHECKOUT_DIR="$PWD/sciencediscovery-src"
+              command -v git >/dev/null 2>&1 || {
+                echo "FATAL: git is not installed on the CodeArts runner." >&2
+                exit 1
+              }
+              test -n "$SOURCE_REPO_URL"
+              test -n "$SOURCE_COMMIT_ID"
+              mkdir -p "$CHECKOUT_DIR"
+              cd "$CHECKOUT_DIR"
+              if [ ! -d .git ]; then
+                git init --quiet
+                git remote add origin "$SOURCE_REPO_URL"
+              else
+                git remote set-url origin "$SOURCE_REPO_URL"
+              fi
+              if ! git fetch --no-tags --depth=1 origin "$SOURCE_COMMIT_ID"; then
+                test -n "$SOURCE_BRANCH"
+                git fetch --no-tags --depth=1 origin "$SOURCE_BRANCH"
+              fi
+              git -c advice.detachedHead=false checkout --detach "$SOURCE_COMMIT_ID"
+              ACTUAL_COMMIT=$(git rev-parse HEAD)
+              test "$ACTUAL_COMMIT" = "$SOURCE_COMMIT_ID"
+              echo "checked out $ACTUAL_COMMIT from $SOURCE_REPO_URL"
+        - name: Provision the runner
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
-              mkdir -p ci-artifacts
-              {
-                echo "ScienceDiscovery CodeArts smoke test"
-                echo "run number    : ${{ pipeline.run_number }}"
-                echo "trigger       : ${{ pipeline.trigger_type }}"
-                echo "merge request : ${{ sources.sciencediscovery.merge_id }}"
-                echo "commit        : ${{ sources.sciencediscovery.commit_id_short }}"
-                echo "generated at  : $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-              } > ci-artifacts/smoke.txt
-        - name: Verify the artifact file
+              set -eu
+              cd sciencediscovery-src
+              bash .ci/provision-runner.sh
+        - name: Run and report UT
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
-              ls -l ci-artifacts
-              echo "--- ci-artifacts/smoke.txt ---"
-              cat ci-artifacts/smoke.txt
-              # Fails the job if the previous step produced an empty file.
-              test -s ci-artifacts/smoke.txt
+              set -u
+              cd sciencediscovery-src
+              export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
+              export CI_RESULTS_DIR="$PWD/.ci-results"
+              export CI_RUNTIME_DIR="$HOME/ci-runtime-ut"
+              set +e
+              pnpm ci:ut:core
+              TEST_RC=$?
+              set -e
+              echo "=== UT run.log (last 80 lines) ==="
+              tail -n 80 .ci-results/ut-core/run.log 2>/dev/null || echo "no run.log produced"
+              exit "$TEST_RC"
         if: "${{ default() }}"
         runs-on:
         - default
-      # Runtime probe for the port itself: is the runner a container or a VM,
-      # what may it create in the way of namespaces, and does bubblewrap build
-      # the sandbox the Runner needs. The bubblewrap launches are the shapes
-      # packages/sandbox-capability tries, so a PASS here is what the product's
-      # own preflight would see. Every check prints PASS or FAIL and the job
-      # never fails on its own, so the whole picture lands in one log.
-      runtime_probe:
+      st:
         select: selected_by_default
-        name: Runtime probe
+        name: ST
         needs: []
         steps:
-        - name: Container or VM
+        - name: Checkout the source commit
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set +e
-              echo "=== identity ==="
-              echo "user               : $(id)"
-              echo "hostname           : $(hostname 2>/dev/null || cat /proc/sys/kernel/hostname)"
-              echo "kernel             : $(uname -srm)"
-              echo "os                 : $(. /etc/os-release 2>/dev/null; if [ -n "$PRETTY_NAME" ]; then echo "$PRETTY_NAME"; else echo unknown; fi)"
-              echo "cpu / memory       : $(nproc) cpu, $(awk '/MemTotal/ {printf "%.1f GiB", $2 / 1048576}' /proc/meminfo)"
-              echo "disk at cwd        : $(df -h . | awk 'NR == 2 {print $4 " free of " $2 " on " $1}')"
-              echo "cwd                : $(pwd)"
-              echo "uptime             : $(awk '{printf "%d min", $1 / 60}' /proc/uptime)"
-              echo "pid 1              : $(cat /proc/1/comm 2>/dev/null) [$(tr '\0' ' ' < /proc/1/cmdline 2>/dev/null | cut -c1-80)]"
-              echo
-              echo "=== container markers ==="
-              ROOT_FS=$(awk '$5 == "/" { for (i = 7; i <= NF; i++) if ($i == "-") { print $(i + 1); exit } }' /proc/self/mountinfo)
-              echo "/.dockerenv        : $(test -e /.dockerenv && echo present || echo absent)"
-              echo "/run/.containerenv : $(test -e /run/.containerenv && echo present || echo absent)"
-              echo "pid 1 cgroup       : $(tr '\n' ';' < /proc/1/cgroup | cut -c1-200)"
-              echo "root filesystem    : $ROOT_FS"
-              echo "/proc/1/sched      : $(head -n 1 /proc/1/sched 2>/dev/null || echo unreadable)"
-              dv() { out=$(systemd-detect-virt "$@" 2>/dev/null); if [ -n "$out" ]; then echo "$out"; else echo n/a; fi; }
-              echo "systemd-detect-virt: $(dv) (container: $(dv --container), vm: $(dv --vm))"
-              echo
-              echo "=== virtualisation markers (visible from inside a container too) ==="
-              echo "dmi vendor/product : $(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo unreadable) / $(cat /sys/class/dmi/id/product_name 2>/dev/null || echo unreadable)"
-              echo "hypervisor cpuflag : $(grep -c -w hypervisor /proc/cpuinfo) of $(nproc) cpus"
-              echo "cpu model          : $(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo)"
-              echo
-              echo "=== verdict ==="
-              PID1=$(cat /proc/1/comm 2>/dev/null)
-              case "$PID1" in
-                systemd|init) VERDICT="a VM or bare metal (pid 1 is $PID1)";;
-                *) VERDICT="probably a container (pid 1 is '$PID1', not an init system)";;
-              esac
-              if [ -e /.dockerenv ] || [ -e /run/.containerenv ] || [ "$ROOT_FS" = overlay ] \
-                 || grep -q -E 'docker|containerd|kubepods|libpod|lxc' /proc/1/cgroup 2>/dev/null; then
-                VERDICT="a container"
-              fi
-              if [ "$(grep -c -w hypervisor /proc/cpuinfo)" -gt 0 ]; then
-                HOST="the machine underneath is a VM ($(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo 'vendor unreadable'))"
+              set -eu
+              SOURCE_REPO_URL="${{ sources.sciencediscovery.repo_url }}"
+              SOURCE_COMMIT_ID="${{ sources.sciencediscovery.commit_id }}"
+              SOURCE_BRANCH="${{ sources.sciencediscovery.source_branch }}"
+              CHECKOUT_DIR="$PWD/sciencediscovery-src"
+              command -v git >/dev/null 2>&1 || {
+                echo "FATAL: git is not installed on the CodeArts runner." >&2
+                exit 1
+              }
+              test -n "$SOURCE_REPO_URL"
+              test -n "$SOURCE_COMMIT_ID"
+              mkdir -p "$CHECKOUT_DIR"
+              cd "$CHECKOUT_DIR"
+              if [ ! -d .git ]; then
+                git init --quiet
+                git remote add origin "$SOURCE_REPO_URL"
               else
-                HOST="no hypervisor cpu flag: bare-metal host, or the flag is hidden"
+                git remote set-url origin "$SOURCE_REPO_URL"
               fi
-              echo "this job runs in $VERDICT; $HOST"
-              echo
-              echo "=== tooling the next steps depend on ==="
-              for t in sudo apt-get dnf yum apk docker bwrap unshare setpriv capsh sysctl python3; do
-                printf '%-19s: %s\n' "$t" "$(command -v "$t" 2>/dev/null || echo '-')"
-              done
-              if [ "$(id -u)" -ne 0 ]; then
-                if sudo -n true >/dev/null 2>&1; then echo "sudo -n            : works"; else echo "sudo -n            : no passwordless sudo"; fi
+              if ! git fetch --no-tags --depth=1 origin "$SOURCE_COMMIT_ID"; then
+                test -n "$SOURCE_BRANCH"
+                git fetch --no-tags --depth=1 origin "$SOURCE_BRANCH"
               fi
-              echo "docker socket      : $(ls -l /var/run/docker.sock 2>/dev/null || echo absent)"
-              if [ -S /var/run/docker.sock ] || [ -n "$DOCKER_HOST" ]; then
-                echo "docker server      : $(docker info --format '{{.ServerVersion}} {{.OSType}}/{{.Architecture}}' 2>&1 | head -n 1)"
-              fi
-              echo "env names          : $(env | cut -d= -f1 | sort | tr '\n' ' ')"
-        - name: Namespaces, capabilities and seccomp
+              git -c advice.detachedHead=false checkout --detach "$SOURCE_COMMIT_ID"
+              ACTUAL_COMMIT=$(git rev-parse HEAD)
+              test "$ACTUAL_COMMIT" = "$SOURCE_COMMIT_ID"
+              echo "checked out $ACTUAL_COMMIT from $SOURCE_REPO_URL"
+        - name: Provision the runner
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set +e
-              echo "=== capabilities of this shell (hex masks from /proc/self/status) ==="
-              grep -E '^Cap(Inh|Prm|Eff|Bnd|Amb):' /proc/self/status
-              BND=$(awk '/^CapBnd:/ {print $2}' /proc/self/status)
-              EFF=$(awk '/^CapEff:/ {print $2}' /proc/self/status)
-              has_cap() { if [ $(( (0x$2 >> $1) & 1 )) -eq 1 ]; then echo yes; else echo no; fi; }
-              echo "CAP_SYS_ADMIN      : bounding $(has_cap 21 "$BND"), effective $(has_cap 21 "$EFF")"
-              echo "CAP_SYS_CHROOT     : bounding $(has_cap 18 "$BND"), effective $(has_cap 18 "$EFF")"
-              echo "CAP_NET_ADMIN      : bounding $(has_cap 12 "$BND"), effective $(has_cap 12 "$EFF")"
-              case "$BND" in
-                00000000a80425fb) echo "bounding set       : Docker's default set (CAP_SYS_ADMIN dropped)";;
-                000001ffffffffff|0000003fffffffff) echo "bounding set       : full";;
-                *) echo "bounding set       : custom ($BND)";;
-              esac
-              if command -v capsh >/dev/null 2>&1; then echo "decoded bounding   : $(capsh --decode="$BND" 2>/dev/null)"; fi
-              echo
-              echo "=== seccomp / no_new_privs / LSM ==="
-              grep -E '^(NoNewPrivs|Seccomp|Seccomp_filters):' /proc/self/status
-              echo "apparmor enabled   : $(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || echo 'module absent')"
-              echo "apparmor profile   : $(cat /proc/self/attr/apparmor/current 2>/dev/null || cat /proc/self/attr/current 2>/dev/null || echo unreadable)"
-              echo "selinux enforce    : $(cat /sys/fs/selinux/enforce 2>/dev/null || echo 'not mounted')"
-              echo
-              echo "=== kernel knobs for unprivileged user namespaces ==="
-              for f in /proc/sys/user/max_user_namespaces /proc/sys/user/max_pid_namespaces \
-                       /proc/sys/kernel/unprivileged_userns_clone \
-                       /proc/sys/kernel/apparmor_restrict_unprivileged_userns \
-                       /proc/sys/kernel/apparmor_restrict_unprivileged_unconfined; do
-                printf '%-58s: %s\n' "$f" "$(cat "$f" 2>/dev/null || echo absent)"
-              done
-              echo
-              echo "=== namespace creation with util-linux unshare ==="
-              try() { label=$1; shift; out=$("$@" 2>&1); rc=$?; if [ $rc -eq 0 ]; then echo "PASS  $label"; else echo "FAIL  $label (exit $rc): $(echo "$out" | tail -n 1)"; fi; }
-              if command -v unshare >/dev/null 2>&1; then
-                try "user ns"                                        unshare --user true
-                try "user ns, map root"                              unshare --user --map-root-user true
-                try "user + mount ns"                                unshare --user --map-root-user --mount true
-                try "user + mount + pid ns (the bwrap shape)"        unshare --user --map-root-user --mount --pid --fork true
-                try "user + mount + pid ns + fresh /proc"            unshare --user --map-root-user --mount --pid --fork --mount-proc true
-                try "user + net ns"                                  unshare --user --map-root-user --net true
-                try "mount ns without user ns (needs CAP_SYS_ADMIN)" unshare --mount true
-              else
-                echo "unshare not installed; skipped"
-              fi
-        - name: bubblewrap
+              set -eu
+              cd sciencediscovery-src
+              bash .ci/provision-runner.sh
+        # The hermetic agent loop drives a scripted local endpoint and performs
+        # a real workspace tool round trip without a model credential.
+        - name: Run and report ST
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -u
+              cd sciencediscovery-src
+              export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
+              export CI_RESULTS_DIR="$PWD/.ci-results"
+              export CI_RUNTIME_DIR="$HOME/ci-runtime-st"
               set +e
-              SUDO=""
-              if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo -n"; fi
-              if ! command -v bwrap >/dev/null 2>&1; then
-                echo "bwrap is not installed; installing it with the package manager"
-                if command -v apt-get >/dev/null 2>&1; then
-                  $SUDO apt-get update -qq 2>&1 | tail -n 3
-                  $SUDO apt-get install -y -qq --no-install-recommends bubblewrap 2>&1 | tail -n 3
-                elif command -v dnf >/dev/null 2>&1; then $SUDO dnf install -y -q bubblewrap 2>&1 | tail -n 3
-                elif command -v yum >/dev/null 2>&1; then $SUDO yum install -y -q bubblewrap 2>&1 | tail -n 3
-                elif command -v apk >/dev/null 2>&1; then $SUDO apk add -q bubblewrap 2>&1 | tail -n 3
-                else echo "no apt-get / dnf / yum / apk found"; fi
-              fi
-              if ! command -v bwrap >/dev/null 2>&1; then
-                echo "RESULT: bubblewrap unavailable: not installed, and it could not be installed here"
-                exit 0
-              fi
-              BWRAP=$(command -v bwrap)
-              echo "bwrap              : $BWRAP ($(bwrap --version 2>&1))"
-              echo "file mode          : $(ls -l "$BWRAP")"
-              if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
-                echo "apparmor_restrict_unprivileged_userns=1: relaxing it as .github/workflows/ci.yml does"
-                $SUDO sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>&1
-                echo "value now          : $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
-              fi
-              probe() { label=$1; shift; out=$("$@" 2>&1); rc=$?; if [ $rc -eq 0 ]; then echo "PASS  $label"; else echo "FAIL  $label (exit $rc): $(echo "$out" | tail -n 1)"; fi; }
-              # The launch shapes packages/sandbox-capability tries, in its order: the
-              # product default first, then the weaker bound-/proc fallback.
-              COMMON="--unshare-all --unshare-user --die-with-parent --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib64 /lib64"
-              echo
-              echo "=== bubblewrap as $(id -un) (uid $(id -u)) ==="
-              probe "baseline (.github/workflows/ci.yml): --ro-bind / / --dev /dev true" bwrap --ro-bind / / --dev /dev true
-              probe "product default: fresh /proc"                     bwrap $COMMON --proc /proc /usr/bin/true
-              probe "product default + --disable-userns"               bwrap $COMMON --disable-userns --proc /proc /usr/bin/true
-              probe "fallback: bound /proc"                            bwrap $COMMON --ro-bind /proc /proc /usr/bin/true
-              probe "fallback + --disable-userns"                      bwrap $COMMON --disable-userns --ro-bind /proc /proc /usr/bin/true
-              probe "execution shape: + --dev /dev --tmpfs /tmp --new-session" bwrap $COMMON --proc /proc --dev /dev --tmpfs /tmp --new-session /usr/bin/true
-              if [ "$(id -u)" -eq 0 ] && command -v setpriv >/dev/null 2>&1; then
-                echo
-                echo "=== bubblewrap as an unprivileged user (uid 65534), how the Runner service runs ==="
-                probe "product default: fresh /proc, uid 65534" setpriv --reuid=65534 --regid=65534 --clear-groups --inh-caps=-all bwrap $COMMON --proc /proc /usr/bin/true
-                probe "fallback: bound /proc, uid 65534"        setpriv --reuid=65534 --regid=65534 --clear-groups --inh-caps=-all bwrap $COMMON --ro-bind /proc /proc /usr/bin/true
-              fi
-              echo
-              echo "RESULT: the Runner needs 'product default: fresh /proc' to PASS for the shipped profile, or 'fallback: bound /proc' for the weaker one; both FAIL means no sandbox can be built here"
+              pnpm ci:st
+              TEST_RC=$?
+              set -e
+              echo "=== ST run.log (last 80 lines) ==="
+              tail -n 80 .ci-results/st/run.log 2>/dev/null || echo "no run.log produced"
+              exit "$TEST_RC"
         if: "${{ default() }}"
         runs-on:
         - default
     pre:
     - type: auto
-    name: Smoke
+    name: CI
     select: selected_by_default
     fail-fast: false

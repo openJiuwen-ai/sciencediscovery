@@ -151,6 +151,12 @@ The user manual lists official plugins by display name only; the `uses:`
 identifiers come from the platform's own YAML view or from a run's `task`
 field. Keep the `stages.<id>` key verbatim — it is the record on the server.
 
+The default pool runs only `ci:ut:core` and hermetic `ci:st`. Each job checks
+out `sources.sciencediscovery.commit_id`, runs `.ci/provision-runner.sh`, and
+sets writable `CI_RESULTS_DIR` / `CI_RUNTIME_DIR` paths before calling the
+repository entry point. Runner UT and E2E remain excluded because this pool
+cannot create a bubblewrap sandbox.
+
 ## Troubleshooting
 
 | Symptom | Meaning |
@@ -160,5 +166,6 @@ field. Keep the `stages.<id>` key verbatim — it is the record on the server.
 | API test expects `runner_exec`, gets `undefined` | An execution never ran. Almost always a missing sandbox. |
 | `BLOCKED: isolated E2E stack did not become healthy` | The Runner refused to serve; check the sandbox before reading `stack.log`. |
 | `插件official_shell不存在[行N，列M]` on a CodeArts pipeline | A step at that line uses `run:`. CodeArts has no `run:`; use `uses: official_shell_plugin` with `with.OFFICIAL_SHELL_SCRIPT_INPUT`. |
+| `sudo: /bin/sudo must be owned by uid 0 and have the setuid bit set` on CodeArts | The default pool's image ships a non-setuid `sudo` and the job runs as `octopus`; there is no root. Install tools into the workspace (`$HOME`, `$(pwd)`) instead of with `dnf`. |
 | `ERR_PNPM_OUTDATED_LOCKFILE` | `pnpm-lock.yaml` is behind a `package.json`. Regenerate with `pnpm install --lockfile-only`. |
 | Playwright reports success with fewer tests than expected | A skip is not a pass. Check the counts and the not-passed titles; a BLOCKED precondition reports as skipped. |
