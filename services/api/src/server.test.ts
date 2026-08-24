@@ -997,6 +997,21 @@ async function listRunEvents(origin: string, sessionId: string, runId: string): 
   return events.body;
 }
 
+async function waitForRunEvents(
+  origin: string,
+  sessionId: string,
+  runId: string,
+  predicate: (events: SessionRunEvent[]) => boolean,
+): Promise<SessionRunEvent[]> {
+  let events: SessionRunEvent[] = [];
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    events = await listRunEvents(origin, sessionId, runId);
+    if (predicate(events)) return events;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+  }
+  return events;
+}
+
 async function startLiteratureModel(context: TestContext): Promise<{
   baseUrl: string;
   requests: Array<{ messages?: Array<{ content?: string; name?: string; role?: string }> }>;
@@ -1424,13 +1439,21 @@ test("Session title refinement persists when the naming model finishes after the
     `${origin}/api/sessions/${created.body.firstSession.id}/runs`,
     { headers: authorization },
   );
-  const events = await listRunEvents(origin, created.body.firstSession.id, runs.body[0]!.id);
-  const terminalIndex = events.findIndex((record) => record.event.type === "run.completed");
-  const refinedIndex = events.findIndex((record) =>
+  const events = await waitForRunEvents(
+    origin,
+    created.body.firstSession.id,
+    runs.body[0]!.id,
+    (records) => records.some((record) =>
+      record.event.type === "session.updated"
+      && record.event.session.title === "Refined TP53 expression study"),
+  );
+  const terminalEvent = events.find((record) => record.event.type === "run.completed");
+  const refinedEvent = events.find((record) =>
     record.event.type === "session.updated"
     && record.event.session.title === "Refined TP53 expression study");
-  assert.equal(terminalIndex >= 0, true);
-  assert.equal(refinedIndex > terminalIndex, true);
+  assert.ok(terminalEvent);
+  assert.ok(refinedEvent);
+  assert.ok(refinedEvent.sequence > terminalEvent.sequence);
 });
 
 test("concurrent first messages keep every run and auto-name only once from queue order one", async (context) => {
