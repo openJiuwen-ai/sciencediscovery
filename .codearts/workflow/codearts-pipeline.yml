@@ -104,13 +104,17 @@ stages:
               if (payload.event_type !== "merge_request" || !attributes) {
                 throw new Error(`expected a merge_request payload, received ${String(payload.event_type)}`);
               }
-              if (typeof sourceBranch !== "string" || sourceBranch.length === 0 || /[\r\n]/.test(sourceBranch)) {
+              const hasLineBreak = typeof sourceBranch === "string" && (
+                sourceBranch.includes(String.fromCharCode(10)) || sourceBranch.includes(String.fromCharCode(13))
+              );
+              if (typeof sourceBranch !== "string" || sourceBranch.length === 0 || hasLineBreak) {
                 throw new Error("the MR payload has no valid source branch");
               }
               if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/i.test(sourceSha)) {
                 throw new Error("the MR payload has no valid source commit SHA");
               }
-              process.stdout.write(`${sourceBranch}\n${sourceSha.toLowerCase()}\n`);
+              console.log(sourceBranch);
+              console.log(sourceSha.toLowerCase());
               NODE
               )
               SOURCE_BRANCH=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '1p')
@@ -260,13 +264,17 @@ stages:
               if (payload.event_type !== "merge_request" || !attributes) {
                 throw new Error(`expected a merge_request payload, received ${String(payload.event_type)}`);
               }
-              if (typeof sourceBranch !== "string" || sourceBranch.length === 0 || /[\r\n]/.test(sourceBranch)) {
+              const hasLineBreak = typeof sourceBranch === "string" && (
+                sourceBranch.includes(String.fromCharCode(10)) || sourceBranch.includes(String.fromCharCode(13))
+              );
+              if (typeof sourceBranch !== "string" || sourceBranch.length === 0 || hasLineBreak) {
                 throw new Error("the MR payload has no valid source branch");
               }
               if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/i.test(sourceSha)) {
                 throw new Error("the MR payload has no valid source commit SHA");
               }
-              process.stdout.write(`${sourceBranch}\n${sourceSha.toLowerCase()}\n`);
+              console.log(sourceBranch);
+              console.log(sourceSha.toLowerCase());
               NODE
               )
               SOURCE_BRANCH=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '1p')
