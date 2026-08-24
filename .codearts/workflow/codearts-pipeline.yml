@@ -403,9 +403,9 @@ stages:
     fail-fast: false
 post:
   jobs:
-    publish_pr_success:
+    prepare_pr_success:
       select: always
-      name: Publish successful PR result
+      name: Prepare successful PR result
       needs: []
       steps:
       - name: Render successful PR result
@@ -441,6 +441,14 @@ post:
           source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
           self_folder: "false"
         identifier: 1790000000002ca71171-679f-4414-948c-ff6497de4ab7
+      if: "${{ pipeline.trigger_type == 'MR' && completed('ut', 'st', 'code_check') }}"
+      runs-on:
+      - default
+    publish_pr_success:
+      select: always
+      name: Publish successful PR result
+      needs: [prepare_pr_success]
+      steps:
       - name: Comment and mark the PR successful
         uses: official_devcloud_cloudBuild
         with:
@@ -456,9 +464,9 @@ post:
       if: "${{ pipeline.trigger_type == 'MR' && completed('ut', 'st', 'code_check') }}"
       runs-on:
       - default
-    publish_pr_failure:
+    prepare_pr_failure:
       select: always
-      name: Publish failed PR result
+      name: Prepare failed PR result
       needs: []
       steps:
       - name: Render failed PR result
@@ -494,6 +502,14 @@ post:
           source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
           self_folder: "false"
         identifier: 1790000000004756cae3-f5a6-4a02-a0e8-ab67c922ed75
+      if: "${{ pipeline.trigger_type == 'MR' && !completed('ut', 'st', 'code_check') }}"
+      runs-on:
+      - default
+    publish_pr_failure:
+      select: always
+      name: Publish failed PR result
+      needs: [prepare_pr_failure]
+      steps:
       - name: Comment and mark the PR failed
         uses: official_devcloud_cloudBuild
         with:
