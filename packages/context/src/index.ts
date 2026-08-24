@@ -6,6 +6,7 @@ export * from "./budget.js";
 export * from "./compaction.js";
 export * from "./contributor.js";
 export * from "./dynamic-assembler.js";
+export * from "./durable-state.js";
 export * from "./history-compactor.js";
 export * from "./history-window.js";
 export * from "./message-composer.js";

@@ -119,6 +119,16 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
       });
       const reservedTokens = this.tokenEstimator.estimateSystemPrompt(prompt.systemPrompt)
         + this.tokenEstimator.estimateTools(tools);
+      const modelInputLimit = this.options.budget.modelContextTokens !== undefined
+        ? this.options.budget.modelContextTokens - (this.options.budget.outputReserveTokens ?? 0)
+        : undefined;
+      if (modelInputLimit !== undefined && modelInputLimit <= 0) {
+        throw new Error("Context output reserve leaves no tokens for model input");
+      }
+      const configuredWindow = this.options.budget.windowTokens;
+      const maxTokens = configuredWindow === undefined
+        ? modelInputLimit
+        : modelInputLimit === undefined ? configuredWindow : Math.min(configuredWindow, modelInputLimit);
       const window = this.windowPolicy.select(invocationHistory, {
         ...(this.options.budget.windowMessages !== undefined
           ? { maxMessages: this.options.budget.windowMessages }
@@ -126,11 +136,16 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
         ...(this.options.budget.windowRounds !== undefined
           ? { maxRounds: this.options.budget.windowRounds }
           : {}),
-        ...(this.options.budget.windowTokens !== undefined
-          ? { maxTokens: this.options.budget.windowTokens }
+        ...(maxTokens !== undefined
+          ? { maxTokens }
           : {}),
         reservedTokens,
       }, this.tokenEstimator);
+      if (maxTokens !== undefined && window.statistics.estimatedInputTokens > maxTokens) {
+        throw new Error(
+          `Required model input needs approximately ${window.statistics.estimatedInputTokens} tokens, exceeding the model-aware input budget ${maxTokens} after output reservation`,
+        );
+      }
       const modelInput: ModelInput<TMessage> = {
         history: window.history,
         systemPrompt: prompt.systemPrompt,

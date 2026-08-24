@@ -225,7 +225,7 @@ test("shadow context mode runs native assembly but sends byte-compatible legacy 
   }
 });
 
-test("dynamic context reloads a committed Skill as bounded working context", async () => {
+test("dynamic context keeps one Skill body and adds a durable lower-authority reference", async () => {
   const { calls, streamer } = scriptStreamer([
     () => toolTurn("read_skill", { skillId: "literature-review" }),
     () => textTurn("done"),
@@ -248,8 +248,12 @@ test("dynamic context reloads a committed Skill as bounded working context", asy
     } as NativeAgentOptions);
     await agent.execute("review the literature");
     assert.doesNotMatch(calls[0]!.systemPrompt, /<loaded_skill/u);
-    assert.match(calls[1]!.systemPrompt, /<loaded_skill id="literature-review"/u);
-    assert.match(calls[1]!.systemPrompt, /Follow the frozen literature workflow/u);
+    assert.doesNotMatch(calls[1]!.systemPrompt, /<loaded_skill/u);
+    assert.doesNotMatch(calls[1]!.systemPrompt, /Follow the frozen literature workflow/u);
+    const historyText = calls[1]!.history.map((message) => String(message.content ?? "")).join("\n");
+    assert.equal(historyText.match(/Follow the frozen literature workflow\./gu)?.length, 1);
+    assert.match(historyText, /channel="active_skills"/u);
+    assert.match(historyText, /instructionsVisibleInHistory":true/u);
   } finally {
     restore();
   }

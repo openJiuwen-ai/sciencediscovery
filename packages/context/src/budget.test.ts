@@ -51,16 +51,27 @@ test("budget rejects protected sections that cannot fit without weakening author
 test("budget environment resolves native window settings", () => {
   const budget = resolveContextBudget({
     SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS: "1234",
+    SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS: "100000",
+    SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS: "12000",
     SCIENCE_AGENT_CONTEXT_WINDOW_MESSAGES: "80",
     SCIENCE_AGENT_CONTEXT_WINDOW_ROUNDS: "12",
     SCIENCE_AGENT_CONTEXT_WINDOW_TOKENS: "64000",
   });
   assert.equal(budget.promptBudgetCharacters, 1234);
+  assert.equal(budget.modelContextTokens, 100000);
+  assert.equal(budget.outputReserveTokens, 12000);
   assert.equal(budget.windowMessages, 80);
   assert.equal(budget.windowRounds, 12);
   assert.equal(budget.windowTokens, 64000);
   assert.throws(
     () => resolveContextBudget({ SCIENCE_AGENT_CONTEXT_DATA_BUDGET_CHARS: "0" }),
     /must be a positive integer/u,
+  );
+  assert.throws(
+    () => resolveContextBudget({
+      SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS: "100",
+      SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS: "100",
+    }),
+    /must be smaller/u,
   );
 });

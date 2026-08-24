@@ -99,3 +99,17 @@ test("context mode defaults to legacy and validates configuration", () => {
   assert.equal(resolveContextAssemblyMode({ SCIENCE_AGENT_CONTEXT_MODE: "dynamic" }), "dynamic");
   assert.throws(() => resolveContextAssemblyMode({ SCIENCE_AGENT_CONTEXT_MODE: "external" }), /dynamic, legacy, or shadow/u);
 });
+
+test("dynamic mode enforces the model context window after reserving output tokens", async () => {
+  await assert.rejects(assembler("dynamic", {
+    budget: {
+      SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS: "100",
+      SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS: "90",
+    },
+  }).assemble({
+    history: [{ role: "user", content: "a long current request that cannot be silently removed" }],
+    onProgress() {},
+    signal: new AbortController().signal,
+    turn: 1,
+  }), /model-aware input budget/u);
+});

@@ -58,22 +58,48 @@ Observed dynamic input:
 - System Prompt: 5000 characters under the test's configured Prompt budget;
 - tools: seven initially governed tools;
 - turn one contains the Skill catalog but not its body;
-- turn two contains the committed `literature-review` Skill revision;
+- turn two contains one canonical `read_skill` result plus a durable Skill
+  reference; the System Prompt does not duplicate the Skill body;
+- turn three contains the committed Plan as a hidden `data_only` runtime
+  message;
 - the deferred biomedical MCP tool appears only after `tool_search` promotion;
-- trace records deterministic truncation of the oversized package context.
+- trace records the exact admitted runtime channels and final model input.
 
 Complete generated file:
 `.tmp/context-examples/main-literature-review.json`.
 
-The same three turns are also executed through `legacy` with identical
-history, tools, Skill selection, RunContract, and scripted model tool calls.
-The integration test verifies that only the assembly path changes. Complete
+The same four turns are also executed through `legacy` with identical
+canonical history, tools, Skill selection, RunContract, and scripted model
+tool calls. Dynamic adds invocation-local hidden data messages, which are not
+written back to canonical history. Complete
 per-turn inputs are generated as
-`.tmp/context-examples/main-literature-review-{legacy,dynamic}-turn-{1,2,3}.json`.
+`.tmp/context-examples/main-literature-review-{legacy,dynamic}-turn-{1,2,3,4}.json`.
 After `read_skill` completes, turn two demonstrates the central behavioral
-difference: dynamic input contains `runtime_task_state` and the frozen
-`loaded_skill` body, while the legacy System Prompt remains byte-identical to
-turn one.
+difference: dynamic input contains an `active_skills` data message with the
+frozen Skill reference while the full body still appears exactly once in its
+ordinary tool result. After `propose_plan`, turn three adds `task_state` as
+lower-authority runtime data. Legacy adds neither projection.
+
+The recorder currently observes the following exact production-pipeline
+inputs (the model transport alone is mocked):
+
+| Turn | Legacy input | Dynamic input | Governed tools |
+| --- | --- | --- | ---: |
+| 1 | Prompt 3671 chars; 1 history message | Prompt 3664 chars; 1 history message; no durable channel yet | 8 |
+| 2 | 3 history messages | 4 history messages; `active_skills` | 8 |
+| 3 | 5 history messages | 7 history messages; `task_state`, `active_skills` | 8 |
+| 4 | 7 history messages | 9 history messages; `task_state`, `active_skills` | 9 |
+
+The seven-character Prompt difference comes from deterministic section
+rendering. The meaningful per-turn difference is the bounded hidden runtime
+data; canonical user/assistant/tool history and ToolRegistry visibility remain
+the same.
+
+The same integration suite also starts with more than 50 historical messages.
+Compaction removes the old Skill body and Plan result, then the actual dynamic
+input retains their structured references and marks
+`instructionsVisibleInHistory=false`, prompting an explicit Skill reload
+instead of silently forgetting or inventing its instructions.
 
 ## Subagent: method comparison in shadow mode
 

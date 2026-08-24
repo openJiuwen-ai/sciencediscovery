@@ -10,6 +10,10 @@ export interface ContextBudgetConfig {
   contributedMessageBudgetCharacters: number;
   dataBudgetCharacters: number;
   maxContributedMessages: number;
+  /** Provider/model context window, including the reserved model output. */
+  modelContextTokens?: number;
+  /** Tokens kept free for the model response. */
+  outputReserveTokens?: number;
   promptBudgetCharacters: number;
   sectionMaxCharacters: number;
   windowMessages?: number;
@@ -22,6 +26,8 @@ const DEFAULTS: ContextBudgetConfig = Object.freeze({
   contributedMessageBudgetCharacters: 100_000,
   dataBudgetCharacters: 500_000,
   maxContributedMessages: 50,
+  modelContextTokens: 131_072,
+  outputReserveTokens: 16_384,
   promptBudgetCharacters: 300_000,
   sectionMaxCharacters: 100_000,
 });
@@ -34,12 +40,30 @@ function positiveInteger(env: NodeJS.ProcessEnv, name: string, fallback?: number
   return value;
 }
 
-export function resolveContextBudget(env: NodeJS.ProcessEnv = process.env): ContextBudgetConfig {
+export function resolveContextBudget(
+  env: NodeJS.ProcessEnv = process.env,
+  defaults: { outputReserveTokens?: number } = {},
+): ContextBudgetConfig {
+  const modelContextTokens = positiveInteger(
+    env,
+    "SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS",
+    DEFAULTS.modelContextTokens,
+  )!;
+  const outputReserveTokens = positiveInteger(
+    env,
+    "SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS",
+    defaults.outputReserveTokens ?? DEFAULTS.outputReserveTokens,
+  )!;
+  if (outputReserveTokens >= modelContextTokens) {
+    throw new Error("SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS must be smaller than SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS");
+  }
   return {
     attachmentMaxCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_ATTACHMENT_MAX_CHARS", DEFAULTS.attachmentMaxCharacters)!,
     contributedMessageBudgetCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_CONTRIBUTED_MESSAGE_BUDGET_CHARS", DEFAULTS.contributedMessageBudgetCharacters)!,
     dataBudgetCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_DATA_BUDGET_CHARS", DEFAULTS.dataBudgetCharacters)!,
     maxContributedMessages: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_MAX_CONTRIBUTED_MESSAGES", DEFAULTS.maxContributedMessages)!,
+    modelContextTokens,
+    outputReserveTokens,
     promptBudgetCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS", DEFAULTS.promptBudgetCharacters)!,
     sectionMaxCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_SECTION_MAX_CHARS", DEFAULTS.sectionMaxCharacters)!,
     ...(positiveInteger(env, "SCIENCE_AGENT_CONTEXT_WINDOW_MESSAGES") !== undefined

@@ -44,7 +44,8 @@ Current capability ownership:
   contracts, the stable `DefaultContextAssembler`, and the optional
   `DynamicContextAssembler`. In `shadow`/`dynamic` mode, Node performs
   contributor admission, deterministic prompt rendering, invocation-local
-  message composition, atomic history-window selection, and final validation.
+  message composition, run-scoped durable tool-state projection, model-aware
+  atomic history-window selection, and final validation.
   Canonical history and the governed tool set remain authoritative. The
   default `legacy` mode preserves the established model-input path;
 - `packages/model`: `ProviderModelClient`, provider-neutral model types,

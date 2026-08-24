@@ -34,6 +34,7 @@ Each model turn follows the same sequence:
 ```text
 canonical history
   -> HistoryCompactor
+  -> DurableContextStore snapshot
   -> ContextContributorRegistry.collectDetailed
   -> applyContextBudget
   -> DeterministicSystemPromptRenderer
@@ -50,6 +51,7 @@ history.
 | Component | Responsibility |
 | --- | --- |
 | `ContextContributorRegistry` | Scope filtering, concurrent collection, stable ordering, validation, and required/optional failure policy |
+| `DurableContextStore` | Run-scoped structured goal, Plan, Skill, Delegation, Artifact, Review, and Memory state captured at the tool-result boundary |
 | `ContextBudgetPolicy` | Protected-section admission and deterministic section/data/message truncation |
 | `SystemPromptRenderer` | Deterministic section ordering and prompt rendering |
 | `ContextMessageComposer` | Invocation-local contributed messages and trust-labelled attachment envelopes |
@@ -68,16 +70,43 @@ are scoped to `main`, `subagent`, or `reviewer` and may provide:
 - trusted or untrusted data attachments;
 - diagnostics.
 
-Current built-in contributors cover identity, governance, RunContract, task
-state, current tool/MCP capabilities, and Skill discovery/loading. Identity,
-Governance, and RunContract sections are protected and cannot be silently
-truncated.
+Current built-in contributors cover identity, governance, RunContract, current
+tool/MCP capabilities, Skill discovery, and structured Plan, Skill,
+Delegation, Artifact, Review, and Memory runtime state. Identity, Governance,
+and RunContract sections are protected and cannot be silently truncated.
 
-Skill bodies continue to use progressive disclosure. The first turn contains
-the selected Skill catalog; a committed `read_skill` result causes the frozen
-Skill revision to appear in bounded working context on later turns. Deferred
-MCP tools remain absent until ToolRegistry promotion and appear in the next
-model turn.
+Skill bodies continue to use progressive disclosure. The stable System Prompt
+contains only the selected Skill catalog. The complete body enters context
+once through the canonical `read_skill` result; dynamic assembly does not copy
+it into the System Prompt. A durable Skill reference records the frozen
+revision. If compaction removes the original result, the runtime data channel
+marks the instructions unavailable so the Agent can call `read_skill` again.
+Deferred MCP tools remain absent until ToolRegistry promotion and appear in
+the next model turn.
+
+## Durable state and authority
+
+Successful tool results update run-scoped structured channels at the
+ToolRegistry result boundary. Concurrent tools may finish in any order, but
+their state sequence follows the order declared by the model. On a run created
+from canonical gateway history, the store hydrates from structured assistant
+tool calls and their matching tool results before compaction.
+
+| Channel | Producer tools | Dynamic projection |
+| --- | --- | --- |
+| Goal/constraints | immutable RunContract | protected RunContract section; structured snapshot retained by the store |
+| Plan | `propose_plan` | hidden `task_state` data message |
+| Skill activation | `read_skill` | hidden `active_skills` reference/reminder; never a second Skill body |
+| Delegation | `task` | hidden bounded `delegations` data message |
+| Artifact | download, extraction, and `declare_artifact` | hidden bounded `artifacts` data message |
+| Review | `review_checkpoint`, `trace_provenance` | hidden bounded `reviews` data message |
+| Memory | `query_graph`, `declare_evidence`, `declare_claim` | hidden bounded `memory` data message |
+
+System sections contain only runtime authority and stable capability policy.
+Tool/model-derived observations use hidden user messages marked
+`authority="data_only"`; their values are data and cannot replace system,
+governance, permission, or RunContract instructions. These projections are
+invocation-local and never alter canonical Session history.
 
 Contributor messages may only use the `user` role. A Contributor cannot forge
 an assistant tool call or tool result. Attachments are wrapped as hidden
@@ -129,6 +158,8 @@ All configured values are positive integers:
 | `SCIENCE_AGENT_CONTEXT_ATTACHMENT_MAX_CHARS` | `200000` | Maximum characters for one attachment |
 | `SCIENCE_AGENT_CONTEXT_CONTRIBUTED_MESSAGE_BUDGET_CHARS` | `100000` | Total string content in contributed messages |
 | `SCIENCE_AGENT_CONTEXT_MAX_CONTRIBUTED_MESSAGES` | `50` | Maximum contributed messages |
+| `SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS` | `131072` | Model context capacity, including reserved output |
+| `SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS` | model policy `maxTokens` (`16384` by default) | Capacity kept free for the next model response |
 | `SCIENCE_AGENT_CONTEXT_WINDOW_MESSAGES` | unset | Maximum invocation messages; the newest complete user round is always retained |
 | `SCIENCE_AGENT_CONTEXT_WINDOW_ROUNDS` | unset | Maximum recent user rounds; takes precedence over the message limit |
 | `SCIENCE_AGENT_CONTEXT_WINDOW_TOKENS` | unset | Approximate complete input limit, including Prompt, tools, and history |
@@ -137,10 +168,16 @@ Protected sections are admitted first. If they alone exceed the Prompt budget,
 assembly fails instead of weakening authority. Other sections are admitted by
 slot and order and produce explicit truncation/drop diagnostics.
 
+The effective input limit is the smaller of
+`SCIENCE_AGENT_CONTEXT_WINDOW_TOKENS` (when set) and
+`MODEL_MAX_TOKENS - OUTPUT_RESERVE_TOKENS`. System Prompt, Tool schemas,
+contributed data, and history all consume that same limit.
+
 History selection preserves the summary checkpoint and newest user round. An
 assistant tool call and its immediately following tool results form one atomic
-unit. If required recent context itself exceeds the configured token limit, it
-is retained and a `CONTEXT_WINDOW_BUDGET_EXCEEDED` diagnostic is emitted.
+unit. If required recent context itself exceeds the effective input limit,
+assembly fails before contacting the Provider instead of sending a predictably
+oversized request.
 
 The built-in `ConservativeTokenEstimator` intentionally overestimates mixed
 Chinese/English scientific text. A Model Provider can inject an exact tokenizer
@@ -190,8 +227,10 @@ pnpm --filter @sciencediscovery/api test
 ```
 
 It covers all three modes, main/Subagent/Reviewer scopes, dynamic package
-registration, Skill loading, deferred MCP promotion, budgets, trace phases,
-and exact inputs received by `ProviderModelClient`.
+registration, Skill loading, deferred MCP promotion, model-aware budgets,
+trace phases, exact inputs received by `ProviderModelClient`, and a history
+over the compaction threshold that retains Plan and Skill references without
+duplicating the Skill body.
 
 Export the three reproducible examples with:
 
@@ -204,9 +243,13 @@ See [context assembly examples](./context-assembly-examples.md).
 
 ## Delivery boundary
 
-Concrete Artifact, Review, Memory, Environment, or other domain Contributors
-belong to their owning packages. `packages/context` provides only registration,
-collection, admission, rendering, windowing, validation, and observation.
+The current run-scoped Artifact, Review, Memory, and Delegation projections are
+fed by ordinary governed tool results; they do not bypass the owning domain
+packages or query their stores directly. Future richer retrieval Contributors
+belong to their owning packages and register through
+`ContextContributorFactory`. `packages/context` owns the generic state,
+registration, collection, admission, rendering, windowing, validation, and
+observation contracts.
 
 A single versioned all-encompassing Context Config and deep equality checks for
 tool descriptions/parameter schemas remain possible normalization work, not

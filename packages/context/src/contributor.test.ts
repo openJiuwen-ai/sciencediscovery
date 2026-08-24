@@ -8,8 +8,6 @@ import {
   ContextContributorRegistry,
   ContextCollectionError,
   StaticSystemPromptContributor,
-  TaskStateContributor,
-  loadedSkillIds,
   registerContextContributorFactories,
 } from "./contributor.js";
 
@@ -134,20 +132,4 @@ test("static contributor preserves the legacy prompt as one protected section", 
     id: "legacy.system-prompt",
     protected: true,
   }]);
-});
-
-test("task state reflects only committed plan and skill tool results", async () => {
-  const history = [
-    { role: "tool", name: "read_skill", content: "Selected skill literature-review@1.0.0 (revision 1)" },
-    { role: "tool", name: "propose_plan", content: "{\"steps\":[\"search\"]}" },
-  ];
-  assert.deepEqual([...loadedSkillIds(history)], ["literature-review"]);
-  const registry = new ContextContributorRegistry()
-    .register(new TaskStateContributor())
-    .freeze();
-  const output = await registry.collect({
-    contextId: "run-1", history, scope: "main", signal: new AbortController().signal, turn: 2,
-  });
-  assert.match(output.sections[0]?.content ?? "", /Loaded skills: literature-review/u);
-  assert.match(output.sections[0]?.content ?? "", /Latest committed plan tool result/u);
 });

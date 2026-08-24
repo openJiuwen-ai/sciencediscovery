@@ -33,15 +33,17 @@ import { randomUUID } from "node:crypto";
 import {
   ContextContributorRegistry,
   ContextSectionContributor,
+  createDurableDomainContributors,
   createContextTraceWriter,
   DefaultContextAssembler,
+  DurableContextStore,
+  DurableSkillStateContributor,
+  DurableTaskStateContributor,
   DynamicContextAssembler,
   HistoryCompactor,
-  loadedSkillIds,
   resolveContextBudget,
   resolveContextAssemblyMode,
   registerContextContributorFactories,
-  TaskStateContributor,
   type AgentScope,
   type ContextAssemblyMode,
   type ContextContributorFactory,
@@ -167,10 +169,6 @@ function formatRunContract(contract: string): string {
   ].join("\n");
 }
 
-function escapeXmlAttribute(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
 class NativeAgent implements NativeAgentHandle {
   private readonly listeners = new Set<Listener>();
   private readonly toolRegistry: ToolRegistry<WireMessage>;
@@ -180,6 +178,7 @@ class NativeAgent implements NativeAgentHandle {
   private readonly endpoint: ModelEndpoint;
   private readonly policy: ModelClientPolicy;
   private readonly waitController = new ExternalWaitController();
+  private readonly durableContext: DurableContextStore;
   private history: WireMessage[];
   private controller: AbortController | undefined;
   private externalWaitCount = 0;
@@ -191,15 +190,41 @@ class NativeAgent implements NativeAgentHandle {
 
   constructor(private readonly options: NativeAgentOptions) {
     this.contextId = `${options.sessionId}:${randomUUID()}`;
+    this.durableContext = new DurableContextStore({
+      history: options.gatewayHistory,
+      ...(options.runContract ? { runContract: options.runContract } : {}),
+    });
     this.toolRegistry = new ToolRegistry(buildTools(options), {
       createResultMessage: (call, content) => ({
         role: "tool", tool_call_id: call.id, name: call.name, content,
       }),
+      onResult: ({ call, content, isError, sequence }) => {
+        this.durableContext.observe(call, { content, isError }, sequence);
+        if (call.name !== "read_skill" || isError || typeof call.args.skillId !== "string") return;
+        const skill = options.skills?.find((item) => item.id === call.args.skillId);
+        if (skill) this.durableContext.registerSkill({
+          description: skill.description,
+          hash: skill.hash,
+          id: skill.id,
+          revision: skill.revision,
+          version: skill.version,
+        });
+      },
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
     this.promptSkills = toolNames.has("describe_skill") && toolNames.has("read_skill")
       ? (options.skills ?? [])
       : [];
+    const hydratedSkillIds = new Set(this.durableContext.snapshot().skills.map((skill) => skill.id));
+    for (const skill of this.promptSkills.filter((item) => hydratedSkillIds.has(item.id))) {
+      this.durableContext.registerSkill({
+        description: skill.description,
+        hash: skill.hash,
+        id: skill.id,
+        revision: skill.revision,
+        version: skill.version,
+      });
+    }
     const governance = {
       ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
       ...(options.memoryGraphEnabled ? { memoryGraphEnabled: options.memoryGraphEnabled } : {}),
@@ -349,7 +374,7 @@ class NativeAgent implements NativeAgentHandle {
         ?? (this.options.subagent?.name === "Reviewer Specialist"
           ? "reviewer"
           : this.options.subagent ? "subagent" : "main");
-      const contextBudget = resolveContextBudget();
+      const contextBudget = resolveContextBudget(process.env, { outputReserveTokens: this.policy.maxTokens });
       const traceWriter = createContextTraceWriter(this.options.config.dataDir);
       const writeTrace = async (turn: number, record: Record<string, unknown>) => {
         if (!traceWriter) return;
@@ -473,30 +498,18 @@ class NativeAgent implements NativeAgentHandle {
       registry.register(new ContextSectionContributor<WireMessage>({
         id: "skills.catalog",
         scopes: [scope],
-        contribute: async (request) => {
-          const loaded = loadedSkillIds(request.history);
+        contribute: async () => {
           return { systemSections: [{
-            content: buildSkillSystemSection(this.promptSkills, {
-              latestUserInput: request.latestUserInput,
-              loadedSkillIds: loaded,
-            }),
+            // Keep the capability catalog stable for provider prefix caching.
+            // Per-turn activation lives in the lower-authority durable data channel.
+            content: buildSkillSystemSection(this.promptSkills),
             id: "skills.catalog",
             order: 50,
             slot: "capabilities",
-          }, ...this.promptSkills
-            .filter((skill) => loaded.has(skill.id))
-            .map((skill, order) => ({
-              content: [
-                `<loaded_skill id="${escapeXmlAttribute(skill.id)}" version="${escapeXmlAttribute(skill.version)}" revision="${skill.revision}">`,
-                skill.content,
-                "</loaded_skill>",
-              ].join("\n"),
-              id: `skill.loaded.${skill.id}`,
-              order,
-              slot: "working_context" as const,
-            }))] };
+          }] };
         },
       }));
+      registry.register(new DurableSkillStateContributor<WireMessage>(this.durableContext, [scope]));
     }
     registry.register(new ContextSectionContributor<WireMessage>({
       id: "tools.capabilities",
@@ -506,7 +519,10 @@ class NativeAgent implements NativeAgentHandle {
         return content ? { systemSections: [{ content, id: "tools.capabilities", order: 100, slot: "capabilities" }] } : {};
       },
     }));
-    registry.register(new TaskStateContributor<WireMessage>([scope]));
+    registry.register(new DurableTaskStateContributor<WireMessage>(this.durableContext, [scope]));
+    for (const contributor of createDurableDomainContributors<WireMessage>(this.durableContext, [scope])) {
+      registry.register(contributor);
+    }
     registerContextContributorFactories(
       registry,
       this.options.contextContributorFactories ?? [],
