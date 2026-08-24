@@ -29,6 +29,13 @@
 # Editing this pipeline in the CodeArts web editor may rewrite the file and
 # drop these comments; keep this file the source of truth.
 
+# Keep these mirrors CodeArts-specific: the pool is in Huawei Cloud, while the
+# GitHub jobs may run outside China. Shell steps reference the values explicitly
+# because CodeArts `env` entries are pipeline parameters, not implicit exports.
+env:
+  HUAWEICLOUD_NPM_REGISTRY: https://repo.huaweicloud.com/repository/npm/
+  HUAWEICLOUD_PYPI_INDEX: https://repo.huaweicloud.com/repository/pypi/simple
+
 concurrency:
   max: 5
   enable: false
@@ -92,6 +99,7 @@ stages:
                 exit 1
               fi
               cd "$SOURCE_DIR"
+              export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
               bash .ci/provision-runner.sh
         - name: Run and report UT
           uses: official_shell_plugin
@@ -102,6 +110,8 @@ stages:
               export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_RUNTIME_DIR="$HOME/ci-runtime-ut"
+              export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX"
               set +e
               pnpm ci:ut:core
               TEST_RC=$?
@@ -132,6 +142,7 @@ stages:
                 exit 1
               fi
               cd "$SOURCE_DIR"
+              export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
               bash .ci/provision-runner.sh
         # The hermetic agent loop drives a scripted local endpoint and performs
         # a real workspace tool round trip without a model credential.
@@ -144,6 +155,8 @@ stages:
               export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_RUNTIME_DIR="$HOME/ci-runtime-st"
+              export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX"
               set +e
               pnpm ci:st
               TEST_RC=$?

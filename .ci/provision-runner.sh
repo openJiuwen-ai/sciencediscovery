@@ -22,6 +22,8 @@
 #
 # Usage: bash .ci/provision-runner.sh [--sandbox]
 #   --sandbox  bubblewrap is required; fail if it cannot be made to work.
+# Optional environment:
+#   CI_NPM_REGISTRY  npm-compatible registry used by npm, pnpm and Corepack.
 #
 # PATH is not exported to the caller: a CI step is its own shell. Callers add
 #   export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
@@ -98,6 +100,19 @@ fi
 if [ ! -f package.json ]; then
   echo "FATAL: no package.json in $PWD; the checkout is not where this script was invoked." >&2
   exit 1
+fi
+
+# npm and pnpm share the user npmrc. Corepack does not read that file, so it
+# needs the same mirror separately and expects its base URL without a trailing
+# slash. The user-level file persists across steps in the same CI job.
+if [ -n "${CI_NPM_REGISTRY:-}" ]; then
+  npm_registry="${CI_NPM_REGISTRY%/}/"
+  export COREPACK_NPM_REGISTRY="${npm_registry%/}"
+  npm config set registry "$npm_registry" --location=user >/dev/null 2>&1 \
+    || { echo "FATAL: could not configure the npm registry." >&2; exit 1; }
+  echo
+  echo "=== npm registry ==="
+  echo "configured: $(npm config get registry)"
 fi
 
 # The pin lives in package.json so the workflow cannot drift from the repository.
