@@ -131,6 +131,26 @@ GitHub workflow does not:
 The checkout lands in the working directory, and `run:` steps execute under
 `bash -e` — a bare failing command aborts the step.
 
+### CodeArts
+
+`.codearts/workflow/codearts-pipeline.yml` is validated by CodeArts, not by
+GitCode Actions, and it has no `run:` key. A step is `name` + `uses` + `with`;
+a shell step is:
+
+```yaml
+- name: Report the runner
+  uses: official_shell_plugin
+  with:
+    OFFICIAL_SHELL_SCRIPT_INPUT: |
+      uname -srm
+```
+
+Writing `run:` is rewritten server-side into a plugin called `official_shell`,
+which does not exist, and the pipeline fails validation before any job starts.
+The user manual lists official plugins by display name only; the `uses:`
+identifiers come from the platform's own YAML view or from a run's `task`
+field. Keep the `stages.<id>` key verbatim — it is the record on the server.
+
 ## Troubleshooting
 
 | Symptom | Meaning |
@@ -139,5 +159,6 @@ The checkout lands in the working directory, and `run:` steps execute under
 | `bwrap: No permissions to create new namespace` | The host forbids user namespaces. Use `ci:ut:core`; `ci:ut:runner` and `ci:e2e` cannot run. |
 | API test expects `runner_exec`, gets `undefined` | An execution never ran. Almost always a missing sandbox. |
 | `BLOCKED: isolated E2E stack did not become healthy` | The Runner refused to serve; check the sandbox before reading `stack.log`. |
+| `插件official_shell不存在[行N，列M]` on a CodeArts pipeline | A step at that line uses `run:`. CodeArts has no `run:`; use `uses: official_shell_plugin` with `with.OFFICIAL_SHELL_SCRIPT_INPUT`. |
 | `ERR_PNPM_OUTDATED_LOCKFILE` | `pnpm-lock.yaml` is behind a `package.json`. Regenerate with `pnpm install --lockfile-only`. |
 | Playwright reports success with fewer tests than expected | A skip is not a pass. Check the counts and the not-passed titles; a BLOCKED precondition reports as skipped. |
