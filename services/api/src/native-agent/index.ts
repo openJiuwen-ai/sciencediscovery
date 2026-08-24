@@ -187,11 +187,20 @@ class NativeAgent implements NativeAgentHandle {
     this.history = options.gatewayHistory
       ? options.gatewayHistory.map(normalizeHistoryMessage)
       : (options.history ?? []).map((message) => ({ role: message.role, content: message.content }));
+    // Reasoning models bill hidden thought against the same `max_tokens` as
+    // the answer, and on some endpoints the agent loop spends a whole turn on
+    // it — tens of thousands of characters, no visible text, no tool call.
+    // Raising the token ceiling only buys a longer spiral, so the lever is the
+    // toggle itself. Left unset by default: for most models the loop's own
+    // reasoning is what makes it work. This belongs on the model profile
+    // eventually; until then it is one switch for the deployment.
+    const thinking = process.env.SCIENCE_AGENT_AGENT_THINKING?.trim();
     this.endpoint = {
       baseUrl: options.config.baseUrl,
       ...(options.config.apiToken ? { apiToken: options.config.apiToken } : {}),
       model: options.config.model,
       ...(options.config.proxy ? { proxy: options.config.proxy } : {}),
+      ...(thinking === "disabled" || thinking === "enabled" ? { thinking } : {}),
     };
     this.policy = resolveModelClientPolicy();
   }

@@ -119,6 +119,48 @@ test("Session title refinement disables DeepSeek thinking mode", async () => {
   assert.equal(refined.title, "Trump news search");
 });
 
+test("Session title refinement disables thinking on ark too, not just deepseek", async () => {
+  // GLM on Volcano Engine's ark honours the same flag. Without it a one-shot
+  // naming call spends its budget reasoning about a title.
+  let requestBody: Record<string, unknown> | undefined;
+  await generateRefinedSessionTitle({
+    apiToken: "secret",
+    fetchImpl: async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: "ODE solver search" } }],
+        usage: { completion_tokens: 3, prompt_tokens: 30, total_tokens: 33 },
+      }), { status: 200 });
+    },
+    firstMessage: "write an ODE solver",
+    model: {
+      ...model,
+      baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+      model: "glm-5.2",
+    },
+  });
+
+  assert.deepEqual(requestBody?.thinking, { type: "disabled" });
+});
+
+test("Session title refinement leaves thinking alone on endpoints that do not take the flag", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  await generateRefinedSessionTitle({
+    apiToken: "secret",
+    fetchImpl: async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: "A title" } }],
+        usage: { completion_tokens: 3, prompt_tokens: 30, total_tokens: 33 },
+      }), { status: 200 });
+    },
+    firstMessage: "anything",
+    model: { ...model, baseUrl: "https://api.openai.com/v1", model: "gpt-4o" },
+  });
+
+  assert.equal(requestBody?.thinking, undefined);
+});
+
 test("Session title refinement rejects a provider-truncated title", async () => {
   await assert.rejects(generateRefinedSessionTitle({
     apiToken: "secret",

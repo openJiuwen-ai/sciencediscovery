@@ -31,7 +31,13 @@ function supportsThinkingToggle(model: ModelProfile): boolean {
     // The model registry validates URLs; keep this helper defensive for tests.
   }
   return hostname === "api.deepseek.com"
-    || hostname.endsWith(".deepseek.com");
+    || hostname.endsWith(".deepseek.com")
+    // Volcano Engine's ark, which serves GLM among others, honours the same
+    // flag — verified against the live endpoint: reasoning_content goes from
+    // 258 characters to 0 with `thinking: {type: "disabled"}` and the answer
+    // is unchanged. Naming a session is a one-shot call that has nothing to
+    // reason about.
+    || hostname.endsWith(".volces.com");
 }
 
 function stripWrappingQuotes(value: string): string {
