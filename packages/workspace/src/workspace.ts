@@ -1434,12 +1434,22 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       path: Type.String({ minLength: 1 }),
       skillId: Type.Union(skillLiterals as [typeof skillLiterals[number], ...typeof skillLiterals]),
     });
-    const selectedSkills = new Map(skillsWithResources.map((skill) => [skill.id, skill]));
+    const skillsWithResourceIds = new Map(skillsWithResources.map((skill) => [skill.id, skill]));
     const readSkillResource: AgentTool<typeof skillResourceParameters> = {
       description: "Read a bounded UTF-8 resource from an explicitly selected skill revision. Files are returned as data and are never executed or installed.",
       execute: async (_toolCallId, params) => {
-        const skill = selectedSkills.get(params.skillId);
-        if (!skill) throw new Error(`Skill ${params.skillId} is not selected for this run`);
+        const skill = skillsWithResourceIds.get(params.skillId);
+        if (!skill) {
+          // Two different situations, and telling them apart matters: a skill
+          // whose only file is SKILL.md is selected and working, it simply has
+          // nothing else to read. Reporting that as "not selected" reads as
+          // "this skill is unavailable", and a caller that believes it goes on
+          // to doubt everything the skill just told it.
+          const selected = selectedSkillsForDiscovery.some((entry) => entry.id === params.skillId);
+          throw new Error(selected
+            ? `Skill ${params.skillId} has no supporting resources; its SKILL.md is the whole skill`
+            : `Skill ${params.skillId} is not selected for this run`);
+        }
         const result = await skill.readResource(params.path);
         return {
           content: [{ type: "text", text: result.content }],

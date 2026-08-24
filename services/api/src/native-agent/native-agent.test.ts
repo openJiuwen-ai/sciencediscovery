@@ -21,6 +21,7 @@ import test from "node:test";
 import type { AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 
 import {
+  buildTools,
   createNativeAgent,
   setModelTurnStreamerForTest,
   type ModelTurnStreamer,
@@ -161,7 +162,7 @@ test("deferred tools stay hidden until tool_search promotes them", async () => {
       sourceId: "biomed",
       toolId: "search",
     }],
-  } as NativeAgentOptions;
+  } as unknown as NativeAgentOptions;
 
   const { calls, streamer } = scriptStreamer([
     () => toolTurn("mcp__biomed__search", { q: "TP53" }, "call-early"),
@@ -423,4 +424,32 @@ test("summary checkpoint carries the full durable-context authority contract", a
   } finally {
     restore();
   }
+});
+
+test("buildTools forwards the evolve handlers, not just declares them", async () => {
+  // The gap this catches: the handlers exist on the run, the tool definitions
+  // exist in createWorkspaceTools, and the option is declared on
+  // WorkspaceAgentOptions — but buildTools forwards each option by hand, and a
+  // pair missed there makes /evolve unreachable with nothing failing. The model
+  // does not say "the tool is missing"; it hand-rolls a search instead.
+  const base = {
+    enabledConnectorIds: [],
+    executePython: async () => ({}) as never,
+    workspaceRoot: process.cwd(),
+  } as unknown as NativeAgentOptions;
+
+  const without = buildTools(base).map((tool) => tool.name);
+  assert.ok(!without.includes("create_evolve_run"));
+
+  const withEvolve = buildTools({
+    ...base,
+    createEvolveRun: async () => ({ refusedBecause: "probe" }),
+    getEvolveRun: async () => ({
+      baselineScore: null, bestScore: null, bestTestScore: null,
+      candidates: 0, id: "run-1", status: "running" as const, tokens: 0,
+    }),
+  } as unknown as NativeAgentOptions).map((tool) => tool.name);
+
+  assert.ok(withEvolve.includes("create_evolve_run"));
+  assert.ok(withEvolve.includes("get_evolve_run"));
 });

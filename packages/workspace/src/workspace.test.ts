@@ -1195,3 +1195,28 @@ test("review_checkpoint exposes only versions and reason to its callback", async
   });
   assert.equal((result.details as { checkpoint: { status: string } }).checkpoint.status, "completed");
 });
+
+test("create_evolve_run and get_evolve_run appear only when their handlers are wired", async () => {
+  // The tools are gated on the handlers being passed through. When a layer
+  // between the run and createWorkspaceTools forgets to forward them, the whole
+  // /evolve feature is simply absent from the model's tool list — and the model
+  // does not report a missing tool, it quietly hand-rolls a search instead.
+  const withoutEvolve = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => ({}) as PythonExecutionResult,
+  });
+  assert.ok(!withoutEvolve.some((tool) => tool.name === "create_evolve_run"));
+  assert.ok(!withoutEvolve.some((tool) => tool.name === "get_evolve_run"));
+
+  const withEvolve = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => ({}) as PythonExecutionResult,
+    createEvolveRun: async () => ({ refusedBecause: "probe" }),
+    getEvolveRun: async () => ({
+      baselineScore: null, bestChange: undefined, bestScore: null, bestTestScore: null,
+      candidates: 0, id: "run-1", status: "running" as const, tokens: 0,
+    }),
+  });
+  assert.ok(withEvolve.some((tool) => tool.name === "create_evolve_run"));
+  assert.ok(withEvolve.some((tool) => tool.name === "get_evolve_run"));
+});

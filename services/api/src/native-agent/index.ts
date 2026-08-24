@@ -388,8 +388,12 @@ class NativeAgent implements NativeAgentHandle {
   }
 }
 
-/** Build the same workspace tools as before, so handlers + governance are unchanged. */
-function buildTools(options: NativeAgentOptions): AgentTool[] {
+/** Build the same workspace tools as before, so handlers + governance are unchanged.
+ *
+ *  Exported for tests: every option here is forwarded by hand, so an option
+ *  added at both ends but missed in the middle leaves its tool absent from the
+ *  model's list with nothing failing anywhere. */
+export function buildTools(options: NativeAgentOptions): AgentTool[] {
   return createWorkspaceTools(options.workspaceRoot, {
     enabledConnectorIds: options.enabledConnectorIds,
     ...(options.environments ? { environments: options.environments } : {}),
@@ -414,6 +418,8 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.declareClaim ? { declareClaim: options.declareClaim } : {}),
     ...(options.reviewCheckpoint ? { reviewCheckpoint: options.reviewCheckpoint } : {}),
     ...(options.proposeRemoteJob ? { proposeRemoteJob: options.proposeRemoteJob } : {}),
+    ...(options.createEvolveRun ? { createEvolveRun: options.createEvolveRun } : {}),
+    ...(options.getEvolveRun ? { getEvolveRun: options.getEvolveRun } : {}),
     remoteHosts: options.remoteHosts ?? [],
     skills: options.skills ?? [],
     specialists: options.specialists ?? [],
