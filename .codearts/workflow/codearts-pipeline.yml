@@ -10,7 +10,7 @@ sources:
   sciencediscovery:
     type: gitcode
     name: sciencediscovery
-    branch: main
+    branch: ci/verify-pr-ci
     git_url: https://gitcode.com/openJiuwen/sciencediscovery.git
     ssh_git_url: git@gitcode.com:openJiuwen/sciencediscovery.git
     endpoint_id: c4451a2a11af48baacd6b2af5eee3075
@@ -18,9 +18,9 @@ sources:
 on:
   sources: {}
 stages:
-  1787618543780e2ded5b3-9908-42e8-ac5a-1b8c68ba9794:
+  1787542687692903221df-b13e-4e04-a571-d9790b3d3f2d:
     jobs:
-      JOB_TFHXS:
+      JOB_FemfQ:
         select: selected_by_default
         name: 新建任务
         needs: []
