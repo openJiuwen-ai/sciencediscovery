@@ -74,6 +74,39 @@ export interface ProposalDeps {
  *  agent is told the reasoning in the skill; this is the floor under it. */
 const MIN_GATE = 4;
 
+
+
+/**
+ * A workspace path as the agent actually saw it, turned into one the store takes.
+ *
+ * The sandbox mounts the workspace at `/workspace`, so every path the agent
+ * reads out of a tool result is absolute and starts there — writing it back
+ * verbatim is the natural thing to do, and the store only accepts relative
+ * paths. Stripping the mount point is not a weakening of that guard: anything
+ * still absolute afterwards, and every `..`, is left for the guard to refuse.
+ */
+function workspaceRelative(path: string): string {
+  const trimmed = path.trim();
+  if (trimmed === "/workspace") return "";
+  return trimmed.startsWith("/workspace/") ? trimmed.slice("/workspace/".length) : trimmed;
+}
+
+/** Which proposal field a path came from, so a refusal can name it. */
+async function storePath(
+  deps: ProposalDeps, field: string, path: string,
+): Promise<string> {
+  try {
+    return await deps.store({ path: workspaceRelative(path) });
+  } catch (error) {
+    throw new PathRefusal(`${field} 指的 ${path} 读不出来：${
+      error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** Carries a path problem back to the agent as a refusal rather than a crash. */
+class PathRefusal extends Error {}
+
+
 /**
  * Assemble, probe, pre-flight, start.
  *
@@ -88,7 +121,15 @@ export async function startProposedRun(
   const shape = shapeOf(proposal);
   if (typeof shape === "string") return { refusedBecause: shape };
 
-  const goal = await assembleGoal(proposal, deps);
+  let goal;
+  try {
+    goal = await assembleGoal(proposal, deps);
+  } catch (error) {
+    // A path the agent got wrong is something it can fix, so it comes back as a
+    // refusal naming the field. Anything else is this side breaking, and throws.
+    if (error instanceof PathRefusal) return { refusedBecause: error.message };
+    throw error;
+  }
   const issues = await preflight({
     casHas: deps.casHas,
     goal,
@@ -210,9 +251,9 @@ async function assembleGoal(
 
   const startCas = proposal.mode === "test_gate"
     ? ""
-    : await deps.store(proposal.startingPointPath
-      ? { path: proposal.startingPointPath }
-      : { content: proposal.startingPointText! });
+    : proposal.startingPointPath
+      ? await storePath(deps, "startingPointPath", proposal.startingPointPath)
+      : await deps.store({ content: proposal.startingPointText! });
 
   // The scoring definition goes into the store and into `frozen`, which is what
   // stops a candidate rewriting what marks it. Same treatment for a rubric and
@@ -308,7 +349,7 @@ async function measureOf(
 ): Promise<EvolveScoring> {
   switch (proposal.mode) {
     case "dataset_metric": {
-      const datasetCas = await deps.store({ path: proposal.datasetPath! });
+      const datasetCas = await storePath(deps, "datasetPath", proposal.datasetPath!);
       return {
         datasetCas: [datasetCas],
         kind: "dataset_metric",
@@ -325,7 +366,10 @@ async function measureOf(
       // from the shard index is the common shape and stages nothing; requiring
       // a file here would mean inventing a dataset to fill a field.
       const files = proposal.datasetPath
-        ? [{ cas: await deps.store({ path: proposal.datasetPath }), name: basename(proposal.datasetPath) }]
+        ? [{
+          cas: await storePath(deps, "datasetPath", proposal.datasetPath),
+          name: basename(workspaceRelative(proposal.datasetPath)),
+        }]
         : [];
       return {
         ...(files.length ? { datasetFiles: files } : {}),

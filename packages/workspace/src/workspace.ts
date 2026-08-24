@@ -1103,14 +1103,20 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         testGroups: Type.Integer({ maximum: 64, minimum: 0 }),
       })),
       datasetPath: Type.Optional(Type.String({
-        description: "Workspace file to score against. Required for dataset_metric (a CSV). "
+        description: "Workspace file to score against. Relative to the workspace, or the "
+          + "/workspace/... path as you saw it in a tool result — both are accepted. Required for dataset_metric (a CSV). "
           + "Optional for custom_script, where it is staged beside the evaluator under its own "
           + "file name — leave it out when the evaluator builds its cases from the shard index "
           + "instead of reading them, which is the common shape.",
         maxLength: 2_000, minLength: 1,
       })),
       direction: Type.Optional(Type.Union([Type.Literal("maximize"), Type.Literal("minimize")])),
-      entrypointPath: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      entrypointPath: Type.Optional(Type.String({
+        description: "test_gate only: which file in the project a candidate replaces. "
+          + "Not where an evaluator lives — a custom_script evaluator is passed verbatim "
+          + "in evaluatorSource and never read from a path.",
+        maxLength: 2_000, minLength: 1,
+      })),
       evaluatorSource: Type.Optional(Type.String({
         description: "custom_script only: the whole evaluator, verbatim. It runs ALONE in a "
           + "scratch directory with the candidate — it cannot see the workspace, and the only "
@@ -1125,7 +1131,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       frozenGlobs: Type.Optional(Type.Array(Type.String({ maxLength: 500, minLength: 1 }), { maxItems: 50 })),
       howScored: Type.String({ maxLength: 400, minLength: 1 }),
       judgeModelId: Type.Optional(Type.String({ maxLength: 200, minLength: 1 })),
-      metric: Type.Optional(Type.String({ maxLength: 40, minLength: 1 })),
+      metric: Type.Optional(Type.String({
+        description: "dataset_metric only: accuracy / mae / r2 / rmse / seconds.",
+        maxLength: 40, minLength: 1,
+      })),
       mode: Type.Union([
         Type.Literal("dataset_metric"), Type.Literal("test_gate"),
         Type.Literal("custom_script"), Type.Literal("llm_judge"),
@@ -1146,7 +1155,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         testShards: Type.Integer({ maximum: 64, minimum: 0 }),
         trainRows: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
       })),
-      startingPointPath: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      startingPointPath: Type.Optional(Type.String({
+        description: "The workspace file the search starts from and rewrites. Relative, or the "
+          + "/workspace/... path as you saw it in a tool result. Use startingPointText instead "
+          + "when you are writing the starting point rather than pointing at one.",
+        maxLength: 2_000, minLength: 1,
+      })),
       startingPointText: Type.Optional(Type.String({ maxLength: 200_000, minLength: 1 })),
       statement: Type.String({ maxLength: 2_000, minLength: 1 }),
       targetColumn: Type.Optional(Type.String({ maxLength: 200, minLength: 1 })),

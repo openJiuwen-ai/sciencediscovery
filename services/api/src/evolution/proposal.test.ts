@@ -276,3 +276,30 @@ test("a scripted evaluator that names a data file gets it staged under that name
   // The bare name, not the path: the evaluator opens it beside itself.
   assert.deepEqual(measure.datasetFiles?.map((file) => file.name), ["dataset.json"]);
 });
+
+test("a workspace-absolute path is accepted, because that is what the agent saw", async () => {
+  // The sandbox mounts the workspace at /workspace, so every path the agent
+  // reads out of a tool result is absolute. Writing it back verbatim is the
+  // natural thing to do, and refusing it with "paths must be relative" reads as
+  // a bug in the tool rather than a fixable mistake.
+  const { deps: d, stored } = deps();
+  const result = await startProposedRun({
+    ...proposal(), startingPointPath: "/workspace/evolve_ode/baseline.py",
+  }, d);
+
+  assert.equal(result.run?.id, "run-1");
+  assert.ok(stored.some((entry) => entry.path === "evolve_ode/baseline.py"));
+});
+
+test("a path that cannot be read names the field it came from", async () => {
+  const { deps: d } = deps({
+    store: async () => { throw new Error("Path escapes the workspace: ../etc/passwd"); },
+  });
+  const result = await startProposedRun({
+    ...proposal(), startingPointPath: "../etc/passwd",
+  }, d);
+
+  assert.equal(result.run, undefined);
+  assert.match(result.refusedBecause!, /startingPointPath/);
+  assert.match(result.refusedBecause!, /escapes the workspace/);
+});
