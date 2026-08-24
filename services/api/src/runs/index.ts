@@ -2101,6 +2101,7 @@ export function scheduleSessionRuns(
         sessionId,
         serverConfig,
         memoryGraphClient,
+        evolve,
       );
     }
   })();
@@ -2224,6 +2225,7 @@ export async function streamAgentRun(
   body: SendMessageRequest,
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
+  evolve?: EvolveToolDeps,
 ): Promise<void> {
   const run = await createQueuedRun(store, skillCatalog, sessionId, body);
   scheduleSessionRuns(
@@ -2242,6 +2244,7 @@ export async function streamAgentRun(
     sessionId,
     serverConfig,
     memoryGraphClient,
+    evolve,
   );
   request.once("close", () => {
     // Browser disconnects should not cancel queued backend work. Cancellation

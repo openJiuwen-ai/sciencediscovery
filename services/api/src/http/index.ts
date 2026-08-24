@@ -222,6 +222,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     evolveOrchestrator,
     evolveProbes,
     evolveRunTokens,
+    evolveToolDeps,
     mcpBroker,
     mcpCatalog,
     mcpRegistry,
@@ -1510,6 +1511,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           sessionId,
           config,
           memoryGraphClient,
+          evolveToolDeps,
         );
         sendJson(response, 201, run);
         return;
@@ -2069,6 +2071,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           await readJson<SendMessageRequest>(request),
           config,
           memoryGraphClient,
+          evolveToolDeps,
         );
         return;
       }
