@@ -150,11 +150,13 @@ checked-in workflow therefore runs `ci:ut:core` and the hermetic `ci:st` layer.
 A sandboxed layer needs a self-hosted resource pool
 (`runs-on: [self-hosted, <pool-id>]`) on a machine that allows user namespaces.
 
-A separate CodeArts pipeline posts a result table on every merge request
-(静态检查 / 禁用词扫描 / 防投毒检查 / 开源合规检查 / UT测试 / build). It is
-represented by `.codearts/workflow/codearts-pipeline-code-check.yml`; its jobs
-invoke CloudBuild tasks whose complete commands remain in CodeArts, and its
-`UT测试` is not the UT/ST workflow's `ut` job above.
+The parent CodeArts workflow also invokes the reusable code-check child defined
+in `.codearts/workflow/codearts-pipeline-code-check.yml`. That child runs SCA,
+anti-poison, static-analysis, and blacklist CloudBuild tasks whose complete
+commands remain in CodeArts; it does not write PR labels or comments. On
+merge-request runs, the parent renders one result table from the overall code
+check, UT, and ST job statuses and publishes the final PR label. Manual runs
+execute the checks without modifying a PR.
 
 ## Repositories
 

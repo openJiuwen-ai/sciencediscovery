@@ -6,15 +6,43 @@ test logs. This repository intentionally does not use GitCode Actions.
 
 ## Pipeline inventory
 
-`.codearts/workflow/codearts-pipeline.yml` runs the repository's `ci:ut:core`
-and hermetic `ci:st` entry points. `.codearts/workflow/codearts-pipeline-code-check.yml`
-is the repository-hosted definition of the separate merge-request code-check
-pipeline; its jobs invoke CloudBuild tasks whose complete commands remain in
-CodeArts.
+`.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
+runs the repository's `ci:ut:core` and hermetic `ci:st` entry points, invokes
+the reusable code-check pipeline, and renders the final PR result. The child
+definition `.codearts/workflow/codearts-pipeline-code-check.yml` contains only
+the SCA, anti-poison, static-analysis, and blacklist CloudBuild tasks; their
+complete commands remain in CodeArts.
 
 GitHub remains a separate mirrored repository and covers full UT, mocked E2E,
 and smoke-gated binaries. Do not add `.gitcode/workflows/ci.yml` as another CI
 definition: GitCode merge-request CI is CodeArts-only.
+
+## Parent and child orchestration
+
+The parent invokes registered child pipeline
+`3a80cbaf5dec4e0b8804ce1401787f5f` with the documented `SubPipeline` plugin:
+
+```yaml
+- name: Run the reusable code-check pipeline
+  uses: SubPipeline
+  with:
+    pipelineId: 3a80cbaf5dec4e0b8804ce1401787f5f
+    branch: "${{ sources.sciencediscovery.target_branch }}"
+```
+
+CodeArts supports manual execution without an `on` entry. Guard GitCode writes
+with `${{ pipeline.trigger_type == 'MR' }}` so a manual run does not use an
+empty `${MERGE_ID}`. Keep the label task in the parent before verification, and
+keep the final publisher in `post` with `select: always` so failed checks can
+still report their status.
+
+Interpret results in the parent workflow, not in the PR bot. The parent uses
+`completed('ut', 'st', 'code_check')` to select mutually exclusive success and
+failure post jobs, renders a complete `result_html` body from
+`jobs.<job_id>.status`, and passes the already chosen `final_label`. The bot may
+post that HTML and apply the supplied label, but must not read OBS or derive a
+result independently; otherwise stale artifacts can disagree with the current
+CodeArts run.
 
 ## PaC syntax and source checkout
 

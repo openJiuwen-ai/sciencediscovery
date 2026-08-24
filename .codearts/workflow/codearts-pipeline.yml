@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# UT and ST on CodeArts Pipeline, using the repository entry points documented
-# in .ci/README.md. The default CodeArts pool cannot create the user namespaces
-# bubblewrap needs, so UT deliberately runs ci:ut:core and E2E is left to
-# GitHub. The hermetic ci:st layer needs neither a sandbox nor secrets.
+# ScienceDiscovery verification on CodeArts Pipeline. PR runs set the GitCode
+# running label, execute UT/ST alongside the reusable code-check pipeline, then
+# publish one result comment and final label. Manual runs execute the checks but
+# intentionally skip GitCode labels and comments because they have no MR.
+#
+# The repository entry points are documented in .ci/README.md. The default
+# CodeArts pool cannot create the user namespaces bubblewrap needs, so UT
+# deliberately runs ci:ut:core and E2E is left to GitHub. The hermetic ci:st
+# layer needs neither a sandbox nor secrets.
 #
 # Every job downloads the source-context commit with CodeArts' built-in clone
 # task before provisioning its own tools. The clone task handles repository
@@ -81,6 +86,34 @@ on:
         paths-ignore: []
         code-update: false
 stages:
+  # Retained from the former standalone code-check pipeline so PR state is set
+  # before any verification jobs start. Manual runs skip its only job.
+  176464703972462e4780d-56ca-4c54-9c49-29291c471dfd:
+    jobs:
+      create_label:
+        select: selected_by_default
+        name: Mark PR checks as running
+        needs: []
+        steps:
+        - name: Create the running label
+          uses: official_devcloud_cloudBuild
+          with:
+            number: "${MERGE_ID}"
+            WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: dc2f05de339b410a972184a84b9f1c6f
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 17736446667235cd01d5c-c29e-41f5-ab85-52bba5fce5ed
+        if: "${{ pipeline.trigger_type == 'MR' }}"
+        runs-on:
+        - default
+    pre:
+    - type: auto
+    name: Prepare PR
+    select: selected_by_default
+    fail-fast: false
   # The stage identifier was generated when pipeline 08f5be37851e45f9a2cbe41ea6dcb07a
   # was converted to a repository-hosted definition. Keep it verbatim so the
   # file still matches the pipeline record on the server.
@@ -251,8 +284,85 @@ stages:
         - ubuntu-latest
         - x64
         - large
+      code_check:
+        select: selected_by_default
+        name: Code checks
+        needs: []
+        steps:
+        - name: Run the reusable code-check pipeline
+          uses: SubPipeline
+          with:
+            pipelineId: 3a80cbaf5dec4e0b8804ce1401787f5f
+            branch: "${{ sources.sciencediscovery.target_branch }}"
+        if: "${{ default() }}"
+        runs-on:
+        - default
     pre:
     - type: auto
     name: CI
-    select: selected_by_default
+    # Verification must still run when the best-effort PR label task fails or
+    # is skipped by a manual trigger.
+    select: always
     fail-fast: false
+post:
+  jobs:
+    publish_pr_success:
+      select: always
+      name: Publish successful PR result
+      needs: []
+      steps:
+      - name: Comment and mark the PR successful
+        uses: official_devcloud_cloudBuild
+        with:
+          number: "${MERGE_ID}"
+          result_html: |
+            <p>&#9989; CodeArts 流水线 <a href="${PASS_CONDITIONS_LINK}">${{ pipeline.run_id }}</a> 执行成功。</p>
+            <table style="border-collapse: collapse">
+              <tr><th>任务名称</th><th>CodeArts 状态</th><th>日志</th></tr>
+              <tr><td>代码检查</td><td>${{ jobs.code_check.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
+              <tr><td>UT</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
+              <tr><td>ST</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
+            </table>
+          final_label: ci-successful
+          WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          __sameProject__: "true"
+          __projectId__: ""
+          jobId: 215834b7550740b89a70d4fd9f55b4d2
+          __repository__: sciencediscovery
+          artifactIdentifier: ""
+        identifier: 17646737830615fa277f2-7774-46a9-9222-bdd6236e9912
+      if: "${{ pipeline.trigger_type == 'MR' && completed('ut', 'st', 'code_check') }}"
+      runs-on:
+      - default
+    publish_pr_failure:
+      select: always
+      name: Publish failed PR result
+      needs: []
+      steps:
+      - name: Comment and mark the PR failed
+        uses: official_devcloud_cloudBuild
+        with:
+          number: "${MERGE_ID}"
+          result_html: |
+            <p>&#10060; CodeArts 流水线 <a href="${PASS_CONDITIONS_LINK}">${{ pipeline.run_id }}</a> 执行失败。</p>
+            <table style="border-collapse: collapse">
+              <tr><th>任务名称</th><th>CodeArts 状态</th><th>日志</th></tr>
+              <tr><td>代码检查</td><td>${{ jobs.code_check.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
+              <tr><td>UT</td><td>${{ jobs.ut.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
+              <tr><td>ST</td><td>${{ jobs.st.status }}</td><td><a href="${PASS_CONDITIONS_LINK}">点此跳转</a></td></tr>
+            </table>
+          final_label: ci-failed
+          WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          __sameProject__: "true"
+          __projectId__: ""
+          jobId: 215834b7550740b89a70d4fd9f55b4d2
+          __repository__: sciencediscovery
+          artifactIdentifier: ""
+        identifier: 1790000000000b7abf11-329f-448a-bdc4-f1db550865d3
+      if: "${{ pipeline.trigger_type == 'MR' && !completed('ut', 'st', 'code_check') }}"
+      runs-on:
+      - default
+  pre:
+  - type: auto
+  select: always
+  fail-fast: false

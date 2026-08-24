@@ -1,3 +1,21 @@
+# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Reusable CodeArts child pipeline for the PR-oriented code checks. Pipeline
+# 08f5be37851e45f9a2cbe41ea6dcb07a invokes the registered child pipeline
+# 3a80cbaf5dec4e0b8804ce1401787f5f; PR labels and the final result comment are
+# deliberately owned by the parent so that the whole CI run publishes once.
 concurrency:
   max: 120
   enable: true
@@ -50,32 +68,6 @@ inputs:
     default: "${WEBHOOK_PAYLOAD}"
     manual_override: true
 stages:
-  176464703972462e4780d-56ca-4c54-9c49-29291c471dfd:
-    jobs:
-      JOB_AeyHi:
-        select: selected_by_default
-        name: create_label
-        needs: []
-        steps:
-        - name: create_label
-          uses: official_devcloud_cloudBuild
-          with:
-            number: "${MERGE_ID}"
-            WEBHOOK_PAYLOAD: "${webhook_payload}"
-            __sameProject__: "true"
-            __projectId__: ""
-            jobId: dc2f05de339b410a972184a84b9f1c6f
-            __repository__: sciencediscovery
-            artifactIdentifier: ""
-          identifier: 17736446667235cd01d5c-c29e-41f5-ab85-52bba5fce5ed
-        if: "${{ default() }}"
-        runs-on:
-        - default
-    pre:
-    - type: auto
-    name: 阶段_1
-    select: selected_by_default
-    fail-fast: false
   1760954519095a0a4b18d-315d-432b-9eec-5651a0eb2e69:
     jobs:
       JOB_EcFGE:
@@ -159,28 +151,3 @@ stages:
     name: 阶段_2
     select: always
     fail-fast: false
-post:
-  jobs:
-    JOB_cHrfj:
-      select: always
-      name: getlabel
-      needs: []
-      steps:
-      - name: getlabel
-        uses: official_devcloud_cloudBuild
-        with:
-          number: "${MERGE_ID}"
-          WEBHOOK_PAYLOAD: "${webhook_payload}"
-          __sameProject__: "true"
-          __projectId__: ""
-          jobId: 215834b7550740b89a70d4fd9f55b4d2
-          __repository__: sciencediscovery
-          artifactIdentifier: ""
-        identifier: 17646737830615fa277f2-7774-46a9-9222-bdd6236e9912
-      if: "${{ default() }}"
-      runs-on:
-      - default
-  pre:
-  - type: auto
-  select: always
-  fail-fast: false
