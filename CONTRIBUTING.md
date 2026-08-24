@@ -132,19 +132,14 @@ that package.
 
 ### What each pipeline covers
 
-Three pipelines run, and **none of them runs everything**:
+Two test-layer pipelines run, and **neither runs everything**. GitCode
+merge-request CI is CodeArts-only; this repository intentionally has no
+`.gitcode/workflows/` Actions pipeline.
 
 | Pipeline | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
-| GitCode — `.gitcode/workflows/ci.yml` | `ci:ut:core` | yes | — | x86_64, `--skip-smoke` |
 | CodeArts — `.codearts/workflow/` | `ci:ut:core` | yes | — | — |
-
-GitCode's hosted runner is a container whose capability bounding set drops
-`CAP_SYS_ADMIN`, so bubblewrap installs but cannot create a namespace. That
-removes the `@sciencediscovery/runner` tests, the `services/api` tests that
-execute code, and E2E entirely — the Runner refuses to serve without a usable
-sandbox, so its stack never becomes healthy.
 
 CodeArts's `default` pool has the same shape. The job is a pod on a CCE
 Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
@@ -155,10 +150,11 @@ checked-in workflow therefore runs `ci:ut:core` and the hermetic `ci:st` layer.
 A sandboxed layer needs a self-hosted resource pool
 (`runs-on: [self-hosted, <pool-id>]`) on a machine that allows user namespaces.
 
-A **fourth** pipeline posts a result table on every merge request
+A separate CodeArts pipeline posts a result table on every merge request
 (静态检查 / 禁用词扫描 / 防投毒检查 / 开源合规检查 / UT测试 / build). It is
-configured in the CodeArts console rather than in this repository, and its
-`UT测试` is not the `ut` job above.
+represented by `.codearts/workflow/codearts-pipeline-code-check.yml`; its jobs
+invoke CloudBuild tasks whose complete commands remain in CodeArts, and its
+`UT测试` is not the UT/ST workflow's `ut` job above.
 
 ## Repositories
 

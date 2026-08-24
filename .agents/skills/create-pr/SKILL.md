@@ -57,11 +57,12 @@ Three bots respond within a minute or two:
 
 - **`openJiuwen-bot`** — CLA check, then a table of the console pipeline's
   steps (静态检查 / 禁用词扫描 / 防投毒检查 / 开源合规检查 / UT测试 / build).
-  That pipeline is configured outside this repository; its `UT测试` is **not**
-  the `ut` job in `.gitcode/workflows/ci.yml`.
+  Those checks are CodeArts CloudBuild tasks; its `UT测试` is **not** the `ut`
+  job in `.codearts/workflow/codearts-pipeline.yml`.
 - **`atomgit-bot`** — a change summary and an AI review. `/ai review` and
   `/ai summary` re-trigger it from a comment.
-- The repository's own CI, on the 流水线 tab.
+- The repository's CodeArts CI, on the 流水线 tab. There is no separate
+  `.gitcode/workflows/` Actions pipeline.
 
 Read a result before responding to it:
 

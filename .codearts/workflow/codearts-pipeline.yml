@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# UT and ST on CodeArts Pipeline, using the same repository entry points as
-# .gitcode/workflows/ci.yml. The default CodeArts pool cannot create the user
-# namespaces bubblewrap needs, so UT deliberately runs ci:ut:core and E2E is
-# left to GitHub. The hermetic ci:st layer needs neither a sandbox nor secrets.
+# UT and ST on CodeArts Pipeline, using the repository entry points documented
+# in .ci/README.md. The default CodeArts pool cannot create the user namespaces
+# bubblewrap needs, so UT deliberately runs ci:ut:core and E2E is left to
+# GitHub. The hermetic ci:st layer needs neither a sandbox nor secrets.
 #
 # Every job downloads the source-context commit with CodeArts' built-in clone
 # task before provisioning its own tools. The clone task handles repository
