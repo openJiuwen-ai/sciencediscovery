@@ -37,6 +37,7 @@
 env:
   HUAWEICLOUD_NPM_REGISTRY: https://repo.huaweicloud.com/repository/npm/
   HUAWEICLOUD_PYPI_INDEX: https://repo.huaweicloud.com/repository/pypi/simple
+  NPMMIRROR_PYTHON_INSTALL_MIRROR: https://registry.npmmirror.com/-/binary/python-build-standalone
 
 concurrency:
   max: 5
@@ -112,6 +113,7 @@ stages:
               cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
               export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
               export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
               for PYTHON_PROJECT in services/gateway services/paper services/memory-graph; do
                 LOCK_FILE="$PYTHON_PROJECT/uv.lock"
                 echo "retargeting $LOCK_FILE to $UV_DEFAULT_INDEX"
@@ -133,7 +135,8 @@ stages:
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_RUNTIME_DIR="$HOME/ci-runtime-ut"
               export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
-              echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX"
+              export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
+              echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX, python=$UV_PYTHON_INSTALL_MIRROR"
               set +e
               pnpm ci:ut:core
               TEST_RC=$?
@@ -181,7 +184,8 @@ stages:
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_RUNTIME_DIR="$HOME/ci-runtime-st"
               export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
-              echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX"
+              export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
+              echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX, python=$UV_PYTHON_INSTALL_MIRROR"
               set +e
               pnpm ci:st
               TEST_RC=$?
