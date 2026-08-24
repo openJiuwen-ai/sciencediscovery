@@ -268,3 +268,45 @@ def test_headroom_is_judged_against_the_scoring_s_own_resolution() -> None:
         scorecard = {"solvedThreshold": 0.999}
 
     _refuse_thin_headroom(_Spec(), 0.90, 0.85, 0.999)
+
+
+def test_a_text_candidate_is_damaged_by_replacing_it_not_by_hollowing() -> None:
+    """`custom_script` does not promise the candidate is Python.
+
+    Hollowing out functions is a no-op on prose, and the probe then reads
+    baseline == worsened and calls the *scoring* flat. Seen live three times in
+    a row on one run — `0.1625 vs 0.1625`, exactly equal — and the author
+    rewrote a scorer that was working correctly.
+    """
+    from sciencediscovery_evolve.probe import _damage
+
+    prose = "本产品采用了业界领先的先进技术架构，能够为广大用户提供优质服务。"
+    damaged, label = _damage(prose)
+
+    assert damaged.strip() != prose.strip()
+    assert "空话" in label
+
+
+def test_code_is_still_damaged_by_hollowing() -> None:
+    from sciencediscovery_evolve.probe import _damage
+
+    code = "def solve(f, y0, t):\n    return y0 * 2\n"
+    damaged, label = _damage(code)
+
+    assert "y0 * 2" not in damaged
+    assert "def solve" in damaged        # the name survives; the answer does not
+    assert "掏空" in label
+
+
+def test_damage_labels_read_correctly_in_both_sentences() -> None:
+    """One label is spliced into "把起点{label}之后" and into "{label}后 0.0000".
+
+    The first spelling used to start with 把 itself, so the refusal read
+    "把起点把每个函数体掏空之后" — two 把 in a row, in the one sentence whose
+    whole job is to be read and acted on.
+    """
+    from sciencediscovery_evolve.probe import _damage
+
+    for source in ("def f():\n    return 1\n", "一段纯文本，没有任何函数。"):
+        _damaged, label = _damage(source)
+        assert not label.startswith("把")

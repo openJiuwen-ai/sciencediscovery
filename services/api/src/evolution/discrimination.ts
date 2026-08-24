@@ -105,7 +105,7 @@ export const DAMAGES: Damage[] = [
 /** A text candidate cannot be damaged by rewriting code; making it shorter and
  *  vaguer is the equivalent, and any rubric worth running notices. */
 export const TEXT_DAMAGE: Damage = {
-  label: "换成一段空话",
+  label: "内容换成空话",
   worsen: () => "本工作做了一些事情，取得了一些结果，具有一定的意义。",
 };
 

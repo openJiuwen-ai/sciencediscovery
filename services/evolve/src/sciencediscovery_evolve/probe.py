@@ -128,8 +128,9 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
                 "起点在你的评测脚本下就不成立，搜索里每个分数都是相对它的。"
                 + (f"脚本报的是：{why}" if why.strip() else "脚本没说为什么。")
             )
+        damaged, damage_label = _damage(spec.baseline_code)
         try:
-            worsened = _score(domain.evaluate, _hollow_out(spec.baseline_code), shards)
+            worsened = _score(domain.evaluate, damaged, shards)
         except ScriptError as error:
             # The damaged copy is what most candidates will look like: a
             # function that raises, or returns None. An evaluator that dies on
@@ -145,7 +146,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
         _refuse_saturated(spec, baseline, worsened)
         _refuse_noisy(domain.evaluate, spec.baseline_code, shards, baseline, worsened)
         return {"baseline": baseline, "flat": flat,
-                "label": "把每个函数体掏空", "worsened": worsened}
+                "label": damage_label, "worsened": worsened}
 
     if mode == "llm_judge":
         from .judge_domain import grader, judge_domain
@@ -160,7 +161,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
             baseline_text=spec.baseline_code,
         )
         shards = tuple(range(_gate_count(spec)))
-        damaged, label = _EMPTY_WORDS, "换成一段空话"
+        damaged, label = _EMPTY_WORDS, "内容换成空话"
     else:
         from .scorecard_domain import scorecard_domain
 
@@ -258,7 +259,7 @@ def _probe_gated(spec: RunSpec) -> Dict[str, Any]:
 
     flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
     _refuse_saturated(spec, baseline, worsened)
-    return {"baseline": baseline, "flat": flat, "label": "把每个函数体掏空", "worsened": worsened}
+    return {"baseline": baseline, "flat": flat, "label": "函数体全部掏空", "worsened": worsened}
 
 
 def _refuse_saturated(spec: RunSpec, baseline: float, worsened: Optional[float] = None) -> None:
@@ -454,3 +455,27 @@ def _refuse_thin_headroom(spec: RunSpec, baseline: float, worsened: Optional[flo
         "搜索多半会以「没有候选超过起点」收场。"
         "把样例出难一点、容差收紧，或者换一个更挑剔的指标，让起点落回 0.3–0.7 之间。"
     )
+
+
+def _damage(source: str) -> Tuple[str, str]:
+    """A deliberately worse copy of the starting point, whatever it is made of.
+
+    Hollowing out every function is the right damage for code and a no-op for
+    anything else. `custom_script` does not promise the candidate is Python — it
+    is whatever the evaluator imports and reads, and a run whose candidate was a
+    piece of prose produced `0.1625 vs 0.1625`, exactly equal, three times in a
+    row. That was reported as "the scoring cannot tell good from bad", and the
+    author rewrote a scorer that was working correctly.
+
+    So the hollowing is checked for having done anything, and when it has not
+    the copy is replaced outright. Content that is *there* but says nothing is
+    the damage that works on text the way an empty function body works on code.
+    """
+    try:
+        hollowed = _hollow_out(source)
+    except ProbeError:
+        # Not parseable as code, so it was never code. Fall through to text.
+        hollowed = source
+    if hollowed.strip() != source.strip():
+        return hollowed, "函数体全部掏空"
+    return _EMPTY_WORDS, "内容换成空话"
