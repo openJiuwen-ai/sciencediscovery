@@ -310,3 +310,21 @@ def test_damage_labels_read_correctly_in_both_sentences() -> None:
     for source in ("def f():\n    return 1\n", "一段纯文本，没有任何函数。"):
         _damaged, label = _damage(source)
         assert not label.startswith("把")
+
+
+def test_the_probe_measures_the_slots_the_run_gates_on() -> None:
+    """One program, one 起点 — not 0.7157 in the probe and 0.2218 on the card.
+
+    The engine holds out the tail of the slot list, so every node score the run
+    reports is measured on the gate slots. A probe that reads `range(gate)`
+    measures the first rollout slots instead, and with one case generator per
+    shard those are different problems.
+    """
+    from sciencediscovery_evolve.probe import _gate_slots
+
+    class _Spec:
+        scorecard = {"criteria": [{"measure": {"split": {
+            "rolloutShards": 8, "gateShards": 4, "testShards": 4,
+        }}}]}
+
+    assert _gate_slots(_Spec()) == (8, 9, 10, 11)

@@ -118,7 +118,14 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
         # candidate can write the result file the evaluator was supposed to
         # write. Both look the same from here, and both are refused: a
         # candidate that scores itself scores the same after being damaged.
-        shards = tuple(range(_gate_count(spec)))
+        # The engine holds out the *tail* of the slot list, so every node score —
+        # including the seeded baseline the run card shows — is measured on the
+        # gate slots. `range(gate)` starts at 0 and lands on the first rollout
+        # slots instead: with one generator per shard the two slices are
+        # different problems, and a live run showed the probe saying 0.7157 for
+        # a start the run then seeded at 0.2218. Two numbers for one program,
+        # both called "起点".
+        shards = _gate_slots(spec)
         try:
             baseline, _raw, why = _measure(domain.evaluate, spec.baseline_code, shards)
         except ScriptError as error:
@@ -363,6 +370,17 @@ def _dataset(spec: RunSpec) -> Dataset:
         return load_dataset(spec.dataset_dir or None, spec.scorecard)
     except DatasetError as error:
         raise ProbeError(str(error)) from error
+
+
+def _gate_slots(spec: RunSpec) -> Tuple[int, ...]:
+    """The slot positions the run itself gates on: after rollout, before test."""
+    for criterion in spec.scorecard.get("criteria") or []:
+        split = (criterion.get("measure") or {}).get("split")
+        if isinstance(split, dict):
+            rollout = max(0, int(split.get("rolloutShards") or 0))
+            gate = max(1, int(split.get("gateShards") or 1))
+            return tuple(range(rollout, rollout + gate))
+    return (0,)
 
 
 def _gate_count(spec: RunSpec) -> int:

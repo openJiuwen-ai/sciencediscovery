@@ -983,10 +983,27 @@ async function executeAgentRun(
       // Every gate the wizard used to sit in front of still runs on this side —
       // the probe, pre-flight, the frozen scoring — because the agent is the
       // designer and never the authority on whether its own scoring can rank.
-      getEvolveRun: async (runId: string) => {
-        const run = await evolve.evolutionStore.readRun(runId);
-        if (!run) throw new Error(`没有这个搜索：${runId}`);
-        return summariseRun(run, await evolve.evolutionStore.readEvents(runId));
+      getEvolveRun: async (runId?: string) => {
+        // The id is optional and prefix-tolerant, because the caller is a model
+        // whose context routinely does not contain it: a search started in an
+        // earlier turn, a compaction in between. Watched live: one call with an
+        // invented number, one with the memory-graph's `subtask:evolve:` handle
+        // — a legitimate id it had just read off the graph.
+        const wanted = runId?.trim().replace(/^subtask:evolve:/, "");
+        const runs = await evolve.evolutionStore.listRuns(sessionId);
+        const run = wanted
+          ? await evolve.evolutionStore.readRun(wanted)
+          : runs.sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+        if (!run) {
+          // The reader is a model deciding what to call next; a bare "not
+          // found" leaves it guessing again. The real ids are right here.
+          const known = runs.slice(0, 8)
+            .map((item) => `${item.id}（${item.status}）`).join("、");
+          throw new Error(wanted
+            ? `没有这个搜索：${wanted}。${known ? `这个会话里的搜索：${known}` : "这个会话里还没有搜索。"}`
+            : "这个会话里还没有搜索。");
+        }
+        return summariseRun(run, await evolve.evolutionStore.readEvents(run.id));
       },
       createEvolveRun: async (input: EvolveRunProposal) => {
         store.assertSessionWritable(sessionId);

@@ -287,7 +287,7 @@ export interface WorkspaceToolOptions {
    * summary is what a person would want said out loud: did it beat the start,
    * by how much, on the split that never took part.
    */
-  getEvolveRun?: (runId: string) => Promise<EvolveRunSummary>;
+  getEvolveRun?: (runId?: string) => Promise<EvolveRunSummary>;
   /** Cross-session memory-graph substring search (the `query_graph` LLM tool). */
   queryGraph?: (query: string) => Promise<MemoryGraphMatchResponse>;
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
@@ -1076,7 +1076,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
   if (options.getEvolveRun) {
     const getEvolveParameters = Type.Object({
-      runId: Type.String({ maxLength: 200, minLength: 1 }),
+      runId: Type.Optional(Type.String({
+        description: "The id create_evolve_run returned (a UUID). Omit it to read this "
+          + "session's most recent search — which is usually what \"how did it go\" means. "
+          + "Do not invent one.",
+        maxLength: 200, minLength: 1,
+      })),
     });
     const getEvolveRun: AgentTool<typeof getEvolveParameters> = {
       description:
