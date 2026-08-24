@@ -290,10 +290,11 @@ post:
         uses: official_devcloud_cloudBuild
         with:
           number: "${MERGE_ID}"
-          WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          result_html: EMPTY
+          final_label: FAILED
           __sameProject__: "true"
           __projectId__: ""
-          jobId: 215834b7550740b89a70d4fd9f55b4d2
+          jobId: 52d1699f53ca463ab77c4c4398be7e5a
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 17646737830615fa277f2-7774-46a9-9222-bdd6236e9912
@@ -309,10 +310,11 @@ post:
         uses: official_devcloud_cloudBuild
         with:
           number: "${MERGE_ID}"
-          WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          result_html: EMPTY
+          final_label: FAILED
           __sameProject__: "true"
           __projectId__: ""
-          jobId: 215834b7550740b89a70d4fd9f55b4d2
+          jobId: 52d1699f53ca463ab77c4c4398be7e5a
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 1790000000000b7abf11-329f-448a-bdc4-f1db550865d3
