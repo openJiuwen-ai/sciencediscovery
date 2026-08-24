@@ -66,7 +66,7 @@ describe("serve topology", () => {
     // API process. Supervising a Python service here would gate startup on a
     // health endpoint nothing serves.
     assert.deepEqual(services.map((service) => service.name), [
-      "bubblewrap runner",
+      "sandbox runner",
       "control API and Web UI",
     ]);
     assert.deepEqual(services.map((service) => service.healthUrl), [

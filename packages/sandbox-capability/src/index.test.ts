@@ -20,11 +20,13 @@ import { after, before, beforeEach, describe, test } from "node:test";
 
 import {
   detectSandboxCapability,
+  detectSeatbeltCapability,
   disableUsernsOmittedMessage,
   procFallbackMessage,
   procMountArguments,
   resetSandboxCapabilityCache,
   sandboxProbeArguments,
+  seatbeltUnusableMessage,
 } from "./index.js";
 
 /** bubblewrap's real refusals, used verbatim so the stubs model the environments. */
@@ -221,5 +223,70 @@ describe("sandbox capability detection", () => {
     // because the first succeeded.
     const calls = (await readFile(callLog, "utf8")).split("\n").filter(Boolean);
     assert.equal(calls.length, 2);
+  });
+});
+
+describe("Seatbelt capability detection", () => {
+  let workspace = "";
+
+  before(async () => {
+    workspace = await mkdtemp(join(tmpdir(), "science-agent-seatbelt-capability-"));
+  });
+
+  after(async () => {
+    await rm(workspace, { force: true, recursive: true });
+  });
+
+  beforeEach(() => {
+    resetSandboxCapabilityCache();
+  });
+
+  async function writeStub(name: string, script: string): Promise<string> {
+    const path = join(workspace, name);
+    await writeFile(path, script);
+    await chmod(path, 0o755);
+    return path;
+  }
+
+  test("runs a real profile probe and reports a usable backend", async () => {
+    const argsLog = join(workspace, "seatbelt-args.log");
+    const stub = await writeStub(
+      "sandbox-exec-ok",
+      `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsLog}'\nexit 0\n`,
+    );
+    const capability = await detectSeatbeltCapability(stub, { timeoutMs: 5_000 });
+    assert.deepEqual(capability, { reason: "supported", sandboxUsable: true });
+    const args = await readFile(argsLog, "utf8");
+    assert.match(args, /^-p$/m);
+    assert.match(args, /\(deny default\)/);
+    assert.match(args, /\/usr\/bin\/true/);
+  });
+
+  test("reports profile application failures without throwing", async () => {
+    const stub = await writeStub(
+      "sandbox-exec-fails",
+      "#!/bin/sh\necho 'sandbox-exec: sandbox_apply: Operation not permitted' >&2\nexit 1\n",
+    );
+    const capability = await detectSeatbeltCapability(stub, { timeoutMs: 5_000 });
+    assert.equal(capability.sandboxUsable, false);
+    assert.equal(capability.reason, "sandbox-unusable");
+    assert.match(capability.detail ?? "", /Operation not permitted/);
+    assert.match(seatbeltUnusableMessage(stub, capability), /never falls back/);
+  });
+
+  test("caches one probe per Seatbelt executable", async () => {
+    const callLog = join(workspace, "seatbelt-calls.log");
+    await writeFile(callLog, "");
+    const stub = await writeStub(
+      "sandbox-exec-counted",
+      `#!/bin/sh\necho call >> '${callLog}'\nexit 0\n`,
+    );
+    await Promise.all([
+      detectSeatbeltCapability(stub, { timeoutMs: 5_000 }),
+      detectSeatbeltCapability(stub, { timeoutMs: 5_000 }),
+    ]);
+    await detectSeatbeltCapability(stub, { timeoutMs: 5_000 });
+    const calls = (await readFile(callLog, "utf8")).split("\n").filter(Boolean);
+    assert.equal(calls.length, 1);
   });
 });

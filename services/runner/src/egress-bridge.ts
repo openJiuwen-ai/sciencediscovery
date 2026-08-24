@@ -61,6 +61,11 @@ export function egressEnvironment(): Record<string, string> {
   return Object.fromEntries(EGRESS_ENVIRONMENT_KEYS.map((key) => [key, EGRESS_PROXY_URL]));
 }
 
+/** Proxy environment for host-network sandboxes such as macOS Seatbelt. */
+export function egressEnvironmentForUrl(proxyUrl: string): Record<string, string> {
+  return Object.fromEntries(EGRESS_ENVIRONMENT_KEYS.map((key) => [key, proxyUrl]));
+}
+
 const BRIDGE_SCRIPT = String.raw`
 """Sandbox egress bridge: loopback TCP inside the sandbox -> host gateway UDS.
 

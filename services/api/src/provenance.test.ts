@@ -22,6 +22,7 @@ import { test } from "node:test";
 
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+  SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID,
   type ComposerReference,
   type Environment,
   type EnvironmentRevision,
@@ -808,6 +809,7 @@ test("an execution interrupted by a run abort is recorded as cancelled, not fail
 
   // A Runner that breaks on its own is still a failure.
   const brokenRunner = {
+    health: async () => ({ sandbox: "seatbelt" }),
     executeShell: async (): Promise<ShellExecutionResult> => { throw new Error("Runner is unavailable"); },
   } as unknown as RunnerClient;
   await assert.rejects(recorder.executeShell({
@@ -821,6 +823,8 @@ test("an execution interrupted by a run abort is recorded as cancelled, not fail
   }));
   const runs = await store.listExecutionRuns(session.id);
   assert.equal(runs.at(-1)?.status, "failed");
+  assert.equal(runs.at(-1)?.sandbox, "seatbelt");
+  assert.equal(runs.at(-1)?.environmentRevisionId, SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID);
 });
 
 test("recorder mirrors provenance addressing fields to the memory graph on shell execution", async (context) => {

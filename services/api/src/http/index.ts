@@ -114,6 +114,7 @@ import {
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
 import { inferDomain, mgLog } from "@sciencediscovery/memory";
+import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { createPromptManifest } from "../prompt-manifest.js";
@@ -1591,7 +1592,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             };
             const reviewerSkills = skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]);
             const reviewerWorkspace: WorkspaceAgentOptions = {
-              config: { apiToken, baseUrl: selectedModel.baseUrl, dataDir: store.dataDir, model: selectedModel.model },
+              config: {
+                apiToken,
+                baseUrl: selectedModel.baseUrl,
+                dataDir: store.dataDir,
+                model: selectedModel.model,
+                // Deep review creates its own AgentRun rather than reusing the
+                // main-run options. Keep the model profile's resolved proxy on
+                // that path as well; without it, a sandbox that can only reach
+                // the provider through a configured proxy fails as `Failed to fetch`.
+                proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
+              },
               enabledConnectorIds: runtimeSettings.enabledConnectorIds,
               executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
               executeShell: async () => { throw new Error("Reviewer Specialist cannot execute code"); },

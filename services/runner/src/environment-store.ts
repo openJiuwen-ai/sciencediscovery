@@ -42,6 +42,7 @@ const CATALOG_VERSION = 1;
 const MANAGED_MICROMAMBA_VERSION = micromambaManifest.version;
 const MANAGED_MICROMAMBA_BASE_URL = `${micromambaManifest.baseUrl}/${MANAGED_MICROMAMBA_VERSION}`;
 const MANAGED_MICROMAMBA_RELEASES = micromambaManifest.releases;
+const MANAGED_MICROMAMBA_DARWIN_RELEASES = micromambaManifest.darwinReleases;
 const MAX_PROVISIONER_BYTES = 64 * 1024 * 1024;
 const BUILT_IN_CONDA_CHANNELS = new Set<string>(
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS.flatMap((preset) => [...preset.condaChannels]),
@@ -88,16 +89,15 @@ export interface EnvironmentRuntime {
   revision: EnvironmentRevision;
 }
 
-type SupportedMicromambaArchitecture = keyof typeof MANAGED_MICROMAMBA_RELEASES;
-
 export function managedMicromambaRelease(
   architecture: string = process.arch,
   platform: string = process.platform,
 ) {
-  if (platform !== "linux") {
-    throw new Error(`Managed micromamba installation requires Linux, not ${platform}`);
-  }
-  const release = MANAGED_MICROMAMBA_RELEASES[architecture as SupportedMicromambaArchitecture];
+  const releases = platform === "linux"
+    ? MANAGED_MICROMAMBA_RELEASES
+    : platform === "darwin" ? MANAGED_MICROMAMBA_DARWIN_RELEASES : undefined;
+  if (!releases) throw new Error(`Managed micromamba installation is unavailable for platform ${platform}`);
+  const release = releases[architecture as keyof typeof releases];
   if (!release) {
     throw new Error(`Managed micromamba installation is unavailable for architecture ${architecture}`);
   }

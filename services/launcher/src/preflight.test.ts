@@ -96,6 +96,28 @@ describe("host preflight", () => {
     assert.match(warnings.join("\n"), /cannot create a sandbox/);
   });
 
+  test("probes Seatbelt on macOS without requiring bubblewrap", async () => {
+    const seatbeltBin = join(workspace, "seatbelt-bin");
+    await mkdir(seatbeltBin, { recursive: true });
+    const stub = join(seatbeltBin, "sandbox-exec");
+    await writeFile(stub, "#!/bin/sh\nexit 0\n");
+    await chmod(stub, 0o755);
+    resetSandboxCapabilityCache();
+    const result = await runPreflight({
+      bwrapPath: "missing-bwrap",
+      dataDir: join(workspace, "data-seatbelt"),
+      env: { PATH: seatbeltBin },
+      platform: "darwin",
+      sandboxProvider: "seatbelt",
+      seatbeltPath: "sandbox-exec",
+      skipSandboxCheck: false,
+      warn: () => {},
+    });
+    assert.equal(result.sandboxProvider, "seatbelt");
+    assert.equal(result.sandboxUsable, true);
+    assert.equal(result.seatbeltPath, stub);
+  });
+
   test("reports a usable but unhardened sandbox when only --disable-userns is refused", async () => {
     // The environment the runner must degrade in: a read-only /proc/sys makes
     // the option fail while the sandbox itself builds fine. Preflight has to

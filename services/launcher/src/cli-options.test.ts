@@ -94,6 +94,16 @@ describe("launcher option parsing", () => {
     assert.deepEqual(messages, []);
   });
 
+  test("accepts an explicit macOS Seatbelt launcher", () => {
+    const settings = parseInvocation([
+      "serve",
+      "--sandbox-provider", "seatbelt",
+      "--seatbelt", "/custom/sandbox-exec",
+    ], {}, cwd).settings;
+    assert.equal(settings.sandboxProvider, "seatbelt");
+    assert.equal(settings.seatbeltPath, "/custom/sandbox-exec");
+  });
+
   test("maps bare help and version flags to commands", () => {
     assert.equal(parseInvocation(["--help"], {}, cwd).command, "help");
     assert.equal(parseInvocation(["-h"], {}, cwd).command, "help");
