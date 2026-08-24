@@ -240,11 +240,27 @@ export function workspaceBindArguments(workspaceRoot: string, readOnlyWorkspaceR
   };
 }
 
-export async function hostInterpreterMaskArguments(): Promise<string[]> {
-  const entries = await readdir("/usr/bin");
-  return entries
-    .filter((name) => /^(?:python(?:3(?:\.\d+)?)?|R|Rscript)$/.test(name))
-    .flatMap((name) => ["--ro-bind", "/dev/null", `/usr/bin/${name}`]);
+export async function hostInterpreterMaskArguments(binDirectory = "/usr/bin"): Promise<string[]> {
+  const entries = await readdir(binDirectory);
+  const names = entries.filter((name) => /^(?:python(?:3(?:\.\d+)?)?|R|Rscript)$/.test(name));
+  // Mask the *resolved* target, not the name. On Debian-family hosts these are
+  // real files and the two are the same; on RHEL-family hosts they are symlinks
+  // through /etc/alternatives, and binding onto a symlink makes bwrap follow it
+  // and try to create the mountpoint at the far end — inside the read-only
+  // /usr bind, which fails the whole launch with
+  //   bwrap: Can't create file at /usr/bin/python: No such file or directory
+  // and takes every run_python with it. Masking the shared target instead
+  // leaves each symlink pointing at /dev/null, which is what the mask is for.
+  const targets = new Set<string>();
+  for (const name of names) {
+    try {
+      targets.add(await realpath(`${binDirectory}/${name}`));
+    } catch {
+      // A dangling alternatives link has nothing to mask; skip it rather than
+      // failing every sandbox launch on this host.
+    }
+  }
+  return [...targets].sort().flatMap((target) => ["--ro-bind", "/dev/null", target]);
 }
 
 export async function hostRuntimeSupportArguments(): Promise<string[]> {

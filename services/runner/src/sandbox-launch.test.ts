@@ -13,14 +13,14 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, realpath as realpathFs, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import { resetSandboxCapabilityCache, type SandboxProcMode } from "@sciencediscovery/sandbox-capability";
 
-import { buildSandboxLaunch, sandboxLaunchProfile } from "./executor.js";
+import { buildSandboxLaunch, hostInterpreterMaskArguments, sandboxLaunchProfile } from "./executor.js";
 
 /** Quote for a shell single-quoted string; bubblewrap messages contain apostrophes. */
 function shellQuote(value: string): string {
@@ -172,5 +172,73 @@ describe("detection feeding the launch", () => {
     const profile = await sandboxLaunchProfile(stub);
     assert.deepEqual(profile, { disableUserns: false, procMode: "new" });
     assert.ok(launchArguments(profile).includes("--proc"));
+  });
+});
+
+describe("host interpreter masks", () => {
+  let root = "";
+
+  before(async () => {
+    // A RHEL-family /usr/bin: the interpreters are symlinks through
+    // /etc/alternatives and only the versioned binary is a real file.
+    // realpath: on macOS /var is itself a symlink to /private/var, and the
+    // function under test resolves its targets — the fixture root has to be
+    // resolved the same way or the comparison fails on the prefix alone.
+    root = await realpathFs(await mkdtemp(join(tmpdir(), "mask-")));
+    await mkdir(join(root, "bin"), { recursive: true });
+    await mkdir(join(root, "libexec"), { recursive: true });
+    await mkdir(join(root, "alternatives"), { recursive: true });
+    await writeFile(join(root, "libexec", "platform-python3.6"), "#!/bin/sh\n");
+    await symlink(join(root, "libexec", "platform-python3.6"), join(root, "alternatives", "python3"));
+    await symlink(join(root, "alternatives", "python3"), join(root, "bin", "python3.6"));
+    await symlink(join(root, "bin", "python3.6"), join(root, "bin", "python3"));
+    await symlink(join(root, "bin", "python3"), join(root, "bin", "python"));
+    // A real file alongside them, the Debian-family shape.
+    await writeFile(join(root, "bin", "python3.8"), "#!/bin/sh\n");
+    // Something that must not be masked at all.
+    await writeFile(join(root, "bin", "pythonic-tool"), "#!/bin/sh\n");
+    // A dangling alternatives link: nothing to mask, and it must not throw.
+    await symlink(join(root, "alternatives", "gone"), join(root, "bin", "Rscript"));
+  });
+
+  after(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+
+  test("masks the resolved target, never the symlink itself", async () => {
+    const args = await hostInterpreterMaskArguments(join(root, "bin"));
+    const targets = args.filter((_, at) => at % 3 === 2);
+
+    // Binding onto a symlink makes bwrap follow it and try to create the
+    // mountpoint at the far end, inside the read-only /usr bind. That fails the
+    // whole launch — "Can't create file at /usr/bin/python" — and takes every
+    // run_python on the host with it.
+    for (const target of targets) {
+      assert.equal((await lstat(target)).isSymbolicLink(), false, `${target} is a symlink`);
+    }
+  });
+
+  test("four names sharing one real interpreter collapse to one mask", async () => {
+    const args = await hostInterpreterMaskArguments(join(root, "bin"));
+    const targets = args.filter((_, at) => at % 3 === 2);
+
+    assert.deepEqual(targets.sort(), [
+      join(root, "bin", "python3.8"),
+      join(root, "libexec", "platform-python3.6"),
+    ].sort());
+  });
+
+  test("a name that merely starts with python is left alone", async () => {
+    const args = await hostInterpreterMaskArguments(join(root, "bin"));
+
+    assert.ok(!args.some((arg) => arg.endsWith("pythonic-tool")));
+  });
+
+  test("a dangling link is skipped rather than failing the launch", async () => {
+    // Every sandbox launch on the host calls this; throwing here would mean no
+    // execution at all, for a link that points at nothing anyway.
+    const args = await hostInterpreterMaskArguments(join(root, "bin"));
+
+    assert.ok(!args.some((arg) => arg.includes("Rscript")));
   });
 });
