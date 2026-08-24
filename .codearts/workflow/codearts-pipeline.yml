@@ -1,60 +1,6 @@
-# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# ScienceDiscovery verification on CodeArts Pipeline. PR runs set the GitCode
-# running label, execute UT/ST alongside the reusable code-check pipeline, then
-# publish one result comment and final label. Manual runs execute the checks but
-# intentionally skip GitCode labels and comments because they have no MR.
-#
-# The repository entry points are documented in .ci/README.md. The default
-# CodeArts pool cannot create the user namespaces bubblewrap needs, so UT
-# deliberately runs ci:ut:core and E2E is left to GitHub. The hermetic ci:st
-# layer needs neither a sandbox nor secrets.
-#
-# Every job downloads the source-context commit with CodeArts' built-in clone
-# task before provisioning its own tools. The clone task handles repository
-# credentials and places this source directly at ${SHARE_PATH}.
-#
-# Shell steps use `official_shell_plugin`, with the script under
-# `with.OFFICIAL_SHELL_SCRIPT_INPUT`. CodeArts has no GitHub-style `run:` key:
-# the server rewrites one into a nonexistent plugin named `official_shell` and
-# rejects the pipeline before it starts.
-# Test steps save their exit code before uploading run.log to OBS; a final shell
-# step restores that exit code so failed tests still publish their diagnostics.
-# OBS objects are scoped by commit and pipeline run because one commit can be
-# executed more than once. upload-obs accepts only absolute paths in SHARE_PATH.
-#
-# Editing this pipeline in the CodeArts web editor may rewrite the file and
-# drop these comments; keep this file the source of truth.
-
-# Keep these mirrors CodeArts-specific: the pool is in Huawei Cloud, while the
-# GitHub jobs may run outside China. Shell steps reference the values explicitly
-# because CodeArts `env` entries are pipeline parameters, not implicit exports.
-# Committed uv lockfiles retain their original registries for other platforms.
-# UT retargets only the disposable CodeArts copies and rejects version changes.
-env:
-  HUAWEICLOUD_NPM_REGISTRY: https://repo.huaweicloud.com/repository/npm/
-  HUAWEICLOUD_PYPI_INDEX: https://repo.huaweicloud.com/repository/pypi/simple
-  NPMMIRROR_PYTHON_INSTALL_MIRROR: https://registry.npmmirror.com/-/binary/python-build-standalone
-
 concurrency:
   max: 5
   enable: false
-  preemption:
-    enable: false
-    events:
-    - mr_id
   exceed-action: IGNORE
 sources:
   sciencediscovery:
@@ -65,11 +11,6 @@ sources:
     ssh_git_url: git@gitcode.com:openJiuwen/sciencediscovery.git
     endpoint_id: c4451a2a11af48baacd6b2af5eee3075
     repo_id: 10597680
-# The four merge-request types are the GitCode equivalent of the GitHub
-# workflow's opened/synchronize/reopened: `open` and `reopen` cover creating and
-# reopening a merge request, `update` covers every later push to it, and `merge`
-# fires once when it lands on main. code-update stays false so a settings-only
-# change is checked too, matching how GitHub re-runs on every synchronize.
 on:
   sources:
     sciencediscovery:
@@ -85,9 +26,20 @@ on:
         branches-ignore: []
         paths-ignore: []
         code-update: false
+inputs:
+  HUAWEICLOUD_NPM_REGISTRY:
+    type: string
+    default: https://repo.huaweicloud.com/repository/npm/
+    manual_override: false
+  HUAWEICLOUD_PYPI_INDEX:
+    type: string
+    default: https://repo.huaweicloud.com/repository/pypi/simple
+    manual_override: false
+  NPMMIRROR_PYTHON_INSTALL_MIRROR:
+    type: string
+    default: https://registry.npmmirror.com/-/binary/python-build-standalone
+    manual_override: false
 stages:
-  # Retained from the former standalone code-check pipeline so PR state is set
-  # before any verification jobs start. Manual runs skip its only job.
   176464703972462e4780d-56ca-4c54-9c49-29291c471dfd:
     jobs:
       create_label:
@@ -114,18 +66,16 @@ stages:
     name: Prepare PR
     select: selected_by_default
     fail-fast: false
-  # The stage identifier was generated when pipeline 08f5be37851e45f9a2cbe41ea6dcb07a
-  # was converted to a repository-hosted definition. Keep it verbatim so the
-  # file still matches the pipeline record on the server.
   1787542687692903221df-b13e-4e04-a571-d9790b3d3f2d:
     jobs:
       ut:
-        select: selected_by_default
+        select: always
         name: UT
         needs: []
         steps:
         - name: Download the source commit
           uses: official_git_clone
+          identifier: 0
         - name: Provision the runner
           uses: official_shell_plugin
           with:
@@ -142,6 +92,7 @@ stages:
               export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
               export CI_PYPI_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               bash .ci/provision-runner.sh
+          identifier: 1
         - name: Retarget Python lockfiles to Huawei mirror
           uses: official_shell_plugin
           with:
@@ -163,6 +114,7 @@ stages:
                   exit 1
                 fi
               done
+          identifier: 2
         - name: Run and stage UT log
           uses: official_shell_plugin
           with:
@@ -188,6 +140,7 @@ stages:
               fi
               echo "=== UT run.log (last 80 lines) ==="
               tail -n 80 "$RESULT_LOG"
+          identifier: 3
         - name: Upload UT log to OBS
           uses: upload-obs
           with:
@@ -197,6 +150,7 @@ stages:
             key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
             source_file: "${SHARE_PATH}/.ci-results/ut-core/run.log"
             self_folder: "false"
+          identifier: 4
         - name: Report UT result
           uses: official_shell_plugin
           with:
@@ -206,18 +160,21 @@ stages:
               TEST_RC=$(cat .ci-results/ut-core/exit-code)
               echo "UT exited with status $TEST_RC"
               exit "$TEST_RC"
+          identifier: 5
         if: "${{ default() }}"
         runs-on:
+        - codearts-hosted
         - ubuntu-latest
         - x64
         - large
       st:
-        select: selected_by_default
+        select: always
         name: ST
         needs: []
         steps:
         - name: Download the source commit
           uses: official_git_clone
+          identifier: 0
         - name: Provision the runner
           uses: official_shell_plugin
           with:
@@ -234,8 +191,7 @@ stages:
               export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
               export CI_PYPI_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               bash .ci/provision-runner.sh
-        # The hermetic agent loop drives a scripted local endpoint and performs
-        # a real workspace tool round trip without a model credential.
+          identifier: 1
         - name: Run and stage ST log
           uses: official_shell_plugin
           with:
@@ -261,6 +217,7 @@ stages:
               fi
               echo "=== ST run.log (last 80 lines) ==="
               tail -n 80 "$RESULT_LOG"
+          identifier: 2
         - name: Upload ST log to OBS
           uses: upload-obs
           with:
@@ -270,6 +227,7 @@ stages:
             key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
             source_file: "${SHARE_PATH}/.ci-results/st/run.log"
             self_folder: "false"
+          identifier: 3
         - name: Report ST result
           uses: official_shell_plugin
           with:
@@ -279,29 +237,42 @@ stages:
               TEST_RC=$(cat .ci-results/st/exit-code)
               echo "ST exited with status $TEST_RC"
               exit "$TEST_RC"
+          identifier: 4
         if: "${{ default() }}"
         runs-on:
+        - codearts-hosted
         - ubuntu-latest
         - x64
         - large
       code_check:
-        select: selected_by_default
-        name: Code checks
+        select: always
+        name: 子流水线
         needs: []
         steps:
-        - name: Run the reusable code-check pipeline
-          uses: SubPipeline
+        - name: 子流水线
+          uses: official_devcloud_subPipeline
           with:
-            pipelineId: 3a80cbaf5dec4e0b8804ce1401787f5f
-            branch: "${{ sources.sciencediscovery.target_branch }}"
+            PR_ID: "${MERGE_ID}"
+            repo_url: "${REPO_URL}"
+            branch: "${test-agentcore_REPOSITORY_BRANCH}"
+            repo_name: "${test-agentcore_REPOSITORY_NAME}"
+            pipeline_name: "${PIPELINE_NAME}"
+            number: "${PR_ID}"
+            webhook_payload: "${WEBHOOK_PAYLOAD}"
+            __sameProject__: "true"
+            __projectId__: ""
+            SYSTEM_DEVCLOUD_SUBPIPELINE_TRIGGER_ID: 3a80cbaf5dec4e0b8804ce1401787f5f
+            SYSTEM_DEVCLOUD_SUBPIPELINE_BRANCH: PARENT
+            SYSTEM_DEVCLOUD_SUBPIPELINE_EXECUTE_BRANCH: ""
+            _OFFICIAL_DEVCLOUD_JOB_NAME_: sciencediscovery-jiuwen-check
+            _OFFICIAL_DEVCLOUD_JOB_VERSION_: 4.0
+          identifier: 1787572530852dd5a9499-1b45-4378-bf48-082dc7948978
         if: "${{ default() }}"
         runs-on:
         - default
     pre:
     - type: auto
     name: CI
-    # Verification must still run when the best-effort PR label task fails or
-    # is skipped by a manual trigger.
     select: always
     fail-fast: false
 post:
