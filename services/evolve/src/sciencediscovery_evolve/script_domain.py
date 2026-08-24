@@ -71,6 +71,7 @@ from .scorecard import evaluate_constraints, score_candidate
 from .vendor.era.domain import Domain
 from .vendor.era.program import Program
 from .vendor.era.sandbox import SandboxCapability, sandbox_command
+from .shard_roles import cases_for, total_slots
 from .vendor.era.tree import finite as _finite
 
 log = get_logger("script")
@@ -125,13 +126,20 @@ def script_domain(
         raise ScriptError("这张评分卡没有判据")
     criterion = criteria[0]
     metric_id = str(criterion.get("id") or SCORE_KEY)
+    # Slots are positional (the engine holds out by tail); the case behind a slot
+    # is not. See `shard_roles` — without this the search trains on one end of
+    # the evaluator's case list and gates on the other.
+    _split = (criterion.get("measure") or {}).get("split") or {}
+    _total = total_slots(_split)
+    _seed = int(_split.get("seed") or 0)
     if not script.strip():
         raise ScriptError("这张评分卡说要用评测脚本打分，但脚本是空的")
 
     def evaluate(code: str, shards: Sequence[int]) -> Tuple[bool, Dict[str, Any], str]:
         try:
             payload = _run_evaluator(
-                code, script, shards, capability=capability, timeout=candidate_timeout,
+                code, script, cases_for(shards, _total, _seed),
+                capability=capability, timeout=candidate_timeout,
                 data_dir=data_dir,
             )
         except ScriptError:
@@ -177,7 +185,7 @@ def script_domain(
             metrics[SCORE_KEY] = float("-inf")
             metrics["violated"] = violations[0].constraint_id
             return False, metrics, violations[0].detail
-        return True, metrics, str(payload.get("error") or "")
+        return True, metrics, _diagnosis(payload)
 
     def reward(metrics: Mapping[str, Any]) -> float:
         value = metrics.get(SCORE_KEY)
@@ -300,6 +308,12 @@ def _run_evaluator(
                 raise ScriptError(f"评测脚本写出的不是可解析的 JSON：{error}") from error
             if not isinstance(payload, dict):
                 raise ScriptError("评测脚本写出的 JSON 不是一个对象")
+            # What the candidate itself printed while dying. An evaluator that
+            # wraps each case in try/except — which it is told to do — usually
+            # records that the case failed and not why, so this is the only
+            # place the traceback survives. Carried, not merged: only used when
+            # the evaluator's own diagnosis turns out to say nothing.
+            payload["_processTail"] = ((completed.stderr or "") + (completed.stdout or "")).strip()[-400:]
             return payload
 
         # No file, but the answer may still be right there. The contract says
@@ -375,3 +389,24 @@ def _test_shards(measure: Mapping[str, Any]) -> Tuple[int, ...]:
     gate = int(split.get("gateShards") or 0)
     count = int(split.get("testShards") or 0)
     return tuple(range(rollout + gate, rollout + gate + count))
+
+
+def _diagnosis(payload: Mapping[str, Any]) -> str:
+    """What the reflector is told about this candidate.
+
+    The evaluator's own text when it carries a reason. When it does not — the
+    shape seen on a real run was every case reporting `err=None, nfev=0`, which
+    says the candidate never ran but not why — the process output is appended,
+    because that is where the traceback went. Without it the reflector is told
+    "score 0" seven times and keeps proposing variants of the same broken idea.
+    """
+    said = str(payload.get("error") or "").strip()
+    tail = str(payload.get("_processTail") or "").strip()
+    if not tail:
+        return said
+    # "Says nothing" is not the same as "is empty": a line of `err=None` for
+    # every case is text, and it is still no reason.
+    uninformative = not said or ("err=None" in said and "Traceback" not in said)
+    if not uninformative:
+        return said
+    return (said + "\n" if said else "") + f"候选进程的输出：{tail}"

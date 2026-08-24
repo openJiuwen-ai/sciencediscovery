@@ -23,6 +23,7 @@ which of the two programs is at fault.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 import pytest
@@ -296,3 +297,85 @@ def test_an_evaluator_that_needs_no_files_runs_with_none_staged(tmp_path):
 
     assert ok, error
     assert metrics["exact_match"] == 1.0
+
+
+def test_slots_are_translated_into_scattered_case_ids():
+    """The search must not train on one end of the case list and gate on the other.
+
+    Observed on a real ODE run: the evaluator's own check said 0.8441, the gate
+    said 0.2375 and the held-out test said 0.4550 — three numbers for one
+    unchanged program, because the gate happened to be the four stiff equations
+    at the end of the list. Slots stay positional (the engine holds out by tail);
+    what a slot *means* is permuted.
+    """
+    seen = []
+    script = (
+        "import json, os\n"
+        "shards = os.environ['SCIENCE_AGENT_SHARDS']\n"
+        "with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as fh:\n"
+        "    json.dump({'valid': True, 'metrics': {'exact_match': 1.0}, 'error': shards}, fh)\n"
+    )
+    card = json.loads(json.dumps(CARD))
+    card["criteria"][0]["measure"]["split"] = {
+        "gateShards": 4, "rolloutShards": 5, "seed": 0, "shardRows": 1, "testShards": 2,
+    }
+    domain = script_domain(scorecard=card, script=script, capability=detect_local_capability())
+
+    ok, _metrics, error = domain.evaluate("value = 1\n", (0, 1, 2, 3, 4))
+    assert ok, error
+    seen = [int(part) for part in error.split(",")]
+
+    # Five slots in, five case ids out, and not the first five.
+    assert len(seen) == 5
+    assert sorted(seen) != [0, 1, 2, 3, 4]
+    assert all(0 <= case < 11 for case in seen)
+
+
+def test_the_same_slots_always_mean_the_same_cases():
+    """A score has to be comparable across candidates and across expansions."""
+    from sciencediscovery_evolve.shard_roles import cases_for
+
+    assert cases_for((0, 1, 2), 11, 0) == cases_for((0, 1, 2), 11, 0)
+    # Every slot maps somewhere, and no two slots collide.
+    everything = cases_for(range(11), 11, 0)
+    assert sorted(everything) == list(range(11))
+
+
+def test_a_candidate_that_never_ran_gets_its_traceback_fed_back():
+    """`err=None` for every case says the candidate died, not why.
+
+    Seen on a real run: four of seven candidates reported `err=None, nfev=0`
+    across the board, and the reflector — told only "score 0" — kept proposing
+    variants of the same broken idea. The traceback is in the process output,
+    and this is the only place it survives.
+    """
+    script = (
+        "import json, os, sys\n"
+        "print('Traceback (most recent call last): NameError: solve_ivp', file=sys.stderr)\n"
+        "with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as fh:\n"
+        "    json.dump({'valid': True, 'metrics': {'exact_match': 0.0},\n"
+        "               'error': 'caseA: err=None, nfev=0'}, fh)\n"
+    )
+    domain = script_domain(scorecard=CARD, script=script, capability=detect_local_capability())
+
+    _ok, _metrics, error = domain.evaluate("value = 1\n", (0,))
+
+    assert "err=None" in error          # the evaluator's own line is kept
+    assert "NameError" in error         # and the reason it could not give is added
+
+
+def test_a_real_diagnosis_is_not_padded_with_process_noise():
+    """An evaluator that says why keeps the floor to itself."""
+    script = (
+        "import json, os, sys\n"
+        "print('some unrelated chatter', file=sys.stderr)\n"
+        "with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as fh:\n"
+        "    json.dump({'valid': True, 'metrics': {'exact_match': 0.2},\n"
+        "               'error': 'caseA: err=3.51, nfev=2000 (budget exhausted)'}, fh)\n"
+    )
+    domain = script_domain(scorecard=CARD, script=script, capability=detect_local_capability())
+
+    _ok, _metrics, error = domain.evaluate("value = 1\n", (0,))
+
+    assert "budget exhausted" in error
+    assert "unrelated chatter" not in error
