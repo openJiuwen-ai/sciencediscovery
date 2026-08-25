@@ -1008,3 +1008,32 @@ def test_the_repair_is_told_what_the_environment_actually_has() -> None:
     text = repair_prompt("x = 1", "ImportError: cannot import name 'cwt'")
 
     assert re.search(r"scipy \d+\.\d+", text), text
+
+
+def test_max_iters_is_a_rollout_budget_not_an_expansion_count() -> None:
+    """A run of 20 stopped at 5, and the two units are why.
+
+    Upstream increments its counter once per clean rollout but calls `propose`
+    only when that rollout scored below `solved_threshold` — a task it already
+    solves needs no proposal. Measured: a linkage search whose shards held one
+    record each scored 0 or 1 with nothing between, 11 of 16 shards came out at
+    1.0, and 20 rollouts bought 5 expansions.
+    """
+    from sciencediscovery_evolve.era_engine import _rollout_budget
+
+    # Enough headroom that the planned expansions stay reachable even when most
+    # rollouts are solved-skips: at the 75% observed, 20 expansions need 80.
+    assert _rollout_budget(20) >= 80
+    assert _rollout_budget(1) >= 1          # never zero, which would stop at once
+
+
+def test_the_engine_passes_the_rollout_budget_not_the_raw_expansions() -> None:
+    """Pins the call site: the fix is worthless if `max_iters` is still fed
+    `spec.expansions`, and a test on the helper alone would not notice."""
+    import inspect
+
+    from sciencediscovery_evolve.era_engine import EraEngine
+
+    source = inspect.getsource(EraEngine._search)
+    assert "max_iters=_rollout_budget(spec.expansions)" in source
+    assert "max_iters=spec.expansions" not in source

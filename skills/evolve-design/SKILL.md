@@ -126,6 +126,14 @@ here — cheaper than a second local check that can disagree with it.
 2. **How big must one be to be stable?** Enough that the same candidate scores the same twice.
    Averaged measures get noisier as units shrink; a unit holding a single item is nearly always
    too small.
+
+   A single item is worse than noisy — it makes the unit's score **binary**, and that quietly
+   costs expansions. The search skips proposing on a unit it already solves, so every unit
+   scoring full marks spends a slot of the run's budget and produces no candidate. Measured: a
+   record-matching run whose units held one record each scored 0 or 1 with nothing between,
+   eleven of sixteen came out at 1.0, and a run planned for 20 expansions made 5. Put enough in
+   one unit that a good candidate lands *between* the floor and the ceiling — a few dozen items
+   averaged, not one.
 3. **How many in the gate — and make it the biggest of the three.** Every candidate's score,
    the one the tree ranks and selects on, is measured on the **gate** units. Nothing else decides
    which candidate wins. So the gate is where a shortage hurts most: too few and the tree ranks

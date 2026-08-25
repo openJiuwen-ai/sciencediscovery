@@ -88,6 +88,28 @@ _MAX_SECONDS = 24 * 3600.0
 _SHUTDOWN_GRACE = 120.0
 
 
+def _rollout_budget(expansions: int) -> int:
+    """`max_iters` in the unit upstream actually counts: worker rollouts.
+
+    Not expansions, and passing one for the other is what made a run of 20 stop
+    at 5. Upstream increments its counter once per clean rollout, but only calls
+    `propose` when that rollout scored **below** `solved_threshold` — a task it
+    already solves needs no proposal. So every solved rollout spends a slot of
+    the budget and produces no candidate, and upstream's own wrapper says as
+    much by computing `max_iters = rounds * n_workers`.
+
+    Measured on two live runs: a linkage search whose shards each held a single
+    record scored 0 or 1 with nothing between, 11 of 16 shards came out at 1.0,
+    and 20 rollouts yielded 5 expansions; a compression search yielded 8.
+
+    Five times, then. A solved rollout costs one sandbox evaluation and **no
+    model call**, so headroom here is paid in seconds rather than tokens, and
+    the real cap on expansions is the tree's own `candidate_limit`, which
+    refuses to select a parent past it.
+    """
+    return max(1, int(expansions)) * 5
+
+
 class _Refusal(RuntimeError):
     """A run-level fault: the search cannot start, or cannot mean anything."""
 
@@ -326,7 +348,7 @@ class EraEngine:
                 outcome = async_evolve(
                     tasks, reward,
                     async_ratio=int(spec.options.get("async_ratio", 1)),
-                    max_iters=spec.expansions,
+                    max_iters=_rollout_budget(spec.expansions),
                     max_seconds=_MAX_SECONDS,
                     shutdown_grace=_SHUTDOWN_GRACE,
                     # A discarded card is a whole trained-and-scored program, and
