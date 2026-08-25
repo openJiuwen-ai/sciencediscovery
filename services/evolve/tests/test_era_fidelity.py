@@ -290,3 +290,58 @@ def test_extract_program_falls_back_to_the_whole_reply():
     code, summary = extract_program("def train_and_predict(a, b):\n    return []\n")
     assert code.startswith("def train_and_predict")
     assert summary == ""
+
+
+def test_the_prompt_gives_versions_not_just_package_names() -> None:
+    """Names alone cost a whole run.
+
+    `scipy` is installed, so the prompt said `scipy` — and three of four
+    candidates on a peak-detection search reached for `scipy.signal.cwt` and
+    `ricker`, which every tutorial written before 2025 uses and which SciPy
+    removed in 1.15. Two crashed mid-run, one failed at import. A model told
+    `scipy 1.18.0` can know that; a model told `scipy` cannot.
+
+    Same rule as the names themselves: probed here, never written down.
+    """
+    import re
+
+    from sciencediscovery_evolve.vendor.era.program import available_imports_text
+
+    text = available_imports_text()
+    assert re.search(r"\bnumpy \d+\.\d+", text), text
+    assert re.search(r"\bscipy \d+\.\d+", text), text
+    # Ships as `scikit-learn`, imported as `sklearn`: the mapping is read, not
+    # guessed, and getting it wrong silently drops the version.
+    assert re.search(r"\bsklearn \d+\.\d+", text), text
+    # Stdlib has no version to give and must not be dressed up with one.
+    assert re.search(r"\bmath(?:、|$)", text), text
+
+    # And the prompt has to actually use it. Testing the helper alone passes
+    # whether or not anything calls it — the first version of this test did
+    # exactly that, and unwiring the prompt left it green.
+    from sciencediscovery_evolve.prompt import mutation_prompt
+
+    for kwargs in ({"script_contract": "f(x)"}, {"frozen": ["tests/**"]}, {}):
+        rendered = mutation_prompt(
+            statement="s", scorecard={}, parent_code="x=1",
+            parent_score=0.5, best_score=0.5, **kwargs,
+        )
+        assert re.search(r"scipy \d+\.\d+", rendered), kwargs
+
+
+def test_a_repair_may_replace_something_that_does_not_exist() -> None:
+    """The repair prompt used to forbid the only possible fix.
+
+    "不要换方法" is right for an off-by-one and wrong for `cannot import name
+    'cwt'`, where the method itself is what is missing. Watched the repair fire
+    three times on that error and land none of them.
+    """
+    from sciencediscovery_evolve.prompt import repair_prompt
+
+    text = repair_prompt("x = 1", "ImportError: cannot import name 'cwt'")
+
+    assert "不要换方法" not in text
+    assert "不存在" in text and "等价" in text
+    # Still narrow everywhere else: a redesign is what the ordinary expansion
+    # already does.
+    assert "不要重新设计" in text

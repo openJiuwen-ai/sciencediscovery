@@ -54,7 +54,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence
 
-from .vendor.era.program import available_imports
+from .vendor.era.program import available_imports_text
 
 #: The closing instruction every code-shaped template ends on.
 #:
@@ -151,7 +151,7 @@ def mutation_prompt(
             feedback=_feedback(feedback),
             history=_history(recent),
             frozen="、".join(frozen),
-            imports="、".join(available_imports()),
+            imports=available_imports_text(),
             how_to_change=_HOW_TO_CHANGE,
         )
     if script_contract:
@@ -171,7 +171,7 @@ def mutation_prompt(
             best_score=_score(best_score),
             feedback=_feedback(feedback),
             history=_history(recent),
-            imports="、".join(available_imports()),
+            imports=available_imports_text(),
             how_to_change=_HOW_TO_CHANGE,
         )
     if rubric:
@@ -191,7 +191,7 @@ def mutation_prompt(
         best_score=_score(best_score),
         parent_code=parent_code.strip(),
         history=_history(recent),
-        imports="、".join(available_imports()),
+        imports=available_imports_text(),
         how_to_change=_HOW_TO_CHANGE,
     )
 
@@ -358,7 +358,14 @@ def repair_prompt(code: str, error: str) -> str:
         # when the error says the round trip does not match points the repair
         # at the wrong thing.
         "下面这份程序一个用例都没通过。请只修掉它报的这个问题，不要重新设计、"
-        "不要换方法、不要顺手改别的地方——把它改到能正确跑通就行，其余保持原样。\n\n"
+        "不要顺手改别的地方——把它改到能正确跑通就行，其余保持原样。\n\n"
+        # "不要换方法"曾经也在上面那句里，而它恰好禁掉了唯一的修法：报错说
+        # `cannot import name 'cwt'` 时，不存在的正是那个方法本身。一次峰
+        # 检测搜索里三个候选伸手去拿 scipy.signal.cwt/ricker（SciPy 1.15 已
+        # 删除），修复触发三次、三次都没救回来。
+        "如果报错说的是某个东西不存在——import 失败、属性没有、函数被删了——"
+        "那么把那一处换成当前版本里确实有的等价做法，**就是**最小修复；"
+        "其余部分照旧不动。\n\n"
         "## 它报的错\n\n"
         f"{error.strip()[:1500] or '（评测没有给出原因）'}\n\n"
         "## 当前程序\n\n"

@@ -36,6 +36,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+from importlib.metadata import PackageNotFoundError, packages_distributions, version
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -108,6 +109,34 @@ def available_imports() -> List[str]:
         name for name in _WORTH_NAMING
         if name not in BLOCKED_IMPORTS and importlib.util.find_spec(name) is not None
     )
+
+
+def available_imports_text() -> str:
+    """The same list, with the version of everything that has one.
+
+    Names alone were not enough, and the gap cost a whole run. `scipy` is
+    installed, so the prompt said `scipy` — and three of four candidates
+    reached for `scipy.signal.cwt` and `ricker`, which every peak-detection
+    tutorial written before 2025 uses and which SciPy removed in 1.15. Two
+    crashed, one failed at import. A model that is told `scipy 1.18.0` can
+    know that; a model told `scipy` cannot.
+
+    Same rule as the names themselves: probed here, never written down.
+    """
+    # The import name is not the distribution name — `sklearn` ships as
+    # `scikit-learn` — so the mapping is read rather than guessed.
+    distributions = packages_distributions()
+    parts = []
+    for name in available_imports():
+        found = None
+        for dist in distributions.get(name, [name]):
+            try:
+                found = version(dist)
+                break
+            except PackageNotFoundError:
+                continue
+        parts.append(f"{name} {found}" if found else name)
+    return "、".join(parts)
 
 
 #: Candidates for `available_imports` to probe. Not a permission list — anything
