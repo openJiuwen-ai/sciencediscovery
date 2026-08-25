@@ -190,11 +190,16 @@ write the table, then use it.
   to the path in `SCIENCE_AGENT_RESULT` (a file, not stdout — the candidate prints too); score
   0–1, larger-is-better. The module docstring is the contract the search sees when rewriting
   candidates. **The `error` field is the feedback channel to the model writing the next
-  candidate — put the exception's own message in it, not just its class.** `type(e).__name__`
-  fills the field and says nothing: six identical "IndexError"s give the next author nothing to
-  fix, so it discards the whole approach and re-rolls, every expansion, each with a fresh bug.
-  `repr(e)` at minimum; a trimmed `traceback.format_exc()` is better. Write it even when the
-  candidate is valid — "budget exhausted on 3 of 6" is how the next one learns to stop.
+  candidate, and for a crash it has to say *where*, not just what.** Use a trimmed
+  `traceback.format_exc()`, so the text carries a file and a line — **the probe refuses an
+  evaluator that reports an exception without one.** `type(e).__name__` says nothing at all;
+  even `repr(e)`, a real message like `ValueError('byte must be in range(0, 256)')`, leaves the
+  next author hunting 200 lines for which of a dozen appends it was, so it discards the whole
+  approach and re-rolls with a fresh bug. Measured: five candidates crashed in one run, the
+  repair pass fired four times and landed once, and two of the five were the same one-line bug
+  found from scratch each time. A *semantic* failure needs no line — "round trip does not
+  match", "budget exhausted on 3 of 6" — and the gate does not ask for one. Write the field
+  even when the candidate is valid; that is how the next one learns to stop.
 
   **How it runs:** as a script, with `__name__ == "__main__"` (`runpy.run_path`), and the
   scratch directory first on `sys.path`. So top-level code runs, a `if __name__ == "__main__":`

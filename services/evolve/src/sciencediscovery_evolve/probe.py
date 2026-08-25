@@ -160,6 +160,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
         # everything that can refuse for free.
         _refuse_saturated(spec, baseline, worsened)
         _refuse_nameless_diagnosis(damaged_why)
+        _refuse_locationless_diagnosis(damaged_why)
         _refuse_rewarding_the_unimportable(domain.evaluate, shards, baseline)
         _refuse_noisy(domain.evaluate, spec.baseline_code, shards, baseline, worsened)
         return {"baseline": baseline, "flat": flat,
@@ -534,6 +535,42 @@ def _refuse_rewarding_the_unimportable(evaluate, shards, baseline: float) -> Non
         f"而起点是 {baseline:.4f}——评分在奖励装不进来的程序，搜索会直接收敛到它们。"
         "多半是 import 的兜底把分数写反了：候选加载不了要记**最差**分（比如 0.0），"
         "不是满分。"
+    )
+
+
+def _refuse_locationless_diagnosis(said: str) -> None:
+    """Refuse a crash report that says what broke but never where.
+
+    Stricter than the gate below it, and for the reader that gate exists to
+    protect. `repr(e)` clears "nameless" — ``ValueError('byte must be in
+    range(0, 256)')`` is a real message — and is still not enough to repair
+    from: the candidate is 245 lines and the value is appended in one of a
+    dozen places. Measured on a live compression run: five candidates crashed,
+    the repair fired four times and landed once, and every diagnosis it worked
+    from named an exception with no file and no line. Two of those failures
+    were literally the same one-line bug (`bytearray.append` of a value wider
+    than a byte), rediscovered from scratch each time.
+
+    Only fires when the text names an exception. A semantic failure — "round
+    trip does not match", "3 of 6 over budget" — has no location to give, and
+    demanding one would refuse the evaluators that report best.
+    """
+    import re
+
+    text = (said or "").strip()
+    if not text:
+        return
+    # `ValueError(`, `IndexError(`, and `error(` — what `repr` of a
+    # `struct.error` renders as.
+    if not re.search(r"\b\w*(?:error|exception)\s*\(", text, flags=re.IGNORECASE):
+        return
+    if re.search(r'(?:\bline\s+\d+|\.py[\"\']?[,:]\s*\d+|\bFile\s+")', text, flags=re.IGNORECASE):
+        return
+    raise ProbeError(
+        f"评分说了坏候选抛的是什么，没说在哪一行：「{text[:120]}」。"
+        "读到它的是修复这一步——候选有几百行，异常消息本身不指向任何一处，"
+        "它只能整个推倒重写，而重写出来的十有八九跑不起来。"
+        "把 error 写成裁剪过的 traceback.format_exc()，带上文件和行号。"
     )
 
 

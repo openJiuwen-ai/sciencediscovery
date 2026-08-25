@@ -392,3 +392,76 @@ def test_a_diagnosis_that_carries_the_message_passes() -> None:
         "",                                    # empty is handled elsewhere
     ):
         _refuse_nameless_diagnosis(said)
+
+
+def test_a_crash_report_without_a_line_number_is_refused():
+    """`repr(e)` clears the nameless gate and is still unrepairable.
+
+    Measured on a live compression run: five candidates crashed, the repair
+    fired four times and landed once, and every diagnosis it worked from named
+    an exception with no file and no line. Two of the five were literally the
+    same one-line bug — `bytearray.append` of a value wider than a byte — found
+    from scratch each time because nothing said where to look.
+    """
+    from sciencediscovery_evolve.probe import ProbeError, _refuse_locationless_diagnosis
+
+    for said in (
+        "no valid cases; case 0(prose): ValueError('byte must be in range(0, 256)')",
+        "case 0(prose): error('unpack requires a buffer of 2 bytes')",
+    ):
+        with pytest.raises(ProbeError) as refusal:
+            _refuse_locationless_diagnosis(said)
+        assert "哪一行" in str(refusal.value)
+
+
+def test_a_semantic_failure_needs_no_line_number():
+    """The gate must not refuse the evaluators that report best.
+
+    A round trip that does not match, or a budget overrun, happens at no
+    particular line — there is nothing to point at, and demanding a location
+    would turn the clearest diagnoses into refusals.
+    """
+    from sciencediscovery_evolve.probe import _refuse_locationless_diagnosis
+
+    for said in (
+        "case 0(prose): lossy round-trip (len 13641 != 13641)",
+        "3/6 条样例超出求值预算，其余误差正常",
+        "",
+        # Already located, in either of the two shapes a traceback gives.
+        'Traceback (most recent call last):\n  File "candidate.py", line 87\nValueError(1)',
+        "case 1: IndexError('index out of range') at candidate.py:87",
+    ):
+        _refuse_locationless_diagnosis(said)      # must not raise
+
+
+def test_the_location_gate_costs_no_extra_evaluation():
+    """It reads the text the damaged-candidate scoring already produced.
+
+    The probe's cost is pinned at four evaluations; a gate that paid for a
+    fifth would be charging every run for a check on the run's own reporting.
+    """
+    import inspect
+
+    from sciencediscovery_evolve import probe
+
+    source = inspect.getsource(probe._refuse_locationless_diagnosis)
+    assert "evaluate" not in source, "这道闸不该自己再跑一次评测"
+
+
+def test_run_probe_actually_runs_the_location_gate():
+    """The tests above call the gate; this pins that the probe does.
+
+    Removing the one wiring line left all of them passing — a gate exercised
+    directly proves the gate works, never that anything reaches it. Twice
+    already today a corrected condition went on passing beside a copy of
+    itself; this is the same hole with the copy left out.
+    """
+    import inspect
+
+    from sciencediscovery_evolve import probe
+
+    source = inspect.getsource(probe.run_probe)
+    assert "_refuse_locationless_diagnosis(" in source
+    # Beside its sibling, on the text the damaged-candidate scoring produced.
+    assert "_refuse_nameless_diagnosis(damaged_why)" in source
+    assert "_refuse_locationless_diagnosis(damaged_why)" in source
