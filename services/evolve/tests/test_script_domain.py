@@ -487,10 +487,18 @@ def test_every_code_template_asks_for_one_change_not_a_rewrite():
         "test_gate": mutation_prompt(**common, frozen=["tests/**"]),
     }
     for name, text in modes.items():
-        assert "一处" in text, f"{name} 没让模型只改一处"
-        # The asymmetry, not just the instruction: a broken candidate scores 0,
-        # which is worse than leaving the parent alone.
-        assert "跑不起来就是 0 分" in text, f"{name} 没说清失败的代价"
+        block = text[text.index("## 怎么改"):]
+        # The objective, stated as the objective: which approach wins is the
+        # search's question. An earlier version led with "不要整套换掉", which
+        # is a rule about the mechanism — the human picking the algorithm and
+        # leaving the run to tune it.
+        assert "唯一的目标是把分数做上去" in block, f"{name} 没把分数摆成目标"
+        # And the reason the advice holds: a broken candidate scores 0, which
+        # is worse than leaving the parent alone, with the expansion spent.
+        assert "跑不起来就是 0 分" in block, f"{name} 没说清失败的代价"
+        assert "一处" in block, f"{name} 没让模型收窄改动范围"
+        assert "不许换方案" not in block.replace("不是因为不许换方案", ""), \
+            f"{name} 把换方案本身当成了错的"
 
     # The judged mode rewrites prose, where a rewrite neither crashes nor
     # scores zero — the advice would be wrong there, so it must stay out.

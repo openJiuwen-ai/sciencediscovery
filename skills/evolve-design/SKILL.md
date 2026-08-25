@@ -57,10 +57,16 @@ Settle three things:
    A later compression run seeded with a working RLE-plus-Huffman at 0.62 still drew eleven
    candidates that each replaced the whole mechanism — arithmetic coding, LZ77, range coding,
    written from nothing in one reply — and ten did not run. The half that was missing was in
-   the prompt, not the seed, and is fixed there now. What is still yours to judge: **the
-   further the ceiling is from the seed, the more the search wants to leap.** When the honest
-   gap is that large, expect leaps, and prefer a task framing that names the next rung
-   ("add a longer match window to the existing RLE") over one that names the summit.
+   the prompt, not the seed, and is fixed there now.
+
+   **Do not fix it by naming the mechanism.** "Add a longer match window to the existing RLE"
+   reads like a helpful narrowing and is the search's own job taken away from it: the human
+   picks the algorithm and the run is left tuning it. The objective is the score, always — the
+   task says what "better" is measured as, never which approach to reach it by. If a run comes
+   back with nothing above the seed, that is a *result*: on this scoring, these variations do
+   not beat the starting point. What is legitimately yours to reconsider is the **scoring** —
+   whether the cases actually reward what you care about, whether the corpus is wide enough to
+   separate approaches — not the approach you would like the candidates to take.
 
 > **Checkpoint 1.** Say back, in a few lines: what will be measured, what is frozen, and what
 > the starting point is. Ask only for what you genuinely could not infer — all of it at once.

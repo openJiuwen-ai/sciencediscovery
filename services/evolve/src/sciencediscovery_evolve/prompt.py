@@ -36,11 +36,14 @@ Everything in it earns its place by preventing a specific failure:
 * **A constraint is presented as a wall, not a cost.** Constraints refuse a
   merge outright, so a model told "prefer fast" will trade accuracy for speed it
   did not need to buy and be refused anyway.
-* **The ask is one change, and the cost of failing is stated.** Upstream says
-  "generate a NEW, IMPROVED function" and gets away with it because its task is
-  a twenty-line sklearn pipeline. Asked the same way about a codec, every
-  candidate replaced the whole mechanism and ten of eleven did not run. See
-  ``_HOW_TO_CHANGE``.
+* **The objective is the score, and the cost of failing is stated.** Upstream
+  says "generate a NEW, IMPROVED function" and gets away with it because its task
+  is a twenty-line sklearn pipeline. Asked the same way about a codec, every
+  candidate replaced the whole mechanism and ten of eleven did not run. What the
+  model was never told is that not running scores zero — worse than leaving the
+  parent alone, with the expansion spent either way. Stated as that reason rather
+  than as a ban on changing the approach: which approach wins is the search's
+  question, not the prompt's. See ``_HOW_TO_CHANGE``.
 * **The reply format is one fenced block whose docstring opens with the change.**
   ``extract_program`` takes the longest fenced block and reads the first
   docstring line as the change summary; that summary is what the user reads in
@@ -72,13 +75,15 @@ from .vendor.era.program import available_imports
 #: and rarely broken; a codec is not.
 _HOW_TO_CHANGE = """## 怎么改
 
-在现在这份的基础上做**一处**改动，其余部分原样保留——包括它已经能跑的那些结构。
+**唯一的目标是把分数做上去。** 换不换方案、用哪种算法，都由这一条决定，没有哪种
+做法本身是对或错的。
 
-不要整套换掉。把 A 方案重写成 B 方案，等于在一次回复里从零实现一套新东西，几乎
-总是换来一份跑不起来的程序；而**跑不起来就是 0 分，比现在这份还差**，这次扩展也
-就白花了。一个能跑的小改进，永远优于一个跑不起来的大重构。
+要注意的只有一件事：**跑不起来就是 0 分，比现在这份还差，而这次机会照样花掉了。**
+所以在现在这份的基础上改，把还能用的部分原样留着——不是因为不许换方案，而是因为
+在一次回复里从零重写一整套，交出来的十有八九跑不起来，那一分也拿不到。真要换掉某个
+环节，就单独换那一个环节，让它周围的代码原样继续跑。
 
-先想清楚现在这份在评分上最薄弱的一环，再只动那一处。"""
+先想清楚现在这份在评分上最薄弱的一环，再动那一处。"""
 
 _TEMPLATE = """你在改进一个 Python 程序，让它在下面这套评分标准上得分更高。
 
