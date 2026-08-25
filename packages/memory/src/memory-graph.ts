@@ -504,8 +504,18 @@ export class MemoryGraphClient {
   // reverse-proxy layer also short-circuits when the client itself is null
   // (feature off), see server.ts.
 
-  async queryMatch(query: string, sessionId?: string): Promise<MemoryGraphMatchResponse> {
-    const body = await this.postJson("/query/match", { query, session_id: sessionId ?? null });
+  async queryMatch(
+    query: string,
+    sessionId?: string,
+    mode?: "any_term" | "all_terms",
+  ): Promise<MemoryGraphMatchResponse> {
+    const body = await this.postJson("/query/match", {
+      query,
+      session_id: sessionId ?? null,
+      // Default any_term (OR) preserves the prior behavior; callers that need
+      // term-AND (the frontend search box) pass "all_terms" explicitly.
+      mode: mode ?? "any_term",
+    });
     return this.toMatchResponse(body);
   }
 

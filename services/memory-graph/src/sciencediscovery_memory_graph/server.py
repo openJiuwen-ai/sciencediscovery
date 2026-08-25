@@ -293,6 +293,11 @@ class ByEdgeTypeRequest(BaseModel):
 class MatchRequest(BaseModel):
     query: str
     session_id: str | None = None
+    # any_term = OR (default, backward-compatible, agent query_graph path);
+    # all_terms = term-AND (frontend search box — typing a paper's full title
+    # returns just that paper instead of the whole corpus). The two TS call
+    # sites each pin a fixed value; the LLM never sees this field.
+    mode: str = "any_term"
 
 
 class ChainRequest(BaseModel):
@@ -351,8 +356,10 @@ def read_by_edge_type(req: ByEdgeTypeRequest) -> dict[str, Any]:
 def read_match(req: MatchRequest) -> dict[str, Any]:
     if not req.query.strip():
         _error("bad_request", 400, "query must be non-empty")
-    log.info("match in: query=%s session=%s", req.query, req.session_id or "-")
-    result = query_match(req.query, req.session_id)
+    if req.mode not in {"any_term", "all_terms"}:
+        _error("bad_request", 400, "mode must be 'any_term' or 'all_terms'")
+    log.info("match in: query=%s session=%s mode=%s", req.query, req.session_id or "-", req.mode)
+    result = query_match(req.query, req.session_id, req.mode)
     log.info("match out: %d hit(s)%s%s",
              result["total"],
              " [truncated at 500]" if result["truncated"] else "",

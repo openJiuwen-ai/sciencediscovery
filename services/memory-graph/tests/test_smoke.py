@@ -341,6 +341,155 @@ def test_observe_session_plan_rejects_missing_token(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+# --- query/match -----------------------------------------------------------
+
+def test_match_rejects_bad_mode(client: TestClient) -> None:
+    # mode is whitelisted server-side; an unknown value is a 400 before any
+    # Cypher runs (mirrors by-node-type/by-edge-type's label validation).
+    response = client.post(
+        "/query/match",
+        json={"query": "TP53", "mode": "not_a_mode"},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "bad_request"
+
+
+def test_match_defaults_to_any_term_and_degrades(client: TestClient) -> None:
+    # No mode → defaults to any_term (OR); without a password the driver is
+    # degraded so the call returns the unreachable reason rather than erroring.
+    response = client.post(
+        "/query/match",
+        json={"query": "A Survey on Multi-Agent Systems"},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hits"] == []
+    assert body["reason"] == "memory_graph_unreachable"
+
+
+def test_match_all_terms_degrades_without_neo4j(client: TestClient) -> None:
+    # all_terms (term-AND) takes the same degraded path when Neo4j is down —
+    # the mode only changes the WHERE clause, not the reachability contract.
+    response = client.post(
+        "/query/match",
+        json={"query": "TP53 NSCLC", "mode": "all_terms"},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    assert response.json()["reason"] == "memory_graph_unreachable"
+
+
+# --- query/match: parameterized Cypher (no Neo4j needed) -------------------
+#
+# The WHERE comparison is now parameterized via $min_matched rather than
+# f-string-interpolated, so the Cypher string is identical for both modes.
+# These tests pin that contract: a fake driver captures the (cypher, params)
+# handed to session.run and asserts on them, with no live Neo4j. A real
+# end-to-end recall assertion lives in the @needs_neo4j test below.
+
+
+class _FakeResult:
+    """Iterable-once result shaped like _HttpResult: zero rows → empty hits."""
+    def __iter__(self):
+        return iter([])
+    def single(self):
+        return None
+
+
+class _FakeSession:
+    """Captures the one session.run(cypher, **params) call query_match makes."""
+    def __init__(self, captured: dict):
+        self._captured = captured
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+    def run(self, cypher, **params):
+        self._captured["cypher"] = cypher
+        self._captured["params"] = params
+        return _FakeResult()
+
+
+class _FakeDriver:
+    """is_reachable() → True so query_match reaches session.run instead of
+    degrading; session() yields the capturing _FakeSession."""
+    def __init__(self, captured: dict):
+        self._captured = captured
+    def is_reachable(self):
+        return True
+    def session(self):
+        return _FakeSession(self._captured)
+
+
+@pytest.fixture()
+def captured_match(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Reload query against a fake reachable driver that records the Cypher +
+    params query_match builds. Returns the capture dict for assertions."""
+    from science_agent_memory_graph import query
+    captured: dict = {}
+    monkeypatch.setattr(query, "handle", lambda: _FakeDriver(captured))
+    return captured
+
+
+@pytest.mark.parametrize("mode", ["any_term", "all_terms"])
+def test_match_cypher_is_static_across_modes(captured_match: dict, mode: str) -> None:
+    # The whole point of parameterizing: the Cypher string must NOT embed the
+    # mode — both modes produce byte-identical Cypher, differing only in the
+    # $min_matched parameter. This is the regression guard against reintroducing
+    # f-string interpolation (which would re-open an injection surface).
+    from science_agent_memory_graph import query
+    query.query_match("TP53 NSCLC EGFR", mode=mode)
+    cypher = captured_match["cypher"]
+    assert "{op}" not in cypher and "{threshold}" not in cypher
+    # No mode-derived operator/keyword leaked into the string.
+    assert "= size($tokens)" not in cypher and "> 0" not in cypher
+    assert "matched >= $min_matched" in cypher
+
+
+def test_match_min_matched_param_differs_by_mode(captured_match: dict) -> None:
+    # all_terms (term-AND) demands every token hit: min_matched = token count.
+    # any_term (OR) demands at least one: min_matched = 1. Same Cypher, the
+    # only divergence is this one integer parameter.
+    from science_agent_memory_graph import query
+    query.query_match("TP53 NSCLC EGFR", mode="all_terms")
+    and_params = dict(captured_match["params"])
+    query.query_match("TP53 NSCLC EGFR", mode="any_term")
+    or_params = dict(captured_match["params"])
+    # 3 whitespace-separated tokens → AND needs all 3, OR needs 1.
+    assert and_params["min_matched"] == 3
+    assert or_params["min_matched"] == 1
+    # The query payload itself (tokens/primary/sid/limit) is mode-invariant.
+    assert and_params["tokens"] == or_params["tokens"] == ["tp53", "nsclc", "egfr"]
+    assert and_params["primary"] == or_params["primary"] == "tp53"
+    assert and_params["sid"] is None and or_params["sid"] is None
+    assert and_params["limit"] == or_params["limit"]
+
+
+def test_match_min_matched_equals_token_count_for_all_terms(
+    captured_match: dict,
+) -> None:
+    # min_matched tracks the token count, not a fixed constant — a 6-word
+    # paper title under all_terms needs min_matched == 6. Guards against an
+    # implementation that hardcodes the count or uses size($tokens) in-Cypher.
+    from science_agent_memory_graph import query
+    query.query_match("A Survey on Multi-Agent Systems", mode="all_terms")
+    params = captured_match["params"]
+    # re.split(r"[\W_]+", ...) splits on the hyphen too → 6 tokens.
+    assert params["min_matched"] == 6
+    assert params["tokens"] == ["a", "survey", "on", "multi", "agent", "systems"]
+
+
+def test_match_empty_query_skips_session_run(captured_match: dict) -> None:
+    # A whitespace-only query yields no tokens → returns before touching the
+    # driver, so session.run is never called (the capture stays empty).
+    from science_agent_memory_graph import query
+    result = query.query_match("   ", mode="all_terms")
+    assert result == {"hits": [], "total": 0, "truncated": False}
+    assert "cypher" not in captured_match
+
+
 # --- declare_evidence / declare_claim -------------------------------------
 
 def test_persist_evidence_degrades_without_neo4j(client: TestClient) -> None:
@@ -1143,6 +1292,62 @@ def test_artifact_provenance_empty_when_no_input_edge(live_client: TestClient) -
                             headers=headers).json()
     assert prov["dependencies"] == []
     assert "reason" not in prov
+
+
+@needs_neo4j
+def test_query_match_all_terms_vs_any_term_recall(live_client: TestClient) -> None:
+    """The frontend's term-AND (all_terms) must NOT return the whole corpus
+    on a paper-title query, while the agent's OR (any_term) stays loose.
+
+    Seeds two Papers in one session:
+
+      paper-A — title "A Survey on Multi-Agent Systems" (the query, every
+        token of which paper-A contains).
+      paper-B — title "Another Note on Surveys" + abstract containing the
+        high-frequency word "a" but NOT "multi"/"agent"/"systems".
+
+    Searching paper-A's full title:
+      - all_terms (term-AND): only paper-A matches — the high-frequency
+        tokens ``a``/``on`` no longer drag paper-B in because ``multi``/
+        ``agent``/``systems`` miss it. This is the bug being fixed.
+      - any_term (OR): both papers match — ``a``/``on`` hit paper-B's
+        abstract, the loose recall the agent path relies on.
+    """
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-match-recall"
+    _wipe_session(sid)
+    live_client.post("/observe/mcp-search", json={
+        "invocation_id": "search-recall", "session_id": sid, "turn_id": "turn-recall",
+        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-21T00:00:00Z",
+        "records": [
+            {"url": "https://x.test/paper-recall-a", "title": "A Survey on Multi-Agent Systems"},
+            {
+                "url": "https://x.test/paper-recall-b",
+                "title": "Another Note on Surveys",
+                "abstract": "a brief on prior work",
+            },
+        ],
+    }, headers=headers)
+    query_title = "A Survey on Multi-Agent Systems"
+
+    and_resp = live_client.post("/query/match", json={
+        "query": query_title, "session_id": sid, "mode": "all_terms",
+    }, headers=headers).json()
+    and_links = {h["extra"].get("link") for h in and_resp["hits"]}
+    # term-AND: only paper-A survives. High-frequency ``a``/``on`` no longer
+    # pull in paper-B, which lacks ``multi``/``agent``/``systems``.
+    assert and_links == {"https://x.test/paper-recall-a"}, and_links
+
+    or_resp = live_client.post("/query/match", json={
+        "query": query_title, "session_id": sid, "mode": "any_term",
+    }, headers=headers).json()
+    or_links = {h["extra"].get("link") for h in or_resp["hits"]}
+    # OR: both papers match (``a``/``on``/``survey``/``systems`` hit paper-B's
+    # title or abstract) — the loose recall the agent query_graph path needs.
+    assert "https://x.test/paper-recall-a" in or_links
+    assert "https://x.test/paper-recall-b" in or_links
+
+
 # --- trace_provenance ------------------------------------------------------
 #
 # The degraded-path and validation tests run without Neo4j (the `client`
