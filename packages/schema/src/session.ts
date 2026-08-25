@@ -159,6 +159,14 @@ export interface WorkbenchSearchResult {
   sessionId?: string;
 }
 
+export interface WorkbenchSearchResponse {
+  hasMore: boolean;
+  limit: number;
+  offset: number;
+  results: WorkbenchSearchResult[];
+  total: number;
+}
+
 export interface ToolTrace {
   /** Structured tool arguments as issued by the model. */
   args?: Record<string, unknown>;

@@ -21,7 +21,7 @@ import {
   buildWorkspaceSystemPrompt,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@sciencediscovery/context";
+} from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
 import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
@@ -115,6 +115,7 @@ import {
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
 import { inferDomain, mgLog } from "@sciencediscovery/memory";
+import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { createPromptManifest } from "../prompt-manifest.js";
@@ -429,7 +430,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/search") {
-        sendJson(response, 200, await searchWorkbench(store, url.searchParams.get("q") ?? ""));
+        sendJson(response, 200, await searchWorkbench(store, url.searchParams.get("q") ?? "", {
+          limit: Number(url.searchParams.get("limit") ?? 250),
+          offset: Number(url.searchParams.get("offset") ?? 0),
+        }));
         return;
       }
       if (url.pathname === "/api/settings" && request.method === "GET") {
@@ -1637,7 +1641,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             };
             const reviewerSkills = skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]);
             const reviewerWorkspace: WorkspaceAgentOptions = {
-              config: { apiToken, baseUrl: selectedModel.baseUrl, dataDir: store.dataDir, model: selectedModel.model },
+              config: {
+                apiToken,
+                baseUrl: selectedModel.baseUrl,
+                dataDir: store.dataDir,
+                model: selectedModel.model,
+                // Deep review creates its own AgentRun rather than reusing the
+                // main-run options. Keep the model profile's resolved proxy on
+                // that path as well; without it, a sandbox that can only reach
+                // the provider through a configured proxy fails as `Failed to fetch`.
+                proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
+              },
               enabledConnectorIds: runtimeSettings.enabledConnectorIds,
               executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
               executeShell: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
@@ -1806,8 +1820,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (request.method === "POST" && url.pathname === "/api/memory/query/match") {
         const body = await readJson<{ query: string; session_id?: string }>(request);
         if (!body.query?.trim()) return sendError(response, 400, "query must be non-empty");
+        // Frontend search box: term-AND so typing a paper's full title returns
+        // just that paper (and nodes sharing its title words), not the whole
+        // corpus. The agent query_graph path pins any_term (OR) separately.
         const result = memoryGraphEnabled()
-          ? await memoryGraphClient.queryMatch(body.query, body.session_id).catch(() => emptyMatch("memory_graph_unreachable"))
+          ? await memoryGraphClient.queryMatch(body.query, body.session_id, "all_terms").catch(() => emptyMatch("memory_graph_unreachable"))
           : emptyMatch("memory_graph_disabled");
         sendJson(response, 200, result);
         return;

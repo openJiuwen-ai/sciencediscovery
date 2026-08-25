@@ -169,7 +169,7 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 |-------------|------|
 | `GET /health` | 状态：`disabled`/`needs-password`/`degraded`/`healthy`（无鉴权） |
 | `GET /subgraph?session_id=` | 全节点 + 全"有意义的"边（白名单含 produces/next/extracted_from/cites/states/supersedes/input；前端绘制时过滤掉 `supersedes`，版本谱系不入链路视图） |
-| `POST /query/match` | 跨会话子串搜索（term-AND，按命中数+字段优先排序）；`session_id=null` 跨会话 |
+| `POST /query/match` | 跨会话子串搜索（按命中数+字段优先排序）；`mode=all_terms` term-AND（前端搜索框用，输入论文标题只回该论文），`mode=any_term` OR（默认，agent `query_graph` 工具用，宽松召回避免零结果）；`session_id=null` 跨会话 |
 | `POST /query/by-node-type` | 按 label 过滤节点 |
 | `POST /query/by-edge-type` | 按边类型过滤，返回边 + 去重端点 |
 | `POST /query/chain` | 链路遍历（`node_id` + 可选 `session_id`/`version`/`chain_kind`：`full` 联合遍历 / `task` 纯任务链 / `artifact` 从报告锚点定向裁剪到被点节点）；未找到 → 404 |

@@ -68,14 +68,14 @@ import type {
   Subagent,
   SubagentStep,
   SystemTimeoutSettings,
-  WorkbenchSearchResult,
+  WorkbenchSearchResponse,
   WorkspaceFile,
   WorkspaceUploadResult,
 } from "@sciencediscovery/schema";
 import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 import {
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-} from "@sciencediscovery/context";
+} from "@sciencediscovery/workspace";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -200,6 +200,8 @@ async function writePassthroughBwrap(root: string): Promise<string> {
   const implementation = resolve(root, "bwrap-passthrough.mjs");
   await writeFile(implementation, `${[
     'import { spawn } from "node:child_process";',
+    'import { accessSync, constants } from "node:fs";',
+    'import { delimiter, resolve } from "node:path";',
     `const ARITY = ${JSON.stringify(BWRAP_ARITY)};`,
     'const argv = process.argv.slice(2);',
     'if (argv[0] === "--help") { console.log("usage: bwrap --cap-drop --die-with-parent --new-session --seccomp --unshare-all --unshare-user --disable-userns"); process.exit(0); }',
@@ -230,6 +232,16 @@ async function writePassthroughBwrap(root: string): Promise<string> {
     '};',
     'const command = argv.slice(index).map(toHost);',
     'if (command.length === 0) { console.error("bwrap-passthrough: no command"); process.exit(2); }',
+    '// The real sandbox exposes stable /usr/bin paths. The test shim instead',
+    '// runs on the host, where CodeArts may install the same tools in /usr/local.',
+    'const hostCommandNames = new Map([["/usr/bin/python3", "python3"], ["/usr/bin/bash", "bash"]]);',
+    'const hostCommandName = hostCommandNames.get(command[0]);',
+    'if (hostCommandName) {',
+    '  for (const directory of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {',
+    '    const candidate = resolve(directory, hostCommandName);',
+    '    try { accessSync(candidate, constants.X_OK); command[0] = candidate; break; } catch {}',
+    '  }',
+    '}',
     '// --clearenv wipes PATH too; without it the shim could not resolve an',
     '// interpreter that the real sandbox reaches through its own /usr mount.',
     'const childEnv = cleared ? { ...Object.fromEntries(Object.entries(env).filter(([key]) => key === "PATH")), ...env } : env;',
@@ -241,10 +253,29 @@ async function writePassthroughBwrap(root: string): Promise<string> {
     'child.on("exit", (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exit(code ?? 0); });',
   ].join("\n")}\n`);
   const launcher = resolve(root, "bwrap");
-  await writeFile(launcher, `#!/bin/sh\nexec node ${JSON.stringify(implementation)} "$@"\n`);
+  await writeFile(launcher, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(implementation)} "$@"\n`);
   await chmod(launcher, 0o755);
   return launcher;
 }
+
+test("the passthrough sandbox resolves its stable Python path through the host PATH", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `bwrap-path-${Date.now()}-${process.pid}`);
+  const hostBin = resolve(tempRoot, "host-bin");
+  await mkdir(hostBin, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const hostPython = resolve(hostBin, "python3");
+  await writeFile(hostPython, "#!/bin/sh\nprintf 'alternate host python\\n'\n");
+  await chmod(hostPython, 0o755);
+  const bwrap = await writePassthroughBwrap(resolve(tempRoot, "sandbox-stub"));
+  const { stdout } = await execFileAsync(bwrap, [
+    "--clearenv",
+    "--setenv", "PATH", "/usr/bin",
+    "/usr/bin/python3", "-c", "print('sandbox python')",
+  ], { env: { ...process.env, PATH: hostBin } });
+
+  assert.equal(stdout, "alternate host python\n");
+});
 
 async function startTestApi(
   context: TestContext,
@@ -329,6 +360,28 @@ async function startScientificTestApi(
       const setup: ScientificEnvironmentSetup = {
         allowedChannels: ["conda-forge"],
         completedAt: new Date().toISOString(),
+        components: {
+          conda: {
+            action: null,
+            completedAt: new Date().toISOString(),
+            error: null,
+            message: "Conda environments are ready",
+            phase: "complete",
+            startedAt: new Date().toISOString(),
+            state: "ready",
+            updatedAt: new Date().toISOString(),
+          },
+          micromamba: {
+            action: null,
+            completedAt: new Date().toISOString(),
+            error: null,
+            message: "micromamba is ready",
+            phase: "complete",
+            startedAt: new Date().toISOString(),
+            state: "ready",
+            updatedAt: new Date().toISOString(),
+          },
+        },
         error: null,
         managedProvisioner: true,
         message: "Python base environment is ready",
@@ -966,6 +1019,21 @@ async function listRunEvents(origin: string, sessionId: string, runId: string): 
   return events.body;
 }
 
+async function waitForRunEvents(
+  origin: string,
+  sessionId: string,
+  runId: string,
+  predicate: (events: SessionRunEvent[]) => boolean,
+): Promise<SessionRunEvent[]> {
+  let events: SessionRunEvent[] = [];
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    events = await listRunEvents(origin, sessionId, runId);
+    if (predicate(events)) return events;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+  }
+  return events;
+}
+
 async function startLiteratureModel(context: TestContext): Promise<{
   baseUrl: string;
   requests: Array<{ messages?: Array<{ content?: string; name?: string; role?: string }> }>;
@@ -1393,13 +1461,21 @@ test("Session title refinement persists when the naming model finishes after the
     `${origin}/api/sessions/${created.body.firstSession.id}/runs`,
     { headers: authorization },
   );
-  const events = await listRunEvents(origin, created.body.firstSession.id, runs.body[0]!.id);
-  const terminalIndex = events.findIndex((record) => record.event.type === "run.completed");
-  const refinedIndex = events.findIndex((record) =>
+  const events = await waitForRunEvents(
+    origin,
+    created.body.firstSession.id,
+    runs.body[0]!.id,
+    (records) => records.some((record) =>
+      record.event.type === "session.updated"
+      && record.event.session.title === "Refined TP53 expression study"),
+  );
+  const terminalEvent = events.find((record) => record.event.type === "run.completed");
+  const refinedEvent = events.find((record) =>
     record.event.type === "session.updated"
     && record.event.session.title === "Refined TP53 expression study");
-  assert.equal(terminalIndex >= 0, true);
-  assert.equal(refinedIndex > terminalIndex, true);
+  assert.ok(terminalEvent);
+  assert.ok(refinedEvent);
+  assert.ok(refinedEvent.sequence > terminalEvent.sequence);
 });
 
 test("concurrent first messages keep every run and auto-name only once from queue order one", async (context) => {
@@ -2172,11 +2248,15 @@ test("workbench search and Composer references use authenticated authoritative i
   assert.equal(upload.status, 201);
 
   assert.equal((await fetch(`${origin}/api/search?q=result`)).status, 401);
-  const search = await jsonRequest<WorkbenchSearchResult[]>(`${origin}/api/search?q=result`, { headers: authorization });
-  assert.deepEqual(search.body.map((result) => result.kind), ["artifact"]);
-  assert.equal(search.body[0]?.path, "reports/result.md");
-  assert.match(search.body[0]?.id ?? "", /^artifact:/);
-  assert.equal(search.body[0]?.sessionId, session.body.id);
+  const search = await jsonRequest<WorkbenchSearchResponse>(`${origin}/api/search?q=result&limit=1&offset=0`, { headers: authorization });
+  assert.deepEqual(search.body.results.map((result) => result.kind), ["artifact"]);
+  assert.equal(search.body.results[0]?.path, "reports/result.md");
+  assert.match(search.body.results[0]?.id ?? "", /^artifact:/);
+  assert.equal(search.body.results[0]?.sessionId, session.body.id);
+  assert.deepEqual(
+    { hasMore: search.body.hasMore, limit: search.body.limit, offset: search.body.offset, total: search.body.total },
+    { hasMore: false, limit: 1, offset: 0, total: 1 },
+  );
 
   const catalog = await jsonRequest<ScientificArtifact[]>(
     `${origin}/api/projects/${project.body.id}/artifacts`,
@@ -2379,6 +2459,8 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
     method: "POST",
   });
   assert.equal(setup.body.state, "ready");
+  assert.equal(setup.body.components.micromamba.state, "ready");
+  assert.equal(setup.body.components.conda.state, "ready");
   const initial = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
   assert.deepEqual(initial.body.map((environment) => environment.id), ["starter-python", "starter-r"]);
   const created = await jsonRequest<Environment>(`${origin}/api/environments`, {

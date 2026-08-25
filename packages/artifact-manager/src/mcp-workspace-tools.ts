@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { WorkspaceAgentOptions } from "@sciencediscovery/context";
+import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 import type {
   ArtifactDownloadResult,
   ArtifactCandidate,

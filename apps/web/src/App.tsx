@@ -93,6 +93,7 @@ import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificA
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
 import { createSessionActivity } from "./run-stream/session-activity.js";
+import { groupArtifactsBySession, upsertArtifactSession } from "./artifact-session-groups.js";
 import { mergePermissionRequestSnapshot } from "./permission-state.js";
 import {
   clampWorkspaceWidth,
@@ -206,6 +207,7 @@ import {
   ComposerReferenceMenu,
   composerReferenceToken,
   composerSkillSuggestions,
+  GLOBAL_SEARCH_DEBOUNCE_MS,
   getComposerTrigger,
   GlobalSearchDialog,
   insertComposerReference,
@@ -976,6 +978,7 @@ export function App() {
   const [session, setSession] = useState<SessionDetail>();
   const [artifacts, setArtifacts] = useState<ScientificArtifact[]>([]);
   const [artifactSessions, setArtifactSessions] = useState<Session[]>([]);
+  const [artifactSessionCatalogProjectId, setArtifactSessionCatalogProjectId] = useState<string>();
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [workspaceCapabilities, setWorkspaceCapabilities] = useState<WorkspaceCapabilities>();
   const [permissionEpoch, setPermissionEpoch] = useState<PermissionEpoch>();
@@ -1035,6 +1038,10 @@ export function App() {
   const [workbenchIndex, setWorkbenchIndex] = useState<WorkbenchSearchResult[]>([]);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [globalSearchResults, setGlobalSearchResults] = useState<WorkbenchSearchResult[]>([]);
+  const [globalSearchHasMore, setGlobalSearchHasMore] = useState(false);
+  const [globalSearchTotal, setGlobalSearchTotal] = useState(0);
+  const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
   const [showConfig, setShowConfig] = useState(() => initialView.settingsKind === "system");
   const [systemSettingsGroup, setSystemSettingsGroup] = useState<SystemSettingsGroup>(() => isSystemSettingsGroup(initialView.settingsGroup) ? initialView.settingsGroup : "global");
   const [globalSettings, setGlobalSettings] = useState<RuntimeSettingsDetails>();
@@ -1130,6 +1137,7 @@ export function App() {
   const renameRevision = useRef(0);
   const renameSavesInFlight = useRef(new Set<string>());
   const sessionCreationInFlight = useRef(false);
+  const globalSearchRequestId = useRef(0);
   const activeProjectIdRef = useRef<string | undefined>(undefined);
   // Project/Session requested by the URL but not yet validated against the
   // loaded lists; consumed by the list-load effects below.
@@ -1630,10 +1638,36 @@ export function App() {
   }, [client, initialView.settingsKind, reportSystemSettingsError]);
 
   useEffect(() => {
-    void client.searchWorkbench().then(setWorkbenchIndex).catch((reason: Error) => setError(reason.message));
+    void client.searchWorkbench().then((response) => setWorkbenchIndex(response.results)).catch((reason: Error) => setError(reason.message));
     void client.listSpecialists().then(setSpecialists).catch((reason: Error) => setError(reason.message));
     void client.listPermissionGrants().then(setPermissionGrants).catch((reason: Error) => setError(reason.message));
   }, [client]);
+
+  useEffect(() => {
+    if (!globalSearchOpen) return;
+    const requestId = ++globalSearchRequestId.current;
+    setGlobalSearchLoading(true);
+    setGlobalSearchResults([]);
+    setGlobalSearchHasMore(false);
+    setGlobalSearchTotal(0);
+    const timeoutId = window.setTimeout(() => {
+      void client.searchWorkbench(globalSearchQuery).then((response) => {
+        if (globalSearchRequestId.current !== requestId) return;
+        setGlobalSearchResults(response.results);
+        setGlobalSearchHasMore(response.hasMore);
+        setGlobalSearchTotal(response.total);
+        setGlobalSearchLoading(false);
+      }).catch((reason: Error) => {
+        if (globalSearchRequestId.current !== requestId) return;
+        setGlobalSearchLoading(false);
+        setError(reason.message);
+      });
+    }, globalSearchQuery.trim() ? GLOBAL_SEARCH_DEBOUNCE_MS : 0);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (globalSearchRequestId.current === requestId) globalSearchRequestId.current += 1;
+    };
+  }, [client, globalSearchOpen, globalSearchQuery]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1641,6 +1675,7 @@ export function App() {
       setSessions([]);
       setArtifacts([]);
       setArtifactSessions([]);
+      setArtifactSessionCatalogProjectId(undefined);
       setActiveSessionId(undefined);
       setProjectSettings(undefined);
       // Only settled once the Project list has resolved (and stayed empty).
@@ -1651,6 +1686,9 @@ export function App() {
       return () => { cancelled = true; };
     }
     setSessionsLoaded(false);
+    setArtifacts([]);
+    setArtifactSessions([]);
+    setArtifactSessionCatalogProjectId(undefined);
     void Promise.all([
       client.listSessions(activeProjectId, sessionListState),
       client.listSessions(activeProjectId, "all"),
@@ -1660,6 +1698,7 @@ export function App() {
       if (cancelled) return;
       setSessions(items);
       setArtifactSessions(allSessions);
+      setArtifactSessionCatalogProjectId(activeProjectId);
       setArtifacts(projectArtifacts);
       setProjectSettings(settings);
       // A Session named by the URL wins over the "first item" default, but
@@ -1963,6 +2002,9 @@ export function App() {
       summary,
     });
     setSessions((current) => current.map((item) => item.id === summary.id ? summary : item));
+    if (summary.projectId === activeProjectIdRef.current) {
+      setArtifactSessions((current) => upsertArtifactSession(current, summary));
+    }
     setSession((current) => current?.id === summary.id ? mergeSessionDetailWithSummary(current, summary) : current);
   }
 
@@ -1972,6 +2014,9 @@ export function App() {
       setProjects((current) => [...current, project]);
       setSessionListState("active");
       setSessions([firstSession]);
+      setArtifactSessions([firstSession]);
+      setArtifactSessionCatalogProjectId(project.id);
+      setArtifacts([]);
       setActiveProjectId(project.id);
       setActiveSessionId(firstSession.id);
       focusComposerSessionId.current = firstSession.id;
@@ -2001,6 +2046,7 @@ export function App() {
           return;
         }
         setSessions((current) => sessionListState === "archived" ? [created] : [created, ...current]);
+        setArtifactSessions((current) => upsertArtifactSession(current, created));
         if (sessionListState === "archived") setSessionListState("active");
         setActiveSessionId(created.id);
         focusComposerSessionId.current = created.id;
@@ -2626,6 +2672,7 @@ export function App() {
         setTimelineMessageIds((current) => forgetSession(current, deletionTarget.id));
         if (activeProjectId) {
           setArtifactSessions(await client.listSessions(activeProjectId, "all"));
+          setArtifactSessionCatalogProjectId(activeProjectId);
           setArtifacts(await client.listProjectArtifacts(activeProjectId));
         }
       }
@@ -3212,14 +3259,9 @@ export function App() {
     }
   }
 
-  async function openGlobalSearch(): Promise<void> {
+  function openGlobalSearch(): void {
     setGlobalSearchOpen(true);
     setGlobalSearchQuery("");
-    try {
-      setWorkbenchIndex(await client.searchWorkbench());
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not search the workbench");
-    }
   }
 
   function openUsageView(): void {
@@ -3243,7 +3285,7 @@ export function App() {
 
   async function openSessionFromUsage(sessionId: string): Promise<void> {
     const match = workbenchIndex.find((item) => item.sessionId === sessionId)
-      ?? (await client.searchWorkbench()).find((item) => item.sessionId === sessionId);
+      ?? (await client.searchWorkbench(sessionId)).results.find((item) => item.sessionId === sessionId);
     setWorkspaceView("session");
     if (!match?.projectId) {
       setActiveSessionId(sessionId);
@@ -3376,18 +3418,13 @@ export function App() {
   }
   const sessionArchived = Boolean(session?.archivedAt);
   const sessionPending = Boolean(activeSessionId) && session?.id !== activeSessionId;
-  const artifactGroups = [...artifacts.reduce((groups, artifact) => {
-    const liveSession = artifactSessions.find((item) => item.id === artifact.createdInSessionId);
-    const key = liveSession?.id ?? "deleted";
-    const group = groups.get(key) ?? {
-      id: key,
-      items: [] as ScientificArtifact[],
-      label: liveSession?.title ?? t("app.deletedSession"),
-    };
-    group.items.push(artifact);
-    groups.set(key, group);
-    return groups;
-  }, new Map<string, { id: string; items: ScientificArtifact[]; label: string }>()).values()];
+  const artifactGroups = groupArtifactsBySession({
+    artifacts,
+    catalogProjectId: artifactSessionCatalogProjectId,
+    deletedSessionLabel: t("app.deletedSession"),
+    projectId: activeProjectId,
+    sessions: artifactSessions,
+  });
   const visibleProjects = getVisibleProjects(projects, activeProjectId, projectsExpanded);
   const activeProjectLabel = activeProject
     ? resourceLabelWithDraft(renameTarget, renameDraft, "project", activeProject.id, activeProject.name)
@@ -4329,11 +4366,14 @@ export function App() {
         skills={skills}
       /> : null}
       {globalSearchOpen ? <GlobalSearchDialog
+        hasMore={globalSearchHasMore}
+        loading={globalSearchLoading}
         onClose={() => setGlobalSearchOpen(false)}
         onQueryChange={setGlobalSearchQuery}
         onSelect={(result) => void navigateToSearchResult(result)}
         query={globalSearchQuery}
-        results={workbenchIndex}
+        results={globalSearchResults}
+        total={globalSearchTotal}
       /> : null}
 
       {settingsTarget ? (

@@ -55,6 +55,19 @@ for (const file of await sourceFiles("packages/runtime-core/src")) {
   if (/from\s+["'][^./]/u.test(source)) failures.push(`${file}: runtime-core may only use relative imports`);
 }
 
+// Context assembly is an extension point for domain packages. Keeping its
+// dependencies pointed only at the runtime/model contracts prevents a cycle
+// when workspace, specialist, provenance, and other capabilities register
+// contributors in #144.
+for (const file of await sourceFiles("packages/context/src")) {
+  const source = await readFile(new URL(file, root), "utf8");
+  for (const match of source.matchAll(/from\s+["'](@sciencediscovery\/[^"']+)["']/gu)) {
+    if (!["@sciencediscovery/model", "@sciencediscovery/runtime-core"].includes(match[1])) {
+      failures.push(`${file}: context may only depend on model and runtime-core package contracts`);
+    }
+  }
+}
+
 // Once a domain source has an owning package, recreating the old service file
 // would silently restore split ownership and duplicate policy.
 const removedServiceDomainSources = [

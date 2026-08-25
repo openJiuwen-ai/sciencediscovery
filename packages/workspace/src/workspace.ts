@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -333,6 +333,43 @@ function assertWorkspacePath(workspaceRoot: string, requestedPath: string): stri
     throw new Error(`Path escapes the workspace: ${requestedPath}`);
   }
   return candidate;
+}
+
+function descendantPath(parent: string, child: string): string | undefined {
+  const path = relative(parent, child);
+  if (!path || path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)) return undefined;
+  return path.split(sep).join("/");
+}
+
+async function resolveSandboxScriptPath(
+  workspaceRoot: string,
+  readOnlyWorkspaceRoot: string | undefined,
+  requestedPath: string,
+): Promise<string> {
+  const candidate = assertWorkspacePath(workspaceRoot, requestedPath);
+  let canonicalRoot: string;
+  let canonicalScript: string;
+  try {
+    [canonicalRoot, canonicalScript] = await Promise.all([realpath(workspaceRoot), realpath(candidate)]);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`scriptPath does not exist in the workspace: ${requestedPath}`);
+    }
+    throw error;
+  }
+  if (canonicalScript !== canonicalRoot && !canonicalScript.startsWith(`${canonicalRoot}${sep}`)) {
+    throw new Error(`scriptPath escapes the workspace: ${requestedPath}`);
+  }
+  if (!(await stat(canonicalScript)).isFile()) throw new Error("scriptPath must reference a workspace file");
+
+  let sandboxRoot = "/workspace";
+  if (readOnlyWorkspaceRoot) {
+    const canonicalParent = await realpath(readOnlyWorkspaceRoot);
+    const writablePath = descendantPath(canonicalParent, canonicalRoot);
+    if (writablePath) sandboxRoot = `${sandboxRoot}/${writablePath}`;
+  }
+  const scriptPath = relative(canonicalRoot, canonicalScript).split(sep).join("/");
+  return `${sandboxRoot}/${scriptPath}`;
 }
 
 function normalizeMountedReadPath(requestedPath: string): {
@@ -1212,11 +1249,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         }
         let code = params.command?.trim() ?? "";
         if (params.scriptPath) {
-          const resolvedPath = assertWorkspacePath(workspaceRoot, params.scriptPath);
-          const metadata = await stat(resolvedPath);
-          if (!metadata.isFile()) throw new Error("scriptPath must reference a workspace file");
-          const normalizedPath = relative(resolve(workspaceRoot), resolvedPath).split(sep).join("/");
-          code = ["/usr/bin/bash", shellQuote(normalizedPath), ...(params.arguments ?? []).map(shellQuote)].join(" ");
+          const scriptPath = await resolveSandboxScriptPath(workspaceRoot, options.readOnlyWorkspaceRoot, params.scriptPath);
+          code = ["/usr/bin/bash", shellQuote(scriptPath), ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
         const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal);
         if (result.exitCode !== 0) throw new Error(`Shell exited with ${result.exitCode}: ${result.stderr || result.stdout}`);

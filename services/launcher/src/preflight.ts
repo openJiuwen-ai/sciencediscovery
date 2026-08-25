@@ -26,10 +26,12 @@ import { delimiter, isAbsolute, join } from "node:path";
 
 import {
   detectSandboxCapability,
+  detectSeatbeltCapability,
   disableUsernsOmittedMessage,
   procFallbackMessage,
   SANDBOX_UNUSABLE_HINT,
   type SandboxProcMode,
+  type SandboxProvider,
 } from "@sciencediscovery/sandbox-capability";
 
 export const BWRAP_INSTALL_HINT = [
@@ -53,6 +55,17 @@ export function missingBwrapMessage(bwrapPath: string): string {
     "",
     "To start the Web UI and control API anyway, with sandboxed execution",
     "unavailable, re-run with --skip-sandbox-check.",
+  ].join("\n");
+}
+
+export function missingSeatbeltMessage(seatbeltPath: string): string {
+  return [
+    `macOS Seatbelt launcher (${seatbeltPath}) was not found on this host.`,
+    "",
+    "ScienceDiscovery requires the macOS sandbox-exec compatibility launcher",
+    "for local file and network isolation.",
+    "",
+    "To start the UI without sandboxed execution, use --skip-sandbox-check.",
   ].join("\n");
 }
 
@@ -98,6 +111,9 @@ export const RESTRICTED_USERNS_HINT = SANDBOX_UNUSABLE_HINT;
 
 export interface PreflightOptions {
   bwrapPath: string;
+  sandboxProvider?: "auto" | SandboxProvider;
+  seatbeltPath?: string;
+  platform?: NodeJS.Platform;
   dataDir: string;
   skipSandboxCheck: boolean;
   env?: NodeJS.ProcessEnv;
@@ -107,6 +123,8 @@ export interface PreflightOptions {
 export interface PreflightResult {
   /** Absolute bubblewrap path, or undefined when the check was skipped. */
   bwrapPath?: string;
+  seatbeltPath?: string;
+  sandboxProvider: SandboxProvider;
   sandboxUsable: boolean;
   /**
    * Whether sandboxed executions will carry `--disable-userns`. False is a
@@ -129,11 +147,53 @@ export async function runPreflight(options: PreflightOptions): Promise<Preflight
     throw new Error(`The data directory ${options.dataDir} is not writable by this user.`);
   }
 
+  const provider = options.sandboxProvider === "auto"
+    ? ((options.platform ?? process.platform) === "darwin" ? "seatbelt" : "bubblewrap")
+    : options.sandboxProvider ?? "bubblewrap";
+  if (provider === "seatbelt") {
+    if ((options.platform ?? process.platform) !== "darwin") {
+      throw new Error("Seatbelt sandbox is available only on macOS");
+    }
+    const requested = options.seatbeltPath ?? "/usr/bin/sandbox-exec";
+    const resolvedSeatbelt = await findExecutable(requested, options.env);
+    if (!resolvedSeatbelt) {
+      if (!options.skipSandboxCheck) throw new Error(missingSeatbeltMessage(requested));
+      warn(`WARNING: macOS Seatbelt (${requested}) is missing; sandboxed execution will fail.`);
+      return {
+        disableUserns: false,
+        procFallback: false,
+        procMode: "new",
+        sandboxProvider: "seatbelt",
+        sandboxUsable: false,
+      };
+    }
+    const capability = await detectSeatbeltCapability(resolvedSeatbelt);
+    if (!capability.sandboxUsable) {
+      const detail = capability.detail ? `: ${capability.detail}` : "";
+      if (!options.skipSandboxCheck) throw new Error(`macOS Seatbelt cannot create a sandbox${detail}`);
+      warn(`WARNING: macOS Seatbelt cannot create a sandbox${detail}`);
+    }
+    return {
+      disableUserns: false,
+      procFallback: false,
+      procMode: "new",
+      sandboxProvider: "seatbelt",
+      sandboxUsable: capability.sandboxUsable,
+      seatbeltPath: resolvedSeatbelt,
+    };
+  }
+
   const resolved = await findExecutable(options.bwrapPath, options.env);
   if (!resolved) {
     if (!options.skipSandboxCheck) throw new Error(missingBwrapMessage(options.bwrapPath));
     warn(`WARNING: bubblewrap (${options.bwrapPath}) is missing; sandboxed execution will fail.`);
-    return { disableUserns: false, procFallback: false, procMode: "new", sandboxUsable: false };
+    return {
+      disableUserns: false,
+      procFallback: false,
+      procMode: "new",
+      sandboxProvider: "bubblewrap",
+      sandboxUsable: false,
+    };
   }
 
   const capability = await detectSandboxCapability(resolved);
@@ -150,6 +210,7 @@ export async function runPreflight(options: PreflightOptions): Promise<Preflight
     disableUserns: capability.disableUserns,
     procFallback: capability.procFallback,
     procMode: capability.procMode,
+    sandboxProvider: "bubblewrap",
     sandboxUsable: capability.sandboxUsable,
   };
 }

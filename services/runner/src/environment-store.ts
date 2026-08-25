@@ -42,6 +42,7 @@ const CATALOG_VERSION = 1;
 const MANAGED_MICROMAMBA_VERSION = micromambaManifest.version;
 const MANAGED_MICROMAMBA_BASE_URL = `${micromambaManifest.baseUrl}/${MANAGED_MICROMAMBA_VERSION}`;
 const MANAGED_MICROMAMBA_RELEASES = micromambaManifest.releases;
+const MANAGED_MICROMAMBA_DARWIN_RELEASES = micromambaManifest.darwinReleases;
 const MAX_PROVISIONER_BYTES = 64 * 1024 * 1024;
 const BUILT_IN_CONDA_CHANNELS = new Set<string>(
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS.flatMap((preset) => [...preset.condaChannels]),
@@ -61,6 +62,10 @@ interface ProvisionedPackage {
   build_string?: string;
   name?: string;
   version?: string;
+}
+
+interface ProvisionedPackageListEnvelope {
+  packages?: unknown;
 }
 
 export type ProvisionerExecutor = (
@@ -88,16 +93,15 @@ export interface EnvironmentRuntime {
   revision: EnvironmentRevision;
 }
 
-type SupportedMicromambaArchitecture = keyof typeof MANAGED_MICROMAMBA_RELEASES;
-
 export function managedMicromambaRelease(
   architecture: string = process.arch,
   platform: string = process.platform,
 ) {
-  if (platform !== "linux") {
-    throw new Error(`Managed micromamba installation requires Linux, not ${platform}`);
-  }
-  const release = MANAGED_MICROMAMBA_RELEASES[architecture as SupportedMicromambaArchitecture];
+  const releases = platform === "linux"
+    ? MANAGED_MICROMAMBA_RELEASES
+    : platform === "darwin" ? MANAGED_MICROMAMBA_DARWIN_RELEASES : undefined;
+  if (!releases) throw new Error(`Managed micromamba installation is unavailable for platform ${platform}`);
+  const release = releases[architecture as keyof typeof releases];
   if (!release) {
     throw new Error(`Managed micromamba installation is unavailable for architecture ${architecture}`);
   }
@@ -179,6 +183,17 @@ function wheelPackageRecord(wheel: EnvironmentLocalWheel): string {
   })}`;
 }
 
+function parseProvisionedPackageList(listOutput: string): ProvisionedPackage[] {
+  const parsed = JSON.parse(listOutput || "[]") as unknown;
+  const listed = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as ProvisionedPackageListEnvelope).packages)
+      ? (parsed as ProvisionedPackageListEnvelope).packages
+      : undefined;
+  if (!listed) throw new Error("Provisioner package list must be a JSON array or an object with a packages array");
+  return listed as ProvisionedPackage[];
+}
+
 async function fileSha256(path: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
@@ -217,6 +232,7 @@ export class EnvironmentStore {
   private setupStartedAt: string | null = null;
   private setupCompletedAt: string | null = null;
   private setupUpdatedAt = new Date().toISOString();
+  private setupComponents: ScientificEnvironmentSetup["components"];
   private setupPromise?: Promise<ScientificEnvironmentSetup>;
   private mutationTail: Promise<void> = Promise.resolve();
   private lastSetupError?: string;
@@ -236,6 +252,20 @@ export class EnvironmentStore {
     this.setupMessage = config.enabled
       ? "Python base environment is waiting to be installed"
       : "Scientific environments are disabled by configuration";
+    const initialComponentState = config.enabled ? "not-configured" : "disabled";
+    const initialComponentPhase = config.enabled ? "pending" : "disabled";
+    this.setupComponents = {
+      conda: this.createSetupComponent(
+        initialComponentState,
+        initialComponentPhase,
+        config.enabled ? "Conda environments are waiting for the Python base" : "Conda environments are disabled by configuration",
+      ),
+      micromamba: this.createSetupComponent(
+        initialComponentState,
+        initialComponentPhase,
+        config.enabled ? "micromamba is waiting to be checked or installed" : "micromamba is disabled by configuration",
+      ),
+    };
     this.provisionerInstaller = provisionerInstaller;
     this.provisioner = provisioner ?? (async (provisionerPath, arguments_, _jobId, environment) => {
       const result = await execFileAsync(provisionerPath, arguments_, {
@@ -281,14 +311,15 @@ export class EnvironmentStore {
     return {
       allowedChannels: [...this.config.allowedChannels],
       completedAt: this.setupCompletedAt,
+      components: structuredClone(this.setupComponents),
       error: this.lastSetupError ?? null,
       ...(this.lastSetupError ? { lastError: this.lastSetupError } : {}),
       managedProvisioner: !this.config.provisionerPath,
       message: this.setupMessage,
       networkPolicy: this.config.packageCacheDir ? "offline-cache" : "allowed-channels",
       phase: this.setupPhase,
-      provisioner: this.setupState === "ready" ? basename(this.provisionerPath) : null,
-      provisionerVersion: !this.config.provisionerPath && this.setupState === "ready"
+      provisioner: this.setupComponents.micromamba.state === "ready" ? basename(this.provisionerPath) : null,
+      provisionerVersion: !this.config.provisionerPath && this.setupComponents.micromamba.state === "ready"
         ? managedMicromambaRelease().version
         : null,
       startedAt: this.setupStartedAt,
@@ -306,12 +337,18 @@ export class EnvironmentStore {
     if (!this.config.enabled) return void (this.initialized = true);
     await this.loadCatalog();
     if (this.catalog.environments.some((environment) => environment.id === "starter-python")) {
+      let component: keyof ScientificEnvironmentSetup["components"] = "micromamba";
       try {
+        this.updateSetupComponent("micromamba", "installing", "checking", "Checking the micromamba executable", { started: true });
         await this.validateProvisioner();
+        this.updateSetupComponent("micromamba", "ready", "complete", "micromamba is ready", { completed: true });
+        component = "conda";
+        this.updateSetupComponent("conda", "installing", "verifying-python-base", "Verifying the managed Python base", { started: true });
         await this.validateStarter("python");
+        this.updateSetupComponent("conda", "ready", "complete", "Conda environments are ready", { completed: true });
         this.updateSetup("ready", "complete", "Python base environment is ready", { completed: true });
       } catch (error) {
-        this.failSetup(error);
+        this.failSetup(error, component);
       }
     }
     this.initialized = true;
@@ -321,12 +358,14 @@ export class EnvironmentStore {
     if (!this.config.enabled) return this.setup;
     if (this.setupPromise || this.setupState === "ready") return this.setup;
     if (!this.config.allowedChannels.length) {
-      this.failSetup(new Error("Scientific environments require at least one allowed package channel"));
+      this.failSetup(new Error("Scientific environments require at least one allowed package channel"), "conda");
       return this.setup;
     }
     this.lastSetupError = undefined;
     this.setupStartedAt = new Date().toISOString();
     this.setupCompletedAt = null;
+    this.updateSetupComponent("micromamba", "installing", "checking", "Checking the micromamba executable", { started: true });
+    this.updateSetupComponent("conda", "not-configured", "pending", "Conda environments are waiting for micromamba");
     this.updateSetup("installing", "checking", "Checking managed environment prerequisites");
     const operation = this.runManagedEnvironmentSetup().finally(() => {
       if (this.setupPromise === operation) this.setupPromise = undefined;
@@ -347,27 +386,35 @@ export class EnvironmentStore {
   }
 
   private async runManagedEnvironmentSetup(): Promise<ScientificEnvironmentSetup> {
+    let component: keyof ScientificEnvironmentSetup["components"] = "micromamba";
     try {
-      if (this.config.packageCacheDir) await access(this.config.packageCacheDir);
       if (this.config.provisionerPath) {
         this.updateSetup("installing", "checking", "Checking configured micromamba provisioner");
+        this.updateSetupComponent("micromamba", "installing", "checking", "Checking the configured micromamba executable");
         await this.validateProvisioner();
       } else {
         this.updateSetup("installing", "downloading-provisioner", "Downloading and verifying managed micromamba");
+        this.updateSetupComponent("micromamba", "installing", "downloading-provisioner", "Downloading and verifying managed micromamba");
         await this.ensureManagedProvisioner();
       }
+      this.updateSetupComponent("micromamba", "ready", "complete", "micromamba is ready", { completed: true });
+      component = "conda";
+      if (this.config.packageCacheDir) await access(this.config.packageCacheDir);
       if (!this.catalog.environments.some((environment) => environment.id === "starter-python")) {
         this.updateSetup("installing", "creating-python-base", "Creating the managed Python base environment");
+        this.updateSetupComponent("conda", "installing", "creating-python-base", "Creating the managed Python base environment", { started: true });
         await this.bootstrapStarter("python");
       }
       this.updateSetup("installing", "verifying-python-base", "Verifying the managed Python base environment");
+      this.updateSetupComponent("conda", "installing", "verifying-python-base", "Verifying the managed Python base environment", { started: true });
       await this.validateStarter("python");
       this.initialized = true;
+      this.updateSetupComponent("conda", "ready", "complete", "Conda environments are ready", { completed: true });
       this.updateSetup("ready", "complete", "Python base environment is ready", { completed: true });
       return this.setup;
     } catch (error) {
       this.initialized = true;
-      this.failSetup(error);
+      this.failSetup(error, component);
       throw error;
     }
   }
@@ -780,8 +827,7 @@ export class EnvironmentStore {
     localWheels: EnvironmentLocalWheel[] = [],
   ): Promise<EnvironmentRevision> {
     const listOutput = await this.runProvisioner(["list", "--json", "--prefix", prefix], `snapshot-${revisionId}`);
-    const listed = JSON.parse(listOutput || "[]") as ProvisionedPackage[];
-    if (!Array.isArray(listed)) throw new Error("Provisioner package list must be a JSON array");
+    const listed = parseProvisionedPackageList(listOutput);
     const packages = uniqueSorted([...listed.flatMap((item) => item.name && item.version
       ? [`${item.name}=${item.version}${item.build_string ? `=${item.build_string}` : ""}`]
       : []), ...additionalPackages, ...localWheels.map(wheelPackageRecord)]);
@@ -886,9 +932,59 @@ export class EnvironmentStore {
     if (options.completed) this.setupCompletedAt = now;
   }
 
-  private failSetup(error: unknown): void {
+  private createSetupComponent(
+    state: ScientificEnvironmentSetup["state"],
+    phase: ScientificEnvironmentSetup["phase"],
+    message: string,
+  ): ScientificEnvironmentSetup["components"]["conda"] {
+    return {
+      action: null,
+      completedAt: null,
+      error: null,
+      message,
+      phase,
+      startedAt: null,
+      state,
+      updatedAt: this.setupUpdatedAt,
+    };
+  }
+
+  private updateSetupComponent(
+    component: keyof ScientificEnvironmentSetup["components"],
+    state: ScientificEnvironmentSetup["state"],
+    phase: ScientificEnvironmentSetup["phase"],
+    message: string,
+    options: { action?: string; completed?: boolean; error?: string; started?: boolean } = {},
+  ): void {
+    const now = new Date().toISOString();
+    const current = this.setupComponents[component];
+    this.setupComponents[component] = {
+      action: options.action ?? null,
+      completedAt: options.completed ? now : null,
+      error: options.error ?? null,
+      message,
+      phase,
+      startedAt: options.started && !current.startedAt ? now : current.startedAt,
+      state,
+      updatedAt: now,
+    };
+  }
+
+  private failSetup(error: unknown, component: keyof ScientificEnvironmentSetup["components"]): void {
     this.lastSetupError = error instanceof Error ? error.message : "Scientific environment setup failed";
-    this.updateSetup("failed", "failed", "Managed Python environment setup failed", { completed: true });
+    const micromambaFailure = component === "micromamba";
+    const message = micromambaFailure ? "micromamba setup failed" : "Conda environment setup failed";
+    const action = micromambaFailure
+      ? this.config.provisionerPath
+        ? "Verify the configured micromamba executable path and execute permissions, then retry setup."
+        : "Retry setup. If it fails again, verify access to the pinned micromamba release and write access to the application data directory."
+      : "Review the configured Conda channels or offline cache, then retry setup. Existing system Conda and shell settings are not modified.";
+    this.updateSetupComponent(component, "failed", "failed", message, {
+      action,
+      completed: true,
+      error: this.lastSetupError,
+    });
+    this.updateSetup("failed", "failed", message, { completed: true });
   }
 
   private async runProvisioner(arguments_: string[], jobId: string): Promise<string> {

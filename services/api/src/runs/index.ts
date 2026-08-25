@@ -25,7 +25,7 @@ import {
   DEFAULT_MAX_TOTAL_SUBAGENTS,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@sciencediscovery/context";
+} from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
 import {
   createMainAgentProfile,
@@ -867,7 +867,11 @@ async function executeAgentRun(
       // Scope the read to this session so the LLM only sees its own nodes when
       // resolving ids to cite; cross-session search stays on the user-facing
       // search box (which sends no session filter).
-      return memoryGraphClient.queryMatch(query, sessionId);
+      // Pin any_term (OR): the LLM's free-text query may name entities that
+      // aren't in the graph, and OR keeps the loose recall — term-AND would
+      // zero out results on the first absent word. Explicit pass makes the
+      // intent visible; behavior is unchanged from the default.
+      return memoryGraphClient.queryMatch(query, sessionId, "any_term");
     },
     declareEvidence: async (input) => {
       if (!memoryGraphClient || !memoryGraphSink.enabled) {
@@ -1231,7 +1235,11 @@ async function executeAgentRun(
                   if (!memoryGraphClient || !memoryGraphSink.enabled) {
                     return { hits: [], total: 0, truncated: false, reason: "memory_graph_disabled" };
                   }
-                  return memoryGraphClient.queryMatch(query, sessionId);
+                  // Pin any_term (OR): the LLM's free-text query may name
+                  // entities that aren't in the graph, and OR keeps the loose
+                  // recall — term-AND would zero out results on the first
+                  // absent word.
+                  return memoryGraphClient.queryMatch(query, sessionId, "any_term");
                 },
                 declareEvidence: async (input) => {
                   if (!memoryGraphClient || !memoryGraphSink.enabled) {

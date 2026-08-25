@@ -8,6 +8,7 @@ import type { HistoryCompactor } from "./history-compactor.js";
 
 export interface ContextAssemblerOptions<TMessage extends RuntimeMessage> {
   compactor: HistoryCompactor<TMessage>;
+  onAssembled?(assembly: ContextAssembly<TMessage, ModelInput<TMessage>>, turn: number): void | Promise<void>;
   systemPrompt: string;
   tools(): WireToolSpec[];
 }
@@ -24,7 +25,7 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
     turn: number;
   }): Promise<ContextAssembly<TMessage, ModelInput<TMessage>>> {
     const history = await this.options.compactor.compact(input.history, input.signal, input.onProgress);
-    return {
+    const assembly = {
       history,
       modelInput: {
         history,
@@ -32,5 +33,7 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
         tools: this.options.tools(),
       },
     };
+    await this.options.onAssembled?.(assembly, input.turn);
+    return assembly;
   }
 }

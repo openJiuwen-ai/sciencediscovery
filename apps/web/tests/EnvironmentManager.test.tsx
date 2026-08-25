@@ -13,11 +13,17 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
-import { EnvironmentSourceSettingsEditor } from "../src/EnvironmentManager.js";
+import type { ScientificEnvironmentSetup, ScientificEnvironmentSetupComponentStatus } from "@sciencediscovery/schema";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import {
+  environmentSetupActionLabel,
+  EnvironmentSetupStatus,
+  EnvironmentSourceSettingsEditor,
+} from "../src/EnvironmentManager.js";
 
 test("environment source settings distinguish global pip and conda mirrors", () => {
   const html = renderToStaticMarkup(createElement(EnvironmentSourceSettingsEditor, {
@@ -58,4 +64,76 @@ test("environment source settings distinguish global pip and conda mirrors", () 
   ]);
   assert.equal(optionLabels.filter((label) => label === "Huawei Cloud").length, 1);
   assert.doesNotMatch(html, /China mainland|中国大陆|地区|country|region/i);
+});
+
+function component(
+  state: ScientificEnvironmentSetupComponentStatus["state"],
+  phase: ScientificEnvironmentSetupComponentStatus["phase"],
+  overrides: Partial<ScientificEnvironmentSetupComponentStatus> = {},
+): ScientificEnvironmentSetupComponentStatus {
+  return {
+    action: null,
+    completedAt: null,
+    error: null,
+    message: `${state} ${phase}`,
+    phase,
+    startedAt: "2026-08-23T00:00:00.000Z",
+    state,
+    updatedAt: "2026-08-23T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function setup(components: ScientificEnvironmentSetup["components"]): ScientificEnvironmentSetup {
+  return {
+    allowedChannels: ["conda-forge"],
+    completedAt: null,
+    components,
+    error: components.micromamba.error ?? components.conda.error,
+    managedProvisioner: true,
+    message: "Managed setup",
+    networkPolicy: "allowed-channels",
+    phase: "checking",
+    provisioner: components.micromamba.state === "ready" ? "micromamba" : null,
+    provisionerVersion: components.micromamba.state === "ready" ? "2.8.1-0" : null,
+    startedAt: "2026-08-23T00:00:00.000Z",
+    starterPackages: { python: ["python=3.12"], r: ["r-base=4.4"] },
+    state: components.micromamba.state === "failed" || components.conda.state === "failed" ? "failed" : "installing",
+    updatedAt: "2026-08-23T00:00:00.000Z",
+  };
+}
+
+test("setup status shows micromamba installation separately from the pending Conda base", () => {
+  const html = renderToStaticMarkup(createElement(EnvironmentSetupStatus, { setup: setup({
+    conda: component("not-configured", "pending"),
+    micromamba: component("installing", "downloading-provisioner"),
+  }) }));
+  assert.match(html, /micromamba bootstrap/);
+  assert.match(html, /Downloading and verifying|installing downloading-provisioner/i);
+  assert.match(html, /Phase: downloading-provisioner/);
+  assert.match(html, /Conda environments/);
+  assert.match(html, /Phase: pending/);
+});
+
+test("setup status preserves micromamba success beside an actionable Conda failure", () => {
+  const failedSetup = setup({
+    conda: component("failed", "failed", {
+      action: "Review the configured Conda channels or offline cache, then retry setup.",
+      error: "This operation was aborted",
+      message: "Conda environment setup failed",
+    }),
+    micromamba: component("ready", "complete", { completedAt: "2026-08-23T00:00:01.000Z", message: "micromamba is ready" }),
+  });
+  const html = renderToStaticMarkup(createElement(EnvironmentSetupStatus, { setup: failedSetup }));
+  assert.match(html, /micromamba 2\.8\.1-0/);
+  assert.match(html, /micromamba is ready/);
+  assert.match(html, /Conda environment setup failed/);
+  assert.match(html, /Reported error/);
+  assert.match(html, /This operation was aborted/);
+  assert.match(html, /Review the configured Conda channels or offline cache, then retry setup/);
+  assert.equal(environmentSetupActionLabel(failedSetup, false), "Retry Conda environment setup");
+  assert.equal(environmentSetupActionLabel(setup({
+    conda: component("not-configured", "pending"),
+    micromamba: component("failed", "failed"),
+  }), false), "Retry micromamba setup");
 });

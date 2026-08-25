@@ -145,19 +145,34 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
 # than erroring when a label has no nodes.
 
 
-def query_match(query: str, session_id: str | None = None) -> dict[str, Any]:
+def query_match(
+    query: str,
+    session_id: str | None = None,
+    mode: str = "any_term",
+) -> dict[str, Any]:
     """Case-insensitive substring search, scoped to one session when
     ``session_id`` is given.
 
-    The query is split into whitespace/punctuation-separated terms; a node
-    matches when its searchable text contains *any* term (OR semantics), so a
-    word absent from the graph (e.g. "paper", "frequency") never zeroes out
-    every result the way a strict AND would. Hits are ranked by how many terms
-    they contain (most first), then by field priority (title before abstract/
-    body), so the most relevant nodes still surface even though looser terms
-    bring in extras. The haystack spans every textual field (title + abstract
-    for Papers, content for Evidence/Claim, core_objective for ResearchGoal,
-    path for Artifact, tool for Code).
+    The query is split into whitespace/punctuation-separated terms. How those
+    terms combine is controlled by ``mode``:
+
+    - ``"any_term"`` (default, OR): a node matches when its searchable text
+      contains *any* term, so a word absent from the graph (e.g. "paper",
+      "frequency") never zeroes out every result the way a strict AND would.
+      This is the mode the agent ``query_graph`` tool relies on — the LLM's
+      free-text query may name entities that are not in the graph, and OR keeps
+      the recall loose.
+    - ``"all_terms"`` (term-AND): a node matches only when its searchable text
+      contains *every* term. The frontend search box uses this so typing a
+      paper's full title returns just that paper (and nodes sharing its title
+      words) instead of the whole corpus — high-frequency words like ``a``/
+      ``on``/``the`` would otherwise match almost every abstract under OR.
+
+    Hits are ranked by how many terms they contain (most first), then by field
+    priority (title before abstract/body), so the most relevant nodes still
+    surface even though looser terms bring in extras. The haystack spans every
+    textual field (title + abstract for Papers, content for Evidence/Claim,
+    core_objective for ResearchGoal, path for Artifact, tool for Code).
 
     Returns ``{hits, total, truncated}``; an empty graph returns ``{hits: [],
     total: 0, truncated: False}`` rather than erroring.
@@ -170,6 +185,16 @@ def query_match(query: str, session_id: str | None = None) -> dict[str, Any]:
     tokens = [t for t in re.split(r"[\W_]+", (query or "").lower()) if t]
     if not tokens:
         return {"hits": [], "total": 0, "truncated": False}
+
+    # mode picks the minimum per-term hit count a node needs to qualify. The
+    # Cypher is fully parameterized — $min_matched is the only thing mode
+    # affects, so there is no string interpolation and no injection surface.
+    #   all_terms (term-AND): min_matched = len(tokens) → every token must hit
+    #     (matched is at most len(tokens), so >= len(tokens) is "all hit").
+    #   any_term (OR, default): min_matched = 1 → at least one token hits
+    #     (matched > 0). mode comes from the server layer, validated against a
+    #     whitelist there.
+    min_matched = len(tokens) if mode == "all_terms" else 1
 
     with driver.session() as session:
         result = session.run(
@@ -188,7 +213,7 @@ def query_match(query: str, session_id: str | None = None) -> dict[str, Any]:
             UNWIND $tokens AS t
             WITH n, label, haystack, collect(CASE WHEN haystack CONTAINS t THEN 1 ELSE 0 END) AS hits
             WITH n, label, haystack, reduce(s = 0, x IN hits | s + x) AS matched
-            WHERE matched > 0
+            WHERE matched >= $min_matched
             RETURN n, label, matched
             ORDER BY matched DESC,
               CASE WHEN toLower(coalesce(toString(n.title), ''))           CONTAINS $primary THEN 0
@@ -201,6 +226,7 @@ def query_match(query: str, session_id: str | None = None) -> dict[str, Any]:
             LIMIT $limit
             """,
             tokens=tokens,
+            min_matched=min_matched,
             primary=tokens[0],
             sid=session_id,
             limit=_NODE_LIMIT,

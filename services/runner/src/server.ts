@@ -23,9 +23,11 @@ import { promisify } from "node:util";
 import { createOperationalLogger, shortErrorMessage } from "@sciencediscovery/operational-logging";
 import {
   detectSandboxCapability,
+  detectSeatbeltCapability,
   disableUsernsOmittedMessage,
   procFallbackMessage,
   sandboxUnusableMessage,
+  seatbeltUnusableMessage,
 } from "@sciencediscovery/sandbox-capability";
 
 import type {
@@ -50,6 +52,7 @@ import {
   DEFAULT_MAX_WORKSPACE_BYTES,
   executePython,
   executeShell,
+  executorSandboxKind,
   MAX_RUNNER_FILE_BYTES,
   RESOURCE_LIMIT_MODE,
   RUNNER_VERSION,
@@ -188,9 +191,18 @@ export function loadRunnerConfig(env: NodeJS.ProcessEnv = process.env, cwd = rep
     }
     return value;
   };
+  const requestedProvider = env.SCIENCE_AGENT_SANDBOX_PROVIDER?.trim() || "auto";
+  if (!["auto", "bubblewrap", "seatbelt"].includes(requestedProvider)) {
+    throw new Error("SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt");
+  }
+  const sandboxProvider = requestedProvider === "auto"
+    ? (process.platform === "darwin" ? "seatbelt" : "bubblewrap")
+    : requestedProvider as "bubblewrap" | "seatbelt";
   return {
     authToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "sciencediscovery-runner-local",
     bwrapPath: env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
+    sandboxProvider,
+    seatbeltPath: env.SCIENCE_AGENT_SEATBELT_PATH?.trim() || "/usr/bin/sandbox-exec",
     dataDir: resolve(cwd, env.SCIENCE_AGENT_DATA_DIR?.trim() || ".sciencediscovery-data"),
     execTimeoutMs,
     maxOutputBytes: parseByteQuota("SCIENCE_AGENT_MAX_OUTPUT_BYTES", DEFAULT_MAX_OUTPUT_BYTES),
@@ -203,6 +215,7 @@ export function loadRunnerConfig(env: NodeJS.ProcessEnv = process.env, cwd = rep
     npuWorkloadConfigPath: env.SCIENCE_AGENT_NPU_WORKLOAD_CONFIG?.trim()
       ? resolve(cwd, env.SCIENCE_AGENT_NPU_WORKLOAD_CONFIG.trim())
       : undefined,
+    pythonPath: env.SCIENCE_AGENT_PYTHON_PATH?.trim() || undefined,
     port,
     provisionerPath: env.SCIENCE_AGENT_PROVISIONER_PATH?.trim()
       ? resolve(cwd, env.SCIENCE_AGENT_PROVISIONER_PATH.trim())
@@ -253,6 +266,8 @@ export function createRunnerServer(
   });
   const shellSessions = shellSessionManager ?? new ShellSessionManager({
     bwrapPath: config.bwrapPath,
+    sandboxProvider: config.sandboxProvider,
+    seatbeltPath: config.seatbeltPath,
     dataDir: config.dataDir,
     execTimeoutMs: config.execTimeoutMs,
     idleTimeoutMs: config.shellSessionIdleMs ?? config.scientificKernelIdleMs,
@@ -342,13 +357,13 @@ export function createRunnerServer(
           maxOutputBytes: config.maxOutputBytes,
           maxWorkspaceBytes: config.maxWorkspaceBytes,
           networkPolicy: "none",
-          noNewPrivileges: true,
+          noNewPrivileges: executorSandboxKind(config) === "bubblewrap",
           npuBroker: npuBroker.capability(),
           runnerVersion: RUNNER_VERSION,
-          sandbox: "bubblewrap",
-          sandboxNetwork: await sandboxNetworkCapability(),
+          sandbox: executorSandboxKind(config),
+          sandboxNetwork: await sandboxNetworkCapability(executorSandboxKind(config)),
           scientificEnvs: environmentStore?.capability ?? DISABLED_SCIENTIFIC_ENVS,
-          seccompBaseline: SECCOMP_BASELINE_VERSION,
+          seccompBaseline: executorSandboxKind(config) === "bubblewrap" ? SECCOMP_BASELINE_VERSION : null,
           status: "ok",
           workerConcurrency: null,
         } satisfies RunnerHealth);
@@ -656,7 +671,8 @@ export function createRunnerServer(
  * the process-wide interpreter probe: no subprocess per request, and no data
  * directory writes. Staging the bridge script stays on the launch path.
  */
-async function sandboxNetworkCapability(): Promise<SandboxNetworkCapability> {
+async function sandboxNetworkCapability(sandbox: "bubblewrap" | "seatbelt"): Promise<SandboxNetworkCapability> {
+  if (sandbox === "seatbelt") return { available: true, modes: ["none", "domain-allowlist"] };
   try {
     await resolveEgressInterpreter();
     return { available: true, modes: ["none", "domain-allowlist"] };
@@ -671,35 +687,42 @@ async function sandboxNetworkCapability(): Promise<SandboxNetworkCapability> {
 
 export async function startRunnerServer(config = loadRunnerConfig()): Promise<Server> {
   const logger = createOperationalLogger({ category: "runner", dataDir: config.dataDir, service: "runner" });
-  let help: string;
-  try {
-    const result = await execFileAsync(config.bwrapPath, ["--help"], {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
-    help = `${result.stdout}\n${result.stderr}`;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error("sandbox_validation_failed", { errorMessage: shortErrorMessage(error) });
-    throw new Error(`Could not execute bubblewrap at "${config.bwrapPath}": ${message}`, { cause: error });
-  }
-  const missingOptions = REQUIRED_BWRAP_OPTIONS.filter((option) => !help.includes(option));
-  if (missingOptions.length) {
-    throw new Error(
-      `bubblewrap at "${config.bwrapPath}" lacks required sandbox options: ${missingOptions.join(", ")}`,
-    );
-  }
-  // Resolve the option by probing, not by reading --help: the same call warms
-  // the cache every execution reads, so the startup warning and the arguments a
-  // real launch uses always describe the same sandbox.
-  const capability = await detectSandboxCapability(config.bwrapPath);
-  if (!capability.sandboxUsable) {
+  const sandbox = executorSandboxKind(config);
+  if (sandbox === "seatbelt") {
+    if (process.platform !== "darwin") throw new Error("Seatbelt sandbox is available only on macOS");
+    const capability = await detectSeatbeltCapability(config.seatbeltPath ?? "/usr/bin/sandbox-exec");
+    if (!capability.sandboxUsable) {
+      logger.error("sandbox_validation_failed", { detail: capability.detail, reason: capability.reason });
+      throw new Error(seatbeltUnusableMessage(config.seatbeltPath ?? "/usr/bin/sandbox-exec", capability));
+    }
+  } else {
+    let help: string;
+    try {
+      const result = await execFileAsync(config.bwrapPath, ["--help"], {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+      });
+      help = `${result.stdout}\n${result.stderr}`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error("sandbox_validation_failed", { errorMessage: shortErrorMessage(error) });
+      throw new Error(`Could not execute bubblewrap at "${config.bwrapPath}": ${message}`, { cause: error });
+    }
+    const missingOptions = REQUIRED_BWRAP_OPTIONS.filter((option) => !help.includes(option));
+    if (missingOptions.length) {
+      throw new Error(
+        `bubblewrap at "${config.bwrapPath}" lacks required sandbox options: ${missingOptions.join(", ")}`,
+      );
+    }
+    // Probe the exact Linux profile so startup and execution cannot disagree.
+    const capability = await detectSandboxCapability(config.bwrapPath);
+    if (!capability.sandboxUsable) {
     // No sandbox builds here at all. The degradation warnings below both end in
     // "executions still run", which would be false — and `disableUserns` is
     // also false in this state, so reporting it would name the wrong cause.
     logger.warn("sandbox_unusable", { detail: capability.detail, reason: capability.reason });
     console.warn(sandboxUnusableMessage(config.bwrapPath, capability));
-  } else {
+    } else {
     // The sandbox works but may be degraded on either axis, and both can be
     // degraded at once, so report them independently rather than as a chain.
     if (capability.procFallback) {
@@ -716,6 +739,7 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
         reason: capability.reason,
       });
       console.warn(disableUsernsOmittedMessage(config.bwrapPath, capability));
+    }
     }
   }
   const environmentStore = new EnvironmentStore({
@@ -746,6 +770,8 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   });
   const shellSessionManager = new ShellSessionManager({
     bwrapPath: config.bwrapPath,
+    sandboxProvider: config.sandboxProvider,
+    seatbeltPath: config.seatbeltPath,
     dataDir: config.dataDir,
     execTimeoutMs: config.execTimeoutMs,
     idleTimeoutMs: config.shellSessionIdleMs ?? config.scientificKernelIdleMs,
@@ -754,6 +780,8 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   }, envProfiles, egressGateways);
   const kernelManager = new KernelManager({
     bwrapPath: config.bwrapPath,
+    sandboxProvider: config.sandboxProvider,
+    seatbeltPath: config.seatbeltPath,
     dataDir: config.dataDir,
     execTimeoutMs: config.execTimeoutMs,
     idleTimeoutMs: config.scientificKernelIdleMs,
@@ -790,9 +818,9 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   const outputLabel = config.maxOutputBytes === 0
     ? "unlimited (no truncation)"
     : `${config.maxOutputBytes} bytes (truncate)`;
-  const sandboxNetwork = await sandboxNetworkCapability();
+  const sandboxNetwork = await sandboxNetworkCapability(sandbox);
   console.log(
-    `Sandbox: bubblewrap (${RUNNER_VERSION}); sandbox network access: default none`
+    `Sandbox: ${sandbox} (${RUNNER_VERSION}); sandbox network access: default none`
     + `${sandboxNetwork.available ? ", domain-allowlist available" : ` (domain-allowlist unavailable: ${sandboxNetwork.unavailableReason})`}`
     + "; no CPU/memory quotas; "
     + `workspace quota: ${workspaceLabel}; output budget: ${outputLabel}; `

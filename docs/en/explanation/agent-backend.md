@@ -319,7 +319,7 @@ The former `packages/agent-runtime` aggregate has been split by ownership. `pack
 
 | Export | Owner | Relationship to the loop |
 |---|---|---|
-| `buildWorkspaceSystemPrompt(...)` | `packages/context` | Builds the workspace/system-prompt contribution consumed by the context assembler |
+| `buildWorkspaceSystemPrompt(...)` | `packages/workspace` | Builds the workspace/system-prompt contribution consumed by the context assembler |
 | `createWorkspaceTools(root, options)` | `packages/workspace` | Produces `AgentTool[]`; concrete ports are supplied by the API composition root |
 | `AgentTool`, `ToolRegistry` | `packages/tools` | Define tool execution and own deferred discovery, sanitization, and loop policy |
 | `AgentEvent`, `Agent` | `packages/orchestration` | Define run-facing lifecycle contracts; `runs/index.ts` maps events to SSE (§4.5) |

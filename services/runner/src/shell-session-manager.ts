@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { open } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+  SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID,
   epochSandboxNetworkAccess,
   type KernelSession,
   type SandboxNetworkAccess,
@@ -32,13 +32,14 @@ import {
   DEFAULT_MAX_WORKSPACE_BYTES,
   RESOURCE_LIMIT_MODE,
   RUNNER_VERSION,
-  buildSandboxLaunch,
-  sandboxLaunchProfile,
+  executorSandboxKind,
   executionTimeoutMs,
   hostRuntimeSupportArguments,
   prepareSandboxEgress,
+  prepareSandboxLaunch,
   resolveQuotaBytes,
   seccompVariantFor,
+  spawnSandboxProcess,
   truncateToBudget,
   validatedWorkspace,
   workspaceBindArguments,
@@ -46,8 +47,8 @@ import {
   workspaceQuotaPrecheckMessage,
   workspaceSnapshot,
   workspaceUsageBytes,
+  type SandboxLaunch,
 } from "./executor.js";
-import { ensureSeccompFilter } from "./seccomp.js";
 import { agentExecutionKey, KeyedTaskQueue } from "./agent-execution.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 
@@ -63,16 +64,23 @@ import { SessionEnvProfileStore } from "./session-env-profile.js";
  * exit code but does not abort the session (`set -e` / `exit` in user code
  * still end the whole session, which is then recreated with memory lost).
  */
-const SHELL_SESSION_WORKER = String.raw`
-__sa_out=/tmp/.sciencediscovery-shell-stdout
-__sa_err=/tmp/.sciencediscovery-shell-stderr
+export const SHELL_SESSION_WORKER = String.raw`
+__sa_tmp=${"${"}TMPDIR:-/tmp}
+__sa_out=$__sa_tmp/.sciencediscovery-shell-stdout
+__sa_err=$__sa_tmp/.sciencediscovery-shell-stderr
 __sa_current=''
+__sa_b64enc() { base64 | tr -d '\n'; }
+if printf '' | base64 --decode >/dev/null 2>&1; then
+  __sa_b64dec() { base64 --decode; }
+else
+  __sa_b64dec() { base64 -D; }
+fi
 __sa_emit() {
   printf '%s %s %s %s %s %s %s %s\n' __SA_RESULT__ "$1" "$2" \
-    "$(base64 -w0 <"$__sa_out" 2>/dev/null)" \
-    "$(base64 -w0 <"$__sa_err" 2>/dev/null)" \
-    "$(printf %s "$(pwd -P)" | base64 -w0)" \
-    "$(env -0 | base64 -w0)" "$3"
+    "$(__sa_b64enc <"$__sa_out" 2>/dev/null)" \
+    "$(__sa_b64enc <"$__sa_err" 2>/dev/null)" \
+    "$(printf %s "$(pwd -P)" | __sa_b64enc)" \
+    "$(env -0 | __sa_b64enc)" "$3"
 }
 __sa_on_exit() {
   __sa_rc=$?
@@ -80,7 +88,7 @@ __sa_on_exit() {
 }
 trap __sa_on_exit EXIT
 while IFS=' ' read -r __sa_id __sa_code; do
-  __sa_code=$(printf %s "$__sa_code" | base64 -d)
+  __sa_code=$(printf %s "$__sa_code" | __sa_b64dec)
   : >"$__sa_out"
   : >"$__sa_err"
   __sa_current=$__sa_id
@@ -137,6 +145,7 @@ class ManagedShellSession {
   constructor(
     readonly child: ChildProcessWithoutNullStreams,
     session: KernelSession,
+    readonly launch: SandboxLaunch,
     readonly workspaceRoot: string,
     readonly readOnlyWorkspaceRoot: string | undefined,
     private idleTimeoutMs: number,
@@ -261,6 +270,7 @@ class ManagedShellSession {
     if (this.stopped) return;
     this.markStopped(reason);
     this.child.kill("SIGKILL");
+    await this.launch.cleanup?.().catch(() => undefined);
   }
 
   private markStopped(reason: string): void {
@@ -271,6 +281,7 @@ class ManagedShellSession {
     this.session.status = "stopped";
     this.failPending(new Error(reason));
     this.onStopped(this, reason);
+    void this.launch.cleanup?.().catch(() => undefined);
   }
 
   private armIdleTimer(): NodeJS.Timeout | undefined {
@@ -293,6 +304,8 @@ class ManagedShellSession {
 
 export interface ShellSessionManagerConfig {
   bwrapPath: string;
+  sandboxProvider?: "bubblewrap" | "seatbelt";
+  seatbeltPath?: string;
   dataDir: string;
   /** Wall-clock limit for a single evaluation inside a session. */
   execTimeoutMs: number;
@@ -336,12 +349,15 @@ export class ShellSessionManager {
   }
 
   async execute(request: ShellExecutionRequest, signal?: AbortSignal): Promise<ShellExecutionResult> {
+    const environmentRevisionId = executorSandboxKind(this.config) === "seatbelt"
+      ? SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID
+      : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID;
     const queueKey = agentExecutionKey(request.permissionEpoch.sessionId, request.agentId);
     const runtimeKey = JSON.stringify([
       request.permissionEpoch.sessionId,
       request.agentId,
       "shell",
-      SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+      environmentRevisionId,
       request.permissionEpoch.id,
     ]);
     return await this.executionQueue.run(
@@ -442,7 +458,13 @@ export class ShellSessionManager {
     // Sediment the post-eval shell state for later cross-language injection.
     // Skipped when the session died mid-eval (the exit trap still reported).
     if (!shellSession.isStopped) {
-      this.profiles.update(sessionId, request.agentId, request.permissionEpoch.id, response.cwd, response.env);
+      this.profiles.update(
+        sessionId,
+        request.agentId,
+        request.permissionEpoch.id,
+        shellSession.launch.toLogicalPath?.(response.cwd) ?? response.cwd,
+        response.env,
+      );
     }
     const after = await workspaceSnapshot(workspaceRoot);
     const createdFiles = [...after.keys()].filter((path) => !before.has(path)).toSorted();
@@ -453,7 +475,9 @@ export class ShellSessionManager {
     return {
       cgroupMode: RESOURCE_LIMIT_MODE,
       createdFiles,
-      environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+      environmentRevisionId: executorSandboxKind(this.config) === "seatbelt"
+        ? SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID
+        : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
       environmentVariables: response.env,
       executionId: request.executionId,
       exitCode: response.exitCode,
@@ -466,11 +490,11 @@ export class ShellSessionManager {
       networkAccessRevision: networkAccess.revision,
       networkPolicy: networkAccess.mode,
       runnerVersion: RUNNER_VERSION,
-      sandbox: "bubblewrap",
+      sandbox: executorSandboxKind(this.config),
       startedAt,
       stderr: response.stderr,
       stdout: response.stdout,
-      workingDirectory: response.cwd,
+      workingDirectory: shellSession.launch.toLogicalPath?.(response.cwd) ?? response.cwd,
     };
   }
 
@@ -514,37 +538,33 @@ export class ShellSessionManager {
     networkAccess: SandboxNetworkAccess,
   ): Promise<ManagedShellSession> {
     const id = `shell-${randomUUID()}`;
-    const filter = await open(
-      await ensureSeccompFilter(this.config.dataDir, seccompVariantFor(networkAccess)),
-      "r",
-    );
     const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
     // A fresh session always starts from the clearenv baseline: the profile is
     // produced by this shell, not consumed by it.
-    const launch = buildSandboxLaunch({
+    const sandbox = executorSandboxKind(this.config);
+    const launch = await prepareSandboxLaunch(this.config, {
       chdir: workspaceBinds.chdir,
-      ...await sandboxLaunchProfile(this.config.bwrapPath),
-      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways),
+      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox),
       environmentBinds: [],
+      environmentPaths: [],
       hostInterpreterMasks: [],
       hostRuntimeSupport: await hostRuntimeSupportArguments(),
       language: "shell",
-      pathEnv: "/usr/bin",
+      pathEnv: "/usr/bin:/bin",
+      readOnlyWorkspaceRoot,
       workspaceBindArgs: workspaceBinds.args,
+      workspaceRoot,
     });
-    const bwrapArguments = [
-      ...launch.args,
-      ...launch.commandPrefix,
-      "/usr/bin/bash", "--noprofile", "--norc", "-c", SHELL_SESSION_WORKER,
+    const commandArguments = [
+      sandbox === "seatbelt" ? "/bin/bash" : "/usr/bin/bash",
+      "--noprofile", "--norc", "-c", SHELL_SESSION_WORKER,
     ];
-    let child;
-    try {
-      child = spawn(this.config.bwrapPath, bwrapArguments, { stdio: ["pipe", "pipe", "pipe", filter.fd] });
-    } catch (error) {
-      await filter.close();
-      throw error;
-    }
-    await filter.close();
+    const child = await spawnSandboxProcess(
+      this.config,
+      launch,
+      commandArguments,
+      seccompVariantFor(networkAccess),
+    );
     if (!child.stdin || !child.stdout || !child.stderr) {
       child.kill("SIGKILL");
       throw new Error("Runner failed to create persistent shell streams");
@@ -554,7 +574,9 @@ export class ShellSessionManager {
     const session: KernelSession = {
       agentId: request.agentId,
       createdAt: now.toISOString(),
-      environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+      environmentRevisionId: sandbox === "seatbelt"
+        ? SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID
+        : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
       ...(idleTimeoutMs > 0 ? { expiresAt: new Date(now.getTime() + idleTimeoutMs).toISOString() } : {}),
       id,
       kernelMode: "persistent",
@@ -567,6 +589,7 @@ export class ShellSessionManager {
     return new ManagedShellSession(
       child as ChildProcessWithoutNullStreams,
       session,
+      launch,
       workspaceRoot,
       readOnlyWorkspaceRoot,
       idleTimeoutMs,

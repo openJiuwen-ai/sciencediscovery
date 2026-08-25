@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { spawn } from "node:child_process";
-import { access, open, readdir, realpath, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { access, mkdir, mkdtemp, open, readdir, realpath, rm, stat } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
   detectSandboxCapability,
@@ -23,10 +23,12 @@ import {
 } from "@sciencediscovery/sandbox-capability";
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+  SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID,
   epochSandboxNetworkAccess,
   type PythonExecutionRequest,
   type PythonExecutionResult,
   type SandboxNetworkAccess,
+  type SandboxKind,
   type ScientificLanguage,
   type ShellExecutionRequest,
   type ShellExecutionResult,
@@ -37,12 +39,14 @@ import {
   egressBridgeBindArguments,
   egressBridgeCommandPrefix,
   egressEnvironment,
+  egressEnvironmentForUrl,
   resolveEgressBridge,
 } from "./egress-bridge.js";
 import type { EgressGatewayRegistry } from "./egress-gateway.js";
 import { ensureSeccompFilter, type SeccompVariant } from "./seccomp.js";
 import { profileKeyAllowed, sedimentableCwd, type SessionEnvProfile } from "./session-env-profile.js";
 import type { EnvironmentStore } from "./environment-store.js";
+import { buildSeatbeltProfile, seatbeltWorkspaceMapping } from "./seatbelt.js";
 
 export const RUNNER_VERSION = "m4-isolation-only-v1";
 
@@ -82,15 +86,30 @@ export const RESOURCE_LIMIT_MODE = "none" as const;
 const OUTPUT_TRUNCATION_MARKER = (limit: number) =>
   `\n...[output truncated: exceeded ${limit} bytes; set SCIENCE_AGENT_MAX_OUTPUT_BYTES=0 to disable]...\n`;
 
-export interface ExecutorConfig {
+export interface SandboxRuntimeConfig {
   bwrapPath: string;
+  /** Resolved sandbox implementation. Defaults from the host platform. */
+  sandboxProvider?: "bubblewrap" | "seatbelt";
+  /** macOS Seatbelt launcher. */
+  seatbeltPath?: string;
   dataDir: string;
+}
+
+export interface ExecutorConfig extends SandboxRuntimeConfig {
+  /** Packaged Python interpreter used when no managed environment is selected. */
+  pythonPath?: string;
   /** Wall-clock limit for a single execution. */
   execTimeoutMs: number;
   /** Workspace total quota in bytes; 0 disables. */
   maxWorkspaceBytes: number;
   /** Combined stdout+stderr retain budget; 0 disables truncation. */
   maxOutputBytes: number;
+}
+
+export function executorSandboxKind(config: SandboxRuntimeConfig): SandboxKind {
+  // Programmatic callers that predate multi-platform support keep the Linux
+  // contract. The process entrypoint always resolves and sets the provider.
+  return config.sandboxProvider ?? "bubblewrap";
 }
 
 export function executionTimeoutMs(value: number | undefined, fallback: number): number {
@@ -319,13 +338,29 @@ async function localPythonPackagePath(config: ExecutorConfig): Promise<string | 
   return undefined;
 }
 
+async function nativePythonPath(config: ExecutorConfig, sandbox: SandboxKind): Promise<string> {
+  if (config.pythonPath) return config.pythonPath;
+  if (sandbox === "seatbelt") {
+    const commandLineToolsPython = "/Library/Developer/CommandLineTools/usr/bin/python3";
+    try {
+      await access(commandLineToolsPython);
+      return commandLineToolsPython;
+    } catch {
+      // A packaged release supplies pythonPath; source installs may fall back
+      // to the system shim when Command Line Tools are not installed.
+    }
+  }
+  return "/usr/bin/python3";
+}
+
 function localPythonPackageBindArguments(packagePath: string | undefined): string[] {
   return packagePath ? ["--ro-bind", packagePath, LOCAL_PYTHON_PACKAGES_MOUNT] : [];
 }
 
 async function runSandboxed(
   config: ExecutorConfig,
-  bwrapArguments: string[],
+  launch: SandboxLaunch,
+  commandArguments: string[],
   stdin: string,
   timeoutMs: number,
   workspaceRoot: string,
@@ -335,21 +370,9 @@ async function runSandboxed(
   maxOutputBytes: number,
   seccompVariant: SeccompVariant = "baseline",
 ): Promise<{ exitCode: number; stderr: string; stdout: string }> {
-  const seccompFilter = await open(
-    await ensureSeccompFilter(config.dataDir, seccompVariant),
-    "r",
-  );
-
   try {
     return await new Promise<{ exitCode: number; stderr: string; stdout: string }>((resolveRun, reject) => {
-      const child = spawn(config.bwrapPath, bwrapArguments, {
-        stdio: ["pipe", "pipe", "pipe", seccompFilter.fd],
-      });
-      void seccompFilter.close();
-      if (!child.stdin || !child.stdout || !child.stderr) {
-        child.kill("SIGKILL");
-        throw new Error("Runner failed to create isolated process streams");
-      }
+      let child: ChildProcessWithoutNullStreams | undefined;
       let stdout = "";
       let stderr = "";
       let settled = false;
@@ -365,12 +388,12 @@ async function runSandboxed(
         else resolveRun({ exitCode, stderr, stdout });
       };
       const abort = () => {
-        child.kill("SIGKILL");
+        child?.kill("SIGKILL");
         finish(new Error(`${timeoutLabel} aborted`));
       };
       const timeout = timeoutMs > 0
         ? setTimeout(() => {
-            child.kill("SIGKILL");
+            child?.kill("SIGKILL");
             finish(new Error(`${timeoutLabel} timed out after ${timeoutMs} ms`));
           }, timeoutMs)
         : undefined;
@@ -381,13 +404,13 @@ async function runSandboxed(
             void workspaceUsageBytes(workspaceRoot)
               .then((bytes) => {
                 if (bytes > maxWorkspaceBytes && !settled) {
-                  child.kill("SIGKILL");
+                  child?.kill("SIGKILL");
                   finish(new Error(workspaceQuotaExceededMessage(maxWorkspaceBytes)));
                 }
               })
               .catch((error: Error) => {
                 if (!settled) {
-                  child.kill("SIGKILL");
+                  child?.kill("SIGKILL");
                   finish(error);
                 }
               })
@@ -395,23 +418,30 @@ async function runSandboxed(
           }, 100)
         : undefined;
 
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) abort();
-      child.stdout.on("data", (chunk: Buffer) => {
-        const next = appendBounded(stdout, chunk, maxOutputBytes, Buffer.byteLength(stderr));
-        stdout = next.text;
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        const next = appendBounded(stderr, chunk, maxOutputBytes, Buffer.byteLength(stdout));
-        stderr = next.text;
-      });
-      child.once("error", (error) => finish(error));
-      child.once("close", (code) => finish(undefined, code ?? 1));
-      child.stdin.end(stdin);
+      void spawnSandboxProcess(config, launch, commandArguments, seccompVariant).then((started) => {
+        child = started;
+        if (!child.stdin || !child.stdout || !child.stderr) {
+          child.kill("SIGKILL");
+          finish(new Error("Runner failed to create isolated process streams"));
+          return;
+        }
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) abort();
+        child.stdout.on("data", (chunk: Buffer) => {
+          const next = appendBounded(stdout, chunk, maxOutputBytes, Buffer.byteLength(stderr));
+          stdout = next.text;
+        });
+        child.stderr.on("data", (chunk: Buffer) => {
+          const next = appendBounded(stderr, chunk, maxOutputBytes, Buffer.byteLength(stdout));
+          stderr = next.text;
+        });
+        child.once("error", (error) => finish(error));
+        child.once("close", (code) => finish(undefined, code ?? 1));
+        child.stdin.end(stdin);
+      }).catch((error: Error) => finish(error));
     });
-  } catch (error) {
-    await seccompFilter.close().catch(() => undefined);
-    throw error;
+  } finally {
+    await launch.cleanup?.().catch(() => undefined);
   }
 }
 
@@ -419,6 +449,10 @@ async function runSandboxed(
 export interface SandboxLaunch {
   args: string[];
   chdir: string;
+  /** Host executable that establishes the sandbox boundary. */
+  executable?: string;
+  /** Host cwd used by Seatbelt; Bubblewrap changes cwd internally. */
+  hostCwd?: string;
   /**
    * Argv that must precede the real command inside the sandbox. Empty unless
    * sandbox network access is on, where it starts the egress bridge that then
@@ -426,6 +460,11 @@ export interface SandboxLaunch {
    */
   commandPrefix: string[];
   env: Record<string, string>;
+  sandbox?: SandboxKind;
+  /** Translate a host cwd observed by a native sandbox back to `/workspace`. */
+  toLogicalPath?: (hostPath: string) => string;
+  /** Release per-launch resources such as a private temp directory. */
+  cleanup?: () => Promise<void>;
 }
 
 /**
@@ -437,6 +476,8 @@ export interface SandboxEgress {
   bindArgs: string[];
   commandPrefix: string[];
   env: Record<string, string>;
+  /** Seatbelt permits only this runner-owned loopback port. */
+  proxyPort?: number;
 }
 
 /**
@@ -448,10 +489,20 @@ export async function prepareSandboxEgress(
   dataDir: string,
   access: SandboxNetworkAccess,
   gateways: EgressGatewayRegistry | undefined,
+  sandbox: SandboxKind = "bubblewrap",
 ): Promise<SandboxEgress | undefined> {
   if (access.mode === "none") return undefined;
   if (!gateways) {
     throw new EgressBridgeUnavailableError("this runner was started without an egress gateway registry");
+  }
+  if (sandbox === "seatbelt") {
+    const gateway = await gateways.acquireTcp(access);
+    return {
+      bindArgs: [],
+      commandPrefix: [],
+      env: egressEnvironmentForUrl(gateway.proxyUrl()),
+      proxyPort: gateway.proxyPort(),
+    };
   }
   const [bridge, gateway] = await Promise.all([resolveEgressBridge(dataDir), gateways.acquire(access)]);
   return {
@@ -548,7 +599,152 @@ export function buildSandboxLaunch(options: {
     chdir: options.chdir,
     commandPrefix: options.egress?.commandPrefix ?? [],
     env,
+    sandbox: "bubblewrap",
   };
+}
+
+interface NativeSandboxLaunchOptions {
+  chdir: string;
+  egress?: SandboxEgress;
+  envProfile?: SessionEnvProfile;
+  language: "python" | "r" | "shell";
+  pathEnv: string;
+  pythonPathEnv?: string;
+  readOnlyWorkspaceRoot?: string;
+  readPaths: string[];
+  workspaceRoot: string;
+}
+
+function launchEnvironment(options: {
+  egress?: SandboxEgress;
+  envProfile?: SessionEnvProfile;
+  home: string;
+  language: "python" | "r" | "shell";
+  pathEnv: string;
+  pythonPathEnv?: string;
+  temp?: string;
+}): Record<string, string> {
+  const env: Record<string, string> = { HOME: options.home, PATH: options.pathEnv };
+  if (options.temp) {
+    env.TMPDIR = options.temp;
+    env.TMP = options.temp;
+    env.TEMP = options.temp;
+  }
+  if (options.pythonPathEnv) env.PYTHONPATH = options.pythonPathEnv;
+  if (options.language === "python" || options.pythonPathEnv) env.PYTHONNOUSERSITE = "1";
+  if (options.language === "r") env.R_ENVIRON_USER = "/dev/null";
+  Object.assign(env, options.egress?.env ?? {});
+  for (const [name, value] of Object.entries(options.envProfile?.variables ?? {})) {
+    if (profileKeyAllowed(name)) env[name] = value;
+  }
+  return env;
+}
+
+async function buildSeatbeltLaunch(
+  config: SandboxRuntimeConfig,
+  options: NativeSandboxLaunchOptions,
+): Promise<SandboxLaunch> {
+  const tempRoot = resolve(config.dataDir, "runner-runtime", "tmp");
+  await mkdir(tempRoot, { recursive: true });
+  const privateTemp = await mkdtemp(resolve(tempRoot, "seatbelt-"));
+  const mapping = seatbeltWorkspaceMapping(
+    options.workspaceRoot,
+    options.readOnlyWorkspaceRoot,
+    options.chdir,
+  );
+  const env = launchEnvironment({
+    ...options,
+    home: privateTemp,
+    temp: privateTemp,
+  });
+  const profile = await buildSeatbeltProfile({
+    proxyPort: options.egress?.proxyPort,
+    readPaths: [
+      options.workspaceRoot,
+      ...(options.readOnlyWorkspaceRoot ? [options.readOnlyWorkspaceRoot] : []),
+      ...options.readPaths,
+    ],
+    writePaths: [options.workspaceRoot, privateTemp],
+  });
+  return {
+    args: ["-p", profile],
+    chdir: options.chdir,
+    cleanup: async () => { await rm(privateTemp, { force: true, recursive: true }); },
+    commandPrefix: [],
+    env,
+    executable: config.seatbeltPath ?? "/usr/bin/sandbox-exec",
+    hostCwd: mapping.hostCwd,
+    sandbox: "seatbelt",
+    toLogicalPath: mapping.toLogicalPath,
+  };
+}
+
+export interface PreparedSandboxOptions {
+  chdir: string;
+  egress?: SandboxEgress;
+  environmentBinds: string[];
+  /** Host paths corresponding to environmentBinds for native Seatbelt. */
+  environmentPaths: string[];
+  envProfile?: SessionEnvProfile;
+  hostInterpreterMasks: string[];
+  hostRuntimeSupport: string[];
+  language: "python" | "r" | "shell";
+  pathEnv: string;
+  pythonPathEnv?: string;
+  readOnlyWorkspaceRoot?: string;
+  workspaceBindArgs: string[];
+  workspaceRoot: string;
+}
+
+/** Build one platform-neutral launch used by ephemeral and persistent tools. */
+export async function prepareSandboxLaunch(
+  config: SandboxRuntimeConfig,
+  options: PreparedSandboxOptions,
+): Promise<SandboxLaunch> {
+  if (executorSandboxKind(config) === "seatbelt") {
+    return await buildSeatbeltLaunch(config, { ...options, readPaths: options.environmentPaths });
+  }
+  const launch = buildSandboxLaunch({
+    ...options,
+    ...await sandboxLaunchProfile(config.bwrapPath),
+  });
+  launch.executable = config.bwrapPath;
+  return launch;
+}
+
+/** Host path for a command or injected runtime, preserving Linux mount paths. */
+export function sandboxCommandPath(launch: SandboxLaunch, linuxPath: string, hostPath: string): string {
+  return launch.sandbox === "seatbelt" ? hostPath : linuxPath;
+}
+
+/** Spawn through the selected sandbox and attach Linux seccomp when applicable. */
+export async function spawnSandboxProcess(
+  config: SandboxRuntimeConfig,
+  launch: SandboxLaunch,
+  commandArguments: string[],
+  seccompVariant: SeccompVariant,
+): Promise<ChildProcessWithoutNullStreams> {
+  let filter: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    if ((launch.sandbox ?? executorSandboxKind(config)) === "bubblewrap") {
+      filter = await open(await ensureSeccompFilter(config.dataDir, seccompVariant), "r");
+    }
+    const child = spawn(launch.executable ?? config.bwrapPath, [
+      ...launch.args,
+      ...launch.commandPrefix,
+      ...commandArguments,
+    ], {
+      ...(launch.hostCwd ? { cwd: launch.hostCwd } : {}),
+      env: launch.sandbox === "seatbelt" ? launch.env : undefined,
+      stdio: filter ? ["pipe", "pipe", "pipe", filter.fd] : ["pipe", "pipe", "pipe"],
+    }) as ChildProcessWithoutNullStreams;
+    await filter?.close();
+    return child;
+  } catch (error) {
+    await filter?.close().catch(() => undefined);
+    await launch.cleanup?.().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function executePython(
@@ -600,25 +796,41 @@ export async function executePython(
     ? await localPythonPackagePath(config)
     : undefined;
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
-  const launch = buildSandboxLaunch({
+  const sandbox = executorSandboxKind(config);
+  const hostPython = !runtime && language === "python" ? await nativePythonPath(config, sandbox) : undefined;
+  const launch = await prepareSandboxLaunch(config, {
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-    ...await sandboxLaunchProfile(config.bwrapPath),
-    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways),
+    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox),
     environmentBinds: runtime
       ? environmentPrefixBindArguments(runtime.prefixPath)
       : localPythonPackageBindArguments(localPythonPackages),
+    environmentPaths: [
+      ...(runtime ? [runtime.prefixPath] : []),
+      ...(localPythonPackages ? [localPythonPackages] : []),
+      ...(hostPython ? [dirname(dirname(hostPython))] : []),
+    ],
     envProfile,
     hostInterpreterMasks,
     hostRuntimeSupport,
     language,
-    pathEnv: runtime ? "/opt/science-env/bin:/usr/bin" : "/usr/bin",
-    pythonPathEnv: localPythonPackages ? LOCAL_PYTHON_PACKAGES_MOUNT : undefined,
+    pathEnv: runtime
+      ? (sandbox === "seatbelt" ? `${resolve(runtime.prefixPath, "bin")}:/usr/bin:/bin` : "/opt/science-env/bin:/usr/bin")
+      : "/usr/bin:/bin",
+    pythonPathEnv: localPythonPackages
+      ? (sandbox === "seatbelt" ? localPythonPackages : LOCAL_PYTHON_PACKAGES_MOUNT)
+      : undefined,
+    readOnlyWorkspaceRoot,
     workspaceBindArgs: workspaceBinds.args,
+    workspaceRoot,
   });
-  const bwrapArguments = [
-    ...launch.args,
-    ...launch.commandPrefix,
-    runtime ? `/opt/science-env/bin/${language === "python" ? "python" : "R"}` : "/usr/bin/python3",
+  const commandArguments = [
+    runtime
+      ? sandboxCommandPath(
+          launch,
+          `/opt/science-env/bin/${language === "python" ? "python" : "R"}`,
+          runtime.interpreterPath,
+        )
+      : hostPython ?? "/usr/bin/python3",
     ...(language === "python" ? [
       ...(localPythonPackages ? [] : ["-I"]),
       "-",
@@ -627,7 +839,8 @@ export async function executePython(
 
   const processResult = await runSandboxed(
     config,
-    bwrapArguments,
+    launch,
+    commandArguments,
     request.code,
     executionTimeoutMs(request.executionTimeoutMs, config.execTimeoutMs),
     workspaceRoot,
@@ -661,7 +874,7 @@ export async function executePython(
     networkAccessRevision: networkAccess.revision,
     networkPolicy: networkAccess.mode,
     runnerVersion: RUNNER_VERSION,
-    sandbox: "bubblewrap",
+    sandbox,
     startedAt,
     workingDirectory: launch.chdir,
   };
@@ -695,23 +908,26 @@ export async function executeShell(
   const hostRuntimeSupport = await hostRuntimeSupportArguments();
   const localPythonPackages = await localPythonPackagePath(config);
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
-  const launch = buildSandboxLaunch({
+  const sandbox = executorSandboxKind(config);
+  const launch = await prepareSandboxLaunch(config, {
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-    ...await sandboxLaunchProfile(config.bwrapPath),
-    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways),
+    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox),
     environmentBinds: localPythonPackageBindArguments(localPythonPackages),
+    environmentPaths: localPythonPackages ? [localPythonPackages] : [],
     envProfile,
     hostInterpreterMasks: [],
     hostRuntimeSupport,
     language: "shell",
-    pathEnv: "/usr/bin",
-    pythonPathEnv: localPythonPackages ? LOCAL_PYTHON_PACKAGES_MOUNT : undefined,
+    pathEnv: "/usr/bin:/bin",
+    pythonPathEnv: localPythonPackages
+      ? (sandbox === "seatbelt" ? localPythonPackages : LOCAL_PYTHON_PACKAGES_MOUNT)
+      : undefined,
+    readOnlyWorkspaceRoot,
     workspaceBindArgs: workspaceBinds.args,
+    workspaceRoot,
   });
-  const bwrapArguments = [
-    ...launch.args,
-    ...launch.commandPrefix,
-    "/usr/bin/bash",
+  const commandArguments = [
+    sandboxCommandPath(launch, "/usr/bin/bash", "/bin/bash"),
     "--noprofile",
     "--norc",
     "-euo",
@@ -721,7 +937,8 @@ export async function executeShell(
 
   const processResult = await runSandboxed(
     config,
-    bwrapArguments,
+    launch,
+    commandArguments,
     request.code,
     executionTimeoutMs(request.executionTimeoutMs, config.execTimeoutMs),
     workspaceRoot,
@@ -742,7 +959,9 @@ export async function executeShell(
     ...processResult,
     cgroupMode: RESOURCE_LIMIT_MODE,
     createdFiles: shellCreatedFiles,
-    environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+    environmentRevisionId: sandbox === "seatbelt"
+      ? SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID
+      : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
     environmentVariables: launch.env,
     executionId: request.executionId,
     finishedAt: new Date().toISOString(),
@@ -753,7 +972,7 @@ export async function executeShell(
     networkAccessRevision: networkAccess.revision,
     networkPolicy: networkAccess.mode,
     runnerVersion: RUNNER_VERSION,
-    sandbox: "bubblewrap",
+    sandbox,
     startedAt,
     workingDirectory: launch.chdir,
   };

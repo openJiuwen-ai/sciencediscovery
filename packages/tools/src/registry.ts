@@ -30,6 +30,13 @@ export interface ToolSpec {
 export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   createResultMessage(call: RuntimeToolCall, content: string): TMessage;
   loopGuard?: ToolLoopGuard;
+  /** Run-scoped observation hook. It cannot alter the result returned to Runtime Core. */
+  onResult?(input: {
+    call: RuntimeToolCall;
+    content: string;
+    isError: boolean;
+    sequence: number;
+  }): void;
 }
 
 /**
@@ -42,6 +49,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
   private readonly orderedTools: readonly AgentTool[];
   private readonly deferredState: DeferredToolState | undefined;
   private readonly loopGuard: ToolLoopGuard;
+  private nextExecutionSequence = 0;
 
   constructor(tools: Iterable<AgentTool>, private readonly options: ToolRegistryOptions<TMessage>) {
     const ordered = [...tools].map((tool) => Object.freeze({ ...tool }));
@@ -85,6 +93,10 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
   }
 
   async execute(call: RuntimeToolCall, signal: AbortSignal): Promise<ToolDispatchResult<TMessage>> {
+    // execute() is entered in model-declared order before concurrent handlers
+    // yield, so this sequence remains deterministic even when completion order
+    // differs.
+    const sequence = this.nextExecutionSequence += 1;
     let content: string;
     let isError: boolean;
     if (call.argsParseError) {
@@ -100,6 +112,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     } else {
       ({ content, isError } = await this.executeRegistered(call, signal));
     }
+    try { this.options.onResult?.({ call, content, isError, sequence }); } catch { /* observer isolation */ }
     return { content, isError, message: this.options.createResultMessage(call, content) };
   }
 

@@ -74,14 +74,14 @@
   .skill-library-create, .skill-library-diff-controls, .skill-library-diff { grid-template-columns: minmax(0, 1fr); }
   .skill-manager-toolbar input { flex-basis: 100%; }
   .skill-manager-toolbar button { flex: 1 1 140px; }
-  .skill-detail > header, .environment-setup-state, .environment-card-heading { align-items: stretch; flex-direction: column; }
+  .skill-detail > header, .environment-card-heading { align-items: stretch; flex-direction: column; }
   .skill-detail-actions { width: 100%; }
   .skill-detail-actions button { flex: 1 1 140px; }
   .skill-metadata { grid-template-columns: minmax(0, 1fr); }
   .skill-editor-columns { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .settings-choices { grid-template-columns: 1fr; }
   .timeout-grid, .runtime-status-summary { grid-template-columns: 1fr; }
-  .environment-starter-plan, .environment-create { grid-template-columns: 1fr; }
+  .environment-setup-components, .environment-starter-plan, .environment-create { grid-template-columns: 1fr; }
   .environment-install { grid-template-columns: minmax(0, 1fr); }
   .environment-install .secondary-button, .environment-card-heading .danger-button { width: 100%; }
   .environment-source-settings { grid-template-areas: "intro" "pip" "conda" "save"; grid-template-columns: minmax(0, 1fr); }

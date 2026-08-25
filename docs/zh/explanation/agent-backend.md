@@ -322,7 +322,7 @@ streamModelTurn(endpoint, systemPrompt, history, tools, policy, signal, callback
 
 | 导出 | 归属 | 与 loop 的关系 |
 |---|---|---|
-| `buildWorkspaceSystemPrompt(...)` | `packages/context` | 构建由 Context Assembler 使用的工作区/System Prompt 片段 |
+| `buildWorkspaceSystemPrompt(...)` | `packages/workspace` | 构建由 Context Assembler 使用的工作区/System Prompt 片段 |
 | `createWorkspaceTools(root, options)` | `packages/workspace` | 产出 `AgentTool[]`；具体 Port 由 API Composition Root 注入 |
 | `AgentTool`、`ToolRegistry` | `packages/tools` | 定义工具执行并负责 deferred 发现、净化和循环策略 |
 | `AgentEvent`、`Agent` | `packages/orchestration` | 定义运行生命周期契约；`runs/index.ts` 负责翻成 SSE（§4.5） |
