@@ -388,7 +388,16 @@ export class EvolveOrchestrator {
     let adopted = 0;
     for (const run of runs) {
       if (!isEvolveRunActive(run.status)) continue;
-      await this.store.finishRun(run.id, "failed", "控制面重启，该次搜索已中断；可从断点续跑");
+      // What is actually recoverable, per algorithm. ERA refuses a resume
+      // outright — its tree would have to be rebuilt from the event log first,
+      // and without that a new node reuses an index the graph already spent.
+      // The banner used to promise "可从断点续跑" to every run regardless, so a
+      // user who lost fifteen candidates to a restart went looking for a resume
+      // that does not exist.
+      await this.store.finishRun(run.id, "failed", run.algorithm === "era"
+        ? "控制面重启，该次搜索已中断。ERA 不支持续跑（树无法从事件日志重建），"
+          + "已跑出的候选可以查看，但要继续只能用同样的设计重开一次"
+        : "控制面重启，该次搜索已中断；可从断点续跑");
       adopted += 1;
     }
     if (adopted) apiLog.info("evolve_runs_adopted", { count: adopted });

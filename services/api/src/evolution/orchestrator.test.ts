@@ -706,3 +706,23 @@ test("a run that settled stays settled when publishing throws", async () => {
 
   assert.equal((await store.readRun(run.id))!.status, "succeeded");
 });
+
+test("an interrupted ERA run is not told it can resume", async () => {
+  // The engine refuses an ERA resume outright: the tree would have to be
+  // rebuilt from the event log first, and without that a new node reuses an
+  // index the graph already spent. The banner promised one anyway, so a user
+  // who lost fifteen candidates to a control-plane restart went looking for a
+  // resume that does not exist.
+  const sidecar = await startFakeSidecar({ events: [] });
+  after(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "adopt-era");
+
+  const run = await store.createRun({ goal: goal(), sessionId: "s1" });
+  await store.patchRun(run.id, { status: "running" });
+  await orchestrator.adoptOrphanedRuns();
+
+  const adopted = await store.readRun(run.id);
+  assert.equal(adopted?.status, "failed");
+  assert.match(adopted!.error!, /ERA 不支持续跑/);
+  assert.doesNotMatch(adopted!.error!, /可从断点续跑/);
+});
