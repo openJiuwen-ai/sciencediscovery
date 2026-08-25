@@ -36,6 +36,11 @@ Everything in it earns its place by preventing a specific failure:
 * **A constraint is presented as a wall, not a cost.** Constraints refuse a
   merge outright, so a model told "prefer fast" will trade accuracy for speed it
   did not need to buy and be refused anyway.
+* **The ask is one change, and the cost of failing is stated.** Upstream says
+  "generate a NEW, IMPROVED function" and gets away with it because its task is
+  a twenty-line sklearn pipeline. Asked the same way about a codec, every
+  candidate replaced the whole mechanism and ten of eleven did not run. See
+  ``_HOW_TO_CHANGE``.
 * **The reply format is one fenced block whose docstring opens with the change.**
   ``extract_program`` takes the longest fenced block and reads the first
   docstring line as the change summary; that summary is what the user reads in
@@ -47,6 +52,33 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional, Sequence
 
 from .vendor.era.program import available_imports
+
+#: The closing instruction every code-shaped template ends on.
+#:
+#: One block rather than a line per template, because the three drifted: the
+#: measured template said "做一处实质改动" and the other two said only "输出完整
+#: 可运行的程序", which reads as an invitation to write one from scratch. A live
+#: compression run showed what that costs — a working RLE+Huffman seed of 6571
+#: characters, and eleven candidates that every one of them *replaced the whole
+#: mechanism* ("替换原有的 RLE+Huffman 方案", "重构为 LZ77 字典匹配"), reaching
+#: 15824 characters and implementing arithmetic coding or LZ77 from nothing in a
+#: single reply. Ten of the eleven did not run. The tree stayed flat at depth 1
+#: because no candidate ever beat the seed.
+#:
+#: The asymmetry is the part the model was never told: a candidate that does not
+#: run scores zero, which is *worse than leaving the parent alone*, and the
+#: expansion is spent either way. Upstream ERA gets away without saying this
+#: because its task is a twenty-line sklearn pipeline, where a rewrite is cheap
+#: and rarely broken; a codec is not.
+_HOW_TO_CHANGE = """## 怎么改
+
+在现在这份的基础上做**一处**改动，其余部分原样保留——包括它已经能跑的那些结构。
+
+不要整套换掉。把 A 方案重写成 B 方案，等于在一次回复里从零实现一套新东西，几乎
+总是换来一份跑不起来的程序；而**跑不起来就是 0 分，比现在这份还差**，这次扩展也
+就白花了。一个能跑的小改进，永远优于一个跑不起来的大重构。
+
+先想清楚现在这份在评分上最薄弱的一环，再只动那一处。"""
 
 _TEMPLATE = """你在改进一个 Python 程序，让它在下面这套评分标准上得分更高。
 
@@ -78,7 +110,7 @@ _TEMPLATE = """你在改进一个 Python 程序，让它在下面这套评分标
 5. 程序的模块 docstring 第一行用一句中文说明这次改了什么——它会作为这个节点的
    标签展示给用户。
 
-先想清楚当前程序在这套标准下最薄弱的一环，再针对它做一处实质改动。
+{how_to_change}
 """
 
 
@@ -115,6 +147,7 @@ def mutation_prompt(
             history=_history(recent),
             frozen="、".join(frozen),
             imports="、".join(available_imports()),
+            how_to_change=_HOW_TO_CHANGE,
         )
     if script_contract:
         # A scripted search's contract is whatever its evaluator calls, and the
@@ -134,6 +167,7 @@ def mutation_prompt(
             feedback=_feedback(feedback),
             history=_history(recent),
             imports="、".join(available_imports()),
+            how_to_change=_HOW_TO_CHANGE,
         )
     if rubric:
         return _TEXT_TEMPLATE.format(
@@ -153,6 +187,7 @@ def mutation_prompt(
         parent_code=parent_code.strip(),
         history=_history(recent),
         imports="、".join(available_imports()),
+        how_to_change=_HOW_TO_CHANGE,
     )
 
 
@@ -175,8 +210,10 @@ _TEST_TEMPLATE = """你在改写一份实现，让它通过更多测试。
 1. **不要改这些路径**：{frozen}。它们是判分依据，改了也不算——每次运行前都会被
    还原成原样。把力气花在实现上。
 2. 只能 import：{imports}。
-3. 输出**一个** ```python 代码块，里面是完整可运行的实现。
+3. 输出**一个** ```python 代码块，里面是完整可运行的实现（不是补丁、不是片段）。
 4. 模块 docstring 第一行用一句中文说明这次改了什么。
+
+{how_to_change}
 """
 
 _SCRIPT_TEMPLATE = """你在改写一个程序，它由一份**固定的评测脚本**打分。
@@ -204,8 +241,10 @@ _SCRIPT_TEMPLATE = """你在改写一个程序，它由一份**固定的评测�
 
 1. 按评测脚本要求的接口写，函数名、参数一个都不能差。
 2. 只能 import：{imports}。
-3. 输出**一个** ```python 代码块，里面是完整可运行的程序。
+3. 输出**一个** ```python 代码块，里面是完整可运行的程序（不是补丁、不是片段）。
 4. 模块 docstring 第一行用一句中文说明这次改了什么。
+
+{how_to_change}
 """
 
 _TEXT_TEMPLATE = """你在改写一段内容，让它按下面的评分细则得分更高。

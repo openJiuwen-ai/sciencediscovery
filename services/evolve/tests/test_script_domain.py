@@ -463,3 +463,36 @@ def test_the_probe_pays_for_four_evaluations_and_no_more():
     probe_module._refuse_noisy(evaluate, "def f():\n    return 1\n", (0, 1), baseline, worsened)
 
     assert len(calls) == 4, [c[:30] for c in calls]
+
+
+def test_every_code_template_asks_for_one_change_not_a_rewrite():
+    """The three code templates drifted, and the drift cost a whole run.
+
+    Only the measured template said "做一处实质改动". The scripted and
+    test-gate ones said just "输出完整可运行的程序", which reads as an
+    invitation to write one from scratch — and a live compression run did
+    exactly that: a working 6571-character RLE+Huffman seed, eleven candidates
+    that each replaced the entire mechanism ("替换原有的 RLE+Huffman 方案"),
+    ten of which did not run, and a tree still flat at depth 1 at the end.
+
+    Pinned across all three so the next template added cannot quietly omit it.
+    """
+    from sciencediscovery_evolve.prompt import mutation_prompt
+
+    common = dict(statement="让它更好", scorecard={}, parent_code="def f():\n    return 1\n",
+                  parent_score=0.62, best_score=0.62)
+    modes = {
+        "measured": mutation_prompt(**common),
+        "script": mutation_prompt(**common, script_contract="compress(text) -> bytes"),
+        "test_gate": mutation_prompt(**common, frozen=["tests/**"]),
+    }
+    for name, text in modes.items():
+        assert "一处" in text, f"{name} 没让模型只改一处"
+        # The asymmetry, not just the instruction: a broken candidate scores 0,
+        # which is worse than leaving the parent alone.
+        assert "跑不起来就是 0 分" in text, f"{name} 没说清失败的代价"
+
+    # The judged mode rewrites prose, where a rewrite neither crashes nor
+    # scores zero — the advice would be wrong there, so it must stay out.
+    judged = mutation_prompt(**common, rubric="写得更清楚")
+    assert "跑不起来" not in judged
