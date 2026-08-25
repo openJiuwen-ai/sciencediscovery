@@ -26,7 +26,7 @@ import { readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { after, test } from "node:test";
 
-import type { EvolveEvent, EvolveEventRecord, EvolveGoal } from "@sciencediscovery/schema";
+import type { EvolveEvent, EvolveEventRecord, EvolveGoal, EvolveRun } from "@sciencediscovery/schema";
 
 import { RunTokenRegistry } from "./llm-proxy.js";
 import { EvolveOrchestrator } from "./orchestrator.js";
@@ -168,6 +168,7 @@ async function startFakeSidecar(options: {
 async function harness(sidecarUrl: string, name: string, options: {
   apiOrigin?: string;
   cas?: { read: (hash: string) => Promise<Buffer> };
+  publishResult?: (input: { run: EvolveRun; winnerCodeHash: string }) => Promise<void>;
   runTokens?: RunTokenRegistry;
 } = {}) {
   const dataDir = temporaryDataDir(name);
@@ -179,7 +180,7 @@ async function harness(sidecarUrl: string, name: string, options: {
     null,
     undefined,
     options.runTokens ?? null,
-    { apiOrigin: options.apiOrigin, cas: options.cas },
+    { apiOrigin: options.apiOrigin, cas: options.cas, publishResult: options.publishResult },
   );
   after(() => rm(dataDir, { force: true, recursive: true }));
   return { orchestrator, store };
@@ -621,4 +622,87 @@ test("a judged run is sent a rubric and its own model token, and no dataset", as
   // second way to spend the user's money after they stopped watching.
   assert.equal(tokens.resolve(run.id, judge.token), undefined);
   assert.equal(tokens.resolve(run.id, llm.token), undefined);
+});
+
+test("a finished run hands its winner to whatever saves results", async () => {
+  // Without this the winner never leaves the evolve subsystem: watched an
+  // agent finish a search at 0.83, find the workspace still holding the seed,
+  // and set out to rebuild the winner from its one-line change summary — a
+  // different program, and one that has never been scored.
+  const sidecar = await startFakeSidecar({
+    events: [
+      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { baselineScore: 0.5, codeHash: "sha256:seed", nodeIndex: 0, type: "seeded" },
+      { codeHash: "sha256:winner", depth: 1, nodeIndex: 1, parentIndex: 0,
+        score: 0.83, type: "expanded", valid: true },
+      FINISHED("succeeded", 1),
+    ],
+  });
+  after(() => sidecar.close());
+
+  const published: Array<{ runId: string; winnerCodeHash: string }> = [];
+  const { orchestrator, store } = await harness(sidecar.url, "publish-winner", {
+    publishResult: async ({ run, winnerCodeHash }) => {
+      published.push({ runId: run.id, winnerCodeHash });
+    },
+  });
+
+  const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to finish");
+  await waitFor(() => published.length > 0, "the winner to be published");
+
+  assert.equal(published.length, 1);
+  assert.equal(published[0]!.runId, run.id);
+  // The winning node's own source, not the seed's and not the last one tried.
+  assert.equal(published[0]!.winnerCodeHash, "sha256:winner");
+});
+
+test("nothing is published when the seed won", async () => {
+  // Node 0 winning means no candidate beat the starting point. There is no
+  // result to save, and saving the seed as its own improvement would be a lie
+  // told in version numbers.
+  const sidecar = await startFakeSidecar({
+    events: [
+      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { baselineScore: 0.5, codeHash: "sha256:seed", nodeIndex: 0, type: "seeded" },
+      { codeHash: "sha256:worse", depth: 1, nodeIndex: 1, parentIndex: 0,
+        score: 0.2, type: "expanded", valid: true },
+      FINISHED("succeeded", 0),
+    ],
+  });
+  after(() => sidecar.close());
+
+  const published: string[] = [];
+  const { orchestrator, store } = await harness(sidecar.url, "publish-seed-won", {
+    publishResult: async ({ winnerCodeHash }) => { published.push(winnerCodeHash); },
+  });
+
+  const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to finish");
+
+  assert.deepEqual(published, []);
+});
+
+test("a run that settled stays settled when publishing throws", async () => {
+  // The run searched, scored and finished. Reporting that as failed because
+  // the artifact store was busy would lose the far more valuable fact.
+  const sidecar = await startFakeSidecar({
+    events: [
+      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { baselineScore: 0.5, nodeIndex: 0, type: "seeded" },
+      { codeHash: "sha256:winner", depth: 1, nodeIndex: 1, parentIndex: 0,
+        score: 0.83, type: "expanded", valid: true },
+      FINISHED("succeeded", 1),
+    ],
+  });
+  after(() => sidecar.close());
+
+  const { orchestrator, store } = await harness(sidecar.url, "publish-throws", {
+    publishResult: async () => { throw new Error("artifact store unavailable"); },
+  });
+
+  const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to finish");
+
+  assert.equal((await store.readRun(run.id))!.status, "succeeded");
 });

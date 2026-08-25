@@ -120,6 +120,24 @@ export interface EvolveOrchestratorOptions {
   workspacePath?: (sessionId: string) => string;
   /** Pin an engine for every run, overriding the goal. For reproductions. */
   engine?: string;
+  /**
+   * Save a finished run's result: the seed and the winner, as two versions of
+   * one artifact.
+   *
+   * A candidate is not an artifact — most are refused, and copying every one
+   * into content-addressed storage would fill it with programs nobody keeps
+   * (see `handleGetCandidate`). The **winner** is the exception, because it is
+   * the thing the run exists to produce, and without this it never leaves the
+   * evolve subsystem: watched an agent finish a search at 0.83, find the
+   * workspace still holding the seed, and set out to reconstruct the winner
+   * from its one-line change summary — which yields a different program that
+   * has never been scored.
+   *
+   * Given the winner's hash rather than its source: the orchestrator is the
+   * only side that knows which node won, and the candidate store is the only
+   * side that can read it.
+   */
+  publishResult?: (input: { run: EvolveRun; winnerCodeHash: string }) => Promise<void>;
 }
 
 export interface StartEvolveRunInput {
@@ -619,6 +637,37 @@ export class EvolveOrchestrator {
     if (current && !isEvolveRunActive(current.status)) return; // already terminal
     if (bestNodeIndex !== undefined) await this.store.patchRun(runId, { bestNodeIndex });
     await this.store.finishRun(runId, status, error);
+    if (status === "succeeded" && bestNodeIndex !== undefined) {
+      await this.publishWinner(runId, bestNodeIndex);
+    }
+  }
+
+  /**
+   * Hand the winner to whatever saves results, after the run is terminal.
+   *
+   * Runs last and swallows its own failures: a run that searched, scored and
+   * settled did happen, and reporting it as failed because the artifact store
+   * was busy would lose the far more valuable fact.
+   */
+  private async publishWinner(runId: string, bestNodeIndex: number): Promise<void> {
+    if (!this.options.publishResult) return;
+    try {
+      const run = await this.store.readRun(runId);
+      if (!run) return;
+      const records = await this.store.readEvents(runId);
+      // The winning node's own source. `seeded` carries one too, and node 0
+      // winning means nothing beat the seed — there is no result to save.
+      let winnerCodeHash: string | undefined;
+      for (const { event } of records) {
+        const candidate = event as { codeHash?: string; nodeIndex?: number; type?: string };
+        if (candidate.type !== "expanded" || candidate.nodeIndex !== bestNodeIndex) continue;
+        winnerCodeHash = candidate.codeHash;
+      }
+      if (!winnerCodeHash) return;
+      await this.options.publishResult({ run, winnerCodeHash });
+    } catch (error) {
+      apiLog.warn("evolve_publish_result_failed", { reason: String(error), runId });
+    }
   }
 
   /**

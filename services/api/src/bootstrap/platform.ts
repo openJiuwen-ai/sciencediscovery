@@ -20,7 +20,7 @@ import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { reviewerLog } from "@sciencediscovery/provenance";
-import type { ResolvedProxy } from "@sciencediscovery/schema";
+import type { EvolveGoal, ResolvedProxy } from "@sciencediscovery/schema";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 
 import { apiLog, configureApiLogging } from "../logging.js";
@@ -49,6 +49,31 @@ export interface ApiServerDependencies {
   /** Test seam: drive MCP through a stub transport instead of live servers. */
   mcpTransport?: McpTransportClient;
 }
+
+/**
+ * What a run's result artifact is called.
+ *
+ * The target's entrypoint, because that is the name the agent already expects
+ * to find it under — a search whose candidates implement `candidate.py` should
+ * leave a `candidate.py` behind. Two runs over the same entrypoint in one
+ * project land on one artifact with four versions, which is right: they are
+ * the same logical file, and `executionRunIds` says which run wrote which.
+ */
+function evolveArtifactName(run: { goal: EvolveGoal; id: string }): string {
+  const target = run.goal.target;
+  const raw = target.kind === "program"
+    ? target.entrypoint
+    : target.kind === "text"
+      ? "evolved.md"
+      : "";
+  const cleaned = raw.trim().replace(/^\/+/, "");
+  // Never a bare fallback that could collide across unrelated searches.
+  if (!cleaned || cleaned.includes("..") || cleaned.includes("\0")) {
+    return `evolve/${run.id.slice(0, 8)}/result.txt`;
+  }
+  return cleaned;
+}
+
 
 /**
  * The API composition root. It selects concrete adapters and wires domain
@@ -162,6 +187,46 @@ export function createPlatformServices(
       apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
       cas: evolveCas,
       workspacePath: (sessionId: string) => store.workspacePath(sessionId),
+      // Wired here because this is the only scope holding both the evolve
+      // subsystem's stores and the session store that owns artifacts.
+      publishResult: async ({ run, winnerCodeHash }) => {
+        const winner = await evolveCandidates.read(run.id, winnerCodeHash);
+        if (winner === undefined) return;
+        const name = evolveArtifactName(run);
+        const kind = name.endsWith(".md") || name.endsWith(".txt") ? "markdown" : "other";
+        // The seed first, so it is version 1 and the winner is version 2: a
+        // result is only meaningful next to what it improved on, and the
+        // version numbers are the cheapest way to say which came first.
+        const seed = await store.createArtifactVersion({
+          // Read then put: the seed is already in the store, and `put` is how
+          // a hash becomes the {hash, size} reference a version needs. Content
+          // addressing makes the write a no-op.
+          content: await evolveCas.put(
+            await evolveCas.read(run.goal.baselineProgramCas.replace(/^sha256:/, "")),
+          ),
+          description: `演进起点：${run.goal.statement}`.slice(0, 500),
+          executionRunIds: [run.id],
+          kind,
+          logicalName: name,
+          mediaType: "text/plain; charset=utf-8",
+          origin: "llm_declared",
+          originMeta: { evolveRunId: run.id, role: "seed" },
+          sessionId: run.sessionId,
+        });
+        await store.createArtifactVersion({
+          content: await evolveCas.put(Buffer.from(winner, "utf-8")),
+          description: `演进结果：${run.goal.statement}`.slice(0, 500),
+          executionRunIds: [run.id],
+          // The lineage the version numbers only imply: this came from that.
+          inputArtifactVersionIds: [seed.version.id],
+          kind,
+          logicalName: name,
+          mediaType: "text/plain; charset=utf-8",
+          origin: "llm_declared",
+          originMeta: { evolveRunId: run.id, role: "winner" },
+          sessionId: run.sessionId,
+        });
+      },
     },
   );
 
