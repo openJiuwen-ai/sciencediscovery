@@ -905,3 +905,106 @@ def test_the_engine_stores_the_seed_before_announcing_it() -> None:
     seeded_block = source[source.index('kind == "seeded"'):source.index('kind == "node"')]
     assert "self.store.put(" in seeded_block
     assert "code_hash=seed_hash" in seeded_block
+
+
+def test_each_repair_attempt_sees_what_the_last_one_produced() -> None:
+    """One shot cannot debug: the second fix has to read the first fix's error.
+
+    Over two live runs eight one-shot repairs landed two, and the six that
+    failed were each handed the original traceback with no view of what their
+    own change had done.
+    """
+    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+
+    saw = []
+    fixes = iter(["def f():\n    return 'second'\n", "def f():\n    return 'third'\n"])
+
+    def repair(code, error, iteration):
+        saw.append(error)
+        return next(fixes)
+
+    def evaluate(code, shards):
+        if "third" in code:
+            return True, {"score": 0.7}, ""            # finally works
+        if "second" in code:
+            return True, {"score": 0.0}, "第二次的错：还是不行"
+        return True, {"score": 0.0}, "第一次的错：原版坏了"
+
+    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator.repair = repair
+    aggregator.domain = type("D", (), {
+        "evaluate": staticmethod(evaluate),
+        "reward": staticmethod(lambda m: float(m["score"])),
+    })()
+    aggregator._held_out_shards = lambda: (0, 1)
+    aggregator.on_event = lambda *args: None
+
+    valid, metrics, _ = _run_one(aggregator, "def f():\n    return None\n", {"iteration": "2"})
+
+    assert saw == ["第一次的错：原版坏了", "第二次的错：还是不行"], saw
+    assert metrics["score"] == 0.7, "第二次修好了，却没被采纳"
+
+
+def test_debugging_stops_as_soon_as_the_candidate_works() -> None:
+    """Every attempt is a model call. A working candidate ends the loop."""
+    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+
+    calls = []
+    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator.repair = lambda code, error, iteration: (
+        calls.append(error) or "def f():\n    return 'fixed'\n")
+    aggregator.domain = type("D", (), {
+        "evaluate": staticmethod(lambda code, shards:
+                                 (True, {"score": 0.6}, "") if "fixed" in code
+                                 else (True, {"score": 0.0}, "坏了")),
+        "reward": staticmethod(lambda m: float(m["score"])),
+    })()
+    aggregator._held_out_shards = lambda: (0, 1)
+    aggregator.on_event = lambda *args: None
+
+    _run_one(aggregator, "def f():\n    return None\n", {"iteration": "1"})
+
+    assert len(calls) == 1, f"候选已经能跑了还在继续修：{len(calls)} 次"
+
+
+def test_a_later_attempt_cannot_displace_a_better_earlier_one() -> None:
+    """Accepted against the original, so the loop never returns a regression."""
+    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+
+    fixes = iter(["def f():\n    return 'good'\n", "def f():\n    return 'worse'\n"])
+    scores = {"good": 0.0001, "worse": 0.0}     # both still dead, one less so
+
+    def evaluate(code, shards):
+        for tag, value in scores.items():
+            if tag in code:
+                return True, {"score": value}, f"{tag} 的错"
+        return True, {"score": 0.0}, "原版的错"
+
+    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator.repair = lambda code, error, iteration: next(fixes)
+    aggregator.domain = type("D", (), {
+        "evaluate": staticmethod(evaluate),
+        "reward": staticmethod(lambda m: float(m["score"])),
+    })()
+    aggregator._held_out_shards = lambda: (0, 1)
+    aggregator.on_event = lambda *args: None
+
+    _, metrics, _ = _run_one(aggregator, "def f():\n    return None\n", {"iteration": "1"})
+
+    assert metrics["score"] == 0.0001, "更差的第二次顶掉了更好的第一次"
+
+
+def test_the_repair_is_told_what_the_environment_actually_has() -> None:
+    """Replacing what does not exist needs knowing what does.
+
+    Three candidates in one peak-detection run reached for `scipy.signal.cwt`,
+    removed in SciPy 1.15. The repair was told to replace it and given no way
+    to know what with; none of the three landed.
+    """
+    import re
+
+    from sciencediscovery_evolve.prompt import repair_prompt
+
+    text = repair_prompt("x = 1", "ImportError: cannot import name 'cwt'")
+
+    assert re.search(r"scipy \d+\.\d+", text), text

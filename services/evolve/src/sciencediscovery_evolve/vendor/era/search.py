@@ -173,6 +173,15 @@ def make_propose(
     return propose
 
 
+#: How many times a dead candidate may be debugged before the search moves on.
+#:
+#: Two, not one: a repair that reads only the original traceback is guessing,
+#: and over two live runs eight one-shot repairs landed two. Not many more
+#: either — every attempt is a model call the user pays for, and a candidate
+#: that resists two fixes is usually a design that wants replacing, which the
+#: next expansion does anyway.
+_REPAIR_ATTEMPTS = 2
+
 #: What a nothing-came-back candidate scores, wherever it is noticed.
 NO_CANDIDATE = "这次没有拿到候选程序，模型调用没有返回内容"
 
@@ -266,6 +275,12 @@ class EraTreeAggregator:
     else is shared.
     """
 
+    #: Class-level so an instance built without `__init__` — which every test
+    #: harness here does — still has a sane bound rather than an AttributeError
+    #: raised from inside the repair path.
+    repair_attempts: int = _REPAIR_ATTEMPTS
+
+
     def __init__(
         self,
         ledger: Ledger,
@@ -278,6 +293,7 @@ class EraTreeAggregator:
         artifact_id: str,
         on_event: OnEvent = _noop,
         repair: Optional[Callable[[str, str, int], str]] = None,
+        repair_attempts: int = _REPAIR_ATTEMPTS,
     ) -> None:
         self.ledger = ledger
         self.verifier = verifier
@@ -288,6 +304,7 @@ class EraTreeAggregator:
         self.artifact_id = artifact_id
         self.on_event = on_event
         self.repair = repair
+        self.repair_attempts = repair_attempts
         self.cards: List[EvidenceCard] = []
         self._cards_lock = threading.Lock()
         self._seeded = False
@@ -355,7 +372,21 @@ class EraTreeAggregator:
         metrics: Dict[str, Any],
         error: str,
     ) -> Tuple[str, bool, Dict[str, Any], str]:
-        """One repair attempt on a candidate that scored nothing, or no change.
+        """Debug a candidate that scored nothing, in place, before it becomes a node.
+
+        A bounded loop rather than one shot, because **each attempt has to see
+        the error the last attempt produced** — that is what debugging is, and
+        one-shot repair cannot do it. Measured over two live runs: eight repairs
+        fired and two landed, and the six that failed were each handed the
+        original traceback and no view of what their own fix had done.
+
+        Iterating on the latest attempt, accepting the best across all of them
+        measured against the original: a later attempt that comes out worse
+        cannot displace an earlier one that worked, and nothing worse than the
+        candidate we started with is ever returned.
+
+        Stops early the moment the candidate is no longer dead — the point is a
+        working candidate, not a full budget spent.
 
         A method rather than an inline block so the tests can drive the real
         thing. Twice now a test rebuilt this shape beside `step()`, and twice
@@ -364,36 +395,53 @@ class EraTreeAggregator:
 
         Its own error only. Nothing about a sibling goes in: parallel expansions
         are independent draws, and the diversity between them is what selection
-        has to work with. Its own iteration too, so the extra model call is
-        billed to the expansion that needed it rather than to the seed.
+        has to work with. Its own iteration too, so the extra model calls are
+        billed to the expansion that needed them rather than to the seed.
         """
         if self.repair is None or not code.strip() or not (error or "").strip():
             return code, valid, metrics, error
         if not _is_dead(self.domain, valid, metrics):
             return code, valid, metrics, error
 
-        repaired = self.repair(code, error or "", int(ops.get("iteration", "0")))
-        if not repaired.strip() or repaired.strip() == code.strip():
-            return code, valid, metrics, error
+        iteration = int(ops.get("iteration", "0"))
+        floor = _reward(self.domain, valid, metrics)
+        best = (code, valid, metrics, error, floor)
+        # The attempt being debugged: the newest one, so its own traceback is
+        # what the next repair reads.
+        current_code, current_error = code, error or ""
+        seen = {code.strip()}
 
-        fixed, fixed_metrics, fixed_error = _evaluate(
-            self.domain, repaired, self._held_out_shards())
-        # Strictly better, not merely `fixed`. `fixed` is `valid`, and for an
-        # evaluator that catches its own exceptions that is true of every
-        # candidate — so keeping on it swapped the repair in unconditionally,
-        # including when it scored the same 0. Watched live: two repairs both
-        # reported 修好了 at 0.0000, each having replaced the original with
-        # something no better. A repair earns its place the way a candidate does.
-        after = _reward(self.domain, fixed, fixed_metrics)
-        kept = after > _reward(self.domain, valid, metrics)
-        self.on_event("repaired", {
-            "after": after if fixed else None,
-            "kept": kept,
-            "why": (error or "")[:200],
-        })
-        if kept:
-            return repaired, fixed, fixed_metrics, fixed_error
-        return code, valid, metrics, error
+        for attempt in range(1, max(1, self.repair_attempts) + 1):
+            repaired = self.repair(current_code, current_error, iteration)
+            # Nothing back, or the same program again: another call would ask
+            # the same question and be billed for it.
+            if not repaired.strip() or repaired.strip() in seen:
+                break
+            seen.add(repaired.strip())
+
+            fixed, fixed_metrics, fixed_error = _evaluate(
+                self.domain, repaired, self._held_out_shards())
+            # Strictly better, not merely `fixed`. `fixed` is `valid`, and for
+            # an evaluator that catches its own exceptions that is true of every
+            # candidate — so keeping on it swapped the repair in
+            # unconditionally, including when it scored the same 0. Watched
+            # live: two repairs both reported 修好了 at 0.0000, each having
+            # replaced the original with something no better. A repair earns
+            # its place the way a candidate does.
+            after = _reward(self.domain, fixed, fixed_metrics)
+            if after > best[4]:
+                best = (repaired, fixed, fixed_metrics, fixed_error, after)
+            self.on_event("repaired", {
+                "after": after if fixed else None,
+                "attempt": attempt,
+                "kept": after > floor,
+                "why": (current_error or "")[:200],
+            })
+            if not _is_dead(self.domain, fixed, fixed_metrics):
+                break        # it runs and scores: nothing left to debug
+            current_code, current_error = repaired, fixed_error or current_error
+
+        return best[0], best[1], best[2], best[3]
 
     def step(self) -> List[MergeReport]:
         self.seed()

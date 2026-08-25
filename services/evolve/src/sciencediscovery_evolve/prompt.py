@@ -368,6 +368,12 @@ def repair_prompt(code: str, error: str) -> str:
         "其余部分照旧不动。\n\n"
         "## 它报的错\n\n"
         f"{error.strip()[:1500] or '（评测没有给出原因）'}\n\n"
+        # The environment, because "换成确实有的等价做法" is not actionable
+        # without knowing what is there. Three candidates in one run reached
+        # for `scipy.signal.cwt`, removed in SciPy 1.15; the repair was told to
+        # replace it and given no way to know what with.
+        "## 这个环境里有什么\n\n"
+        f"只能 import：{available_imports_text()}\n\n"
         "## 当前程序\n\n"
         "```python\n"
         f"{code}\n"
