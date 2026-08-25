@@ -1137,7 +1137,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           + "SCIENCE_AGENT_SHARDS (the shard is "
           + "an index, and what index i means is the evaluator's choice — generate case i, or "
           + "look it up); write {\"valid\": true, \"metrics\": {\"score\": 0.83}} to the path "
-          + "in SCIENCE_AGENT_RESULT. Score is 0-1, larger is better.",
+          + "in SCIENCE_AGENT_RESULT. Score is 0-1, larger is better. Also write an `error` "
+          + "string carrying each failure's own MESSAGE — repr(e) or a trimmed "
+          + "traceback.format_exc(), never bare type(e).__name__: that is the only channel to "
+          + "whoever writes the next candidate, and six identical \"IndexError\"s give it "
+          + "nothing to fix, so it discards the approach and re-rolls instead of repairing.",
         maxLength: 200_000, minLength: 1,
       })),
       expansions: Type.Integer({ maximum: 40, minimum: 1 }),

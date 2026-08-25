@@ -365,3 +365,32 @@ def test_an_evaluator_that_dies_on_the_unimportable_one_is_left_to_its_own_messa
         raise ScriptError("评测脚本自己崩了")
 
     _refuse_rewarding_the_unimportable(evaluate, (0,), 0.5)
+
+
+def test_a_diagnosis_of_bare_exception_names_is_refused() -> None:
+    """`type(e).__name__` satisfies "fill the error field" and says nothing.
+
+    Seen live: six identical "IndexError"s reached the reflector, which had
+    nothing to fix and re-rolled the whole approach every expansion — LZ77, then
+    PPM-D, then BWT+MTF+RLE — each with a fresh bug. Five of six candidates
+    scored exactly 0.000.
+    """
+    from sciencediscovery_evolve.probe import ProbeError, _refuse_nameless_diagnosis
+
+    with pytest.raises(ProbeError) as caught:
+        _refuse_nameless_diagnosis(
+            lambda _c, _s: (True, {"score": 0.0}, "text13: exc IndexError; text37: exc IndexError"),
+            "damaged", (0,))
+
+    assert "类名" in str(caught.value)
+
+
+def test_a_diagnosis_that_carries_the_message_passes() -> None:
+    from sciencediscovery_evolve.probe import _refuse_nameless_diagnosis
+
+    for said in (
+        "text13: IndexError: list index out of range",
+        "vanderpol: err=3.51, score=0.0000, nfev=1999",
+        "",                                    # empty is handled elsewhere
+    ):
+        _refuse_nameless_diagnosis(lambda _c, _s, t=said: (True, {"score": 0.0}, t), "d", (0,))

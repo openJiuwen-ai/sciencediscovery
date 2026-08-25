@@ -164,8 +164,12 @@ write the table, then use it.
   `SCIENCE_AGENT_SHARDS` (comma-separated); write `{"valid": true, "metrics": {"score": 0.83}}`
   to the path in `SCIENCE_AGENT_RESULT` (a file, not stdout — the candidate prints too); score
   0–1, larger-is-better. The module docstring is the contract the search sees when rewriting
-  candidates. Write the `error` field even when valid — it is the feedback channel to the
-  improving model.
+  candidates. **The `error` field is the feedback channel to the model writing the next
+  candidate — put the exception's own message in it, not just its class.** `type(e).__name__`
+  fills the field and says nothing: six identical "IndexError"s give the next author nothing to
+  fix, so it discards the whole approach and re-rolls, every expansion, each with a fresh bug.
+  `repr(e)` at minimum; a trimmed `traceback.format_exc()` is better. Write it even when the
+  candidate is valid — "budget exhausted on 3 of 6" is how the next one learns to stop.
 
   **How it runs:** as a script, with `__name__ == "__main__"` (`runpy.run_path`), and the
   scratch directory first on `sys.path`. So top-level code runs, a `if __name__ == "__main__":`

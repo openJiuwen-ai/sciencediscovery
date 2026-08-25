@@ -157,6 +157,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
         flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
         _refuse_saturated(spec, baseline, worsened)
         _refuse_rewarding_the_unimportable(domain.evaluate, shards, baseline)
+        _refuse_nameless_diagnosis(domain.evaluate, damaged, shards)
         _refuse_noisy(domain.evaluate, spec.baseline_code, shards, baseline, worsened)
         return {"baseline": baseline, "flat": flat,
                 "label": damage_label, "worsened": worsened}
@@ -530,4 +531,42 @@ def _refuse_rewarding_the_unimportable(evaluate, shards, baseline: float) -> Non
         f"而起点是 {baseline:.4f}——评分在奖励装不进来的程序，搜索会直接收敛到它们。"
         "多半是 import 的兜底把分数写反了：候选加载不了要记**最差**分（比如 0.0），"
         "不是满分。"
+    )
+
+
+def _refuse_nameless_diagnosis(evaluate, damaged: str, shards) -> None:
+    """Refuse a scoring whose failure text names the exception and nothing else.
+
+    The contract asks the evaluator to fill `error`, and one live run filled it
+    with ``f"text{i}: exc {type(e).__name__}"``. Structurally compliant, and the
+    reflector then received six identical "IndexError"s with no message, no line
+    and no traceback — nothing to fix. What it did instead was re-roll the whole
+    approach every expansion (LZ77, then PPM-D, then BWT+MTF+RLE, then a
+    multi-strategy coder), each with a fresh bug, and five of six candidates
+    landed on exactly 0.000.
+
+    The rule is conservative: strip the case labels, the word `exc`, and the
+    exception class names, and if nothing but punctuation is left then the text
+    carried no reason at all.
+    """
+    import re
+
+    try:
+        _score_value, _raw, said = _measure(evaluate, damaged, shards)
+    except Exception:  # noqa: BLE001 - the evaluator's own failure has its own message
+        return
+    text = (said or "").strip()
+    if not text:
+        return  # Empty is handled where the process tail is appended.
+    residue = re.sub(r"\b\w*(?:Error|Exception|Warning)\b", " ", text)
+    residue = re.sub(r"\b(?:exc|exception|error|shard|case|text|item)\s*\d*\b", " ", residue,
+                     flags=re.IGNORECASE)
+    residue = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", residue)
+    if residue:
+        return
+    raise ProbeError(
+        f"评分对坏候选只说了异常的类名：「{text[:120]}」——没有消息、没有行号，"
+        "读到它的是下一个候选的作者，它没法据此修任何东西，只会把整个方案推倒重来。"
+        "把 error 写成 repr(e) 或者裁剪过的 traceback.format_exc()，"
+        "至少要带上异常自己的那句话。"
     )
