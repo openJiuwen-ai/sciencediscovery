@@ -359,7 +359,7 @@ test("combines separately named Agent drafts into one stable Skill version histo
       instructions: "# Standard\n\nRun the standard survey.",
       metadata: { version: "standard" },
       name: "literature-survey",
-    });
+    }, { source: "manual" });
     const lite = await catalog.createReviewDraft({
       description: "Lightweight literature survey proposal.",
       instructions: "# Lite\n\nRun the lightweight survey.",
@@ -392,12 +392,21 @@ test("combines separately named Agent drafts into one stable Skill version histo
       const parsed = parseSkillMarkdown(Buffer.from(snapshot.files.find((file) => file.path === "SKILL.md")!.content!));
       assert.equal(parsed.frontmatter.name, "literature-survey");
     }
-    const detail = await catalog.getReviewDraft(merged.draftId);
+    const selectedVersion = versions[2]!;
+    const selectedSnapshot = await catalog.getSkillVersion("literature-survey", selectedVersion.id);
     const confirmed = await catalog.confirmReviewDraft(merged.draftId, {
       expectedUpdatedAt: merged.updatedAt,
-      files: detail!.files.map((file) => ({ content: file.content!, path: file.path })),
+      files: selectedSnapshot.files.map(({ binary, content, encodedContent, path }) => ({
+        ...(binary ? { binary } : {}),
+        ...(content === undefined ? {} : { content }),
+        ...(encodedContent === undefined ? {} : { encodedContent }),
+        path,
+      })),
+      sourceVersionId: selectedVersion.id,
     });
     assert.equal(confirmed.id, "literature-survey");
+    assert.match(confirmed.instructions, /# Standard/);
+    assert.equal((await catalog.listSkillVersions("literature-survey"))[0]?.provenance?.source, "manual");
   } finally {
     await rm(dataDir, { force: true, recursive: true });
   }

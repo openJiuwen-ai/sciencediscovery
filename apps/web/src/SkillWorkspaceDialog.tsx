@@ -9,6 +9,7 @@ import type {
   GitSkillRepositoryInspection,
   SkillDeletionImpact,
   SkillDescriptor,
+  SkillReviewDraft,
   SkillReviewDraftSummary,
   SkillReviewFile,
   SkillVersionSnapshot,
@@ -16,7 +17,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
-import { ChevronRightIcon, CloseIcon, FileIcon, ProjectIcon } from "./icons.js";
+import { CheckIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, ProjectIcon, TrashIcon } from "./icons.js";
 import { SkillLineDiff, skillFileDiffStatus, type EditableSkillFile } from "./SkillReviewDialog.js";
 
 function comparePaths(left: string, right: string): number {
@@ -107,7 +108,6 @@ export function SkillWorkspaceDialog({
   onDraftsChange,
   onError,
   onOpenSession,
-  onReviewDraft,
   sessionId,
   skills,
 }: {
@@ -119,7 +119,6 @@ export function SkillWorkspaceDialog({
   onDraftsChange: (drafts: SkillReviewDraftSummary[]) => void;
   onError: (message: string) => void;
   onOpenSession?: (sessionId: string) => void;
-  onReviewDraft: (draftId: string) => void;
   sessionId?: string;
   skills: SkillDescriptor[];
 }) {
@@ -134,6 +133,11 @@ export function SkillWorkspaceDialog({
   const [rightVersionId, setRightVersionId] = useState<string>();
   const [leftSnapshot, setLeftSnapshot] = useState<SkillVersionSnapshot>();
   const [rightSnapshot, setRightSnapshot] = useState<SkillVersionSnapshot>();
+  const [reviewDraftDetail, setReviewDraftDetail] = useState<SkillReviewDraft>();
+  const [reviewVersionId, setReviewVersionId] = useState<string>();
+  const [reviewFiles, setReviewFiles] = useState<EditableSkillFile[]>([]);
+  const [reviewFilesVersionId, setReviewFilesVersionId] = useState<string>();
+  const [newDraftPath, setNewDraftPath] = useState("");
   const [activePath, setActivePath] = useState("SKILL.md");
   const [mode, setMode] = useState<"compare" | "edit">("edit");
   const [editContent, setEditContent] = useState("");
@@ -182,6 +186,11 @@ export function SkillWorkspaceDialog({
     setRightVersionId(undefined);
     setLeftSnapshot(undefined);
     setRightSnapshot(undefined);
+    setReviewDraftDetail(undefined);
+    setReviewVersionId(undefined);
+    setReviewFiles([]);
+    setReviewFilesVersionId(undefined);
+    setNewDraftPath("");
     setActivePath("SKILL.md");
     setLoadError(undefined);
     setGitUpdate(undefined);
@@ -189,14 +198,31 @@ export function SkillWorkspaceDialog({
       if (!active) return;
       setVersions(next);
       setVersionsSkillId(selectedSkillId);
-      setRightVersionId(next[0]?.id);
-      setLeftVersionId(next[1]?.id ?? next[0]?.id);
+      const currentProposal = next.find((version) => version.kind === "agent-proposal" && version.current);
+      const right = currentProposal ?? next[0];
+      setRightVersionId(right?.id);
+      setLeftVersionId(next.find((version) => version.id !== right?.id)?.id ?? right?.id);
+      setReviewVersionId(currentProposal?.id);
       setMode("edit");
     }).catch((reason: Error) => {
       if (active) setLoadError(reason.message);
     });
     return () => { active = false; };
   }, [client, refreshKey, selectedSkillId]);
+
+  useEffect(() => {
+    if (!pendingDraft) {
+      setReviewDraftDetail(undefined);
+      return;
+    }
+    let active = true;
+    void client.getSkillReviewDraft(pendingDraft.draftId).then((detail) => {
+      if (active && detail.name === selectedSkillId) setReviewDraftDetail(detail);
+    }).catch((reason: Error) => {
+      if (active) setLoadError(reason.message);
+    });
+    return () => { active = false; };
+  }, [client, pendingDraft?.draftId, refreshKey, selectedSkillId]);
 
   useEffect(() => {
     if (!selectedSkillId || !leftVersionId || versionsSkillId !== selectedSkillId
@@ -222,13 +248,31 @@ export function SkillWorkspaceDialog({
     return () => { active = false; };
   }, [client, rightVersionId, selectedSkillId, versions, versionsSkillId]);
 
+  useEffect(() => {
+    if (!reviewVersionId || activeRightSnapshot?.id !== reviewVersionId
+      || reviewFilesVersionId === reviewVersionId) return;
+    setReviewFiles(activeRightSnapshot.files.map((file) => ({
+      ...(file.binary ? { binary: true } : {}),
+      content: file.content ?? "",
+      ...(file.encodedContent === undefined ? {} : { encodedContent: file.encodedContent }),
+      path: file.path,
+    })).toSorted((left, right) => comparePaths(left.path, right.path)));
+    setReviewFilesVersionId(reviewVersionId);
+  }, [activeRightSnapshot, reviewFilesVersionId, reviewVersionId]);
+
   const leftByPath = useMemo(() => new Map(activeLeftSnapshot?.files.map((file) => [file.path, file]) ?? []), [activeLeftSnapshot]);
   const rightByPath = useMemo(() => new Map(activeRightSnapshot?.files.map((file) => [file.path, file]) ?? []), [activeRightSnapshot]);
-  const paths = useMemo(() => [...new Set([...leftByPath.keys(), ...rightByPath.keys()])].toSorted(comparePaths), [leftByPath, rightByPath]);
+  const reviewByPath = useMemo(() => new Map(reviewFiles.map((file) => [file.path, file])), [reviewFiles]);
+  const editingDraft = Boolean(pendingDraft && mode === "edit" && reviewVersionId);
+  const visibleRightByPath = editingDraft ? reviewByPath : rightByPath;
+  const paths = useMemo(() => [...new Set([...leftByPath.keys(), ...visibleRightByPath.keys()])].toSorted(comparePaths), [leftByPath, visibleRightByPath]);
   const fileTree = useMemo(() => buildSkillFileTree(paths), [paths]);
   const leftFile = leftByPath.get(activePath);
-  const rightFile = rightByPath.get(activePath);
+  const rightFile = visibleRightByPath.get(activePath);
   const activeStatus = skillFileDiffStatus(leftFile, rightFile as EditableSkillFile | undefined);
+  const reviewVersion = activeVersions.find((version) => version.id === reviewVersionId && version.kind === "agent-proposal");
+  const reviewReady = Boolean(reviewDraftDetail && reviewVersion && reviewFilesVersionId === reviewVersionId);
+  const confirmableReview = reviewReady && reviewFiles.some((file) => file.path === "SKILL.md" && !file.binary && file.content !== undefined);
   const installedCurrent = activeVersions.find((version) => version.kind === "managed-revision" && version.current);
   const installedGit = installedCurrent?.provenance?.git;
   const editable = selectedSkill?.source === "managed"
@@ -271,14 +315,14 @@ export function SkillWorkspaceDialog({
           {expanded ? <div className="skill-file-tree-children">{renderFileNodes(node.children, depth + 1)}</div> : null}
         </div>;
       }
-      const status = skillFileDiffStatus(leftByPath.get(node.path), rightByPath.get(node.path) as EditableSkillFile | undefined);
+      const status = skillFileDiffStatus(leftByPath.get(node.path), visibleRightByPath.get(node.path) as EditableSkillFile | undefined);
       return <button className={`skill-file-tree-file${node.path === activePath ? " active" : ""}`} key={node.path} onClick={() => setActivePath(node.path)} style={{ paddingInlineStart: 10 + depth * 14 }} title={node.path} type="button"><span className="skill-file-tree-copy"><FileIcon size={12} /><strong>{node.name}</strong></span><small className={status}>{status}</small></button>;
     });
   }
 
   useEffect(() => {
-    setEditContent(rightFile?.content ?? "");
-  }, [activePath, rightFile?.content, rightVersionId]);
+    if (!editingDraft) setEditContent(rightFile?.content ?? "");
+  }, [activePath, editingDraft, rightFile?.content, rightVersionId]);
 
   function selectVersion(side: "left" | "right", id: string): void {
     setLoadError(undefined);
@@ -295,7 +339,10 @@ export function SkillWorkspaceDialog({
 
   function openEditMode(): void {
     if (pendingDraft) {
-      onReviewDraft(pendingDraft.draftId);
+      const selectedReviewVersion = reviewVersion
+        ?? activeVersions.find((version) => version.kind === "agent-proposal" && version.current)
+        ?? activeVersions.find((version) => version.kind === "agent-proposal");
+      if (selectedReviewVersion) selectReviewVersion(selectedReviewVersion.id);
       return;
     }
     if (installedCurrent) {
@@ -304,6 +351,76 @@ export function SkillWorkspaceDialog({
       setRightSnapshot(undefined);
     }
     setMode("edit");
+  }
+
+  function selectReviewVersion(id: string): void {
+    const version = activeVersions.find((candidate) => candidate.id === id && candidate.kind === "agent-proposal");
+    if (!version) return;
+    setLoadError(undefined);
+    setReviewVersionId(id);
+    setReviewFilesVersionId(undefined);
+    setReviewFiles([]);
+    setRightVersionId(id);
+    setRightSnapshot(undefined);
+    setActivePath("SKILL.md");
+    setMode("edit");
+  }
+
+  function updateReviewFile(content: string): void {
+    if (!activePath) return;
+    setReviewFiles((current) => current.map((file) => file.path === activePath ? { ...file, content } : file));
+  }
+
+  function renameReviewFile(path: string): void {
+    if (!activePath || path === activePath || reviewFiles.some((file) => file.path === path)) return;
+    setReviewFiles((current) => current.map((file) => file.path === activePath ? { ...file, path } : file)
+      .toSorted((left, right) => comparePaths(left.path, right.path)));
+    setActivePath(path);
+  }
+
+  function addReviewFile(): void {
+    const path = newDraftPath.trim();
+    if (!path || reviewFiles.some((file) => file.path === path)) return;
+    setReviewFiles((current) => [...current, { content: "", path }]
+      .toSorted((left, right) => comparePaths(left.path, right.path)));
+    setNewDraftPath("");
+    setActivePath(path);
+  }
+
+  function removeReviewFile(): void {
+    if (!activePath || activePath === "SKILL.md") return;
+    setReviewFiles((current) => current.filter((file) => file.path !== activePath));
+    setActivePath("SKILL.md");
+  }
+
+  async function confirmReviewVersion(): Promise<void> {
+    if (!pendingDraft || !reviewDraftDetail || !reviewVersion || !confirmableReview) return;
+    setBusy(true);
+    setLoadError(undefined);
+    try {
+      await client.confirmSkillReviewDraft(pendingDraft.draftId, {
+        expectedUpdatedAt: reviewDraftDetail.updatedAt,
+        files: reviewFiles,
+        sourceVersionId: reviewVersion.id,
+      });
+      const [nextSkills, nextDrafts] = await Promise.all([
+        client.listSkills(),
+        client.listSkillReviewDrafts(),
+      ]);
+      onCatalogChange(nextSkills);
+      onDraftsChange(nextDrafts);
+      setReviewDraftDetail(undefined);
+      setReviewVersionId(undefined);
+      setReviewFiles([]);
+      setReviewFilesVersionId(undefined);
+      setRefreshKey((current) => current + 1);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Could not confirm Skill proposal";
+      setLoadError(message);
+      onError(message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function openMergeDrafts(): void {
@@ -475,13 +592,14 @@ export function SkillWorkspaceDialog({
         </aside>
         <aside className={`skill-workspace-files${filesCollapsed ? " collapsed" : ""}`}>
           <div><strong>Package files</strong><span>{paths.length}</span><button aria-expanded={!filesCollapsed} aria-label={filesCollapsed ? "Expand package files sidebar" : "Collapse package files sidebar"} onClick={() => setFilesCollapsed((current) => !current)} title={filesCollapsed ? "Expand package files" : "Collapse package files"} type="button"><ChevronRightIcon className={!filesCollapsed ? "skill-pane-chevron point-left" : "skill-pane-chevron"} size={14} /></button></div>
-          {!filesCollapsed ? <nav aria-label="Skill package file tree" className="skill-file-tree">{renderFileNodes(fileTree)}</nav> : null}
+          {!filesCollapsed ? <><nav aria-label="Skill package file tree" className="skill-file-tree">{renderFileNodes(fileTree)}</nav>{editingDraft ? <form className="skill-workspace-file-create" onSubmit={(event) => { event.preventDefault(); addReviewFile(); }}><input aria-label="New draft file path" onChange={(event) => setNewDraftPath(event.target.value)} placeholder="references/guide.md" spellCheck={false} value={newDraftPath} /><button aria-label="Add file to draft" disabled={!newDraftPath.trim() || reviewFiles.some((file) => file.path === newDraftPath.trim())} title="Add file" type="submit"><PlusIcon size={14} /></button></form> : null}</> : null}
         </aside>
         <main className="skill-workspace-main">
           <div className="skill-workspace-modebar">
             <div className="skill-workspace-mode-controls"><button className={mode === "compare" ? "active" : ""} disabled={activeVersions.length < 2} onClick={() => setMode("compare")} type="button">Compare</button><button className={mode === "edit" ? "active" : ""} disabled={!installedCurrent && !pendingDraft} onClick={openEditMode} type="button">{pendingDraft ? "Edit draft" : installedCurrent ? "Edit" : "Read-only"}</button></div>
             <strong title={`${selectedSkillId ?? ""}/${activePath}`}><span>{selectedSkillId}</span><b>/</b>{activePath || "Select a file"}</strong>
             <div className="skill-workspace-item-actions">
+              {pendingDraft ? <button className="skill-workspace-focus-action" onClick={() => { const focused = catalogCollapsed && historyCollapsed; setCatalogCollapsed(!focused); setHistoryCollapsed(!focused); }} type="button">{catalogCollapsed && historyCollapsed ? "Show sidebars" : "Focus editor"}</button> : null}
               {installedGit ? <button disabled={busy} onClick={() => void checkGitUpdate()} title={`Check ${installedGit.repositoryUrl} at ${installedGit.ref ?? "the default branch"}`} type="button">{busy ? "Checking…" : "Check Git update"}</button> : null}
               {pendingDraft ? <button className="skill-workspace-delete-action" disabled={busy} onClick={inspectDraftDeletion} type="button">Discard draft</button> : null}
               {selectedSkill?.source === "managed" ? <button className="skill-workspace-delete-action" disabled={busy || Boolean(pendingDraft)} onClick={() => void inspectSkillDeletion()} title={pendingDraft ? "Discard the pending draft before deleting this Skill" : "Delete this managed Skill"} type="button">Delete Skill</button> : null}
@@ -490,16 +608,19 @@ export function SkillWorkspaceDialog({
           </div>
           <div className="skill-workspace-editor">
             {gitUpdate ? <div className={`skill-git-update-result ${gitUpdate.candidate.status}`}><div><strong>{gitUpdate.candidate.status === "update" ? "Update available" : gitUpdate.candidate.status === "unchanged" ? "Already up to date" : "Git source needs attention"}</strong><p><code>{gitUpdate.inspection.commit.slice(0, 12)}</code> · {gitUpdate.candidate.subdirectory}{gitUpdate.candidate.diagnostics.length ? ` · ${gitUpdate.candidate.diagnostics.join(" · ")}` : ""}</p></div><div><button onClick={() => setGitUpdate(undefined)} type="button">Dismiss</button>{gitUpdate.candidate.status === "update" ? <button className="primary-button" disabled={busy} onClick={() => void prepareGitUpdate()} type="button">Prepare review diff</button> : null}</div></div> : null}
-            {loadError ? <div className="skill-workspace-load-error" role="alert"><strong>Could not load this Skill</strong><p>{loadError}</p><button onClick={() => setRefreshKey((current) => current + 1)} type="button">Retry</button></div> : !activeRightSnapshot ? <p className="skill-workspace-empty">Loading version…</p> : mode === "compare" ? leftFile?.binary || rightFile?.binary ? <div className="skill-workspace-empty"><strong>Binary comparison</strong><p>{leftFile?.size ?? 0} bytes → {rightFile?.size ?? 0} bytes</p></div> : <SkillLineDiff after={rightFile?.content} before={leftFile?.content} leftLabel={activeLeftSnapshot?.label ?? "Version A"} rightLabel={activeRightSnapshot.label} status={activeStatus} /> : pendingDraft ? <div className="skill-workspace-draft-edit"><span aria-hidden="true">✎</span><strong>Edit the current draft</strong><p>Open the draft editor to inspect every package file, make changes, and confirm this version.</p><button className="primary-button" onClick={() => onReviewDraft(pendingDraft.draftId)} type="button">Open draft editor <b aria-hidden="true"><ChevronRightIcon size={14} /></b></button></div> : <>
+            {loadError ? <div className="skill-workspace-load-error" role="alert"><strong>Could not load this Skill</strong><p>{loadError}</p><button onClick={() => setRefreshKey((current) => current + 1)} type="button">Retry</button></div> : !activeRightSnapshot ? <p className="skill-workspace-empty">Loading version…</p> : mode === "compare" ? leftFile?.binary || rightFile?.binary ? <div className="skill-workspace-empty"><strong>Binary comparison</strong><p>{leftFile?.size ?? 0} bytes → {rightByPath.get(activePath)?.size ?? 0} bytes</p></div> : <SkillLineDiff after={rightFile?.content} before={leftFile?.content} leftLabel={activeLeftSnapshot?.label ?? "Version A"} rightLabel={activeRightSnapshot.label} status={activeStatus} /> : pendingDraft ? !reviewReady ? <p className="skill-workspace-empty">Preparing the selected proposal…</p> : <div className="skill-workspace-draft-editor">
+              <div className="skill-workspace-draft-path"><label><span>Package path</span><input defaultValue={activePath} disabled={activePath === "SKILL.md" || busy} key={activePath} onBlur={(event) => renameReviewFile(event.target.value.trim())} spellCheck={false} /></label>{activePath !== "SKILL.md" ? <button aria-label={`Remove ${activePath} from draft`} disabled={busy} onClick={removeReviewFile} title="Remove file" type="button"><TrashIcon size={15} /> Remove</button> : <span>Required entry file</span>}</div>
+              {rightFile?.binary ? <div className="skill-binary-editor-note"><strong>Binary resource</strong><p>This file is preserved byte-for-byte. You can rename or remove it, but it cannot be edited as text.</p></div> : <textarea aria-label={`Edit draft file ${activePath}`} disabled={busy || !rightFile} onChange={(event) => updateReviewFile(event.target.value)} spellCheck={false} value={rightFile?.content ?? ""} />}
+              <div className="skill-workspace-review-bar"><div><span><CheckIcon size={14} /> Review target</span><strong>{reviewVersion?.label}</strong><small>{versionSource(reviewVersion!)} · {reviewDraftDetail?.baseRevision === undefined ? "Creates a new Skill" : `Publishes revision r${reviewDraftDetail.baseRevision + 1}`}</small></div><button className="primary-button" disabled={busy || !confirmableReview} onClick={() => void confirmReviewVersion()} type="button">{busy ? "Confirming…" : reviewDraftDetail?.baseRevision === undefined ? "Confirm and create Skill" : `Confirm as revision r${reviewDraftDetail.baseRevision + 1}`}</button></div>
+            </div> : <>
               <textarea aria-label={`Edit Skill file ${activePath}`} disabled={!editable || busy} onChange={(event) => setEditContent(event.target.value)} spellCheck={false} value={editContent} />
               <div className="skill-workspace-save"><span>{selectedSkill?.source === "built-in" ? "Built-in Skills are read-only." : editable ? "Saving creates a new immutable revision." : "Choose the latest installed revision to edit."}</span><button className="primary-button" disabled={!editable || busy || editContent === rightFile?.content} onClick={() => void saveFile()} type="button">{busy ? "Saving…" : "Save new revision"}</button></div>
             </>}
           </div>
         </main>
         <aside className={`skill-workspace-history${historyCollapsed ? " collapsed" : ""}`}>
-          <div className="skill-workspace-history-heading"><span><strong>Version history</strong><small>Select two versions as A and B</small></span><b>{activeVersions.length}</b><button aria-expanded={!historyCollapsed} aria-label={historyCollapsed ? "Expand version history sidebar" : "Collapse version history sidebar"} onClick={() => setHistoryCollapsed((current) => !current)} title={historyCollapsed ? "Expand version history" : "Collapse version history"} type="button"><ChevronRightIcon className={historyCollapsed ? "skill-pane-chevron point-left" : "skill-pane-chevron"} size={14} /></button></div>
-          {!historyCollapsed ? <>{pendingDraft ? <button className="skill-workspace-review" onClick={() => onReviewDraft(pendingDraft.draftId)} type="button"><span aria-hidden="true" className="skill-workspace-review-icon">✎</span><span><strong>Edit &amp; review draft</strong><small>Inspect files before publishing</small></span><b aria-hidden="true"><ChevronRightIcon size={14} /></b></button> : null}
-          <ol>{activeVersions.map((version) => <li className={`${versionTone(version)}${leftVersionId === version.id || rightVersionId === version.id ? " selected-version" : ""}`} key={version.id}><div><i /><span><strong>{version.label}</strong><small>{version.createdAt ? new Date(version.createdAt).toLocaleString() : "Packaged with this app"}</small><small className="skill-version-source">{versionSource(version)}</small>{version.provenance?.git ? <small className="skill-version-git-path" title={`${version.provenance.git.repositoryUrl}#${version.provenance.git.commit}`}>{version.provenance.git.subdirectory}</small> : null}{version.provenance?.sessionId && onOpenSession ? <button className="skill-version-session" onClick={() => onOpenSession(version.provenance!.sessionId!)} type="button">Open source Session ↗</button> : null}</span></div><div><button aria-label={`Select ${version.label} as version A`} className={leftVersionId === version.id ? "selected" : ""} onClick={() => selectVersion("left", version.id)} type="button">A</button><button aria-label={`Select ${version.label} as version B`} className={rightVersionId === version.id ? "selected" : ""} onClick={() => selectVersion("right", version.id)} type="button">B</button></div></li>)}</ol></> : null}
+          <div className="skill-workspace-history-heading"><span><strong>Version history</strong><small>Choose A/B to compare · Review to publish</small></span><b>{activeVersions.length}</b><button aria-expanded={!historyCollapsed} aria-label={historyCollapsed ? "Expand version history sidebar" : "Collapse version history sidebar"} onClick={() => setHistoryCollapsed((current) => !current)} title={historyCollapsed ? "Expand version history" : "Collapse version history"} type="button"><ChevronRightIcon className={historyCollapsed ? "skill-pane-chevron point-left" : "skill-pane-chevron"} size={14} /></button></div>
+          {!historyCollapsed ? <><ol>{activeVersions.map((version) => <li className={`${versionTone(version)}${leftVersionId === version.id || rightVersionId === version.id ? " selected-version" : ""}${reviewVersionId === version.id ? " review-target" : ""}`} key={version.id}><div><i /><span><strong>{version.label}</strong><small>{version.createdAt ? new Date(version.createdAt).toLocaleString() : "Packaged with this app"}</small><small className="skill-version-source">{versionSource(version)}</small>{version.provenance?.git ? <small className="skill-version-git-path" title={`${version.provenance.git.repositoryUrl}#${version.provenance.git.commit}`}>{version.provenance.git.subdirectory}</small> : null}{version.provenance?.sessionId && onOpenSession ? <button className="skill-version-session" onClick={() => onOpenSession(version.provenance!.sessionId!)} type="button">Open source Session ↗</button> : null}</span></div><div className="skill-version-actions"><span><button aria-label={`Select ${version.label} as version A`} className={leftVersionId === version.id ? "selected" : ""} onClick={() => selectVersion("left", version.id)} type="button">A</button><button aria-label={`Select ${version.label} as version B`} className={rightVersionId === version.id ? "selected" : ""} onClick={() => selectVersion("right", version.id)} type="button">B</button></span>{version.kind === "agent-proposal" ? <button aria-label={`Select ${version.label} as review target`} className={`skill-version-review-target${reviewVersionId === version.id ? " selected" : ""}`} onClick={() => selectReviewVersion(version.id)} type="button">{reviewVersionId === version.id ? <><CheckIcon size={12} /> Review target</> : "Review this version"}</button> : null}</div></li>)}</ol></> : null}
         </aside>
       </div>
       {mergeOpen ? <div className="skill-merge-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setMergeOpen(false); }}>

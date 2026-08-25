@@ -1189,7 +1189,7 @@ export class SkillCatalog {
     if (versionId === `draft:${draft.draftId}`) {
       return {
         ...summary,
-        files: draft.files.map((file) => this.publicReviewFile(file)).toSorted(compareSkillPaths),
+        files: draft.files.map((file) => this.publicReviewFile(file, true)).toSorted(compareSkillPaths),
         skillId: id,
       };
     }
@@ -1197,7 +1197,7 @@ export class SkillCatalog {
     if (!proposal) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill version not found: ${id}@${versionId}`);
     return {
       ...summary,
-      files: proposal.files.map((file) => this.publicReviewFile(file)).toSorted(compareSkillPaths),
+      files: proposal.files.map((file) => this.publicReviewFile(file, true)).toSorted(compareSkillPaths),
       skillId: id,
     };
   }
@@ -1347,6 +1347,16 @@ export class SkillCatalog {
       if (input.expectedUpdatedAt !== draft.updatedAt) {
         throw new SkillCatalogError("SKILL_CONFLICT", "Skill review draft changed; reload it before confirming");
       }
+      let confirmedProvenance = draft.provenance ?? { source: "agent" as const };
+      if (input.sourceVersionId && input.sourceVersionId !== `draft:${draft.draftId}`) {
+        const selectedProposal = draft.proposalHistory?.find(
+          (candidate) => `proposal:${candidate.proposalId}` === input.sourceVersionId,
+        );
+        if (!selectedProposal) {
+          throw validationError(`Skill proposal does not belong to this draft: ${input.sourceVersionId}`);
+        }
+        confirmedProvenance = selectedProposal.provenance ?? confirmedProvenance;
+      }
       const files = new Map<string, Buffer>();
       for (const file of input.files) {
         if (files.has(file.path)) throw validationError(`Duplicate skill package path: ${file.path}`);
@@ -1370,7 +1380,7 @@ export class SkillCatalog {
         loaded,
         revision,
         new Date().toISOString(),
-        draft.provenance ?? { source: "agent" },
+        confirmedProvenance,
       );
       const previous = this.index.managed[loaded.detail.id];
       this.index.managed[loaded.detail.id] = { currentRevision: revision };

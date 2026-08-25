@@ -164,6 +164,8 @@ export interface ConfirmSkillReviewDraftRequest {
     encodedContent?: string;
     path: string;
   }>;
+  /** The pending Agent proposal explicitly selected by the reviewer. */
+  sourceVersionId?: string;
 }
 
 export interface MergeSkillReviewDraftsRequest {

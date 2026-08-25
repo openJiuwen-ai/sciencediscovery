@@ -22,14 +22,12 @@ import type {
   SkillLibraryUpdateProposal,
   SkillLibraryVersion,
   SkillDescriptor,
-  SkillReviewDraft,
   SkillReviewDraftSummary,
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, TrashIcon } from "./icons.js";
 import { createSkillFolderArchive } from "./skill-folder-import.js";
-import { SkillReviewDialog, type EditableSkillFile } from "./SkillReviewDialog.js";
 import { SkillWorkspaceDialog } from "./SkillWorkspaceDialog.js";
 
 export interface SkillEditorDraft {
@@ -238,8 +236,6 @@ function SkillCatalogManager({
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string>();
   const [reviewDrafts, setReviewDrafts] = useState<SkillReviewDraftSummary[]>([]);
-  const [reviewDraft, setReviewDraft] = useState<SkillReviewDraft>();
-  const [returnToWorkspaceAfterReview, setReturnToWorkspaceAfterReview] = useState(false);
   const [workspaceSkillId, setWorkspaceSkillId] = useState<string>();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const importInput = useRef<HTMLInputElement>(null);
@@ -302,69 +298,6 @@ function SkillCatalogManager({
 
   async function refreshReviewDrafts(): Promise<void> {
     setReviewDrafts(await client.listSkillReviewDrafts());
-  }
-
-  async function openReviewDraft(draftId: string, returnToWorkspace = false): Promise<void> {
-    setReturnToWorkspaceAfterReview(returnToWorkspace);
-    setBusy(true);
-    setLocalError(undefined);
-    try {
-      const next = await client.getSkillReviewDraft(draftId);
-      setReviewDraft(next);
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not open Skill draft";
-      setLocalError(message);
-      onError(message);
-      if (returnToWorkspace) {
-        setWorkspaceOpen(true);
-        setReturnToWorkspaceAfterReview(false);
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function closeReviewDraft(): void {
-    setReviewDraft(undefined);
-    if (returnToWorkspaceAfterReview) setWorkspaceOpen(true);
-    setReturnToWorkspaceAfterReview(false);
-  }
-
-  async function confirmReviewDraft(files: EditableSkillFile[]): Promise<void> {
-    if (!reviewDraft) return;
-    setBusy(true);
-    setLocalError(undefined);
-    try {
-      await client.confirmSkillReviewDraft(reviewDraft.draftId, {
-        expectedUpdatedAt: reviewDraft.updatedAt,
-        files,
-      });
-      await Promise.all([refreshCatalog(), refreshReviewDrafts()]);
-      closeReviewDraft();
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not confirm Skill draft";
-      setLocalError(message);
-      onError(message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function discardReviewDraft(): Promise<void> {
-    if (!reviewDraft) return;
-    setBusy(true);
-    setLocalError(undefined);
-    try {
-      await client.discardSkillReviewDraft(reviewDraft.draftId);
-      await refreshReviewDrafts();
-      closeReviewDraft();
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not discard Skill draft";
-      setLocalError(message);
-      onError(message);
-    } finally {
-      setBusy(false);
-    }
   }
 
   function openCreate(): void {
@@ -631,9 +564,7 @@ function SkillCatalogManager({
       </section>
     </div> : null}
 
-    {reviewDraft ? <SkillReviewDialog busy={busy} draft={reviewDraft} error={localError} onClose={closeReviewDraft} onConfirm={(files) => void confirmReviewDraft(files)} onDiscard={() => void discardReviewDraft()} /> : null}
-
-    {workspaceOpen ? <SkillWorkspaceDialog client={client} drafts={reviewDrafts} initialSkillId={workspaceSkillId} onCatalogChange={onCatalogChange} onClose={() => { setWorkspaceOpen(false); setWorkspaceSkillId(undefined); }} onDraftsChange={setReviewDrafts} onError={onError} onOpenSession={onOpenSession} onReviewDraft={(draftId) => { setWorkspaceSkillId(reviewDrafts.find((draft) => draft.draftId === draftId)?.name); setWorkspaceOpen(false); void openReviewDraft(draftId, true); }} sessionId={sessionId} skills={skills} /> : null}
+    {workspaceOpen ? <SkillWorkspaceDialog client={client} drafts={reviewDrafts} initialSkillId={workspaceSkillId} onCatalogChange={onCatalogChange} onClose={() => { setWorkspaceOpen(false); setWorkspaceSkillId(undefined); }} onDraftsChange={setReviewDrafts} onError={onError} onOpenSession={onOpenSession} sessionId={sessionId} skills={skills} /> : null}
   </div>;
 }
 

@@ -72,7 +72,6 @@ test("renders a four-pane Skill explorer with pending and installed Skills", () 
     onClose: () => undefined,
     onDraftsChange: () => undefined,
     onError: () => undefined,
-    onReviewDraft: () => undefined,
     skills: [managed],
   }));
 
@@ -92,7 +91,7 @@ test("renders a four-pane Skill explorer with pending and installed Skills", () 
   assert.match(html, /Drafts/);
 });
 
-test("opens pending Skills in edit mode and presents a prominent draft editor entry", async () => {
+test("edits and confirms an explicitly selected Agent proposal in the Explorer", async () => {
   const draft = {
     createdAt: "2026-08-20T00:00:00.000Z",
     draftId: "draft-edit-1",
@@ -100,22 +99,34 @@ test("opens pending Skills in edit mode and presents a prominent draft editor en
     name: "pending-edit-skill",
     updatedAt: "2026-08-20T00:01:00.000Z",
   };
-  const opened: string[] = [];
+  const currentContent = `---\nname: ${draft.name}\ndescription: Current\n---\n\n# Current`;
+  const previousContent = `---\nname: ${draft.name}\ndescription: Previous\n---\n\n# Previous`;
+  const confirmed: Array<{ sourceVersionId?: string; files: Array<{ content?: string; path: string }> }> = [];
   const client = {
+    confirmSkillReviewDraft: async (_draftId: string, body: { sourceVersionId?: string; files: Array<{ content?: string; path: string }> }) => {
+      confirmed.push(body);
+      return {};
+    },
+    getSkillReviewDraft: async () => ({
+      ...draft,
+      baseFiles: [],
+      files: [{ content: currentContent, path: "SKILL.md", size: currentContent.length }],
+    }),
     getSkillVersion: async (skillId: string, versionId: string) => ({
+      current: versionId.startsWith("draft:"),
       fileCount: 1,
-      files: [{ content: `---\nname: ${skillId}\ndescription: Test\n---\n\n# Workflow`, path: "SKILL.md", size: 59 }],
+      files: [{ content: versionId === "proposal:old" ? previousContent : currentContent, path: "SKILL.md", size: 59 }],
       id: versionId,
       kind: "agent-proposal" as const,
-      label: "Current pending proposal",
+      label: versionId === "proposal:old" ? "Agent proposal 1" : "Current pending proposal",
       skillId,
     }),
-    listSkillVersions: async () => [{
-      fileCount: 1,
-      id: "proposal:draft-edit-1",
-      kind: "agent-proposal" as const,
-      label: "Current pending proposal",
-    }],
+    listSkillReviewDrafts: async () => [],
+    listSkills: async () => [],
+    listSkillVersions: async () => [
+      { current: true, fileCount: 1, id: `draft:${draft.draftId}`, kind: "agent-proposal" as const, label: "Current pending proposal" },
+      { current: false, fileCount: 1, id: "proposal:old", kind: "agent-proposal" as const, label: "Agent proposal 1" },
+    ],
   } as ApiClient;
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
@@ -126,7 +137,6 @@ test("opens pending Skills in edit mode and presents a prominent draft editor en
       onClose: () => undefined,
       onDraftsChange: () => undefined,
       onError: (message) => assert.fail(message),
-      onReviewDraft: (draftId) => opened.push(draftId),
       skills: [],
     }));
   });
@@ -134,11 +144,17 @@ test("opens pending Skills in edit mode and presents a prominent draft editor en
   const editMode = renderer!.root.findAllByType("button").find((button) => button.children.join("") === "Edit draft");
   assert.ok(editMode);
   assert.equal(editMode.props.className, "active");
-  assert.equal(renderer!.root.findAllByProps({ className: "skill-workspace-draft-edit" }).length, 1);
-  const reviewEntry = renderer!.root.findByProps({ className: "skill-workspace-review" });
-  assert.equal(reviewEntry.findByType("strong").children.join(""), "Edit & review draft");
-  await act(async () => reviewEntry.props.onClick());
-  assert.deepEqual(opened, [draft.draftId]);
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-workspace-draft-editor" }).length, 1);
+  assert.equal(renderer!.root.findByProps({ "aria-label": "Edit draft file SKILL.md" }).props.value, currentContent);
+
+  const selectPrevious = renderer!.root.findByProps({ "aria-label": "Select Agent proposal 1 as review target" });
+  await act(async () => selectPrevious.props.onClick());
+  assert.equal(renderer!.root.findByProps({ "aria-label": "Edit draft file SKILL.md" }).props.value, previousContent);
+  const confirmButton = renderer!.root.findAllByType("button").find((button) => button.children.join("") === "Confirm and create Skill");
+  assert.ok(confirmButton);
+  await act(async () => confirmButton.props.onClick());
+  assert.equal(confirmed[0]?.sourceVersionId, "proposal:old");
+  assert.equal(confirmed[0]?.files.find((file) => file.path === "SKILL.md")?.content, previousContent);
   await act(async () => renderer!.unmount());
 });
 
@@ -156,7 +172,10 @@ test("filters the Explorer catalog down to pending drafts", async () => {
     version: "1.0.0",
   } satisfies SkillDescriptor;
   const draft = { createdAt: "2026-08-20T00:00:00.000Z", draftId: "draft-filter", fileCount: 1, name: "draft-only", updatedAt: "2026-08-20T00:01:00.000Z" };
-  const client = { listSkillVersions: async () => [] } as ApiClient;
+  const client = {
+    getSkillReviewDraft: async () => ({ ...draft, baseFiles: [], files: [] }),
+    listSkillVersions: async () => [],
+  } as ApiClient;
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
     renderer = create(createElement(SkillWorkspaceDialog, {
@@ -167,7 +186,6 @@ test("filters the Explorer catalog down to pending drafts", async () => {
       onClose: () => undefined,
       onDraftsChange: () => undefined,
       onError: (message) => assert.fail(message),
-      onReviewDraft: () => undefined,
       skills: [managed],
     }));
   });
@@ -239,7 +257,6 @@ test("switching Skills never requests the previous Skill's version and managed f
       onClose: () => undefined,
       onDraftsChange: () => undefined,
       onError: (message) => errors.push(message),
-      onReviewDraft: () => undefined,
       skills: [builtIn, managed],
     }));
   });
@@ -308,7 +325,6 @@ test("deletes a managed Skill from the Explorer after reference check and typed 
       onClose: () => undefined,
       onDraftsChange: () => undefined,
       onError: (message) => assert.fail(message),
-      onReviewDraft: () => undefined,
       skills: [managed],
     }));
   });
