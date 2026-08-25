@@ -1132,7 +1132,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           + "runs, and `import candidate` resolves. It runs ALONE in that "
           + "scratch directory with the candidate — it cannot see the workspace, and the only "
           + "other file present is the one named by datasetPath, if any. Import the candidate "
-          + "as `candidate`; score only the shards listed in SCIENCE_AGENT_SHARDS (the shard is "
+          + "as `candidate` — guard that import, since a broken candidate can raise there, "
+          + "before any per-case try/except can reach it; score only the shards listed in "
+          + "SCIENCE_AGENT_SHARDS (the shard is "
           + "an index, and what index i means is the evaluator's choice — generate case i, or "
           + "look it up); write {\"valid\": true, \"metrics\": {\"score\": 0.83}} to the path "
           + "in SCIENCE_AGENT_RESULT. Score is 0-1, larger is better.",

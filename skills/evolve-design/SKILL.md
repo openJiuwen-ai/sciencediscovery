@@ -57,8 +57,14 @@ Write the starting point and the evaluator, then use `run_python` to check three
 | It discriminates | Score a **deliberately broken** copy (gut the logic, return a constant, replace the text with filler) | Same score twice |
 | There is slope | Look at the starting score | 0 is a floor, solved is a ceiling. **Aim 0.3–0.7** |
 
-The evaluator must survive bad candidates: wrap each case in try/except and count it wrong. If
-the script itself crashes, nothing runs.
+**The evaluator must survive bad candidates — including at import.** Most candidates in a search
+are broken, and the probe deliberately scores a broken one, so this is the normal path rather
+than an edge case. Guard two places: `import candidate` itself (a hollowed-out module can leave
+a module-level name as `None` or raise outright, and that happens *before* any case, where a
+per-case `try/except` cannot reach it — on failure mark the candidate unusable and score every
+shard worst), and each individual call. It is the evaluator that has to be robust, never the
+candidate: being broken is what the damaged copy is for. If the script itself crashes, nothing
+runs and the whole run is refused.
 
 **You are checking the ruler, not looking for the answer.** These three checks are about the
 scoring: does it run, does it separate good from bad, is there room to climb. Do not go looking

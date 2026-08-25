@@ -146,8 +146,13 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
             # names the evaluator rather than arriving as a 502.
             raise ProbeError(
                 "评测脚本扛不住坏候选——把起点函数体掏空之后它自己崩了："
-                f"{error}。候选大多长这样，每条样例都要 try/except 兜住，"
-                "算作答错而不是让脚本挂掉"
+                f"{error}。搜索里大多数候选都长这样，评测脚本必须把它们算作答错、"
+                "而不是跟着一起挂掉。两个地方都要兜："
+                "\n1) `import candidate` 本身——掏空后模块级的语句会拿到 None、"
+                "抛异常，这一步在任何样例之前，per-shard 的 try/except 到不了；"
+                "导入失败就把候选记为不可用，每一片直接记最差分。"
+                "\n2) 每一条样例的调用。"
+                "\n注意：要健壮的是评测脚本，不是候选——候选被改坏就是这个探针的目的。"
             ) from error
         flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
         _refuse_saturated(spec, baseline, worsened)

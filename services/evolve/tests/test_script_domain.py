@@ -407,3 +407,28 @@ def test_the_evaluator_runs_as_main_with_the_scratch_dir_importable():
     assert ok, error
     assert "name=__main__" in error       # the guard fires
     assert "cand=7" in error              # and the candidate is importable
+
+
+def test_an_evaluator_that_dies_on_import_is_named_as_the_fault():
+    """A hollowed-out candidate can raise at import, before any case runs.
+
+    The advice used to say "wrap each case", which is exactly the guard that
+    cannot reach an import-time failure — so an author who followed it hit the
+    same wall twice and then went off trying to make the *candidate* survive
+    being damaged, which is the one thing it must not do.
+    """
+    script = (
+        "import candidate\n"          # no guard: this is the shape being diagnosed
+        "import json, os\n"
+        "with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as fh:\n"
+        "    json.dump({'valid': True, 'metrics': {'exact_match': 1.0}}, fh)\n"
+    )
+    domain = script_domain(scorecard=CARD, script=script, capability=detect_local_capability())
+
+    with pytest.raises(ScriptError) as caught:
+        # Exactly what hollowing produces: the function keeps its name and
+        # returns None, so the module-level line below raises during import.
+        domain.evaluate("def build():\n    return None\n_CODES = build()\n_CODES[1]\n", (0,))
+
+    said = str(caught.value)
+    assert "评测脚本" in said
