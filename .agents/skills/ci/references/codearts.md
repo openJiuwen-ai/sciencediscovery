@@ -200,13 +200,11 @@ The bot's `result_html` input is an OBS object key, not inline HTML.
 ## Read a result
 
 CodeArts PaC runs do not register in GitCode's `/api/v8/.../actions` endpoints.
-The merge-request bot table is visible through:
+The result comment and `ci-*` labels the bot puts on the merge request are
+described in the create-pr skill; this section is about the run itself.
 
-```bash
-gitcode pr view <number> -R <owner>/<repo> --comments --json
-```
-
-The MR check page exposes the job status and build-log entry. Complete CodeArts
+The MR check page (`/pull/<number>/check`) exposes the job status and
+build-log entry. Complete CodeArts
 run details may still require CodeArts credentials; if those credentials are
 not available, ask the user for the complete job log. When upload ran, UT/ST
 `run.log` files are also archived at:
