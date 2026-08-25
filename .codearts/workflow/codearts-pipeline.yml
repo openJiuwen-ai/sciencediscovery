@@ -88,6 +88,7 @@ stages:
         - name: Checkout the PR source commit
           uses: official_shell_plugin
           env:
+            CODEARTS_COMMIT_ID: "${COMMIT_ID}"
             CODEARTS_MERGE_ID: "${MERGE_ID}"
             CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
           with:
@@ -117,7 +118,7 @@ stages:
                 throw new Error(`expected a merge_request or PR note payload, received ${String(payload.event_type)}`);
               }
               const sourceBranch = attributes?.source_branch;
-              const sourceSha = attributes?.last_commit?.id;
+              const sourceSha = process.env.CODEARTS_COMMIT_ID;
               const payloadMergeId = attributes?.iid;
               if (!attributes) {
                 throw new Error("the webhook payload has no merge_request metadata");
@@ -270,6 +271,7 @@ stages:
         - name: Checkout the PR source commit
           uses: official_shell_plugin
           env:
+            CODEARTS_COMMIT_ID: "${COMMIT_ID}"
             CODEARTS_MERGE_ID: "${MERGE_ID}"
             CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
           with:
@@ -299,7 +301,7 @@ stages:
                 throw new Error(`expected a merge_request or PR note payload, received ${String(payload.event_type)}`);
               }
               const sourceBranch = attributes?.source_branch;
-              const sourceSha = attributes?.last_commit?.id;
+              const sourceSha = process.env.CODEARTS_COMMIT_ID;
               const payloadMergeId = attributes?.iid;
               if (!attributes) {
                 throw new Error("the webhook payload has no merge_request metadata");

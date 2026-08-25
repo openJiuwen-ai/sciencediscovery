@@ -104,9 +104,11 @@ under `payload.merge_request`. Accept both layouts, require a PR note's
 `${MERGE_ID}` when present.
 
 Validate all payload data first: `source_branch` must be a non-empty valid Git
-branch without CR/LF, `last_commit.id` must be a 40-hex SHA, and `${MERGE_ID}`
-must be a positive integer. Then fetch the upstream MR ref and detach at the
-event SHA:
+branch without CR/LF, system `${COMMIT_ID}` must be a 40-hex SHA, and
+`${MERGE_ID}` must be a positive integer. Use `${COMMIT_ID}` as the
+authoritative source head for both initial PR and PR-note runs; do not depend
+on a webhook-specific `last_commit` location. Then fetch the upstream MR ref
+and detach at that execution SHA:
 
 ```sh
 FETCH_REF=refs/remotes/origin/codearts-pr-source
@@ -120,8 +122,8 @@ test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 Use `refs/merge-requests/<number>/head`, not
 `refs/heads/<source_branch>`. The MR ref is exposed by the upstream repository
 for both same-repository and fork PRs, whereas a fork-only source branch does
-not exist under upstream `refs/heads/`. If the event SHA is not already present,
-fetch that exact SHA before verifying ancestry. Detaching at the event SHA
+not exist under upstream `refs/heads/`. If the execution SHA is not already
+present, fetch that exact SHA before verifying ancestry. Detaching at that SHA
 also prevents a later source update from changing the code covered by the
 current run. Fail rather than testing another commit if the recorded SHA is no
 longer reachable from the MR ref.
