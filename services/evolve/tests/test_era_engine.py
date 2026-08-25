@@ -731,7 +731,10 @@ def test_a_failed_candidate_gets_one_repair_on_its_own_error() -> None:
 
     aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
     aggregator.repair = repair
-    aggregator.domain = type("D", (), {"evaluate": staticmethod(evaluate)})()
+    aggregator.domain = type("D", (), {
+        "evaluate": staticmethod(evaluate),
+        "reward": staticmethod(lambda m: max(0.0, float(m["score"]))),
+    })()
     aggregator._held_out_shards = lambda: (0, 1)
     aggregator.on_event = lambda *args: None
 
@@ -809,42 +812,64 @@ def test_a_working_but_worse_candidate_is_left_alone() -> None:
     assert asked == [], "a candidate that ran was sent for repair"
 
 
-def _run_one(aggregator, code, ops):
-    """The failure-and-repair half of `step()`, exercised directly.
+def test_a_repair_that_did_not_help_is_thrown_away() -> None:
+    """Watched live, one level below the trigger bug and the same shape.
 
-    The *decision* comes from the real `_is_dead` rather than being restated
-    here. An earlier version of this helper spelled out `if not valid`, and
-    when the real condition was corrected it went on passing — a copy of the
-    logic proves the copy works, which is how a test like this quietly stops
-    meaning anything. `test_step_itself_asks_for_the_repair` pins the rest.
+    Keeping the repair was gated on `fixed`, which is `valid`, which an
+    evaluator that catches its own exceptions reports for everything — so the
+    repaired version replaced the original unconditionally, including when it
+    scored the same 0. The panel said 修好了 twice, both at 0.0000.
     """
-    from sciencediscovery_evolve.vendor.era.search import _evaluate, _is_dead
+    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+
+    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+
+    def evaluate(code, shards):
+        # Both measure fine, both score nothing — the repair changed the bug,
+        # not the outcome.
+        if "repaired" in code:
+            return True, {"score": 0.0}, "从修复版来的：还是对不上"
+        return True, {"score": 0.0}, "从原版来的：往返对不上"
+
+    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator.repair = lambda code, error, iteration: "def solve():\n    return 'repaired'\n"
+    aggregator.domain = type("D", (), {
+        "evaluate": staticmethod(evaluate),
+        "reward": staticmethod(lambda m: float(m["score"])),
+    })()
+    aggregator._held_out_shards = lambda: (0, 1)
+    aggregator.on_event = lambda *args: None
+
+    _, _, error = _run_one(aggregator, "def solve():\n    return None\n", {"iteration": "1"})
+
+    assert error.startswith("从原版来的"), "没变好的修复顶掉了原版"
+
+
+def _run_one(aggregator, code, ops):
+    """Evaluate, then hand the result to the real `_repair_once`.
+
+    Nothing about the repair is restated here. Two earlier versions of this
+    helper spelled the decision out themselves — first `if not valid`, then the
+    acceptance check — and each went on passing after the original was
+    corrected, proving only that the copy worked. `step()` calls the same
+    method, and `test_step_itself_asks_for_the_repair` pins that it still does.
+    """
+    from sciencediscovery_evolve.vendor.era.search import _evaluate
 
     valid, metrics, error = _evaluate(aggregator.domain, code, aggregator._held_out_shards())
-    if (aggregator.repair is not None and code.strip() and (error or "").strip()
-            and _is_dead(aggregator.domain, valid, metrics)):
-        repaired = aggregator.repair(code, error or "", int(ops.get("iteration", "0")))
-        if repaired.strip() and repaired.strip() != code.strip():
-            fixed, fixed_metrics, fixed_error = _evaluate(
-                aggregator.domain, repaired, aggregator._held_out_shards())
-            if fixed:
-                return fixed, fixed_metrics, fixed_error
+    _, valid, metrics, error = aggregator._repair_once(code, ops, valid, metrics, error)
     return valid, metrics, error
 
 
 def test_step_itself_asks_for_the_repair() -> None:
-    """The test above rebuilds the shape; this one pins the real call site.
+    """The tests above drive `_repair_once`; this pins that `step()` still does.
 
-    A copy of the logic passes whether or not `step()` runs it, which is the
-    way a test like that quietly stops meaning anything.
+    Exercising a method the real path stopped calling passes just as happily,
+    which is the way a test like that quietly stops meaning anything.
     """
     import inspect
 
     from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
 
     source = inspect.getsource(EraTreeAggregator.step)
-    assert "self.repair(" in source
-    assert 'ops.get("iteration"' in source      # billed to its own expansion
-    # The predicate itself, not a restatement of it: gating on `not valid`
-    # alone is the bug this pins shut.
-    assert "_is_dead(" in source
+    assert "self._repair_once(" in source

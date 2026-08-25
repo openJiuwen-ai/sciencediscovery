@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from agentdescent.aggregator import AggregatorConfig, MergeOutcome, MergeReport
 from agentdescent.evolution import Task
@@ -175,6 +175,16 @@ def make_propose(
 
 #: What a nothing-came-back candidate scores, wherever it is noticed.
 NO_CANDIDATE = "这次没有拿到候选程序，模型调用没有返回内容"
+
+
+def _reward(domain: Domain, valid: bool, metrics: Dict[str, Any]) -> float:
+    """A candidate's reward, or the floor when it did not produce one."""
+    if not valid:
+        return 0.0
+    try:
+        return float(domain.reward(dict(metrics)))
+    except Exception:
+        return 0.0
 
 
 def _is_dead(domain: Domain, valid: bool, metrics: Dict[str, Any]) -> bool:
@@ -337,6 +347,54 @@ class EraTreeAggregator:
 
     # -- the merge -------------------------------------------------------------
 
+    def _repair_once(
+        self,
+        code: str,
+        ops: Mapping[str, str],
+        valid: bool,
+        metrics: Dict[str, Any],
+        error: str,
+    ) -> Tuple[str, bool, Dict[str, Any], str]:
+        """One repair attempt on a candidate that scored nothing, or no change.
+
+        A method rather than an inline block so the tests can drive the real
+        thing. Twice now a test rebuilt this shape beside `step()`, and twice
+        the copy went on passing after the original was corrected — proving
+        only that the copy worked.
+
+        Its own error only. Nothing about a sibling goes in: parallel expansions
+        are independent draws, and the diversity between them is what selection
+        has to work with. Its own iteration too, so the extra model call is
+        billed to the expansion that needed it rather than to the seed.
+        """
+        if self.repair is None or not code.strip() or not (error or "").strip():
+            return code, valid, metrics, error
+        if not _is_dead(self.domain, valid, metrics):
+            return code, valid, metrics, error
+
+        repaired = self.repair(code, error or "", int(ops.get("iteration", "0")))
+        if not repaired.strip() or repaired.strip() == code.strip():
+            return code, valid, metrics, error
+
+        fixed, fixed_metrics, fixed_error = _evaluate(
+            self.domain, repaired, self._held_out_shards())
+        # Strictly better, not merely `fixed`. `fixed` is `valid`, and for an
+        # evaluator that catches its own exceptions that is true of every
+        # candidate — so keeping on it swapped the repair in unconditionally,
+        # including when it scored the same 0. Watched live: two repairs both
+        # reported 修好了 at 0.0000, each having replaced the original with
+        # something no better. A repair earns its place the way a candidate does.
+        after = _reward(self.domain, fixed, fixed_metrics)
+        kept = after > _reward(self.domain, valid, metrics)
+        self.on_event("repaired", {
+            "after": after if fixed else None,
+            "kept": kept,
+            "why": (error or "")[:200],
+        })
+        if kept:
+            return repaired, fixed, fixed_metrics, fixed_error
+        return code, valid, metrics, error
+
     def step(self) -> List[MergeReport]:
         self.seed()
         with self._cards_lock:
@@ -357,32 +415,8 @@ class EraTreeAggregator:
             ops = card.diff.ops
             code = ops.get("code", "")
             valid, metrics, error = _evaluate(self.domain, code, self._held_out_shards())
-            if (self.repair is not None and code.strip() and (error or "").strip()
-                    and _is_dead(self.domain, valid, metrics)):
-                # One repair attempt, on this candidate's own failure and
-                # nothing else. Most candidates that fail do so for a reason
-                # visible in one line of their own traceback — an import that
-                # raises, an index off by one — and discarding them means the
-                # next expansion writes the whole program again from the parent
-                # rather than fixing what is already there. Measured on a live
-                # compression run: seven of ten candidates never ran at all.
-                #
-                # Its own error only. Nothing about a sibling goes in: parallel
-                # expansions are independent draws, and the diversity between
-                # them is what selection has to work with.
-                # The candidate's own iteration, so the extra call is billed to
-                # the expansion that needed it rather than to the seed.
-                repaired = self.repair(code, error or "", int(ops.get("iteration", "0")))
-                if repaired.strip() and repaired.strip() != code.strip():
-                    fixed, fixed_metrics, fixed_error = _evaluate(
-                        self.domain, repaired, self._held_out_shards())
-                    self.on_event("repaired", {
-                        "after": float(fixed_metrics.get("score", 0.0)) if fixed else None,
-                        "kept": bool(fixed),
-                        "why": (error or "")[:200],
-                    })
-                    if fixed:
-                        code, valid, metrics, error = repaired, fixed, fixed_metrics, fixed_error
+            code, valid, metrics, error = self._repair_once(
+                code, ops, valid, metrics, error)
             program = Program(
                 program_id(code),
                 int(ops.get("iteration", "0")),
