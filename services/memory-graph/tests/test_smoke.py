@@ -427,7 +427,7 @@ class _FakeDriver:
 def captured_match(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Reload query against a fake reachable driver that records the Cypher +
     params query_match builds. Returns the capture dict for assertions."""
-    from science_agent_memory_graph import query
+    from sciencediscovery_memory_graph import query
     captured: dict = {}
     monkeypatch.setattr(query, "handle", lambda: _FakeDriver(captured))
     return captured
@@ -439,7 +439,7 @@ def test_match_cypher_is_static_across_modes(captured_match: dict, mode: str) ->
     # mode — both modes produce byte-identical Cypher, differing only in the
     # $min_matched parameter. This is the regression guard against reintroducing
     # f-string interpolation (which would re-open an injection surface).
-    from science_agent_memory_graph import query
+    from sciencediscovery_memory_graph import query
     query.query_match("TP53 NSCLC EGFR", mode=mode)
     cypher = captured_match["cypher"]
     assert "{op}" not in cypher and "{threshold}" not in cypher
@@ -452,7 +452,7 @@ def test_match_min_matched_param_differs_by_mode(captured_match: dict) -> None:
     # all_terms (term-AND) demands every token hit: min_matched = token count.
     # any_term (OR) demands at least one: min_matched = 1. Same Cypher, the
     # only divergence is this one integer parameter.
-    from science_agent_memory_graph import query
+    from sciencediscovery_memory_graph import query
     query.query_match("TP53 NSCLC EGFR", mode="all_terms")
     and_params = dict(captured_match["params"])
     query.query_match("TP53 NSCLC EGFR", mode="any_term")
@@ -473,7 +473,7 @@ def test_match_min_matched_equals_token_count_for_all_terms(
     # min_matched tracks the token count, not a fixed constant — a 6-word
     # paper title under all_terms needs min_matched == 6. Guards against an
     # implementation that hardcodes the count or uses size($tokens) in-Cypher.
-    from science_agent_memory_graph import query
+    from sciencediscovery_memory_graph import query
     query.query_match("A Survey on Multi-Agent Systems", mode="all_terms")
     params = captured_match["params"]
     # re.split(r"[\W_]+", ...) splits on the hyphen too → 6 tokens.
@@ -484,7 +484,7 @@ def test_match_min_matched_equals_token_count_for_all_terms(
 def test_match_empty_query_skips_session_run(captured_match: dict) -> None:
     # A whitespace-only query yields no tokens → returns before touching the
     # driver, so session.run is never called (the capture stays empty).
-    from science_agent_memory_graph import query
+    from sciencediscovery_memory_graph import query
     result = query.query_match("   ", mode="all_terms")
     assert result == {"hits": [], "total": 0, "truncated": False}
     assert "cypher" not in captured_match
