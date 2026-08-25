@@ -30,6 +30,7 @@ on:
         branches-ignore: []
         paths-ignore: []
         code-update: false
+        merge_comment: .*rerun
 inputs:
   PR_ID:
     type: string
@@ -438,8 +439,6 @@ post:
             mkdir -p "$RESULT_DIR"
             PR_CHECK_URL="https://gitcode.com/openJiuwen/sciencediscovery/pull/${MERGE_ID}/check"
             CODECHECK_RESULT_BASE="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery"
-            UT_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
-            ST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
             result_link_cell() {
               python3 - "$1" <<'PY'
             import html
@@ -462,48 +461,20 @@ post:
                 print("N/A")
             PY
             }
-            public_log_cell() {
-              python3 - "$1" "$PR_CHECK_URL" <<'PY'
-            import html
-            import sys
-            from urllib.request import Request, urlopen
-
-            log_url, checks_url = sys.argv[1:3]
-            try:
-                request = Request(
-                    log_url,
-                    headers={"Range": "bytes=0-0", "User-Agent": "ScienceDiscovery-CodeArts"},
-                )
-                with urlopen(request, timeout=10) as response:
-                    if response.status not in (200, 206):
-                        raise ValueError("unexpected HTTP status {}".format(response.status))
-                print('<a href="{}">公开日志</a>'.format(html.escape(log_url, quote=True)))
-            except Exception as error:
-                print("public test log is unavailable at {}: {}".format(log_url, error), file=sys.stderr)
-                print(
-                    '<a href="{}">查看构建日志</a>（公开测试日志未生成）'.format(
-                        html.escape(checks_url, quote=True)
-                    )
-                )
-            PY
-            }
             CODECHECK_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/codecheck/${MERGE_ID}/codecheck.json")
             BLACKLIST_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/blacklist/${MERGE_ID}/blacklist.json")
             ANTI_POISON_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/anti_poison/${MERGE_ID}/anti_poison.json")
             SCA_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/sca/${MERGE_ID}/sca.json")
-            UT_LOG_CELL=$(public_log_cell "$UT_LOG_URL")
-            ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")
             cat > "$RESULT_FILE" <<RESULT_HTML
             <p>&#9989; 流水线 <a href="$PR_CHECK_URL">${{ pipeline.run_id }}</a> 执行成功。</p>
-            <p>可在 <a href="$PR_CHECK_URL">$PR_CHECK_URL</a> 查看完整构建日志。</p>
             <table style="border-collapse: collapse">
               <tr><th>任务名称</th><th>子任务</th><th>状态</th><th>详情</th></tr>
-              <tr><td rowspan="4">代码检查</td><td>SCA（开源合规）</td><td rowspan="4">PASSED（子流水线汇总）</td><td>$SCA_LINK_CELL</td></tr>
+              <tr><td rowspan="4">代码检查</td><td>SCA（开源合规）</td><td rowspan="4">${{ jobs.code_check.status }}（子流水线汇总）</td><td>$SCA_LINK_CELL</td></tr>
               <tr><td>Anti-poison（防投毒）</td><td>$ANTI_POISON_LINK_CELL</td></tr>
               <tr><td>CodeCheck（静态检查）</td><td>$CODECHECK_LINK_CELL</td></tr>
               <tr><td>Blacklist（禁用词）</td><td>$BLACKLIST_LINK_CELL</td></tr>
-              <tr><td>UT</td><td>-</td><td>PASSED</td><td>$UT_LOG_CELL</td></tr>
-              <tr><td>ST</td><td>-</td><td>PASSED</td><td>$ST_LOG_CELL</td></tr>
+              <tr><td>UT</td><td>-</td><td>${{ jobs.ut.status }}</td><td><a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log">公开日志</a></td></tr>
+              <tr><td>ST</td><td>-</td><td>${{ jobs.st.status }}</td><td><a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log">公开日志</a></td></tr>
             </table>
             RESULT_HTML
             test -s "$RESULT_FILE"
@@ -558,8 +529,6 @@ post:
             mkdir -p "$RESULT_DIR"
             PR_CHECK_URL="https://gitcode.com/openJiuwen/sciencediscovery/pull/${MERGE_ID}/check"
             CODECHECK_RESULT_BASE="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery"
-            UT_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
-            ST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
             result_link_cell() {
               python3 - "$1" <<'PY'
             import html
@@ -582,57 +551,20 @@ post:
                 print("N/A")
             PY
             }
-            public_log_cell() {
-              python3 - "$1" "$PR_CHECK_URL" <<'PY'
-            import html
-            import sys
-            from urllib.request import Request, urlopen
-
-            log_url, checks_url = sys.argv[1:3]
-            try:
-                request = Request(
-                    log_url,
-                    headers={"Range": "bytes=0-0", "User-Agent": "ScienceDiscovery-CodeArts"},
-                )
-                with urlopen(request, timeout=10) as response:
-                    if response.status not in (200, 206):
-                        raise ValueError("unexpected HTTP status {}".format(response.status))
-                print('<a href="{}">公开日志</a>'.format(html.escape(log_url, quote=True)))
-            except Exception as error:
-                print("public test log is unavailable at {}: {}".format(log_url, error), file=sys.stderr)
-                print(
-                    '<a href="{}">查看构建日志</a>（公开测试日志未生成）'.format(
-                        html.escape(checks_url, quote=True)
-                    )
-                )
-            PY
-            }
-            job_result() {
-              case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-                completed|passed|success|successful|succeeded) printf 'PASSED' ;;
-                *) printf 'FAILED' ;;
-              esac
-            }
             CODECHECK_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/codecheck/${MERGE_ID}/codecheck.json")
             BLACKLIST_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/blacklist/${MERGE_ID}/blacklist.json")
             ANTI_POISON_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/anti_poison/${MERGE_ID}/anti_poison.json")
             SCA_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/sca/${MERGE_ID}/sca.json")
-            CODECHECK_RESULT=$(job_result "${{ jobs.code_check.status }}")
-            UT_RESULT=$(job_result "${{ jobs.ut.status }}")
-            ST_RESULT=$(job_result "${{ jobs.st.status }}")
-            UT_LOG_CELL=$(public_log_cell "$UT_LOG_URL")
-            ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")
             cat > "$RESULT_FILE" <<RESULT_HTML
             <p>&#10060; 流水线 <a href="$PR_CHECK_URL">${{ pipeline.run_id }}</a> 执行失败。</p>
-            <p>可在 <a href="$PR_CHECK_URL">$PR_CHECK_URL</a> 查看完整构建日志。</p>
             <table style="border-collapse: collapse">
               <tr><th>任务名称</th><th>子任务</th><th>状态</th><th>详情</th></tr>
-              <tr><td rowspan="4">代码检查</td><td>SCA（开源合规）</td><td rowspan="4">$CODECHECK_RESULT（子流水线汇总）</td><td>$SCA_LINK_CELL</td></tr>
+              <tr><td rowspan="4">代码检查</td><td>SCA（开源合规）</td><td rowspan="4">${{ jobs.code_check.status }}（子流水线汇总）</td><td>$SCA_LINK_CELL</td></tr>
               <tr><td>Anti-poison（防投毒）</td><td>$ANTI_POISON_LINK_CELL</td></tr>
               <tr><td>CodeCheck（静态检查）</td><td>$CODECHECK_LINK_CELL</td></tr>
               <tr><td>Blacklist（禁用词）</td><td>$BLACKLIST_LINK_CELL</td></tr>
-              <tr><td>UT</td><td>-</td><td>$UT_RESULT</td><td>$UT_LOG_CELL</td></tr>
-              <tr><td>ST</td><td>-</td><td>$ST_RESULT</td><td>$ST_LOG_CELL</td></tr>
+              <tr><td>UT</td><td>-</td><td>${{ jobs.ut.status }}</td><td><a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log">公开日志</a></td></tr>
+              <tr><td>ST</td><td>-</td><td>${{ jobs.st.status }}</td><td><a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log">公开日志</a></td></tr>
             </table>
             RESULT_HTML
             test -s "$RESULT_FILE"
