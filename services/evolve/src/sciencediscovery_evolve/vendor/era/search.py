@@ -177,6 +177,28 @@ def make_propose(
 NO_CANDIDATE = "这次没有拿到候选程序，模型调用没有返回内容"
 
 
+def _is_dead(domain: Domain, valid: bool, metrics: Dict[str, Any]) -> bool:
+    """Whether a candidate did not work at all, as opposed to working badly.
+
+    Not `valid` on its own. An evaluator that catches its own exceptions -- the
+    shape every mode here asks for -- reports a *successful measurement of a
+    broken candidate*: `{"valid": true, "metrics": {"score": 0.0}}`, because
+    from its side the measurement did succeed. So `valid` means the evaluation
+    ran, never that the candidate runs, and on a live compression run seven
+    candidates that crashed on every shard all arrived here as valid.
+
+    The floor of the reward is what separates the two. Every domain hands back
+    a reward already oriented so that larger is better, so nothing at or below
+    zero has anything left to lose.
+    """
+    if not valid:
+        return True
+    try:
+        return float(domain.reward(dict(metrics))) <= 0.0
+    except Exception:
+        return False
+
+
 def _evaluate(
     domain: Domain, code: str, shards: Sequence[int],
 ) -> Tuple[bool, Dict[str, Any], str]:
@@ -335,7 +357,8 @@ class EraTreeAggregator:
             ops = card.diff.ops
             code = ops.get("code", "")
             valid, metrics, error = _evaluate(self.domain, code, self._held_out_shards())
-            if not valid and self.repair is not None and code.strip():
+            if (self.repair is not None and code.strip() and (error or "").strip()
+                    and _is_dead(self.domain, valid, metrics)):
                 # One repair attempt, on this candidate's own failure and
                 # nothing else. Most candidates that fail do so for a reason
                 # visible in one line of their own traceback — an import that

@@ -205,6 +205,45 @@ test("a run that learned nothing says so, rather than reporting a status", async
   assert.equal(summary.bestTestScore, null);
 });
 
+test("a run that stopped a third of the way in says so", async () => {
+  // Taken from a live compression run: 20 expansions planned, 8 made, status
+  // `succeeded`, a real improvement on the board. Nothing in the summary said
+  // it had stopped early, which is the first thing anyone asks on seeing the
+  // tree — and the engine keeps quiet in the log about ordinary endings, so
+  // there was no warning line to carry it either.
+  const summary = summariseRun(
+    { candidates: 9, id: "r", status: "succeeded", tokens: 26_604 },
+    [
+      { event: { baselineScore: 0.253, type: "seeded" } },
+      { event: { score: 0.6953, type: "expanded", valid: true } },
+      {
+        event: {
+          bestTestScore: 0.5708, candidates: 9, expansionsPlanned: 20,
+          stopReason: "max_iters", type: "search_finished",
+        },
+      },
+    ],
+  );
+
+  assert.match(summary.stoppedEarly!, /计划 20 次扩展/);
+  assert.match(summary.stoppedEarly!, /实际跑了 8 次/);   // the seed is not an expansion
+  assert.match(summary.stoppedEarly!, /max_iters/);
+});
+
+test("a run that spent its plan says nothing about it", async () => {
+  const summary = summariseRun(
+    { candidates: 21, id: "r", status: "succeeded", tokens: 90_000 },
+    [{
+      event: {
+        candidates: 21, expansionsPlanned: 20, stopReason: "max_iters",
+        type: "search_finished",
+      },
+    }],
+  );
+
+  assert.equal(summary.stoppedEarly, undefined);
+});
+
 test("the summary quotes the split the search never saw", async () => {
   const summary = summariseRun(
     { candidates: 12, id: "r", status: "succeeded", tokens: 11_000 },

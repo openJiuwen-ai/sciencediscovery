@@ -233,6 +233,8 @@ def search_finished(
     candidates: int,
     *,
     best_test_score: float | None = None,
+    stop_reason: str = "",
+    expansions_planned: int | None = None,
 ) -> dict[str, Any]:
     event: dict[str, Any] = {
         "bestNodeIndex": best_node_index,
@@ -242,6 +244,14 @@ def search_finished(
     }
     if best_test_score is not None:
         event["bestTestScore"] = round(best_test_score, 6)
+    # Recorded even when it is the dull one. Whether a run that planned 20
+    # expansions and made 8 hit its iteration cap, lost its workers or timed
+    # out is answerable only from here, and only if it is written down while
+    # the framework's result is still in hand.
+    if stop_reason:
+        event["stopReason"] = stop_reason
+    if expansions_planned is not None:
+        event["expansionsPlanned"] = expansions_planned
     return event
 
 

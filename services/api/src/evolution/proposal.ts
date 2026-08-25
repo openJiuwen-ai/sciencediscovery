@@ -430,6 +430,7 @@ export function summariseRun(
   let bestTestScore: number | null = null;
   let bestChange: string | undefined;
   let note: string | undefined;
+  let stoppedEarly: string | undefined;
 
   for (const { event } of events) {
     const kind = event.type;
@@ -442,8 +443,21 @@ export function summariseRun(
         bestChange = typeof event.changeSummary === "string" ? event.changeSummary : undefined;
       }
     }
-    if (kind === "search_finished" && typeof event.bestTestScore === "number") {
-      bestTestScore = event.bestTestScore;
+    if (kind === "search_finished") {
+      if (typeof event.bestTestScore === "number") bestTestScore = event.bestTestScore;
+      // A run that made 8 of its 20 expansions reports `succeeded` and a real
+      // improvement, and nothing in the summary says it stopped a third of the
+      // way in — which is the first thing anyone asks on seeing the tree. The
+      // engine deliberately keeps quiet in the log about ordinary endings, so
+      // this is where the shortfall becomes sayable.
+      const planned = typeof event.expansionsPlanned === "number" ? event.expansionsPlanned : null;
+      const made = typeof event.candidates === "number" ? event.candidates - 1 : null;
+      if (planned !== null && made !== null && made < planned) {
+        const why = typeof event.stopReason === "string" && event.stopReason
+          ? event.stopReason
+          : "未知";
+        stoppedEarly = `计划 ${planned} 次扩展，实际跑了 ${made} 次，停止原因是 ${why}`;
+      }
     }
     // A run can finish `succeeded` having learned nothing — every score
     // identical, or nothing valid at all. The engine says so in a log line, and
@@ -463,6 +477,7 @@ export function summariseRun(
     id: run.id,
     note,
     status: run.status,
+    stoppedEarly,
     tokens: run.tokens ?? 0,
   };
 }

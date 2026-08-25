@@ -681,6 +681,29 @@ def test_a_run_that_spent_its_budget_says_nothing_extra() -> None:
     reporter.note_outcome(_Outcome(), planned=24)
 
     assert emitted == []
+    # Quiet in the log, but still on the record: a run that stops at 8 of 20
+    # has to be answerable afterwards, and staying quiet is not the same as
+    # throwing the reason away.
+    assert reporter._stop_reason == "max_iters"
+
+
+def test_the_stop_reason_survives_onto_the_finish_event() -> None:
+    """Where the reason is actually recoverable from, after the run.
+
+    A live run planned 20 expansions and made 8. The framework had said why;
+    the reporter declined to log the ordinary reasons and kept no field, so
+    the only account of it was gone by the time anyone asked.
+    """
+    from sciencediscovery_evolve import events
+
+    event = events.search_finished(
+        "succeeded", 2, 9, best_test_score=0.5708,
+        stop_reason="max_iters", expansions_planned=20,
+    )
+
+    assert event["stopReason"] == "max_iters"
+    assert event["expansionsPlanned"] == 20
+    assert event["candidates"] == 9      # planned versus actual, side by side
 
 
 def test_a_failed_candidate_gets_one_repair_on_its_own_error() -> None:
@@ -722,12 +745,84 @@ def test_a_failed_candidate_gets_one_repair_on_its_own_error() -> None:
     assert valid and metrics["score"] == 0.8         # the repaired one is kept
 
 
+def test_a_candidate_that_crashed_on_every_shard_is_repaired_too() -> None:
+    """The case the first version of this missed, found in a live run.
+
+    An evaluator that catches its own exceptions — the shape every mode here
+    asks for — reports a *successful measurement of a broken candidate*:
+    `valid: true` with a score of 0. Gating the repair on `not valid` therefore
+    never fired for the failures it was built for. On a compression run seven
+    candidates crashed on every shard, all arrived valid, and the run made nine
+    model calls: not one repair among them.
+    """
+    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+
+    asked = []
+
+    def repair(code, error, iteration):
+        asked.append(error)
+        return "def solve():\n    return 1\n"
+
+    def evaluate(code, shards):
+        if "return 1" in code:
+            return True, {"score": 0.8}, ""
+        # Valid: the evaluator ran and measured. Zero: nothing worked.
+        return True, {"score": 0.0}, "round-trip mismatch"
+
+    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator.repair = repair
+    aggregator.domain = type("D", (), {
+        "evaluate": staticmethod(evaluate),
+        "reward": staticmethod(lambda m: float(m["score"])),
+    })()
+    aggregator._held_out_shards = lambda: (0, 1)
+    aggregator.on_event = lambda *args: None
+
+    valid, metrics, _ = _run_one(aggregator, "def solve():\n    return None\n", {"iteration": "3"})
+
+    assert asked == ["round-trip mismatch"], "a valid-but-zero candidate was never repaired"
+    assert metrics["score"] == 0.8
+
+
+def test_a_working_but_worse_candidate_is_left_alone() -> None:
+    """Repair is for candidates that did not run, not for ones that ran badly.
+
+    Making it worse is what the search is for; spending a model call to "fix" a
+    candidate that works would buy a second draw from the same distribution at
+    the price of the diversity between siblings.
+    """
+    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+
+    asked = []
+
+    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator.repair = lambda *args: asked.append(args) or "x"
+    aggregator.domain = type("D", (), {
+        "evaluate": staticmethod(lambda code, shards: (True, {"score": 0.11}, "slow on 2 of 8")),
+        "reward": staticmethod(lambda m: float(m["score"])),
+    })()
+    aggregator._held_out_shards = lambda: (0, 1)
+    aggregator.on_event = lambda *args: None
+
+    _run_one(aggregator, "def solve():\n    return 2\n", {"iteration": "3"})
+
+    assert asked == [], "a candidate that ran was sent for repair"
+
+
 def _run_one(aggregator, code, ops):
-    """The failure-and-repair half of `step()`, exercised directly."""
-    from sciencediscovery_evolve.vendor.era.search import _evaluate
+    """The failure-and-repair half of `step()`, exercised directly.
+
+    The *decision* comes from the real `_is_dead` rather than being restated
+    here. An earlier version of this helper spelled out `if not valid`, and
+    when the real condition was corrected it went on passing — a copy of the
+    logic proves the copy works, which is how a test like this quietly stops
+    meaning anything. `test_step_itself_asks_for_the_repair` pins the rest.
+    """
+    from sciencediscovery_evolve.vendor.era.search import _evaluate, _is_dead
 
     valid, metrics, error = _evaluate(aggregator.domain, code, aggregator._held_out_shards())
-    if not valid and aggregator.repair is not None and code.strip():
+    if (aggregator.repair is not None and code.strip() and (error or "").strip()
+            and _is_dead(aggregator.domain, valid, metrics)):
         repaired = aggregator.repair(code, error or "", int(ops.get("iteration", "0")))
         if repaired.strip() and repaired.strip() != code.strip():
             fixed, fixed_metrics, fixed_error = _evaluate(
@@ -750,3 +845,6 @@ def test_step_itself_asks_for_the_repair() -> None:
     source = inspect.getsource(EraTreeAggregator.step)
     assert "self.repair(" in source
     assert 'ops.get("iteration"' in source      # billed to its own expansion
+    # The predicate itself, not a restatement of it: gating on `not valid`
+    # alone is the bug this pins shut.
+    assert "_is_dead(" in source

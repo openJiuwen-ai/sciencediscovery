@@ -341,6 +341,9 @@ export interface EvolveRunSummary {
    *  nothing, and that is worth reporting rather than dressing up. */
   note?: string;
   status: EvolveRunStatus;
+  /** Set only when the search made fewer expansions than it planned, which a
+   *  `succeeded` status and a real improvement otherwise hide completely. */
+  stoppedEarly?: string;
   tokens: number;
 }
 
@@ -529,7 +532,14 @@ export type EvolveEvent =
     bestNodeIndex: number | null;
     bestTestScore?: number;
     candidates: number;
+    /** What the run planned, next to the `candidates` it actually produced. */
+    expansionsPlanned?: number;
     status: EvolveRunStatus;
+    /** The framework's own word for why the search stopped — `max_iters`,
+     * `patience`, `max_seconds`. Recorded even when it is the ordinary one:
+     * a run that planned 20 expansions and made 8 is answerable only from
+     * here, and the log deliberately stays quiet about the dull reasons. */
+    stopReason?: string;
     type: "search_finished";
   }
   | { cents: number; tokens: number; type: "cost" }

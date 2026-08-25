@@ -429,6 +429,11 @@ class _Reporter:
         self.store = store
         self.usage = usage
         self.emit = emit
+        # Empty until the framework returns. `finish` runs on paths where it
+        # never does — a stop, a crash — and an absent reason has to be
+        # distinguishable from a reason the framework declined to give.
+        self._stop_reason = ""
+        self._planned = spec.expansions
         self.attempted = 0
         self.scored = 0
         #: Every finite score seen, rounded — one member after a whole run means
@@ -575,6 +580,13 @@ class _Reporter:
         and were being dropped. A run that ends early because every worker
         retired, or because a backend error killed it, is not the same event as
         one that spent its expansions — and told apart only here.
+
+        The reason is recorded on `search_finished` unconditionally, including
+        the ordinary ones this stays quiet about. Suppressing the log line for
+        `max_iters` keeps a normal ending from reading like a fault; suppressing
+        the *field* as well left a run that stopped at 8 of 20 expansions with
+        no recoverable account of why, and the one number that would have
+        explained it had been thrown away by this method.
         """
         if outcome is None:
             return
@@ -582,6 +594,8 @@ class _Reporter:
         error = str(getattr(outcome, "error", "") or "")
         retired = int(getattr(outcome, "retired_workers", 0) or 0)
         done = len(self.tree.nodes) - 1  # the seed is not an expansion
+        self._stop_reason = reason
+        self._planned = planned
 
         if error:
             self.emit(events.log("warn", f"搜索是被一个错误结束的：{error[:300]}"))
@@ -639,6 +653,8 @@ class _Reporter:
         self.emit(events.search_finished(
             status, best.index if best.program.valid else None, len(self.tree.nodes),
             best_test_score=test_score,
+            stop_reason=self._stop_reason,
+            expansions_planned=self._planned,
         ))
         log.info("run %s finished: status=%s nodes=%d best=%d",
                  self.spec.search_id, status, len(self.tree.nodes), best.index)
