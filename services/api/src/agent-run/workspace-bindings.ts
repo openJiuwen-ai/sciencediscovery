@@ -16,7 +16,7 @@ import type {
   Environment,
   KernelMode,
 } from "@sciencediscovery/schema";
-import type { WorkspaceAgentOptions } from "@sciencediscovery/context";
+import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 
 import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";

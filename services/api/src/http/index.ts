@@ -21,7 +21,7 @@ import {
   buildWorkspaceSystemPrompt,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@sciencediscovery/context";
+} from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
 import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";

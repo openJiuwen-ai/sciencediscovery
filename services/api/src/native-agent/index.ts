@@ -28,11 +28,25 @@
  * `packages/tools`; history compaction comes from `packages/context`.
  */
 
+import { randomUUID } from "node:crypto";
+
 import {
-  buildWorkspaceSystemPrompt,
+  ContextContributorRegistry,
+  ContextSectionContributor,
+  createDurableDomainContributors,
+  createContextTraceWriter,
   DefaultContextAssembler,
+  DurableContextStore,
+  DurableSkillStateContributor,
+  DurableTaskStateContributor,
+  DynamicContextAssembler,
   HistoryCompactor,
-  type WorkspaceAgentOptions,
+  resolveContextBudget,
+  resolveContextAssemblyMode,
+  registerContextContributorFactories,
+  type AgentScope,
+  type ContextAssemblyMode,
+  type ContextContributorFactory,
 } from "@sciencediscovery/context";
 import {
   resolveModelClientPolicy,
@@ -52,9 +66,19 @@ import {
   type AgentTool,
   ToolRegistry,
 } from "@sciencediscovery/tools";
-import { createWorkspaceTools, normalizeLegacyEnvironmentToolName } from "@sciencediscovery/workspace";
+import {
+  buildSkillSystemSection,
+  buildWorkspacePromptParts,
+  buildWorkspaceSystemPrompt,
+  createWorkspaceTools,
+  normalizeLegacyEnvironmentToolName,
+  type WorkspaceAgentOptions,
+  type RuntimeSkill,
+  type WorkspacePromptPart,
+} from "@sciencediscovery/workspace";
 
 import { composeRuntime } from "../bootstrap/runtime.js";
+import { runLog } from "../logging.js";
 
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 240_000;
 export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
@@ -74,6 +98,12 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
   gatewayHistory?: AgentHistoryMessage[];
   /** Runtime-pinned request/task contract preserved outside compactable history. */
   runContract?: string;
+  /** Internal composition seam; production defaults to SCIENCE_AGENT_CONTEXT_MODE. */
+  contextAssemblyMode?: ContextAssemblyMode;
+  /** Explicit role used to select scoped contributors. */
+  contextScope?: AgentScope;
+  /** Capability-package extension seam; factories are instantiated and frozen per AgentRun. */
+  contextContributorFactories?: readonly ContextContributorFactory<WireMessage>[];
 }
 
 export interface NativeAgentRunResult {
@@ -143,9 +173,12 @@ class NativeAgent implements NativeAgentHandle {
   private readonly listeners = new Set<Listener>();
   private readonly toolRegistry: ToolRegistry<WireMessage>;
   private readonly systemPrompt: string;
+  private readonly promptParts: WorkspacePromptPart[];
+  private readonly promptSkills: RuntimeSkill[];
   private readonly endpoint: ModelEndpoint;
   private readonly policy: ModelClientPolicy;
   private readonly waitController = new ExternalWaitController();
+  private readonly durableContext: DurableContextStore;
   private history: WireMessage[];
   private controller: AbortController | undefined;
   private externalWaitCount = 0;
@@ -153,32 +186,62 @@ class NativeAgent implements NativeAgentHandle {
   private resumeRunDeadline: (() => void) | undefined;
   private abortRequested = false;
   private executed = false;
+  private readonly contextId: string;
 
   constructor(private readonly options: NativeAgentOptions) {
+    this.contextId = `${options.sessionId}:${randomUUID()}`;
+    this.durableContext = new DurableContextStore({
+      history: options.gatewayHistory,
+      ...(options.runContract ? { runContract: options.runContract } : {}),
+    });
     this.toolRegistry = new ToolRegistry(buildTools(options), {
       createResultMessage: (call, content) => ({
         role: "tool", tool_call_id: call.id, name: call.name, content,
       }),
+      onResult: ({ call, content, isError, sequence }) => {
+        this.durableContext.observe(call, { content, isError }, sequence);
+        if (call.name !== "read_skill" || isError || typeof call.args.skillId !== "string") return;
+        const skill = options.skills?.find((item) => item.id === call.args.skillId);
+        if (skill) this.durableContext.registerSkill({
+          description: skill.description,
+          hash: skill.hash,
+          id: skill.id,
+          revision: skill.revision,
+          version: skill.version,
+        });
+      },
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
-    const promptSkills = toolNames.has("describe_skill") && toolNames.has("read_skill")
-      ? options.skills
+    this.promptSkills = toolNames.has("describe_skill") && toolNames.has("read_skill")
+      ? (options.skills ?? [])
       : [];
+    const hydratedSkillIds = new Set(this.durableContext.snapshot().skills.map((skill) => skill.id));
+    for (const skill of this.promptSkills.filter((item) => hydratedSkillIds.has(item.id))) {
+      this.durableContext.registerSkill({
+        description: skill.description,
+        hash: skill.hash,
+        id: skill.id,
+        revision: skill.revision,
+        version: skill.version,
+      });
+    }
+    const governance = {
+      ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
+      ...(options.memoryGraphEnabled ? { memoryGraphEnabled: options.memoryGraphEnabled } : {}),
+      ...(options.remoteHosts ? { remoteHosts: options.remoteHosts } : {}),
+      ...(options.specialist ? { specialist: options.specialist } : {}),
+      ...(options.specialists?.filter((specialist) => specialist.builtIn).length
+        ? { builtinSpecialists: options.specialists!.filter((specialist) => specialist.builtIn).map((specialist) => ({ description: specialist.description, name: specialist.name })) }
+        : {}),
+      ...(options.subagent ? { subagent: options.subagent } : {}),
+      ...(options.runSubagent && !options.subagent ? { subagentOrchestration: true } : {}),
+    };
     const baseSystemPrompt = buildWorkspaceSystemPrompt(
-      promptSkills,
+      this.promptSkills,
       Boolean(options.environments),
-      {
-        ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
-        ...(options.memoryGraphEnabled ? { memoryGraphEnabled: options.memoryGraphEnabled } : {}),
-        ...(options.remoteHosts ? { remoteHosts: options.remoteHosts } : {}),
-        ...(options.specialist ? { specialist: options.specialist } : {}),
-        ...(options.specialists?.filter((specialist) => specialist.builtIn).length
-          ? { builtinSpecialists: options.specialists!.filter((specialist) => specialist.builtIn).map((specialist) => ({ description: specialist.description, name: specialist.name })) }
-          : {}),
-        ...(options.subagent ? { subagent: options.subagent } : {}),
-        ...(options.runSubagent && !options.subagent ? { subagentOrchestration: true } : {}),
-      },
+      governance,
     );
+    this.promptParts = buildWorkspacePromptParts(this.promptSkills, Boolean(options.environments), governance);
     this.systemPrompt = [
       baseSystemPrompt,
       options.runContract ? formatRunContract(options.runContract) : "",
@@ -305,11 +368,72 @@ class NativeAgent implements NativeAgentHandle {
         );
         return typeof summaryTurn.assistantMessage.content === "string" ? summaryTurn.assistantMessage.content : "";
       });
-      const contextAssembler = new DefaultContextAssembler<WireMessage>({
-        compactor,
-        systemPrompt: this.systemPrompt,
-        tools: () => this.toolRegistry.visibleSpecs(),
-      });
+      const contextMode = this.options.contextAssemblyMode ?? resolveContextAssemblyMode();
+      const contextScope = this.options.contextScope
+        ?? (this.options.subagent?.name === "Reviewer Specialist"
+          ? "reviewer"
+          : this.options.subagent ? "subagent" : "main");
+      const contextBudget = resolveContextBudget(process.env, { outputReserveTokens: this.policy.maxTokens });
+      const traceWriter = createContextTraceWriter(this.options.config.dataDir);
+      const writeTrace = async (turn: number, record: Record<string, unknown>) => {
+        if (!traceWriter) return;
+        await traceWriter.write(this.contextId, turn, record).catch((error: unknown) => {
+          runLog.warn("context.trace_write_failed", {
+            contextId: this.contextId,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            turn,
+          });
+        });
+      };
+      const contextAssembler = contextMode === "legacy"
+        ? new DefaultContextAssembler<WireMessage>({
+          compactor,
+          onAssembled: async (assembly, turn) => writeTrace(turn, {
+            contextConfig: { budget: contextBudget, mode: contextMode, scope: contextScope },
+            llmInput: assembly.modelInput,
+            selectedPath: "legacy",
+          }),
+          systemPrompt: this.systemPrompt,
+          tools: () => this.toolRegistry.visibleSpecs(),
+        })
+        : new DynamicContextAssembler<WireMessage>({
+          budget: contextBudget,
+          compactor,
+          contextId: this.contextId,
+          mode: contextMode,
+          onTrace: async (trace) => {
+            runLog.info("context.assembled", {
+              attachmentCount: trace.admitted?.attachments.length ?? 0,
+              contextId: this.contextId,
+              contributorCount: trace.collection?.contributors.length ?? 0,
+              diagnosticCount: trace.admitted?.diagnostics.length
+                ?? trace.collection?.collected.diagnostics.length
+                ?? 0,
+              ...(trace.error ? { errorMessage: trace.error } : {}),
+              mode: trace.mode,
+              sectionCount: trace.admitted?.sections.length ?? 0,
+              turn: trace.turn,
+              used: trace.used,
+              ...(trace.rendered ? {
+                estimatedInputTokens: trace.rendered.statistics.estimatedInputTokens,
+                outputMessages: trace.rendered.statistics.outputMessages,
+              } : {}),
+            });
+            await writeTrace(trace.turn, {
+              admitted: trace.admitted,
+              collection: trace.collection,
+              contextConfig: { budget: contextBudget, mode: trace.mode, scope: contextScope },
+              ...(trace.error ? { error: trace.error } : {}),
+              llmInput: trace.modelInput,
+              renderedContext: trace.rendered,
+              selectedPath: trace.used,
+            });
+          },
+          registry: this.createContextRegistry(contextScope),
+          scope: contextScope,
+          systemPrompt: this.systemPrompt,
+          tools: () => this.toolRegistry.visibleSpecs(),
+        });
       const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, modelTurnStreamer);
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         maxModelTurns: MAX_MODEL_TURNS,
@@ -333,6 +457,77 @@ class NativeAgent implements NativeAgentHandle {
       this.resumeRunDeadline = undefined;
       this.externalWaitCount = 0;
     }
+  }
+
+  private createContextRegistry(scope: AgentScope): ContextContributorRegistry<WireMessage> {
+    const registry = new ContextContributorRegistry<WireMessage>();
+    for (const [order, part] of this.promptParts.filter((item) => item.kind !== "skills").entries()) {
+      const slot = part.kind === "identity" ? "identity"
+        : part.kind === "governance" ? "governance" : "capabilities";
+      registry.register(new ContextSectionContributor<WireMessage>({
+        id: part.id,
+        scopes: [scope],
+        async contribute() {
+          return { systemSections: [{
+            content: part.content,
+            id: part.id,
+            order,
+            protected: part.protected,
+            slot,
+          }] };
+        },
+      }));
+    }
+    if (this.options.runContract) {
+      const runContract = formatRunContract(this.options.runContract);
+      registry.register(new ContextSectionContributor<WireMessage>({
+        id: "run.contract",
+        scopes: [scope],
+        async contribute() {
+          return { systemSections: [{
+            content: runContract,
+            id: "run.contract",
+            protected: true,
+            slot: "run_contract",
+          }] };
+        },
+      }));
+    }
+    if (this.promptSkills.length) {
+      registry.register(new ContextSectionContributor<WireMessage>({
+        id: "skills.catalog",
+        scopes: [scope],
+        contribute: async () => {
+          return { systemSections: [{
+            // Keep the capability catalog stable for provider prefix caching.
+            // Per-turn activation lives in the lower-authority durable data channel.
+            content: buildSkillSystemSection(this.promptSkills),
+            id: "skills.catalog",
+            order: 50,
+            slot: "capabilities",
+          }] };
+        },
+      }));
+      registry.register(new DurableSkillStateContributor<WireMessage>(this.durableContext, [scope]));
+    }
+    registry.register(new ContextSectionContributor<WireMessage>({
+      id: "tools.capabilities",
+      scopes: [scope],
+      contribute: async () => {
+        const content = this.toolRegistry.promptSections().filter(Boolean).join("\n\n");
+        return content ? { systemSections: [{ content, id: "tools.capabilities", order: 100, slot: "capabilities" }] } : {};
+      },
+    }));
+    registry.register(new DurableTaskStateContributor<WireMessage>(this.durableContext, [scope]));
+    for (const contributor of createDurableDomainContributors<WireMessage>(this.durableContext, [scope])) {
+      registry.register(contributor);
+    }
+    registerContextContributorFactories(
+      registry,
+      this.options.contextContributorFactories ?? [],
+      { contextId: this.contextId, scope },
+    );
+    return registry.freeze();
   }
 
   private emit(event: AgentEvent): void {

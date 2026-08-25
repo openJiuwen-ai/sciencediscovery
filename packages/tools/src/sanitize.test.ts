@@ -96,7 +96,7 @@ const NON_AUTHORITY_TAGS = new Map([
  */
 test("denylist covers every framework authority block", () => {
   const sources = [
-    "packages/context/src/workspace-prompt.ts",
+    "packages/workspace/src/prompt.ts",
     "packages/context/src/compaction.ts",
     "packages/tools/src/deferred-tools.ts",
     "services/api/src/native-agent/index.ts",

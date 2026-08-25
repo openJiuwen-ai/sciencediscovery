@@ -25,7 +25,7 @@ import {
   DEFAULT_MAX_TOTAL_SUBAGENTS,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@sciencediscovery/context";
+} from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
 import {
   createMainAgentProfile,

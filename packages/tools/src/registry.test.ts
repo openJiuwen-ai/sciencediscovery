@@ -23,3 +23,31 @@ test("executes tools and creates the canonical result message", async () => {
   assert.equal(result.content, "ok");
   assert.deepEqual(result.message, { role: "tool", name: "echo", tool_call_id: "1", content: "ok" });
 });
+
+test("result observations retain model-declared order across concurrent completion", async () => {
+  const observed: Array<{ name: string; sequence: number }> = [];
+  const registry = new ToolRegistry([
+    {
+      name: "slow", label: "slow", description: "slow", parameters: Type.Object({}),
+      async execute() {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { content: [{ type: "text" as const, text: "slow" }], details: {} };
+      },
+    },
+    {
+      name: "fast", label: "fast", description: "fast", parameters: Type.Object({}),
+      async execute() { return { content: [{ type: "text" as const, text: "fast" }], details: {} }; },
+    },
+  ], {
+    createResultMessage: (call, content) => ({ role: "tool", name: call.name, content }),
+    onResult: ({ call, sequence }) => observed.push({ name: call.name, sequence }),
+  });
+  await Promise.all([
+    registry.execute({ args: {}, id: "1", name: "slow" }, new AbortController().signal),
+    registry.execute({ args: {}, id: "2", name: "fast" }, new AbortController().signal),
+  ]);
+  assert.deepEqual(observed.sort((left, right) => left.sequence - right.sequence), [
+    { name: "slow", sequence: 1 },
+    { name: "fast", sequence: 2 },
+  ]);
+});

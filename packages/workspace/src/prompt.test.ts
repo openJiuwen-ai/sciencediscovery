@@ -15,7 +15,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildWorkspaceSystemPrompt } from "./workspace-prompt.js";
+import {
+  buildSkillSystemSection,
+  buildWorkspacePromptParts,
+  buildWorkspaceSystemPrompt,
+  type RuntimeSkill,
+} from "./prompt.js";
+
+function skill(id: string, description: string): RuntimeSkill {
+  return {
+    content: `Instructions for ${id}`,
+    description,
+    hash: "a".repeat(64),
+    id,
+    readResource: async () => { throw new Error("not called"); },
+    resources: [],
+    revision: 1,
+    version: "1.0.0",
+  };
+}
 
 test("managed environment prompt directs mutations through governed tools", () => {
   const prompt = buildWorkspaceSystemPrompt([], true);
@@ -58,6 +76,26 @@ test("system prompt lists selected skill metadata without injecting instructions
   assert.match(prompt, /Do not issue a PDF extraction in the same turn/i);
   assert.match(prompt, /fails or returns no records, state that evidence gap/i);
   assert.doesNotMatch(prompt, /unselected-skill/);
+});
+
+test("dynamic skill catalog prioritizes the current task and marks committed loads", () => {
+  const prompt = buildSkillSystemSection([
+    skill("protein-structure", "Analyze protein structures"),
+    skill("literature-review", "Review scientific literature"),
+  ], {
+    latestUserInput: "Please conduct a literature review",
+    loadedSkillIds: new Set(["literature-review"]),
+  });
+  assert.ok(prompt.indexOf("literature-review") < prompt.indexOf("protein-structure"));
+  assert.match(prompt, /<name>literature-review<\/name>[\s\S]*?<loaded>true<\/loaded>/u);
+  assert.doesNotMatch(prompt, /Instructions for literature-review/u);
+});
+
+test("workspace prompt exposes protected identity and governance parts", () => {
+  const parts = buildWorkspacePromptParts([], true, { memoryGraphEnabled: true });
+  assert.equal(parts.find((part) => part.id === "workspace.identity")?.protected, true);
+  assert.equal(parts.find((part) => part.id === "environment.capabilities")?.protected, false);
+  assert.equal(parts.find((part) => part.id === "citation.governance")?.protected, true);
 });
 
 test("system prompt composes a subagent preset with an optional user specialist", () => {

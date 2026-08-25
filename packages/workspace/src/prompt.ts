@@ -34,7 +34,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { AgentConfig } from "@sciencediscovery/model";
-import type { ToolFilterPolicy, WorkspaceToolOptions } from "@sciencediscovery/workspace";
+import type { ToolFilterPolicy, WorkspaceToolOptions } from "./workspace.js";
 
 export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.1";
 // Bump when the workspace prompt contract changes, including subagent orchestration or skill disclosure rules.
@@ -129,9 +129,25 @@ function escapePromptTagText(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function buildSkillSystemSection(skills: RuntimeSkill[]): string {
+export function buildSkillSystemSection(
+  skills: RuntimeSkill[],
+  state: { latestUserInput?: string; loadedSkillIds?: ReadonlySet<string> } = {},
+): string {
   if (!skills.length) return "";
-  const skillItems = skills
+  const query = state.latestUserInput?.trim().toLowerCase() ?? "";
+  const score = (skill: RuntimeSkill): number => {
+    if (state.loadedSkillIds?.has(skill.id)) return 1_000;
+    const id = skill.id.toLowerCase();
+    const description = skill.description.toLowerCase();
+    if (query.includes(id)) return 500;
+    const terms = query.split(/[^\p{L}\p{N}_-]+/u).filter((term) => term.length >= 3);
+    return terms.reduce((total, term) => total + (id.includes(term) ? 10 : description.includes(term) ? 2 : 0), 0);
+  };
+  const orderedSkills = skills
+    .map((skill, index) => ({ index, score: score(skill), skill }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map(({ skill }) => skill);
+  const skillItems = orderedSkills
     .map((skill) => {
       const resources = skill.resources.length
         ? `\n        <resources>${skill.resources.length} read-only resource(s); call read_skill first, then read_skill_resource only for referenced supporting files.</resources>`
@@ -141,7 +157,9 @@ function buildSkillSystemSection(skills: RuntimeSkill[]): string {
         `        <name>${escapePromptTagText(skill.id)}</name>`,
         `        <description>${escapePromptTagText(skill.description)}</description>`,
         `        <revision>${skill.revision}</revision>`,
-        `        <version>${escapePromptTagText(skill.version)}</version>${resources}`,
+        `        <version>${escapePromptTagText(skill.version)}</version>${
+          state.loadedSkillIds ? `\n        <loaded>${state.loadedSkillIds.has(skill.id)}</loaded>` : ""
+        }${resources}`,
         "    </skill>",
       ].join("\n");
     })
@@ -163,22 +181,33 @@ ${skillItems}
 </skill_system>`;
 }
 
-export function buildWorkspaceSystemPrompt(
-  skills: RuntimeSkill[] = [],
-  scientificEnvsAvailable = false,
-  governance?: {
-    approvalMode?: "always_allow" | "ask_for_dangerous";
-    memoryGraphEnabled?: boolean;
-    remoteHosts?: RemoteHostTarget[];
-    specialist?: { description: string; instructions: string; name: string };
-    builtinSpecialists?: Array<{ description: string; name: string }>;
-    subagent?: { instructions: string; name: string };
-    subagentOrchestration?: boolean | {
-      maxConcurrent?: number;
-      maxTotal?: number;
-    };
-  },
-): string {
+export interface WorkspacePromptGovernance {
+  approvalMode?: "always_allow" | "ask_for_dangerous";
+  memoryGraphEnabled?: boolean;
+  remoteHosts?: RemoteHostTarget[];
+  specialist?: { description: string; instructions: string; name: string };
+  builtinSpecialists?: Array<{ description: string; name: string }>;
+  subagent?: { instructions: string; name: string };
+  subagentOrchestration?: boolean | {
+    maxConcurrent?: number;
+    maxTotal?: number;
+  };
+}
+
+export type WorkspacePromptPartKind = "capabilities" | "governance" | "identity" | "skills";
+
+export interface WorkspacePromptPart {
+  content: string;
+  id: string;
+  kind: WorkspacePromptPartKind;
+  protected: boolean;
+}
+
+function buildWorkspacePromptValues(
+  skills: RuntimeSkill[],
+  scientificEnvsAvailable: boolean,
+  governance?: WorkspacePromptGovernance,
+): string[] {
   return [
     WORKSPACE_SYSTEM_PROMPT,
     scientificEnvsAvailable
@@ -206,13 +235,41 @@ export function buildWorkspaceSystemPrompt(
       ? `\nRemote compute is available through these user-controlled SSH targets: ${governance.remoteHosts.map((host) => `${host.id} (${host.alias}, SLURM=${host.capabilities?.slurm ?? false})`).join("; ")}. Remote datasets should stay at their existing absolute paths. Calling propose_remote_job creates an immutable job card.${governance.approvalMode === "always_allow" ? " The current approval policy submits it without a prompt." : " Dangerous remote jobs pause until the user reviews their independent permission card."}`
       : "",
     buildSkillSystemSection(skills),
-    // Memory-graph instructions are injected only when the feature is on.
     ...(governance?.memoryGraphEnabled
       ? [
         "\nCitation chain — Whenever your run produces a user-facing output file, you MUST follow this flow so the output carries clickable [alias] chips:\n1. query_graph — optional. Browse what has already been searched (Papers) or produced (Artifacts) in this session. Exploratory read only; do not use it to look up ids to cite.\n2. declare_evidence — for each literature finding, declare the Evidence extracted from a Paper; it returns an evidence_id.\n3. list_artifacts — for any file an upstream subagent produced that you want to cite (a Domain Summary, a CSV), list it here to get its artifact_id.\n4. declare_claim — for each cited assertion in the output, declare a Claim. To cite an evidence_id, pass it in cites_evidence_aliases as {\"evidenceN\": \"<evidence_id>\"}; to cite an artifact_id of a figure/dataset you produced this run (declare_artifact on it first) or one from step 3, pass it in cites_artifact_aliases as {\"artifactN\": \"<artifact_id>\"}. declare_claim returns the alias to write inline. A [alias] chip renders ONLY when the alias token you write in the body matches a key in cites_evidence_aliases or cites_artifact_aliases — writing [artifact1] in the body without an {\"artifact1\": \"<artifact_id>\"} entry in cites_artifact_aliases produces plain text, not a clickable chip. Every [evidenceN]/[artifactN] token in the body MUST have a matching entry in the same declare_claim's alias params. Alias format is fixed: evidence+number for evidence (e.g. [evidence1]); artifact+number for artifacts (e.g. [artifact1]) — no other formats.\n5. declare_artifact(output) — call this LAST, after all declare_claim calls. It saves the output and drains the aliases from step 4 onto this version as the chips. (declare_artifact on a non-output figure/dataset that you cite in step 4 is not last — it runs before the claim that cites it.)\n6. Put the same aliases in the final chat message so chips render there too.\nDo NOT narrate these steps to the user. They are silent bookkeeping — never say \"I will declare these files as artifacts\" or \"now I'm building the citation chain\". Tell the user only about the substantive work and the finished output.",
       ]
       : []),
-  ].join("\n");
+  ];
+}
+
+export function buildWorkspacePromptParts(
+  skills: RuntimeSkill[] = [],
+  scientificEnvsAvailable = false,
+  governance?: WorkspacePromptGovernance,
+): WorkspacePromptPart[] {
+  const descriptors: Array<Omit<WorkspacePromptPart, "content">> = [
+    { id: "workspace.identity", kind: "identity", protected: true },
+    { id: "environment.capabilities", kind: "capabilities", protected: false },
+    { id: "specialist.identity", kind: "identity", protected: true },
+    { id: "specialists.capabilities", kind: "capabilities", protected: false },
+    { id: "subagent.identity", kind: "identity", protected: true },
+    { id: "subagent.governance", kind: "governance", protected: true },
+    { id: "remote-compute.capabilities", kind: "capabilities", protected: false },
+    { id: "skills.catalog", kind: "skills", protected: false },
+    { id: "citation.governance", kind: "governance", protected: true },
+  ];
+  return buildWorkspacePromptValues(skills, scientificEnvsAvailable, governance)
+    .map((content, index) => ({ ...descriptors[index]!, content }))
+    .filter((part) => Boolean(part.content));
+}
+
+export function buildWorkspaceSystemPrompt(
+  skills: RuntimeSkill[] = [],
+  scientificEnvsAvailable = false,
+  governance?: WorkspacePromptGovernance,
+): string {
+  return buildWorkspacePromptValues(skills, scientificEnvsAvailable, governance).join("\n");
 }
 
 export interface WorkspaceAgentOptions {

@@ -12,9 +12,7 @@
   },
   "dependencies": {
     "@sciencediscovery/model": "workspace:*",
-    "@sciencediscovery/runtime-core": "workspace:*",
-    "@sciencediscovery/schema": "workspace:*",
-    "@sciencediscovery/workspace": "workspace:*"
+    "@sciencediscovery/runtime-core": "workspace:*"
   },
   "devDependencies": { "@types/node": "26.1.1" }
 }

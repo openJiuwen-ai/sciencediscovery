@@ -2,4 +2,5 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 export * from "./environment-tool-names.js";
+export * from "./prompt.js";
 export * from "./workspace.js";

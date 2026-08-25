@@ -75,7 +75,7 @@ import type {
 import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 import {
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-} from "@sciencediscovery/context";
+} from "@sciencediscovery/workspace";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
