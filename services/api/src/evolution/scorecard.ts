@@ -33,7 +33,6 @@
  * reproduces their scores.
  */
 
-import { createHash } from "node:crypto";
 
 import type {
   EvolveNormalize,
@@ -260,38 +259,6 @@ function satisfies(observed: number, op: ScorecardConstraint["op"], limit: numbe
 
 // --- Freezing ---------------------------------------------------------------
 
-/**
- * Hash of everything that makes two runs' scores comparable.
- *
- * Deliberately excludes the provenance fields (`confirmedBy`, `confirmedAt`,
- * `derivedFrom`, and `hash` itself): who approved a card does not change what it
- * measures, and including them would make `--resume` refuse a run for a reason
- * that has nothing to do with comparability.
- */
-export function hashScorecard(scorecard: EvolveScorecard): string {
-  const canonical = {
-    aggregate: scorecard.aggregate,
-    constraints: [...scorecard.constraints]
-      .map((constraint) => ({
-        criterionId: constraint.criterionId,
-        id: constraint.id,
-        op: constraint.op,
-        value: constraint.value,
-      }))
-      .sort((left, right) => left.id.localeCompare(right.id)),
-    criteria: [...scorecard.criteria]
-      .map((criterion) => ({
-        direction: criterion.direction,
-        id: criterion.id,
-        measure: criterion.measure,
-        normalize: criterion.normalize,
-        weight: criterion.weight,
-      }))
-      .sort((left, right) => left.id.localeCompare(right.id)),
-    solvedThreshold: scorecard.solvedThreshold,
-  };
-  return `sha256:${createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
-}
 
 // --- Validation -------------------------------------------------------------
 

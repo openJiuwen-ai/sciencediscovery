@@ -23,7 +23,6 @@ import {
   aggregate,
   evaluateConstraints,
   hasBlockingIssue,
-  hashScorecard,
   normalize,
   normalizedWeights,
   scoreCandidate,
@@ -188,21 +187,6 @@ test("an unmeasured criterion neither violates nor silently passes", () => {
 
 // --- Freezing ---------------------------------------------------------------
 
-test("the hash covers what makes scores comparable, and not who approved the card", () => {
-  const base = card([criterion({ id: "a", weight: 0.5 }), criterion({ id: "b", weight: 0.5 })]);
-  const reordered = card([criterion({ id: "b", weight: 0.5 }), criterion({ id: "a", weight: 0.5 })]);
-  assert.equal(hashScorecard(base), hashScorecard(reordered), "criterion order is not semantics");
-
-  const reapproved = { ...base, confirmedAt: "2027-01-01T00:00:00.000Z", confirmedBy: "someone else" };
-  assert.equal(hashScorecard(base), hashScorecard(reapproved), "provenance must not break --resume");
-
-  const reweighted = card([criterion({ id: "a", weight: 0.9 }), criterion({ id: "b", weight: 0.1 })]);
-  assert.notEqual(hashScorecard(base), hashScorecard(reweighted), "weights change the ranking");
-
-  const stricter = card([criterion({ id: "a", weight: 0.5 }), criterion({ id: "b", weight: 0.5 })],
-    [{ criterionId: "a", id: "gate", name: "gate", op: ">", value: 0.1 }]);
-  assert.notEqual(hashScorecard(base), hashScorecard(stricter), "constraints change what may merge");
-});
 
 // --- Validation -------------------------------------------------------------
 

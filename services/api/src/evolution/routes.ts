@@ -33,7 +33,6 @@ import { readJson } from "../http/body.js";
 import { sendError, sendJson } from "../http/response.js";
 
 import type { EvolveOrchestrator } from "./orchestrator.js";
-import { preflight, type PreflightIssue } from "./preflight.js";
 import { EvolutionStoreError, type EvolutionStore } from "./store.js";
 
 interface CreateRunBody {
@@ -200,10 +199,3 @@ async function readRunOr404(
   return run;
 }
 
-/** A refusal the user can act on: every issue carries what to change. */
-function sendPreflightRefusal(response: ServerResponse, issues: PreflightIssue[]): void {
-  sendJson(response, 400, {
-    error: issues[0]!.message,
-    issues: issues.map((issue) => ({ code: issue.code, fix: issue.fix, message: issue.message })),
-  });
-}
