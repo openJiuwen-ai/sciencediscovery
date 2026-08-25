@@ -30,7 +30,7 @@ on:
         branches-ignore: []
         paths-ignore: []
         code-update: false
-        merge_comment: .*rerun
+        merge_comment: rerun
 inputs:
   PR_ID:
     type: string
