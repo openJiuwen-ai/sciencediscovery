@@ -57,13 +57,16 @@ export function isSystemEnvironmentRevisionId(revisionId: string): boolean {
 
 export const DEFAULT_ENVIRONMENT_REVISION_ID = systemPythonEnvironmentRevisionId();
 const sandbox = hostSandboxKind();
-const pythonExecutable = process.env.SCIENCE_AGENT_PYTHON_PATH?.trim() || "/usr/bin/python3";
-const shellExecutable = process.env.SCIENCE_AGENT_SHELL_PATH?.trim()
-  || (process.platform === "darwin" ? "/bin/bash" : "/usr/bin/bash");
-const pythonVersion = execFileSync(pythonExecutable, ["--version"], { encoding: "utf8" }).trim();
-const shellVersion = execFileSync(shellExecutable, ["--version"], { encoding: "utf8" }).split("\n")[0]!.trim();
+// The package spec records paths inside the Runner's sandbox. Probe versions
+// through PATH because the API host may install the same tools elsewhere.
+const pythonProbeExecutable = process.env.SCIENCE_AGENT_PYTHON_PATH?.trim() || "python3";
+const shellProbeExecutable = process.env.SCIENCE_AGENT_SHELL_PATH?.trim() || "bash";
+const pythonVersion = execFileSync(pythonProbeExecutable, ["--version"], { encoding: "utf8" }).trim();
+const shellVersion = execFileSync(shellProbeExecutable, ["--version"], { encoding: "utf8" }).split("\n")[0]!.trim();
 const runnerVersion = sandbox === "seatbelt" ? "m4-isolation-only-v1" : "m1-bwrap-v1";
 const packageSource = sandbox === "seatbelt" ? "read-only system runtime" : "read-only system /usr";
+const pythonExecutable = "/usr/bin/python3";
+const shellExecutable = process.platform === "darwin" ? "/bin/bash" : "/usr/bin/bash";
 
 export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
   executable: pythonExecutable,
