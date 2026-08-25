@@ -204,6 +204,7 @@ import { PermissionCards, PermissionGrantManager } from "./Permissions.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
 import { formatRunFailure } from "./run-failure.js";
 import {
+  ComposerCommandChips,
   ComposerReferenceChips,
   ComposerReferenceMenu,
   composerReferenceToken,
@@ -213,7 +214,10 @@ import {
   GlobalSearchDialog,
   insertComposerCommand,
   insertComposerReference,
+  removeSkillAuthoringCommand,
+  selectedSkillAuthoringCommands,
   SKILL_AUTHORING_COMMANDS,
+  type ComposerCommandSuggestion,
   type ComposerSuggestion,
 } from "./composer/WorkbenchNavigation.js";
 
@@ -3387,6 +3391,11 @@ export function App() {
     setMessage((current) => current.replace(`${token} `, "").replace(token, ""));
   }
 
+  function removeComposerCommand(command: ComposerCommandSuggestion): void {
+    setMessage((current) => removeSkillAuthoringCommand(current, command.command));
+    requestAnimationFrame(() => composerTextarea.current?.focus());
+  }
+
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const activeModel = models.find((item) => item.id === session?.modelId);
   const visionModels = models.filter((item) => item.vision);
@@ -3497,6 +3506,7 @@ export function App() {
     stoppingSessionIds,
   });
   const composerTrigger = getComposerTrigger(message, composerTextarea.current?.selectionStart ?? message.length);
+  const selectedComposerCommands = selectedSkillAuthoringCommands(message);
   const composerSuggestions: ComposerSuggestion[] = !composerTrigger ? [] : composerTrigger.symbol === "@"
     ? artifacts.map((artifact) => ({
       detail: `${artifact.kind} · ${artifact.origin} · v${artifact.currentVersion}`,
@@ -3962,6 +3972,7 @@ export function App() {
                 </div>
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
+                  <ComposerCommandChips commands={selectedComposerCommands} onRemove={removeComposerCommand} />
                   <ComposerReferenceChips references={composerReferences} onRemove={removeComposerReference} />
                   {pendingAnnotations.length ? <div className="annotation-chips">{pendingAnnotations.map((annotation) => <button key={annotation.id} onClick={() => setPendingAnnotations((current) => current.filter((item) => item.id !== annotation.id))} title={`Remove annotation: ${annotation.artifactLogicalName}: ${annotation.note}`} type="button"><TargetIcon size={12} /> {annotation.artifactLogicalName}: {annotation.note} <CloseIcon size={12} /></button>)}</div> : null}
                   <textarea ref={composerTextarea} disabled={sessionArchived} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => {

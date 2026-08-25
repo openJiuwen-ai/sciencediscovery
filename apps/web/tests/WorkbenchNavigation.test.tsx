@@ -20,6 +20,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  ComposerCommandChips,
   ComposerReferenceMenu,
   composerSkillSuggestions,
   GLOBAL_SEARCH_DEBOUNCE_MS,
@@ -27,6 +28,8 @@ import {
   GlobalSearchDialog,
   insertComposerCommand,
   insertComposerReference,
+  removeSkillAuthoringCommand,
+  selectedSkillAuthoringCommands,
   SKILL_AUTHORING_COMMANDS,
 } from "../src/WorkbenchNavigation.js";
 
@@ -58,6 +61,30 @@ test("inserts Skill authoring commands without attaching a catalog reference", (
   }));
   assert.match(html, /skill-creator/);
   assert.match(html, /reviewable Skill package/);
+  assert.match(html, /composer-command-suggestion/);
+  assert.match(html, />Authoring</);
+});
+
+test("renders selected Skill authoring commands as removable high-emphasis chips", () => {
+  const message = "/code-engineer /skill-creator Build a presentation review workflow";
+  assert.deepEqual(
+    selectedSkillAuthoringCommands(message).map((item) => item.command),
+    ["/skill-creator"],
+  );
+  assert.equal(
+    removeSkillAuthoringCommand(message, "/skill-creator"),
+    "/code-engineer Build a presentation review workflow",
+  );
+  assert.deepEqual(selectedSkillAuthoringCommands("Explain /skill-creator-like syntax"), []);
+
+  const html = renderToStaticMarkup(createElement(ComposerCommandChips, {
+    commands: selectedSkillAuthoringCommands(message),
+    onRemove: () => undefined,
+  }));
+  assert.match(html, /composer-command-chips/);
+  assert.match(html, /Selected Skill authoring commands/);
+  assert.match(html, /Remove \/skill-creator from the prompt/);
+  assert.match(html, /Skill authoring/);
 });
 
 test("`/` only offers the skills the Session can actually run", () => {
