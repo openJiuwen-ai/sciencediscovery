@@ -16,7 +16,17 @@ sources:
     endpoint_id: c4451a2a11af48baacd6b2af5eee3075
     repo_id: 10597680
 on:
-  sources: {}
+  sources:
+    sciencediscovery:
+      merge_requests:
+        branches:
+        - main
+        paths: []
+        types: []
+        branches-ignore: []
+        paths-ignore: []
+        code-update: false
+        merge_comment: /merge
 stages:
   17876415983332873c1af-7bdb-4329-8424-4161cf516258:
     jobs:
