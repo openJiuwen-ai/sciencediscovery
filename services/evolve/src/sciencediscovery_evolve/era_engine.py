@@ -493,9 +493,11 @@ class _Reporter:
             # went, and silently failing hides that the attempt was made.
             self.emit(events.log(
                 "info",
-                ("修好了一个跑不起来的候选（%.4f）：%s" % (payload["after"], payload["why"]))
+                # "一分没拿到", not "跑不起来": a candidate that runs and gets
+                # every case wrong lands here just as often as one that raises.
+                ("修好了一个一分没拿到的候选（%.4f）：%s" % (payload["after"], payload["why"]))
                 if payload.get("kept") else
-                ("有个候选跑不起来，试着修了一次没成：%s" % payload["why"]),
+                ("有个候选一分没拿到，试着修了一次没成：%s" % payload["why"]),
             ))
 
     def _node(self, payload: Dict[str, Any]) -> None:

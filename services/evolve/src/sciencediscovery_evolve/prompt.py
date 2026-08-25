@@ -308,8 +308,13 @@ def repair_prompt(code: str, error: str) -> str:
     what the ordinary expansion already does.
     """
     return (
-        "下面这份程序跑不起来。请只修掉它报的这个问题，不要重新设计、"
-        "不要换方法、不要顺手改别的地方——把它改到能跑就行，其余保持原样。\n\n"
+        # Not "跑不起来": it may well run. A candidate reaches here whenever it
+        # scored nothing at all, and "every case came out wrong" is as common a
+        # way to get there as a traceback — telling it the program does not run
+        # when the error says the round trip does not match points the repair
+        # at the wrong thing.
+        "下面这份程序一个用例都没通过。请只修掉它报的这个问题，不要重新设计、"
+        "不要换方法、不要顺手改别的地方——把它改到能正确跑通就行，其余保持原样。\n\n"
         "## 它报的错\n\n"
         f"{error.strip()[:1500] or '（评测没有给出原因）'}\n\n"
         "## 当前程序\n\n"
