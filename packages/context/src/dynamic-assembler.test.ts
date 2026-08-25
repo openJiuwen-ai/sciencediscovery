@@ -93,8 +93,8 @@ test("dynamic mode rejects a contributor that forges a tool result", async () =>
   }), /only add user messages/u);
 });
 
-test("context mode defaults to legacy and validates configuration", () => {
-  assert.equal(resolveContextAssemblyMode({}), "legacy");
+test("context mode defaults to dynamic and validates debug modes", () => {
+  assert.equal(resolveContextAssemblyMode({}), "dynamic");
   assert.equal(resolveContextAssemblyMode({ SCIENCE_AGENT_CONTEXT_MODE: " Shadow " }), "shadow");
   assert.equal(resolveContextAssemblyMode({ SCIENCE_AGENT_CONTEXT_MODE: "dynamic" }), "dynamic");
   assert.throws(() => resolveContextAssemblyMode({ SCIENCE_AGENT_CONTEXT_MODE: "external" }), /dynamic, legacy, or shadow/u);

@@ -47,7 +47,8 @@ Current capability ownership:
   message composition, run-scoped durable tool-state projection, model-aware
   atomic history-window selection, and final validation.
   Canonical history and the governed tool set remain authoritative. The
-  default `legacy` mode preserves the established model-input path;
+  default `dynamic` mode sends the natively assembled model input; `legacy`
+  and `shadow` remain explicit debugging/regression paths;
 - `packages/model`: `ProviderModelClient`, provider-neutral model types,
   normalized streaming transport, proxy, timeout, and retry policy;
 - `packages/tools`: frozen tool registry, deferred discovery, remote-content

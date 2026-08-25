@@ -13,19 +13,22 @@ assembly.
 Set `SCIENCE_AGENT_CONTEXT_MODE` before starting the service:
 
 ```bash
-# Stable default: use the established complete prompt and compacted history.
-SCIENCE_AGENT_CONTEXT_MODE=legacy
+# Production default: send the Node-assembled dynamic context to the model.
+SCIENCE_AGENT_CONTEXT_MODE=dynamic
 
-# Build and trace the dynamic candidate, but send legacy input to the model.
+# Debug comparison: build and trace the dynamic candidate, but send legacy
+# input to the model.
 SCIENCE_AGENT_CONTEXT_MODE=shadow
 
-# Send the Node-assembled prompt, invocation history, and governed tools.
-SCIENCE_AGENT_CONTEXT_MODE=dynamic
+# Debug regression: bypass dynamic assembly and reproduce the former path.
+SCIENCE_AGENT_CONTEXT_MODE=legacy
 ```
 
-`shadow` is a rollout and comparison mode. It exercises every dynamic stage
-and records its candidate result, while the Agent's actual behavior still uses
-the legacy `ModelInput`.
+When `SCIENCE_AGENT_CONTEXT_MODE` is unset, the runtime selects `dynamic`.
+`legacy` and `shadow` are retained as debugging and regression-comparison
+paths, not normal production modes. `shadow` exercises every dynamic stage and
+records its candidate result, while the Agent's actual behavior still uses the
+legacy `ModelInput`.
 
 ## Node assembly pipeline
 
