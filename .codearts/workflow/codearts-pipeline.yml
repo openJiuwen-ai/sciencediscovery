@@ -32,11 +32,6 @@ on:
         code-update: false
         merge_comment: rerun
 inputs:
-  PR_CONTEXT_ID:
-    type: string
-    # Comment-triggered reruns use trigger type Node but still provide MERGE_ID.
-    default: "${MERGE_ID}"
-    manual_override: false
   PR_ID:
     type: string
     default: "${MERGE_ID}"
@@ -72,7 +67,7 @@ stages:
             __repository__: sciencediscovery
             artifactIdentifier: ""
           identifier: 17736446667235cd01d5c-c29e-41f5-ab85-52bba5fce5ed
-        if: "${{ inputs.PR_CONTEXT_ID != '' }}"
+        if: "${{ sources.sciencediscovery.merge_id != '' }}"
         runs-on:
         - default
     pre:
@@ -104,17 +99,28 @@ stages:
               fi
 
               cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              # GitCode's MR payload carries the source head that triggered this run.
+              # GitCode's PR or PR-note payload carries the source head for this run.
               SOURCE_METADATA=$(node <<'NODE'
               const payloadText = process.env.CODEARTS_WEBHOOK_PAYLOAD;
               if (!payloadText) throw new Error("CODEARTS_WEBHOOK_PAYLOAD is empty");
               const payload = JSON.parse(payloadText);
-              const attributes = payload.object_attributes;
               const mergeId = process.env.CODEARTS_MERGE_ID;
+              let attributes;
+              if (payload.event_type === "merge_request") {
+                attributes = payload.object_attributes;
+              } else if (
+                payload.event_type === "note" &&
+                payload.object_attributes?.noteable_type === "MergeRequest"
+              ) {
+                attributes = payload.merge_request;
+              } else {
+                throw new Error(`expected a merge_request or PR note payload, received ${String(payload.event_type)}`);
+              }
               const sourceBranch = attributes?.source_branch;
               const sourceSha = attributes?.last_commit?.id;
-              if (payload.event_type !== "merge_request" || !attributes) {
-                throw new Error(`expected a merge_request payload, received ${String(payload.event_type)}`);
+              const payloadMergeId = attributes?.iid;
+              if (!attributes) {
+                throw new Error("the webhook payload has no merge_request metadata");
               }
               const hasLineBreak = typeof sourceBranch === "string" && (
                 sourceBranch.includes(String.fromCharCode(10)) || sourceBranch.includes(String.fromCharCode(13))
@@ -127,6 +133,9 @@ stages:
               }
               if (typeof mergeId !== "string" || !/^[1-9][0-9]*$/.test(mergeId)) {
                 throw new Error("CodeArts did not provide a valid merge request number");
+              }
+              if (payloadMergeId !== undefined && String(payloadMergeId) !== mergeId) {
+                throw new Error(`payload merge request ${String(payloadMergeId)} does not match ${mergeId}`);
               }
               console.log(sourceBranch);
               console.log(sourceSha.toLowerCase());
@@ -272,17 +281,28 @@ stages:
               fi
 
               cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              # GitCode's MR payload carries the source head that triggered this run.
+              # GitCode's PR or PR-note payload carries the source head for this run.
               SOURCE_METADATA=$(node <<'NODE'
               const payloadText = process.env.CODEARTS_WEBHOOK_PAYLOAD;
               if (!payloadText) throw new Error("CODEARTS_WEBHOOK_PAYLOAD is empty");
               const payload = JSON.parse(payloadText);
-              const attributes = payload.object_attributes;
               const mergeId = process.env.CODEARTS_MERGE_ID;
+              let attributes;
+              if (payload.event_type === "merge_request") {
+                attributes = payload.object_attributes;
+              } else if (
+                payload.event_type === "note" &&
+                payload.object_attributes?.noteable_type === "MergeRequest"
+              ) {
+                attributes = payload.merge_request;
+              } else {
+                throw new Error(`expected a merge_request or PR note payload, received ${String(payload.event_type)}`);
+              }
               const sourceBranch = attributes?.source_branch;
               const sourceSha = attributes?.last_commit?.id;
-              if (payload.event_type !== "merge_request" || !attributes) {
-                throw new Error(`expected a merge_request payload, received ${String(payload.event_type)}`);
+              const payloadMergeId = attributes?.iid;
+              if (!attributes) {
+                throw new Error("the webhook payload has no merge_request metadata");
               }
               const hasLineBreak = typeof sourceBranch === "string" && (
                 sourceBranch.includes(String.fromCharCode(10)) || sourceBranch.includes(String.fromCharCode(13))
@@ -295,6 +315,9 @@ stages:
               }
               if (typeof mergeId !== "string" || !/^[1-9][0-9]*$/.test(mergeId)) {
                 throw new Error("CodeArts did not provide a valid merge request number");
+              }
+              if (payloadMergeId !== undefined && String(payloadMergeId) !== mergeId) {
+                throw new Error(`payload merge request ${String(payloadMergeId)} does not match ${mergeId}`);
               }
               console.log(sourceBranch);
               console.log(sourceSha.toLowerCase());
@@ -419,7 +442,7 @@ stages:
             _OFFICIAL_DEVCLOUD_JOB_NAME_: sciencediscovery-jiuwen-codecheck
             _OFFICIAL_DEVCLOUD_JOB_VERSION_: 3.0
           identifier: 1787572530852dd5a9499-1b45-4378-bf48-082dc7948978
-        if: "${{ inputs.PR_CONTEXT_ID != '' || inputs.PR_ID != '' }}"
+        if: "${{ sources.sciencediscovery.merge_id != '' || inputs.PR_ID != '' }}"
         runs-on:
         - default
     pre:
@@ -525,7 +548,7 @@ post:
           source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
           self_folder: "false"
         identifier: 1790000000002ca71171-679f-4414-948c-ff6497de4ab7
-      if: "${{ inputs.PR_CONTEXT_ID != '' && completed('ut', 'st', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'st', 'code_check') }}"
       runs-on:
       - default
     publish_pr_success:
@@ -546,7 +569,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 17646737830615fa277f2-7774-46a9-9222-bdd6236e9912
-      if: "${{ inputs.PR_CONTEXT_ID != '' && completed('ut', 'st', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'st', 'code_check') }}"
       runs-on:
       - default
     prepare_pr_failure:
@@ -654,7 +677,7 @@ post:
           source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
           self_folder: "false"
         identifier: 1790000000004756cae3-f5a6-4a02-a0e8-ab67c922ed75
-      if: "${{ inputs.PR_CONTEXT_ID != '' && !completed('ut', 'st', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'st', 'code_check') }}"
       runs-on:
       - default
     publish_pr_failure:
@@ -675,7 +698,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 1790000000000b7abf11-329f-448a-bdc4-f1db550865d3
-      if: "${{ inputs.PR_CONTEXT_ID != '' && !completed('ut', 'st', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'st', 'code_check') }}"
       runs-on:
       - default
   pre:

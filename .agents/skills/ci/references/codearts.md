@@ -48,15 +48,17 @@ currently forwards `${MERGE_ID}` as `PR_ID` for MR runs and `${PR_ID}` in the
 in an actual run that the effective value reaches every child task.
 
 Do not use `pipeline.trigger_type == 'MR'` to recognize PR context. A GitCode
-comment such as `rerun` can re-trigger the same PR pipeline with trigger type
-`Node`, while `${MERGE_ID}` remains populated. Mirror `${MERGE_ID}` into a
-non-overridable string input such as `PR_CONTEXT_ID`, and guard PR labels and
-comments with `${{ inputs.PR_CONTEXT_ID != '' }}`. Manual and periodic runs do
-not have `${MERGE_ID}`, so they run UT/ST without writing to a PR. A manually
-supplied `PR_ID` may still enable the PR-oriented code-check child, but it must
-not enable labels or comments. Keep the label task in the parent before
-verification, and keep the final publisher in `post` with `select: always` so
-failed checks can still report their status.
+comment such as `rerun` re-triggers the PR pipeline with trigger type `Node`,
+while system `${MERGE_ID}` remains populated. In an expression, read its
+documented source-context equivalent and guard PR labels and comments with
+`${{ sources.sciencediscovery.merge_id != '' }}`. Do not copy `${MERGE_ID}`
+into an input default for this purpose: CodeArts leaves that input empty on a
+`Node` run even though the system parameter is available to steps. Manual and
+periodic runs have no source `merge_id`, so they run UT/ST without writing to a
+PR. A manually supplied `PR_ID` may still enable the PR-oriented code-check
+child, but it must not enable labels or comments. Keep the label task in the
+parent before verification, and keep the final publisher in `post` with
+`select: always` so failed checks can still report their status.
 
 Interpret results in the parent workflow, not in the PR bot. The parent uses
 `completed('ut', 'st', 'code_check')` to select mutually exclusive success and
@@ -94,7 +96,13 @@ paths, and call the repository-owned layer entry point.
 PR-context run, so UT/ST must explicitly switch to the source commit from the
 MR event. Decide whether checkout is needed from the actual `${MERGE_ID}`
 value, not `pipeline.trigger_type`; comment-triggered `Node` runs must follow
-the same checkout path as initial MR runs.
+the same checkout path as initial MR runs. Initial PR webhooks store metadata
+under `payload.object_attributes`, but a comment webhook has `event_type: note`,
+comment metadata under `payload.object_attributes`, and PR metadata
+under `payload.merge_request`. Accept both layouts, require a PR note's
+`noteable_type` to be `MergeRequest`, and validate its `iid` against
+`${MERGE_ID}` when present.
+
 Validate all payload data first: `source_branch` must be a non-empty valid Git
 branch without CR/LF, `last_commit.id` must be a 40-hex SHA, and `${MERGE_ID}`
 must be a positive integer. Then fetch the upstream MR ref and detach at the
@@ -232,4 +240,6 @@ workflow again before pushing. Never overwrite a new UI commit blindly.
 | A generated UT/ST OBS URL returns `403` after checkout or provisioning failed | The upload step never ran and the object does not exist. Probe the object before linking and fall back to the GitCode Checks page. |
 | `独占任务official_devcloud_cloudBuild所在的job下不能配置其他step` | The bot CloudBuild task shares its job with rendering or upload. Move preparation into a separate prerequisite job. |
 | A CodeArts UI save restores old pipeline logic | The UI committed a stale expanded snapshot. Diff the new `main` commit, preserve its generated fields, and reapply the lost logic. |
-| A `rerun` comment starts CI but PR checkout, labels, or result publishing are skipped | The comment trigger reports type `Node`, so an `MR`-only guard evaluates false. Treat a non-empty `${MERGE_ID}` as PR context instead. |
+| A `rerun` comment starts CI but PR checkout, labels, or result publishing are skipped | The comment trigger reports type `Node`, so an `MR`-only guard evaluates false. In expressions, test `sources.sciencediscovery.merge_id`; in steps, use `${MERGE_ID}`. |
+| `inputs.PR_CONTEXT_ID != ''` skips a `Node` rerun even though `${MERGE_ID}` is present in the shell | CodeArts did not runtime-expand the input default for the Node trigger. Remove the proxy input and use `sources.sciencediscovery.merge_id` directly. |
+| Checkout reports `expected a merge_request payload, received note` | PR comments use the Note Event schema. Read PR metadata from `payload.merge_request`, not the comment's `payload.object_attributes`. |
