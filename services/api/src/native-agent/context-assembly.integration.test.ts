@@ -29,12 +29,41 @@ interface StructuredExample {
   outputRequirements: string[];
 }
 
+function planRepository(sessionId: string): NonNullable<NativeAgentOptions["planRepository"]> {
+  let current: Awaited<ReturnType<NonNullable<NativeAgentOptions["planRepository"]>["propose"]>> | undefined;
+  return {
+    async abandon() { throw new Error("not called"); },
+    async latest() { return current && structuredClone(current); },
+    async propose(input) {
+      current = {
+        caveats: input.caveats ?? [],
+        createdAt: "2026-08-25T00:00:00.000Z",
+        feasibilityConfidence: input.feasibilityConfidence,
+        id: "plan-1",
+        mode: "recorded",
+        scope: input.scope,
+        sessionId,
+        state: "recorded",
+        steps: input.steps.map((description, index) => ({
+          description, id: `step-${index + 1}`, status: "pending",
+        })),
+        updatedAt: "2026-08-25T00:00:00.000Z",
+        version: 1,
+      };
+      return structuredClone(current);
+    },
+    async revise() { throw new Error("not called"); },
+    async updateStep() { throw new Error("not called"); },
+  };
+}
+
 function workspace(root: string, sessionId: string): NativeAgentOptions {
   return {
     config: { baseUrl: "http://model.test", dataDir: root, model: "context-contract-stub" },
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not called"); },
     executeShell: async () => { throw new Error("not called"); },
+    initialExecutionMode: "direct",
     sessionId,
     workspaceRoot: root,
   };
@@ -137,22 +166,9 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
     };
     const mainOptions: NativeAgentOptions = {
       ...workspace(root, "main-example"),
+      initialExecutionMode: "plan",
+      planRepository: planRepository("main-example"),
       runContract: JSON.stringify(mainInput),
-      proposePlan: async (input) => ({
-        caveats: input.caveats ?? [],
-        createdAt: "2026-08-25T00:00:00.000Z",
-        feasibilityConfidence: input.feasibilityConfidence,
-        id: "plan-1",
-        mode: "recorded",
-        scope: input.scope,
-        sessionId: "main-example",
-        state: "recorded",
-        steps: input.steps.map((description, index) => ({
-          description, id: `step-${index + 1}`, status: "pending",
-        })),
-        updatedAt: "2026-08-25T00:00:00.000Z",
-        version: 1,
-      }),
       skills: [{
         content: "Search, screen, extract, and cite the selected literature before synthesis.",
         description: "Systematic literature review",
@@ -203,7 +219,7 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
 
     const comparisonLegacyCalls = await runExample({
       mode: "legacy",
-      options: { ...mainOptions, sessionId: "main-example-legacy" },
+      options: { ...mainOptions, planRepository: planRepository("main-example"), sessionId: "main-example-legacy" },
       prompt: "Execute the structured research contract.",
       turns: [
         toolTurn("read_skill", { skillId: "literature-review" }),

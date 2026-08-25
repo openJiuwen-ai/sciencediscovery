@@ -98,7 +98,7 @@ tool calls and their matching tool results before compaction.
 | Channel | Producer tools | Dynamic projection |
 | --- | --- | --- |
 | Goal/constraints | immutable RunContract | protected RunContract section; structured snapshot retained by the store |
-| Plan | `propose_plan` | hidden `task_state` data message |
+| Plan | `propose_plan`, `revise_plan`, `update_plan_step`, `abandon_plan` | hidden `task_state` data message |
 | Skill activation | `read_skill` | hidden `active_skills` reference/reminder; never a second Skill body |
 | Delegation | `task` | hidden bounded `delegations` data message |
 | Artifact | download, extraction, and `declare_artifact` | hidden bounded `artifacts` data message |

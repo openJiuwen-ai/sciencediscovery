@@ -64,6 +64,7 @@ import type {
   PermissionGrant,
   PermissionGrantScope,
   PermissionRequest,
+  PlanStep,
   PromptManifest,
   Project,
   ProposePlanRequest,
@@ -611,7 +612,7 @@ export class SessionStore {
     const sessionPlans = savedSessionPlans.map((plan) => ({
       ...plan,
       mode: "recorded" as const,
-      state: plan.state === "completed" ? "completed" as const : "recorded" as const,
+      state: plan.state === "completed" || plan.state === "abandoned" ? plan.state : "recorded" as const,
     }));
     const migratedSessionPlans = JSON.stringify(sessionPlans) !== JSON.stringify(savedSessionPlans);
     const savedSubagents = Array.isArray(saved.subagents)
@@ -2010,8 +2011,9 @@ export class SessionStore {
       .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
-  latestSessionPlan(sessionId: string): SessionPlan | undefined {
-    return this.listSessionPlans(sessionId).at(-1);
+  latestSessionPlan(sessionId: string, runId?: string): SessionPlan | undefined {
+    const plans = this.listSessionPlans(sessionId);
+    return (runId ? plans.filter((plan) => plan.runId === runId) : plans).at(-1);
   }
 
   private normalizePlanInput(input: ProposePlanRequest): Pick<SessionPlan, "caveats" | "feasibilityConfidence" | "scope" | "steps"> {
@@ -2034,7 +2036,7 @@ export class SessionStore {
     };
   }
 
-  async proposeSessionPlan(sessionId: string, input: ProposePlanRequest): Promise<SessionPlan> {
+  async proposeSessionPlan(sessionId: string, input: ProposePlanRequest, runId?: string): Promise<SessionPlan> {
     this.assertSessionWritable(sessionId);
     const normalized = this.normalizePlanInput(input);
     const now = new Date().toISOString();
@@ -2043,6 +2045,7 @@ export class SessionStore {
       createdAt: now,
       id: randomUUID(),
       mode: "recorded",
+      ...(runId ? { runId } : {}),
       sessionId,
       state: "recorded",
       updatedAt: now,
@@ -2060,6 +2063,44 @@ export class SessionStore {
     if (plan.state !== "recorded") throw new Error("Only a recorded plan can be revised");
     if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before revising");
     Object.assign(plan, this.normalizePlanInput(input), { updatedAt: new Date().toISOString(), version: plan.version + 1 });
+    await this.saveCatalog();
+    return structuredClone(plan);
+  }
+
+  async updateSessionPlanStep(
+    sessionId: string,
+    input: { expectedVersion: number; planId: string; status: PlanStep["status"]; stepId: string },
+  ): Promise<SessionPlan> {
+    this.assertSessionWritable(sessionId);
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === input.planId && candidate.sessionId === sessionId);
+    if (!plan) throw new Error("Plan not found");
+    if (plan.state !== "recorded") throw new Error("Only a recorded plan can update step progress");
+    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before updating a step");
+    const step = plan.steps.find((candidate) => candidate.id === input.stepId);
+    if (!step) throw new Error("Plan step not found");
+    step.status = input.status;
+    plan.state = plan.steps.every((candidate) => candidate.status === "completed") ? "completed" : "recorded";
+    plan.updatedAt = new Date().toISOString();
+    plan.version += 1;
+    await this.saveCatalog();
+    return structuredClone(plan);
+  }
+
+  async abandonSessionPlan(
+    sessionId: string,
+    input: { expectedVersion: number; planId: string; reason?: string },
+  ): Promise<SessionPlan> {
+    this.assertSessionWritable(sessionId);
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === input.planId && candidate.sessionId === sessionId);
+    if (!plan) throw new Error("Plan not found");
+    if (plan.state !== "recorded") throw new Error("Only a recorded plan can be abandoned");
+    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before abandoning");
+    const reason = input.reason?.trim();
+    if (reason && reason.length > 2_000) throw new Error("Plan abandonment reason must not exceed 2000 characters");
+    plan.state = "abandoned";
+    if (reason) plan.abandonmentReason = reason;
+    plan.updatedAt = new Date().toISOString();
+    plan.version += 1;
     await this.saveCatalog();
     return structuredClone(plan);
   }

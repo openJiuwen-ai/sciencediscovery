@@ -29,7 +29,7 @@ import {
 } from "./index.js";
 import type { ModelTurn, WireToolSpec } from "@sciencediscovery/model";
 
-function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" | "executePython" | "executeShell" | "sessionId" | "workspaceRoot"> {
+function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" | "executePython" | "executeShell" | "initialExecutionMode" | "sessionId" | "workspaceRoot"> {
   const root = mkdtempSync(join(tmpdir(), "native-agent-"));
   writeFileSync(join(root, "readme.md"), "hello");
   return {
@@ -37,6 +37,7 @@ function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" 
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not called"); },
     executeShell: async () => { throw new Error("not called"); },
+    initialExecutionMode: "direct",
     sessionId: "session-1",
     workspaceRoot: root,
   };
@@ -113,6 +114,71 @@ test("loop streams a tool round trip and returns wire-format final messages", as
     // The second model call saw the tool result in history.
     assert.equal(calls.length, 2);
     assert.equal(calls[1]!.history.at(-1)?.role, "tool");
+  } finally {
+    restore();
+  }
+});
+
+test("an unconfigured run exposes only mode activation before direct tools", async () => {
+  const { calls, streamer } = scriptStreamer([
+    (call) => {
+      assert.deepEqual(call.tools.map((tool) => tool.name), ["activate_execution_mode"]);
+      return toolTurn("activate_execution_mode", { modeId: "direct" });
+    },
+    (call) => {
+      assert.ok(call.tools.some((tool) => tool.name === "list_files"));
+      return toolTurn("list_files", { path: "." });
+    },
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const options = workspace() as NativeAgentOptions;
+    delete options.initialExecutionMode;
+    const agent = createNativeAgent(options);
+    await agent.execute("list files");
+    assert.equal(calls.length, 3);
+  } finally {
+    restore();
+  }
+});
+
+test("Plan Mode exposes lifecycle and execution tools after activation", async () => {
+  let plan: import("@sciencediscovery/schema").SessionPlan | undefined;
+  const options = workspace() as NativeAgentOptions;
+  delete options.initialExecutionMode;
+  options.planRepository = {
+    async abandon() { throw new Error("not called"); },
+    async latest() { return plan && structuredClone(plan); },
+    async propose(input) {
+      plan = {
+        caveats: input.caveats ?? [], createdAt: "now", feasibilityConfidence: input.feasibilityConfidence,
+        id: "plan-1", mode: "recorded", runId: "run-1", scope: input.scope, sessionId: "session-1",
+        state: "recorded", steps: input.steps.map((description, index) => ({ description, id: `step-${index}`, status: "pending" })),
+        updatedAt: "now", version: 1,
+      };
+      return structuredClone(plan);
+    },
+    async revise() { throw new Error("not called"); },
+    async updateStep() { throw new Error("not called"); },
+  };
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("activate_execution_mode", { modeId: "plan" }),
+    (call) => {
+      assert.ok(call.tools.some((tool) => tool.name === "propose_plan"));
+      assert.ok(call.tools.some((tool) => tool.name === "list_files"));
+      return toolTurn("propose_plan", { feasibilityConfidence: "high", scope: "Inspect files", steps: ["List files"] });
+    },
+    (call) => {
+      assert.match(call.systemPrompt + call.history.map((message) => String(message.content ?? "")).join("\n"), /Inspect files/u);
+      return textTurn("planned");
+    },
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    await createNativeAgent(options).execute("plan the inspection");
+    assert.equal(calls[0]?.tools.some((tool) => tool.name === "propose_plan"), false);
+    assert.equal(plan?.scope, "Inspect files");
   } finally {
     restore();
   }

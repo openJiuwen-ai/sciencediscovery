@@ -740,7 +740,6 @@ test("built-in workspace tool names use the strict provider-safe alphabet", () =
     executeShell: unavailable,
     listArtifacts: unavailable,
     paperExtractPdf: unavailable,
-    proposePlan: unavailable,
     queryGraph: unavailable,
     readArtifact: unavailable,
     remoteHosts: [],
@@ -969,9 +968,8 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
   );
 });
 
-test("planning and subagent tools preserve structured governance inputs", async () => {
+test("subagent tools preserve structured governance inputs", async () => {
   const timestamp = new Date().toISOString();
-  let proposedScope = "";
   let subagentDescription = "";
   let subagentSpecialistId: string | undefined;
   let subagentMaxTurns: number | undefined;
@@ -1017,27 +1015,9 @@ test("planning and subagent tools preserve structured governance inputs", async 
       id: "specialist-code",
       name: "Code implementer",
     }],
-    proposePlan: async (input) => {
-      proposedScope = input.scope;
-      return {
-        caveats: input.caveats ?? [],
-        createdAt: timestamp,
-        feasibilityConfidence: input.feasibilityConfidence,
-        id: "plan-1",
-        mode: "recorded",
-        scope: input.scope,
-        sessionId: "session-1",
-        state: "recorded",
-        steps: input.steps.map((description, index) => ({ description, id: `step-${index}`, status: "pending" })),
-        updatedAt: timestamp,
-        version: 1,
-      };
-    },
   });
 
-  const propose = tools.find((candidate) => candidate.name === "propose_plan");
   const task = tools.find((candidate) => candidate.name === "task");
-  assert.ok(propose);
   assert.ok(task);
   const taskProperties = (task.parameters as unknown as { properties: Record<string, unknown> }).properties;
   assert.deepEqual(Object.keys(taskProperties).toSorted(), [
@@ -1076,14 +1056,6 @@ test("planning and subagent tools preserve structured governance inputs", async 
   assert.match(task.description, /id: specialist-code; description: Builds and debugs analysis code/);
   assert.doesNotMatch(task.description, /Code implementer/);
   assert.match(task.description, /semantic match against specialist descriptions/);
-  await propose.execute("plan-call", {
-    caveats: ["Reference coverage may be incomplete"],
-    feasibilityConfidence: "medium",
-    scope: "Compare two independent analysis methods",
-    steps: ["Prepare inputs", "Run both methods", "Compare outputs"],
-  });
-  assert.equal(proposedScope, "Compare two independent analysis methods");
-
   const result = await task.execute("task-call", {
     brief: {
       collaborationRules: ["Work independently", "Return one final JSON object"],

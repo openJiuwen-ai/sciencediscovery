@@ -169,7 +169,7 @@ export class DurableContextStore {
       if (id) this.skillRefs.set(id, { id });
       return;
     }
-    if (call.name === "propose_plan" && !result.isError) {
+    if (["propose_plan", "revise_plan", "update_plan_step", "abandon_plan"].includes(call.name) && !result.isError) {
       if (!this.plan || sequence >= this.plan.sequence) this.plan = record;
       return;
     }

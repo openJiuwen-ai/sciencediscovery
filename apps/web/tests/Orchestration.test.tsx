@@ -90,15 +90,16 @@ function buildSubagent(overrides: Partial<Subagent> = {}): Subagent {
   };
 }
 
-test("recorded plan collapses to a saved-plan summary without live-progress wording", () => {
+test("recorded plan collapses to a live Todo summary", () => {
   const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
     expandedCards: {},
     onToggleCard: noopToggle,
     plans: [buildPlan()],
   }));
 
-  assert.match(html, /Saved plan · v1/);
-  assert.match(html, /1 steps · saved, not live progress · medium feasibility/);
+  assert.match(html, /Plan · v1/);
+  assert.match(html, /0\/1 completed · medium feasibility/);
+  assert.match(html, /active/);
   assert.match(html, /aria-expanded="false"/);
   assert.doesNotMatch(html, /recorded mode/);
   // Scope and step list stay folded away until the card is expanded.
@@ -120,8 +121,8 @@ test("completed plan summary reports completed step counts", () => {
     plans: [plan],
   }));
 
-  assert.match(html, /1\/2 steps completed · medium feasibility/);
-  assert.doesNotMatch(html, /saved, not live progress/);
+  assert.match(html, /1\/2 completed · medium feasibility/);
+  assert.match(html, /completed/);
 });
 
 test("panel renders every plan it is given, not only the latest", () => {
@@ -133,11 +134,11 @@ test("panel renders every plan it is given, not only the latest", () => {
     plans: [older, newer],
   }));
 
-  assert.match(html, /Saved plan · v1/);
-  assert.match(html, /Saved plan · v2/);
+  assert.match(html, /Plan · v1/);
+  assert.match(html, /Plan · v2/);
 });
 
-test("expanded plan card shows scope, steps, and the recorded-plan note", () => {
+test("expanded plan card shows the live scope and step states", () => {
   const plan = buildPlan();
   const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
     expandedCards: { [activityCardId("plan", plan.id)]: true },
@@ -148,7 +149,7 @@ test("expanded plan card shows scope, steps, and the recorded-plan note", () => 
   assert.match(html, /aria-expanded="true"/);
   assert.match(html, /Compare two independent methods/);
   assert.match(html, /Run both methods/);
-  assert.match(html, /not tracked as live progress/);
+  assert.match(html, /data-status="pending"/);
 });
 
 test("subagent cards default to collapsed summaries with status, turns, and usage", () => {

@@ -1826,6 +1826,32 @@ test("SessionStore records plans without coupling them to approval policy", asyn
     steps: ["Inspect inputs", "Run analysis", "Validate findings"],
   });
   assert.equal(revised.version, 2);
+  const started = await store.updateSessionPlanStep(manual.id, {
+    expectedVersion: revised.version,
+    planId: revised.id,
+    status: "in_progress",
+    stepId: revised.steps[0]!.id,
+  });
+  assert.equal(started.steps[0]?.status, "in_progress");
+  let progressing = started;
+  for (const step of started.steps) {
+    progressing = await store.updateSessionPlanStep(manual.id, {
+      expectedVersion: progressing.version,
+      planId: progressing.id,
+      status: "completed",
+      stepId: step.id,
+    });
+  }
+  assert.equal(progressing.state, "completed");
+  await assert.rejects(
+    store.updateSessionPlanStep(manual.id, {
+      expectedVersion: progressing.version,
+      planId: progressing.id,
+      status: "pending",
+      stepId: progressing.steps[0]!.id,
+    }),
+    /Only a recorded plan/u,
+  );
   const automatic = await store.createSession(project.id, "Automatic planning", {}, { approvalMode: "always_allow" });
   const autoPlan = await store.proposeSessionPlan(automatic.id, {
     feasibilityConfidence: "high",
@@ -1833,6 +1859,13 @@ test("SessionStore records plans without coupling them to approval policy", asyn
     steps: ["Summarize inputs", "Write results"],
   });
   assert.equal(autoPlan.state, "recorded");
+  const abandoned = await store.abandonSessionPlan(automatic.id, {
+    expectedVersion: autoPlan.version,
+    planId: autoPlan.id,
+    reason: "The user changed the objective",
+  });
+  assert.equal(abandoned.state, "abandoned");
+  assert.equal(abandoned.abandonmentReason, "The user changed the objective");
   assert.doesNotThrow(() => store.assertSessionWritable(automatic.id));
 });
 

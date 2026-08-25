@@ -213,8 +213,9 @@ Authorization 使用独立 SQLite 表追加写入，ArtifactPlan、ArtifactJob �
 SSE 断开或 execution 结束时，其残留 pending 请求进入 `cancelled`。运行中切换到 `always_allow`
 会旋转 Permission Epoch，并分别允许和唤醒当前 Session 的所有 pending 请求。
 
-Plan 与权限完全解耦：`propose_plan` 只生成 `recorded` 计划，不存在计划批准门禁或计划
-Approve/Reject API。
+Plan 与权限完全解耦：Plan Mode 通过 `propose_plan`、`revise_plan`、`update_plan_step`、
+`abandon_plan` 维护 `recorded/completed/abandoned` 生命周期，但不存在计划批准门禁或计划
+Approve/Reject API；计划状态也不会替代 Governance 对危险工具的授权。
 
 ## 8. 生命周期
 

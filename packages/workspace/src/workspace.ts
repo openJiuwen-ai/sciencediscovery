@@ -53,7 +53,6 @@ import type {
   ScientificArtifactVersion,
   ScientificExecutionResult,
   ScientificLanguage,
-  SessionPlan,
   SkillResource,
   SkillResourceContent,
   ShellExecutionResult,
@@ -256,10 +255,6 @@ export interface WorkspaceToolOptions {
   runSubagent?: (input: SubagentInput, signal?: AbortSignal) => Promise<Subagent>;
   remoteHosts?: RemoteHostTarget[];
   proposeRemoteJob?: (input: CreateRemoteJobRequest) => Promise<RemoteJob>;
-  proposePlan?: (
-    input: { caveats?: string[]; feasibilityConfidence: "high" | "low" | "medium"; scope: string; steps: string[] },
-    signal?: AbortSignal,
-  ) => Promise<SessionPlan>;
   /** Cross-session memory-graph substring search (the `query_graph` LLM tool). */
   queryGraph?: (query: string) => Promise<MemoryGraphMatchResponse>;
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
@@ -876,25 +871,6 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters,
     };
     tools.push(webFetch);
-  }
-  if (options.proposePlan) {
-    const planParameters = Type.Object({
-      caveats: Type.Optional(Type.Array(Type.String({ maxLength: 1_000 }), { maxItems: 10 })),
-      feasibilityConfidence: Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
-      scope: Type.String({ maxLength: 2_000, minLength: 1 }),
-      steps: Type.Array(Type.String({ maxLength: 1_000, minLength: 1 }), { maxItems: 20, minItems: 1 }),
-    });
-    const proposePlan: AgentTool<typeof planParameters> = {
-      description: "Record a multi-phase plan with explicit scope and feasibility confidence. Plans are progress records and do not block subsequent execution.",
-      execute: async (_toolCallId, params, signal) => {
-        const plan = await options.proposePlan!(params, signal);
-        return { content: [{ type: "text", text: JSON.stringify(plan) }], details: plan };
-      },
-      label: "Propose plan",
-      name: "propose_plan",
-      parameters: planParameters,
-    };
-    tools.push(proposePlan);
   }
   if (options.queryGraph) {
     const queryGraphParameters = Type.Object({ query: Type.String({ minLength: 1 }) });

@@ -136,7 +136,11 @@ async function apiJson<T>(
 }
 
 type ScriptedTurns = ScriptedModelStep[] | ScriptedModelStep[][];
-type ChatMessage = { content?: string; role?: string };
+type ChatMessage = {
+  content?: unknown;
+  role?: string;
+  tool_calls?: Array<{ function?: { name?: string } }>;
+};
 
 const SUBAGENT_PRESET_MARKER = "Applied subagent preset general-purpose";
 
@@ -172,22 +176,40 @@ export function scriptedModel(
   const model = "journey-scripted-model";
   const apiToken = "journey-local-stub-token";
   let sequence = 0;
+  let mainTurn = -1;
   const server: Server = createServer((request, response) => {
     const bodyChunks: Buffer[] = [];
     request.on("data", (chunk) => bodyChunks.push(Buffer.from(chunk)));
     request.on("end", async () => {
       try {
-        const body = JSON.parse(Buffer.concat(bodyChunks).toString("utf8")) as { messages?: ChatMessage[] };
+        const body = JSON.parse(Buffer.concat(bodyChunks).toString("utf8")) as {
+          messages?: ChatMessage[];
+          tools?: Array<{ function?: { name?: string } }>;
+        };
         const messages = body.messages ?? [];
-        const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
+        const systemPrompt = String(messages.find((message) => message.role === "system")?.content ?? "");
         const isSubagent = systemPrompt.includes(SUBAGENT_PRESET_MARKER);
         const route = isSubagent ? "subagent" : "main";
+        const availableToolNames = (body.tools ?? []).flatMap((tool) =>
+          tool.function?.name ? [tool.function.name] : []);
+        const activationOnly = availableToolNames.length === 1
+          && availableToolNames[0] === "activate_execution_mode";
+        if (!isSubagent && activationOnly) mainTurn += 1;
+        const turn = isSubagent ? 0 : Math.max(0, mainTurn);
         const scripts = isSubagent ? subagentSteps : mainSteps;
         if (!scripts) throw new Error("The product made an unexpected subagent model request");
-        const turn = Math.max(0, messages.filter((message) => message.role === "user").length - 1);
-        const steps = scriptedTurn(scripts, isSubagent ? 0 : turn);
-        const stepIndex = messages.filter((message) => message.role === "tool").length;
-        const step = steps[stepIndex];
+        const steps = scriptedTurn(scripts, turn);
+        const latestActivation = messages.findLastIndex((message) =>
+          message.role === "assistant"
+          && message.tool_calls?.some((call) => call.function?.name === "activate_execution_mode"));
+        const toolResultsSinceActivation = messages.slice(latestActivation + 1)
+          .filter((message) => message.role === "tool").length;
+        const stepIndex = latestActivation < 0
+          ? messages.filter((message) => message.role === "tool").length
+          : Math.max(0, toolResultsSinceActivation - 1);
+        const step: ScriptedModelStep = activationOnly
+          ? { arguments: { modeId: "direct" }, tool: "activate_execution_mode" }
+          : steps[stepIndex]!;
         if (!step) throw new Error(`No ${route} scripted step ${stepIndex + 1} for turn ${turn + 1}`);
 
         sequence += 1;

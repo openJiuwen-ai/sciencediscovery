@@ -27,7 +27,6 @@ import type {
   RemoteJob,
   ScientificExecutionResult,
   ScientificLanguage,
-  SessionPlan,
   SkillResource,
   SkillResourceContent,
   ShellExecutionResult,
@@ -302,10 +301,6 @@ export interface WorkspaceAgentOptions {
    * system-prompt injection so a disabled graph doesn't mislead the model
    * into calling tools that return a disabled error. */
   memoryGraphEnabled?: boolean;
-  proposePlan?: (
-    input: { caveats?: string[]; feasibilityConfidence: "high" | "low" | "medium"; scope: string; steps: string[] },
-    signal?: AbortSignal,
-  ) => Promise<SessionPlan>;
   /** Cross-session memory-graph substring search (`query_graph` tool). */
   queryGraph?: WorkspaceToolOptions["queryGraph"];
   /** Create an Evidence node + extracts edge, Paper → Evidence
