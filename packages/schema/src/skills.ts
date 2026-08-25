@@ -201,6 +201,46 @@ export interface CommitSkillLibraryVersionResult {
   version?: SkillLibraryVersion;
 }
 
+export interface SkillLibraryProposalSourceRef {
+  id: string;
+  kind: "artifact" | "review-finding" | "run" | "session" | "tool-call";
+}
+
+export interface ProposeSkillLibraryUpdateRequest extends CommitSkillLibraryVersionRequest {
+  dryRun?: true;
+  libraryId: string;
+  rationale: string;
+  sourceRefs: SkillLibraryProposalSourceRef[];
+}
+
+export interface SkillLibraryUpdateProposal {
+  baseVersionId?: string;
+  createdAt: string;
+  id: string;
+  libraryId: string;
+  publishedVersionId?: string;
+  rationale: string;
+  request: CommitSkillLibraryVersionRequest;
+  result: CommitSkillLibraryVersionResult;
+  sourceRefs: SkillLibraryProposalSourceRef[];
+  status: "pending" | "published" | "rejected";
+  updatedAt: string;
+}
+
+export interface PublishSkillLibraryUpdateProposalResult {
+  proposal: SkillLibraryUpdateProposal;
+  result: CommitSkillLibraryVersionResult;
+}
+
+export interface PublishSkillLibraryUpdateProposalsRequest {
+  proposalIds: string[];
+}
+
+export interface PublishSkillLibraryUpdateProposalsResult {
+  proposals: SkillLibraryUpdateProposal[];
+  result: CommitSkillLibraryVersionResult;
+}
+
 export interface RollbackSkillLibraryVersionRequest {
   author: SkillLibraryVersion["author"];
   baseVersionId?: string;

@@ -17,6 +17,8 @@ import type {
   CreateSkillDialogueDraftRequest,
   CommitSkillLibraryVersionRequest,
   CommitSkillLibraryVersionResult,
+  PublishSkillLibraryUpdateProposalResult,
+  PublishSkillLibraryUpdateProposalsResult,
   DistillSessionSkillRequest,
   ImportSkillFromGitRequest,
   RollbackSkillLibraryVersionRequest,
@@ -28,6 +30,7 @@ import type {
   SkillLibraryDiff,
   SkillLibrarySearchRequest,
   SkillLibrarySearchResult,
+  SkillLibraryUpdateProposal,
   SkillLibraryVersion,
   SkillResourceContent,
   UpdateSkillRequest,
@@ -92,6 +95,26 @@ export class SkillsApiClient extends SettingsApiClient {
       body: JSON.stringify(body),
       method: "POST",
     });
+  }
+
+  listSkillLibraryProposals(libraryId?: string): Promise<SkillLibraryUpdateProposal[]> {
+    const query = libraryId ? `?libraryId=${encodeURIComponent(libraryId)}` : "";
+    return this.request(`/api/skill-library-proposals${query}`);
+  }
+
+  publishSkillLibraryProposal(proposalId: string): Promise<PublishSkillLibraryUpdateProposalResult> {
+    return this.request(`/api/skill-library-proposals/${encodeURIComponent(proposalId)}/publish`, { method: "POST" });
+  }
+
+  publishSkillLibraryProposals(proposalIds: string[]): Promise<PublishSkillLibraryUpdateProposalsResult> {
+    return this.request("/api/skill-library-proposals/publish", {
+      body: JSON.stringify({ proposalIds }),
+      method: "POST",
+    });
+  }
+
+  rejectSkillLibraryProposal(proposalId: string): Promise<SkillLibraryUpdateProposal> {
+    return this.request(`/api/skill-library-proposals/${encodeURIComponent(proposalId)}/reject`, { method: "POST" });
   }
 
   getSkill(skillId: string): Promise<SkillDetail> {

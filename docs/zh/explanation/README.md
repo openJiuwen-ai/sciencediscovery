@@ -15,5 +15,6 @@
 - [科学记忆](science-memory.md) — 任务链、引用链、模块边界和存储。
 - [技能渐进式披露](skill-progressive-disclosure.md) — 技能目录检索与冻结快照读取。
 - [技能库管理初步设计](skill-library-management.md) — 技能库版本、批量提交、目录级召回和自演进写回接口。
+- [Skill 自演进设计](skill-self-evolution.md) — 从任务经验提取候选 Skill、评估、门禁和发布到 Skill 库的闭环。
 - [子 Agent 编排](subagent-orchestration.md) — 主/子 Agent 契约、guardrails 和取舍。
 - [内容寻址存储](cas.md) — CAS 地址、工作区变更检测、写入方与生命周期。

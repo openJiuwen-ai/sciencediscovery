@@ -16,6 +16,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type {
   CommitSkillLibraryVersionRequest,
+  PublishSkillLibraryUpdateProposalsRequest,
+  ProposeSkillLibraryUpdateRequest,
   RollbackSkillLibraryVersionRequest,
   SkillLibrarySearchRequest,
 } from "@sciencediscovery/schema";
@@ -44,6 +46,31 @@ export async function handleSkillLibraryRequest(options: {
     return true;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/skill-library-proposals") {
+    sendJson(response, 200, catalog.listProposals(url.searchParams.get("libraryId") ?? undefined));
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/skill-library-proposals/publish") {
+    const body = await readJson<PublishSkillLibraryUpdateProposalsRequest>(request);
+    const result = await catalog.publishProposals(body.proposalIds ?? []);
+    sendJson(response, result.result.conflicts.length ? 409 : 201, result);
+    return true;
+  }
+
+  const proposalPublishMatch = url.pathname.match(/^\/api\/skill-library-proposals\/([^/]+)\/publish$/);
+  if (proposalPublishMatch && request.method === "POST") {
+    const result = await catalog.publishProposal(decodeURIComponent(proposalPublishMatch[1]!));
+    sendJson(response, result.result.conflicts.length ? 409 : 201, result);
+    return true;
+  }
+
+  const proposalRejectMatch = url.pathname.match(/^\/api\/skill-library-proposals\/([^/]+)\/reject$/);
+  if (proposalRejectMatch && request.method === "POST") {
+    sendJson(response, 200, await catalog.rejectProposal(decodeURIComponent(proposalRejectMatch[1]!)));
+    return true;
+  }
+
   const skillLibrariesMatch = url.pathname.match(/^\/api\/skill-libraries\/([^/]+)$/);
   if (skillLibrariesMatch && request.method === "GET") {
     const libraryId = decodeURIComponent(skillLibrariesMatch[1]!);
@@ -64,6 +91,15 @@ export async function handleSkillLibraryRequest(options: {
       await readJson<CommitSkillLibraryVersionRequest>(request),
     );
     sendJson(response, result.conflicts.length ? 409 : result.dryRun ? 200 : 201, result);
+    return true;
+  }
+
+  const skillLibraryProposalMatch = url.pathname.match(/^\/api\/skill-libraries\/([^/]+)\/proposals$/);
+  if (skillLibraryProposalMatch && request.method === "POST") {
+    sendJson(response, 201, await catalog.proposeUpdate(
+      decodeURIComponent(skillLibraryProposalMatch[1]!),
+      await readJson<ProposeSkillLibraryUpdateRequest>(request),
+    ));
     return true;
   }
 

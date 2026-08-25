@@ -22,9 +22,12 @@ import test from "node:test";
 
 import type {
   CommitSkillLibraryVersionResult,
+  PublishSkillLibraryUpdateProposalResult,
+  PublishSkillLibraryUpdateProposalsResult,
   SkillLibrary,
   SkillLibraryDiff,
   SkillLibrarySearchResult,
+  SkillLibraryUpdateProposal,
   SkillLibraryVersion,
 } from "@sciencediscovery/schema";
 
@@ -209,4 +212,104 @@ test("skill library HTTP APIs return conflicts without publishing stale writes",
 
     const current = await apiJsonRequest<SkillLibrary>(catalog, "/api/skill-libraries/stale-http-library");
     assert.equal(current.body.headVersionId, first.body.version?.id);
+});
+
+test("skill library HTTP APIs create, list, reject, and publish self-evolution proposals", async (context) => {
+  const dataDir = await temporaryDataDir();
+  context.after(() => rmSync(dataDir, { force: true, recursive: true }));
+  const catalog = new SkillLibraryCatalog(dataDir);
+  await catalog.load();
+  await apiJsonRequest<SkillLibrary>(catalog, "/api/skill-libraries", {
+    body: { id: "proposal-http-library" },
+    method: "POST",
+  });
+  const first = await apiJsonRequest<CommitSkillLibraryVersionResult>(catalog, "/api/skill-libraries/proposal-http-library/versions", {
+    body: {
+      author: { kind: "user" },
+      operations: [{ package: skillPackage("alpha-http-skill"), type: "upsert" }],
+    },
+    method: "POST",
+  });
+
+  const proposal = await apiJsonRequest<SkillLibraryUpdateProposal>(catalog, "/api/skill-libraries/proposal-http-library/proposals", {
+    body: {
+      author: { kind: "self-evolution" },
+      baseVersionId: first.body.version!.id,
+      dryRun: true,
+      libraryId: "proposal-http-library",
+      operations: [{ package: skillPackage("beta-http-skill"), type: "upsert" }],
+      rationale: "Add the skill discovered by a failed run.",
+      sourceRefs: [{ id: "run-http-1", kind: "run" }],
+    },
+    method: "POST",
+  });
+  assert.equal(proposal.status, 201);
+  assert.equal(proposal.body.status, "pending");
+
+  const listed = await apiJsonRequest<SkillLibraryUpdateProposal[]>(catalog, "/api/skill-library-proposals?libraryId=proposal-http-library");
+  assert.deepEqual(listed.body.map((item) => item.id), [proposal.body.id]);
+
+  const published = await apiJsonRequest<PublishSkillLibraryUpdateProposalResult>(catalog, `/api/skill-library-proposals/${proposal.body.id}/publish`, {
+    method: "POST",
+  });
+  assert.equal(published.status, 201);
+  assert.equal(published.body.proposal.status, "published");
+  assert.equal(published.body.result.version?.skills.length, 2);
+
+  await assert.rejects(
+    apiJsonRequest<Record<string, unknown>>(catalog, `/api/skill-library-proposals/${proposal.body.id}/reject`, {
+      method: "POST",
+    }),
+    /cannot be rejected/,
+  );
+});
+
+test("skill library HTTP APIs publish selected self-evolution proposals as one version", async (context) => {
+  const dataDir = await temporaryDataDir();
+  context.after(() => rmSync(dataDir, { force: true, recursive: true }));
+  const catalog = new SkillLibraryCatalog(dataDir);
+  await catalog.load();
+  await apiJsonRequest<SkillLibrary>(catalog, "/api/skill-libraries", {
+    body: { id: "proposal-http-batch-library" },
+    method: "POST",
+  });
+  const first = await apiJsonRequest<CommitSkillLibraryVersionResult>(catalog, "/api/skill-libraries/proposal-http-batch-library/versions", {
+    body: {
+      author: { kind: "user" },
+      operations: [{ package: skillPackage("alpha-http-skill"), type: "upsert" }],
+    },
+    method: "POST",
+  });
+  const beta = await apiJsonRequest<SkillLibraryUpdateProposal>(catalog, "/api/skill-libraries/proposal-http-batch-library/proposals", {
+    body: {
+      author: { kind: "self-evolution" },
+      baseVersionId: first.body.version!.id,
+      dryRun: true,
+      libraryId: "proposal-http-batch-library",
+      operations: [{ package: skillPackage("beta-http-skill"), type: "upsert" }],
+      rationale: "Add beta.",
+      sourceRefs: [{ id: "run-http-1", kind: "run" }],
+    },
+    method: "POST",
+  });
+  const gamma = await apiJsonRequest<SkillLibraryUpdateProposal>(catalog, "/api/skill-libraries/proposal-http-batch-library/proposals", {
+    body: {
+      author: { kind: "self-evolution" },
+      baseVersionId: first.body.version!.id,
+      dryRun: true,
+      libraryId: "proposal-http-batch-library",
+      operations: [{ package: skillPackage("gamma-http-skill"), type: "upsert" }],
+      rationale: "Add gamma.",
+      sourceRefs: [{ id: "run-http-2", kind: "run" }],
+    },
+    method: "POST",
+  });
+
+  const published = await apiJsonRequest<PublishSkillLibraryUpdateProposalsResult>(catalog, "/api/skill-library-proposals/publish", {
+    body: { proposalIds: [beta.body.id, gamma.body.id] },
+    method: "POST",
+  });
+  assert.equal(published.status, 201);
+  assert.deepEqual(published.body.proposals.map((proposal) => proposal.status), ["published", "published"]);
+  assert.deepEqual(published.body.result.version?.skills.map((skill) => skill.id), ["alpha-http-skill", "beta-http-skill", "gamma-http-skill"]);
 });

@@ -85,6 +85,10 @@
 .skill-version-list button.active, .skill-version-list button:hover { border-color: var(--accent-border-soft); background: var(--accent-softer); }
 .skill-version-list strong, .skill-version-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skill-version-list small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.skill-library-proposal { display: grid; gap: 10px; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 10px; }
+.skill-library-proposal header { display: grid; gap: 3px; min-width: 0; }
+.skill-library-proposal p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+.skill-library-proposal-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .skill-library-checkbox { display: flex !important; grid-template-columns: none !important; align-items: center; gap: 8px; }
 .skill-library-checkbox input { width: 18px; height: 18px; accent-color: var(--accent); }
 .skill-library-diff-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }

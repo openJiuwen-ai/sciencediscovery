@@ -20,6 +20,9 @@ import type {
   CommitSkillLibraryVersionRequest,
   CommitSkillLibraryVersionResult,
   EnabledSkillLibrary,
+  ProposeSkillLibraryUpdateRequest,
+  PublishSkillLibraryUpdateProposalResult,
+  PublishSkillLibraryUpdateProposalsResult,
   PromptSkillLibraryRef,
   SkillLibrary,
   SkillLibrarySearchCandidate,
@@ -29,6 +32,7 @@ import type {
   SkillLibraryConflict,
   SkillLibraryDiff,
   SkillLibraryPackageInput,
+  SkillLibraryUpdateProposal,
   SkillLibraryVersion,
   SkillLibraryVersionSkill,
   SkillValidationDiagnostic,
@@ -44,6 +48,7 @@ const DEFAULT_LIBRARY_RECALL_LIMIT = 12;
 
 interface CatalogIndex {
   libraries: Record<string, SkillLibrary>;
+  proposals?: Record<string, SkillLibraryUpdateProposal>;
   schemaVersion: 1;
 }
 
@@ -212,7 +217,7 @@ export class SkillLibraryCatalog {
       if (saved.schemaVersion !== 1 || !saved.libraries || typeof saved.libraries !== "object") {
         throw validationError("Skill library catalog has an unsupported schema");
       }
-      this.index = saved as CatalogIndex;
+      this.index = { proposals: {}, ...(saved as CatalogIndex) };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       await this.saveIndex();
@@ -246,6 +251,20 @@ export class SkillLibraryCatalog {
   get(libraryId: string): SkillLibrary | undefined {
     this.assertLoaded();
     return this.index.libraries[libraryId] ? structuredClone(this.index.libraries[libraryId]) : undefined;
+  }
+
+  listProposals(libraryId?: string): SkillLibraryUpdateProposal[] {
+    this.assertLoaded();
+    return Object.values(this.index.proposals ?? {})
+      .filter((proposal) => !libraryId || proposal.libraryId === libraryId)
+      .map((proposal) => structuredClone(proposal))
+      .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  getProposal(proposalId: string): SkillLibraryUpdateProposal | undefined {
+    this.assertLoaded();
+    const proposal = this.index.proposals?.[proposalId];
+    return proposal ? structuredClone(proposal) : undefined;
   }
 
   async create(input: { id?: string; name?: string } = {}): Promise<SkillLibrary> {
@@ -460,6 +479,130 @@ export class SkillLibraryCatalog {
         diff: built.diff,
         dryRun: false,
         version: structuredClone(built.version),
+      };
+    });
+  }
+
+  async proposeUpdate(libraryId: string, request: ProposeSkillLibraryUpdateRequest): Promise<SkillLibraryUpdateProposal> {
+    return await this.mutate(async () => {
+      this.assertLoaded();
+      if (libraryId === BUILT_IN_SKILL_LIBRARY_ID) {
+        throw validationError("Built-in skill libraries are read-only and cannot receive self-evolution proposals");
+      }
+      if (!request.rationale?.trim()) throw validationError("Skill library update proposal requires rationale");
+      if (!request.sourceRefs?.length) throw validationError("Skill library update proposal requires sourceRefs");
+      const dryRunRequest: CommitSkillLibraryVersionRequest = {
+        ...structuredClone(request),
+        author: { ...request.author, kind: "self-evolution" },
+        dryRun: true,
+      };
+      const built = await this.buildCommit(libraryId, dryRunRequest);
+      const result: CommitSkillLibraryVersionResult = {
+        conflicts: built.conflicts,
+        diagnostics: built.diagnostics,
+        diff: built.diff,
+        dryRun: true,
+        version: structuredClone(built.version),
+      };
+      const now = new Date().toISOString();
+      const proposal: SkillLibraryUpdateProposal = {
+        ...(dryRunRequest.baseVersionId ? { baseVersionId: dryRunRequest.baseVersionId } : {}),
+        createdAt: now,
+        id: randomUUID(),
+        libraryId,
+        rationale: request.rationale.trim(),
+        request: dryRunRequest,
+        result,
+        sourceRefs: structuredClone(request.sourceRefs),
+        status: "pending",
+        updatedAt: now,
+      };
+      this.index.proposals ??= {};
+      this.index.proposals[proposal.id] = proposal;
+      await this.saveIndex();
+      return structuredClone(proposal);
+    });
+  }
+
+  async rejectProposal(proposalId: string): Promise<SkillLibraryUpdateProposal> {
+    return await this.mutate(async () => {
+      this.assertLoaded();
+      const proposal = this.index.proposals?.[proposalId];
+      if (!proposal) throw new SkillLibraryCatalogError("SKILL_LIBRARY_NOT_FOUND", `Skill library update proposal not found: ${proposalId}`);
+      if (proposal.status === "published") throw validationError("Published skill library update proposals cannot be rejected");
+      proposal.status = "rejected";
+      proposal.updatedAt = new Date().toISOString();
+      await this.saveIndex();
+      return structuredClone(proposal);
+    });
+  }
+
+  async publishProposal(proposalId: string): Promise<PublishSkillLibraryUpdateProposalResult> {
+    const published = await this.publishProposals([proposalId]);
+    return {
+      proposal: published.proposals[0]!,
+      result: published.result,
+    };
+  }
+
+  async publishProposals(proposalIds: readonly string[]): Promise<PublishSkillLibraryUpdateProposalsResult> {
+    return await this.mutate(async () => {
+      this.assertLoaded();
+      const uniqueProposalIds = Array.from(new Set(proposalIds.map((id) => id.trim()).filter(Boolean)));
+      if (!uniqueProposalIds.length) throw validationError("At least one skill library update proposal is required");
+      if (uniqueProposalIds.length > 50) throw validationError("At most 50 skill library update proposals can be published at once");
+      const proposals = uniqueProposalIds.map((proposalId) => {
+        const proposal = this.index.proposals?.[proposalId];
+        if (!proposal) throw new SkillLibraryCatalogError("SKILL_LIBRARY_NOT_FOUND", `Skill library update proposal not found: ${proposalId}`);
+        if (proposal.status !== "pending") throw validationError(`Skill library update proposal ${proposalId} is ${proposal.status}`);
+        return proposal;
+      });
+      const [first] = proposals;
+      const libraryId = first!.libraryId;
+      if (libraryId === BUILT_IN_SKILL_LIBRARY_ID) {
+        throw validationError("Built-in skill libraries are read-only and cannot publish self-evolution proposals");
+      }
+      if (proposals.some((proposal) => proposal.libraryId !== libraryId)) {
+        throw validationError("Skill library update proposals must belong to the same library");
+      }
+      const library = this.index.libraries[libraryId];
+      if (!library) throw new SkillLibraryCatalogError("SKILL_LIBRARY_NOT_FOUND", `Skill library not found: ${libraryId}`);
+      const request: CommitSkillLibraryVersionRequest = {
+        author: { kind: "self-evolution", name: uniqueProposalIds.length === 1 ? "Agent self-evolution proposal" : "Merged agent self-evolution proposals" },
+        baseVersionId: library.headVersionId,
+        dryRun: false,
+        evaluation: { proposalIds: uniqueProposalIds },
+        operations: proposals.flatMap((proposal) => structuredClone(proposal.request.operations)),
+      };
+      const built = await this.buildCommit(libraryId, request);
+      if (built.conflicts.length) {
+        return {
+          proposals: structuredClone(proposals),
+          result: {
+            conflicts: built.conflicts,
+            diagnostics: built.diagnostics,
+            diff: built.diff,
+            dryRun: false,
+          },
+        };
+      }
+      await this.publishVersion(libraryId, built.version, built.packages);
+      const now = new Date().toISOString();
+      for (const proposal of proposals) {
+        proposal.status = "published";
+        proposal.publishedVersionId = built.version.id;
+        proposal.updatedAt = now;
+      }
+      await this.saveIndex();
+      return {
+        proposals: structuredClone(proposals),
+        result: {
+          conflicts: [],
+          diagnostics: built.diagnostics,
+          diff: built.diff,
+          dryRun: false,
+          version: structuredClone(built.version),
+        },
       };
     });
   }

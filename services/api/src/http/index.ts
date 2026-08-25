@@ -59,6 +59,7 @@ import type {
   UpdateProxySettingsRequest,
   UpdateWebSettingsRequest,
   UpdateMemoryGraphSettingsRequest,
+  CreateSkillEvolutionRunRequest,
   DistillSessionSkillRequest,
   Environment,
   EffectiveRuntimeSettings,
@@ -179,6 +180,7 @@ import {
   ApiStatusError,
   cancelCurrentSessionRun,
   cancelSessionRun,
+  createSkillEvolutionRun,
   createQueuedRun,
   emptyMatch,
   emptyTrace,
@@ -699,7 +701,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, skillCatalog.list());
         return;
       }
-      if (url.pathname.startsWith("/api/skill-libraries")) {
+      if (url.pathname.startsWith("/api/skill-libraries") || url.pathname.startsWith("/api/skill-library-proposals")) {
         if (await handleSkillLibraryRequest({ catalog: skillLibraryCatalog, request, response, url })) return;
       }
       if (request.method === "GET" && url.pathname === "/api/specialists") {
@@ -1499,6 +1501,40 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const run = await store.getSessionRun(sessionRunMatch[1]!, sessionRunMatch[2]!);
         if (!run) return sendError(response, 404, "Run not found");
         sendJson(response, 200, run);
+        return;
+      }
+
+      const sessionRunSkillEvolutionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/skill-evolution$/);
+      if (sessionRunSkillEvolutionMatch && request.method === "POST") {
+        const sessionId = sessionRunSkillEvolutionMatch[1]!;
+        const runId = sessionRunSkillEvolutionMatch[2]!;
+        const run = await createSkillEvolutionRun(
+          store,
+          skillCatalog,
+          skillLibraryCatalog,
+          sessionId,
+          runId,
+          await readJson<CreateSkillEvolutionRunRequest>(request),
+        );
+        scheduleSessionRuns(
+          store,
+          runnerClient,
+          provenanceRecorder,
+          mcpBroker,
+          webBroker,
+          mcpRegistry,
+          mcpCatalog,
+          artifactManager,
+          paperService,
+          remoteCompute,
+          skillCatalog,
+          skillLibraryCatalog,
+          memoryGraphSink,
+          sessionId,
+          config,
+          memoryGraphClient,
+        );
+        sendJson(response, 201, run);
         return;
       }
 

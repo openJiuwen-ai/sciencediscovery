@@ -2149,7 +2149,13 @@ test("workbench search and Composer references use authenticated authoritative i
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
-    body: JSON.stringify({ name: "Proteomics" }),
+    body: JSON.stringify({
+      name: "Proteomics",
+      settingsOverrides: {
+        enabledSkillIds: ["life-science-evidence-brief"],
+        skillSelectionMode: "selected",
+      },
+    }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
@@ -4546,7 +4552,12 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
-  assert.deepEqual(project.body.settingsOverrides, { reviewModelId: modelB.id });
+  assert.deepEqual(project.body.settingsOverrides, {
+    enabledSkillIds: [],
+    enabledSkillLibraries: [],
+    reviewModelId: modelB.id,
+    skillSelectionMode: "selected",
+  });
   const renamedProject = await jsonRequest<Project>(`${origin}/api/projects/${project.body.id}`, {
     body: JSON.stringify({ name: "Renamed lifecycle project" }),
     headers: { ...authorization, "content-type": "application/json" },

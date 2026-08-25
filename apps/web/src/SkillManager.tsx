@@ -18,6 +18,7 @@ import type {
   CreateSkillRequest,
   SkillLibrary,
   SkillLibraryDiff,
+  SkillLibraryUpdateProposal,
   SkillLibraryVersion,
   SkillDeletionImpact,
   SkillDescriptor,
@@ -470,15 +471,21 @@ function SkillLibraryManager({
   const [fromVersionId, setFromVersionId] = useState("");
   const [toVersionId, setToVersionId] = useState("");
   const [diff, setDiff] = useState<SkillLibraryDiff>();
+  const [proposals, setProposals] = useState<SkillLibraryUpdateProposal[]>([]);
   const [libraryName, setLibraryName] = useState("");
   const [libraryId, setLibraryId] = useState("");
   const [skillMarkdown, setSkillMarkdown] = useState(DEFAULT_LIBRARY_SKILL);
   const [dryRun, setDryRun] = useState(true);
   const [status, setStatus] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [selectedProposalIds, setSelectedProposalIds] = useState<Set<string>>(() => new Set());
 
   const selectedLibrary = libraries.find((library) => library.id === selectedId);
   const selectedVersion = versions.find((version) => version.id === selectedVersionId) ?? versions[versions.length - 1];
+  const selectedLibraryProposals = proposals.filter((proposal) => proposal.libraryId === selectedId && proposal.status === "pending");
+  const selectedPendingProposalIds = selectedLibraryProposals
+    .map((proposal) => proposal.id)
+    .filter((proposalId) => selectedProposalIds.has(proposalId));
 
   useEffect(() => {
     let active = true;
@@ -496,12 +503,22 @@ function SkillLibraryManager({
     if (!selectedId) {
       setVersions([]);
       setSelectedVersionId(undefined);
+      setProposals([]);
+      setSelectedProposalIds(new Set());
       return;
     }
     let active = true;
-    void client.listSkillLibraryVersions(selectedId).then((items) => {
+    void Promise.all([
+      client.listSkillLibraryVersions(selectedId),
+      client.listSkillLibraryProposals(selectedId),
+    ]).then(([items, nextProposals]) => {
       if (!active) return;
       setVersions(items);
+      setProposals(nextProposals);
+      setSelectedProposalIds((current) => {
+        const pendingIds = new Set(nextProposals.filter((proposal) => proposal.status === "pending").map((proposal) => proposal.id));
+        return new Set(Array.from(current).filter((proposalId) => pendingIds.has(proposalId)));
+      });
       const head = libraries.find((library) => library.id === selectedId)?.headVersionId;
       setSelectedVersionId((current) => current && items.some((item) => item.id === current) ? current : head ?? items.at(-1)?.id);
       setFromVersionId((current) => current && items.some((item) => item.id === current) ? current : items[0]?.id ?? "");
@@ -522,6 +539,7 @@ function SkillLibraryManager({
     setSelectedId(selectId);
     const nextVersions = await client.listSkillLibraryVersions(selectId);
     setVersions(nextVersions);
+    setProposals(await client.listSkillLibraryProposals(selectId));
     const head = nextLibraries.find((library) => library.id === selectId)?.headVersionId;
     setSelectedVersionId(head ?? nextVersions.at(-1)?.id);
     setFromVersionId(nextVersions[0]?.id ?? "");
@@ -617,6 +635,75 @@ function SkillLibraryManager({
     }
   }
 
+  async function publishProposal(proposalId: string): Promise<void> {
+    setBusy(true);
+    setStatus(undefined);
+    try {
+      const result = await client.publishSkillLibraryProposal(proposalId);
+      setDiff(result.result.diff);
+      if (result.result.conflicts.length) {
+        setStatus(result.result.conflicts.map((conflict) => conflict.message).join(" "));
+      } else {
+        setStatus(`Published proposal ${proposalId.slice(0, 8)} as version ${result.result.version?.id.slice(0, 8) ?? ""}.`);
+        await refresh(result.proposal.libraryId);
+      }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Could not publish skill library proposal";
+      setStatus(message);
+      onError(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function publishSelectedProposals(): Promise<void> {
+    if (!selectedPendingProposalIds.length) return;
+    setBusy(true);
+    setStatus(undefined);
+    try {
+      const result = await client.publishSkillLibraryProposals(selectedPendingProposalIds);
+      setDiff(result.result.diff);
+      if (result.result.conflicts.length) {
+        setStatus(result.result.conflicts.map((conflict) => conflict.message).join(" "));
+      } else {
+        setStatus(`Published ${result.proposals.length} proposal(s) as version ${result.result.version?.id.slice(0, 8) ?? ""}.`);
+        setSelectedProposalIds(new Set());
+        await refresh(result.proposals[0]?.libraryId);
+      }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Could not publish skill library proposals";
+      setStatus(message);
+      onError(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleProposalSelection(proposalId: string, selected: boolean): void {
+    setSelectedProposalIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(proposalId);
+      else next.delete(proposalId);
+      return next;
+    });
+  }
+
+  async function rejectProposal(proposalId: string): Promise<void> {
+    setBusy(true);
+    setStatus(undefined);
+    try {
+      const rejected = await client.rejectSkillLibraryProposal(proposalId);
+      setStatus(`Rejected proposal ${rejected.id.slice(0, 8)}.`);
+      await refresh(rejected.libraryId);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Could not reject skill library proposal";
+      setStatus(message);
+      onError(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return <>
     <form className="skill-library-create" onSubmit={(event) => void createLibrary(event)}>
       <label><span>Library name</span><input onChange={(event) => setLibraryName(event.target.value)} placeholder="Evaluation skills" value={libraryName} /></label>
@@ -629,7 +716,7 @@ function SkillLibraryManager({
         {libraries.map((library) => {
           const headVersion = versions.find((version) => version.id === library.headVersionId);
           const isSelected = library.id === selectedId;
-          return <button aria-label={`Skill library ${library.name}`} className={isSelected ? "skill-card active" : "skill-card"} key={library.id} onClick={() => { setSelectedId(library.id); setDiff(undefined); }} title={library.name} type="button">
+          return <button aria-label={`Skill library ${library.name}`} className={isSelected ? "skill-card active" : "skill-card"} key={library.id} onClick={() => { setSelectedId(library.id); setSelectedProposalIds(new Set()); setDiff(undefined); }} title={library.name} type="button">
           <span><strong>{library.name}</strong><small>{library.headVersionId ? `Head ${library.headVersionId.slice(0, 8)}` : "No published versions"}</small>{isSelected && headVersion ? <small>{headVersion.skills.length} skills · {headVersion.contentHash.slice(0, 12)}</small> : null}</span>
           <span className="skill-source managed">{library.id}</span>
         </button>;
@@ -649,6 +736,27 @@ function SkillLibraryManager({
             <label className="skill-library-checkbox"><input checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} type="checkbox" /><span>Dry run</span></label>
             <button className="primary-button" disabled={busy} type="submit">{dryRun ? "Preview commit" : "Publish version"}</button>
           </form>
+          <section className="skill-library-section">
+            <h5>Pending proposals</h5>
+            {selectedLibraryProposals.length ? <>
+              <div className="skill-library-proposal-toolbar">
+                <label className="skill-library-checkbox"><input checked={selectedPendingProposalIds.length === selectedLibraryProposals.length} onChange={(event) => setSelectedProposalIds(event.target.checked ? new Set(selectedLibraryProposals.map((proposal) => proposal.id)) : new Set())} type="checkbox" /><span>Select all</span></label>
+                <button className="primary-button" disabled={busy || !selectedPendingProposalIds.length} onClick={() => void publishSelectedProposals()} type="button">Publish selected</button>
+              </div>
+              <div className="skill-version-list">
+              {selectedLibraryProposals.map((proposal) => <article className="skill-library-proposal" key={proposal.id}>
+                <header><label className="skill-library-checkbox"><input checked={selectedProposalIds.has(proposal.id)} onChange={(event) => toggleProposalSelection(proposal.id, event.target.checked)} type="checkbox" /><strong>{proposal.id.slice(0, 8)}</strong></label><small>{proposal.status} · {diffCount(proposal.result.diff)} change(s)</small></header>
+                <p>{proposal.rationale}</p>
+                <div className="skill-library-diff" aria-label={`Skill library proposal ${proposal.id} diff`}>
+                  {(["added", "modified", "deleted"] as const).map((kind) => <div key={kind}><strong>{kind}</strong>{proposal.result.diff[kind].length ? <ul>{proposal.result.diff[kind].map((entry) => <li key={`${proposal.id}-${kind}-${entry.skillId}`}>{entry.skillId}</li>)}</ul> : <p>None</p>}</div>)}
+                </div>
+                {proposal.status === "pending" ? <div className="dialog-actions">
+                  <button className="secondary-button" disabled={busy} onClick={() => void rejectProposal(proposal.id)} type="button">Reject</button>
+                  <button className="primary-button" disabled={busy || Boolean(proposal.result.conflicts.length)} onClick={() => void publishProposal(proposal.id)} type="button">Publish</button>
+                </div> : null}
+              </article>)}
+            </div></> : <p className="skill-empty">No pending proposals.</p>}
+          </section>
           <section className="skill-library-section">
             <h5>Diff and rollback</h5>
             <div className="skill-library-diff-controls">

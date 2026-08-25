@@ -259,6 +259,8 @@ export interface WorkspaceAgentOptions {
    * chip_map the LLM uses to write aliases into the report body. */
   declareClaim?: (input: DeclareClaimInput) => Promise<DeclareClaimResult>;
   reviewCheckpoint?: WorkspaceToolOptions["reviewCheckpoint"];
+  proposeSkillLibraryUpdate?: WorkspaceToolOptions["proposeSkillLibraryUpdate"];
+  publishSkillLibraryUpdate?: WorkspaceToolOptions["publishSkillLibraryUpdate"];
   /** Trace provenance chain + broken signal (`trace_provenance` tool). */
   traceProvenance?: WorkspaceToolOptions["traceProvenance"];
   proposeRemoteJob?: (input: CreateRemoteJobRequest) => Promise<RemoteJob>;

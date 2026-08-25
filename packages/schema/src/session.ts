@@ -300,6 +300,10 @@ export interface SendMessageRequest {
   webForceRefresh?: boolean;
 }
 
+export interface CreateSkillEvolutionRunRequest {
+  targetLibraryId?: string;
+}
+
 /** Result of stopping the agent run that is currently streaming for a Session. */
 
 export interface CancelRunResult {

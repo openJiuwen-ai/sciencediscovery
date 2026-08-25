@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SkillDescriptor } from "@sciencediscovery/schema";
+import type { SkillDescriptor, SkillLibraryUpdateProposal } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -105,6 +105,30 @@ test("renders skill library cards with pinned head version metadata", async () =
         { description: "Beta", hash: "b".repeat(64), id: "beta-skill", version: "1.0.0" },
       ],
     }],
+    listSkillLibraryProposals: async (): Promise<SkillLibraryUpdateProposal[]> => [{
+      createdAt: "2026-01-03T00:00:00.000Z",
+      id: "proposal-alpha",
+      libraryId: "evaluation-skills",
+      rationale: "A reusable evaluation workflow was discovered.",
+      request: {
+        author: { kind: "self-evolution" },
+        baseVersionId: "version-alpha",
+        dryRun: true,
+        operations: [{ package: { files: [{ content: "---\nname: gamma-skill\ndescription: Gamma\n---\n\nUse gamma.\n", path: "SKILL.md" }] }, type: "upsert" }],
+      },
+      result: {
+        conflicts: [],
+        diagnostics: [],
+        diff: { added: [{ skillId: "gamma-skill" }], deleted: [], modified: [] },
+        dryRun: true,
+      },
+      sourceRefs: [{ id: "run-1", kind: "run" }],
+      status: "pending",
+      updatedAt: "2026-01-03T00:00:00.000Z",
+    }],
+    publishSkillLibraryProposal: async () => { throw new Error("not used"); },
+    publishSkillLibraryProposals: async () => { throw new Error("not used"); },
+    rejectSkillLibraryProposal: async () => { throw new Error("not used"); },
   } as Partial<ApiClient> as ApiClient;
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
@@ -123,5 +147,7 @@ test("renders skill library cards with pinned head version metadata", async () =
   assert.match(text, /Head version/);
   assert.match(text, /2 skills/);
   assert.match(text, /abcdef123456/);
+  assert.match(text, /Pending proposals/);
+  assert.match(text, /gamma-skill/);
   await act(async () => renderer!.unmount());
 });

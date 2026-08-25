@@ -402,6 +402,8 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.declareEvidence ? { declareEvidence: options.declareEvidence } : {}),
     ...(options.declareClaim ? { declareClaim: options.declareClaim } : {}),
     ...(options.reviewCheckpoint ? { reviewCheckpoint: options.reviewCheckpoint } : {}),
+    ...(options.proposeSkillLibraryUpdate ? { proposeSkillLibraryUpdate: options.proposeSkillLibraryUpdate } : {}),
+    ...(options.publishSkillLibraryUpdate ? { publishSkillLibraryUpdate: options.publishSkillLibraryUpdate } : {}),
     ...(options.proposeRemoteJob ? { proposeRemoteJob: options.proposeRemoteJob } : {}),
     remoteHosts: options.remoteHosts ?? [],
     skills: options.skills ?? [],

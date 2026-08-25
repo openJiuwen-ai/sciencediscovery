@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { BUNDLED_SKILL_IDS, SkillCatalog } from "@sciencediscovery/specialist";
 import { BUILT_IN_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
 
-import { createQueuedRun } from "./runs/index.js";
+import { createQueuedRun, createSkillEvolutionRun, DEFAULT_SELF_EVOLUTION_LIBRARY_ID, SKILL_EVOLUTION_PROMPT_MARKER } from "./runs/index.js";
 import { SessionStore } from "./store.js";
 import { SkillLibraryCatalog } from "./skill-library-catalog.js";
 
@@ -137,6 +137,106 @@ test("skill library commits report stale base conflicts without moving head", as
   }
 });
 
+test("skill library self-evolution proposals dry-run before user publication", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    await catalog.create({ id: "proposal-library" });
+    const first = await catalog.commitVersion("proposal-library", {
+      author: { kind: "user" },
+      operations: [{ package: skillPackage("alpha-skill"), type: "upsert" }],
+    });
+
+    const proposal = await catalog.proposeUpdate("proposal-library", {
+      author: { kind: "self-evolution" },
+      baseVersionId: first.version!.id,
+      dryRun: true,
+      libraryId: "proposal-library",
+      operations: [{ package: skillPackage("beta-skill"), type: "upsert" }],
+      rationale: "Beta skill was useful in a failed run.",
+      sourceRefs: [{ id: "run-1", kind: "run" }],
+    });
+    assert.equal(proposal.status, "pending");
+    assert.equal(proposal.result.dryRun, true);
+    assert.deepEqual(proposal.result.diff.added.map((entry) => entry.skillId), ["beta-skill"]);
+    assert.equal(catalog.get("proposal-library")?.headVersionId, first.version?.id);
+    assert.deepEqual(catalog.listProposals("proposal-library").map((item) => item.id), [proposal.id]);
+
+    const published = await catalog.publishProposal(proposal.id);
+    assert.equal(published.result.conflicts.length, 0);
+    assert.equal(published.proposal.status, "published");
+    assert.equal(catalog.get("proposal-library")?.headVersionId, published.result.version?.id);
+    assert.deepEqual((await catalog.getVersion("proposal-library", published.result.version!.id)).skills.map((skill) => skill.id), ["alpha-skill", "beta-skill"]);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("skill library self-evolution proposals publish as one merged version", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    await catalog.create({ id: "proposal-batch-library", name: "Proposal Batch Library" });
+    const first = await catalog.commitVersion("proposal-batch-library", {
+      author: { kind: "user" },
+      operations: [{ package: skillPackage("alpha-skill"), type: "upsert" }],
+    });
+    const beta = await catalog.proposeUpdate("proposal-batch-library", {
+      author: { kind: "self-evolution" },
+      baseVersionId: first.version!.id,
+      dryRun: true,
+      libraryId: "proposal-batch-library",
+      operations: [{ package: skillPackage("beta-skill"), type: "upsert" }],
+      rationale: "Beta skill was useful.",
+      sourceRefs: [{ id: "run-1", kind: "run" }],
+    });
+    const gamma = await catalog.proposeUpdate("proposal-batch-library", {
+      author: { kind: "self-evolution" },
+      baseVersionId: first.version!.id,
+      dryRun: true,
+      libraryId: "proposal-batch-library",
+      operations: [{ package: skillPackage("gamma-skill"), type: "upsert" }],
+      rationale: "Gamma skill was useful.",
+      sourceRefs: [{ id: "run-2", kind: "run" }],
+    });
+
+    const published = await catalog.publishProposals([beta.id, gamma.id]);
+    assert.equal(published.result.conflicts.length, 0);
+    assert.deepEqual(published.proposals.map((proposal) => proposal.status), ["published", "published"]);
+    assert.equal(catalog.get("proposal-batch-library")?.headVersionId, published.result.version?.id);
+    assert.deepEqual(
+      (await catalog.getVersion("proposal-batch-library", published.result.version!.id)).skills.map((skill) => skill.id),
+      ["alpha-skill", "beta-skill", "gamma-skill"],
+    );
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("skill library self-evolution proposals reject read-only built-in libraries", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    await catalog.seedBuiltInSkillLibrary(repositoryRoot);
+    await assert.rejects(
+      catalog.proposeUpdate(BUILT_IN_SKILL_LIBRARY_ID, {
+        author: { kind: "self-evolution" },
+        dryRun: true,
+        libraryId: BUILT_IN_SKILL_LIBRARY_ID,
+        operations: [{ package: skillPackage("beta-skill"), type: "upsert" }],
+        rationale: "Do not write built-in skills.",
+        sourceRefs: [{ id: "run-1", kind: "run" }],
+      }),
+      /read-only/,
+    );
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("skill library references are validated against immutable version hashes", async () => {
   const dataDir = await temporaryDataDir();
   try {
@@ -203,7 +303,7 @@ test("skill library search returns bounded candidates from mounted versions", as
 test("queued runs pin enabled skill library heads to immutable version refs", async () => {
   const dataDir = await temporaryDataDir();
   try {
-    const skillCatalog = new SkillCatalog(dataDir, process.cwd());
+    const skillCatalog = new SkillCatalog(dataDir, repositoryRoot);
     await skillCatalog.load();
     const store = new SessionStore(dataDir);
     store.setAvailableSkillIds(skillCatalog.ids());
@@ -241,6 +341,44 @@ test("queued runs pin enabled skill library heads to immutable version refs", as
       priority: 7,
       versionId: "head",
     }]);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("run-level skill self-evolution queues a guided proposal run", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const skillCatalog = new SkillCatalog(dataDir, repositoryRoot);
+    await skillCatalog.load();
+    const store = new SessionStore(dataDir);
+    store.setAvailableSkillIds(skillCatalog.ids());
+    await store.load();
+    const model = await store.createModel({
+      apiToken: "model-token",
+      baseUrl: "https://models.example.test/v1",
+      model: "science-model",
+      name: "Science model",
+    });
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    await catalog.create({ id: DEFAULT_SELF_EVOLUTION_LIBRARY_ID });
+    const project = await store.createProject("Self-evolution project", {
+      enabledSkillIds: [],
+      modelId: model.id,
+      skillSelectionMode: "selected",
+    });
+    const session = await store.createSession(project.id, "Self-evolution session");
+    const source = await createQueuedRun(store, skillCatalog, catalog, session.id, { content: "Summarize a tiny CSV validation workflow" });
+    await store.updateSessionRunStatus(session.id, source.id, "completed", { finishedAt: new Date().toISOString(), startedAt: new Date().toISOString() });
+
+    const evolution = await createSkillEvolutionRun(store, skillCatalog, catalog, session.id, source.id);
+    assert.equal(evolution.status, "queued");
+    assert.match(evolution.prompt, new RegExp(SKILL_EVOLUTION_PROMPT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(evolution.prompt, /propose_skill_library_update/);
+    assert.match(evolution.prompt, /upsert_skill/);
+    assert.match(evolution.prompt, new RegExp(source.id));
+    assert.match(evolution.prompt, new RegExp(DEFAULT_SELF_EVOLUTION_LIBRARY_ID));
   } finally {
     await rm(dataDir, { force: true, recursive: true });
   }

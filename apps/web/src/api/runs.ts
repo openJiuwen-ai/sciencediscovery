@@ -14,6 +14,7 @@
 
 import type {
   CancelRunResult,
+  CreateSkillEvolutionRunRequest,
   ExecutionRun,
   RunStreamEvent,
   SessionUsageSummary,
@@ -66,6 +67,17 @@ export class RunsApiClient extends SessionsApiClient {
 
   createRun(sessionId: string, body: SendMessageRequest): Promise<SessionRun> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
+      body: JSON.stringify(body),
+      method: "POST",
+    });
+  }
+
+  createSkillEvolutionRun(
+    sessionId: string,
+    runId: string,
+    body: CreateSkillEvolutionRunRequest = {},
+  ): Promise<SessionRun> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/skill-evolution`, {
       body: JSON.stringify(body),
       method: "POST",
     });
