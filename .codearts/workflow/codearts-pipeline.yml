@@ -527,6 +527,7 @@ post:
             cat > "$RESULT_FILE" <<RESULT_HTML
             <p>&#9989; 流水线 <a href="$PR_CHECK_URL">${{ pipeline.run_id }}</a> 执行成功。</p>
             <p>可在 <a href="$PR_CHECK_URL">$PR_CHECK_URL</a> 查看完整构建日志。</p>
+            <p>在 PR 评论中发送 <code>rerun</code> 可重新触发 CI 流水线。</p>
             <table style="border-collapse: collapse">
               <tr><th>任务名称</th><th>子任务</th><th>状态</th><th>详情</th></tr>
               <tr><td rowspan="4">代码检查</td><td>SCA（开源合规）</td><td rowspan="4">PASSED（子流水线汇总）</td><td>$SCA_LINK_CELL</td></tr>
@@ -656,6 +657,7 @@ post:
             cat > "$RESULT_FILE" <<RESULT_HTML
             <p>&#10060; 流水线 <a href="$PR_CHECK_URL">${{ pipeline.run_id }}</a> 执行失败。</p>
             <p>可在 <a href="$PR_CHECK_URL">$PR_CHECK_URL</a> 查看完整构建日志。</p>
+            <p>在 PR 评论中发送 <code>rerun</code> 可重新触发 CI 流水线。</p>
             <table style="border-collapse: collapse">
               <tr><th>任务名称</th><th>子任务</th><th>状态</th><th>详情</th></tr>
               <tr><td rowspan="4">代码检查</td><td>SCA（开源合规）</td><td rowspan="4">$CODECHECK_RESULT（子流水线汇总）</td><td>$SCA_LINK_CELL</td></tr>
