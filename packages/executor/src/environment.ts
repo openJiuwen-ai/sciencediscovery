@@ -18,15 +18,34 @@ import { execFileSync } from "node:child_process";
 import { DEFAULT_ENVIRONMENT_REVISION_ID, SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, type EnvironmentRevision } from "@sciencediscovery/schema";
 
 export { DEFAULT_ENVIRONMENT_REVISION_ID } from "@sciencediscovery/schema";
-const pythonVersion = execFileSync("/usr/bin/python3", ["--version"], { encoding: "utf8" }).trim();
-const shellVersion = execFileSync("/usr/bin/bash", ["--version"], { encoding: "utf8" }).split("\n")[0]!.trim();
+
+function firstWorkingExecutable(candidates: readonly string[], args: readonly string[]): { path: string; version: string } {
+  for (const candidate of candidates) {
+    try {
+      return {
+        path: candidate,
+        version: execFileSync(candidate, [...args], { encoding: "utf8" }).trim(),
+      };
+    } catch {
+      // Keep module import side-effect free on minimal CI images.
+    }
+  }
+  return { path: candidates[0] ?? "unavailable", version: "unavailable" };
+}
+
+const python = firstWorkingExecutable(
+  [process.env.SCIENCE_AGENT_SYSTEM_PYTHON_PATH?.trim(), "python3", "python", "/usr/bin/python3"].filter(Boolean) as string[],
+  ["--version"],
+);
+const shell = firstWorkingExecutable(["/usr/bin/bash", "bash"], ["--version"]);
+const shellVersion = shell.version.split("\n")[0]!.trim();
 
 export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
-  executable: "/usr/bin/python3",
+  executable: python.path,
   format: "sciencediscovery-environment-v1",
   language: "python",
   packageSource: "read-only system /usr",
-  pythonVersion,
+  pythonVersion: python.version,
   runner: "m1-bwrap-v1",
 }, null, 2)}\n`;
 
@@ -35,7 +54,7 @@ export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC_HASH = createHash("sha256")
   .digest("hex");
 
 export const DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
-  executable: "/usr/bin/bash",
+  executable: shell.path,
   format: "sciencediscovery-environment-v1",
   language: "shell",
   packageSource: "read-only system /usr",
@@ -54,7 +73,7 @@ export function defaultEnvironmentRevision(): EnvironmentRevision {
     environmentId: "legacy-system-python",
     id: DEFAULT_ENVIRONMENT_REVISION_ID,
     language: "python",
-    languageVersion: pythonVersion,
+    languageVersion: python.version,
     packages: [],
     packageSpecHash: DEFAULT_ENVIRONMENT_PACKAGE_SPEC_HASH,
     platform: `${process.platform}-${process.arch}`,
