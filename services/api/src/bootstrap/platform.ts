@@ -34,7 +34,6 @@ import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { RunnerClient } from "@sciencediscovery/executor";
 import { CasStore } from "@sciencediscovery/cas";
 import { CandidateSources } from "../evolution/candidates.js";
-import { ProbeRegistry } from "../evolution/discrimination.js";
 import { RunTokenRegistry } from "../evolution/llm-proxy.js";
 import { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
@@ -147,7 +146,6 @@ export function createPlatformServices(
   // would outlive the run it belongs to, and that is the property it exists for.
   const evolveRunTokens = new RunTokenRegistry();
   const evolveCas = new CasStore(config.dataDir);
-  const evolveProbes = new ProbeRegistry();
   const evolveCandidates = new CandidateSources(
     config.dataDir, process.env.SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR?.trim() || undefined,
   );
@@ -181,7 +179,6 @@ export function createPlatformServices(
     },
     model: (id: string) => store.getModel(id),
     orchestrator: evolveOrchestrator,
-    probes: evolveProbes,
     store: (sessionId: string) => async (input: { content?: string; path?: string }) => {
       const bytes = input.content !== undefined
         ? Buffer.from(input.content, "utf-8")
@@ -194,9 +191,7 @@ export function createPlatformServices(
     artifactManager,
     evolutionStore,
     evolveCandidates,
-    evolveCas,
     evolveOrchestrator,
-    evolveProbes,
     evolveRunTokens,
     evolveToolDeps,
     mcpBroker,

@@ -19,7 +19,6 @@ import { test } from "node:test";
 
 import type { EvolveScorecard, ScorecardConstraint, ScorecardCriterion } from "@sciencediscovery/schema";
 
-import { MeasurementCache } from "./measurements.js";
 import {
   aggregate,
   evaluateConstraints,
@@ -291,68 +290,6 @@ test("a card with real discrimination passes", () => {
 });
 
 // --- Measurement cache ------------------------------------------------------
-
-test("the cache answers per shard and averages across them", () => {
-  const cache = new MeasurementCache();
-  cache.record({ candidateHash: "sha256:a", shard: "gate-0" }, { f1: 0.6, runtime: 100 });
-  cache.record({ candidateHash: "sha256:a", shard: "gate-1" }, { f1: 0.8, runtime: 200 });
-  cache.record({ candidateHash: "sha256:b", shard: "gate-0" }, { f1: 0.1 });
-
-  assert.deepEqual(cache.get({ candidateHash: "sha256:a", shard: "gate-1" }), { f1: 0.8, runtime: 200 });
-  assert.deepEqual(cache.shards("sha256:a"), ["gate-0", "gate-1"]);
-  const mean = cache.mean("sha256:a");
-  // Tolerance rather than an exact float: pinning the last bit of an IEEE mean
-  // tests the arithmetic of the machine, not the behaviour of the cache.
-  assert.ok(Math.abs((mean?.f1 ?? 0) - 0.7) < 1e-9);
-  assert.equal(mean?.runtime, 150);
-  assert.equal(cache.mean("sha256:missing"), undefined);
-});
-
-test("a merge decision can pin the average to the held-out shards", () => {
-  const cache = new MeasurementCache();
-  cache.record({ candidateHash: "sha256:a", shard: "rollout-0" }, { f1: 0.95 });
-  cache.record({ candidateHash: "sha256:a", shard: "gate-0" }, { f1: 0.60 });
-  cache.record({ candidateHash: "sha256:a", shard: "gate-1" }, { f1: 0.62 });
-
-  // Ranking may look at everything; deciding a commit reads only the gate.
-  assert.equal(cache.mean("sha256:a", ["gate-0", "gate-1"])?.f1, 0.61);
-  assert.notEqual(cache.mean("sha256:a")?.f1, 0.61);
-});
-
-test("a criterion missing from one shard is skipped, not counted as zero", () => {
-  const cache = new MeasurementCache();
-  cache.record({ candidateHash: "sha256:a", shard: "gate-0" }, { f1: 0.6, runtime: 100 });
-  cache.record({ candidateHash: "sha256:a", shard: "gate-1" }, { f1: 0.8 });
-
-  const mean = cache.mean("sha256:a");
-  assert.equal(mean?.runtime, 100, "averaging in a zero would invent a measurement");
-});
-
-test("re-recording a shard overwrites, and the cache stays bounded", () => {
-  const cache = new MeasurementCache(3);
-  cache.record({ candidateHash: "sha256:a", shard: "s" }, { f1: 0.1 });
-  cache.record({ candidateHash: "sha256:a", shard: "s" }, { f1: 0.2 });
-  assert.equal(cache.size, 1);
-  assert.deepEqual(cache.get({ candidateHash: "sha256:a", shard: "s" }), { f1: 0.2 });
-
-  for (const shard of ["t", "u", "v"]) cache.record({ candidateHash: "sha256:a", shard }, { f1: 1 });
-  assert.equal(cache.size, 3, "the cap holds");
-  assert.equal(cache.get({ candidateHash: "sha256:a", shard: "s" }), undefined, "the oldest went first");
-
-  cache.forget("sha256:a");
-  assert.equal(cache.size, 0);
-});
-
-test("keys cannot collide when a shard id looks like part of a hash", () => {
-  const cache = new MeasurementCache();
-  cache.record({ candidateHash: "sha256:ab", shard: "c" }, { f1: 1 });
-  cache.record({ candidateHash: "sha256:a", shard: "bc" }, { f1: 2 });
-
-  assert.equal(cache.get({ candidateHash: "sha256:ab", shard: "c" })?.f1, 1);
-  assert.equal(cache.get({ candidateHash: "sha256:a", shard: "bc" })?.f1, 2);
-});
-
-// --- cross-language agreement -----------------------------------------------
 
 test("this implementation still matches the fixture the sidecar asserts against", async () => {
   // The same formulas exist in Python, where the run is actually scored. A

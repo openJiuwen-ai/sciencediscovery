@@ -37,16 +37,13 @@ import { isEvolveRunActive } from "@sciencediscovery/schema";
 
 import { EvolveOrchestrator } from "./orchestrator.js";
 import {
-  handleCreateRun,
   handleGetCandidate,
-  handleGetRun,
   handleListRuns,
   handleRunEvents,
   handleStopRun,
 } from "./routes.js";
 import { EvolveSidecarClient } from "./sidecar.js";
 import { CandidateSources } from "./candidates.js";
-import { ProbeRegistry } from "./discrimination.js";
 import { EvolutionStore } from "./store.js";
 
 function goal(expansions = 2): EvolveGoal {
@@ -89,11 +86,6 @@ function goal(expansions = 2): EvolveGoal {
   };
 }
 
-const MODEL = {
-  baseUrl: "http://127.0.0.1:1", createdAt: "", hasApiToken: true, id: "model-1",
-  model: "glm-5.2", name: "GLM", proxyPolicy: "inherit", updatedAt: "", vision: false,
-};
-
 const SEQUENCE: EvolveEvent[] = [
   { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
   { baselineScore: 0.5, nodeIndex: 0, type: "seeded" },
@@ -126,7 +118,7 @@ async function startFakeSidecar(): Promise<{ close: () => Promise<void>; url: st
 }
 
 /** The same URL shapes `http/index.ts` matches, mounted on a bare server. */
-async function startApi(deps: { probes?: ProbeRegistry } = {}): Promise<{ origin: string }> {
+async function startApi(): Promise<{ orchestrator: EvolveOrchestrator; origin: string }> {
   const sidecar = await startFakeSidecar();
   const dataDir = resolve(process.cwd(), ".tmp", `evolve-routes-${Date.now()}-${process.pid}-${counter++}`);
   const store = new EvolutionStore(dataDir);
@@ -139,14 +131,6 @@ async function startApi(deps: { probes?: ProbeRegistry } = {}): Promise<{ origin
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (url.pathname === "/api/evolve/runs" && request.method === "POST") {
-        // Pre-flight refuses a run whose model cannot be called, so the fixture
-        // has to describe a runnable one.
-        return handleCreateRun(request, response, orchestrator, {
-          model: () => MODEL,
-          ...(deps.probes ? { probes: deps.probes } : {}),
-        });
-      }
       if (url.pathname === "/api/evolve/runs" && request.method === "GET") {
         return handleListRuns(response, store, url.searchParams.get("sessionId"));
       }
@@ -166,10 +150,6 @@ async function startApi(deps: { probes?: ProbeRegistry } = {}): Promise<{ origin
           decodeURIComponent(candidate[1]!), decodeURIComponent(candidate[2]!),
         );
       }
-      const one = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)$/);
-      if (one && request.method === "GET") {
-        return handleGetRun(response, store, decodeURIComponent(one[1]!));
-      }
       response.writeHead(404).end();
     })().catch((error: unknown) => {
       response.writeHead(500, { "content-type": "application/json" });
@@ -188,10 +168,18 @@ async function startApi(deps: { probes?: ProbeRegistry } = {}): Promise<{ origin
   });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  return { origin: `http://127.0.0.1:${port}` };
+  return { orchestrator, origin: `http://127.0.0.1:${port}` };
 }
 
 let counter = 0;
+
+/** Runs are started the way the product now starts them — through the
+ *  orchestrator the `create_evolve_run` tool calls — not over a route that no
+ *  longer exists. */
+async function startRun(orchestrator: EvolveOrchestrator, sessionId: string): Promise<EvolveRun> {
+  return await orchestrator.start({ goal: goal(), sessionId });
+}
+
 
 async function waitForQuiet(store: EvolutionStore): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -206,15 +194,8 @@ async function waitForQuiet(store: EvolutionStore): Promise<void> {
 const auth = { authorization: "Bearer test-token" };
 
 test("a run created over HTTP streams its whole sequence as SSE", async () => {
-  const { origin } = await startApi();
-
-  const created = await fetch(`${origin}/api/evolve/runs`, {
-    body: JSON.stringify({ goal: goal(), sessionId: "s1" }),
-    headers: { ...auth, "content-type": "application/json" },
-    method: "POST",
-  });
-  assert.equal(created.status, 201);
-  const run = await created.json() as EvolveRun;
+  const { orchestrator, origin } = await startApi();
+  const run = await startRun(orchestrator, "s1");
 
   const stream = await fetch(`${origin}/api/evolve/runs/${run.id}/events`, {
     headers: { ...auth, accept: "text/event-stream" },
@@ -234,19 +215,14 @@ test("a run created over HTTP streams its whole sequence as SSE", async () => {
 
   // The stream closing is the signal the run has settled: a client that reads
   // the run the moment the socket closes must not find it still "running".
-  const settled = await (await fetch(`${origin}/api/evolve/runs/${run.id}`, { headers: auth })).json() as EvolveRun;
-  assert.equal(settled.status, "succeeded");
-  assert.ok(settled.finishedAt);
+  const listed = await (await fetch(`${origin}/api/evolve/runs?sessionId=s1`, { headers: auth })).json() as EvolveRun[];
+  assert.equal(listed[0]?.status, "succeeded");
+  assert.ok(listed[0]?.finishedAt);
 });
 
 test("the same events are readable as JSON, and resumable with ?after=", async () => {
-  const { origin } = await startApi();
-  const created = await fetch(`${origin}/api/evolve/runs`, {
-    body: JSON.stringify({ goal: goal(), sessionId: "s1" }),
-    headers: { ...auth, "content-type": "application/json" },
-    method: "POST",
-  });
-  const run = await created.json() as EvolveRun;
+  const { orchestrator, origin } = await startApi();
+  const run = await startRun(orchestrator, "s1");
   // Drain the stream so the run is finished before reading it back.
   await (await fetch(`${origin}/api/evolve/runs/${run.id}/events`, {
     headers: { ...auth, accept: "text/event-stream" },
@@ -259,89 +235,27 @@ test("the same events are readable as JSON, and resumable with ?after=", async (
   assert.deepEqual(tail.map((record) => record.sequence), [5, 6]);
 });
 
-test("a run is listable by session and readable by id", async () => {
-  const { origin } = await startApi();
-  const created = await fetch(`${origin}/api/evolve/runs`, {
-    body: JSON.stringify({ goal: goal(), sessionId: "s-list" }),
-    headers: { ...auth, "content-type": "application/json" },
-    method: "POST",
-  });
-  const run = await created.json() as EvolveRun;
+test("a run is listable by the session it belongs to", async () => {
+  const { orchestrator, origin } = await startApi();
+  const run = await startRun(orchestrator, "s-list");
 
   const mine = await (await fetch(`${origin}/api/evolve/runs?sessionId=s-list`, { headers: auth })).json() as EvolveRun[];
   assert.deepEqual(mine.map((item) => item.id), [run.id]);
   const others = await (await fetch(`${origin}/api/evolve/runs?sessionId=other`, { headers: auth })).json() as EvolveRun[];
   assert.equal(others.length, 0);
-
-  const one = await fetch(`${origin}/api/evolve/runs/${run.id}`, { headers: auth });
-  assert.equal(one.status, 200);
-});
-
-test("a malformed goal is refused before a run exists", async () => {
-  const { origin } = await startApi();
-  for (const [body, expected] of [
-    [{ sessionId: "s1" }, /goal is required/],
-    [{ goal: { ...goal(), schemaVersion: 1 }, sessionId: "s1" }, /schemaVersion/],
-    [{ goal: { ...goal(), algorithm: "gepa" }, sessionId: "s1" }, /algorithm/],
-    [{ goal: goal() }, /sessionId/],
-  ] as const) {
-    const response = await fetch(`${origin}/api/evolve/runs`, {
-      body: JSON.stringify(body),
-      headers: { ...auth, "content-type": "application/json" },
-      method: "POST",
-    });
-    assert.equal(response.status, 400);
-    assert.match(((await response.json()) as { error: string }).error, expected);
-  }
-
-  const listed = await (await fetch(`${origin}/api/evolve/runs`, { headers: auth })).json() as EvolveRun[];
-  assert.equal(listed.length, 0, "a refused request must not leave a run behind");
 });
 
 test("an unknown run 404s, and an id that could escape the data dir does too", async () => {
   const { origin } = await startApi();
-  assert.equal((await fetch(`${origin}/api/evolve/runs/missing`, { headers: auth })).status, 404);
+  assert.equal((await fetch(`${origin}/api/evolve/runs/missing/events`, { headers: auth })).status, 404);
   // `/api/` auth is a global gate in http/index.ts, ahead of every handler, so
   // it is not re-tested here.
-  assert.equal((await fetch(`${origin}/api/evolve/runs/%2E%2E%2Fescape`, { headers: auth })).status, 404);
-});
-
-test("a run that could never have worked is refused before it exists", async () => {
-  const { origin } = await startApi();
-
-  const response = await fetch(`${origin}/api/evolve/runs`, {
-    body: JSON.stringify({
-      goal: {
-        ...goal(),
-        budget: { ...goal().budget, expansions: 7, maxTokensPerCall: 1_000, workers: 2 },
-      },
-      sessionId: "s1",
-    }),
-    headers: { ...auth, "content-type": "application/json" },
-    method: "POST",
-  });
-
-  assert.equal(response.status, 400);
-  const body = await response.json() as { issues: Array<{ code: string; fix: string }> };
-  const codes = body.issues.map((issue) => issue.code);
-  assert.ok(codes.includes("max_tokens_too_low"));
-  assert.ok(codes.includes("expansions_not_divisible"));
-  // Every refusal names the knob to turn: being told no with no direction is a
-  // dead end for the user.
-  assert.ok(body.issues.every((issue) => issue.fix));
-
-  const listed = await (await fetch(`${origin}/api/evolve/runs`, { headers: auth })).json() as unknown[];
-  assert.equal(listed.length, 0, "a refused run must not leave a record behind");
+  assert.equal((await fetch(`${origin}/api/evolve/runs/%2E%2E%2Fescape/events`, { headers: auth })).status, 404);
 });
 
 test("a candidate's source is served by hash, and anything else is a 404", async () => {
-  const { origin } = await startApi();
-  const created = await fetch(`${origin}/api/evolve/runs`, {
-    body: JSON.stringify({ goal: goal(), sessionId: "s1" }),
-    headers: { ...auth, "content-type": "application/json" },
-    method: "POST",
-  });
-  const run = await created.json() as { id: string };
+  const { orchestrator, origin } = await startApi();
+  const run = await startRun(orchestrator, "s1");
 
   // The fake sidecar writes no sources, so every lookup misses — which is the
   // case worth pinning: a miss is a 404, not an empty body that would render as
@@ -366,45 +280,3 @@ test("a candidate's source is served by hash, and anything else is a 404", async
   assert.equal(unknown.status, 404);
 });
 
-test("a run whose scoring was never probed is refused", async () => {
-  // The one pre-flight check the control plane cannot answer by reading the
-  // goal, so it is enforced by a proof rather than re-run at creation — which
-  // would spend the same two evaluations twice.
-  const { origin } = await startApi({ probes: new ProbeRegistry() });
-
-  const refused = await fetch(`${origin}/api/evolve/runs`, {
-    body: JSON.stringify({ goal: goal(), sessionId: "s1" }),
-    headers: { ...auth, "content-type": "application/json" },
-    method: "POST",
-  });
-
-  assert.equal(refused.status, 400);
-  const body = await refused.json() as { issues: Array<{ code: string; fix: string }> };
-  assert.ok(body.issues.some((issue) => issue.code === "not_probed"));
-  assert.ok(body.issues.every((issue) => issue.fix));
-});
-
-test("a probed scorecard starts, and editing it stops starting", async () => {
-  const probes = new ProbeRegistry();
-  probes.record(goal().scorecard.hash);
-  const { origin } = await startApi({ probes });
-
-  const started = await fetch(`${origin}/api/evolve/runs`, {
-    body: JSON.stringify({ goal: goal(), sessionId: "s1" }),
-    headers: { ...auth, "content-type": "application/json" },
-    method: "POST",
-  });
-  assert.equal(started.status, 201);
-
-  // A different card is a different measurement, however small the edit.
-  const edited = goal();
-  const refused = await fetch(`${origin}/api/evolve/runs`, {
-    body: JSON.stringify({
-      goal: { ...edited, scorecard: { ...edited.scorecard, hash: "sha256:edited" } },
-      sessionId: "s1",
-    }),
-    headers: { ...auth, "content-type": "application/json" },
-    method: "POST",
-  });
-  assert.equal(refused.status, 400);
-});

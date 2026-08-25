@@ -28,11 +28,7 @@ import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { handleEvolveCompletion } from "../evolution/llm-proxy.js";
 import {
-  handleCreateRun as handleEvolveCreateRun,
   handleGetCandidate as handleEvolveGetCandidate,
-  handleProbe as handleEvolveProbe,
-  handleIngestDataset as handleEvolveIngestDataset,
-  handleGetRun as handleEvolveGetRun,
   handleListRuns as handleEvolveListRuns,
   handleRunEvents as handleEvolveRunEvents,
   handleStopRun as handleEvolveStopRun,
@@ -218,9 +214,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     artifactManager,
     evolutionStore,
     evolveCandidates,
-    evolveCas,
     evolveOrchestrator,
-    evolveProbes,
     evolveRunTokens,
     evolveToolDeps,
     mcpBroker,
@@ -1539,13 +1533,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
-      if (url.pathname === "/api/evolve/runs" && request.method === "POST") {
-        await handleEvolveCreateRun(request, response, evolveOrchestrator, {
-          model: (id) => store.getModel(id),
-        });
-        return;
-      }
-
       if (url.pathname === "/api/evolve/runs" && request.method === "GET") {
         await handleEvolveListRuns(response, evolutionStore, url.searchParams.get("sessionId"));
         return;
@@ -1559,19 +1546,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           request, response, evolutionStore, evolveOrchestrator,
           decodeURIComponent(evolveRunEventsMatch[1]!), Math.floor(after),
         );
-        return;
-      }
-
-      if (url.pathname === "/api/evolve/probe" && request.method === "POST") {
-        await handleEvolveProbe(request, response, evolveOrchestrator, evolveProbes);
-        return;
-      }
-
-      if (url.pathname === "/api/evolve/datasets" && request.method === "POST") {
-        await handleEvolveIngestDataset(request, response, {
-          cas: evolveCas,
-          resolve: (sessionId, path) => resolveWorkspaceFile(store.workspacePath(sessionId), path),
-        });
         return;
       }
 
@@ -1590,12 +1564,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const evolveRunStopMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/stop$/);
       if (evolveRunStopMatch && request.method === "POST") {
         await handleEvolveStopRun(response, evolutionStore, evolveOrchestrator, decodeURIComponent(evolveRunStopMatch[1]!));
-        return;
-      }
-
-      const evolveRunMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)$/);
-      if (evolveRunMatch && request.method === "GET") {
-        await handleEvolveGetRun(response, evolutionStore, decodeURIComponent(evolveRunMatch[1]!));
         return;
       }
 

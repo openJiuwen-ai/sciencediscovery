@@ -135,7 +135,6 @@ import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
 import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { EvolveRunProposal } from "@sciencediscovery/schema";
-import type { ProbeRegistry } from "../evolution/discrimination.js";
 import type { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolutionStore } from "../evolution/store.js";
@@ -332,7 +331,6 @@ export interface EvolveToolDeps {
   evolutionStore: EvolutionStore;
   model?: (id: string) => unknown;
   orchestrator: EvolveOrchestrator;
-  probes?: ProbeRegistry;
   /** Per-session storer: text or a workspace path in, `sha256:` ref out. */
   store: (sessionId: string) => (input: { content?: string; path?: string }) => Promise<string>;
 }
@@ -1021,7 +1019,6 @@ async function executeAgentRun(
             model: evolve.model,
             modelId: selectedModel.id,
             orchestrator: evolve.orchestrator,
-            probes: evolve.probes,
             sessionId,
             store: evolve.store(sessionId),
           });

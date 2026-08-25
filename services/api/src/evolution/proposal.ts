@@ -55,7 +55,6 @@ import { EvolveSidecarError } from "./sidecar.js";
 import { preflight, type PreflightIssue } from "./preflight.js";
 import { basename } from "node:path";
 
-import type { ProbeRegistry } from "./discrimination.js";
 
 /** What the assembler needs from the world. Injected so the unit tests need no
  *  store, no sandbox and no model. */
@@ -66,7 +65,6 @@ export interface ProposalDeps {
   model?: (id: string) => unknown;
   modelId: string;
   orchestrator: EvolveOrchestrator;
-  probes?: ProbeRegistry;
   sessionId: string;
 }
 
@@ -178,7 +176,6 @@ export async function startProposedRun(
         + "把样例出难一点、细则写得更机械，或者换个更敏感的指标。",
     };
   }
-  deps.probes?.record(goal.scorecard.hash);
 
   const run = await deps.orchestrator.start({ goal, sessionId: deps.sessionId });
   return { probe, run };

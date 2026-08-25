@@ -29,7 +29,6 @@
 /** Which search algorithm runs the loop. Not two code paths — one field. */
 export type EvolveAlgorithm = "era" | "openevolve";
 
-export const EVOLVE_ALGORITHMS: readonly EvolveAlgorithm[] = ["era", "openevolve"];
 
 /** What is being evolved. */
 export type EvolveTarget =
@@ -548,7 +547,6 @@ export type EvolveEvent =
   | { cents: number; tokens: number; type: "cost" }
   | { level: "error" | "info" | "warn"; message: string; type: "log" };
 
-export type EvolveEventType = EvolveEvent["type"];
 
 /** One line of a run's `events.ndjson`. Mirrors the shape run streams already
  * use (`{ createdAt, event, sequence }`) so the two readers stay symmetric. */

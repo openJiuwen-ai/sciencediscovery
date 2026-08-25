@@ -26,18 +26,12 @@ import { SkillsApiClient } from "./skills.js";
  * answers `memory_graph_disabled` and nothing else changes.
  */
 export class EvolveApiClient extends SkillsApiClient {
-  createEvolveRun(input: { goal: EvolveGoal; projectId?: string; sessionId: string }): Promise<EvolveRun> {
-    return this.request("/api/evolve/runs", { body: JSON.stringify(input), method: "POST" });
-  }
 
   listEvolveRuns(sessionId?: string): Promise<EvolveRun[]> {
     const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : "";
     return this.request(`/api/evolve/runs${query}`);
   }
 
-  getEvolveRun(runId: string): Promise<EvolveRun> {
-    return this.request(`/api/evolve/runs/${encodeURIComponent(runId)}`);
-  }
 
   stopEvolveRun(runId: string): Promise<{ runId: string; stopping: boolean } | EvolveRun> {
     return this.request(`/api/evolve/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
@@ -47,49 +41,7 @@ export class EvolveApiClient extends SkillsApiClient {
     return this.request(`/api/evolve/runs/${encodeURIComponent(runId)}/events?after=${after}`);
   }
 
-  /**
-   * Take a workspace file into the CAS and describe what is in it.
-   *
-   * The columns come back with the hash because the wizard's next question is
-   * "which column do you predict", and a dropdown beats a free-text field that
-   * fails at staging with "the column you named is not in the file".
-   */
-  ingestEvolveDataset(
-    sessionId: string, path: string, options: { content?: string; raw?: boolean } = {},
-  ): Promise<{
-    cas: string;
-    columns: string[];
-    head: string[][];
-    numericColumns: string[];
-    rows: number;
-  }> {
-    return this.request("/api/evolve/datasets", {
-      body: JSON.stringify({
-        ...(options.content === undefined ? {} : { content: options.content }),
-        path,
-        raw: options.raw ?? false,
-        sessionId,
-      }),
-      method: "POST",
-    });
-  }
 
-  /**
-   * Score the starting point and a deliberately worse copy of it.
-   *
-   * Two evaluations, run before the search, because "can this scoring tell a
-   * good candidate from a bad one" is not derivable from the goal — and a
-   * scorecard that cannot produces a search that emits every event and finds
-   * nothing.
-   */
-  probeEvolveGoal(input: { goal: EvolveGoal; sessionId: string }): Promise<{
-    baseline: number;
-    flat: boolean;
-    label: string;
-    worsened: number | null;
-  }> {
-    return this.request("/api/evolve/probe", { body: JSON.stringify(input), method: "POST" });
-  }
 
   /**
    * One candidate's source, by the hash the event stream carries.

@@ -33,8 +33,6 @@ import { readJson } from "../http/body.js";
 import { sendError, sendJson } from "../http/response.js";
 
 import type { EvolveOrchestrator } from "./orchestrator.js";
-import { DatasetIntakeError, ingestDataset } from "./dataset-intake.js";
-import { ProbeRegistry } from "./discrimination.js";
 import { preflight, type PreflightIssue } from "./preflight.js";
 import { EvolutionStoreError, type EvolutionStore } from "./store.js";
 
@@ -45,115 +43,8 @@ interface CreateRunBody {
   sessionId?: string;
 }
 
-/**
- * Structural check only — enough that the orchestrator and the sidecar are not
- * handed nonsense.
- *
- * The judgements that actually decide whether a run is worth starting (is the
- * normalisation monotone with the metric's direction, does the baseline already
- * violate a constraint, can the scorecard tell two candidates apart) need to run
- * the baseline and belong to the scorecard validator, not to a request parser.
- */
-export function validateGoal(value: unknown): { error: string } | { goal: EvolveGoal } {
-  if (!value || typeof value !== "object") return { error: "goal is required" };
-  const goal = value as Partial<EvolveGoal>;
-  if (goal.schemaVersion !== 2) return { error: "goal.schemaVersion must be 2" };
-  if (typeof goal.statement !== "string" || !goal.statement.trim()) return { error: "goal.statement is required" };
-  if (goal.algorithm !== "era" && goal.algorithm !== "openevolve") {
-    return { error: 'goal.algorithm must be "era" or "openevolve"' };
-  }
-  if (!goal.target || typeof goal.target !== "object") return { error: "goal.target is required" };
-  if (!goal.budget || typeof goal.budget !== "object") return { error: "goal.budget is required" };
-  if (!Number.isInteger(goal.budget.expansions) || goal.budget.expansions < 1) {
-    return { error: "goal.budget.expansions must be a positive integer" };
-  }
-  const scorecard = goal.scorecard;
-  if (!scorecard || typeof scorecard !== "object") return { error: "goal.scorecard is required" };
-  if (typeof scorecard.hash !== "string" || !scorecard.hash) return { error: "goal.scorecard.hash is required" };
-  if (!Array.isArray(scorecard.criteria) || !scorecard.criteria.length) {
-    return { error: "goal.scorecard.criteria must not be empty" };
-  }
-  return { goal: goal as EvolveGoal };
-}
 
-/**
- * Take the discrimination probe for a goal, before any run exists.
- *
- * Its own endpoint rather than a step inside creation: it costs two
- * evaluations, and hiding that inside "start" makes starting slow and
- * surprising. The wizard runs it, shows both numbers, and only then offers to
- * begin.
- */
-export async function handleProbe(
-  request: IncomingMessage,
-  response: ServerResponse,
-  orchestrator: EvolveOrchestrator,
-  probes: ProbeRegistry,
-): Promise<void> {
-  const body = await readJson<{ goal?: EvolveGoal; sessionId?: string }>(request);
-  if (!body.sessionId) return sendError(response, 400, "sessionId is required");
-  const validated = validateGoal(body.goal);
-  if ("error" in validated) return sendError(response, 400, validated.error);
 
-  try {
-    const result = await orchestrator.probe(validated.goal, body.sessionId);
-    // Only a pass is remembered. A flat scorecard the user then edits gets a
-    // new hash and has to be probed again, which is the point: the thing that
-    // was measured has to be the thing that runs.
-    if (!result.flat) probes.record(validated.goal.scorecard.hash);
-    sendJson(response, 200, result);
-  } catch (error) {
-    sendError(response, 502, error instanceof Error ? error.message : String(error));
-  }
-}
-
-export async function handleCreateRun(
-  request: IncomingMessage,
-  response: ServerResponse,
-  orchestrator: EvolveOrchestrator,
-  deps: {
-    casHas?: (hash: string) => Promise<boolean>;
-    model?: (id: string) => unknown;
-    /** Absent in tests that are not about the probe; present in the server,
-     *  where skipping it is what this gate exists to prevent. */
-    probes?: ProbeRegistry;
-  } = {},
-): Promise<void> {
-  const body = await readJson<CreateRunBody>(request);
-  if (!body.sessionId) return sendError(response, 400, "sessionId is required");
-  const validated = validateGoal(body.goal);
-  if ("error" in validated) return sendError(response, 400, validated.error);
-
-  // Refused here rather than at the first expansion: every one of these fails
-  // silently or expensively, and a user who has watched a progress bar for a
-  // minute has already paid for the mistake.
-  const issues = await preflight({
-    casHas: deps.casHas,
-    goal: validated.goal,
-    model: deps.model?.(validated.goal.modelId) as never,
-    sandbox: await orchestrator.sandboxCapability(),
-  });
-  if (issues.length) return sendPreflightRefusal(response, issues);
-
-  // The probe is the one check the control plane cannot answer by reading the
-  // goal, so it is enforced by a proof rather than re-run here: re-running it
-  // would spend the same two evaluations again.
-  if (deps.probes && !deps.probes.has(validated.goal.scorecard.hash)) {
-    return sendPreflightRefusal(response, [{
-      code: "not_probed",
-      fix: "先跑一次判别力探针",
-      message: "这套评分还没验过判别力。分不出好坏的评分会让搜索在平坦地形上"
-        + "随机游走，而看板上什么都不会显示为异常",
-    }]);
-  }
-  const run = await orchestrator.start({
-    goal: validated.goal,
-    projectId: body.projectId,
-    resumedFromRunId: body.resumedFromRunId,
-    sessionId: body.sessionId,
-  });
-  sendJson(response, 201, run);
-}
 
 export async function handleListRuns(
   response: ServerResponse,
@@ -163,45 +54,6 @@ export async function handleListRuns(
   sendJson(response, 200, await store.listRuns(sessionId ?? undefined));
 }
 
-/**
- * Take a workspace file into the CAS and describe it.
- *
- * The wizard needs the hash to build a goal and the columns to ask its next
- * question; doing both in one call is what keeps "which column do you predict"
- * a dropdown rather than a free-text field that fails at staging.
- */
-export async function handleIngestDataset(
-  request: IncomingMessage,
-  response: ServerResponse,
-  deps: {
-    cas: Pick<import("@sciencediscovery/cas").ContentStore, "put">;
-    resolve: (sessionId: string, path: string) => string;
-  },
-): Promise<void> {
-  const body = await readJson<{
-    content?: string;
-    path?: string;
-    raw?: boolean;
-    sessionId?: string;
-  }>(request);
-  if (!body.sessionId) return sendError(response, 400, "sessionId is required");
-  if (!body.path && body.content === undefined) {
-    return sendError(response, 400, "path or content is required");
-  }
-  try {
-    const summary = await ingestDataset({
-      cas: deps.cas,
-      ...(body.content === undefined ? {} : { content: body.content }),
-      path: body.path ?? "",
-      raw: body.raw === true,
-      resolve: (path) => deps.resolve(body.sessionId!, path),
-    });
-    sendJson(response, 200, summary);
-  } catch (error) {
-    if (error instanceof DatasetIntakeError) return sendError(response, 400, error.message);
-    throw error;
-  }
-}
 
 /**
  * One candidate's source, by the hash the event stream carries.
@@ -231,14 +83,6 @@ export async function handleGetCandidate(
   sendJson(response, 200, { hash, source });
 }
 
-export async function handleGetRun(
-  response: ServerResponse,
-  store: EvolutionStore,
-  runId: string,
-): Promise<void> {
-  const run = await readRunOr404(response, store, runId);
-  if (run) sendJson(response, 200, run);
-}
 
 export async function handleStopRun(
   response: ServerResponse,
