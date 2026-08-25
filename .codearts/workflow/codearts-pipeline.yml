@@ -1,6 +1,10 @@
 concurrency:
   max: 5
   enable: false
+  preemption:
+    enable: false
+    events:
+    - mr_id
   exceed-action: IGNORE
 sources:
   sciencediscovery:
@@ -475,7 +479,8 @@ post:
     publish_pr_success:
       select: always
       name: Publish successful PR result
-      needs: [prepare_pr_success]
+      needs:
+      - prepare_pr_success
       steps:
       - name: Comment and mark the PR successful
         uses: official_devcloud_cloudBuild
@@ -564,7 +569,8 @@ post:
     publish_pr_failure:
       select: always
       name: Publish failed PR result
-      needs: [prepare_pr_failure]
+      needs:
+      - prepare_pr_failure
       steps:
       - name: Comment and mark the PR failed
         uses: official_devcloud_cloudBuild
