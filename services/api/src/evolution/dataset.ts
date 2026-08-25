@@ -43,7 +43,7 @@
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import type { ContentStore } from "@sciencediscovery/cas";
 import type { EvolveScorecard, EvolveSplit, ScorecardCriterion } from "@sciencediscovery/schema";
@@ -129,9 +129,8 @@ export function validateSplit(split: EvolveSplit): string | undefined {
 export interface StagedDataset {
   /** Absolute path the sidecar is handed. */
   directory: string;
-  /** What was staged, per criterion, for the run log. A scripted evaluator's
-   *  files are counted as `files`; a dataset_metric reports rows and shards. */
-  staged: Array<{ criterionId: string; files?: number; rows: number; shards: number }>;
+  /** What was staged, per criterion, for the run log. */
+  staged: Array<{ criterionId: string; rows: number; shards: number }>;
 }
 
 export interface StageDatasetInput {
@@ -156,17 +155,6 @@ export interface StageDatasetInput {
  * ```
  */
 
-/** A staged file name is written into a directory this side owns, and it comes
- *  from a field the agent filled in — so it is a bare file name or nothing. */
-function safeStagedName(name: string, criterion: ScorecardCriterion): string {
-  const bare = name.trim();
-  if (!bare || bare !== basename(bare) || bare === "." || bare === "..") {
-    throw new DatasetStagingError(
-      `判据「${criterion.name}」的数据文件名 ${JSON.stringify(name)} 不是一个纯文件名`,
-    );
-  }
-  return bare;
-}
 
 export async function stageDataset(input: StageDatasetInput): Promise<StagedDataset> {
   const criteria = (input.scorecard.criteria ?? []).filter(needsData);
@@ -176,41 +164,6 @@ export async function stageDataset(input: StageDatasetInput): Promise<StagedData
   const staged: StagedDataset["staged"] = [];
 
   for (const criterion of criteria) {
-    // A scripted evaluator's files are staged verbatim under their own names:
-    // the evaluator opens them by name, and this side has no idea what shape
-    // they are — a table, a JSON of cases, a fixture directory. Splitting them
-    // into shards the way a dataset_metric is split would be this side deciding
-    // what the evaluator's rows are, which is the evaluator's job.
-    if (criterion.measure.kind === "custom_script") {
-      const base = resolve(input.directory, criterion.id);
-      await mkdir(base, { recursive: true });
-      for (const file of criterion.measure.datasetFiles ?? []) {
-        // `casHash`, not the raw ref: the store keeps bare hashes and these
-        // arrive with the `sha256:` prefix the proposal layer puts on. Reading
-        // one unstripped fails with "Invalid CAS hash", which reaches the agent
-        // as a probe that could not run — a sentence it can do nothing with.
-        let bytes: Buffer;
-        try {
-          bytes = await input.cas.read(casHash(file.cas));
-        } catch (error) {
-          // The store's own errors are invariants — "Invalid CAS hash", ENOENT —
-          // and say nothing about which of a proposal's files went missing. The
-          // reader is an agent deciding what to change next, and a bare
-          // invariant leaves it nothing to change.
-          throw new DatasetStagingError(
-            `判据「${criterion.name}」的数据文件 ${file.name} 读不出来：${
-              error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        await writeFile(resolve(base, safeStagedName(file.name, criterion)), bytes);
-      }
-      manifest.criteria[criterion.id] = {
-        files: (criterion.measure.datasetFiles ?? []).map((file) => file.name),
-        kind: "custom_script",
-      };
-      staged.push({ criterionId: criterion.id, files: (criterion.measure.datasetFiles ?? []).length, rows: 0, shards: 0 });
-      continue;
-    }
     const measure = criterion.measure as Extract<ScorecardCriterion["measure"], { kind: "dataset_metric" }>;
     const table = parseCsv(await readSource(input.cas, measure.datasetCas, criterion));
     if (table.rows.length === 0) throw new DatasetStagingError(`判据「${criterion.name}」的数据集是空的`);
@@ -268,10 +221,6 @@ export async function stageDataset(input: StageDatasetInput): Promise<StagedData
 /** Whether a criterion is measured on a dataset at all. `seconds` is read off
  *  the run itself, which is what makes a "training time" veto expressible. */
 export function needsData(criterion: ScorecardCriterion): boolean {
-  // A scripted evaluator only needs files when it says so. Most do not: an
-  // evaluator that builds case `i` from the shard index has nothing to stage,
-  // and staging an empty directory for it would be work that can only fail.
-  if (criterion.measure.kind === "custom_script") return (criterion.measure.datasetFiles?.length ?? 0) > 0;
   return criterion.measure.kind === "dataset_metric"
     && criterion.measure.metric.name !== "seconds";
 }

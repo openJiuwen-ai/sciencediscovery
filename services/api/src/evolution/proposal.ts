@@ -374,21 +374,10 @@ async function measureOf(
         target: proposal.targetColumn!,
       };
     }
-    case "custom_script": {
-      // Only when the proposal names one. An evaluator that derives its cases
-      // from the shard index is the common shape and stages nothing; requiring
-      // a file here would mean inventing a dataset to fill a field.
-      const files = proposal.datasetPath
-        ? [{
-          cas: await storePath(deps, "datasetPath", proposal.datasetPath),
-          name: basename(workspaceRelative(proposal.datasetPath)),
-        }]
-        : [];
+    case "custom_script":
       return {
-        ...(files.length ? { datasetFiles: files } : {}),
         kind: "custom_script", scriptCas: scoringCas, split, timeoutSeconds: 180,
       };
-    }
     case "llm_judge":
       return {
         blind: true,

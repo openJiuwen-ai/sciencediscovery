@@ -125,23 +125,11 @@ export type EvolveScoring =
     setupCmd?: string[];
     testCmd: string[];
   }
-  | {
-    /**
-     * Files staged beside the evaluator, each under its own name.
-     *
-     * Optional on purpose: an evaluator that derives case `i` from the shard
-     * index — an equation with a known analytic solution, a generated input, a
-     * property to check — needs no files at all, and requiring one would mean
-     * inventing a dataset to satisfy a field. When there is genuinely material
-     * to score against, this is how it arrives: the evaluator runs alone in a
-     * scratch directory, so anything it opens by name must be listed here.
-     */
-    datasetFiles?: Array<{ cas: string; name: string }>;
-    kind: "custom_script";
-    scriptCas: string;
-    split: EvolveSplit;
-    timeoutSeconds: number;
-  }
+  /** The evaluator is self-contained: it builds case `i` from the shard index
+   *  rather than reading anything, because it runs alone in a scratch directory
+   *  with only the candidate for company. Material that genuinely lives in a
+   *  file belongs in `dataset_metric`, which owns the splitting too. */
+  | { kind: "custom_script"; scriptCas: string; split: EvolveSplit; timeoutSeconds: number }
   | {
     /** Judges never see the candidate's identity, iteration or parent score. */
     blind: true;

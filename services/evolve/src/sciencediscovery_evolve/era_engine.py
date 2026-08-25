@@ -231,7 +231,6 @@ class EraEngine:
                     baseline_code=spec.baseline_code,
                     candidate_timeout=spec.candidate_timeout_seconds,
                     baseline=baseline,
-                    dataset_dir=spec.dataset_dir,
                 )
             except ScriptError as error:
                 raise _Refusal(str(error)) from error

@@ -225,57 +225,7 @@ test("the summary quotes the split the search never saw", async () => {
   assert.equal(summary.bestTestScore, 0.58);
 });
 
-test("a scripted evaluator with no data file stages nothing", async () => {
-  // The common shape: the evaluator builds case `i` from the shard index. It
-  // must not be pushed into declaring a dataset it does not have — an empty
-  // staged directory is work that can only fail.
-  let captured: { scorecard: { criteria: Array<{ measure: unknown }> } } | undefined;
-  const { deps: d } = deps({
-    orchestrator: {
-      probe: async () => ({ baseline: 0.4, flat: false, label: "x", worsened: 0.1 }),
-      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
-      start: async (input: { goal: typeof captured }) => {
-        captured = input.goal;
-        return { id: "run-1", status: "running" };
-      },
-    } as never,
-  });
-  await startProposedRun({
-    ...proposal(),
-    datasetPath: undefined,
-    evaluatorSource: 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]',
-    mode: "custom_script",
-  }, d);
 
-  const measure = captured!.scorecard.criteria[0]!.measure as { datasetFiles?: unknown[] };
-  assert.equal(measure.datasetFiles, undefined);
-});
-
-test("a scripted evaluator that names a data file gets it staged under that name", async () => {
-  let captured: { scorecard: { criteria: Array<{ measure: unknown }> } } | undefined;
-  const { deps: d } = deps({
-    orchestrator: {
-      probe: async () => ({ baseline: 0.4, flat: false, label: "x", worsened: 0.1 }),
-      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
-      start: async (input: { goal: typeof captured }) => {
-        captured = input.goal;
-        return { id: "run-1", status: "running" };
-      },
-    } as never,
-  });
-  await startProposedRun({
-    ...proposal(),
-    datasetPath: "cases/dataset.json",
-    evaluatorSource: 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]',
-    mode: "custom_script",
-  }, d);
-
-  const measure = captured!.scorecard.criteria[0]!.measure as {
-    datasetFiles?: Array<{ cas: string; name: string }>;
-  };
-  // The bare name, not the path: the evaluator opens it beside itself.
-  assert.deepEqual(measure.datasetFiles?.map((file) => file.name), ["dataset.json"]);
-});
 
 test("a workspace-absolute path is accepted, because that is what the agent saw", async () => {
   // The sandbox mounts the workspace at /workspace, so every path the agent

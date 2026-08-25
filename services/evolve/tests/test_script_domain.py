@@ -246,39 +246,6 @@ def test_the_evaluators_diagnosis_reaches_the_mutation_prompt():
     assert "评测对它的诊断" not in d.prompt(quiet)
 
 
-def test_declared_data_files_land_beside_the_evaluator(tmp_path):
-    """A file the control plane staged is openable by name from the evaluator.
-
-    The evaluator runs alone in a scratch directory — it cannot reach the
-    workspace — so a file that is not copied in is a FileNotFoundError on every
-    single candidate, and the whole run scores zero for a reason that has
-    nothing to do with the candidates.
-    """
-    # Staged the way the control plane stages: under the criterion id.
-    data_dir = tmp_path / "staged" / "exact_match"
-    data_dir.mkdir(parents=True)
-    (data_dir / "cases.json").write_text('{"answer": 7}', encoding="utf-8")
-
-    script = (
-        "import json, os\n"
-        "here = os.path.dirname(os.path.abspath(__file__))\n"
-        "with open(os.path.join(here, 'cases.json')) as fh:\n"
-        "    cases = json.load(fh)\n"
-        "shards = os.environ['SCIENCE_AGENT_SHARDS'].split(',')\n"
-        "score = 1.0 if cases['answer'] == 7 else 0.0\n"
-        "with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as fh:\n"
-        "    json.dump({'valid': True, 'metrics': {'exact_match': score}}, fh)\n"
-    )
-    domain = script_domain(
-        scorecard=CARD, script=script, capability=detect_local_capability(),
-        dataset_dir=str(tmp_path / "staged"),
-    )
-
-    ok, metrics, error = domain.evaluate("value = 1\n", (0, 1))
-
-    assert ok, error
-    assert metrics["exact_match"] == 1.0
-
 
 def test_an_evaluator_that_needs_no_files_runs_with_none_staged(tmp_path):
     """The common shape: case `i` is built from the shard index, not read."""
@@ -435,27 +402,31 @@ def test_an_evaluator_that_dies_on_import_is_named_as_the_fault():
     assert "评测脚本" in said
 
 
-def test_the_run_path_and_the_probe_path_stage_the_same_way(tmp_path):
-    """One resolution, not one per call site.
 
-    The bug this pins: `data_dir` was computed by the caller, and in the search
-    engine the computed value got attached to the *test-gate* domain instead of
-    the scripted one. The probe staged the file, the run did not, and a search
-    whose probe had just passed died on `FileNotFoundError` for a file it had
-    itself declared. Passing the raw `dataset_dir` and resolving inside removes
-    the chance to attach it anywhere.
+def test_the_evaluator_is_alone_with_the_candidate(tmp_path):
+    """Nothing but the candidate, the evaluator and the shim.
+
+    The evaluator builds case `i` from the shard index; there is no channel for
+    shipping it a file, and there was one — a schema field, a staging branch, a
+    name check and a resolution step in two places, whose only concrete effect
+    in production was one silent staging bug. Material that genuinely lives in
+    a file belongs in `dataset_metric`, which owns the splitting too.
     """
-    import inspect
+    script = (
+        "import json, os\n"
+        "here = os.path.dirname(os.path.abspath(__file__))\n"
+        "names = sorted(os.listdir(here))\n"
+        "with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as fh:\n"
+        "    json.dump({'valid': True, 'metrics': {'exact_match': 1.0},\n"
+        "               'error': ','.join(names)}, fh)\n"
+    )
+    domain = script_domain(scorecard=CARD, script=script, capability=detect_local_capability())
 
-    from sciencediscovery_evolve import era_engine, probe as probe_module
-    from sciencediscovery_evolve.script_domain import script_domain
+    ok, _metrics, error = domain.evaluate("value = 1\n", (0,))
 
-    # Both call sites hand over the same plain field.
-    for module in (era_engine, probe_module):
-        source = inspect.getsource(module)
-        assert "dataset_dir=spec.dataset_dir" in source, module.__name__
-        assert "_script_data_dir" not in source, module.__name__
-
-    # And the domain accepts exactly that, not a pre-resolved path.
-    assert "dataset_dir" in inspect.signature(script_domain).parameters
-    assert "data_dir" not in inspect.signature(script_domain).parameters
+    assert ok, error
+    present = set(error.split(","))
+    # The two programs are there; the sandbox and the runner add their own
+    # plumbing. What matters is that nothing data-shaped can arrive.
+    assert {"candidate.py", "evaluate.py"} <= present
+    assert not [name for name in present if name.endswith((".json", ".csv", ".txt"))]

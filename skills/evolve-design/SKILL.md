@@ -169,14 +169,13 @@ write the table, then use it.
   scratch directory first on `sys.path`. So top-level code runs, a `if __name__ == "__main__":`
   guard runs, and `import candidate` resolves. You do not need to reverse-engineer this.
 
-  **The evaluator runs alone.** It gets a scratch directory containing itself, the candidate,
-  and nothing else — not the workspace, not the file you read while designing. A shard is an
-  *index*, and what index `i` means is the evaluator's choice: most of the time it builds case
-  `i` (an equation with a known analytic solution, a generated input, a property to check) and
-  needs no files at all. When there is genuine material to score against, name it in
-  `datasetPath` and it is staged beside the evaluator under its own file name. An evaluator that
-  opens a path you did not declare fails on every candidate, and the probe catches it before the
-  run starts — but only after you have written the whole thing.
+  **The evaluator runs alone and reads nothing.** It gets a scratch directory containing itself
+  and the candidate — not the workspace, not the file you read while designing, and there is no
+  way to ship it one. A shard is an *index*, and what index `i` means is the evaluator's choice:
+  it **builds** case `i` — an equation with a known analytic solution, a generated input, a
+  corpus drawn from a fixed seed, a property to check. Anything it opens by path fails on every
+  candidate. If the material genuinely lives in a file, that is `dataset_metric`, which owns the
+  splitting as well.
 - **Only another model can judge it** → `llm_judge`. For prose, explanations, anything whose
   quality is a reading. Most gameable and the only non-deterministic option; ask once whether it
   could be a `custom_script` instead.

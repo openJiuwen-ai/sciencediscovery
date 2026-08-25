@@ -1111,11 +1111,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         testGroups: Type.Integer({ maximum: 64, minimum: 0 }),
       })),
       datasetPath: Type.Optional(Type.String({
-        description: "Workspace file to score against. Relative to the workspace, or the "
-          + "/workspace/... path as you saw it in a tool result — both are accepted. Required for dataset_metric (a CSV). "
-          + "Optional for custom_script, where it is staged beside the evaluator under its own "
-          + "file name — leave it out when the evaluator builds its cases from the shard index "
-          + "instead of reading them, which is the common shape.",
+        description: "dataset_metric only: the CSV to score against. Relative to the workspace, "
+          + "or the /workspace/... path as you saw it in a tool result — both are accepted. "
+          + "A custom_script evaluator reads nothing: it builds case `i` from the shard index.",
         maxLength: 2_000, minLength: 1,
       })),
       direction: Type.Optional(Type.Union([Type.Literal("maximize"), Type.Literal("minimize")])),
@@ -1130,8 +1128,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           + "script with __name__ == \"__main__\" (runpy.run_path), with the scratch directory "
           + "first on sys.path — so top-level code runs, a `if __name__ == \"__main__\":` guard "
           + "runs, and `import candidate` resolves. It runs ALONE in that "
-          + "scratch directory with the candidate — it cannot see the workspace, and the only "
-          + "other file present is the one named by datasetPath, if any. Import the candidate "
+          + "scratch directory with the candidate — it cannot see the workspace and cannot be "
+          + "given a data file, so it BUILDS case `i` from the shard index rather than reading "
+          + "it. Import the candidate "
           + "as `candidate` — guard that import, since a broken candidate can raise there, "
           + "before any per-case try/except can reach it; score only the shards listed in "
           + "SCIENCE_AGENT_SHARDS (the shard is "
