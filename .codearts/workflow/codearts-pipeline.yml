@@ -87,6 +87,7 @@ stages:
         - name: Checkout the PR source commit
           uses: official_shell_plugin
           env:
+            CODEARTS_MERGE_ID: "${MERGE_ID}"
             CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
@@ -103,6 +104,7 @@ stages:
               if (!payloadText) throw new Error("CODEARTS_WEBHOOK_PAYLOAD is empty");
               const payload = JSON.parse(payloadText);
               const attributes = payload.object_attributes;
+              const mergeId = process.env.CODEARTS_MERGE_ID;
               const sourceBranch = attributes?.source_branch;
               const sourceSha = attributes?.last_commit?.id;
               if (payload.event_type !== "merge_request" || !attributes) {
@@ -117,18 +119,24 @@ stages:
               if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/i.test(sourceSha)) {
                 throw new Error("the MR payload has no valid source commit SHA");
               }
+              if (typeof mergeId !== "string" || !/^[1-9][0-9]*$/.test(mergeId)) {
+                throw new Error("CodeArts did not provide a valid merge request number");
+              }
               console.log(sourceBranch);
               console.log(sourceSha.toLowerCase());
+              console.log(mergeId);
               NODE
               )
               SOURCE_BRANCH=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '1p')
               SOURCE_SHA=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '2p')
+              MR_NUMBER=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '3p')
               git check-ref-format --branch "$SOURCE_BRANCH" >/dev/null
 
-              # Fetch the branch for reachability, then detach at the event SHA so a
-              # later PR update cannot change the code covered by this pipeline run.
+              # The upstream merge-request ref exists for both same-repository and
+              # fork PRs. Detach at the event SHA so a later update cannot change
+              # the code covered by this pipeline run.
               FETCH_REF=refs/remotes/origin/codearts-pr-source
-              git fetch --no-tags --force origin "+refs/heads/$SOURCE_BRANCH:$FETCH_REF"
+              git fetch --no-tags --force origin "+refs/merge-requests/$MR_NUMBER/head:$FETCH_REF"
               if ! git cat-file -e "$SOURCE_SHA^{commit}" 2>/dev/null; then
                 git fetch --no-tags origin "$SOURCE_SHA"
               fi
@@ -247,6 +255,7 @@ stages:
         - name: Checkout the PR source commit
           uses: official_shell_plugin
           env:
+            CODEARTS_MERGE_ID: "${MERGE_ID}"
             CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
@@ -263,6 +272,7 @@ stages:
               if (!payloadText) throw new Error("CODEARTS_WEBHOOK_PAYLOAD is empty");
               const payload = JSON.parse(payloadText);
               const attributes = payload.object_attributes;
+              const mergeId = process.env.CODEARTS_MERGE_ID;
               const sourceBranch = attributes?.source_branch;
               const sourceSha = attributes?.last_commit?.id;
               if (payload.event_type !== "merge_request" || !attributes) {
@@ -277,18 +287,24 @@ stages:
               if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/i.test(sourceSha)) {
                 throw new Error("the MR payload has no valid source commit SHA");
               }
+              if (typeof mergeId !== "string" || !/^[1-9][0-9]*$/.test(mergeId)) {
+                throw new Error("CodeArts did not provide a valid merge request number");
+              }
               console.log(sourceBranch);
               console.log(sourceSha.toLowerCase());
+              console.log(mergeId);
               NODE
               )
               SOURCE_BRANCH=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '1p')
               SOURCE_SHA=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '2p')
+              MR_NUMBER=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '3p')
               git check-ref-format --branch "$SOURCE_BRANCH" >/dev/null
 
-              # Fetch the branch for reachability, then detach at the event SHA so a
-              # later PR update cannot change the code covered by this pipeline run.
+              # The upstream merge-request ref exists for both same-repository and
+              # fork PRs. Detach at the event SHA so a later update cannot change
+              # the code covered by this pipeline run.
               FETCH_REF=refs/remotes/origin/codearts-pr-source
-              git fetch --no-tags --force origin "+refs/heads/$SOURCE_BRANCH:$FETCH_REF"
+              git fetch --no-tags --force origin "+refs/merge-requests/$MR_NUMBER/head:$FETCH_REF"
               if ! git cat-file -e "$SOURCE_SHA^{commit}" 2>/dev/null; then
                 git fetch --no-tags origin "$SOURCE_SHA"
               fi
