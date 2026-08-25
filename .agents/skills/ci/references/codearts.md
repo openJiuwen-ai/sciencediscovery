@@ -8,10 +8,12 @@ test logs. This repository intentionally does not use GitCode Actions.
 
 `.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
 runs the repository's `ci:ut:core` and hermetic `ci:st` entry points, invokes
-the reusable code-check pipeline, and renders the final PR result. The child
-definition `.codearts/workflow/codearts-pipeline-code-check.yml` contains only
-the SCA, anti-poison, static-analysis, and blacklist CloudBuild tasks; their
-complete commands remain in CodeArts.
+the reusable code-check pipeline, and renders the final PR result. The code
+check is an externally registered CodeArts pipeline containing the SCA,
+anti-poison, static-analysis, and blacklist CloudBuild tasks. Its former local
+definition `.codearts/workflow/codearts-pipeline-code-check.yml` was migrated
+out of this repository and intentionally deleted. Do not recreate it or remove
+the parent caller merely because the local file is absent.
 
 GitHub remains a separate mirrored repository and covers full UT, mocked E2E,
 and smoke-gated binaries. Do not add `.gitcode/workflows/ci.yml` as another CI
@@ -20,26 +22,30 @@ definition: GitCode merge-request CI is CodeArts-only.
 ## Parent and child orchestration
 
 The parent invokes registered child pipeline
-`3a80cbaf5dec4e0b8804ce1401787f5f`. The manual documents a minimal
+`2dce32a1e91949d4872f6d10a9d86b2e`. The manual documents a minimal
 `SubPipeline` form, but the CodeArts editor expands this repository's step to
-the platform plugin below. Preserve the generated fields when editing it:
+the platform plugin below. Read the live YAML before editing and preserve all
+generated fields:
 
 ```yaml
-- name: Run the reusable code-check pipeline
+- name: code_check
   uses: official_devcloud_subPipeline
   with:
-    PR_ID: "${PR_ID}"
+    PR_ID: "${MERGE_ID}"
     number: "${PR_ID}"
-    SYSTEM_DEVCLOUD_SUBPIPELINE_TRIGGER_ID: 3a80cbaf5dec4e0b8804ce1401787f5f
+    webhook_payload: "${WEBHOOK_PAYLOAD}"
+    SYSTEM_DEVCLOUD_SUBPIPELINE_TRIGGER_ID: 2dce32a1e91949d4872f6d10a9d86b2e
     SYSTEM_DEVCLOUD_SUBPIPELINE_BRANCH: PARENT
 ```
 
 A sub-pipeline run does not inherit the parent's `${MERGE_ID}`. Define a parent
-`PR_ID` input whose default is `${MERGE_ID}`, pass `${PR_ID}` through the
-expanded plugin, and make every child CloudBuild task consume the child input
-`${PR_ID}`. Reading `${MERGE_ID}` inside the child expands to empty and produces
-commands such as `--pr_id` with no argument. A manual run may provide `PR_ID`;
-when it is empty, skip the PR-oriented child and run UT/ST only.
+`PR_ID` input whose default is `${MERGE_ID}`, pass an effective PR number
+through the expanded plugin, and make every child CloudBuild task consume the
+child input `${PR_ID}`. Reading `${MERGE_ID}` inside the child expands to empty
+and produces commands such as `--pr_id` with no argument. The generated caller
+currently forwards `${MERGE_ID}` as `PR_ID` for MR runs and `${PR_ID}` in the
+`number` field. Before claiming that a manual `PR_ID` run is supported, verify
+in an actual run that the effective value reaches every child task.
 
 CodeArts supports manual execution without an `on` entry. Guard GitCode writes
 with `${{ pipeline.trigger_type == 'MR' }}` so a manual run does not use an
@@ -49,11 +55,11 @@ still report their status.
 
 Interpret results in the parent workflow, not in the PR bot. The parent uses
 `completed('ut', 'st', 'code_check')` to select mutually exclusive success and
-failure post jobs, renders a complete `result_html` body from
-`jobs.<job_id>.status`, and passes the already chosen `final_label`. The bot may
-post that HTML and apply the supplied label, but must not read OBS or derive a
-result independently; otherwise stale artifacts can disagree with the current
-CodeArts run.
+failure post jobs, renders a complete result HTML file from
+`jobs.<job_id>.status`, uploads that file to OBS, and passes its OBS key plus the
+already chosen `final_label` to the bot. The bot downloads and posts the HTML
+unchanged; it must not read other result artifacts or derive a result
+independently, because stale artifacts can disagree with the current run.
 
 ## PaC syntax and source checkout
 
@@ -78,6 +84,31 @@ source, the task expands the checkout directly into `${SHARE_PATH}`, not a
 nested `${SHARE_PATH}/sciencediscovery` directory. Run
 `.ci/provision-runner.sh`, set writable `CI_RESULTS_DIR` / `CI_RUNTIME_DIR`
 paths, and call the repository-owned layer entry point.
+
+`official_git_clone` may still download the configured `main` source for an MR
+run, so UT/ST must explicitly switch to the source commit from the MR event.
+Validate all payload data first: `source_branch` must be a non-empty valid Git
+branch without CR/LF, `last_commit.id` must be a 40-hex SHA, and `${MERGE_ID}`
+must be a positive integer. Then fetch the upstream MR ref and detach at the
+event SHA:
+
+```sh
+FETCH_REF=refs/remotes/origin/codearts-pr-source
+git fetch --no-tags --force origin \
+  "+refs/merge-requests/$MR_NUMBER/head:$FETCH_REF"
+git merge-base --is-ancestor "$SOURCE_SHA" "$FETCH_REF"
+git checkout --detach "$SOURCE_SHA"
+test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+```
+
+Use `refs/merge-requests/<number>/head`, not
+`refs/heads/<source_branch>`. The MR ref is exposed by the upstream repository
+for both same-repository and fork PRs, whereas a fork-only source branch does
+not exist under upstream `refs/heads/`. If the event SHA is not already present,
+fetch that exact SHA before verifying ancestry. Detaching at the event SHA
+also prevents a later source update from changing the code covered by the
+current run. Fail rather than testing another commit if the recorded SHA is no
+longer reachable from the MR ref.
 
 ## Default runner constraints
 
@@ -116,6 +147,38 @@ Use both the source commit and `pipeline.run_id` in `key`: one commit can run
 more than once, and a commit-only key overwrites earlier diagnostics. This
 source expansion and OBS layout passed on CodeArts on 2026-08-24.
 
+An early checkout or provisioning failure occurs before `run.log` is staged
+and before `upload-obs` runs. In that case the public OBS URL is expected to be
+missing and may return HTTP `403`; do not publish it as if a log exists.
+
+## Publish the PR result
+
+The PR comment must expose the public GitCode Checks page, not a CodeArts
+console URL that requires a Huawei Cloud login:
+
+```text
+https://gitcode.com/openJiuwen/sciencediscovery/pull/<MR_NUMBER>/check
+```
+
+List all four code-check subtasks (SCA, anti-poison, CodeCheck, and blacklist),
+plus UT and ST. User-facing status cells contain only `PASSED` or `FAILED`.
+CodeArts may report successful jobs as lifecycle state `completed`; normalize
+`completed`, `passed`, `success`, `successful`, and `succeeded` to `PASSED`, and
+every other value to `FAILED`. Do not print `COMPLETED` in the table.
+
+For code-check detail links, read the public result JSON created by the child
+pipeline and publish its validated absolute HTTPS `link`; use `N/A` when the
+JSON or link is unavailable. For UT/ST, probe the public OBS object with a
+small ranged request (`Range: bytes=0-0`) and accept only HTTP `200` or `206`.
+If the object is missing or inaccessible, link to the GitCode Checks page and
+say that the public test log was not generated. This probe controls only link
+availability; `jobs.<job_id>.status` controls the reported test result.
+
+Keep result rendering and OBS upload in a preparation job, and keep the
+`official_devcloud_cloudBuild` bot task alone in its publisher job. CodeArts
+rejects a job that places another step beside this exclusive CloudBuild task.
+The bot's `result_html` input is an OBS object key, not inline HTML.
+
 ## Read a result
 
 CodeArts PaC runs do not register in GitCode's `/api/v8/.../actions` endpoints.
@@ -125,10 +188,10 @@ The merge-request bot table is visible through:
 gitcode pr view <number> -R <owner>/<repo> --comments --json
 ```
 
-The MR check page may expose a CodeArts console link and `pipeline.run_id`, but
-complete run details require CodeArts credentials. If those credentials are
-not available, ask the user for the complete job log. UT/ST `run.log` files are
-also archived at:
+The MR check page exposes the job status and build-log entry. Complete CodeArts
+run details may still require CodeArts credentials; if those credentials are
+not available, ask the user for the complete job log. When upload ran, UT/ST
+`run.log` files are also archived at:
 
 ```text
 obs://openjiuwen-ci/sciencediscovery/ci/<commit>/<pipeline.run_id>/<ut|st>/run.log
@@ -136,6 +199,15 @@ obs://openjiuwen-ci/sciencediscovery/ci/<commit>/<pipeline.run_id>/<ut|st>/run.l
 
 Do not infer a root cause from the generic final `COCT.1140002.450`; use the
 first failing step and its inner command or plugin error.
+
+## Editing through the CodeArts UI
+
+Saving the pipeline in CodeArts can commit an expanded but stale YAML snapshot
+to `main`. After every UI mutation, fetch `origin/main` and diff the resulting
+workflow against the intended prior version. Preserve newly generated fields
+and deliberate UI changes, such as the current `merge_comment` value, then
+reapply only the logic that the stale snapshot removed. Validate the final
+workflow again before pushing. Never overwrite a new UI commit blindly.
 
 ## Failure signals
 
@@ -147,3 +219,8 @@ first failing step and its inner command or plugin error.
 | `sudo: /bin/sudo must be owned by uid 0 and have the setuid bit set` | The default pool has no usable root; install user-space tools under `$HOME` or the workspace. |
 | YAML requests `ubuntu-latest`, but logs show `octopus_container` and EulerOS | The default CCE execution mode ignored or overrode the OS label; use a dedicated pool for an actual Ubuntu rootfs. |
 | A child CloudBuild command ends with bare `--pr_id` | The child read `${MERGE_ID}`, which is not inherited from the parent. Pass the parent's MR ID as `PR_ID` and consume `${PR_ID}` inside every child task. |
+| `fatal: couldn't find remote ref refs/heads/<source>` on a fork PR | The checkout tried to fetch a fork-only branch from upstream. Fetch `refs/merge-requests/<MERGE_ID>/head` and detach at the validated event SHA. |
+| The PR table reports `COMPLETED` | The workflow exposed a raw CodeArts lifecycle state. Normalize it to `PASSED`; map every non-success state to `FAILED`. |
+| A generated UT/ST OBS URL returns `403` after checkout or provisioning failed | The upload step never ran and the object does not exist. Probe the object before linking and fall back to the GitCode Checks page. |
+| `独占任务official_devcloud_cloudBuild所在的job下不能配置其他step` | The bot CloudBuild task shares its job with rendering or upload. Move preparation into a separate prerequisite job. |
+| A CodeArts UI save restores old pipeline logic | The UI committed a stale expanded snapshot. Diff the new `main` commit, preserve its generated fields, and reapply the lost logic. |

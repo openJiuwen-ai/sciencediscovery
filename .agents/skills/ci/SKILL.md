@@ -12,7 +12,8 @@ description: >
 Read [CONTRIBUTING.md](../../../CONTRIBUTING.md) first. It owns the layer entry
 points, writable `CI_RESULTS_DIR` / `CI_RUNTIME_DIR` overrides, per-platform
 coverage, the GitCode/GitHub repository split, and the local checks required
-before a merge request. `.ci/README.md` documents the toolchain image.
+before a merge request. `.ci/README.md` documents the toolchain image. The
+platform references below own the current pipeline topology and integrations.
 
 This skill adds platform-specific result access, workflow validation, and
 failure diagnosis.
@@ -52,3 +53,6 @@ failure diagnosis.
 | `BLOCKED: isolated E2E stack did not become healthy` | The Runner refused to serve; inspect the sandbox probe before application logs. |
 | `ERR_PNPM_OUTDATED_LOCKFILE` | `pnpm-lock.yaml` is behind a `package.json`; regenerate it with `pnpm install --lockfile-only`. |
 | Playwright is green with fewer tests than expected | A skip is not a pass. Check counts and not-passed titles; a BLOCKED precondition is reported as skipped. |
+| `fatal: couldn't find remote ref refs/heads/<source>` on a fork PR | The job fetched a fork-only branch from the upstream repository. Fetch GitCode's upstream merge-request ref instead; see the CodeArts reference. |
+| The PR result table says `COMPLETED` | A CodeArts lifecycle state leaked into user-facing output. Normalize each task to `PASSED` or `FAILED` in the parent workflow. |
+| A UT/ST public OBS link returns `403` after an early job failure | The job failed before the upload step, so the object was never created. Probe the object and fall back to the GitCode Checks page. |
