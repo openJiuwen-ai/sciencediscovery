@@ -123,6 +123,10 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
     case "seeded":
       return withCandidate(state, event.nodeIndex, (candidate) => ({
         ...candidate,
+        // Carried so the root can be a diff's "before". Almost every node's
+        // parent is the root, so without it every diff in the run showed as
+        // pure addition with nothing ever removed.
+        codeHash: event.codeHash ?? candidate.codeHash,
         depth: 0,
         parentIndex: null,
         score: event.baselineScore,

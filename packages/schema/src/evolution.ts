@@ -471,7 +471,16 @@ export type EvolveRejectionCategory =
  */
 export type EvolveEvent =
   | { algorithm: EvolveAlgorithm; scorecardHash: string; type: "search_started" }
-  | { baselineScore: number | null; nodeIndex: number; type: "seeded" }
+  | {
+    baselineScore: number | null;
+    /** The seed's own source, stored like an expansion's. Absent on runs
+     *  written before it was recorded; the detail view falls back to an empty
+     *  "before", which renders the whole candidate as added. */
+    codeChars?: number;
+    codeHash?: string;
+    nodeIndex: number;
+    type: "seeded";
+  }
   | {
     /** Every ancestor whose visit count moved, with its **absolute** count. */
     ancestorVisits: Array<{ nodeIndex: number; visits: number }>;

@@ -429,3 +429,25 @@ test("the table carries every channel the picture encodes", () => {
   assert.match(markup, /<caption class="visually-hidden">/, "screen readers get a description");
   assert.match(markup, /<button[^>]*>[^<]*#1<\/button>/, "every candidate is focusable");
 });
+
+test("种子带上自己的代码哈希，diff 才有 before 可比", () => {
+  // Every diff in a live run rendered as pure addition, nothing ever removed.
+  // `expanded` carried `codeHash`; `seeded` did not, and `CandidateDetail`
+  // diffs against `parent.codeHash`. A flat tree is ERA's normal shape — ten
+  // of eleven nodes forked from the root on one run — so almost every parent
+  // *is* the root, and an absent hash meant an empty "before" every time.
+  const view = reduceEvolveRecords(emptyRunView(), [
+    record(1, START),
+    record(2, { baselineScore: 0.5417, codeHash: "sha256:seed", nodeIndex: 0, type: "seeded" }),
+    record(3, { codeHash: "sha256:child", depth: 1, nodeIndex: 1, parentIndex: 0,
+                score: 0.4146, type: "expanded", valid: true }),
+  ]);
+
+  const root = view.candidates.find((candidate) => candidate.nodeIndex === 0);
+  assert.equal(root?.codeHash, "sha256:seed");
+
+  // An older run that never stored the seed still folds, with no hash rather
+  // than a hash that resolves to nothing.
+  const legacy = reduceEvolveRecords(emptyRunView(), [record(1, START), record(2, SEED)]);
+  assert.equal(legacy.candidates.find((c) => c.nodeIndex === 0)?.codeHash, undefined);
+});

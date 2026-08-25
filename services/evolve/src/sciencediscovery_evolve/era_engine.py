@@ -482,7 +482,19 @@ class _Reporter:
             seed_score = payload["metrics"].get(SCORE_KEY)
             if isinstance(seed_score, (int, float)) and math.isfinite(float(seed_score)):
                 self._distinct_scores.add(round(float(seed_score), 6))
-            self.emit(events.seeded(0, payload["metrics"].get(SCORE_KEY)))
+            # The seed's source goes into the same store an expansion's does.
+            # Without it the detail view has no "before" to diff against, and
+            # since almost every node's parent is the root, that meant every
+            # diff in the run rendered as pure addition.
+            seed_code = ""
+            node = payload.get("node")
+            if node is not None and getattr(node, "program", None) is not None:
+                seed_code = getattr(node.program, "code", "") or ""
+            seed_hash = self.store.put(self.spec.search_id, seed_code) if seed_code.strip() else None
+            self.emit(events.seeded(
+                0, payload["metrics"].get(SCORE_KEY),
+                code_hash=seed_hash, code_chars=len(seed_code) or None,
+            ))
         elif kind == "node":
             self._node(payload)
         elif kind == "swept":

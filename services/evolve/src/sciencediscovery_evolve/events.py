@@ -124,8 +124,31 @@ def search_started(algorithm: str, scorecard_hash: str) -> dict[str, Any]:
     return {"algorithm": algorithm, "scorecardHash": scorecard_hash, "type": "search_started"}
 
 
-def seeded(node_index: int, baseline_score: float | None) -> dict[str, Any]:
-    return {"baselineScore": finite(baseline_score), "nodeIndex": node_index, "type": "seeded"}
+def seeded(
+    node_index: int,
+    baseline_score: float | None,
+    *,
+    code_hash: str | None = None,
+    code_chars: int | None = None,
+) -> dict[str, Any]:
+    """The root node, carrying its source the same way an expansion does.
+
+    `code_hash` was missing here while `expanded` had it, and the detail view
+    diffs a candidate against `parent.codeHash`. Almost every node's parent is
+    the root — a flat tree is ERA's normal shape — so with no hash on the seed
+    the "before" side was empty and *every* diff rendered as pure addition,
+    with nothing ever shown as removed.
+    """
+    event: dict[str, Any] = {
+        "baselineScore": finite(baseline_score),
+        "nodeIndex": node_index,
+        "type": "seeded",
+    }
+    if code_hash:
+        event["codeHash"] = code_hash
+    if code_chars:
+        event["codeChars"] = code_chars
+    return event
 
 
 def selected(

@@ -873,3 +873,35 @@ def test_step_itself_asks_for_the_repair() -> None:
 
     source = inspect.getsource(EraTreeAggregator.step)
     assert "self._repair_once(" in source
+
+
+def test_the_seed_carries_its_source_so_a_diff_has_a_before() -> None:
+    """Every diff in a run rendered as pure addition, nothing ever removed.
+
+    `expanded` carried `codeHash`; `seeded` did not. The detail view diffs a
+    candidate against `parent.codeHash`, and a flat tree — ERA's normal shape,
+    ten of eleven nodes forking from the root on one live run — means almost
+    every parent *is* the root. With no hash there, the "before" side was
+    empty and the whole candidate showed as new.
+    """
+    from sciencediscovery_evolve import events
+
+    event = events.seeded(0, 0.5417, code_hash="sha256:abc", code_chars=5498)
+
+    assert event["codeHash"] == "sha256:abc"
+    assert event["codeChars"] == 5498
+    # An older run that stored no seed source stays valid rather than carrying
+    # a hash that resolves to nothing.
+    assert "codeHash" not in events.seeded(0, 0.5417)
+
+
+def test_the_engine_stores_the_seed_before_announcing_it() -> None:
+    """A hash on the event is only useful if the source is fetchable by it."""
+    import inspect
+
+    from sciencediscovery_evolve.era_engine import _Reporter
+
+    source = inspect.getsource(_Reporter.on_event)
+    seeded_block = source[source.index('kind == "seeded"'):source.index('kind == "node"')]
+    assert "self.store.put(" in seeded_block
+    assert "code_hash=seed_hash" in seeded_block
