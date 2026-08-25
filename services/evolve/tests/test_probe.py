@@ -378,9 +378,7 @@ def test_a_diagnosis_of_bare_exception_names_is_refused() -> None:
     from sciencediscovery_evolve.probe import ProbeError, _refuse_nameless_diagnosis
 
     with pytest.raises(ProbeError) as caught:
-        _refuse_nameless_diagnosis(
-            lambda _c, _s: (True, {"score": 0.0}, "text13: exc IndexError; text37: exc IndexError"),
-            "damaged", (0,))
+        _refuse_nameless_diagnosis("text13: exc IndexError; text37: exc IndexError")
 
     assert "类名" in str(caught.value)
 
@@ -393,4 +391,4 @@ def test_a_diagnosis_that_carries_the_message_passes() -> None:
         "vanderpol: err=3.51, score=0.0000, nfev=1999",
         "",                                    # empty is handled elsewhere
     ):
-        _refuse_nameless_diagnosis(lambda _c, _s, t=said: (True, {"score": 0.0}, t), "d", (0,))
+        _refuse_nameless_diagnosis(said)

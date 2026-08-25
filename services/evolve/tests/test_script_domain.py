@@ -430,3 +430,36 @@ def test_the_evaluator_is_alone_with_the_candidate(tmp_path):
     # plumbing. What matters is that nothing data-shaped can arrive.
     assert {"candidate.py", "evaluate.py"} <= present
     assert not [name for name in present if name.endswith((".json", ".csv", ".txt"))]
+
+def test_the_probe_pays_for_four_evaluations_and_no_more():
+    """Each gate was added on its own, and one of them re-ran a measurement.
+
+    `_refuse_nameless_diagnosis` needed the failure text that `_score` had just
+    thrown away, so it scored the same damaged copy a second time — five real
+    sandbox runs where four do. Counting them here means the next gate has to be
+    deliberate about its cost rather than quietly adding one.
+
+    The four: the starting point, a damaged copy, one that cannot be imported,
+    and the starting point again to read the repeat noise.
+    """
+    from sciencediscovery_evolve import probe as probe_module
+
+    calls = []
+
+    def evaluate(code, shards):
+        calls.append(code)
+        # Distinguishable so every gate sees a scoring that discriminates.
+        if "does not import" in code:
+            return True, {"score": 0.0}, "candidate did not import: RuntimeError('…')"
+        if "return None" in code or code.strip() == "":
+            return True, {"score": 0.1}, "case 0: ValueError: nothing to score"
+        return True, {"score": 0.5}, ""
+
+    baseline, _raw, why = probe_module._measure(evaluate, "def f():\n    return 1\n", (0, 1))
+    damaged, _label = probe_module._damage("def f():\n    return 1\n")
+    worsened, _dr, damaged_why = probe_module._measure(evaluate, damaged, (0, 1))
+    probe_module._refuse_nameless_diagnosis(damaged_why)
+    probe_module._refuse_rewarding_the_unimportable(evaluate, (0, 1), baseline)
+    probe_module._refuse_noisy(evaluate, "def f():\n    return 1\n", (0, 1), baseline, worsened)
+
+    assert len(calls) == 4, [c[:30] for c in calls]

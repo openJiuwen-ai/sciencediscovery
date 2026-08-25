@@ -136,7 +136,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
             )
         damaged, damage_label = _damage(spec.baseline_code)
         try:
-            worsened = _score(domain.evaluate, damaged, shards)
+            worsened, _damaged_raw, damaged_why = _measure(domain.evaluate, damaged, shards)
         except ScriptError as error:
             # The damaged copy is what most candidates will look like: a
             # function that raises, or returns None. An evaluator that dies on
@@ -155,9 +155,12 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
                 "\n注意：要健壮的是评测脚本，不是候选——候选被改坏就是这个探针的目的。"
             ) from error
         flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
+        # Ordered by what each costs. The first three read numbers already paid
+        # for; the last two each spend one more evaluation, so they come after
+        # everything that can refuse for free.
         _refuse_saturated(spec, baseline, worsened)
+        _refuse_nameless_diagnosis(damaged_why)
         _refuse_rewarding_the_unimportable(domain.evaluate, shards, baseline)
-        _refuse_nameless_diagnosis(domain.evaluate, damaged, shards)
         _refuse_noisy(domain.evaluate, spec.baseline_code, shards, baseline, worsened)
         return {"baseline": baseline, "flat": flat,
                 "label": damage_label, "worsened": worsened}
@@ -534,7 +537,7 @@ def _refuse_rewarding_the_unimportable(evaluate, shards, baseline: float) -> Non
     )
 
 
-def _refuse_nameless_diagnosis(evaluate, damaged: str, shards) -> None:
+def _refuse_nameless_diagnosis(said: str) -> None:
     """Refuse a scoring whose failure text names the exception and nothing else.
 
     The contract asks the evaluator to fill `error`, and one live run filled it
@@ -551,10 +554,6 @@ def _refuse_nameless_diagnosis(evaluate, damaged: str, shards) -> None:
     """
     import re
 
-    try:
-        _score_value, _raw, said = _measure(evaluate, damaged, shards)
-    except Exception:  # noqa: BLE001 - the evaluator's own failure has its own message
-        return
     text = (said or "").strip()
     if not text:
         return  # Empty is handled where the process tail is appended.
