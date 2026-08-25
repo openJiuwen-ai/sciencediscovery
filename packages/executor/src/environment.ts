@@ -15,22 +15,66 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
-import { DEFAULT_ENVIRONMENT_REVISION_ID, SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, type EnvironmentRevision } from "@sciencediscovery/schema";
+import {
+  SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID,
+  SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID,
+  SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+  SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID,
+  type EnvironmentRevision,
+  type SandboxKind,
+} from "@sciencediscovery/schema";
 
-export { DEFAULT_ENVIRONMENT_REVISION_ID } from "@sciencediscovery/schema";
+export function hostSandboxKind(platform: NodeJS.Platform = process.platform): SandboxKind {
+  return platform === "darwin" ? "seatbelt" : "bubblewrap";
+}
 
+export function systemPythonEnvironmentRevisionId(
+  sandbox: SandboxKind = hostSandboxKind(),
+): string {
+  return sandbox === "seatbelt"
+    ? SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID
+    : SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID;
+}
+
+export function systemShellEnvironmentRevisionId(
+  sandbox: SandboxKind = hostSandboxKind(),
+): typeof SYSTEM_SHELL_ENVIRONMENT_REVISION_ID | typeof SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID {
+  return sandbox === "seatbelt"
+    ? SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID
+    : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID;
+}
+
+const SYSTEM_ENVIRONMENT_REVISION_IDS = new Set<string>([
+  SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID,
+  SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID,
+  SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+  SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID,
+]);
+
+export function isSystemEnvironmentRevisionId(revisionId: string): boolean {
+  return SYSTEM_ENVIRONMENT_REVISION_IDS.has(revisionId);
+}
+
+export const DEFAULT_ENVIRONMENT_REVISION_ID = systemPythonEnvironmentRevisionId();
+const sandbox = hostSandboxKind();
 // The package spec records paths inside the Runner's sandbox. Probe versions
 // through PATH because the API host may install the same tools elsewhere.
-const pythonVersion = execFileSync("python3", ["--version"], { encoding: "utf8" }).trim();
-const shellVersion = execFileSync("bash", ["--version"], { encoding: "utf8" }).split("\n")[0]!.trim();
+const pythonProbeExecutable = process.env.SCIENCE_AGENT_PYTHON_PATH?.trim() || "python3";
+const shellProbeExecutable = process.env.SCIENCE_AGENT_SHELL_PATH?.trim() || "bash";
+const pythonVersion = execFileSync(pythonProbeExecutable, ["--version"], { encoding: "utf8" }).trim();
+const shellVersion = execFileSync(shellProbeExecutable, ["--version"], { encoding: "utf8" }).split("\n")[0]!.trim();
+const runnerVersion = sandbox === "seatbelt" ? "m4-isolation-only-v1" : "m1-bwrap-v1";
+const packageSource = sandbox === "seatbelt" ? "read-only system runtime" : "read-only system /usr";
+const pythonExecutable = "/usr/bin/python3";
+const shellExecutable = process.platform === "darwin" ? "/bin/bash" : "/usr/bin/bash";
 
 export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
-  executable: "/usr/bin/python3",
+  executable: pythonExecutable,
   format: "sciencediscovery-environment-v1",
   language: "python",
-  packageSource: "read-only system /usr",
+  packageSource,
   pythonVersion,
-  runner: "m1-bwrap-v1",
+  runner: runnerVersion,
 }, null, 2)}\n`;
 
 export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC_HASH = createHash("sha256")
@@ -38,12 +82,12 @@ export const DEFAULT_ENVIRONMENT_PACKAGE_SPEC_HASH = createHash("sha256")
   .digest("hex");
 
 export const DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC = `${JSON.stringify({
-  executable: "/usr/bin/bash",
+  executable: shellExecutable,
   format: "sciencediscovery-environment-v1",
   language: "shell",
-  packageSource: "read-only system /usr",
+  packageSource,
   shellVersion,
-  runner: "m1-bwrap-v1",
+  runner: runnerVersion,
 }, null, 2)}\n`;
 
 export const DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH = createHash("sha256")
@@ -62,7 +106,7 @@ export function defaultEnvironmentRevision(): EnvironmentRevision {
     packageSpecHash: DEFAULT_ENVIRONMENT_PACKAGE_SPEC_HASH,
     platform: `${process.platform}-${process.arch}`,
     provisioner: "system",
-    runnerVersion: "m1-bwrap-v1",
+    runnerVersion,
     snapshot: {
       hash: DEFAULT_ENVIRONMENT_PACKAGE_SPEC_HASH,
       size: Buffer.byteLength(DEFAULT_ENVIRONMENT_PACKAGE_SPEC),
@@ -75,14 +119,14 @@ export function defaultShellEnvironmentRevision(): EnvironmentRevision {
     channels: [],
     createdAt: "1970-01-01T00:00:00.000Z",
     environmentId: "system-shell",
-    id: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+    id: systemShellEnvironmentRevisionId(),
     language: "shell",
     languageVersion: shellVersion,
     packages: [],
     packageSpecHash: DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH,
     platform: `${process.platform}-${process.arch}`,
     provisioner: "system",
-    runnerVersion: "m1-bwrap-v1",
+    runnerVersion,
     snapshot: {
       hash: DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH,
       size: Buffer.byteLength(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC),

@@ -49,7 +49,9 @@ serve options:
   --runner-port <number>   Loopback runner port (default: 4311)
   --env-file <path>        Load KEY=VALUE settings from this file before starting
   --bwrap <path>           bubblewrap executable (default: bwrap from PATH)
-  --skip-sandbox-check     Start without bubblewrap; sandboxed tools will fail
+  --seatbelt <path>        macOS Seatbelt launcher (default: /usr/bin/sandbox-exec)
+  --sandbox-provider <p>   auto, bubblewrap, or seatbelt (default: auto)
+  --skip-sandbox-check     Start when the platform sandbox probe fails
   --no-scientific-envs     Do not provision the managed scientific environments
 
 Bubblewrap is the only required host dependency. Neo4j is not bundled, so the
@@ -88,8 +90,14 @@ export function defaultSettings(
   cwd: string,
   onCompatibility?: CompatibilityLog,
 ): ServeSettings {
+  const sandboxProvider = env.SCIENCE_AGENT_SANDBOX_PROVIDER?.trim() || "auto";
+  if (!["auto", "bubblewrap", "seatbelt"].includes(sandboxProvider)) {
+    throw new Error("SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt");
+  }
   return {
     bwrapPath: env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
+    sandboxProvider: sandboxProvider as "auto" | "bubblewrap" | "seatbelt",
+    seatbeltPath: env.SCIENCE_AGENT_SEATBELT_PATH?.trim() || "/usr/bin/sandbox-exec",
     dataDir: resolve(
       cwd,
       renamedEnvironmentValue(
@@ -139,6 +147,15 @@ export function parseInvocation(
     const next = (): string => requireValue(argument as string, rest[++index]);
     switch (argument) {
       case "--bwrap": invocation.settings.bwrapPath = next(); break;
+      case "--sandbox-provider": {
+        const provider = next();
+        if (!["auto", "bubblewrap", "seatbelt"].includes(provider)) {
+          throw new Error("--sandbox-provider must be auto, bubblewrap, or seatbelt");
+        }
+        invocation.settings.sandboxProvider = provider as "auto" | "bubblewrap" | "seatbelt";
+        break;
+      }
+      case "--seatbelt": invocation.settings.seatbeltPath = next(); break;
       case "--data-dir": invocation.settings.dataDir = resolve(cwd, next()); break;
       case "--env-file": invocation.envFile = resolve(cwd, next()); break;
       // Accepted and ignored: a saved command line must not start failing just

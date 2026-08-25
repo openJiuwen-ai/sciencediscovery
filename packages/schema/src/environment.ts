@@ -118,8 +118,13 @@ export interface ProducedArtifactInfo {
   inputArtifactVersions?: Array<{ artifactId: string; version: number }>;
 }
 
+export type SandboxKind = "bubblewrap" | "seatbelt";
+
+export const SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID = "system-python3-bwrap-v1";
+export const SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID = "system-python3-seatbelt-v1";
+
 export interface ScientificExecutionResult {
-  /** Always `none`: isolation is bubblewrap + seccomp; no resource quotas are applied. */
+  /** Always `none`: sandbox isolation does not apply CPU or memory quotas. */
   cgroupMode: "none" | "direct-v2";
   createdFiles: string[];
   environmentRevisionId: string;
@@ -150,7 +155,7 @@ export interface ScientificExecutionResult {
    */
   producedArtifacts?: ProducedArtifactInfo[];
   runnerVersion: string;
-  sandbox: "bubblewrap";
+  sandbox: SandboxKind;
   startedAt: string;
   stderr: string;
   stdout: string;
@@ -163,6 +168,7 @@ export interface ScientificExecutionResult {
 }
 
 export const SYSTEM_SHELL_ENVIRONMENT_REVISION_ID = "system-shell-bwrap-v1";
+export const SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID = "system-shell-seatbelt-v1";
 
 export interface ShellExecutionRequest {
   /** Stable Agent identity within the Session; assigned by the trusted API binding. */
@@ -186,7 +192,9 @@ export interface ShellExecutionRequest {
 }
 
 export interface ShellExecutionResult extends Omit<ScientificExecutionResult, "environmentRevisionId" | "language"> {
-  environmentRevisionId: typeof SYSTEM_SHELL_ENVIRONMENT_REVISION_ID;
+  environmentRevisionId:
+    | typeof SYSTEM_SHELL_ENVIRONMENT_REVISION_ID
+    | typeof SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID;
   language: "shell";
 }
 
@@ -405,14 +413,16 @@ export interface RunnerHealth {
    * Permission Epoch carries a `domain-allowlist` policy snapshot.
    */
   networkPolicy: "none";
-  noNewPrivileges: true;
+  /** Linux Bubblewrap sets no-new-privileges; Seatbelt reports false. */
+  noNewPrivileges: boolean;
   npuBroker: NpuBrokerCapability;
   runnerVersion: string;
-  sandbox: "bubblewrap";
+  sandbox: SandboxKind;
   /** Whether this runner can serve `domain-allowlist` executions at all. */
   sandboxNetwork: SandboxNetworkCapability;
   scientificEnvs: ScientificEnvsCapability;
-  seccompBaseline: "multiarch-v1-profile-aware";
+  /** Linux syscall filter; not applicable to macOS Seatbelt. */
+  seccompBaseline: "multiarch-v1-profile-aware" | null;
   status: "ok";
   /** `null` means no global cap; positive numbers are retained for older Runner compatibility. */
   workerConcurrency: number | null;

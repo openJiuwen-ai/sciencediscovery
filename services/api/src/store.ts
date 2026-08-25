@@ -139,6 +139,7 @@ import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   defaultEnvironmentRevision,
   defaultShellEnvironmentRevision,
+  isSystemEnvironmentRevisionId,
 } from "@sciencediscovery/executor";
 import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
@@ -555,6 +556,9 @@ export class SessionStore {
         snapshot: legacy.snapshot ?? { hash: legacy.packageSpecHash, size: 0 },
       };
     });
+    if (!environmentRevisions.some((revision) => revision.id === DEFAULT_ENVIRONMENT_REVISION_ID)) {
+      environmentRevisions.push(defaultEnvironmentRevision());
+    }
     if (!environmentRevisions.some((revision) => revision.id === defaultShellEnvironmentRevision().id)) {
       environmentRevisions.push(defaultShellEnvironmentRevision());
     }
@@ -3255,13 +3259,16 @@ export class SessionStore {
     revisions: EnvironmentRevision[],
   ): Promise<void> {
     this.catalog.environments = structuredClone(environments);
-    const legacy = this.catalog.environmentRevisions.find((revision) => revision.id === DEFAULT_ENVIRONMENT_REVISION_ID)
-      ?? defaultEnvironmentRevision();
-    const shell = this.catalog.environmentRevisions.find((revision) => revision.id === defaultShellEnvironmentRevision().id)
-      ?? defaultShellEnvironmentRevision();
-    this.catalog.environmentRevisions = [legacy, shell, ...structuredClone(revisions)
-      .filter((revision) => revision.id !== DEFAULT_ENVIRONMENT_REVISION_ID
-        && revision.id !== defaultShellEnvironmentRevision().id)];
+    const systemRevisions = this.catalog.environmentRevisions
+      .filter((revision) => isSystemEnvironmentRevisionId(revision.id));
+    if (!systemRevisions.some((revision) => revision.id === DEFAULT_ENVIRONMENT_REVISION_ID)) {
+      systemRevisions.push(defaultEnvironmentRevision());
+    }
+    if (!systemRevisions.some((revision) => revision.id === defaultShellEnvironmentRevision().id)) {
+      systemRevisions.push(defaultShellEnvironmentRevision());
+    }
+    this.catalog.environmentRevisions = [...systemRevisions, ...structuredClone(revisions)
+      .filter((revision) => !isSystemEnvironmentRevisionId(revision.id))];
     await this.saveCatalog();
   }
 

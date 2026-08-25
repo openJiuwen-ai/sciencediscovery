@@ -31,6 +31,31 @@ const execFileAsync = promisify(execFile);
 /** Probe budget. Generous: a cold bubblewrap on a loaded host is still fast. */
 export const SANDBOX_PROBE_TIMEOUT_MS = 15_000;
 
+export type SandboxProvider = "bubblewrap" | "seatbelt";
+
+export type SeatbeltCapabilityReason = "supported" | "sandbox-unusable";
+
+export interface SeatbeltCapability {
+  /** The Seatbelt profile compiled and a child process completed. */
+  sandboxUsable: boolean;
+  reason: SeatbeltCapabilityReason;
+  /** sandbox-exec's failure line, retained for operator diagnostics. */
+  detail?: string;
+}
+
+/**
+ * A deliberately small real probe. Presence of sandbox-exec is insufficient:
+ * launch constraints, nested sandboxes, or future macOS changes may still
+ * reject profile application. The profile also proves that deny-by-default,
+ * process execution, and the system runtime read surface work together.
+ */
+export const SEATBELT_PROBE_PROFILE = [
+  "(version 1)",
+  "(deny default)",
+  "(allow process-exec)",
+  "(allow file-read*)",
+].join(" ");
+
 export type SandboxCapabilityReason =
   /** The hardened sandbox, `--disable-userns` included, launched. */
   | "supported"
@@ -178,6 +203,7 @@ async function probeSandboxCapability(bwrapPath: string, timeoutMs: number): Pro
 }
 
 const capabilityCache = new Map<string, Promise<SandboxCapability>>();
+const seatbeltCapabilityCache = new Map<string, Promise<SeatbeltCapability>>();
 
 /**
  * Detect once per binary per process and share the promise: every execution
@@ -195,9 +221,60 @@ export function detectSandboxCapability(
   return pending;
 }
 
+async function probeSeatbeltCapability(
+  seatbeltPath: string,
+  timeoutMs: number,
+): Promise<SeatbeltCapability> {
+  try {
+    await execFileAsync(seatbeltPath, [
+      "-p",
+      SEATBELT_PROBE_PROFILE,
+      "/usr/bin/true",
+    ], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: timeoutMs,
+    });
+    return { reason: "supported", sandboxUsable: true };
+  } catch (error) {
+    return {
+      detail: probeFailureDetail(error),
+      reason: "sandbox-unusable",
+      sandboxUsable: false,
+    };
+  }
+}
+
+/** Detect and cache whether macOS Seatbelt can apply a real profile. */
+export function detectSeatbeltCapability(
+  seatbeltPath: string,
+  options: { timeoutMs?: number } = {},
+): Promise<SeatbeltCapability> {
+  let pending = seatbeltCapabilityCache.get(seatbeltPath);
+  if (!pending) {
+    pending = probeSeatbeltCapability(
+      seatbeltPath,
+      options.timeoutMs ?? SANDBOX_PROBE_TIMEOUT_MS,
+    );
+    seatbeltCapabilityCache.set(seatbeltPath, pending);
+  }
+  return pending;
+}
+
 /** Tests only: the cache is keyed by path, which stubs reuse across cases. */
 export function resetSandboxCapabilityCache(): void {
   capabilityCache.clear();
+  seatbeltCapabilityCache.clear();
+}
+
+export function seatbeltUnusableMessage(
+  seatbeltPath: string,
+  capability: SeatbeltCapability,
+): string {
+  return `Seatbelt at "${seatbeltPath}" could not apply the sandbox profile`
+    + `${capability.detail ? `: ${capability.detail}` : "."} `
+    + "The Web UI and control API may start, but run_python and run_shell must remain unavailable; "
+    + "ScienceAgent never falls back to an unsandboxed process.";
 }
 
 /**

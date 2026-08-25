@@ -35,6 +35,8 @@ import { Supervisor, type ServiceDefinition } from "./supervisor.js";
 
 export interface ServeSettings {
   bwrapPath: string;
+  sandboxProvider?: "auto" | "bubblewrap" | "seatbelt";
+  seatbeltPath?: string;
   dataDir: string;
   host: string;
   port: number;
@@ -129,6 +131,9 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
     ...baseEnv,
     ...forwarded(baseEnv),
     SCIENCE_AGENT_BWRAP_PATH: settings.bwrapPath,
+    SCIENCE_AGENT_SANDBOX_PROVIDER: settings.sandboxProvider ?? "auto",
+    SCIENCE_AGENT_SEATBELT_PATH: settings.seatbeltPath ?? "/usr/bin/sandbox-exec",
+    SCIENCE_AGENT_PYTHON_PATH: pythonBinary,
     SCIENCE_AGENT_DATA_DIR: settings.dataDir,
     SCIENCE_AGENT_RUNNER_HOST: settings.runnerHost,
     SCIENCE_AGENT_RUNNER_PORT: String(settings.runnerPort),
@@ -154,7 +159,7 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
 
   return [
     {
-      name: "bubblewrap runner",
+      name: "sandbox runner",
       command: nodeBinary,
       args: [payloadPath(payloadRoot, manifest.app.runnerEntry)],
       cwd: appRoot,
@@ -205,10 +210,13 @@ export interface ServeResult {
 
 export async function serve(context: ServeContext, log: (message: string) => void): Promise<ServeResult> {
   const { manifest, settings } = context;
-  log(`ScienceDiscovery ${manifest.version} (linux-${manifest.architecture})`);
+  const hostPlatform = process.platform === "darwin" ? "darwin" : "linux";
+  log(`ScienceDiscovery ${manifest.version} (${hostPlatform}-${manifest.architecture})`);
 
   await runPreflight({
     bwrapPath: settings.bwrapPath,
+    sandboxProvider: settings.sandboxProvider ?? "auto",
+    seatbeltPath: settings.seatbeltPath,
     dataDir: settings.dataDir,
     env: context.baseEnv,
     skipSandboxCheck: settings.skipSandboxCheck,

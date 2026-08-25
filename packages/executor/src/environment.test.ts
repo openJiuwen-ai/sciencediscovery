@@ -27,7 +27,7 @@ test("host probes preserve the Runner sandbox executable contract", () => {
   const shellSpec = JSON.parse(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC) as { executable?: unknown };
 
   assert.equal(pythonSpec.executable, "/usr/bin/python3");
-  assert.equal(shellSpec.executable, "/usr/bin/bash");
+  assert.equal(shellSpec.executable, process.platform === "darwin" ? "/bin/bash" : "/usr/bin/bash");
   assert.match(defaultEnvironmentRevision().languageVersion, /^Python 3\./);
   assert.match(defaultShellEnvironmentRevision().languageVersion, /^GNU bash, version /);
 });

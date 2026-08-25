@@ -39,9 +39,9 @@ import type {
   ScientificArtifactKind,
   ScientificArtifactVersion,
   ShellExecutionResult,
+  SandboxKind,
 } from "@sciencediscovery/schema";
 import {
-  SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   classifyScientificArtifact,
   epochSandboxNetworkAccess,
 } from "@sciencediscovery/schema";
@@ -54,6 +54,8 @@ import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC,
   DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH,
+  hostSandboxKind,
+  systemShellEnvironmentRevisionId,
 } from "@sciencediscovery/executor";
 
 /** Persistence boundary consumed by provenance recording. */
@@ -88,6 +90,14 @@ export interface ProvenanceStore {
  */
 function interruptedExecutionStatus(signal: AbortSignal | undefined): "cancelled" | "failed" {
   return signal?.aborted ? "cancelled" : "failed";
+}
+
+async function runnerSandboxKind(runnerClient: RunnerClient): Promise<SandboxKind> {
+  try {
+    return (await runnerClient.health()).sandbox;
+  } catch {
+    return hostSandboxKind();
+  }
 }
 
 export interface RecordExecutionOptions {
@@ -360,6 +370,7 @@ export class ProvenanceRecorder {
 
   async executeShell(options: RecordShellExecutionOptions): Promise<ShellExecutionResult> {
     const executionId = randomUUID();
+    const sandbox = await runnerSandboxKind(options.runnerClient);
     const shellSpec = await this.cas.put(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC);
     if (shellSpec.hash !== DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH) {
       throw new Error("Shell environment package spec hash is inconsistent");
@@ -386,7 +397,7 @@ export class ProvenanceRecorder {
         cgroupMode: "unavailable",
         code,
         createdFiles: [],
-        environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentRevisionId: systemShellEnvironmentRevisionId(sandbox),
         envSnapshot: null,
         exitCode: null,
         finishedAt: timestamp,
@@ -399,7 +410,7 @@ export class ProvenanceRecorder {
         networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         runnerVersion: "unavailable",
-        sandbox: "bubblewrap",
+        sandbox,
         sessionId: options.sessionId,
         startedAt: timestamp,
         status: interruptedExecutionStatus(options.signal),
@@ -476,6 +487,7 @@ export class ProvenanceRecorder {
 
   async executeScientific(options: RecordExecutionOptions): Promise<PythonExecutionResult> {
     const executionId = randomUUID();
+    const sandbox = await runnerSandboxKind(options.runnerClient);
     const language = options.language ?? "python";
     const kernelMode = options.kernelMode ?? "ephemeral";
     if (!options.environmentRevisionId && language === "python") {
@@ -524,7 +536,7 @@ export class ProvenanceRecorder {
         networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         runnerVersion: "unavailable",
-        sandbox: "bubblewrap",
+        sandbox,
         sessionId: options.sessionId,
         startedAt: timestamp,
         status: interruptedExecutionStatus(options.signal),

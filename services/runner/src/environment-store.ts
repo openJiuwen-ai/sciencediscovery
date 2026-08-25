@@ -42,6 +42,7 @@ const CATALOG_VERSION = 1;
 const MANAGED_MICROMAMBA_VERSION = micromambaManifest.version;
 const MANAGED_MICROMAMBA_BASE_URL = `${micromambaManifest.baseUrl}/${MANAGED_MICROMAMBA_VERSION}`;
 const MANAGED_MICROMAMBA_RELEASES = micromambaManifest.releases;
+const MANAGED_MICROMAMBA_DARWIN_RELEASES = micromambaManifest.darwinReleases;
 const MAX_PROVISIONER_BYTES = 64 * 1024 * 1024;
 const BUILT_IN_CONDA_CHANNELS = new Set<string>(
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS.flatMap((preset) => [...preset.condaChannels]),
@@ -61,6 +62,10 @@ interface ProvisionedPackage {
   build_string?: string;
   name?: string;
   version?: string;
+}
+
+interface ProvisionedPackageListEnvelope {
+  packages?: unknown;
 }
 
 export type ProvisionerExecutor = (
@@ -88,16 +93,15 @@ export interface EnvironmentRuntime {
   revision: EnvironmentRevision;
 }
 
-type SupportedMicromambaArchitecture = keyof typeof MANAGED_MICROMAMBA_RELEASES;
-
 export function managedMicromambaRelease(
   architecture: string = process.arch,
   platform: string = process.platform,
 ) {
-  if (platform !== "linux") {
-    throw new Error(`Managed micromamba installation requires Linux, not ${platform}`);
-  }
-  const release = MANAGED_MICROMAMBA_RELEASES[architecture as SupportedMicromambaArchitecture];
+  const releases = platform === "linux"
+    ? MANAGED_MICROMAMBA_RELEASES
+    : platform === "darwin" ? MANAGED_MICROMAMBA_DARWIN_RELEASES : undefined;
+  if (!releases) throw new Error(`Managed micromamba installation is unavailable for platform ${platform}`);
+  const release = releases[architecture as keyof typeof releases];
   if (!release) {
     throw new Error(`Managed micromamba installation is unavailable for architecture ${architecture}`);
   }
@@ -177,6 +181,17 @@ function wheelPackageRecord(wheel: EnvironmentLocalWheel): string {
     sha256: wheel.content.hash,
     version: wheel.version,
   })}`;
+}
+
+function parseProvisionedPackageList(listOutput: string): ProvisionedPackage[] {
+  const parsed = JSON.parse(listOutput || "[]") as unknown;
+  const listed = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as ProvisionedPackageListEnvelope).packages)
+      ? (parsed as ProvisionedPackageListEnvelope).packages
+      : undefined;
+  if (!listed) throw new Error("Provisioner package list must be a JSON array or an object with a packages array");
+  return listed as ProvisionedPackage[];
 }
 
 async function fileSha256(path: string): Promise<string> {
@@ -780,8 +795,7 @@ export class EnvironmentStore {
     localWheels: EnvironmentLocalWheel[] = [],
   ): Promise<EnvironmentRevision> {
     const listOutput = await this.runProvisioner(["list", "--json", "--prefix", prefix], `snapshot-${revisionId}`);
-    const listed = JSON.parse(listOutput || "[]") as ProvisionedPackage[];
-    if (!Array.isArray(listed)) throw new Error("Provisioner package list must be a JSON array");
+    const listed = parseProvisionedPackageList(listOutput);
     const packages = uniqueSorted([...listed.flatMap((item) => item.name && item.version
       ? [`${item.name}=${item.version}${item.build_string ? `=${item.build_string}` : ""}`]
       : []), ...additionalPackages, ...localWheels.map(wheelPackageRecord)]);

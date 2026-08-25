@@ -27,7 +27,10 @@ import {
 
 async function fixture(
   context: { after: (callback: () => Promise<void>) => void },
-  options: { beforeCommand?: (arguments_: string[]) => Promise<void> | void } = {},
+  options: {
+    beforeCommand?: (arguments_: string[]) => Promise<void> | void;
+    listOutput?: "array" | "micromamba";
+  } = {},
 ) {
   const root = resolve(process.cwd(), ".tmp", `environment-store-${process.pid}-${Date.now()}-${Math.random()}`);
   const provisionerPath = resolve(root, "micromamba-test");
@@ -76,10 +79,11 @@ async function fixture(
       return "";
     }
     if (command === "list") {
-      return JSON.stringify((installed.get(prefix) ?? []).map((specification) => {
+      const packages = (installed.get(prefix) ?? []).map((specification) => {
         const [name, version = "unknown"] = specification.split("=");
         return { build_string: "test_0", name, version };
-      }));
+      });
+      return options.listOutput === "micromamba" ? JSON.stringify({ packages }) : JSON.stringify(packages);
     }
     throw new Error(`Unexpected provisioner command: ${command}`);
   };
@@ -134,6 +138,18 @@ test("scientific environment lifecycle advances immutable revisions only after s
 
   await store.deleteTask(task.id);
   assert.equal(store.list().some((environment) => environment.id === task.id), false);
+});
+
+test("scientific environments accept micromamba's package-list envelope", async (context) => {
+  const { store } = await fixture(context, { listOutput: "micromamba" });
+  await store.initialize();
+  await store.setupManagedEnvironments();
+
+  assert.equal(store.setup.state, "ready");
+  const starter = store.list().find((environment) => environment.id === "starter-python");
+  assert.ok(starter);
+  const revision = store.getRevision(starter.currentRevisionId);
+  assert.ok(revision?.packages.some((item) => item.startsWith("python=3.12")));
 });
 
 test("trusted provisioning uses fixed channels while agent runtimes remain a separate no-network path", async (context) => {
@@ -440,7 +456,7 @@ test("managed provisioner installation rejects bytes that do not match the pinne
   );
 });
 
-test("managed provisioner selects pinned Linux x64 and arm64 releases", async (context) => {
+test("managed provisioner selects pinned Linux and macOS releases", async (context) => {
   const { root } = await fixture(context);
   const x64 = managedMicromambaRelease("x64", "linux");
   assert.equal(x64.filename, "micromamba-linux-64");
@@ -456,8 +472,18 @@ test("managed provisioner selects pinned Linux x64 and arm64 releases", async (c
   assert.equal(arm64.url, "https://github.com/mamba-org/micromamba-releases/releases/download/2.8.1-0/micromamba-linux-aarch64");
   assert.equal(arm64.sha256, "e5ba23b5945aa49dfd11022e592a510d2686a8feee810e00140b73c9fdf0ba2a");
 
+  const macArm64 = managedMicromambaRelease("arm64", "darwin");
+  assert.equal(macArm64.filename, "micromamba-osx-arm64");
+  assert.equal(macArm64.packageArch, "osx-arm64");
+  assert.equal(macArm64.sha256, "de71a646b73af92dd663e6ddc78993a6a4d47ea28b5d8908c3cc2b9c3077e528");
+
+  const macX64 = managedMicromambaRelease("x64", "darwin");
+  assert.equal(macX64.filename, "micromamba-osx-64");
+  assert.equal(macX64.packageArch, "osx-64");
+  assert.equal(macX64.sha256, "b2bd613791c0a524883d7cb66505d630bf15badd1f492bc93ba78550a3a1a94b");
+
   assert.throws(() => managedMicromambaRelease("riscv64", "linux"), /unavailable for architecture riscv64/);
-  assert.throws(() => managedMicromambaRelease("x64", "darwin"), /requires Linux, not darwin/);
+  assert.throws(() => managedMicromambaRelease("x64", "win32"), /unavailable for platform win32/);
 
   const requestedUrls: string[] = [];
   await assert.rejects(
