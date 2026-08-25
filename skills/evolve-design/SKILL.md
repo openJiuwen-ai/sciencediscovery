@@ -71,15 +71,27 @@ Settle three things:
 > **Checkpoint 1.** Say back, in a few lines: what will be measured, what is frozen, and what
 > the starting point is. Ask only for what you genuinely could not infer — all of it at once.
 
-## Step 2 — Build and prove the scoring
+## Step 2 — Build the scoring; the probe proves it
 
-Write the starting point and the evaluator, then use `run_python` to check three things:
+Write the starting point and the evaluator, then run the evaluator **once**, against the
+starting point, with `run_python`. You are checking that the thing you just wrote executes and
+emits a number — a typo, a missing import, a result file never written. That is authoring
+hygiene, and it is the whole of the local check.
 
-| Check | How | Failure |
-|---|---|---|
-| It runs | Score the starting point | Raises, missing dep |
-| It discriminates | Score a **deliberately broken** copy (gut the logic, return a constant, replace the text with filler) | Same score twice |
-| There is slope | Look at the starting score | 0 is a floor, solved is a ceiling. **Aim 0.3–0.7** |
+**Do not score a broken copy locally.** The server's discrimination probe does exactly that, on
+the real shards, in the real sandbox, and hands you both numbers when the run starts. Doing it
+yourself as well buys nothing and costs something real: your `run_python` environment and the
+candidate sandbox are different places, and your shard indices are not the ones the run uses, so
+the two numbers can legitimately differ. Watched one session where they did — local 0.3853,
+server 0.0000 — and the turn went into reconciling them instead of into the search.
+
+**When your local number and the server's disagree, the server's is the one that is true.** It
+measured the real thing. Do not investigate the gap; read the server's two numbers and act on
+those.
+
+Aim for a starting point in **0.3–0.7**: 0 is a floor and solved is a ceiling. That is a design
+target for the seed, not a local measurement to defend — the probe reports where it actually
+landed.
 
 **The evaluator must survive bad candidates — including at import.** Most candidates in a search
 are broken, and the probe deliberately scores a broken one, so this is the normal path rather
@@ -89,22 +101,21 @@ per-case `try/except` cannot reach it — on failure score every shard **worst**
 larger-is-better scale means 0.0 and not 1.0; a guard written the right shape with the score
 inverted makes the search converge on candidates that do not load, and one live run's winner was
 exactly that, at a perfect 1.0000), and each individual call. It is the evaluator that has to be robust, never the
-candidate: being broken is what the damaged copy is for. If the script itself crashes, nothing
+candidate: being broken is what the probe's damaged copy is for. If the script itself crashes, nothing
 runs and the whole run is refused.
 
-**You are checking the ruler, not looking for the answer.** These three checks are about the
-scoring: does it run, does it separate good from bad, is there room to climb. Do not go looking
-for a candidate that beats the starting point — "let me first confirm a better heuristic exists"
-is the search's entire job, done by hand, at the cost of the turn. And succeeding is worse than
-failing: you then either throw the answer away or seed it, and a strong seed spends the search
-space before the search begins. A starting point that no obvious variation beats is a *good*
-starting point, not a problem to solve first.
+**You are checking the ruler, not looking for the answer.** Do not go looking for a candidate
+that beats the starting point — "let me first confirm a better heuristic exists" is the search's
+entire job, done by hand, at the cost of the turn. And succeeding is worse than failing: you then
+either throw the answer away or seed it, and a strong seed spends the search space before the
+search begins. A starting point that no obvious variation beats is a *good* starting point, not a
+problem to solve first.
 
-The server runs the same probe and refuses on failure, so skipping this only moves the discovery
-to after the budget is spent.
+A probe refusal costs four sandbox evaluations and no model calls, so it is cheap to be wrong
+here — cheaper than a second local check that can disagree with it.
 
-> **Checkpoint 2.** Show the three numbers — starting point, broken copy, and whether it ran —
-> and one sentence on what the scoring rewards. This is where a criterion that measures the
+> **Checkpoint 2.** Show one number — what the starting point scored — plus whether the evaluator
+> ran, and one sentence on what the scoring rewards. This is where a criterion that measures the
 > wrong thing gets caught, so make it easy to disagree with: name what a candidate could do to
 > score higher, and let the user say whether that is actually what they want.
 
