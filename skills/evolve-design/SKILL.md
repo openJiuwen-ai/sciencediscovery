@@ -53,6 +53,15 @@ Settle three things:
    nothing — spent ten expansions on whole compressors written from scratch, seven of which did
    not run at all, and finished at 0.226. Seed the RLE, not the identity function.
 
+   **The seed is necessary and not sufficient**, so do not treat this as solved by a good one.
+   A later compression run seeded with a working RLE-plus-Huffman at 0.62 still drew eleven
+   candidates that each replaced the whole mechanism — arithmetic coding, LZ77, range coding,
+   written from nothing in one reply — and ten did not run. The half that was missing was in
+   the prompt, not the seed, and is fixed there now. What is still yours to judge: **the
+   further the ceiling is from the seed, the more the search wants to leap.** When the honest
+   gap is that large, expect leaps, and prefer a task framing that names the next rung
+   ("add a longer match window to the existing RLE") over one that names the summit.
+
 > **Checkpoint 1.** Say back, in a few lines: what will be measured, what is frozen, and what
 > the starting point is. Ask only for what you genuinely could not infer — all of it at once.
 
