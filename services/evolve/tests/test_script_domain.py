@@ -254,8 +254,9 @@ def test_declared_data_files_land_beside_the_evaluator(tmp_path):
     single candidate, and the whole run scores zero for a reason that has
     nothing to do with the candidates.
     """
-    data_dir = tmp_path / "staged"
-    data_dir.mkdir()
+    # Staged the way the control plane stages: under the criterion id.
+    data_dir = tmp_path / "staged" / "exact_match"
+    data_dir.mkdir(parents=True)
     (data_dir / "cases.json").write_text('{"answer": 7}', encoding="utf-8")
 
     script = (
@@ -270,7 +271,7 @@ def test_declared_data_files_land_beside_the_evaluator(tmp_path):
     )
     domain = script_domain(
         scorecard=CARD, script=script, capability=detect_local_capability(),
-        data_dir=str(data_dir),
+        dataset_dir=str(tmp_path / "staged"),
     )
 
     ok, metrics, error = domain.evaluate("value = 1\n", (0, 1))
@@ -432,3 +433,29 @@ def test_an_evaluator_that_dies_on_import_is_named_as_the_fault():
 
     said = str(caught.value)
     assert "评测脚本" in said
+
+
+def test_the_run_path_and_the_probe_path_stage_the_same_way(tmp_path):
+    """One resolution, not one per call site.
+
+    The bug this pins: `data_dir` was computed by the caller, and in the search
+    engine the computed value got attached to the *test-gate* domain instead of
+    the scripted one. The probe staged the file, the run did not, and a search
+    whose probe had just passed died on `FileNotFoundError` for a file it had
+    itself declared. Passing the raw `dataset_dir` and resolving inside removes
+    the chance to attach it anywhere.
+    """
+    import inspect
+
+    from sciencediscovery_evolve import era_engine, probe as probe_module
+    from sciencediscovery_evolve.script_domain import script_domain
+
+    # Both call sites hand over the same plain field.
+    for module in (era_engine, probe_module):
+        source = inspect.getsource(module)
+        assert "dataset_dir=spec.dataset_dir" in source, module.__name__
+        assert "_script_data_dir" not in source, module.__name__
+
+    # And the domain accepts exactly that, not a pre-resolved path.
+    assert "dataset_dir" in inspect.signature(script_domain).parameters
+    assert "data_dir" not in inspect.signature(script_domain).parameters

@@ -58,6 +58,7 @@ exactly the shape the probe refuses to start.
 
 from __future__ import annotations
 
+import os
 import json
 import shutil
 import subprocess
@@ -117,7 +118,7 @@ def script_domain(
     baseline_code: str = "",
     candidate_timeout: float = 120.0,
     baseline: Optional[MutableMapping[str, float]] = None,
-    data_dir: Optional[str] = None,
+    dataset_dir: str = "",
 ) -> Domain:
     """Build a domain that scores a candidate by running the drafted evaluator."""
     reference: MutableMapping[str, float] = {} if baseline is None else baseline
@@ -129,6 +130,11 @@ def script_domain(
     # Slots are positional (the engine holds out by tail); the case behind a slot
     # is not. See `shard_roles` — without this the search trains on one end of
     # the evaluator's case list and gates on the other.
+    # Resolved here, not by the caller: the control plane stages under the
+    # criterion id, and a call site that has to remember that is a call site
+    # that can attach it to the wrong domain — which is exactly what happened,
+    # silently, until a run needed the file.
+    data_dir = _staged_dir(dataset_dir, criterion)
     _split = (criterion.get("measure") or {}).get("split") or {}
     _total = total_slots(_split)
     _seed = int(_split.get("seed") or 0)
@@ -410,3 +416,15 @@ def _diagnosis(payload: Mapping[str, Any]) -> str:
     if not uninformative:
         return said
     return (said + "\n" if said else "") + f"候选进程的输出：{tail}"
+
+
+def _staged_dir(dataset_dir: str, criterion: Mapping[str, Any]) -> Optional[str]:
+    """Where `stage_dataset` put this criterion's files, if it staged any.
+
+    Absent for the common case — an evaluator that builds case `i` from the
+    shard index reads nothing — so a missing directory is not an error.
+    """
+    if not dataset_dir:
+        return None
+    candidate = os.path.join(dataset_dir, str(criterion.get("id") or "score"))
+    return candidate if os.path.isdir(candidate) else None

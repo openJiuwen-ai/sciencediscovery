@@ -108,7 +108,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
                 scorecard=spec.scorecard, script=spec.script, capability=spec.sandbox,
                 baseline_code=spec.baseline_code,
                 candidate_timeout=spec.candidate_timeout_seconds,
-                data_dir=_script_data_dir(spec),
+                dataset_dir=spec.dataset_dir,
             )
         except ScriptError as error:
             raise ProbeError(str(error)) from error
@@ -394,22 +394,6 @@ def _gate_count(spec: RunSpec) -> int:
         if isinstance(split, dict):
             return max(1, int(split.get("gateShards") or 1))
     return 1
-
-
-def _script_data_dir(spec) -> Optional[str]:
-    """Where the control plane staged this criterion's files, if it staged any.
-
-    Nested under the criterion id the way stage_dataset writes it. Absent for
-    the common case: an evaluator that builds case `i` from the shard index has
-    no files, and this returns None rather than an empty directory.
-    """
-    if not spec.dataset_dir:
-        return None
-    criteria = list((spec.scorecard or {}).get("criteria") or [])
-    if not criteria:
-        return None
-    candidate = os.path.join(spec.dataset_dir, str(criteria[0].get("id") or "score"))
-    return candidate if os.path.isdir(candidate) else None
 
 
 def _refuse_noisy(evaluate, baseline_code: str, shards, baseline: float,
