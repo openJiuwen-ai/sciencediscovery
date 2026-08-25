@@ -68,7 +68,7 @@ import type {
   Subagent,
   SubagentStep,
   SystemTimeoutSettings,
-  WorkbenchSearchResult,
+  WorkbenchSearchResponse,
   WorkspaceFile,
   WorkspaceUploadResult,
 } from "@sciencediscovery/schema";
@@ -360,6 +360,28 @@ async function startScientificTestApi(
       const setup: ScientificEnvironmentSetup = {
         allowedChannels: ["conda-forge"],
         completedAt: new Date().toISOString(),
+        components: {
+          conda: {
+            action: null,
+            completedAt: new Date().toISOString(),
+            error: null,
+            message: "Conda environments are ready",
+            phase: "complete",
+            startedAt: new Date().toISOString(),
+            state: "ready",
+            updatedAt: new Date().toISOString(),
+          },
+          micromamba: {
+            action: null,
+            completedAt: new Date().toISOString(),
+            error: null,
+            message: "micromamba is ready",
+            phase: "complete",
+            startedAt: new Date().toISOString(),
+            state: "ready",
+            updatedAt: new Date().toISOString(),
+          },
+        },
         error: null,
         managedProvisioner: true,
         message: "Python base environment is ready",
@@ -2220,11 +2242,15 @@ test("workbench search and Composer references use authenticated authoritative i
   assert.equal(upload.status, 201);
 
   assert.equal((await fetch(`${origin}/api/search?q=result`)).status, 401);
-  const search = await jsonRequest<WorkbenchSearchResult[]>(`${origin}/api/search?q=result`, { headers: authorization });
-  assert.deepEqual(search.body.map((result) => result.kind), ["artifact"]);
-  assert.equal(search.body[0]?.path, "reports/result.md");
-  assert.match(search.body[0]?.id ?? "", /^artifact:/);
-  assert.equal(search.body[0]?.sessionId, session.body.id);
+  const search = await jsonRequest<WorkbenchSearchResponse>(`${origin}/api/search?q=result&limit=1&offset=0`, { headers: authorization });
+  assert.deepEqual(search.body.results.map((result) => result.kind), ["artifact"]);
+  assert.equal(search.body.results[0]?.path, "reports/result.md");
+  assert.match(search.body.results[0]?.id ?? "", /^artifact:/);
+  assert.equal(search.body.results[0]?.sessionId, session.body.id);
+  assert.deepEqual(
+    { hasMore: search.body.hasMore, limit: search.body.limit, offset: search.body.offset, total: search.body.total },
+    { hasMore: false, limit: 1, offset: 0, total: 1 },
+  );
 
   const catalog = await jsonRequest<ScientificArtifact[]>(
     `${origin}/api/projects/${project.body.id}/artifacts`,
@@ -2427,6 +2453,8 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
     method: "POST",
   });
   assert.equal(setup.body.state, "ready");
+  assert.equal(setup.body.components.micromamba.state, "ready");
+  assert.equal(setup.body.components.conda.state, "ready");
   const initial = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
   assert.deepEqual(initial.body.map((environment) => environment.id), ["starter-python", "starter-r"]);
   const created = await jsonRequest<Environment>(`${origin}/api/environments`, {

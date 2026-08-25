@@ -347,9 +347,27 @@ export type ScientificEnvironmentSetupPhase =
   | "pending"
   | "verifying-python-base";
 
+export interface ScientificEnvironmentSetupComponentStatus {
+  /** Recovery guidance for the current state; failures keep the original error separately. */
+  action: string | null;
+  completedAt: string | null;
+  error: string | null;
+  message: string;
+  phase: ScientificEnvironmentSetupPhase;
+  startedAt: string | null;
+  state: ScientificEnvironmentSetupState;
+  updatedAt: string;
+}
+
 export interface ScientificEnvironmentSetup {
   allowedChannels: string[];
   completedAt: string | null;
+  components: {
+    /** Conda-compatible Python base and the named environments derived from it. */
+    conda: ScientificEnvironmentSetupComponentStatus;
+    /** Standalone managed or configured micromamba executable. */
+    micromamba: ScientificEnvironmentSetupComponentStatus;
+  };
   error: string | null;
   /** Compatibility alias for clients that predate the structured progress fields. */
   lastError?: string;

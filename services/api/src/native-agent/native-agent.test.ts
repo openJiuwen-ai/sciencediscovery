@@ -281,6 +281,76 @@ test("beginExternalWait pauses both deadlines until released", async () => {
   }
 });
 
+test("gateway progress cannot re-arm idle while an external wait is active", async () => {
+  let finish!: () => void;
+  let markProgress!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const streamer: ModelTurnStreamer = (_endpoint, _prompt, _history, _tools, _policy, signal, callbacks) =>
+    new Promise((resolve, reject) => {
+      markProgress = () => callbacks?.onProgress?.();
+      finish = () => resolve(textTurn("finished after external wait"));
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      markStarted();
+    });
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({ ...workspace(), runIdleTimeoutMs: 40, runTimeoutMs: 0 } as NativeAgentOptions);
+    const outcome = agent.execute("wait").then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    await started;
+    const release = agent.beginExternalWait();
+    markProgress();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    release();
+    finish();
+    const settled = await outcome;
+    if ("error" in settled) throw settled.error;
+    assert.equal(settled.result?.finalMessages.at(-1)?.content, "finished after external wait");
+  } finally {
+    restore();
+  }
+});
+
+test("one completed parallel wait cannot start parent idle while another remains", async () => {
+  let finish!: () => void;
+  let markProgress!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const streamer: ModelTurnStreamer = (_endpoint, _prompt, _history, _tools, _policy, signal, callbacks) =>
+    new Promise((resolve, reject) => {
+      markProgress = () => callbacks?.onProgress?.();
+      finish = () => resolve(textTurn("both external waits completed"));
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      markStarted();
+    });
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({ ...workspace(), runIdleTimeoutMs: 40, runTimeoutMs: 0 } as NativeAgentOptions);
+    const outcome = agent.execute("parallel waits").then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    await started;
+    const releaseFirst = agent.beginExternalWait();
+    const releaseSecond = agent.beginExternalWait();
+    releaseFirst();
+    // The first task result reaches the parent model stream while the second
+    // task is still running. This progress must not restart parent idle.
+    markProgress();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    releaseSecond();
+    finish();
+    const settled = await outcome;
+    if ("error" in settled) throw settled.error;
+    assert.equal(settled.result?.finalMessages.at(-1)?.content, "both external waits completed");
+  } finally {
+    restore();
+  }
+});
+
 test("abort cancels the run and pre-abort rejects immediately", async () => {
   const streamer: ModelTurnStreamer = (_endpoint, _prompt, _history, _tools, _policy, signal) =>
     new Promise((_, reject) => {

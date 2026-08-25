@@ -237,7 +237,6 @@ class NativeAgent implements NativeAgentHandle {
     const controller = this.controller;
     const runTimeoutMs = this.options.runTimeoutMs ?? DEFAULT_AGENT_TURN_TIMEOUT_MS;
     const runIdleTimeoutMs = this.options.runIdleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS;
-    const startedWithExternalWait = this.externalWaitCount > 0;
     let timeoutKind: "idle" | "turn" | undefined;
     let remainingRunMs = runTimeoutMs;
     let activeSince = Date.now();
@@ -255,7 +254,7 @@ class NativeAgent implements NativeAgentHandle {
     };
     const markProgress = () => {
       if (idleTimeoutId) clearTimeout(idleTimeoutId);
-      if (startedWithExternalWait && this.externalWaitCount > 0) {
+      if (this.externalWaitCount > 0) {
         idleTimeoutId = undefined;
         return;
       }
@@ -281,7 +280,7 @@ class NativeAgent implements NativeAgentHandle {
     };
     armTurnDeadline();
     markProgress();
-    if (startedWithExternalWait) this.pauseRunDeadline();
+    if (this.externalWaitCount > 0) this.pauseRunDeadline();
     // Keep "timeout" in these errors: classifySubagentFailure matches
     // /timeout/i to preserve the public Subagent timed_out status.
     const timeoutError = () => timeoutKind === "idle"

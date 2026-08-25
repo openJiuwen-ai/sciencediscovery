@@ -73,12 +73,7 @@ export function insertComposerReference(
   return `${text.slice(0, trigger.start)}${composerReferenceToken(reference)} ${text.slice(cursor)}`;
 }
 
-export function filterSearchResults(results: WorkbenchSearchResult[], query: string): WorkbenchSearchResult[] {
-  const needle = query.trim().toLocaleLowerCase();
-  if (!needle) return results.slice(0, 80);
-  return results.filter((result) =>
-    `${result.label}\n${result.detail}\n${result.kind}`.toLocaleLowerCase().includes(needle)).slice(0, 80);
-}
+export const GLOBAL_SEARCH_DEBOUNCE_MS = 250;
 
 export function ComposerReferenceMenu({
   onSelect,
@@ -132,20 +127,26 @@ export function ComposerReferenceChips({
 }
 
 export function GlobalSearchDialog({
+  hasMore,
+  loading,
   onClose,
   onQueryChange,
   onSelect,
   query,
   results,
+  total,
 }: {
+  hasMore: boolean;
+  loading: boolean;
   onClose: () => void;
   onQueryChange: (query: string) => void;
   onSelect: (result: WorkbenchSearchResult) => void;
   query: string;
   results: WorkbenchSearchResult[];
+  total: number;
 }) {
   const { t } = useLocale();
-  const visible = filterSearchResults(results, query);
+  const visible = results.slice(0, 80);
   return (
     <div className="config-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
@@ -164,7 +165,11 @@ export function GlobalSearchDialog({
               <em>{result.kind}</em>
             </button>
           ))}
-          {!visible.length ? <p>{t("search.empty")}</p> : null}
+          {loading ? <p>{t("search.loading")}</p> : null}
+          {!loading && !visible.length ? <p>{t("search.empty")}</p> : null}
+          {!loading && (hasMore || total > visible.length) ? (
+            <p>{t("search.more", { count: visible.length, total })}</p>
+          ) : null}
         </div>
       </section>
     </div>

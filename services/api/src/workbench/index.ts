@@ -12,13 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ChatMessage, ComposerReference, WorkbenchSearchResult } from "@sciencediscovery/schema";
+import type { ChatMessage, ComposerReference, WorkbenchSearchResponse, WorkbenchSearchResult } from "@sciencediscovery/schema";
 
 import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
 
-export async function searchWorkbench(store: SessionStore, query: string): Promise<WorkbenchSearchResult[]> {
+const MAX_SEARCH_RESULTS = 250;
+
+function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum?: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  const integer = Math.max(minimum, Math.trunc(value!));
+  return maximum === undefined ? integer : Math.min(maximum, integer);
+}
+
+export async function searchWorkbench(
+  store: SessionStore,
+  query: string,
+  options: { limit?: number; offset?: number } = {},
+): Promise<WorkbenchSearchResponse> {
   const needle = query.trim().toLocaleLowerCase().slice(0, 200);
+  const limit = boundedInteger(options.limit, MAX_SEARCH_RESULTS, 1, MAX_SEARCH_RESULTS);
+  const offset = boundedInteger(options.offset, 0, 0);
   const matches = (...values: string[]) => !needle || values.some((value) => value.toLocaleLowerCase().includes(needle));
   const results: WorkbenchSearchResult[] = [];
 
@@ -34,7 +48,7 @@ export async function searchWorkbench(store: SessionStore, query: string): Promi
     }
     const sessions = store.listSessions(project.id, "all");
     for (const session of sessions) {
-      if (matches(session.title, project.name)) {
+      if (matches(session.title, project.name, session.id)) {
         results.push({
           detail: `${project.name}${session.archivedAt ? " · Archived" : ""}`,
           id: `session:${session.id}`,
@@ -59,7 +73,15 @@ export async function searchWorkbench(store: SessionStore, query: string): Promi
       });
     }
   }
-  return results.slice(0, 250);
+  const total = results.length;
+  const page = results.slice(offset, offset + limit);
+  return {
+    hasMore: offset + page.length < total,
+    limit,
+    offset,
+    results: page,
+    total,
+  };
 }
 
 export async function resolveComposerReferences(

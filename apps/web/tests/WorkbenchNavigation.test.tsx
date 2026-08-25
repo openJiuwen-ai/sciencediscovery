@@ -22,7 +22,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   ComposerReferenceMenu,
   composerSkillSuggestions,
-  filterSearchResults,
+  GLOBAL_SEARCH_DEBOUNCE_MS,
   getComposerTrigger,
   GlobalSearchDialog,
   insertComposerReference,
@@ -78,24 +78,46 @@ test("renders typed Composer suggestions as structured context choices", () => {
   assert.match(html, /title="plots\/result\.png · Result · 42 KB"/);
 });
 
-test("global search filters and renders project, Session, and artifact navigation", () => {
-  const results: WorkbenchSearchResult[] = [
-    { detail: "Project", id: "project:1", kind: "project", label: "Proteomics", projectId: "project-1" },
-    { detail: "Proteomics", id: "session:1", kind: "session", label: "Differential analysis", projectId: "project-1", sessionId: "session-1" },
-    { detail: "Proteomics / Differential analysis", id: "artifact:1", kind: "artifact", label: "plots/volcano.png", path: "plots/volcano.png", projectId: "project-1", sessionId: "session-1" },
-  ];
-  assert.deepEqual(filterSearchResults(results, "volcano").map((item) => item.id), ["artifact:1"]);
-
+test("global search renders limited mixed-catalog pages and authoritative server matches", () => {
+  const results: WorkbenchSearchResult[] = Array.from({ length: 301 }, (_, index) => {
+    const kind = (["project", "session", "artifact"] as const)[index % 3]!;
+    return {
+      detail: `Mixed catalog ${kind}`,
+      id: `${kind}:${index}`,
+      kind,
+      label: index === 300 ? "target-after-250.csv" : `${kind}-${index}`,
+      ...(kind === "artifact" ? { path: `artifact-${index}.csv` } : {}),
+      projectId: `project-${index}`,
+      ...(kind === "project" ? {} : { sessionId: `session-${index}` }),
+    };
+  });
   const html = renderToStaticMarkup(createElement(GlobalSearchDialog, {
+    hasMore: true,
+    loading: false,
     onClose: () => undefined,
     onQueryChange: () => undefined,
     onSelect: () => undefined,
     query: "",
-    results,
+    results: results.slice(0, 250),
+    total: 301,
   }));
   assert.match(html, /Search projects, sessions, and artifacts/);
-  assert.match(html, /Proteomics/);
-  assert.match(html, /Differential analysis/);
-  assert.match(html, /plots\/volcano\.png/);
-  assert.match(html, /title="plots\/volcano\.png · Proteomics \/ Differential analysis"/);
+  assert.match(html, /project-0/);
+  assert.match(html, /session-1/);
+  assert.match(html, /artifact-2/);
+  assert.doesNotMatch(html, /project-81/);
+  assert.match(html, /Showing 80 of 301 results/);
+
+  const targetedHtml = renderToStaticMarkup(createElement(GlobalSearchDialog, {
+    hasMore: false,
+    loading: false,
+    onClose: () => undefined,
+    onQueryChange: () => undefined,
+    onSelect: () => undefined,
+    query: "server-authoritative-query",
+    results: [results[300]!],
+    total: 1,
+  }));
+  assert.match(targetedHtml, /target-after-250\.csv/);
+  assert.ok(GLOBAL_SEARCH_DEBOUNCE_MS >= 200 && GLOBAL_SEARCH_DEBOUNCE_MS <= 500);
 });

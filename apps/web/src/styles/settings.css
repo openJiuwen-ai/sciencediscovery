@@ -174,13 +174,18 @@
 .runtime-teardown-button { min-height: 32px; padding: 5px 10px; }
 .environment-manager { display: grid; gap: 18px; }
 .environment-manager .settings-detail-header { margin-bottom: 0; }
-.environment-setup-state { display: flex; justify-content: space-between; align-items: center; gap: 16px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); padding: 14px; }
-.environment-setup-state.ready { border-color: var(--success-border); background: var(--success-soft); }
-.environment-setup-state.failed { border-color: var(--danger-border); background: var(--danger-soft); }
-.environment-setup-state strong, .environment-setup-state small { display: block; }
-.environment-setup-state small { margin-top: 4px; color: var(--muted); line-height: 1.45; }
-.environment-setup-state > span, .environment-readonly { border-radius: 999px; background: var(--surface-track); padding: 5px 9px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+.environment-readonly { border-radius: 999px; background: var(--surface-track); padding: 5px 9px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
 .environment-error { margin: 0; border-left: 3px solid var(--danger-bright); background: var(--danger-soft); padding: 10px 12px; color: var(--danger); font-size: 12px; }
+.environment-setup-components { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.environment-setup-component { border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); padding: 13px; }
+.environment-setup-component.ready { border-color: var(--success-border); background: var(--success-soft); }
+.environment-setup-component.failed { border-color: var(--danger-border); background: var(--danger-soft); }
+.environment-setup-component > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.environment-setup-component > header strong, .environment-setup-component > header small, .environment-setup-component .environment-error > * { display: block; }
+.environment-setup-component > header small, .environment-setup-component > p, .environment-setup-component .environment-error small { margin-top: 4px; color: var(--muted); line-height: 1.45; }
+.environment-setup-component > header em { border-radius: 999px; background: var(--surface-track); padding: 5px 9px; color: var(--text-secondary); font-size: 11px; font-style: normal; white-space: nowrap; }
+.environment-setup-component > p { margin-bottom: 0; font-size: 12px; }
+.environment-setup-component .environment-error { margin-top: 10px; }
 .environment-starter-plan { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .environment-starter-plan > div { border: 1px solid var(--border); border-radius: 9px; padding: 13px; }
 .environment-starter-plan strong, .environment-starter-plan small { display: block; }

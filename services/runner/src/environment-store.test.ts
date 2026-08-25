@@ -368,6 +368,9 @@ test("scientific environments remain unavailable until managed setup succeeds", 
   assert.equal(missingProvisioner.setup.state, "not-configured");
   await assert.rejects(missingProvisioner.setupManagedEnvironments(), /fixed provisioner source unavailable/);
   assert.equal(missingProvisioner.setup.state, "failed");
+  assert.equal(missingProvisioner.setup.components.micromamba.state, "failed");
+  assert.match(missingProvisioner.setup.components.micromamba.action ?? "", /pinned micromamba release/);
+  assert.equal(missingProvisioner.setup.components.conda.state, "not-configured");
   await assert.rejects(async () => missingProvisioner.list(), /fixed provisioner source unavailable/);
 
   const disabled = new EnvironmentStore({
@@ -384,10 +387,13 @@ test("scientific environments remain unavailable until managed setup succeeds", 
 test("background setup exposes progress, serializes callers, and retries after failure", async (context) => {
   let releaseCreate!: () => void;
   const createGate = new Promise<void>((resolveGate) => { releaseCreate = resolveGate; });
+  let markCreateStarted!: () => void;
+  const createStarted = new Promise<void>((resolveStarted) => { markCreateStarted = resolveStarted; });
   let failNextCreate = false;
   const { store } = await fixture(context, {
     beforeCommand: async (arguments_) => {
       if (arguments_[1] !== "create") return;
+      markCreateStarted();
       await createGate;
       if (failNextCreate) {
         failNextCreate = false;
@@ -400,12 +406,19 @@ test("background setup exposes progress, serializes callers, and retries after f
   const started = store.startManagedEnvironmentSetup();
   assert.equal(started.state, "installing");
   assert.equal(started.startedAt !== null, true);
+  assert.equal(started.components.micromamba.state, "installing");
+  assert.equal(started.components.conda.state, "not-configured");
   const firstWaiter = store.setupManagedEnvironments();
   const secondWaiter = store.setupManagedEnvironments();
+  await createStarted;
+  assert.equal(store.setup.components.micromamba.state, "ready");
+  assert.equal(store.setup.components.conda.phase, "creating-python-base");
   releaseCreate();
   const [first, second] = await Promise.all([firstWaiter, secondWaiter]);
   assert.equal(first.state, "ready");
   assert.equal(second.state, "ready");
+  assert.equal(first.components.micromamba.state, "ready");
+  assert.equal(first.components.conda.state, "ready");
   assert.equal(store.list().some((environment) => environment.id === "starter-r"), false);
 
   const retryFixture = await fixture(context, {
@@ -421,7 +434,33 @@ test("background setup exposes progress, serializes callers, and retries after f
   await assert.rejects(retryFixture.store.setupManagedEnvironments(), /temporary bootstrap failure/);
   assert.equal(retryFixture.store.setup.state, "failed");
   assert.equal(retryFixture.store.setup.error, "temporary bootstrap failure");
-  assert.equal((await retryFixture.store.setupManagedEnvironments()).state, "ready");
+  assert.equal(retryFixture.store.setup.components.micromamba.state, "ready");
+  assert.equal(retryFixture.store.setup.components.conda.state, "failed");
+  assert.equal(retryFixture.store.setup.components.conda.error, "temporary bootstrap failure");
+  assert.match(retryFixture.store.setup.components.conda.action ?? "", /Conda channels or offline cache/);
+  const retried = await retryFixture.store.setupManagedEnvironments();
+  assert.equal(retried.state, "ready");
+  assert.equal(retried.components.micromamba.state, "ready");
+  assert.equal(retried.components.conda.state, "ready");
+  assert.equal(retried.components.conda.error, null);
+});
+
+test("micromamba bootstrap failure remains distinct and can be retried", async (context) => {
+  const { provisionerPath, store } = await fixture(context);
+  await rm(provisionerPath);
+  await store.initialize();
+
+  await assert.rejects(store.setupManagedEnvironments(), /provisioner is unavailable/);
+  assert.equal(store.setup.components.micromamba.state, "failed");
+  assert.match(store.setup.components.micromamba.error ?? "", /provisioner is unavailable/);
+  assert.match(store.setup.components.micromamba.action ?? "", /configured micromamba executable path/);
+  assert.equal(store.setup.components.conda.state, "not-configured");
+
+  await writeFile(provisionerPath, "#!/bin/sh\nexit 0\n");
+  await chmod(provisionerPath, 0o755);
+  const retried = await store.setupManagedEnvironments();
+  assert.equal(retried.components.micromamba.state, "ready");
+  assert.equal(retried.components.conda.state, "ready");
 });
 
 test("existing R base and named environments remain available after catalog reload", async (context) => {

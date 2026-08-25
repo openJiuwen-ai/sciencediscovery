@@ -422,7 +422,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/search") {
-        sendJson(response, 200, await searchWorkbench(store, url.searchParams.get("q") ?? ""));
+        sendJson(response, 200, await searchWorkbench(store, url.searchParams.get("q") ?? "", {
+          limit: Number(url.searchParams.get("limit") ?? 250),
+          offset: Number(url.searchParams.get("offset") ?? 0),
+        }));
         return;
       }
       if (url.pathname === "/api/settings" && request.method === "GET") {
