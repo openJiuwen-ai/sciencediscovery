@@ -61,8 +61,10 @@ Write the starting point and the evaluator, then use `run_python` to check three
 are broken, and the probe deliberately scores a broken one, so this is the normal path rather
 than an edge case. Guard two places: `import candidate` itself (a hollowed-out module can leave
 a module-level name as `None` or raise outright, and that happens *before* any case, where a
-per-case `try/except` cannot reach it — on failure mark the candidate unusable and score every
-shard worst), and each individual call. It is the evaluator that has to be robust, never the
+per-case `try/except` cannot reach it — on failure score every shard **worst**, which on a
+larger-is-better scale means 0.0 and not 1.0; a guard written the right shape with the score
+inverted makes the search converge on candidates that do not load, and one live run's winner was
+exactly that, at a perfect 1.0000), and each individual call. It is the evaluator that has to be robust, never the
 candidate: being broken is what the damaged copy is for. If the script itself crashes, nothing
 runs and the whole run is refused.
 

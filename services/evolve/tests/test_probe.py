@@ -328,3 +328,40 @@ def test_the_probe_measures_the_slots_the_run_gates_on() -> None:
         }}}]}
 
     assert _gate_slots(_Spec()) == (8, 9, 10, 11)
+
+
+def test_a_scoring_that_pays_for_failing_to_import_is_refused() -> None:
+    """Guarding the import is easy to get structurally right and backwards.
+
+    Seen live, and it produced a winner: `if _cand is None: return 1.0` — where
+    1.0 was the best score. The search's best candidate raised at import and sat
+    at a perfect 1.0000 on both the rollout and the held-out gate. Nothing looked
+    wrong: the probe had passed, because a hollowed-out module still imports.
+    """
+    from sciencediscovery_evolve.probe import ProbeError, _refuse_rewarding_the_unimportable
+
+    with pytest.raises(ProbeError) as caught:
+        _refuse_rewarding_the_unimportable(
+            lambda _code, _shards: (True, {"score": 1.0}, ""), (0, 1), 0.3704)
+
+    said = str(caught.value)
+    assert "1.0000" in said and "0.3704" in said   # both numbers, checkable
+    assert "最差" in said                            # and what to change
+
+
+def test_a_scoring_that_marks_it_worst_is_left_alone() -> None:
+    from sciencediscovery_evolve.probe import _refuse_rewarding_the_unimportable
+
+    _refuse_rewarding_the_unimportable(
+        lambda _code, _shards: (True, {"score": 0.0}, ""), (0, 1), 0.3704)
+
+
+def test_an_evaluator_that_dies_on_the_unimportable_one_is_left_to_its_own_message() -> None:
+    """That is the other failure mode and it already has a diagnosis of its own."""
+    from sciencediscovery_evolve.probe import _refuse_rewarding_the_unimportable
+    from sciencediscovery_evolve.script_domain import ScriptError
+
+    def evaluate(_code, _shards):
+        raise ScriptError("评测脚本自己崩了")
+
+    _refuse_rewarding_the_unimportable(evaluate, (0,), 0.5)

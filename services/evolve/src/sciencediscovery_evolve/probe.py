@@ -148,13 +148,15 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
                 f"{error}。搜索里大多数候选都长这样，评测脚本必须把它们算作答错、"
                 "而不是跟着一起挂掉。两个地方都要兜："
                 "\n1) `import candidate` 本身——掏空后模块级的语句会拿到 None、"
-                "抛异常，这一步在任何样例之前，per-shard 的 try/except 到不了；"
-                "导入失败就把候选记为不可用，每一片直接记最差分。"
+                "抛异常，这一步在任何样例之前，per-shard 的 try/except 到不了。"
+                "导入失败要记**最差**分（越大越好的评分里就是 0.0），"
+                "不是满分——写反了搜索会直接收敛到装不进来的候选。"
                 "\n2) 每一条样例的调用。"
                 "\n注意：要健壮的是评测脚本，不是候选——候选被改坏就是这个探针的目的。"
             ) from error
         flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
         _refuse_saturated(spec, baseline, worsened)
+        _refuse_rewarding_the_unimportable(domain.evaluate, shards, baseline)
         _refuse_noisy(domain.evaluate, spec.baseline_code, shards, baseline, worsened)
         return {"baseline": baseline, "flat": flat,
                 "label": damage_label, "worsened": worsened}
@@ -485,3 +487,47 @@ def _damage(source: str) -> Tuple[str, str]:
     if hollowed.strip() != source.strip():
         return hollowed, "函数体全部掏空"
     return _EMPTY_WORDS, "内容换成空话"
+
+
+#: A candidate that cannot be imported at all — the single commonest way a
+#: generated program fails, and the one the hollowed-out copy does not reach
+#: (a gutted function still imports; its body just returns None).
+_UNIMPORTABLE = "raise RuntimeError('this candidate does not import')\n"
+
+
+def _refuse_rewarding_the_unimportable(evaluate, shards, baseline: float) -> None:
+    """Refuse a scoring that pays a candidate for failing to load.
+
+    The evaluator is told to guard `import candidate`, because a broken module
+    raises there and a per-case try/except cannot reach it. Guarding it is easy
+    to get structurally right and semantically backwards, and one live run did
+    exactly that::
+
+        if _cand is None:
+            return 1.0, f"import failed: {_IMP_ERR}"
+
+    1.0 was the *best* score. The search's winner was a candidate that raised at
+    import, at a perfect 1.0000 on both the rollout and the held-out gate, and
+    nothing looked wrong anywhere: the probe had passed, because hollowing out
+    function bodies leaves a module that still imports.
+
+    So the probe scores one that does not. An unimportable candidate must not do
+    as well as the starting point — if it does, the search converges on programs
+    that do not load.
+    """
+    from .script_domain import ScriptError
+
+    try:
+        unimportable = _score(evaluate, _UNIMPORTABLE, shards)
+    except ScriptError:
+        # The evaluator died rather than scoring it. That is the other failure
+        # mode, and it already has its own diagnosis on the path above.
+        return
+    if unimportable is None or unimportable < baseline - TOLERANCE:
+        return
+    raise ProbeError(
+        f"一个连导入都失败的候选，在你的评分下拿到了 {unimportable:.4f}，"
+        f"而起点是 {baseline:.4f}——评分在奖励装不进来的程序，搜索会直接收敛到它们。"
+        "多半是 import 的兜底把分数写反了：候选加载不了要记**最差**分（比如 0.0），"
+        "不是满分。"
+    )
