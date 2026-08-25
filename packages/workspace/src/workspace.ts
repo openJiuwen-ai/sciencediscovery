@@ -1187,7 +1187,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       startingPointPath: Type.Optional(Type.String({
         description: "The workspace file the search starts from and rewrites. Relative, or the "
           + "/workspace/... path as you saw it in a tool result. Use startingPointText instead "
-          + "when you are writing the starting point rather than pointing at one.",
+          + "when you are writing the starting point rather than pointing at one. Whichever you "
+          + "use, the seed must already contain the mechanism being improved in its feeblest "
+          + "form — seed a working RLE, not an identity function; a seed with no mechanism makes "
+          + "every candidate invent one from scratch, and most of those do not run.",
         maxLength: 2_000, minLength: 1,
       })),
       startingPointText: Type.Optional(Type.String({ maxLength: 200_000, minLength: 1 })),

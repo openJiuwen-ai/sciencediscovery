@@ -245,6 +245,7 @@ class EraTreeAggregator:
         domain: Domain,
         artifact_id: str,
         on_event: OnEvent = _noop,
+        repair: Optional[Callable[[str, str, int], str]] = None,
     ) -> None:
         self.ledger = ledger
         self.verifier = verifier
@@ -254,6 +255,7 @@ class EraTreeAggregator:
         self.domain = domain
         self.artifact_id = artifact_id
         self.on_event = on_event
+        self.repair = repair
         self.cards: List[EvidenceCard] = []
         self._cards_lock = threading.Lock()
         self._seeded = False
@@ -333,6 +335,31 @@ class EraTreeAggregator:
             ops = card.diff.ops
             code = ops.get("code", "")
             valid, metrics, error = _evaluate(self.domain, code, self._held_out_shards())
+            if not valid and self.repair is not None and code.strip():
+                # One repair attempt, on this candidate's own failure and
+                # nothing else. Most candidates that fail do so for a reason
+                # visible in one line of their own traceback — an import that
+                # raises, an index off by one — and discarding them means the
+                # next expansion writes the whole program again from the parent
+                # rather than fixing what is already there. Measured on a live
+                # compression run: seven of ten candidates never ran at all.
+                #
+                # Its own error only. Nothing about a sibling goes in: parallel
+                # expansions are independent draws, and the diversity between
+                # them is what selection has to work with.
+                # The candidate's own iteration, so the extra call is billed to
+                # the expansion that needed it rather than to the seed.
+                repaired = self.repair(code, error or "", int(ops.get("iteration", "0")))
+                if repaired.strip() and repaired.strip() != code.strip():
+                    fixed, fixed_metrics, fixed_error = _evaluate(
+                        self.domain, repaired, self._held_out_shards())
+                    self.on_event("repaired", {
+                        "after": float(fixed_metrics.get("score", 0.0)) if fixed else None,
+                        "kept": bool(fixed),
+                        "why": (error or "")[:200],
+                    })
+                    if fixed:
+                        code, valid, metrics, error = repaired, fixed, fixed_metrics, fixed_error
             program = Program(
                 program_id(code),
                 int(ops.get("iteration", "0")),

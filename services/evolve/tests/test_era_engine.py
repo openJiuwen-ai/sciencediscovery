@@ -681,3 +681,72 @@ def test_a_run_that_spent_its_budget_says_nothing_extra() -> None:
     reporter.note_outcome(_Outcome(), planned=24)
 
     assert emitted == []
+
+
+def test_a_failed_candidate_gets_one_repair_on_its_own_error() -> None:
+    """Seven of ten candidates never ran on a live compression search.
+
+    Each failure was discarded and the next expansion wrote the whole program
+    again from the parent — a fresh design with a fresh bug. Most of those
+    failures were one visible line: an import that raises, an index off by one.
+    """
+    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+
+    asked = []
+
+    def repair(code, error, iteration):
+        asked.append((code, error, iteration))
+        return "def solve():\n    return 1\n"
+
+    scored = []
+
+    def evaluate(code, shards):
+        scored.append(code)
+        if "return 1" in code:
+            return True, {"score": 0.8}, ""
+        return False, {"score": float("-inf")}, "IndexError: list index out of range"
+
+    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator.repair = repair
+    aggregator.domain = type("D", (), {"evaluate": staticmethod(evaluate)})()
+    aggregator._held_out_shards = lambda: (0, 1)
+    aggregator.on_event = lambda *args: None
+
+    # The shape `step()` runs per surviving card.
+    code = "def solve():\n    return [][0]\n"
+    valid, metrics, error = _run_one(aggregator, code, {"iteration": "7"})
+
+    assert asked, "a failed candidate was discarded without a repair attempt"
+    assert asked[0][1].startswith("IndexError")      # its own error, nothing else
+    assert asked[0][2] == 7                          # billed to its own expansion
+    assert valid and metrics["score"] == 0.8         # the repaired one is kept
+
+
+def _run_one(aggregator, code, ops):
+    """The failure-and-repair half of `step()`, exercised directly."""
+    from sciencediscovery_evolve.vendor.era.search import _evaluate
+
+    valid, metrics, error = _evaluate(aggregator.domain, code, aggregator._held_out_shards())
+    if not valid and aggregator.repair is not None and code.strip():
+        repaired = aggregator.repair(code, error or "", int(ops.get("iteration", "0")))
+        if repaired.strip() and repaired.strip() != code.strip():
+            fixed, fixed_metrics, fixed_error = _evaluate(
+                aggregator.domain, repaired, aggregator._held_out_shards())
+            if fixed:
+                return fixed, fixed_metrics, fixed_error
+    return valid, metrics, error
+
+
+def test_step_itself_asks_for_the_repair() -> None:
+    """The test above rebuilds the shape; this one pins the real call site.
+
+    A copy of the logic passes whether or not `step()` runs it, which is the
+    way a test like that quietly stops meaning anything.
+    """
+    import inspect
+
+    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+
+    source = inspect.getsource(EraTreeAggregator.step)
+    assert "self.repair(" in source
+    assert 'ops.get("iteration"' in source      # billed to its own expansion

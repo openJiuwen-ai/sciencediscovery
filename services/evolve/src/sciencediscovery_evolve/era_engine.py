@@ -282,6 +282,7 @@ class EraEngine:
             aggregator = EraTreeAggregator(
                 ledger, verifier, tree, config, policy,
                 domain=domain, artifact_id=artifact_id, on_event=reporter.on_event,
+                repair=_repairer(spec, complete, domain),
             )
             # Seeded here so the root's numbers are what everything after is
             # normalised against — the domain's baseline is empty until now.
@@ -481,6 +482,16 @@ class _Reporter:
             self._node(payload)
         elif kind == "swept":
             self._swept(payload)
+        elif kind == "repaired":
+            # A repair is an extra model call the user paid for, so it is said
+            # out loud either way: silently succeeding hides where the budget
+            # went, and silently failing hides that the attempt was made.
+            self.emit(events.log(
+                "info",
+                ("修好了一个跑不起来的候选（%.4f）：%s" % (payload["after"], payload["why"]))
+                if payload.get("kept") else
+                ("有个候选跑不起来，试着修了一次没成：%s" % payload["why"]),
+            ))
 
     def _node(self, payload: Dict[str, Any]) -> None:
         node: Node = payload["node"]
@@ -876,3 +887,22 @@ def _default_completion(
         on_usage=on_usage,
         should_stop=should_stop,
     )
+
+
+def _repairer(spec: RunSpec, complete, domain) -> Callable[[str, str, int], str]:
+    """One model call that fixes a candidate's own bug, or gives up quietly.
+
+    Bounded on purpose: one attempt, this candidate's code and error only, and
+    any failure returns "" so the run keeps the original verdict rather than
+    stopping. A repair that cannot be had is not worth a failed search.
+    """
+    from .prompt import repair_prompt
+
+    def repair(code: str, error: str, iteration: int) -> str:
+        try:
+            fixed, _summary = complete(repair_prompt(code, error), iteration)
+        except Exception:  # noqa: BLE001 - a repair is a bonus, never a failure mode
+            return ""
+        return fixed or ""
+
+    return repair

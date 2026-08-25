@@ -40,9 +40,18 @@ Settle three things:
    the complaint from its opposite. "Well-structured and readable" fails: true of any document.
 2. **What must not change.** Inputs unavailable when the thing actually runs, files that define
    the score, hard limits (budget, runtime, memory, safety).
-3. **The starting point.** Use what is in the workspace. Otherwise write **the most boring thing
-   that works** — a dozen lines, no tuning, no edge cases. A strong seed is not an advantage: it
-   spends the search space before the search begins.
+3. **The starting point.** Use what is in the workspace. Otherwise write **the simplest thing
+   that already does the job badly** — a dozen lines, no tuning, no edge cases. A strong seed is
+   not an advantage: it spends the search space before the search begins.
+
+   But "simplest" means simplest *of the right kind*: the seed has to contain the mechanism the
+   search is supposed to improve, in its feeblest form. A seed with no mechanism forces every
+   candidate to invent one from nothing, and a from-scratch implementation fails far more often
+   than an edit does. Measured on two real runs: a cache task seeded with a working LRU climbed
+   0.2218 → 0.9396, its candidates swapping in ARC, LIRS and TinyLFU on top of a policy that was
+   already there; a compression task seeded with identity encoding — which "works" and compresses
+   nothing — spent ten expansions on whole compressors written from scratch, seven of which did
+   not run at all, and finished at 0.226. Seed the RLE, not the identity function.
 
 > **Checkpoint 1.** Say back, in a few lines: what will be measured, what is frozen, and what
 > the starting point is. Ask only for what you genuinely could not infer — all of it at once.

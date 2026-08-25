@@ -291,3 +291,30 @@ def _history(recent: Sequence[str]) -> str:
 
 def _score(value: Optional[float]) -> str:
     return "尚未测量" if value is None else f"{value:.4f}"
+
+
+def repair_prompt(code: str, error: str) -> str:
+    """Ask for the one bug this candidate has, not for a different candidate.
+
+    A candidate that failed usually failed for something visible in its own
+    traceback — an import that raises, an index off by one, a type that is not
+    what the line assumed. Discarding it means the next expansion writes the
+    whole program again from the parent, and on a live compression run seven of
+    ten candidates never ran at all: each a fresh design with a fresh bug.
+
+    Deliberately narrow. It carries this candidate's code and this candidate's
+    failure and nothing else — no statement of the goal, no scorecard, no other
+    candidate — because a wider prompt invites a redesign, and a redesign is
+    what the ordinary expansion already does.
+    """
+    return (
+        "下面这份程序跑不起来。请只修掉它报的这个问题，不要重新设计、"
+        "不要换方法、不要顺手改别的地方——把它改到能跑就行，其余保持原样。\n\n"
+        "## 它报的错\n\n"
+        f"{error.strip()[:1500] or '（评测没有给出原因）'}\n\n"
+        "## 当前程序\n\n"
+        "```python\n"
+        f"{code}\n"
+        "```\n\n"
+        "只输出修好之后的完整程序，放在一个 ```python 代码块里。\n"
+    )
