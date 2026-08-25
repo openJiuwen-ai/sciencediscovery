@@ -25,7 +25,9 @@ import {
   GLOBAL_SEARCH_DEBOUNCE_MS,
   getComposerTrigger,
   GlobalSearchDialog,
+  insertComposerCommand,
   insertComposerReference,
+  SKILL_AUTHORING_COMMANDS,
 } from "../src/WorkbenchNavigation.js";
 
 const artifactReference: ComposerReference = {
@@ -43,6 +45,19 @@ test("detects Composer context triggers and inserts a stable reference token", (
   assert.equal(insertComposerReference("Compare @plo", trigger!, artifactReference), "Compare @[plots/result.png] ");
   assert.deepEqual(getComposerTrigger("Use /dock"), { query: "dock", start: 4, symbol: "/" });
   assert.equal(getComposerTrigger("email@example.org"), undefined);
+});
+
+test("inserts Skill authoring commands without attaching a catalog reference", () => {
+  const trigger = getComposerTrigger("/dist");
+  assert.equal(insertComposerCommand("/dist", trigger!, "/distill-session"), "/distill-session ");
+  assert.deepEqual(SKILL_AUTHORING_COMMANDS.map((item) => item.command), ["/skill-creator", "/distill-session"]);
+  const html = renderToStaticMarkup(createElement(ComposerReferenceMenu, {
+    onSelect: () => undefined,
+    suggestions: SKILL_AUTHORING_COMMANDS,
+    trigger: { query: "skill", start: 0, symbol: "/" },
+  }));
+  assert.match(html, /skill-creator/);
+  assert.match(html, /reviewable Skill package/);
 });
 
 test("`/` only offers the skills the Session can actually run", () => {

@@ -211,7 +211,9 @@ import {
   GLOBAL_SEARCH_DEBOUNCE_MS,
   getComposerTrigger,
   GlobalSearchDialog,
+  insertComposerCommand,
   insertComposerReference,
+  SKILL_AUTHORING_COMMANDS,
   type ComposerSuggestion,
 } from "./composer/WorkbenchNavigation.js";
 
@@ -1045,6 +1047,8 @@ export function App() {
   const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
   const [showConfig, setShowConfig] = useState(() => initialView.settingsKind === "system");
   const [systemSettingsGroup, setSystemSettingsGroup] = useState<SystemSettingsGroup>(() => isSystemSettingsGroup(initialView.settingsGroup) ? initialView.settingsGroup : "global");
+  const [skillWorkspaceLaunch, setSkillWorkspaceLaunch] = useState<{ requestId: number; skillId?: string }>();
+  const skillWorkspaceLaunchRevision = useRef(0);
   const [globalSettings, setGlobalSettings] = useState<RuntimeSettingsDetails>();
   const [timeoutSettings, setTimeoutSettings] = useState<SystemTimeoutSettings>();
   const [quotaSettings, setQuotaSettings] = useState<SystemQuotaSettings>();
@@ -2031,7 +2035,7 @@ export function App() {
     }
   }
 
-  async function createSession(): Promise<void> {
+  async function createSession(initialMessage?: string): Promise<void> {
     if (!activeProjectId) {
       setError(t("error.selectProject"));
       return;
@@ -2052,12 +2056,43 @@ export function App() {
         setActiveSessionId(created.id);
         focusComposerSessionId.current = created.id;
         setWorkspaceView("session");
+        if (initialMessage !== undefined) {
+          setMessage(initialMessage);
+          setComposerReferences([]);
+        }
         pushToast("success", "Session created", created.title);
       },
       onError: setError,
       setInFlight: (value) => { sessionCreationInFlight.current = value; },
       setPending: setSessionCreationPending,
     });
+  }
+
+  function startSkillCreationFromSettings(): void {
+    cancelSystemSettings();
+    void createSession("/skill-creator ");
+  }
+
+  function distillCurrentSessionFromSettings(): void {
+    if (!activeSessionId) return;
+    cancelSystemSettings();
+    setWorkspaceView("session");
+    setMessage("/distill-session ");
+    setComposerReferences([]);
+    requestAnimationFrame(() => composerTextarea.current?.focus());
+  }
+
+  function openSkillSourceSession(sessionId: string): void {
+    cancelSystemSettings();
+    void openSessionFromUsage(sessionId);
+  }
+
+  function openGeneratedSkillDraftExplorer(skillId?: string): void {
+    setSkillWorkspaceLaunch({
+      requestId: ++skillWorkspaceLaunchRevision.current,
+      ...(skillId ? { skillId } : {}),
+    });
+    openSystemSettings("skills");
   }
 
   function beginInlineRename(target: ResourceTarget, location: InlineRenameTarget["location"]): void {
@@ -2275,6 +2310,7 @@ export function App() {
   function cancelSystemSettings(): void {
     clearSystemSettingsDrafts();
     reportSystemSettingsError();
+    setSkillWorkspaceLaunch(undefined);
     setShowConfig(false);
   }
 
@@ -3331,6 +3367,11 @@ export function App() {
     const cursor = composerTextarea.current?.selectionStart ?? message.length;
     const trigger = getComposerTrigger(message, cursor);
     if (!trigger) return;
+    if (suggestion.command) {
+      setMessage(insertComposerCommand(message, trigger, suggestion.command, cursor));
+      requestAnimationFrame(() => composerTextarea.current?.focus());
+      return;
+    }
     setMessage(insertComposerReference(message, trigger, suggestion.reference, cursor));
     setComposerReferences((current) => current.some((reference) =>
       reference.kind === suggestion.reference.kind && reference.id === suggestion.reference.id)
@@ -3481,7 +3522,11 @@ export function App() {
           sessionId: result.sessionId,
         },
       }))
-      : composerSkillSuggestions(skills, session?.enabledSkillIds);
+      : [
+        ...SKILL_AUTHORING_COMMANDS,
+        ...composerSkillSuggestions(skills, session?.enabledSkillIds)
+          .filter((suggestion) => suggestion.reference?.id !== "skill-creator"),
+      ];
   const sidebarResourceClass = !activeProject
     ? "sidebar-resources"
     : projectsExpanded && sessionsExpanded
@@ -3861,6 +3906,7 @@ export function App() {
                         onChipClick={handleChipClick}
                         onLoadToolOutput={(trace) => loadToolOutput(session.id, block.runId, trace)}
                         onOpenArtifacts={openMarkdownImageArtifacts}
+                        onOpenSkillReviews={openGeneratedSkillDraftExplorer}
                         references={reportReferences}
                         onToggle={(id, expanded) => setReplayTimelines((current) => {
                           const forSession = current[session.id] ?? {};
@@ -3891,6 +3937,7 @@ export function App() {
                     onChipClick={handleChipClick}
                     onLoadToolOutput={(trace) => loadToolOutput(session.id, runTimelines[session.id]?.runId, trace)}
                     onOpenArtifacts={openMarkdownImageArtifacts}
+                    onOpenSkillReviews={openGeneratedSkillDraftExplorer}
                     onPermissionDecision={decidePermission}
                     references={reportReferences}
                     onToggle={(id, expanded) => setRunTimelines((current) => ({
@@ -4346,7 +4393,18 @@ export function App() {
                   ? <MemoryGraphSettingsEditor draft={memoryGraphSettingsEdit ?? createMemoryGraphSettingsDraft(memoryGraphSettings)} onChange={setMemoryGraphSettingsEdit} settings={memoryGraphSettings} />
                   : <p className="muted">{t("settings.loadingMemoryGraph")}</p>
               ) : null}
-              {systemSettingsGroup === "skills" ? <SkillManager client={client} onCatalogChange={setSkills} onError={reportSystemSettingsError} sessionId={activeSessionId} skills={skills} /> : null}
+              {systemSettingsGroup === "skills" ? <SkillManager
+                client={client}
+                onCatalogChange={setSkills}
+                onDistillSession={distillCurrentSessionFromSettings}
+                onError={reportSystemSettingsError}
+                onOpenSession={openSkillSourceSession}
+                onStartSkillCreation={startSkillCreationFromSettings}
+                onWorkspaceLaunchHandled={(requestId) => setSkillWorkspaceLaunch((current) => current?.requestId === requestId ? undefined : current)}
+                sessionId={activeSessionId}
+                skills={skills}
+                workspaceLaunch={skillWorkspaceLaunch}
+              /> : null}
               {systemSettingsGroup === "specialists" ? <SpecialistManager client={client} connectors={connectors} onChanged={setSpecialists} onError={reportSystemSettingsError} skills={skills} /> : null}
               {systemSettingsGroup === "permissions" ? <PermissionGrantManager grants={permissionGrants.filter((grant) => grant.scope !== "once")} onRevoke={(grant) => void revokePermission(grant)} /> : null}
               {systemSettingsGroup === "remote" ? <RemoteHostManager client={client} onError={reportSystemSettingsError} onPermissionRequest={(request) => setPermissionRequests((current) => [...current.filter((item) => item.id !== request.id), request])} sessionId={activeSessionId} /> : null}

@@ -23,10 +23,30 @@ export interface ComposerTrigger {
   symbol: "#" | "/" | "@";
 }
 
-export interface ComposerSuggestion {
+export type ComposerSuggestion = {
+  command: `/${string}`;
   detail: string;
+  label: string;
+  reference?: never;
+} | {
+  command?: never;
+  detail: string;
+  label?: never;
   reference: ComposerReference;
-}
+};
+
+export const SKILL_AUTHORING_COMMANDS: ComposerSuggestion[] = [
+  {
+    command: "/skill-creator",
+    detail: "Describe a workflow and let the Agent create a reviewable Skill package",
+    label: "skill-creator",
+  },
+  {
+    command: "/distill-session",
+    detail: "Distill this Session into a reviewable Skill using its conversation and run history",
+    label: "distill-session",
+  },
+];
 
 /**
  * `/` offers exactly the skills the Session can run. `effectiveSkillIds` is the
@@ -75,6 +95,22 @@ export function insertComposerReference(
 
 export const GLOBAL_SEARCH_DEBOUNCE_MS = 250;
 
+export function insertComposerCommand(
+  text: string,
+  trigger: ComposerTrigger,
+  command: `/${string}`,
+  cursor = text.length,
+): string {
+  return `${text.slice(0, trigger.start)}${command} ${text.slice(cursor)}`;
+}
+
+export function filterSearchResults(results: WorkbenchSearchResult[], query: string): WorkbenchSearchResult[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return results.slice(0, 80);
+  return results.filter((result) =>
+    `${result.label}\n${result.detail}\n${result.kind}`.toLocaleLowerCase().includes(needle)).slice(0, 80);
+}
+
 export function ComposerReferenceMenu({
   onSelect,
   suggestions,
@@ -87,7 +123,7 @@ export function ComposerReferenceMenu({
   const { t } = useLocale();
   const needle = trigger.query.toLocaleLowerCase();
   const visible = suggestions.filter((suggestion) =>
-    `${suggestion.reference.label}\n${suggestion.detail}`.toLocaleLowerCase().includes(needle)).slice(0, 8);
+    `${suggestion.reference?.label ?? suggestion.label}\n${suggestion.detail}`.toLocaleLowerCase().includes(needle)).slice(0, 8);
   if (!visible.length) return null;
 
   return (
@@ -97,8 +133,8 @@ export function ComposerReferenceMenu({
         <span>{t("search.structuredContext")}</span>
       </div>
       {visible.map((suggestion) => (
-        <button key={`${suggestion.reference.kind}:${suggestion.reference.id}`} title={`${suggestion.reference.label} · ${suggestion.detail}`} type="button" role="option" onClick={() => onSelect(suggestion)}>
-          <span>{suggestion.reference.label}</span><small>{suggestion.detail}</small>
+        <button key={suggestion.command ?? `${suggestion.reference.kind}:${suggestion.reference.id}`} title={`${suggestion.reference?.label ?? suggestion.label} · ${suggestion.detail}`} type="button" role="option" onClick={() => onSelect(suggestion)}>
+          <span>{suggestion.reference?.label ?? suggestion.label}</span><small>{suggestion.detail}</small>
         </button>
       ))}
     </div>

@@ -355,6 +355,53 @@ test("dynamic capability assembly follows deferred tool promotion on the next tu
   }
 });
 
+test("native loop loads skill-creator before creating a managed Skill", async () => {
+  let createdName = "";
+  const options: NativeAgentOptions = {
+    ...workspace(),
+    createSkill: async (input) => {
+      createdName = input.name;
+      return {
+        createdAt: "2026-08-20T00:00:00.000Z",
+        draftId: "11111111-1111-4111-8111-111111111111",
+        fileCount: 1,
+        name: input.name,
+        updatedAt: "2026-08-20T00:00:00.000Z",
+      };
+    },
+    skills: [{
+      content: "Use create_skill exactly once for an explicit request.",
+      description: "Creates Skills from user descriptions.",
+      hash: "e".repeat(64),
+      id: "skill-creator",
+      readResource: () => { throw new Error("not used"); },
+      resources: [],
+      revision: 1,
+      version: "1.0.0",
+    }],
+  } as NativeAgentOptions;
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("read_skill", { skillId: "skill-creator" }, "call-read-creator"),
+    () => toolTurn("create_skill", {
+      description: "A focused reusable workflow.",
+      instructions: "# Workflow\n\nPerform the focused workflow.",
+      name: "focused-workflow",
+    }, "call-create-skill"),
+    () => textTurn("Created focused-workflow."),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent(options);
+    const result = await agent.execute("Create a Skill for the focused workflow");
+
+    assert(calls[0]!.tools.some((tool) => tool.name === "create_skill"));
+    assert.equal(createdName, "focused-workflow");
+    assert.equal(result.finalMessages.at(-1)?.content, "Created focused-workflow.");
+  } finally {
+    restore();
+  }
+});
+
 test("raw assistant tool-call fields replay verbatim on the next model call", async () => {
   const signedTurn: ModelTurn = {
     assistantMessage: {

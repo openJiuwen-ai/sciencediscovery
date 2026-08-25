@@ -14,6 +14,7 @@
 
 import type {
   ConnectorId,
+  CreateSkillPackageRequest,
   CreateRemoteJobRequest,
   DeclareClaimInput,
   DeclareClaimResult,
@@ -29,6 +30,7 @@ import type {
   ScientificLanguage,
   SkillResource,
   SkillResourceContent,
+  SkillReviewDraftSummary,
   ShellExecutionResult,
 } from "@sciencediscovery/schema";
 
@@ -273,6 +275,7 @@ export function buildWorkspaceSystemPrompt(
 
 export interface WorkspaceAgentOptions {
   config: AgentConfig;
+  createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
   enabledConnectorIds: ConnectorId[];
   environments?: Environment[];
   environmentManagement?: WorkspaceToolOptions["environmentManagement"];

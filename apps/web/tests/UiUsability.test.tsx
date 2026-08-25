@@ -109,9 +109,9 @@ test("dense settings and artifact layouts adapt without fixed-column overflow", 
   const responsive = source("styles/responsive.css");
   const artifacts = source("styles/artifacts.css");
 
-  assert.match(settings, /\.skill-manager-toolbar \{[^}]*display: flex;[^}]*flex-wrap: wrap;/);
+  assert.match(settings, /\.skill-manager-toolbar \{[^}]*display: grid;[^}]*grid-template-columns: minmax\(250px, 1fr\) auto auto auto;/);
   assert.match(settings, /\.environment-install \{[^}]*grid-template-columns: minmax\(112px, 128px\) minmax\(0, 1fr\) auto;/);
-  assert.match(responsive, /\.skill-manager-toolbar input \{ flex-basis: 100%; \}/);
+  assert.match(responsive, /\.skill-manager-toolbar \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/);
   assert.match(responsive, /\.environment-install \{ grid-template-columns: minmax\(0, 1fr\); \}/);
   assert.match(responsive, /\.dialog-actions \{ flex-wrap: wrap; \}/);
   assert.match(responsive, /\.annotation-editor \{ grid-template-columns: minmax\(0, 1fr\); \}/);

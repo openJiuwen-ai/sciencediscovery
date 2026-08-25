@@ -82,6 +82,7 @@
 | `describe_skill` | 本次运行至少选择一个技能 | `query`（支持名称/描述关键词、`select:skill-a,skill-b` 精确选择、`+term rest` 必含名称检索）；只返回技能 metadata 与资源摘要，不返回完整 `SKILL.md` |
 | `read_skill` | 本次运行至少选择一个技能 | `skillId`（枚举限定为本次运行选中的技能）；按需读取冻结 revision 的完整 `SKILL.md` instructions，并列出可选 supporting resources |
 | `read_skill_resource` | 选中的技能中至少一个带文本资源 | `skillId`（枚举限定为本次运行选中的技能）+ `path`；读取 `read_skill` 后按需加载 supporting resource，返回有界 UTF-8 内容，**从不**执行或安装 |
+| `create_skill` | 主 Agent 本次运行选中且已通过 `read_skill` 加载 `skill-creator` | 从用户明确描述生成持久化但未激活的 Skill 草稿；同名待审 Skill 的再次修改会更新同一个审核项，并与上一次 Agent 提案做 Diff；对话中提供审核入口，最后由用户在「系统配置 > Skills」明确确认新建或更新 |
 
 技能加载流程见 [skill-progressive-disclosure.md](../explanation/skill-progressive-disclosure.md)：`describe_skill` 检索本次运行的技能目录，`read_skill` 和 `read_skill_resource` 读取本次运行的冻结快照。
 

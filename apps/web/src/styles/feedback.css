@@ -27,7 +27,7 @@
 @keyframes message-in { from { opacity: 0; transform: translateY(10px); } }
 .dialog-backdrop, .config-backdrop, .document-backdrop, .artifact-modal-backdrop, .memory-explorer-backdrop { animation: backdrop-in .18s ease; }
 @keyframes backdrop-in { from { opacity: 0; } }
-.creation-dialog, .rename-dialog, .deletion-dialog, .config-panel, .document-panel, .global-search-dialog, .skill-editor-dialog, .skill-delete-dialog, .artifact-modal-panel, .memory-explorer-panel { animation: panel-in .22s ease; }
+.creation-dialog, .rename-dialog, .deletion-dialog, .config-panel, .document-panel, .global-search-dialog, .skill-editor-dialog, .skill-delete-dialog, .skill-review-dialog, .skill-workspace-dialog, .artifact-modal-panel, .memory-explorer-panel { animation: panel-in .22s ease; }
 @keyframes panel-in { from { opacity: 0; transform: translateY(12px) scale(.985); } }
 .nav-item, .file-row, .model-card, .skill-card, .settings-group-nav button { transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast); }
 .secondary-button, .primary-button, .send-button, .danger-button, .settings-button, .sidebar-add-button, .sidebar-section-toggle { transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast); }

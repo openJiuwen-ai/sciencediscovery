@@ -20,6 +20,7 @@ import { test } from "node:test";
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   type ConnectorResult,
+  type CreateSkillPackageRequest,
   type Subagent,
   type Environment,
   type NpuJob,
@@ -966,6 +967,54 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
     tool.execute("tool-call", { path: "references/guide.md", skillId: "unselected-skill" } as never),
     /not selected/,
   );
+});
+
+test("create_skill requires the selected skill-creator instructions before mutating the catalog", async () => {
+  let request: CreateSkillPackageRequest | undefined;
+  const tools = createWorkspaceTools(process.cwd(), {
+    createSkill: async (input) => {
+      request = input;
+      return {
+        createdAt: "2026-08-20T00:00:00.000Z",
+        draftId: "11111111-1111-4111-8111-111111111111",
+        fileCount: 1 + (input.resources?.length ?? 0),
+        name: input.name,
+        updatedAt: "2026-08-20T00:00:00.000Z",
+      };
+    },
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    skills: [{
+      content: "Create focused skills, then call create_skill exactly once.",
+      description: "Create a Skill from an explicit user request.",
+      hash: "c".repeat(64),
+      id: "skill-creator",
+      readResource: () => { throw new Error("not used"); },
+      resources: [],
+      revision: 1,
+      version: "1.0.0",
+    }],
+  });
+  const create = tools.find((tool) => tool.name === "create_skill");
+  const read = tools.find((tool) => tool.name === "read_skill");
+  assert.ok(create);
+  assert.ok(read);
+
+  const parameters = {
+    description: "Checks a result against a reusable rubric.",
+    instructions: "# Workflow\n\nApply the rubric and report failures.",
+    name: "rubric-checker",
+    resources: [{ content: "# Rubric\n\n- Complete\n", path: "references/rubric.md" }],
+    version: "1.0.0",
+  };
+  await assert.rejects(create.execute("create-before-read", parameters), /Load skill-creator/);
+  await read.execute("read-creator", { skillId: "skill-creator" });
+  const result = await create.execute("create-after-read", parameters);
+
+  assert.equal(request?.name, "rubric-checker");
+  assert.equal(request?.metadata?.version, "1.0.0");
+  assert.equal(request?.resources?.[0]?.path, "references/rubric.md");
+  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /pending draft/);
 });
 
 test("subagent tools preserve structured governance inputs", async () => {

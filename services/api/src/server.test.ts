@@ -65,6 +65,8 @@ import type {
   SkillDeletionImpact,
   SkillDescriptor,
   SkillDetail,
+  SkillReviewDraft,
+  SkillReviewDraftSummary,
   Specialist,
   Subagent,
   SubagentStep,
@@ -669,6 +671,81 @@ async function startToolModel(context: TestContext): Promise<{
   return {
     authorizations,
     baseUrl: `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}/v1`,
+  };
+}
+
+async function startSkillCreatorModel(context: TestContext): Promise<{
+  baseUrl: string;
+  toolNames: string[][];
+}> {
+  const toolNames: string[][] = [];
+  const modelServer = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      messages?: Array<{ role?: string }>;
+      tools?: Array<{ function?: { name?: string } }>;
+    };
+    toolNames.push(body.tools?.map((tool) => tool.function?.name ?? "") ?? []);
+    const toolResultCount = body.messages?.filter((message) => message.role === "tool").length ?? 0;
+    const completionId = `chatcmpl-skill-creator-${toolResultCount}`;
+    const delta = toolResultCount === 0
+      ? {
+          role: "assistant",
+          tool_calls: [{
+            function: { arguments: JSON.stringify({ skillId: "skill-creator" }), name: "read_skill" },
+            id: "call-read-skill-creator",
+            index: 0,
+            type: "function",
+          }],
+        }
+      : toolResultCount === 1
+        ? {
+            role: "assistant",
+            tool_calls: [{
+              function: {
+                arguments: JSON.stringify({
+                  description: "A reusable Skill created end to end by the Agent.",
+                  instructions: "# Workflow\n\nRead the checklist and report whether the request passes.",
+                  name: "agent-created-demo",
+                  resources: [{ content: "# Checklist\n\n- The result is complete.\n", path: "references/checklist.md" }],
+                  version: "1.0.0",
+                }),
+                name: "create_skill",
+              },
+              id: "call-create-skill",
+              index: 0,
+              type: "function",
+            }],
+          }
+        : { content: "Created a pending agent-created-demo draft for user review.", role: "assistant" };
+    const responseChunk = {
+      choices: [{ delta, finish_reason: null, index: 0 }],
+      created: 1,
+      id: completionId,
+      model: "skill-creator-test-model",
+      object: "chat.completion.chunk",
+    };
+    const finish = {
+      choices: [{ delta: {}, finish_reason: toolResultCount >= 2 ? "stop" : "tool_calls", index: 0 }],
+      created: 1,
+      id: completionId,
+      model: "skill-creator-test-model",
+      object: "chat.completion.chunk",
+    };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify(responseChunk)}\n\n`);
+    response.write(`data: ${JSON.stringify(finish)}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolveListen) => modelServer.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => {
+    modelServer.close(() => resolveClose());
+    modelServer.closeAllConnections();
+  }));
+  return {
+    baseUrl: `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}/v1`,
+    toolNames,
   };
 }
 
@@ -2736,6 +2813,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
     "report-writer",
     "result-evaluator",
     "science-research-team",
+    "skill-creator",
     "structure-pocket-inspection",
   ]);
   assert.equal(initial.body[0]?.readOnly, true);
@@ -2880,6 +2958,73 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   const diff = await jsonRequest<ArtifactVersionDiff>(`${origin}/api/sessions/${session.body.id}/artifact-versions/${reportVersions.body[1]!.id}/diff`, { headers: authorization });
   assert.ok(diff.body.lines.some((line) => line.kind === "removed" && line.text === "Original value."));
   assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value with units."));
+});
+
+test("Agent loads skill-creator and leaves a described Skill inactive until user confirmation", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const { origin } = await startTestApi(context, tempRoot);
+  const modelServer = await startSkillCreatorModel(context);
+  const model = await createTestModel(origin, {
+    apiToken: "skill-creator-token",
+    baseUrl: modelServer.baseUrl,
+    model: "skill-creator-test-model",
+    name: "Skill creator test model",
+  });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Agent Skill creation" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Create a reusable Skill" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    body: JSON.stringify({ content: "请使用 skill-creator 创建一个带检查清单的 Skill。" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(run.status, 200);
+  const stream = await run.text();
+  assert.match(stream, /pending agent-created-demo draft/);
+  assert.ok(modelServer.toolNames[0]?.includes("read_skill"));
+  assert.ok(modelServer.toolNames[0]?.includes("create_skill"));
+
+  assert.equal((await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization })).status, 404);
+  const drafts = await jsonRequest<SkillReviewDraftSummary[]>(`${origin}/api/skill-review-drafts`, {
+    headers: authorization,
+  });
+  assert.equal(drafts.body.length, 1);
+  assert.equal(drafts.body[0]?.name, "agent-created-demo");
+  const draft = await jsonRequest<SkillReviewDraft>(`${origin}/api/skill-review-drafts/${drafts.body[0]!.draftId}`, {
+    headers: authorization,
+  });
+  assert.deepEqual(draft.body.files.map((file) => file.path), ["SKILL.md", "references/checklist.md"]);
+  const created = await jsonRequest<SkillDetail>(`${origin}/api/skill-review-drafts/${draft.body.draftId}/confirm`, {
+    body: JSON.stringify({
+      expectedUpdatedAt: draft.body.updatedAt,
+      files: draft.body.files.map((file) => ({
+        content: file.path === "references/checklist.md" ? "# Checklist\n\n- The user reviewed this result.\n" : file.content,
+        path: file.path,
+      })),
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.body.source, "managed");
+  assert.equal(created.body.currentRevision, 1);
+  assert.equal(created.body.version, "1.0.0");
+  assert.deepEqual(created.body.resources.map((resource) => resource.path), ["references/checklist.md"]);
+  const checklist = await jsonRequest<{ content: string }>(
+    `${origin}/api/skills/agent-created-demo/resources/references%2Fchecklist.md`,
+    { headers: authorization },
+  );
+  assert.match(checklist.body.content, /user reviewed/);
 });
 
 test("PDF upload extracts full text and tables into the session workspace", async (context) => {

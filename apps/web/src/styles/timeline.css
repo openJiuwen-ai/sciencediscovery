@@ -49,6 +49,14 @@
 .tool-content pre { max-height: 240px; overflow: auto; margin: 0; color: var(--text-secondary); font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-io-label { display: block; margin: 0 0 4px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .tool-content .tool-io-label:not(:first-child) { margin-top: 12px; }
+.skill-review-timeline-cta { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: calc(100% - var(--timeline-gutter)); margin: -2px 0 14px var(--timeline-gutter); border: 1px solid var(--accent-border-soft); border-radius: var(--radius-m); background: linear-gradient(135deg, var(--surface) 0%, var(--accent-soft) 100%); box-shadow: 0 8px 24px rgba(37, 99, 235, .08); padding: 12px 13px; }
+.skill-review-timeline-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 11px; background: var(--accent); color: white; box-shadow: 0 6px 14px rgba(37, 99, 235, .22); }
+.skill-review-timeline-cta > div { display: grid; min-width: 0; gap: 3px; }
+.skill-review-timeline-cta strong { color: var(--text-heading); font-size: 13px; font-weight: 780; }
+.skill-review-timeline-cta small { color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+.skill-review-timeline-cta button { min-height: 36px; border: 1px solid var(--accent); border-radius: 9px; background: var(--accent); padding: 7px 14px; color: white; cursor: pointer; font-size: 12px; font-weight: 760; white-space: nowrap; transition: transform var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast); }
+.skill-review-timeline-cta button:hover { background: var(--accent-strong); box-shadow: 0 7px 16px rgba(37, 99, 235, .2); transform: translateY(-1px); }
+.skill-review-timeline-cta button:focus-visible { outline: 3px solid var(--accent-tint); outline-offset: 2px; }
 .run-timeline > .message { margin-bottom: 28px; }
 .run-timeline > .timeline-permission, .run-timeline > .boundary-note { width: calc(100% - var(--timeline-gutter)); margin: 0 0 11px var(--timeline-gutter); }
 .timeline-permission.allowed { border-color: var(--success-border); background: var(--success-soft); }

@@ -61,6 +61,22 @@ export interface ManagedSkillRevision {
   version: string;
 }
 
+export type SkillVersionSource = "agent" | "built-in" | "git" | "local-import" | "manual" | "session-distill";
+
+export interface SkillGitProvenance {
+  /** Exact commit used to build this immutable Skill version. */
+  commit: string;
+  ref?: string;
+  repositoryUrl: string;
+  subdirectory: string;
+}
+
+export interface SkillVersionProvenance {
+  git?: SkillGitProvenance;
+  sessionId?: string;
+  source: SkillVersionSource;
+}
+
 export interface SkillDetail extends SkillDescriptor {
   frontmatter: Record<string, unknown>;
   instructions: string;
@@ -75,6 +91,85 @@ export interface CreateSkillRequest {
   license?: string;
   metadata?: Record<string, string>;
   name: string;
+  sourceSessionId?: string;
+}
+
+export interface CreateSkillResourceRequest {
+  content: string;
+  path: string;
+}
+
+/** A complete UTF-8 package authored by an Agent. */
+export interface CreateSkillPackageRequest extends CreateSkillRequest {
+  resources?: CreateSkillResourceRequest[];
+}
+
+export interface SkillReviewFile {
+  /** Binary files from a previous revision can be compared by size, but not edited as text. */
+  binary?: boolean;
+  content?: string;
+  /** Present only for a pending binary proposal so confirmation can preserve it unchanged. */
+  encodedContent?: string;
+  path: string;
+  size: number;
+}
+
+export interface SkillReviewDraftSummary {
+  baseRevision?: number;
+  comparisonSource?: "installed-revision" | "previous-agent-draft";
+  createdAt: string;
+  draftId: string;
+  fileCount: number;
+  name: string;
+  /** Present for newly persisted drafts; omitted only by legacy data and older clients. */
+  provenance?: SkillVersionProvenance;
+  updatedAt: string;
+}
+
+export interface SkillReviewDraft extends SkillReviewDraftSummary {
+  baseFiles: SkillReviewFile[];
+  files: SkillReviewFile[];
+}
+
+export type SkillVersionKind = "agent-proposal" | "built-in" | "managed-revision";
+
+export interface SkillVersionSummary {
+  createdAt?: string;
+  current: boolean;
+  fileCount: number;
+  id: string;
+  kind: SkillVersionKind;
+  label: string;
+  /** Present for newly persisted versions; omitted only by legacy data and older clients. */
+  provenance?: SkillVersionProvenance;
+  revision?: number;
+}
+
+export interface SkillVersionSnapshot extends SkillVersionSummary {
+  files: SkillReviewFile[];
+  skillId: string;
+}
+
+export interface UpdateSkillFileRequest {
+  content: string;
+  expectedRevision: number;
+  sourceSessionId?: string;
+}
+
+export interface ConfirmSkillReviewDraftRequest {
+  expectedUpdatedAt: string;
+  files: Array<{
+    binary?: boolean;
+    content?: string;
+    encodedContent?: string;
+    path: string;
+  }>;
+}
+
+export interface MergeSkillReviewDraftsRequest {
+  /** Every selected draft is converted into proposal history under the target's stable Skill name. */
+  draftIds: string[];
+  targetDraftId: string;
 }
 
 export interface UpdateSkillRequest extends CreateSkillRequest {
@@ -99,6 +194,43 @@ export interface ImportSkillFromGitRequest {
   ref?: string;
   repositoryUrl: string;
   subdirectory?: string;
+}
+
+export interface InspectGitSkillRepositoryRequest {
+  ref?: string;
+  repositoryUrl: string;
+  /** Restrict discovery to a package root or marketplace subtree when it is already known. */
+  subdirectory?: string;
+}
+
+export interface GitSkillImportCandidate {
+  currentRevision?: number;
+  description?: string;
+  diagnostics: string[];
+  name?: string;
+  packageHash?: string;
+  status: "invalid" | "new" | "unchanged" | "update";
+  subdirectory: string;
+}
+
+export interface GitSkillRepositoryInspection {
+  candidates: GitSkillImportCandidate[];
+  commit: string;
+  ref?: string;
+  repositoryUrl: string;
+}
+
+export interface CreateGitSkillReviewDraftsRequest {
+  /** Commit returned by inspection. Import fails if the requested ref moved. */
+  commit: string;
+  ref?: string;
+  repositoryUrl: string;
+  subdirectories: string[];
+}
+
+export interface CreateGitSkillReviewDraftsResponse {
+  commit: string;
+  drafts: SkillReviewDraftSummary[];
 }
 
 export interface SkillDeletionReference {

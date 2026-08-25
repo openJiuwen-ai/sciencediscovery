@@ -351,6 +351,18 @@ function statusIcon(status: ToolTrace["status"] | "completed" | "running") {
   return <CheckIcon size={14} />;
 }
 
+export function skillDraftNameFromTrace(trace: ToolTrace): string | undefined {
+  const argumentName = trace.args?.name;
+  if (typeof argumentName === "string" && argumentName.trim()) return argumentName.trim();
+  if (!trace.input) return undefined;
+  try {
+    const input = JSON.parse(trace.input) as { name?: unknown };
+    return typeof input.name === "string" && input.name.trim() ? input.name.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function RunTimeline({
   artifactReviews = [],
   entries,
@@ -359,6 +371,7 @@ export function RunTimeline({
   loadWorkspaceImage,
   onLoadToolOutput,
   onOpenArtifacts,
+  onOpenSkillReviews,
   onPermissionDecision,
   onToggle,
   references,
@@ -374,6 +387,7 @@ export function RunTimeline({
   /** Fetches the full result of a tool whose output lives in a child stream. */
   onLoadToolOutput?: (trace: ToolTrace) => Promise<string | undefined>;
   onOpenArtifacts?: () => void;
+  onOpenSkillReviews?: (skillId?: string) => void;
   onPermissionDecision?: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   onToggle: (id: string, expanded: boolean) => void;
   /** Chip references (alias → graph node) for the session's latest report
@@ -536,10 +550,12 @@ export function RunTimeline({
 
         const outputText = entry.trace.output ?? toolOutputs[entry.trace.id] ?? entry.trace.summary;
 
+        const skillDraftReady = entry.trace.name === "create_skill" && entry.trace.status === "completed";
+        const createdSkillId = skillDraftReady ? skillDraftNameFromTrace(entry.trace) : undefined;
         return (
+          <React.Fragment key={entry.id}>
           <details
             className={`timeline-disclosure tool ${entry.trace.status}`}
-            key={entry.id}
             open={entry.expanded}
             onToggle={(event) => {
               if (event.currentTarget.open !== entry.expanded) onToggle(entry.id, event.currentTarget.open);
@@ -555,6 +571,12 @@ export function RunTimeline({
               <ToolIoSections outputText={outputText} trace={entry.trace} />
             </div>
           </details>
+          {skillDraftReady && onOpenSkillReviews ? <aside className="skill-review-timeline-cta">
+            <span className="skill-review-timeline-icon"><CheckIcon size={17} /></span>
+            <div><strong>{t("timeline.skillDraftReady")}</strong><small>{t("timeline.skillDraftReadyDescription")}</small></div>
+            <button onClick={() => onOpenSkillReviews(createdSkillId)} type="button">{t("timeline.reviewSkill")}</button>
+          </aside> : null}
+          </React.Fragment>
         );
       })}
     </section>

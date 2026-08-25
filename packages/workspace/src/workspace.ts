@@ -21,6 +21,7 @@ import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
   ConnectorId,
+  CreateSkillPackageRequest,
   CreateEnvironmentRequest,
   CreateNpuJobRequest,
   CreateRemoteJobRequest,
@@ -55,6 +56,7 @@ import type {
   ScientificLanguage,
   SkillResource,
   SkillResourceContent,
+  SkillReviewDraftSummary,
   ShellExecutionResult,
   UninstallEnvironmentRequest,
 } from "@sciencediscovery/schema";
@@ -191,6 +193,7 @@ function summarizeSubagentResult(subagent: Subagent): {
 }
 
 export interface WorkspaceToolOptions {
+  createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
   declareArtifact?: (input: {
     description?: string;
     name?: string;
@@ -522,6 +525,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     && resolve(options.readOnlyWorkspaceRoot) !== resolve(workspaceRoot)
     ? options.readOnlyWorkspaceRoot
     : undefined;
+  const loadedSkillIds = new Set<string>();
 
   const pythonParameters = Type.Object({
     code: Type.String({ minLength: 1 }),
@@ -1425,6 +1429,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       execute: async (_toolCallId, params) => {
         const skill = selectedSkills.get(params.skillId);
         if (!skill) throw new Error(`Skill ${params.skillId} is not selected for this run`);
+        loadedSkillIds.add(skill.id);
         const resources = skill.resources.length
           ? `\n\nAvailable read-only supporting resources (use read_skill_resource only as needed):\n${skill.resources.map((resource) => `- ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")}`
           : "";
@@ -1476,6 +1481,50 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: skillResourceParameters,
     };
     tools.push(readSkillResource);
+  }
+  if (options.createSkill && selectedSkillsForDiscovery.some((skill) => skill.id === "skill-creator")) {
+    const createSkillParameters = Type.Object({
+      allowedTools: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      compatibility: Type.Optional(Type.String({ maxLength: 500, minLength: 1 })),
+      description: Type.String({ maxLength: 1_024, minLength: 1 }),
+      instructions: Type.String({ maxLength: 524_288, minLength: 1 }),
+      license: Type.Optional(Type.String({ maxLength: 500, minLength: 1 })),
+      name: Type.String({ maxLength: 64, minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
+      resources: Type.Optional(Type.Array(Type.Object({
+        content: Type.String({ maxLength: 1_000_000, minLength: 1 }),
+        path: Type.String({ maxLength: 240, minLength: 1 }),
+      }), { maxItems: 50 })),
+      version: Type.Optional(Type.String({ maxLength: 100, minLength: 1 })),
+    });
+    const createSkill: AgentTool<typeof createSkillParameters> = {
+      description: "Create a reviewable Agent Skill proposal from an explicit user request. First load skill-creator with read_skill and follow it. Revisions or alternative versions of one logical Skill must reuse the exact same name so they join one version history. The draft remains inactive until the user edits and confirms it; never call this merely because a workflow seems reusable.",
+      execute: async (_toolCallId, params, signal) => {
+        if (!loadedSkillIds.has("skill-creator")) {
+          throw new Error("Load skill-creator with read_skill before creating a Skill");
+        }
+        const created = await options.createSkill!({
+          ...(params.allowedTools ? { allowedTools: params.allowedTools } : {}),
+          ...(params.compatibility ? { compatibility: params.compatibility } : {}),
+          description: params.description,
+          instructions: params.instructions,
+          ...(params.license ? { license: params.license } : {}),
+          ...(params.version ? { metadata: { version: params.version } } : {}),
+          name: params.name,
+          ...(params.resources ? { resources: params.resources } : {}),
+        }, signal);
+        return {
+          content: [{
+            type: "text",
+            text: `${JSON.stringify(created, null, 2)}\n\nThe Skill is a pending draft and is not active yet. Ask the user to open Settings > Skills, review the files and diff, then confirm or discard it.`,
+          }],
+          details: created,
+        };
+      },
+      label: "Create Skill draft",
+      name: "create_skill",
+      parameters: createSkillParameters,
+    };
+    tools.push(createSkill);
   }
   for (const mcpTool of options.mcpTools ?? []) {
     tools.push({

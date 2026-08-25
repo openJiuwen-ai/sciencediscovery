@@ -33,15 +33,17 @@ import type {
   AnalyzePaperVisionRequest,
   CancelRunResult,
   ChatMessage,
+  ConfirmSkillReviewDraftRequest,
   ComposerReference,
   MemoryGraphEdgeType,
   MemoryGraphNodeLabel,
   MemoryGraphTraceResult,
   CreateEnvironmentRequest,
+  CreateGitSkillReviewDraftsRequest,
   CreateSkillDialogueDraftRequest,
   CreateArtifactAnnotationRequest,
   CreateArtifactPlanRequest,
-  CreateSkillRequest,
+  CreateSkillPackageRequest,
   CreateModelProfileRequest,
   CreateProjectRequest,
   CreatePermissionRequest,
@@ -67,6 +69,8 @@ import type {
   EffectiveRuntimeSettings,
   DeleteResourceRequest,
   ImportSkillFromGitRequest,
+  InspectGitSkillRepositoryRequest,
+  MergeSkillReviewDraftsRequest,
   InstallEnvironmentRequest,
   UninstallEnvironmentRequest,
   RunStreamEvent,
@@ -88,6 +92,7 @@ import type {
   ScientificEnvironmentSetup,
   SkillDeletionImpact,
   UpdateSkillRequest,
+  UpdateSkillFileRequest,
   UpdateModelProfileRequest,
   UpdateProjectRequest,
   UpdateSessionRequest,
@@ -712,6 +717,40 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (url.pathname.startsWith("/api/skill-libraries") || url.pathname.startsWith("/api/skill-library-proposals")) {
         if (await handleSkillLibraryRequest({ catalog: skillLibraryCatalog, request, response, url })) return;
       }
+      if (request.method === "GET" && url.pathname === "/api/skill-review-drafts") {
+        sendJson(response, 200, skillCatalog.listReviewDrafts());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/skill-review-drafts/merge") {
+        sendJson(response, 200, await skillCatalog.mergeReviewDrafts(
+          await readJson<MergeSkillReviewDraftsRequest>(request),
+        ));
+        return;
+      }
+      const skillReviewConfirmMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)\/confirm$/);
+      if (skillReviewConfirmMatch && request.method === "POST") {
+        const detail = await skillCatalog.confirmReviewDraft(
+          decodeURIComponent(skillReviewConfirmMatch[1]!),
+          await readJson<ConfirmSkillReviewDraftRequest>(request),
+        );
+        store.setAvailableSkillIds(skillCatalog.ids());
+        sendJson(response, 201, detail);
+        return;
+      }
+      const skillReviewDraftMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)$/);
+      if (skillReviewDraftMatch && request.method === "GET") {
+        const draftId = decodeURIComponent(skillReviewDraftMatch[1]!);
+        const draft = await skillCatalog.getReviewDraft(draftId);
+        if (!draft) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill review draft not found: ${draftId}`);
+        sendJson(response, 200, draft);
+        return;
+      }
+      if (skillReviewDraftMatch && request.method === "DELETE") {
+        const draftId = decodeURIComponent(skillReviewDraftMatch[1]!);
+        await skillCatalog.discardReviewDraft(draftId);
+        sendJson(response, 200, { discarded: draftId });
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/specialists") {
         sendJson(response, 200, store.listSpecialists());
         return;
@@ -734,7 +773,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/skills") {
-        const detail = await skillCatalog.create(await readJson<CreateSkillRequest>(request));
+        const detail = await skillCatalog.createPackage(await readJson<CreateSkillPackageRequest>(request));
         store.setAvailableSkillIds(skillCatalog.ids());
         sendJson(response, 201, detail);
         return;
@@ -744,6 +783,18 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const detail = await skillCatalog.import(upload.filename, upload.bytes);
         store.setAvailableSkillIds(skillCatalog.ids());
         sendJson(response, 201, detail);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/skills/import-git/inspect") {
+        sendJson(response, 200, await skillCatalog.inspectGitRepository(
+          await readJson<InspectGitSkillRepositoryRequest>(request),
+        ));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/skills/import-git/review") {
+        sendJson(response, 201, await skillCatalog.createGitReviewDrafts(
+          await readJson<CreateGitSkillReviewDraftsRequest>(request),
+        ));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/skills/import-git") {
@@ -775,6 +826,30 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const skillId = decodeURIComponent(skillDeletionImpactMatch[1]!);
         if (!skillCatalog.get(skillId)) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         sendJson(response, 200, store.getSkillDeletionImpact(skillId));
+        return;
+      }
+
+      const skillVersionMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/versions\/([^/]+)$/);
+      if (skillVersionMatch && request.method === "GET") {
+        sendJson(response, 200, await skillCatalog.getSkillVersion(
+          decodeURIComponent(skillVersionMatch[1]!),
+          decodeURIComponent(skillVersionMatch[2]!),
+        ));
+        return;
+      }
+      const skillVersionsMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/versions$/);
+      if (skillVersionsMatch && request.method === "GET") {
+        sendJson(response, 200, await skillCatalog.listSkillVersions(decodeURIComponent(skillVersionsMatch[1]!)));
+        return;
+      }
+
+      const skillFileMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/files\/(.+)$/);
+      if (skillFileMatch && request.method === "PUT") {
+        sendJson(response, 200, await skillCatalog.updateFile(
+          decodeURIComponent(skillFileMatch[1]!),
+          decodeURIComponent(skillFileMatch[2]!),
+          await readJson<UpdateSkillFileRequest>(request),
+        ));
         return;
       }
 

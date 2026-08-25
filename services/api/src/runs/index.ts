@@ -354,6 +354,30 @@ export function splitArtifactVersionSuffix(raw: string): { id: string; version: 
   return { id: raw, version: undefined };
 }
 
+export function skillAuthoringCommandPrompt(content: string): string | undefined {
+  const match = /^\/(skill-creator|distill-session)(?:\s+([\s\S]*))?$/i.exec(content.trim());
+  if (!match) return undefined;
+  const command = match[1]!.toLowerCase();
+  const request = match[2]?.trim();
+  if (command === "skill-creator") {
+    return [
+      "The user invoked /skill-creator to create or revise a Skill through this conversation.",
+      "Use the enabled skill-creator Skill as the authoritative authoring workflow. Read it before creating a package.",
+      request
+        ? `Workflow description from the user:\n${request}`
+        : "No workflow description was supplied. Ask one concise question for the workflow goal, inputs, outputs, and important checks; do not create a generic Skill yet.",
+      "When the requirements are sufficient, call create_skill exactly once. The result must remain a pending review draft; tell the user they can open Skills Explorer to inspect the files and diff before confirmation.",
+    ].join("\n\n");
+  }
+  return [
+    "The user invoked /distill-session to turn this Session into a reusable Skill.",
+    "Use the enabled skill-creator Skill as the authoritative authoring workflow. Read it before creating a package.",
+    "Infer the reusable workflow from the complete prior Session conversation and execution history supplied above. Preserve generalizable inputs, steps, outputs, validation, safety boundaries, and useful resource files; remove one-off data and secrets.",
+    ...(request ? [`Additional direction from the user:\n${request}`] : []),
+    "Call create_skill exactly once with the finished package. It must remain a pending review draft, and you must direct the user to Skills Explorer to inspect the files, provenance, and diff before confirmation.",
+  ].join("\n\n");
+}
+
 async function executeAgentRun(
   store: SessionStore,
   runnerClient: RunnerClient,
@@ -507,7 +531,7 @@ async function executeAgentRun(
   const promptUserMessage = {
     ...userMessage,
     content: [
-      messagePromptContent(userMessage),
+      skillAuthoringCommandPrompt(userMessage.content) ?? messagePromptContent(userMessage),
       ...(pendingManualNotice ? [
         "A manual Reviewer notice is pending. Address its findings in this response by correcting the work or explaining why a finding does not apply, with record evidence.",
         pendingManualNotice.content,
@@ -775,6 +799,12 @@ async function executeAgentRun(
   };
   const agentOptions: WorkspaceAgentOptions = {
     config: agentConfig,
+    createSkill: async (input) => {
+      return await skillCatalog.createReviewDraft(input, {
+        sessionId,
+        source: /^\/distill-session(?:\s|$)/i.test(body.content.trim()) ? "session-distill" : "agent",
+      });
+    },
     enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
     memoryGraphEnabled: memoryGraphSink.enabled,
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
@@ -2092,6 +2122,9 @@ export async function createQueuedRun(
     skillLibraryRefs = mergeSkillLibraryRefs(configuredRefs, declaredRefs);
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Skill library references are invalid");
+  }
+  if (skillAuthoringCommandPrompt(prompt)) {
+    settingsSnapshot.enabledSkillIds = [...new Set([...settingsSnapshot.enabledSkillIds, "skill-creator"])];
   }
   const run = await store.createSessionRun({
     annotationIds: body.annotationIds,

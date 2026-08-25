@@ -13,7 +13,10 @@
 // limitations under the License.
 
 import type {
-  CreateSkillRequest,
+  ConfirmSkillReviewDraftRequest,
+  CreateGitSkillReviewDraftsRequest,
+  CreateGitSkillReviewDraftsResponse,
+  CreateSkillPackageRequest,
   CreateSkillDialogueDraftRequest,
   CommitSkillLibraryVersionRequest,
   CommitSkillLibraryVersionResult,
@@ -22,6 +25,9 @@ import type {
   DistillSessionSkillRequest,
   ImportSkillFromGitRequest,
   RollbackSkillLibraryVersionRequest,
+  GitSkillRepositoryInspection,
+  InspectGitSkillRepositoryRequest,
+  MergeSkillReviewDraftsRequest,
   SkillDeletionImpact,
   SkillDescriptor,
   SkillDraft,
@@ -33,6 +39,11 @@ import type {
   SkillLibraryUpdateProposal,
   SkillLibraryVersion,
   SkillResourceContent,
+  SkillReviewDraft,
+  SkillReviewDraftSummary,
+  SkillVersionSnapshot,
+  SkillVersionSummary,
+  UpdateSkillFileRequest,
   UpdateSkillRequest,
 } from "@sciencediscovery/schema";
 
@@ -121,8 +132,49 @@ export class SkillsApiClient extends SettingsApiClient {
     return this.request(`/api/skills/${encodeURIComponent(skillId)}`);
   }
 
-  createSkill(body: CreateSkillRequest): Promise<SkillDetail> {
+  listSkillVersions(skillId: string): Promise<SkillVersionSummary[]> {
+    return this.request(`/api/skills/${encodeURIComponent(skillId)}/versions`);
+  }
+
+  getSkillVersion(skillId: string, versionId: string): Promise<SkillVersionSnapshot> {
+    return this.request(`/api/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(versionId)}`);
+  }
+
+  updateSkillFile(skillId: string, path: string, body: UpdateSkillFileRequest): Promise<SkillDetail> {
+    return this.request(`/api/skills/${encodeURIComponent(skillId)}/files/${encodeURIComponent(path)}`, {
+      body: JSON.stringify(body),
+      method: "PUT",
+    });
+  }
+
+  createSkill(body: CreateSkillPackageRequest): Promise<SkillDetail> {
     return this.request("/api/skills", { body: JSON.stringify(body), method: "POST" });
+  }
+
+  listSkillReviewDrafts(): Promise<SkillReviewDraftSummary[]> {
+    return this.request("/api/skill-review-drafts");
+  }
+
+  getSkillReviewDraft(draftId: string): Promise<SkillReviewDraft> {
+    return this.request(`/api/skill-review-drafts/${encodeURIComponent(draftId)}`);
+  }
+
+  confirmSkillReviewDraft(draftId: string, body: ConfirmSkillReviewDraftRequest): Promise<SkillDetail> {
+    return this.request(`/api/skill-review-drafts/${encodeURIComponent(draftId)}/confirm`, {
+      body: JSON.stringify(body),
+      method: "POST",
+    });
+  }
+
+  discardSkillReviewDraft(draftId: string): Promise<{ discarded: string }> {
+    return this.request(`/api/skill-review-drafts/${encodeURIComponent(draftId)}`, { method: "DELETE" });
+  }
+
+  mergeSkillReviewDrafts(body: MergeSkillReviewDraftsRequest): Promise<SkillReviewDraftSummary> {
+    return this.request("/api/skill-review-drafts/merge", {
+      body: JSON.stringify(body),
+      method: "POST",
+    });
   }
 
   updateSkill(skillId: string, body: UpdateSkillRequest): Promise<SkillDetail> {
@@ -140,6 +192,14 @@ export class SkillsApiClient extends SettingsApiClient {
 
   importSkillFromGit(body: ImportSkillFromGitRequest): Promise<SkillDetail> {
     return this.request("/api/skills/import-git", { body: JSON.stringify(body), method: "POST" });
+  }
+
+  inspectGitSkillRepository(body: InspectGitSkillRepositoryRequest): Promise<GitSkillRepositoryInspection> {
+    return this.request("/api/skills/import-git/inspect", { body: JSON.stringify(body), method: "POST" });
+  }
+
+  createGitSkillReviewDrafts(body: CreateGitSkillReviewDraftsRequest): Promise<CreateGitSkillReviewDraftsResponse> {
+    return this.request("/api/skills/import-git/review", { body: JSON.stringify(body), method: "POST" });
   }
 
   createSkillDialogueDraft(body: CreateSkillDialogueDraftRequest): Promise<SkillDraft> {

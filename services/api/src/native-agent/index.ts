@@ -616,6 +616,7 @@ class NativeAgent implements NativeAgentHandle {
 /** Build the same workspace tools as before, so handlers + governance are unchanged. */
 function buildTools(options: NativeAgentOptions): AgentTool[] {
   return createWorkspaceTools(options.workspaceRoot, {
+    ...(options.createSkill ? { createSkill: options.createSkill } : {}),
     enabledConnectorIds: options.enabledConnectorIds,
     ...(options.environments ? { environments: options.environments } : {}),
     ...(options.environmentManagement ? { environmentManagement: options.environmentManagement } : {}),
