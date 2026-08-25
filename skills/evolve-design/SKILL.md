@@ -100,18 +100,25 @@ to after the budget is spent.
 2. **How big must one be to be stable?** Enough that the same candidate scores the same twice.
    Averaged measures get noisier as units shrink; a unit holding a single item is nearly always
    too small.
-3. **How many held out?** Deterministic scoring 4–6 units; anything with randomness 8–12. Too
-   few misreads noise as improvement — silently, for the whole run.
-   **And how many to rank on.** The rollout units are what the tree compares candidates with, and
-   they are the ones people forget: a run with `rolloutShards: 1` ranks every candidate on a
-   single measurement, so a coarse metric gives the same number to everything and the search has
-   nothing to choose by. Observed: five candidates, all exactly 0.6000, budget spent, no signal.
-   Give the rollout at least as many units as it takes for two genuinely different candidates to
-   land on different numbers — usually 4 or more, and never 1.
+3. **How many in the gate — and make it the biggest of the three.** Every candidate's score,
+   the one the tree ranks and selects on, is measured on the **gate** units. Nothing else decides
+   which candidate wins. So the gate is where a shortage hurts most: too few and the tree ranks
+   on noise, silently, for the whole run, and the improvement it reports does not survive a
+   re-run. Deterministic scoring 8–12 units; anything with randomness 16–24. More is better here
+   in a way it is not elsewhere.
+
+   Rollout comes next — it drives the search's own trajectory, and one unit means every
+   comparison rests on a single measurement. Observed: five candidates, all exactly 0.6000,
+   budget spent, no signal. Four or more, never one, and no more than the gate.
+
+   Test is what never takes part at all, read once at the end. 4–8 is plenty; it buys confidence
+   in the final number, not progress during the run.
 4. **Does the candidate learn from data?** If it fits before it produces, the fitting volume
    must match the evaluation volume. Skip when nothing is fitted.
 
-If the total will not fit, shrink each unit — do not cut held-out or fitting data.
+If the total will not fit, shrink each unit — do not cut the gate. A run that measures a few
+units carefully beats one that measures many units badly, and cutting the gate is cutting the
+only number the search actually steers by.
 
 `expansions` must be at least `4 × workers`, or the first sweep forks only the root and the tree
 is flat. By search space: a known defect 4–6; swapping approach or restructuring 12–20; writing

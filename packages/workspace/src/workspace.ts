@@ -1173,7 +1173,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       rubric: Type.Optional(Type.String({ maxLength: 100_000, minLength: 1 })),
       scaleMax: Type.Optional(Type.Number({ maximum: 100, minimum: 1 })),
       split: Type.Optional(Type.Object({
-        gateShards: Type.Integer({ maximum: 64, minimum: 4 }),
+        // The gate is what every candidate's score is measured on — what the
+        // tree ranks and selects by — so it is the split that must be largest,
+        // and the floor under it is the highest of the three.
+        gateShards: Type.Integer({ maximum: 64, minimum: 8 }),
         // Minimum 4, like the gate. These are what the tree ranks candidates
         // with, and one of them means every candidate is compared on a single
         // measurement — a coarse metric then gives them all the same number.

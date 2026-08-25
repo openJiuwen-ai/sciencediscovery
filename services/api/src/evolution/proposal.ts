@@ -68,19 +68,32 @@ export interface ProposalDeps {
   sessionId: string;
 }
 
-/** Held-out sizing this side refuses below, whatever a proposal asks for. The
- *  agent is told the reasoning in the skill; this is the floor under it. */
-const MIN_GATE = 4;
+/** The gate is what every candidate's score is measured on — the number the
+ *  tree ranks, selects and reports on — so it is the split a shortage hurts
+ *  most, and the floor under it is the highest. The agent is told the reasoning
+ *  in the skill; this is the floor under that. */
+const MIN_GATE = 8;
+
+/** The rollout drives the search's own trajectory. Four is enough for two
+ *  genuinely different candidates to land on different numbers; one is not. */
+const MIN_ROLLOUT = 4;
 
 /** The rollout is what the tree ranks candidates with, and it is the split
  *  people forget: the gate has a floor and this had none. One rollout unit
  *  means every candidate is compared on a single measurement, and a coarse
  *  metric then hands them all the same number — observed as five candidates
  *  scoring exactly 0.6000 with the whole budget spent. */
-function rolloutTooThin(split: EvolveSplit): string | undefined {
-  if (split.rolloutShards >= MIN_GATE) return undefined;
-  return `rollout 只有 ${split.rolloutShards} 片。搜索就是靠这几片给候选排名的，`
-    + `片太少时不同的候选会拿到同一个分数，树就没有可选的了——至少 ${MIN_GATE} 片`;
+function splitTooThin(split: EvolveSplit): string | undefined {
+  if (split.rolloutShards < MIN_ROLLOUT) {
+    return `rollout 只有 ${split.rolloutShards} 片，不同的候选会拿到同一个分数，`
+      + `搜索没有可比的东西——至少 ${MIN_ROLLOUT} 片`;
+  }
+  if (split.gateShards < split.rolloutShards) {
+    return `留出门 ${split.gateShards} 片比 rollout 的 ${split.rolloutShards} 片还少。`
+      + "每个候选的分数——树用来排名、选择、判定最优的那个数——只在留出门上量，"
+      + "所以它应该是三者里最大的一份，而不是最小的";
+  }
+  return undefined;
 }
 
 
@@ -202,8 +215,8 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     if (proposal.split.gateShards < MIN_GATE) {
       return `留出只有 ${proposal.split.gateShards} 片，判不出一次提升是不是噪声`;
     }
-    const rollout = rolloutTooThin(proposal.split);
-    if (rollout) return rollout;
+    const thin = splitTooThin(proposal.split);
+    if (thin) return thin;
   }
   if (proposal.mode === "custom_script") {
     if (!proposal.evaluatorSource?.trim()) return "custom_script 要给评测脚本";
@@ -216,8 +229,8 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     if (proposal.split.gateShards < MIN_GATE) {
       return `留出只有 ${proposal.split.gateShards} 片，判不出一次提升是不是噪声`;
     }
-    const rollout = rolloutTooThin(proposal.split);
-    if (rollout) return rollout;
+    const thin = splitTooThin(proposal.split);
+    if (thin) return thin;
   }
   if (proposal.mode === "llm_judge") {
     if (!proposal.rubric?.trim()) return "llm_judge 要写评分细则";

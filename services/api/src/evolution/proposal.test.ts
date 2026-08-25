@@ -30,7 +30,7 @@ import { EvolveSidecarError } from "./sidecar.js";
 import { startProposedRun, summariseRun, type ProposalDeps } from "./proposal.js";
 
 const SPLIT = {
-  gateShards: 6, rolloutShards: 4, seed: 0, shardRows: 20, testShards: 2, trainRows: null,
+  gateShards: 8, rolloutShards: 4, seed: 0, shardRows: 20, testShards: 2, trainRows: null,
 };
 
 function proposal(over: Partial<EvolveRunProposal> = {}): EvolveRunProposal {
@@ -254,26 +254,40 @@ test("a path that cannot be read names the field it came from", async () => {
   assert.match(result.refusedBecause!, /escapes the workspace/);
 });
 
-test("a rollout too thin to rank on is refused", async () => {
-  // The split people forget: the gate had a floor and the rollout had none.
+test("a rollout too thin to compare on is refused", async () => {
   // Observed live — rolloutShards 1, five candidates, every one scoring exactly
-  // 0.6000, the whole budget spent and nothing for the tree to choose by.
+  // 0.6000, the whole budget spent and nothing to tell them apart.
   const { deps: d } = deps();
   const result = await startProposedRun({
     ...proposal(),
-    split: { gateShards: 6, rolloutShards: 1, seed: 0, shardRows: 20, testShards: 2, trainRows: 200 },
+    split: { gateShards: 8, rolloutShards: 1, seed: 0, shardRows: 20, testShards: 2, trainRows: 200 },
   }, d);
 
   assert.equal(result.run, undefined);
   assert.match(result.refusedBecause!, /rollout/);
-  assert.match(result.refusedBecause!, /排名/);
+});
+
+test("a gate smaller than the rollout is refused", async () => {
+  // Every candidate's score — the number the tree ranks, selects and reports on
+  // — is measured on the gate alone. Real runs kept making it the *smallest* of
+  // the three (gate 4 against rollout 16), which spends the measurements on the
+  // split that does not decide anything.
+  const { deps: d } = deps();
+  const result = await startProposedRun({
+    ...proposal(),
+    split: { gateShards: 8, rolloutShards: 16, seed: 0, shardRows: 20, testShards: 4, trainRows: 200 },
+  }, d);
+
+  assert.equal(result.run, undefined);
+  assert.match(result.refusedBecause!, /留出门/);
+  assert.match(result.refusedBecause!, /最大/);
 });
 
 test("a rollout at the floor is accepted", async () => {
   const { deps: d } = deps();
   const result = await startProposedRun({
     ...proposal(),
-    split: { gateShards: 6, rolloutShards: 4, seed: 0, shardRows: 20, testShards: 2, trainRows: 200 },
+    split: { gateShards: 8, rolloutShards: 4, seed: 0, shardRows: 20, testShards: 2, trainRows: 200 },
   }, d);
 
   assert.equal(result.run?.id, "run-1");

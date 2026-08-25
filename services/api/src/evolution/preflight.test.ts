@@ -55,7 +55,7 @@ function goal(overrides: Partial<EvolveGoal> = {}): EvolveGoal {
         measure: {
           datasetCas: ["sha256:data"], kind: "dataset_metric",
           metric: { direction: "maximize", name: "f1" },
-          split: { gateShards: 4, rolloutShards: 4, seed: 0, shardRows: 10, testShards: 4, trainRows: null },
+          split: { gateShards: 8, rolloutShards: 4, seed: 0, shardRows: 10, testShards: 4, trainRows: null },
           target: "y",
         },
         name: "宏 F1", normalize: { kind: "identity" }, weight: 1,
@@ -232,7 +232,7 @@ function judged(overrides: Partial<{
           rubricCas,
           samplesPerCandidate: 1,
           scale: { max: 9, min: 0 },
-          split: { gateShards: 4, rolloutShards: 4, seed: 0, shardRows: 1, testShards: 0, trainRows: null },
+          split: { gateShards: 8, rolloutShards: 4, seed: 0, shardRows: 1, testShards: 0, trainRows: null },
           varianceThreshold: 0.2,
         },
         name: "质量",

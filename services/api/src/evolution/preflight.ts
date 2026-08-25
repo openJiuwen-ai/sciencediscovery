@@ -73,7 +73,11 @@ const MIN_TOKENS_PER_CALL: Record<string, { thinking: number; quiet: number }> =
 
 /** Below this the held-out set is too small for the acceptance gate to say
  *  anything: four shards is the floor the split design settles on. */
-const MIN_GATE_SHARDS = 4;
+//: The gate is what a node's score is measured on, so it is the split that has
+//: to be largest and the one with the highest floor. Kept in step with
+//: `MIN_GATE` in proposal.ts — the proposal path refuses first, this catches a
+//: goal that arrived any other way.
+const MIN_GATE_SHARDS = 8;
 
 export async function preflight(input: PreflightInput): Promise<PreflightIssue[]> {
   const issues: PreflightIssue[] = [];
