@@ -27,7 +27,10 @@ import {
 
 async function fixture(
   context: { after: (callback: () => Promise<void>) => void },
-  options: { beforeCommand?: (arguments_: string[]) => Promise<void> | void } = {},
+  options: {
+    beforeCommand?: (arguments_: string[]) => Promise<void> | void;
+    listOutput?: "array" | "micromamba";
+  } = {},
 ) {
   const root = resolve(process.cwd(), ".tmp", `environment-store-${process.pid}-${Date.now()}-${Math.random()}`);
   const provisionerPath = resolve(root, "micromamba-test");
@@ -76,10 +79,11 @@ async function fixture(
       return "";
     }
     if (command === "list") {
-      return JSON.stringify((installed.get(prefix) ?? []).map((specification) => {
+      const packages = (installed.get(prefix) ?? []).map((specification) => {
         const [name, version = "unknown"] = specification.split("=");
         return { build_string: "test_0", name, version };
-      }));
+      });
+      return options.listOutput === "micromamba" ? JSON.stringify({ packages }) : JSON.stringify(packages);
     }
     throw new Error(`Unexpected provisioner command: ${command}`);
   };
@@ -134,6 +138,18 @@ test("scientific environment lifecycle advances immutable revisions only after s
 
   await store.deleteTask(task.id);
   assert.equal(store.list().some((environment) => environment.id === task.id), false);
+});
+
+test("scientific environments accept micromamba's package-list envelope", async (context) => {
+  const { store } = await fixture(context, { listOutput: "micromamba" });
+  await store.initialize();
+  await store.setupManagedEnvironments();
+
+  assert.equal(store.setup.state, "ready");
+  const starter = store.list().find((environment) => environment.id === "starter-python");
+  assert.ok(starter);
+  const revision = store.getRevision(starter.currentRevisionId);
+  assert.ok(revision?.packages.some((item) => item.startsWith("python=3.12")));
 });
 
 test("trusted provisioning uses fixed channels while agent runtimes remain a separate no-network path", async (context) => {

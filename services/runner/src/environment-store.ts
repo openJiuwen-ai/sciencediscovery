@@ -64,6 +64,10 @@ interface ProvisionedPackage {
   version?: string;
 }
 
+interface ProvisionedPackageListEnvelope {
+  packages?: unknown;
+}
+
 export type ProvisionerExecutor = (
   provisionerPath: string,
   arguments_: string[],
@@ -177,6 +181,17 @@ function wheelPackageRecord(wheel: EnvironmentLocalWheel): string {
     sha256: wheel.content.hash,
     version: wheel.version,
   })}`;
+}
+
+function parseProvisionedPackageList(listOutput: string): ProvisionedPackage[] {
+  const parsed = JSON.parse(listOutput || "[]") as unknown;
+  const listed = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as ProvisionedPackageListEnvelope).packages)
+      ? (parsed as ProvisionedPackageListEnvelope).packages
+      : undefined;
+  if (!listed) throw new Error("Provisioner package list must be a JSON array or an object with a packages array");
+  return listed as ProvisionedPackage[];
 }
 
 async function fileSha256(path: string): Promise<string> {
@@ -780,8 +795,7 @@ export class EnvironmentStore {
     localWheels: EnvironmentLocalWheel[] = [],
   ): Promise<EnvironmentRevision> {
     const listOutput = await this.runProvisioner(["list", "--json", "--prefix", prefix], `snapshot-${revisionId}`);
-    const listed = JSON.parse(listOutput || "[]") as ProvisionedPackage[];
-    if (!Array.isArray(listed)) throw new Error("Provisioner package list must be a JSON array");
+    const listed = parseProvisionedPackageList(listOutput);
     const packages = uniqueSorted([...listed.flatMap((item) => item.name && item.version
       ? [`${item.name}=${item.version}${item.build_string ? `=${item.build_string}` : ""}`]
       : []), ...additionalPackages, ...localWheels.map(wheelPackageRecord)]);
