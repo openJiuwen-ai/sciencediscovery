@@ -47,11 +47,16 @@ currently forwards `${MERGE_ID}` as `PR_ID` for MR runs and `${PR_ID}` in the
 `number` field. Before claiming that a manual `PR_ID` run is supported, verify
 in an actual run that the effective value reaches every child task.
 
-CodeArts supports manual execution without an `on` entry. Guard GitCode writes
-with `${{ pipeline.trigger_type == 'MR' }}` so a manual run does not use an
-empty `${MERGE_ID}`. Keep the label task in the parent before verification, and
-keep the final publisher in `post` with `select: always` so failed checks can
-still report their status.
+Do not use `pipeline.trigger_type == 'MR'` to recognize PR context. A GitCode
+comment such as `rerun` can re-trigger the same PR pipeline with trigger type
+`Node`, while `${MERGE_ID}` remains populated. Mirror `${MERGE_ID}` into a
+non-overridable string input such as `PR_CONTEXT_ID`, and guard PR labels and
+comments with `${{ inputs.PR_CONTEXT_ID != '' }}`. Manual and periodic runs do
+not have `${MERGE_ID}`, so they run UT/ST without writing to a PR. A manually
+supplied `PR_ID` may still enable the PR-oriented code-check child, but it must
+not enable labels or comments. Keep the label task in the parent before
+verification, and keep the final publisher in `post` with `select: always` so
+failed checks can still report their status.
 
 Interpret results in the parent workflow, not in the PR bot. The parent uses
 `completed('ut', 'st', 'code_check')` to select mutually exclusive success and
@@ -85,8 +90,11 @@ nested `${SHARE_PATH}/sciencediscovery` directory. Run
 `.ci/provision-runner.sh`, set writable `CI_RESULTS_DIR` / `CI_RUNTIME_DIR`
 paths, and call the repository-owned layer entry point.
 
-`official_git_clone` may still download the configured `main` source for an MR
-run, so UT/ST must explicitly switch to the source commit from the MR event.
+`official_git_clone` may still download the configured `main` source for a
+PR-context run, so UT/ST must explicitly switch to the source commit from the
+MR event. Decide whether checkout is needed from the actual `${MERGE_ID}`
+value, not `pipeline.trigger_type`; comment-triggered `Node` runs must follow
+the same checkout path as initial MR runs.
 Validate all payload data first: `source_branch` must be a non-empty valid Git
 branch without CR/LF, `last_commit.id` must be a 40-hex SHA, and `${MERGE_ID}`
 must be a positive integer. Then fetch the upstream MR ref and detach at the
@@ -224,3 +232,4 @@ workflow again before pushing. Never overwrite a new UI commit blindly.
 | A generated UT/ST OBS URL returns `403` after checkout or provisioning failed | The upload step never ran and the object does not exist. Probe the object before linking and fall back to the GitCode Checks page. |
 | `独占任务official_devcloud_cloudBuild所在的job下不能配置其他step` | The bot CloudBuild task shares its job with rendering or upload. Move preparation into a separate prerequisite job. |
 | A CodeArts UI save restores old pipeline logic | The UI committed a stale expanded snapshot. Diff the new `main` commit, preserve its generated fields, and reapply the lost logic. |
+| A `rerun` comment starts CI but PR checkout, labels, or result publishing are skipped | The comment trigger reports type `Node`, so an `MR`-only guard evaluates false. Treat a non-empty `${MERGE_ID}` as PR context instead. |
