@@ -105,14 +105,16 @@
 .memory-filter-block { display: flex; align-items: center; gap: 10px; }
 .memory-filter-title { flex: 0 0 auto; min-width: 118px; color: var(--text-heading); font-size: 11px; font-weight: 700; }
 .memory-filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.memory-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text-strong); padding: 5px 12px; cursor: pointer; font-size: 11px; font-weight: 600; transition: background .12s, border-color .12s, color .12s; }
-.memory-chip i { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 999px; }
-.memory-chip em { border-radius: 999px; background: var(--surface-track); color: var(--text-secondary); padding: 1px 6px; font-size: 10px; font-style: normal; font-weight: 700; }
-.memory-chip:hover { border-color: var(--accent-border); background: var(--surface-hover); color: var(--text-strong); }
+/* Each chip's inline `background` carries the node/edge colour; the rules below
+   only frame it and handle interaction states. Hover dims via an overlay so the
+   category colour stays visible instead of being washed out by --surface-hover. */
+.memory-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: inherit; padding: 5px 12px; cursor: pointer; font-size: 11px; font-weight: 600; transition: filter .12s, border-color .12s; }
+.memory-chip em { border-radius: 999px; background: rgba(255, 255, 255, .28); color: inherit; padding: 1px 6px; font-size: 10px; font-style: normal; font-weight: 700; }
+.memory-chip:hover { filter: brightness(.92); }
 .memory-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.memory-chip.active { border-width: 2px; background: var(--accent-softer); color: var(--accent-ink); padding: 4px 11px; }
-.memory-chip.active em { background: var(--accent-tint); color: var(--accent-deep); }
-.memory-chip.reset { border-style: dashed; color: var(--muted); }
+.memory-chip.active { border-color: #ffffff; border-width: 2px; padding: 4px 11px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .25); }
+.memory-chip.active em { background: rgba(255, 255, 255, .45); }
+.memory-chip.reset { border-style: dashed; border-color: var(--border-strong); background: var(--surface); color: var(--muted); }
 
 .memory-explorer-body { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); min-height: 0; flex: 1 1 auto; }
 .memory-explorer-canvas { position: relative; min-width: 0; min-height: 220px; flex: 1 1 auto; background: var(--surface-subtle); }

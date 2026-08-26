@@ -324,51 +324,173 @@ export function mergeExpansions(
   };
 }
 
-// Overlay scope expansions onto a CHAIN view. A chain is itself a folded read
-// (a subagent scope node + the one ``contains`` spine edge to its first child
-// + the surrogate to its product + the scope's child ToolCalls scattered as
-// free nodes, since the chain walker carries them but not the full contains
-// spine). ``mergeExpansions`` can't be reused here — it subtracts collapsed
-// subtrees from a folded read whose child nodes are present-but-hidden, while
-// a chain has the child nodes already visible (no subtree to subtract). So
-// this is a plain overlay: for each expanded scope, union its
-// ``getScopeExpansion`` nodes + edges onto the chain, skipping self-loops (the
-// scope_chain ``next`` self-edges the backend emits for single-child scopes),
-// surrogates (view hints, already represented), and edges whose endpoints
-// aren't in the merged node set. De-duped by (source, target, type). A scope
-// no longer in ``expandedScopes`` contributes nothing — the chain falls back
-// to its own scattered-child shape, i.e. the pre-expand view.
+// Overlay scope expansions onto a CHAIN view, AND fold collapsed scopes'
+// child ToolCalls away. The artifact-chain walker pulls a subagent scope's
+// child ToolCalls into the eid set: it walks the producing Code's ``produces
+// in`` ancestor — the child ToolCall — then ``next out`` fans across the
+// child→child next chain. So a chain typically carries a scope's child
+// ToolCalls (and the one Code whose produced Artifact the chain cites) as free
+// nodes alongside the scope node, even when the scope is folded. Two cases:
+//
+//  - EXPANDED scope: union its ``getScopeExpansion`` nodes + edges onto the
+//    chain (the full child ToolCalls + their Codes + the real produces/
+//    contains/next edges connecting them). Self-loops + surrogates skipped;
+//    de-duped by (source, target, type).
+//  - COLLAPSED scope (in the chain but NOT in expandedScopes): HIDE its child
+//    ToolCalls and the Codes produced by those children, but KEEP the
+//    scope's own products (the chain-cited Artifact) and reconnect them to
+//    the scope with a synthesised surrogate ``scope→produces→artifact`` edge.
+//    Without this fold path the children stay scattered as free nodes — the
+//    "double-click to collapse only hid the overlaid Codes, not the base-chain
+//    ToolCalls" symptom on session db799384's G2M scope (9 children, 1 cited
+//    Artifact 0608…#v1 — a key input ancestor of trace.md v4). Keeping the
+//    product preserves the chain's continuity (the Artifact is an input to a
+//    downstream top-level Code); hiding only the children + Codes matches the
+//    folded get_subgraph view's scope+surrogate-product shape.
+//
+// ``mergeExpansions`` can't be reused: it subtracts subtrees from a folded
+// read whose child nodes are present-but-hidden and whose products are reached
+// by pre-existing surrogate edges (rescued by those surrogates). A chain is
+// pure real edges (no surrogates), so the fold synthesises the surrogate that
+// the folded get_subgraph view would have carried, to rescue the scope's
+// chain-cited product once its producing child + Code are hidden.
 export function mergeChainScopeExpansions(
   chain: MemorySubgraph,
   expansionGraphs: ReadonlyMap<string, MemorySubgraph>,
   expandedScopes: ReadonlySet<string>,
 ): MemorySubgraph {
-  if (expandedScopes.size === 0) return chain;
+  // FOLD PASS — find the child ToolCalls + Codes to hide for every collapsed
+  // scope in the chain. A scope node's children are the chain nodes whose
+  // owning scope (``extra.parent_subtask_id`` or the ``:exec:`` task_id
+  // prefix) is collapsed.
+  const chainScopes = new Set<string>();
+  for (const node of chain.nodes) if (isScopeNode(node)) chainScopes.add(node.id);
+  const collapsedScopes = new Set<string>();
+  for (const id of chainScopes) if (!expandedScopes.has(id)) collapsedScopes.add(id);
+  const hiddenDirect = new Set<string>();
+  // child -> its owning collapsed scope (resolved once here, threaded through
+  // the BFS below so a product reached via child→Code→Artifact is attributed
+  // to the scope, not the intermediate Code). Also scope -> one child task_id
+  // to tag synthesised surrogate edges with ``via_child`` (the same marker
+  // get_subgraph's folded surrogates carry, so a click on the folded edge can
+  // still jump to the responsible child).
+  const childScope = new Map<string, string>();
+  const viaChild = new Map<string, string>();
+  for (const node of chain.nodes) {
+    if (!isChildNode(node)) continue;
+    const parent = childParentScope(node);
+    if (parent && collapsedScopes.has(parent)) {
+      hiddenDirect.add(node.id);
+      childScope.set(node.id, parent);
+      if (!viaChild.has(parent)) viaChild.set(parent, node.id);
+    }
+  }
+  // Forward BFS along ``produces`` from each collapsed scope's children: hide
+  // the Codes those children produced (the chain carries child→Code→Artifact
+  // for the cited Artifact). Codes are structural plumbing, not products —
+  // they have no meaning once their producing child is hidden. Products
+  // (Artifacts/Papers) are the opposite: they are the scope's cited outputs
+  // and must stay; the BFS records them (foldedProducts) so a synthesised
+  // surrogate can re-attach them to the scope. A product also reached by a
+  // NON-hidden producer (a top-level ToolCall) is not a child-subtree product
+  // and is left to that producer's real edge — it is never added here.
+  const producesForward = new Map<string, string[]>();
+  for (const edge of chain.edges) {
+    if (edge.type !== "produces" || isSurrogateEdge(edge)) continue;
+    const arr = producesForward.get(edge.source);
+    if (arr) arr.push(edge.target); else producesForward.set(edge.source, [edge.target]);
+  }
+  const labelById = new Map<string, string>();
+  for (const node of chain.nodes) labelById.set(node.id, node.label);
+  const hidden = new Set<string>(hiddenDirect);          // hidden children + Codes
+  const foldedProducts = new Set<string>();              // rescued scope products
+  const foldedProductScope = new Map<string, string>();   // product -> owning collapsed scope
+  // Queue carries the owning collapsed scope so a product reached via a chain
+  // of hidden Codes (child→Code→Artifact) is attributed to the scope, not to
+  // the intermediate Code that produces it.
+  const queue: Array<{ node: string; scope: string }> = [];
+  for (const child of hiddenDirect) queue.push({ node: child, scope: childScope.get(child) ?? "" });
+  while (queue.length > 0) {
+    const { node: cur, scope } = queue.pop() as { node: string; scope: string };
+    for (const next of producesForward.get(cur) ?? []) {
+      if (hidden.has(next) || chainScopes.has(next)) continue;
+      const label = labelById.get(next);
+      if (label === "Artifact" || label === "Paper") {
+        // Product of the collapsed scope — keep it, record owning scope.
+        foldedProducts.add(next);
+        if (!foldedProductScope.has(next)) foldedProductScope.set(next, scope);
+        // Don't enqueue: a product reached once is rescued; we don't walk
+        // past it (its own ``produces`` out-edges belong to a different
+        // derivation, e.g. an Artifact feeding a downstream Code via input).
+        continue;
+      }
+      // A Code (or other structural node) produced by a hidden child → hide,
+      // inheriting the same owning scope for its own produces targets.
+      hidden.add(next);
+      queue.push({ node: next, scope });
+    }
+  }
+  // A product reached by the child subtree is rescued (kept) ONLY if it has
+  // no NON-hidden producer outside the subtree — otherwise the outside real
+  // edge is the one that keeps it visible and the folded scope shouldn't
+  // claim it (the surrogate would duplicate the outside edge's relation).
+  const outsideProducers = new Map<string, number>();
+  for (const edge of chain.edges) {
+    if (hidden.has(edge.source)) continue;
+    if (edge.type !== "produces") continue;
+    outsideProducers.set(edge.target, (outsideProducers.get(edge.target) ?? 0) + 1);
+  }
+  const rescued = new Set<string>();
+  for (const prod of foldedProducts) {
+    if ((outsideProducers.get(prod) ?? 0) === 0) rescued.add(prod);
+  }
+
   const nodesById = new Map<string, MemoryGraphNode>();
-  for (const node of chain.nodes) nodesById.set(node.id, node);
+  for (const node of chain.nodes) {
+    if (hidden.has(node.id)) continue;                   // child ToolCall / Code — hidden
+    nodesById.set(node.id, node);
+  }
+  // Synthesise a surrogate scope→product edge for each rescued product of a
+  // collapsed scope — the folded hint that re-attaches the cited product to
+  // the scope once its producing child + Code are hidden. Tagged surrogate +
+  // via_child so it reads as the same kind of view edge get_subgraph emits.
+  const foldedSurrogates: MemorySubgraph["edges"] = [];
+  for (const prod of rescued) {
+    const scope = foldedProductScope.get(prod);
+    if (!scope || !nodesById.has(scope) || !nodesById.has(prod)) continue;
+    foldedSurrogates.push({
+      source: scope,
+      target: prod,
+      type: "produces",
+      extra: { surrogate: true, via_child: viaChild.get(scope) ?? null },
+    });
+  }
+
+  // Expansion edges that are surrogates drop (view hints, already drawn);
+  // a folded scope's synthesised surrogate is added below as the folded hint.
   const edgeKeys = new Set<string>();
   const edges: MemorySubgraph["edges"] = [];
-  const pushEdge = (edge: MemorySubgraph["edges"][number]): void => {
+  const pushEdge = (edge: MemorySubgraph["edges"][number], fromExpansion: boolean): void => {
     if (edge.source === edge.target) return;            // self-loop (scope_chain noise)
-    if (isSurrogateEdge(edge)) return;                  // view hint, already drawn
+    if (fromExpansion && isSurrogateEdge(edge)) return; // view hint, already drawn
     if (!nodesById.has(edge.source) || !nodesById.has(edge.target)) return;
     const key = `${edge.source}>${edge.target}:${edge.type}`;
     if (edgeKeys.has(key)) return;
     edgeKeys.add(key);
     edges.push(edge);
   };
-  // Seed the dedup set with the chain's own edges so expansion edges that
-  // duplicate a chain edge (e.g. the scope's contains spine) don't double-draw.
-  for (const edge of chain.edges) {
-    const key = `${edge.source}>${edge.target}:${edge.type}`;
-    edgeKeys.add(key);
-    edges.push(edge);
-  }
+  // Seed the dedup set with the chain's own edges (post-fold filtering) so
+  // expansion edges that duplicate a chain edge don't double-draw.
+  for (const edge of chain.edges) pushEdge(edge, false);
+  // Add the synthesised folded surrogates (a real chain has none, so they
+  // never collide with a chain edge; the dedup is still a safety net).
+  for (const edge of foldedSurrogates) pushEdge(edge, false);
+  // EXPAND PASS — union each expanded scope's expansion nodes + edges.
   for (const scopeId of expandedScopes) {
     const expansion = expansionGraphs.get(scopeId);
     if (!expansion) continue;
     for (const node of expansion.nodes) nodesById.set(node.id, node);
-    for (const edge of expansion.edges) pushEdge(edge);
+    for (const edge of expansion.edges) pushEdge(edge, true);
   }
   return {
     nodes: [...nodesById.values()],
@@ -1008,9 +1130,9 @@ export function MemoryGraphExplorer({
                   className={activeLabels.has(label) ? "memory-chip active" : "memory-chip"}
                   key={label}
                   onClick={() => toggleLabel(label)}
-                  style={{ borderColor: activeLabels.has(label) ? NODE_COLORS[label] : undefined }}
+                  style={{ background: NODE_COLORS[label], color: "#ffffff" }}
                   type="button"
-                ><i style={{ background: NODE_COLORS[label] }} />{label} <em>{count}</em></button>)}
+                >{label} <em>{count}</em></button>)}
               </div>
             </div>
             <div className="memory-filter-block">
@@ -1021,9 +1143,9 @@ export function MemoryGraphExplorer({
                   className={activeEdges.has(type) ? "memory-chip active" : "memory-chip"}
                   key={type}
                   onClick={() => toggleEdge(type)}
-                  style={{ borderColor: activeEdges.has(type) ? EDGE_COLORS[type] : undefined }}
+                  style={{ background: EDGE_COLORS[type], color: "var(--text-strong)" }}
                   type="button"
-                ><i style={{ background: EDGE_COLORS[type] }} />{type} <em>{count}</em></button>)}
+                >{type} <em>{count}</em></button>)}
                 {filtered ? <button className="memory-chip reset" onClick={() => { setActiveLabels(new Set()); setActiveEdges(new Set()); }} type="button">Clear filters</button> : null}
               </div>
             </div>

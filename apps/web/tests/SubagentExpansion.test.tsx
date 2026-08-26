@@ -624,9 +624,27 @@ test("mergeExpansions hides an aggregate whose owning scope is expanded (real me
   assert.equal(merged.edges.some((e) => e.target === GROUP_ID), false, "no edge to the hidden aggregate");
 });
 
-// --- chain-view scope expansion overlay (链内就地展开) ---
+// --- chain-view scope expansion overlay + fold (链内就地展开/收回) ---
+//
+// A chain carries a folded subagent scope's child ToolCalls as free nodes (the
+// artifact-chain walker reaches them via the producing Code's produces→in hop,
+// then next→out fans across the child→child next chain). The merge has two
+// jobs:
+//   - EXPANDED scope: overlay the scope expansion (children + Codes + the
+//     real produces/contains/next edges connecting them) onto the chain.
+//   - COLLAPSED scope: hide its child ToolCalls + the Codes those children
+//     produced, but KEEP the scope's chain-cited Artifact and re-attach it to
+//     the scope with a synthesised surrogate edge (the folded get_subgraph
+//     view's shape). Without the fold the children stay scattered — the
+//     "double-click collapse hid only the overlaid Codes, not the base-chain
+//     ToolCalls" symptom on session db799384's G2M scope.
 
-test("mergeChainScopeExpansions is a no-op when no scope is expanded", () => {
+test("mergeChainScopeExpansions folds a collapsed scope's child ToolCalls out of the chain", () => {
+  // A collapsed scope with one child in the chain (no expansion overlaid). The
+  // child has no produces edge to a product, so folding hides the child and
+  // the contains spine — leaving just the scope node, no edges. This is the
+  // regression guard for "collapse only hid Codes, not the base-chain child
+  // ToolCalls": the child is now hidden too.
   const chain: MemorySubgraph = {
     nodes: [
       { id: SCOPE, label: "Task", extra: { task_type: "subagent" } },
@@ -635,10 +653,83 @@ test("mergeChainScopeExpansions is a no-op when no scope is expanded", () => {
     edges: [{ source: SCOPE, target: CHILD, type: "contains", extra: {} }],
     total: 2, truncated: false,
   };
-  const merged = mergeChainScopeExpansions(chain, new Map(), new Set());
-  assert.equal(merged.nodes.length, 2);
-  assert.equal(merged.edges.length, 1);
-  assert.equal(merged, chain, "returns the same reference when nothing to overlay");
+  const collapsed = mergeChainScopeExpansions(chain, new Map(), new Set());
+  const ids = new Set(collapsed.nodes.map((n) => n.id));
+  assert.equal(ids.has(SCOPE), true, "scope stays");
+  assert.equal(ids.has(CHILD), false, "child ToolCall folded away");
+  assert.equal(collapsed.edges.some((e) => e.type === "contains"), false, "contains spine folded (child hidden)");
+  assert.equal(collapsed.edges.length, 0, "no edges left — child was the only endpoint");
+});
+
+test("mergeChainScopeExpansions keeps a collapsed scope's cited product + synthesises its surrogate", () => {
+  // The G2M scenario: a collapsed scope whose child produces a Code, which
+  // produces the Artifact the chain cites (the Artifact is a key input
+  // ancestor downstream). Folding must hide the child ToolCall + the Code, but
+  // KEEP the Artifact and re-attach it to the scope with a synthesised
+  // surrogate scope→produces→artifact edge so the chain stays continuous.
+  const CODE1 = "code:1";
+  const chain: MemorySubgraph = {
+    nodes: [
+      { id: SCOPE, label: "Task", extra: { task_type: "subagent" } },
+      { id: CHILD, label: "ToolCall", extra: { parent_subtask_id: SCOPE } },
+      { id: CODE1, label: "Code", extra: {} },
+      { id: ART, label: "Artifact", extra: { artifact_id: "art1", version: 1 } },
+    ],
+    edges: [
+      { source: SCOPE, target: CHILD, type: "contains", extra: {} },
+      { source: CHILD, target: CODE1, type: "produces", extra: {} },
+      { source: CODE1, target: ART, type: "produces", extra: {} },
+    ],
+    total: 4, truncated: false,
+  };
+  const collapsed = mergeChainScopeExpansions(chain, new Map(), new Set());
+  const ids = new Set(collapsed.nodes.map((n) => n.id));
+  assert.equal(ids.has(SCOPE), true, "scope stays");
+  assert.equal(ids.has(CHILD), false, "child ToolCall folded away");
+  assert.equal(ids.has(CODE1), false, "Code (child's only product) folded away");
+  assert.equal(ids.has(ART), true, "cited Artifact kept — the scope's product");
+  // The real child→Code→Artifact chain is gone; one synthesised surrogate
+  // scope→artifact stands in as the folded hint.
+  const surrogates = collapsed.edges.filter((e) => e.extra?.surrogate === true);
+  assert.equal(surrogates.length, 1, "one synthesised surrogate re-attaches the product");
+  assert.equal(surrogates[0].source, SCOPE, "surrogate rooted on the scope");
+  assert.equal(surrogates[0].target, ART, "surrogate points at the cited Artifact");
+  assert.equal(surrogates[0].type, "produces");
+  assert.equal(typeof surrogates[0].extra?.via_child, "string", "surrogate tagged with the responsible child");
+  assert.equal(collapsed.edges.some((e) => e.source === CHILD || e.source === CODE1), false, "no edges from the hidden child/Code");
+  assert.equal(collapsed.edges.some((e) => e.type === "contains"), false, "contains spine folded away");
+});
+
+test("mergeChainScopeExpansions does not claim a product that a non-hidden producer also reaches", () => {
+  // A product reached by BOTH a collapsed scope's child subtree AND a visible
+  // top-level ToolCall must NOT gain a synthesised surrogate — the top-level
+  // real edge already keeps it visible, and a surrogate would duplicate that
+  // relation. The child + Code still fold away; the top-level edge survives.
+  const CODE1 = "code:1";
+  const TOP = "subtask:top:1";
+  const chain: MemorySubgraph = {
+    nodes: [
+      { id: SCOPE, label: "Task", extra: { task_type: "subagent" } },
+      { id: CHILD, label: "ToolCall", extra: { parent_subtask_id: SCOPE } },
+      { id: CODE1, label: "Code", extra: {} },
+      { id: TOP, label: "ToolCall", extra: { task_type: "code_execution" } },
+      { id: ART, label: "Artifact", extra: { artifact_id: "art1", version: 1 } },
+    ],
+    edges: [
+      { source: SCOPE, target: CHILD, type: "contains", extra: {} },
+      { source: CHILD, target: CODE1, type: "produces", extra: {} },
+      { source: CODE1, target: ART, type: "produces", extra: {} },
+      { source: TOP, target: ART, type: "produces", extra: {} },
+    ],
+    total: 5, truncated: false,
+  };
+  const collapsed = mergeChainScopeExpansions(chain, new Map(), new Set());
+  const ids = new Set(collapsed.nodes.map((n) => n.id));
+  assert.equal(ids.has(ART), true, "Artifact kept — reached by the top-level ToolCall");
+  assert.equal(collapsed.edges.some((e) => e.extra?.surrogate === true), false, "no synthesised surrogate — the top-level edge owns the product");
+  assert.equal(collapsed.edges.some((e) => e.source === TOP && e.target === ART), true, "top-level real produces edge survives");
+  assert.equal(ids.has(CHILD), false, "child folded away");
+  assert.equal(ids.has(CODE1), false, "Code folded away");
 });
 
 test("mergeChainScopeExpansions overlays an expanded scope's children onto the chain", () => {
@@ -646,7 +737,8 @@ test("mergeChainScopeExpansions overlays an expanded scope's children onto the c
   // child ToolCalls scattered as free nodes (no edges to the Code they ran).
   // The scope expansion carries the Code nodes + the scope→Code produces edges
   // that connect them. Overlaying must add the Code nodes and the connecting
-  // edges, de-duped, without touching the chain's own edges.
+  // edges, de-duped, without touching the chain's own edges. The scope is in
+  // expandedScopes so its children are NOT folded — they stay as free nodes.
   const CHILD2 = "subtask:subagent:sub1:exec:e2";
   const CODE1 = "code:1";
   const CODE2 = "code:2";
@@ -681,11 +773,11 @@ test("mergeChainScopeExpansions overlays an expanded scope's children onto the c
   };
   const merged = mergeChainScopeExpansions(chain, new Map([[SCOPE, expansion]]), new Set([SCOPE]));
   const ids = new Set(merged.nodes.map((n) => n.id));
-  // Code nodes added; chain's own nodes preserved.
+  // Code nodes added; chain's own nodes preserved (scope is expanded → not folded).
   assert.equal(ids.has(CODE1), true, "Code1 overlaid");
   assert.equal(ids.has(CODE2), true, "Code2 overlaid");
   assert.equal(ids.has(SCOPE), true);
-  assert.equal(ids.has(CHILD), true);
+  assert.equal(ids.has(CHILD), true, "child stays — scope expanded, not folded");
   // The chain's own edges survive.
   assert.equal(merged.edges.some((e) => e.source === SCOPE && e.target === CHILD && e.type === "contains"), true, "chain's contains spine kept");
   // New scope→Code edges added, de-duped.
@@ -698,30 +790,49 @@ test("mergeChainScopeExpansions overlays an expanded scope's children onto the c
   assert.equal(containsCount, 1, "contains edge de-duped (one copy from the chain)");
 });
 
-test("mergeChainScopeExpansions drops an expanded scope's overlay when it is collapsed again", () => {
-  // Expanding then collapsing (removing from expandedScopes) must yield the
-  // original chain — the overlay contributes nothing when the scope isn't in
-  // the expanded set.
+test("mergeChainScopeExpansions round-trips: expand then collapse restores the folded shape", () => {
+  // Expanding surfaces the real child subtree; collapsing again must remove
+  // the overlaid Code nodes AND hide the base-chain child, landing back on the
+  // folded shape (scope + synthesised surrogate product). The fold is not just
+  // "drop the overlay" — it actively hides base-chain children the overlay
+  // never touched.
   const CODE1 = "code:1";
   const chain: MemorySubgraph = {
     nodes: [
       { id: SCOPE, label: "Task", extra: { task_type: "subagent" } },
       { id: CHILD, label: "ToolCall", extra: { parent_subtask_id: SCOPE } },
+      { id: CODE1, label: "Code", extra: {} },
+      { id: ART, label: "Artifact", extra: { artifact_id: "art1", version: 1 } },
     ],
-    edges: [{ source: SCOPE, target: CHILD, type: "contains", extra: {} }],
-    total: 2, truncated: false,
+    edges: [
+      { source: SCOPE, target: CHILD, type: "contains", extra: {} },
+      { source: CHILD, target: CODE1, type: "produces", extra: {} },
+      { source: CODE1, target: ART, type: "produces", extra: {} },
+    ],
+    total: 4, truncated: false,
   };
   const expansion: MemorySubgraph = {
     nodes: [
       { id: SCOPE, label: "Task", extra: { task_type: "subagent" } },
       { id: CHILD, label: "ToolCall", extra: { parent_subtask_id: SCOPE } },
       { id: CODE1, label: "Code", extra: {} },
+      { id: ART, label: "Artifact", extra: { artifact_id: "art1", version: 1 } },
     ],
-    edges: [{ source: SCOPE, target: CODE1, type: "produces", extra: {} }],
-    total: 3, truncated: false,
+    edges: [
+      { source: SCOPE, target: CHILD, type: "contains", extra: {} },
+      { source: CHILD, target: CODE1, type: "produces", extra: {} },
+      { source: CODE1, target: ART, type: "produces", extra: {} },
+    ],
+    total: 4, truncated: false,
   };
+  const expanded = mergeChainScopeExpansions(chain, new Map([[SCOPE, expansion]]), new Set([SCOPE]));
+  assert.equal(new Set(expanded.nodes.map((n) => n.id)).has(CHILD), true, "child visible when expanded");
+  assert.equal(expanded.edges.some((e) => e.extra?.surrogate === true), false, "no surrogate while expanded");
+  // Collapse: overlay dropped AND base-chain child hidden, product rescued.
   const collapsed = mergeChainScopeExpansions(chain, new Map([[SCOPE, expansion]]), new Set());
-  assert.equal(collapsed.nodes.length, 2, "collapsed = chain's own nodes only");
-  assert.equal(collapsed.edges.length, 1, "collapsed = chain's own edges only");
-  assert.equal(collapsed.nodes.some((n) => n.id === CODE1), false, "Code gone when scope collapsed");
+  const ids = new Set(collapsed.nodes.map((n) => n.id));
+  assert.equal(ids.has(CHILD), false, "child folded away on collapse");
+  assert.equal(ids.has(CODE1), false, "Code folded away on collapse");
+  assert.equal(ids.has(ART), true, "Artifact kept on collapse");
+  assert.equal(collapsed.edges.some((e) => e.extra?.surrogate === true && e.source === SCOPE && e.target === ART), true, "surrogate synthesised on collapse");
 });

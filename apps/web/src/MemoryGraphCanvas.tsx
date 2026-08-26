@@ -31,22 +31,22 @@ import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomTransform } from "d3-zoo
 import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
 /**
- * One colour per node label, drawn from a Morandi palette (low-saturation,
- * dusty tones — every channel sits between 0.55 and 0.75 so the seven hues
- * never compete). Kept in a plain map (not CSS variables) because SVG paints
- * inline and we want the same predictable palette the previous Cytoscape
- * canvas used. The Morandi palette is purely visual: it does not change any
- * data semantics, only the rendered swatch.
+ * One colour per node label, drawn from a vivid, high-saturation palette
+ * (each hue is pushed bright so the eight categories read at a glance even
+ * on a dense graph). Kept in a plain map (not CSS variables) because SVG
+ * paints inline and we want the same predictable palette across renders.
+ * The palette is purely visual: it does not change any data semantics,
+ * only the rendered swatch.
  */
 export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
-  ResearchGoal: "#a89bb0", // dusty lavender
-  Task: "#9bafc0",         // powder blue (subagent scope)
-  ToolCall: "#a3b5c4",     // lighter blue (code_execution / literature_search / …)
-  Paper: "#c09a8a",        // dusty terracotta
-  Evidence: "#9aab97",     // sage
-  Claim: "#c0b08a",        // warm beige
-  Code: "#bf9aa8",         // dusty rose
-  Artifact: "#9aab85",     // muted moss
+  ResearchGoal: "#F6114A", // vivid red
+  Task: "#0AA0BF",         // bright teal (subagent scope)
+  ToolCall: "#FCA00C",     // amber (code_execution / literature_search / …)
+  Paper: "#F36E98",        // rose pink
+  Evidence: "#78B177",     // sage
+  Claim: "#F05006",        // burnt orange
+  Code: "#9862A2",         // amethyst purple
+  Artifact: "#25998F",     // teal green
 };
 
 /**
