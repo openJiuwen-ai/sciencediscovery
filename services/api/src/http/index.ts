@@ -194,6 +194,7 @@ import {
   streamStoredRunEvents,
 } from "../runs/index.js";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
+import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
 import {
   createPlatformServices,
   initializePlatformServices,
@@ -228,6 +229,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     webBroker,
   } = platform;
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
+  const modelConnectivityTests = new ModelConnectivityTestCoordinator();
   const patchEphemeralCallback = (server: Server) => {
     // With an ephemeral port (tests), the configured tool-callback URL cannot
     // know the real port in advance; rewrite it from the bound address.
@@ -886,6 +888,20 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (request.method === "POST" && url.pathname === "/api/models") {
         const body = await readJson<CreateModelProfileRequest>(request);
         sendJson(response, 201, await store.createModel(body));
+        return;
+      }
+
+      const modelConnectivityMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/test$/);
+      if (modelConnectivityMatch && request.method === "POST") {
+        const modelId = decodeURIComponent(modelConnectivityMatch[1]!);
+        const profile = store.getModel(modelId);
+        if (!profile) return sendError(response, 404, "Model not found");
+        const tested = await modelConnectivityTests.run(modelId, () => testModelConnectivity({
+          apiToken: store.getModelApiToken(modelId),
+          profile,
+          resolveProxy: () => resolveProxyForUrl(store.resolveProxy(profile.proxyPolicy), profile.baseUrl),
+        }));
+        sendJson(response, 200, tested);
         return;
       }
 
