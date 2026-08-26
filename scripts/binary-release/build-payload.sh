@@ -181,6 +181,14 @@ prepare_shared() {
   # payload app root; keep it alongside the deployed Node services and skills.
   mkdir -p "$shared_dir/app/config"
   cp config/external-urls.json "$shared_dir/app/config/external-urls.json"
+  # The model catalog is not committed; packaging downloads one snapshot so a
+  # first `serve` without network still knows context windows, prices and
+  # thinking capabilities. The user refreshes it later from Settings.
+  echo "Downloading the model catalog snapshot..." >&2
+  node scripts/fetch-model-catalog.mjs \
+    --output "$shared_dir/app/resources/model-catalog/models-dev.json" >&2
+  [[ -s "$shared_dir/app/resources/model-catalog/models-dev.json" ]] \
+    || { echo "The model catalog snapshot is missing from the payload." >&2; exit 1; }
   # The control API launches the paper worker by repository-relative path; the
   # optional PDF environment is provisioned into the data directory at runtime.
   mkdir -p "$shared_dir/app/services/paper"

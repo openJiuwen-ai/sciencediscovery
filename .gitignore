@@ -41,6 +41,11 @@ logs/
 # here, holding service venvs, session data and bootstrap tokens.
 /.sciencediscovery-data/
 
+# Packaging-time downloads. The model catalog snapshot is fetched when a
+# release is built and refreshed at runtime, so the document itself is never
+# committed.
+/resources/
+
 # Local runtime state (catalog, sessions, credentials, environments, and logs)
 /data/
 /science-discovery-data/

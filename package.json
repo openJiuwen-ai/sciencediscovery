@@ -13,6 +13,7 @@
     "binary:smoke": "node scripts/binary-release/smoke-binary.mjs",
     "binary:test": "node --test scripts/binary-release/*.test.mjs",
     "build": "pnpm --recursive build",
+    "catalog:fetch": "node scripts/fetch-model-catalog.mjs --output resources/model-catalog/models-dev.json",
     "check": "pnpm architecture:check && pnpm typecheck && pnpm paper:test && pnpm gateway:test && pnpm test",
     "ci:e2e": "bash .ci/run-e2e.sh",
     "ci:e2e:legacy": "bash .ci/run-e2e.sh legacy",

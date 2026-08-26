@@ -118,6 +118,12 @@ export SCIENCE_AGENT_RUNNER_URL="http://127.0.0.1:${SCIENCE_AGENT_RUNNER_PORT}"
 # The default mocked job must not turn J3 into a conda-channel provisioning
 # job. A dedicated CI setup job may opt in after its network policy is reviewed.
 export SCIENTIFIC_ENVS="${E2E_SCIENTIFIC_ENVS:-0}"
+# The model catalog is downloaded when a release is packaged and refreshed on
+# demand at run time. Neither belongs in a browser test, so the stack loads a
+# small committed excerpt of the published document instead: the journeys can
+# then assert exact context windows, prices and thinking capabilities without a
+# network call and without depending on what the live catalog says today.
+export SCIENCE_AGENT_MODEL_CATALOG_PATH="$repository_root/test/fixtures/model-catalog.json"
 export E2E_API_TOKEN="$auth_token"
 export E2E_BASE_URL="http://127.0.0.1:${SCIENCE_AGENT_PORT}"
 export E2E_API_URL="$E2E_BASE_URL"
