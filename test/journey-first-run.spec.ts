@@ -121,6 +121,11 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
           .getByRole("button", { name: /^模型注册表/ })
           .click();
         await expect(settings.getByRole("heading", { name: "模型注册表" })).toBeVisible();
+        // 高级独立模型配置默认折叠；新建模型需要先展开（新 head 的模型注册表以服务商为中心）。
+        const advancedProfiles = settings.locator("details.provider-advanced-profiles");
+        if (await advancedProfiles.getAttribute("open") === null) {
+          await advancedProfiles.locator(":scope > summary").click();
+        }
         await settings.getByRole("button", { name: "+ 添加模型" }).click();
 
         const nameInput = settings.getByLabel("显示名称");
@@ -151,6 +156,10 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await reopened.getByRole("navigation", { name: "设置分组" })
           .getByRole("button", { name: /^模型注册表/ })
           .click();
+        const reopenedAdvanced = reopened.locator("details.provider-advanced-profiles");
+        if (await reopenedAdvanced.getAttribute("open") === null) {
+          await reopenedAdvanced.locator(":scope > summary").click();
+        }
         await reopened.locator(".model-card").filter({ hasText: modelName }).click();
         await expect(reopened.getByLabel("基础接口")).toHaveValue("openai-chat-completions");
         await expect(reopened.getByLabel("接口变种")).toHaveValue("deepseek");
@@ -186,8 +195,8 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         expect(modelValue).toBeTruthy();
         await modelPicker.selectOption(modelValue!);
         await expect(modelPicker.locator("option:checked")).toContainText(modelName);
-        await expect(modelPicker.locator("option:checked")).toContainText("openai-chat-completions/deepseek");
-        await expect(modelPicker.locator("option:checked")).toContainText("thinking enabled:max");
+        await expect(modelPicker.locator("option:checked")).toContainText("DeepSeek");
+        await expect(modelPicker.locator("option:checked")).toContainText("开启: 最大");
       },
     );
 

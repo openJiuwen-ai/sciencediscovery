@@ -101,6 +101,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         for (const heading of ["身份信息", "接口", "思考", "访问与能力"]) {
           await expect(dialog.getByRole("heading", { name: heading, exact: true })).toBeVisible();
         }
+        await dialog.getByLabel("显示名称").scrollIntoViewIfNeeded();
         await expect(dialog.getByLabel("显示名称")).toBeInViewport();
         await dialog.getByLabel("接口变种").scrollIntoViewIfNeeded();
         for (const label of ["基础接口", "接口变种"]) {

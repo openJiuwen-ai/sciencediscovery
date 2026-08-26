@@ -181,23 +181,24 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  * Purpose: Provider 与模型目录完整用户旅程——草稿安全、内置预设只填令牌、自定义 Provider、发现成功/失败/乱序、双语可溯源价格、模型级思考能力与 Session/wire 一致性，以及桌面/窄屏真实几何。
  * Steps:
  *   1. 打开模型注册表，确认常见 Provider 预设与自定义入口。
- *   2. MiniMax 仅填令牌；Escape 取消关闭保留草稿，底部保存并关闭提交；请求在浏览器边界改写为 loopback/manual。
- *   3. 选择智谱内置预设，仅填令牌连接；核对默认 endpoint/协议未要求用户填写，令牌不回传。
- *   4. 查看维护目录的 GLM-5.2 能力、美元价、官方来源与更新时间，并添加模型。
- *   5. 新建自定义兼容 Provider；标题栏取消关闭保留草稿，底部保存发现 loopback 模型，状态提供文本可访问名。
- *   6. 验证远端事实逐字段覆盖、未知事实保持未知、价格单位与来源清楚，并添加 DeepSeek 模型。
- *   7. 用 DeepSeek 预设目录核对中文高峰/闲时价格、CNY/每百万 token、规范去重来源与日期。
- *   8. 刷新模型列表遭遇 403 时显示明确错误、保留上次结果，并可手动添加精确模型 ID。
- *   9. 让 Provider A 迟到、B 先回，确认界面只保留 B 且添加请求发往 B。
- *   10. 删除被全局默认模型引用的 B，确认中文错误提供可恢复操作且不会误报保存/刷新失败。
- *   11. 在 600px 窄屏确认 Provider 表单、目录卡片无横向溢出且仍可操作。
- *   12. 新建会话切换模型；不支持模型隐藏思考控件，DeepSeek enabled/max 跨刷新保存。
- *   13. 工作区展开时分别在 1440×900、600×900 对中文 Composer 做两两无重叠、紧凑高度、命中、边界与标签几何断言。
- *   14. 发送消息，核对 DeepSeek 所选模型、thinking.type=enabled 与 reasoning_effort=max 真实进入 wire。
- *   15. 选择 GPT-5.5，把旧 max 持久化收窄为 xhigh；刷新一致且 Responses wire 合法。
- *   16. 选择始终推理 Kimi K3，确认仅 enabled 和 low/high/max，wire 只发送 reasoning_effort=low。
- *   17. 选择 Claude Haiku 4.5，Composer/高级编辑器统一隐藏 effort 并提示 legacy，wire 使用合法固定预算。
- *   18. 切换英文，复核两档 Composer 几何，再确认模型/effort 标签及 DeepSeek 分时价格自然本地化。
+ *   2. 核对目录状态行：打包快照时间与刷新按钮；刷新成功改时间、刷新失败保留旧数据且草稿不丢（浏览器边界伪造目录下载响应）。
+ *   3. MiniMax 仅填令牌；Escape 取消关闭保留草稿，底部保存并关闭提交；请求在浏览器边界改写为 loopback/manual。
+ *   4. 选择智谱内置预设，仅填令牌连接；核对默认 endpoint/协议未要求用户填写，令牌不回传。
+ *   5. 维护目录的 GLM-5.2 展示能力、诚实未知价格（不冒用 z.ai 国际站定价）与官方来源快照日期，并添加模型。
+ *   6. 新建自定义兼容 Provider；标题栏取消关闭保留草稿，底部保存发现 loopback 模型，状态提供文本可访问名。
+ *   7. 验证远端事实逐字段覆盖、未知事实保持未知、价格单位与来源清楚，并添加 DeepSeek 模型。
+ *   8. 用 DeepSeek 预设目录核对 USD 每百万 token 标准单价、缓存输入与规范去重来源（上游不再发布分时价）。
+ *   9. 刷新模型列表遭遇 403 时显示明确错误、保留上次结果，并可手动添加精确模型 ID。
+ *   10. 让 Provider A 迟到、B 先回，确认界面只保留 B 且添加请求发往 B。
+ *   11. 删除被全局默认模型引用的 B，确认中文错误提供可恢复操作且不会误报保存/刷新失败。
+ *   12. 在 600px 窄屏确认 Provider 表单、目录卡片无横向溢出且仍可操作。
+ *   13. 新建会话切换模型；不支持模型隐藏思考控件，DeepSeek enabled/max 跨刷新保存。
+ *   14. 工作区展开时分别在 1440×900、600×900 对中文 Composer 做两两无重叠、紧凑高度、命中、边界与标签几何断言。
+ *   15. 发送消息，核对 DeepSeek 所选模型、thinking.type=enabled 与 reasoning_effort=max 真实进入 wire。
+ *   16. 选择 GPT-5.5，把旧 max 持久化收窄为 xhigh；刷新一致且 Responses wire 合法。
+ *   17. 选择始终推理 Kimi K3，确认仅 enabled 和 low/high/max，wire 只发送 reasoning_effort=low。
+ *   18. 选择 Claude Haiku 4.5，Composer/高级编辑器统一隐藏 effort 并提示 legacy，wire 使用合法固定预算。
+ *   19. 切换英文，复核两档 Composer 几何，再确认模型/effort 标签及 DeepSeek 标准价格自然本地化。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；模型列表、Chat Completions、Responses 与 Anthropic Messages 均由本 spec 的 loopback mock 提供。
  * Type: mocked
  * LLM: local deterministic HTTP/SSE fixture only；不调用真实或付费模型 API。
@@ -349,6 +350,78 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     );
 
     await journey.step(
+      "目录带快照时间可手动刷新，失败保留旧数据且草稿不丢",
+      "模型注册表顶部展示“模型元数据目录”状态行：标明快照随本次构建发布、最近更新于打包时间，并提供“刷新目录”按钮。手动刷新成功后状态行改为“最近更新于”新时间并提示“模型目录已更新”；随后模拟刷新失败时给出“无法刷新模型目录，仍在使用上一次的目录数据”，状态行时间与内容保留刷新后的快照，同时正在填写的自定义服务商草稿字段一个都不丢。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        const status = dialog.getByRole("region", { name: "模型元数据目录" });
+        await expect(status).toContainText("随本次构建发布，最近更新于");
+        await expect(status.getByRole("button", { name: "刷新目录" })).toBeVisible();
+
+        const current = await apiJson<{ sourceUrl: string; snapshot?: { fetchedAt: string; origin: string } }>(
+          page,
+          "/api/model-catalog",
+        );
+        expect(current.snapshot?.origin).toBe("bundled");
+        const refreshedAt = "2026-08-26T02:00:00.000Z";
+        let simulatedRefresh: { body: unknown; status: number } | undefined;
+        const refreshRoute = async (route: Route) => {
+          if (!simulatedRefresh) {
+            await route.continue();
+            return;
+          }
+          await route.fulfill({
+            body: JSON.stringify(simulatedRefresh.body),
+            contentType: "application/json",
+            status: simulatedRefresh.status,
+          });
+        };
+        await page.route("**/api/model-catalog/refresh", refreshRoute);
+        try {
+          // 刷新成功：浏览器边界伪造一次成功的目录下载（origin=downloaded，新时间戳）。
+          simulatedRefresh = {
+            body: {
+              ...current,
+              snapshot: { ...(current.snapshot ?? {}), fetchedAt: refreshedAt, origin: "downloaded" },
+            },
+            status: 200,
+          };
+          await status.getByRole("button", { name: "刷新目录" }).click();
+          await expect(page.getByText("模型目录已更新")).toBeVisible();
+          await expect(status).toContainText("最近更新于 2026/8/26 02:00:00");
+          await expect(status).not.toContainText("随本次构建发布");
+
+          // 刷新失败：上游 502，保留上一次快照且草稿不丢。
+          await page.getByRole("button", { name: "+ 自定义服务商" }).click();
+          const editor = dialog.getByRole("region", { name: "服务商编辑器" });
+          const draftName = `J7 目录刷新草稿 ${Date.now()}`;
+          await editor.getByLabel("服务商名称").fill(draftName);
+          await editor.getByLabel("LLM API 令牌").fill("j7-catalog-draft-token");
+          await editor.getByLabel("基础 URL").fill(stub.baseUrl);
+
+          simulatedRefresh = {
+            body: { error: "fixture catalog refresh denied" },
+            status: 502,
+          };
+          await status.getByRole("button", { name: "刷新目录" }).click();
+          await expect(page.getByText("无法刷新模型目录，仍在使用上一次的目录数据")).toBeVisible();
+          await expect(status).toContainText("最近更新于 2026/8/26 02:00:00");
+          await expect(editor.getByLabel("服务商名称")).toHaveValue(draftName);
+          await expect(editor.getByLabel("LLM API 令牌")).toHaveValue("j7-catalog-draft-token");
+          await expect(editor.getByLabel("基础 URL")).toHaveValue(stub.baseUrl);
+
+          // 丢弃未保存草稿，恢复干净的注册表视图继续后续步骤。
+          page.once("dialog", (confirmation) => { void confirmation.accept(); });
+          await dialog.getByRole("button", { name: "取消并关闭" }).first().click();
+          await expect(dialog).toBeHidden();
+          await openModelRegistry();
+        } finally {
+          await page.unroute("**/api/model-catalog/refresh", refreshRoute);
+        }
+      },
+    );
+
+    await journey.step(
       "MiniMax 只填令牌且底部动作不会丢失草稿",
       "选择 MiniMax 预设后只填写令牌。按 Escape 时出现明确的未保存确认；取消关闭后令牌仍在。点击对话框底部“保存并关闭”会提交同一草稿并关闭设置。测试在浏览器边界核对预设原始 endpoint/发现策略，再把请求改写到本地 manual fixture，保证服务端绝不访问厂商网络。",
       async () => {
@@ -448,19 +521,18 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     );
 
     await journey.step(
-      "维护目录清楚展示 GLM 能力、价格与官方来源",
-      "GLM-5.2 标明维护建议而非厂商动态返回；卡片展示 1,000,000 上下文、128,000 最大输出、无视觉、有思考、USD 输入 1.4 / 输出 4.4 / 缓存输入 0.26（每百万 tokens），并链接带 2026-08-23 更新时间的官方来源。",
+      "维护目录给出 GLM 能力、诚实未知价格与官方来源",
+      "GLM-5.2 标明维护建议而非厂商动态返回；卡片展示 1,000,000 上下文、131,072 最大输出、无视觉、有思考（高/最大）。由于上游只发布智谱国际站（z.ai）的价格、而本端点连接 open.bigmodel.cn，卡片诚实地把价格标注为「未知」而不是冒用另一个托管商的定价，并链接带 2026-08-26 快照日期的官方来源。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await expect(dialog.getByText(/维护建议（并非服务商返回）/)).toBeVisible();
         const card = dialog.locator("article.provider-model-card").filter({ hasText: "glm-5.2" });
         await expect(card).toContainText("1,000,000");
-        await expect(card).toContainText("128,000");
+        await expect(card).toContainText("131,072");
         await expect(card).toContainText("视觉否");
         await expect(card).toContainText("思考是");
-        await expect(card).toContainText("USD 1.4 / 4.4");
-        await expect(card).toContainText("缓存输入 0.26");
-        await expect(card.getByRole("link", { name: /官方来源 · 2026-08-23/ }).first()).toHaveAttribute("href", /bigmodel|z\.ai/);
+        await expect(card.locator(".provider-model-price dd")).toHaveText("未知");
+        await expect(card.getByRole("link", { name: /官方来源 · 2026-08-26/ }).first()).toHaveAttribute("href", /bigmodel|z\.ai/);
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
           && /\/api\/providers\/[^/]+\/models$/.test(new URL(response.url()).pathname));
         await card.getByRole("button", { name: "添加模型" }).click();
@@ -519,7 +591,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const known = dialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" });
         await expect(known).toContainText("131,072");
         await expect(known).toContainText("视觉是");
-        await expect(known).toContainText("思考是 · 高 / 最大");
+        await expect(known).toContainText("思考是 · 低 / 高 / 最大");
         await expect(known).toContainText("USD 1.5 / 3");
         await expect(known).toContainText("缓存输入 0.2");
         await expect(known).toContainText("每百万 tokens");
@@ -538,8 +610,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     );
 
     await journey.step(
-      "DeepSeek 分时价格以结构化事实本地化展示",
-      "使用 DeepSeek 内置预设的维护目录（连接参数由测试改为本地 manual）展示 CNY/每百万 token，并明确区分北京时间工作日 09:00–12:00、14:00–18:00 高峰和其余闲时。官方来源按规范 URL 去重，核对日期统一为 YYYY-MM-DD；界面不暴露 periods 等内部字段名。",
+      "DeepSeek 目录展示标准美元单价并本地化来源",
+      "使用 DeepSeek 内置预设的维护目录（连接参数由测试改为本地 manual）展示 USD/每百万 token 的 0.14 / 0.28 与缓存输入 0.0028。上游已不再发布分时价格，因此界面不再出现高峰/闲时时段，也不暴露 periods 等内部字段名；官方来源按规范 URL 去重为一条并核对日期为 YYYY-MM-DD。",
       async () => {
         const deepseekProvider = await apiJson<ModelProvider>(page, "/api/providers", {
           data: {
@@ -556,17 +628,13 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const registry = dialog.getByRole("region", { name: "已配置服务商" });
         await registry.getByRole("button", { name: /DeepSeek/ }).click();
         const flash = dialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" });
-        await expect(flash).toContainText("高峰: CNY 3 / 9");
-        await expect(flash).toContainText("缓存输入 0.1");
-        await expect(flash).toContainText("北京时间工作日 09:00–12:00, 14:00–18:00");
-        await expect(flash).toContainText("闲时: CNY 1.5 / 4.5");
-        await expect(flash).toContainText("缓存输入 0.05");
-        await expect(flash).toContainText("其余时间（北京时间）");
+        await expect(flash).toContainText("USD 0.14 / 0.28");
+        await expect(flash).toContainText("缓存输入 0.0028");
         await expect(flash).toContainText("每百万 tokens");
         await expect(flash).not.toContainText("periods");
-        const sources = flash.getByRole("link", { name: "官方来源 · 2026-08-23" });
+        const sources = flash.getByRole("link", { name: "官方来源 · 2026-08-26" });
         await expect(sources).toHaveCount(1);
-        await expect(sources).toHaveAttribute("href", "https://api-docs.deepseek.com/zh-cn/quick_start/pricing");
+        await expect(sources).toHaveAttribute("href", "https://api-docs.deepseek.com/quick_start/pricing");
 
         await registry.getByRole("button", { name: new RegExp(customName) }).click();
         await expect(dialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" })).toBeVisible();
@@ -944,11 +1012,10 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const registry = englishDialog.getByRole("region", { name: "Configured providers" });
         await registry.getByRole("button", { name: /DeepSeek/ }).click();
         const flash = englishDialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" });
-        await expect(flash).toContainText("Peak: CNY 3 / 9");
-        await expect(flash).toContainText("Beijing time, weekdays 09:00–12:00, 14:00–18:00");
-        await expect(flash).toContainText("Off-peak: CNY 1.5 / 4.5");
-        await expect(flash).toContainText("All other times (Beijing time)");
-        await expect(flash).not.toContainText(/工作日|闲时|periods/);
+        await expect(flash).toContainText("USD 0.14 / 0.28");
+        await expect(flash).toContainText("cached input 0.0028");
+        await expect(flash).toContainText("per 1M tokens");
+        await expect(flash).not.toContainText(/Peak|Off-peak|periods/);
       },
     );
   } finally {
