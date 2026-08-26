@@ -15,6 +15,30 @@ definition `.codearts/workflow/codearts-pipeline-code-check.yml` was migrated
 out of this repository and intentionally deleted. Do not recreate it or remove
 the parent caller merely because the local file is absent.
 
+`.codearts/workflow/codearts-auto-merge-pipeline.yml` is the auto-merge
+pipeline, triggered by a `/merge` comment on a merge request targeting
+`main`. A copy named `codearts-auto-merge-pipeline-test.yml` exists only on
+`ci/verify-pr-ci`, registered against that branch, for experiments. On a
+`/merge` comment it checks the commenter against
+`CODEOWNERS` on `main`, reads the merge request's live state (open, base equal to the merge
+request's own target branch, not draft, `mergeable`, head still the commit
+the comment was made on), then calls GitCode's
+`PUT /api/v5/repos/{owner}/{repo}/pulls/{number}/merge` with
+`merge_method=rebase` and `force_merge=true` — linear history, no merge
+commit, and GitCode marks the merge request merged. The `/merge` comment from
+a CODEOWNERS member is the authorization: `force_merge` carries the merge
+past the repository's `review_mode: approval` rule, which otherwise answers
+`405 Not enough required approvers` to API and UI alike; the report says
+when that happened. `force_merge` needs the repository setting 允许管理员强制合入
+and an administrator token. A conflict, a stale head, a rejected merge, or a
+non-owner commenter produces an error comment instead. It declares no
+inputs: the merge request number, source commit, and
+note payload come from the system `${MERGE_ID}`, `${COMMIT_ID}`, and
+`${WEBHOOK_PAYLOAD}`; the only parameter is `GITCODE_TOKEN`, kept as a
+private parameter in the console, whose account must be allowed to merge
+and comment on merge requests. Without a merge-request context the job is
+skipped.
+
 GitHub remains a separate mirrored repository and covers full UT, mocked E2E,
 and smoke-gated binaries. Do not add `.gitcode/workflows/ci.yml` as another CI
 definition: GitCode merge-request CI is CodeArts-only.
@@ -242,4 +266,5 @@ workflow again before pushing. Never overwrite a new UI commit blindly.
 | A CodeArts UI save restores old pipeline logic | The UI committed a stale expanded snapshot. Diff the new `main` commit, preserve its generated fields, and reapply the lost logic. |
 | A `rerun` comment starts CI but PR checkout, labels, or result publishing are skipped | The comment trigger reports type `Node`, so an `MR`-only guard evaluates false. In expressions, test `sources.sciencediscovery.merge_id`; in steps, use `${MERGE_ID}`. |
 | `inputs.PR_CONTEXT_ID != ''` skips a `Node` rerun even though `${MERGE_ID}` is present in the shell | CodeArts did not runtime-expand the input default for the Node trigger. Remove the proxy input and use `sources.sciencediscovery.merge_id` directly. |
+| A job fails on its first step with `named capturing group is missing trailing '}'` | A `${{ env.<input> }}` expansion inside a script received a value containing `${…}` (typically a console default of `${MERGE_ID}`); CodeArts substitutes with Java `Matcher.appendReplacement`, which reads `${` as a group reference. Keep input defaults free of `${`, and read system parameters through the step `env:` block. |
 | Checkout reports `expected a merge_request payload, received note` | PR comments use the Note Event schema. Read PR metadata from `payload.merge_request`, not the comment's `payload.object_attributes`. |

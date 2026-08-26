@@ -37,7 +37,10 @@ CodeArts's default pool cannot create user namespaces, so Runner UT and E2E
 run only on GitHub or on a self-hosted pool that passes a bubblewrap probe.
 The CodeArts parent workflow also invokes the externally registered code-check
 child (SCA, anti-poison, static analysis, blacklist) and renders one result
-comment from the code check, UT, and ST job statuses. This repository
+comment from the code check, UT, and ST job statuses. A second CodeArts
+pipeline, `codearts-auto-merge-pipeline.yml`, lands a merge request when a
+`CODEOWNERS` member comments `/merge` on it, through GitCode's merge API with
+`merge_method=rebase` (see the CodeArts reference). This repository
 intentionally has no `.gitcode/workflows/` pipeline; do not reintroduce
 GitCode Actions unless the user changes that policy.
 
