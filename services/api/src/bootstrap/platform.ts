@@ -19,7 +19,7 @@ import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { reviewerLog } from "@sciencediscovery/provenance";
-import type { ResolvedProxy } from "@sciencediscovery/schema";
+import type { ModelsDevPayload, ResolvedProxy } from "@sciencediscovery/schema";
 
 import { apiLog, configureApiLogging } from "../logging.js";
 import { MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
@@ -39,6 +39,8 @@ import type { ServerConfig } from "./config.js";
 
 export interface ApiServerDependencies {
   connectorFetch?: typeof fetch;
+  /** Test seam: resolve the model catalog from a fixture instead of models.dev. */
+  fetchModelCatalog?: (options: { proxy?: ResolvedProxy; url: string }) => Promise<ModelsDevPayload>;
   /** Test seam: drive MCP through a stub transport instead of live servers. */
   mcpTransport?: McpTransportClient;
 }

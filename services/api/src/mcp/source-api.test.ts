@@ -48,6 +48,8 @@ test("MCP source API exposes only native MCP sources", async (context) => {
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
     kernelIdleTimeoutMs: 0,
+    // No packaging snapshot in tests: the catalog stays empty unless a test installs one.
+    modelCatalogPath: resolve(dataDir, "model-catalog/absent.json"),
     paperPythonPath: resolve(dataDir, "paper-python"),
     paperWorkerPath: resolve(dataDir, "paper-worker.py"),
     port: 0,

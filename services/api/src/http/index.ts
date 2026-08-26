@@ -23,7 +23,12 @@ import {
   WORKSPACE_SYSTEM_PROMPT_VERSION,
 } from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
-import { listProviderModels, ModelDiscoveryError, type DiscoveredModel } from "@sciencediscovery/model";
+import {
+  listProviderModels,
+  ModelCatalogFetchError,
+  ModelDiscoveryError,
+  type DiscoveredModel,
+} from "@sciencediscovery/model";
 import {
   listCatalogModelsForPreset,
   lookupModelCatalog,
@@ -149,6 +154,7 @@ import {
   type RuntimeSkillSnapshot,
 } from "@sciencediscovery/specialist";
 import { SkillLibraryCatalog, SkillLibraryCatalogError } from "../skill-library-catalog.js";
+import { ModelCatalogStore } from "../model-catalog.js";
 import { handleSkillLibraryRequest } from "./skill-libraries.js";
 import {
   reviewerCheckpointPromptContent,
@@ -249,6 +255,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   } = platform;
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
+  const modelCatalog = new ModelCatalogStore({
+    bundledPath: config.modelCatalogPath,
+    dataDir: config.dataDir,
+    ...(dependencies.fetchModelCatalog ? { fetchCatalog: dependencies.fetchModelCatalog } : {}),
+  });
   // Provider model listings are cached briefly so composer and settings reads
   // do not hammer vendor endpoints; provider edits invalidate the entry and
   // `?refresh=1` forces a live fetch.
@@ -293,7 +304,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
     });
   };
-  const ready = skillLibraryCatalog.load()
+  // The catalog is installed before the store loads: saved thinking values are
+  // narrowed against it while model profiles are read, so a later install
+  // would constrain them against an empty catalog.
+  const ready = modelCatalog.load()
+    .then(() => skillLibraryCatalog.load())
     .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
     .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
     .then(() => undefined);
@@ -1089,6 +1104,25 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (modelMatch && request.method === "DELETE") {
         await store.deleteModel(modelMatch[1]!);
         sendJson(response, 200, { deleted: modelMatch[1] });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/model-catalog") {
+        sendJson(response, 200, modelCatalog.details);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/model-catalog/refresh") {
+        try {
+          // The catalog is a plain HTTPS download, so it follows the global
+          // default proxy rather than any single provider's policy.
+          sendJson(response, 200, await modelCatalog.refresh(store.resolveProxy("inherit")));
+        } catch (error) {
+          if (error instanceof ModelCatalogFetchError) {
+            // The previously installed snapshot is still in place; say what
+            // failed so the user can act on it.
+            throw new ApiStatusError(502, error.message);
+          }
+          throw error;
+        }
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/providers") {

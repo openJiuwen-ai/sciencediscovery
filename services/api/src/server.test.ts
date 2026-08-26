@@ -24,6 +24,7 @@ import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 
 import { createRunnerServer, type RunnerConfig } from "@sciencediscovery/runner";
+import { ModelCatalogFetchError } from "@sciencediscovery/model";
 import type {
   ApiError,
   ArtifactDerivation,
@@ -39,6 +40,7 @@ import type {
   ExecutionRun,
   ModelConnectivityTestResult,
   ModelProfile,
+  ModelCatalogDetails,
   ModelProvider,
   ModelProviderPreset,
   McpInvocation,
@@ -154,6 +156,8 @@ function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1"): ServerCo
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
     kernelIdleTimeoutMs: 0,
+    // No packaging snapshot in tests: the catalog stays empty unless a test installs one.
+    modelCatalogPath: resolve(dataDir, "model-catalog/absent.json"),
     paperPythonPath: resolve(process.cwd(), "../paper/.venv/bin/python"),
     paperWorkerPath: resolve(process.cwd(), "../paper/paper_worker.py"),
     port: 0,
@@ -294,6 +298,7 @@ async function startTestApi(
   context: TestContext,
   dataDir: string,
   mcpTransport?: McpTransportClient,
+  configOverrides: Partial<ServerConfig> = {},
 ): Promise<{ origin: string }> {
   const runnerConfig: RunnerConfig = {
     authToken: "runner-test-token",
@@ -315,7 +320,7 @@ async function startTestApi(
   const runnerOrigin = `http://127.0.0.1:${(runner.address() as AddressInfo).port}`;
 
   const server = createApiServer(
-    testConfig(dataDir, runnerOrigin),
+    { ...testConfig(dataDir, runnerOrigin), ...configOverrides },
     mcpTransport ? { mcpTransport } : {},
   );
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
@@ -5181,7 +5186,26 @@ test("provider REST discovers models, reports upstream failure, and keeps manual
   context.after(() => new Promise<void>((resolveClose) => upstream.close(() => resolveClose())));
   const upstreamOrigin = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
 
-  const { origin } = await startTestApi(context, tempRoot);
+  // Zhipu has no listing endpoint, so its suggestions come from the catalog.
+  // The catalog is downloaded at runtime, so the test states the two models it
+  // asserts on instead of depending on whatever the live document says today.
+  const catalogPath = resolve(tempRoot, "packaged/models-dev.json");
+  await mkdir(resolve(tempRoot, "packaged"), { recursive: true });
+  await writeFile(catalogPath, JSON.stringify({
+    fetchedAt: "2026-08-26T00:00:00.000Z",
+    payload: {
+      zhipuai: {
+        doc: "https://docs.z.ai/guides/overview/pricing",
+        id: "zhipuai",
+        models: {
+          "glm-5.2": { id: "glm-5.2", limit: { context: 200_000 }, name: "GLM-5.2", reasoning: true },
+        },
+      },
+    },
+    sourceUrl: "https://models.dev/api.json",
+  }), "utf8");
+
+  const { origin } = await startTestApi(context, tempRoot, undefined, { modelCatalogPath: catalogPath });
   const registry = await jsonRequest<{ presets: ModelProviderPreset[]; providers: ModelProvider[] }>(
     `${origin}/api/providers`,
     { headers: authorization },
@@ -5873,4 +5897,85 @@ test("publishing routes growable payloads into child streams and keeps the main 
   assert.ok(milestone.event.type === "subagent.updated" && milestone.event.subagent.steps.length === 0,
     "the persisted milestone does not repeat accumulated steps");
   assert.ok(subagent.steps.length > 0, "the source subagent still owns its steps");
+});
+
+test("the model catalog endpoint serves the packaged snapshot and keeps it when a refresh fails", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-catalog-api-${Date.now()}-${process.pid}`);
+  await mkdir(resolve(tempRoot, "packaged"), { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const document = (contextWindow: number) => ({
+    openai: {
+      doc: "https://developers.openai.com/api/docs/api-reference/introduction",
+      id: "openai",
+      models: {
+        "gpt-5.5": {
+          cost: { input: 1.25, output: 10 },
+          id: "gpt-5.5",
+          limit: { context: contextWindow, output: 128_000 },
+          modalities: { input: ["text", "image"], output: ["text"] },
+          name: "GPT-5.5",
+          reasoning: true,
+          reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh"] }],
+        },
+      },
+    },
+  });
+  const bundledPath = resolve(tempRoot, "packaged/models-dev.json");
+  await writeFile(bundledPath, JSON.stringify({
+    fetchedAt: "2026-08-20T00:00:00.000Z",
+    payload: document(400_000),
+    sourceUrl: "https://models.dev/api.json",
+  }), "utf8");
+
+  let downloadFails = false;
+  const server = createApiServer(
+    { ...testConfig(tempRoot, "http://127.0.0.1:1"), modelCatalogPath: bundledPath },
+    {
+      fetchModelCatalog: async () => {
+        if (downloadFails) throw new ModelCatalogFetchError("The model catalog is unreachable: connect ECONNREFUSED");
+        return document(1_050_000);
+      },
+    },
+  );
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  assert.equal((await fetch(`${origin}/api/model-catalog`)).status, 401);
+  const packaged = await jsonRequest<ModelCatalogDetails>(`${origin}/api/model-catalog`, { headers: authorization });
+  assert.equal(packaged.body.snapshot?.origin, "bundled");
+  assert.equal(packaged.body.snapshot?.fetchedAt, "2026-08-20T00:00:00.000Z");
+  assert.equal(packaged.body.sourceUrl, "https://models.dev/api.json");
+  assert.equal(
+    packaged.body.snapshot?.records.find((record) => record.key === "gpt-5.5")?.contextWindow,
+    400_000,
+    "the Web app receives the records it needs for its own synchronous lookups",
+  );
+
+  const refreshed = await jsonRequest<ModelCatalogDetails>(`${origin}/api/model-catalog/refresh`, {
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(refreshed.response.status, 200);
+  assert.equal(refreshed.body.snapshot?.origin, "downloaded");
+  assert.notEqual(refreshed.body.snapshot?.fetchedAt, "2026-08-20T00:00:00.000Z");
+  assert.equal(
+    refreshed.body.snapshot?.records.find((record) => record.key === "gpt-5.5")?.contextWindow,
+    1_050_000,
+  );
+
+  downloadFails = true;
+  const failure = await jsonRequest<ApiError>(`${origin}/api/model-catalog/refresh`, {
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(failure.response.status, 502);
+  assert.match(failure.body.error, /unreachable/);
+  const afterFailure = await jsonRequest<ModelCatalogDetails>(`${origin}/api/model-catalog`, { headers: authorization });
+  assert.deepEqual(
+    afterFailure.body.snapshot?.fetchedAt,
+    refreshed.body.snapshot?.fetchedAt,
+    "a failed refresh leaves the last successful catalog in place",
+  );
 });

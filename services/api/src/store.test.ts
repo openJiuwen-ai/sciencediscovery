@@ -30,6 +30,7 @@ import {
 import {
   SessionStore,
 } from "./store.js";
+import { installApiTestModelCatalog } from "./model-catalog.fixture.js";
 import { encryptModelApiToken } from "./store/secrets.js";
 import { normalizeMemoryGraphSettings } from "./store/settings.js";
 
@@ -2818,6 +2819,7 @@ test("model providers: preset creation, token fallback, sync, and lifecycle", as
 });
 
 test("provider models materialize exact Kimi, Responses, and Anthropic capabilities", async (context) => {
+  installApiTestModelCatalog();
   const tempRoot = resolve(process.cwd(), ".tmp", `provider-capabilities-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -2881,6 +2883,9 @@ test("runtime settings carry legal thinking overrides through scopes and narrow 
   const tempRoot = resolve(process.cwd(), ".tmp", `thinking-overrides-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  // The catalog records this model as accepting only `high` and `max`, which is
+  // what the narrowing below is asserted against.
+  installApiTestModelCatalog();
   const store = new SessionStore(tempRoot);
   await store.load();
 
@@ -2888,7 +2893,7 @@ test("runtime settings carry legal thinking overrides through scopes and narrow 
     apiToken: "tok",
     apiVariant: "deepseek",
     baseUrl: "https://api.example/v1",
-    model: "deepseek-v4-flash",
+    model: "deepseek-v4-pro",
     name: "示例模型",
   });
   const project = await store.createProject("thinking");

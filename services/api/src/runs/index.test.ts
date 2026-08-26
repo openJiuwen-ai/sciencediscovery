@@ -17,6 +17,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
+import { installApiTestModelCatalog } from "../model-catalog.fixture.js";
 import { SessionStore } from "../store.js";
 import { computeSettingsSnapshot, skillAuthoringCommandPrompt, splitArtifactVersionSuffix } from "./index.js";
 
@@ -81,6 +82,7 @@ test("Skill authoring slash commands expand into guarded Agent workflows", () =>
 });
 
 test("run snapshots narrow legacy Responses max to the selected model wire capability", async (context) => {
+  installApiTestModelCatalog();
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
