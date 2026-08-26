@@ -78,16 +78,15 @@
   .settings-group-nav { max-width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
   .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
   .settings-group-detail { padding: 22px 18px 30px; }
-  .skill-manager-grid { grid-template-columns: minmax(0, 1fr); }
-  .skill-catalog-list { max-height: 180px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .skill-library-grid { grid-template-columns: minmax(0, 1fr); }
+  .skill-library-catalog { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--border); }
   .skill-library-create, .skill-library-diff-controls, .skill-library-diff { grid-template-columns: minmax(0, 1fr); }
-  .skill-manager-toolbar input { flex-basis: 100%; }
-  .skill-manager-toolbar button { flex: 1 1 140px; }
-  .skill-detail > header, .environment-card-heading { align-items: stretch; flex-direction: column; }
-  .skill-detail-actions { width: 100%; }
-  .skill-detail-actions button { flex: 1 1 140px; }
-  .skill-metadata { grid-template-columns: minmax(0, 1fr); }
+  .skill-library-create > button, .skill-library-diff-controls > button { width: 100%; }
+  .skill-library-detail > header, .environment-card-heading { align-items: stretch; flex-direction: column; }
   .skill-manager-hero { align-items: stretch; flex-direction: column; }
+  .skill-manager-hero-actions { width: 100%; align-items: stretch; flex-direction: column; }
+  .skill-manager-tabs { width: 100%; }
+  .skill-manager-tabs button { flex: 1 1 0; }
   .skill-manager-stats { width: 100%; }
   .skill-manager-stats > span { flex: 1 1 0; min-width: 0; }
   .skill-manager-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }

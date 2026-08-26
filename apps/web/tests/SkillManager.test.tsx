@@ -25,8 +25,6 @@ import { normalizeGitSkillLocation, requestFromDraft, SkillManager, validateSkil
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-
 const skill = {
   currentRevision: 1,
   description: "Read-only built-in evidence workflow",
@@ -263,5 +261,8 @@ test("renders skill library cards with pinned head version metadata", async () =
   assert.match(text, /abcdef123456/);
   assert.match(text, /Pending proposals/);
   assert.match(text, /gamma-skill/);
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-library-grid" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-library-card active" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ "aria-label": "Skill library summary" }).length, 1);
   await act(async () => renderer!.unmount());
 });

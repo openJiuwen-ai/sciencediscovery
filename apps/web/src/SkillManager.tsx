@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import React, { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import type {
   CreateSkillPackageRequest,
@@ -162,13 +162,11 @@ export function SkillManager({
 
   if (view === "libraries") {
     return <div className="skill-manager">
-      <SkillManagerHeader activeView={view} onViewChange={setView} />
-      <SkillLibraryManager client={client} onError={onError} />
+      <SkillLibraryManager client={client} onError={onError} onViewChange={setView} />
     </div>;
   }
 
   return <div className="skill-manager">
-    <SkillManagerHeader activeView={view} onViewChange={setView} />
     <SkillCatalogManager
       client={client}
       onCatalogChange={onCatalogChange}
@@ -176,6 +174,7 @@ export function SkillManager({
       onError={onError}
       onOpenSession={onOpenSession}
       onStartSkillCreation={onStartSkillCreation}
+      onViewChange={setView}
       onWorkspaceLaunchHandled={onWorkspaceLaunchHandled}
       sessionId={sessionId}
       skills={skills}
@@ -184,20 +183,17 @@ export function SkillManager({
   </div>;
 }
 
-function SkillManagerHeader({
+function SkillManagerViewTabs({
   activeView,
   onViewChange,
 }: {
   activeView: "libraries" | "skills";
   onViewChange: (view: "libraries" | "skills") => void;
 }) {
-  return <>
-    <div className="settings-detail-header"><span className="eyebrow">Agent Skills</span><h3>Skill manager</h3><p>Author portable skills and manage versioned skill libraries for batch evaluation writeback.</p></div>
-    <div aria-label="Skill manager views" className="skill-manager-tabs" role="tablist">
-      <button aria-selected={activeView === "skills"} className={activeView === "skills" ? "active" : ""} onClick={() => onViewChange("skills")} role="tab" type="button">Skills</button>
-      <button aria-selected={activeView === "libraries"} className={activeView === "libraries" ? "active" : ""} onClick={() => onViewChange("libraries")} role="tab" type="button">Libraries</button>
-    </div>
-  </>;
+  return <div aria-label="Skill manager views" className="skill-manager-tabs" role="tablist">
+    <button aria-selected={activeView === "skills"} className={activeView === "skills" ? "active" : ""} onClick={() => onViewChange("skills")} role="tab" type="button">Skills</button>
+    <button aria-selected={activeView === "libraries"} className={activeView === "libraries" ? "active" : ""} onClick={() => onViewChange("libraries")} role="tab" type="button">Libraries</button>
+  </div>;
 }
 
 function SkillCatalogManager({
@@ -207,6 +203,7 @@ function SkillCatalogManager({
   onError,
   onOpenSession,
   onStartSkillCreation,
+  onViewChange,
   onWorkspaceLaunchHandled,
   sessionId,
   skills,
@@ -218,6 +215,7 @@ function SkillCatalogManager({
   onError: (message: string) => void;
   onOpenSession?: (sessionId: string) => void;
   onStartSkillCreation?: () => void;
+  onViewChange: (view: "libraries" | "skills") => void;
   onWorkspaceLaunchHandled?: (requestId: number) => void;
   sessionId?: string;
   skills: SkillDescriptor[];
@@ -474,10 +472,13 @@ function SkillCatalogManager({
   return <div className="skill-catalog-manager">
     <section className="skill-manager-hero">
       <div><span className="eyebrow">Agent Skills</span><h3>Skill manager</h3></div>
-      <div aria-label="Skill catalog summary" className="skill-manager-stats">
-        <span><strong>{skills.length}</strong><small>Installed</small></span>
-        <span><strong>{skills.filter((skill) => skill.source === "managed").length}</strong><small>Managed</small></span>
-        <span className={reviewDrafts.length ? "has-pending" : undefined}><strong>{reviewDrafts.length}</strong><small>Awaiting review</small></span>
+      <div className="skill-manager-hero-actions">
+        <SkillManagerViewTabs activeView="skills" onViewChange={onViewChange} />
+        <div aria-label="Skill catalog summary" className="skill-manager-stats">
+          <span><strong>{skills.length}</strong><small>Installed</small></span>
+          <span><strong>{skills.filter((skill) => skill.source === "managed").length}</strong><small>Managed</small></span>
+          <span className={reviewDrafts.length ? "has-pending" : undefined}><strong>{reviewDrafts.length}</strong><small>Awaiting review</small></span>
+        </div>
       </div>
     </section>
     <div className="skill-manager-toolbar">
@@ -581,9 +582,11 @@ function diffCount(diff?: SkillLibraryDiff): number {
 function SkillLibraryManager({
   client,
   onError,
+  onViewChange,
 }: {
   client: ApiClient;
   onError: (message: string) => void;
+  onViewChange: (view: "libraries" | "skills") => void;
 }) {
   const [libraries, setLibraries] = useState<SkillLibrary[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
@@ -825,26 +828,39 @@ function SkillLibraryManager({
     }
   }
 
-  return <>
+  return <div className="skill-library-manager">
+    <section className="skill-manager-hero skill-library-hero">
+      <div><span className="eyebrow">Versioned collections</span><h3>Skill libraries</h3></div>
+      <div className="skill-manager-hero-actions">
+        <SkillManagerViewTabs activeView="libraries" onViewChange={onViewChange} />
+        <div aria-label="Skill library summary" className="skill-manager-stats">
+          <span><strong>{libraries.length}</strong><small>Libraries</small></span>
+          <span><strong>{versions.length}</strong><small>Versions</small></span>
+          <span className={selectedLibraryProposals.length ? "has-pending" : undefined}><strong>{selectedLibraryProposals.length}</strong><small>Proposals</small></span>
+        </div>
+      </div>
+    </section>
     <form className="skill-library-create" onSubmit={(event) => void createLibrary(event)}>
       <label><span>Library name</span><input onChange={(event) => setLibraryName(event.target.value)} placeholder="Evaluation skills" value={libraryName} /></label>
       <label><span>Stable id</span><input onChange={(event) => setLibraryId(event.target.value)} placeholder="evaluation-skills" value={libraryId} /></label>
       <button className="primary-button" disabled={busy} type="submit">Create library</button>
     </form>
     {status ? <p className="skill-manager-error" role="status">{status}</p> : null}
-    <div className="skill-manager-grid skill-library-grid">
-      <div aria-label="Skill libraries" className="skill-catalog-list">
+    <div className="skill-library-grid">
+      <div aria-label="Skill libraries" className="skill-library-catalog">
+        <header><strong>Libraries</strong><span>{libraries.length}</span></header>
         {libraries.map((library) => {
           const headVersion = versions.find((version) => version.id === library.headVersionId);
           const isSelected = library.id === selectedId;
-          return <button aria-label={`Skill library ${library.name}`} className={isSelected ? "skill-card active" : "skill-card"} key={library.id} onClick={() => { setSelectedId(library.id); setSelectedProposalIds(new Set()); setDiff(undefined); }} title={library.name} type="button">
-          <span><strong>{library.name}</strong><small>{library.headVersionId ? `Head ${library.headVersionId.slice(0, 8)}` : "No published versions"}</small>{isSelected && headVersion ? <small>{headVersion.skills.length} skills · {headVersion.contentHash.slice(0, 12)}</small> : null}</span>
+          return <button aria-label={`Skill library ${library.name}`} className={isSelected ? "skill-library-card active" : "skill-library-card"} key={library.id} onClick={() => { setSelectedId(library.id); setSelectedProposalIds(new Set()); setDiff(undefined); }} title={library.name} type="button">
+          <span aria-hidden="true" className="skill-library-card-icon">L</span>
+          <span className="skill-library-card-copy"><strong>{library.name}</strong><small>{library.headVersionId ? `Head ${library.headVersionId.slice(0, 8)}` : "No published versions"}</small>{isSelected && headVersion ? <small>{headVersion.skills.length} skills · {headVersion.contentHash.slice(0, 12)}</small> : null}</span>
           <span className="skill-source managed">{library.id}</span>
         </button>;
         })}
         {!libraries.length ? <p className="skill-empty">Create a skill library to begin.</p> : null}
       </div>
-      <div className="skill-detail skill-library-detail">
+      <div className="skill-library-detail">
         {!selectedLibrary ? <p className="skill-empty">Select or create a library.</p> : <>
           <header><div><span className="skill-source managed">Versioned library</span><h4>{selectedLibrary.name}</h4><p>{selectedLibrary.id} · {versions.length} version(s)</p></div></header>
           <section className="skill-library-section">
@@ -893,5 +909,5 @@ function SkillLibraryManager({
         </>}
       </div>
     </div>
-  </>;
+  </div>;
 }

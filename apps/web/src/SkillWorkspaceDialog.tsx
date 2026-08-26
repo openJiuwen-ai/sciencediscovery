@@ -2,7 +2,7 @@
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import React, { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type {
   GitSkillImportCandidate,
