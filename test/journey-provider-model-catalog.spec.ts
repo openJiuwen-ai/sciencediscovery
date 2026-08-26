@@ -247,7 +247,9 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     const addRegion = dialog.getByRole("region", { name: /^(添加 Provider|Add provider)$/ });
     const customCard = addRegion.getByRole("button", { name: /^(自定义服务商|Custom provider)/ });
     if (!await customCard.isVisible()) {
-      await addRegion.getByRole("button", { name: /^(添加 Provider|Add provider)/ }).click();
+      // The disclosure title renders with a decorative ":before marker ("+ ")
+      // that Chromium folds into the accessible name, so match it loosely.
+      await addRegion.getByRole("button", { name: /添加 Provider|Add provider/ }).click();
     }
     return addRegion;
   };
@@ -364,11 +366,21 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
   try {
     await journey.step(
       "模型注册表把常见预设收进“添加 Provider”",
-      "模型注册表主视图是目录状态与已配置服务商，而不是铺开的预设墙。展开“添加 Provider”后可见 DeepSeek、智谱 GLM、OpenAI、Anthropic、Gemini、DashScope 等常见预设；每张需密钥的卡片标明“只需令牌”，末尾是“自定义服务商”。",
+      "模型注册表主视图是目录状态与已配置服务商，而不是铺开的预设墙；设置窗口放大到约 80% 视口保持响应式。展开“添加 Provider”后可见 DeepSeek、智谱 GLM、OpenAI、Anthropic、Gemini、DashScope 等常见预设；每张需密钥的卡片标明“只需令牌”，末尾是“自定义服务商”。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openModelRegistry();
+        // The settings window is resized to roughly 80% of the viewport and
+        // stays responsive: at 1280×720 it should measure about 1024×576.
+        const dialogGeometry = await dialog.evaluate(() => {
+          const rect = document.querySelector(".system-config-dialog")!.getBoundingClientRect();
+          return { height: rect.height, width: rect.width, viewportHeight: window.innerHeight, viewportWidth: window.innerWidth };
+        });
+        expect(dialogGeometry.width).toBeGreaterThanOrEqual(0.78 * dialogGeometry.viewportWidth - 2);
+        expect(dialogGeometry.width).toBeLessThanOrEqual(0.83 * dialogGeometry.viewportWidth + 2);
+        expect(dialogGeometry.height).toBeGreaterThanOrEqual(0.78 * dialogGeometry.viewportHeight - 2);
+        expect(dialogGeometry.height).toBeLessThanOrEqual(0.83 * dialogGeometry.viewportHeight + 2);
         const addRegion = await expandAddProvider(dialog);
         for (const name of ["DeepSeek", "智谱 GLM", "OpenAI", "Anthropic", "Google Gemini", "Alibaba Cloud Model Studio"]) {
           await expect(addRegion.getByRole("button", { name: new RegExp(name) })).toBeVisible();
@@ -384,6 +396,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const status = dialog.getByRole("region", { name: "模型元数据目录" });
+        await expect(status).toContainText("数据来源：models.dev");
         await expect(status).toContainText("随本次构建发布，最近更新于");
         await expect(status.getByRole("button", { name: "刷新目录" })).toBeVisible();
 
@@ -664,6 +677,16 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const sources = flash.getByRole("link", { name: "官方来源 · 2026-08-26" });
         await expect(sources).toHaveCount(1);
         await expect(sources).toHaveAttribute("href", "https://api-docs.deepseek.com/quick_start/pricing");
+
+        // The pulled model list is a collapsible <details>: collapse hides the
+        // cards, expanding brings them back.
+        const modelsDetails = dialog.locator("details.provider-models-details");
+        await modelsDetails.locator(":scope > summary").click();
+        await expect(modelsDetails).not.toHaveJSProperty("open", true);
+        await expect(modelsDetails.locator("article.provider-model-card").first()).toBeHidden();
+        await modelsDetails.locator(":scope > summary").click();
+        await expect(modelsDetails).toHaveJSProperty("open", true);
+        await expect(dialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" })).toBeVisible();
 
         await registry.getByRole("button", { name: new RegExp(customName) }).click();
         await expect(dialog.locator("article.provider-model-card").filter({ hasText: "deepseek-v4-flash" })).toBeVisible();

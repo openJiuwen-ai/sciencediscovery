@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { expect } from "@playwright/test";
+import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import { expect, type Page } from "@playwright/test";
 
 import { test } from "./helpers/e2e.ts";
 import {
@@ -129,12 +130,16 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await settings.getByRole("button", { name: "+ 添加模型" }).click();
 
         const nameInput = settings.getByLabel("显示名称");
-        await settings.getByLabel("基础接口").selectOption("openai-chat-completions");
-        await settings.getByLabel("接口变种").selectOption("deepseek");
-        await settings.getByLabel("思考开关").selectOption("enabled");
-        await settings.getByLabel("思考强度").selectOption("max");
-        const baseUrlInput = settings.getByLabel("Chat Completions 基础 URL");
-        const modelInput = settings.getByLabel("模型 ID");
+        // The registry shows both the provider editor and the standalone model
+        // editor once a provider exists, so scope protocol/variant selects to
+        // the model form.
+        const modelEditor = settings.locator("form.model-editor");
+        await modelEditor.getByLabel("基础接口").selectOption("openai-chat-completions");
+        await modelEditor.getByLabel("接口变种").selectOption("deepseek");
+        await modelEditor.getByLabel("思考开关").selectOption("enabled");
+        await modelEditor.getByLabel("思考强度").selectOption("max");
+        const baseUrlInput = modelEditor.getByLabel("Chat Completions 基础 URL");
+        const modelInput = modelEditor.getByLabel("模型 ID");
         await expect(baseUrlInput).toHaveValue("");
         await expect(modelInput).toHaveValue("");
         await expect(baseUrlInput).toHaveAttribute("placeholder", "一般以 v1 结尾");
@@ -161,10 +166,11 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
           await reopenedAdvanced.locator(":scope > summary").click();
         }
         await reopened.locator(".model-card").filter({ hasText: modelName }).click();
-        await expect(reopened.getByLabel("基础接口")).toHaveValue("openai-chat-completions");
-        await expect(reopened.getByLabel("接口变种")).toHaveValue("deepseek");
-        await expect(reopened.getByLabel("思考开关")).toHaveValue("enabled");
-        await expect(reopened.getByLabel("思考强度")).toHaveValue("max");
+        const reopenedEditor = reopened.locator("form.model-editor");
+        await expect(reopenedEditor.getByLabel("基础接口")).toHaveValue("openai-chat-completions");
+        await expect(reopenedEditor.getByLabel("接口变种")).toHaveValue("deepseek");
+        await expect(reopenedEditor.getByLabel("思考开关")).toHaveValue("enabled");
+        await expect(reopenedEditor.getByLabel("思考强度")).toHaveValue("max");
         await reopened.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
         await expect(reopened).toBeHidden();
       },
@@ -188,15 +194,17 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         fixture = { model: model!, project: created.project, session: created.firstSession };
 
         await expect(page.getByRole("heading", { name: created.firstSession.title })).toBeVisible();
-        const composer = page.locator("form.composer");
-        const modelPicker = composer.getByLabel("本任务使用的模型");
-        const modelOption = modelPicker.locator("option").filter({ hasText: modelName });
-        const modelValue = await modelOption.getAttribute("value");
-        expect(modelValue).toBeTruthy();
-        await modelPicker.selectOption(modelValue!);
-        await expect(modelPicker.locator("option:checked")).toContainText(modelName);
-        await expect(modelPicker.locator("option:checked")).toContainText("DeepSeek");
-        await expect(modelPicker.locator("option:checked")).toContainText("开启: 最大");
+        // The inline composer select was replaced by a trigger button that opens
+        // the provider-grouped model picker dialog.
+        await page.getByLabel("本任务使用的模型").click();
+        const picker = page.getByRole("dialog", { name: "选择模型" });
+        const modelOption = picker.getByRole("option", { name: new RegExp(modelName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")) });
+        await modelOption.click();
+        await expect(modelOption).toHaveAttribute("aria-selected", "true");
+        await picker.getByRole("button", { name: "关闭模型选择" }).click();
+        await expect(picker).toBeHidden();
+        await expect(page.locator(".model-picker-trigger-name")).toContainText(modelName);
+        await expect(page.locator(".model-picker-trigger-thinking")).toContainText("最\u5927");
       },
     );
 
@@ -257,6 +265,36 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
     );
   } finally {
     if (fixture) await cleanupJourney(page, fixture);
+    try {
+      if (model) {
+        // The first standalone model becomes the global default, so clear the
+        // runtime-setting reference before deleting it.
+        const settings = await (await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
+          headers: authorizationHeader(),
+        })).json() as { overrides?: Record<string, unknown> };
+        const overrides = { ...(settings.overrides ?? {}) };
+        let changed = false;
+        for (const key of ["modelId", "reviewModelId"]) {
+          if (overrides[key] === model.id) {
+            delete overrides[key];
+            changed = true;
+          }
+        }
+        if (changed) {
+          await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
+            data: overrides,
+            headers: { ...authorizationHeader(), "content-type": "application/json" },
+            method: "PUT",
+          });
+        }
+        await page.request.fetch(`${apiBaseUrl()}/api/models/${encodeURIComponent(model.id)}`, {
+          headers: authorizationHeader(),
+          method: "DELETE",
+        });
+      }
+    } catch {
+      // Best-effort cleanup; the journey result is authoritative.
+    }
     await stub.stop();
   }
 });

@@ -103,16 +103,16 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         }
         await dialog.getByLabel("显示名称").scrollIntoViewIfNeeded();
         await expect(dialog.getByLabel("显示名称")).toBeInViewport();
-        await dialog.getByLabel("接口变种").scrollIntoViewIfNeeded();
+        await dialog.locator("form.model-editor").getByLabel("接口变种").scrollIntoViewIfNeeded();
         for (const label of ["基础接口", "接口变种"]) {
-          await expect(dialog.getByLabel(label)).toBeInViewport();
+          await expect(dialog.locator("form.model-editor").getByLabel(label)).toBeInViewport();
         }
         await expect(dialog.getByLabel("思考开关")).toHaveCount(0);
         await expect(dialog.getByLabel("思考强度")).toHaveCount(0);
         await expect(dialog.getByText("此接口变种没有思考控制字段。服务商会忽略思考开关与强度，因此不会保存这些设置。")).toBeVisible();
         const pairings = await dialog.evaluate(() => {
           const rowOf = (label: string) => {
-            const s = Array.from(document.querySelectorAll(".config-panel label > span"))
+            const s = Array.from(document.querySelectorAll(".model-editor label > span"))
               .find((x) => x.textContent.trim() === label);
             return s ? s.parentElement.getBoundingClientRect() : null;
           };
@@ -132,7 +132,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       + "思考开启前提示「仅在思考开关为『开启』时发送」；开启思考并选「最大」后强度生效。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByLabel("接口变种").selectOption("deepseek");
+        await dialog.locator("form.model-editor").getByLabel("接口变种").selectOption("deepseek");
         await expect(dialog.getByText("发送思考开关与强度；回复以 reasoning_content 流式返回。")).toBeVisible();
         await expect(dialog.getByText("仅在思考开关为“开启”时发送。")).toBeVisible();
         const effort = dialog.getByLabel("思考强度");
@@ -158,12 +158,12 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       + "换回 DeepSeek 后可重新开启思考并选择最大强度。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByLabel("接口变种").selectOption("openai");
+        await dialog.locator("form.model-editor").getByLabel("接口变种").selectOption("openai");
         await expect(dialog.getByLabel("思考开关")).toHaveCount(0);
         await expect(dialog.getByLabel("思考强度")).toHaveCount(0);
         await expect(dialog.getByText("此接口变种没有思考控制字段。服务商会忽略思考开关与强度，因此不会保存这些设置。")).toBeVisible();
         await expect(dialog.getByText("标准 Chat Completions 请求，不发送思考控制字段。")).toBeVisible();
-        await dialog.getByLabel("接口变种").selectOption("deepseek");
+        await dialog.locator("form.model-editor").getByLabel("接口变种").selectOption("deepseek");
         await dialog.getByLabel("思考开关").selectOption("enabled");
         await dialog.getByLabel("思考强度").selectOption("max");
         await expect(dialog.getByLabel("思考强度")).toHaveValue("max");
@@ -204,8 +204,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         // 上一步保存后对话框仍开着、已展示模型列表，直接点卡片进入编辑。
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.locator(".model-card").filter({ hasText: modelName }).click();
-        await expect(dialog.getByLabel("基础接口")).toHaveValue("openai-chat-completions");
-        await expect(dialog.getByLabel("接口变种")).toHaveValue("deepseek");
+        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-chat-completions");
+        await expect(dialog.locator("form.model-editor").getByLabel("接口变种")).toHaveValue("deepseek");
         await expect(dialog.getByLabel("思考开关")).toHaveValue("enabled");
         await expect(dialog.getByLabel("思考强度")).toHaveValue("max");
       },
@@ -218,7 +218,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         let dialog = page.getByRole("dialog", { name: "系统设置" });
         const unsavedName = modelName + " 未保存";
         await dialog.getByLabel("显示名称").fill(unsavedName);
-        await dialog.getByLabel("基础接口").selectOption("openai-responses");
+        await dialog.locator("form.model-editor").getByLabel("基础接口").selectOption("openai-responses");
 
         let confirmationMessage = "";
         page.once("dialog", (confirmation) => {
@@ -229,7 +229,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         expect(confirmationMessage).toContain("放弃尚未保存的高级模型修改");
         await expect(dialog).toBeVisible();
         await expect(dialog.getByLabel("显示名称")).toHaveValue(unsavedName);
-        await expect(dialog.getByLabel("基础接口")).toHaveValue("openai-responses");
+        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-responses");
 
         page.once("dialog", (confirmation) => void confirmation.accept());
         await page.keyboard.press("Escape");
@@ -238,8 +238,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         dialog = await openModelRegistry();
         await dialog.locator(".model-card").filter({ hasText: modelName }).click();
         await expect(dialog.getByLabel("显示名称")).toHaveValue(modelName);
-        await expect(dialog.getByLabel("基础接口")).toHaveValue("openai-chat-completions");
-        await expect(dialog.getByLabel("接口变种")).toHaveValue("deepseek");
+        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-chat-completions");
+        await expect(dialog.locator("form.model-editor").getByLabel("接口变种")).toHaveValue("deepseek");
       },
     );
 
@@ -250,7 +250,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         let dialog = page.getByRole("dialog", { name: "系统设置" });
         const updatedName = modelName + " 已更新";
         await dialog.getByLabel("显示名称").fill(updatedName);
-        await dialog.getByLabel("基础接口").selectOption("openai-responses");
+        await dialog.locator("form.model-editor").getByLabel("基础接口").selectOption("openai-responses");
         const modelPath = "/api/models/" + encodeURIComponent(createdModelId!);
         const modelUrl = (url: URL) => url.pathname === modelPath;
         const failSave = async (route: import("@playwright/test").Route) => {
@@ -264,11 +264,11 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await dialog.getByRole("button", { name: "保存", exact: true }).click();
         await expect(dialog.getByText(/fixture model save denied/)).toBeVisible();
         await expect(dialog.getByLabel("显示名称")).toHaveValue(updatedName);
-        await expect(dialog.getByLabel("基础接口")).toHaveValue("openai-responses");
+        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-responses");
         await page.unroute(modelUrl, failSave);
 
-        await dialog.getByLabel("基础接口").selectOption("openai-chat-completions");
-        await dialog.getByLabel("接口变种").selectOption("deepseek");
+        await dialog.locator("form.model-editor").getByLabel("基础接口").selectOption("openai-chat-completions");
+        await dialog.locator("form.model-editor").getByLabel("接口变种").selectOption("deepseek");
         const saveResponse = page.waitForResponse((response) =>
           response.request().method() === "PUT" && new URL(response.url()).pathname === modelPath);
         await dialog.getByRole("button", { name: "保存并关闭" }).click();
@@ -278,8 +278,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         dialog = await openModelRegistry();
         await dialog.locator(".model-card").filter({ hasText: updatedName }).click();
         await expect(dialog.getByLabel("显示名称")).toHaveValue(updatedName);
-        await expect(dialog.getByLabel("基础接口")).toHaveValue("openai-chat-completions");
-        await expect(dialog.getByLabel("接口变种")).toHaveValue("deepseek");
+        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-chat-completions");
+        await expect(dialog.locator("form.model-editor").getByLabel("接口变种")).toHaveValue("deepseek");
         await dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
         await expect(dialog).toBeHidden();
       },
