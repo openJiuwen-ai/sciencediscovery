@@ -5467,6 +5467,107 @@ test("same-named uploads remain physically isolated and append one Project artif
   assert.deepEqual(versions.body.map((version) => version.sessionId), [sessionA.body.id, sessionB.body.id]);
 });
 
+test("Artifact deletion endpoint logically deletes without removing history or workspace files", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-lifecycle-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Artifact deletion" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const otherProject = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Other project" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Deletion Session" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const form = new FormData();
+  form.append("files", new Blob([Buffer.from("value\n1\n")], { type: "text/csv" }), "result.csv");
+  const upload = await jsonRequest<WorkspaceUploadResult>(
+    `${origin}/api/sessions/${session.body.id}/workspace/upload`,
+    { body: form, headers: authorization, method: "POST" },
+  );
+  assert.equal(upload.response.status, 201);
+
+  const initial = await jsonRequest<ScientificArtifact[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts`,
+    { headers: authorization },
+  );
+  assert.equal(initial.body.length, 1);
+  const originalArtifact = initial.body[0]!;
+  const originalVersions = await jsonRequest<ScientificArtifactVersion[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts/${originalArtifact.id}/versions`,
+    { headers: authorization },
+  );
+  assert.equal(originalVersions.body.length, 1);
+
+  const crossProject = await jsonRequest<{ error: string }>(
+    `${origin}/api/projects/${otherProject.body.id}/artifacts/${originalArtifact.id}`,
+    { headers: authorization, method: "DELETE" },
+  );
+  assert.equal(crossProject.response.status, 404);
+
+  const deletion = await jsonRequest<{ deleted: string }>(
+    `${origin}/api/projects/${project.body.id}/artifacts/${originalArtifact.id}`,
+    { headers: authorization, method: "DELETE" },
+  );
+  assert.equal(deletion.response.status, 200);
+  assert.equal(deletion.body.deleted, originalArtifact.id);
+  const afterDeletion = await jsonRequest<ScientificArtifact[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts`,
+    { headers: authorization },
+  );
+  assert.deepEqual(afterDeletion.body, []);
+  const retainedVersions = await jsonRequest<ScientificArtifactVersion[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts/${originalArtifact.id}/versions`,
+    { headers: authorization },
+  );
+  assert.deepEqual(retainedVersions.body.map((version) => version.id), [originalVersions.body[0]!.id]);
+  const retainedContent = await fetch(
+    `${origin}/api/projects/${project.body.id}/artifact-versions/${originalVersions.body[0]!.id}/content`,
+    { headers: authorization },
+  );
+  assert.equal(retainedContent.status, 200);
+  assert.equal(await retainedContent.text(), "value\n1\n");
+  const workspaceContent = await fetch(
+    `${origin}/api/sessions/${session.body.id}/file?path=result.csv`,
+    { headers: authorization },
+  );
+  assert.equal(workspaceContent.status, 200);
+  assert.equal(await workspaceContent.text(), "value\n1\n");
+  assert.equal((await fetch(
+    `${origin}/api/projects/${project.body.id}/artifacts/${originalArtifact.id}`,
+    { headers: authorization, method: "DELETE" },
+  )).status, 200);
+
+  const replacementForm = new FormData();
+  replacementForm.append("files", new Blob([Buffer.from("value\n2\n")], { type: "text/csv" }), "result.csv");
+  const replacementUpload = await jsonRequest<WorkspaceUploadResult>(
+    `${origin}/api/sessions/${session.body.id}/workspace/upload?conflict=overwrite`,
+    { body: replacementForm, headers: authorization, method: "POST" },
+  );
+  assert.equal(replacementUpload.response.status, 201);
+  const replacementArtifacts = await jsonRequest<ScientificArtifact[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts`,
+    { headers: authorization },
+  );
+  assert.equal(replacementArtifacts.body.length, 1);
+  assert.equal(replacementArtifacts.body[0]?.name, "result.csv");
+  assert.notEqual(replacementArtifacts.body[0]?.id, originalArtifact.id);
+  const replacementVersions = await jsonRequest<ScientificArtifactVersion[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts/${replacementArtifacts.body[0]!.id}/versions`,
+    { headers: authorization },
+  );
+  assert.deepEqual(replacementVersions.body.map((version) => version.version), [1]);
+});
+
 test("recovery cancels and replays undecided approvals for run and subagent scopes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `recover-approvals-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

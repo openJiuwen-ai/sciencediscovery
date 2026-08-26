@@ -735,15 +735,18 @@ export class SessionStore {
       const session = sessionsById.get(createdInSessionId);
       const projectId = legacy.projectId ?? session?.projectId;
       if (!projectId) return [];
+      const deletedAt = typeof legacy.deletedAt === "string" && legacy.deletedAt ? legacy.deletedAt : undefined;
       const baseName = (legacy.name ?? legacy.logicalName).trim();
       let name = baseName;
       let key = `${projectId}\0${name}`;
-      if (usedArtifactNames.has(key)) {
-        name = `${baseName} (s-${createdInSessionId.slice(0, 8)})`;
-        key = `${projectId}\0${name}`;
-        if (usedArtifactNames.has(key)) name = `${name}-${legacy.id.slice(0, 8)}`;
+      if (!deletedAt) {
+        if (usedArtifactNames.has(key)) {
+          name = `${baseName} (s-${createdInSessionId.slice(0, 8)})`;
+          key = `${projectId}\0${name}`;
+          if (usedArtifactNames.has(key)) name = `${name}-${legacy.id.slice(0, 8)}`;
+        }
+        usedArtifactNames.add(`${projectId}\0${name}`);
       }
-      usedArtifactNames.add(`${projectId}\0${name}`);
       const firstVersion = savedVersionsByArtifactId.get(legacy.id)?.toSorted((left, right) => left.version - right.version)[0];
       const origin: ArtifactOrigin = legacy.origin
         ?? (firstVersion?.executionRunIds?.length ? "legacy_auto" : "user_upload");
@@ -752,6 +755,7 @@ export class SessionStore {
         createdInSessionId,
         createdInSessionTitle: legacy.createdInSessionTitle ?? session?.title ?? "Deleted Session",
         currentVersion: legacy.currentVersion,
+        ...(deletedAt ? { deletedAt } : {}),
         ...(legacy.description ? { description: legacy.description } : {}),
         id: legacy.id,
         // `.json` entries recorded before JSON had its own kind are stored as
@@ -2230,7 +2234,7 @@ export class SessionStore {
 
   listProjectArtifacts(projectId: string): ScientificArtifact[] {
     if (!this.getProject(projectId)) throw new Error("Project not found");
-    return structuredClone(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId))
+    return structuredClone(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId && !artifact.deletedAt))
       .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
@@ -2245,10 +2249,23 @@ export class SessionStore {
     return artifact ? structuredClone(artifact) : undefined;
   }
 
+  async deleteArtifact(projectId: string, artifactId: string): Promise<ScientificArtifact> {
+    if (!this.getProject(projectId)) throw new SessionStoreHttpError("Project not found", 404);
+    const artifact = this.catalog.artifacts.find((candidate) => candidate.id === artifactId && candidate.projectId === projectId);
+    if (!artifact) throw new SessionStoreHttpError("Artifact not found", 404);
+    if (artifact.deletedAt) return structuredClone(artifact);
+    const now = new Date().toISOString();
+    artifact.deletedAt = now;
+    artifact.updatedAt = now;
+    await this.saveCatalog();
+    return structuredClone(artifact);
+  }
+
   getArtifactByName(sessionId: string, name: string): ScientificArtifact | undefined {
     const session = this.getSession(sessionId);
     if (!session) return undefined;
-    const artifact = this.catalog.artifacts.find((candidate) => candidate.projectId === session.projectId && candidate.name === name);
+    const artifact = this.catalog.artifacts.find((candidate) =>
+      candidate.projectId === session.projectId && candidate.name === name && !candidate.deletedAt);
     return artifact ? structuredClone(artifact) : undefined;
   }
 
@@ -2284,7 +2301,7 @@ export class SessionStore {
     const session = this.getSession(sessionId);
     if (!session) return undefined;
     const reportArtifacts = this.catalog.artifacts
-      .filter((artifact) => artifact.projectId === session.projectId && reportKinds.has(artifact.kind))
+      .filter((artifact) => artifact.projectId === session.projectId && !artifact.deletedAt && reportKinds.has(artifact.kind))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     for (const artifact of reportArtifacts) {
       const versions = this.catalog.artifactVersions
@@ -2370,7 +2387,8 @@ export class SessionStore {
       throw new Error("Artifact dependency must reference a version in the same Project");
     }
     const now = new Date().toISOString();
-    let artifact = this.catalog.artifacts.find((candidate) => candidate.projectId === projectId && candidate.name === logicalName);
+    let artifact = this.catalog.artifacts.find((candidate) =>
+      candidate.projectId === projectId && candidate.name === logicalName && !candidate.deletedAt);
     if (artifact && artifact.kind !== input.kind) throw new Error("Artifact kind cannot change across versions");
     if (!artifact) {
       artifact = {

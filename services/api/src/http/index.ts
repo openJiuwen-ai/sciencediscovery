@@ -1089,6 +1089,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listProjectArtifacts(projectArtifactsMatch[1]!));
         return;
       }
+      const projectArtifactMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/artifacts\/([^/]+)$/);
+      if (projectArtifactMatch && request.method === "DELETE") {
+        await store.deleteArtifact(projectArtifactMatch[1]!, projectArtifactMatch[2]!);
+        sendJson(response, 200, { deleted: projectArtifactMatch[2] });
+        return;
+      }
       const projectArtifactVersionsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/artifacts\/([^/]+)\/versions$/);
       if (projectArtifactVersionsMatch && request.method === "GET") {
         sendJson(response, 200, store.listProjectArtifactVersions(
@@ -2241,7 +2247,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       const message = error instanceof Error ? error.message : "Request failed";
-      if (error instanceof ApiStatusError) sendError(response, error.statusCode, message);
+      if (error instanceof ApiStatusError || error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message);
       else if (code === "ENOENT") sendError(response, 404, "File not found");
       else if (code === "PAYLOAD_TOO_LARGE" || code === "QUOTA_EXCEEDED") {
         sendError(response, 413, error instanceof Error ? error.message : "Payload too large");

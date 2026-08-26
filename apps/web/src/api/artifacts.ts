@@ -111,6 +111,13 @@ export class ArtifactsApiClient extends RunsApiClient {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/artifacts`);
   }
 
+  deleteProjectArtifact(projectId: string, artifactId: string): Promise<{ deleted: string }> {
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}`,
+      { method: "DELETE" },
+    );
+  }
+
   listProjectArtifactVersions(projectId: string, artifactId: string): Promise<ScientificArtifactVersion[]> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/versions`);
   }

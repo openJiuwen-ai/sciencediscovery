@@ -213,6 +213,29 @@ test("readProjectArtifactVersion downloads retained content from the Project end
   }
 });
 
+test("Artifact deletion client method encodes identifiers and uses DELETE", async () => {
+  const previousFetch = globalThis.fetch;
+  const requests: Array<{ body: BodyInit | null | undefined; method: string; url: string }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ body: init?.body, method: init?.method ?? "GET", url: String(input) });
+    return Response.json({ deleted: "artifact/1" });
+  };
+  try {
+    const client = new ApiClient("test-token");
+    const deleted = await client.deleteProjectArtifact("project/a", "artifact/1");
+    assert.equal(deleted.deleted, "artifact/1");
+    assert.deepEqual(requests, [
+      {
+        body: undefined,
+        method: "DELETE",
+        url: "/api/projects/project%2Fa/artifacts/artifact%2F1",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("workspace and artifact image reads keep Bearer auth and forward cancellation", async () => {
   const previousFetch = globalThis.fetch;
   const requests: Array<{ headers?: HeadersInit; signal?: AbortSignal | null; url: string }> = [];

@@ -155,6 +155,7 @@ import {
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
 import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
+import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./ArtifactLifecycleControls.js";
 import { SkillManager } from "./SkillManager.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
@@ -338,11 +339,13 @@ function CompactPathTreeList<TLeaf extends PathTreeLeaf>({
 
 export function ArtifactTreeList({
   entries,
+  lifecycleActions = false,
   onOpen,
   onSelectionChange,
   selectedArtifactIds,
 }: {
   entries: readonly ArtifactTreeEntry[];
+  lifecycleActions?: boolean;
   onOpen: (artifact: ScientificArtifact) => void;
   onSelectionChange?: (artifacts: readonly ScientificArtifact[], selected: boolean) => void;
   selectedArtifactIds?: ReadonlySet<string>;
@@ -382,7 +385,20 @@ export function ArtifactTreeList({
       <span aria-hidden="true" className="artifact-tree-selection-control"><span>{selection.ids.has(entry.artifact.id) ? "✓" : ""}</span></span>
       <TreeFileIcon kind={artifactTreeIconKind(entry.artifact)} />
       <span className="artifact-tree-label">{entry.name}</span>
-    </button> : <button
+    </button> : lifecycleActions ? <div className="artifact-tree-file-row">
+      <button
+        aria-label={`Open ${entry.artifact.name}`}
+        className="artifact-tree-file"
+        onClick={() => onOpen(entry.artifact)}
+        title={entry.artifact.name}
+        type="button"
+      >
+        <span className="artifact-tree-spacer" aria-hidden="true" />
+        <TreeFileIcon kind={artifactTreeIconKind(entry.artifact)} />
+        <span className="artifact-tree-label">{entry.name}</span>
+      </button>
+      <ArtifactLifecycleControls artifact={entry.artifact} />
+    </div> : <button
       aria-label={`Open ${entry.artifact.name}`}
       className="artifact-tree-file"
       onClick={() => onOpen(entry.artifact)}
@@ -3204,6 +3220,23 @@ export function App() {
     setArtifactModalName(artifact.name);
   }
 
+  async function deleteArtifact(artifact: ScientificArtifact): Promise<void> {
+    if (!activeProjectId) return;
+    await client.deleteProjectArtifact(activeProjectId, artifact.id);
+    setArtifacts((current) => current.filter((candidate) => candidate.id !== artifact.id));
+    setSelectedArtifactIds((current) => {
+      const next = new Set(current);
+      next.delete(artifact.id);
+      return next;
+    });
+    if (artifactModalName === artifact.name) {
+      setArtifactModalName(undefined);
+      setArtifactModalVersion(undefined);
+      setArtifactModalSessionId(undefined);
+    }
+    pushToast("success", t("app.artifactDeleted"), artifact.name);
+  }
+
   function changeArtifactSelection(items: readonly ScientificArtifact[], selected: boolean): void {
     setSelectedArtifactIds((current) => {
       const next = new Set(current);
@@ -4090,7 +4123,11 @@ export function App() {
             <details className="workspace-fold artifact-catalog-section" open>
               <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("app.artifacts")}</strong><span className="fold-meta">{artifacts.length}</span></summary>
               <div className="artifact-catalog">
-                {!projectsLoaded ? <SkeletonRows className="file-skeleton" count={3} /> : artifactGroups.map((group) => (
+                {!projectsLoaded ? <SkeletonRows className="file-skeleton" count={3} /> : <ArtifactLifecycleProvider
+                  onDelete={deleteArtifact}
+                  onError={setError}
+                  resetKey={activeProjectId ?? ""}
+                >{artifactGroups.map((group) => (
                   <section className="artifact-session-group" key={group.id}>
                     <header>
                       <span className="artifact-session-heading"><strong>{group.label}</strong><span>{group.items.length}</span></span>
@@ -4125,13 +4162,14 @@ export function App() {
                     <div className="file-list">
                       <ArtifactTreeList
                         entries={buildArtifactTree(group.items)}
+                        lifecycleActions
                         onOpen={openArtifact}
                         onSelectionChange={artifactSelectionMode ? changeArtifactSelection : undefined}
                         selectedArtifactIds={artifactSelectionMode ? selectedArtifactIds : undefined}
                       />
                     </div>
                   </section>
-                ))}
+                ))}</ArtifactLifecycleProvider>}
                 {activeProjectId && artifacts.length === 0 ? <p className="muted centered">{t("app.noArtifacts")}</p> : null}
               </div>
             </details>
