@@ -44,6 +44,7 @@
   .document-header, .artifact-modal-header { padding: 18px 20px; }
   .document-markdown, .artifact-modal-body { padding: 28px 20px 44px; }
   .environment-source-settings { grid-template-areas: "intro intro" "pip conda" "save save"; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .system-config-dialog { width: calc(100vw - 32px); height: min(80vh, calc(100vh - 56px)); }
   .skill-workspace-dialog { width: calc(100vw - 20px); height: calc(100vh - 20px); }
   .skill-workspace-layout { grid-template-columns: 190px minmax(0, 1fr); grid-template-rows: 170px minmax(0, 1fr) minmax(120px, 170px); }
   .skill-workspace-catalog { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--border); }
