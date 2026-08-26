@@ -29,6 +29,7 @@ export * from "./model-usage.js";
 export * from "./model-provider.js";
 export * from "./model-provider-presets.js";
 export * from "./model-catalog.js";
+export * from "./models-dev.js";
 export * from "./skills.js";
 export * from "./connectors.js";
 export * from "./papers.js";

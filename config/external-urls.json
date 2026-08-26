@@ -29,6 +29,10 @@
   "bootstrap": {
     "pypi_index": "https://mirrors.huaweicloud.com/repository/pypi/simple"
   },
+  "model_catalog": {
+    "api_json": "https://models.dev/api.json",
+    "project": "https://github.com/anomalyco/models.dev"
+  },
   "data_sources": {
     "arxiv": {
       "api_query": "https://export.arxiv.org/api/query",

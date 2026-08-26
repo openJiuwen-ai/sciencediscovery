@@ -17,7 +17,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { AddressInfo } from "node:net";
 import test from "node:test";
 
-import { constrainCatalogThinking, lookupModelCatalog, type ResolvedProxy } from "@sciencediscovery/schema";
+import {
+  constrainCatalogThinking,
+  lookupModelCatalog,
+  setModelCatalogSnapshot,
+  type ResolvedProxy,
+} from "@sciencediscovery/schema";
+
+import { installTestModelCatalog } from "./models-dev.fixture.js";
 
 import {
   normalizeUsage,
@@ -30,56 +37,28 @@ import {
 
 const policy: ModelClientPolicy = { maxRetries: 1, maxTokens: 1_024, requestTimeoutMs: 5_000 };
 
-test("catalog preserves official period prices and exact model thinking capabilities", () => {
-  const flash = lookupModelCatalog("deepseek-v4-flash", "deepseek")!.pricing!;
-  const pro = lookupModelCatalog("deepseek-v4-pro", "deepseek")!.pricing!;
-  assert.deepEqual(
-    flash.periods?.map(({ cachedInput, id, input, output }) => ({ cachedInput, id, input, output })),
-    [
-      { cachedInput: 0.1, id: "peak", input: 3, output: 9 },
-      { cachedInput: 0.05, id: "off-peak", input: 1.5, output: 4.5 },
-    ],
-  );
-  assert.deepEqual(
-    pro.periods?.map(({ cachedInput, id, input, output }) => ({ cachedInput, id, input, output })),
-    [
-      { cachedInput: 0.3, id: "peak", input: 9, output: 27 },
-      { cachedInput: 0.15, id: "off-peak", input: 4.5, output: 13.5 },
-    ],
-  );
-  assert.equal(flash.currency, "CNY");
-  assert.equal(flash.unit, "per-1m-tokens");
-  assert.equal(flash.source.retrievedAt, "2026-08-23");
-  assert.match(flash.source.url, /^https:\/\/api-docs\.deepseek\.com\//);
-  assert.deepEqual(flash.periods?.map(({ schedule }) => schedule), [
-    {
-      intervals: [{ start: "09:00", end: "12:00" }, { start: "14:00", end: "18:00" }],
-      kind: "weekdays",
-      timeZone: "Asia/Shanghai",
-    },
-    { kind: "remainder", timeZone: "Asia/Shanghai" },
-  ]);
-  assert.equal(flash.notes, undefined, "catalog-internal period notes must not leak into the UI");
-  assert.equal(lookupModelCatalog("deepseek-v4-pro", "siliconflow")?.pricing, undefined);
-
+test("an installed catalog narrows thinking and pricing exactly as the snapshot states", () => {
+  installTestModelCatalog();
   assert.deepEqual(lookupModelCatalog("gpt-5.5", "openai")!.thinking!.efforts, ["low", "medium", "high", "xhigh"]);
-  assert.deepEqual(lookupModelCatalog("gpt-5.4-mini", "openai")!.thinking!.efforts, ["low", "medium", "high", "xhigh"]);
-  for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
-    assert.deepEqual(lookupModelCatalog(model, "openai")!.thinking!.efforts, ["low", "medium", "high", "xhigh", "max"]);
-  }
   assert.deepEqual(constrainCatalogThinking("gpt-5.5", "enabled", "max"), { effort: "xhigh", mode: "enabled" });
 
   const k3 = lookupModelCatalog("kimi-k3", "moonshot")!;
   assert.equal(k3.apiVariant, "kimi-k3");
-  assert.deepEqual(k3.thinking, {
-    defaultEffort: "max",
-    defaultMode: "enabled",
-    efforts: ["low", "high", "max"],
-    modes: ["enabled"],
-    supported: true,
-  });
   assert.deepEqual(constrainCatalogThinking("kimi-k3", "disabled"), { effort: "max", mode: "enabled" });
   assert.equal(lookupModelCatalog("claude-haiku-4-5-20251001", "anthropic")!.apiVariant, "anthropic-legacy");
+
+  // A rehosted model keeps its facts and never inherits the vendor's price.
+  assert.equal(lookupModelCatalog("deepseek-v4-pro", "deepseek")!.pricing!.input, 0.55);
+  assert.equal(lookupModelCatalog("deepseek-v4-pro", "siliconflow")?.pricing, undefined);
+});
+
+test("an empty catalog leaves the protocol dialect in charge of thinking", () => {
+  setModelCatalogSnapshot(undefined);
+  // Nothing is narrowed and nothing is invented: the requested values survive
+  // and no model claims a wire dialect the catalog did not supply.
+  assert.deepEqual(constrainCatalogThinking("gpt-5.5", "enabled", "max"), { effort: "max", mode: "enabled" });
+  assert.equal(lookupModelCatalog("claude-haiku-4-5-20251001", "anthropic"), undefined);
+  installTestModelCatalog();
 });
 
 async function readBody(request: IncomingMessage): Promise<string> {
