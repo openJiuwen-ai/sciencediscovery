@@ -240,6 +240,7 @@ import {
   resolveComposerRunAction,
   type ComposerRunAction,
 } from "./composer/model.js";
+import { ModelPickerDialog } from "./composer/ModelPickerDialog.js";
 import {
   isActiveRunStatus,
   isSessionRunning,
@@ -1194,6 +1195,7 @@ export function App() {
   const [globalSearchTotal, setGlobalSearchTotal] = useState(0);
   const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
   const [showConfig, setShowConfig] = useState(() => initialView.settingsKind === "system");
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [systemSettingsGroup, setSystemSettingsGroup] = useState<SystemSettingsGroup>(() => isSystemSettingsGroup(initialView.settingsGroup) ? initialView.settingsGroup : "global");
   const [skillWorkspaceLaunch, setSkillWorkspaceLaunch] = useState<{ requestId: number; skillId?: string }>();
   const skillWorkspaceLaunchRevision = useRef(0);
@@ -3638,6 +3640,13 @@ export function App() {
   const activeThinkingEffort = activeThinkingControls.efforts.includes(requestedThinkingEffort)
     ? requestedThinkingEffort
     : constrainedActiveThinking.effort;
+  const activeThinkingSummary = !activeModel || !activeThinkingControls.supported
+    ? undefined
+    : activeThinkingMode === "enabled"
+      ? t(`settings.thinkingEffort.${activeThinkingEffort}`)
+      : activeThinkingMode === "disabled"
+        ? t("composer.modelPicker.off")
+        : t("settings.thinkingMode.auto");
   useEffect(() => {
     if (!session || !activeModel || isRunning || session.archivedAt) return;
     const changes = normalizeSessionThinking(
@@ -4271,37 +4280,17 @@ export function App() {
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
                   <div className="composer-footer">
-                    <label className="task-model-picker">
-                      <span><i className="live-dot" />{t("composer.taskModel")}</span>
-                      <select value={session.modelId ?? ""} onChange={(event) => void updateConversationModel(event.target.value)} disabled={isRunning || sessionArchived || !models.length} aria-label={t("composer.modelAria")}>
-                        {!session.modelId ? <option value="">{t("composer.noModel")}</option> : null}
-                        {models.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, models, t)}</option>)}
-                      </select>
-                    </label>
-                    {activeThinkingControls.supported ? <div className="conversation-thinking-picker">
-                      <label>
-                        <span>{t("composer.thinking")}</span>
-                        <select
-                          aria-label={t("composer.thinkingAria")}
-                          disabled={isRunning || sessionArchived}
-                          onChange={(event) => void updateSessionSettings({ thinkingMode: event.target.value as ModelThinkingMode })}
-                          value={activeThinkingMode}
-                        >
-                          {activeThinkingControls.modes.map((mode) => <option key={mode} value={mode}>{t(`settings.thinkingMode.${mode}`)}</option>)}
-                        </select>
-                      </label>
-                      {activeThinkingMode === "enabled" && activeThinkingControls.efforts.length ? <label>
-                        <span>{t("composer.thinkingEffort")}</span>
-                        <select
-                          aria-label={t("composer.thinkingEffortAria")}
-                          disabled={isRunning || sessionArchived}
-                          onChange={(event) => void updateSessionSettings({ thinkingEffort: event.target.value as ModelThinkingEffort })}
-                          value={activeThinkingEffort}
-                        >
-                          {activeThinkingControls.efforts.map((effort) => <option key={effort} value={effort}>{t(`settings.thinkingEffort.${effort}`)}</option>)}
-                        </select>
-                      </label> : null}
-                    </div> : null}
+                    <button
+                      aria-label={t("composer.modelAria")}
+                      className="model-picker-trigger"
+                      disabled={isRunning || sessionArchived || !models.length}
+                      onClick={() => setModelPickerOpen(true)}
+                      type="button"
+                    >
+                      <i className="live-dot" />
+                      <span className="model-picker-trigger-name">{activeModel ? activeModel.name : t("composer.noModel")}</span>
+                      {activeThinkingSummary ? <small className="model-picker-trigger-thinking">{activeThinkingSummary}</small> : null}
+                    </button>
                     <span className="composer-hint" title={t("composer.keyboardHint")}>{t("composer.keyboardHint")}</span>
                     <div className="orchestration-controls">
                       <ConnectorPicker
@@ -4607,6 +4596,23 @@ export function App() {
           sessionId={activeSessionId}
         />
       ) : null}
+
+      {modelPickerOpen && session ? <ModelPickerDialog
+        activeModelId={session.modelId ?? undefined}
+        controls={activeThinkingControls}
+        disabled={isRunning || sessionArchived}
+        models={models}
+        onClose={() => setModelPickerOpen(false)}
+        onOpenSettings={() => {
+          setModelPickerOpen(false);
+          openSystemSettings("models");
+        }}
+        onSelect={(modelId) => void updateConversationModel(modelId)}
+        onThinkingChange={(update) => void updateSessionSettings(update)}
+        providers={modelProviders}
+        thinkingEffort={activeThinkingEffort}
+        thinkingMode={activeThinkingMode}
+      /> : null}
 
       {showConfig ? (
         <div className="config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelSystemSettings(); }}>

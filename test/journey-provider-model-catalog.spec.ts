@@ -180,8 +180,8 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  * E2E-META
  * Purpose: Provider 与模型目录完整用户旅程——草稿安全、内置预设只填令牌、自定义 Provider、发现成功/失败/乱序、双语可溯源价格、模型级思考能力与 Session/wire 一致性，以及桌面/窄屏真实几何。
  * Steps:
- *   1. 打开模型注册表，确认常见 Provider 预设与自定义入口。
- *   2. 核对目录状态行：打包快照时间与刷新按钮；刷新成功改时间、刷新失败保留旧数据且草稿不丢（浏览器边界伪造目录下载响应）。
+ *   1. 打开模型注册表，确认预设收进“添加 Provider”折叠区，内有常见 Provider 与自定义入口。
+ *   2. 核对目录状态行：models.dev 来源、打包快照时间与刷新按钮；刷新成功改时间、刷新失败保留旧数据且草稿不丢（浏览器边界伪造目录下载响应）。
  *   3. MiniMax 仅填令牌；Escape 取消关闭保留草稿，底部保存并关闭提交；请求在浏览器边界改写为 loopback/manual。
  *   4. 选择智谱内置预设，仅填令牌连接；核对默认 endpoint/协议未要求用户填写，令牌不回传。
  *   5. 维护目录的 GLM-5.2 展示能力、诚实未知价格（不冒用 z.ai 国际站定价）与官方来源快照日期，并添加模型。
@@ -192,13 +192,13 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  *   10. 让 Provider A 迟到、B 先回，确认界面只保留 B 且添加请求发往 B。
  *   11. 删除被全局默认模型引用的 B，确认中文错误提供可恢复操作且不会误报保存/刷新失败。
  *   12. 在 600px 窄屏确认 Provider 表单、目录卡片无横向溢出且仍可操作。
- *   13. 新建会话切换模型；不支持模型隐藏思考控件，DeepSeek enabled/max 跨刷新保存。
+ *   13. 新建会话，经模型弹窗切换模型；不支持思考的模型提示无思考字段，DeepSeek 思考合一控件选 max 并跨刷新保存。
  *   14. 工作区展开时分别在 1440×900、600×900 对中文 Composer 做两两无重叠、紧凑高度、命中、边界与标签几何断言。
  *   15. 发送消息，核对 DeepSeek 所选模型、thinking.type=enabled 与 reasoning_effort=max 真实进入 wire。
  *   16. 选择 GPT-5.5，把旧 max 持久化收窄为 xhigh；刷新一致且 Responses wire 合法。
- *   17. 选择始终推理 Kimi K3，确认仅 enabled 和 low/high/max，wire 只发送 reasoning_effort=low。
- *   18. 选择 Claude Haiku 4.5，Composer/高级编辑器统一隐藏 effort 并提示 legacy，wire 使用合法固定预算。
- *   19. 切换英文，复核两档 Composer 几何，再确认模型/effort 标签及 DeepSeek 标准价格自然本地化。
+ *   17. 选择始终推理 Kimi K3，确认思考控件无“关”仅有 low/high/max 强度，wire 只发送 reasoning_effort=low。
+ *   18. 选择 Claude Haiku 4.5，思考控件只给 关/自动/开启 无强度并提示 legacy，wire 使用合法固定预算。
+ *   19. 切换英文，复核两档 Composer 几何，再确认弹窗内模型/思考选项及 DeepSeek 标准价格自然本地化。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；模型列表、Chat Completions、Responses 与 Anthropic Messages 均由本 spec 的 loopback mock 提供。
  * Type: mocked
  * LLM: local deterministic HTTP/SSE fixture only；不调用真实或付费模型 API。
@@ -241,6 +241,36 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     return dialog;
   };
 
+  // The preset wall stays folded behind the "添加 Provider" disclosure; expand
+  // it only when a journey step actually adds a provider.
+  const expandAddProvider = async (dialog: ReturnType<typeof page.getByRole>) => {
+    const addRegion = dialog.getByRole("region", { name: /^(添加 Provider|Add provider)$/ });
+    const customCard = addRegion.getByRole("button", { name: /^(自定义服务商|Custom provider)/ });
+    if (!await customCard.isVisible()) {
+      await addRegion.getByRole("button", { name: /^(添加 Provider|Add provider)/ }).click();
+    }
+    return addRegion;
+  };
+
+  // Conversation model selection goes through the picker dialog: click the
+  // composer trigger, pick the model row, optionally pick the combined
+  // thinking control value ("off" | "auto" | "effort:<level>"), then close.
+  const pickConversationModel = async ({ model, thinking, thinkingLabel }: {
+    model: RegExp | string;
+    thinking?: string;
+    thinkingLabel: RegExp;
+  }) => {
+    await page.getByLabel(/^(本任务使用的模型|Model for this task)$/).click();
+    const picker = page.getByRole("dialog", { name: /^(选择模型|Choose a model)$/ });
+    await picker.getByRole("option", { name: model }).click();
+    if (thinking) await picker.getByLabel(thinkingLabel).selectOption(thinking);
+    return picker;
+  };
+  const closeModelPicker = async (picker: ReturnType<typeof page.getByRole>) => {
+    await picker.getByRole("button", { name: /^(关闭模型选择|Close model picker)$/ }).click();
+    await expect(picker).toBeHidden();
+  };
+
   const verifyComposerGeometry = async ({
     labels,
     runButton,
@@ -256,8 +286,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     const geometry = await footer.evaluate((node) => {
       const footerRect = node.getBoundingClientRect();
       const groupSelectors = [
-        { group: "model", selector: ".task-model-picker select" },
-        { group: "thinking", selector: ".conversation-thinking-picker select" },
+        { group: "model", selector: ".model-picker-trigger" },
         { group: "orchestration", selector: ".orchestration-controls select, .orchestration-controls button" },
         { group: "run", selector: ".composer-run-actions button" },
       ];
@@ -304,7 +333,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           rectangles.filter((rect) => rect.group === group).length,
         ])),
         labelsUnclipped: labelSpans.every((span) => span.scrollWidth <= span.clientWidth + 1),
-        modelSelectHeight: node.querySelector<HTMLSelectElement>(".task-model-picker select")?.getBoundingClientRect().height ?? 0,
+        modelTriggerHeight: node.querySelector<HTMLElement>(".model-picker-trigger")?.getBoundingClientRect().height ?? 0,
         overlaps,
         pageScrollWidth: document.documentElement.scrollWidth,
         selectHeights: controls
@@ -318,13 +347,13 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     expect(geometry.controlsInside).toBe(true);
     expect(geometry.labelsUnclipped).toBe(true);
     expect(geometry.pageScrollWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
-    for (const group of ["model", "thinking", "orchestration", "run"]) {
+    for (const group of ["model", "orchestration", "run"]) {
       expect(geometry.groupCounts[group]).toBeGreaterThan(0);
     }
     if (width <= 600) {
-      expect(geometry.modelSelectHeight).toBeGreaterThanOrEqual(24);
-      expect(geometry.modelSelectHeight).toBeLessThanOrEqual(48);
-      expect(geometry.selectHeights.length).toBeGreaterThanOrEqual(5);
+      expect(geometry.modelTriggerHeight).toBeGreaterThanOrEqual(24);
+      expect(geometry.modelTriggerHeight).toBeLessThanOrEqual(48);
+      expect(geometry.selectHeights.length).toBeGreaterThanOrEqual(2);
       expect(geometry.selectHeights.every((height) => height >= 24 && height <= 48)).toBe(true);
     }
     for (const label of labels) await expect(page.getByLabel(label)).toBeVisible();
@@ -334,18 +363,18 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
   try {
     await journey.step(
-      "模型注册表同时提供常见预设与自定义入口",
-      "模型注册表展示 DeepSeek、智谱 GLM、OpenAI、Anthropic、Gemini、DashScope 等常见预设；每张需密钥的卡片标明“只需令牌”，旁边有“+ 自定义服务商”。",
+      "模型注册表把常见预设收进“添加 Provider”",
+      "模型注册表主视图是目录状态与已配置服务商，而不是铺开的预设墙。展开“添加 Provider”后可见 DeepSeek、智谱 GLM、OpenAI、Anthropic、Gemini、DashScope 等常见预设；每张需密钥的卡片标明“只需令牌”，末尾是“自定义服务商”。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openModelRegistry();
-        const presets = dialog.getByRole("region", { name: "常见服务商" });
+        const addRegion = await expandAddProvider(dialog);
         for (const name of ["DeepSeek", "智谱 GLM", "OpenAI", "Anthropic", "Google Gemini", "Alibaba Cloud Model Studio"]) {
-          await expect(presets.getByRole("button", { name: new RegExp(name) })).toBeVisible();
+          await expect(addRegion.getByRole("button", { name: new RegExp(name) })).toBeVisible();
         }
-        await expect(presets.getByRole("button", { name: "+ 自定义服务商" })).toBeVisible();
-        await expect(presets.getByRole("button", { name: /智谱 GLM.*只需令牌/ })).toBeVisible();
+        await expect(addRegion.getByRole("button", { name: /自定义服务商.*手动配置端点/ })).toBeVisible();
+        await expect(addRegion.getByRole("button", { name: /智谱 GLM.*只需令牌/ })).toBeVisible();
       },
     );
 
@@ -392,7 +421,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           await expect(status).not.toContainText("随本次构建发布");
 
           // 刷新失败：上游 502，保留上一次快照且草稿不丢。
-          await page.getByRole("button", { name: "+ 自定义服务商" }).click();
+          await (await expandAddProvider(dialog)).getByRole("button", { name: /自定义服务商/ }).click();
           const editor = dialog.getByRole("region", { name: "服务商编辑器" });
           const draftName = `J7 目录刷新草稿 ${Date.now()}`;
           await editor.getByLabel("服务商名称").fill(draftName);
@@ -426,7 +455,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       "选择 MiniMax 预设后只填写令牌。按 Escape 时出现明确的未保存确认；取消关闭后令牌仍在。点击对话框底部“保存并关闭”会提交同一草稿并关闭设置。测试在浏览器边界核对预设原始 endpoint/发现策略，再把请求改写到本地 manual fixture，保证服务端绝不访问厂商网络。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("region", { name: "常见服务商" })
+        await (await expandAddProvider(dialog))
           .getByRole("button", { name: /MiniMax.*只需令牌/ })
           .click();
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
@@ -491,7 +520,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       "选择“智谱 GLM”后，名称与可靠默认连接参数已经预填且高级项保持收起；用户只填写令牌并保存。创建请求使用预设的 open.bigmodel.cn endpoint、DeepSeek 变种和维护目录策略，返回体只有 hasApiToken=true，不包含令牌。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("region", { name: "常见服务商" })
+        await (await expandAddProvider(dialog))
           .getByRole("button", { name: /智谱 GLM.*只需令牌/ })
           .click();
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
@@ -548,7 +577,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       "新建自定义服务商，填写本地 endpoint、令牌、OpenAI Chat Completions、DeepSeek 变种和 /models 策略。点击标题栏关闭时确认未保存且取消后字段仍在；随后使用对话框底部“保存”提交。目录显示服务商真实返回的 deepseek-v4-flash 与 fixture-unknown，且模型列表请求携带 Bearer 令牌。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "+ 自定义服务商" }).click();
+        await (await expandAddProvider(dialog)).getByRole("button", { name: /自定义服务商/ }).click();
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
         await editor.getByLabel("服务商名称").fill(customName);
         await editor.getByLabel("LLM API 令牌").fill("j7-custom-local-token");
@@ -775,7 +804,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "对话模型与思考强度遵守能力并跨刷新保存",
-      "创建会话后，模型选择器实际选中 DeepSeek。切到不支持思考的 OpenAI fixture 时思考控件消失；切回 DeepSeek 后可选开启/最大，刷新页面仍显示同一模型、开启和最大。",
+      "创建会话后，点击 Composer 的模型按钮弹出选择弹窗，按 Provider 分组列出模型，DeepSeek 行为当前选中。切到不支持思考的 OpenAI fixture 时弹窗提示该模型不暴露思考字段；切回 DeepSeek 后思考控件是“关闭/自动 + 强度列表”的单个下拉，选“最大”即写入 Session，刷新页面仍显示同一模型与最大强度。",
       async () => {
         const unsupported = await apiJson<ModelProfile>(page, "/api/models", {
           data: {
@@ -795,14 +824,16 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         });
         await page.setViewportSize({ width: 1280, height: 720 });
         await openProjectSession(page, fixture);
-        const modelSelect = page.getByLabel("本任务使用的模型");
-        await expect(modelSelect).toHaveValue(deepseekModelId);
-        await modelSelect.selectOption(unsupported.id);
-        await expect(page.getByLabel("当前对话的思考模式")).toHaveCount(0);
-        await modelSelect.selectOption(deepseekModelId);
-        await page.getByLabel("当前对话的思考模式").selectOption("enabled");
-        await page.getByLabel("当前对话的思考强度").selectOption("max");
-        await expect(page.getByLabel("当前对话的思考强度")).toHaveValue("max");
+        const thinkingLabel = "当前对话的思考开关与强度";
+        await page.getByLabel("本任务使用的模型").click();
+        const picker = page.getByRole("dialog", { name: "选择模型" });
+        await expect(picker.getByRole("option", { name: /deepseek-v4-flash/ })).toHaveAttribute("aria-selected", "true");
+        await picker.getByRole("option", { name: /J7 no-thinking fixture/ }).click();
+        await expect(picker.getByText("此模型不暴露思考控制字段")).toBeVisible();
+        await picker.getByRole("option", { name: /deepseek-v4-flash/ }).click();
+        const thinking = picker.getByLabel(thinkingLabel);
+        await thinking.selectOption("effort:max");
+        await expect(thinking).toHaveValue("effort:max");
         await expect.poll(async () => {
           const session = await apiJson<{ thinkingEffort?: string; thinkingMode?: string }>(
             page,
@@ -810,23 +841,24 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           );
           return `${session.thinkingMode}/${session.thinkingEffort}`;
         }).toBe("enabled/max");
+        await closeModelPicker(picker);
         await page.reload();
         await openProjectSession(page, fixture);
-        await expect(page.getByLabel("本任务使用的模型")).toHaveValue(deepseekModelId);
-        await expect(page.getByLabel("当前对话的思考模式")).toHaveValue("enabled");
-        await expect(page.getByLabel("当前对话的思考强度")).toHaveValue("max");
+        const reopened = await pickConversationModel({ model: /deepseek-v4-flash/, thinkingLabel });
+        await expect(reopened.getByLabel(thinkingLabel)).toHaveValue("effort:max");
+        await closeModelPicker(reopened);
       },
     );
 
     await journey.step(
       "Composer 在默认桌面与 600px 窄屏按可用容器换行",
-      "工作区面板保持展开，在 1440×900 和 600×900 两个真实视口分别滚动到中文 Composer。模型、思考、强度、审批、专家和运行控件都有可读标签/可访问名称，四类控件矩形两两不相交、中心命中自身、全部位于 Composer 和视口内；窄屏所有下拉框保持 24–48px 紧凑高度，页面无横向溢出。",
+      "工作区面板保持展开，在 1440×900 和 600×900 两个真实视口分别滚动到中文 Composer。模型选择入口（弹窗触发按钮）、审批、专家和运行控件都有可读标签/可访问名称，三类控件矩形两两不相交、中心命中自身、全部位于 Composer 和视口内；窄屏控件保持 24–48px 紧凑高度，页面无横向溢出。",
       async () => {
         await page.setViewportSize({ width: 1440, height: 900 });
         const showWorkspace = page.getByRole("button", { name: "显示工作区" });
         if (await showWorkspace.count()) await showWorkspace.click();
         await expect(page.getByRole("button", { name: "隐藏工作区" })).toBeVisible();
-        const labels = ["本任务使用的模型", "当前对话的思考模式", "当前对话的思考强度", "审批", "专家"];
+        const labels = ["本任务使用的模型", "审批", "专家"];
         await verifyComposerGeometry({ labels, runButton: "运行分析", width: 1440 });
         await verifyComposerGeometry({ labels, runButton: "运行分析", width: 600 });
       },
@@ -851,7 +883,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "GPT-5.5 只展示并发送合法 xhigh 强度",
-      "通过 OpenAI 预设具体化 GPT-5.5 后，从 DeepSeek/max 切换模型会把 Session 的旧非法 max 原子归一化并持久化为 xhigh；刷新后模型与 xhigh 均保持。对话强度只显示 low、medium、high、xhigh，不出现 max，本地 Responses fixture 收到 reasoning.effort=xhigh。",
+      "通过 OpenAI 预设具体化 GPT-5.5 后，从 DeepSeek/max 切换模型会把 Session 的旧非法 max 原子归一化并持久化为 xhigh；刷新后模型与 xhigh 均保持。弹窗中的思考控件把“关/自动”与强度合为一个下拉，强度恰为 low、medium、high、xhigh，不出现 max，本地 Responses fixture 收到 reasoning.effort=xhigh。",
       async () => {
         const provider = await apiJson<ModelProvider>(page, "/api/providers", {
           data: {
@@ -870,7 +902,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         modelIds.push(gpt55.id);
         await page.reload();
         await openProjectSession(page, fixture!);
-        await page.getByLabel("本任务使用的模型").selectOption(gpt55.id);
+        const picker = await pickConversationModel({ model: /gpt-5\.5/, thinkingLabel: "当前对话的思考开关与强度" });
+        await expect(picker.getByRole("option", { name: /gpt-5\.5/ })).toHaveAttribute("aria-selected", "true");
         await expect.poll(async () => {
           const session = await apiJson<{ modelId?: string; thinkingEffort?: string }>(
             page,
@@ -880,13 +913,14 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         }).toBe(`${gpt55.id}/xhigh`);
         await page.reload();
         await openProjectSession(page, fixture!);
-        await expect(page.getByLabel("本任务使用的模型")).toHaveValue(gpt55.id);
-        await expect(page.getByLabel("当前对话的思考强度")).toHaveValue("xhigh");
-        await page.getByLabel("当前对话的思考模式").selectOption("enabled");
-        const effort = page.getByLabel("当前对话的思考强度");
-        expect(await effort.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
-          .toEqual(["low", "medium", "high", "xhigh"]);
-        await effort.selectOption("xhigh");
+        await page.getByLabel("本任务使用的模型").click();
+        const reopened = page.getByRole("dialog", { name: "选择模型" });
+        await expect(reopened.getByRole("option", { name: /gpt-5\.5/ })).toHaveAttribute("aria-selected", "true");
+        const thinking = reopened.getByLabel("当前对话的思考开关与强度");
+        await expect(thinking).toHaveValue("effort:xhigh");
+        expect(await thinking.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
+          .toEqual(["off", "auto", "effort:low", "effort:medium", "effort:high", "effort:xhigh"]);
+        await closeModelPicker(reopened);
         const run = await sendUserMessage(page, fixture!.session.id, "Verify the GPT-5.5 Responses effort.");
         expect((await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000)).status).toBe("completed");
         await expect(page.getByText("GPT-5.5 xhigh is active.")).toBeVisible();
@@ -897,7 +931,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "Kimi K3 始终推理且 low 强度真实进入请求",
-      "通过 Moonshot Kimi 预设具体化 Kimi K3 后，模式只有 enabled，没有 auto/disabled；强度恰为 low、high、max。选择 low 后 Chat Completions wire 发送 reasoning_effort=low，且不发送无效 thinking.type。",
+      "通过 Moonshot Kimi 预设具体化 Kimi K3 后，思考控件只有强度档（low、high、max），没有“关”或“自动”，因为该模型不能关闭思考。选择 low 后 Chat Completions wire 发送 reasoning_effort=low，且不发送无效 thinking.type。",
       async () => {
         const provider = await apiJson<ModelProvider>(page, "/api/providers", {
           data: {
@@ -917,14 +951,14 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         expect(k3.apiVariant).toBe("kimi-k3");
         await page.reload();
         await openProjectSession(page, fixture!);
-        await page.getByLabel("本任务使用的模型").selectOption(k3.id);
-        const mode = page.getByLabel("当前对话的思考模式");
-        expect(await mode.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
-          .toEqual(["enabled"]);
-        const effort = page.getByLabel("当前对话的思考强度");
-        expect(await effort.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
-          .toEqual(["low", "high", "max"]);
-        await effort.selectOption("low");
+        await page.getByLabel("本任务使用的模型").click();
+        const picker = page.getByRole("dialog", { name: "选择模型" });
+        await picker.getByRole("option", { name: /kimi-k3/ }).click();
+        const thinking = picker.getByLabel("当前对话的思考开关与强度");
+        expect(await thinking.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
+          .toEqual(["effort:low", "effort:high", "effort:max"]);
+        await thinking.selectOption("effort:low");
+        await closeModelPicker(picker);
         const run = await sendUserMessage(page, fixture!.session.id, "Verify the Kimi K3 effort.");
         expect((await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000)).status).toBe("completed");
         const request = stub.chatBodies.at(-1)!;
@@ -956,9 +990,15 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         expect(haiku.apiVariant).toBe("anthropic-legacy");
         await page.reload();
         await openProjectSession(page, fixture!);
-        await page.getByLabel("本任务使用的模型").selectOption(haiku.id);
-        await page.getByLabel("当前对话的思考模式").selectOption("enabled");
-        await expect(page.getByLabel("当前对话的思考强度")).toHaveCount(0);
+        await page.getByLabel("本任务使用的模型").click();
+        const picker = page.getByRole("dialog", { name: "选择模型" });
+        await picker.getByRole("option", { name: /claude-haiku-4-5/ }).click();
+        const thinking = picker.getByLabel("当前对话的思考开关与强度");
+        expect(await thinking.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
+          .toEqual(["off", "auto", "on"]);
+        await expect(picker.getByText(/旧式固定思考预算/)).toBeVisible();
+        await thinking.selectOption("on");
+        await closeModelPicker(picker);
         await expect(page.getByRole("note")).toContainText("此模型使用 Anthropic 旧式固定思考预算");
 
         const dialog = await openModelRegistry();
@@ -985,11 +1025,13 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "设置与对话控件提供英文界面",
-      "在系统设置的语言页选择 English 并保存关闭；对话区显示本地化模型与思考标签，并在 1440×900、600×900 重复无重叠、紧凑高度、命中和溢出几何断言；重新打开模型注册表可见 Common providers、Custom provider 与 Provider model catalog。",
+      "在系统设置的语言页选择 English 并保存关闭；对话区显示本地化模型选择入口，弹窗里的思考控件选项同样本地化；在 1440×900、600×900 重复无重叠、紧凑高度、命中和溢出几何断言；重新打开模型注册表，展开 Add provider 可见预设与 Custom provider，并可见 Provider model catalog。",
       async () => {
-        await page.getByLabel("本任务使用的模型").selectOption(deepseekModelId);
-        await page.getByLabel("当前对话的思考模式").selectOption("enabled");
-        await page.getByLabel("当前对话的思考强度").selectOption("max");
+        await page.getByLabel("本任务使用的模型").click();
+        const zhPicker = page.getByRole("dialog", { name: "选择模型" });
+        await zhPicker.getByRole("option", { name: /deepseek-v4-flash/ }).click();
+        await zhPicker.getByLabel("当前对话的思考开关与强度").selectOption("effort:max");
+        await closeModelPicker(zhPicker);
         const dialog = await openModelRegistry();
         await dialog.getByRole("navigation", { name: "设置分组" })
           .getByRole("button", { name: /^语言/ })
@@ -997,17 +1039,20 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await dialog.getByLabel("界面语言").selectOption("en");
         await dialog.getByRole("button", { name: "保存并关闭" }).click();
         await expect(page.getByLabel("Model for this task")).toBeVisible();
-        await expect(page.getByLabel("Thinking mode for this conversation")).toBeVisible();
-        await expect(page.getByLabel("Thinking effort for this conversation")).toBeVisible();
-        await expect(page.getByLabel("Thinking effort for this conversation").locator("option:checked")).toHaveText("Max");
-        await expect(page.getByLabel("Model for this task").locator("option:checked")).toContainText("DeepSeek · Auto");
-        await expect(page.getByLabel("Model for this task").locator("option:checked")).not.toContainText("自动");
-        const labels = ["Model for this task", "Thinking mode for this conversation", "Thinking effort for this conversation", "Approvals", "Specialist"];
+        await page.getByLabel("Model for this task").click();
+        const enPicker = page.getByRole("dialog", { name: "Choose a model" });
+        const enThinking = enPicker.getByLabel("Thinking switch and effort for this conversation");
+        await expect(enThinking).toHaveValue("effort:max");
+        await expect(enThinking.locator("option:checked")).toHaveText("Max");
+        await expect(enPicker.getByRole("option", { name: /deepseek-v4-flash/ })).toHaveAttribute("aria-selected", "true");
+        await closeModelPicker(enPicker);
+        const labels = ["Model for this task", "Approvals", "Specialist"];
         await verifyComposerGeometry({ labels, runButton: "Run analysis", width: 1440 });
         await verifyComposerGeometry({ labels, runButton: "Run analysis", width: 600 });
         const englishDialog = await openModelRegistry();
-        await expect(englishDialog.getByRole("region", { name: "Common providers" })).toBeVisible();
-        await expect(englishDialog.getByRole("button", { name: "+ Custom provider" })).toBeVisible();
+        const addRegion = await expandAddProvider(englishDialog);
+        await expect(addRegion.getByRole("button", { name: /DeepSeek/ })).toBeVisible();
+        await expect(addRegion.getByRole("button", { name: /Custom provider/ })).toBeVisible();
         await expect(englishDialog.getByRole("region", { name: "Provider model catalog" })).toBeVisible();
         const registry = englishDialog.getByRole("region", { name: "Configured providers" });
         await registry.getByRole("button", { name: /DeepSeek/ }).click();

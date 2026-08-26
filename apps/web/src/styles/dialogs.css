@@ -119,6 +119,33 @@
 .model-card-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .model-badge { border-radius: 999px; background: var(--surface-track); color: var(--text-secondary); padding: 2px 8px; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .model-badge.warning { background: var(--warning-soft); color: var(--warning); }
+.model-badge.current { background: var(--accent-soft); color: var(--accent-ink); }
+
+/* Conversation model picker dialog: provider-grouped model list plus the
+   combined thinking control (off + effort list). */
+.model-picker-dialog { display: flex; flex-direction: column; width: min(640px, 100%); max-height: calc(100vh - 56px); overflow: hidden; padding: 0; }
+.model-picker-dialog > .config-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin: 0; padding: 20px 24px; border-bottom: 1px solid var(--border); }
+.model-picker-dialog > .config-header h2 { font-size: 20px; }
+.model-picker-dialog > .config-header small { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.model-picker-dialog > .config-header button { flex: 0 0 auto; width: 38px; height: 38px; color: var(--muted); }
+.model-picker-body { display: grid; gap: 16px; overflow-y: auto; padding: 18px 24px 24px; }
+.model-picker-group > h4 { margin: 0 0 8px; color: var(--text-heading); font-size: 12px; }
+.model-picker-group-list { display: grid; gap: 6px; }
+.model-picker-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 10px 12px; cursor: pointer; text-align: left; }
+.model-picker-row:hover, .model-picker-row.active { border-color: var(--accent-border); background: var(--accent-soft); }
+.model-picker-row:disabled { cursor: not-allowed; opacity: .65; }
+.model-picker-row-text { display: grid; min-width: 0; }
+.model-picker-row-text strong, .model-picker-row-text code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-picker-row-text strong { color: var(--text-heading); font-size: 13px; }
+.model-picker-row-text code { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.model-picker-row-badges { display: flex; flex: 0 0 auto; gap: 5px; }
+.model-picker-thinking { display: grid; gap: 8px; border-top: 1px solid var(--border); padding-top: 14px; }
+.model-picker-thinking label { display: grid; gap: 5px; margin-bottom: 0; }
+.model-picker-thinking label > span { display: block; color: var(--text-heading); font-size: 12px; font-weight: 700; }
+.model-picker-thinking select { width: 100%; min-height: 39px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); padding: 7px 9px; }
+.model-picker-empty { display: grid; justify-items: start; gap: 10px; color: var(--muted); font-size: 13px; }
+.model-picker-empty p { margin: 0; }
+.model-picker-empty .primary-button { width: auto; }
 .config-panel .vision-capability { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; gap: 11px; border: 1px solid var(--border-strong); border-radius: 8px; padding: 12px; cursor: pointer; }
 .config-panel .vision-capability input { width: 24px; min-width: 24px; min-height: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
 .config-panel .vision-capability > span { margin: 0; }

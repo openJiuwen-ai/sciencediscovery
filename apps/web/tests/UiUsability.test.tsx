@@ -108,7 +108,19 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
 
   assert.match(app, /<span title=\{project\.name\}>\{label\}<\/span>/);
   assert.match(app, /<span title=\{`\$\{item\.title\}\$\{item\.archivedAt/);
-  assert.equal(app.match(/modelOptionLabel\(item, (?:models|visionModels), t\)/g)?.length, 3);
+  // Registry card title + optional vision model picker; the composer now opens
+  // the model picker dialog instead of an inline labelled select.
+  assert.equal(app.match(/modelOptionLabel\(item, (?:models|visionModels), t\)/g)?.length, 2);
+  assert.match(app, /className="model-picker-trigger"/);
+});
+
+test("the system settings dialog uses up to roughly 80% of the viewport", () => {
+  const dialogs = source("styles/dialogs.css");
+  const responsive = source("styles/responsive.css");
+
+  assert.match(dialogs, /\.system-config-dialog \{[^}]*width: min\(80vw, 1600px\);[^}]*height: min\(80vh, 1000px\);/);
+  assert.match(responsive, /@media \(max-width: 900px\)[\s\S]*?\.system-config-dialog \{ width: calc\(100vw - 32px\);/);
+  assert.match(responsive, /@media \(max-width: 600px\)[\s\S]*?\.system-config-dialog \{ width: 100%;/);
 });
 
 test("workspace resize wiring shares a viewport-driven maximum", () => {
@@ -140,10 +152,10 @@ test("Composer controls wrap by available container width instead of overlapping
   const responsive = source("styles/responsive.css");
 
   assert.match(conversation, /\.composer-footer \{[^}]*flex-wrap: wrap;/);
-  assert.match(conversation, /\.task-model-picker \{[^}]*flex: 1 1 280px;[^}]*min-width: 0;/);
-  assert.match(conversation, /\.task-model-picker select \{[^}]*width: 100%;[^}]*min-width: 0;/);
+  assert.match(conversation, /\.model-picker-trigger \{[^}]*flex: 1 1 280px;[^}]*min-width: 0;/);
+  assert.match(conversation, /\.model-picker-trigger-name \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
   assert.match(conversation, /\.orchestration-controls \{[^}]*flex-wrap: wrap;/);
-  assert.match(responsive, /@container \(max-width: 1024px\)[\s\S]*?\.task-model-picker \{ flex-basis: 100%; \}/);
+  assert.match(responsive, /@container \(max-width: 1024px\)[\s\S]*?\.model-picker-trigger \{ flex-basis: 100%; max-width: none; \}/);
   assert.match(responsive, /@container \(max-width: 900px\)[\s\S]*?\.orchestration-controls \{ flex-basis: 100%; \}/);
-  assert.match(responsive, /@media \(max-width: 600px\) \{\s*\.task-model-picker, \.conversation-thinking-picker, \.orchestration-controls \{ flex: 0 0 auto; \}\s*\.task-model-picker select \{[^}]*flex: 0 0 auto;/);
+  assert.match(responsive, /@media \(max-width: 600px\) \{\s*\.model-picker-trigger, \.orchestration-controls \{ flex: 0 0 auto; \}\s*\.model-picker-trigger \{ width: 100%; max-width: none;/);
 });
