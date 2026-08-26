@@ -17,6 +17,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import type {
   ModelApiProtocol,
   ModelApiVariant,
+  ModelCatalogDetails,
   ModelDiscoveryStrategy,
   ModelProfile,
   ModelProvider,
@@ -214,9 +215,60 @@ function SourceLinks({ model }: { model: ProviderModelEntry }) {
   </small>;
 }
 
+/** The model catalog header: when the shared metadata was last updated and a
+ *  way to update it now. Refreshing only replaces the catalog, never the
+ *  provider or model form the user may be part-way through. */
+export function ModelCatalogStatus({ catalog, client, onCatalogChange, onError, onNotice }: {
+  catalog?: ModelCatalogDetails;
+  client: SettingsApiClient;
+  onCatalogChange?: (details: ModelCatalogDetails) => void;
+  onError: (message: string) => void;
+  onNotice: (message: string, detail?: string) => void;
+}) {
+  const { t } = useLocale();
+  const [refreshing, setRefreshing] = useState(false);
+  const snapshot = catalog?.snapshot;
+
+  async function refresh(): Promise<void> {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const next = await client.refreshModelCatalog();
+      onCatalogChange?.(next);
+      onNotice(t("providers.catalog.notice.refreshed"), next.snapshot
+        ? new Date(next.snapshot.fetchedAt).toLocaleString()
+        : undefined);
+    } catch (reason) {
+      // The server keeps serving the snapshot it already had, so say that
+      // rather than leaving the user to guess whether the data is now gone.
+      const detail = reason instanceof Error ? reason.message : "";
+      onError(detail ? `${t("providers.catalog.refreshFailed")}: ${detail}` : t("providers.catalog.refreshFailed"));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  return <section className="model-catalog-status" aria-label={t("providers.catalog.title")}>
+    <div>
+      <strong>{t("providers.catalog.title")}</strong>
+      <small>{snapshot
+        ? t(`providers.catalog.updated.${snapshot.origin}`, { time: new Date(snapshot.fetchedAt).toLocaleString() })
+        : t("providers.catalog.missing")}</small>
+    </div>
+    <button
+      className="secondary-button compact-button"
+      disabled={refreshing}
+      onClick={() => void refresh()}
+      type="button"
+    >{refreshing ? t("providers.catalog.refreshing") : t("providers.catalog.refresh")}</button>
+  </section>;
+}
+
 export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
+  catalog?: ModelCatalogDetails;
   client: SettingsApiClient;
   models: ModelProfile[];
+  onCatalogChange?: (details: ModelCatalogDetails) => void;
   onDraftStateChange?: (dirty: boolean) => void;
   onError: (message: string) => void;
   onModelsChange: (models: ModelProfile[]) => void;
@@ -226,8 +278,10 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   providers: ModelProvider[];
   proxySettings?: ProxySettingsDetails;
 }>(function ProviderModelSettings({
+  catalog,
   client,
   models,
+  onCatalogChange,
   onDraftStateChange,
   onError,
   onModelsChange,
@@ -433,6 +487,13 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
 
   const existing = draft?.providerId ? providers.find((provider) => provider.id === draft.providerId) : undefined;
   return <div className="provider-settings">
+    <ModelCatalogStatus
+      {...(catalog ? { catalog } : {})}
+      client={client}
+      {...(onCatalogChange ? { onCatalogChange } : {})}
+      onError={onError}
+      onNotice={onNotice}
+    />
     <section className="provider-presets" aria-label={t("providers.presets.title")}>
       <div className="provider-section-heading">
         <div><h4>{t("providers.presets.title")}</h4><p>{t("providers.presets.help")}</p></div>

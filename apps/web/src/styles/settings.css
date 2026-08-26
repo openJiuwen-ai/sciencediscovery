@@ -598,6 +598,13 @@
 .provider-section-heading h4, .provider-registry > h4 { color: var(--text-heading); font-size: 14px; }
 .provider-section-heading p { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .provider-presets, .provider-registry, .provider-editor, .provider-model-catalog { display: grid; gap: 12px; min-width: 0; }
+/* Catalog freshness sits above the provider list: it applies to every provider,
+   not to whichever one happens to be selected. */
+.model-catalog-status { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); padding: 10px 12px; }
+.model-catalog-status > div { display: grid; gap: 3px; min-width: 0; }
+.model-catalog-status strong { color: var(--text-heading); font-size: 12px; }
+.model-catalog-status small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.model-catalog-status button { flex: 0 0 auto; }
 .provider-preset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
 .provider-preset-card { display: grid; min-width: 0; gap: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); padding: 10px 11px; color: var(--text-heading); cursor: pointer; text-align: left; }
 .provider-preset-card:hover, .provider-preset-card.active { border-color: var(--accent-border); background: var(--accent-soft); }

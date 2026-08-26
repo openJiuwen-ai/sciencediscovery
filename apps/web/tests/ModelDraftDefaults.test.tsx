@@ -21,6 +21,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { EMPTY_MODEL_DRAFT, ModelDraftFields, modelDraftFromProfile } from "../src/App.js";
 import { LocaleProvider } from "../src/i18n/index.js";
+import { installWebModelCatalog } from "./model-catalog-fixture.js";
+
+// The catalog is downloaded at runtime; these drafts assert what the form does
+// with known model facts, so install them first.
+installWebModelCatalog();
 
 function renderFields(locale: "en" | "zh-CN", draft = EMPTY_MODEL_DRAFT): string {
   return renderToStaticMarkup(createElement(

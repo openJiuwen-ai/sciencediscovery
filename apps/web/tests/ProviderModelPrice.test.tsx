@@ -27,6 +27,9 @@ import {
   providerOperationError,
   sourceDate,
 } from "../src/ProviderModelSettings.js";
+import { installWebModelCatalog } from "./model-catalog-fixture.js";
+
+installWebModelCatalog();
 
 test("DeepSeek price summary localizes structured peak and off-peak schedules", () => {
   const render = (initialLocale: "en" | "zh-CN") => renderToStaticMarkup(createElement(

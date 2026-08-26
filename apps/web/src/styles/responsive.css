@@ -85,6 +85,7 @@
   .provider-preset-grid, .provider-registry-list, .provider-editor-primary, .provider-advanced-grid { grid-template-columns: minmax(0, 1fr); }
   .provider-model-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-section-heading { align-items: stretch; flex-direction: column; }
+  .model-catalog-status { align-items: stretch; flex-direction: column; }
   .provider-editor-actions { justify-content: stretch; }
   .provider-editor-actions button { flex: 1 1 120px; }
   .skill-library-grid { grid-template-columns: minmax(0, 1fr); }

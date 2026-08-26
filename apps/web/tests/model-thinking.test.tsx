@@ -18,6 +18,9 @@ import test from "node:test";
 import type { ModelProfile, ModelProvider } from "@sciencediscovery/schema";
 
 import { modelThinkingControls, normalizeSessionThinking } from "../src/modelThinking.js";
+import { installWebModelCatalog } from "./model-catalog-fixture.js";
+
+installWebModelCatalog();
 
 const profile = (update: Partial<ModelProfile>): ModelProfile => ({
   baseUrl: "https://example.test/v1",

@@ -33,6 +33,7 @@ import type {
   InstallEnvironmentRequest,
   ModelConnectivityTestResult,
   MemoryGraphSettingsDetails,
+  ModelCatalogDetails,
   UninstallEnvironmentRequest,
   RegisterRemoteHostRequest,
   RemoteHostTarget,
@@ -176,6 +177,16 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   listProviders(): Promise<{ presets: ModelProviderPreset[]; providers: ModelProvider[] }> {
     return this.request("/api/providers");
+  }
+
+  getModelCatalog(): Promise<ModelCatalogDetails> {
+    return this.request("/api/model-catalog");
+  }
+
+  /** Download a fresh catalog. A failure rejects and the server keeps serving
+   *  the snapshot it already had. */
+  refreshModelCatalog(): Promise<ModelCatalogDetails> {
+    return this.request("/api/model-catalog/refresh", { method: "POST" });
   }
 
   createProvider(body: CreateModelProviderRequest): Promise<ModelProvider> {

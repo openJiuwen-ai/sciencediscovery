@@ -95,7 +95,8 @@ import type {
   WorkspaceFile,
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
-import { constrainCatalogThinking } from "@sciencediscovery/schema";
+import type { ModelCatalogDetails } from "@sciencediscovery/schema";
+import { constrainCatalogThinking, setModelCatalogSnapshot } from "@sciencediscovery/schema";
 import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import { classifyScientificArtifact, createLocalSessionTitle, resolveScientificArtifactKind, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 
@@ -1094,6 +1095,14 @@ export function App() {
   const [models, setModels] = useState<ModelProfile[]>([]);
   const [modelProviders, setModelProviders] = useState<ModelProvider[]>([]);
   const [modelProviderPresets, setModelProviderPresets] = useState<ModelProviderPreset[]>([]);
+  // The catalog lives in a process-wide registry so the synchronous lookups in
+  // the model form keep working. This state exists to show its age and to make
+  // React re-render the affected controls after a refresh replaces it.
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogDetails>();
+  const applyModelCatalog = useCallback((details: ModelCatalogDetails) => {
+    setModelCatalogSnapshot(details.snapshot);
+    setModelCatalog(details);
+  }, []);
   const [connectors, setConnectors] = useState<ConnectorManifest[]>([]);
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
   const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
@@ -1723,6 +1732,7 @@ export function App() {
       client.listProjects(),
       client.listModels(),
       client.listProviders(),
+      client.getModelCatalog(),
       client.listConnectors(),
       client.listSkills(),
       client.listSkillLibraries(),
@@ -1735,11 +1745,12 @@ export function App() {
       client.listMcpSources(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([projectItems, modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
+    ]).then(([projectItems, modelItems, providerRegistry, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
       setProjects(projectItems);
       setModels(modelItems);
       setModelProviders(providerRegistry.providers);
       setModelProviderPresets(providerRegistry.presets);
+      applyModelCatalog(catalog);
       setConnectors(connectorItems);
       setSkills(skillItems);
       setSkillLibraries(skillLibraryItems);
@@ -4642,8 +4653,10 @@ export function App() {
               {systemSettingsGroup === "models" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.providerConfiguration")}</span><h3>{t("settings.modelRegistry")}</h3><p>{t("settings.modelHelp")}</p></div>
                 <ProviderModelSettings
+                  catalog={modelCatalog}
                   client={client}
                   models={models}
+                  onCatalogChange={applyModelCatalog}
                   onDraftStateChange={setProviderDraftDirty}
                   onError={reportSystemSettingsError}
                   onModelsChange={setModels}
