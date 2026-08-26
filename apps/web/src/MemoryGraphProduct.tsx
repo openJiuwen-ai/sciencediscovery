@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { EnvironmentRevision, MemoryGraphEdgeType, MemoryGraphNode, MemorySubgraph } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { useLocale } from "./i18n/LocaleProvider.js";
 import { graphNodeName } from "./MemoryGraphCanvas.js";
+import { MarkdownRenderer } from "./Markdown.js";
 import { Field, humanizeKey, LinkField, LongText, partitionEvidenceExtra, TimeField } from "./NodeField.js";
 
 /** Edge-type display order in the relations block: produces is the primary
@@ -85,16 +86,18 @@ export function useResolvedArtifactName(
  *  type; falls back to the raw key/value dump for unknown labels. Each typed
  *  component composes the shared Field/LongText/TimeField/LinkField primitives
  *  so hashes decode, long text truncates, times format, links open. */
-function NodeProperties({ node, client, sessionId, subgraph }: {
+function NodeProperties({ node, client, sessionId, subgraph, scopeChildCounts }: {
   node: MemoryGraphNode;
   client: ApiClient;
   sessionId: string;
   subgraph: MemorySubgraph;
+  scopeChildCounts?: ReadonlyMap<string, number>;
 }) {
   const extra = (node.extra ?? {}) as Record<string, unknown>;
   switch (node.label) {
     case "ResearchGoal": return <ResearchGoalDetail extra={extra} />;
-    case "SubTask": return <SubTaskDetail extra={extra} />;
+    case "Task": return <TaskDetail extra={extra} scopeChildCount={scopeChildCounts?.get(node.id)} />;
+    case "ToolCall": return <TaskDetail extra={extra} scopeChildCount={scopeChildCounts?.get(node.id)} />;
     case "Paper": return <PaperDetail extra={extra} />;
     case "Evidence": return <EvidenceDetail extra={extra} />;
     case "Claim": return <ClaimDetail extra={extra} />;
@@ -122,20 +125,94 @@ function ResearchGoalDetail({ extra }: { extra: Record<string, unknown> }) {
   </div>;
 }
 
-// --- SubTask ----------------------------------------------------------------
+// --- Task / ToolCall --------------------------------------------------------
 
 // Friendly display for known task_type values; unknown values pass through.
-function taskTypeLabel(taskType: string, t: (key: "node.task_type.code_execution" | "node.task_type.literature_search") => string): string {
+function taskTypeLabel(taskType: string, t: (key: "node.task_type.code_execution" | "node.task_type.literature_search" | "node.task_type.subagent") => string): string {
   if (taskType === "code_execution") return t("node.task_type.code_execution");
   if (taskType === "literature_search") return t("node.task_type.literature_search");
+  if (taskType === "subagent") return t("node.task_type.subagent");
   return taskType;
 }
 
-function SubTaskDetail({ extra }: { extra: Record<string, unknown> }) {
+/**
+ * A Markdown-rendered section for a subagent scope's `objective`/`summary`. The
+ * scope's summary is the subagent's final assistant message (see
+ * runs/index.ts: `assistantOutput` = last assistant step content), which the
+ * specialist agent emits as structured Markdown — headings, code blocks,
+ * tables, lists. Rendering it as plain text (the previous `LongText` path)
+ * left the `#`/` ``` `/`|` markers visible and the report unreadable. This
+ * wraps `MarkdownRenderer` (GFM tables + code + KaTeX, HTML stripped) in the
+ * same expand/collapse affordance `LongText` gives plain fields, so a long
+ * report is collapsed to a few lines by default and opens on demand. `content`
+ * may also be a plain error string or the backend's no-text fallback — both
+ * render fine as Markdown (plain text passes through unchanged).
+ */
+function MarkdownSection({ title, content, maxLines = 6 }: { title: string; content: unknown; maxLines?: number }) {
+  const { t } = useLocale();
+  const [expanded, setExpanded] = useState(false);
+  const [overflow, setOverflow] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const text = typeof content === "string" ? content : typeof content === "number" ? String(content) : "";
+  // A max-line budget as a pixel height cap (12px font * 1.5 line-height), plus
+  // the box's vertical padding (8px top + 8px bottom) so the cap measures the
+  // same number of content lines regardless of the border/padding.
+  const collapsedMaxHeight = maxLines * 18 + 16;
+  // Measure overflow only while collapsed — mirrors LongText's sticky flag so
+  // expanding never re-measures and drops the toggle.
+  useLayoutEffect(() => {
+    if (expanded) return;
+    const el = ref.current;
+    if (!el) return;
+    setOverflow(el.scrollHeight - el.clientHeight > 1);
+  }, [text, expanded]);
+  if (!text) return null;
+  return <section className="node-detail-section">
+    <h4 className="node-detail-section-label">{title}</h4>
+    <div
+      ref={ref}
+      className={expanded ? "markdown-body node-subagent-summary node-subagent-summary-expanded" : "markdown-body node-subagent-summary"}
+      style={{ maxHeight: expanded ? "none" : `${collapsedMaxHeight}px` }}
+    >
+      <MarkdownRenderer content={text} />
+    </div>
+    {overflow ? <button className="node-longtext-toggle" onClick={() => setExpanded((e) => !e)} type="button">
+      {expanded ? t("node.longtext.collapse") : t("node.longtext.expand")}
+    </button> : null}
+  </section>;
+}
+
+function TaskDetail({ extra, scopeChildCount }: { extra: Record<string, unknown>; scopeChildCount?: number }) {
   const { t } = useLocale();
   const status = typeof extra.status === "string" ? extra.status : undefined;
   const taskType = typeof extra.task_type === "string" ? extra.task_type : undefined;
   const taskTypeDisplay = taskType ? taskTypeLabel(taskType, t) : undefined;
+  // A subagent scope (Task, task_type='subagent') carries its own descriptive
+  // surface — objective, summary, role (subagent_type), child-task count —
+  // distinct from the per-tool fields a ToolCall (code_execution/
+  // literature_search/…) shows. Branch on task_type so the scope's card reads
+  // as a scope, not as a generic task. Both labels dispatch here: a Task is
+  // the scope; a ToolCall is the child (the non-subagent branch below).
+  const isScope = taskType === "subagent";
+  const objective = extra.objective;
+  const summary = extra.summary;
+  const subagentType = typeof extra.subagent_type === "string" && extra.subagent_type ? extra.subagent_type : undefined;
+  const failureReason = typeof extra.failure_reason === "string" && extra.failure_reason ? extra.failure_reason : undefined;
+  if (isScope) {
+    return <div className="node-detail-body">
+      {status ? <span className={`node-status-badge node-status-${status}`}>{status}</span> : null}
+      {objective ? <MarkdownSection title={t("node.section.subagent_objective")} content={objective} maxLines={4} /> : null}
+      {summary ? <MarkdownSection title={t("node.section.subagent_summary")} content={summary} maxLines={6} /> : null}
+      <dl className="node-detail-fields">
+        {taskTypeDisplay ? <Field label={t("node.field.task_type")} value={taskTypeDisplay} /> : null}
+        {subagentType ? <Field label={t("node.field.subagent_type")} value={subagentType} /> : null}
+        {typeof scopeChildCount === "number" ? <Field label={t("node.field.child_count")} value={scopeChildCount} /> : null}
+        {failureReason ? <Field label={t("node.field.failure_reason")} value={failureReason} /> : null}
+        {extra.created_at ? <Field label={t("node.field.created_at")}><TimeField value={extra.created_at} /></Field> : null}
+        {extra.finished_at ? <Field label={t("node.field.finished_at")}><TimeField value={extra.finished_at} /></Field> : null}
+      </dl>
+    </div>;
+  }
   return <div className="node-detail-body">
     {status ? <span className={`node-status-badge node-status-${status}`}>{status}</span> : null}
     <dl className="node-detail-fields">
@@ -403,10 +480,10 @@ function RawNodeProperties({ extra }: { extra: Record<string, unknown> }) {
 }
 
 /**
- * Left-column fallback for nodes that are not artifacts (SubTask, Code, Paper,
- * …): shows the node's header, its outgoing relationships, and delegates the
- * property surface to the per-label detail component (which recovers script /
- * logs for Code nodes, formats times/links, and truncates long text).
+ * Left-column fallback for nodes that are not artifacts (Task, ToolCall, Code,
+ * Paper, …): shows the node's header, its outgoing relationships, and delegates
+ * the property surface to the per-label detail component (which recovers
+ * script / logs for Code nodes, formats times/links, and truncates long text).
  */
 export function MemoryGraphNodeDetail({
   client,
@@ -415,6 +492,7 @@ export function MemoryGraphNodeDetail({
   resolveState,
   sessionId,
   subgraph,
+  scopeChildCounts,
 }: {
   client: ApiClient;
   node?: MemoryGraphNode;
@@ -423,6 +501,11 @@ export function MemoryGraphNodeDetail({
   resolveState: ResolveState;
   sessionId: string;
   subgraph: MemorySubgraph;
+  /** True per-scope child counts (built from the raw folded node set in the
+   *  explorer), so the scope detail card can show the child-task count even
+   *  while the scope is collapsed — counting visible ``contains`` edges would
+   *  read 0 while folded. */
+  scopeChildCounts?: ReadonlyMap<string, number>;
 }) {
   const { t } = useLocale();
   if (!node) {
@@ -432,8 +515,8 @@ export function MemoryGraphNodeDetail({
   }
 
   // Outgoing edges grouped by relationship. Listing them all under "produces"
-  // misreports the graph: a SubTask *produces* its Code and runs *next* before
-  // the following SubTask, and those are different claims.
+  // misreports the graph: a Task/ToolCall *produces* its Code and runs *next*
+  // before the following Task/ToolCall, and those are different claims.
   const relations = new Map<MemoryGraphEdgeType, MemoryGraphNode[]>();
   for (const edge of subgraph.edges) {
     if (edge.source !== node.id) continue;
@@ -493,7 +576,7 @@ export function MemoryGraphNodeDetail({
             {target.label}: {graphNodeName(target)}
           </span>)}
       </div>)}
-      <NodeProperties node={node} client={client} sessionId={sessionId} subgraph={subgraph} />
+      <NodeProperties node={node} client={client} sessionId={sessionId} subgraph={subgraph} scopeChildCounts={scopeChildCounts} />
     </div>
   </div>;
 }

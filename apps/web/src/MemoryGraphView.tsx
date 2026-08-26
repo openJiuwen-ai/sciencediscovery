@@ -39,6 +39,17 @@ export function isNodeCompleted(node: { extra?: Record<string, unknown> }): bool
 }
 
 /**
+ * A node that ended by cancellation (status === "cancelled", PR1's
+ * failure_reason="aborted"). Counted separately from completed so the
+ * done-badge can split `✓ N done · ⊘ M cancelled` (doc16 §2.5) — cancelled
+ * work is terminal-but-failed, neither pending nor succeeded.
+ */
+export function isNodeCancelled(node: { extra?: Record<string, unknown> }): boolean {
+  const status = node.extra?.status;
+  return typeof status === "string" && status.toLowerCase() === "cancelled";
+}
+
+/**
  * Workspace-panel card: a status summary of the session's memory graph.
  * The card is non-interactive — it shows the health badge, node count, and a
  * hint pointing to the per-product "View chain" entry (the explorer itself is
@@ -96,6 +107,7 @@ export function MemoryGraphView({ client, onError, refreshKey, sessionId }: Memo
   }
 
   const completed = subgraph.nodes.filter((node) => isNodeCompleted(node)).length;
+  const cancelled = subgraph.nodes.filter((node) => isNodeCancelled(node)).length;
 
   return <section className="memory-graph-view">
     <header className="memory-graph-header">
@@ -109,6 +121,7 @@ export function MemoryGraphView({ client, onError, refreshKey, sessionId }: Memo
     <p className="memory-thumb-meta memory-graph-stats">
       {subgraph.nodes.length} {t("memory.stats.nodes")} · {subgraph.edges.length} {t("memory.stats.edges")}
       {completed ? <em className="memory-thumb-done">✓ {completed} {t("memory.stats.done")}</em> : null}
+      {cancelled ? <em className="memory-thumb-cancelled">⊘ {cancelled} {t("memory.stats.cancelled")}</em> : null}
     </p>
   </section>;
 }

@@ -71,6 +71,10 @@ export interface InvokeMcpToolRequest {
   toolCallId: string;
   toolId: string;
   turnId: string;
+  /** When set, this search ran inside a subagent: products hang off the
+   * subagent's child SubTask instead of a per-search SubTask. Absent in
+   * main-agent context — behavior unchanged. */
+  parentSubagentId?: string;
 }
 
 export interface InvokeMcpToolResponse {
@@ -339,6 +343,7 @@ export class McpGovernanceBroker {
               abstract: record.abstract,
               source: record.source,
             })),
+            parentSubagentId: request.parentSubagentId,
           });
         }
         return { invocation, result: structuredClone(cached.result) };
@@ -545,6 +550,7 @@ export class McpGovernanceBroker {
           abstract: record.abstract,
           source: record.source,
         })),
+        parentSubagentId: request.parentSubagentId,
       });
     }
     return {

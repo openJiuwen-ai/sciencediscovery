@@ -1884,6 +1884,43 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, result);
         return;
       }
+      if (request.method === "POST" && url.pathname === "/api/memory/query/scope-expansion") {
+        // Subagent scope expansion: returns the scope's child ToolCalls + real
+        // produces/contains/next edges (the "click to expand a scope" payload).
+        // Same reverse-proxy defensive shape as query/chain — toggle off or
+        // sidecar down → empty subgraph with a reason, never a 500. A 404
+        // (scope absent / not a subagent) surfaces as node_not_found so the
+        // frontend can show "scope gone" rather than a blank expansion.
+        const body = await readJson<{ scope_task_id: string; session_id: string }>(request);
+        if (!body.scope_task_id?.trim()) return sendError(response, 400, "scope_task_id must be non-empty");
+        if (!body.session_id?.trim()) return sendError(response, 400, "session_id must be non-empty");
+        const result = memoryGraphEnabled()
+          ? await memoryGraphClient
+              .getScopeExpansion(body.scope_task_id, body.session_id)
+              .catch(() => ({ nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_unreachable" }))
+          : { nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_disabled" as const };
+        sendJson(response, 200, result);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/memory/query/group-expansion") {
+        // Aggregate expansion (需求3): a folded scope with >1 product of one
+        // kind (Artifact/Paper) collapses into a single virtual
+        // `_group:<scopeId>:<Kind>` node in the folded view; this unpacks it
+        // into the real member products + one surrogate scope→member produces
+        // edge each. Same defensive shape as scope-expansion — toggle off or
+        // sidecar down → empty subgraph with a reason; a 404 (malformed id /
+        // absent scope) surfaces as node_not_found.
+        const body = await readJson<{ group_id: string; session_id: string }>(request);
+        if (!body.group_id?.trim()) return sendError(response, 400, "group_id must be non-empty");
+        if (!body.session_id?.trim()) return sendError(response, 400, "session_id must be non-empty");
+        const result = memoryGraphEnabled()
+          ? await memoryGraphClient
+              .getGroupExpansion(body.group_id, body.session_id)
+              .catch(() => ({ nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_unreachable" }))
+          : { nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_disabled" as const };
+        sendJson(response, 200, result);
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/memory/trace/provenance") {
         // Reviewer authenticity trace: ordered provenance chain + broken/
         // truncated/reason. Same reverse-proxy three-step as query/chain —
