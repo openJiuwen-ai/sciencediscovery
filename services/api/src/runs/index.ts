@@ -689,6 +689,7 @@ async function executeAgentRun(
     workspaceRoot: string,
     turnId: string,
     sourcePathPrefix?: string,
+    parentSubagentId?: string,
   ): Pick<WorkspaceAgentOptions, "declareArtifact" | "listArtifacts" | "readArtifact"> => ({
     declareArtifact: async (input) => {
       const defaultName = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
@@ -697,6 +698,7 @@ async function executeAgentRun(
         ...(input.description ? { description: input.description } : {}),
         name: input.name?.trim() || defaultName,
         path: input.path,
+        parentSubagentId,
         referencesProvider: drainReferences,
         sessionId,
         sourcePath,
@@ -1052,6 +1054,23 @@ async function executeAgentRun(
           timeoutSeconds: subagentConfig.timeoutSeconds,
         });
         await emit({ subagent, type: "subagent.updated" });
+        // Mirror the subagent's start into one scope SubTask node. objective /
+        // created_at / role are written now; status / finishedAt / summary are
+        // filled at the terminal landing below. scope task_type is fixed at
+        // "subagent" (it is the aggregate, not a concrete execution); the actual
+        // subagent role rides in subagentType. Each internal toolcall is a
+        // separate child SubTask built by upsert_execution / upsert_mcp_search,
+        // so the scope itself never carries products.
+        memoryGraphSink.observeSubagent({
+          subagentId: subagent.id,
+          sessionId,
+          turnId: runId,
+          objective: subagent.input.description,
+          taskType: "subagent",
+          subagentType: subagent.input.subagentType,
+          createdAt: subagent.createdAt,
+          status: "running",
+        });
         const steps: SubagentStep[] = [...subagent.steps];
         let handoff: NonNullable<Subagent["handoff"]> | undefined;
         const releaseParentWait = mainExecution?.beginExternalWait();
@@ -1159,7 +1178,7 @@ async function executeAgentRun(
             config: agentConfig,
             enabledConnectorIds: subagentConnectorIds,
             ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
-            ...createArtifactBindings(subagentWorkspaceRoot, childExecution.identity.executionId, handoff.privateWorkspacePath),
+            ...createArtifactBindings(subagentWorkspaceRoot, childExecution.identity.executionId, handoff.privateWorkspacePath, subagent.id),
             ...createWorkspaceExecutionBindings({
               agentId: `subagent:${subagent.id}`,
               executionId: childExecution.identity.executionId,
@@ -1178,6 +1197,7 @@ async function executeAgentRun(
               sessionId,
               store,
               workspaceRoot: subagentWorkspaceRoot,
+              parentSubagentId: subagent.id,
             }),
             ...createMcpWorkspaceTools({
               artifactManager,
@@ -1199,6 +1219,7 @@ async function executeAgentRun(
               store,
               turnId: childExecution.identity.executionId,
               workspacePathPrefix: handoff.privateWorkspacePath,
+              parentSubagentId: subagent.id,
             }),
             ...createWebWorkspaceTools({
               broker: webBroker,
@@ -1467,6 +1488,25 @@ async function executeAgentRun(
         }
         subagent = await store.updateSubagent(subagent);
         await emit({ subagent, type: "subagent.updated" });
+        // Mirror the subagent's terminal state into its scope SubTask node.
+        // ON MATCH fills only the gaps (status / summary / finishedAt); the
+        // objective / role / created_at written at start are not overwritten.
+        // status is the raw subagent status — upsert_subagent normalises
+        // timed_out → failed (failure_reason="timed_out"). summary carries the
+        // failure reason on failure/cancel or the last assistant text on
+        // success; upsert_subagent guarantees a non-empty summary on success.
+        memoryGraphSink.observeSubagent({
+          subagentId: subagent.id,
+          sessionId,
+          turnId: runId,
+          objective: subagent.input.description,
+          taskType: "subagent",
+          subagentType: subagent.input.subagentType,
+          createdAt: subagent.createdAt,
+          status: subagent.status,
+          finishedAt: subagent.finishedAt,
+          summary: subagent.error ?? (assistantOutput || undefined),
+        });
         return subagent;
       } finally {
         releaseSubagentSlot();

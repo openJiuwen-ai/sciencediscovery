@@ -144,6 +144,10 @@ export interface ObserveExecutionPayload {
   stdoutHash?: string | null;
   stderrHash?: string | null;
   envHash?: string | null;
+  /** When set, this execution ran inside a subagent: products hang off the
+   * subagent's child SubTask instead of a per-execution SubTask. Absent
+   * (undefined) in main-agent context — behavior unchanged. */
+  parentSubagentId?: string;
 }
 
 // MemorySubgraph / MemoryGraphNode / MemoryGraphEdge live in @sciencediscovery/schema
@@ -169,6 +173,29 @@ export interface ObserveMcpInvocationPayload {
   toolType: string;
   retrievedAt: string;
   records: MemoryGraphMcpRecord[];
+  /** When set, this search ran inside a subagent: products hang off the
+   * subagent's child SubTask instead of a per-search SubTask. Absent
+   * (undefined) in main-agent context — behavior unchanged. */
+  parentSubagentId?: string;
+}
+
+// subagent = one scope SubTask node, mirrored twice: at start
+// (status="running", finishedAt/summary absent) and at terminal landing
+// (ON MATCH only fills gaps). Each internal toolcall is a separate child
+// SubTask (built by upsert_execution / upsert_mcp_search, which take
+// parent_subagent_id), so the scope itself never carries products.
+export interface ObserveSubagentPayload {
+  subagentId: string;
+  sessionId: string;
+  turnId: string;
+  objective: string;
+  taskType: string;
+  subagentType?: string;
+  createdAt: string;
+  /** Terminal-phase fields; absent on the start-phase call. */
+  status: string;
+  finishedAt?: string;
+  summary?: string;
 }
 
 // Passive ResearchGoal fallback + SessionPlan → SubTask DAG mirror.
@@ -311,6 +338,7 @@ export class MemoryGraphClient {
         stdout_hash: payload.stdoutHash ?? null,
         stderr_hash: payload.stderrHash ?? null,
         env_hash: payload.envHash ?? null,
+        parent_subagent_id: payload.parentSubagentId ?? null,
       });
       mgLog.info("observeExecution done: execution=%s delivered", payload.executionId);
     } catch (error) {
@@ -342,12 +370,37 @@ export class MemoryGraphClient {
           abstract: record.abstract,
           source: record.source,
         })),
+        parent_subagent_id: payload.parentSubagentId ?? null,
       });
       mgLog.info("observeMcpInvocation done: invocation=%s delivered (%d papers)",
         payload.invocationId, papersWithUrl);
     } catch (error) {
       mgLog.warn("observeMcpInvocation failed: invocation=%s, error %s",
         payload.invocationId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
+  async observeSubagent(payload: ObserveSubagentPayload): Promise<void> {
+    mgLog.info("observeSubagent in: subagent=%s session=%s status=%s",
+      payload.subagentId, payload.sessionId, payload.status);
+    try {
+      await this.post("/observe/subagent", {
+        subagent_id: payload.subagentId,
+        session_id: payload.sessionId,
+        turn_id: payload.turnId,
+        objective: payload.objective,
+        task_type: payload.taskType,
+        subagent_type: payload.subagentType ?? null,
+        created_at: payload.createdAt,
+        status: payload.status,
+        finished_at: payload.finishedAt ?? null,
+        summary: payload.summary ?? null,
+      });
+      mgLog.info("observeSubagent done: subagent=%s status=%s delivered", payload.subagentId, payload.status);
+    } catch (error) {
+      mgLog.warn("observeSubagent failed: subagent=%s, error %s",
+        payload.subagentId, error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
@@ -453,6 +506,60 @@ export class MemoryGraphClient {
         sessionId, result.nodes.length, result.edges.length);
     }
     return result;
+  }
+
+  /**
+   * Expand a subagent scope into its child ToolCalls + real produces/
+   * contains/next edges (the "click to expand a scope" payload). Mirrors
+   * ``getChain``'s defensive POST contract: an unreachable sidecar or an
+   * absent/non-subagent scope resolves to an empty subgraph with a ``reason``
+   * (``node_not_found`` / ``memory_graph_unreachable``) rather than throwing,
+   * so the frontend's expand toggle can surface a "scope gone" notice instead
+   * of crashing.
+   */
+  async getScopeExpansion(scopeTaskId: string, sessionId: string): Promise<MemorySubgraph> {
+    const body = await this.postJson("/query/scope-expansion", {
+      scope_task_id: scopeTaskId,
+      session_id: sessionId,
+    });
+    const result = body as Record<string, unknown>;
+    const rawNodes = (result.nodes as Array<Record<string, unknown>>) ?? [];
+    const nodes = rawNodes.map((n) => this.toHit(n)) as unknown as MemoryGraphNode[];
+    return {
+      nodes,
+      edges: (result.edges as MemoryGraphEdge[]) ?? [],
+      total: (result.total as number) ?? 0,
+      truncated: Boolean(result.truncated),
+      reason: result.reason as string | undefined,
+    };
+  }
+
+  /**
+   * Expand a folded Artifacts/Papers aggregate node into its member products
+   * (the "click an Artifacts/Papers aggregate to expand it" payload). A folded
+   * scope with >1 product of one kind collapses into a single virtual
+   * ``_group:<scopeId>:<Kind>`` node in the folded view; this unpacks it into
+   * the real member product nodes + one surrogate ``scope→member`` produces
+   * edge each. Mirrors ``getScopeExpansion``'s defensive POST contract: an
+   * unreachable sidecar or a malformed/absent ``groupId`` resolves to an empty
+   * subgraph with a ``reason`` rather than throwing, so the frontend's
+   * aggregate expand toggle can degrade gracefully.
+   */
+  async getGroupExpansion(groupId: string, sessionId: string): Promise<MemorySubgraph> {
+    const body = await this.postJson("/query/group-expansion", {
+      group_id: groupId,
+      session_id: sessionId,
+    });
+    const result = body as Record<string, unknown>;
+    const rawNodes = (result.nodes as Array<Record<string, unknown>>) ?? [];
+    const nodes = rawNodes.map((n) => this.toHit(n)) as unknown as MemoryGraphNode[];
+    return {
+      nodes,
+      edges: (result.edges as MemoryGraphEdge[]) ?? [],
+      total: (result.total as number) ?? 0,
+      truncated: Boolean(result.truncated),
+      reason: result.reason as string | undefined,
+    };
   }
 
   /** Aggregate one Artifact version's provenance addressing info + derived-from
@@ -907,6 +1014,28 @@ export class MemoryGraphSink {
       .catch((error: unknown) => {
         mgLog.warn("mirror failed: invocation=%s session=%s, error %s",
           payload.invocationId, payload.sessionId,
+          error instanceof Error ? error.message : String(error));
+      });
+  }
+
+  /** Mirror a subagent's lifecycle into one scope SubTask node. Never throws;
+   * a disabled/unreachable graph leaves the subagent unblocked. Called twice
+   * (start + terminal); MERGE on task_id makes both calls idempotent. The
+   * scope never carries products — each internal toolcall is a separate child
+   * hung off this scope by upsert_execution / upsert_mcp_search. */
+  observeSubagent(payload: ObserveSubagentPayload): void {
+    if (!this.enabled || !this.client) {
+      mgLog.debug("mirror skipped: memory graph not enabled (subagent=%s)", payload.subagentId);
+      return;
+    }
+    mgLog.info("subagent %s, mirroring to memory graph: subagent=%s session=%s",
+      payload.status === "running" ? "started" : "finished", payload.subagentId, payload.sessionId);
+    void this.client
+      .observeSubagent(payload)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        mgLog.warn("mirror failed: subagent=%s session=%s, error %s",
+          payload.subagentId, payload.sessionId,
           error instanceof Error ? error.message : String(error));
       });
   }

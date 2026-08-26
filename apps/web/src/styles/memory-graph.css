@@ -46,6 +46,9 @@
 .memory-canvas-edge-group { pointer-events: none; }
 .memory-canvas-edge { pointer-events: none; }
 .memory-canvas-edge-label { pointer-events: none; user-select: none; font-family: inherit; }
+/* Invisible wide hit area layered over a surrogate edge so its thin dashed
+   line is still clickable (the visible line keeps pointer-events:none). */
+.memory-canvas-edge-hit { pointer-events: all; cursor: pointer; }
 .memory-canvas .dimmed { opacity: 0.14; }
 .memory-canvas .dimmed text { opacity: 0; }
 /* Search hits stay full-opacity and get an accent ring so the user can spot
@@ -62,6 +65,13 @@
 .memory-canvas-node.selected-node {
   filter: drop-shadow(0 0 5px rgba(59, 130, 246, 0.55));
 }
+/* Subagent scope badge: small ▸N / ▾N caption in the node's top-right.
+   The glyph flips on expand (built inline); this just keeps it crisp and
+   non-interactive so the disc's click handler owns the gesture. */
+.memory-canvas-scope-badge { font-family: inherit; }
+/* Folded-scope stack ghost discs: translucent offset discs painted behind
+   the main disc so a folded task reads as a stack. Non-interactive so the
+   main disc always owns the click (toggles fold). */
 .memory-graph-thumb-card { display: block; width: 100%; margin: 10px 0 4px; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); cursor: pointer; text-align: left; }
 .memory-graph-thumb-card:hover { border-color: var(--accent-border); box-shadow: var(--shadow-1); }
 .memory-graph-thumb-cta { display: block; border-top: 1px solid var(--border); background: var(--surface); padding: 6px 9px; color: var(--muted); font-size: 10px; }
@@ -119,6 +129,37 @@
 .memory-product-link-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .memory-thumb-meta { display: flex; align-items: center; gap: 6px; }
 .memory-thumb-done { border-radius: 999px; background: var(--success-soft); color: var(--success); padding: 0 6px; font-size: 9px; font-style: normal; }
+/* Cancelled work is terminal-but-failed: a muted grey chip so it reads as
+   distinct from the green done badge (doc16 §2.5 ⊘ N cancelled). */
+.memory-thumb-cancelled { border-radius: 999px; background: var(--surface-subtle); color: var(--muted); padding: 0 6px; font-size: 9px; font-style: normal; }
+.memory-explorer-scope-note { position: absolute; left: 12px; bottom: 28px; margin: 0; border-radius: 6px; background: var(--warning-soft); color: var(--warning); padding: 3px 8px; font-size: 10px; max-width: calc(100% - 24px); }
+/* Center-screen toast for one-shot scope notices ("该节点暂无可展开的子节点").
+   A grey scrim covers the graph area to focus attention on the notice; the
+   notice has NO dismiss button — clicking anywhere outside it (scrim,
+   backdrop, canvas, any panel) clears it. Both scrim + toast stop mousedown
+   propagation so the backdrop's dismiss-on-outside-click fires correctly. */
+.memory-explorer-scope-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-panel);
+  background: rgba(6, 12, 20, .42);
+  pointer-events: auto;
+}
+.memory-explorer-scope-toast {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: calc(var(--z-panel) + 1);
+  display: flex; align-items: center;
+  max-width: min(440px, calc(100% - 48px));
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-3);
+  padding: 16px 22px;
+  pointer-events: auto;
+}
+.memory-explorer-scope-toast-msg { font-size: 13px; line-height: 1.45; color: var(--text); }
 .memory-graph-thumb-cta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
 .memory-product { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
@@ -243,6 +284,26 @@
 .node-longtext { margin: 0; color: var(--text); font-size: 12px; line-height: 1.5; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
 .node-longtext-expanded { display: block; overflow: visible; }
 .node-longtext-toggle { align-self: flex-start; background: none; border: none; color: var(--accent-ink); font-size: 10px; cursor: pointer; padding: 0; text-decoration: underline; text-decoration-style: dotted; }
+
+/* Subagent scope objective/summary: Markdown-rendered (the scope summary is
+   the subagent's final assistant message, emitted as structured Markdown).
+   A bordered + lightly-filled box keeps the report visually contained so its
+   headings/tables/code don't bleed into the objective above or the field
+   list below. Collapsed: a max-height cap clips the preview (no fade — the
+   earlier gradient used an undefined --memory-bg that resolved to #fff and
+   cast a white haze over the objective); expanded: full height + scroll. */
+.node-subagent-summary {
+  overflow: hidden; font-size: 12px; line-height: 1.5;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-sunk); padding: 8px 10px;
+}
+.node-subagent-summary-expanded { overflow: auto; }
+.node-subagent-summary .markdown-body > *:first-child { margin-top: 0; }
+.node-subagent-summary .markdown-body > *:last-child { margin-bottom: 0; }
+.node-subagent-summary .markdown-body p,
+.node-subagent-summary .markdown-body li { font-size: 12px; line-height: 1.5; }
+.node-subagent-summary .markdown-body pre { font-size: 11px; }
+.node-subagent-summary .markdown-body table { font-size: 11px; }
 
 /* Time + link */
 .node-time { color: var(--text); font-size: 11px; font-variant-numeric: tabular-nums; }

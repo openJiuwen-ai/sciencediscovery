@@ -91,14 +91,17 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
         # links as a fallback rather than a real dependency.
         # supports/extracts/stated_in are also returned so the full
         # claim↔evidence↔paper↔report chain renders in the graph view, not just
-        # in a per-node chain lookup.
+        # in a per-node chain lookup. ``contains`` (subagent scope → child
+        # SubTask) is returned so the folded view has the scope↔child spine to
+        # expand from (the surrogate edges below synthesize scope→product on
+        # top of these real contains/produces edges).
         edges_result = session.run(
             """
             MATCH (a)-[r]->(b)
             WHERE a.session_id = $sid AND b.session_id = $sid
               AND NOT coalesce(a.deleted_session, false)
               AND NOT coalesce(b.deleted_session, false)
-              AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input']
+              AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input', 'contains']
             RETURN a AS src, b AS dst, labels(a)[0] AS src_label,
                    labels(b)[0] AS dst_label, type(r) AS edge_type, r AS rel
             """,
@@ -121,6 +124,133 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
                 if extra:
                     edge["extra"] = extra
                 edges.append(edge)
+
+        # Folded-state surrogate edges: for every subagent scope, synthesize one
+        # scope→product edge per terminal product so the collapsed view shows
+        # "this scope produced these artifacts/papers" without expanding the
+        # child subtree. Per需求1, ``contains`` now links the scope to the
+        # *first* child only; siblings link to each other via ``next``
+        # (method='scope_chain'). So reaching every child's products requires
+        # walking the scope-internal chain: ``scope-[:contains]->firstChild
+        # -[:next*0..]->child-[:produces]->...`` (the ``0..`` lets the first
+        # child match with zero next hops). Products hang off the child, never
+        # the scope. These are query-time only — never written to the graph
+        # (总方案 §2.2). ``type`` stays ``produces`` (the surrogate stands in
+        # for the "scope produces product" relation); ``extra`` carries
+        # ``surrogate: True`` so the frontend distinguishes them from real edges
+        # and ``via_child`` so a click can jump to the responsible child. The
+        # target uses the same ``_node_identity`` format as the node set above
+        # (Artifact → ``<artifact_id>#v<version>``, Paper → ``link``) so the
+        # frontend can resolve it to a node. All three endpoints carry the soft
+        # -delete filter so a deleted session's scope/child/product stays hidden.
+        # The edge is only emitted when the product node is actually in the
+        # returned ``node_ids`` set (otherwise the frontend cannot resolve the
+        # target). A real produces edge between the same (scope, product) —
+        # impossible today (products hang off the child, not the scope) — would
+        # win the dedup key over the surrogate.
+        surrogates_result = session.run(
+            """
+            MATCH (scope:Task)-[:contains]->(first:ToolCall)
+            OPTIONAL MATCH (first)-[:next*0..]->(child:ToolCall)
+            MATCH (child)-[:produces]->(c:Code)-[:produces]->(art:Artifact)
+            WHERE scope.session_id = $sid
+              AND scope.task_type = 'subagent'
+              AND NOT coalesce(scope.deleted_session, false)
+              AND NOT coalesce(first.deleted_session, false)
+              AND NOT coalesce(child.deleted_session, false)
+              AND NOT coalesce(art.deleted_session, false)
+            RETURN DISTINCT scope.task_id AS scope_id, art AS product, 'Artifact' AS kind,
+                   child.task_id AS via_child
+            UNION
+            MATCH (scope:Task)-[:contains]->(first:ToolCall)
+            OPTIONAL MATCH (first)-[:next*0..]->(child:ToolCall)
+            MATCH (child)-[:produces]->(p:Paper)
+            WHERE scope.session_id = $sid
+              AND scope.task_type = 'subagent'
+              AND NOT coalesce(scope.deleted_session, false)
+              AND NOT coalesce(first.deleted_session, false)
+              AND NOT coalesce(child.deleted_session, false)
+              AND NOT coalesce(p.deleted_session, false)
+            RETURN DISTINCT scope.task_id AS scope_id, p AS product, 'Paper' AS kind,
+                   child.task_id AS via_child
+            """,
+            sid=session_id,
+        )
+        seen: set[tuple[str, str, str]] = {
+            (e["source"], e["target"], e["type"]) for e in edges
+        }
+        # Per需求3: when a folded scope has >1 of the same product kind
+        # (Artifact or Paper) reachable via surrogates, collapse those products
+        # into ONE virtual "aggregate" node labelled "Artifacts"/"Papers" so the
+        # folded view stays compact. The aggregate node is itself clickable to
+        # expand its members (separate from expanding the scope — see
+        # get_group_expansion). Group members are tracked here and the virtual
+        # node is emitted in place of the per-product surrogates; a scope with
+        # exactly one product of a kind keeps its direct surrogate (no
+        # aggregate). The aggregate id is ``_group:<scopeId>:<Kind>`` so the
+        # frontend can ask for it and the backend can resolve members.
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        singleton_records: list[dict[str, Any]] = []
+        for record in surrogates_result:
+            scope_id = record["scope_id"]
+            product_id = _node_identity(record["kind"], record["product"])
+            if scope_id is None or product_id is None:
+                continue
+            # Only keep surrogates whose product is in the returned node set
+            # (the product may have been truncated past _NODE_LIMIT).
+            if scope_id not in node_ids or product_id not in node_ids:
+                continue
+            grouped.setdefault((scope_id, record["kind"]), []).append({
+                "scope_id": scope_id,
+                "product_id": product_id,
+                "kind": record["kind"],
+                "via_child": record["via_child"],
+            })
+
+        for (scope_id, kind), members in grouped.items():
+            if len(members) > 1:
+                # Aggregate: emit one virtual node + one surrogate edge to it.
+                agg_id = f"_group:{scope_id}:{kind}"
+                # Avoid colliding with a real node id (none use this prefix).
+                if agg_id not in node_ids:
+                    nodes.append({
+                        "label": kind,
+                        "id": agg_id,
+                        "session_id": session_id,
+                        "extra": {
+                            "aggregated": True,
+                            "count": len(members),
+                            "members": [m["product_id"] for m in members],
+                            "scope": scope_id,
+                            "kind": kind,
+                        },
+                        "created_at": None,
+                    })
+                    node_ids.add(agg_id)
+                key = (scope_id, agg_id, "produces")
+                if key not in seen:
+                    seen.add(key)
+                    edges.append({
+                        "source": scope_id,
+                        "target": agg_id,
+                        "type": "produces",
+                        "extra": {"surrogate": True, "aggregated": True,
+                                  "via_child": members[0]["via_child"]},
+                    })
+            else:
+                singleton_records.extend(members)
+
+        for m in singleton_records:
+            key = (m["scope_id"], m["product_id"], "produces")
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append({
+                "source": m["scope_id"],
+                "target": m["product_id"],
+                "type": "produces",
+                "extra": {"surrogate": True, "via_child": m["via_child"]},
+            })
 
         return {
             "nodes": nodes,
@@ -207,6 +337,9 @@ def query_match(
                    + coalesce(toString(n.abstract), '') + ' '
                    + coalesce(toString(n.content), '') + ' '
                    + coalesce(toString(n.core_objective), '') + ' '
+                   + coalesce(toString(n.objective), '') + ' '
+                   + coalesce(toString(n.summary), '') + ' '
+                   + coalesce(toString(n.subagent_type), '') + ' '
                    + coalesce(toString(n.task_type), '') + ' '
                    + coalesce(toString(n.path), '') + ' '
                    + coalesce(toString(n.tool), '')) AS haystack
@@ -219,6 +352,8 @@ def query_match(
               CASE WHEN toLower(coalesce(toString(n.title), ''))           CONTAINS $primary THEN 0
                    WHEN toLower(coalesce(toString(n.abstract), ''))       CONTAINS $primary THEN 1
                    WHEN toLower(coalesce(toString(n.core_objective), '')) CONTAINS $primary THEN 2
+                   WHEN toLower(coalesce(toString(n.objective), ''))      CONTAINS $primary THEN 3
+                   WHEN toLower(coalesce(toString(n.summary), ''))       CONTAINS $primary THEN 3
                    WHEN toLower(coalesce(toString(n.content), ''))        CONTAINS $primary THEN 4
                    ELSE 5
               END,
@@ -368,7 +503,7 @@ def get_artifact_provenance(
             MATCH (out:Artifact {artifact_id: $aid, version: $v})
             WHERE $sid IS NULL OR out.session_id = $sid
             OPTIONAL MATCH (out)<-[:produces]-(c:Code)
-            OPTIONAL MATCH (st:SubTask)-[:produces]->(c)
+            OPTIONAL MATCH (st:ToolCall)-[:produces]->(c)
             OPTIONAL MATCH (c)<-[:input]-(inA:Artifact)
             WHERE $sid IS NULL OR inA.session_id = $sid
             WITH out, c, st, inA
@@ -510,6 +645,288 @@ def get_chain(
             hops = _CHAIN_HOPS.get(src_label, [])
         eids = _walk_hops(session, hops, [src_eid], session_id)
         return _serialize_subgraph(session, eids, session_id)
+
+
+def get_scope_expansion(scope_task_id: str, session_id: str) -> dict[str, Any]:
+    """Expand a subagent scope into its child ToolCalls + real produces/
+    contains/next edges (the "click to expand a scope" payload).
+
+    Given a scope's ``task_id`` and its ``session_id``, returns every child
+    ToolCall belonging to the scope, plus the real product edges rooted on
+    those children — ``child-[:produces]->Code-[:produces]->Artifact`` and
+    ``child-[:produces]->Paper`` — and the scope-internal ``contains`` + ``next``
+    spine itself. Children are matched by ``parent_subtask_id`` (NOT by
+    ``contains``): per需求1, ``contains`` now links the scope to the *first*
+    child only, and siblings link to each other via ``next`` in seq order:
+        Task(scope) -[:contains]-> ToolCall₁ -[:next]-> ToolCall₂ -> …
+    so walking ``contains`` alone would drop every child after the first.
+    Unlike ``get_subgraph``'s folded surrogate edges, every edge here is a real
+    persisted edge (no ``extra.surrogate`` marker); the folded view's surrogates
+    are dropped by the frontend when this expansion is drawn (总方案 §2.4).
+
+    Mirrors ``get_subgraph``'s defensive contract: an unreachable driver
+    returns an empty subgraph + ``reason: "memory_graph_unreachable"`` rather
+    than erroring; a ``scope_task_id`` that is absent or not a subagent scope
+    (``task_type != 'subagent'``) returns ``reason: "node_not_found"``. All
+    endpoints carry the soft-delete filter so a deleted session's scope/child/
+    product stays hidden.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        log.warning("get_scope_expansion skipped: Neo4j not reachable (scope=%s)", scope_task_id)
+        return {
+            "nodes": [],
+            "edges": [],
+            "total": 0,
+            "truncated": False,
+            "reason": "memory_graph_unreachable",
+        }
+
+    with driver.session() as session:
+        # Locate the scope (a Task with task_type='subagent'); absent or
+        # non-scope → node_not_found so the frontend can show "scope gone"
+        # rather than an empty-but-healthy expansion.
+        scope_rec = session.run(
+            """
+            MATCH (scope:Task)
+            WHERE scope.task_id = $tid AND scope.session_id = $sid
+              AND scope.task_type = 'subagent'
+              AND NOT coalesce(scope.deleted_session, false)
+            RETURN elementId(scope) AS scope_eid
+            """,
+            tid=scope_task_id,
+            sid=session_id,
+        ).single()
+        if scope_rec is None:
+            return {"nodes": [], "edges": [], "total": 0, "truncated": False, "reason": "node_not_found"}
+
+        # Children belonging to this scope, matched by ``parent_subtask_id``
+        # (NOT ``contains`` — contains links scope→first child only now; the
+        # rest hang off the first via the scope-internal ``next`` chain).
+        # Ordered by seq so the rendered chain reads in run order. A scope with
+        # no children returns an empty expansion — not an error (the frontend
+        # shows a "no products yet" notice).
+        children_result = session.run(
+            """
+            MATCH (child:ToolCall)
+            WHERE child.parent_subtask_id = $tid AND child.session_id = $sid
+              AND NOT coalesce(child.deleted_session, false)
+            RETURN child, labels(child)[0] AS child_label, elementId(child) AS child_eid
+            ORDER BY coalesce(child.seq, 0), child.finished_at
+            """,
+            tid=scope_task_id,
+            sid=session_id,
+        )
+        child_eids: list[str] = []
+        nodes: list[dict[str, Any]] = []
+        node_map: dict[str, dict[str, Any]] = {}
+        for rec in children_result:
+            hit = _to_hit(rec["child"], rec["child_label"])
+            if hit is None:
+                continue
+            node_map[hit["id"]] = hit
+            nodes.append(hit)
+            child_eids.append(rec["child_eid"])
+
+        # Real product + spine edges rooted on the children: the whole produces
+        # subtree under each child (child→Code→Artifact, child→Paper, and any
+        # further produces depth) plus the ``contains`` (scope→first child) and
+        # scope-internal ``next`` (child→child) spine so the expansion renders
+        # the whole scope subtree. All endpoints soft-delete-filtered. Two-step
+        # (the same shape _serialize_subgraph uses): first gather the
+        # elementIds of every node reachable from a child via produces, then
+        # render every produces/contains/next edge between two in-set eids.
+        # This avoids the brittle per-edge enumeration a variable-length path
+        # would need and de-dups nodes/edges naturally.
+        if child_eids:
+            subtree_eids = set(child_eids)
+            subtree_result = session.run(
+                """
+                MATCH (child:ToolCall)-[:produces*1..3]->(prod)
+                WHERE elementId(child) IN $child_eids
+                  AND child.session_id = $sid
+                  AND prod.session_id = $sid
+                  AND NOT coalesce(child.deleted_session, false)
+                  AND NOT coalesce(prod.deleted_session, false)
+                RETURN collect(DISTINCT elementId(prod)) AS prod_eids
+                """,
+                sid=session_id,
+                child_eids=child_eids,
+            ).single()
+            if subtree_result and subtree_result["prod_eids"]:
+                subtree_eids.update(subtree_result["prod_eids"])
+            all_eids = list(subtree_eids | {scope_rec["scope_eid"]})
+
+            edges_result = session.run(
+                """
+                MATCH (a)-[r]->(b)
+                WHERE a.session_id = $sid AND b.session_id = $sid
+                  AND NOT coalesce(a.deleted_session, false)
+                  AND NOT coalesce(b.deleted_session, false)
+                  AND type(r) IN ['produces', 'contains', 'next']
+                  AND elementId(a) IN $eids AND elementId(b) IN $eids
+                RETURN a, b, labels(a)[0] AS a_label, labels(b)[0] AS b_label,
+                       type(r) AS edge_type, properties(r) AS edge_props
+                """,
+                sid=session_id,
+                eids=all_eids,
+            )
+            edges: list[dict[str, Any]] = []
+            seen: set[tuple[str, str, str]] = set()
+            for rec in edges_result:
+                src = _to_hit(rec["a"], rec["a_label"])
+                dst = _to_hit(rec["b"], rec["b_label"])
+                if src is None or dst is None:
+                    continue
+                # Keep both endpoints in the node set so every edge resolves.
+                for hit in (src, dst):
+                    if hit["id"] not in node_map:
+                        node_map[hit["id"]] = hit
+                        nodes.append(hit)
+                key = (src["id"], dst["id"], rec["edge_type"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append({
+                    "source": src["id"],
+                    "target": dst["id"],
+                    "type": rec["edge_type"],
+                    "extra": _json_safe(dict(rec["edge_props"])) if rec["edge_props"] else {},
+                })
+        else:
+            edges = []
+
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "total": len(nodes),
+            "truncated": len(nodes) >= _NODE_LIMIT,
+        }
+
+
+def get_group_expansion(group_id: str, session_id: str) -> dict[str, Any]:
+    """Expand a folded aggregate node into its member products (the "click an
+    Artifacts/Papers aggregate to expand it" payload).
+
+    A folded scope with >1 product of the same kind (Artifact or Paper) is
+    rendered in ``get_subgraph`` as ONE virtual aggregate node
+    (``_group:<scopeId>:<Kind>``, 需求3). This call unpacks that aggregate:
+    it resolves the scope + kind from the id, re-walks the scope-internal
+    chain (``scope-[:contains]->first-[:next*0..]->child-[:produces]->...``)
+    to collect every member product of that kind, and returns those real
+    product nodes plus one surrogate ``scope→member`` produces edge per member
+    (the same shape the folded view would have drawn had it not collapsed
+    them). Members that exceed ``_NODE_LIMIT`` are truncated (flag set).
+
+    Expanding an aggregate is separate from expanding the scope itself —
+    clicking "Artifacts" shows just the member artifacts (and their
+    scope→artifact surrogate edges), NOT the scope's child ToolCall subtree
+    (that's ``get_scope_expansion``). Defensive contract mirrors the other
+    readers: unreachable driver → ``reason: "memory_graph_unreachable"``;
+    a malformed ``group_id`` or absent scope → ``reason: "node_not_found"``.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        log.warning("get_group_expansion skipped: Neo4j not reachable (group=%s)", group_id)
+        return {
+            "nodes": [],
+            "edges": [],
+            "total": 0,
+            "truncated": False,
+            "reason": "memory_graph_unreachable",
+        }
+
+    # Parse ``_group:<scopeId>:<Kind>``. The scope id may itself contain colons
+    # (task ids are free-form), so split on the *first* and *last* colon only.
+    if not group_id.startswith("_group:"):
+        return {"nodes": [], "edges": [], "total": 0, "truncated": False, "reason": "node_not_found"}
+    body = group_id[len("_group:"):]
+    if ":" not in body:
+        return {"nodes": [], "edges": [], "total": 0, "truncated": False, "reason": "node_not_found"}
+    scope_id, _, kind = body.rpartition(":")
+    if not scope_id or kind not in {"Artifact", "Paper"}:
+        return {"nodes": [], "edges": [], "total": 0, "truncated": False, "reason": "node_not_found"}
+
+    with driver.session() as session:
+        # Confirm the scope exists + is a subagent in this session.
+        scope_rec = session.run(
+            """
+            MATCH (scope:Task)
+            WHERE scope.task_id = $tid AND scope.session_id = $sid
+              AND scope.task_type = 'subagent'
+              AND NOT coalesce(scope.deleted_session, false)
+            RETURN scope.task_id AS scope_id
+            """,
+            tid=scope_id,
+            sid=session_id,
+        ).single()
+        if scope_rec is None:
+            return {"nodes": [], "edges": [], "total": 0, "truncated": False, "reason": "node_not_found"}
+
+        # Walk scope→firstChild→(next*0..)→child→produces→(Code→)product,
+        # filtered to the one kind this aggregate represents. Same traversal
+        # shape get_subgraph's surrogate synthesis uses (contains→first, then
+        # next*0.. so the first child matches with zero hops).
+        if kind == "Artifact":
+            members_result = session.run(
+                """
+                MATCH (scope:Task)-[:contains]->(first:ToolCall)
+                OPTIONAL MATCH (first)-[:next*0..]->(child:ToolCall)
+                MATCH (child)-[:produces]->(c:Code)-[:produces]->(art:Artifact)
+                WHERE scope.session_id = $sid AND scope.task_id = $tid
+                  AND scope.task_type = 'subagent'
+                  AND NOT coalesce(scope.deleted_session, false)
+                  AND NOT coalesce(first.deleted_session, false)
+                  AND NOT coalesce(child.deleted_session, false)
+                  AND NOT coalesce(art.deleted_session, false)
+                RETURN DISTINCT art AS product, labels(art)[0] AS product_label,
+                       child.task_id AS via_child
+                """,
+                tid=scope_id,
+                sid=session_id,
+            )
+        else:  # Paper
+            members_result = session.run(
+                """
+                MATCH (scope:Task)-[:contains]->(first:ToolCall)
+                OPTIONAL MATCH (first)-[:next*0..]->(child:ToolCall)
+                MATCH (child)-[:produces]->(p:Paper)
+                WHERE scope.session_id = $sid AND scope.task_id = $tid
+                  AND scope.task_type = 'subagent'
+                  AND NOT coalesce(scope.deleted_session, false)
+                  AND NOT coalesce(first.deleted_session, false)
+                  AND NOT coalesce(child.deleted_session, false)
+                  AND NOT coalesce(p.deleted_session, false)
+                RETURN DISTINCT p AS product, labels(p)[0] AS product_label,
+                       child.task_id AS via_child
+                """,
+                tid=scope_id,
+                sid=session_id,
+            )
+
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        node_map: dict[str, dict[str, Any]] = {}
+        for rec in members_result:
+            hit = _to_hit(rec["product"], rec["product_label"])
+            if hit is None:
+                continue
+            if hit["id"] not in node_map:
+                node_map[hit["id"]] = hit
+                nodes.append(hit)
+            edges.append({
+                "source": scope_id,
+                "target": hit["id"],
+                "type": "produces",
+                "extra": {"surrogate": True, "via_child": rec["via_child"]},
+            })
+
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "total": len(nodes),
+            "truncated": len(nodes) >= _NODE_LIMIT,
+        }
 
 
 def _resolve_source_node(
@@ -733,23 +1150,23 @@ def _artifact_chain(
     """
     # Citation-entry hops per non-Artifact source label: walk from the source
     # to the Artifact(s) its chain should be centered on, then the upstream
-    # task-chain tail (source ← produces ← SubTask ← next(1..) ← ResearchGoal).
+    # task-chain tail (source ← produces ← ToolCall ← next(1..) ← ResearchGoal).
     # Each entry is (edge_type, direction, target_label[, depth]); ``out`` walks
     # along edge orientation (toward the cited Artifact), ``in`` walks against
     # it (toward the producing task / goal).
     _ENTRY_HOPS: dict[str, list[tuple]] = {
-        # Paper ←produces← SubTask ←next(1..)← ResearchGoal, PLUS the reverse
+        # Paper ←produces← ToolCall ←next(1..)← ResearchGoal, PLUS the reverse
         # citation side: Paper -[:extracts]-> Evidence -[:supports]-> Claim
         # -[:stated_in]-> report Artifact, so a paper's artifact chain shows the
         # reports that reference it through the Evidence/Claims built from it.
         "Paper": [
-            ("produces", "in", "SubTask"),
+            ("produces", "in", "ToolCall"),
             ("next", "in", "ResearchGoal", "1.."),
             ("extracts", "out", "Evidence"),
             ("supports", "out", "Claim"),
             ("stated_in", "out", "Artifact"),
         ],
-        # Evidence ←extracts← Paper ←produces← SubTask ←next(1..)← Goal,
+        # Evidence ←extracts← Paper ←produces← ToolCall ←next(1..)← Goal,
         # PLUS the forward citation side: Evidence -[:supports]-> Claim -[:stated_in]
         # ← report Artifact, so an evidence node's artifact chain also shows
         # the report(s) that reference it via the Claims backing it. Without
@@ -757,19 +1174,19 @@ def _artifact_chain(
         # and the 报告→claim→evidence path is invisible from this entry point.
         "Evidence": [
             ("extracts", "in", "Paper"),
-            ("produces", "in", "SubTask"),
+            ("produces", "in", "ToolCall"),
             ("next", "in", "ResearchGoal", "1.."),
             ("supports", "out", "Claim"),
             ("stated_in", "out", "Artifact"),
         ],
-        # Claim ←supports← Evidence ←extracts← Paper ←produces← SubTask
+        # Claim ←supports← Evidence ←extracts← Paper ←produces← ToolCall
         # ←next(1..)← Goal, PLUS Claim -[:stated_in]-> report Artifact (the report
         # that asserts this claim), so a claim's artifact chain shows the
         # report it appears in alongside the Evidence/Paper it is built from.
         "Claim": [
             ("supports", "in", "Evidence"),
             ("extracts", "in", "Paper"),
-            ("produces", "in", "SubTask"),
+            ("produces", "in", "ToolCall"),
             ("next", "in", "ResearchGoal", "1.."),
             ("stated_in", "out", "Artifact"),
         ],
@@ -946,13 +1363,13 @@ def _artifact_derivation_tail(
     allowed: set[tuple[str, str, str]] = set()
     # Task-chain tail hops, run from each newly-discovered producing Code so a
     # derivation that dead-ends at a Code (no input edges) still reaches the
-    # goal. ``produces in`` finds the producing SubTask (SubTask→Code), then
-    # the next-chain up to ResearchGoal and back down to every SubTask — the
-    # same hops ``_ENTRY_HOPS`` uses for the non-Artifact sources' own tails.
+    # goal. ``produces in`` finds the producing ToolCall (ToolCall→Code), then
+    # the next-chain up to ResearchGoal and back down to every Task/ToolCall —
+    # the same hops ``_ENTRY_HOPS`` uses for the non-Artifact sources' own tails.
     _CODE_TAIL_HOPS: list[tuple] = [
-        ("produces", "in", "SubTask"),
+        ("produces", "in", "ToolCall"),
         ("next", "in", "ResearchGoal", "1.."),
-        ("next", "out", "SubTask", "1.."),
+        ("next", "out", "Task", "1.."),
     ]
     while artifact_frontier:
         # Artifact <-produces- Code: for each frontier Artifact, the Code(s)
@@ -979,13 +1396,22 @@ def _artifact_derivation_tail(
         new_codes: list[str] = []
         for p in pairs:
             code_eid, art_eid = p["code"], p["art"]
+            # Whitelist THIS Artifact's produces edge from its producing Code
+            # regardless of whether the Code was already reached — the
+            # whitelist is keyed by (code, artifact) per-Artifact, and every
+            # cited Artifact needs its own Code→Artifact produces edge rendered.
+            # The "new Code" guard below only decides whether to keep walking
+            # (a Code already reached has already had its inputs/tail walked);
+            # it must NOT gate the whitelist, or a Code producing several cited
+            # Artifacts drops the produces edge to every one after the first
+            # (session db799384: bb1c2f1c produces both 0f006a88 and
+            # _methodology_ref.md; only the first's edge survived in the
+            # trace.md v4 chain, leaving methodology_ref disconnected from
+            # its own Code).
+            allowed.add((code_eid, art_eid, "produces"))
             if code_eid not in reached:
                 reached.add(code_eid)
                 new_codes.append(code_eid)
-                # Whitelist this produces edge only when the Code is newly
-                # discovered from THIS Artifact — the edge is the
-                # Artifact's own derivation, not a sibling branch.
-                allowed.add((code_eid, art_eid, "produces"))
         if not new_codes:
             break
         # Each newly-discovered producing Code anchors to its task-chain tail
@@ -1254,12 +1680,12 @@ def get_trace(
 # reaches a Paper only via ``supports Evidence → extracts Paper`` (walked backward).
 _CHAIN_HOPS: dict[str, list[tuple]] = {
     "Paper": [
-        # upstream: Paper <-produces- SubTask, then walk the `next` chain
+        # upstream: Paper <-produces- Task/ToolCall, then walk the `next` chain
         # *up* to the ResearchGoal and *down* from the goal to every
-        # SubTask — so any Paper's View chain shows the full task chain.
-        ("produces", "in", "SubTask"),
+        # Task/ToolCall — so any Paper's View chain shows the full task chain.
+        ("produces", "in", "ToolCall"),
         ("next", "in", "ResearchGoal", "1.."),
-        ("next", "out", "SubTask", "1.."),
+        ("next", "out", "Task", "1.."),
         # downstream: the `extracts` edge is Paper -> Evidence (Paper extracts
         # Evidence), so from a Paper we walk it *along* its orientation (out)
         # to reach the Evidence extracted from it. Then the citation side:
@@ -1271,39 +1697,63 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         ("supports", "out", "Claim"),
         ("stated_in", "out", "Artifact"),
     ],
-    "SubTask": [
-        # This SubTask's OWN produces subtree first, while the eid set is
-        # still just the source — so only this SubTask's Code/Artifact/Paper
+    "Task": [
+        # This Task's OWN produces subtree first, while the eid set is
+        # still just the source — so only this Task's Code/Artifact/Paper
         # are pulled in. Doing produces *after* the next-chain unfold would
-        # fan out to every SubTask's produces (the whole graph), which is
+        # fan out to every Task's produces (the whole graph), which is
         # what we avoid here. Code before Artifact so Code's Artifacts are
-        # reached (Code -produces-> Artifact, not SubTask -produces-> Artifact).
+        # reached (Code -produces-> Artifact, not Task -produces-> Artifact).
         ("produces", "out", "Code"),
         ("produces", "out", "Artifact"),
         ("produces", "out", "Paper"),
         ("produces", "out", "Evidence"),
+        # A subagent scope's children hang off it via ``contains`` (scope →
+        # *first* child only now; the rest are reached via the child→child
+        # ``next`` chain — see _link_scope_children). Walking contains *out*
+        # from a scope lets the chain drill into its child ToolCalls — so
+        # "view chain" on a scope shows the internal steps, not just the
+        # scope's (empty) produces. Placed after the scope's produces subtree
+        # (empty for scopes — products hang on the child, not the scope) and
+        # before the next chain, so the children come in while the eid set is
+        # still tight. trace walks ``in`` only (see get_trace), so this
+        # out-hop is skipped there — a child is a lateral step inside the
+        # scope, not an upstream of it.
+        ("contains", "out", "ToolCall"),
         # Then the task chain: walk `next` up to the ResearchGoal and back
-        # down to the last SubTask — Goal → head → ... → this → ... → last.
+        # down to the last Task/ToolCall — Goal → head → ... → this → … → last.
         # Variable-length because the source can sit in the middle of the chain.
         ("next", "in", "ResearchGoal", "1.."),
-        ("next", "out", "SubTask", "1.."),
+        ("next", "out", "Task", "1.."),
+        ("supports", "in", "Claim"),
+    ],
+    "ToolCall": [
+        # Same shape as Task minus the scope-only ``contains`` drill-down — a
+        # ToolCall (code_execution/literature_search/…) carries its own
+        # produces subtree and joins the session main ``next`` chain.
+        ("produces", "out", "Code"),
+        ("produces", "out", "Artifact"),
+        ("produces", "out", "Paper"),
+        ("produces", "out", "Evidence"),
+        ("next", "in", "ResearchGoal", "1.."),
+        ("next", "out", "Task", "1.."),
         ("supports", "in", "Claim"),
     ],
     "Code": [
         # This Code's OWN produces (Artifacts) first, while eid set is just
-        # {Code, producing-SubTask} — so only this Code's Artifacts come in.
+        # {Code, producing-ToolCall/Task} — so only this Code's Artifacts come in.
         # Doing produces *after* the next-chain unfold would fan out to every
-        # SubTask's Artifacts (the whole graph).
-        ("produces", "in", "SubTask"),
+        # producer's Artifacts (the whole graph).
+        ("produces", "in", "ToolCall"),
         ("produces", "out", "Artifact"),
         # The Artifact versions this Code read as inputs (Artifact -[:input]->
         # Code): surfaces the derived-from inputs alongside the outputs.
         ("input", "in", "Artifact"),
         # Then the task chain: up to the ResearchGoal, back down to the last
-        # SubTask. Variable-length because the producing SubTask can sit in
+        # Task/ToolCall. Variable-length because the producing node can sit in
         # the middle of the chain.
         ("next", "in", "ResearchGoal", "1.."),
-        ("next", "out", "SubTask", "1.."),
+        ("next", "out", "Task", "1.."),
         ("supports", "in", "Claim"),
     ],
     "Artifact": [
@@ -1316,9 +1766,9 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         # reach the versions that Code consumed — so the derived-from chain
         # appears when viewing an output Artifact.
         ("input", "in", "Artifact"),
-        ("produces", "in", "SubTask"),
+        ("produces", "in", "ToolCall"),
         ("next", "in", "ResearchGoal", "1.."),
-        ("next", "out", "SubTask", "1.."),
+        ("next", "out", "Task", "1.."),
         ("supports", "out", "Claim"),
         # A Claim is stated_in a report Artifact (Claim → Artifact): walking
         # the stated_in edge *in* (against Claim→Artifact) reaches the Claims the
@@ -1333,19 +1783,19 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         ("supports", "in", "Evidence"),
         ("extracts", "in", "Paper"),
     ],
-    # ResearchGoal: only the task chain — Goal → head → ... → last SubTask.
-    # No produces subtree (each SubTask's produces is shown when *its* chain
+    # ResearchGoal: only the task chain — Goal → head → ... → last Task/ToolCall.
+    # No produces subtree (each node's produces is shown when *its* chain
     # is viewed; the goal view stays a clean task skeleton).
     "ResearchGoal": [
-        ("next", "out", "SubTask", "1.."),
+        ("next", "out", "Task", "1.."),
     ],
     "Evidence": [
         # extracts is Paper -> Evidence, so walking *in* (against it) reaches
         # the Paper this evidence was extracted from.
         ("extracts", "in", "Paper"),
-        ("produces", "in", "SubTask"),
+        ("produces", "in", "ToolCall"),
         ("next", "in", "ResearchGoal", "1.."),
-        ("next", "out", "SubTask", "1.."),
+        ("next", "out", "Task", "1.."),
         # Citation side: Evidence -[:supports]-> Claim, so walk supports *out*
         # from this Evidence to reach the Claim(s) it backs; then Claim
         # -[:stated_in]-> report Artifact (stated_in *out* once Claim is in the eid set).
@@ -1360,9 +1810,9 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         ("extracts", "in", "Paper"),
         # Output: Claim -[:stated_in]-> report Artifact (walk stated_in *out*).
         ("stated_in", "out", "Artifact"),
-        ("produces", "in", "SubTask"),
+        ("produces", "in", "ToolCall"),
         ("next", "in", "ResearchGoal", "1.."),
-        ("next", "out", "SubTask", "1.."),
+        ("next", "out", "Task", "1.."),
     ],
 }
 
@@ -1444,7 +1894,8 @@ def _to_trace_node(node: Any, label: str | None = None) -> dict[str, Any] | None
 
 _EXCERPT_FIELDS: dict[str, tuple[str, ...]] = {
     "ResearchGoal": ("core_objective", "domain"),
-    "SubTask": ("task_type",),
+    "Task": ("task_type", "objective"),
+    "ToolCall": ("task_type", "source", "tool_type"),
     "Paper": ("title", "identifier", "abstract"),
     "Evidence": ("content", "locator"),
     "Claim": ("content", "locator"),
@@ -1470,7 +1921,8 @@ def _excerpt(node: dict[str, Any], label: str) -> str:
 
 _ID_FIELDS: dict[str, str] = {
     "ResearchGoal": "goal_id",
-    "SubTask": "task_id",
+    "Task": "task_id",
+    "ToolCall": "task_id",
     "Paper": "link",
     "Evidence": "evidence_id",
     "Claim": "claim_id",

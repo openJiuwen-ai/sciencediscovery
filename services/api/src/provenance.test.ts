@@ -1090,3 +1090,117 @@ test("a report declare without a referencesProvider degrades gracefully to empty
   });
   assert.ok(!version.references?.length, "report without a provider carries no chip references and does not throw");
 });
+
+test("parentSubagentId threads through executeShell and declareWorkspaceArtifact; absent in main-agent context", async (context) => {
+  // Regression guard for the subagent write chain (PR1). The Python sidecar
+  // builds a child SubTask only when parent_subagent_id is non-null, so this
+  // value must survive every hop of the TS passthrough: RecordExecutionOptions
+  // → execute* → observeExecution (first call, on execution), AND
+  // declareWorkspaceArtifact → observeExecution (second call, on product
+  // upsert). The second call was the gap the feat branch missed — products
+  // would have hung off a per-execution SubTask instead of the subagent's
+  // child. Also assert the main-agent context omits the field entirely (null)
+  // so the main path keeps building subtask:<execId>.
+  const dataDir = resolve(process.cwd(), ".tmp", `parent-subagent-${process.pid}-${Date.now()}`);
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  const model = await store.createModel({ apiToken: "test", baseUrl: "https://models.example.test/v1", model: "test", name: "Test" });
+  const project = await store.createProject("Parent subagent passthrough");
+  const session = await store.createSession(project.id, "Subagent passthrough", { modelId: model.id });
+  const permissionEpoch = store.getSessionPermissionEpoch(session.id)!;
+  const workspaceRoot = store.workspacePath(session.id);
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const subagentId = "subagent-passthrough-1";
+  const writes: Array<Record<string, unknown>> = [];
+  const fake = http.createServer((_req, res) => {
+    let data = "";
+    _req.on("data", (chunk) => { data += chunk; });
+    _req.on("end", () => {
+      if (_req.url === "/observe/execution") writes.push(JSON.parse(data) as Record<string, unknown>);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "healthy", written: 1 }));
+    });
+  });
+  await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
+  const port = (fake.address() as AddressInfo).port;
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${port}`, token: "t" });
+    const sink = new MemoryGraphSink(client, () => true);
+    const recorder = new ProvenanceRecorder(dataDir, store, sink);
+
+    const runnerClient = {
+      executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
+        await writeFile(resolve(workspaceRoot, "out.csv"), "x\n1\n");
+        const timestamp = new Date().toISOString();
+        return {
+          cgroupMode: "none", createdFiles: ["out.csv"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+          environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+          executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
+          kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
+          sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "ok\n", workingDirectory: "/workspace",
+        } as ShellExecutionResult;
+      },
+    } as unknown as RunnerClient;
+
+    // --- Subagent context: parentSubagentId set. Must land on BOTH calls. ---
+    await recorder.executeShell({
+      agentId: `subagent:${subagentId}`,
+      code: "echo ok", permissionEpoch, runnerClient,
+      parentSubagentId: subagentId,
+      sessionId: session.id, turnId: "turn-sub", workspaceRoot,
+    });
+    await recorder.declareWorkspaceArtifact({
+      name: "out.csv", path: "out.csv", parentSubagentId: subagentId,
+      sessionId: session.id, sourcePath: "out.csv", turnId: "turn-sub", workspaceRoot,
+    });
+    for (let i = 0; i < 50 && writes.length < 2; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(writes.length, 2, "two observeExecution calls: execution + product declare");
+    assert.equal(
+      writes[0]!.parent_subagent_id, subagentId,
+      "first observeExecution (execution) carries parentSubagentId",
+    );
+    assert.equal(
+      writes[1]!.parent_subagent_id, subagentId,
+      "second observeExecution (declareWorkspaceArtifact) carries parentSubagentId — the feat gap",
+    );
+
+    // --- Main-agent context: parentSubagentId absent. Must be null on both
+    // calls so the Python sidecar builds the unchanged subtask:<execId> shell. ---
+    writes.length = 0;
+    const mainRunner = {
+      executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
+        await writeFile(resolve(workspaceRoot, "out2.csv"), "y\n2\n");
+        const timestamp = new Date().toISOString();
+        return {
+          cgroupMode: "none", createdFiles: ["out2.csv"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+          environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+          executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
+          kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
+          sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "ok\n", workingDirectory: "/workspace",
+        } as ShellExecutionResult;
+      },
+    } as unknown as RunnerClient;
+    await recorder.executeShell({
+      agentId: "main",
+      code: "echo ok", permissionEpoch, runnerClient: mainRunner,
+      sessionId: session.id, turnId: "turn-main", workspaceRoot,
+    });
+    await recorder.declareWorkspaceArtifact({
+      name: "out2.csv", path: "out2.csv",
+      sessionId: session.id, sourcePath: "out2.csv", turnId: "turn-main", workspaceRoot,
+    });
+    for (let i = 0; i < 50 && writes.length < 2; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(writes.length, 2, "main-agent: two observeExecution calls");
+    assert.equal(writes[0]!.parent_subagent_id, null, "main-agent execution: parentSubagentId null (unchanged path)");
+    assert.equal(writes[1]!.parent_subagent_id, null, "main-agent product declare: parentSubagentId null (unchanged path)");
+  } finally {
+    await new Promise<void>((r) => fake.close(() => r()));
+  }
+});

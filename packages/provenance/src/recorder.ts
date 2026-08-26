@@ -118,6 +118,10 @@ export interface RecordExecutionOptions {
   signal?: AbortSignal;
   turnId: string;
   workspaceRoot: string;
+  /** When set, this execution runs inside a subagent: products hang off the
+   * subagent's child SubTask instead of a per-execution SubTask. Absent
+   * (undefined) in main-agent context — behavior unchanged. */
+  parentSubagentId?: string;
 }
 
 export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environmentRevisionId" | "language">;
@@ -200,6 +204,10 @@ export class ProvenanceRecorder {
   async declareWorkspaceArtifact(options: {
     description?: string;
     name: string;
+    /** When set, this artifact was declared inside a subagent: its upsert
+     * must carry parentSubagentId so products hang off the subagent's child
+     * SubTask, not a per-execution SubTask. Mirrors the execute* path. */
+    parentSubagentId?: string;
     path: string;
     /**
      * Chip-reference + claim-id accumulator from the calling run scope. Drains
@@ -296,6 +304,7 @@ export class ProvenanceRecorder {
         taskType: "auto_inferred_from_execution",
         tool: run.tool,
         turnId: run.turnId,
+        parentSubagentId: options.parentSubagentId,
       });
     }
     return { artifact, version };
@@ -481,6 +490,7 @@ export class ProvenanceRecorder {
       stdoutHash: stdout.hash,
       stderrHash: stderr.hash,
       envHash: null,
+      parentSubagentId: options.parentSubagentId,
     });
     return result;
   }
@@ -633,6 +643,7 @@ export class ProvenanceRecorder {
       stdoutHash: stdout.hash,
       stderrHash: stderr.hash,
       envHash: envRevision?.snapshot.hash ?? null,
+      parentSubagentId: options.parentSubagentId,
     });
     if (environmentSyncError) throw environmentSyncError;
     return result;

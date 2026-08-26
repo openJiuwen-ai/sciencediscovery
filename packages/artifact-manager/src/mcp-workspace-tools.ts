@@ -67,6 +67,10 @@ export interface McpWorkspaceToolOptions {
   suppressMemoryGraphMirror?: boolean;
   turnId: string;
   workspacePathPrefix?: string;
+  /** When set, this workspace runs inside a subagent: passed through to
+   * broker.invoke so products hang off the subagent's child SubTask. Absent
+   * in main-agent context — behavior unchanged. */
+  parentSubagentId?: string;
 }
 
 function safeLogicalName(value: string, fallback: string): string {
@@ -130,6 +134,7 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
               toolCallId,
               toolId: tool.id,
               turnId: options.turnId,
+              parentSubagentId: options.parentSubagentId,
             });
             return {
               ...response.result,

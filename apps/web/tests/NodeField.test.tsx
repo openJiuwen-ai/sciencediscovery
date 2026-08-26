@@ -321,8 +321,8 @@ test("ResearchGoalDetail hides raw attributes (no inferred/method leakage)", () 
   assert.ok(!html.includes("inferred"), "inferred field not shown");
 });
 
-test("SubTaskDetail shows source/tool_type at top level, no raw attributes", () => {
-  const node = makeNode("SubTask", {
+test("TaskDetail (ToolCall) shows source/tool_type at top level, no raw attributes", () => {
+  const node = makeNode("ToolCall", {
     task_type: "literature_search",
     status: "completed",
     source: "pubmed",
@@ -395,9 +395,9 @@ test("CodeDetail never surfaces the four CAS hashes", () => {
 });
 
 test("MemoryGraphNodeDetail renders outgoing relations grouped by edge type", () => {
-  const src = makeNode("SubTask", { task_type: "t", status: "completed" }, "src");
+  const src = makeNode("ToolCall", { task_type: "t", status: "completed" }, "src");
   const code = makeNode("Code", { tool: "run_python" }, "code");
-  const nextTask = makeNode("SubTask", { task_type: "t2", status: "pending" }, "next-task");
+  const nextTask = makeNode("ToolCall", { task_type: "t2", status: "pending" }, "next-task");
   // edges[] deliberately lists `next` first; the display order must still put
   // `produces` above `next` (produces is the primary "made that" claim).
   const edges: MemoryGraphEdge[] = [

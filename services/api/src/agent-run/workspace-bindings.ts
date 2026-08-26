@@ -48,6 +48,10 @@ export interface WorkspaceExecutionBindingOptions {
   sessionId: string;
   store: SessionStore;
   workspaceRoot: string;
+  /** When set, this workspace runs inside a subagent: passed through to
+   * provenanceRecorder.execute* so products hang off the subagent's child
+   * SubTask instead of a per-execution SubTask. Absent in main-agent context. */
+  parentSubagentId?: string;
 }
 
 /** Build the shared governed handlers; only identity and observability policy differ. */
@@ -138,6 +142,7 @@ export function createWorkspaceExecutionBindings(
         signal,
         turnId: options.executionId,
         workspaceRoot: options.workspaceRoot,
+        parentSubagentId: options.parentSubagentId,
       });
     },
     executeShell: async (code: string, kernelMode: KernelMode, signal?: AbortSignal) => {
@@ -165,6 +170,7 @@ export function createWorkspaceExecutionBindings(
         signal,
         turnId: options.executionId,
         workspaceRoot: options.workspaceRoot,
+        parentSubagentId: options.parentSubagentId,
       });
     },
     ...(options.scientificEnvironments ? {
@@ -249,6 +255,7 @@ export function createWorkspaceExecutionBindings(
           signal,
           turnId: options.executionId,
           workspaceRoot: options.workspaceRoot,
+          parentSubagentId: options.parentSubagentId,
         });
       },
     } : {}),
