@@ -41,7 +41,10 @@ import type {
   NpuJobLogs,
   NpuJobResult,
   NpuWorkloadDescriptor,
+  ProposeSkillLibraryUpdateRequest,
+  PublishSkillLibraryUpdateProposalsResult,
   PythonExecutionResult,
+  SkillLibraryUpdateProposal,
   RemoteHostTarget,
   RemoteJob,
   ReviewCheckpointRequest,
@@ -275,6 +278,16 @@ export interface WorkspaceToolOptions {
     signal?: AbortSignal,
     toolCallId?: string,
   ) => Promise<ReviewCheckpointResult>;
+  proposeSkillLibraryUpdate?: (
+    input: ProposeSkillLibraryUpdateRequest,
+    signal?: AbortSignal,
+    toolCallId?: string,
+  ) => Promise<SkillLibraryUpdateProposal>;
+  publishSkillLibraryUpdate?: (
+    input: { proposalIds: string[] },
+    signal?: AbortSignal,
+    toolCallId?: string,
+  ) => Promise<PublishSkillLibraryUpdateProposalsResult>;
   /** Trace a node's provenance chain and return whether it is intact
    * (`trace_provenance` tool, reviewer specialist authenticity check).
    * Returns `{startNode, chain, broken, truncated, reason}` — the caller
@@ -472,6 +485,39 @@ export async function scanWorkspace(workspaceRoot: string): Promise<WorkspaceFil
 
   await visit(resolve(workspaceRoot));
   return files;
+}
+
+function yamlQuoted(value: string): string {
+  return JSON.stringify(value);
+}
+
+function renderGeneratedSkillMarkdown(input: {
+  allowedTools?: string;
+  compatibility?: string;
+  description: string;
+  instructions: string;
+  license?: string;
+  metadata?: Record<string, string>;
+  name: string;
+  version?: string;
+}): string {
+  const lines = [
+    "---",
+    `name: ${yamlQuoted(input.name)}`,
+    `description: ${yamlQuoted(input.description)}`,
+  ];
+  if (input.version) lines.push(`version: ${yamlQuoted(input.version)}`);
+  if (input.allowedTools) lines.push(`allowed-tools: ${yamlQuoted(input.allowedTools)}`);
+  if (input.compatibility) lines.push(`compatibility: ${yamlQuoted(input.compatibility)}`);
+  if (input.license) lines.push(`license: ${yamlQuoted(input.license)}`);
+  const metadata = input.metadata ? Object.entries(input.metadata).filter(([key, value]) => key.trim() && value.trim()) : [];
+  if (metadata.length) {
+    lines.push("metadata:");
+    for (const [key, value] of metadata.toSorted(([left], [right]) => left.localeCompare(right))) {
+      lines.push(`  ${yamlQuoted(key)}: ${yamlQuoted(value)}`);
+    }
+  }
+  return `${lines.join("\n")}\n---\n\n${input.instructions.trim()}\n`;
 }
 
 export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceToolOptions): AgentTool[] {
@@ -1021,6 +1067,114 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: reviewCheckpointParameters,
     };
     tools.push(reviewCheckpoint);
+  }
+  if (options.proposeSkillLibraryUpdate) {
+    const sourceRefParameters = Type.Object({
+      id: Type.String({ minLength: 1 }),
+      kind: Type.Union([
+        Type.Literal("artifact"),
+        Type.Literal("review-finding"),
+        Type.Literal("run"),
+        Type.Literal("session"),
+        Type.Literal("tool-call"),
+      ]),
+    });
+    const skillPackageParameters = Type.Object({
+      files: Type.Array(Type.Object({
+        content: Type.String({ minLength: 1 }),
+        encoding: Type.Optional(Type.Union([Type.Literal("base64"), Type.Literal("utf8")])),
+        path: Type.String({ minLength: 1 }),
+      }), { minItems: 1, maxItems: 32 }),
+    });
+    const generatedSkillParameters = Type.Object({
+      allowedTools: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+      compatibility: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+      description: Type.String({ minLength: 1, maxLength: 1024 }),
+      instructions: Type.String({ minLength: 1 }),
+      license: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+      metadata: Type.Optional(Type.Record(Type.String({ minLength: 1, maxLength: 64 }), Type.String({ minLength: 1, maxLength: 500 }))),
+      name: Type.String({ minLength: 1, maxLength: 64 }),
+      version: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+    });
+    const operationParameters = Type.Union([
+      Type.Object({ package: skillPackageParameters, type: Type.Literal("upsert") }),
+      Type.Object({ skill: generatedSkillParameters, type: Type.Literal("upsert_skill") }),
+      Type.Object({ skillId: Type.String({ minLength: 1 }), type: Type.Literal("delete") }),
+    ]);
+    const proposeSkillLibraryUpdateParameters = Type.Object({
+      baseVersionId: Type.Optional(Type.String({ minLength: 1 })),
+      libraryId: Type.String({ minLength: 1 }),
+      operations: Type.Array(operationParameters, { minItems: 1, maxItems: 16 }),
+      rationale: Type.String({ minLength: 1, maxLength: 4_000 }),
+      sourceRefs: Type.Optional(Type.Array(sourceRefParameters, { maxItems: 16 })),
+    });
+    const proposeSkillLibraryUpdate: AgentTool<typeof proposeSkillLibraryUpdateParameters> = {
+      description: "Propose a self-evolution update to a writable Skill Library. Prefer operations with type `upsert_skill` and a structured `skill` object; the tool will generate a valid SKILL.md with YAML frontmatter. Use raw `upsert` packages only when extra resource files are needed. This only creates a pending proposal; when the user asks to publish accepted proposals, call `publish_skill_library_update` with the proposal ids.",
+      execute: async (toolCallId, params, signal) => {
+        const operations = params.operations.map((operation) => {
+          if (operation.type !== "upsert_skill") return operation;
+          return {
+            package: {
+              files: [{
+                content: renderGeneratedSkillMarkdown(operation.skill),
+                path: "SKILL.md",
+              }],
+            },
+            type: "upsert" as const,
+          };
+        });
+        const proposal = await options.proposeSkillLibraryUpdate!({
+          author: { kind: "self-evolution", name: "Agent self-evolution proposal" },
+          ...(params.baseVersionId ? { baseVersionId: params.baseVersionId } : {}),
+          dryRun: true,
+          libraryId: params.libraryId,
+          operations,
+          rationale: params.rationale,
+          sourceRefs: params.sourceRefs ?? [],
+        }, signal, toolCallId);
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            conflicts: proposal.result.conflicts,
+            diagnostics: proposal.result.diagnostics,
+            diff: proposal.result.diff,
+            id: proposal.id,
+            libraryId: proposal.libraryId,
+            nextTool: proposal.result.conflicts.length ? undefined : "publish_skill_library_update",
+            status: proposal.status,
+          }, null, 2) }],
+          details: proposal,
+        };
+      },
+      label: "Propose skill library update",
+      name: "propose_skill_library_update",
+      parameters: proposeSkillLibraryUpdateParameters,
+    };
+    tools.push(proposeSkillLibraryUpdate);
+  }
+  if (options.publishSkillLibraryUpdate) {
+    const publishSkillLibraryUpdateParameters = Type.Object({
+      proposalIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
+    });
+    const publishSkillLibraryUpdate: AgentTool<typeof publishSkillLibraryUpdateParameters> = {
+      description: "Publish one or more pending Skill Library self-evolution proposals after user permission is granted. Multiple proposals must belong to the same writable library and are merged into one new library version.",
+      execute: async (toolCallId, params, signal) => {
+        const result = await options.publishSkillLibraryUpdate!({ proposalIds: params.proposalIds }, signal, toolCallId);
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            conflicts: result.result.conflicts,
+            diagnostics: result.result.diagnostics,
+            diff: result.result.diff,
+            proposalIds: result.proposals.map((proposal) => proposal.id),
+            publishedVersionId: result.result.version?.id,
+          }, null, 2) }],
+          details: result,
+        };
+      },
+      label: "Publish skill library update",
+      name: "publish_skill_library_update",
+      parameters: publishSkillLibraryUpdateParameters,
+    };
+    tools.push(publishSkillLibraryUpdate);
   }
   if (options.traceProvenance) {
     const traceProvenanceParameters = Type.Object({

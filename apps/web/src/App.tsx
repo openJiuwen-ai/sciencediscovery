@@ -60,6 +60,7 @@ import type {
   ReviewerSpecialistSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,
+  SkillLibrary,
   RunStreamEvent,
   SessionRun,
   ToolTrace,
@@ -260,6 +261,16 @@ import {
   type SessionRunTimeline,
   type SessionRunTimelines,
 } from "./timeline/model.js";
+
+const SELF_EVOLUTION_LIBRARY_ID = "project-skills";
+const BUILT_IN_SKILL_LIBRARY_ID = "built-in-skills";
+const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
+
+function canSummarizeRunAsSkill(run: SessionRun | undefined): run is SessionRun {
+  if (!run) return false;
+  return (run.status === "completed" || run.status === "failed" || run.status === "interrupted")
+    && !run.prompt.includes(SKILL_EVOLUTION_PROMPT_MARKER);
+}
 
 export function artifactTreeIconKind(
   artifact: Pick<ScientificArtifact, "kind" | "name">,
@@ -944,6 +955,7 @@ export function App() {
   const [models, setModels] = useState<ModelProfile[]>([]);
   const [connectors, setConnectors] = useState<ConnectorManifest[]>([]);
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
+  const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
   const [editingModelId, setEditingModelId] = useState<string>();
   const [modelDraft, setModelDraft] = useState<ModelDraft>(EMPTY_MODEL_DRAFT);
   const [draftToken, setDraftToken] = useState("");
@@ -1005,6 +1017,7 @@ export function App() {
   // clickable chips. Refreshed when files change (a report lands).
   const [reportReferences, setReportReferences] = useState<ComposerReference[] | undefined>();
   const [cancellingQueuedRunIds, setCancellingQueuedRunIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [skillEvolutionSourceRunIds, setSkillEvolutionSourceRunIds] = useState<ReadonlySet<string>>(() => new Set());
   // Timelines are buffered per Session so a run that keeps streaming while the
   // user is elsewhere still has its steps to show when they switch back.
   const [runTimelines, setRunTimelines] = useState<SessionRunTimelines>({});
@@ -1235,17 +1248,19 @@ export function App() {
       client.listModels(),
       client.listConnectors(),
       client.listSkills(),
+      client.listSkillLibraries(),
       client.getGlobalSettings(),
       client.getTimeoutSettings(),
       client.getQuotaSettings(),
       client.getSandboxNetworkSettings(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([modelItems, connectorItems, skillItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
+    ]).then(([modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
       if (!active) return;
       setModels(modelItems);
       setConnectors(connectorItems);
       setSkills(skillItems);
+      setSkillLibraries(skillLibraryItems);
       setGlobalSettings(settings);
       setTimeoutSettings(timeouts);
       setQuotaSettings(quotas);
@@ -1559,6 +1574,7 @@ export function App() {
       client.listModels(),
       client.listConnectors(),
       client.listSkills(),
+      client.listSkillLibraries(),
       client.getGlobalSettings(),
       client.getTimeoutSettings(),
       client.getQuotaSettings(),
@@ -1568,11 +1584,12 @@ export function App() {
       client.listMcpSources(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([projectItems, modelItems, connectorItems, skillItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
+    ]).then(([projectItems, modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
       setProjects(projectItems);
       setModels(modelItems);
       setConnectors(connectorItems);
       setSkills(skillItems);
+      setSkillLibraries(skillLibraryItems);
       setGlobalSettings(settings);
       setTimeoutSettings(timeouts);
       setQuotaSettings(quotas);
@@ -3061,6 +3078,40 @@ export function App() {
     }
   }
 
+  async function summarizeRunAsSkill(run: SessionRun): Promise<void> {
+    if (!session || !canSummarizeRunAsSkill(run) || skillEvolutionSourceRunIds.has(run.id)) return;
+    if (!session.modelId || !models.find((item) => item.id === session.modelId)?.hasApiToken) {
+      setError("Assign an available model with an API token before summarizing this run as a Skill");
+      return;
+    }
+    const writableLibraries = skillLibraries.filter((library) => library.id !== BUILT_IN_SKILL_LIBRARY_ID);
+    if (!writableLibraries.length) {
+      setError("Create a writable Skill Library before summarizing this run as a Skill");
+      return;
+    }
+    setSkillEvolutionSourceRunIds((current) => new Set(current).add(run.id));
+    try {
+      const queued = await client.createSkillEvolutionRun(session.id, run.id);
+      const nextRuns = upsertSessionRunSnapshot(session.id, queued);
+      setSessionRuns(nextRuns);
+      syncSessionRunActivity(session.id, nextRuns);
+      setIsFollowingOutput(true);
+      setError(undefined);
+      pushToast("info", "Skill proposal queued", `Run ${run.id.slice(0, 8)} will be summarized into a writable Skill Library.`);
+      await refreshSession(session.id);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Could not queue Skill self-evolution";
+      setError(message);
+    } finally {
+      setSkillEvolutionSourceRunIds((current) => {
+        if (!current.has(run.id)) return current;
+        const next = new Set(current);
+        next.delete(run.id);
+        return next;
+      });
+    }
+  }
+
   async function stopRun(sessionId = activeSessionId): Promise<void> {
     const hasAgentRun = Boolean(sessionId && runningSessionIds.has(sessionId));
     const hasReviewerCheckpoint = Boolean(sessionId === activeSessionId && reviewerCheckpointRunning);
@@ -3475,6 +3526,22 @@ export function App() {
     }
   }
 
+  function renderSkillEvolutionCard(sourceRun: SessionRun | undefined): ReactNode {
+    if (!session || !canSummarizeRunAsSkill(sourceRun)) return null;
+    const missingLibrary = !skillLibraries.some((library) => library.id !== BUILT_IN_SKILL_LIBRARY_ID);
+    const busy = skillEvolutionSourceRunIds.has(sourceRun.id);
+    return <section aria-label="Skill self-evolution" className="skill-evolution-card">
+      <header><span><SparkleIcon size={16} /></span><div><strong>Summarize as Skill</strong><small>default {SELF_EVOLUTION_LIBRARY_ID}</small></div></header>
+      <button
+        className="secondary-button"
+        disabled={busy || sessionArchived || !session.modelId || missingLibrary}
+        onClick={() => void summarizeRunAsSkill(sourceRun)}
+        title={missingLibrary ? "Create a writable Skill Library first" : "Queue a self-evolution run for this completed run"}
+        type="button"
+      >{busy ? "Queuing..." : "Create proposal"}</button>
+    </section>;
+  }
+
   function renderRunActivityGroup(group: RunActivityGroup) {
     if (!session) return null;
     const artifactCardId = activityCardId("artifacts", group.runId ?? "unattributed");
@@ -3810,6 +3877,7 @@ export function App() {
                         workspaceSessionId={session.id}
                       />
                       <RunUsageInline run={runUsageByRunId.get(block.runId)} />
+                      {renderSkillEvolutionCard(sessionRuns.find((run) => run.id === block.runId))}
                       {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) => renderRunActivityGroup(group))}
                     </Fragment>
                   ))}
@@ -4294,6 +4362,7 @@ export function App() {
         models={models}
         onCancel={() => setProjectCreationOpen(false)}
         onCreate={createProject}
+        skillLibraries={skillLibraries}
         skills={skills}
       /> : null}
       {globalSearchOpen ? <GlobalSearchDialog
@@ -4324,6 +4393,7 @@ export function App() {
               models={models}
               onSave={saveScopedSettings}
               scopeLabel={settingsTarget.kind === "project" ? "Project" : "Session"}
+              skillLibraries={skillLibraries}
               skillScope={settingsTarget.kind === "project" ? "project" : "session"}
               skills={skills}
             /> : <p className="muted">Loading effective settings and sources…</p>}

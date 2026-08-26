@@ -14,6 +14,8 @@
 
 export type SkillSource = "built-in" | "managed";
 
+export const BUILT_IN_SKILL_LIBRARY_ID = "built-in-skills";
+
 export type SkillResourceKind = "asset" | "other" | "reference" | "script";
 
 export interface SkillValidationDiagnostic {
@@ -118,6 +120,163 @@ export interface SkillResourceContent {
   revision: number;
   skillId: string;
   size: number;
+}
+
+export interface SkillLibrary {
+  createdAt: string;
+  headVersionId?: string;
+  id: string;
+  name: string;
+  updatedAt: string;
+}
+
+export interface SkillLibraryVersionSkill {
+  declaredVersion?: string;
+  description: string;
+  hash: string;
+  id: string;
+  version: string;
+}
+
+export interface SkillLibraryVersion {
+  author: {
+    id?: string;
+    kind: "self-evolution" | "system" | "user";
+    name?: string;
+  };
+  baseVersionId?: string;
+  contentHash: string;
+  createdAt: string;
+  evaluation?: Record<string, unknown>;
+  id: string;
+  libraryId: string;
+  parentVersionId?: string;
+  rollbackOfVersionId?: string;
+  skills: SkillLibraryVersionSkill[];
+}
+
+export interface SkillLibraryPackageInput {
+  files: Array<{
+    content: string;
+    encoding?: "base64" | "utf8";
+    path: string;
+  }>;
+}
+
+export type CommitSkillLibraryOperation =
+  | { package: SkillLibraryPackageInput; type: "upsert" }
+  | { skillId: string; type: "delete" };
+
+export interface CommitSkillLibraryVersionRequest {
+  author: SkillLibraryVersion["author"];
+  baseVersionId?: string;
+  dryRun?: boolean;
+  evaluation?: Record<string, unknown>;
+  operations: CommitSkillLibraryOperation[];
+}
+
+export interface SkillLibraryDiffEntry {
+  after?: SkillLibraryVersionSkill;
+  before?: SkillLibraryVersionSkill;
+  skillId: string;
+}
+
+export interface SkillLibraryDiff {
+  added: SkillLibraryDiffEntry[];
+  deleted: SkillLibraryDiffEntry[];
+  modified: SkillLibraryDiffEntry[];
+}
+
+export interface SkillLibraryConflict {
+  code: string;
+  message: string;
+  skillId?: string;
+}
+
+export interface CommitSkillLibraryVersionResult {
+  conflicts: SkillLibraryConflict[];
+  diagnostics: SkillValidationDiagnostic[];
+  diff: SkillLibraryDiff;
+  dryRun: boolean;
+  version?: SkillLibraryVersion;
+}
+
+export interface SkillLibraryProposalSourceRef {
+  id: string;
+  kind: "artifact" | "review-finding" | "run" | "session" | "tool-call";
+}
+
+export interface ProposeSkillLibraryUpdateRequest extends CommitSkillLibraryVersionRequest {
+  dryRun?: true;
+  libraryId: string;
+  rationale: string;
+  sourceRefs: SkillLibraryProposalSourceRef[];
+}
+
+export interface SkillLibraryUpdateProposal {
+  baseVersionId?: string;
+  createdAt: string;
+  id: string;
+  libraryId: string;
+  publishedVersionId?: string;
+  rationale: string;
+  request: CommitSkillLibraryVersionRequest;
+  result: CommitSkillLibraryVersionResult;
+  sourceRefs: SkillLibraryProposalSourceRef[];
+  status: "pending" | "published" | "rejected";
+  updatedAt: string;
+}
+
+export interface PublishSkillLibraryUpdateProposalResult {
+  proposal: SkillLibraryUpdateProposal;
+  result: CommitSkillLibraryVersionResult;
+}
+
+export interface PublishSkillLibraryUpdateProposalsRequest {
+  proposalIds: string[];
+}
+
+export interface PublishSkillLibraryUpdateProposalsResult {
+  proposals: SkillLibraryUpdateProposal[];
+  result: CommitSkillLibraryVersionResult;
+}
+
+export interface RollbackSkillLibraryVersionRequest {
+  author: SkillLibraryVersion["author"];
+  baseVersionId?: string;
+  evaluation?: Record<string, unknown>;
+  targetVersionId: string;
+}
+
+export interface SkillLibrarySearchLibrary {
+  contentHash?: string;
+  libraryId: string;
+  limit?: number;
+  priority?: number;
+  versionId: string;
+}
+
+export interface SkillLibrarySearchRequest {
+  filters?: {
+    domainTags?: string[];
+  };
+  libraries: SkillLibrarySearchLibrary[];
+  limit?: number;
+  query: string;
+}
+
+export interface SkillLibrarySearchCandidate {
+  libraryId: string;
+  priority: number;
+  score: number;
+  skill: SkillLibraryVersionSkill;
+  versionId: string;
+}
+
+export interface SkillLibrarySearchResult {
+  candidates: SkillLibrarySearchCandidate[];
+  conflicts: SkillLibraryConflict[];
+  skillLibraryRefs: import("./provenance.js").PromptSkillLibraryRef[];
 }
 
 /**

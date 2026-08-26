@@ -73,6 +73,7 @@ import type {
   RuntimeSessionRun,
   RuntimeSettingsOverrides,
   RuntimeStatus,
+  CreateSkillEvolutionRunRequest,
   SendMessageRequest,
   Session,
   SessionRun,
@@ -94,12 +95,13 @@ import type {
   UploadFileRequest,
   RegisterRemoteHostRequest,
   PromptManifest,
+  PromptSkillLibraryRef,
   ProposePlanRequest,
   RevisePlanRequest,
   SubagentStep,
   UpdateSpecialistRequest,
 } from "@sciencediscovery/schema";
-import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
+import { BUILT_IN_SKILL_LIBRARY_ID, createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
@@ -115,6 +117,7 @@ import {
 import { inferDomain, MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
 import { runLog } from "../logging.js";
 import { createPromptManifest } from "../prompt-manifest.js";
+import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { GovernedDownloadManager } from "@sciencediscovery/artifact-manager";
 import { McpGovernanceBroker } from "@sciencediscovery/data-source";
@@ -208,6 +211,8 @@ const activeSessions = new Map<string, RuntimeSessionRun>();
 const scheduledSessions = new Set<string>();
 const activeRunAbortControllers = new Map<string, AbortController>();
 const cancelledRuns = new Set<string>();
+export const DEFAULT_SELF_EVOLUTION_LIBRARY_ID = "project-skills";
+export const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
 
 type RunEventSink = (event: RunStreamEvent) => void | Promise<void>;
 type RunEventSubscriber = (event: SessionRunEvent) => void;
@@ -222,6 +227,42 @@ function skillIdForSubagentType(skillCatalog: SkillCatalog, subagentType: string
     .replace(/^-|-$/g, "");
   const available = new Set(skillCatalog.ids());
   return [requested, normalized].find((candidate) => available.has(candidate));
+}
+
+function mergeSkillLibraryRefs(...groups: Array<readonly PromptSkillLibraryRef[] | undefined>): PromptSkillLibraryRef[] {
+  const merged = new Map<string, PromptSkillLibraryRef>();
+  for (const refs of groups) {
+    for (const ref of refs ?? []) merged.set(`${ref.libraryId}\0${ref.versionId}`, structuredClone(ref));
+  }
+  return [...merged.values()].toSorted((left, right) => `${left.libraryId}/${left.versionId}`.localeCompare(`${right.libraryId}/${right.versionId}`));
+}
+
+async function recallSkillLibrarySkills(
+  skillLibraryCatalog: SkillLibraryCatalog,
+  settingsSnapshot: EffectiveRuntimeSettings,
+  skillLibraryRefs: readonly PromptSkillLibraryRef[],
+  query: string,
+): Promise<RuntimeSkillSnapshot[]> {
+  const result = await skillLibraryCatalog.search({
+    libraries: skillLibraryRefs.map((ref) => {
+      const mount = settingsSnapshot.enabledSkillLibraries.find((candidate) => (
+        candidate.libraryId === ref.libraryId
+        && (!candidate.versionId || candidate.versionId === "head" || candidate.versionId === ref.versionId)
+      ));
+      return {
+        contentHash: ref.contentHash,
+        libraryId: ref.libraryId,
+        ...(mount?.limit === undefined ? {} : { limit: mount.limit }),
+        priority: mount?.priority ?? 0,
+        versionId: ref.versionId,
+      };
+    }),
+    query,
+  });
+  if (result.conflicts.length) {
+    throw new Error(result.conflicts.map((conflict) => conflict.message).join(" "));
+  }
+  return await skillLibraryCatalog.resolveSkills(result.candidates);
 }
 
 function resolveSubagentSpecialist(store: SessionStore, sessionSpecialistId: string | undefined, input: SubagentInput): Specialist | undefined {
@@ -325,6 +366,7 @@ async function executeAgentRun(
   paperService: PaperService,
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
+  skillLibraryCatalog: SkillLibraryCatalog,
   memoryGraphSink: MemoryGraphSink,
   sessionId: string,
   runId: string,
@@ -395,7 +437,15 @@ async function executeAgentRun(
     if (blockedSkillIds.length) {
       throw new Error(`These skills are not enabled for this Session: ${blockedSkillIds.join(", ")}`);
     }
-    activeSkills = skillCatalog.resolve([...effectiveSkillIds]);
+    const manualSkills = skillCatalog.resolve([...effectiveSkillIds]);
+    const librarySkills = body.skillLibraryRefs?.length
+      ? await recallSkillLibrarySkills(skillLibraryCatalog, settingsSnapshot, body.skillLibraryRefs, body.content)
+      : [];
+    const manualSkillIds = new Set(manualSkills.map((skill) => skill.id));
+    activeSkills = [
+      ...manualSkills,
+      ...librarySkills.filter((skill) => !manualSkillIds.has(skill.id)),
+    ];
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "The selected skills are not available");
   }
@@ -428,6 +478,7 @@ async function executeAgentRun(
       subagentOrchestration: true,
     },
   );
+  const skillLibraryRefs = body.skillLibraryRefs?.length ? structuredClone(body.skillLibraryRefs) : undefined;
   const runStartedAt = new Date().toISOString();
   const assertRunActive = () => {
     if (cancelledRuns.has(runId) || requestAbortController.signal.aborted) {
@@ -779,6 +830,33 @@ async function executeAgentRun(
         steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
       });
       return plan;
+    },
+    proposeSkillLibraryUpdate: async (input, _signal, toolCallId) => {
+      const library = skillLibraryCatalog.get(input.libraryId);
+      const sourceRefs = [
+        ...(input.sourceRefs ?? []),
+        { id: sessionId, kind: "session" as const },
+        { id: runId, kind: "run" as const },
+        ...(toolCallId ? [{ id: toolCallId, kind: "tool-call" as const }] : []),
+      ].filter((ref, index, refs) => refs.findIndex((candidate) => candidate.kind === ref.kind && candidate.id === ref.id) === index);
+      return await skillLibraryCatalog.proposeUpdate(input.libraryId, {
+        ...input,
+        author: { kind: "self-evolution", name: "Agent self-evolution proposal" },
+        baseVersionId: input.baseVersionId ?? library?.headVersionId,
+        dryRun: true,
+        sourceRefs,
+      });
+    },
+    publishSkillLibraryUpdate: async (input, signal, toolCallId) => {
+      await requestExecution.permission.requirePrivilege({
+        action: "host",
+        executionId: runId,
+        resource: `skill-library-proposals:${input.proposalIds.join(",")}`,
+        signal,
+        summary: `Publish ${input.proposalIds.length} Skill Library proposal(s) in this Session`,
+        toolCallId,
+      });
+      return await skillLibraryCatalog.publishProposals(input.proposalIds);
     },
     queryGraph: async (query: string) => {
       // Degraded when the toggle is off or the sidecar is unreachable —
@@ -1211,6 +1289,34 @@ async function executeAgentRun(
                 },
               }
               : {}),
+            proposeSkillLibraryUpdate: async (input, _signal, toolCallId) => {
+              const library = skillLibraryCatalog.get(input.libraryId);
+              const sourceRefs = [
+                ...(input.sourceRefs ?? []),
+                { id: sessionId, kind: "session" as const },
+                { id: runId, kind: "run" as const },
+                { id: childExecution.identity.executionId, kind: "run" as const },
+                ...(toolCallId ? [{ id: toolCallId, kind: "tool-call" as const }] : []),
+              ].filter((ref, index, refs) => refs.findIndex((candidate) => candidate.kind === ref.kind && candidate.id === ref.id) === index);
+              return await skillLibraryCatalog.proposeUpdate(input.libraryId, {
+                ...input,
+                author: { kind: "self-evolution", name: "Agent self-evolution proposal" },
+                baseVersionId: input.baseVersionId ?? library?.headVersionId,
+                dryRun: true,
+                sourceRefs,
+              });
+            },
+            publishSkillLibraryUpdate: async (input, signal, toolCallId) => {
+              await requestExecution.permission.requirePrivilege({
+                action: "host",
+                executionId: childExecution.identity.executionId,
+                resource: `skill-library-proposals:${input.proposalIds.join(",")}`,
+                signal,
+                summary: `Publish ${input.proposalIds.length} Skill Library proposal(s) from subagent ${childExecution.identity.executionId}`,
+                toolCallId,
+              });
+              return await skillLibraryCatalog.publishProposals(input.proposalIds);
+            },
             remoteHosts: [],
             runSubagent: async () => {
               throw new Error("Nested subagents are disabled");
@@ -1498,6 +1604,7 @@ async function executeAgentRun(
       startedAt: runStartedAt,
       systemPrompt,
       systemPromptVersion: WORKSPACE_SYSTEM_PROMPT_VERSION,
+      ...(skillLibraryRefs ? { skillLibraryRefs } : {}),
       skillRefs: activeSkills.map(({ hash, id, revision, version }) => ({ hash, id, revision, version })),
       ...(sessionSpecialist ? { specialistRef: { id: sessionSpecialist.id, name: sessionSpecialist.name } } : {}),
       turnId: runId,
@@ -1555,6 +1662,7 @@ async function executeAgentRun(
           startedAt: runStartedAt,
           systemPrompt,
           systemPromptVersion: WORKSPACE_SYSTEM_PROMPT_VERSION,
+          ...(skillLibraryRefs ? { skillLibraryRefs } : {}),
           skillRefs: activeSkills.map(({ hash, id, revision, version }) => ({ hash, id, revision, version })),
           ...(sessionSpecialist ? { specialistRef: { id: sessionSpecialist.id, name: sessionSpecialist.name } } : {}),
           turnId: runId,
@@ -1887,6 +1995,7 @@ function computeSettingsSnapshot(store: SessionStore, sessionId: string): Effect
 export async function createQueuedRun(
   store: SessionStore,
   skillCatalog: SkillCatalog,
+  skillLibraryCatalog: SkillLibraryCatalog,
   sessionId: string,
   body: SendMessageRequest,
 ): Promise<SessionRun> {
@@ -1902,12 +2011,22 @@ export async function createQueuedRun(
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Composer references are invalid");
   }
+  let skillLibraryRefs: SessionRun["skillLibraryRefs"];
+  const settingsSnapshot = computeSettingsSnapshot(store, sessionId);
+  try {
+    const configuredRefs = await skillLibraryCatalog.resolveEnabledRefs(settingsSnapshot.enabledSkillLibraries);
+    const declaredRefs = await skillLibraryCatalog.validateRefs(body.skillLibraryRefs);
+    skillLibraryRefs = mergeSkillLibraryRefs(configuredRefs, declaredRefs);
+  } catch (error) {
+    throw new ApiStatusError(400, error instanceof Error ? error.message : "Skill library references are invalid");
+  }
   const run = await store.createSessionRun({
     annotationIds: body.annotationIds,
     prompt,
     references,
     sessionId,
-    settingsSnapshot: computeSettingsSnapshot(store, sessionId),
+    settingsSnapshot,
+    ...(skillLibraryRefs.length ? { skillLibraryRefs } : {}),
     webForceRefresh: body.webForceRefresh === true || slashRefresh,
   });
   const renamedSession = await applyInitialSessionTitle(store, run);
@@ -1918,6 +2037,99 @@ export async function createQueuedRun(
   await publishRunEvent(store, sessionId, run.id, { run, type: "run.queued" });
   if (renamedSession) refineSessionTitleInBackground(store, run, renamedSession.title);
   return run;
+}
+
+function isSelfEvolutionSourceRun(status: SessionRunStatus): boolean {
+  return status === "completed" || status === "failed" || status === "interrupted";
+}
+
+function buildSkillEvolutionPrompt(input: {
+  candidateLibraryIds: string[];
+  defaultLibraryId: string;
+  session: Session;
+  sourceRun: SessionRun;
+  forcedTargetLibraryId?: string;
+}): string {
+  const sourcePrompt = input.sourceRun.prompt.replace(/\s+/g, " ").trim().slice(0, 2_000);
+  const candidateLibraries = input.candidateLibraryIds.map((libraryId) =>
+    `  - ${libraryId}${libraryId === input.defaultLibraryId ? " (default)" : ""}`,
+  );
+  return [
+    `${SKILL_EVOLUTION_PROMPT_MARKER}`,
+    "",
+    "You are running M1.6 Run-level Skill self-evolution for this ScienceDiscovery Session.",
+    "Your job is to decide whether the referenced source run contains reusable workflow knowledge, and if so create exactly one pending Skill Library proposal.",
+    "",
+    "Source:",
+    `- session_id: ${input.session.id}`,
+    `- project_id: ${input.session.projectId}`,
+    `- source_run_id: ${input.sourceRun.id}`,
+    `- source_run_status: ${input.sourceRun.status}`,
+    `- source_run_prompt: ${sourcePrompt || "(empty)"}`,
+    `- default_library_id: ${input.defaultLibraryId}`,
+    ...(input.forcedTargetLibraryId ? [`- forced_target_library_id: ${input.forcedTargetLibraryId}`] : []),
+    "- writable_skill_libraries:",
+    ...candidateLibraries,
+    "",
+    "Required workflow:",
+    "1. Choose the Skill Library before proposing. If forced_target_library_id is present, use it. Otherwise prefer default_library_id, but choose another writable_skill_libraries entry when its name better matches the reusable pattern. Never use a library outside writable_skill_libraries.",
+    "2. Call the `task` tool for a proposer subagent. Ask it to inspect the source run at a high level and return JSON with: decision (`create`, `edit`, or `no-op`), chosen_library_id, rationale, reusable_pattern, applicability, boundaries, and risk_notes.",
+    "3. If the proposer returns `no-op`, stop and explain briefly. Do not create a proposal.",
+    "4. If the proposer returns `create` or `edit`, call the `task` tool for a skill-builder subagent. Ask it to produce JSON with a structured `upsert_skill` payload: name, description, instructions, optional version, and optional metadata. Keep the skill reusable and avoid one-off sample answers.",
+    "5. Call `propose_skill_library_update` with libraryId equal to the chosen writable library. Prefer operation type `upsert_skill`; do not hand-write raw SKILL.md unless extra resource files are essential.",
+    "6. Include sourceRefs for the original source run and session: `{kind: \"session\", id: session_id}` and `{kind: \"run\", id: source_run_id}`.",
+    "7. Do not call `publish_skill_library_update` in this run. The user will review and publish pending proposals separately.",
+    "",
+    "Safety:",
+    "- Do not write secrets, private filesystem paths, hidden benchmark answers, or one-off ground truth into the Skill.",
+    "- The Skill must state when it applies and when it should not be used.",
+    "- Prefer one small, specific Skill over a broad catch-all Skill.",
+    "",
+    "Final response:",
+    "- If a proposal was created, report the proposal id, target library, changed skill name, and why it is reusable.",
+    "- If no proposal was created, report the no-op reason.",
+  ].join("\n");
+}
+
+export async function createSkillEvolutionRun(
+  store: SessionStore,
+  skillCatalog: SkillCatalog,
+  skillLibraryCatalog: SkillLibraryCatalog,
+  sessionId: string,
+  sourceRunId: string,
+  request: CreateSkillEvolutionRunRequest = {},
+): Promise<SessionRun> {
+  const session = store.assertSessionWritable(sessionId);
+  if (session.archivedAt) throw new ApiStatusError(409, "Session is archived and read-only");
+  const sourceRun = await store.getSessionRun(sessionId, sourceRunId);
+  if (!sourceRun) throw new ApiStatusError(404, "Run not found");
+  if (sourceRun.prompt.includes(SKILL_EVOLUTION_PROMPT_MARKER)) {
+    throw new ApiStatusError(409, "Skill self-evolution runs cannot be used as self-evolution sources");
+  }
+  if (!isSelfEvolutionSourceRun(sourceRun.status)) {
+    throw new ApiStatusError(409, "Only completed, failed, or interrupted runs can be summarized as Skills");
+  }
+  const writableLibraryIds = skillLibraryCatalog.list()
+    .map((library) => library.id)
+    .filter((libraryId) => libraryId !== BUILT_IN_SKILL_LIBRARY_ID);
+  if (!writableLibraryIds.length) {
+    throw new ApiStatusError(409, "Create a writable Skill Library before summarizing a Run as Skill");
+  }
+  const targetLibraryId = request.targetLibraryId?.trim();
+  if (targetLibraryId && !writableLibraryIds.includes(targetLibraryId)) {
+    throw new ApiStatusError(409, `Skill Library ${targetLibraryId} is not writable or does not exist`);
+  }
+  return await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, {
+    content: buildSkillEvolutionPrompt({
+      candidateLibraryIds: writableLibraryIds,
+      defaultLibraryId: writableLibraryIds.includes(DEFAULT_SELF_EVOLUTION_LIBRARY_ID)
+        ? DEFAULT_SELF_EVOLUTION_LIBRARY_ID
+        : writableLibraryIds[0]!,
+      ...(targetLibraryId ? { forcedTargetLibraryId: targetLibraryId } : {}),
+      session,
+      sourceRun,
+    }),
+  });
 }
 
 export function scheduleSessionRuns(
@@ -1932,6 +2144,7 @@ export function scheduleSessionRuns(
   paperService: PaperService,
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
+  skillLibraryCatalog: SkillLibraryCatalog,
   memoryGraphSink: MemoryGraphSink,
   sessionId: string,
   serverConfig: ServerConfig,
@@ -1981,6 +2194,7 @@ export function scheduleSessionRuns(
             paperService,
             remoteCompute,
             skillCatalog,
+            skillLibraryCatalog,
             memoryGraphSink,
             sessionId,
             next.id,
@@ -1988,6 +2202,7 @@ export function scheduleSessionRuns(
               annotationIds: next.annotationIds,
               content: next.prompt,
               references: next.references,
+              skillLibraryRefs: next.skillLibraryRefs,
               webForceRefresh: next.webForceRefresh,
             },
             requestAbortController,
@@ -2041,6 +2256,7 @@ export function scheduleSessionRuns(
         paperService,
         remoteCompute,
         skillCatalog,
+        skillLibraryCatalog,
         memoryGraphSink,
         sessionId,
         serverConfig,
@@ -2163,13 +2379,14 @@ export async function streamAgentRun(
   paperService: PaperService,
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
+  skillLibraryCatalog: SkillLibraryCatalog,
   memoryGraphSink: MemoryGraphSink,
   sessionId: string,
   body: SendMessageRequest,
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
 ): Promise<void> {
-  const run = await createQueuedRun(store, skillCatalog, sessionId, body);
+  const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, body);
   scheduleSessionRuns(
     store,
     runnerClient,
@@ -2182,6 +2399,7 @@ export async function streamAgentRun(
     paperService,
     remoteCompute,
     skillCatalog,
+    skillLibraryCatalog,
     memoryGraphSink,
     sessionId,
     serverConfig,

@@ -79,6 +79,45 @@ test("cancelRun posts to the run-specific cancel endpoint", async () => {
   }
 });
 
+test("createSkillEvolutionRun posts to the run self-evolution endpoint", async () => {
+  const previousFetch = globalThis.fetch;
+  let requestedUrl = "";
+  let requestedMethod = "";
+  let requestedBody = "";
+  globalThis.fetch = async (input, init) => {
+    requestedUrl = String(input);
+    requestedMethod = init?.method ?? "GET";
+    requestedBody = String(init?.body);
+    return Response.json({
+      annotationIds: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      id: "run/2",
+      prompt: "[Skill self-evolution M1.6]",
+      queueOrder: 3,
+      references: [],
+      sessionId: "session/a",
+      settingsSnapshot: {
+        enabledConnectorIds: [],
+        enabledSkillIds: [],
+        modelId: "model-a",
+        semanticReviewEnabled: false,
+      },
+      status: "queued",
+    });
+  };
+  try {
+    const run = await new ApiClient("test-token").createSkillEvolutionRun("session/a", "run/1", {
+      targetLibraryId: "project-skills",
+    });
+    assert.equal(run.id, "run/2");
+    assert.equal(requestedUrl, "/api/sessions/session%2Fa/runs/run%2F1/skill-evolution");
+    assert.equal(requestedMethod, "POST");
+    assert.equal(requestedBody, JSON.stringify({ targetLibraryId: "project-skills" }));
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("listArtifactReviews uses the Session-scoped review endpoint", async () => {
   const previousFetch = globalThis.fetch;
   let requestedUrl = "";
@@ -89,6 +128,70 @@ test("listArtifactReviews uses the Session-scoped review endpoint", async () => 
   try {
     assert.deepEqual(await new ApiClient("test-token").listArtifactReviews("session/a"), []);
     assert.equal(requestedUrl, "/api/sessions/session%2Fa/artifact-reviews");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("skill library client methods target versioned library endpoints", async () => {
+  const previousFetch = globalThis.fetch;
+  const requests: Array<{ body?: BodyInit | null; method: string; url: string }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ body: init?.body, method: init?.method ?? "GET", url: String(input) });
+    if (String(input).endsWith("/versions") && init?.method === "POST") {
+      return Response.json({ conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: true });
+    }
+    if (String(input).endsWith("/rollback")) {
+      return Response.json({ conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: false });
+    }
+    if (String(input).endsWith("/publish")) {
+      return Response.json({ proposal: { id: "proposal-a" }, result: { conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: false } });
+    }
+    if (String(input).endsWith("/reject")) return Response.json({ id: "proposal-a", status: "rejected" });
+    if (String(input).includes("/diff/")) return Response.json({ added: [], deleted: [], modified: [] });
+    return Response.json([]);
+  };
+  try {
+    const client = new ApiClient("test-token");
+    await client.listSkillLibraries();
+    await client.createSkillLibrary({ id: "library/a", name: "Library A" });
+    await client.getSkillLibrary("library/a");
+    await client.listSkillLibraryVersions("library/a");
+    await client.commitSkillLibraryVersion("library/a", {
+      author: { kind: "user" },
+      dryRun: true,
+      operations: [],
+    });
+    await client.getSkillLibraryVersion("library/a", "version/1");
+    await client.diffSkillLibraryVersions("library/a", "version/1", "version/2");
+    await client.rollbackSkillLibrary("library/a", {
+      author: { kind: "user" },
+      targetVersionId: "version/1",
+    });
+    await client.listSkillLibraryProposals("library/a");
+    await client.publishSkillLibraryProposal("proposal/a");
+    await client.publishSkillLibraryProposals(["proposal/a", "proposal/b"]);
+    await client.rejectSkillLibraryProposal("proposal/a");
+    assert.deepEqual(requests.map((request) => [request.method, request.url]), [
+      ["GET", "/api/skill-libraries"],
+      ["POST", "/api/skill-libraries"],
+      ["GET", "/api/skill-libraries/library%2Fa"],
+      ["GET", "/api/skill-libraries/library%2Fa/versions"],
+      ["POST", "/api/skill-libraries/library%2Fa/versions"],
+      ["GET", "/api/skill-libraries/library%2Fa/versions/version%2F1"],
+      ["GET", "/api/skill-libraries/library%2Fa/versions/version%2F1/diff/version%2F2"],
+      ["POST", "/api/skill-libraries/library%2Fa/rollback"],
+      ["GET", "/api/skill-library-proposals?libraryId=library%2Fa"],
+      ["POST", "/api/skill-library-proposals/proposal%2Fa/publish"],
+      ["POST", "/api/skill-library-proposals/publish"],
+      ["POST", "/api/skill-library-proposals/proposal%2Fa/reject"],
+    ]);
+    assert.equal(requests[4]?.body, JSON.stringify({
+      author: { kind: "user" },
+      dryRun: true,
+      operations: [],
+    }));
+    assert.equal(requests[10]?.body, JSON.stringify({ proposalIds: ["proposal/a", "proposal/b"] }));
   } finally {
     globalThis.fetch = previousFetch;
   }

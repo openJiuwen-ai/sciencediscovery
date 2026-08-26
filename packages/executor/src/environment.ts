@@ -59,10 +59,25 @@ export const DEFAULT_ENVIRONMENT_REVISION_ID = systemPythonEnvironmentRevisionId
 const sandbox = hostSandboxKind();
 // The package spec records paths inside the Runner's sandbox. Probe versions
 // through PATH because the API host may install the same tools elsewhere.
-const pythonProbeExecutable = process.env.SCIENCE_AGENT_PYTHON_PATH?.trim() || "python3";
-const shellProbeExecutable = process.env.SCIENCE_AGENT_SHELL_PATH?.trim() || "bash";
-const pythonVersion = execFileSync(pythonProbeExecutable, ["--version"], { encoding: "utf8" }).trim();
-const shellVersion = execFileSync(shellProbeExecutable, ["--version"], { encoding: "utf8" }).split("\n")[0]!.trim();
+function firstWorkingVersion(candidates: readonly string[], args: readonly string[]): string {
+  for (const candidate of candidates) {
+    try {
+      return execFileSync(candidate, [...args], { encoding: "utf8" }).trim();
+    } catch {
+      // Minimal CI images may have no host Python; importing this module should still work.
+    }
+  }
+  return "unavailable";
+}
+
+const pythonVersion = firstWorkingVersion(
+  [process.env.SCIENCE_AGENT_PYTHON_PATH?.trim(), "python3", "python", "/usr/bin/python3"].filter(Boolean) as string[],
+  ["--version"],
+);
+const shellVersion = firstWorkingVersion(
+  [process.env.SCIENCE_AGENT_SHELL_PATH?.trim(), "bash", process.platform === "darwin" ? "/bin/bash" : "/usr/bin/bash"].filter(Boolean) as string[],
+  ["--version"],
+).split("\n")[0]!.trim();
 const runnerVersion = sandbox === "seatbelt" ? "m4-isolation-only-v1" : "m1-bwrap-v1";
 const packageSource = sandbox === "seatbelt" ? "read-only system runtime" : "read-only system /usr";
 const pythonExecutable = "/usr/bin/python3";

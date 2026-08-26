@@ -757,6 +757,134 @@ test("built-in workspace tool names use the strict provider-safe alphabet", () =
   );
 });
 
+test("propose_skill_library_update only submits dry-run self-evolution proposals", async () => {
+  let captured: unknown;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    proposeSkillLibraryUpdate: async (input) => {
+      captured = input;
+      return {
+        createdAt: "2026-08-25T00:00:00.000Z",
+        id: "proposal-1",
+        libraryId: input.libraryId,
+        rationale: input.rationale,
+        request: input,
+        result: { conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: true },
+        sourceRefs: input.sourceRefs,
+        status: "pending",
+        updatedAt: "2026-08-25T00:00:00.000Z",
+      };
+    },
+  });
+
+  const tool = tools.find((candidate) => candidate.name === "propose_skill_library_update");
+  assert.ok(tool);
+  const result = await tool.execute("tool-call", {
+    libraryId: "project-skills",
+    operations: [{ package: { files: [{ content: "---\nname: learned-skill\ndescription: Learned workflow.\n---\n\nUse it.\n", path: "SKILL.md" }] }, type: "upsert" }],
+    rationale: "A reusable workflow was found.",
+  });
+  assert.deepEqual(captured, {
+    author: { kind: "self-evolution", name: "Agent self-evolution proposal" },
+    dryRun: true,
+    libraryId: "project-skills",
+    operations: [{ package: { files: [{ content: "---\nname: learned-skill\ndescription: Learned workflow.\n---\n\nUse it.\n", path: "SKILL.md" }] }, type: "upsert" }],
+    rationale: "A reusable workflow was found.",
+    sourceRefs: [],
+  });
+  assert.match(result.content[0]?.text ?? "", /proposal-1/);
+});
+
+test("propose_skill_library_update can generate valid SKILL.md from structured fields", async () => {
+  let captured: unknown;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    proposeSkillLibraryUpdate: async (input) => {
+      captured = input;
+      return {
+        createdAt: "2026-08-25T00:00:00.000Z",
+        id: "proposal-structured",
+        libraryId: input.libraryId,
+        rationale: input.rationale,
+        request: input,
+        result: { conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: true },
+        sourceRefs: input.sourceRefs,
+        status: "pending",
+        updatedAt: "2026-08-25T00:00:00.000Z",
+      };
+    },
+  });
+
+  const tool = tools.find((candidate) => candidate.name === "propose_skill_library_update");
+  assert.ok(tool);
+  await tool.execute("tool-call", {
+    libraryId: "project-skills",
+    operations: [{
+      skill: {
+        description: "Reusable checks for tiny task outputs.",
+        instructions: "Check the task output, record reusable steps, and keep the result concise.",
+        metadata: { source: "self-evolution" },
+        name: "tiny-task-check",
+        version: "1.0.0",
+      },
+      type: "upsert_skill",
+    }],
+    rationale: "The same tiny task pattern recurred.",
+  });
+
+  const operation = (captured as { operations: Array<{ package: { files: Array<{ content: string; path: string }> }; type: string }> }).operations[0]!;
+  assert.equal(operation.type, "upsert");
+  assert.equal(operation.package.files[0]?.path, "SKILL.md");
+  assert.match(operation.package.files[0]?.content ?? "", /^---\nname: "tiny-task-check"\ndescription: "Reusable checks for tiny task outputs\."/);
+  assert.match(operation.package.files[0]?.content ?? "", /\n---\n\nCheck the task output/);
+});
+
+test("publish_skill_library_update submits selected proposals", async () => {
+  let captured: unknown;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    publishSkillLibraryUpdate: async (input) => {
+      captured = input;
+      return {
+        proposals: input.proposalIds.map((id) => ({
+          createdAt: "2026-08-25T00:00:00.000Z",
+          id,
+          libraryId: "project-skills",
+          rationale: "Ready to publish.",
+          request: { author: { kind: "self-evolution" }, operations: [] },
+          result: { conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: true },
+          sourceRefs: [],
+          status: "published",
+          updatedAt: "2026-08-25T00:00:00.000Z",
+        })),
+        result: {
+          conflicts: [],
+          diagnostics: [],
+          diff: { added: [], deleted: [], modified: [] },
+          dryRun: false,
+          version: {
+            author: { kind: "self-evolution" },
+            contentHash: "a".repeat(64),
+            createdAt: "2026-08-25T00:00:00.000Z",
+            id: "version-1",
+            libraryId: "project-skills",
+            skills: [],
+          },
+        },
+      };
+    },
+  });
+
+  const tool = tools.find((candidate) => candidate.name === "publish_skill_library_update");
+  assert.ok(tool);
+  const result = await tool.execute("tool-call", { proposalIds: ["proposal-1", "proposal-2"] });
+  assert.deepEqual(captured, { proposalIds: ["proposal-1", "proposal-2"] });
+  assert.match(result.content[0]?.text ?? "", /version-1/);
+});
+
 test("skill discovery loads frozen instructions progressively", async () => {
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
