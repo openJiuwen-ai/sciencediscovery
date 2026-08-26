@@ -597,7 +597,17 @@
 .provider-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .provider-section-heading h4, .provider-registry > h4 { color: var(--text-heading); font-size: 14px; }
 .provider-section-heading p { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.provider-presets, .provider-registry, .provider-editor, .provider-model-catalog { display: grid; gap: 12px; min-width: 0; }
+.provider-add, .provider-registry, .provider-editor, .provider-model-catalog { display: grid; gap: 12px; min-width: 0; }
+.provider-add-toggle { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%; border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--surface); padding: 10px 12px; cursor: pointer; text-align: left; }
+.provider-add-toggle:hover { border-color: var(--accent-border); background: var(--accent-soft); }
+.provider-add-toggle strong { color: var(--text-heading); font-size: 13px; font-weight: 750; }
+.provider-add-toggle strong::before { content: "+ "; color: var(--accent-ink); font-weight: 800; }
+.provider-add-toggle[aria-expanded="true"] strong::before { content: "− "; }
+.provider-add-toggle small { color: var(--muted); font-size: 11px; text-align: right; }
+.provider-models-details > summary { display: flex; align-items: baseline; gap: 8px; color: var(--accent-ink); cursor: pointer; font-size: 12px; font-weight: 750; }
+.provider-models-details > summary small { color: var(--text-faint); font-size: 10px; font-weight: 500; }
+.provider-models-details[open] > summary { margin-bottom: 12px; }
+.provider-models-details .provider-manual-model { margin-bottom: 10px; }
 /* Catalog freshness sits above the provider list: it applies to every provider,
    not to whichever one happens to be selected. */
 .model-catalog-status { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); padding: 10px 12px; }

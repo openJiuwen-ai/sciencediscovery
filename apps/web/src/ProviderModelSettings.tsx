@@ -251,6 +251,7 @@ export function ModelCatalogStatus({ catalog, client, onCatalogChange, onError, 
   return <section className="model-catalog-status" aria-label={t("providers.catalog.title")}>
     <div>
       <strong>{t("providers.catalog.title")}</strong>
+      <small>{t("providers.catalog.source")}</small>
       <small>{snapshot
         ? t(`providers.catalog.updated.${snapshot.origin}`, { time: new Date(snapshot.fetchedAt).toLocaleString() })
         : t("providers.catalog.missing")}</small>
@@ -297,6 +298,10 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   const [manualModelId, setManualModelId] = useState("");
   const [discoveryError, setDiscoveryError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  // The preset wall stays folded away until the user explicitly adds a
+  // provider; with nothing configured yet it starts open as the first-run path.
+  const [addOpen, setAddOpen] = useState(() => !providers.length);
+  const [modelsOpen, setModelsOpen] = useState(true);
   const baselineDraft = useRef<ProviderDraft | undefined>(undefined);
   const listingGuard = useRef(createProviderListingRequestGuard());
   const draftDirty = draftFingerprint(draft) !== draftFingerprint(baselineDraft.current);
@@ -363,6 +368,8 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     setListing(undefined);
     setManualModelId("");
     setDiscoveryError(undefined);
+    setAddOpen(false);
+    setModelsOpen(true);
     void loadModels(provider.id);
   }
 
@@ -372,6 +379,15 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     setListing(undefined);
     setManualModelId("");
     setDiscoveryError(undefined);
+    setAddOpen(false);
+  }
+
+  function selectCustomProvider(): void {
+    if (!allowDraftReplacement()) return;
+    selectDraft({ ...CUSTOM_PROVIDER });
+    setListing(undefined);
+    setDiscoveryError(undefined);
+    setAddOpen(false);
   }
 
   async function saveProvider(): Promise<boolean> {
@@ -494,26 +510,6 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
       onError={onError}
       onNotice={onNotice}
     />
-    <section className="provider-presets" aria-label={t("providers.presets.title")}>
-      <div className="provider-section-heading">
-        <div><h4>{t("providers.presets.title")}</h4><p>{t("providers.presets.help")}</p></div>
-        <button className="secondary-button compact-button" onClick={() => {
-          if (!allowDraftReplacement()) return;
-          selectDraft({ ...CUSTOM_PROVIDER });
-          setListing(undefined);
-          setDiscoveryError(undefined);
-        }} type="button">{t("providers.custom.new")}</button>
-      </div>
-      <div className="provider-preset-grid">
-        {presets.map((preset) => <button
-          className={draft?.presetId === preset.id && !draft.providerId ? "provider-preset-card active" : "provider-preset-card"}
-          key={preset.id}
-          onClick={() => selectPreset(preset)}
-          type="button"
-        ><strong>{preset.name}</strong><small>{preset.tokenOptional ? t("providers.token.optional") : t("providers.token.only")}</small></button>)}
-      </div>
-    </section>
-
     {providers.length ? <section className="provider-registry" aria-label={t("providers.configured.title")}>
       <h4>{t("providers.configured.title")}</h4>
       <div className="provider-registry-list">{providers.map((provider) => <button
@@ -532,6 +528,26 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
         <em>{provider.presetId ? t("providers.kind.builtIn") : t("providers.kind.custom")}</em>
       </button>)}</div>
     </section> : null}
+
+    <section className="provider-add" aria-label={t("providers.add.title")}>
+      <button aria-expanded={addOpen} className="provider-add-toggle" onClick={() => setAddOpen((current) => !current)} type="button">
+        <strong>{t("providers.add.title")}</strong>
+        <small>{t("providers.add.help")}</small>
+      </button>
+      {addOpen ? <div className="provider-preset-grid">
+        {presets.map((preset) => <button
+          className={draft?.presetId === preset.id && !draft.providerId ? "provider-preset-card active" : "provider-preset-card"}
+          key={preset.id}
+          onClick={() => selectPreset(preset)}
+          type="button"
+        ><strong>{preset.name}</strong><small>{preset.tokenOptional ? t("providers.token.optional") : t("providers.token.only")}</small></button>)}
+        <button
+          className={draft && !draft.presetId && !draft.providerId ? "provider-preset-card active" : "provider-preset-card"}
+          onClick={selectCustomProvider}
+          type="button"
+        ><strong>{t("providers.custom.name")}</strong><small>{t("providers.custom.hint")}</small></button>
+      </div> : null}
+    </section>
 
     {draft ? <section className="provider-editor" aria-label={t("providers.editor.title")}>
       <div className="provider-section-heading">
@@ -585,21 +601,32 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
         <div><h4>{t("providers.models.title")}</h4><p>{t("providers.models.help")}</p></div>
         <button className="secondary-button compact-button" disabled={busy} onClick={() => void loadModels(draft.providerId!, true)} type="button">{busy ? t("common.loading") : t("providers.models.refresh")}</button>
       </div>
-      {listing ? <p className="provider-list-source">{listing.source === "remote" ? t("providers.models.remote") : t("providers.models.catalog")} · {new Date(listing.fetchedAt).toLocaleString()}</p> : null}
       {discoveryError ? <div className="provider-discovery-error" role="alert"><strong>{t("providers.discovery.failed")}</strong><span>{discoveryError}</span><small>{t("providers.discovery.fallback")}</small></div> : null}
-      <div className="provider-manual-model">
-        <label><span>{t("providers.models.manualId")}</span><input value={manualModelId} onChange={(event) => setManualModelId(event.target.value)} placeholder={t("providers.models.manualPlaceholder")} /></label>
-        <button className="secondary-button" disabled={busy || !manualModelId.trim()} onClick={() => void addModel(manualModelId)} type="button">{t("providers.models.add")}</button>
-      </div>
-      <div className="provider-model-list">
-        {listing?.models.map((model) => <article className="provider-model-card" key={model.id}>
-          <header><div><strong>{model.displayName ?? model.catalog?.label ?? model.id}</strong><code>{model.id}</code></div><button className="secondary-button compact-button" disabled={busy || Boolean(model.profileId)} onClick={() => void addModel(model.id, model)} type="button">{model.profileId ? t("providers.models.added") : t("providers.models.add")}</button></header>
-          <ModelFacts model={model} />
-          {model.catalog?.pricing?.notes ? <small className="provider-price-note">{model.catalog.pricing.notes}</small> : null}
-          <SourceLinks model={model} />
-        </article>)}
-        {listing && !listing.models.length ? <p className="muted">{t("providers.models.empty")}</p> : null}
-      </div>
+      <details
+        className="provider-models-details"
+        onToggle={(event) => setModelsOpen(event.currentTarget.open)}
+        open={modelsOpen}
+      >
+        <summary>
+          {listing
+            ? t("providers.models.toggle", { count: listing.models.length })
+            : busy ? t("common.loading") : t("providers.models.toggleEmpty")}
+          {listing ? <small>{listing.source === "remote" ? t("providers.models.remote") : t("providers.models.catalog")} · {new Date(listing.fetchedAt).toLocaleString()}</small> : null}
+        </summary>
+        <div className="provider-manual-model">
+          <label><span>{t("providers.models.manualId")}</span><input value={manualModelId} onChange={(event) => setManualModelId(event.target.value)} placeholder={t("providers.models.manualPlaceholder")} /></label>
+          <button className="secondary-button" disabled={busy || !manualModelId.trim()} onClick={() => void addModel(manualModelId)} type="button">{t("providers.models.add")}</button>
+        </div>
+        <div className="provider-model-list">
+          {listing?.models.map((model) => <article className="provider-model-card" key={model.id}>
+            <header><div><strong>{model.displayName ?? model.catalog?.label ?? model.id}</strong><code>{model.id}</code></div><button className="secondary-button compact-button" disabled={busy || Boolean(model.profileId)} onClick={() => void addModel(model.id, model)} type="button">{model.profileId ? t("providers.models.added") : t("providers.models.add")}</button></header>
+            <ModelFacts model={model} />
+            {model.catalog?.pricing?.notes ? <small className="provider-price-note">{model.catalog.pricing.notes}</small> : null}
+            <SourceLinks model={model} />
+          </article>)}
+          {listing && !listing.models.length ? <p className="muted">{t("providers.models.empty")}</p> : null}
+        </div>
+      </details>
     </section> : null}
   </div>;
 });

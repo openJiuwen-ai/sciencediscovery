@@ -50,14 +50,16 @@ test("the catalog header states when the metadata was last updated, in both lang
 
   const english = render("en", details("downloaded"));
   assert.match(english, /Model metadata catalog/);
+  assert.match(english, /Data source: models\.dev/);
   assert.match(english, new RegExp(`Last updated ${expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   assert.match(english, /<button [^>]*>Refresh catalog<\/button>/);
 
   const chinese = render("zh-CN", details("downloaded"));
   assert.match(chinese, /模型元数据目录/);
+  assert.match(chinese, /数据来源：models\.dev/);
   assert.match(chinese, /最近更新于/);
   assert.match(chinese, /<button [^>]*>刷新目录<\/button>/);
-  assert.doesNotMatch(chinese, /Last updated|Refresh catalog/);
+  assert.doesNotMatch(chinese, /Last updated|Refresh catalog|Data source/);
 });
 
 test("a snapshot that shipped with the build says so instead of claiming a fresh download", () => {
