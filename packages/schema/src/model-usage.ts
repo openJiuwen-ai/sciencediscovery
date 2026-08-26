@@ -26,6 +26,26 @@ export interface ModelProfile {
   vision: boolean;
 }
 
+export type ModelConnectivityTestCategory =
+  | "ok"
+  | "missing_token"
+  | "authorization"
+  | "not_found"
+  | "rate_limited"
+  | "timeout"
+  | "network"
+  | "provider_error"
+  | "invalid_response";
+
+export interface ModelConnectivityTestResult {
+  category: ModelConnectivityTestCategory;
+  latencyMs: number;
+  message: string;
+  ok: boolean;
+  providerStatus?: number;
+  testedAt: string;
+}
+
 export interface ModelRunInfo {
   id: string;
   model: string;

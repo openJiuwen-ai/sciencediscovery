@@ -27,6 +27,7 @@ import type {
   EnvironmentSourceSettings,
   ScientificEnvironmentSetup,
   InstallEnvironmentRequest,
+  ModelConnectivityTestResult,
   MemoryGraphSettingsDetails,
   UninstallEnvironmentRequest,
   RegisterRemoteHostRequest,
@@ -234,5 +235,9 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   deleteModel(modelId: string): Promise<{ deleted: string }> {
     return this.request(`/api/models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
+  }
+
+  testModel(modelId: string): Promise<ModelConnectivityTestResult> {
+    return this.request(`/api/models/${encodeURIComponent(modelId)}/test`, { method: "POST" });
   }
 }

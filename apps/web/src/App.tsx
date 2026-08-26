@@ -154,6 +154,7 @@ import {
 } from "./timeline/RunTimeline.js";
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
 import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
+import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { SkillManager } from "./SkillManager.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
@@ -4283,11 +4284,22 @@ export function App() {
                 <div className="model-list">
                   {models.map((item) => {
                     const idHint = duplicateModelProfileId(item, models);
-                    return <button type="button" className={item.id === editingModelId ? "model-card active" : "model-card"} key={item.id} onClick={() => editModel(item)} title={modelOptionLabel(item, models)}>
-                      <span className={item.hasApiToken ? "model-status" : "model-status missing"} />
-                      <span><strong>{item.name}</strong><small>{item.model}{idHint ? ` · ${idHint}` : ""}{item.vision ? " · Vision" : ""} · {item.hasApiToken ? "Key saved" : "Key missing"}</small></span>
-                      <span><ChevronRightIcon size={16} /></span>
-                    </button>;
+                    return <div className={item.id === editingModelId ? "model-card active" : "model-card"} key={item.id} title={modelOptionLabel(item, models)}>
+                      <button className="model-card-main" type="button" onClick={() => editModel(item)}>
+                        <span className={item.hasApiToken ? "model-status" : "model-status missing"} />
+                        <span><strong>{item.name}</strong><small>{item.model}{idHint ? ` · ${idHint}` : ""}{item.vision ? " · Vision" : ""} · {item.hasApiToken ? "Key saved" : "Key missing"}</small></span>
+                      </button>
+                      <ModelConnectivityButton
+                        disabled={item.id === editingModelId && modelSettingsDirty}
+                        modelId={item.id}
+                        modelName={item.name}
+                        profileVersion={item.updatedAt}
+                        testModel={(modelId) => client.testModel(modelId)}
+                      />
+                      <button aria-label={`${t("settings.editModel")}: ${item.name}`} className="model-card-open" type="button" onClick={() => editModel(item)} title={t("settings.editModel")}>
+                        <ChevronRightIcon size={16} />
+                      </button>
+                    </div>;
                   })}
                 </div>
                 <form className="model-editor" onSubmit={(event) => event.preventDefault()}>

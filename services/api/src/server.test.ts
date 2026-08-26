@@ -36,6 +36,7 @@ import type {
   EnvironmentRevision,
   EnvironmentSourceSettings,
   ExecutionRun,
+  ModelConnectivityTestResult,
   ModelProfile,
   McpInvocation,
   McpToolResult,
@@ -4967,6 +4968,47 @@ test("deleting a session/project mirrors the cleanup to the memory-graph sidecar
   // impact.sessionIds mirrors the pre-deletion snapshot (both of projectB's
   // sessions); order-independent.
   assert.deepEqual((projectCall.session_ids as string[]).toSorted(), expectedProjectSessionIds);
+});
+
+test("model connectivity endpoint uses the encrypted saved credential", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-connectivity-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  let providerAuthorization = "";
+  const provider = createHttpServer(async (request, response) => {
+    providerAuthorization = request.headers.authorization ?? "";
+    for await (const _chunk of request) {
+      // Consume the bounded connectivity request before replying.
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+  });
+  await new Promise<void>((resolveListen) => provider.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => provider.close(() => resolveClose())));
+  const providerOrigin = `http://127.0.0.1:${(provider.address() as AddressInfo).port}`;
+  const { origin } = await startTestApi(context, tempRoot);
+  const created = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    body: JSON.stringify({
+      apiToken: "encrypted-connectivity-token",
+      baseUrl: `${providerOrigin}/v1`,
+      model: "connectivity-model",
+      name: "Connectivity model",
+      proxyPolicy: "none",
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal((await fetch(`${origin}/api/models/${created.body.id}/test`, { method: "POST" })).status, 401);
+  const tested = await jsonRequest<ModelConnectivityTestResult>(`${origin}/api/models/${created.body.id}/test`, {
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(tested.response.status, 200);
+  assert.equal(tested.body.category, "ok");
+  assert.equal(tested.body.ok, true);
+  assert.equal(providerAuthorization, "Bearer encrypted-connectivity-token");
+  assert.doesNotMatch(JSON.stringify(tested.body), /encrypted-connectivity-token/);
 });
 
 test("model registry persists multiple profiles and assigns them per session", async (context) => {
