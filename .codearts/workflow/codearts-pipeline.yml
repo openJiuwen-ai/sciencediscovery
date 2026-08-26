@@ -26,7 +26,6 @@ on:
         - open
         - update
         - reopen
-        - close
         branches-ignore: []
         paths-ignore: []
         code-update: false
