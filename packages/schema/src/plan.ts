@@ -23,14 +23,16 @@ export interface PlanStep {
 }
 
 export interface SessionPlan {
+  abandonmentReason?: string;
   caveats: string[];
   createdAt: string;
   feasibilityConfidence: PlanConfidence;
   id: string;
   mode: "recorded";
+  runId?: string;
   scope: string;
   sessionId: string;
-  state: "completed" | "recorded";
+  state: "abandoned" | "completed" | "recorded";
   steps: PlanStep[];
   updatedAt: string;
   version: number;

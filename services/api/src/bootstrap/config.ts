@@ -40,6 +40,8 @@ export interface ServerConfig {
   authTokenSource?: BootstrapTokenSource;
   dataDir: string;
   host: string;
+  /** Test/embedding preset; production bootstrap leaves mode selection to the Agent. */
+  initialExecutionMode?: string;
   paperPythonPath: string;
   paperWorkerPath: string;
   port: number;

@@ -176,7 +176,8 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
           fixture.session.id,
           "Revise the existing summary with the updated measurements; keep it as the same deliverable.",
         );
-        expect((await waitForRunTerminal(page, fixture.session.id, secondRun.id)).status).toBe("completed");
+        const terminal = await waitForRunTerminal(page, fixture.session.id, secondRun.id);
+        expect(terminal.status, terminal.error).toBe("completed");
         await expect(await expandToolStep(page, { contains: secondMarker })).toContainText(secondMarker);
         tree = await artifactTree(page);
         await expect(tree.artifactCount).toHaveText("1", { timeout: 30_000 });

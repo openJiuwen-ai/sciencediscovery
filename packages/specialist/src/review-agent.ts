@@ -364,7 +364,6 @@ export function createReviewAgentOptions(input: CreateReviewAgentOptionsInput): 
         history: [],
         memoryGraphEnabled: false,
         mcpTools: [],
-        proposePlan: undefined,
         proposeRemoteJob: undefined,
         queryGraph: undefined,
         remoteHosts: [],

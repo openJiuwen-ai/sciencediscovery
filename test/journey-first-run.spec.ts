@@ -222,8 +222,9 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await openProjectSession(page, fixture!);
         await expect(page.locator(".message.user").filter({ hasText: firstPrompt })).toBeVisible();
         await expect(page.locator(".message.user").filter({ hasText: secondPrompt })).toBeVisible();
+        // Each run records its Direct Mode activation before the requested shell tool.
         await expect(page.getByRole("region", { name: "Agent 活动" }).locator("details.timeline-disclosure.tool"))
-          .toHaveCount(2);
+          .toHaveCount(4);
         await expect(await expandToolStep(page, { contains: secondMarker })).toContainText(persistentValue);
       },
     );

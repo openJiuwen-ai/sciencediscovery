@@ -29,6 +29,8 @@ export interface ToolSpec {
 
 export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   createResultMessage(call: RuntimeToolCall, content: string): TMessage;
+  /** Dynamic run-scoped capability policy, for example an active execution mode. */
+  isAvailable?(tool: AgentTool): boolean;
   loopGuard?: ToolLoopGuard;
   /** Run-scoped observation hook. It cannot alter the result returned to Runtime Core. */
   onResult?(input: {
@@ -65,17 +67,19 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
   }
 
   promoteForRequest(text: string): string[] {
-    return autoPromoteFromRouting(this.deferredState, this.orderedTools, text);
+    return autoPromoteFromRouting(this.availableDeferredState(), this.availableTools(), text);
   }
 
   deferredNames(): ReadonlySet<string> {
-    return this.deferredState?.catalog.names ?? new Set();
+    return this.availableDeferredState()?.catalog.names ?? new Set();
   }
 
   promptSections(): string[] {
+    const tools = this.availableTools();
+    const deferredState = this.availableDeferredState();
     return [
-      deferredToolsPromptSection(this.deferredState),
-      routingHintsPromptSection(this.orderedTools, this.deferredNames()),
+      deferredToolsPromptSection(deferredState),
+      routingHintsPromptSection(tools, deferredState?.catalog.names ?? new Set()),
     ].filter(Boolean);
   }
 
@@ -84,11 +88,12 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
   }
 
   visibleSpecs(): ToolSpec[] {
-    const hidden = hiddenDeferredNames(this.deferredState);
-    const specs = this.orderedTools
+    const deferredState = this.availableDeferredState();
+    const hidden = hiddenDeferredNames(deferredState);
+    const specs = this.availableTools()
       .filter((tool) => !hidden.has(tool.name))
       .map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters as unknown }));
-    if (this.deferredState) specs.push({ ...TOOL_SEARCH_SPEC });
+    if (deferredState) specs.push({ ...TOOL_SEARCH_SPEC });
     return specs;
   }
 
@@ -103,10 +108,13 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       content = JSON.stringify({ ok: false, error: { attempts: 1, code: "INVALID_TOOL_ARGUMENTS", retryable: true,
         message: `Invalid tool arguments: ${call.argsParseError}`.slice(0, 1_000) } });
       isError = true;
-    } else if (call.name === TOOL_SEARCH_NAME && this.deferredState) {
-      content = runToolSearch(this.deferredState, typeof call.args.query === "string" ? call.args.query : "");
+    } else if (call.name === TOOL_SEARCH_NAME && this.availableDeferredState()) {
+      content = runToolSearch(this.availableDeferredState()!, typeof call.args.query === "string" ? call.args.query : "");
       isError = false;
-    } else if (this.deferredState && hiddenDeferredNames(this.deferredState).has(call.name)) {
+    } else if (!this.toolIsAvailable(call.name)) {
+      content = `Error: Tool '${call.name}' is not available in the current execution mode.`;
+      isError = true;
+    } else if (this.availableDeferredState() && hiddenDeferredNames(this.availableDeferredState()).has(call.name)) {
       content = blockedDeferredToolResult(call.name);
       isError = true;
     } else {
@@ -114,6 +122,27 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     }
     try { this.options.onResult?.({ call, content, isError, sequence }); } catch { /* observer isolation */ }
     return { content, isError, message: this.options.createResultMessage(call, content) };
+  }
+
+  private availableTools(): readonly AgentTool[] {
+    return this.options.isAvailable
+      ? this.orderedTools.filter((tool) => this.options.isAvailable!(tool))
+      : this.orderedTools;
+  }
+
+  private toolIsAvailable(name: string): boolean {
+    const tool = this.tools.get(name);
+    return Boolean(tool) && (!this.options.isAvailable || this.options.isAvailable(tool!));
+  }
+
+  private availableDeferredState(): DeferredToolState | undefined {
+    if (!this.deferredState) return undefined;
+    const available = this.availableTools().filter((tool) => this.deferredState!.catalog.names.has(tool.name));
+    if (!available.length) return undefined;
+    const state = buildDeferredToolState(available);
+    if (!state) return undefined;
+    state.promoted = this.deferredState.promoted;
+    return state;
   }
 
   private async executeRegistered(call: RuntimeToolCall, signal: AbortSignal): Promise<{ content: string; isError: boolean }> {

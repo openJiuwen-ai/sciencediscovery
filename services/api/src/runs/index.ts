@@ -759,6 +759,18 @@ async function executeAgentRun(
       };
     },
   });
+  const publishPlan = async (plan: import("@sciencediscovery/schema").SessionPlan, observeGoal = false) => {
+    await emit({ plan, type: "plan.proposed" });
+    if (!observeGoal) return;
+    memoryGraphSink.observeSessionPlan({
+      sessionId,
+      goalId: `goal:session:${sessionId}`,
+      planId: plan.id,
+      scope: plan.scope,
+      domain: inferDomain(plan.scope),
+      steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
+    });
+  };
   const agentOptions: WorkspaceAgentOptions = {
     config: agentConfig,
     enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
@@ -814,23 +826,6 @@ async function executeAgentRun(
     }),
     approvalMode: session.approvalMode,
     remoteHosts,
-    proposePlan: async (input) => {
-      const plan = await store.proposeSessionPlan(sessionId, input);
-      await emit({ plan, type: "plan.proposed" });
-      // Let plan.scope correct the goal's fallback domain (steps are not
-      // mirrored into SubTask nodes — the framework doesn't advance step
-      // status, so a skeleton would stay PENDING and clutter the graph).
-      // Never blocks; plan flow stays unblocked on a down graph.
-      memoryGraphSink.observeSessionPlan({
-        sessionId,
-        goalId: `goal:session:${sessionId}`,
-        planId: plan.id,
-        scope: plan.scope,
-        domain: inferDomain(plan.scope),
-        steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
-      });
-      return plan;
-    },
     proposeSkillLibraryUpdate: async (input, _signal, toolCallId) => {
       const library = skillLibraryCatalog.get(input.libraryId);
       const sourceRefs = [
@@ -1390,6 +1385,7 @@ async function executeAgentRun(
         subagentRunHandle = runSubagentTask({
           bindings: {
             abortSignal: childExecution.abortSignal,
+            ...(serverConfig.initialExecutionMode ? { initialExecutionMode: serverConfig.initialExecutionMode } : {}),
             observer: observeSubagentEvent,
             runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
             workspace: subagentWorkspace,
@@ -1499,11 +1495,19 @@ async function executeAgentRun(
     ...(sessionSpecialist ? { specialistId: sessionSpecialist.id } : {}),
     workspaceRoot: store.workspacePath(sessionId),
   });
+  let modePersistenceQueue = Promise.resolve();
   const observeMainEvent: NonNullable<import("../agent-run/create-agent-run.js").AgentRunBindings["observer"]> = (event) => {
     const active = activeSessions.get(sessionId);
     if (active) active.lastActivityAt = new Date().toISOString();
     if (event.type === "model_usage") {
       lastAgentUsage = capturedModelUsage(event);
+      return;
+    }
+    if (event.type === "execution_mode_changed") {
+      modePersistenceQueue = modePersistenceQueue.then(async () => {
+        await store.updateSessionRun(sessionId, runId, { executionMode: event.mode });
+        await emit({ mode: event.mode, type: "execution_mode.changed" });
+      });
       return;
     }
     if (event.type === "turn_start") {
@@ -1564,7 +1568,34 @@ async function executeAgentRun(
   mainExecution = runMainRequestExecution({
     bindings: {
       abortSignal: requestExecution.abortSignal,
+      ...(serverConfig.initialExecutionMode ? { initialExecutionMode: serverConfig.initialExecutionMode } : {}),
       observer: observeMainEvent,
+      planRepository: {
+        abandon: async (input) => {
+          const plan = await store.abandonSessionPlan(sessionId, input);
+          await publishPlan(plan);
+          return plan;
+        },
+        latest: async () => store.latestSessionPlan(sessionId, runId),
+        propose: async (input) => {
+          if (store.latestSessionPlan(sessionId, runId)) throw new Error("A plan already exists for this run; call revise_plan instead");
+          const plan = await store.proposeSessionPlan(sessionId, input, runId);
+          // Let plan.scope correct the goal's fallback domain. This remains
+          // non-blocking when the optional graph sidecar is unavailable.
+          await publishPlan(plan, true);
+          return plan;
+        },
+        revise: async (planId, input) => {
+          const plan = await store.reviseSessionPlan(sessionId, planId, input);
+          await publishPlan(plan, true);
+          return plan;
+        },
+        updateStep: async (input) => {
+          const plan = await store.updateSessionPlanStep(sessionId, input);
+          await publishPlan(plan);
+          return plan;
+        },
+      },
       runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
       workspace: agentOptions,
     },
@@ -1588,6 +1619,7 @@ async function executeAgentRun(
       prompt: promptUserMessage.content,
       purpose: "initial",
     });
+    await modePersistenceQueue;
     const taskUsage = lastAgentUsage;
     assertRunActive();
     await flushWorkspaceRefresh();
@@ -1639,6 +1671,7 @@ async function executeAgentRun(
     });
     return "completed";
   } catch (error) {
+    await modePersistenceQueue.catch(() => undefined);
     if (cancelledRuns.has(runId)) {
       await flushWorkspaceRefresh();
       await emit({ reason: "Run cancelled", runId, type: "run.cancelled" });
