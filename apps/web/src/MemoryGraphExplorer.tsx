@@ -699,15 +699,15 @@ export function MemoryGraphExplorer({
 
   // Only offer categories that actually occur, with their counts.
   const labelCounts = useMemo(() => {
-    const counts = new Map<MemoryGraphNodeLabel, number>();
-    for (const node of graph.nodes) counts.set(node.label, (counts.get(node.label) ?? 0) + 1);
-    return NODE_LABELS.flatMap((label) => counts.has(label) ? [{ count: counts.get(label)!, label }] : []);
+    const present = new Set<MemoryGraphNodeLabel>();
+    for (const node of graph.nodes) present.add(node.label);
+    return NODE_LABELS.filter((label) => present.has(label)).map((label) => ({ label }));
   }, [graph]);
 
   const edgeCounts = useMemo(() => {
-    const counts = new Map<MemoryGraphEdgeType, number>();
-    for (const edge of graph.edges) counts.set(edge.type, (counts.get(edge.type) ?? 0) + 1);
-    return EDGE_TYPES.flatMap((type) => counts.has(type) ? [{ count: counts.get(type)!, type }] : []);
+    const present = new Set<MemoryGraphEdgeType>();
+    for (const edge of graph.edges) present.add(edge.type);
+    return EDGE_TYPES.filter((type) => present.has(type)).map((type) => ({ type }));
   }, [graph]);
 
   const selected = graph.nodes.find((node) => node.id === selectedId);
@@ -1125,27 +1125,37 @@ export function MemoryGraphExplorer({
             <div className="memory-filter-block">
               <span className="memory-filter-title">Nodes ({graph.nodes.length})</span>
               <div className="memory-filter-chips">
-                {labelCounts.map(({ count, label }) => <button
+                {/* Node-label chips render as Neo4j-Browser-style pill/capsule
+                    tags: a single rounded button whose border-radius is exactly
+                    half its height (24px / 2 = 12px), so both ends form complete
+                    semicircles. No SVG, no point caps — unlike the relationship
+                    chips' hexagon. Background stays per-label (NODE_COLORS). */}
+                {labelCounts.map(({ label }) => <button
                   aria-pressed={activeLabels.has(label)}
-                  className={activeLabels.has(label) ? "memory-chip active" : "memory-chip"}
+                  className={activeLabels.has(label) ? "memory-chip node-chip active" : "memory-chip node-chip"}
                   key={label}
                   onClick={() => toggleLabel(label)}
-                  style={{ background: NODE_COLORS[label], color: "#ffffff" }}
+                  style={{ background: NODE_COLORS[label], color: "#1a1b1d" }}
                   type="button"
-                >{label} <em>{count}</em></button>)}
+                >{label}</button>)}
               </div>
             </div>
             <div className="memory-filter-block">
               <span className="memory-filter-title">Relationships ({graph.edges.length})</span>
               <div className="memory-filter-chips">
-                {edgeCounts.map(({ count, type }) => <button
+                {/* Relationship chips render as Neo4j-Browser-style double-pointed
+                    hexagon tags: a flat body flanked by left/right SVG point caps.
+                    The same path is used for both caps; the right cap is mirrored
+                    via scaleX(-1). Background colour is carried on --chip-bg so all
+                    three pieces share one fill; typography is untouched. */}
+                {edgeCounts.map(({ type }) => <button
                   aria-pressed={activeEdges.has(type)}
-                  className={activeEdges.has(type) ? "memory-chip active" : "memory-chip"}
+                  className={activeEdges.has(type) ? "memory-chip rel-chip active" : "memory-chip rel-chip"}
                   key={type}
                   onClick={() => toggleEdge(type)}
-                  style={{ background: EDGE_COLORS[type], color: "var(--text-strong)" }}
+                  style={{ ["--chip-bg" as string]: "#e2e3e5", color: "#1a1b1d" }}
                   type="button"
-                >{type} <em>{count}</em></button>)}
+                ><span className="rel-chip-cap" aria-hidden="true"><svg width="9" height="24" viewBox="0 0 9 24" preserveAspectRatio="none"><path d="M5.73024 1.03676C6.08165 0.397331 6.75338 0 7.48301 0H9V24H7.483C6.75338 24 6.08165 23.6027 5.73024 22.9632L0.315027 13.1094C-0.105009 12.4376 -0.105009 11.5624 0.315026 10.8906L5.73024 1.03676Z" /></svg></span><span className="rel-chip-body">{type}</span><span className="rel-chip-cap rel-chip-cap-right" aria-hidden="true"><svg width="9" height="24" viewBox="0 0 9 24" preserveAspectRatio="none"><path d="M5.73024 1.03676C6.08165 0.397331 6.75338 0 7.48301 0H9V24H7.483C6.75338 24 6.08165 23.6027 5.73024 22.9632L0.315027 13.1094C-0.105009 12.4376 -0.105009 11.5624 0.315026 10.8906L5.73024 1.03676Z" /></svg></span></button>)}
                 {filtered ? <button className="memory-chip reset" onClick={() => { setActiveLabels(new Set()); setActiveEdges(new Set()); }} type="button">Clear filters</button> : null}
               </div>
             </div>

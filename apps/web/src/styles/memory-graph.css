@@ -103,18 +103,43 @@
    read as controls rather than as a footer legend. */
 .memory-explorer-filters { display: grid; gap: 9px; flex: 0 0 auto; border-bottom: 1px solid var(--border); background: var(--surface); padding: 11px 18px; }
 .memory-filter-block { display: flex; align-items: center; gap: 10px; }
-.memory-filter-title { flex: 0 0 auto; min-width: 118px; color: var(--text-heading); font-size: 11px; font-weight: 700; }
+.memory-filter-title { flex: 0 0 auto; min-width: 118px; color: #1a1b1d; font-family: "Public Sans", sans-serif; font-size: 14px; font-weight: 600; line-height: 20px; }
 .memory-filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 /* Each chip's inline `background` carries the node/edge colour; the rules below
    only frame it and handle interaction states. Hover dims via an overlay so the
-   category colour stays visible instead of being washed out by --surface-hover. */
-.memory-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: inherit; padding: 5px 12px; cursor: pointer; font-size: 11px; font-weight: 600; transition: filter .12s, border-color .12s; }
-.memory-chip em { border-radius: 999px; background: rgba(255, 255, 255, .28); color: inherit; padding: 1px 6px; font-size: 10px; font-style: normal; font-weight: 700; }
+   category colour stays visible instead of being washed out by --surface-hover.
+   Chip sizing is pinned: block-level, border-box, 20px tall with a 20px line
+   height and near-zero 0 1px padding so width shrinks to the text content (a
+   5-char label like "cites" ≈ 34px). The label text is the only content — no
+   count badge — so text-align:center + line-height:height centres it. */
+.memory-chip { display: block; box-sizing: border-box; width: auto; height: 24px; line-height: 20px; padding: 0 1px; margin: 0; border: 0 solid #1a1b1d; border-radius: 0; background: transparent; color: inherit; cursor: pointer; text-align: center; font-family: "Public Sans", sans-serif; font-size: 14px; font-weight: 700; transition: filter .12s; }
 .memory-chip:hover { filter: brightness(.92); }
 .memory-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.memory-chip.active { border-color: #ffffff; border-width: 2px; padding: 4px 11px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .25); }
-.memory-chip.active em { background: rgba(255, 255, 255, .45); }
-.memory-chip.reset { border-style: dashed; border-color: var(--border-strong); background: var(--surface); color: var(--muted); }
+.memory-chip.active { filter: brightness(.82); }
+.memory-chip.reset { border: 0 solid #1a1b1d; background: var(--surface); color: var(--muted); }
+
+/* Node-label chips (label filters) render as Neo4j-Browser-style pill/capsule
+   tags: a single rounded button. border-radius is exactly half the height
+   (24px / 2 = 12px) so both ends form complete semicircles — not 9999px (that
+   is a different rounded-pill look) and not a hexagon. Only the shape changes;
+   the per-label background (NODE_COLORS, set inline), text colour and the
+   toggle behaviour are untouched. Relationship chips' hexagon rules below are
+   independent and not affected. */
+.memory-chip.node-chip { display: inline-block; flex: 0 0 auto; width: auto; min-width: 0; height: 24px; padding: 2px 8px; border: 0; border-radius: 12px; line-height: 20px; white-space: nowrap; }
+
+/* Relationship chips (edge-type filters) render as Neo4j-Browser-style
+   double-pointed hexagon tags: a flat rectangular body flanked by left and
+   right SVG point caps. The SAME path is used for both caps; the right cap is
+   mirrored with scaleX(-1). All three pieces share one fill via --chip-bg
+   (set inline per chip) so the shape reads as one solid silhouette. Only the
+   shape changes here — colour, font size/weight and the toggle behaviour are
+   untouched. Node-label chips stay as plain rectangles and are not affected. */
+.memory-chip.rel-chip { display: inline-flex; align-items: stretch; flex: 0 0 auto; width: auto; min-width: 0; height: 24px; padding: 0; border: 0; border-radius: 0; background: transparent; line-height: normal; }
+.memory-chip.rel-chip .rel-chip-cap { display: flex; align-items: stretch; flex: 0 0 9px; width: 9px; line-height: 0; }
+.memory-chip.rel-chip .rel-chip-cap svg { display: block; width: 9px; height: 24px; }
+.memory-chip.rel-chip .rel-chip-cap path { fill: var(--chip-bg); }
+.memory-chip.rel-chip .rel-chip-cap-right { transform: scaleX(-1); }
+.memory-chip.rel-chip .rel-chip-body { display: flex; align-items: center; flex: 0 1 auto; width: auto; min-width: 0; background: var(--chip-bg); padding: 0 1px; line-height: 20px; white-space: nowrap; }
 
 .memory-explorer-body { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); min-height: 0; flex: 1 1 auto; }
 .memory-explorer-canvas { position: relative; min-width: 0; min-height: 220px; flex: 1 1 auto; background: var(--surface-subtle); }
