@@ -86,12 +86,30 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
     const value = extra[key];
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
   };
-  const name = node.label === "Artifact" ? pick("path") ?? pick("artifact_id")
+  // Artifact versions are separate nodes on a composite key, so the caption
+  // carries the version too: two circles both reading "evolve/e…" told the
+  // user nothing about which one a search started from and which it produced.
+  const artifactBase = (() => {
+    const path = pick("path") ?? pick("artifact_id");
+    // Only a versioned node trades its directory prefix for the version: a
+    // short unversioned path keeps its prefix, which can carry meaning.
+    if (path === undefined || typeof extra.version !== "number") return path;
+    const leaf = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
+    return `${leaf} v${extra.version}`;
+  })();
+  const name = node.label === "Artifact" ? artifactBase
     : node.label === "Code" ? pick("tool") ?? pick("code_id")
     : node.label === "SubTask" ? pick("task_type") ?? pick("task_id")
     : node.label === "Paper" ? pick("title") ?? pick("link")
     : node.label === "ResearchGoal" ? pick("core_objective") ?? pick("goal_id")
-    : node.label === "SearchRun" ? pick("algorithm") ?? pick("search_id")
+    // The algorithm alone read as a mystery word ("era"); the held-out score
+    // is the one number worth a caption, so the two travel together.
+    : node.label === "SearchRun" ? (() => {
+      const algorithm = pick("algorithm") ?? pick("search_id");
+      const score = extra.best_test_score;
+      return typeof score === "number" && algorithm
+        ? `${algorithm} · ${score.toFixed(2)}` : algorithm;
+    })()
     : node.label === "SearchNode" ? `#${String(extra.node_index ?? "?")}`
     : node.label === "SearchCell" ? `i${String(extra.island ?? "?")} (${String(extra.complexity_bin ?? "?")},${String(extra.diversity_bin ?? "?")})`
     : pick("title") ?? pick("name");

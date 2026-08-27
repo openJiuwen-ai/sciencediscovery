@@ -439,11 +439,13 @@ def link_search_artifacts(
     but invisible to `trace_provenance`, so the winner looked unrooted the
     moment anyone asked where it came from.
 
-    Same vocabulary as an execution's output: composite-keyed Artifact nodes
-    and a `produces` edge — from the SubTask rather than a Code node, because
-    a search has no single execution to blame. `role` (seed / winner) rides on
-    the edge, not the node: the node is the version, which exists independent
-    of which part it played in this search.
+    Same vocabulary as an execution's I/O: composite-keyed Artifact nodes,
+    and the **direction carries the story**. The seed points *into* the search
+    (`(seed)-[:input]->(SubTask)`) and the winner comes *out*
+    (`(SubTask)-[:produces]->(winner)`) — exactly how a Code node relates to
+    what it read and what it wrote. An earlier revision drew `produces` to
+    both, and the canvas then showed one search emitting two identically-named
+    artifacts, with nothing saying which one the search had started from.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -452,9 +454,17 @@ def link_search_artifacts(
     linked = 0
     with driver.session() as session:
         for art in artifacts:
+            role = str(art.get("role") or "winner")
+            edge = (
+                "MERGE (a)-[:input]->(st) WITH a, st "
+                # Repair pass for graphs written by the both-produces revision.
+                "OPTIONAL MATCH (st)-[old:produces]->(a) DELETE old"
+                if role == "seed"
+                else "MERGE (st)-[p:produces]->(a) SET p.role = $role"
+            )
             session.run(
-                """
-                MERGE (a:Artifact {artifact_id: $artifact_id, version: $version})
+                f"""
+                MERGE (a:Artifact {{artifact_id: $artifact_id, version: $version}})
                   ON CREATE SET a.session_id   = $session_id,
                                 a.logical_name = $logical_name,
                                 a.path         = $logical_name,
@@ -462,12 +472,12 @@ def link_search_artifacts(
                                 a.created_at   = datetime()
                   ON MATCH  SET a.logical_name = $logical_name,
                                 a.media_type   = $media_type
-                MERGE (st:SubTask {task_id: $task_id})
+                MERGE (st:SubTask {{task_id: $task_id}})
                   ON CREATE SET st.session_id = $session_id,
                                 st.task_type  = 'program_evolution',
                                 st.created_at = datetime()
-                MERGE (st)-[p:produces]->(a)
-                SET p.role = $role
+                WITH a, st
+                {edge}
                 """,
                 artifact_id=art.get("artifact_id"),
                 version=art.get("version"),
@@ -475,7 +485,7 @@ def link_search_artifacts(
                 logical_name=art.get("logical_name"),
                 media_type=art.get("media_type"),
                 task_id=task_id,
-                role=art.get("role"),
+                role=role,
             ).consume()
             linked += 1
     return {"linked": linked}

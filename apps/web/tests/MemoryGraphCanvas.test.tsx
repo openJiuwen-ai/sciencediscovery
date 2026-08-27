@@ -237,3 +237,24 @@ test("图谱的 evolve 节点展示搜索内容并能跳到演进面板", () => 
   assert.match(runHtml, /打开演进面板/);
   assert.match(runHtml, /0\.7666/);
 });
+
+test("evolve 相关节点的标题要能读", () => {
+  // Two circles both reading "evolve/e…" and one reading just "era" told the
+  // user nothing: which artifact the search started from, which it produced,
+  // and what the mystery word meant.
+  assert.equal(
+    graphNodeName({ label: "Artifact", id: "a#v9",
+      extra: { path: "evolve/e71c20c5/candidate.py", version: 9 } }),
+    "candidate.py v9",
+  );
+  assert.equal(
+    graphNodeName({ label: "SearchRun", id: "r1",
+      extra: { algorithm: "era", best_test_score: 0.766605 } }),
+    "era · 0.77",
+  );
+  // Still running: no score yet, the algorithm alone.
+  assert.equal(
+    graphNodeName({ label: "SearchRun", id: "r2", extra: { algorithm: "era" } }),
+    "era",
+  );
+});
