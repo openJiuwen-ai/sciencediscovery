@@ -24,7 +24,7 @@ test.use({ locale: "zh-CN" });
  * Purpose: 以服务商为中心的注册表：添加控件与编辑器分组紧凑可扫读；行内模型表（一行一模型）可扫读；
  *   手动登记支持思考默认值档位；保存失败保留 Provider 草稿；旧的独立“模型卡片”入口已删除；桌面与窄屏可用。
  * Steps:
- *   1. 打开系统设置并进入模型注册表：空态、添加控件（下拉+自定义按钮）、编辑器默认隐藏；旧独立模型入口（+ 添加模型 / 模型卡片）不再出现。
+ *   1. 打开系统设置并进入模型注册表：空态、添加控件收在列表下「添加 Provider」按钮后（预置下拉+自定义按钮）、编辑器默认隐藏；旧独立模型入口不再出现。
  *   2. 显式选择自定义服务商：编辑器按分组展开，协议与变种同行紧凑；保存后服务商行自动展开并预载模型列表。
  *   3. 行内手动表单登记模型并选最强思考：思考默认值下拉含“跟随目录默认”与各合法档位；“已添加”计数与行内模型行出现。
  *   4. 编辑 Provider 时保存失败：错误清楚、草稿保留；恢复后保存成功并重开保持一致。
@@ -74,16 +74,21 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     await journey.step(
       "打开模型注册表：空态、添加控件与编辑器默认隐藏",
       "注册表入口高亮；右侧出现标题与说明；还没有服务商时给出“添加预置或自定义”的空态引导。"
-      + "添加是“下拉+自定义按钮”，编辑器只在显式选择后出现；旧的高级独立模型入口（“+ 添加模型”与模型卡片）不再存在。",
+      + "添加收在列表下「添加 Provider」按钮后（点开才有预置下拉与自定义按钮），编辑器只在显式选择后出现；旧的高级独立模型入口不再存在。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openModelRegistry();
         await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
         await expect(dialog.getByText("管理运行时设置可用的模型配置和凭证。")).toBeVisible();
-        await expect(dialog.getByText("还没有服务商——在上方选择预置或添加自定义服务商。")).toBeVisible();
-        await expect(dialog.getByLabel("添加 Provider", { exact: true })).toBeVisible();
-        await expect(dialog.locator(".provider-add-controls").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();
+        await expect(dialog.getByText("还没有服务商——点击下方“添加 Provider”选择预置或自定义服务商。")).toBeVisible();
+        const addButton = dialog.getByRole("button", { name: /添加 Provider/ }).first();
+        await expect(addButton).toBeVisible();
+        // 添加控件藏在“添加 Provider”按钮后：未点开时没有预置下拉和自定义按钮。
+        await expect(dialog.locator(".provider-add-panel")).toHaveCount(0);
+        await addButton.click();
+        await expect(dialog.locator(".provider-add-panel").getByLabel("添加 Provider", { exact: true })).toBeVisible();
+        await expect(dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();
         await expect(dialog.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
         await expect(dialog.getByRole("region", { name: "模型元数据目录" })).toBeVisible();
         // 九条 4：高级独立模型配置已删除——不再有“+ 添加模型”入口或模型卡片。
@@ -101,7 +106,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       + "主区是名称与密钥；高级连接（基础 URL、接口协议、接口变种、模型列表）默认展开、两两同行紧凑排布。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.locator(".provider-add-controls").getByRole("button", { name: /^自定义服务商$/ }).click();
+        await dialog.getByRole("button", { name: /添加 Provider/ }).first().click();
+        await dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ }).click();
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
         await expect(editor).toBeVisible();
         await expect(editor.getByLabel("服务商名称")).toBeVisible();
@@ -134,7 +140,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     await journey.step(
       "保存自定义服务商并手动登记模型，选最强思考",
       "填写本地端点、令牌、DeepSeek 变种与“手动 ID 与维护目录”后保存；服务商行立即展开并预载。"
-      + "行内手动表单的“思考默认值”下拉以“跟随目录默认”开头并提供关闭/自动/档位等合法选择；"
+      + "行内手动表单收在「添加模型」按钮后；“思考默认值”下拉以“跟随目录默认”开头并提供关闭/模型默认/档位等合法选择；"
       + "登记模型并选“最大”后出现“已添加”计数与行内模型行。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
@@ -152,6 +158,10 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
 
         const row = dialog.locator(".provider-row").filter({ hasText: providerName });
         await expect(row.locator(".provider-row-detail")).toBeVisible();
+        // 手动表单收在“添加模型”按钮后，不常驻。
+        await expect(row.locator(".provider-manual-form")).toHaveCount(0);
+        await row.locator(".provider-add-model-toggle").click();
+        await expect(row.locator(".provider-manual-form")).toBeVisible();
         const thinkingChoices = await dialog.getByLabel("思考默认值（可选）").locator("option").allTextContents();
         expect(thinkingChoices[0]).toBe("跟随目录默认");
         expect(thinkingChoices).toContain("最大");
