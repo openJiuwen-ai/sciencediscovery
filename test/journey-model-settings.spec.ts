@@ -21,70 +21,74 @@ test.use({ locale: "zh-CN" });
 
 /**
  * E2E-META
- * Purpose: 模型设置分组紧凑表单——支持思考的配置同屏可配，高级模型草稿在关闭/保存失败时可恢复，模型卡片可扫读，桌面与窄屏布局可用。
+ * Purpose: 以服务商为中心的注册表：添加控件与编辑器分组紧凑可扫读；行内模型表（一行一模型）可扫读；
+ *   手动登记支持思考默认值档位；保存失败保留 Provider 草稿；旧的独立“模型卡片”入口已删除；桌面与窄屏可用。
  * Steps:
- *   1. 打开系统设置并进入模型注册表，确认这是配置模型的位置。
- *   2. 新建模型：身份/接口/思考/访问分组清楚；OpenAI 标准不展示会被 wire 忽略的思考控件并说明原因。
- *   3. 选择 DeepSeek 变种：出现行为提示，开启思考后强度可选、选最大。
- *   4. 换成 OpenAI 标准变种：思考模式与强度均隐藏并出现准确原因；换回 DeepSeek 后可重新配置合法值。
- *   5. 填写身份与凭证并保存，再打开模型注册表，卡片徽标可扫读变种/思考/密钥状态。
- *   6. 再次打开该模型的编辑，四个配置值与保存时一致。
- *   7. 修改名称与协议后按 Escape；取消丢弃会保留草稿，确认丢弃后重开恢复已保存值。
- *   8. 底部保存失败时保留模型草稿与错误；修正后“保存并关闭”提交同一草稿。
- *   9. 窄屏（600px）下设置对话框单列排布、控件不越界、四个配置仍可达。
- * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；空模型目录由本旅程自建并清理。
+ *   1. 打开系统设置并进入模型注册表：空态、添加控件（下拉+自定义按钮）、编辑器默认隐藏；旧独立模型入口（+ 添加模型 / 模型卡片）不再出现。
+ *   2. 显式选择自定义服务商：编辑器按分组展开，协议与变种同行紧凑；保存后服务商行自动展开并预载模型列表。
+ *   3. 行内手动表单登记模型并选最强思考：思考默认值下拉含“跟随目录默认”与各合法档位；“已添加”计数与行内模型行出现。
+ *   4. 编辑 Provider 时保存失败：错误清楚、草稿保留；恢复后保存成功并重开保持一致。
+ *   5. 行内模型行事实一行可扫读（上下文/输出/视觉/思考/价格）。
+ *   6. 窄屏（600px）：对话框不越界、高级网格单列、模型行不横向溢出。
+ * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；Provider 与模型由本旅程创建并清理。
  * Type: mocked
- * LLM: none — 仅配置模型配置并回读，不发起点模型调用。
+ * LLM: none — 仅配置 Provider 与模型并回读，不发起点模型调用。
  * WebSearch: none
  * PaperSources: none
  * MCP: none
- * OtherExternal: none — 非本地浏览器请求被拦截；令牌为本地演示值。
- * Credentials: E2E_API_TOKEN（隔离实例）与新建模型的本地演示令牌（无外部访问）。
- * CostSideEffects: none；创建的模型记录在 finally 中删除。
+ * OtherExternal: none — 非本地浏览器请求被拦截；令牌为本地演示值，端点 127.0.0.1:4321 不接收请求。
+ * Credentials: E2E_API_TOKEN（隔离实例）与新建 Provider 的本地演示令牌（无外部访问）。
+ * CostSideEffects: none；创建的 Provider 与模型记录在 finally 中删除。
  */
 test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" }, async ({ journey, page }) => {
   test.setTimeout(180_000);
   journey.scenario({
-    goal: "一位用户要为模型服务商配置策略，先确认模型设置的入口与分组清楚可读，"
-      + "再验证不同变种的思考能力、模型卡片、未保存草稿保护和失败恢复，并确认桌面和窄屏下都整齐可用。",
+    goal: "一位用户要为模型服务商配置策略：先确认注册表入口与空态、添加控件紧凑清楚，"
+      + "再验证服务商编辑器分组、行内模型表可扫读、思考档位、失败恢复，并确认桌面和窄屏下都整齐可用。",
     preconditions: [
       "隔离栈已启动，浏览器已持有本实例的访问 token",
-      "实例内没有可用模型；新建的模型由本旅程创建并在结束时清理",
+      "实例内没有可用模型与服务商；新建的 Provider 与模型由本旅程创建并在结束时清理",
       "浏览器与界面语言均为 zh-CN",
-      "mocked：仅配置模型配置并回读，不发起任何模型调用",
+      "mocked：仅配置并回读，不发起任何模型调用",
     ],
   });
   await page.addInitScript(() => window.localStorage.setItem("science-agent-locale", "zh-CN"));
 
-  const modelName = `J6 紧凑配置 ${Date.now()}`;
+  const providerName = `J6 紧凑服务商 ${Date.now()}`;
   const demoToken = "sk-e2e-demo-local";
+  let createdProviderId: string | undefined;
   let createdModelId: string | undefined;
 
   const openModelRegistry = async () => {
-    await page.getByRole("button", { name: /^系统设置/ }).click();
     const dialog = page.getByRole("dialog", { name: "系统设置" });
+    if (!await dialog.isVisible()) {
+      await page.getByRole("button", { name: /^系统设置/ }).click();
+    }
     await dialog.getByRole("navigation", { name: "设置分组" })
       .getByRole("button", { name: /^模型注册表/ })
       .click();
-    const advancedProfiles = dialog.locator("details.provider-advanced-profiles");
-    if (await advancedProfiles.getAttribute("open") === null) {
-      await advancedProfiles.locator(":scope > summary").click();
-    }
     return dialog;
   };
 
   try {
     await journey.step(
-      "打开系统设置里的模型注册表",
-      "在系统设置左侧能看到「模型注册表」分组并高亮，右侧出现标题、说明、已配置模型列表与「+ 添加模型」按钮，说明这里就是配置模型的地方。",
+      "打开模型注册表：空态、添加控件与编辑器默认隐藏",
+      "注册表入口高亮；右侧出现标题与说明；还没有服务商时给出“添加预置或自定义”的空态引导。"
+      + "添加是“下拉+自定义按钮”，编辑器只在显式选择后出现；旧的高级独立模型入口（“+ 添加模型”与模型卡片）不再存在。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openModelRegistry();
         await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
         await expect(dialog.getByText("管理运行时设置可用的模型配置和凭证。")).toBeVisible();
-        await expect(dialog.getByText("已配置模型")).toBeVisible();
-        await expect(dialog.getByRole("button", { name: "+ 添加模型" })).toBeVisible();
+        await expect(dialog.getByText("还没有服务商——在上方选择预置或添加自定义服务商。")).toBeVisible();
+        await expect(dialog.getByLabel("添加 Provider", { exact: true })).toBeVisible();
+        await expect(dialog.locator(".provider-add-controls").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();
+        await expect(dialog.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
+        await expect(dialog.getByRole("region", { name: "模型元数据目录" })).toBeVisible();
+        // 九条 4：高级独立模型配置已删除——不再有“+ 添加模型”入口或模型卡片。
+        await expect(dialog.getByRole("button", { name: "+ 添加模型" })).toHaveCount(0);
+        await expect(dialog.locator(".model-card")).toHaveCount(0);
         const nav = dialog.getByRole("navigation", { name: "设置分组" })
           .getByRole("button", { name: /^模型注册表/ });
         await expect(nav).toHaveAttribute("aria-current", "page");
@@ -92,246 +96,188 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     );
 
     await journey.step(
-      "新建标准 OpenAI 模型时不提供无效思考开关",
-      "「+ 添加模型」后出现身份信息/接口/思考/访问与能力分组；基础接口与接口变种同行。"
-      + "OpenAI 标准没有可发送的思考控制字段，因此思考模式和强度都不显示，并给出不会保存无效配置的准确原因。",
+      "显式选择自定义服务商：编辑器分组紧凑可扫读",
+      "点“自定义服务商”后才出现编辑器——打开注册表绝不自动选中任何服务商。"
+      + "主区是名称与密钥；高级连接（基础 URL、接口协议、接口变种、模型列表）默认展开、两两同行紧凑排布。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "+ 添加模型" }).click();
-        for (const heading of ["身份信息", "接口", "思考", "访问与能力"]) {
-          await expect(dialog.getByRole("heading", { name: heading, exact: true })).toBeVisible();
-        }
-        await dialog.getByLabel("显示名称").scrollIntoViewIfNeeded();
-        await expect(dialog.getByLabel("显示名称")).toBeInViewport();
-        await dialog.locator("form.model-editor").getByLabel("接口变种").scrollIntoViewIfNeeded();
-        for (const label of ["基础接口", "接口变种"]) {
-          await expect(dialog.locator("form.model-editor").getByLabel(label)).toBeInViewport();
-        }
-        await expect(dialog.getByLabel("思考开关")).toHaveCount(0);
-        await expect(dialog.getByLabel("思考强度")).toHaveCount(0);
-        await expect(dialog.getByText("此接口变种没有思考控制字段。服务商会忽略思考开关与强度，因此不会保存这些设置。")).toBeVisible();
-        const pairings = await dialog.evaluate(() => {
+        await dialog.locator(".provider-add-controls").getByRole("button", { name: /^自定义服务商$/ }).click();
+        const editor = dialog.getByRole("region", { name: "服务商编辑器" });
+        await expect(editor).toBeVisible();
+        await expect(editor.getByLabel("服务商名称")).toBeVisible();
+        await expect(editor.getByLabel("LLM API 令牌")).toBeVisible();
+        await expect(editor.getByLabel("基础 URL")).toBeVisible();
+        await expect(editor.getByLabel("基础接口")).toBeVisible();
+        await expect(editor.getByLabel("接口变种")).toBeVisible();
+        await expect(editor.getByLabel("模型列表")).toBeVisible();
+        // 每行两列：基础 URL 与基础接口同行、接口变种与模型列表同行。
+        const pairings = await editor.evaluate(() => {
           const rowOf = (label: string) => {
-            const s = Array.from(document.querySelectorAll(".model-editor label > span"))
+            const s = Array.from(document.querySelectorAll(".provider-editor label > span"))
               .find((x) => x.textContent.trim() === label);
             return s ? s.parentElement.getBoundingClientRect() : null;
           };
-          const api = rowOf("基础接口");
+          const url = rowOf("基础 URL");
+          const protocol = rowOf("基础接口");
           const variant = rowOf("接口变种");
+          const discovery = rowOf("模型列表");
           return {
-            apiVariantSameRow: api && variant && Math.abs(api.top - variant.top) < 2,
+            urlAndProtocolSameRow: Boolean(url && protocol && Math.abs(url.top - protocol.top) < 2),
+            variantAndDiscoverySameRow: Boolean(variant && discovery && Math.abs(variant.top - discovery.top) < 2),
           };
         });
-        expect(pairings.apiVariantSameRow).toBe(true);
+        expect(pairings.urlAndProtocolSameRow).toBe(true);
+        expect(pairings.variantAndDiscoverySameRow).toBe(true);
       },
     );
 
     await journey.step(
-      "选 DeepSeek 变种：开启思考并选最大",
-      "变种选 DeepSeek 后出现行为提示「发送思考开关与强度；回复以 reasoning_content 流式返回」。"
-      + "思考开启前提示「仅在思考开关为『开启』时发送」；开启思考并选「最大」后强度生效。",
+      "保存自定义服务商并手动登记模型，选最强思考",
+      "填写本地端点、令牌、DeepSeek 变种与“手动 ID 与维护目录”后保存；服务商行立即展开并预载。"
+      + "行内手动表单的“思考默认值”下拉以“跟随目录默认”开头并提供关闭/自动/档位等合法选择；"
+      + "登记模型并选“最大”后出现“已添加”计数与行内模型行。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.locator("form.model-editor").getByLabel("接口变种").selectOption("deepseek");
-        await expect(dialog.getByText("发送思考开关与强度；回复以 reasoning_content 流式返回。")).toBeVisible();
-        await expect(dialog.getByText("仅在思考开关为“开启”时发送。")).toBeVisible();
-        const effort = dialog.getByLabel("思考强度");
-        await dialog.getByLabel("思考开关").selectOption("enabled");
-        await effort.selectOption("max");
-        await expect(effort).toBeEnabled();
-        await expect(effort).toHaveValue("max");
-        await expect(dialog.getByText("仅在思考开关为“开启”时发送。")).toBeHidden();
-        const pairings = await dialog.evaluate(() => {
-          const rowOf = (label: string) => Array.from(document.querySelectorAll(".config-panel label > span"))
-            .find((node) => node.textContent?.trim() === label)?.parentElement?.getBoundingClientRect();
-          const mode = rowOf("思考开关");
-          const effortRect = rowOf("思考强度");
-          return Boolean(mode && effortRect && Math.abs(mode.top - effortRect.top) < 2);
-        });
-        expect(pairings).toBe(true);
-      },
-    );
+        const editor = dialog.getByRole("region", { name: "服务商编辑器" });
+        await editor.getByLabel("服务商名称").fill(providerName);
+        await editor.getByLabel("LLM API 令牌").fill(demoToken);
+        await editor.getByLabel("基础 URL").fill("http://127.0.0.1:4321/v1");
+        await editor.getByLabel("接口变种").selectOption("deepseek");
+        await editor.getByLabel("模型列表").selectOption("manual");
+        const providerSave = page.waitForResponse((response) =>
+          response.request().method() === "POST" && new URL(response.url()).pathname === "/api/providers");
+        await editor.getByRole("button", { name: "保存", exact: true }).click();
+        const saved = await (await providerSave).json() as { id: string; name: string };
+        createdProviderId = saved.id;
 
-    await journey.step(
-      "换 OpenAI 标准变种：无效思考配置不可保存",
-      "换到 OpenAI 标准后，思考开关与强度都隐藏，并说明服务商会忽略这些字段；"
-      + "换回 DeepSeek 后可重新开启思考并选择最大强度。",
-      async () => {
-        const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.locator("form.model-editor").getByLabel("接口变种").selectOption("openai");
-        await expect(dialog.getByLabel("思考开关")).toHaveCount(0);
-        await expect(dialog.getByLabel("思考强度")).toHaveCount(0);
-        await expect(dialog.getByText("此接口变种没有思考控制字段。服务商会忽略思考开关与强度，因此不会保存这些设置。")).toBeVisible();
-        await expect(dialog.getByText("标准 Chat Completions 请求，不发送思考控制字段。")).toBeVisible();
-        await dialog.locator("form.model-editor").getByLabel("接口变种").selectOption("deepseek");
-        await dialog.getByLabel("思考开关").selectOption("enabled");
-        await dialog.getByLabel("思考强度").selectOption("max");
-        await expect(dialog.getByLabel("思考强度")).toHaveValue("max");
-      },
-    );
-
-    await journey.step(
-      "填写并保存模型，卡片徽标可扫读",
-      "填好显示名称、基础 URL/模型 ID 与演示令牌并保存关闭；重新打开模型注册表，列表卡片一行内可扫读 DeepSeek 变种徽标、"
-      + "「开启 · 最大」思考徽标，且不出现「缺少密钥」警示徽标、密钥状态点为已保存。",
-      async () => {
-        const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByLabel("显示名称").fill(modelName);
-        await dialog.getByLabel("Chat Completions 基础 URL").fill("http://127.0.0.1:4321/v1");
-        await dialog.getByLabel("模型 ID").fill("deepseek-chat");
-        await dialog.getByLabel("LLM API 令牌").fill(demoToken);
+        const row = dialog.locator(".provider-row").filter({ hasText: providerName });
+        await expect(row.locator(".provider-row-detail")).toBeVisible();
+        const thinkingChoices = await dialog.getByLabel("思考默认值（可选）").locator("option").allTextContents();
+        expect(thinkingChoices[0]).toBe("跟随目录默认");
+        expect(thinkingChoices).toContain("最大");
+        await dialog.getByLabel("手动模型 ID").fill("deepseek-chat");
+        await dialog.getByLabel("思考默认值（可选）").selectOption("effort:max");
         const modelResponsePromise = page.waitForResponse((response) =>
-          response.request().method() === "POST" && new URL(response.url()).pathname === "/api/models");
-        await dialog.getByRole("button", { name: "保存并关闭" }).click();
+          response.request().method() === "POST" && new URL(response.url()).pathname
+            === `/api/providers/${createdProviderId}/models`);
+        await dialog.locator(".provider-manual-form").getByRole("button", { name: "添加模型" }).click();
         const created = await (await modelResponsePromise).json() as { id: string };
         createdModelId = created.id;
-        await expect(dialog).toBeHidden();
-
-        const reopened = await openModelRegistry();
-        const card = reopened.locator(".model-card").filter({ hasText: modelName });
-        await expect(card).toBeVisible();
-        await expect(card).toContainText("DeepSeek");
-        await expect(card).toContainText("开启 · 最大");
-        await expect(card.locator(".model-badge.warning")).toHaveCount(0);
-        await expect(card.locator(".model-status")).not.toHaveClass(/missing/);
+        await expect(row).toContainText("已添加 1");
+        const modelRow = row.locator(".provider-model-row").filter({ hasText: "deepseek-chat" });
+        await expect(modelRow).toBeVisible();
+        await expect(modelRow.getByRole("button", { name: "已添加" })).toBeDisabled();
       },
     );
 
     await journey.step(
-      "再次打开编辑，四个值与保存时一致",
-      "点开列表中的模型卡片，基础接口=OpenAI Chat Completions、接口变种=DeepSeek、思考开关=开启、思考强度=最大，与保存时一致。",
+      "编辑 Provider 保存失败时保留草稿，恢复后可保存",
+      "点“编辑”打开同一草稿；修改名称后保存被本地故障注入拒绝——错误清楚可见、草稿保留、服务商仍可用；恢复后重试保存成功。",
       async () => {
-        // 上一步保存后对话框仍开着、已展示模型列表，直接点卡片进入编辑。
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.locator(".model-card").filter({ hasText: modelName }).click();
-        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-chat-completions");
-        await expect(dialog.locator("form.model-editor").getByLabel("接口变种")).toHaveValue("deepseek");
-        await expect(dialog.getByLabel("思考开关")).toHaveValue("enabled");
-        await expect(dialog.getByLabel("思考强度")).toHaveValue("max");
-      },
-    );
-
-    await journey.step(
-      "Escape 取消关闭保留草稿，确认丢弃后恢复已保存值",
-      "修改高级模型的名称与基础接口后按 Escape，只出现一次作用域明确的“高级模型修改”确认。选择继续编辑时对话框和两个修改都保留；再次 Escape 并明确丢弃后关闭，重开显示此前已保存的名称和 Chat Completions 协议。",
-      async () => {
-        let dialog = page.getByRole("dialog", { name: "系统设置" });
-        const unsavedName = modelName + " 未保存";
-        await dialog.getByLabel("显示名称").fill(unsavedName);
-        await dialog.locator("form.model-editor").getByLabel("基础接口").selectOption("openai-responses");
-
-        let confirmationMessage = "";
-        page.once("dialog", (confirmation) => {
-          confirmationMessage = confirmation.message();
-          void confirmation.dismiss();
-        });
-        await page.keyboard.press("Escape");
-        expect(confirmationMessage).toContain("放弃尚未保存的高级模型修改");
-        await expect(dialog).toBeVisible();
-        await expect(dialog.getByLabel("显示名称")).toHaveValue(unsavedName);
-        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-responses");
-
-        page.once("dialog", (confirmation) => void confirmation.accept());
-        await page.keyboard.press("Escape");
-        await expect(dialog).toBeHidden();
-
-        dialog = await openModelRegistry();
-        await dialog.locator(".model-card").filter({ hasText: modelName }).click();
-        await expect(dialog.getByLabel("显示名称")).toHaveValue(modelName);
-        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-chat-completions");
-        await expect(dialog.locator("form.model-editor").getByLabel("接口变种")).toHaveValue("deepseek");
-      },
-    );
-
-    await journey.step(
-      "底部保存失败保留草稿，重试保存并关闭提交同一修改",
-      "修改名称与协议后点击底部“保存”，本地故障注入返回失败；设置保持打开、错误清楚可见且两个修改仍在。恢复本地 API 后把协议改回 DeepSeek，点击“保存并关闭”成功；重开后新名称和合法协议都已保存。",
-      async () => {
-        let dialog = page.getByRole("dialog", { name: "系统设置" });
-        const updatedName = modelName + " 已更新";
-        await dialog.getByLabel("显示名称").fill(updatedName);
-        await dialog.locator("form.model-editor").getByLabel("基础接口").selectOption("openai-responses");
-        const modelPath = "/api/models/" + encodeURIComponent(createdModelId!);
-        const modelUrl = (url: URL) => url.pathname === modelPath;
-        const failSave = async (route: import("@playwright/test").Route) => {
+        const row = dialog.locator(".provider-row").filter({ hasText: providerName });
+        await row.getByRole("button", { name: "编辑", exact: true }).click();
+        const editor = dialog.getByRole("region", { name: "服务商编辑器" });
+        const updatedName = providerName + " 未保存";
+        await editor.getByLabel("服务商名称").fill(updatedName);
+        const providerPath = "/api/providers/" + encodeURIComponent(createdProviderId!);
+        const providerUrl = (url: URL) => url.pathname === providerPath;
+        await page.route(providerUrl, async (route) => {
           await route.fulfill({
-            body: JSON.stringify({ error: "fixture model save denied" }),
+            body: JSON.stringify({ error: "fixture provider save denied" }),
             contentType: "application/json",
             status: 500,
           });
-        };
-        await page.route(modelUrl, failSave);
-        await dialog.getByRole("button", { name: "保存", exact: true }).click();
-        await expect(dialog.getByText(/fixture model save denied/)).toBeVisible();
-        await expect(dialog.getByLabel("显示名称")).toHaveValue(updatedName);
-        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-responses");
-        await page.unroute(modelUrl, failSave);
+        });
+        await editor.getByRole("button", { name: "保存", exact: true }).click();
+        await expect(dialog.getByText(/fixture provider save denied/)).toBeVisible();
+        await expect(editor.getByLabel("服务商名称")).toHaveValue(updatedName);
+        await expect(dialog.getByRole("region", { name: "已配置服务商" })).toBeVisible();
+        await page.unroute(providerUrl);
 
-        await dialog.locator("form.model-editor").getByLabel("基础接口").selectOption("openai-chat-completions");
-        await dialog.locator("form.model-editor").getByLabel("接口变种").selectOption("deepseek");
+        const expectedName = providerName + " 已更新";
+        await editor.getByLabel("服务商名称").fill(expectedName);
         const saveResponse = page.waitForResponse((response) =>
-          response.request().method() === "PUT" && new URL(response.url()).pathname === modelPath);
-        await dialog.getByRole("button", { name: "保存并关闭" }).click();
+          response.request().method() === "PUT" && new URL(response.url()).pathname === providerPath);
+        await editor.getByRole("button", { name: "保存", exact: true }).click();
         expect((await saveResponse).ok()).toBe(true);
-        await expect(dialog).toBeHidden();
+        await expect(dialog.locator(".provider-row").filter({ hasText: expectedName })).toBeVisible();
+      },
+    );
 
-        dialog = await openModelRegistry();
-        await dialog.locator(".model-card").filter({ hasText: updatedName }).click();
-        await expect(dialog.getByLabel("显示名称")).toHaveValue(updatedName);
-        await expect(dialog.locator("form.model-editor").getByLabel("基础接口")).toHaveValue("openai-chat-completions");
-        await expect(dialog.locator("form.model-editor").getByLabel("接口变种")).toHaveValue("deepseek");
-        await dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
+    await journey.step(
+      "已添加模型在测试下拉中可选，行内表诚实显示空态",
+      "manual 发现策略不返回服务商模型列表：行内表显示“服务商未返回模型”的诚实空态，而不是伪造目录。"
+      + "手动登记的模型仍然持久存在：行计数为“已添加 1”，并且出现在“选择要测试的模型”下拉中，可单独测试。",
+      async () => {
+        const dialog = await openModelRegistry();
+        const row = dialog.locator(".provider-row").filter({ hasText: providerName + " 已更新" });
+        if (!await row.locator(".provider-row-detail").count()) {
+          await row.locator(".provider-row-summary").click();
+        }
+        await expect(row).toContainText("已添加 1");
+        await expect(row.getByText("服务商未返回模型。请手动添加精确模型 ID。")).toBeVisible();
+        const testSelect = row.getByLabel("选择要测试的模型");
+        await expect(testSelect).toBeVisible();
+        const options = await testSelect.locator("option").allTextContents();
+        expect(options.some((text) => text.includes("deepseek-chat"))).toBe(true);
+        await dialog.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
         await expect(dialog).toBeHidden();
       },
     );
 
     await journey.step(
       "窄屏下设置对话框仍整齐可用",
-      "视口收到约 600px 宽后重新打开设置：对话框不超出屏幕、页面无横向滚动；表单行变为单列排布，"
-      + "四个配置下拉框两端都不超出对话框右缘，且滚动后仍可在同一画面看到四个配置项。",
+      "视口收到约 600px 宽后重新打开设置：对话框不超出屏幕、页面无横向滚动；高级配置网格转为单列，"
+      + "行内模型行两端都在对话框边界内，思考档位下拉可见可操作。",
       async () => {
         await page.setViewportSize({ width: 600, height: 900 });
         const dialog = await openModelRegistry();
-        await dialog.locator(".model-card").filter({ hasText: modelName + " 已更新" }).click();
+        const row = dialog.locator(".provider-row").filter({ hasText: providerName + " 已更新" });
+        if (!await row.locator(".provider-row-detail").count()) {
+          await row.locator(".provider-row-summary").click();
+        }
+        await row.getByRole("button", { name: "编辑", exact: true }).click();
         const geometry = await dialog.evaluate(() => {
-          const d = document.querySelector(".system-config-dialog").getBoundingClientRect();
-          const labelRowTop = (label: string) => {
-            const s = Array.from(document.querySelectorAll(".config-panel label > span"))
+          const d = document.querySelector(".system-config-dialog")!.getBoundingClientRect();
+          const topOf = (label: string) => {
+            const s = Array.from(document.querySelectorAll(".provider-editor label > span"))
               .find((x) => x.textContent.trim() === label);
             return s ? s.parentElement.getBoundingClientRect().top : null;
           };
-          const selectsInDialog = Array.from(document.querySelectorAll(".model-editor select"))
+          const protocolTop = topOf("基础接口");
+          const variantTop = topOf("接口变种");
+          const modelRows = Array.from(document.querySelectorAll(".provider-model-row"))
             .every((el) => {
               const b = el.getBoundingClientRect();
               return b.right <= d.right + 1 && b.left >= d.left - 1;
             });
-          const apiTop = labelRowTop("基础接口");
-          const variantTop = labelRowTop("接口变种");
+          const selects = Array.from(document.querySelectorAll(".provider-settings select"))
+            .every((el) => {
+              const b = el.getBoundingClientRect();
+              return b.right <= d.right + 1 && b.left >= d.left - 1;
+            });
           return {
             vw: window.innerWidth,
             dialogRight: Math.round(d.right),
-            dialogWidth: Math.round(d.width),
             docScrollW: document.documentElement.scrollWidth,
-            singleColumn: apiTop != null && variantTop != null && Math.abs(apiTop - variantTop) > 2,
-            selectsInDialog,
+            singleColumn: protocolTop != null && variantTop != null && Math.abs(protocolTop - variantTop) > 2,
+            modelRowsInside: modelRows,
+            selectsInside: selects,
           };
         });
         expect(geometry.dialogRight).toBeLessThanOrEqual(geometry.vw + 1);
         expect(geometry.docScrollW).toBeLessThanOrEqual(geometry.vw + 1);
         expect(geometry.singleColumn).toBe(true);
-        expect(geometry.selectsInDialog).toBe(true);
-        await dialog.getByLabel("思考强度").scrollIntoViewIfNeeded();
-        for (const label of ["基础接口", "接口变种", "思考开关", "思考强度"]) {
-          await expect(dialog.getByLabel(label)).toBeInViewport();
-        }
-        await expect(dialog.getByLabel("思考强度")).toHaveValue("max");
+        expect(geometry.modelRowsInside).toBe(true);
+        expect(geometry.selectsInside).toBe(true);
+        await dialog.getByLabel("思考默认值（可选）").scrollIntoViewIfNeeded();
+        await expect(dialog.getByLabel("思考默认值（可选）")).toBeInViewport();
       },
     );
   } finally {
     if (createdModelId) {
-      // 新建的第一个模型会被设为全局默认（写入 runtime settings 引用），
-      // 删除前先清除 settings 中的 modelId/reviewModelId 引用，与 journeys.ts
-      // deleteJourneyModel 保持一致。
+      // 手动添加的模型可能成为全局默认，删除前先清除 settings 引用。
       try {
         const settings = await page.request
           .fetch(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader() })
@@ -354,6 +300,15 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       } catch { /* best-effort */ }
       await page.request
         .fetch(`${apiBaseUrl()}/api/models/${encodeURIComponent(createdModelId)}`, {
+          headers: authorizationHeader(),
+          method: "DELETE",
+        })
+        .then((response) => expect(response.ok()).toBe(true))
+        .catch(() => undefined);
+    }
+    if (createdProviderId) {
+      await page.request
+        .fetch(`${apiBaseUrl()}/api/providers/${encodeURIComponent(createdProviderId)}`, {
           headers: authorizationHeader(),
           method: "DELETE",
         })

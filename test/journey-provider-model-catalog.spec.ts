@@ -392,7 +392,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         for (const name of ["DeepSeek", "智谱 GLM", "OpenAI", "Anthropic", "Google Gemini", "Alibaba Cloud Model Studio"]) {
           expect(optionTexts.some((text) => text.includes(name))).toBe(true);
         }
-        await expect(dialog.getByRole("button", { name: "自定义服务商" })).toBeVisible();
+        await expect(dialog.locator(".provider-add-controls").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();
       },
     );
 
@@ -742,23 +742,37 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         providerIds.push(providerA.id, providerB.id);
         raceProviderBId = providerB.id;
         await page.reload();
-        const dialog = await openModelRegistry();
-        const registry = dialog.getByRole("region", { name: "已配置服务商" });
+        // The registry mounts ProviderModelSettings, which pre-loads every
+        // configured provider's real model list in parallel (per-provider
+        // listing slot). Register both responses before opening the registry
+        // so the late A response still lands in A's own row and never bleeds
+        // into B's catalog.
         const responseA = page.waitForResponse((response) => new URL(response.url()).pathname
           === `/api/providers/${providerA.id}/models`);
         const responseB = page.waitForResponse((response) => new URL(response.url()).pathname
           === `/api/providers/${providerB.id}/models`);
-        await registry.getByRole("button", { name: /J7 Race Provider A/ }).click();
-        await registry.getByRole("button", { name: /J7 Race Provider B/ }).click();
+        const dialog = await openModelRegistry();
         await Promise.all([responseA, responseB]);
-        await expect(dialog.locator(".provider-model-row").filter({ hasText: "race-provider-b-model" })).toBeVisible();
-        await expect(dialog.locator(".provider-model-row").filter({ hasText: "race-provider-a-model" })).toHaveCount(0);
+        const rowA = dialog.locator(".provider-row").filter({ hasText: "J7 Race Provider A" });
+        const rowB = dialog.locator(".provider-row").filter({ hasText: "J7 Race Provider B" });
+        await expect(rowA).toContainText("已添加 0/1");
+        await expect(rowB).toContainText("已添加 0/1");
+        // B's expanded row shows only B's own models — the late A response
+        // never contaminates it.
+        await rowB.locator(".provider-row-summary").click();
+        await expect(rowB.locator(".provider-model-row").filter({ hasText: "race-provider-b-model" })).toBeVisible();
+        await expect(rowB.locator(".provider-model-row").filter({ hasText: "race-provider-a-model" })).toHaveCount(0);
+        // The late A response still lands in A's own row once it is expanded.
+        await rowA.locator(".provider-row-summary").click();
+        await expect(rowA.locator(".provider-model-row").filter({ hasText: "race-provider-a-model" })).toBeVisible();
         expect(stub.listPaths).toContain("/slow/v1/models");
         expect(stub.listPaths).toContain("/fast/v1/models");
 
+        // Re-expand B (expanding A collapsed it) and add B's model to B.
+        await rowB.locator(".provider-row-summary").click();
         const addResponse = page.waitForResponse((response) => response.request().method() === "POST"
           && new URL(response.url()).pathname === `/api/providers/${providerB.id}/models`);
-        await dialog.locator(".provider-model-row")
+        await rowB.locator(".provider-model-row")
           .filter({ hasText: "race-provider-b-model" })
           .getByRole("button", { name: "添加模型" })
           .click();
@@ -796,7 +810,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           "此服务商正被运行时设置引用。请先更换全局默认任务模型或评审模型，再删除服务商。",
         );
         await expect(dialog.getByRole("region", { name: "已配置服务商" })
-          .getByRole("button", { name: /J7 Race Provider B/ })).toBeVisible();
+          .locator(".provider-row").filter({ hasText: "J7 Race Provider B" }).locator(".provider-row-summary")).toBeVisible();
         await apiJson(page, "/api/settings", { data: before.overrides, method: "PUT" });
         expect(raceProviderBId).toBeTruthy();
       },
@@ -1032,9 +1046,14 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         if (!await anthropicRow.locator(".provider-row-detail").count()) {
           await anthropicRow.locator(".provider-row-summary").click();
         }
-        const haikuRow = dialog.locator(".provider-model-row").filter({ hasText: "claude-haiku-4-5" });
-        await expect(haikuRow).toBeVisible();
-        await expect(haikuRow.getByRole("button", { name: "已添加" })).toBeDisabled();
+        const anthropicRow2 = dialog.locator(".provider-row").filter({ hasText: "Anthropic" });
+        // The expanded Anthropic row lists both the catalog entry and the added
+        // profile; the added row carries a disabled 已添加 button.
+        const haikuAdded = anthropicRow2.locator(".provider-model-row")
+          .filter({ hasText: "claude-haiku-4-5" })
+          .getByRole("button", { name: "已添加" });
+        await expect(haikuAdded).toHaveCount(1);
+        await expect(haikuAdded).toBeDisabled();
         await expect(dialog.locator(".provider-model-row").first()).toContainText("claude-haiku-4-5");
         await dialog.getByRole("button", { name: "取消并关闭" }).first().click();
         await expect(dialog).toBeHidden();

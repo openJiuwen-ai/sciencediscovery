@@ -97,6 +97,19 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
   const secondPrompt = "继续使用同一个持久 shell，只用第二条命令读回刚才保存的值。";
   let fixture: JourneyFixture | undefined;
   let modelName = "";
+  let providerName = "";
+  let providerId = "";
+  let model: JourneyModel | undefined;
+
+  const apiJsonSafe = async (path: string, init?: { data?: unknown; method?: string }) => {
+    const response = await page.request.fetch(`${apiBaseUrl()}${path}`, {
+      ...(init?.data === undefined ? {} : { data: init.data }),
+      headers: authorizationHeader(),
+      method: init?.method ?? "GET",
+    });
+    if (!response.ok()) return undefined;
+    return response.json() as Promise<unknown>;
+  };
 
   try {
     await journey.step(
@@ -111,10 +124,9 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
       },
     );
 
-    let model: JourneyModel | undefined;
     await journey.step(
-      "在模型注册表新建一个模型",
-      "新建草稿可选择基础接口、接口变种、思考开关和强度；填好并保存后，重新打开仍显示相同选择。",
+      "在模型注册表添加自定义服务商并手动登记模型",
+      "注册表以服务商为中心：添加是“下拉+自定义服务商按钮”而不再是预置卡墙，编辑器只在显式选择后才出现；填写本地端点与令牌、选 DeepSeek 变种与手动模型列表后，用行内手动表单登记模型并选最强思考；保存后行内显示已添加计数，重开设置后仍在。",
       async () => {
         await page.getByRole("button", { name: /^系统设置/ }).click();
         const settings = page.getByRole("dialog", { name: "系统设置" });
@@ -122,55 +134,47 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
           .getByRole("button", { name: /^模型注册表/ })
           .click();
         await expect(settings.getByRole("heading", { name: "模型注册表" })).toBeVisible();
-        // 高级独立模型配置默认折叠；新建模型需要先展开（新 head 的模型注册表以服务商为中心）。
-        const advancedProfiles = settings.locator("details.provider-advanced-profiles");
-        if (await advancedProfiles.getAttribute("open") === null) {
-          await advancedProfiles.locator(":scope > summary").click();
-        }
-        await settings.getByRole("button", { name: "+ 添加模型" }).click();
-
-        const nameInput = settings.getByLabel("显示名称");
-        // The registry shows both the provider editor and the standalone model
-        // editor once a provider exists, so scope protocol/variant selects to
-        // the model form.
-        const modelEditor = settings.locator("form.model-editor");
-        await modelEditor.getByLabel("基础接口").selectOption("openai-chat-completions");
-        await modelEditor.getByLabel("接口变种").selectOption("deepseek");
-        await modelEditor.getByLabel("思考开关").selectOption("enabled");
-        await modelEditor.getByLabel("思考强度").selectOption("max");
-        const baseUrlInput = modelEditor.getByLabel("Chat Completions 基础 URL");
-        const modelInput = modelEditor.getByLabel("模型 ID");
-        await expect(baseUrlInput).toHaveValue("");
-        await expect(modelInput).toHaveValue("");
-        await expect(baseUrlInput).toHaveAttribute("placeholder", "一般以 v1 结尾");
-        await expect(modelInput).not.toHaveAttribute("placeholder", /openai|deepseek|gpt/i);
-
-        modelName = `J1 本地模型 ${Date.now()}`;
-        await nameInput.fill(modelName);
-        await baseUrlInput.fill(stub.baseUrl);
-        await modelInput.fill(stub.model);
-        await settings.getByLabel("LLM API 令牌").fill(stub.apiToken);
+        // The editor only appears after an explicit choice, never on open.
+        await expect(settings.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
+        providerName = `J1 自定义服务商 ${Date.now()}`;
+        await settings.getByRole("button", { name: "自定义服务商" }).click();
+        const editor = settings.getByRole("region", { name: "服务商编辑器" });
+        await expect(editor).toBeVisible();
+        await editor.getByLabel("服务商名称").fill(providerName);
+        await editor.getByLabel("LLM API 令牌").fill(stub.apiToken);
+        // 自定义服务商的高级连接默认展开；配置端点、变种与模型列表方式。
+        await editor.getByLabel("基础 URL").fill(stub.baseUrl);
+        await editor.getByLabel("接口变种").selectOption("deepseek");
+        await editor.getByLabel("模型列表").selectOption("manual");
+        const providerSave = page.waitForResponse((response) =>
+          response.request().method() === "POST" && new URL(response.url()).pathname === "/api/providers");
+        await editor.getByRole("button", { name: "保存" }).click();
+        const savedProvider = await (await providerSave).json() as { id: string; name: string };
+        providerId = savedProvider.id;
+        expect(savedProvider.name).toBe(providerName);
+        // 保存后自动展开该服务商并预载；行内手动表单登记模型并选最强思考。
+        const row = settings.locator(".provider-row").filter({ hasText: providerName });
+        await expect(row.locator(".provider-row-detail")).toBeVisible();
+        await settings.getByLabel("手动模型 ID").fill(stub.model);
+        await settings.getByLabel("思考默认值（可选）").selectOption("effort:max");
         const modelResponsePromise = page.waitForResponse((response) =>
-          response.request().method() === "POST" && new URL(response.url()).pathname === "/api/models");
-        await settings.getByRole("button", { name: "保存并关闭" }).click();
+          response.request().method() === "POST" && new URL(response.url()).pathname
+            === `/api/providers/${providerId}/models`);
+        await settings.locator(".provider-manual-form").getByRole("button", { name: "添加模型" }).click();
         model = await (await modelResponsePromise).json() as JourneyModel;
-        await expect(settings).toBeHidden();
+        await expect(row).toContainText("已添加 1");
+        await expect(row.locator(".provider-model-row").filter({ hasText: stub.model })).toBeVisible();
 
+        // 关闭后重开：服务商与已添加模型仍在。
+        await settings.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
+        await expect(settings).toBeHidden();
         await page.getByRole("button", { name: /^系统设置/ }).click();
         const reopened = page.getByRole("dialog", { name: "系统设置" });
         await reopened.getByRole("navigation", { name: "设置分组" })
           .getByRole("button", { name: /^模型注册表/ })
           .click();
-        const reopenedAdvanced = reopened.locator("details.provider-advanced-profiles");
-        if (await reopenedAdvanced.getAttribute("open") === null) {
-          await reopenedAdvanced.locator(":scope > summary").click();
-        }
-        await reopened.locator(".model-card").filter({ hasText: modelName }).click();
-        const reopenedEditor = reopened.locator("form.model-editor");
-        await expect(reopenedEditor.getByLabel("基础接口")).toHaveValue("openai-chat-completions");
-        await expect(reopenedEditor.getByLabel("接口变种")).toHaveValue("deepseek");
-        await expect(reopenedEditor.getByLabel("思考开关")).toHaveValue("enabled");
-        await expect(reopenedEditor.getByLabel("思考强度")).toHaveValue("max");
+        await expect(reopened.locator(".provider-row").filter({ hasText: providerName }))
+          .toContainText("已添加 1");
         await reopened.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
         await expect(reopened).toBeHidden();
       },
@@ -194,16 +198,17 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         fixture = { model: model!, project: created.project, session: created.firstSession };
 
         await expect(page.getByRole("heading", { name: created.firstSession.title })).toBeVisible();
-        // The inline composer select was replaced by a trigger button that opens
-        // the provider-grouped model picker dialog.
+        // The composer trigger opens the connector-style popover; the model row
+        // carries the manually registered model. Close the popover with Escape
+        // (the popover has no explicit close button).
         await page.getByLabel("本任务使用的模型").click();
         const picker = page.getByRole("dialog", { name: "选择模型" });
-        const modelOption = picker.getByRole("option", { name: new RegExp(modelName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")) });
+        const modelOption = picker.getByRole("option", { name: new RegExp(stub.model.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")) });
         await modelOption.click();
         await expect(modelOption).toHaveAttribute("aria-selected", "true");
-        await picker.getByRole("button", { name: "关闭模型选择" }).click();
+        await page.keyboard.press("Escape");
         await expect(picker).toBeHidden();
-        await expect(page.locator(".model-picker-trigger-name")).toContainText(modelName);
+        await expect(page.locator(".model-picker-trigger-name")).toContainText(stub.model);
         await expect(page.locator(".model-picker-trigger-thinking")).toContainText("最\u5927");
       },
     );
@@ -263,16 +268,68 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await expect(await expandToolStep(page, { contains: secondMarker })).toContainText(persistentValue);
       },
     );
+
+    await journey.step(
+      "删除服务商：确认后模型一并移除，注册表回到空态",
+      "先删除项目释放会话引用，再在服务商行点“编辑”后点“删除”：确认后 DELETE 命中该服务商；其未被引用的模型一并删除，注册表回到“还没有服务商”的空态。",
+      async () => {
+        // The project/session referencing the journey model must go first so
+        // the provider delete is accepted.
+        await cleanupJourney(page, fixture!);
+        fixture = undefined;
+        await page.getByRole("button", { name: /^系统设置/ }).click();
+        const settings = page.getByRole("dialog", { name: "系统设置" });
+        await settings.getByRole("navigation", { name: "设置分组" })
+          .getByRole("button", { name: /^模型注册表/ })
+          .click();
+        const row = settings.locator(".provider-row").filter({ hasText: providerName });
+        if (!await row.locator(".provider-row-detail").count()) {
+          await row.locator(".provider-row-summary").click();
+        }
+        await row.getByRole("button", { name: "编辑", exact: true }).click();
+        const editor = settings.getByRole("region", { name: "服务商编辑器" });
+        // A manually added model may have become the global default; clear the
+        // runtime-setting reference first so the provider delete is accepted.
+        if (model) {
+          const current = await apiJsonSafe("/api/settings") as { overrides?: Record<string, unknown> } | undefined;
+          const overrides2 = { ...(current?.overrides ?? {}) };
+          let changed = false;
+          for (const key of ["modelId", "reviewModelId"]) {
+            if (overrides2[key] === model.id) {
+              delete overrides2[key];
+              changed = true;
+            }
+          }
+          if (changed) await apiJsonSafe("/api/settings", { data: overrides2, method: "PUT" });
+        }
+        const deleteResponse = page.waitForResponse((response) => response.request().method() === "DELETE"
+          && new URL(response.url()).pathname === `/api/providers/${providerId}`);
+        page.once("dialog", (confirmation) => {
+          void confirmation.accept();
+        });
+        await editor.getByRole("button", { name: "删除" }).click();
+        expect((await deleteResponse).status()).toBe(200);
+        await expect(settings.locator(".provider-row")).toHaveCount(0);
+        await expect(settings.getByText("还没有服务商——在上方选择预置或添加自定义服务商。")).toBeVisible();
+        // The unreferenced model profile is deleted together with the provider.
+        model = undefined;
+        const registryCount = await apiJsonSafe("/api/models");
+        expect((registryCount as unknown[]).length).toBe(0);
+        await settings.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
+        await expect(settings).toBeHidden();
+      },
+    );
   } finally {
     if (fixture) await cleanupJourney(page, fixture);
     try {
+      if (providerId) {
+        await apiJsonSafe(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
+      }
       if (model) {
-        // The first standalone model becomes the global default, so clear the
-        // runtime-setting reference before deleting it.
-        const settings = await (await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
-          headers: authorizationHeader(),
-        })).json() as { overrides?: Record<string, unknown> };
-        const overrides = { ...(settings.overrides ?? {}) };
+        // A manually added model may have become the global default, so clear
+        // the runtime-setting reference before deleting it.
+        const settings = await apiJsonSafe("/api/settings") as { overrides?: Record<string, unknown> } | undefined;
+        const overrides = { ...(settings?.overrides ?? {}) };
         let changed = false;
         for (const key of ["modelId", "reviewModelId"]) {
           if (overrides[key] === model.id) {
@@ -280,17 +337,8 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
             changed = true;
           }
         }
-        if (changed) {
-          await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
-            data: overrides,
-            headers: { ...authorizationHeader(), "content-type": "application/json" },
-            method: "PUT",
-          });
-        }
-        await page.request.fetch(`${apiBaseUrl()}/api/models/${encodeURIComponent(model.id)}`, {
-          headers: authorizationHeader(),
-          method: "DELETE",
-        });
+        if (changed) await apiJsonSafe("/api/settings", { data: overrides, method: "PUT" });
+        await apiJsonSafe(`/api/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
       }
     } catch {
       // Best-effort cleanup; the journey result is authoritative.
