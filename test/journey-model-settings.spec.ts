@@ -28,7 +28,7 @@ test.use({ locale: "zh-CN" });
  *   2. 显式选择自定义服务商：编辑器按分组展开，协议与变种同行紧凑；保存后服务商行自动展开并预载模型列表。
  *   3. 行内手动表单登记模型并选最强思考：思考默认值下拉含“跟随目录默认”与各合法档位；“已添加”计数与行内模型行出现。
  *   4. 编辑 Provider 时保存失败：错误清楚、草稿保留；恢复后保存成功并重开保持一致。
- *   5. 行内模型行事实一行可扫读（上下文/输出/视觉/思考/价格）。
+ *   5. manual 发现为空时已添加模型仍在行内表占一行且排前、不出空态；行内模型行事实一行可扫读。
  *   6. 窄屏（600px）：对话框不越界、高级网格单列、模型行不横向溢出。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；Provider 与模型由本旅程创建并清理。
  * Type: mocked
@@ -206,9 +206,9 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     );
 
     await journey.step(
-      "已添加模型在测试下拉中可选，行内表诚实显示空态",
-      "manual 发现策略不返回服务商模型列表：行内表显示“服务商未返回模型”的诚实空态，而不是伪造目录。"
-      + "手动登记的模型仍然持久存在：行计数为“已添加 1”，并且出现在“选择要测试的模型”下拉中，可单独测试。",
+      "已添加模型持久占行，测试下拉可选",
+      "manual 发现策略不返回服务商模型列表，但手动登记的模型必须仍在行内表占一行且排最前：保存服务商、重开设置后仍在，"
+      + "不出现“服务商未返回模型”空态；行计数为“已添加 1”，并出现在“选择要测试的模型”下拉中，可单独测试。",
       async () => {
         const dialog = await openModelRegistry();
         const row = dialog.locator(".provider-row").filter({ hasText: providerName + " 已更新" });
@@ -216,7 +216,12 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
           await row.locator(".provider-row-summary").click();
         }
         await expect(row).toContainText("已添加 1");
-        await expect(row.getByText("服务商未返回模型。请手动添加精确模型 ID。")).toBeVisible();
+        // 发现为空也不能吞掉已添加模型：行内表仍有该模型一行且「已添加」禁用。
+        const modelRow = row.locator(".provider-model-row").filter({ hasText: "deepseek-chat" });
+        await expect(modelRow).toBeVisible();
+        await expect(modelRow.getByRole("button", { name: "已添加" })).toBeDisabled();
+        await expect(row.locator(".provider-model-row").first()).toContainText("deepseek-chat");
+        await expect(row.getByText("服务商未返回模型")).toHaveCount(0);
         const testSelect = row.getByLabel("选择要测试的模型");
         await expect(testSelect).toBeVisible();
         const options = await testSelect.locator("option").allTextContents();

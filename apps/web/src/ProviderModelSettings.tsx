@@ -31,6 +31,7 @@ import type {
 import {
   DEFAULT_MODEL_API_VARIANT,
   DEFAULT_MODEL_DISCOVERY,
+  lookupModelCatalog,
   MODEL_API_VARIANTS,
 } from "@sciencediscovery/schema";
 
@@ -195,6 +196,40 @@ export function sortProviderModels(entries: readonly ProviderModelEntry[]): Prov
     || (left.displayName ?? left.catalog?.label ?? left.id).localeCompare(right.displayName ?? right.catalog?.label ?? right.id));
 }
 
+/** The inline table is the union of already-added profiles and the pulled
+ *  listing: an added model always keeps its row (and sorts first), listing
+ *  entries not yet added follow. This is what keeps a manually registered
+ *  model visible after save/refresh even when discovery returns nothing
+ *  (manual strategy with no curated suggestions). */
+export function mergeProviderModelRows(
+  listingModels: readonly ProviderModelEntry[] | undefined,
+  addedProfiles: readonly ModelProfile[],
+  provider: ModelProvider,
+): ProviderModelEntry[] {
+  const byId = new Map<string, ProviderModelEntry>();
+  for (const profile of addedProfiles) {
+    const catalog = lookupModelCatalog(profile.model, provider.presetId);
+    byId.set(profile.model, {
+      id: profile.model,
+      displayName: profile.name,
+      profileId: profile.id,
+      ...(catalog ? { catalog } : {}),
+    });
+  }
+  for (const entry of listingModels ?? []) {
+    const existing = byId.get(entry.id);
+    byId.set(entry.id, existing
+      ? {
+          ...entry,
+          catalog: entry.catalog ?? existing.catalog,
+          displayName: entry.displayName ?? existing.displayName,
+          profileId: entry.profileId ?? existing.profileId,
+        }
+      : entry);
+  }
+  return sortProviderModels([...byId.values()]);
+}
+
 /** One compact line of capability facts for a provider model row. */
 function ModelRowFacts({ model }: { model: ProviderModelEntry }) {
   const { t } = useLocale();
@@ -280,7 +315,7 @@ interface ManualModelForm {
 
 const EMPTY_MANUAL_MODEL: ManualModelForm = { label: "", modelId: "", thinking: "", vision: false };
 
-function ProviderRow({
+export function ProviderRow({
   addedProfiles,
   busy,
   expanded,
@@ -306,7 +341,10 @@ function ProviderRow({
   const { t } = useLocale();
   const [manual, setManual] = useState<ManualModelForm>({ ...EMPTY_MANUAL_MODEL });
   const [testModelId, setTestModelId] = useState("");
-  const total = listing?.list?.models.length;
+  const rows = mergeProviderModelRows(listing?.list?.models, addedProfiles, provider);
+  // The total counts the same union the table shows, so the count, the table,
+  // and the test dropdown never disagree.
+  const total = listing?.list ? rows.length : undefined;
   const ready = provider.hasApiToken || provider.tokenOptional;
   const manualChoices = thinkingChoiceOptions(modelVariantThinkingControls(manual.modelId, provider.apiVariant));
   const testProfile = addedProfiles.find((profile) => profile.id === testModelId) ?? addedProfiles[0];
@@ -355,14 +393,13 @@ function ProviderRow({
       </div>
       {listing?.error ? <div className="provider-discovery-error" role="alert"><strong>{t("providers.discovery.failed")}</strong><span>{listing.error}</span><small>{t("providers.discovery.fallback")}</small></div> : null}
       {listing?.list ? <small className="provider-row-source">{listing.list.source === "remote" ? t("providers.models.remote") : t("providers.models.catalog")} · {new Date(listing.list.fetchedAt).toLocaleString()}</small> : null}
-      {listing?.list ? <div className="provider-model-table" aria-label={t("providers.models.table", { provider: provider.name })} role="table">
-        {sortProviderModels(listing.list.models).map((model) => <div className="provider-model-row" key={model.id} role="row">
+      {rows.length ? <div className="provider-model-table" aria-label={t("providers.models.table", { provider: provider.name })} role="table">
+        {rows.map((model) => <div className="provider-model-row" key={model.id} role="row">
           <span className="provider-model-cell-name"><strong>{model.displayName ?? model.catalog?.label ?? model.id}</strong><code>{model.id}</code></span>
           <ModelRowFacts model={model} />
           <button className="secondary-button compact-button" disabled={busy || Boolean(model.profileId)} onClick={() => void onAddModel(provider.id, model.id, model, { ...EMPTY_MANUAL_MODEL })} type="button">{model.profileId ? t("providers.models.added") : t("providers.models.add")}</button>
         </div>)}
-        {listing.list.models.length ? null : <p className="muted">{t("providers.models.empty")}</p>}
-      </div> : null}
+      </div> : listing?.list ? <p className="muted">{t("providers.models.empty")}</p> : null}
       <div className="provider-manual-form">
         <label><span>{t("providers.manual.label")}</span><input value={manual.label} onChange={(event) => setManual((current) => ({ ...current, label: event.target.value }))} placeholder={t("providers.manual.labelPlaceholder")} /></label>
         <label><span>{t("providers.models.manualId")}</span><input value={manual.modelId} onChange={(event) => setManual((current) => ({ ...current, modelId: event.target.value }))} placeholder={t("providers.models.manualPlaceholder")} /></label>

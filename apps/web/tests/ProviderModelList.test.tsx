@@ -21,7 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { SettingsApiClient } from "../src/api/settings.js";
 import { LocaleProvider } from "../src/i18n/index.js";
-import { ProviderModelSettings, sortProviderModels } from "../src/ProviderModelSettings.js";
+import { mergeProviderModelRows, ProviderModelSettings, ProviderRow, sortProviderModels } from "../src/ProviderModelSettings.js";
 
 function entry(id: string, profileId?: string): ProviderModelEntry {
   return { id, ...(profileId ? { profileId } : {}) };
@@ -30,6 +30,27 @@ function entry(id: string, profileId?: string): ProviderModelEntry {
 test("provider model tables sort added models first, then alphabetically", () => {
   const sorted = sortProviderModels([entry("zeta"), entry("alpha"), entry("beta", "profile-1"), entry("gamma", "profile-2")]);
   assert.deepEqual(sorted.map((model) => model.id), ["beta", "gamma", "alpha", "zeta"]);
+});
+
+test("inline table unions added profiles with the listing, added first, no duplicates", () => {
+  const p = provider("p1", "Custom");
+  const added = [profile("m1", "p1"), profile("m2", "p1")];
+  // manual + empty listing: the added models must still own rows.
+  const manualOnly = mergeProviderModelRows([], added, p);
+  assert.deepEqual(manualOnly.map((model) => model.id), ["m1-id", "m2-id"]);
+  assert.deepEqual(manualOnly.map((model) => model.profileId), ["m1", "m2"]);
+
+  // A listing entry for the same model merges into the added row instead of
+  // duplicating it; not-yet-added entries follow.
+  const merged = mergeProviderModelRows(
+    [entry("m2-id", "m2"), entry("zeta"), entry("alpha")],
+    added,
+    p,
+  );
+  assert.deepEqual(merged.map((model) => model.id), ["m1-id", "m2-id", "alpha", "zeta"]);
+  const m2 = merged.find((model) => model.id === "m2-id")!;
+  assert.equal(m2.profileId, "m2");
+  assert.equal(m2.displayName, "Model m2");
 });
 
 function provider(id: string, name: string): ModelProvider {
@@ -113,4 +134,59 @@ test("the registry opens without a preset wall or a resident editor", () => {
   assert.match(chinese, /已添加 1/);
   assert.match(chinese, /数据来源：models\.dev/);
   assert.doesNotMatch(chinese, /provider-editor/);
+});
+
+test("manual provider with an empty listing still shows the added model row, never the empty state", () => {
+  const p = provider("p1", "Custom endpoint");
+  const html = renderToStaticMarkup(createElement(
+    LocaleProvider,
+    { initialLocale: "en" },
+    createElement(ProviderRow, {
+      addedProfiles: [profile("m1", "p1")],
+      busy: false,
+      expanded: true,
+      listing: {
+        list: { fetchedAt: "2026-08-27T00:00:00.000Z", models: [], providerId: "p1", source: "catalog" },
+        loading: false,
+      },
+      onAddModel: () => Promise.resolve(true),
+      onEdit: () => undefined,
+      onRefresh: () => undefined,
+      onToggle: () => undefined,
+      provider: p,
+      testModel: () => Promise.reject(new Error("not under test")),
+    }),
+  ));
+
+  // The manually registered model keeps its row even though discovery
+  // returned nothing; the honest empty state is reserved for "nothing added
+  // and nothing discovered".
+  assert.match(html, /provider-model-table/);
+  assert.match(html, /<code>m1-id<\/code>/);
+  assert.match(html, />Added<\/button>/);
+  assert.doesNotMatch(html, /No models were returned/);
+  // Count, table, and test dropdown all read the same union.
+  assert.match(html, /1\/1 models/);
+  assert.match(html, /aria-label="Model to test"/);
+
+  const chinese = renderToStaticMarkup(createElement(
+    LocaleProvider,
+    { initialLocale: "zh-CN" },
+    createElement(ProviderRow, {
+      addedProfiles: [],
+      busy: false,
+      expanded: true,
+      listing: {
+        list: { fetchedAt: "2026-08-27T00:00:00.000Z", models: [], providerId: "p1", source: "catalog" },
+        loading: false,
+      },
+      onAddModel: () => Promise.resolve(true),
+      onEdit: () => undefined,
+      onRefresh: () => undefined,
+      onToggle: () => undefined,
+      provider: p,
+      testModel: () => Promise.reject(new Error("not under test")),
+    }),
+  ));
+  assert.match(chinese, /服务商未返回模型。请手动添加精确模型 ID。/);
 });
