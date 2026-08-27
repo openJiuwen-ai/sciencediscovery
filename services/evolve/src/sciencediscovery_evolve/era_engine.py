@@ -332,9 +332,19 @@ class EraEngine:
             # A held-out evaluation here is a sandboxed process, not an API call,
             # so the useful concurrency is the worker count.
             "eval_concurrency": max(1, min(spec.workers, spec.expansions)),
-            # The reward is graded, not binary: the default 0.999 would ask the
-            # reflector to "fix" a candidate that scored 0.95 on every rollout.
-            "solved_threshold": float(spec.scorecard.get("solvedThreshold") or 0.999),
+            # Never "solved": upstream skips `propose` on a rollout whose task
+            # already scores past this, which makes sense for a multi-task bench
+            # and none at all for a single-artifact tree search — the shard is a
+            # *measurement*, not a task to finish, and a proposal is equally
+            # valuable whichever shard this rollout happened to draw. Measured
+            # on a live compression run: the evaluator clamped any shard
+            # compressed past 50% to a flat 1.0, four of six rollout shards
+            # saturated, and two-thirds of the rollout budget burned on skips —
+            # a run planned for 20 expansions made 12 and stopped on max_iters
+            # in under two minutes. The scorecard's own solvedThreshold keeps
+            # governing the control plane; it just no longer turns rollouts
+            # into no-ops.
+            "solved_threshold": 2.0,
             "self_verify": False,
             "strategy": EraStrategy(domain),
             "usage": None,

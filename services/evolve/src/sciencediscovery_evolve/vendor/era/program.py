@@ -288,6 +288,16 @@ def extract_program(reply: str) -> Tuple[str, str]:
     """
     blocks = FENCE.findall(reply)
     code = max(blocks, key=len).strip() if blocks else reply.strip()
+    # A reply whose fence never closed — truncation, or a model that stopped at
+    # the code — falls through to "whole reply as code" with the opening fence
+    # still on line 1, and ```python is a SyntaxError at import. Watched live.
+    # Strip a stray opening fence (and a stray trailing one) so the fallback
+    # degrades to the code instead of to a candidate that cannot parse.
+    if not blocks and code.startswith("```"):
+        code = code.split("\n", 1)[1] if "\n" in code else ""
+        if code.rstrip().endswith("```"):
+            code = code.rstrip()[: -3].rstrip()
+        code = code.strip()
     summary = ""
     try:
         parsed = ast.parse(code)

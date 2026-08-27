@@ -1084,3 +1084,36 @@ def _task():
     from agentdescent.evolution import Task
 
     return Task(id="t0", prompt="p", meta={"shard": 0})
+
+
+def test_rollouts_are_never_skipped_as_solved() -> None:
+    """Upstream skips `propose` on a rollout whose task already scores past
+    `solved_threshold` — sane for a multi-task bench, a budget shredder for a
+    single-artifact tree search where the shard is a measurement, not a task.
+
+    Measured live: an evaluator clamped any shard compressed past 50% to a
+    flat 1.0, four of six rollout shards saturated, and a run planned for 20
+    expansions made 12 — two-thirds of the rollout budget burned on skips.
+    """
+    import inspect
+
+    from sciencediscovery_evolve.era_engine import EraEngine
+
+    source = inspect.getsource(EraEngine._search)
+    assert '"solved_threshold": 2.0' in source
+    assert 'spec.scorecard.get("solvedThreshold")' not in source
+
+
+def test_an_unclosed_fence_still_yields_importable_code() -> None:
+    """A truncated reply left ```python as candidate.py line 1 — SyntaxError
+    at import, one whole expansion spent on a markdown artifact."""
+    from sciencediscovery_evolve.vendor.era.program import extract_program
+
+    code, _ = extract_program("```python\nx = 1\ny = 2")
+    assert code == "x = 1\ny = 2"
+    # A stray trailing fence goes too.
+    code2, _ = extract_program("```python\nz = 3\n```")
+    # 正常配对的围栏走正则路径，不受影响。
+    assert code2 == "z = 3"
+    code3, _ = extract_program("```\nw = 4")
+    assert code3 == "w = 4"
