@@ -212,11 +212,29 @@
   transition: width 200ms ease;
 }
 
-/* A failed expansion is still a node in the tree — dropping it would change the
- * rank denominator of every later iteration — so it is shown, dimmed, rather
- * than hidden. Hiding it makes "the model returned nothing" indistinguishable
- * from "the program did not run". */
-.evolve-candidate-failed .evolve-candidate-score,
+/* What the engine said out loud while it ran — a repair that landed, scores
+ * that never separated, workers that died. Levels follow the notice/error
+ * palette above so the block reads as commentary, not as a new alarm. */
+.evolve-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.evolve-log li {
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.evolve-log-info { background: var(--surface-subtle); color: var(--text-secondary); }
+.evolve-log-warn { background: color-mix(in srgb, #d97706 10%, transparent); color: var(--text-secondary); }
+.evolve-log-error { background: color-mix(in srgb, #dc2626 8%, transparent); color: #b91c1c; }
 
 .evolve-panel-error {
   background: color-mix(in srgb, #dc2626 8%, transparent);
@@ -225,10 +243,6 @@
   font-size: 12px;
   margin: 0;
   padding: 8px 10px;
-}
-
-@media (max-width: 900px) {
-
 }
 
 /* --- search graph --------------------------------------------------------- */

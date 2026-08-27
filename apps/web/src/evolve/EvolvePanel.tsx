@@ -183,6 +183,25 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
         {hidden > 0 ? <p className="evolve-notice">
           {t("evolve.view.truncated", { shown: view.candidates.length - hidden, total: view.candidates.length })}
         </p> : null}
+        {/* A run that made fewer expansions than it planned looks broken, and
+            "why did it stop early" is the first question every such run gets.
+            The engine records the framework's own stop reason on the finish
+            event; without this line the panel had the answer and never said. */}
+        {!active && view.expansionsPlanned !== undefined && view.expansions < view.expansionsPlanned
+          ? <p className="evolve-notice">
+            {t("evolve.panel.stoppedShort", {
+              made: view.expansions,
+              planned: view.expansionsPlanned,
+              reason: view.stopReason ?? "?",
+            })}
+          </p> : null}
+        {/* What the engine chose to say out loud: a repair that landed, scores
+            that never separated, workers that died. These were folded into the
+            view from day one and rendered nowhere — the panel showed a tree of
+            zeros and kept the engine's own explanation to itself. */}
+        {view.logLines.length > 0 ? <ul className="evolve-log">
+          {view.logLines.map((line, at) => <li className={`evolve-log-${line.level}`} key={at}>{line.message}</li>)}
+        </ul> : null}
         {/* A failed run's reason lives on the run record, not in the event
             fold: the control plane is the only side that knows why a search was
             stopped (a budget gate, a dead sidecar), so it writes that there. */}

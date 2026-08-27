@@ -81,6 +81,14 @@ export interface EvolveRunView {
   maxDepth: number;
   rootVisits: number;
   status: EvolveRunStatus;
+  /** The framework's own word for why the search stopped — `max_iters`,
+   *  `patience` — recorded even for ordinary endings. The user's first
+   *  question about a run of 20 that shows 5 nodes is "why did it stop", and
+   *  the event carries the answer; dropping it here made the panel unable to
+   *  say. */
+  stopReason?: string;
+  /** What the run planned, next to the expansions it actually made. */
+  expansionsPlanned?: number;
   tokens: number;
 }
 
@@ -199,6 +207,8 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
         // and so the only one that means anything outside this run. It arrives
         // once, at the end, which is why it is on the view and not a candidate.
         ...(event.bestTestScore === undefined ? {} : { bestTestScore: event.bestTestScore }),
+        ...(event.stopReason === undefined ? {} : { stopReason: event.stopReason }),
+        ...(event.expansionsPlanned === undefined ? {} : { expansionsPlanned: event.expansionsPlanned }),
         status: event.status,
       };
 

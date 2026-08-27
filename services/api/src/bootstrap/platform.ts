@@ -51,15 +51,21 @@ export interface ApiServerDependencies {
 }
 
 /**
- * What a run's result artifact is called.
+ * What a run's result artifact is called: `evolve/<run>/<entrypoint>`.
  *
- * The target's entrypoint, because that is the name the agent already expects
- * to find it under — a search whose candidates implement `candidate.py` should
- * leave a `candidate.py` behind. Two runs over the same entrypoint in one
- * project land on one artifact with four versions, which is right: they are
- * the same logical file, and `executionRunIds` says which run wrote which.
+ * Scoped by run, after the unscoped version was measured doing the wrong
+ * thing. An earlier revision used the bare entrypoint on the reasoning that
+ * two runs over the same file are the same logical artifact — but for a
+ * scripted search the entrypoint is always the literal `candidate.py`, so a
+ * compression run, a peak-detection run and an enzyme-kinetics run in one
+ * project piled into a single artifact ten versions deep, interleaved with
+ * versions the sessions' own agents had declared under that name. Version 10
+ * being a Michaelis-Menten fitter "derived from" version 8's peak detector is
+ * lineage said backwards.
+ *
+ * One run, one artifact, exactly two versions: v1 the seed, v2 the winner.
  */
-function evolveArtifactName(run: { goal: EvolveGoal; id: string }): string {
+export function evolveArtifactName(run: { goal: EvolveGoal; id: string }): string {
   const target = run.goal.target;
   const raw = target.kind === "program"
     ? target.entrypoint
@@ -67,11 +73,10 @@ function evolveArtifactName(run: { goal: EvolveGoal; id: string }): string {
       ? "evolved.md"
       : "";
   const cleaned = raw.trim().replace(/^\/+/, "");
-  // Never a bare fallback that could collide across unrelated searches.
-  if (!cleaned || cleaned.includes("..") || cleaned.includes("\0")) {
-    return `evolve/${run.id.slice(0, 8)}/result.txt`;
-  }
-  return cleaned;
+  const leaf = !cleaned || cleaned.includes("..") || cleaned.includes("\0")
+    ? "result.txt"
+    : cleaned;
+  return `evolve/${run.id.slice(0, 8)}/${leaf}`;
 }
 
 

@@ -451,3 +451,38 @@ test("种子带上自己的代码哈希，diff 才有 before 可比", () => {
   const legacy = reduceEvolveRecords(emptyRunView(), [record(1, START), record(2, SEED)]);
   assert.equal(legacy.candidates.find((c) => c.nodeIndex === 0)?.codeHash, undefined);
 });
+
+test("提前结束的 run 面板要说出原因和缺口", () => {
+  // Twice the user asked "为什么提前结束/为什么8个就结束" about runs whose
+  // events carried the answer. The fold dropped stopReason/expansionsPlanned,
+  // so the panel had it and never said.
+  const view = reduceEvolveRecords(emptyRunView(), [
+    record(1, START),
+    record(2, SEED),
+    record(3, { depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.62, type: "expanded", valid: true }),
+    record(4, { bestNodeIndex: 1, candidates: 2, expansionsPlanned: 20,
+                status: "succeeded", stopReason: "max_iters", type: "search_finished" }),
+  ]);
+  assert.equal(view.stopReason, "max_iters");
+  assert.equal(view.expansionsPlanned, 20);
+
+  // An old run whose finish event predates the fields folds unchanged.
+  const legacy = reduceEvolveRecords(emptyRunView(), [
+    record(1, START), record(2, SEED),
+    record(3, { bestNodeIndex: null, candidates: 1, status: "succeeded", type: "search_finished" }),
+  ]);
+  assert.equal(legacy.stopReason, undefined);
+});
+
+test("引擎的日志行折进视图，供面板渲染", () => {
+  // logLines were folded into the view from day one and rendered nowhere in
+  // the panel — that render is verified in the browser harness; this pins the
+  // fold half so the panel has something to show.
+  const view = reduceEvolveRecords(emptyRunView(), [
+    record(1, START), record(2, SEED),
+    record(3, { level: "info", message: "修好了一个一分没拿到的候选（0.4781）", type: "log" }),
+    record(4, { level: "warn", message: "9 个候选的分数全都一样", type: "log" }),
+  ]);
+  assert.equal(view.logLines.length, 2);
+  assert.equal(view.logLines[1]!.level, "warn");
+});
