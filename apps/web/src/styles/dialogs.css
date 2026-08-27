@@ -43,9 +43,27 @@
 .artifact-modal-panel { display: flex; flex-direction: column; width: min(1080px, 100%); max-height: calc(100vh - 56px); }
 .artifact-modal-header { padding: 22px 26px; border-bottom: 1px solid var(--border); }
 .artifact-modal-header h2 { margin: 3px 0 0; color: var(--text-strong); font-size: 20px; }
-.artifact-modal-controls { display: flex; align-items: center; gap: 12px; }
+/* Wraps rather than overflows: with the version picker, two icon squares and
+ * a text button this row outgrows a narrow modal, and unwrapped it pushed the
+ * ✕ out and bled the button text past the card edge. */
+.artifact-modal-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .artifact-modal-controls button { width: 34px; height: 34px; border-color: var(--border-strong); background: var(--surface); font-size: 14px; }
 .artifact-modal-controls button:hover { background: var(--surface-soft); }
+/* The one text button in a row of 34px icon squares. Without this override it
+ * inherits the icon geometry, crushes to "把这个…" and bleeds past the ✕. */
+.artifact-modal-controls .artifact-evolve {
+  width: auto;
+  height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.artifact-modal-controls .artifact-evolve:hover { background: var(--accent); filter: brightness(1.08); }
 .version-picker { display: flex; align-items: center; gap: 6px; }
 .version-picker > span { color: var(--muted); font-size: 11px; }
 .version-picker select { min-width: 140px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 6px; font-size: 11px; }
