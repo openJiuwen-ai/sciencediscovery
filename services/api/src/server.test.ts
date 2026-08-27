@@ -25,6 +25,7 @@ import { promisify } from "node:util";
 
 import { createRunnerServer, type RunnerConfig } from "@sciencediscovery/runner";
 import { ModelCatalogFetchError } from "@sciencediscovery/model";
+import { resolveModelFacts } from "@sciencediscovery/schema";
 import type {
   ApiError,
   ArtifactDerivation,
@@ -5978,4 +5979,74 @@ test("the model catalog endpoint serves the packaged snapshot and keeps it when 
     refreshed.body.snapshot?.fetchedAt,
     "a failed refresh leaves the last successful catalog in place",
   );
+});
+
+test("provider model REST saves stated facts and shows them back on the listing", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-model-facts-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const upstream = createHttpServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      data: [{ id: "listed-model", context_length: 131_072, max_tokens: 8_192 }],
+    }));
+  });
+  await new Promise<void>((resolveListen) => upstream.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => upstream.close(() => resolveClose())));
+  const upstreamOrigin = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+
+  const { origin } = await startTestApi(context, tempRoot);
+  const provider = await jsonRequest<ModelProvider>(`${origin}/api/providers`, {
+    body: JSON.stringify({
+      apiToken: "facts-provider-token",
+      baseUrl: `${upstreamOrigin}/v1`,
+      modelDiscovery: "openai-models",
+      name: "Facts gateway",
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+
+  // The listing reports 131,072 tokens; the operator knows this deployment
+  // actually serves a longer window and states it by hand.
+  const added = await jsonRequest<ModelProfile>(`${origin}/api/providers/${provider.body.id}/models`, {
+    body: JSON.stringify({
+      facts: {
+        contextWindow: 1_000_000,
+        pricing: { cachedInput: 0.05, currency: "CNY", input: 1, output: 4 },
+        thinkingSupported: true,
+      },
+      model: "listed-model",
+      vision: true,
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(added.response.status, 201);
+  assert.equal(added.body.facts?.contextWindow, 1_000_000);
+  assert.equal(added.body.facts?.pricing?.currency, "CNY");
+  assert.equal(added.body.vision, true);
+
+  const listing = await jsonRequest<ProviderModelList>(
+    `${origin}/api/providers/${provider.body.id}/models`,
+    { headers: authorization },
+  );
+  const row = listing.body.models.find((model) => model.id === "listed-model")!;
+  assert.equal(row.remote?.contextWindow, 131_072, "the listing still reports what the vendor said");
+  assert.equal(row.user?.contextWindow, 1_000_000, "and the row carries what the user stated");
+  const resolved = resolveModelFacts(row);
+  assert.equal(resolved.contextWindow, 1_000_000);
+  assert.equal(resolved.origins.contextWindow, "user");
+  assert.equal(resolved.maxOutputTokens, 8_192, "a fact the user left alone still comes from the listing");
+  assert.equal(resolved.origins.maxOutputTokens, "remote");
+
+  // A price that cannot be true is refused rather than stored.
+  const rejected = await jsonRequest<ApiError>(`${origin}/api/providers/${provider.body.id}/models`, {
+    body: JSON.stringify({ facts: { pricing: { currency: "USD", input: 1 } }, model: "listed-model" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(rejected.response.status, 400);
+  assert.match(rejected.body.error, /must state both an input and an output rate/);
 });

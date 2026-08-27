@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Type-only, so the mutual reference with model-provider.ts costs nothing at
+// runtime: the fact-override shape is defined next to the catalog types it
+// competes with, and consumed here by the profile that stores it.
+import type { ModelFactOverrides } from "./model-provider.js";
 import type { ProxyPolicy } from "./proxy.js";
 
 export type ModelApiProtocol =
@@ -75,6 +79,9 @@ export interface ModelProfile {
   apiVariant?: ModelApiVariant;
   baseUrl: string;
   createdAt: string;
+  /** Facts the user stated for this model. Saved here rather than in the
+   *  catalog snapshot, so refreshing the catalog cannot overwrite them. */
+  facts?: ModelFactOverrides;
   hasApiToken: boolean;
   id: string;
   model: string;
@@ -211,6 +218,7 @@ export interface CreateModelProfileRequest {
   apiProtocol?: ModelApiProtocol;
   apiVariant?: ModelApiVariant;
   baseUrl: string;
+  facts?: ModelFactOverrides;
   model: string;
   name: string;
   proxyPolicy?: ProxyPolicy;
@@ -224,6 +232,9 @@ export interface UpdateModelProfileRequest {
   apiProtocol?: ModelApiProtocol;
   apiVariant?: ModelApiVariant;
   baseUrl: string;
+  /** Replaces the saved overrides. `null` clears them and lets the listing and
+   *  catalog answer again. */
+  facts?: ModelFactOverrides | null;
   model: string;
   name: string;
   proxyPolicy?: ProxyPolicy;

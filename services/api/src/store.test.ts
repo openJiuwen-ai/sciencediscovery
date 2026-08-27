@@ -20,7 +20,12 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
 import type { ArtifactJob, ComposerReference, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
-import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
+import {
+  lookupModelCatalog,
+  resolveModelFacts,
+  reviewerSpecialistSupportsLevel,
+  setModelCatalogSnapshot,
+} from "@sciencediscovery/schema";
 import { ToolOutputStore, toolOutputStoreRoot } from "@sciencediscovery/tools";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -30,7 +35,7 @@ import {
 import {
   SessionStore,
 } from "./store.js";
-import { installApiTestModelCatalog } from "./model-catalog.fixture.js";
+import { API_TEST_CATALOG_RECORDS, installApiTestModelCatalog } from "./model-catalog.fixture.js";
 import { encryptModelApiToken } from "./store/secrets.js";
 import { normalizeMemoryGraphSettings } from "./store/settings.js";
 
@@ -3185,4 +3190,152 @@ test("manually added provider models accept a name, vision and legal thinking de
   assert.equal(narrowed.thinkingEffort, "xhigh");
   assert.equal(narrowed.vision, true, "a field the caller did not state is left alone");
   assert.equal(store.listModels().filter((model) => model.model === "gpt-5.5").length, 1);
+});
+
+test("facts the user states for a model are persisted and survive a reopen", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-persist-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const added = await store.materializeProviderModel(provider.id, "self-hosted-mystery-7b", {
+    facts: {
+      contextWindow: 262_144,
+      maxOutputTokens: 32_768,
+      pricing: { cachedInput: 0.1, currency: "CNY", input: 2, output: 8 },
+      thinkingSupported: false,
+    },
+    label: "Self hosted",
+    vision: true,
+  });
+  assert.deepEqual(added.facts, {
+    contextWindow: 262_144,
+    maxOutputTokens: 32_768,
+    pricing: { cachedInput: 0.1, currency: "CNY", input: 2, output: 8 },
+    thinkingSupported: false,
+  });
+  assert.equal(added.vision, true);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const saved = reopened.getModel(added.id)!;
+  assert.deepEqual(saved.facts, added.facts, "the overrides are still there after a restart");
+  assert.equal(saved.vision, true);
+  assert.equal(resolveModelFacts({ user: saved.facts }).contextWindow, 262_144);
+});
+
+test("refreshing the model catalog does not overwrite what the user stated", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-refresh-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const added = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    facts: { contextWindow: 2_000_000, pricing: { currency: "USD", input: 0.5, output: 1.5 } },
+  });
+
+  // A later catalog refresh publishes different numbers for the same model.
+  setModelCatalogSnapshot({
+    fetchedAt: "2026-09-01T00:00:00.000Z",
+    origin: "downloaded",
+    records: API_TEST_CATALOG_RECORDS.map((record) => record.key === "gpt-5.5"
+      ? {
+        ...record,
+        contextWindow: 128_000,
+        pricing: {
+          openai: {
+            currency: "USD" as const,
+            input: 9,
+            output: 45,
+            source: { retrievedAt: "2026-09-01", url: "https://example.test/pricing" },
+            unit: "per-1m-tokens" as const,
+          },
+        },
+      }
+      : record),
+    sourceUrl: "https://models.dev/api.json",
+  });
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const saved = reopened.getModel(added.id)!;
+  assert.equal(saved.facts?.contextWindow, 2_000_000, "the refresh cannot reach into a saved profile");
+  assert.equal(saved.facts?.pricing?.input, 0.5);
+
+  // And the override still wins when the row is assembled.
+  const resolved = resolveModelFacts({
+    catalog: lookupModelCatalog("gpt-5.5", "openai"),
+    user: saved.facts,
+  });
+  assert.equal(resolved.contextWindow, 2_000_000);
+  assert.equal(resolved.origins.contextWindow, "user");
+  assert.equal(resolved.pricing?.input, 0.5);
+  assert.equal(resolved.origins.pricing, "user");
+  // A fact the user did not state still follows the refreshed catalog.
+  assert.equal(resolved.maxOutputTokens, 128_000);
+  assert.equal(resolved.origins.maxOutputTokens, "catalog");
+  installApiTestModelCatalog();
+});
+
+test("re-adding a model replaces only the facts the caller states again", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-restate-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const added = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    facts: { contextWindow: 900_000 },
+  });
+
+  const untouched = await store.materializeProviderModel(provider.id, "gpt-5.5", { vision: true });
+  assert.equal(untouched.id, added.id);
+  assert.equal(untouched.facts?.contextWindow, 900_000, "saying nothing about facts keeps them");
+  assert.equal(untouched.vision, true);
+
+  const restated = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    facts: { maxOutputTokens: 4_096 },
+  });
+  assert.deepEqual(restated.facts, { maxOutputTokens: 4_096 }, "a stated overrides object replaces the saved one");
+
+  // Editing the profile can drop the overrides entirely.
+  const cleared = await store.updateModel(restated.id, {
+    apiProtocol: restated.apiProtocol,
+    apiVariant: restated.apiVariant,
+    baseUrl: restated.baseUrl,
+    facts: null,
+    model: restated.model,
+    name: restated.name,
+  });
+  assert.equal(cleared.facts, undefined, "null lets the listing and catalog answer again");
+});
+
+test("stated facts that cannot be true are rejected instead of stored", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-invalid-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const add = (facts: unknown) =>
+    store.materializeProviderModel(provider.id, "gpt-5.5", { facts: facts as never });
+
+  await assert.rejects(add({ contextWindow: 1.5 }), /positive whole number of tokens/);
+  await assert.rejects(add({ contextWindow: 0 }), /positive whole number of tokens/);
+  await assert.rejects(add({ maxOutputTokens: -1 }), /positive whole number of tokens/);
+  await assert.rejects(add({ pricing: { currency: "EUR", input: 1, output: 2 } }), /must be CNY or USD/);
+  await assert.rejects(add({ pricing: { currency: "USD", input: 1 } }), /must state both an input and an output rate/);
+  await assert.rejects(add({ pricing: { currency: "USD", input: -1, output: 2 } }), /zero or greater/);
+  await assert.rejects(add({ thinkingSupported: "yes" }), /must be true or false/);
+  assert.deepEqual(store.listModels(), [], "nothing was persisted from a rejected request");
 });

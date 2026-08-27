@@ -51,6 +51,7 @@ import type {
   MemoryGraphSettings,
   MemoryGraphSettingsDetails,
   McpInvocation,
+  ModelFactOverrides,
   ModelInvocationUsage,
   ModelRunInfo,
   ModelProfile,
@@ -185,6 +186,7 @@ import {
   encryptModelApiToken,
   loadOrCreateModelSecretKey,
   normalizeApiToken,
+  normalizeModelFactOverrides,
   validateLiveModel,
 } from "./store/secrets.js";
 import { planStandaloneProfileMigration, providerSecretKey, validateLiveProvider } from "./store/providers.js";
@@ -1868,6 +1870,9 @@ export class SessionStore {
       throw new Error("The base URL and API protocol of a provider model cannot be changed here; edit the provider instead");
     }
     Object.assign(profile, normalized, { updatedAt: new Date().toISOString() });
+    // `null` is an explicit "drop my overrides" so the listing and the catalog
+    // answer again; an absent key keeps whatever was saved.
+    if (input.facts === null) delete profile.facts;
     if (input.proxyPolicy !== undefined) {
       profile.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
     }
@@ -2014,6 +2019,7 @@ export class SessionStore {
     providerId: string,
     modelId: string,
     options: {
+      facts?: ModelFactOverrides;
       label?: string;
       thinkingEffort?: ModelThinkingEffort;
       thinkingMode?: ModelThinkingMode;
@@ -2050,13 +2056,16 @@ export class SessionStore {
         ? existing.name
         : cleanLabel(`${provider.name} · ${options.label}`, model);
       const vision = options.vision ?? existing.vision;
+      const facts = normalizeModelFactOverrides(options.facts) ?? existing.facts;
       if (existing.apiVariant !== apiVariant
         || existing.thinkingMode !== constrained.mode
         || existing.thinkingEffort !== constrained.effort
         || existing.name !== name
-        || existing.vision !== vision) {
+        || existing.vision !== vision
+        || JSON.stringify(existing.facts) !== JSON.stringify(facts)) {
         Object.assign(existing, {
           apiVariant,
+          ...(facts ? { facts } : {}),
           name,
           thinkingEffort: constrained.effort,
           thinkingMode: constrained.mode,
@@ -2068,11 +2077,13 @@ export class SessionStore {
       return existing;
     }
     const now = new Date().toISOString();
+    const facts = normalizeModelFactOverrides(options.facts);
     const profile: ModelProfile = {
       apiProtocol: provider.apiProtocol,
       apiVariant,
       baseUrl: provider.baseUrl,
       createdAt: now,
+      ...(facts ? { facts } : {}),
       hasApiToken: provider.hasApiToken,
       id: randomUUID(),
       model,

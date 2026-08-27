@@ -35,6 +35,7 @@ import {
   MODEL_PROVIDER_PRESETS,
   type CreateModelProviderRequest,
   type CreateProviderModelRequest,
+  type ModelFactOverrides,
   type ModelProvider,
   type ProviderModelEntry,
   type ProviderModelList,
@@ -266,6 +267,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // `?refresh=1` forces a live fetch.
   const providerModelListCache = new Map<string, { fetchedAt: string; models: DiscoveredModel[] }>();
   const PROVIDER_MODEL_CACHE_TTL_MS = 5 * 60_000;
+  /** Overrides saved on the profile that backs a listing row, so the row shows
+   *  what the user stated instead of what the vendor last published. */
+  const savedFacts = (profileId: string | undefined): ModelFactOverrides | undefined =>
+    profileId ? store.getModel(profileId)?.facts : undefined;
   const providerModelEntry = (
     provider: ModelProvider,
     model: DiscoveredModel,
@@ -288,12 +293,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         : {}),
     };
     const catalog = lookupModelCatalog(model.id, provider.presetId);
+    const user = savedFacts(profileId);
     return {
       id: model.id,
       ...(model.displayName ? { displayName: model.displayName } : {}),
       ...(Object.keys(remote).length ? { remote } : {}),
       ...(catalog ? { catalog } : {}),
       ...(profileId ? { profileId } : {}),
+      ...(user ? { user } : {}),
     };
   };
   const patchEphemeralCallback = (server: Server) => {
@@ -1161,11 +1168,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           const models: ProviderModelEntry[] = listCatalogModelsForPreset(provider.presetId ?? "").map((record) => {
             const profileId = profileFor(record.key);
             const catalog = lookupModelCatalog(record.key, provider.presetId);
+            const user = savedFacts(profileId);
             return {
               id: record.key,
               ...(record.label !== record.key ? { displayName: record.label } : {}),
               ...(catalog ? { catalog } : {}),
               ...(profileId ? { profileId } : {}),
+              ...(user ? { user } : {}),
             };
           });
           const listing: ProviderModelList = {
@@ -1221,6 +1230,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const vision = body.vision ?? remote?.vision ?? catalog?.vision;
         const label = body.label ?? remote?.displayName ?? catalog?.label;
         sendJson(response, 201, await store.materializeProviderModel(providerId, modelId, {
+          ...(body.facts !== undefined ? { facts: body.facts } : {}),
           ...(label !== undefined ? { label } : {}),
           ...(body.thinkingEffort !== undefined ? { thinkingEffort: body.thinkingEffort } : {}),
           ...(body.thinkingMode !== undefined ? { thinkingMode: body.thinkingMode } : {}),

@@ -90,6 +90,37 @@ export interface RemoteModelFacts {
   vision?: boolean;
 }
 
+/**
+ * A price the user typed for a model. Deliberately not a `ModelCatalogPricing`:
+ * that type promises a published page the number was read from, and a
+ * hand-entered rate has no such source to cite.
+ */
+export interface UserModelPricing {
+  cachedInput?: number;
+  currency: ModelCatalogPricing["currency"];
+  input: number;
+  output: number;
+}
+
+/**
+ * Facts the user stated for one model, saved on its profile.
+ *
+ * They outrank the provider's live listing and the catalog: whoever runs the
+ * endpoint knows things neither source published — a self-hosted context
+ * window, a negotiated rate, a model the catalog has never heard of. Because
+ * they live on the profile rather than in the catalog snapshot, refreshing the
+ * catalog cannot overwrite them.
+ *
+ * Vision is not here: `ModelProfile.vision` already holds the user's decision
+ * and is what runs read, so duplicating it would create two answers.
+ */
+export interface ModelFactOverrides {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  pricing?: UserModelPricing;
+  thinkingSupported?: boolean;
+}
+
 /** One model reported by a provider's listing endpoint (normalized). */
 export interface ProviderModelEntry {
   /** Present when a model profile already backs this provider/model pair. */
@@ -98,6 +129,94 @@ export interface ProviderModelEntry {
   displayName?: string;
   id: string;
   remote?: RemoteModelFacts;
+  /** Overrides saved on the backing profile, when one exists. */
+  user?: ModelFactOverrides;
+}
+
+/** Which of the three sources supplied a resolved fact. */
+export type ModelFactOrigin = "catalog" | "remote" | "user";
+
+export interface ResolvedModelPricing {
+  cachedInput?: number;
+  currency: ModelCatalogPricing["currency"];
+  input: number;
+  output: number;
+  /** Present only when a published page backs the number; a price the user
+   *  typed has no source to link. */
+  source?: { retrievedAt: string; url: string };
+  unit: "per-1m-tokens";
+}
+
+export interface ResolvedModelFacts {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  /** Which source each present fact came from, for the hover explanation. */
+  origins: Partial<Record<"contextWindow" | "maxOutputTokens" | "pricing" | "thinkingSupported", ModelFactOrigin>>;
+  pricing?: ResolvedModelPricing;
+  thinkingSupported?: boolean;
+}
+
+/**
+ * Resolve one model's facts field by field: what the user stated wins, then
+ * what the provider's own listing reported, then the catalog. A fact no source
+ * carries stays absent, which every caller renders as "unknown" — never as 0
+ * or false.
+ */
+export function resolveModelFacts(entry: Pick<ProviderModelEntry, "catalog" | "remote" | "user">): ResolvedModelFacts {
+  const origins: ResolvedModelFacts["origins"] = {};
+  const pick = <T>(
+    key: keyof ResolvedModelFacts["origins"],
+    user: T | undefined,
+    remote: T | undefined,
+    catalog: T | undefined,
+  ): T | undefined => {
+    if (user !== undefined) {
+      origins[key] = "user";
+      return user;
+    }
+    if (remote !== undefined) {
+      origins[key] = "remote";
+      return remote;
+    }
+    if (catalog !== undefined) {
+      origins[key] = "catalog";
+      return catalog;
+    }
+    return undefined;
+  };
+
+  const contextWindow = pick(
+    "contextWindow",
+    entry.user?.contextWindow,
+    entry.remote?.contextWindow,
+    entry.catalog?.contextWindow,
+  );
+  const maxOutputTokens = pick(
+    "maxOutputTokens",
+    entry.user?.maxOutputTokens,
+    entry.remote?.maxOutputTokens,
+    entry.catalog?.maxOutputTokens,
+  );
+  const thinkingSupported = pick(
+    "thinkingSupported",
+    entry.user?.thinkingSupported,
+    entry.remote?.thinkingSupported,
+    entry.catalog?.thinking?.supported,
+  );
+  const pricing = pick<ResolvedModelPricing>(
+    "pricing",
+    entry.user?.pricing ? { ...entry.user.pricing, unit: "per-1m-tokens" } : undefined,
+    entry.remote?.pricing,
+    entry.catalog?.pricing,
+  );
+
+  return {
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    origins,
+    ...(pricing !== undefined ? { pricing } : {}),
+    ...(thinkingSupported !== undefined ? { thinkingSupported } : {}),
+  };
 }
 
 /**
@@ -109,6 +228,9 @@ export interface ProviderModelEntry {
  * same wire contract as a discovered one.
  */
 export interface CreateProviderModelRequest {
+  /** Facts the user stated by hand; they outrank the listing and the catalog
+   *  and survive a catalog refresh. */
+  facts?: ModelFactOverrides;
   /** Display name for the profile; defaults to the listing or catalog label. */
   label?: string;
   model: string;

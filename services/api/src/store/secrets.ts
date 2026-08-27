@@ -19,10 +19,12 @@ import type {
   CreateModelProfileRequest,
   ModelApiProtocol,
   ModelApiVariant,
+  ModelFactOverrides,
   ModelProfile,
   ModelThinkingEffort,
   ModelThinkingMode,
   UpdateModelProfileRequest,
+  UserModelPricing,
 } from "@sciencediscovery/schema";
 import {
   constrainCatalogThinking,
@@ -34,6 +36,72 @@ import { cleanLabel } from "@sciencediscovery/governance";
 
 const MODEL_SECRET_KEY_BYTES = 32;
 const MODEL_SECRET_VERSION = "v1";
+
+/** A token count the user typed. Rejected rather than clamped: silently
+ *  turning 1.5 or -1 into something else would store a number the user never
+ *  stated and then show it back as fact. */
+function factTokenCount(value: unknown, label: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive whole number of tokens`);
+  }
+  return value;
+}
+
+function factRate(value: unknown, label: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a price per million tokens that is zero or greater`);
+  }
+  return value;
+}
+
+function normalizeUserPricing(value: unknown): UserModelPricing | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("The model price is invalid");
+  const pricing = value as Partial<UserModelPricing>;
+  if (pricing.currency !== "CNY" && pricing.currency !== "USD") {
+    throw new Error("The model price currency must be CNY or USD");
+  }
+  const input = factRate(pricing.input, "The model input price");
+  const output = factRate(pricing.output, "The model output price");
+  // Input and output together are what every price display needs; a half
+  // price would render as a confident number beside a blank.
+  if (input === undefined || output === undefined) {
+    throw new Error("The model price must state both an input and an output rate");
+  }
+  const cachedInput = factRate(pricing.cachedInput, "The model cached input price");
+  return {
+    ...(cachedInput !== undefined ? { cachedInput } : {}),
+    currency: pricing.currency,
+    input,
+    output,
+  };
+}
+
+/**
+ * Validate the facts a user stated for a model. Absent keys mean "no override"
+ * and let the listing and the catalog answer; an empty result is returned as
+ * `undefined` so a profile never carries a hollow overrides object.
+ */
+export function normalizeModelFactOverrides(value: unknown): ModelFactOverrides | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("The model facts are invalid");
+  const facts = value as Partial<ModelFactOverrides>;
+  const contextWindow = factTokenCount(facts.contextWindow, "The model context window");
+  const maxOutputTokens = factTokenCount(facts.maxOutputTokens, "The model maximum output");
+  const pricing = normalizeUserPricing(facts.pricing);
+  if (facts.thinkingSupported !== undefined && typeof facts.thinkingSupported !== "boolean") {
+    throw new Error("The model thinking support must be true or false");
+  }
+  const normalized: ModelFactOverrides = {
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    ...(pricing !== undefined ? { pricing } : {}),
+    ...(facts.thinkingSupported !== undefined ? { thinkingSupported: facts.thinkingSupported } : {}),
+  };
+  return Object.keys(normalized).length ? normalized : undefined;
+}
 
 export function validateLiveModel(
   input: CreateModelProfileRequest | UpdateModelProfileRequest,
@@ -76,10 +144,12 @@ export function validateLiveModel(
     input.thinkingMode === undefined ? undefined : requestedMode,
     input.thinkingEffort === undefined ? undefined : requestedEffort,
   );
+  const facts = normalizeModelFactOverrides(input.facts);
   return {
     apiProtocol,
     apiVariant,
     baseUrl: endpoint.toString().replace(/\/$/, ""),
+    ...(facts ? { facts } : {}),
     model,
     name,
     thinkingEffort,
