@@ -396,7 +396,9 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         expect(dialogGeometry.height).toBeLessThanOrEqual(0.83 * dialogGeometry.viewportHeight + 2);
         await expect(dialog.locator(".provider-preset-card")).toHaveCount(0);
         await expect(dialog.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
-        await dialog.getByRole("button", { name: /添加 Provider/ }).first().click();
+        // 空态下添加面板默认展开（首启路径）；openAddPanel 只在未展开时点击，
+        // 避免把已展开的面板 toggle 收起。
+        await openAddPanel(dialog);
         const optionTexts = await dialog.locator(".provider-add-panel").getByLabel("添加 Provider").locator("option").allTextContents();
         for (const name of ["DeepSeek", "智谱 GLM", "OpenAI", "Anthropic", "Google Gemini", "Alibaba Cloud Model Studio"]) {
           expect(optionTexts.some((text) => text.includes(name))).toBe(true);
@@ -644,12 +646,14 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "远端覆盖、未知状态、价格单位与来源均可核对",
-      "DeepSeek 卡片以远端返回的 131,072 上下文、视觉与思考为准，并显示 USD 1.5 / 3、缓存输入 0.2、每百万 tokens 及本地响应来源；fixture-unknown 的上下文、输出、视觉、思考和价格均明确显示“未知”，不伪造能力。",
+      "DeepSeek 卡片以远端返回的 131,072 上下文、视觉与思考为准，输出字段级回退目录 384,000；价格行显示 1.5 / 3 / 0.2 USD/1M（单位在后，悬停为 输入/输出/缓存输入 每百万 tokens）。fixture-unknown 的上下文、输出、视觉、思考和价格均明确显示“未知”，不伪造能力。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const known = dialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" });
         const knownFacts = known.locator(".provider-model-row-facts .fact");
-        await expect(knownFacts.nth(0)).toHaveText("131k / ?");
+        // 远端只有 context_length：上下文 131k 来自远端，输出按字段级回退
+        // 取目录的 384k，而不是整行未知。
+        await expect(knownFacts.nth(0)).toHaveText("131k / 384k");
         await expect(knownFacts.nth(1)).toHaveAttribute("title", "视觉：支持");
         await expect(knownFacts.nth(2)).toHaveText(/低 高 最大/);
         await expect(knownFacts.nth(3)).toHaveText("1.5 / 3 / 0.2 USD/1M");
@@ -1112,15 +1116,17 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await verifyComposerGeometry({ labels, runButton: "Run analysis", width: 1440 });
         await verifyComposerGeometry({ labels, runButton: "Run analysis", width: 600 });
         const englishDialog = await openModelRegistry();
-        const enOptionTexts = await englishDialog.getByLabel("Add provider").locator("option").allTextContents();
+        // 已有服务商时添加面板默认收起，先展开再取预置与自定义入口。
+        await openAddPanel(englishDialog);
+        const enOptionTexts = await englishDialog.locator(".provider-add-panel").getByLabel("Add provider").locator("option").allTextContents();
         expect(enOptionTexts.some((text) => text.includes("DeepSeek"))).toBe(true);
         await expect(englishDialog.getByRole("button", { name: "Custom provider" })).toBeVisible();
         const registry = englishDialog.getByRole("region", { name: "Configured providers" });
         await registry.getByRole("button", { name: /DeepSeek/ }).click();
         const flash = englishDialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" });
-        await expect(flash).toContainText("USD 0.14 / 0.28");
-        await expect(flash).toContainText("cached input 0.0028");
-        await expect(flash).toContainText("per 1M tokens");
+        const enPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
+        await expect(enPrice).toHaveText("0.14 / 0.28 / 0.0028 USD/1M");
+        await expect(enPrice).toHaveAttribute("title", "Input / output / cached input per 1M tokens (USD)");
         await expect(flash).not.toContainText(/Peak|Off-peak|periods/);
         await expect(flash.getByRole("link")).toHaveCount(0);
       },
