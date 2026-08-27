@@ -250,14 +250,6 @@ function placeholder(nodeIndex: number): EvolveCandidateView {
 
 /** The best *valid* candidate. A failed one scores `null` and can never win,
  *  even though it is part of the tree. */
-export function bestCandidate(view: EvolveRunView): EvolveCandidateView | undefined {
-  return view.candidates
-    .filter((candidate) => candidate.valid && candidate.score !== null)
-    .reduce<EvolveCandidateView | undefined>(
-      (best, candidate) => (best === undefined || (candidate.score ?? 0) > (best.score ?? 0) ? candidate : best),
-      undefined,
-    );
-}
 
 /** Expansions dispatched against the budget, for the card's progress ring. */
 export function runProgress(view: EvolveRunView, budgetExpansions: number): number {

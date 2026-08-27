@@ -31,7 +31,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { isPlaceholderGoal } from "../src/evolve/command.js";
 import { EvolveRunCard } from "../src/evolve/EvolveRunCard.js";
 import {
-  bestCandidate,
   emptyRunView,
   reduceEvolveRecords,
   runProgress,
@@ -121,7 +120,6 @@ test("a whole sequence folds into the view the dashboard reads", () => {
   assert.equal(view.lastSequence, 8);
   assert.deepEqual(view.candidates.map((candidate) => candidate.nodeIndex), [0, 1]);
   assert.equal(view.candidates[1]?.accepted, true);
-  assert.equal(bestCandidate(view)?.nodeIndex, 1);
 });
 
 test("records may arrive out of order and twice", () => {
@@ -158,7 +156,6 @@ test("a failed candidate is in the tree, scores null, and can never win", () => 
   assert.equal(failed?.score, null);
   assert.equal(failed?.error, "SyntaxError");
   assert.equal(view.expansions, 2, "a failed expansion still counts against the budget");
-  assert.equal(bestCandidate(view)?.nodeIndex, 2);
 });
 
 test("the two refusal kinds stay distinguishable", () => {
@@ -176,7 +173,6 @@ test("the two refusal kinds stay distinguishable", () => {
   assert.equal(view.candidates[0]?.rejectedBy, "too-slow");
   assert.equal(view.candidates[1]?.category, "below-threshold");
   // A refused candidate keeps its score: the tree ranks on it either way.
-  assert.equal(bestCandidate(view)?.nodeIndex, 1);
 });
 
 test("an event about an unseen candidate creates a placeholder rather than dropping", () => {

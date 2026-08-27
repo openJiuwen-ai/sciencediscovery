@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import json
 import math
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -400,6 +399,3 @@ def default_runner_argv() -> List[str]:
 
     return [str(Path(runner.__file__).resolve())]
 
-
-def python_executable() -> str:
-    return sys.executable
