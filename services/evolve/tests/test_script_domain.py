@@ -247,6 +247,7 @@ def test_the_evaluators_diagnosis_reaches_the_mutation_prompt():
 
 
 
+@live
 def test_an_evaluator_that_needs_no_files_runs_with_none_staged(tmp_path):
     """The common shape: case `i` is built from the shard index, not read."""
     script = (
@@ -267,6 +268,7 @@ def test_an_evaluator_that_needs_no_files_runs_with_none_staged(tmp_path):
     assert metrics["exact_match"] == 1.0
 
 
+@live
 def test_slots_are_translated_into_scattered_case_ids():
     """The search must not train on one end of the case list and gate on the other.
 
@@ -309,6 +311,7 @@ def test_the_same_slots_always_mean_the_same_cases():
     assert sorted(everything) == list(range(11))
 
 
+@live
 def test_a_candidate_that_never_ran_gets_its_traceback_fed_back():
     """`err=None` for every case says the candidate died, not why.
 
@@ -332,6 +335,7 @@ def test_a_candidate_that_never_ran_gets_its_traceback_fed_back():
     assert "NameError" in error         # and the reason it could not give is added
 
 
+@live
 def test_a_real_diagnosis_is_not_padded_with_process_noise():
     """An evaluator that says why keeps the floor to itself."""
     script = (
@@ -349,6 +353,7 @@ def test_a_real_diagnosis_is_not_padded_with_process_noise():
     assert "unrelated chatter" not in error
 
 
+@live
 def test_the_evaluator_runs_as_main_with_the_scratch_dir_importable():
     """The contract the author has to know without being able to try it first.
 
@@ -377,6 +382,7 @@ def test_the_evaluator_runs_as_main_with_the_scratch_dir_importable():
     assert "cand=7" in error              # and the candidate is importable
 
 
+@live
 def test_an_evaluator_that_dies_on_import_is_named_as_the_fault():
     """A hollowed-out candidate can raise at import, before any case runs.
 
@@ -403,6 +409,7 @@ def test_an_evaluator_that_dies_on_import_is_named_as_the_fault():
 
 
 
+@live
 def test_the_evaluator_is_alone_with_the_candidate(tmp_path):
     """Nothing but the candidate, the evaluator and the shim.
 
