@@ -141,8 +141,8 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
         const details = card.locator(".subagent-details");
         await expect(details).toContainText(childMarker);
         await expect(details).toContainText(/tokens|Usage unavailable/);
-        // The subagent first selects Direct Mode, then executes the two journey tools.
-        await expect(details.locator(".subagent-steps [data-kind='tool']")).toHaveCount(3);
+        // The subagent executes the two journey tools without a mode-selection round trip.
+        await expect(details.locator(".subagent-steps [data-kind='tool']")).toHaveCount(2);
         await expect(details.locator(".subagent-steps [data-kind='assistant']"))
           .toContainText("review notes are ready");
       },

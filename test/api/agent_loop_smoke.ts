@@ -16,10 +16,10 @@
  * Agent-loop smoke (hermetic): prove the Node-native loop end-to-end without
  * the full API stack or a live model.
  *
- * A local OpenAI-compatible SSE stub scripts three model turns (activate
- * Direct Mode, call one workspace tool, then answer), so the run under test
- * exercises the REAL transport and the execution-mode visibility contract:
- *   native loop -> activate mode -> dynamic tool exposure -> tool-call
+ * A local OpenAI-compatible SSE stub scripts two model turns (call one
+ * workspace tool, then answer), so the run under test exercises the REAL
+ * transport and first-step tool visibility contract:
+ *   native loop -> baseline tool exposure -> tool-call
  *   assembly -> createWorkspaceTools handler -> tool result into history ->
  *   next turn -> AgentEvents + final wire-format transcript.
  * It also verifies the request payload (system prompt, dynamic tool specs,
@@ -62,25 +62,9 @@ function startModelStub(requests: ChatRequest[]): Promise<{ server: Server; url:
     request.on("end", () => {
       const body = JSON.parse(raw) as ChatRequest;
       requests.push(body);
-      const toolNames = (body.tools ?? []).map((tool) => tool.function.name);
       const lastMessage = body.messages.at(-1) ?? {};
-      const previousAssistant = body.messages.at(-2) as {
-        tool_calls?: Array<{ function?: { name?: string } }>;
-      } | undefined;
-      const lastToolName = previousAssistant?.tool_calls?.[0]?.function?.name;
-      if (!toolNames.includes("list_files")) {
-        // First turn of every run: select Direct Mode. Mode-specific tools
-        // become visible only on the following model turn.
-        sse(response, [
-          { choices: [{ delta: { content: "Selecting direct execution…" } }] },
-          { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-mode", type: "function", function: { name: "activate_execution_mode", arguments: '{"modeId"' } }] } }] },
-          { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: ':"direct"}' } }] } }] },
-          { choices: [], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } },
-        ]);
-        return;
-      }
-      if (lastMessage.role !== "tool" || lastToolName === "activate_execution_mode") {
-        // Direct Mode is active: execute a real workspace tool.
+      if (lastMessage.role !== "tool") {
+        // Baseline tools are visible on the first model step.
         sse(response, [
           { choices: [{ delta: { content: "Checking the workspace…" } }] },
           { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-list", type: "function", function: { name: "list_files", arguments: '{"path"' } }] } }] },
@@ -130,29 +114,24 @@ async function main(): Promise<void> {
   agent.subscribe((event) => events.push(event));
   const first = await agent.execute("What files are in the workspace?");
 
-  assert(requests.length === 3, `model stub saw ${requests.length} requests, expected 3`);
+  assert(requests.length === 2, `model stub saw ${requests.length} requests, expected 2`);
   const firstRequest = requests[0]!;
   assert(firstRequest.model === "stub-model", "per-session model was not sent");
   assert(firstRequest.messages[0]!.role === "system", "system prompt missing");
   assert(String(firstRequest.messages[0]!.content).includes("workspace"), "workspace system prompt missing");
   const initialToolNames = (firstRequest.tools ?? []).map((tool) => tool.function.name);
   assert(
-    JSON.stringify(initialToolNames) === JSON.stringify(["activate_execution_mode"]),
-    `initial tool specs should expose only mode activation: ${initialToolNames.join(",")}`,
-  );
-  const directToolNames = (requests[1]!.tools ?? []).map((tool) => tool.function.name);
-  assert(
-    directToolNames.includes("list_files") && directToolNames.includes("run_python"),
-    `Direct Mode tool specs missing or stale: ${directToolNames.join(",")}`,
+    initialToolNames.includes("list_files") && initialToolNames.includes("run_python")
+      && !initialToolNames.includes("activate_execution_mode"),
+    `first-step tool specs missing, stale, or gated: ${initialToolNames.join(",")}`,
   );
 
   const textDeltas = events.filter((event) => event.type === "message_update").length;
-  assert(textDeltas >= 3, "streamed text deltas missing");
+  assert(textDeltas >= 2, "streamed text deltas missing");
   const toolStarts = events.filter((event) => event.type === "tool_execution_start");
   assert(
-    toolStarts.some((event) => event.type === "tool_execution_start" && event.toolName === "activate_execution_mode")
-      && toolStarts.some((event) => event.type === "tool_execution_start" && event.toolName === "list_files"),
-    "mode activation or list_files tool_execution_start missing",
+    toolStarts.some((event) => event.type === "tool_execution_start" && event.toolName === "list_files"),
+    "list_files tool_execution_start missing",
   );
   const listToolEnd = events.find(
     (event) => event.type === "tool_execution_end" && event.toolName === "list_files",
@@ -163,10 +142,10 @@ async function main(): Promise<void> {
 
   const roles = first.finalMessages.map((message) => message.role);
   assert(
-    JSON.stringify(roles) === JSON.stringify(["user", "assistant", "tool", "assistant", "tool", "assistant"]),
+    JSON.stringify(roles) === JSON.stringify(["user", "assistant", "tool", "assistant"]),
     `unexpected final roles: ${roles.join(",")}`,
   );
-  const toolResult = first.finalMessages[4]!;
+  const toolResult = first.finalMessages[2]!;
   assert(String(toolResult.content).includes("notes.md"), "real list_files handler did not run");
   const finalText = String(first.finalMessages.at(-1)?.content ?? "");
   assert(finalText === "Listed the workspace files.", `unexpected final text: ${finalText}`);
@@ -174,17 +153,17 @@ async function main(): Promise<void> {
   // ── Run 2: canonical history handoff replays the whole first transcript ──
   const second = createNativeAgent({ ...baseOptions, gatewayHistory: first.finalMessages } as Parameters<typeof createNativeAgent>[0]);
   await second.execute("And what did we find?");
-  const replayRequest = requests[3]!;
+  const replayRequest = requests[2]!;
   const replayRoles = replayRequest.messages.map((message) => message.role);
   assert(
     JSON.stringify(replayRoles) === JSON.stringify([
-      "system", "user", "assistant", "tool", "assistant", "tool", "assistant", "user",
+      "system", "user", "assistant", "tool", "assistant", "user",
     ]),
     `turn-2 replayed roles: ${replayRoles.join(",")}`,
   );
 
   console.log(
-    "Agent loop smoke PASS: mode activation + native loop + streaming model transport + real tool round-trip + multi-turn history verified.\n"
+    "Agent loop smoke PASS: first-step tools + native loop + streaming model transport + real tool round-trip + multi-turn history verified.\n"
     + `  final text turn 1: "${finalText}"; turn-2 replayed roles: ${replayRoles.join(",")}`,
   );
   await new Promise<void>((resolve) => server.close(() => resolve()));

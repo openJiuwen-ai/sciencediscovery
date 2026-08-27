@@ -1441,7 +1441,6 @@ async function executeAgentRun(
         subagentRunHandle = runSubagentTask({
           bindings: {
             abortSignal: childExecution.abortSignal,
-            ...(serverConfig.initialExecutionMode ? { initialExecutionMode: serverConfig.initialExecutionMode } : {}),
             observer: observeSubagentEvent,
             runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
             workspace: subagentWorkspace,
@@ -1570,19 +1569,11 @@ async function executeAgentRun(
     ...(sessionSpecialist ? { specialistId: sessionSpecialist.id } : {}),
     workspaceRoot: store.workspacePath(sessionId),
   });
-  let modePersistenceQueue = Promise.resolve();
   const observeMainEvent: NonNullable<import("../agent-run/create-agent-run.js").AgentRunBindings["observer"]> = (event) => {
     const active = activeSessions.get(sessionId);
     if (active) active.lastActivityAt = new Date().toISOString();
     if (event.type === "model_usage") {
       lastAgentUsage = capturedModelUsage(event);
-      return;
-    }
-    if (event.type === "execution_mode_changed") {
-      modePersistenceQueue = modePersistenceQueue.then(async () => {
-        await store.updateSessionRun(sessionId, runId, { executionMode: event.mode });
-        await emit({ mode: event.mode, type: "execution_mode.changed" });
-      });
       return;
     }
     if (event.type === "turn_start") {
@@ -1643,7 +1634,6 @@ async function executeAgentRun(
   mainExecution = runMainRequestExecution({
     bindings: {
       abortSignal: requestExecution.abortSignal,
-      ...(serverConfig.initialExecutionMode ? { initialExecutionMode: serverConfig.initialExecutionMode } : {}),
       observer: observeMainEvent,
       planRepository: {
         abandon: async (input) => {
@@ -1694,7 +1684,6 @@ async function executeAgentRun(
       prompt: promptUserMessage.content,
       purpose: "initial",
     });
-    await modePersistenceQueue;
     const taskUsage = lastAgentUsage;
     assertRunActive();
     await flushWorkspaceRefresh();
@@ -1746,7 +1735,6 @@ async function executeAgentRun(
     });
     return "completed";
   } catch (error) {
-    await modePersistenceQueue.catch(() => undefined);
     if (cancelledRuns.has(runId)) {
       await flushWorkspaceRefresh();
       await emit({ reason: "Run cancelled", runId, type: "run.cancelled" });

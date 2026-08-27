@@ -63,7 +63,6 @@ function workspace(root: string, sessionId: string): NativeAgentOptions {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not called"); },
     executeShell: async () => { throw new Error("not called"); },
-    initialExecutionMode: "direct",
     sessionId,
     workspaceRoot: root,
   };
@@ -166,7 +165,6 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
     };
     const mainOptions: NativeAgentOptions = {
       ...workspace(root, "main-example"),
-      initialExecutionMode: "plan",
       planRepository: planRepository("main-example"),
       runContract: JSON.stringify(mainInput),
       skills: [{

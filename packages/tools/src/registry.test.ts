@@ -64,7 +64,7 @@ test("dynamic availability hides and blocks tools without changing handlers", as
   assert.deepEqual(registry.visibleSpecs(), []);
   const blocked = await registry.execute({ args: {}, id: "1", name: "execute" }, new AbortController().signal);
   assert.equal(blocked.isError, true);
-  assert.match(blocked.content, /not available in the current execution mode/u);
+  assert.match(blocked.content, /not available under the current run capability policy/u);
   active = true;
   assert.deepEqual(registry.visibleSpecs().map((spec) => spec.name), ["execute"]);
   assert.equal((await registry.execute({ args: {}, id: "2", name: "execute" }, new AbortController().signal)).content, "done");

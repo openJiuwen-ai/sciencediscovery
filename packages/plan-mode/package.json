@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@sciencediscovery/context": "workspace:*",
-    "@sciencediscovery/execution-modes": "workspace:*",
     "@sciencediscovery/runtime-core": "workspace:*",
     "@sciencediscovery/schema": "workspace:*",
     "@sciencediscovery/tools": "workspace:*",

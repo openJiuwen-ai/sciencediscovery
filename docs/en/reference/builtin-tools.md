@@ -29,11 +29,10 @@ Node performs permission, CAS, and `WebInvocation` audit, and calls the vendors 
 
 | Tool | Condition | Key parameters |
 |---|---|---|
-| `activate_execution_mode` | first model turn | `modeId: direct\|plan`; exposes that mode's tools on the next model turn |
-| `propose_plan` | Plan Mode | `scope` ≤2000, 1–20 `steps`, `feasibilityConfidence`, optional `caveats`; records progress without gating work |
-| `revise_plan` | Plan Mode with a recorded plan | latest `planId` and `expectedVersion`, plus a replacement plan body |
-| `update_plan_step` | Plan Mode with a recorded plan | latest `planId` and `expectedVersion`, `stepId`, and step status; all completed steps complete the plan |
-| `abandon_plan` | Plan Mode with a recorded plan | latest `planId` and `expectedVersion`, optional reason |
+| `propose_plan` | Plan persistence is wired | `scope` ≤2000, 1–20 `steps`, `feasibilityConfidence`, optional `caveats`; records progress without gating work |
+| `revise_plan` | A plan has been recorded | latest `planId` and `expectedVersion`, plus a replacement plan body |
+| `update_plan_step` | A plan has been recorded | latest `planId` and `expectedVersion`, `stepId`, and step status; all completed steps complete the plan |
+| `abandon_plan` | A plan has been recorded | latest `planId` and `expectedVersion`, optional reason |
 | `task` | main run; unavailable inside subagents | `description` ≤80, `prompt` ≤20000, optional Brief v1, up to 50 `inputPaths`, `max_turns` ≤300, `timeout_seconds` ≤3600, `specialistId`, and up to 32 whitelisted `tools`; same-turn calls may run in parallel |
 | `query_graph` | Science Memory enabled | case-insensitive cross-Session substring `query`; returns `{hits,total,truncated}` |
 

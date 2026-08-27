@@ -606,7 +606,6 @@ async function startHttpFixture<T>(
     gatewayIdleTimeoutMs: 240_000,
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
-    initialExecutionMode: "direct",
     kernelIdleTimeoutMs: 0,
     paperPythonPath: resolve(fixture.dataDir, "paper-python"),
     paperWorkerPath: resolve(fixture.dataDir, "paper-worker.py"),

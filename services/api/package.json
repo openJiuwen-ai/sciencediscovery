@@ -16,8 +16,6 @@
     "@sciencediscovery/cas": "workspace:*",
     "@sciencediscovery/context": "workspace:*",
     "@sciencediscovery/data-source": "workspace:*",
-    "@sciencediscovery/direct-mode": "workspace:*",
-    "@sciencediscovery/execution-modes": "workspace:*",
     "@sciencediscovery/executor": "workspace:*",
     "@sciencediscovery/governance": "workspace:*",
     "@sciencediscovery/mcp-sources": "workspace:*",

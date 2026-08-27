@@ -139,7 +139,6 @@ type ScriptedTurns = ScriptedModelStep[] | ScriptedModelStep[][];
 type ChatMessage = {
   content?: unknown;
   role?: string;
-  tool_calls?: Array<{ function?: { name?: string } }>;
 };
 
 const SUBAGENT_PRESET_MARKER = "Applied subagent preset general-purpose";
@@ -176,7 +175,9 @@ export function scriptedModel(
   const model = "journey-scripted-model";
   const apiToken = "journey-local-stub-token";
   let sequence = 0;
-  let mainTurn = -1;
+  let mainStepIndex = 0;
+  let mainTurn = 0;
+  let subagentStepIndex = 0;
   const server: Server = createServer((request, response) => {
     const bodyChunks: Buffer[] = [];
     request.on("data", (chunk) => bodyChunks.push(Buffer.from(chunk)));
@@ -187,29 +188,30 @@ export function scriptedModel(
           tools?: Array<{ function?: { name?: string } }>;
         };
         const messages = body.messages ?? [];
+        if (!body.tools?.length) {
+          sequence += 1;
+          const id = `chatcmpl-journey-${sequence}`;
+          response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+          response.write(`data: ${JSON.stringify(completionChunk(id, model, {
+            content: "Journey session",
+            role: "assistant",
+          }, null))}\n\n`);
+          response.write(`data: ${JSON.stringify({
+            ...completionChunk(id, model, {}, "stop"),
+            usage: { completion_tokens: 3, prompt_tokens: 10, total_tokens: 13 },
+          })}\n\n`);
+          response.end("data: [DONE]\n\n");
+          return;
+        }
         const systemPrompt = String(messages.find((message) => message.role === "system")?.content ?? "");
         const isSubagent = systemPrompt.includes(SUBAGENT_PRESET_MARKER);
         const route = isSubagent ? "subagent" : "main";
-        const availableToolNames = (body.tools ?? []).flatMap((tool) =>
-          tool.function?.name ? [tool.function.name] : []);
-        const activationOnly = availableToolNames.length === 1
-          && availableToolNames[0] === "activate_execution_mode";
-        if (!isSubagent && activationOnly) mainTurn += 1;
-        const turn = isSubagent ? 0 : Math.max(0, mainTurn);
+        const turn = isSubagent ? 0 : mainTurn;
         const scripts = isSubagent ? subagentSteps : mainSteps;
         if (!scripts) throw new Error("The product made an unexpected subagent model request");
         const steps = scriptedTurn(scripts, turn);
-        const latestActivation = messages.findLastIndex((message) =>
-          message.role === "assistant"
-          && message.tool_calls?.some((call) => call.function?.name === "activate_execution_mode"));
-        const toolResultsSinceActivation = messages.slice(latestActivation + 1)
-          .filter((message) => message.role === "tool").length;
-        const stepIndex = latestActivation < 0
-          ? messages.filter((message) => message.role === "tool").length
-          : Math.max(0, toolResultsSinceActivation - 1);
-        const step: ScriptedModelStep = activationOnly
-          ? { arguments: { modeId: "direct" }, tool: "activate_execution_mode" }
-          : steps[stepIndex]!;
+        const stepIndex = isSubagent ? subagentStepIndex : mainStepIndex;
+        const step: ScriptedModelStep = steps[stepIndex]!;
         if (!step) throw new Error(`No ${route} scripted step ${stepIndex + 1} for turn ${turn + 1}`);
 
         sequence += 1;
@@ -247,6 +249,15 @@ export function scriptedModel(
           })}\n\n`);
         }
         response.end("data: [DONE]\n\n");
+        if (isSubagent) {
+          if ("tool" in step) subagentStepIndex += 1;
+          else subagentStepIndex = 0;
+        } else if ("tool" in step) {
+          mainStepIndex += 1;
+        } else {
+          mainStepIndex = 0;
+          mainTurn += 1;
+        }
       } catch (error) {
         response.writeHead(500, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
