@@ -218,7 +218,7 @@ export function createPlatformServices(
           originMeta: { evolveRunId: run.id, role: "seed" },
           sessionId: run.sessionId,
         });
-        await store.createArtifactVersion({
+        const winnerVersion = await store.createArtifactVersion({
           content: await evolveCas.put(Buffer.from(winner, "utf-8")),
           description: `演进结果：${run.goal.statement}`.slice(0, 500),
           executionRunIds: [run.id],
@@ -229,6 +229,31 @@ export function createPlatformServices(
           mediaType: "text/plain; charset=utf-8",
           origin: "llm_declared",
           originMeta: { evolveRunId: run.id, role: "winner" },
+          sessionId: run.sessionId,
+        });
+        // Mirror both versions onto the graph's evolve SubTask. Without this
+        // the run's node carried a `searches` edge and nothing else — the one
+        // thing the search existed to produce was in SessionStore but invisible
+        // to trace_provenance, so the winner looked unrooted the moment anyone
+        // asked where it came from.
+        memoryGraphSink.linkSearchArtifacts({
+          artifacts: [
+            {
+              artifactId: seed.artifact.id,
+              logicalName: name,
+              mediaType: "text/plain; charset=utf-8",
+              role: "seed",
+              version: seed.version.version,
+            },
+            {
+              artifactId: winnerVersion.artifact.id,
+              logicalName: name,
+              mediaType: "text/plain; charset=utf-8",
+              role: "winner",
+              version: winnerVersion.version.version,
+            },
+          ],
+          searchId: run.id,
           sessionId: run.sessionId,
         });
       },

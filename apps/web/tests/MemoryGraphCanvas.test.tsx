@@ -16,6 +16,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { MemoryGraphEdgeType, MemoryGraphNodeLabel } from "@sciencediscovery/schema";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
+import { MemoryGraphNodeDetail } from "../src/MemoryGraphProduct.js";
 
 import {
   EDGE_COLORS,
@@ -174,4 +179,61 @@ test("graphNodeDisplayNames does not suffixed names that appear only once", () =
   const display = graphNodeDisplayNames(nodes);
   assert.equal(display.get("c1"), "run_python");
   assert.equal(display.get("c2"), "run_shell");
+});
+
+test("图谱的 evolve 节点展示搜索内容并能跳到演进面板", () => {
+  // The evolve SubTask used to render a bare status + a raw "program_evolution"
+  // string: the run's substance lives one edge away on the SearchRun, and the
+  // panel that could explain it was unreachable from the graph.
+  const subtask = {
+    extra: { status: "completed", task_type: "program_evolution" },
+    id: "subtask:evolve:23601271-4db3-4774-bf69-b2c8bb9b81e5",
+    label: "SubTask" as const,
+  };
+  const searchRun = {
+    extra: {
+      algorithm: "era", baseline_score: 0.6626, best_test_score: 0.7666,
+      candidates: 17, search_id: "23601271-4db3-4774-bf69-b2c8bb9b81e5",
+      status: "succeeded", tokens: 56834,
+    },
+    id: "23601271-4db3-4774-bf69-b2c8bb9b81e5",
+    label: "SearchRun" as const,
+  };
+  const subgraph = {
+    edges: [{ source: subtask.id, target: searchRun.id, type: "searches" as const }],
+    nodes: [subtask, searchRun],
+  };
+
+  const opened: string[] = [];
+  const html = renderToStaticMarkup(createElement(
+    LocaleProvider, { initialLocale: "zh-CN" as const },
+    createElement(MemoryGraphNodeDetail as never, {
+      client: {} as never,
+      node: subtask as never,
+      onOpenEvolveRun: (runId: string) => opened.push(runId),
+      resolveState: { names: {}, states: {} } as never,
+      sessionId: "s1",
+      subgraph: subgraph as never,
+    }),
+  ));
+
+  assert.match(html, /程序演进/, "task_type 要有译名，不能裸串");
+  assert.match(html, /0\.6626/, "SubTask 详情要透出 SearchRun 的基线");
+  assert.match(html, /0\.7666/, "以及留出测试分");
+  assert.match(html, /打开演进面板/, "以及去面板的按钮");
+
+  // SearchRun 自己的详情也一样能看、能跳。
+  const runHtml = renderToStaticMarkup(createElement(
+    LocaleProvider, { initialLocale: "zh-CN" as const },
+    createElement(MemoryGraphNodeDetail as never, {
+      client: {} as never,
+      node: searchRun as never,
+      onOpenEvolveRun: () => {},
+      resolveState: { names: {}, states: {} } as never,
+      sessionId: "s1",
+      subgraph: subgraph as never,
+    }),
+  ));
+  assert.match(runHtml, /打开演进面板/);
+  assert.match(runHtml, /0\.7666/);
 });

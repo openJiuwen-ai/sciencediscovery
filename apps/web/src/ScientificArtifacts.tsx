@@ -368,6 +368,7 @@ export function ArtifactModal({
   onNavigateCode,
   onChipClick,
   onError,
+  onOpenEvolveRun,
   onPendingAnnotation,
   refreshKey,
   sessionId,
@@ -376,6 +377,8 @@ export function ArtifactModal({
   client: ApiClient;
   /** Render inline (memory-graph explorer) instead of as a modal over a backdrop. */
   embedded?: boolean;
+  /** Open the evolve panel for a run a graph node points at. */
+  onOpenEvolveRun?: (runId: string) => void;
   logicalName: string;
   /** When opened from a chip, select this version (the one the claim cited)
     * instead of the latest — so an [artifact1] chip pointing at v1 opens v1, not the
@@ -834,6 +837,7 @@ export function ArtifactModal({
     {chainExplorer ? <ErrorBoundary label="Science Memory" onError={(message) => { onError(message); setChainExplorer(null); }}><Suspense fallback={null}><MemoryGraphExplorer
       client={client}
       initialNodeId={chainExplorer.nodeId}
+      onOpenEvolveRun={onOpenEvolveRun}
       initialVersion={chainExplorer.version}
       initialChainKind={chainExplorer.chainKind}
       autoChain
@@ -850,6 +854,7 @@ export function ScientificArtifacts({
   client,
   onError,
   onEvolve,
+  onOpenEvolveRun,
   onPendingAnnotation,
   refreshKey,
   sessionId,
@@ -857,11 +862,14 @@ export function ScientificArtifacts({
   client: ApiClient;
   onError: (message: string) => void;
   onEvolve?: (seed: { cas: string; label: string }) => void;
+  /** Open the evolve panel for a run a graph node points at. */
+  onOpenEvolveRun?: (runId: string) => void;
   onPendingAnnotation: (annotation: ArtifactAnnotation) => void;
   refreshKey: string;
   sessionId: string;
 }) {
   return <ArtifactModal
+    onOpenEvolveRun={onOpenEvolveRun}
     client={client}
     embedded
     logicalName=""

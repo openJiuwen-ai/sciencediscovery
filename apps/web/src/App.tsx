@@ -4151,6 +4151,7 @@ export function App() {
 
       {artifactModalName && activeSessionId ? (
         <ArtifactModal
+          onOpenEvolveRun={setOpenEvolveRunId}
           client={client}
           logicalName={artifactModalName}
           initialVersion={artifactModalVersion}
@@ -4198,6 +4199,7 @@ export function App() {
 
       {evidenceDetailId && activeSessionId ? (
         <EvidenceModal
+          onOpenEvolveRun={setOpenEvolveRunId}
           client={client}
           evidenceId={evidenceDetailId}
           onClose={() => setEvidenceDetailId(undefined)}

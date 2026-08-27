@@ -37,6 +37,8 @@ export interface EvidenceModalProps {
   client: ApiClient;
   evidenceId: string;
   onClose: () => void;
+  /** Open the evolve panel for a run a graph node points at. */
+  onOpenEvolveRun?: (runId: string) => void;
   sessionId: string;
 }
 
@@ -48,7 +50,7 @@ function paperExtra(paper: MemoryGraphNode): Record<string, unknown> {
   return (paper.extra as Record<string, unknown> | undefined) ?? {};
 }
 
-export function EvidenceModal({ client, evidenceId, onClose, sessionId }: EvidenceModalProps) {
+export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, sessionId }: EvidenceModalProps) {
   const [evidence, setEvidence] = useState<MemoryGraphNode | null>(null);
   const [papers, setPapers] = useState<MemoryGraphNode[]>([]);
   const [loading, setLoading] = useState(true);

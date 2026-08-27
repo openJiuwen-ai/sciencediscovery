@@ -267,3 +267,18 @@
 .node-raw-field { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 6px; font-size: 10px; }
 .node-raw-field .node-field-label { color: var(--muted); }
 .node-raw-field .node-field-value { color: var(--muted); }
+
+/* The way from a graph's evolve node into the panel that can explain it.
+ * Accent-styled unlike the muted view-chain buttons: it leaves the graph. */
+.node-evolve-open {
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  margin-top: 10px;
+  padding: 7px 12px;
+}
+
+.node-evolve-open:hover { filter: brightness(1.08); }

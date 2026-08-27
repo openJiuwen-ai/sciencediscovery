@@ -85,16 +85,25 @@ export function useResolvedArtifactName(
  *  type; falls back to the raw key/value dump for unknown labels. Each typed
  *  component composes the shared Field/LongText/TimeField/LinkField primitives
  *  so hashes decode, long text truncates, times format, links open. */
-function NodeProperties({ node, client, sessionId, subgraph }: {
+function NodeProperties({ node, client, onOpenEvolveRun, sessionId, subgraph }: {
   node: MemoryGraphNode;
   client: ApiClient;
+  onOpenEvolveRun?: (runId: string) => void;
   sessionId: string;
   subgraph: MemorySubgraph;
 }) {
   const extra = (node.extra ?? {}) as Record<string, unknown>;
   switch (node.label) {
     case "ResearchGoal": return <ResearchGoalDetail extra={extra} />;
-    case "SubTask": return <SubTaskDetail extra={extra} />;
+    case "SubTask": return <SubTaskDetail extra={extra} node={node} onOpenEvolveRun={onOpenEvolveRun} subgraph={subgraph} />;
+    case "SearchRun": return <div className="node-detail-body">
+      {typeof extra.status === "string" ? <span className={`node-status-badge node-status-${extra.status}`}>{extra.status}</span> : null}
+      <EvolveRunSummary
+        extra={extra}
+        onOpenEvolveRun={onOpenEvolveRun}
+        runId={typeof extra.search_id === "string" ? extra.search_id : undefined}
+      />
+    </div>;
     case "Paper": return <PaperDetail extra={extra} />;
     case "Evidence": return <EvidenceDetail extra={extra} />;
     case "Claim": return <ClaimDetail extra={extra} />;
@@ -125,17 +134,65 @@ function ResearchGoalDetail({ extra }: { extra: Record<string, unknown> }) {
 // --- SubTask ----------------------------------------------------------------
 
 // Friendly display for known task_type values; unknown values pass through.
-function taskTypeLabel(taskType: string, t: (key: "node.task_type.code_execution" | "node.task_type.literature_search") => string): string {
+function taskTypeLabel(taskType: string, t: (key: "node.task_type.code_execution" | "node.task_type.literature_search" | "node.task_type.program_evolution") => string): string {
   if (taskType === "code_execution") return t("node.task_type.code_execution");
   if (taskType === "literature_search") return t("node.task_type.literature_search");
+  if (taskType === "program_evolution") return t("node.task_type.program_evolution");
   return taskType;
 }
 
-function SubTaskDetail({ extra }: { extra: Record<string, unknown> }) {
+/** The searched run's node, reached over the SubTask's `searches` edge. */
+function searchRunOf(node: MemoryGraphNode, subgraph: MemorySubgraph): MemoryGraphNode | undefined {
+  const edge = subgraph.edges.find((e) => e.source === node.id && e.type === "searches");
+  if (!edge) return undefined;
+  return subgraph.nodes.find((n) => n.id === edge.target && n.label === "SearchRun");
+}
+
+/** Scores, budget and a way into the panel — shared by the evolve SubTask and
+ *  the SearchRun node so the two views of one search cannot drift. */
+function EvolveRunSummary({ extra, onOpenEvolveRun, runId }: {
+  extra: Record<string, unknown>;
+  onOpenEvolveRun?: (runId: string) => void;
+  runId?: string;
+}) {
+  const { t } = useLocale();
+  const number = (key: string) => (typeof extra[key] === "number" ? (extra[key] as number) : undefined);
+  const baseline = number("baseline_score");
+  const bestTest = number("best_test_score");
+  return <>
+    <dl className="node-detail-fields">
+      {typeof extra.algorithm === "string" ? <Field label={t("evolve.summary.algorithm")} value={extra.algorithm} /> : null}
+      {baseline !== undefined ? <Field label={t("node.evolve.baseline")} value={baseline.toFixed(4)} /> : null}
+      {bestTest !== undefined ? <Field label={t("node.evolve.bestTest")} value={bestTest.toFixed(4)} /> : null}
+      {number("candidates") !== undefined ? <Field label={t("node.evolve.candidates")} value={number("candidates")} /> : null}
+      {number("tokens") !== undefined ? <Field label={t("evolve.summary.tokens")} value={number("tokens")} /> : null}
+    </dl>
+    {onOpenEvolveRun && runId ? <button
+      className="node-evolve-open"
+      onClick={() => onOpenEvolveRun(runId)}
+      type="button"
+    >{t("node.evolve.openPanel")}</button> : null}
+  </>;
+}
+
+function SubTaskDetail({ extra, node, onOpenEvolveRun, subgraph }: {
+  extra: Record<string, unknown>;
+  node?: MemoryGraphNode;
+  onOpenEvolveRun?: (runId: string) => void;
+  subgraph?: MemorySubgraph;
+}) {
   const { t } = useLocale();
   const status = typeof extra.status === "string" ? extra.status : undefined;
   const taskType = typeof extra.task_type === "string" ? extra.task_type : undefined;
   const taskTypeDisplay = taskType ? taskTypeLabel(taskType, t) : undefined;
+  // An evolve SubTask's substance lives one edge away, on the SearchRun it
+  // searches: scores, candidates, budget. Without this the node showed a bare
+  // status and the panel that could explain it was unreachable from here.
+  const searchRun = taskType === "program_evolution" && node && subgraph
+    ? searchRunOf(node, subgraph) : undefined;
+  const evolveRunId = node?.id.startsWith("subtask:evolve:")
+    ? node.id.slice("subtask:evolve:".length)
+    : undefined;
   return <div className="node-detail-body">
     {status ? <span className={`node-status-badge node-status-${status}`}>{status}</span> : null}
     <dl className="node-detail-fields">
@@ -146,6 +203,11 @@ function SubTaskDetail({ extra }: { extra: Record<string, unknown> }) {
       {extra.created_at ? <Field label={t("node.field.created_at")}><TimeField value={extra.created_at} /></Field> : null}
       {typeof extra.result_count === "number" ? <Field label={t("node.field.result_count")} value={extra.result_count} /> : null}
     </dl>
+    {searchRun || evolveRunId ? <EvolveRunSummary
+      extra={(searchRun?.extra ?? {}) as Record<string, unknown>}
+      onOpenEvolveRun={onOpenEvolveRun}
+      runId={evolveRunId}
+    /> : null}
   </div>;
 }
 
@@ -411,6 +473,7 @@ function RawNodeProperties({ extra }: { extra: Record<string, unknown> }) {
 export function MemoryGraphNodeDetail({
   client,
   node,
+  onOpenEvolveRun,
   onSelectNode,
   resolveState,
   sessionId,
@@ -418,6 +481,9 @@ export function MemoryGraphNodeDetail({
 }: {
   client: ApiClient;
   node?: MemoryGraphNode;
+  /** Open the evolve panel for a run this node points at. Omit where the
+   *  panel is out of reach (a modal without the session's run list). */
+  onOpenEvolveRun?: (runId: string) => void;
   /** Follow a relationship to its target node. Omit to render the chips as plain text. */
   onSelectNode?: (nodeId: string) => void;
   resolveState: ResolveState;
@@ -493,7 +559,7 @@ export function MemoryGraphNodeDetail({
             {target.label}: {graphNodeName(target)}
           </span>)}
       </div>)}
-      <NodeProperties node={node} client={client} sessionId={sessionId} subgraph={subgraph} />
+      <NodeProperties node={node} client={client} onOpenEvolveRun={onOpenEvolveRun} sessionId={sessionId} subgraph={subgraph} />
     </div>
   </div>;
 }

@@ -855,6 +855,26 @@ export class MemoryGraphClient {
     }
   }
 
+  async linkSearchArtifacts(payload: LinkSearchArtifactsPayload): Promise<void> {
+    try {
+      await this.post("/observe/search-artifacts", {
+        artifacts: payload.artifacts.map((art) => ({
+          artifact_id: art.artifactId,
+          logical_name: art.logicalName,
+          media_type: art.mediaType,
+          role: art.role,
+          version: art.version,
+        })),
+        search_id: payload.searchId,
+        session_id: payload.sessionId,
+      });
+    } catch (error) {
+      mgLog.warn("linkSearchArtifacts failed: search=%s, error %s",
+        payload.searchId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
   /** Read one search's graph back. Degrades to a reason rather than throwing,
    *  like every other read path here. */
   async getSearchGraph(searchId: string, maxNodes?: number): Promise<unknown> {
@@ -895,6 +915,21 @@ export class MemoryGraphClient {
 /** One batch of a search's events, as the sidecar's `/observe/search-progress`
  *  expects them. `taskId` rides along with the first batch so the
  *  `SubTask -[:searches]-> SearchRun` binding lands without a second call. */
+export interface SearchArtifactLink {
+  artifactId: string;
+  version: number;
+  logicalName: string;
+  mediaType: string;
+  /** Which part this version played in the search: `seed` or `winner`. */
+  role: string;
+}
+
+export interface LinkSearchArtifactsPayload {
+  searchId: string;
+  sessionId: string;
+  artifacts: SearchArtifactLink[];
+}
+
 export interface ObserveSearchProgressPayload {
   records: unknown[];
   searchId: string;
@@ -1073,6 +1108,16 @@ export class MemoryGraphSink {
    * projection of `events.ndjson`, so a write that does not land is repaired by
    * a replay rather than by failing the run.
    */
+  /** The run's published result — fire-and-forget like every other observe.
+   *  No buffering: this fires once per run, after the terminal event. */
+  linkSearchArtifacts(payload: LinkSearchArtifactsPayload): void {
+    if (!this.enabled || !this.client || !payload.artifacts.length) return;
+    this.client.linkSearchArtifacts(payload).catch(() => {
+      // Logged inside the client; the graph is a projection and the artifact
+      // stays real in SessionStore either way.
+    });
+  }
+
   observeSearchProgress(payload: ObserveSearchProgressPayload): void {
     if (!this.enabled || !this.client || !payload.records.length) return;
     const buffer = this.searchBuffers.get(payload.searchId) ?? {

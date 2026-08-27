@@ -426,6 +426,61 @@ def bind_subtask(
             _link_search_subtask_chain(session, session_id)
 
 
+def link_search_artifacts(
+    *,
+    search_id: str,
+    session_id: str,
+    artifacts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """The run's published result — seed and winner — as Artifact nodes.
+
+    Without this the evolve SubTask sat in the graph with a `searches` edge and
+    nothing else: the one thing the run existed to produce was in SessionStore
+    but invisible to `trace_provenance`, so the winner looked unrooted the
+    moment anyone asked where it came from.
+
+    Same vocabulary as an execution's output: composite-keyed Artifact nodes
+    and a `produces` edge — from the SubTask rather than a Code node, because
+    a search has no single execution to blame. `role` (seed / winner) rides on
+    the edge, not the node: the node is the version, which exists independent
+    of which part it played in this search.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        return {"linked": 0, "reason": "memory_graph_unreachable"}
+    task_id = f"subtask:evolve:{search_id}"
+    linked = 0
+    with driver.session() as session:
+        for art in artifacts:
+            session.run(
+                """
+                MERGE (a:Artifact {artifact_id: $artifact_id, version: $version})
+                  ON CREATE SET a.session_id   = $session_id,
+                                a.logical_name = $logical_name,
+                                a.path         = $logical_name,
+                                a.media_type   = $media_type,
+                                a.created_at   = datetime()
+                  ON MATCH  SET a.logical_name = $logical_name,
+                                a.media_type   = $media_type
+                MERGE (st:SubTask {task_id: $task_id})
+                  ON CREATE SET st.session_id = $session_id,
+                                st.task_type  = 'program_evolution',
+                                st.created_at = datetime()
+                MERGE (st)-[p:produces]->(a)
+                SET p.role = $role
+                """,
+                artifact_id=art.get("artifact_id"),
+                version=art.get("version"),
+                session_id=session_id,
+                logical_name=art.get("logical_name"),
+                media_type=art.get("media_type"),
+                task_id=task_id,
+                role=art.get("role"),
+            ).consume()
+            linked += 1
+    return {"linked": linked}
+
+
 def _link_search_subtask_chain(session: Any, session_id: str) -> None:
     """Rebuild the session's temporal chain so the search takes its place in it.
 

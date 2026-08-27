@@ -65,7 +65,7 @@ from .persistence import (
     upsert_session_first_message,
     upsert_session_plan,
 )
-from .search_graph import bind_subtask, get_search_graph, upsert_search_progress
+from .search_graph import bind_subtask, get_search_graph, link_search_artifacts, upsert_search_progress
 from .query import (
     by_edge_type,
     by_node_type,
@@ -960,6 +960,25 @@ def _finished_at(records: list[dict[str, Any]]) -> str | None:
         if (record.get("event") or {}).get("type") == "search_finished":
             return record.get("createdAt")
     return None
+
+
+class SearchArtifactsRequest(BaseModel):
+    search_id: str
+    session_id: str
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@app.post("/observe/search-artifacts", dependencies=[Depends(require_internal_token)])
+def observe_search_artifacts(req: SearchArtifactsRequest) -> dict[str, Any]:
+    if not req.artifacts:
+        return {"linked": 0}
+    try:
+        return link_search_artifacts(
+            search_id=req.search_id, session_id=req.session_id, artifacts=req.artifacts,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("search artifacts failed: %s", exc)
+        return {"linked": 0, "reason": str(exc)[:200]}
 
 
 @app.post("/observe/search-progress", dependencies=[Depends(require_internal_token)])
