@@ -1037,3 +1037,50 @@ def test_the_engine_passes_the_rollout_budget_not_the_raw_expansions() -> None:
     source = inspect.getsource(EraEngine._search)
     assert "max_iters=_rollout_budget(spec.expansions)" in source
     assert "max_iters=spec.expansions" not in source
+
+
+def test_a_summary_copied_from_the_parent_is_blanked() -> None:
+    """Sixteen nodes all read "Lossless text compression: …" on a live run.
+
+    The incremental-edit instruction ("其余部分原样保留") had the model keep
+    the seed's spec-style docstring header verbatim, and the header doubles as
+    the node label. An empty label is honest about carrying no information;
+    sixteen identical ones actively claim the candidates are the same thing.
+    """
+    import json as jsonlib
+
+    from sciencediscovery_evolve.vendor.era.search import make_propose
+    from sciencediscovery_evolve.vendor.era.program import Program
+    from sciencediscovery_evolve.vendor.era.tree import EraTree
+
+    seed_code = '"""Lossless text compression: compress(text)->bytes."""\n\nx = 1\n'
+    tree = EraTree(c_puct=1.0)
+    tree.seed(Program("p0", 0, None, seed_code, "基线", {"score": 0.5}, True, ""), 0.5)
+
+    class _Domain:
+        @staticmethod
+        def prompt(program):
+            return "改进它"
+
+    def complete(prompt, iteration):
+        # The model returns new code but keeps the parent's docstring line.
+        return ('"""Lossless text compression: compress(text)->bytes."""\n\nx = 2\n',
+                "Lossless text compression: compress(text)->bytes.")
+
+    propose = make_propose(tree, complete, _Domain())
+    payload = jsonlib.loads(propose("", _task(), "", 0.0))
+    assert payload["change_summary"] == ""
+
+    # A genuinely new line survives untouched.
+    def complete_fresh(prompt, iteration):
+        return ('"""换成 LZ77 滑窗匹配。"""\n\nx = 3\n', "换成 LZ77 滑窗匹配。")
+
+    propose2 = make_propose(tree, complete_fresh, _Domain())
+    payload2 = jsonlib.loads(propose2("", _task(), "", 0.0))
+    assert payload2["change_summary"] == "换成 LZ77 滑窗匹配。"
+
+
+def _task():
+    from agentdescent.evolution import Task
+
+    return Task(id="t0", prompt="p", meta={"shard": 0})

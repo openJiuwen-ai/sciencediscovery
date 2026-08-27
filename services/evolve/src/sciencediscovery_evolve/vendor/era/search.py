@@ -44,6 +44,7 @@ those is how a port stops being the algorithm it claims to be.
 
 from __future__ import annotations
 
+import ast
 import json
 import threading
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -129,6 +130,15 @@ class EraStrategy:
         )
 
 
+def _first_doc_line(code: str) -> str:
+    """The module docstring's first line, or empty — what a copied label equals."""
+    try:
+        doc = ast.get_docstring(ast.parse(code))
+    except SyntaxError:
+        return ""
+    return (doc or "").strip().splitlines()[0][:200] if doc else ""
+
+
 def make_propose(
     tree: EraTree,
     complete: Callable[[str, int], Tuple[str, str]],
@@ -159,6 +169,16 @@ def make_propose(
             "parent_index": parent.index,
         })
         code, summary = complete(domain.prompt(parent.program), iteration)
+        # A summary copied verbatim from the parent is not a summary: the
+        # docstring first line doubles as the node's label, and on one live
+        # compression run every candidate kept the seed's spec-style header,
+        # so sixteen nodes all read "Lossless text compression: …". An empty
+        # label is honest about carrying no information; sixteen identical
+        # ones actively claim the candidates are the same thing.
+        parent_summary = (parent.program.change_summary or "").strip()
+        parent_doc = _first_doc_line(parent.program.code)
+        if summary.strip() and summary.strip() in (parent_summary, parent_doc):
+            summary = ""
         return json.dumps(
             {
                 "change_summary": summary,
