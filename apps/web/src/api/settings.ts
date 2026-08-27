@@ -21,6 +21,8 @@ import type {
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
+  ModelThinkingEffort,
+  ModelThinkingMode,
   ProviderModelList,
   McpProxyPolicies,
   ProxyServer,
@@ -211,7 +213,13 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   addProviderModel(
     providerId: string,
-    body: { label?: string; model: string; vision?: boolean },
+    body: {
+      label?: string;
+      model: string;
+      thinkingEffort?: ModelThinkingEffort;
+      thinkingMode?: ModelThinkingMode;
+      vision?: boolean;
+    },
   ): Promise<ModelProfile> {
     return this.request(`/api/providers/${encodeURIComponent(providerId)}/models`, {
       body: JSON.stringify(body),

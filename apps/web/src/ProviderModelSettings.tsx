@@ -35,8 +35,11 @@ import {
 } from "@sciencediscovery/schema";
 
 import type { SettingsApiClient } from "./api/settings.js";
+import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
+import { parseThinkingChoice, thinkingChoiceLabelKey } from "./composer/ModelPicker.js";
 import { useLocale } from "./i18n/index.js";
+import { modelVariantThinkingControls, thinkingChoiceOptions } from "./modelThinking.js";
 
 interface ProviderDraft {
   apiProtocol: ModelApiProtocol;
@@ -185,7 +188,15 @@ export function PriceSummary({ model }: { model: ProviderModelEntry }) {
   </span>;
 }
 
-function ModelFacts({ model }: { model: ProviderModelEntry }) {
+/** Added models first (they are what the user acts on), then alphabetical. */
+export function sortProviderModels(entries: readonly ProviderModelEntry[]): ProviderModelEntry[] {
+  return [...entries].toSorted((left, right) =>
+    Number(Boolean(right.profileId)) - Number(Boolean(left.profileId))
+    || (left.displayName ?? left.catalog?.label ?? left.id).localeCompare(right.displayName ?? right.catalog?.label ?? right.id));
+}
+
+/** One compact line of capability facts for a provider model row. */
+function ModelRowFacts({ model }: { model: ProviderModelEntry }) {
   const { t } = useLocale();
   const unknown = t("providers.metadata.unknown");
   const contextWindow = mergedFact(model.remote?.contextWindow, model.catalog?.contextWindow);
@@ -193,26 +204,15 @@ function ModelFacts({ model }: { model: ProviderModelEntry }) {
   const vision = mergedFact(model.remote?.vision, model.catalog?.vision);
   const thinking = mergedFact(model.remote?.thinkingSupported, model.catalog?.thinking?.supported);
   const efforts = model.catalog?.thinking?.efforts;
-  return <dl className="provider-model-facts">
-    <div><dt>{t("providers.metadata.context")}</dt><dd>{tokenCount(contextWindow, unknown)}</dd></div>
-    <div><dt>{t("providers.metadata.output")}</dt><dd>{tokenCount(maxOutputTokens, unknown)}</dd></div>
-    <div><dt>{t("providers.metadata.vision")}</dt><dd>{vision === undefined ? unknown : vision ? t("common.yes") : t("common.no")}</dd></div>
-    <div><dt>{t("providers.metadata.thinking")}</dt><dd>{thinking === undefined ? unknown : thinking ? t("common.yes") : t("common.no")}{efforts?.length ? ` · ${efforts.map((effort) => t(`settings.thinkingEffort.${effort}`)).join(" / ")}` : ""}</dd></div>
-    <div className="provider-model-price"><dt>{t("providers.metadata.price")}</dt><dd><PriceSummary model={model} /></dd></div>
-  </dl>;
-}
-
-function SourceLinks({ model }: { model: ProviderModelEntry }) {
-  const { t } = useLocale();
-  const sources = [model.remote?.pricing?.source, model.catalog?.source, model.catalog?.pricing?.source]
-    .filter((source, index, all) => source && all.findIndex((candidate) =>
-      candidate && canonicalSourceUrl(candidate.url) === canonicalSourceUrl(source.url)) === index);
-  if (!sources.length) return <small>{t("providers.metadata.remoteSource")}</small>;
-  return <small className="provider-model-sources">
-    {sources.map((source) => source ? <a href={canonicalSourceUrl(source.url)} key={canonicalSourceUrl(source.url)} rel="noreferrer" target="_blank">
-      {t("providers.metadata.officialSource")} · {sourceDate(source.retrievedAt)}
-    </a> : null)}
-  </small>;
+  return <span className="provider-model-row-facts">
+    <span>{tokenCount(contextWindow, unknown)} {t("providers.metadata.contextShort")}</span>
+    <span>{t("providers.metadata.outputShort")} {tokenCount(maxOutputTokens, unknown)}</span>
+    <span>{vision === undefined ? `${t("providers.metadata.vision")} ${unknown}` : vision ? t("settings.visionCapable") : t("providers.metadata.noVision")}</span>
+    <span>{thinking === undefined ? `${t("providers.metadata.thinking")} ${unknown}` : thinking
+      ? (efforts?.length ? efforts.map((effort) => t(`settings.thinkingEffort.${effort}`)).join(" / ") : t("common.yes"))
+      : t("common.no")}</span>
+    <span className="provider-model-row-price"><PriceSummary model={model} /></span>
+  </span>;
 }
 
 /** The model catalog header: when the shared metadata was last updated and a
@@ -265,6 +265,118 @@ export function ModelCatalogStatus({ catalog, client, onCatalogChange, onError, 
   </section>;
 }
 
+interface ListingState {
+  error?: string;
+  list?: ProviderModelList;
+  loading: boolean;
+}
+
+interface ManualModelForm {
+  label: string;
+  modelId: string;
+  thinking: string;
+  vision: boolean;
+}
+
+const EMPTY_MANUAL_MODEL: ManualModelForm = { label: "", modelId: "", thinking: "", vision: false };
+
+function ProviderRow({
+  addedProfiles,
+  busy,
+  expanded,
+  listing,
+  onAddModel,
+  onEdit,
+  onRefresh,
+  onToggle,
+  provider,
+  testModel,
+}: {
+  addedProfiles: ModelProfile[];
+  busy: boolean;
+  expanded: boolean;
+  listing?: ListingState | undefined;
+  onAddModel: (providerId: string, modelId: string, entry: ProviderModelEntry | undefined, manual: ManualModelForm) => Promise<boolean>;
+  onEdit: (provider: ModelProvider) => void;
+  onRefresh: (providerId: string) => void;
+  onToggle: (providerId: string) => void;
+  provider: ModelProvider;
+  testModel: SettingsApiClient["testModel"];
+}) {
+  const { t } = useLocale();
+  const [manual, setManual] = useState<ManualModelForm>({ ...EMPTY_MANUAL_MODEL });
+  const [testModelId, setTestModelId] = useState("");
+  const total = listing?.list?.models.length;
+  const ready = provider.hasApiToken || provider.tokenOptional;
+  const manualChoices = thinkingChoiceOptions(modelVariantThinkingControls(manual.modelId, provider.apiVariant));
+  const testProfile = addedProfiles.find((profile) => profile.id === testModelId) ?? addedProfiles[0];
+
+  async function submitManual(): Promise<void> {
+    const added = await onAddModel(provider.id, manual.modelId, undefined, manual);
+    if (added) setManual({ ...EMPTY_MANUAL_MODEL });
+  }
+
+  return <div className={expanded ? "provider-row expanded" : "provider-row"}>
+    <button
+      aria-expanded={expanded}
+      className="provider-row-summary"
+      onClick={() => onToggle(provider.id)}
+      type="button"
+    >
+      <span
+        aria-label={ready ? t("providers.status.ready") : t("providers.status.missingToken")}
+        className={ready ? "model-status" : "model-status missing"}
+        role="img"
+        title={ready ? t("providers.status.ready") : t("providers.status.missingToken")}
+      />
+      <span className="provider-row-name"><strong>{provider.name}</strong><small>{provider.baseUrl}</small></span>
+      <span className="provider-row-count">{listing?.loading
+        ? t("providers.configured.loading")
+        : total === undefined
+          ? t("providers.configured.addedOnly", { added: addedProfiles.length })
+          : t("providers.configured.counts", { added: addedProfiles.length, total })}</span>
+      <em>{provider.presetId ? t("providers.kind.builtIn") : t("providers.kind.custom")}</em>
+    </button>
+    {expanded ? <div className="provider-row-detail">
+      <div className="provider-row-actions">
+        <button className="secondary-button compact-button" onClick={() => onEdit(provider)} type="button">{t("providers.edit")}</button>
+        <button className="secondary-button compact-button" disabled={busy || listing?.loading} onClick={() => onRefresh(provider.id)} type="button">{listing?.loading ? t("common.loading") : t("providers.models.refresh")}</button>
+        {addedProfiles.length && testProfile ? <span className="provider-row-test">
+          <select aria-label={t("providers.test.choose")} value={testProfile.id} onChange={(event) => setTestModelId(event.target.value)}>
+            {addedProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+          </select>
+          <ModelConnectivityButton
+            modelId={testProfile.id}
+            modelName={testProfile.name}
+            profileVersion={testProfile.updatedAt}
+            testModel={testModel}
+          />
+        </span> : null}
+      </div>
+      {listing?.error ? <div className="provider-discovery-error" role="alert"><strong>{t("providers.discovery.failed")}</strong><span>{listing.error}</span><small>{t("providers.discovery.fallback")}</small></div> : null}
+      {listing?.list ? <small className="provider-row-source">{listing.list.source === "remote" ? t("providers.models.remote") : t("providers.models.catalog")} · {new Date(listing.list.fetchedAt).toLocaleString()}</small> : null}
+      {listing?.list ? <div className="provider-model-table" aria-label={t("providers.models.table", { provider: provider.name })} role="table">
+        {sortProviderModels(listing.list.models).map((model) => <div className="provider-model-row" key={model.id} role="row">
+          <span className="provider-model-cell-name"><strong>{model.displayName ?? model.catalog?.label ?? model.id}</strong><code>{model.id}</code></span>
+          <ModelRowFacts model={model} />
+          <button className="secondary-button compact-button" disabled={busy || Boolean(model.profileId)} onClick={() => void onAddModel(provider.id, model.id, model, { ...EMPTY_MANUAL_MODEL })} type="button">{model.profileId ? t("providers.models.added") : t("providers.models.add")}</button>
+        </div>)}
+        {listing.list.models.length ? null : <p className="muted">{t("providers.models.empty")}</p>}
+      </div> : null}
+      <div className="provider-manual-form">
+        <label><span>{t("providers.manual.label")}</span><input value={manual.label} onChange={(event) => setManual((current) => ({ ...current, label: event.target.value }))} placeholder={t("providers.manual.labelPlaceholder")} /></label>
+        <label><span>{t("providers.models.manualId")}</span><input value={manual.modelId} onChange={(event) => setManual((current) => ({ ...current, modelId: event.target.value }))} placeholder={t("providers.models.manualPlaceholder")} /></label>
+        <label><span>{t("providers.manual.thinking")}</span><select value={manual.thinking} onChange={(event) => setManual((current) => ({ ...current, thinking: event.target.value }))}>
+          <option value="">{t("providers.manual.thinkingDefault")}</option>
+          {manualChoices.map((choice) => <option key={choice.value} value={choice.value}>{t(thinkingChoiceLabelKey(choice))}</option>)}
+        </select></label>
+        <label className="provider-manual-vision"><input checked={manual.vision} onChange={(event) => setManual((current) => ({ ...current, vision: event.target.checked }))} type="checkbox" /><span>{t("settings.visionCapable")}</span></label>
+        <button className="secondary-button" disabled={busy || !manual.modelId.trim()} onClick={() => void submitManual()} type="button">{t("providers.models.add")}</button>
+      </div>
+    </div> : null}
+  </div>;
+}
+
 export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   catalog?: ModelCatalogDetails;
   client: SettingsApiClient;
@@ -294,16 +406,11 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
 }, ref) {
   const { t } = useLocale();
   const [draft, setDraft] = useState<ProviderDraft>();
-  const [listing, setListing] = useState<ProviderModelList>();
-  const [manualModelId, setManualModelId] = useState("");
-  const [discoveryError, setDiscoveryError] = useState<string>();
+  const [listings, setListings] = useState<Record<string, ListingState>>({});
+  const [expandedId, setExpandedId] = useState<string>();
   const [busy, setBusy] = useState(false);
-  // The preset wall stays folded away until the user explicitly adds a
-  // provider; with nothing configured yet it starts open as the first-run path.
-  const [addOpen, setAddOpen] = useState(() => !providers.length);
-  const [modelsOpen, setModelsOpen] = useState(true);
   const baselineDraft = useRef<ProviderDraft | undefined>(undefined);
-  const listingGuard = useRef(createProviderListingRequestGuard());
+  const listingRequests = useRef(new Map<string, number>());
   const draftDirty = draftFingerprint(draft) !== draftFingerprint(baselineDraft.current);
 
   useEffect(() => onDraftStateChange?.(draftDirty), [draftDirty, onDraftStateChange]);
@@ -314,24 +421,39 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     saveDraft: saveProvider,
   }), [draftDirty, draft, busy, providers]);
 
+  async function loadModels(providerId: string, refresh = false): Promise<void> {
+    const sequence = (listingRequests.current.get(providerId) ?? 0) + 1;
+    listingRequests.current.set(providerId, sequence);
+    setListings((current) => ({ ...current, [providerId]: { ...current[providerId], error: undefined, loading: true } }));
+    try {
+      const list = await client.listProviderModels(providerId, refresh);
+      if (listingRequests.current.get(providerId) === sequence) {
+        setListings((current) => ({ ...current, [providerId]: { list, loading: false } }));
+      }
+    } catch (reason) {
+      // Keep the last successful listing visible. Manual model entry stays
+      // available so an outage is recoverable.
+      const message = reason instanceof Error ? reason.message : t("providers.discovery.failed");
+      if (listingRequests.current.get(providerId) === sequence) {
+        setListings((current) => ({ ...current, [providerId]: { ...current[providerId], error: message, loading: false } }));
+      }
+    }
+  }
+
+  // Pull every configured provider's real model list so each row can show
+  // added/total counts; results are cached in state and refreshed per row.
   useEffect(() => {
-    if (draft || !providers.length) return;
-    const first = providers[0]!;
-    const next = providerDraft(first);
-    baselineDraft.current = next;
-    setDraft(next);
-    void loadModels(first.id);
-    // The first-provider selection is only a hydration default. User edits
-    // are never reset merely because a parent list received a fresh object.
+    for (const provider of providers) {
+      if (!listings[provider.id] && !listingRequests.current.has(provider.id)) void loadModels(provider.id);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providers.length]);
+  }, [providers]);
 
   function change(update: Partial<ProviderDraft>): void {
     setDraft((current) => current ? { ...current, ...update } : current);
   }
 
   function selectDraft(next: ProviderDraft): void {
-    listingGuard.current.invalidate();
     baselineDraft.current = next;
     setDraft(next);
     setBusy(false);
@@ -345,49 +467,23 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     return providerOperationError(reason, fallback, t("providers.delete.referenced"));
   }
 
-  async function loadModels(providerId: string, refresh = false): Promise<void> {
-    const request = listingGuard.current.begin(providerId);
-    setBusy(true);
-    setDiscoveryError(undefined);
-    try {
-      const next = await client.listProviderModels(providerId, refresh);
-      if (listingGuard.current.isCurrent(request, providerId)) setListing(next);
-    } catch (reason) {
-      // Keep the last successful listing visible. The manual ID path below is
-      // intentionally independent of discovery so an outage is recoverable.
-      const message = reason instanceof Error ? reason.message : t("providers.discovery.failed");
-      if (listingGuard.current.isCurrent(request, providerId)) setDiscoveryError(message);
-    } finally {
-      if (listingGuard.current.isCurrent(request, providerId)) setBusy(false);
-    }
-  }
-
-  function selectProvider(provider: ModelProvider): void {
-    if (!allowDraftReplacement()) return;
-    selectDraft(providerDraft(provider));
-    setListing(undefined);
-    setManualModelId("");
-    setDiscoveryError(undefined);
-    setAddOpen(false);
-    setModelsOpen(true);
-    void loadModels(provider.id);
-  }
-
   function selectPreset(preset: ModelProviderPreset): void {
     if (!allowDraftReplacement()) return;
     selectDraft(presetDraft(preset));
-    setListing(undefined);
-    setManualModelId("");
-    setDiscoveryError(undefined);
-    setAddOpen(false);
   }
 
   function selectCustomProvider(): void {
     if (!allowDraftReplacement()) return;
     selectDraft({ ...CUSTOM_PROVIDER });
-    setListing(undefined);
-    setDiscoveryError(undefined);
-    setAddOpen(false);
+  }
+
+  function editProvider(provider: ModelProvider): void {
+    if (!allowDraftReplacement()) return;
+    selectDraft(providerDraft(provider));
+  }
+
+  function toggleRow(providerId: string): void {
+    setExpandedId((current) => current === providerId ? undefined : providerId);
   }
 
   async function saveProvider(): Promise<boolean> {
@@ -419,9 +515,6 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
             ...(draft.removeToken ? { apiToken: null } : {}),
           })
         : await client.createProvider({ ...input, presetId: draft.presetId });
-      const savedDraft = providerDraft(saved);
-      baselineDraft.current = savedDraft;
-      setDraft(savedDraft);
       onNotice(existing ? t("providers.notice.updated") : t("providers.notice.created"), saved.name);
       try {
         const registry = await client.listProviders();
@@ -430,6 +523,11 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
         onError(operationError(reason, t("providers.load.providersFailed")));
         return false;
       }
+      // Saved: back to the list, with the provider expanded and its real
+      // model list refreshed.
+      baselineDraft.current = undefined;
+      setDraft(undefined);
+      setExpandedId(saved.id);
       await loadModels(saved.id, true);
       return true;
     } catch (reason) {
@@ -446,8 +544,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     setBusy(true);
     try {
       await client.deleteProvider(draft.providerId);
-      const remaining = providers.filter((provider) => provider.id !== draft.providerId);
-      let nextProviders = remaining;
+      let nextProviders = providers.filter((provider) => provider.id !== draft.providerId);
       try {
         nextProviders = (await client.listProviders()).providers;
       } catch (reason) {
@@ -459,15 +556,13 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
       } catch (reason) {
         onError(operationError(reason, t("providers.load.modelsFailed")));
       }
-      const next = nextProviders[0];
-      if (next) selectDraft(providerDraft(next));
-      else {
-        listingGuard.current.invalidate();
-        baselineDraft.current = undefined;
-        setDraft(undefined);
-      }
-      setListing(undefined);
-      if (next) await loadModels(next.id);
+      setListings((current) => {
+        const next = { ...current };
+        delete next[draft.providerId!];
+        return next;
+      });
+      baselineDraft.current = undefined;
+      setDraft(undefined);
       onNotice(t("providers.notice.deleted"), draft.name);
     } catch (reason) {
       onError(operationError(reason, t("providers.delete.failed")));
@@ -476,26 +571,51 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     }
   }
 
-  async function addModel(modelId: string, entry?: ProviderModelEntry): Promise<void> {
-    if (!draft?.providerId || !modelId.trim() || busy) return;
+  async function addModel(
+    providerId: string,
+    modelId: string,
+    entry: ProviderModelEntry | undefined,
+    manual: ManualModelForm,
+  ): Promise<boolean> {
+    if (!modelId.trim() || busy) return false;
     setBusy(true);
     try {
-      const saved = await client.addProviderModel(draft.providerId, {
-        label: entry?.displayName ?? entry?.catalog?.label,
+      const label = manual.label.trim() || entry?.displayName || entry?.catalog?.label;
+      const vision = manual.vision || mergedFact(entry?.remote?.vision, entry?.catalog?.vision);
+      const thinking = parseThinkingChoice(manual.thinking);
+      const saved = await client.addProviderModel(providerId, {
+        ...(label ? { label } : {}),
         model: modelId.trim(),
-        vision: mergedFact(entry?.remote?.vision, entry?.catalog?.vision),
+        ...(thinking.mode ? { thinkingMode: thinking.mode } : {}),
+        ...(thinking.effort ? { thinkingEffort: thinking.effort } : {}),
+        ...(vision !== undefined ? { vision } : {}),
       });
       const nextModels = [...models.filter((model) => model.id !== saved.id), saved]
         .toSorted((left, right) => left.name.localeCompare(right.name));
       onModelsChange(nextModels);
-      setManualModelId("");
-      setListing((current) => current ? {
-        ...current,
-        models: current.models.map((model) => model.id === modelId ? { ...model, profileId: saved.id } : model),
-      } : current);
+      setListings((current) => {
+        const listing = current[providerId]?.list;
+        if (!listing) return current;
+        const known = listing.models.some((model) => model.id === modelId.trim());
+        return {
+          ...current,
+          [providerId]: {
+            ...current[providerId]!,
+            list: {
+              ...listing,
+              models: known
+                ? listing.models.map((model) => model.id === modelId.trim() ? { ...model, profileId: saved.id } : model)
+                : [{ id: modelId.trim(), profileId: saved.id }, ...listing.models],
+            },
+            loading: false,
+          },
+        };
+      });
       onNotice(t("providers.notice.modelAdded"), saved.name);
+      return true;
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : t("providers.models.addFailed"));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -510,43 +630,39 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
       onError={onError}
       onNotice={onNotice}
     />
-    {providers.length ? <section className="provider-registry" aria-label={t("providers.configured.title")}>
-      <h4>{t("providers.configured.title")}</h4>
-      <div className="provider-registry-list">{providers.map((provider) => <button
-        className={provider.id === draft?.providerId ? "provider-registry-card active" : "provider-registry-card"}
-        key={provider.id}
-        onClick={() => selectProvider(provider)}
-        type="button"
-      >
-        <span
-          aria-label={provider.hasApiToken || provider.tokenOptional ? t("providers.status.ready") : t("providers.status.missingToken")}
-          className={provider.hasApiToken || provider.tokenOptional ? "model-status" : "model-status missing"}
-          role="img"
-          title={provider.hasApiToken || provider.tokenOptional ? t("providers.status.ready") : t("providers.status.missingToken")}
-        />
-        <span><strong>{provider.name}</strong><small>{provider.baseUrl}</small></span>
-        <em>{provider.presetId ? t("providers.kind.builtIn") : t("providers.kind.custom")}</em>
-      </button>)}</div>
-    </section> : null}
-
-    <section className="provider-add" aria-label={t("providers.add.title")}>
-      <button aria-expanded={addOpen} className="provider-add-toggle" onClick={() => setAddOpen((current) => !current)} type="button">
-        <strong>{t("providers.add.title")}</strong>
-        <small>{t("providers.add.help")}</small>
-      </button>
-      {addOpen ? <div className="provider-preset-grid">
-        {presets.map((preset) => <button
-          className={draft?.presetId === preset.id && !draft.providerId ? "provider-preset-card active" : "provider-preset-card"}
-          key={preset.id}
-          onClick={() => selectPreset(preset)}
-          type="button"
-        ><strong>{preset.name}</strong><small>{preset.tokenOptional ? t("providers.token.optional") : t("providers.token.only")}</small></button>)}
-        <button
-          className={draft && !draft.presetId && !draft.providerId ? "provider-preset-card active" : "provider-preset-card"}
-          onClick={selectCustomProvider}
-          type="button"
-        ><strong>{t("providers.custom.name")}</strong><small>{t("providers.custom.hint")}</small></button>
-      </div> : null}
+    <section className="provider-registry" aria-label={t("providers.configured.title")}>
+      <div className="provider-section-heading">
+        <div><h4>{t("providers.configured.title")}</h4></div>
+        <div className="provider-add-controls">
+          <select
+            aria-label={t("providers.add.title")}
+            onChange={(event) => {
+              const preset = presets.find((candidate) => candidate.id === event.target.value as ModelProviderPresetId);
+              if (preset) selectPreset(preset);
+            }}
+            value=""
+          >
+            <option value="">{t("providers.add.placeholder")}</option>
+            {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}{preset.tokenOptional ? ` · ${t("providers.token.optional")}` : ""}</option>)}
+          </select>
+          <button className="secondary-button compact-button" onClick={selectCustomProvider} type="button">{t("providers.custom.name")}</button>
+        </div>
+      </div>
+      {providers.length ? <div className="provider-rows">
+        {providers.map((provider) => <ProviderRow
+          addedProfiles={models.filter((model) => model.providerId === provider.id)}
+          busy={busy}
+          expanded={expandedId === provider.id}
+          key={provider.id}
+          {...(listings[provider.id] ? { listing: listings[provider.id] } : {})}
+          onAddModel={addModel}
+          onEdit={editProvider}
+          onRefresh={(providerId) => void loadModels(providerId, true)}
+          onToggle={toggleRow}
+          provider={provider}
+          testModel={(modelId) => client.testModel(modelId)}
+        />)}
+      </div> : <p className="muted">{t("providers.configured.empty")}</p>}
     </section>
 
     {draft ? <section className="provider-editor" aria-label={t("providers.editor.title")}>
@@ -554,6 +670,11 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
         <div><h4>{draft.providerId ? t("providers.editor.edit") : t("providers.editor.create")}</h4><p>{draft.presetId ? t("providers.editor.presetHelp") : t("providers.editor.customHelp")}</p></div>
         <div className="provider-editor-actions">
           {draft.providerId ? <button className="danger-button compact-button" disabled={busy} onClick={() => void deleteProvider()} type="button">{t("common.delete")}</button> : null}
+          <button className="secondary-button compact-button" disabled={busy} onClick={() => {
+            if (!allowDraftReplacement()) return;
+            baselineDraft.current = undefined;
+            setDraft(undefined);
+          }} type="button">{t("common.cancel")}</button>
           <button className="primary-button compact-button" disabled={busy} onClick={() => void saveProvider()} type="button">{busy ? t("common.saving") : t("common.save")}</button>
         </div>
       </div>
@@ -592,39 +713,6 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           </select></label>
           {proxySettings ? <ProxyPolicySelect label={t("settings.llmProxy")} onChange={(proxyPolicy) => change({ proxyPolicy })} settings={proxySettings} value={draft.proxyPolicy} /> : null}
           {!draft.presetId ? <label className="provider-token-optional"><input checked={draft.tokenOptional} onChange={(event) => change({ tokenOptional: event.target.checked })} type="checkbox" /><span>{t("providers.token.optionalToggle")}</span></label> : null}
-        </div>
-      </details>
-    </section> : null}
-
-    {draft?.providerId ? <section className="provider-model-catalog" aria-label={t("providers.models.title")}>
-      <div className="provider-section-heading">
-        <div><h4>{t("providers.models.title")}</h4><p>{t("providers.models.help")}</p></div>
-        <button className="secondary-button compact-button" disabled={busy} onClick={() => void loadModels(draft.providerId!, true)} type="button">{busy ? t("common.loading") : t("providers.models.refresh")}</button>
-      </div>
-      {discoveryError ? <div className="provider-discovery-error" role="alert"><strong>{t("providers.discovery.failed")}</strong><span>{discoveryError}</span><small>{t("providers.discovery.fallback")}</small></div> : null}
-      <details
-        className="provider-models-details"
-        onToggle={(event) => setModelsOpen(event.currentTarget.open)}
-        open={modelsOpen}
-      >
-        <summary>
-          {listing
-            ? t("providers.models.toggle", { count: listing.models.length })
-            : busy ? t("common.loading") : t("providers.models.toggleEmpty")}
-          {listing ? <small>{listing.source === "remote" ? t("providers.models.remote") : t("providers.models.catalog")} · {new Date(listing.fetchedAt).toLocaleString()}</small> : null}
-        </summary>
-        <div className="provider-manual-model">
-          <label><span>{t("providers.models.manualId")}</span><input value={manualModelId} onChange={(event) => setManualModelId(event.target.value)} placeholder={t("providers.models.manualPlaceholder")} /></label>
-          <button className="secondary-button" disabled={busy || !manualModelId.trim()} onClick={() => void addModel(manualModelId)} type="button">{t("providers.models.add")}</button>
-        </div>
-        <div className="provider-model-list">
-          {listing?.models.map((model) => <article className="provider-model-card" key={model.id}>
-            <header><div><strong>{model.displayName ?? model.catalog?.label ?? model.id}</strong><code>{model.id}</code></div><button className="secondary-button compact-button" disabled={busy || Boolean(model.profileId)} onClick={() => void addModel(model.id, model)} type="button">{model.profileId ? t("providers.models.added") : t("providers.models.add")}</button></header>
-            <ModelFacts model={model} />
-            {model.catalog?.pricing?.notes ? <small className="provider-price-note">{model.catalog.pricing.notes}</small> : null}
-            <SourceLinks model={model} />
-          </article>)}
-          {listing && !listing.models.length ? <p className="muted">{t("providers.models.empty")}</p> : null}
         </div>
       </details>
     </section> : null}

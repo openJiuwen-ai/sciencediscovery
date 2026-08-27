@@ -163,7 +163,6 @@ import {
 } from "./timeline/RunTimeline.js";
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
 import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
-import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./ArtifactLifecycleControls.js";
 import { SkillManager } from "./SkillManager.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
@@ -240,7 +239,7 @@ import {
   resolveComposerRunAction,
   type ComposerRunAction,
 } from "./composer/model.js";
-import { ModelPickerDialog } from "./composer/ModelPickerDialog.js";
+import { ModelPicker } from "./composer/ModelPicker.js";
 import {
   isActiveRunStatus,
   isSessionRunning,
@@ -486,18 +485,6 @@ export function WorkspaceFileTreeList({
   />;
 }
 
-export interface ModelDraft {
-  apiProtocol: ModelApiProtocol;
-  apiVariant: ModelApiVariant;
-  baseUrl: string;
-  model: string;
-  name: string;
-  proxyPolicy: ProxyPolicy;
-  thinkingEffort: ModelThinkingEffort;
-  thinkingMode: ModelThinkingMode;
-  vision: boolean;
-}
-
 function preserveEqualSnapshot<T>(current: T, next: T): T {
   return JSON.stringify(current) === JSON.stringify(next) ? current : next;
 }
@@ -681,152 +668,6 @@ export function SystemSettingsFooter({
     <button className="primary-button" disabled={busy} onClick={onSaveAndClose} type="button">{busy ? t("common.saving") : t("settings.saveAndClose")}</button>
   </div>;
 }
-
-export const EMPTY_MODEL_DRAFT: ModelDraft = {
-  apiProtocol: "openai-chat-completions",
-  apiVariant: "openai",
-  baseUrl: "",
-  model: "",
-  name: "",
-  proxyPolicy: "inherit",
-  thinkingEffort: "high",
-  thinkingMode: "auto",
-  vision: false,
-};
-
-export function modelDraftFromProfile(profile: ModelProfile): ModelDraft {
-  const apiProtocol = profile.apiProtocol ?? (profile.baseUrl.includes("/api/plan")
-    ? "anthropic-messages"
-    : "openai-chat-completions");
-  return {
-    apiProtocol,
-    apiVariant: profile.apiVariant ?? DEFAULT_MODEL_API_VARIANT[apiProtocol],
-    baseUrl: profile.baseUrl,
-    model: profile.model,
-    name: profile.name,
-    proxyPolicy: profile.proxyPolicy,
-    thinkingEffort: profile.thinkingEffort ?? "high",
-    thinkingMode: profile.thinkingMode ?? "auto",
-    vision: profile.vision,
-  };
-}
-
-export function modelDraftIsDirty(
-  draft: ModelDraft,
-  baseline: ModelDraft,
-  draftToken: string,
-  removeStoredToken: boolean,
-): boolean {
-  return removeStoredToken
-    || draftToken.trim().length > 0
-    || draft.apiProtocol !== baseline.apiProtocol
-    || draft.apiVariant !== baseline.apiVariant
-    || draft.baseUrl !== baseline.baseUrl
-    || draft.model !== baseline.model
-    || draft.name !== baseline.name
-    || draft.proxyPolicy !== baseline.proxyPolicy
-    || draft.thinkingEffort !== baseline.thinkingEffort
-    || draft.thinkingMode !== baseline.thinkingMode
-    || draft.vision !== baseline.vision;
-}
-
-export type ModelRegistryDraftScope = "both" | "model" | "provider" | undefined;
-
-export function modelRegistryDraftScope(
-  providerDraftDirty: boolean,
-  modelDraftDirty: boolean,
-): ModelRegistryDraftScope {
-  if (providerDraftDirty && modelDraftDirty) return "both";
-  if (providerDraftDirty) return "provider";
-  if (modelDraftDirty) return "model";
-  return undefined;
-}
-
-export function ModelDraftFields({
-  draft,
-  onChange,
-}: {
-  draft: ModelDraft;
-  onChange: (update: Partial<ModelDraft>) => void;
-}) {
-  const { t } = useLocale();
-  const baseUrlLabel = draft.apiProtocol === "anthropic-messages"
-    ? t("settings.baseUrl.anthropic")
-    : draft.apiProtocol === "openai-responses"
-      ? t("settings.baseUrl.responses")
-      : t("settings.baseUrl.chatCompletions");
-  const thinkingControls = modelVariantThinkingControls(draft.model, draft.apiVariant);
-  const effortOptions = thinkingControls.efforts;
-  const modeOptions = thinkingControls.modes;
-  const constrainedDraftThinking = constrainCatalogThinking(draft.model, draft.thinkingMode, draft.thinkingEffort);
-  const displayedThinkingMode = modeOptions.includes(draft.thinkingMode)
-    ? draft.thinkingMode
-    : constrainedDraftThinking.mode;
-  const effortHint = thinkingControls.supported && effortOptions.length && displayedThinkingMode !== "enabled"
-    ? t("settings.thinkingEffort.requiresEnabled")
-    : undefined;
-  return <>
-    <section className="model-editor-section">
-      <h4>{t("settings.modelSection.identity")}</h4>
-      <label><span>{t("settings.displayName")}</span><input required value={draft.name} onChange={(event) => onChange({ name: event.target.value })} placeholder={t("settings.displayNamePlaceholder")} /></label>
-      <div className="model-editor-row">
-        <label><span>{baseUrlLabel}</span><input required value={draft.baseUrl} onChange={(event) => onChange({ baseUrl: event.target.value })} placeholder={draft.apiProtocol === "anthropic-messages" ? t("settings.baseUrlHint.anthropic") : t("settings.baseUrlHint")} /></label>
-        <label><span>{t("settings.modelId")}</span><input required value={draft.model} onChange={(event) => onChange({ model: event.target.value })} /></label>
-      </div>
-    </section>
-    <section className="model-editor-section">
-      <h4>{t("settings.modelSection.api")}</h4>
-      <div className="model-editor-row">
-        <label><span>{t("settings.apiProtocol")}</span><select value={draft.apiProtocol} onChange={(event) => {
-          const apiProtocol = event.target.value as ModelApiProtocol;
-          onChange({ apiProtocol, apiVariant: DEFAULT_MODEL_API_VARIANT[apiProtocol] });
-        }}>
-          <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
-          <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
-          <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
-        </select></label>
-        <label><span>{t("settings.apiVariant")}</span><select value={draft.apiVariant} onChange={(event) => {
-          const apiVariant = event.target.value as ModelApiVariant;
-          const supported = modelVariantThinkingControls(draft.model, apiVariant).supported;
-          onChange({ apiVariant, ...(!supported ? { thinkingMode: "auto" as const } : {}) });
-        }}>
-          {MODEL_API_VARIANTS[draft.apiProtocol].map((variant) => <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>)}
-        </select></label>
-      </div>
-      <small className="model-editor-hint">{t(`settings.apiVariant.${draft.apiVariant}.hint`)}</small>
-    </section>
-    <section className="model-editor-section">
-      <h4>{t("settings.modelSection.thinking")}</h4>
-      {thinkingControls.supported ? <>
-        <div className="model-editor-row">
-          <label><span>{t("settings.thinkingMode")}</span><select value={displayedThinkingMode} onChange={(event) => onChange({ thinkingMode: event.target.value as ModelThinkingMode })}>
-            {modeOptions.map((mode) => <option key={mode} value={mode}>{t(`settings.thinkingMode.${mode}`)}</option>)}
-          </select></label>
-          {effortOptions.length ? <label><span>{t("settings.thinkingEffort")}</span><select disabled={displayedThinkingMode !== "enabled"} value={effortOptions.includes(draft.thinkingEffort) ? draft.thinkingEffort : constrainedDraftThinking.effort} onChange={(event) => onChange({ thinkingEffort: event.target.value as ModelThinkingEffort })}>
-            {effortOptions.map((effort) => <option key={effort} value={effort}>{t(`settings.thinkingEffort.${effort}`)}</option>)}
-          </select></label> : null}
-        </div>
-        {thinkingControls.legacyBudget ? <small className="model-editor-hint legacy-notice">{t("settings.thinking.anthropicLegacyNotice")}</small> : null}
-        {effortHint ? <small className="model-editor-hint">{effortHint}</small> : null}
-      </> : <small className="model-editor-hint warning">{t("settings.thinking.unsupportedHint")}</small>}
-    </section>
-  </>;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/** How long the server gets to close a cancelled stream before the client drops it. */
 
 function measureWorkspaceMaxWidth(): number {
   if (typeof window === "undefined") return DEFAULT_WORKSPACE_WIDTH;
@@ -1107,12 +948,6 @@ export function App() {
   const [connectors, setConnectors] = useState<ConnectorManifest[]>([]);
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
   const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
-  const [editingModelId, setEditingModelId] = useState<string>();
-  const [modelDraft, setModelDraft] = useState<ModelDraft>(EMPTY_MODEL_DRAFT);
-  const [modelDraftBaseline, setModelDraftBaseline] = useState<ModelDraft>(EMPTY_MODEL_DRAFT);
-  const [draftToken, setDraftToken] = useState("");
-  const [removeStoredToken, setRemoveStoredToken] = useState(false);
-  const modelSettingsDirty = modelDraftIsDirty(modelDraft, modelDraftBaseline, draftToken, removeStoredToken);
   const [papers, setPapers] = useState<PaperAcquisition[]>([]);
   const [paperVisionRuns, setPaperVisionRuns] = useState<PaperVisionRun[]>([]);
   const [visionModelId, setVisionModelId] = useState<string>();
@@ -1195,7 +1030,6 @@ export function App() {
   const [globalSearchTotal, setGlobalSearchTotal] = useState(0);
   const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
   const [showConfig, setShowConfig] = useState(() => initialView.settingsKind === "system");
-  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [systemSettingsGroup, setSystemSettingsGroup] = useState<SystemSettingsGroup>(() => isSystemSettingsGroup(initialView.settingsGroup) ? initialView.settingsGroup : "global");
   const [skillWorkspaceLaunch, setSkillWorkspaceLaunch] = useState<{ requestId: number; skillId?: string }>();
   const skillWorkspaceLaunchRevision = useRef(0);
@@ -1784,15 +1618,6 @@ export function App() {
         const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
         if (target) void openScopedSettings(target);
       }
-      const selected = modelItems.find((item) => item.id === editingModelId) ?? modelItems[0];
-      if (selected) {
-        const selectedDraft = modelDraftFromProfile(selected);
-        setEditingModelId(selected.id);
-        setModelDraft(selectedDraft);
-        setModelDraftBaseline(selectedDraft);
-        setDraftToken("");
-        setRemoveStoredToken(false);
-      }
       setVisionModelId((current) => modelItems.some((item) => item.id === current && item.vision)
         ? current
         : modelItems.find((item) => item.vision)?.id);
@@ -2302,77 +2127,6 @@ export function App() {
     }
   }
 
-  function replaceModelDraft(profile?: ModelProfile): void {
-    const nextDraft = profile ? modelDraftFromProfile(profile) : EMPTY_MODEL_DRAFT;
-    setEditingModelId(profile?.id);
-    setModelDraft(nextDraft);
-    setModelDraftBaseline(nextDraft);
-    setDraftToken("");
-    setRemoveStoredToken(false);
-  }
-
-  function confirmModelDraftDiscard(): boolean {
-    return !modelSettingsDirty || window.confirm(t("settings.unsaved.model.confirm"));
-  }
-
-  function editModel(profile: ModelProfile): void {
-    if (profile.id === editingModelId) return;
-    if (!confirmModelDraftDiscard()) return;
-    replaceModelDraft(profile);
-  }
-
-  function startNewModel(): void {
-    if (!editingModelId) return;
-    if (!confirmModelDraftDiscard()) return;
-    replaceModelDraft();
-  }
-
-  function updateModelDraft(update: Partial<ModelDraft>): void {
-    setModelDraft((current) => ({ ...current, ...update }));
-  }
-
-  async function saveModel(): Promise<void> {
-    reportSystemSettingsError();
-    try {
-      const thinkingControls = modelVariantThinkingControls(modelDraft.model, modelDraft.apiVariant);
-      const constrainedThinking = constrainCatalogThinking(
-        modelDraft.model,
-        modelDraft.thinkingMode,
-        modelDraft.thinkingEffort,
-      );
-      const {
-        thinkingEffort: _draftThinkingEffort,
-        thinkingMode: _draftThinkingMode,
-        ...draftWithoutThinking
-      } = modelDraft;
-      const normalizedDraft = thinkingControls.supported
-        ? {
-            ...draftWithoutThinking,
-            thinkingEffort: constrainedThinking.effort,
-            thinkingMode: constrainedThinking.mode,
-          }
-        : draftWithoutThinking;
-      const saved = editingModelId
-        ? await client.updateModel(editingModelId, {
-            ...normalizedDraft,
-            ...(removeStoredToken ? { apiToken: null } : draftToken.trim() ? { apiToken: draftToken.trim() } : {}),
-          })
-        : await client.createModel({ ...normalizedDraft, apiToken: draftToken.trim() });
-      const savedDraft = modelDraftFromProfile(saved);
-      setModels((current) => [...current.filter((item) => item.id !== saved.id), saved]
-        .toSorted((left, right) => left.name.localeCompare(right.name)));
-      setEditingModelId(saved.id);
-      setModelDraft(savedDraft);
-      setModelDraftBaseline(savedDraft);
-      setDraftToken("");
-      setRemoveStoredToken(false);
-      pushToast("success", editingModelId ? "Model updated" : "Model added", saved.name);
-    } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : t("error.saveModel"));
-      throw reason;
-    }
-  }
-
   async function createProxyServer(input: CreateProxyServerRequest): Promise<void> {
     try {
       await client.createProxyServer(input);
@@ -2470,7 +2224,7 @@ export function App() {
     }
   }
 
-  function clearSystemSettingsDrafts(discardModel = true): void {
+  function clearSystemSettingsDrafts(): void {
     setGlobalSettingsEdit(undefined);
     setTimeoutSettingsEdit(undefined);
     setQuotaSettingsEdit(undefined);
@@ -2479,14 +2233,6 @@ export function App() {
     setMemoryGraphSettingsEdit(undefined);
     setLocaleEdit(undefined);
     setTokenEdit(undefined);
-    if (discardModel) {
-      const savedModel = models.find((item) => item.id === editingModelId);
-      const savedDraft = savedModel ? modelDraftFromProfile(savedModel) : EMPTY_MODEL_DRAFT;
-      setModelDraft(savedDraft);
-      setModelDraftBaseline(savedDraft);
-    }
-    setDraftToken("");
-    setRemoveStoredToken(false);
   }
 
   function openSystemSettings(group?: SystemSettingsGroup): void {
@@ -2496,11 +2242,7 @@ export function App() {
   }
 
   function confirmModelRegistryDraftDiscard(): boolean {
-    const scope = modelRegistryDraftScope(providerDraftDirty, modelSettingsDirty);
-    if (!scope) return true;
-    if (scope === "both") return window.confirm(t("settings.unsaved.providerAndModel.confirm"));
-    if (scope === "model") return window.confirm(t("settings.unsaved.model.confirm"));
-    return window.confirm(t("providers.unsaved.confirm"));
+    return !providerDraftDirty || window.confirm(t("providers.unsaved.confirm"));
   }
 
   function cancelSystemSettings(): void {
@@ -2514,7 +2256,6 @@ export function App() {
   function selectSystemSettingsGroup(group: SystemSettingsGroup): void {
     if (group !== systemSettingsGroup && systemSettingsGroup === "models") {
       if (!confirmModelRegistryDraftDiscard()) return;
-      replaceModelDraft(models.find((item) => item.id === editingModelId));
     }
     setSystemSettingsGroup(group);
   }
@@ -2523,16 +2264,6 @@ export function App() {
     if (systemSettingsSaving) return;
     reportSystemSettingsError();
     setSystemSettingsSaving(true);
-    const validationError = modelSettingsDirty && (!modelDraft.name.trim() || !modelDraft.baseUrl.trim() || !modelDraft.model.trim())
-      ? "Display name, base URL, and model ID are required"
-      : modelSettingsDirty && !editingModelId && !draftToken.trim()
-        ? "API token is required for a new model"
-        : undefined;
-    if (validationError) {
-      reportSystemSettingsError(validationError);
-      setSystemSettingsSaving(false);
-      return;
-    }
     try {
       // The footer saves every edited section retained while navigating.
       // Persist every edited section, including drafts retained while the user
@@ -2548,10 +2279,9 @@ export function App() {
         const saved = await providerSettingsRef.current.saveDraft();
         if (!saved) return;
       }
-      if (modelSettingsDirty) await saveModel();
       if (localeEdit) setLocale(localeEdit);
       if (tokenEdit !== undefined) setToken(tokenEdit);
-      clearSystemSettingsDrafts(false);
+      clearSystemSettingsDrafts();
       if (closeAfterSave) {
         reportSystemSettingsError();
         setShowConfig(false);
@@ -2561,21 +2291,6 @@ export function App() {
       // Save can be retried without reconstructing edits from other sections.
     } finally {
       setSystemSettingsSaving(false);
-    }
-  }
-
-  async function deleteModel(): Promise<void> {
-    if (!editingModelId) return;
-    reportSystemSettingsError();
-    try {
-      await client.deleteModel(editingModelId);
-      const remaining = models.filter((item) => item.id !== editingModelId);
-      setModels(remaining);
-      const next = remaining[0];
-      replaceModelDraft(next);
-      pushToast("success", "Model deleted");
-    } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : t("error.deleteModel"));
     }
   }
 
@@ -3681,9 +3396,9 @@ export function App() {
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-    // The handler must observe both Model registry draft scopes.
+    // The handler must observe the Provider draft state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelSettingsDirty, providerDraftDirty, showConfig]);
+  }, [providerDraftDirty, showConfig]);
   const visionModels = models.filter((item) => item.vision);
   const latestExecution = executionRuns.at(-1);
   const latestEnvironmentRevision = environmentRevisions.find((revision) => revision.id === latestExecution?.environmentRevisionId);
@@ -4280,17 +3995,19 @@ export function App() {
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
                   <div className="composer-footer">
-                    <button
-                      aria-label={t("composer.modelAria")}
-                      className="model-picker-trigger"
-                      disabled={isRunning || sessionArchived || !models.length}
-                      onClick={() => setModelPickerOpen(true)}
-                      type="button"
-                    >
-                      <i className="live-dot" />
-                      <span className="model-picker-trigger-name">{activeModel ? activeModel.name : t("composer.noModel")}</span>
-                      {activeThinkingSummary ? <small className="model-picker-trigger-thinking">{activeThinkingSummary}</small> : null}
-                    </button>
+                    <ModelPicker
+                      activeModelId={session.modelId ?? undefined}
+                      controls={activeThinkingControls}
+                      disabled={isRunning || sessionArchived}
+                      models={models}
+                      onOpenSettings={() => openSystemSettings("models")}
+                      onSelect={(modelId) => void updateConversationModel(modelId)}
+                      onThinkingChange={(update) => void updateSessionSettings(update)}
+                      providers={modelProviders}
+                      thinkingEffort={activeThinkingEffort}
+                      thinkingMode={activeThinkingMode}
+                      {...(activeThinkingSummary ? { thinkingSummary: activeThinkingSummary } : {})}
+                    />
                     <span className="composer-hint" title={t("composer.keyboardHint")}>{t("composer.keyboardHint")}</span>
                     <div className="orchestration-controls">
                       <ConnectorPicker
@@ -4597,22 +4314,7 @@ export function App() {
         />
       ) : null}
 
-      {modelPickerOpen && session ? <ModelPickerDialog
-        activeModelId={session.modelId ?? undefined}
-        controls={activeThinkingControls}
-        disabled={isRunning || sessionArchived}
-        models={models}
-        onClose={() => setModelPickerOpen(false)}
-        onOpenSettings={() => {
-          setModelPickerOpen(false);
-          openSystemSettings("models");
-        }}
-        onSelect={(modelId) => void updateConversationModel(modelId)}
-        onThinkingChange={(update) => void updateSessionSettings(update)}
-        providers={modelProviders}
-        thinkingEffort={activeThinkingEffort}
-        thinkingMode={activeThinkingMode}
-      /> : null}
+
 
       {showConfig ? (
         <div className="config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelSystemSettings(); }}>
@@ -4673,63 +4375,6 @@ export function App() {
                   proxySettings={proxySettings}
                   ref={providerSettingsRef}
                 />
-                <details className="provider-advanced-profiles">
-                  <summary><strong>{t("providers.advancedProfiles")}</strong><small>{t("providers.advancedProfiles.help")}</small></summary>
-                <div className="model-list-header"><span>{t("settings.configuredModels")}</span><button className="secondary-button compact-button" type="button" onClick={startNewModel}>{t("settings.addModel")}</button></div>
-                <div className="model-list">
-                  {models.map((item) => {
-                    const idHint = duplicateModelProfileId(item, models);
-                    const protocol = item.apiProtocol ?? (item.baseUrl.includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions");
-                    const variant = item.apiVariant ?? (protocol === "anthropic-messages" ? "anthropic-adaptive" : "openai");
-                    const thinking = item.thinkingMode ?? "auto";
-                    return <div className={item.id === editingModelId ? "model-card active" : "model-card"} key={item.id} title={modelOptionLabel(item, models, t)}>
-                      <button className="model-card-main" type="button" onClick={() => editModel(item)}>
-                        <span aria-label={item.hasApiToken ? t("settings.keySaved") : t("settings.keyMissing")} className={item.hasApiToken ? "model-status" : "model-status missing"} role="img" title={item.hasApiToken ? t("settings.keySaved") : t("settings.keyMissing")} />
-                        <span className="model-card-body">
-                          <strong>{item.name}</strong>
-                          <small>{item.model}{idHint ? ` · ${idHint}` : ""}</small>
-                          <span className="model-card-badges">
-                            <span className="model-badge">{t(`settings.apiVariant.${variant}`)}</span>
-                            <span className="model-badge">{t(`settings.thinkingMode.${thinking}`)}{thinking === "enabled" ? ` · ${t(`settings.thinkingEffort.${item.thinkingEffort ?? "high"}`)}` : ""}</span>
-                            {item.vision ? <span className="model-badge">{t("settings.visionCapable")}</span> : null}
-                            {item.hasApiToken ? null : <span className="model-badge warning">{t("settings.keyMissing")}</span>}
-                          </span>
-                        </span>
-                      </button>
-                      <ModelConnectivityButton
-                        disabled={item.id === editingModelId && modelSettingsDirty}
-                        modelId={item.id}
-                        modelName={item.name}
-                        profileVersion={item.updatedAt}
-                        testModel={(modelId) => client.testModel(modelId)}
-                      />
-                      <button aria-label={`${t("settings.editModel")}: ${item.name}`} className="model-card-open" type="button" onClick={() => editModel(item)} title={t("settings.editModel")}>
-                        <ChevronRightIcon size={16} />
-                      </button>
-                    </div>;
-                  })}
-                </div>
-                <form className="model-editor" onSubmit={(event) => event.preventDefault()}>
-                  <div className="editor-heading"><strong>{editingModelId ? t("settings.editModel") : t("settings.newModel")}</strong><small>{t("settings.modelEditorHelp")}</small></div>
-                  <ModelDraftFields draft={modelDraft} onChange={updateModelDraft} />
-                  <section className="model-editor-section">
-                    <h4>{t("settings.modelSection.access")}</h4>
-                    <label><span>{t("settings.apiToken")}</span><input required={!editingModelId} type="password" value={draftToken} onChange={(event) => { setDraftToken(event.target.value); setRemoveStoredToken(false); }} placeholder={models.find((item) => item.id === editingModelId)?.hasApiToken ? t("settings.apiTokenPlaceholder.saved") : t("settings.apiTokenPlaceholder.required")} /></label>
-                    {editingModelId && models.find((item) => item.id === editingModelId)?.hasApiToken ? (
-                      <button className={removeStoredToken ? "credential-remove pending" : "credential-remove"} type="button" onClick={() => { setDraftToken(""); setRemoveStoredToken((current) => !current); }}>
-                        {removeStoredToken ? t("settings.removeTokenPending") : t("settings.removeToken")}
-                      </button>
-                    ) : null}
-                    {proxySettings ? <ProxyPolicySelect label={t("settings.llmProxy")} onChange={(proxyPolicy) => updateModelDraft({ proxyPolicy })} settings={proxySettings} value={modelDraft.proxyPolicy} /> : null}
-                    <label className="vision-capability"><input type="checkbox" checked={modelDraft.vision} onChange={(event) => updateModelDraft({ vision: event.target.checked })} /><span><strong>{t("settings.visionCapable")}</strong><small>{t("settings.visionHelp")}</small></span></label>
-                  </section>
-                  <div className="model-editor-actions">
-                    {editingModelId ? <button className="danger-button" type="button" onClick={() => void deleteModel()}>{t("settings.delete")}</button> : <span />}
-                    <span className="settings-source">{t("settings.modelEditorSaveHint")}</span>
-                  </div>
-                </form>
-                <div className="config-note">{t("settings.modelStorageNote")}</div>
-                </details>
               </> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings

@@ -1,0 +1,116 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { ModelProfile, ModelProvider, ModelProviderPreset, ProviderModelEntry } from "@sciencediscovery/schema";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import type { SettingsApiClient } from "../src/api/settings.js";
+import { LocaleProvider } from "../src/i18n/index.js";
+import { ProviderModelSettings, sortProviderModels } from "../src/ProviderModelSettings.js";
+
+function entry(id: string, profileId?: string): ProviderModelEntry {
+  return { id, ...(profileId ? { profileId } : {}) };
+}
+
+test("provider model tables sort added models first, then alphabetically", () => {
+  const sorted = sortProviderModels([entry("zeta"), entry("alpha"), entry("beta", "profile-1"), entry("gamma", "profile-2")]);
+  assert.deepEqual(sorted.map((model) => model.id), ["beta", "gamma", "alpha", "zeta"]);
+});
+
+function provider(id: string, name: string): ModelProvider {
+  return {
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "openai",
+    baseUrl: "https://provider.example.test/v1",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    hasApiToken: true,
+    id,
+    modelDiscovery: "openai-models",
+    name,
+    proxyPolicy: "inherit",
+    tokenOptional: false,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function profile(id: string, providerId: string): ModelProfile {
+  return {
+    baseUrl: "https://provider.example.test/v1",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    hasApiToken: true,
+    id,
+    model: `${id}-id`,
+    name: `Model ${id}`,
+    providerId,
+    proxyPolicy: "inherit",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    vision: false,
+  };
+}
+
+const PRESETS: ModelProviderPreset[] = [{
+  apiProtocol: "openai-chat-completions",
+  apiVariant: "deepseek",
+  baseUrl: "https://api.deepseek.com/v1",
+  id: "deepseek",
+  modelDiscovery: "openai-models",
+  name: "DeepSeek",
+}];
+
+function renderSettings(locale: "en" | "zh-CN"): string {
+  return renderToStaticMarkup(createElement(
+    LocaleProvider,
+    { initialLocale: locale },
+    createElement(ProviderModelSettings, {
+      client: {} as SettingsApiClient,
+      models: [profile("m1", "p1")],
+      onError: () => undefined,
+      onModelsChange: () => undefined,
+      onNotice: () => undefined,
+      onProvidersChange: () => undefined,
+      presets: PRESETS,
+      providers: [provider("p1", "DeepSeek")],
+    }),
+  ));
+}
+
+test("the registry opens without a preset wall or a resident editor", () => {
+  const html = renderSettings("en");
+
+  // Adding is a dropdown of presets plus a custom-provider button.
+  assert.match(html, /aria-label="Add provider"/);
+  assert.match(html, /<option value="" selected="">Choose a preset…<\/option>/);
+  assert.match(html, /<option value="deepseek">DeepSeek<\/option>/);
+  assert.match(html, />Custom provider<\/button>/);
+  // No preset cards are laid out.
+  assert.doesNotMatch(html, /provider-preset-card/);
+  // The provider editor stays hidden until the user asks for it.
+  assert.doesNotMatch(html, /provider-editor/);
+  // One row per provider with the added count and an expand affordance.
+  assert.match(html, /provider-row-summary/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /1 added/);
+  assert.match(html, /Data source: models\.dev/);
+
+  const chinese = renderSettings("zh-CN");
+  assert.match(chinese, /aria-label="添加 Provider"/);
+  assert.match(chinese, /<option value="" selected="">选择预置服务商…<\/option>/);
+  assert.match(chinese, /已添加 1/);
+  assert.match(chinese, /数据来源：models\.dev/);
+  assert.doesNotMatch(chinese, /provider-editor/);
+});

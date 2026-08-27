@@ -21,40 +21,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   buildCreateSessionRequest,
-  EMPTY_MODEL_DRAFT,
   followSessionTitleRefinement,
   getVisibleProjects,
   mergeRefreshedSessionDetail,
   mergeSessionDetailWithSummary,
   messageForSessionTitle,
-  modelDraftIsDirty,
-  modelRegistryDraftScope,
   resourceLabelWithDraft,
   runSessionCreationOnce,
   SystemSettingsFooter,
   SystemSettingsLayout,
 } from "../src/App.js";
-
-test("advanced model dirty state compares the current draft with its saved baseline", () => {
-  const baseline = { ...EMPTY_MODEL_DRAFT };
-  assert.equal(modelDraftIsDirty({ ...baseline }, baseline, "", false), false);
-  assert.equal(modelDraftIsDirty({ ...baseline }, baseline, "   ", false), false);
-  assert.equal(modelDraftIsDirty({ ...baseline, name: "Changed" }, baseline, "", false), true);
-  assert.equal(modelDraftIsDirty({
-    ...baseline,
-    apiProtocol: "openai-responses",
-    apiVariant: "responses",
-  }, baseline, "", false), true);
-  assert.equal(modelDraftIsDirty({ ...baseline }, baseline, "new-token", false), true);
-  assert.equal(modelDraftIsDirty({ ...baseline }, baseline, "", true), true);
-});
-
-test("Model registry discard confirmation chooses one explicit draft scope", () => {
-  assert.equal(modelRegistryDraftScope(false, false), undefined);
-  assert.equal(modelRegistryDraftScope(true, false), "provider");
-  assert.equal(modelRegistryDraftScope(false, true), "model");
-  assert.equal(modelRegistryDraftScope(true, true), "both");
-});
 
 test("new Session requests inherit settings unless a model override is explicit", () => {
   assert.deepEqual(buildCreateSessionRequest(""), {});

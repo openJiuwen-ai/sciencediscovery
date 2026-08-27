@@ -38,6 +38,44 @@ export interface ModelThinkingNormalization {
   thinkingMode?: ModelThinkingMode;
 }
 
+/** One entry of the combined thinking control: the off switch, the model
+ *  default, and the effort list live in a single control, so a model that
+ *  cannot turn thinking off (e.g. Kimi K3) simply has no "off" entry. */
+export interface ThinkingChoice {
+  effort?: ModelThinkingEffort;
+  mode: ModelThinkingMode;
+  value: string;
+}
+
+export function thinkingChoiceOptions(controls: ModelThinkingControls): ThinkingChoice[] {
+  if (!controls.supported) return [];
+  const options: ThinkingChoice[] = [];
+  if (controls.modes.includes("disabled")) options.push({ mode: "disabled", value: "off" });
+  if (controls.modes.includes("auto")) options.push({ mode: "auto", value: "auto" });
+  if (controls.efforts.length) {
+    for (const effort of controls.efforts) options.push({ effort, mode: "enabled", value: `effort:${effort}` });
+  } else if (controls.modes.includes("enabled")) {
+    options.push({ mode: "enabled", value: "on" });
+  }
+  return options;
+}
+
+export function thinkingChoiceValue(
+  mode: ModelThinkingMode,
+  effort: ModelThinkingEffort,
+  options: readonly ThinkingChoice[],
+): string {
+  if (mode === "enabled") {
+    const byEffort = options.find((option) => option.value === `effort:${effort}`);
+    if (byEffort) return byEffort.value;
+    if (options.some((option) => option.value === "on")) return "on";
+  } else {
+    const value = mode === "disabled" ? "off" : "auto";
+    if (options.some((option) => option.value === value)) return value;
+  }
+  return options[0]?.value ?? "auto";
+}
+
 const DEFAULT_MODES: ModelThinkingMode[] = ["auto", "enabled", "disabled"];
 
 export function modelVariantThinkingControls(
