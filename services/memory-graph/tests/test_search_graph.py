@@ -225,7 +225,10 @@ def test_chain_hops_never_walk_expands_downwards() -> None:
 
 
 def test_a_subtask_chain_reaches_the_search_handle_only() -> None:
-    hops = query._CHAIN_HOPS["SubTask"]
+    # ToolCall since upstream's Task/ToolCall split: an evolve search is a
+    # ToolCall (task_type=program_evolution), and its chain entry carries the
+    # `searches` handle.
+    hops = query._CHAIN_HOPS["ToolCall"]
     assert ("searches", "out", "SearchRun") in hops
     assert not any(hop[0] == "expands" for hop in hops)
 
@@ -296,7 +299,7 @@ def test_a_searchs_nodes_do_not_collapse_onto_one_identity() -> None:
 
 
 def test_the_search_subtask_is_created_rather_than_assumed() -> None:
-    """Nothing else mirrors a SubTask for a search, so binding must create one.
+    """Nothing else mirrors a task node for a search, so binding must create one.
 
     Matching an existing node — which is what this did first — left the
     `searches` edge unwritten and the search off the session's task chain, which
@@ -308,6 +311,8 @@ def test_the_search_subtask_is_created_rather_than_assumed() -> None:
     from sciencediscovery_memory_graph import search_graph
 
     body = inspect.getsource(search_graph.bind_subtask)
-    assert "MERGE (st:SubTask" in body, "the SubTask has to be created here"
+    # `:ToolCall` since the Task/ToolCall split — a `:SubTask` node would fall
+    # out of the session chain the rebuild walks (`st:Task OR st:ToolCall`).
+    assert "MERGE (st:ToolCall" in body, "the ToolCall has to be created here"
     assert "MERGE (st)-[:searches]->(r)" in body
     assert "program_evolution" in body

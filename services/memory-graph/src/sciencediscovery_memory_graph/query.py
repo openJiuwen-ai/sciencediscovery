@@ -1958,6 +1958,10 @@ _ID_FIELDS: dict[str, str] = {
     "ResearchGoal": "goal_id",
     "Task": "task_id",
     "ToolCall": "task_id",
+    # Kept as the external compatibility name for the Task/ToolCall split (it
+    # is still in `_NODE_LABELS`), and pre-migration graphs still hold nodes
+    # under this label — both would be silently dropped without a key here.
+    "SubTask": "task_id",
     "Paper": "link",
     "Evidence": "evidence_id",
     "Claim": "claim_id",
