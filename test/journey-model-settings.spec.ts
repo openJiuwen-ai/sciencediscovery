@@ -22,11 +22,11 @@ test.use({ locale: "zh-CN" });
 /**
  * E2E-META
  * Purpose: 以服务商为中心的注册表：添加控件与编辑器分组紧凑可扫读；行内模型表（一行一模型）可扫读；
- *   手动登记支持思考默认值档位；保存失败保留 Provider 草稿；旧的独立“模型卡片”入口已删除；桌面与窄屏可用。
+ *   手动登记支持逗号分隔的强度档声明；保存失败保留 Provider 草稿；旧的独立“模型卡片”入口已删除；桌面与窄屏可用。
  * Steps:
  *   1. 打开系统设置并进入模型注册表：空态、添加控件收在列表下「添加 Provider」按钮后（预置下拉+自定义按钮）、编辑器默认隐藏；旧独立模型入口不再出现。
  *   2. 显式选择自定义服务商：编辑器按分组展开，协议与变种同行紧凑；保存后服务商行自动展开并预载模型列表。
- *   3. 行内手动表单登记模型并选最强思考：思考默认值下拉含“跟随目录默认”与各合法档位；“已添加”计数与行内模型行出现。
+ *   3. 行内手动表单登记模型并以逗号分隔声明可接受强度档（原文）；“已添加”计数与行内模型行出现。
  *   4. 编辑 Provider 时保存失败：错误清楚、草稿保留；恢复后保存成功并重开保持一致。
  *   5. manual 发现为空时已添加模型仍在行内表占一行且排前、不出空态；行内模型行事实一行可扫读。
  *   6. 窄屏（600px）：对话框不越界、高级网格单列、模型行不横向溢出。
@@ -103,7 +103,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     await journey.step(
       "显式选择自定义服务商：编辑器分组紧凑可扫读",
       "点“自定义服务商”后才出现编辑器——打开注册表绝不自动选中任何服务商。"
-      + "主区是名称与密钥；高级连接（基础 URL、接口协议、接口变种、模型列表）默认展开、两两同行紧凑排布。",
+      + "主区是名称与密钥；高级连接默认展开：基础 URL 独占一行，接口协议、接口变种与 LLM 网络代理服务器同一行，不再单独选择模型列表策略。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.getByRole("button", { name: /添加 Provider/ }).first().click();
@@ -115,8 +115,9 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await expect(editor.getByLabel("基础 URL")).toBeVisible();
         await expect(editor.getByLabel("基础接口")).toBeVisible();
         await expect(editor.getByLabel("接口变种")).toBeVisible();
-        await expect(editor.getByLabel("模型列表")).toBeVisible();
-        // 每行两列：基础 URL 与基础接口同行、接口变种与模型列表同行。
+        await expect(editor.getByLabel("模型列表")).toHaveCount(0);
+        await expect(editor.getByText("LLM 网络代理服务器")).toBeVisible();
+        // 基础 URL 独占一行；接口协议、接口变种与代理同一行。
         const pairings = await editor.evaluate(() => {
           const rowOf = (label: string) => {
             const s = Array.from(document.querySelectorAll(".provider-editor label > span"))
@@ -126,22 +127,24 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
           const url = rowOf("基础 URL");
           const protocol = rowOf("基础接口");
           const variant = rowOf("接口变种");
-          const discovery = rowOf("模型列表");
+          const proxy = rowOf("LLM 网络代理服务器");
           return {
-            urlAndProtocolSameRow: Boolean(url && protocol && Math.abs(url.top - protocol.top) < 2),
-            variantAndDiscoverySameRow: Boolean(variant && discovery && Math.abs(variant.top - discovery.top) < 2),
+            urlOwnRow: Boolean(url && protocol && url.top < protocol.top - 4),
+            protocolVariantSameRow: Boolean(protocol && variant && Math.abs(protocol.top - variant.top) < 2),
+            variantProxySameRow: Boolean(variant && proxy && Math.abs(variant.top - proxy.top) < 2),
           };
         });
-        expect(pairings.urlAndProtocolSameRow).toBe(true);
-        expect(pairings.variantAndDiscoverySameRow).toBe(true);
+        expect(pairings.urlOwnRow).toBe(true);
+        expect(pairings.protocolVariantSameRow).toBe(true);
+        expect(pairings.variantProxySameRow).toBe(true);
       },
     );
 
     await journey.step(
       "保存自定义服务商并手动登记模型，选最强思考",
       "填写本地端点、令牌、DeepSeek 变种与“手动 ID 与维护目录”后保存；服务商行立即展开并预载。"
-      + "行内手动表单收在「添加模型」按钮后；“思考默认值”下拉以“跟随目录默认”开头并提供关闭/模型默认/档位等合法选择；"
-      + "登记模型并选“最大”后出现“已添加”计数与行内模型行。",
+      + "行内手动表单收在「添加模型」按钮后；用逗号分隔的原文强度档（如 max）声明可接受思考强度，"
+      + "不提供时默认省略思考参数；登记后出现“已添加”计数与行内模型行。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
@@ -162,11 +165,9 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await expect(row.locator(".provider-manual-form")).toHaveCount(0);
         await row.locator(".provider-add-model-toggle").click();
         await expect(row.locator(".provider-manual-form")).toBeVisible();
-        const thinkingChoices = await dialog.getByLabel("思考默认值（可选）").locator("option").allTextContents();
-        expect(thinkingChoices[0]).toBe("跟随目录默认");
-        expect(thinkingChoices).toContain("最大");
+        await expect(dialog.getByLabel("思考默认值（可选）")).toHaveCount(0);
         await dialog.getByLabel("手动模型 ID").fill("deepseek-chat");
-        await dialog.getByLabel("思考默认值（可选）").selectOption("effort:max");
+        await dialog.getByLabel("思考强度档（逗号分隔，可选）").fill("low,max");
         const modelResponsePromise = page.waitForResponse((response) =>
           response.request().method() === "POST" && new URL(response.url()).pathname
             === `/api/providers/${createdProviderId}/models`);
@@ -286,8 +287,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         expect(geometry.singleColumn).toBe(true);
         expect(geometry.modelRowsInside).toBe(true);
         expect(geometry.selectsInside).toBe(true);
-        await dialog.getByLabel("思考默认值（可选）").scrollIntoViewIfNeeded();
-        await expect(dialog.getByLabel("思考默认值（可选）")).toBeInViewport();
+        await dialog.getByLabel("思考强度档（逗号分隔，可选）").scrollIntoViewIfNeeded();
+        await expect(dialog.getByLabel("思考强度档（逗号分隔，可选）")).toBeInViewport();
       },
     );
   } finally {

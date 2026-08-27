@@ -586,13 +586,16 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const card = dialog.locator(".provider-model-row").filter({ hasText: "glm-5.2" });
         const facts = card.locator(".provider-model-row-facts .fact");
         await expect(facts.nth(0)).toHaveText("1M / 131k");
-        await expect(facts.nth(0)).toHaveAttribute("title", /1,000,000 \/ 131,072/);
-        await expect(facts.nth(1)).toHaveAttribute("title", "视觉：不支持");
-        await expect(facts.nth(2)).toHaveText(/高 最大/);
-        await expect(facts.nth(2)).toHaveAttribute("title", "思考：高 / 最大");
-        // 价格诚实地为未知：可见为 "?"，悬停说明原因。
+        await expect(facts.nth(2)).toHaveText(/high max/);
+        // 价格诚实地为未知：可见为 "?"，细节在悬停富文本弹窗里。
         await expect(facts.nth(3)).toHaveText("?");
-        await expect(facts.nth(3)).toHaveAttribute("title", /未知/);
+        await card.hover();
+        const popup = card.locator(".provider-model-popup");
+        await expect(popup).toBeVisible();
+        await expect(popup).toContainText("1,000,000");
+        await expect(popup).toContainText("131,072");
+        await expect(popup).toContainText("high / max");
+        await expect(popup).toContainText("未知");
         await expect(card.getByRole("link")).toHaveCount(0);
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
           && /\/api\/providers\/[^/]+\/models$/.test(new URL(response.url()).pathname));
@@ -616,7 +619,6 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await editor.getByLabel("基础 URL").fill(stub.baseUrl);
         await editor.getByLabel("基础接口").selectOption("openai-chat-completions");
         await editor.getByLabel("接口变种").selectOption("deepseek");
-        await editor.getByLabel("模型列表").selectOption("openai-models");
 
         let confirmationMessage = "";
         page.once("dialog", (confirmation) => {
@@ -654,17 +656,22 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         // 远端只有 context_length：上下文 131k 来自远端，输出按字段级回退
         // 取目录的 384k，而不是整行未知。
         await expect(knownFacts.nth(0)).toHaveText("131k / 384k");
-        await expect(knownFacts.nth(1)).toHaveAttribute("title", "视觉：支持");
-        await expect(knownFacts.nth(2)).toHaveText(/低 高 最大/);
+        await expect(knownFacts.nth(2)).toHaveText(/low high max/);
         await expect(knownFacts.nth(3)).toHaveText("1.5 / 3 / 0.2 USD/1M");
-        await expect(knownFacts.nth(3)).toHaveAttribute("title", "输入 / 输出 / 缓存输入，每百万 tokens（USD）");
         await expect(known.getByRole("link")).toHaveCount(0);
+        await known.hover();
+        const knownPopup = known.locator(".provider-model-popup");
+        await expect(knownPopup).toContainText("视觉");
+        await expect(knownPopup).toContainText("low / high / max");
+        await expect(knownPopup).toContainText("每百万 tokens");
         const unknown = dialog.locator(".provider-model-row").filter({ hasText: "fixture-unknown" });
-        for (const title of await unknown.locator(".provider-model-row-facts .fact").evaluateAll(
-          (nodes) => nodes.map((node) => node.getAttribute("title") ?? ""),
-        )) {
-          expect(title).toContain("未知");
+        for (const text of await unknown.locator(".provider-model-row-facts .fact").allTextContents()) {
+          expect(text.replace(/[✓—]/gu, "").trim()).toBe("?");
         }
+        await unknown.hover();
+        const unknownPopup = unknown.locator(".provider-model-popup");
+        await expect(unknownPopup).toBeVisible();
+        await expect(unknownPopup).toContainText("未知");
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
           && /\/api\/providers\/[^/]+\/models$/.test(new URL(response.url()).pathname));
         await known.getByRole("button", { name: "添加模型" }).click();
@@ -695,7 +702,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const flash = dialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" });
         const flashPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
         await expect(flashPrice).toHaveText("0.14 / 0.28 / 0.0028 USD/1M");
-        await expect(flashPrice).toHaveAttribute("title", /每百万 tokens/);
+        await flash.hover();
+        await expect(flash.locator(".provider-model-popup")).toContainText("每百万 tokens");
         await expect(flash).not.toContainText("periods");
         await expect(flash.getByRole("link")).toHaveCount(0);
 
@@ -867,7 +875,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "对话模型与思考强度遵守能力并跨刷新保存",
-      "创建会话后，点击 Composer 的模型按钮弹出连接器风格的小弹窗，按 Provider 分组列出模型，DeepSeek 行为当前选中。切到不支持思考的 OpenAI fixture 时弹窗提示该模型不暴露思考字段、也没有分档控件；切回 DeepSeek 后思考是一排分档按钮：关闭 → 模型默认 → 低/高/最大，点“最大”即写入 Session，刷新页面仍显示同一模型与最大强度。",
+      "创建会话后，点击 Composer 的模型按钮弹出连接器风格的小弹窗，按 Provider 分组列出模型，DeepSeek 行为当前选中。切到不支持思考的 OpenAI fixture 时弹窗提示该模型不暴露思考字段、也没有分档控件；切回 DeepSeek 后思考是一排分档按钮：关闭 → 模型默认 → low/high/max（原文），点 max 即写入 Session，刷新页面仍显示同一模型与最大强度。",
       async () => {
         const unsupported = await apiJson<ModelProfile>(page, "/api/models", {
           data: {
@@ -892,9 +900,9 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(picker.getByText("此模型不暴露思考控制字段")).toBeVisible();
         await expect(thinkingStops(picker)).toHaveCount(0);
         await picker.getByRole("option", { name: /deepseek-v4-flash/ }).click();
-        // 分档按钮：关闭 → 模型默认 → 低 → 高 → 最大
+        // 分档按钮：关闭 → 模型默认 → low → high → max（强度档原文）
         await expect(thinkingStops(picker)).toHaveCount(5);
-        await setThinkingStop(picker, "最大");
+        await setThinkingStop(picker, "max");
         await expect.poll(async () => {
           const session = await apiJson<{ thinkingEffort?: string; thinkingMode?: string }>(
             page,
@@ -903,12 +911,12 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           return `${session.thinkingMode}/${session.thinkingEffort}`;
         }).toBe("enabled/max");
         await closeModelPicker(picker);
-        await expect(page.locator(".model-picker-trigger-thinking")).toHaveText("最大");
+        await expect(page.locator(".model-picker-trigger-thinking")).toHaveText("max");
         await page.reload();
         await openProjectSession(page, fixture);
         const reopened = await openModelPicker();
         await expect(reopened.getByRole("option", { name: /deepseek-v4-flash/ })).toHaveAttribute("aria-selected", "true");
-        await expect(reopened.getByRole("radio", { name: "最大" })).toHaveAttribute("aria-checked", "true");
+        await expect(reopened.getByRole("radio", { name: "max" })).toHaveAttribute("aria-checked", "true");
         await closeModelPicker(reopened);
       },
     );
@@ -946,7 +954,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "GPT-5.5 只展示并发送合法 xhigh 强度",
-      "通过 OpenAI 预设具体化 GPT-5.5 后，从 DeepSeek/max 切换模型会把 Session 的旧非法 max 原子归一化并持久化为 xhigh；刷新后模型与 xhigh 均保持。弹窗分档按钮恰为 关闭、模型默认、低、中、高、超高，不出现 max，本地 Responses fixture 收到 reasoning.effort=xhigh。",
+      "通过 OpenAI 预设具体化 GPT-5.5 后，从 DeepSeek/max 切换模型会把 Session 的旧非法 max 原子归一化并持久化为 xhigh；刷新后模型与 xhigh 均保持。弹窗分档按钮恰为 关闭、模型默认、low、medium、high、xhigh，不出现 max，本地 Responses fixture 收到 reasoning.effort=xhigh。",
       async () => {
         const provider = await apiJson<ModelProvider>(page, "/api/providers", {
           data: {
@@ -979,10 +987,10 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await openProjectSession(page, fixture!);
         const reopened = await openModelPicker();
         await expect(reopened.getByRole("option", { name: /gpt-5\.5/ })).toHaveAttribute("aria-selected", "true");
-        // 关闭、模型默认、低、中、高、超高——没有 max 档。
+        // 关闭、模型默认、low、medium、high、xhigh——没有 max 档。
         await expect(thinkingStops(reopened)).toHaveCount(6);
-        await expect(reopened.getByRole("radio", { name: "超高" })).toHaveAttribute("aria-checked", "true");
-        await expect(reopened.getByRole("radio", { name: "最大" })).toHaveCount(0);
+        await expect(reopened.getByRole("radio", { name: "xhigh" })).toHaveAttribute("aria-checked", "true");
+        await expect(reopened.getByRole("radio", { name: "max" })).toHaveCount(0);
         await closeModelPicker(reopened);
         const run = await sendUserMessage(page, fixture!.session.id, "Verify the GPT-5.5 Responses effort.");
         expect((await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000)).status).toBe("completed");
@@ -994,7 +1002,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "Kimi K3 始终推理且 low 强度真实进入请求",
-      "通过 Moonshot Kimi 预设具体化 Kimi K3 后，思考分档按钮只有强度档（低、高、最大），没有“关”或“模型默认”，因为该模型不能关闭思考。点低后 Chat Completions wire 发送 reasoning_effort=low，且不发送无效 thinking.type。",
+      "通过 Moonshot Kimi 预设具体化 Kimi K3 后，思考分档按钮只有强度档（low、high、max 原文），没有“关”或“模型默认”，因为该模型不能关闭思考。点 low 后 Chat Completions wire 发送 reasoning_effort=low，且不发送无效 thinking.type。",
       async () => {
         const provider = await apiJson<ModelProvider>(page, "/api/providers", {
           data: {
@@ -1018,8 +1026,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         // 不能关闭思考的模型只有强度档，没有「关」。
         await expect(thinkingStops(picker)).toHaveCount(3);
         await expect(picker.getByRole("radio", { name: "关闭" })).toHaveCount(0);
-        await setThinkingStop(picker, "低");
-        await expect(picker.locator(".model-picker-slider-label strong")).toHaveText("低");
+        await setThinkingStop(picker, "low");
+        await expect(picker.locator(".model-picker-slider-label strong")).toHaveText("low");
         await closeModelPicker(picker);
         const run = await sendUserMessage(page, fixture!.session.id, "Verify the Kimi K3 effort.");
         expect((await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000)).status).toBe("completed");
@@ -1093,10 +1101,10 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "设置与对话控件提供英文界面",
-      "在系统设置的语言页选择 English 并保存关闭；对话区显示本地化模型选择入口，弹窗滑杆与“模型默认”文案同样本地化；在 1440×900、600×900 重复无重叠、紧凑高度、命中和溢出几何断言；重新打开模型注册表，Add provider 下拉列出预设、旁边有 Custom provider，Provider 行内展开可见模型表。",
+      "在系统设置的语言页选择 English 并保存关闭；对话区显示本地化模型选择入口，弹窗分档按钮与“模型默认”文案同样本地化；在 1440×900、600×900 重复无重叠、紧凑高度、命中和溢出几何断言；重新打开模型注册表，Add provider 下拉列出预设、旁边有 Custom provider，Provider 行内展开可见模型表。",
       async () => {
         const zhPicker = await pickConversationModel({ model: /deepseek-v4-flash/ });
-        await setThinkingStop(zhPicker, "最大");
+        await setThinkingStop(zhPicker, "max");
         await closeModelPicker(zhPicker);
         const dialog = await openModelRegistry();
         await dialog.getByRole("navigation", { name: "设置分组" })
@@ -1106,9 +1114,9 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await dialog.getByRole("button", { name: "保存并关闭" }).click();
         await expect(page.getByLabel("Model for this task")).toBeVisible();
         const enPicker = await openModelPicker();
-        await expect(enPicker.getByRole("radio", { name: "Max" })).toHaveAttribute("aria-checked", "true");
+        await expect(enPicker.getByRole("radio", { name: "max" })).toHaveAttribute("aria-checked", "true");
         const enStopTexts = await thinkingStops(enPicker).allTextContents();
-        expect(enStopTexts).toEqual(["Off", "Model default", "Low", "High", "Max"]);
+        expect(enStopTexts).toEqual(["Off", "Model default", "low", "high", "max"]);
         expect(enStopTexts).not.toContain("Auto");
         await expect(enPicker.getByRole("option", { name: /deepseek-v4-flash/ })).toHaveAttribute("aria-selected", "true");
         await closeModelPicker(enPicker);
@@ -1126,7 +1134,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const flash = englishDialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" });
         const enPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
         await expect(enPrice).toHaveText("0.14 / 0.28 / 0.0028 USD/1M");
-        await expect(enPrice).toHaveAttribute("title", "Input / output / cached input per 1M tokens (USD)");
+        await flash.hover();
+        await expect(flash.locator(".provider-model-popup")).toContainText("per 1M tokens");
         await expect(flash).not.toContainText(/Peak|Off-peak|periods/);
         await expect(flash.getByRole("link")).toHaveCount(0);
       },
