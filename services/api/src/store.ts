@@ -187,7 +187,7 @@ import {
   normalizeApiToken,
   validateLiveModel,
 } from "./store/secrets.js";
-import { providerSecretKey, validateLiveProvider } from "./store/providers.js";
+import { planStandaloneProfileMigration, providerSecretKey, validateLiveProvider } from "./store/providers.js";
 import {
   knownConnectorIdSet,
   normalizeMcpProxyPolicies,
@@ -524,7 +524,6 @@ export class SessionStore {
       tokenOptional: provider.tokenOptional === true,
       updatedAt: provider.updatedAt,
     }));
-    const migratedProviders = JSON.stringify(providers) !== JSON.stringify(savedProviders);
     const providerIds = new Set(providers.map((provider) => provider.id));
     const providerHasToken = new Map(providers.map((provider) => [provider.id, provider.hasApiToken]));
 
@@ -548,6 +547,22 @@ export class SessionStore {
         proxyPolicy: normalizeSavedProxyPolicy(model.proxyPolicy),
         updatedAt: model.updatedAt,
       }));
+
+    // Profiles that predate the provider registry own their connection fields
+    // and used to be edited through a separate "standalone" surface. Group
+    // them by connection so every one of them is reachable through the
+    // provider list, without touching profile ids or endpoints.
+    const standaloneMigration = planStandaloneProfileMigration(models, {
+      newProviderId: () => randomUUID(),
+      now: new Date().toISOString(),
+    });
+    for (const provider of standaloneMigration.providers) providers.push(provider);
+    for (const model of models) {
+      const providerId = standaloneMigration.assignments.get(model.id);
+      if (providerId) model.providerId = providerId;
+    }
+
+    const migratedProviders = JSON.stringify(providers) !== JSON.stringify(savedProviders);
     const migratedModels = JSON.stringify(models) !== JSON.stringify(savedModels);
     const modelIds = new Set(models.map((model) => model.id));
     const fallbackModelId = models[0]?.id;
@@ -1998,7 +2013,12 @@ export class SessionStore {
   async materializeProviderModel(
     providerId: string,
     modelId: string,
-    options: { label?: string; vision?: boolean } = {},
+    options: {
+      label?: string;
+      thinkingEffort?: ModelThinkingEffort;
+      thinkingMode?: ModelThinkingMode;
+      vision?: boolean;
+    } = {},
   ): Promise<ModelProfile> {
     const provider = this.getProvider(providerId);
     if (!provider) throw new Error("Provider not found");
@@ -2006,21 +2026,42 @@ export class SessionStore {
     if (!model) throw new Error("Model ID is required");
     if (model.length > 512) throw new Error("Model ID is too long");
     const catalog = lookupModelCatalog(model, provider.presetId);
-    const { effort: defaultEffort, mode: defaultMode } = constrainCatalogThinking(model);
+    // Requested thinking defaults are narrowed to what this model accepts, so
+    // hand-entered values cannot store a combination the endpoint rejects.
+    const { effort: defaultEffort, mode: defaultMode } = constrainCatalogThinking(
+      model,
+      options.thinkingMode,
+      options.thinkingEffort,
+    );
     const apiVariant = catalog?.apiVariant && MODEL_API_VARIANTS[provider.apiProtocol].includes(catalog.apiVariant)
       ? catalog.apiVariant
       : provider.apiVariant;
     const existing = this.catalog.models.find((profile) => profile.providerId === providerId && profile.model === model);
     if (existing) {
-      const constrained = constrainCatalogThinking(model, existing.thinkingMode, existing.thinkingEffort);
+      // Adding the same model twice stays idempotent, but a field the caller
+      // states explicitly is an instruction, not a duplicate: apply it and
+      // leave everything else as saved.
+      const constrained = constrainCatalogThinking(
+        model,
+        options.thinkingMode ?? existing.thinkingMode,
+        options.thinkingEffort ?? existing.thinkingEffort,
+      );
+      const name = options.label === undefined
+        ? existing.name
+        : cleanLabel(`${provider.name} · ${options.label}`, model);
+      const vision = options.vision ?? existing.vision;
       if (existing.apiVariant !== apiVariant
         || existing.thinkingMode !== constrained.mode
-        || existing.thinkingEffort !== constrained.effort) {
+        || existing.thinkingEffort !== constrained.effort
+        || existing.name !== name
+        || existing.vision !== vision) {
         Object.assign(existing, {
           apiVariant,
+          name,
           thinkingEffort: constrained.effort,
           thinkingMode: constrained.mode,
           updatedAt: new Date().toISOString(),
+          vision,
         });
         await this.saveCatalog();
       }

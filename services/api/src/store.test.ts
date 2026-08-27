@@ -40,6 +40,7 @@ interface PersistedCatalog {
   models: Array<Record<string, unknown>>;
   permissionEpochs: Array<{ id: string; networkPolicy: string }>;
   projects: Array<{ id: string; name: string; settingsOverrides: Record<string, unknown> }>;
+  providers?: Array<Record<string, unknown>>;
   reviewerSpecialistEnabled?: boolean;
   reviewerSpecialistLevel?: string;
   sessions: Array<{
@@ -925,7 +926,14 @@ test("SessionStore persists model protocol settings and migrates legacy defaults
 
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
-  assert.deepEqual(reopened.getModel("legacy-anthropic"), {
+  // The legacy profile is also adopted by a migrated provider, so assert the
+  // adoption separately and the rest of the shape exactly.
+  const legacy = reopened.getModel("legacy-anthropic")!;
+  const legacyProvider = reopened.getProvider(legacy.providerId);
+  assert.equal(legacyProvider?.baseUrl, "https://legacy.example.test/api/plan");
+  assert.equal(legacyProvider?.apiProtocol, "anthropic-messages");
+  const { providerId: _adopted, ...legacyProfile } = legacy;
+  assert.deepEqual(legacyProfile, {
     apiProtocol: "anthropic-messages",
     apiVariant: "anthropic-adaptive",
     baseUrl: "https://legacy.example.test/api/plan",
@@ -2970,4 +2978,211 @@ test("switching Session models persists a legal model-level effort across reload
   assert.equal(reopened.getSession(session.id)?.modelId, target.id);
   assert.equal(reopened.getSession(session.id)?.thinkingEffort, "xhigh");
   assert.equal(reopened.getSessionSettings(session.id).overrides.thinkingEffort, "xhigh");
+});
+
+test("standalone profiles are grouped into one migrated provider per connection", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `standalone-migration-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  // Profiles created through the pre-provider API: connection fields live on
+  // the profile and there is no providerId.
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const flash = await store.createModel({
+    apiToken: "shared-endpoint-token",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.example.test/v1",
+    model: "legacy-flash",
+    name: "Legacy flash",
+    thinkingEffort: "high",
+    thinkingMode: "enabled",
+  });
+  const pro = await store.createModel({
+    apiToken: "shared-endpoint-token",
+    apiVariant: "deepseek",
+    // Same endpoint, written with a trailing slash.
+    baseUrl: "https://api.example.test/v1/",
+    model: "legacy-pro",
+    name: "Legacy pro",
+  });
+  const qwen = await store.createModel({
+    apiToken: "qwen-token",
+    apiVariant: "qwen",
+    baseUrl: "https://api.example.test/v1",
+    model: "legacy-qwen",
+    name: "Legacy qwen",
+  });
+  const other = await store.createModel({
+    apiToken: "other-endpoint-token",
+    apiVariant: "deepseek",
+    baseUrl: "https://other.example.test/v1",
+    model: "legacy-other",
+    name: "Legacy other",
+  });
+  const project = await store.createProject("Legacy project");
+  const session = await store.createSession(project.id, "Legacy session", flash.id);
+  await store.replaceGlobalSettings({ modelId: pro.id });
+  assert.deepEqual(store.listProviders(), [], "the pre-migration catalog has no providers");
+
+  const migrated = new SessionStore(tempRoot);
+  await migrated.load();
+
+  const providers = migrated.listProviders();
+  assert.equal(providers.length, 3, "one provider per protocol + variant + endpoint");
+  const providerOf = (modelId: string) => migrated.getModel(modelId)?.providerId;
+  assert.equal(providerOf(flash.id), providerOf(pro.id), "a trailing slash is not a different endpoint");
+  assert.notEqual(providerOf(flash.id), providerOf(qwen.id), "a different dialect is a different provider");
+  assert.notEqual(providerOf(flash.id), providerOf(other.id), "a different host is a different provider");
+
+  // Profile identity and every connection fact survive untouched.
+  for (const before of [flash, pro, qwen, other]) {
+    const after = migrated.getModel(before.id)!;
+    assert.equal(after.id, before.id);
+    assert.equal(after.model, before.model);
+    assert.equal(after.baseUrl, before.baseUrl);
+    assert.equal(after.apiProtocol, before.apiProtocol);
+    assert.equal(after.apiVariant, before.apiVariant);
+    assert.equal(after.thinkingMode, before.thinkingMode);
+    assert.equal(after.thinkingEffort, before.thinkingEffort);
+    assert.equal(after.hasApiToken, true);
+  }
+  assert.equal(migrated.getSession(session.id)?.modelId, flash.id, "session assignment still resolves");
+  assert.equal(migrated.getGlobalSettings().effective.modelId, pro.id, "the global default still resolves");
+
+  // Credentials are not moved. Copying the group's shared token onto the
+  // provider would survive a later "remove saved token" on the profile, so the
+  // provider starts empty and each profile keeps resolving its own.
+  const sharedProvider = migrated.getProvider(providerOf(flash.id))!;
+  assert.equal(sharedProvider.hasApiToken, false);
+  assert.equal(migrated.getProviderApiToken(sharedProvider.id), undefined);
+  assert.equal(migrated.getModelApiToken(flash.id), "shared-endpoint-token");
+  assert.equal(migrated.getModelApiToken(other.id), "other-endpoint-token");
+  assert.equal(sharedProvider.modelDiscovery, "manual", "a hand-configured endpoint never proved it lists models");
+  assert.equal(sharedProvider.tokenOptional, false, "standalone profiles always required their own token");
+  assert.equal(sharedProvider.presetId, undefined, "migrated providers are custom, not preset-derived");
+
+  // Reloading plans nothing: the profiles are no longer standalone.
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.deepEqual(
+    reloaded.listProviders().map((provider) => provider.id).toSorted(),
+    providers.map((provider) => provider.id).toSorted(),
+    "a second load does not create a second set of providers",
+  );
+  assert.equal(reloaded.getModel(flash.id)?.providerId, providerOf(flash.id));
+});
+
+test("migrating never merges credentials across profiles in the same group", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `standalone-mixed-token-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const first = await store.createModel({
+    apiToken: "first-token",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.example.test/v1",
+    model: "legacy-a",
+    name: "Legacy A",
+  });
+  const second = await store.createModel({
+    apiToken: "second-token",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.example.test/v1",
+    model: "legacy-b",
+    name: "Legacy B",
+  });
+
+  const migrated = new SessionStore(tempRoot);
+  await migrated.load();
+
+  const [provider] = migrated.listProviders();
+  assert.equal(migrated.listProviders().length, 1, "the same connection is one provider");
+  assert.equal(provider!.hasApiToken, false, "no credential is copied onto the provider");
+  assert.equal(migrated.getProviderApiToken(provider!.id), undefined);
+  assert.equal(migrated.getModelApiToken(first.id), "first-token");
+  assert.equal(migrated.getModelApiToken(second.id), "second-token");
+
+  // Clearing one profile's token still means "no token", not "fall back to a
+  // sibling's": the migration must not widen what a credential can reach.
+  await migrated.updateModel(first.id, {
+    apiToken: null,
+    baseUrl: first.baseUrl,
+    model: first.model,
+    name: first.name,
+    vision: false,
+  });
+  assert.equal(migrated.getModelApiToken(first.id), undefined);
+  assert.equal(migrated.getModelApiToken(second.id), "second-token");
+});
+
+test("a legacy catalog with standalone profiles migrates on load without any user step", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `standalone-legacy-catalog-${Date.now()}-${process.pid}`);
+  await mkdir(resolve(tempRoot, "messages"), { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const now = new Date().toISOString();
+  await writeFile(resolve(tempRoot, "catalog.json"), `${JSON.stringify({
+    models: [{
+      baseUrl: "https://legacy.example.test/v1",
+      createdAt: now,
+      hasApiToken: false,
+      id: "legacy-model-1",
+      model: "legacy-model",
+      name: "Legacy model",
+      updatedAt: now,
+      vision: false,
+    }],
+    projects: [{ createdAt: now, id: "project-1", name: "Legacy project" }],
+    sessions: [{ createdAt: now, id: "session-1", modelId: "legacy-model-1", projectId: "project-1", title: "Legacy task", updatedAt: now }],
+  }, null, 2)}\n`, "utf8");
+  await writeFile(resolve(tempRoot, "messages", "session-1.json"), "[]\n", "utf8");
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const [provider] = store.listProviders();
+  assert.equal(store.listProviders().length, 1);
+  assert.equal(store.getModel("legacy-model-1")?.providerId, provider!.id,
+    "the profile is now reachable through the provider list");
+  assert.equal(store.getModel("legacy-model-1")?.baseUrl, "https://legacy.example.test/v1");
+  assert.equal(store.getModel("legacy-model-1")?.hasApiToken, false, "a profile without a token stays without one");
+  assert.equal(store.getSession("session-1")?.modelId, "legacy-model-1");
+
+  // The migration is persisted, so the next process sees the same shape.
+  const persisted = await readPersistedCatalog(tempRoot);
+  assert.equal(persisted.providers?.length, 1);
+  assert.equal(persisted.models[0]?.providerId, provider!.id);
+});
+
+test("manually added provider models accept a name, vision and legal thinking defaults", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `manual-provider-model-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+
+  const added = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    label: "Hand entered",
+    thinkingEffort: "medium",
+    thinkingMode: "enabled",
+    vision: true,
+  });
+  assert.match(added.name, /Hand entered$/);
+  assert.equal(added.vision, true);
+  assert.equal(added.thinkingMode, "enabled");
+  assert.equal(added.thinkingEffort, "medium");
+  assert.equal(added.hasApiToken, true, "the model inherits the provider credential");
+
+  // An illegal effort for this model is narrowed rather than stored as sent.
+  const narrowed = await store.materializeProviderModel(provider.id, "gpt-5.5", { thinkingEffort: "max" });
+  assert.equal(narrowed.id, added.id, "re-adding the same model stays idempotent");
+  assert.equal(narrowed.thinkingEffort, "xhigh");
+  assert.equal(narrowed.vision, true, "a field the caller did not state is left alone");
+  assert.equal(store.listModels().filter((model) => model.model === "gpt-5.5").length, 1);
 });

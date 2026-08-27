@@ -34,6 +34,7 @@ import {
   lookupModelCatalog,
   MODEL_PROVIDER_PRESETS,
   type CreateModelProviderRequest,
+  type CreateProviderModelRequest,
   type ModelProvider,
   type ProviderModelEntry,
   type ProviderModelList,
@@ -1210,16 +1211,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const providerId = providerModelsMatch[1]!;
         const provider = store.getProvider(providerId);
         if (!provider) throw new ApiStatusError(404, "Provider not found");
-        const body = await readJson<{ label?: string; model?: string; vision?: boolean }>(request);
+        const body = await readJson<Partial<CreateProviderModelRequest>>(request);
         const modelId = body.model?.trim() ?? "";
         // Seed the profile from the best facts available: explicit request,
-        // then the live listing, then the curated catalog.
+        // then the live listing, then the curated catalog. A model typed by
+        // hand simply has no listing entry, so it lands on the same path.
         const remote = providerModelListCache.get(providerId)?.models.find((model) => model.id === modelId);
         const catalog = modelId ? lookupModelCatalog(modelId, provider.presetId) : undefined;
         const vision = body.vision ?? remote?.vision ?? catalog?.vision;
         const label = body.label ?? remote?.displayName ?? catalog?.label;
         sendJson(response, 201, await store.materializeProviderModel(providerId, modelId, {
           ...(label !== undefined ? { label } : {}),
+          ...(body.thinkingEffort !== undefined ? { thinkingEffort: body.thinkingEffort } : {}),
+          ...(body.thinkingMode !== undefined ? { thinkingMode: body.thinkingMode } : {}),
           ...(vision !== undefined ? { vision } : {}),
         }));
         return;

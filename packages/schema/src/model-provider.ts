@@ -100,6 +100,24 @@ export interface ProviderModelEntry {
   remote?: RemoteModelFacts;
 }
 
+/**
+ * Add one model to a provider, either from its listing/catalog suggestions or
+ * typed by hand. Only `model` is required: an absent fact falls back to the
+ * live listing, then the catalog, then the provider's own default. Connection
+ * fields are deliberately not accepted — protocol, endpoint, proxy and token
+ * belong to the provider, which is what keeps a manually added model on the
+ * same wire contract as a discovered one.
+ */
+export interface CreateProviderModelRequest {
+  /** Display name for the profile; defaults to the listing or catalog label. */
+  label?: string;
+  model: string;
+  /** Narrowed to what the model actually accepts before it is stored. */
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
+  vision?: boolean;
+}
+
 export interface ProviderModelList {
   fetchedAt: string;
   models: ProviderModelEntry[];
