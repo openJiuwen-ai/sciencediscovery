@@ -93,9 +93,15 @@ import type {
 import {
   classifyScientificArtifact,
   createLocalSessionTitle,
+  isEvolveRunActive,
   resolveScientificArtifactKind,
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
+
+/** How often the workspace card re-reads the run list while a search is live.
+ *  Slower than the panel's SSE stream on purpose: this is a card showing a
+ *  count and a status, not a progress view. */
+const EVOLVE_CARD_POLL_MS = 3_000;
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
 import { createSessionActivity } from "./run-stream/session-activity.js";
@@ -1229,16 +1235,29 @@ export function App() {
       return;
     }
     let live = true;
-    // Read once. Progress belongs to the panel, which replays the run's event
-    // log over SSE and is live for as long as it is open; polling the list
-    // behind it would be a second, worse copy of that. The card's job is to say
-    // a search exists and let it be opened.
-    void client.listEvolveRuns(activeSessionId)
-      .then((runs) => { if (live) setEvolveRuns(runs); })
-      // A session with no runs is the common case and 404s nothing; a failure
-      // here must not take the workspace panel down with it.
-      .catch(() => { if (live) setEvolveRuns([]); });
-    return () => { live = false; };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // The card carries an expansion count and a status, so it cannot be a
+    // one-shot read: a search left running behind a closed panel froze at
+    // whatever "19/20" it happened to be at when the list was fetched, and
+    // only a session switch corrected it. Poll while at least one run is
+    // active, stop as soon as none are — a session whose searches have all
+    // finished settles back to zero requests.
+    const load = () => {
+      void client.listEvolveRuns(activeSessionId)
+        .then((runs) => {
+          if (!live) return;
+          setEvolveRuns(runs);
+          if (runs.some((run) => isEvolveRunActive(run.status))) {
+            timer = setTimeout(load, EVOLVE_CARD_POLL_MS);
+          }
+        })
+        // A session with no runs is the common case and 404s nothing; a failure
+        // here must not take the workspace panel down with it. Polling stops:
+        // a broken list will not fix itself by being asked again every 3s.
+        .catch(() => { if (live) setEvolveRuns([]); });
+    };
+    load();
+    return () => { live = false; if (timer) clearTimeout(timer); };
   }, [activeSessionId, client, evolveRefreshKey]);
   const loadMarkdownImage = useCallback(async (path: string, signal: AbortSignal): Promise<Blob> => {
     const sessionId = session?.id;
