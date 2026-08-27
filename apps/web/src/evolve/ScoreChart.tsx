@@ -68,8 +68,14 @@ export function ScoreChart({ view }: ScoreChartProps) {
 
   const x = (index: number) => PAD.left
     + (WIDTH - PAD.left - PAD.right) * (bounds.maxIndex === 0 ? 0.5 : index / bounds.maxIndex);
-  const y = (value: number) => PAD.top
-    + (HEIGHT - PAD.top - PAD.bottom) * (1 - (value - bounds.min) / (bounds.max - bounds.min || 1));
+  const y = (value: number) => {
+    // The window starts at the baseline, so anything worse than the baseline
+    // is clamped to the floor — still visible as "tried, below the window"
+    // rather than dragging the whole axis down to zero for one dead candidate.
+    const clamped = Math.min(bounds.max, Math.max(bounds.min, value));
+    return PAD.top
+      + (HEIGHT - PAD.top - PAD.bottom) * (1 - (clamped - bounds.min) / (bounds.max - bounds.min || 1));
+  };
   // The best-so-far staircase: starts at the baseline, steps up at the index
   // where a candidate first beats everything before it, holds to the end.
   const bestPath = (() => {
@@ -185,13 +191,17 @@ function boundsOf(
   const values = [...series.gate, ...series.rollout].map((point) => point.value);
   if (view.baselineScore !== null) values.push(view.baselineScore);
   if (view.bestTestScore !== undefined) values.push(view.bestTestScore);
-  const min = values.length ? Math.min(...values) : 0;
+  // The floor is the baseline, not zero: the story of the chart is the climb
+  // above the starting point, and one dead candidate at 0 was compressing that
+  // climb into the top tenth of the plot. Below-baseline dots clamp to the
+  // floor in `y`. Without a baseline (old runs) fall back to the data range.
+  const min = view.baselineScore ?? (values.length ? Math.min(...values) : 0);
   const max = values.length ? Math.max(...values) : 1;
   // A flat run would otherwise divide by zero and draw every point on the axis.
   const pad = (max - min) * 0.1 || 0.05;
   return {
     max: max + pad,
     maxIndex: Math.max(1, ...view.candidates.map((candidate) => candidate.nodeIndex)),
-    min: Math.max(0, min - pad),
+    min: Math.max(0, min - pad * 0.4),
   };
 }
