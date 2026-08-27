@@ -376,9 +376,9 @@
 }
 .evolve-chart-line { fill: none; }
 /* The gate line is the one that decides, so it is the one that reads first. */
-.evolve-chart-gate { stroke: var(--accent); stroke-width: 2.5; }
-.evolve-chart-rollout { stroke: var(--muted); stroke-width: 1.5; }
-.evolve-chart-gate-dot { fill: var(--accent); }
+.evolve-chart-best { stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.evolve-chart-gate-dot { fill: var(--accent); opacity: .75; }
+.evolve-chart-rollout-dot { fill: var(--muted); opacity: .6; }
 .evolve-chart-test { fill: var(--success, #2e7d32); stroke: var(--surface); stroke-width: 2; }
 /* Hollow, and on the axis: a failed expansion happened, it just has no score. */
 .evolve-chart-failed { fill: none; stroke: var(--danger, #c62828); stroke-width: 1.5; }
@@ -399,8 +399,9 @@
   margin-right: 4px;
   width: 8px;
 }
-.evolve-chart-key-gate::before { background: var(--accent); }
-.evolve-chart-key-rollout::before { background: var(--muted); }
+.evolve-chart-key-best::before { background: var(--accent); border-radius: 1px; height: 3px; margin-top: 4px; }
+.evolve-chart-key-gate::before { background: var(--accent); border-radius: 50%; opacity: .75; }
+.evolve-chart-key-rollout::before { background: var(--muted); border-radius: 50%; opacity: .6; }
 .evolve-chart-key-test::before { background: var(--success, #2e7d32); border-radius: 50%; }
 .evolve-chart-key-failed::before {
   border: 1.5px solid var(--danger, #c62828);

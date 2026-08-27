@@ -18,17 +18,21 @@
  * They are three different measurements and conflating any two of them hides
  * the thing the split was built for:
  *
- * * **rollout** is what the search can see, and what it ranks on.
- * * **gate** is what decides — drawn bold, because a candidate that is better
- *   on rollout and worse on gate is the case the whole design exists to catch,
- *   and one averaged line would draw it as progress.
+ * * **gate** is what decides. Every candidate is a dot; the accent **step
+ *   line traces the best so far**, starting at the baseline. Dots joined in
+ *   expansion order drew a sawtooth — parallel expansions are independent
+ *   draws, so consecutive indices are not a trajectory, and the zig-zag read
+ *   as wild instability when the run was actually climbing.
+ * * **rollout** is what the search can see; smaller muted dots, only drawn
+ *   where it differs from the gate — the two conflating is what the split
+ *   exists to catch.
  * * **test** is a single point at the end, on shards that took no part. It is
  *   the only number that means anything outside this run.
  *
- * A failed expansion is a hollow point on the axis, not a gap in the line: a
- * gap reads as "nothing happened here", and what happened is that a candidate
- * was spent. Baseline is a dashed horizontal rule, because every score in the
- * run is relative to it.
+ * A failed expansion is a hollow point on the axis, not a gap: a gap reads as
+ * "nothing happened here", and what happened is that a candidate was spent.
+ * Baseline is a dashed horizontal rule, because every score in the run is
+ * relative to it — and it is where the best-so-far line begins.
  *
  * Hand-drawn SVG rather than a chart library: this is four polylines and a
  * dozen circles, it has to be readable by a screen reader (there is a table
@@ -66,8 +70,24 @@ export function ScoreChart({ view }: ScoreChartProps) {
     + (WIDTH - PAD.left - PAD.right) * (bounds.maxIndex === 0 ? 0.5 : index / bounds.maxIndex);
   const y = (value: number) => PAD.top
     + (HEIGHT - PAD.top - PAD.bottom) * (1 - (value - bounds.min) / (bounds.max - bounds.min || 1));
-  const path = (points: Point[]) => points.map((point, at) =>
-    `${at === 0 ? "M" : "L"}${x(point.index).toFixed(1)},${y(point.value).toFixed(1)}`).join(" ");
+  // The best-so-far staircase: starts at the baseline, steps up at the index
+  // where a candidate first beats everything before it, holds to the end.
+  const bestPath = (() => {
+    let best = view.baselineScore ?? -Infinity;
+    const start = view.baselineScore !== null
+      ? `M${x(0).toFixed(1)},${y(view.baselineScore).toFixed(1)}`
+      : "";
+    let d = start;
+    for (const point of series.gate) {
+      if (point.value <= best) continue;
+      const px = x(point.index).toFixed(1);
+      const py = y(point.value).toFixed(1);
+      d = d ? `${d} H${px} V${py}` : `M${px},${py}`;
+      best = point.value;
+    }
+    if (!d || best === -Infinity) return "";
+    return `${d} H${x(bounds.maxIndex).toFixed(1)}`;
+  })();
 
   return <figure className="evolve-chart">
     <svg
@@ -94,27 +114,31 @@ export function ScoreChart({ view }: ScoreChartProps) {
           textAnchor="end">{t("evolve.chart.baseline")}</text>
       </>}
 
-      {series.rollout.length
-        ? <path className="evolve-chart-line evolve-chart-rollout" d={path(series.rollout)} />
-        : null}
-      {/* Bold, and drawn last of the two so it is never hidden under the line
-          the search is allowed to see. */}
-      {series.gate.length
-        ? <path className="evolve-chart-line evolve-chart-gate" d={path(series.gate)} />
+      {bestPath
+        ? <path className="evolve-chart-line evolve-chart-best" d={bestPath} />
         : null}
 
       {series.failed.map((index) => <circle
         className="evolve-chart-failed" cx={x(index)} cy={HEIGHT - PAD.bottom} key={`f${index}`} r={4}
       />)}
+      {/* Rollout only where it disagrees with the gate — agreement would just
+          double every dot. Disagreement is the case the split exists for. */}
+      {series.rollout
+        .filter((point) => series.gate.find((g) => g.index === point.index)?.value !== point.value)
+        .map((point) => <circle
+          className="evolve-chart-dot evolve-chart-rollout-dot"
+          cx={x(point.index)} cy={y(point.value)} key={`r${point.index}`} r={2.5}
+        />)}
       {series.gate.map((point) => <circle
         className="evolve-chart-dot evolve-chart-gate-dot"
-        cx={x(point.index)} cy={y(point.value)} key={`g${point.index}`} r={3}
+        cx={x(point.index)} cy={y(point.value)} key={`g${point.index}`} r={3.5}
       />)}
       {view.bestTestScore === undefined ? null : <circle
         className="evolve-chart-test" cx={x(bounds.maxIndex)} cy={y(view.bestTestScore)} r={5}
       />}
     </svg>
     <figcaption className="evolve-chart-legend">
+      <span className="evolve-chart-key evolve-chart-key-best">{t("evolve.chart.best")}</span>
       <span className="evolve-chart-key evolve-chart-key-gate">{t("evolve.chart.gate")}</span>
       <span className="evolve-chart-key evolve-chart-key-rollout">{t("evolve.chart.rollout")}</span>
       <span className="evolve-chart-key evolve-chart-key-test">
