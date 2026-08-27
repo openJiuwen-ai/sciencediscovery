@@ -46,8 +46,8 @@ export function modelOptionLabel(
   const effort = profile.thinkingEffort ?? "high";
   const variantLabel = t(`settings.apiVariant.${variant}`);
   const thinkingLabel = t(`settings.thinkingMode.${thinking}`);
-  const effortLabel = t(`settings.thinkingEffort.${effort}`);
-  const base = `${profile.name} · ${profile.model} · ${variantLabel} · ${thinkingLabel}${thinking === "enabled" ? `: ${effortLabel}` : ""}`;
+  // Effort levels are provider vocabulary and stay in the raw form.
+  const base = `${profile.name} · ${profile.model} · ${variantLabel} · ${thinkingLabel}${thinking === "enabled" ? `: ${effort}` : ""}`;
   const idHint = duplicateModelProfileId(profile, profiles);
   return idHint ? `${base} · ${idHint}` : base;
 }

@@ -21,6 +21,7 @@ import type {
   ModelThinkingMode,
 } from "@sciencediscovery/schema";
 
+import { SparkleIcon } from "../icons.js";
 import { useLocale, type MessageKey } from "../i18n/index.js";
 import type { ModelThinkingControls, ThinkingChoice } from "../modelThinking.js";
 import { thinkingChoiceOptions, thinkingChoiceValue } from "../modelThinking.js";
@@ -46,10 +47,18 @@ export function groupModelsByProvider(
   return groups;
 }
 
-export function thinkingChoiceLabelKey(choice: ThinkingChoice): MessageKey {
+export function thinkingChoiceLabelKey(choice: ThinkingChoice): MessageKey | undefined {
   if (choice.value === "off") return "composer.modelPicker.off";
-  if (choice.effort) return `settings.thinkingEffort.${choice.effort}`;
+  if (choice.effort) return undefined;
   return `settings.thinkingMode.${choice.mode}`;
+}
+
+/** Visible label for one stop: effort levels stay in provider vocabulary
+ *  (raw "low"/"high"/"max"), while off and model default are localized. */
+export function thinkingChoiceLabel(choice: ThinkingChoice, t: (key: MessageKey) => string): string {
+  if (choice.effort) return choice.effort;
+  const key = thinkingChoiceLabelKey(choice);
+  return key ? t(key) : choice.value;
 }
 
 /** Inverse of the combined-control value encoding used by
@@ -116,7 +125,7 @@ export function ModelPicker({
   const stops = thinkingChoiceOptions(controls);
   const currentValue = thinkingChoiceValue(thinkingMode, thinkingEffort, stops);
   const currentIndex = Math.max(0, stops.findIndex((stop) => stop.value === currentValue));
-  const currentLabel = stops.length ? t(thinkingChoiceLabelKey(stops[currentIndex]!)) : "";
+  const currentLabel = stops.length ? thinkingChoiceLabel(stops[currentIndex]!, t) : "";
 
   function applyStop(index: number): void {
     const stop = stops[index];
@@ -179,16 +188,19 @@ export function ModelPicker({
             <span>{t("composer.modelPicker.thinking")}</span>
             <strong aria-live="polite">{currentLabel}</strong>
           </div>
-          <div aria-label={t("composer.modelPicker.thinkingAria")} className="model-picker-stops" role="radiogroup">
-            {stops.map((stop, index) => <button
-              aria-checked={index === currentIndex}
-              className={index === currentIndex ? "model-picker-stop active" : "model-picker-stop"}
-              disabled={disabled}
-              key={stop.value}
-              onClick={() => applyStop(index)}
-              role="radio"
-              type="button"
-            >{t(thinkingChoiceLabelKey(stop))}</button>)}
+          <div className="model-picker-stops-row">
+            <span className="model-picker-thinking-marker" title={t("composer.modelPicker.thinking")}><SparkleIcon size={12} />{t("composer.thinking")}</span>
+            <div aria-label={t("composer.modelPicker.thinkingAria")} className="model-picker-stops" role="radiogroup">
+              {stops.map((stop, index) => <button
+                aria-checked={index === currentIndex}
+                className={index === currentIndex ? "model-picker-stop active" : "model-picker-stop"}
+                disabled={disabled}
+                key={stop.value}
+                onClick={() => applyStop(index)}
+                role="radio"
+                type="button"
+              >{thinkingChoiceLabel(stop, t)}</button>)}
+            </div>
           </div>
           {controls.legacyBudget ? <small className="model-picker-note">{t("composer.thinkingLegacyNotice")}</small> : null}
         </> : <small className="model-picker-note">{t("composer.modelPicker.thinkingUnsupported")}</small>}

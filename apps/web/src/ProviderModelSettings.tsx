@@ -20,6 +20,7 @@ import type {
   ModelCatalogDetails,
   ModelCatalogEntry,
   ModelDiscoveryStrategy,
+  ModelThinkingEffort,
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
@@ -42,9 +43,7 @@ import type { SettingsApiClient } from "./api/settings.js";
 import { ImageIcon, SparkleIcon } from "./icons.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
-import { parseThinkingChoice, thinkingChoiceLabelKey } from "./composer/ModelPicker.js";
 import { useLocale } from "./i18n/index.js";
-import { modelVariantThinkingControls, thinkingChoiceOptions } from "./modelThinking.js";
 
 interface ProviderDraft {
   apiProtocol: ModelApiProtocol;
@@ -257,43 +256,54 @@ function ModelRowFacts({ model }: { model: ProviderModelEntry }) {
   const maxOutputTokens = resolved.maxOutputTokens;
   const vision = mergedFact(model.remote?.vision, model.catalog?.vision);
   const thinking = resolved.thinkingSupported ?? model.catalog?.thinking?.supported;
-  const efforts = model.catalog?.thinking?.efforts;
+  // Effort levels are provider vocabulary: show the raw strings (the user's
+  // declared list wins over the catalog), never translated labels.
+  const efforts = model.user?.thinkingEfforts ?? model.catalog?.thinking?.efforts;
   const pricing = resolved.pricing;
-  const contextOrigin = resolved.origins.contextWindow === "user" || resolved.origins.maxOutputTokens === "user"
-    ? ` · ${t("providers.facts.originUser")}` : "";
-  const priceOrigin = resolved.origins.pricing === "user" ? ` · ${t("providers.facts.originUser")}` : "";
-  const tokenTitle = contextWindow === undefined && maxOutputTokens === undefined
-    ? unknown
-    : t("providers.facts.tokens", {
-        context: contextWindow === undefined ? unknown : tokenCount(contextWindow, unknown),
-        output: maxOutputTokens === undefined ? unknown : tokenCount(maxOutputTokens, unknown),
-      }) + contextOrigin;
-  const visionTitle = vision === undefined
-    ? t("providers.facts.visionUnknown")
-    : vision ? t("providers.facts.visionYes") : t("providers.facts.visionNo");
-  const thinkingTitle = thinking === undefined
-    ? `${t("providers.metadata.thinking")}: ${unknown}`
-    : thinking
-      ? t("providers.facts.thinking", {
-          detail: efforts?.length ? efforts.map((effort) => t(`settings.thinkingEffort.${effort}`)).join(" / ") : t("common.yes"),
-        })
-      : t("providers.facts.thinkingNo");
   return <span className="provider-model-row-facts">
-    <span className="fact" title={tokenTitle}>{compactTokenCount(contextWindow) ?? "?"} / {compactTokenCount(maxOutputTokens) ?? "?"}</span>
-    <span className={vision ? "fact icon on" : "fact icon"} title={visionTitle}><ImageIcon size={12} />{vision === undefined ? "?" : vision ? "✓" : "—"}</span>
-    <span className={thinking ? "fact icon on" : "fact icon"} title={thinkingTitle}>
+    <span className="fact">{compactTokenCount(contextWindow) ?? "?"} / {compactTokenCount(maxOutputTokens) ?? "?"}</span>
+    <span className={vision ? "fact icon on" : "fact icon"}><ImageIcon size={12} />{vision === undefined ? "?" : vision ? "✓" : "—"}</span>
+    <span className={thinking ? "fact icon on" : "fact icon"}>
       <SparkleIcon size={12} />{thinking === undefined ? "?" : thinking
-        ? (efforts?.length ? efforts.map((effort) => t(`settings.thinkingEffort.${effort}`)).join(" ") : "✓")
+        ? (efforts?.length ? efforts.join(" ") : "✓")
         : "—"}
     </span>
-    <span className="fact" title={pricing
-      ? t("providers.facts.price", { currency: pricing.currency }) + priceOrigin
-      : `${t("providers.metadata.price")}: ${unknown}`}>
+    <span className="fact">
       {pricing
         ? `${pricing.input} / ${pricing.output}${pricing.cachedInput !== undefined ? ` / ${pricing.cachedInput}` : ""} ${pricing.currency}/1M`
         : "?"}
     </span>
   </span>;
+}
+
+/** Rich hover card for one provider model row: everything the compact badges
+ *  abbreviate, with full numbers and the fact's origin. Replaces native
+ *  `title` tooltips. */
+function ModelRowPopup({ model, provider }: { model: ProviderModelEntry; provider: ModelProvider }) {
+  const { t } = useLocale();
+  const unknown = t("providers.metadata.unknown");
+  const resolved = resolveModelFacts(model);
+  const vision = mergedFact(model.remote?.vision, model.catalog?.vision);
+  const thinking = resolved.thinkingSupported ?? model.catalog?.thinking?.supported;
+  const efforts = model.user?.thinkingEfforts ?? model.catalog?.thinking?.efforts;
+  const pricing = resolved.pricing;
+  const origin = resolved.origins.contextWindow === "user" || resolved.origins.pricing === "user"
+    ? t("providers.facts.originUser")
+    : model.remote ? t("providers.models.remote") : t("providers.models.catalog");
+  return <div className="provider-model-popup" role="tooltip">
+    <strong>{model.displayName ?? model.catalog?.label ?? model.id}</strong>
+    <code>{model.id}</code>
+    <dl>
+      <div><dt>{t("providers.metadata.context")}</dt><dd>{tokenCount(resolved.contextWindow, unknown)}</dd></div>
+      <div><dt>{t("providers.metadata.output")}</dt><dd>{tokenCount(resolved.maxOutputTokens, unknown)}</dd></div>
+      <div><dt>{t("providers.metadata.vision")}</dt><dd>{vision === undefined ? unknown : vision ? t("common.yes") : t("common.no")}</dd></div>
+      <div><dt>{t("providers.metadata.thinking")}</dt><dd>{thinking === undefined ? unknown : thinking ? (efforts?.length ? efforts.join(" / ") : t("common.yes")) : t("common.no")}</dd></div>
+      <div><dt>{t("providers.metadata.price")}</dt><dd>{pricing
+        ? `${pricing.currency} ${pricing.input} / ${pricing.output}${pricing.cachedInput !== undefined ? ` / ${pricing.cachedInput}` : ""} · ${t("providers.metadata.perMillion")}`
+        : unknown}</dd></div>
+      <div><dt>{t("providers.facts.source")}</dt><dd>{origin}</dd></div>
+    </dl>
+  </div>;
 }
 
 /** The model catalog header: when the shared metadata was last updated and a
@@ -330,13 +340,13 @@ export function ModelCatalogStatus({ catalog, client, onCatalogChange, onError, 
   }
 
   return <section className="model-catalog-status" aria-label={t("providers.catalog.title")}>
-    <div>
+    <span className="model-catalog-line">
       <strong>{t("providers.catalog.title")}</strong>
       <small>{t("providers.catalog.source")}</small>
       <small>{snapshot
         ? t(`providers.catalog.updated.${snapshot.origin}`, { time: new Date(snapshot.fetchedAt).toLocaleString() })
         : t("providers.catalog.missing")}</small>
-    </div>
+    </span>
     <button
       className="secondary-button compact-button"
       disabled={refreshing}
@@ -354,6 +364,7 @@ interface ListingState {
 
 export interface ManualModelForm {
   contextWindow: string;
+  efforts: string;
   label: string;
   maxOutputTokens: string;
   modelId: string;
@@ -361,12 +372,12 @@ export interface ManualModelForm {
   priceCurrency: string;
   priceInput: string;
   priceOutput: string;
-  thinking: string;
   vision: boolean;
 }
 
 const EMPTY_MANUAL_MODEL: ManualModelForm = {
   contextWindow: "",
+  efforts: "",
   label: "",
   maxOutputTokens: "",
   modelId: "",
@@ -374,9 +385,18 @@ const EMPTY_MANUAL_MODEL: ManualModelForm = {
   priceCurrency: "",
   priceInput: "",
   priceOutput: "",
-  thinking: "",
   vision: false,
 };
+
+const KNOWN_EFFORTS: readonly ModelThinkingEffort[] = ["low", "medium", "high", "xhigh", "max"];
+
+/** Parse a comma-separated raw effort list ("low, high, max"), keeping only
+ *  efforts the product knows. */
+export function parseEffortList(value: string): ModelThinkingEffort[] {
+  return value.split(",")
+    .map((part) => part.trim())
+    .filter((part): part is ModelThinkingEffort => KNOWN_EFFORTS.includes(part as ModelThinkingEffort));
+}
 
 function parseOptionalInt(value: string): number | undefined {
   const parsed = Number.parseInt(value.trim(), 10);
@@ -405,7 +425,7 @@ export function prefillManualFromCatalog(
     vision: current.vision || catalog.vision === true,
     contextWindow: current.contextWindow || (catalog.contextWindow !== undefined ? String(catalog.contextWindow) : ""),
     maxOutputTokens: current.maxOutputTokens || (catalog.maxOutputTokens !== undefined ? String(catalog.maxOutputTokens) : ""),
-    thinking: current.thinking || catalogThinkingChoice(catalog),
+    efforts: current.efforts || (catalog.thinking?.efforts?.length ? catalog.thinking.efforts.join(",") : ""),
     priceCurrency: current.priceCurrency || catalog.pricing?.currency || "",
     priceInput: current.priceInput || (catalog.pricing ? String(catalog.pricing.input) : ""),
     priceOutput: current.priceOutput || (catalog.pricing ? String(catalog.pricing.output) : ""),
@@ -413,16 +433,6 @@ export function prefillManualFromCatalog(
   };
 }
 
-/** Map a catalog entry's default thinking onto the combined-choice encoding
- *  used by the manual form select. */
-function catalogThinkingChoice(catalog: ModelCatalogEntry): string {
-  const thinking = catalog.thinking;
-  if (!thinking?.supported) return "";
-  if (thinking.defaultMode === "enabled" && thinking.defaultEffort) return `effort:${thinking.defaultEffort}`;
-  if (thinking.defaultMode === "disabled") return "off";
-  if (thinking.defaultMode === "auto") return "auto";
-  return "";
-}
 
 export function ProviderRow({
   addedProfiles,
@@ -458,7 +468,6 @@ export function ProviderRow({
   // and the test dropdown never disagree.
   const total = listing?.list ? rows.length : undefined;
   const ready = provider.hasApiToken || provider.tokenOptional;
-  const manualChoices = thinkingChoiceOptions(modelVariantThinkingControls(manual.modelId, provider.apiVariant));
   const testProfile = addedProfiles.find((profile) => profile.id === testModelId) ?? addedProfiles[0];
 
   async function submitManual(): Promise<void> {
@@ -517,6 +526,7 @@ export function ProviderRow({
         {rows.map((model) => <div className="provider-model-row" key={model.id} role="row">
           <span className="provider-model-cell-name"><strong>{model.displayName ?? model.catalog?.label ?? model.id}</strong><code>{model.id}</code></span>
           <ModelRowFacts model={model} />
+          <ModelRowPopup model={model} provider={provider} />
           <button className="secondary-button compact-button" disabled={busy || Boolean(model.profileId)} onClick={() => void onAddModel(provider.id, model.id, model, { ...EMPTY_MANUAL_MODEL })} type="button">{model.profileId ? t("providers.models.added") : t("providers.models.add")}</button>
         </div>)}
       </div> : listing?.list ? <p className="muted">{t("providers.models.empty")}</p> : null}
@@ -528,10 +538,7 @@ export function ProviderRow({
         <label><span>{t("providers.manual.label")}</span><input value={manual.label} onChange={(event) => setManual((current) => ({ ...current, label: event.target.value }))} placeholder={t("providers.manual.labelPlaceholder")} /></label>
         <label><span>{t("providers.manual.context")}</span><input inputMode="numeric" value={manual.contextWindow} onChange={(event) => setManual((current) => ({ ...current, contextWindow: event.target.value }))} placeholder="1000000" /></label>
         <label><span>{t("providers.manual.output")}</span><input inputMode="numeric" value={manual.maxOutputTokens} onChange={(event) => setManual((current) => ({ ...current, maxOutputTokens: event.target.value }))} placeholder="131072" /></label>
-        <label><span>{t("providers.manual.thinking")}</span><select value={manual.thinking} onChange={(event) => setManual((current) => ({ ...current, thinking: event.target.value }))}>
-          <option value="">{t("providers.manual.thinkingDefault")}</option>
-          {manualChoices.map((choice) => <option key={choice.value} value={choice.value}>{t(thinkingChoiceLabelKey(choice))}</option>)}
-        </select></label>
+        <label><span>{t("providers.manual.efforts")}</span><input value={manual.efforts} onChange={(event) => setManual((current) => ({ ...current, efforts: event.target.value }))} placeholder={t("providers.manual.effortsPlaceholder")} /></label>
         <fieldset className="provider-manual-price">
           <legend>{t("providers.manual.price")}</legend>
           <label><span>{t("providers.manual.priceCurrency")}</span><input value={manual.priceCurrency} onChange={(event) => setManual((current) => ({ ...current, priceCurrency: event.target.value }))} placeholder="USD" /></label>
@@ -591,7 +598,7 @@ function ProviderEditorPanel({
     <details className="provider-advanced" open={!draft.presetId}>
       <summary>{t("providers.advanced")}</summary>
       <div className="provider-advanced-grid">
-        <label><span>{t("providers.baseUrl")}</span><input value={draft.baseUrl} onChange={(event) => onChange({ baseUrl: event.target.value })} /></label>
+        <label className="provider-advanced-url"><span>{t("providers.baseUrl")}</span><input value={draft.baseUrl} onChange={(event) => onChange({ baseUrl: event.target.value })} /></label>
         <label><span>{t("settings.apiProtocol")}</span><select value={draft.apiProtocol} onChange={(event) => {
           const apiProtocol = event.target.value as ModelApiProtocol;
           onChange({ apiProtocol, apiVariant: DEFAULT_MODEL_API_VARIANT[apiProtocol], modelDiscovery: DEFAULT_MODEL_DISCOVERY[apiProtocol] });
@@ -603,13 +610,7 @@ function ProviderEditorPanel({
         <label><span>{t("settings.apiVariant")}</span><select value={draft.apiVariant} onChange={(event) => onChange({ apiVariant: event.target.value as ModelApiVariant })}>
           {MODEL_API_VARIANTS[draft.apiProtocol].map((variant) => <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>)}
         </select></label>
-        <label><span>{t("providers.discovery.strategy")}</span><select value={draft.modelDiscovery} onChange={(event) => onChange({ modelDiscovery: event.target.value as ModelDiscoveryStrategy })}>
-          <option value="openai-models">{t("providers.discovery.openai")}</option>
-          <option value="anthropic-models">{t("providers.discovery.anthropic")}</option>
-          <option value="manual">{t("providers.discovery.manual")}</option>
-        </select></label>
         {proxySettings ? <ProxyPolicySelect label={t("settings.llmProxy")} onChange={(proxyPolicy) => onChange({ proxyPolicy })} settings={proxySettings} value={draft.proxyPolicy} /> : null}
-        {!draft.presetId ? <label className="provider-token-optional"><input checked={draft.tokenOptional} onChange={(event) => onChange({ tokenOptional: event.target.checked })} type="checkbox" /><span>{t("providers.token.optionalToggle")}</span></label> : null}
       </div>
     </details>
   </section>;
@@ -743,10 +744,6 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
       return false;
     }
     const existing = draft.providerId ? providers.find((provider) => provider.id === draft.providerId) : undefined;
-    if (!existing && !draft.tokenOptional && !draft.apiToken.trim()) {
-      onError(t("providers.validation.token"));
-      return false;
-    }
     setBusy(true);
     try {
       const input = {
@@ -832,7 +829,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     try {
       const label = manual.label.trim() || entry?.displayName || entry?.catalog?.label;
       const vision = manual.vision || mergedFact(entry?.remote?.vision, entry?.catalog?.vision);
-      const thinking = parseThinkingChoice(manual.thinking);
+      const efforts = parseEffortList(manual.efforts);
       const contextWindow = parseOptionalInt(manual.contextWindow);
       const maxOutputTokens = parseOptionalInt(manual.maxOutputTokens);
       const priceInput = parseOptionalNumber(manual.priceInput);
@@ -846,18 +843,19 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
             ...(priceCached !== undefined ? { cachedInput: priceCached } : {}),
           }
         : undefined;
-      const facts = contextWindow !== undefined || maxOutputTokens !== undefined || pricing
+      // Facts carry the user-stated effort list; without one the model simply
+      // omits thinking parameters (the "model default" behaviour).
+      const facts = contextWindow !== undefined || maxOutputTokens !== undefined || pricing || efforts.length
         ? {
             ...(contextWindow !== undefined ? { contextWindow } : {}),
             ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
             ...(pricing ? { pricing } : {}),
+            ...(efforts.length ? { thinkingEfforts: efforts } : {}),
           }
         : undefined;
       const saved = await client.addProviderModel(providerId, {
         ...(label ? { label } : {}),
         model: modelId.trim(),
-        ...(thinking.mode ? { thinkingMode: thinking.mode } : {}),
-        ...(thinking.effort ? { thinkingEffort: thinking.effort } : {}),
         ...(vision !== undefined ? { vision } : {}),
         ...(facts ? { facts } : {}),
       });

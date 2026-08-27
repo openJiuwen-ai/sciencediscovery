@@ -23,6 +23,7 @@ import {
   groupModelsByProvider,
   ModelPicker,
   parseThinkingChoice,
+  thinkingChoiceLabel,
   thinkingChoiceLabelKey,
 } from "../src/composer/ModelPicker.js";
 import { LocaleProvider } from "../src/i18n/index.js";
@@ -103,7 +104,10 @@ test("thinking choice values round-trip through the parser", () => {
   assert.deepEqual(parseThinkingChoice(""), {});
   assert.equal(thinkingChoiceLabelKey({ mode: "disabled", value: "off" }), "composer.modelPicker.off");
   assert.equal(thinkingChoiceLabelKey({ mode: "auto", value: "auto" }), "settings.thinkingMode.auto");
-  assert.equal(thinkingChoiceLabelKey({ effort: "xhigh", mode: "enabled", value: "effort:xhigh" }), "settings.thinkingEffort.xhigh");
+  // Effort levels keep the provider's raw vocabulary; only off/default localize.
+  assert.equal(thinkingChoiceLabelKey({ effort: "xhigh", mode: "enabled", value: "effort:xhigh" }), undefined);
+  assert.equal(thinkingChoiceLabel({ effort: "xhigh", mode: "enabled", value: "effort:xhigh" }, (key) => key), "xhigh");
+  assert.equal(thinkingChoiceLabel({ mode: "disabled", value: "off" }, (key) => key), "composer.modelPicker.off");
 });
 
 test("models group under their provider with a trailing group for standalone profiles", () => {
@@ -149,7 +153,7 @@ test("the trigger renders the current model and the popover is connector-style",
   assert.doesNotMatch(html, /model-picker-popover/);
 });
 
-test("the slider carries exactly the legal stops and the current value", () => {
+test("the stop row carries exactly the legal stops and the current value", () => {
   const models = [model("m1", "DeepSeek Chat", "p1")];
   const html = renderPicker("en", {
     activeModelId: "m1",
@@ -163,12 +167,12 @@ test("the slider carries exactly the legal stops and the current value", () => {
   assert.match(html, /model-picker-trigger/);
 
   const stops = thinkingChoiceOptions(FULL_CONTROLS);
-  const labels = stops.map((stop) => thinkingChoiceLabelKey(stop));
+  const labels = stops.map((stop) => thinkingChoiceLabel(stop, (key) => key));
   assert.deepEqual(labels, [
     "composer.modelPicker.off",
     "settings.thinkingMode.auto",
-    "settings.thinkingEffort.high",
-    "settings.thinkingEffort.max",
+    "high",
+    "max",
   ]);
 });
 

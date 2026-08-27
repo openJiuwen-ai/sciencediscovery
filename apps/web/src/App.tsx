@@ -3358,7 +3358,7 @@ export function App() {
   const activeThinkingSummary = !activeModel || !activeThinkingControls.supported
     ? undefined
     : activeThinkingMode === "enabled"
-      ? t(`settings.thinkingEffort.${activeThinkingEffort}`)
+      ? activeThinkingEffort
       : activeThinkingMode === "disabled"
         ? t("composer.modelPicker.off")
         : t("settings.thinkingMode.auto");

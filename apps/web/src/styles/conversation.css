@@ -142,7 +142,9 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .model-picker-thinking { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
 .model-picker-slider-label { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .model-picker-slider-label strong { color: var(--text-heading); font-size: 12px; }
-.model-picker-stops { display: flex; flex-wrap: wrap; margin-top: 6px; }
+.model-picker-stops-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.model-picker-thinking-marker { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.model-picker-stops { display: flex; flex-wrap: wrap; }
 .model-picker-stop { min-height: 28px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-secondary); padding: 3px 10px; cursor: pointer; font-size: 11px; font-weight: 700; }
 .model-picker-stop + .model-picker-stop { margin-left: -1px; }
 .model-picker-stop:first-child { border-radius: 7px 0 0 7px; }
