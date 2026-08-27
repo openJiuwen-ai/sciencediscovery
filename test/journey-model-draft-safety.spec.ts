@@ -136,7 +136,8 @@ test("T1 服务商草稿不会静默丢失", { tag: "@mocked" }, async ({ journe
           dismissMessage = confirmation.message();
           void confirmation.dismiss();
         });
-        await dialog.locator(".provider-add-controls").getByRole("button", { name: /^自定义服务商$/ }).click();
+        await dialog.getByRole("button", { name: /添加 Provider/ }).first().click();
+        await dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ }).click();
         expect(dismissMessage).toContain("放弃尚未保存的服务商修改");
         await expect(dialog.getByRole("region", { name: "服务商编辑器" }).getByLabel("服务商名称"))
           .toHaveValue(unsavedName);
@@ -146,7 +147,7 @@ test("T1 服务商草稿不会静默丢失", { tag: "@mocked" }, async ({ journe
           acceptCount += 1;
           void confirmation.accept();
         });
-        await dialog.locator(".provider-add-controls").getByRole("button", { name: /^自定义服务商$/ }).click();
+        await dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ }).click();
         expect(acceptCount).toBe(1);
         const newEditor = dialog.getByRole("region", { name: "服务商编辑器" });
         await expect(newEditor.getByText("连接服务商")).toBeVisible();

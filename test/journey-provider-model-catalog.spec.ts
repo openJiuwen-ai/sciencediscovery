@@ -248,7 +248,9 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
   // button below the configured list; open it on demand.
   const openAddPanel = async (dialog: ReturnType<typeof page.getByRole>) => {
     if (!await dialog.locator(".provider-add-panel").count()) {
-      await dialog.getByRole("button", { name: /^(添加 Provider|Add provider)/ }).first().click();
+      // The button's CSS ::before "+ " folds into its accessible name, so the
+      // match must stay unanchored.
+      await dialog.getByRole("button", { name: /添加 Provider|Add provider/ }).first().click();
     }
     return dialog.locator(".provider-add-panel");
   };
@@ -399,7 +401,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         for (const name of ["DeepSeek", "智谱 GLM", "OpenAI", "Anthropic", "Google Gemini", "Alibaba Cloud Model Studio"]) {
           expect(optionTexts.some((text) => text.includes(name))).toBe(true);
         }
-        await expect(dialog.locator(".provider-add-controls").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();
+        await expect(dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();
       },
     );
 
