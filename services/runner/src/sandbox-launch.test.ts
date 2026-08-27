@@ -20,7 +20,12 @@ import { after, before, describe, test } from "node:test";
 
 import { resetSandboxCapabilityCache, type SandboxProcMode } from "@sciencediscovery/sandbox-capability";
 
-import { buildSandboxLaunch, sandboxLaunchProfile } from "./executor.js";
+import {
+  buildSandboxLaunch,
+  resolveHostRuntimeSupport,
+  sandboxLaunchProfile,
+  type HostRuntimeSupport,
+} from "./executor.js";
 
 /** Quote for a shell single-quoted string; bubblewrap messages contain apostrophes. */
 function shellQuote(value: string): string {
@@ -30,18 +35,26 @@ function shellQuote(value: string): string {
 const PROC_EPERM = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
 const USERNS_EROFS = "bwrap: cannot open /proc/sys/user/max_user_namespaces: Read-only file system";
 
-function launchArguments(options: { disableUserns: boolean; procMode: SandboxProcMode }): string[] {
+function launch(options: {
+  disableUserns: boolean;
+  hostRuntimeSupport?: HostRuntimeSupport;
+  procMode: SandboxProcMode;
+}) {
   return buildSandboxLaunch({
     chdir: "/workspace",
     disableUserns: options.disableUserns,
     environmentBinds: [],
     hostInterpreterMasks: [],
-    hostRuntimeSupport: [],
+    hostRuntimeSupport: options.hostRuntimeSupport ?? { bindArgs: [], env: {} },
     language: "python",
     pathEnv: "/usr/bin",
     procMode: options.procMode,
     workspaceBindArgs: ["--bind", "/data/workspace", "/workspace"],
-  }).args;
+  });
+}
+
+function launchArguments(options: { disableUserns: boolean; procMode: SandboxProcMode }): string[] {
+  return launch(options).args;
 }
 
 /** Isolation that must survive either degradation, checked as adjacent pairs. */
@@ -97,6 +110,57 @@ describe("sandbox launch arguments", () => {
     assert.ok(!args.includes("--proc"));
     assert.ok(args.join(" ").includes("--ro-bind /proc /proc"));
     assertBaselineIsolation(args);
+  });
+});
+
+describe("host CA trust inside the sandbox", () => {
+  /** Adjacent `--ro-bind <source> <target>` triples, as bwrap reads them. */
+  function readOnlyBinds(args: string[]): Array<{ source: string; target: string }> {
+    return args.flatMap((argument, index) => argument === "--ro-bind"
+      ? [{ source: args[index + 1]!, target: args[index + 2]! }]
+      : []);
+  }
+
+  test("carries the resolved trust store into the binds and the environment", () => {
+    const built = launch({
+      disableUserns: true,
+      hostRuntimeSupport: {
+        bindArgs: ["--ro-bind", "/etc/ssl/certs", "/etc/ssl/certs"],
+        env: { SSL_CERT_DIR: "/etc/ssl/certs", SSL_CERT_FILE: "/etc/ssl/certs/ca-certificates.crt" },
+      },
+      procMode: "new",
+    });
+    assert.ok(readOnlyBinds(built.args).some(
+      ({ source, target }) => source === "/etc/ssl/certs" && target === "/etc/ssl/certs",
+    ));
+    assert.equal(built.env.SSL_CERT_FILE, "/etc/ssl/certs/ca-certificates.crt");
+    assert.equal(built.env.SSL_CERT_DIR, "/etc/ssl/certs");
+    // Trust is not reachability: nothing here opens a network path.
+    assert.ok(!built.args.includes("--share-net"));
+    assertBaselineIsolation(built.args);
+  });
+
+  test("binds a real trust store from this host and points TLS clients at it", async (t) => {
+    const support = await resolveHostRuntimeSupport();
+    const binds = readOnlyBinds(support.bindArgs);
+    const trustStores = binds.filter(({ source }) => source.startsWith("/etc/ssl/") || source.startsWith("/etc/pki/"));
+    if (trustStores.length === 0) {
+      t.skip("this host has no system CA trust store to bind");
+      return;
+    }
+    // Every bundle the environment advertises must be reachable in the sandbox,
+    // otherwise curl fails on the missing file (exit 77) exactly as before.
+    for (const key of ["SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"]) {
+      const bundle = support.env[key];
+      assert.ok(bundle, `expected ${key}`);
+      assert.ok(
+        binds.some(({ target }) => bundle === target || bundle!.startsWith(`${target}/`)),
+        `${key}=${bundle} is not covered by a bind`,
+      );
+    }
+    const built = launch({ disableUserns: true, hostRuntimeSupport: support, procMode: "new" });
+    assert.ok(!built.args.includes("--share-net"));
+    assertBaselineIsolation(built.args);
   });
 });
 

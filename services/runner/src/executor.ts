@@ -266,21 +266,86 @@ export async function hostInterpreterMaskArguments(): Promise<string[]> {
     .flatMap((name) => ["--ro-bind", "/dev/null", `/usr/bin/${name}`]);
 }
 
-export async function hostRuntimeSupportArguments(): Promise<string[]> {
-  const args: string[] = [];
+/**
+ * Optional host resources the sandbox may use. Every one of them is absent on
+ * some host, so each is probed before it is bound, and the environment is only
+ * populated for what was actually found.
+ */
+export interface HostRuntimeSupport {
+  /** bubblewrap binds exposing the resources this host actually has. */
+  bindArgs: string[];
+  /** Environment pointing TLS clients at the trust store that was bound. */
+  env: Record<string, string>;
+}
+
+/**
+ * Hashed certificate directories OpenSSL scans, by distribution family.
+ *
+ * The sandbox keeps `--ro-bind /usr /usr` but assembles a fresh `/etc`, so
+ * without a trust store bind no CA bundle exists inside it and every TLS client
+ * fails before the handshake — curl reports exit 77 on the missing bundle
+ * rather than any HTTP status. Binding a trust store grants no reachability: an
+ * outbound connection still needs `domain-allowlist` and the egress gateway, so
+ * `none` stays offline and unlisted domains stay refused.
+ */
+const HOST_CA_DIRECTORIES = [
+  "/etc/ssl/certs",      // Debian, Ubuntu, Alpine, Arch, SUSE
+  "/etc/pki/tls/certs",  // RHEL, Fedora, CentOS
+];
+/** Trees the certificate directories link into on the RHEL family. */
+const HOST_CA_SUPPORT_DIRECTORIES = ["/etc/pki/ca-trust"];
+/** Concatenated bundles, in the order a client looks for them. */
+const HOST_CA_BUNDLES = [
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem",
+  "/etc/ssl/cert.pem",
+];
+
+async function hostPathExists(path: string): Promise<boolean> {
   try {
-    await access("/etc/alternatives");
-    args.push("--ro-bind", "/etc/alternatives", "/etc/alternatives");
+    await access(path);
+    return true;
   } catch {
-    // Optional host runtime support.
+    return false;
   }
-  try {
-    await access("/etc/fonts");
-    args.push("--ro-bind", "/etc/fonts", "/etc/fonts");
-  } catch {
-    // Fontconfig falls back without this, but matplotlib is quieter with it.
+}
+
+export async function resolveHostRuntimeSupport(): Promise<HostRuntimeSupport> {
+  const bindArgs: string[] = [];
+  if (await hostPathExists("/etc/alternatives")) {
+    bindArgs.push("--ro-bind", "/etc/alternatives", "/etc/alternatives");
   }
-  return args;
+  // Fontconfig falls back without this, but matplotlib is quieter with it.
+  if (await hostPathExists("/etc/fonts")) {
+    bindArgs.push("--ro-bind", "/etc/fonts", "/etc/fonts");
+  }
+
+  const certificateDirectories: string[] = [];
+  for (const directory of [...HOST_CA_DIRECTORIES, ...HOST_CA_SUPPORT_DIRECTORIES]) {
+    if (!await hostPathExists(directory)) continue;
+    bindArgs.push("--ro-bind", directory, directory);
+    certificateDirectories.push(directory);
+  }
+  const env: Record<string, string> = {};
+  for (const bundle of HOST_CA_BUNDLES) {
+    if (!await hostPathExists(bundle)) continue;
+    // Bind the bundle only when no bound directory already carries it; binding
+    // it twice would target a path inside a read-only mount.
+    if (!certificateDirectories.some((directory) => bundle.startsWith(`${directory}/`))) {
+      bindArgs.push("--ro-bind", bundle, bundle);
+    }
+    // curl and OpenSSL find their compiled-in default once the file is there;
+    // these make an interpreter shipped with its own prefix (a conda Python,
+    // whose OPENSSLDIR points inside the environment) use the same store.
+    env.SSL_CERT_FILE = bundle;
+    env.CURL_CA_BUNDLE = bundle;
+    env.REQUESTS_CA_BUNDLE = bundle;
+    break;
+  }
+  const hashedDirectory = certificateDirectories.find((directory) => HOST_CA_DIRECTORIES.includes(directory));
+  if (hashedDirectory) env.SSL_CERT_DIR = hashedDirectory;
+  return { bindArgs, env };
 }
 
 export function environmentPrefixBindArguments(prefixPath: string): string[] {
@@ -554,7 +619,7 @@ export function buildSandboxLaunch(options: {
   environmentBinds: string[];
   envProfile?: SessionEnvProfile;
   hostInterpreterMasks: string[];
-  hostRuntimeSupport: string[];
+  hostRuntimeSupport: HostRuntimeSupport;
   language: "python" | "r" | "shell";
   pathEnv: string;
   procMode: SandboxProcMode;
@@ -567,6 +632,7 @@ export function buildSandboxLaunch(options: {
   if (options.pythonPathEnv) env.PYTHONPATH = options.pythonPathEnv;
   if (options.language === "python" || options.pythonPathEnv) env.PYTHONNOUSERSITE = "1";
   if (options.language === "r") env.R_ENVIRON_USER = "/dev/null";
+  Object.assign(env, options.hostRuntimeSupport.env);
   Object.assign(env, options.egress?.env ?? {});
   for (const [name, value] of Object.entries(options.envProfile?.variables ?? {})) {
     if (profileKeyAllowed(name)) env[name] = value;
@@ -580,7 +646,7 @@ export function buildSandboxLaunch(options: {
       ...(options.disableUserns ? ["--disable-userns"] : []),
       "--cap-drop", "ALL",
       "--ro-bind", "/usr", "/usr",
-      ...options.hostRuntimeSupport,
+      ...options.hostRuntimeSupport.bindArgs,
       "--symlink", "usr/bin", "/bin",
       "--symlink", "usr/lib", "/lib",
       "--symlink", "usr/lib64", "/lib64",
@@ -687,7 +753,7 @@ export interface PreparedSandboxOptions {
   environmentPaths: string[];
   envProfile?: SessionEnvProfile;
   hostInterpreterMasks: string[];
-  hostRuntimeSupport: string[];
+  hostRuntimeSupport: HostRuntimeSupport;
   language: "python" | "r" | "shell";
   pathEnv: string;
   pythonPathEnv?: string;
@@ -791,7 +857,7 @@ export async function executePython(
     ?? request.environmentRevisionId
     ?? request.permissionEpoch.environmentRevisionId;
   const hostInterpreterMasks = runtime ? await hostInterpreterMaskArguments() : [];
-  const hostRuntimeSupport = await hostRuntimeSupportArguments();
+  const hostRuntimeSupport = await resolveHostRuntimeSupport();
   const localPythonPackages = !runtime && language === "python"
     ? await localPythonPackagePath(config)
     : undefined;
@@ -905,7 +971,7 @@ export async function executeShell(
     : undefined;
   const before = await workspaceSnapshot(workspaceRoot);
   const startedAt = new Date().toISOString();
-  const hostRuntimeSupport = await hostRuntimeSupportArguments();
+  const hostRuntimeSupport = await resolveHostRuntimeSupport();
   const localPythonPackages = await localPythonPackagePath(config);
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
   const sandbox = executorSandboxKind(config);
