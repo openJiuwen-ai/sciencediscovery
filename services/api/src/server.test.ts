@@ -2812,6 +2812,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
     "code-engineer",
     "computation-reviewer",
     "evidence-extractor",
+    "evolve-design",
     "life-science-evidence-brief",
     "literature-searcher",
     "report-writer",

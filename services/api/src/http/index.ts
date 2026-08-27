@@ -1778,6 +1778,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           sessionId,
           config,
           memoryGraphClient,
+          evolveToolDeps,
         );
         sendJson(response, 201, run);
         return;
