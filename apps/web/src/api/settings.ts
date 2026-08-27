@@ -15,6 +15,7 @@
 import type {
   CreateModelProfileRequest,
   CreateModelProviderRequest,
+  CreateProviderModelRequest,
   CreateProxyServerRequest,
   CreateEnvironmentRequest,
   CreateSpecialistRequest,
@@ -213,13 +214,7 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   addProviderModel(
     providerId: string,
-    body: {
-      label?: string;
-      model: string;
-      thinkingEffort?: ModelThinkingEffort;
-      thinkingMode?: ModelThinkingMode;
-      vision?: boolean;
-    },
+    body: CreateProviderModelRequest,
   ): Promise<ModelProfile> {
     return this.request(`/api/providers/${encodeURIComponent(providerId)}/models`, {
       body: JSON.stringify(body),

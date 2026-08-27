@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 
 import type {
   ModelApiProtocol,
   ModelApiVariant,
   ModelCatalogDetails,
+  ModelCatalogEntry,
   ModelDiscoveryStrategy,
   ModelProfile,
   ModelProvider,
@@ -27,15 +28,18 @@ import type {
   ProviderModelList,
   ProxyPolicy,
   ProxySettingsDetails,
+  UserModelPricing,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_MODEL_API_VARIANT,
   DEFAULT_MODEL_DISCOVERY,
   lookupModelCatalog,
   MODEL_API_VARIANTS,
+  resolveModelFacts,
 } from "@sciencediscovery/schema";
 
 import type { SettingsApiClient } from "./api/settings.js";
+import { ImageIcon, SparkleIcon } from "./icons.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
 import { parseThinkingChoice, thinkingChoiceLabelKey } from "./composer/ModelPicker.js";
@@ -213,6 +217,10 @@ export function mergeProviderModelRows(
       id: profile.model,
       displayName: profile.name,
       profileId: profile.id,
+      // The profile's vision is itself a user decision; surface it like a
+      // reported fact so the badge matches what runs will actually get.
+      remote: { vision: profile.vision },
+      ...(profile.facts ? { user: profile.facts } : {}),
       ...(catalog ? { catalog } : {}),
     });
   }
@@ -230,23 +238,61 @@ export function mergeProviderModelRows(
   return sortProviderModels([...byId.values()]);
 }
 
-/** One compact line of capability facts for a provider model row. */
+/** Large token counts as integers: 1,000,000 → "1M", 200,000 → "200k". */
+export function compactTokenCount(value: number | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
+  return String(value);
+}
+
+/** Compact facts as hover-labelled badges: context/output as 1M/200k, vision
+ *  and thinking as icons, thinking levels as one group, price as
+ *  input/output/cached with the per-million unit last. */
 function ModelRowFacts({ model }: { model: ProviderModelEntry }) {
   const { t } = useLocale();
   const unknown = t("providers.metadata.unknown");
-  const contextWindow = mergedFact(model.remote?.contextWindow, model.catalog?.contextWindow);
-  const maxOutputTokens = mergedFact(model.remote?.maxOutputTokens, model.catalog?.maxOutputTokens);
+  const resolved = resolveModelFacts(model);
+  const contextWindow = resolved.contextWindow;
+  const maxOutputTokens = resolved.maxOutputTokens;
   const vision = mergedFact(model.remote?.vision, model.catalog?.vision);
-  const thinking = mergedFact(model.remote?.thinkingSupported, model.catalog?.thinking?.supported);
+  const thinking = resolved.thinkingSupported ?? model.catalog?.thinking?.supported;
   const efforts = model.catalog?.thinking?.efforts;
+  const pricing = resolved.pricing;
+  const contextOrigin = resolved.origins.contextWindow === "user" || resolved.origins.maxOutputTokens === "user"
+    ? ` · ${t("providers.facts.originUser")}` : "";
+  const priceOrigin = resolved.origins.pricing === "user" ? ` · ${t("providers.facts.originUser")}` : "";
+  const tokenTitle = contextWindow === undefined && maxOutputTokens === undefined
+    ? unknown
+    : t("providers.facts.tokens", {
+        context: contextWindow === undefined ? unknown : tokenCount(contextWindow, unknown),
+        output: maxOutputTokens === undefined ? unknown : tokenCount(maxOutputTokens, unknown),
+      }) + contextOrigin;
+  const visionTitle = vision === undefined
+    ? t("providers.facts.visionUnknown")
+    : vision ? t("providers.facts.visionYes") : t("providers.facts.visionNo");
+  const thinkingTitle = thinking === undefined
+    ? `${t("providers.metadata.thinking")}: ${unknown}`
+    : thinking
+      ? t("providers.facts.thinking", {
+          detail: efforts?.length ? efforts.map((effort) => t(`settings.thinkingEffort.${effort}`)).join(" / ") : t("common.yes"),
+        })
+      : t("providers.facts.thinkingNo");
   return <span className="provider-model-row-facts">
-    <span>{tokenCount(contextWindow, unknown)} {t("providers.metadata.contextShort")}</span>
-    <span>{t("providers.metadata.outputShort")} {tokenCount(maxOutputTokens, unknown)}</span>
-    <span>{vision === undefined ? `${t("providers.metadata.vision")} ${unknown}` : vision ? t("settings.visionCapable") : t("providers.metadata.noVision")}</span>
-    <span>{thinking === undefined ? `${t("providers.metadata.thinking")} ${unknown}` : thinking
-      ? (efforts?.length ? efforts.map((effort) => t(`settings.thinkingEffort.${effort}`)).join(" / ") : t("common.yes"))
-      : t("common.no")}</span>
-    <span className="provider-model-row-price"><PriceSummary model={model} /></span>
+    <span className="fact" title={tokenTitle}>{compactTokenCount(contextWindow) ?? "?"} / {compactTokenCount(maxOutputTokens) ?? "?"}</span>
+    <span className={vision ? "fact icon on" : "fact icon"} title={visionTitle}><ImageIcon size={12} />{vision === undefined ? "?" : vision ? "✓" : "—"}</span>
+    <span className={thinking ? "fact icon on" : "fact icon"} title={thinkingTitle}>
+      <SparkleIcon size={12} />{thinking === undefined ? "?" : thinking
+        ? (efforts?.length ? efforts.map((effort) => t(`settings.thinkingEffort.${effort}`)).join(" ") : "✓")
+        : "—"}
+    </span>
+    <span className="fact" title={pricing
+      ? t("providers.facts.price", { currency: pricing.currency }) + priceOrigin
+      : `${t("providers.metadata.price")}: ${unknown}`}>
+      {pricing
+        ? `${pricing.input} / ${pricing.output}${pricing.cachedInput !== undefined ? ` / ${pricing.cachedInput}` : ""} ${pricing.currency}/1M`
+        : "?"}
+    </span>
   </span>;
 }
 
@@ -306,18 +352,82 @@ interface ListingState {
   loading: boolean;
 }
 
-interface ManualModelForm {
+export interface ManualModelForm {
+  contextWindow: string;
   label: string;
+  maxOutputTokens: string;
   modelId: string;
+  priceCached: string;
+  priceCurrency: string;
+  priceInput: string;
+  priceOutput: string;
   thinking: string;
   vision: boolean;
 }
 
-const EMPTY_MANUAL_MODEL: ManualModelForm = { label: "", modelId: "", thinking: "", vision: false };
+const EMPTY_MANUAL_MODEL: ManualModelForm = {
+  contextWindow: "",
+  label: "",
+  maxOutputTokens: "",
+  modelId: "",
+  priceCached: "",
+  priceCurrency: "",
+  priceInput: "",
+  priceOutput: "",
+  thinking: "",
+  vision: false,
+};
+
+function parseOptionalInt(value: string): number | undefined {
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseOptionalNumber(value: string): number | undefined {
+  const parsed = Number.parseFloat(value.trim());
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/** Exact-match a typed model ID against models.dev (alias-aware) and prefill
+ *  every field the user has not filled yet. No match means no guessing: the
+ *  form is returned unchanged apart from the ID itself. */
+export function prefillManualFromCatalog(
+  current: ManualModelForm,
+  modelId: string,
+  presetId: string | undefined,
+): ManualModelForm {
+  const catalog = lookupModelCatalog(modelId.trim(), presetId);
+  const next = { ...current, modelId };
+  if (!catalog) return next;
+  return {
+    ...next,
+    label: current.label || catalog.label,
+    vision: current.vision || catalog.vision === true,
+    contextWindow: current.contextWindow || (catalog.contextWindow !== undefined ? String(catalog.contextWindow) : ""),
+    maxOutputTokens: current.maxOutputTokens || (catalog.maxOutputTokens !== undefined ? String(catalog.maxOutputTokens) : ""),
+    thinking: current.thinking || catalogThinkingChoice(catalog),
+    priceCurrency: current.priceCurrency || catalog.pricing?.currency || "",
+    priceInput: current.priceInput || (catalog.pricing ? String(catalog.pricing.input) : ""),
+    priceOutput: current.priceOutput || (catalog.pricing ? String(catalog.pricing.output) : ""),
+    priceCached: current.priceCached || (catalog.pricing?.cachedInput !== undefined ? String(catalog.pricing.cachedInput) : ""),
+  };
+}
+
+/** Map a catalog entry's default thinking onto the combined-choice encoding
+ *  used by the manual form select. */
+function catalogThinkingChoice(catalog: ModelCatalogEntry): string {
+  const thinking = catalog.thinking;
+  if (!thinking?.supported) return "";
+  if (thinking.defaultMode === "enabled" && thinking.defaultEffort) return `effort:${thinking.defaultEffort}`;
+  if (thinking.defaultMode === "disabled") return "off";
+  if (thinking.defaultMode === "auto") return "auto";
+  return "";
+}
 
 export function ProviderRow({
   addedProfiles,
   busy,
+  editorPanel,
   expanded,
   listing,
   onAddModel,
@@ -329,6 +439,7 @@ export function ProviderRow({
 }: {
   addedProfiles: ModelProfile[];
   busy: boolean;
+  editorPanel?: ReactNode;
   expanded: boolean;
   listing?: ListingState | undefined;
   onAddModel: (providerId: string, modelId: string, entry: ProviderModelEntry | undefined, manual: ManualModelForm) => Promise<boolean>;
@@ -340,6 +451,7 @@ export function ProviderRow({
 }) {
   const { t } = useLocale();
   const [manual, setManual] = useState<ManualModelForm>({ ...EMPTY_MANUAL_MODEL });
+  const [manualOpen, setManualOpen] = useState(false);
   const [testModelId, setTestModelId] = useState("");
   const rows = mergeProviderModelRows(listing?.list?.models, addedProfiles, provider);
   // The total counts the same union the table shows, so the count, the table,
@@ -351,7 +463,14 @@ export function ProviderRow({
 
   async function submitManual(): Promise<void> {
     const added = await onAddModel(provider.id, manual.modelId, undefined, manual);
-    if (added) setManual({ ...EMPTY_MANUAL_MODEL });
+    if (added) {
+      setManual({ ...EMPTY_MANUAL_MODEL });
+      setManualOpen(false);
+    }
+  }
+
+  function changeManualId(value: string): void {
+    setManual((current) => prefillManualFromCatalog(current, value, provider.presetId));
   }
 
   return <div className={expanded ? "provider-row expanded" : "provider-row"}>
@@ -391,6 +510,7 @@ export function ProviderRow({
           />
         </span> : null}
       </div>
+      {editorPanel}
       {listing?.error ? <div className="provider-discovery-error" role="alert"><strong>{t("providers.discovery.failed")}</strong><span>{listing.error}</span><small>{t("providers.discovery.fallback")}</small></div> : null}
       {listing?.list ? <small className="provider-row-source">{listing.list.source === "remote" ? t("providers.models.remote") : t("providers.models.catalog")} · {new Date(listing.list.fetchedAt).toLocaleString()}</small> : null}
       {rows.length ? <div className="provider-model-table" aria-label={t("providers.models.table", { provider: provider.name })} role="table">
@@ -400,18 +520,99 @@ export function ProviderRow({
           <button className="secondary-button compact-button" disabled={busy || Boolean(model.profileId)} onClick={() => void onAddModel(provider.id, model.id, model, { ...EMPTY_MANUAL_MODEL })} type="button">{model.profileId ? t("providers.models.added") : t("providers.models.add")}</button>
         </div>)}
       </div> : listing?.list ? <p className="muted">{t("providers.models.empty")}</p> : null}
-      <div className="provider-manual-form">
+      <button aria-expanded={manualOpen} className="provider-add-model-toggle" onClick={() => setManualOpen((current) => !current)} type="button">
+        {t("providers.models.add")}
+      </button>
+      {manualOpen ? <div className="provider-manual-form">
+        <label><span>{t("providers.models.manualId")}</span><input value={manual.modelId} onChange={(event) => changeManualId(event.target.value)} placeholder={t("providers.models.manualPlaceholder")} /></label>
         <label><span>{t("providers.manual.label")}</span><input value={manual.label} onChange={(event) => setManual((current) => ({ ...current, label: event.target.value }))} placeholder={t("providers.manual.labelPlaceholder")} /></label>
-        <label><span>{t("providers.models.manualId")}</span><input value={manual.modelId} onChange={(event) => setManual((current) => ({ ...current, modelId: event.target.value }))} placeholder={t("providers.models.manualPlaceholder")} /></label>
+        <label><span>{t("providers.manual.context")}</span><input inputMode="numeric" value={manual.contextWindow} onChange={(event) => setManual((current) => ({ ...current, contextWindow: event.target.value }))} placeholder="1000000" /></label>
+        <label><span>{t("providers.manual.output")}</span><input inputMode="numeric" value={manual.maxOutputTokens} onChange={(event) => setManual((current) => ({ ...current, maxOutputTokens: event.target.value }))} placeholder="131072" /></label>
         <label><span>{t("providers.manual.thinking")}</span><select value={manual.thinking} onChange={(event) => setManual((current) => ({ ...current, thinking: event.target.value }))}>
           <option value="">{t("providers.manual.thinkingDefault")}</option>
           {manualChoices.map((choice) => <option key={choice.value} value={choice.value}>{t(thinkingChoiceLabelKey(choice))}</option>)}
         </select></label>
+        <fieldset className="provider-manual-price">
+          <legend>{t("providers.manual.price")}</legend>
+          <label><span>{t("providers.manual.priceCurrency")}</span><input value={manual.priceCurrency} onChange={(event) => setManual((current) => ({ ...current, priceCurrency: event.target.value }))} placeholder="USD" /></label>
+          <label><span>{t("providers.manual.priceInput")}</span><input inputMode="decimal" value={manual.priceInput} onChange={(event) => setManual((current) => ({ ...current, priceInput: event.target.value }))} placeholder="1.5" /></label>
+          <label><span>{t("providers.manual.priceOutput")}</span><input inputMode="decimal" value={manual.priceOutput} onChange={(event) => setManual((current) => ({ ...current, priceOutput: event.target.value }))} placeholder="3" /></label>
+          <label><span>{t("providers.manual.priceCached")}</span><input inputMode="decimal" value={manual.priceCached} onChange={(event) => setManual((current) => ({ ...current, priceCached: event.target.value }))} placeholder="0.2" /></label>
+        </fieldset>
         <label className="provider-manual-vision"><input checked={manual.vision} onChange={(event) => setManual((current) => ({ ...current, vision: event.target.checked }))} type="checkbox" /><span>{t("settings.visionCapable")}</span></label>
         <button className="secondary-button" disabled={busy || !manual.modelId.trim()} onClick={() => void submitManual()} type="button">{t("providers.models.add")}</button>
-      </div>
+      </div> : null}
     </div> : null}
   </div>;
+}
+
+function ProviderEditorPanel({
+  busy,
+  draft,
+  existing,
+  onCancel,
+  onChange,
+  onDelete,
+  onSave,
+  proxySettings,
+}: {
+  busy: boolean;
+  draft: ProviderDraft;
+  existing?: ModelProvider | undefined;
+  onCancel: () => void;
+  onChange: (update: Partial<ProviderDraft>) => void;
+  onDelete: () => void;
+  onSave: () => void;
+  proxySettings?: ProxySettingsDetails | undefined;
+}) {
+  const { t } = useLocale();
+  return <section className="provider-editor" aria-label={t("providers.editor.title")}>
+    <div className="provider-section-heading">
+      <div><h4>{draft.providerId ? t("providers.editor.edit") : t("providers.editor.create")}</h4><p>{draft.presetId ? t("providers.editor.presetHelp") : t("providers.editor.customHelp")}</p></div>
+      <div className="provider-editor-actions">
+        {draft.providerId ? <button className="danger-button compact-button" disabled={busy} onClick={onDelete} type="button">{t("common.delete")}</button> : null}
+        <button className="secondary-button compact-button" disabled={busy} onClick={onCancel} type="button">{t("common.cancel")}</button>
+        <button className="primary-button compact-button" disabled={busy} onClick={onSave} type="button">{busy ? t("common.saving") : t("common.save")}</button>
+      </div>
+    </div>
+    <div className="provider-editor-primary">
+      <label><span>{t("providers.name")}</span><input value={draft.name} onChange={(event) => onChange({ name: event.target.value })} /></label>
+      <label><span>{t("settings.apiToken")}</span><input
+        autoComplete="off"
+        placeholder={existing?.hasApiToken ? t("settings.apiTokenPlaceholder.saved") : draft.tokenOptional ? t("providers.token.optional") : t("settings.apiTokenPlaceholder.required")}
+        type="password"
+        value={draft.apiToken}
+        onChange={(event) => onChange({ apiToken: event.target.value, removeToken: false })}
+      /></label>
+    </div>
+    {existing?.hasApiToken ? <button className={draft.removeToken ? "credential-remove pending" : "credential-remove"} onClick={() => onChange({ apiToken: "", removeToken: !draft.removeToken })} type="button">
+      {draft.removeToken ? t("settings.removeTokenPending") : t("settings.removeToken")}
+    </button> : null}
+    <details className="provider-advanced" open={!draft.presetId}>
+      <summary>{t("providers.advanced")}</summary>
+      <div className="provider-advanced-grid">
+        <label><span>{t("providers.baseUrl")}</span><input value={draft.baseUrl} onChange={(event) => onChange({ baseUrl: event.target.value })} /></label>
+        <label><span>{t("settings.apiProtocol")}</span><select value={draft.apiProtocol} onChange={(event) => {
+          const apiProtocol = event.target.value as ModelApiProtocol;
+          onChange({ apiProtocol, apiVariant: DEFAULT_MODEL_API_VARIANT[apiProtocol], modelDiscovery: DEFAULT_MODEL_DISCOVERY[apiProtocol] });
+        }}>
+          <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
+          <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
+          <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
+        </select></label>
+        <label><span>{t("settings.apiVariant")}</span><select value={draft.apiVariant} onChange={(event) => onChange({ apiVariant: event.target.value as ModelApiVariant })}>
+          {MODEL_API_VARIANTS[draft.apiProtocol].map((variant) => <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>)}
+        </select></label>
+        <label><span>{t("providers.discovery.strategy")}</span><select value={draft.modelDiscovery} onChange={(event) => onChange({ modelDiscovery: event.target.value as ModelDiscoveryStrategy })}>
+          <option value="openai-models">{t("providers.discovery.openai")}</option>
+          <option value="anthropic-models">{t("providers.discovery.anthropic")}</option>
+          <option value="manual">{t("providers.discovery.manual")}</option>
+        </select></label>
+        {proxySettings ? <ProxyPolicySelect label={t("settings.llmProxy")} onChange={(proxyPolicy) => onChange({ proxyPolicy })} settings={proxySettings} value={draft.proxyPolicy} /> : null}
+        {!draft.presetId ? <label className="provider-token-optional"><input checked={draft.tokenOptional} onChange={(event) => onChange({ tokenOptional: event.target.checked })} type="checkbox" /><span>{t("providers.token.optionalToggle")}</span></label> : null}
+      </div>
+    </details>
+  </section>;
 }
 
 export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
@@ -445,6 +646,9 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   const [draft, setDraft] = useState<ProviderDraft>();
   const [listings, setListings] = useState<Record<string, ListingState>>({});
   const [expandedId, setExpandedId] = useState<string>();
+  // The preset dropdown and custom entry stay behind one "Add provider"
+  // button; with nothing configured yet it starts open as the first-run path.
+  const [addOpen, setAddOpen] = useState(() => !providers.length);
   const [busy, setBusy] = useState(false);
   const baselineDraft = useRef<ProviderDraft | undefined>(undefined);
   const listingRequests = useRef(new Map<string, number>());
@@ -500,6 +704,12 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     return !draftDirty || window.confirm(t("providers.unsaved.confirm"));
   }
 
+  function cancelDraft(): void {
+    if (!allowDraftReplacement()) return;
+    baselineDraft.current = undefined;
+    setDraft(undefined);
+  }
+
   function operationError(reason: unknown, fallback: string): string {
     return providerOperationError(reason, fallback, t("providers.delete.referenced"));
   }
@@ -507,16 +717,19 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   function selectPreset(preset: ModelProviderPreset): void {
     if (!allowDraftReplacement()) return;
     selectDraft(presetDraft(preset));
+    setAddOpen(false);
   }
 
   function selectCustomProvider(): void {
     if (!allowDraftReplacement()) return;
     selectDraft({ ...CUSTOM_PROVIDER });
+    setAddOpen(false);
   }
 
   function editProvider(provider: ModelProvider): void {
     if (!allowDraftReplacement()) return;
     selectDraft(providerDraft(provider));
+    setExpandedId(provider.id);
   }
 
   function toggleRow(providerId: string): void {
@@ -620,12 +833,33 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
       const label = manual.label.trim() || entry?.displayName || entry?.catalog?.label;
       const vision = manual.vision || mergedFact(entry?.remote?.vision, entry?.catalog?.vision);
       const thinking = parseThinkingChoice(manual.thinking);
+      const contextWindow = parseOptionalInt(manual.contextWindow);
+      const maxOutputTokens = parseOptionalInt(manual.maxOutputTokens);
+      const priceInput = parseOptionalNumber(manual.priceInput);
+      const priceOutput = parseOptionalNumber(manual.priceOutput);
+      const priceCached = parseOptionalNumber(manual.priceCached);
+      const pricing = priceInput !== undefined && priceOutput !== undefined
+        ? {
+            currency: (manual.priceCurrency.trim() || "USD") as UserModelPricing["currency"],
+            input: priceInput,
+            output: priceOutput,
+            ...(priceCached !== undefined ? { cachedInput: priceCached } : {}),
+          }
+        : undefined;
+      const facts = contextWindow !== undefined || maxOutputTokens !== undefined || pricing
+        ? {
+            ...(contextWindow !== undefined ? { contextWindow } : {}),
+            ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+            ...(pricing ? { pricing } : {}),
+          }
+        : undefined;
       const saved = await client.addProviderModel(providerId, {
         ...(label ? { label } : {}),
         model: modelId.trim(),
         ...(thinking.mode ? { thinkingMode: thinking.mode } : {}),
         ...(thinking.effort ? { thinkingEffort: thinking.effort } : {}),
         ...(vision !== undefined ? { vision } : {}),
+        ...(facts ? { facts } : {}),
       });
       const nextModels = [...models.filter((model) => model.id !== saved.id), saved]
         .toSorted((left, right) => left.name.localeCompare(right.name));
@@ -670,7 +904,39 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     <section className="provider-registry" aria-label={t("providers.configured.title")}>
       <div className="provider-section-heading">
         <div><h4>{t("providers.configured.title")}</h4></div>
-        <div className="provider-add-controls">
+      </div>
+      {providers.length ? <div className="provider-rows">
+        {providers.map((provider) => <ProviderRow
+          addedProfiles={models.filter((model) => model.providerId === provider.id)}
+          busy={busy}
+          {...(draft?.providerId === provider.id
+            ? { editorPanel: <ProviderEditorPanel
+                busy={busy}
+                draft={draft}
+                existing={providers.find((candidate) => candidate.id === provider.id)}
+                onCancel={cancelDraft}
+                onChange={change}
+                onDelete={() => void deleteProvider()}
+                onSave={() => void saveProvider()}
+                {...(proxySettings ? { proxySettings } : {})}
+              /> }
+            : {})}
+          expanded={expandedId === provider.id}
+          key={provider.id}
+          {...(listings[provider.id] ? { listing: listings[provider.id] } : {})}
+          onAddModel={addModel}
+          onEdit={editProvider}
+          onRefresh={(providerId) => void loadModels(providerId, true)}
+          onToggle={toggleRow}
+          provider={provider}
+          testModel={(modelId) => client.testModel(modelId)}
+        />)}
+      </div> : <p className="muted">{t("providers.configured.empty")}</p>}
+      <div className="provider-add">
+        <button aria-expanded={addOpen} className="provider-add-button" onClick={() => setAddOpen((current) => !current)} type="button">
+          {t("providers.add.title")}
+        </button>
+        {addOpen ? <div className="provider-add-panel">
           <select
             aria-label={t("providers.add.title")}
             onChange={(event) => {
@@ -683,75 +949,18 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
             {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}{preset.tokenOptional ? ` · ${t("providers.token.optional")}` : ""}</option>)}
           </select>
           <button className="secondary-button compact-button" onClick={selectCustomProvider} type="button">{t("providers.custom.name")}</button>
-        </div>
+        </div> : null}
       </div>
-      {providers.length ? <div className="provider-rows">
-        {providers.map((provider) => <ProviderRow
-          addedProfiles={models.filter((model) => model.providerId === provider.id)}
-          busy={busy}
-          expanded={expandedId === provider.id}
-          key={provider.id}
-          {...(listings[provider.id] ? { listing: listings[provider.id] } : {})}
-          onAddModel={addModel}
-          onEdit={editProvider}
-          onRefresh={(providerId) => void loadModels(providerId, true)}
-          onToggle={toggleRow}
-          provider={provider}
-          testModel={(modelId) => client.testModel(modelId)}
-        />)}
-      </div> : <p className="muted">{t("providers.configured.empty")}</p>}
+      {draft && !draft.providerId ? <ProviderEditorPanel
+        busy={busy}
+        draft={draft}
+        onCancel={cancelDraft}
+        onChange={change}
+        onDelete={() => void deleteProvider()}
+        onSave={() => void saveProvider()}
+        {...(proxySettings ? { proxySettings } : {})}
+      /> : null}
     </section>
 
-    {draft ? <section className="provider-editor" aria-label={t("providers.editor.title")}>
-      <div className="provider-section-heading">
-        <div><h4>{draft.providerId ? t("providers.editor.edit") : t("providers.editor.create")}</h4><p>{draft.presetId ? t("providers.editor.presetHelp") : t("providers.editor.customHelp")}</p></div>
-        <div className="provider-editor-actions">
-          {draft.providerId ? <button className="danger-button compact-button" disabled={busy} onClick={() => void deleteProvider()} type="button">{t("common.delete")}</button> : null}
-          <button className="secondary-button compact-button" disabled={busy} onClick={() => {
-            if (!allowDraftReplacement()) return;
-            baselineDraft.current = undefined;
-            setDraft(undefined);
-          }} type="button">{t("common.cancel")}</button>
-          <button className="primary-button compact-button" disabled={busy} onClick={() => void saveProvider()} type="button">{busy ? t("common.saving") : t("common.save")}</button>
-        </div>
-      </div>
-      <div className="provider-editor-primary">
-        <label><span>{t("providers.name")}</span><input value={draft.name} onChange={(event) => change({ name: event.target.value })} /></label>
-        <label><span>{t("settings.apiToken")}</span><input
-          autoComplete="off"
-          placeholder={existing?.hasApiToken ? t("settings.apiTokenPlaceholder.saved") : draft.tokenOptional ? t("providers.token.optional") : t("settings.apiTokenPlaceholder.required")}
-          type="password"
-          value={draft.apiToken}
-          onChange={(event) => change({ apiToken: event.target.value, removeToken: false })}
-        /></label>
-      </div>
-      {existing?.hasApiToken ? <button className={draft.removeToken ? "credential-remove pending" : "credential-remove"} onClick={() => change({ apiToken: "", removeToken: !draft.removeToken })} type="button">
-        {draft.removeToken ? t("settings.removeTokenPending") : t("settings.removeToken")}
-      </button> : null}
-      <details className="provider-advanced" open={!draft.presetId}>
-        <summary>{t("providers.advanced")}</summary>
-        <div className="provider-advanced-grid">
-          <label><span>{t("providers.baseUrl")}</span><input value={draft.baseUrl} onChange={(event) => change({ baseUrl: event.target.value })} /></label>
-          <label><span>{t("settings.apiProtocol")}</span><select value={draft.apiProtocol} onChange={(event) => {
-            const apiProtocol = event.target.value as ModelApiProtocol;
-            change({ apiProtocol, apiVariant: DEFAULT_MODEL_API_VARIANT[apiProtocol], modelDiscovery: DEFAULT_MODEL_DISCOVERY[apiProtocol] });
-          }}>
-            <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
-            <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
-            <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
-          </select></label>
-          <label><span>{t("settings.apiVariant")}</span><select value={draft.apiVariant} onChange={(event) => change({ apiVariant: event.target.value as ModelApiVariant })}>
-            {MODEL_API_VARIANTS[draft.apiProtocol].map((variant) => <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>)}
-          </select></label>
-          <label><span>{t("providers.discovery.strategy")}</span><select value={draft.modelDiscovery} onChange={(event) => change({ modelDiscovery: event.target.value as ModelDiscoveryStrategy })}>
-            <option value="openai-models">{t("providers.discovery.openai")}</option>
-            <option value="anthropic-models">{t("providers.discovery.anthropic")}</option>
-            <option value="manual">{t("providers.discovery.manual")}</option>
-          </select></label>
-          {proxySettings ? <ProxyPolicySelect label={t("settings.llmProxy")} onChange={(proxyPolicy) => change({ proxyPolicy })} settings={proxySettings} value={draft.proxyPolicy} /> : null}
-          {!draft.presetId ? <label className="provider-token-optional"><input checked={draft.tokenOptional} onChange={(event) => change({ tokenOptional: event.target.checked })} type="checkbox" /><span>{t("providers.token.optionalToggle")}</span></label> : null}
-        </div>
-      </details>
-    </section> : null}
   </div>;
 });

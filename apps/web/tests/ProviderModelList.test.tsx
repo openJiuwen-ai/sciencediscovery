@@ -21,11 +21,73 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { SettingsApiClient } from "../src/api/settings.js";
 import { LocaleProvider } from "../src/i18n/index.js";
-import { mergeProviderModelRows, ProviderModelSettings, ProviderRow, sortProviderModels } from "../src/ProviderModelSettings.js";
+import {
+  compactTokenCount,
+  type ManualModelForm,
+  mergeProviderModelRows,
+  prefillManualFromCatalog,
+  ProviderModelSettings,
+  ProviderRow,
+  sortProviderModels,
+} from "../src/ProviderModelSettings.js";
+import { installWebModelCatalog } from "./model-catalog-fixture.js";
 
 function entry(id: string, profileId?: string): ProviderModelEntry {
   return { id, ...(profileId ? { profileId } : {}) };
 }
+
+test("token counts compact to integers: 1M, 200k, 131k", () => {
+  assert.equal(compactTokenCount(1_000_000), "1M");
+  assert.equal(compactTokenCount(1_048_576), "1M");
+  assert.equal(compactTokenCount(200_000), "200k");
+  assert.equal(compactTokenCount(131_072), "131k");
+  assert.equal(compactTokenCount(512), "512");
+  assert.equal(compactTokenCount(undefined), undefined);
+});
+
+const EMPTY_FORM: ManualModelForm = {
+  contextWindow: "",
+  label: "",
+  maxOutputTokens: "",
+  modelId: "",
+  priceCached: "",
+  priceCurrency: "",
+  priceInput: "",
+  priceOutput: "",
+  thinking: "",
+  vision: false,
+};
+
+test("typing a catalog-known model ID prefills facts without stomping user input", () => {
+  installWebModelCatalog();
+
+  const prefilled = prefillManualFromCatalog(EMPTY_FORM, "deepseek-v4-flash", "deepseek");
+  assert.equal(prefilled.label, "DeepSeek V4 Flash");
+  assert.equal(prefilled.contextWindow, "1000000");
+  assert.equal(prefilled.priceCurrency, "CNY");
+  assert.equal(prefilled.priceInput, "3");
+  assert.equal(prefilled.priceOutput, "9");
+  assert.equal(prefilled.priceCached, "0.1");
+
+  // User-typed values win over the catalog.
+  const kept = prefillManualFromCatalog(
+    { ...EMPTY_FORM, label: "My own name", priceInput: "0.5" },
+    "deepseek-v4-flash",
+    "deepseek",
+  );
+  assert.equal(kept.label, "My own name");
+  assert.equal(kept.priceInput, "0.5");
+  assert.equal(kept.priceOutput, "9");
+
+  const haiku = prefillManualFromCatalog(EMPTY_FORM, "claude-haiku-4-5", "anthropic");
+  assert.equal(haiku.vision, true);
+  assert.equal(haiku.contextWindow, "200000");
+  assert.equal(haiku.maxOutputTokens, "64000");
+
+  // No exact match: nothing is guessed.
+  const unknown = prefillManualFromCatalog(EMPTY_FORM, "totally-unknown-model", "deepseek");
+  assert.deepEqual(unknown, { ...EMPTY_FORM, modelId: "totally-unknown-model" });
+});
 
 test("provider model tables sort added models first, then alphabetically", () => {
   const sorted = sortProviderModels([entry("zeta"), entry("alpha"), entry("beta", "profile-1"), entry("gamma", "profile-2")]);
@@ -113,11 +175,11 @@ function renderSettings(locale: "en" | "zh-CN"): string {
 test("the registry opens without a preset wall or a resident editor", () => {
   const html = renderSettings("en");
 
-  // Adding is a dropdown of presets plus a custom-provider button.
-  assert.match(html, /aria-label="Add provider"/);
-  assert.match(html, /<option value="" selected="">Choose a preset…<\/option>/);
-  assert.match(html, /<option value="deepseek">DeepSeek<\/option>/);
-  assert.match(html, />Custom provider<\/button>/);
+  // Adding sits below the list behind one "Add provider" button; the preset
+  // dropdown and custom button only appear after opening it.
+  assert.match(html, /aria-expanded="false" class="provider-add-button"/);
+  assert.doesNotMatch(html, /provider-add-panel/);
+  assert.doesNotMatch(html, />Custom provider<\/button>/);
   // No preset cards are laid out.
   assert.doesNotMatch(html, /provider-preset-card/);
   // The provider editor stays hidden until the user asks for it.
@@ -129,8 +191,7 @@ test("the registry opens without a preset wall or a resident editor", () => {
   assert.match(html, /Data source: models\.dev/);
 
   const chinese = renderSettings("zh-CN");
-  assert.match(chinese, /aria-label="添加 Provider"/);
-  assert.match(chinese, /<option value="" selected="">选择预置服务商…<\/option>/);
+  assert.match(chinese, /添加 Provider/);
   assert.match(chinese, /已添加 1/);
   assert.match(chinese, /数据来源：models\.dev/);
   assert.doesNotMatch(chinese, /provider-editor/);

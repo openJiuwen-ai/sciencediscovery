@@ -80,12 +80,13 @@
   .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
   .settings-group-detail { padding: 22px 18px 30px; }
   .provider-editor-primary, .provider-advanced-grid { grid-template-columns: minmax(0, 1fr); }
-  .provider-manual-form { grid-template-columns: minmax(0, 1fr); }
+  .provider-manual-form, .provider-manual-price { grid-template-columns: minmax(0, 1fr); }
+  .provider-manual-price { grid-column: 1 / -1; }
   .provider-model-row { grid-template-columns: minmax(0, 1fr) auto; }
   .provider-model-row-facts { grid-column: 1 / -1; }
   .provider-row-test { margin-left: 0; }
-  .provider-add-controls { align-items: stretch; flex-direction: column; }
-  .provider-add-controls select { max-width: none; }
+  .provider-add-panel { align-items: stretch; flex-direction: column; }
+  .provider-add-panel select { max-width: none; }
   .provider-section-heading { align-items: stretch; flex-direction: column; }
   .model-catalog-status { align-items: stretch; flex-direction: column; }
   .provider-editor-actions { justify-content: stretch; }
