@@ -583,7 +583,11 @@ export function ArtifactModal({
     setProvenance(undefined);
     void Promise.all([client.readArtifactVersion(sessionId, versionId), client.getArtifactProvenance(sessionId, versionId)]).then(async ([blob, nextProvenance]) => {
       if (!active) return;
-      const textualKind = artifact && ["dataset", "html", "json", "latex", "markdown", "notebook", "structure"].includes(artifact.kind);
+      // "other" reads as text too: it is the kind every source file lands on
+      // (the kind enum has no "code"), and gating it out meant a .py artifact
+      // opened to a blank preview. Binary "other" content is caught at render
+      // by the NUL sniff rather than here — the bytes are already downloaded.
+      const textualKind = artifact && ["dataset", "html", "json", "latex", "markdown", "notebook", "other", "structure"].includes(artifact.kind);
       const molecularByName = detectStructureFormat({ name: artifact?.logicalName });
       const nextSource = textualKind || molecularByName ? await blob.text() : "";
       if (!active) return;
@@ -772,6 +776,15 @@ export function ArtifactModal({
         {artifact?.kind === "notebook" && preview?.kind === "notebook" && preview.mode === "notebook-cells"
           ? <NotebookCells cells={preview.cells} />
           : artifact?.kind === "notebook" && !(structureFormat && source) ? <pre className="artifact-source-preview">{source.slice(0, 100_000) || "Binary artifact: use the version content endpoint to inspect it."}</pre> : null}
+        {/* "other" is where every source file lands — the kind enum has no
+            "code" — and it had no case at all, so a .py artifact opened to a
+            blank body. A NUL byte in the head is the binary tell; those get
+            the download hint instead of mojibake. */}
+        {artifact?.kind === "other" && !(structureFormat && source)
+          ? (source && !source.slice(0, 4096).includes("\u0000")
+            ? <pre className="artifact-source-preview">{source.slice(0, 100_000)}</pre>
+            : <pre className="artifact-source-preview">Binary artifact: use the download button to inspect it.</pre>)
+          : null}
       </div>;
   const csvWorkspace: ReactNode = csvWindowOpen && artifact && version && csvWorkspaceReady ? <Suspense fallback={<div className="csv-artifact-loading" role="status"><span>Loading CSV visualization...</span></div>}>
     <CsvArtifactWindow
