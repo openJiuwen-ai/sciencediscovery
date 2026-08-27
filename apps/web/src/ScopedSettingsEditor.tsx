@@ -16,12 +16,14 @@ import { useState, type FormEvent, type ReactNode } from "react";
 
 import type {
   ConnectorManifest,
+  EnabledSkillLibrary,
   ModelProfile,
   RuntimeSettingsDetails,
   RuntimeSettingsField,
   RuntimeSettingsOverrides,
   RuntimeSettingsSource,
   SkillDescriptor,
+  SkillLibrary,
   SkillSelectionMode,
 } from "@sciencediscovery/schema";
 
@@ -30,10 +32,11 @@ import { useLocale, type MessageKey } from "./i18n/index.js";
 
 const FIELD_LABELS = {
   enabledConnectorIds: "settings.connectors",
+  enabledSkillLibraries: "settings.skillLibraries",
   enabledSkillIds: "settings.skills",
   modelId: "settings.taskModel",
   skillSelectionMode: "settings.skills",
-} satisfies Pick<Record<RuntimeSettingsField, MessageKey>, "enabledConnectorIds" | "enabledSkillIds" | "modelId" | "skillSelectionMode">;
+} satisfies Pick<Record<RuntimeSettingsField, MessageKey>, "enabledConnectorIds" | "enabledSkillIds" | "enabledSkillLibraries" | "modelId" | "skillSelectionMode">;
 
 /**
  * Which skill controls a scope may show. Global no longer configures skills at
@@ -46,8 +49,8 @@ const SKILL_MODE_LABELS = {
   selected: "settings.skillModeSelected",
 } satisfies Record<SkillSelectionMode, MessageKey>;
 
-function sourceLabel(source: RuntimeSettingsSource): string {
-  if (source === "unset") return "Built-in fallback";
+function sourceLabel(source: RuntimeSettingsSource | undefined): string {
+  if (!source || source === "unset") return "Built-in fallback";
   return `${source[0]!.toUpperCase()}${source.slice(1)} setting`;
 }
 
@@ -56,6 +59,27 @@ function effectiveModelName(modelId: string | undefined, models: ModelProfile[])
   const model = models.find((candidate) => candidate.id === modelId);
   if (!model) return modelId;
   return duplicateModelProfileId(model, models) ? modelOptionLabel(model, models) : model.name;
+}
+
+function normalizeSkillLibraryMount(mount: EnabledSkillLibrary): EnabledSkillLibrary {
+  const rawLimit = Number.isFinite(mount.limit) ? mount.limit! : 12;
+  const rawPriority = Number.isFinite(mount.priority) ? mount.priority! : 0;
+  return {
+    libraryId: mount.libraryId,
+    limit: Math.min(Math.max(Math.round(rawLimit), 1), 100),
+    priority: Math.min(Math.max(Math.round(rawPriority), -1_000_000), 1_000_000),
+    versionId: mount.versionId?.trim() || "head",
+  };
+}
+
+function normalizeSkillLibraryMounts(mounts: readonly EnabledSkillLibrary[] = [], libraries: readonly SkillLibrary[] = []): EnabledSkillLibrary[] {
+  const byId = new Map(mounts.map((mount) => [mount.libraryId, normalizeSkillLibraryMount(mount)]));
+  const ordered = libraries
+    .map((library) => byId.get(library.id))
+    .filter((mount): mount is EnabledSkillLibrary => Boolean(mount));
+  const knownIds = new Set(libraries.map((library) => library.id));
+  ordered.push(...[...byId.values()].filter((mount) => !knownIds.has(mount.libraryId)));
+  return ordered;
 }
 
 function SettingsSource({ details, field }: { details: RuntimeSettingsDetails; field: RuntimeSettingsField }) {
@@ -82,6 +106,7 @@ export function ScopedSettingsEditor({
   onDraftChange,
   onSave,
   scopeLabel,
+  skillLibraries = [],
   skills,
   skillScope = "session",
   submitLabel,
@@ -99,6 +124,7 @@ export function ScopedSettingsEditor({
   onDraftChange?: (draft: RuntimeSettingsOverrides) => void;
   onSave: (overrides: RuntimeSettingsOverrides) => Promise<void> | void;
   scopeLabel: string;
+  skillLibraries?: SkillLibrary[];
   skills: SkillDescriptor[];
   skillScope?: SkillScope;
   submitLabel?: string;
@@ -161,11 +187,37 @@ export function ScopedSettingsEditor({
     });
   }
 
+  function setSkillLibraryMount(libraryId: string, patch: Partial<EnabledSkillLibrary>): void {
+    setDraft((current) => {
+      const mounts = normalizeSkillLibraryMounts(current.enabledSkillLibraries ?? skillLibraryMounts, skillLibraries);
+      const index = mounts.findIndex((mount) => mount.libraryId === libraryId);
+      if (index < 0) return current;
+      mounts[index] = normalizeSkillLibraryMount({ ...mounts[index]!, ...patch });
+      return { ...current, enabledSkillLibraries: mounts };
+    });
+  }
+
+  function toggleSkillLibrary(library: SkillLibrary): void {
+    setDraft((current) => {
+      const mounts = normalizeSkillLibraryMounts(current.enabledSkillLibraries ?? skillLibraryMounts, skillLibraries);
+      const selected = mounts.some((mount) => mount.libraryId === library.id);
+      return {
+        ...current,
+        enabledSkillLibraries: selected
+          ? mounts.filter((mount) => mount.libraryId !== library.id)
+          : [...mounts, normalizeSkillLibraryMount({ libraryId: library.id })],
+      };
+    });
+  }
+
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
     setSaving(true);
     try {
-      await onSave(draft);
+      const next = skillScope === "global"
+        ? draft
+        : { ...draft, enabledSkillLibraries: normalizeSkillLibraryMounts(draft.enabledSkillLibraries ?? skillLibraryMounts, skillLibraries) };
+      await onSave(next);
     } finally {
       setSaving(false);
     }
@@ -177,6 +229,9 @@ export function ScopedSettingsEditor({
   const skillMode: "inherit" | SkillSelectionMode = draft.skillSelectionMode
     ?? (skillInheritable ? "inherit" : "all");
   const skillWhitelist = skillMode === "selected";
+  const rawSkillLibraryMounts = draft.enabledSkillLibraries ?? details.effective.enabledSkillLibraries;
+  const skillLibraryMounts = normalizeSkillLibraryMounts(rawSkillLibraryMounts, skillLibraries);
+  const skillLibraryMountsById = new Map(skillLibraryMounts.map((mount) => [mount.libraryId, normalizeSkillLibraryMount(mount)]));
 
   return (
     <form className="scoped-settings" onSubmit={(event) => void submit(event)}>
@@ -224,6 +279,40 @@ export function ScopedSettingsEditor({
           {!skills.length ? <p className="settings-choice-empty">{t("settings.noSkills")}</p> : null}
         </div> : <small className="settings-hint">{t("settings.skillModeAllHint")}</small>}
         {skillInheritable ? <SettingsSource details={details} field="skillSelectionMode" /> : null}
+      </fieldset>}
+
+      {skillScope === "global" ? null : <fieldset className="settings-array" disabled={disabled || saving}>
+        <legend>{t(FIELD_LABELS.enabledSkillLibraries)}</legend>
+        <small className="settings-hint">{t("settings.skillLibrariesPickerHint" as MessageKey)}</small>
+        <div className="settings-library-list">
+          {skillLibraries.map((library) => {
+            const mount = skillLibraryMountsById.get(library.id);
+            const selected = Boolean(mount);
+            const selectedMount = mount ?? normalizeSkillLibraryMount({ libraryId: library.id });
+            return <div className={selected ? "settings-library-row selected" : "settings-library-row"} key={library.id}>
+              <label className="settings-library-picker">
+                <input
+                  aria-label={t("settings.skillLibraryToggleAria" as MessageKey, { name: library.name })}
+                  checked={selected}
+                  disabled={!library.headVersionId && !selected}
+                  onChange={() => toggleSkillLibrary(library)}
+                  type="checkbox"
+                />
+                <span className="settings-library-main">
+                  <strong>{library.name}</strong>
+                  <small>{library.headVersionId ? t("settings.skillLibraryHead" as MessageKey, { version: library.headVersionId.slice(0, 8) }) : t("settings.skillLibraryNoVersions" as MessageKey)}</small>
+                </span>
+              </label>
+              {selected ? <div className="settings-library-controls">
+                <label><span>{t("settings.skillLibraryVersion" as MessageKey)}</span><input value={selectedMount.versionId ?? "head"} onChange={(event) => setSkillLibraryMount(library.id, { versionId: event.target.value || "head" })} placeholder="head" /></label>
+                <label><span>{t("settings.skillLibraryPriority" as MessageKey)}</span><input inputMode="numeric" type="number" value={selectedMount.priority ?? 0} onChange={(event) => setSkillLibraryMount(library.id, { priority: Number(event.target.value || 0) })} /></label>
+                <label><span>{t("settings.skillLibraryLimit" as MessageKey)}</span><input inputMode="numeric" max={100} min={1} type="number" value={selectedMount.limit ?? 12} onChange={(event) => setSkillLibraryMount(library.id, { limit: Number(event.target.value || 12) })} /></label>
+              </div> : null}
+            </div>;
+          })}
+          {!skillLibraries.length ? <p className="settings-choice-empty">{t("settings.noSkillLibraries" as MessageKey)}</p> : null}
+        </div>
+        <SettingsSource details={details} field="enabledSkillLibraries" />
       </fieldset>}
 
       {disabled ? <p className="settings-readonly">{t("settings.archivedReadonly")}</p> : null}

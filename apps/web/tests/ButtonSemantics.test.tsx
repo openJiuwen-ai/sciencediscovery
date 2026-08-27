@@ -26,10 +26,11 @@ test("mixed action rows assign semantic button classes", () => {
   assert.match(source("ReviewerControlCard.tsx"), /className="primary-button"/);
 
   const skillManager = source("SkillManager.tsx");
-  assert.equal(skillManager.match(/className="dialog-actions"><button className="secondary-button"/g)?.length, 4);
-  const skillToolbar = skillManager.match(/<div className="skill-manager-toolbar">([\s\S]*?)<\/div>/)?.[1] ?? "";
-  assert.equal(skillToolbar.match(/<button className="secondary-button"/g)?.length, 5);
-  assert.match(skillManager, /className="skill-detail-actions">[\s\S]*?className="secondary-button compact-button"[\s\S]*?>Edit<[\s\S]*?className="danger-button compact-button"[\s\S]*?>Delete</);
+  // Workflow description and Session distillation now reuse the chat composer,
+  // so only the Git panel uses the shared dialog-actions row. Blank-Skill
+  // authoring has a dedicated sticky footer for its details/resources tabs.
+  assert.equal(skillManager.match(/className="dialog-actions"><button className="secondary-button"/g)?.length, 1);
+  assert.match(skillManager, /<footer><span>.*?<button className="secondary-button".*?<button className="primary-button"/s);
 
   assert.match(source("Orchestration.tsx"), /className="specialist-actions"><button className="primary-button"/);
 
@@ -54,6 +55,7 @@ test("mixed action rows assign semantic button classes", () => {
 
 test("container-styled button groups retain their dedicated skeleton", () => {
   const settings = source("styles/settings.css");
+  assert.match(settings, /\.skill-manager-toolbar > button, \.skill-toolbar-menu > summary \{ min-height: 40px;/);
   assert.match(settings, /\.config-panel \.specialist-actions \.primary-button,[\s\S]*?\.config-panel \.remote-host-form \.primary-button \{ width: auto; \}/);
   assert.match(source("styles/workspace.css"), /\.paper-actions button \{ min-height: 34px;/);
   assert.match(source("styles/memory-graph.css"), /\.memory-explorer-search button \{ border:/);
@@ -75,8 +77,9 @@ test("environment settings poll bootstrap progress and expose a failed retry act
   const environments = source("EnvironmentManager.tsx");
   assert.match(environments, /setup\?\.state !== "installing"/);
   assert.match(environments, /window\.setInterval/);
-  assert.match(environments, /\{setup\.message\} · Phase: \{setup\.phase\}/);
-  assert.match(environments, /Retry Python environment setup/);
-  assert.match(environments, /setup\.error/);
+  assert.match(environments, /setup\.components\[card\.key\]/);
+  assert.match(environments, /Reported error/);
+  assert.match(environments, /Retry micromamba setup/);
+  assert.match(environments, /Retry Conda environment setup/);
   assert.doesNotMatch(environments, /Install managed Python and R environments/);
 });

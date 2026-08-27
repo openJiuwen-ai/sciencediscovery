@@ -21,6 +21,7 @@ import { mergePermissionRequestSnapshot } from "../src/permission-state.js";
 
 import {
   buildConversationBlocks,
+  canSummarizeRunAsSkill,
   clearSessionTimeline,
   collectTimelinePermissionRequestIds,
   hydrateTerminalRunTimelines,
@@ -160,6 +161,16 @@ function sessionRun(id: string, queueOrder: number, status: SessionRun["status"]
     status,
   };
 }
+
+test("Skill authoring runs do not offer the redundant self-evolution action", () => {
+  const ordinary = sessionRun("ordinary", 1, "completed");
+  const creator = { ...ordinary, id: "creator", prompt: "/skill-creator build a reusable checker" };
+  const distill = { ...ordinary, id: "distill", prompt: "/distill-session" };
+
+  assert.equal(canSummarizeRunAsSkill(ordinary), true);
+  assert.equal(canSummarizeRunAsSkill(creator), false);
+  assert.equal(canSummarizeRunAsSkill(distill), false);
+});
 
 test("hydrate restores the active run before a newer queued run and deduplicates by sequence", () => {
   const completed = sessionRun("run-completed", 1, "completed");

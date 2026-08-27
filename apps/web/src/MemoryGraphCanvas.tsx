@@ -31,23 +31,24 @@ import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomTransform } from "d3-zoo
 import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
 /**
- * One colour per node label, drawn from a Morandi palette (low-saturation,
- * dusty tones — every channel sits between 0.55 and 0.75 so the seven hues
- * never compete). Kept in a plain map (not CSS variables) because SVG paints
- * inline and we want the same predictable palette the previous Cytoscape
- * canvas used. The Morandi palette is purely visual: it does not change any
- * data semantics, only the rendered swatch.
+ * One colour per node label, drawn from a vivid, high-saturation palette
+ * (each hue is pushed bright so the eight categories read at a glance even
+ * on a dense graph). Kept in a plain map (not CSS variables) because SVG
+ * paints inline and we want the same predictable palette across renders.
+ * The palette is purely visual: it does not change any data semantics,
+ * only the rendered swatch.
  */
 export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
-  ResearchGoal: "#a89bb0", // dusty lavender
-  SubTask: "#9bafc0",      // powder blue
-  Paper: "#c09a8a",        // dusty terracotta
-  Evidence: "#9aab97",     // sage
-  Claim: "#c0b08a",        // warm beige
-  Code: "#bf9aa8",         // dusty rose
-  Artifact: "#9aab85",     // muted moss
+  ResearchGoal: "#F6114A", // vivid red
+  Task: "#0AA0BF",         // bright teal (subagent scope)
+  ToolCall: "#FCA00C",     // amber (code_execution / literature_search / …)
+  Paper: "#F36E98",        // rose pink
+  Evidence: "#78B177",     // sage
+  Claim: "#F05006",        // burnt orange
+  Code: "#9862A2",         // amethyst purple
+  Artifact: "#25998F",     // teal green
   // /evolve search graph. SearchNode/SearchCell are excluded from the session
-  // subgraph, so these only render inside the search view itself.
+  // subgraph, so these mostly render inside the search view itself.
   SearchRun: "#c0a98a",    // muted ochre
   SearchNode: "#bfb08f",   // pale straw
   SearchCell: "#ab9c7e",   // dusty gold
@@ -68,6 +69,7 @@ export const EDGE_COLORS: Record<MemoryGraphEdgeType, string> = {
   stated_in: "#94a3b8",
   supersedes: "#94a3b8",
   input: "#94a3b8",
+  contains: "#94a3b8",
   searches: "#94a3b8",
   root: "#94a3b8",
   expands: "#94a3b8",
@@ -86,6 +88,13 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
     const value = extra[key];
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
   };
+  // Aggregate virtual node (需求3): a folded scope with >1 product of one
+  // kind collapses into one ``_group:<scopeId>:<Kind>`` node. Render it as the
+  // plural kind name ("Artifacts"/"Papers") so it reads as a stack to expand.
+  if (extra.aggregated === true || node.id.startsWith("_group:")) {
+    const kind = typeof extra.kind === "string" ? extra.kind : node.label;
+    return kind === "Artifact" ? "Artifacts" : kind === "Paper" ? "Papers" : kind;
+  }
   // Artifact versions are separate nodes on a composite key, so the caption
   // carries the version too: two circles both reading "evolve/e…" told the
   // user nothing about which one a search started from and which it produced.
@@ -99,7 +108,8 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
   })();
   const name = node.label === "Artifact" ? artifactBase
     : node.label === "Code" ? pick("tool") ?? pick("code_id")
-    : node.label === "SubTask" ? pick("task_type") ?? pick("task_id")
+    : node.label === "Task" ? pick("objective") ?? pick("task_type") ?? pick("task_id")
+    : node.label === "ToolCall" ? pick("task_type") ?? pick("tool_type") ?? pick("task_id")
     : node.label === "Paper" ? pick("title") ?? pick("link")
     : node.label === "ResearchGoal" ? pick("core_objective") ?? pick("goal_id")
     // The algorithm alone read as a mystery word ("era"); the held-out score
@@ -151,6 +161,89 @@ export function graphNodeDisplayNames(
  */
 const DONE_STATUSES = new Set(["succeeded", "success", "completed", "done", "ok"]);
 
+/**
+ * A folded-state surrogate edge (get_subgraph synthesises one scope→product
+ * pair per terminal product). `extra.surrogate === true` is the marker the
+ * render pass keys its dashed/light/no-label branch on; `extra.via_child` is
+ * the responsible child hop a click jumps to (总方案 §2.2).
+ */
+export function isSurrogateEdge(edge: { extra?: Record<string, unknown> }): boolean {
+  return edge.extra?.surrogate === true;
+}
+
+/**
+ * A subagent scope is a real ``Task`` node whose `extra.task_type === "subagent"`
+ * (the scope carries the ``Task`` label; its child executions carry the
+ * ``ToolCall`` label — distinguish a scope by task_type, since the two labels
+ * are separate now but the scope is still identified by task_type='subagent'
+ * so the predicate stays label-agnostic). The canvas renders scopes with a
+ * double ring + ▸N badge so they read as expandable.
+ */
+export function isScopeNode(node: { extra?: Record<string, unknown>; id: string }): boolean {
+  return node.extra?.task_type === "subagent";
+}
+
+/**
+ * A child of an expanded scope carries `extra.parent_subtask_id`, or its
+ * task_id embeds `:exec:` (PR1's child task_id shape
+ * `subtask:subagent:<id>:exec:<execId>`). Smaller/lighter on the canvas so
+ * the scope↔child hierarchy reads at a glance.
+ */
+export function isChildNode(node: { extra?: Record<string, unknown>; id: string }): boolean {
+  return Boolean(node.extra?.parent_subtask_id) || node.id.includes(":exec:");
+}
+
+/**
+ * An aggregate virtual node (需求3): a folded scope with >1 product of one
+ * kind (Artifact/Paper) collapses into ONE ``_group:<scopeId>:<Kind>`` node
+ * synthesised by the backend's ``get_subgraph``. The id prefix + the
+ * ``extra.aggregated`` marker both flag it so a renderer can draw it as a
+ * stack ("Artifacts"/"Papers") and wire a separate click to expand its
+ * members (independent of expanding the owning scope).
+ */
+export function isAggregateNode(node: { extra?: Record<string, unknown>; id: string }): boolean {
+  if (node.extra?.aggregated === true) return true;
+  return typeof node.id === "string" && node.id.startsWith("_group:");
+}
+
+/**
+ * Recover the owning scope's task_id from an aggregate virtual node id
+ * (``_group:<scopeId>:<Kind>``). The scope id may itself contain colons (task
+ * ids are free-form), so split on the *first* and *last* colon only. Returns
+ * ``undefined`` when the id is not an aggregate id.
+ */
+export function aggregateOwnerScope(groupId: string): string | undefined {
+  if (!groupId.startsWith("_group:")) return undefined;
+  const body = groupId.slice("_group:".length);
+  if (!body.includes(":")) return undefined;
+  const scope = body.slice(0, body.lastIndexOf(":"));
+  return scope || undefined;
+}
+
+/**
+ * Resolve a child node's owning scope id — ``extra.parent_subtask_id`` when
+ * PR1 wrote it, otherwise the prefix before ``:exec:`` in the task_id. Used
+ * by the layout's incremental seed so a newly-expanded child appears near its
+ * parent scope's settled position instead of at a random ring slot. Returns
+ * ``undefined`` when the node is not a scope child.
+ */
+function childParentScopeId(id: string, extra?: Record<string, unknown>): string | undefined {
+  const explicit = extra?.parent_subtask_id;
+  if (typeof explicit === "string" && explicit) return explicit;
+  const idx = id.indexOf(":exec:");
+  return idx > 0 ? id.slice(0, idx) : undefined;
+}
+
+/**
+ * A terminal-but-cancelled SubTask/Code (`extra.status === "cancelled"`,
+ * PR1's aborted subagent). Drawn grey + solid-outline, distinct from pending
+ * (dashed) and completed (borderless full-fill).
+ */
+export function isCancelledNode(node: { extra?: Record<string, unknown> }): boolean {
+  const status = node.extra?.status;
+  return typeof status === "string" && status.toLowerCase() === "cancelled";
+}
+
 interface SimNode {
   id: string;
   label: MemoryGraphNodeLabel;
@@ -162,6 +255,45 @@ interface SimNode {
   // the regular disc + truncated name.
   collapsed?: boolean;
   collapsedCount?: number;
+  // A subagent scope (extra.task_type === "subagent"): a real SubTask node
+  // that owns a child subtree reachable via `contains` edges. A *folded*
+  // scope (its child subtree not merged in) is rendered as a stack — the
+  // solid disc with 1-2 offset translucent "ghost" discs behind it — so it
+  // reads as "holds several nodes inside" without a numeric badge. An
+  // *expanded* scope renders as a single disc (stack hidden). Clicking a
+  // scope toggles its expansion AND selects it (§3.3).
+  isScope?: boolean;
+  childCount?: number;
+  // True when this scope is folded (isScope && !expanded). Drives the stack
+  // ghost discs' visibility (shown folded, hidden expanded) and the hover
+  // hint ("单击展开节点" vs "单击收起节点").
+  folded?: boolean;
+  // A child of an expanded scope (extra.parent_subtask_id set, or task_id
+  // carries ":exec:"). Rendered slightly smaller / lighter so the scope↔child
+  // hierarchy reads at a glance (doc16 §2.5).
+  isChild?: boolean;
+  // The owning scope's id, resolved at build time for child nodes (undefined
+  // for non-children). The incremental layout seed uses it to place a newly
+  // expanded child near its parent scope's settled position.
+  parentScopeId?: string;
+  // A scope/Code that finished by cancellation (extra.status === "cancelled"):
+  // grey solid outline + greyed fill, distinct from pending (dashed) and
+  // completed (solid full-fill). PR1 writes cancelled on aborted subagents.
+  cancelled?: boolean;
+  // True when this scope's children + real edges are merged into the current
+  // graph (expandedScopes in the explorer). A folded scope's stack shows;
+  // an expanded scope's stack hides so an open scope reads as "open".
+  expanded?: boolean;
+  // An aggregate virtual node (需求3): a folded scope with >1 product of one
+  // kind collapses into ONE ``_group:<scopeId>:<Kind>`` node. Rendered as a
+  // dashed double-stacked disc with the plural kind name ("Artifacts"/
+  // "Papers") + a "▸ N" badge so it reads as an expandable stack, distinct
+  // from a scope (a scope owns a child subtree; an aggregate owns a flat list
+  // of same-kind products). Clicking toggles its expansion (onToggleGroup),
+  // independent of the owning scope's expand/collapse.
+  isAggregate?: boolean;
+  aggregateCount?: number;
+  aggregateExpanded?: boolean;
   // Fields set/read by d3-force during simulation. Declared on our type so we
   // don't have to extend `SimulationNodeDatum` (whose x/y are optional and
   // whose other fields confuse the d3-selection generic callbacks).
@@ -182,6 +314,13 @@ interface SimLink {
   source: string | SimNode;
   target: string | SimNode;
   index?: number;
+  // Folded-state surrogate edges (get_subgraph synthesises one scope→product
+  // edge per terminal product, carrying `extra.surrogate` + `extra.via_child`)
+  // are drawn dashed/light with no label so the collapsed view reads "this
+  // scope produced these products" without showing the child subtree. A click
+  // on a surrogate jumps to the responsible child via `viaChild` (see §3.3).
+  surrogate?: boolean;
+  viaChild?: string;
 }
 
 /**
@@ -243,10 +382,18 @@ function applyZoomAdaptation(
   const edgeColor = t < 0.5 ? EDGE_COLOR_LIGHT : EDGE_COLORS.next;
   const labelOpacity = Math.max(0, (t - 0.55) * 2.2); // 0 below 0.55, 1 above 1.0
 
-  edgeSel.select("line")
+  // Style only the *visible* edge line (``.memory-canvas-edge``), never the
+  // transparent surrogate hit-line (``.memory-canvas-edge-hit``, inserted as
+  // the group's first child). ``select("line")`` would match the hit-line
+  // and recolour it slate here, turning the invisible hit area into a solid
+  // slate stroke that reads as a real edge. Surrogates keep their own light
+  // colour + dasharray set at create time; the adaptation only scales width +
+  // opacity on them (the dasharray stays, so they still read as dashed).
+  edgeSel.select("line.memory-canvas-edge")
     .attr("stroke-width", strokeWidth)
-    .attr("opacity", edgeOpacity)
-    .attr("stroke", edgeColor);
+    .attr("opacity", edgeOpacity);
+  edgeSel.select("line.memory-canvas-edge")
+    .attr("stroke", (link: SimLink) => link.surrogate ? EDGE_COLOR_LIGHT : edgeColor);
   edgeSel.select("text")
     .attr("opacity", labelOpacity);
 }
@@ -317,6 +464,39 @@ interface MemoryGraphCanvasProps {
   onSelect?: (nodeId: string) => void;
   selectedId?: string;
   subgraph: MemorySubgraph;
+  /** Scope task_ids currently expanded (children + real edges merged in).
+   * The canvas marks these scopes' rings solid so an expanded scope reads as
+   * "open" (▸ flipped to ▾). Pass the live set from the explorer's state. */
+  expandedScopes?: ReadonlySet<string>;
+  /** True per-scope child counts, built from the raw folded node set (the
+   * full session read, children included). The "▸ N" badge reads this so the
+   * count is stable across collapse/expand — counting visible ``contains``
+   * edges would read 0 while collapsed (the fold hides the spine). Falls back
+   * to the visible contains-edge count when absent (legacy callers). */
+  scopeChildCounts?: ReadonlyMap<string, number>;
+  /** Click on a scope node toggles its expansion rather than only selecting.
+   * The explorer fetches getScopeExpansion, merges the child subtree, and
+   * drops this scope's surrogate edges (§3.3). Falls back to onSelect when
+   * unset (scopes behave as plain nodes — kept for the thumbnail/non-interactive
+   * callers). */
+  onToggleScope?: (scopeTaskId: string) => void;
+  /** Aggregate virtual node ids currently expanded (member products merged in,
+   * 需3). The canvas marks these aggregates' rings solid so an open aggregate
+   * reads as "open". Pass the live set from the explorer's state. */
+  expandedGroups?: ReadonlySet<string>;
+  /** Click on an aggregate node (Artifacts/Papers) toggles its expansion
+   * rather than only selecting — the explorer fetches getGroupExpansion,
+   * merges the member products, and drops the virtual aggregate. Independent
+   * of the owning scope's expand/collapse. Falls back to onSelect when unset. */
+  onToggleGroup?: (groupId: string) => void;
+  /** Click on a surrogate edge (scope→product) jumps to the responsible child
+   * (extra.via_child): expand the owning scope + select that child. Falls
+   * back to a no-op when unset so the thumbnail canvas stays inert. */
+  onEdgeClick?: (edge: { surrogate: boolean; viaChild?: string; source: string; target: string; type: MemoryGraphEdgeType }) => void;
+  /** Hover-hint text for a scope node's <title> tooltip. The explorer resolves
+   * these from its i18n locale so the canvas stays a pure render layer.
+   * ``expand`` shows when the scope is folded, ``collapse`` when expanded. */
+  scopeHints?: { expand: string; collapse: string };
 }
 
 /**
@@ -331,6 +511,14 @@ interface SimRef {
   edgeSel: Selection<SVGGElement, SimLink, SVGGElement, unknown> | null;
   zoomBehavior: ReturnType<typeof zoom<SVGSVGElement, unknown>> | null;
   svgSel: Selection<SVGSVGElement, unknown, null, undefined> | null;
+  // Persistent layers + helpers created once by the mount effect. The data
+  // effect joins into these instead of rebuilding the SVG, so an
+  // expand/collapse never tears the canvas down.
+  zoomLayer: Selection<SVGGElement, unknown, null, undefined> | null;
+  edgesLayer: Selection<SVGGElement, unknown, null, undefined> | null;
+  nodesLayer: Selection<SVGGElement, unknown, null, undefined> | null;
+  dragBehavior: ReturnType<typeof drag<SVGGElement, SimNode>> | null;
+  fitAll: ((duration: number) => void) | undefined;
   width: number;
   height: number;
   nodeSize: number;
@@ -346,11 +534,31 @@ export function MemoryGraphCanvas({
   subgraph,
   visibleEdgeTypes,
   visibleLabels,
+  expandedScopes,
+  scopeChildCounts,
+  onToggleScope,
+  expandedGroups,
+  onToggleGroup,
+  onEdgeClick,
+  scopeHints,
 }: MemoryGraphCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  // Mirror the toggle/edge-click callbacks into refs so the d3 click
+  // handlers (bound once at build time) always call the latest closures
+  // without rebinding on every poll-driven re-render.
+  const onToggleScopeRef = useRef(onToggleScope);
+  onToggleScopeRef.current = onToggleScope;
+  const onToggleGroupRef = useRef(onToggleGroup);
+  onToggleGroupRef.current = onToggleGroup;
+  const onEdgeClickRef = useRef(onEdgeClick);
+  onEdgeClickRef.current = onEdgeClick;
+  // Mirror scopeHints into a ref so the data effect's update block can read
+  // the latest tooltip strings without rebuilding the SVG on a locale change.
+  const scopeHintsRef = useRef(scopeHints);
+  scopeHintsRef.current = scopeHints;
   const simRef = useRef<SimRef>({
     simulation: null,
     simNodes: [],
@@ -359,6 +567,11 @@ export function MemoryGraphCanvas({
     edgeSel: null,
     zoomBehavior: null,
     svgSel: null,
+    zoomLayer: null,
+    edgesLayer: null,
+    nodesLayer: null,
+    dragBehavior: null,
+    fitAll: undefined,
     width: 0,
     height: 0,
     nodeSize: 0,
@@ -377,8 +590,22 @@ export function MemoryGraphCanvas({
   const didInitialSelectionRef = useRef(false);
   useEffect(() => { didInitialSelectionRef.current = false; }, [signature]);
 
-  // Build/rebuild the simulation only when the data itself changes. Filtering
-  // and selection are applied separately below so the layout never jumps.
+  // The live simulation + node array for the *current* data effect run. The
+  // mount-once drag/click handlers read this ref so they always act on the
+  // latest simulation without being rebound on every expand/collapse — the
+  // handlers are bound once (mount effect) and the data effect just swaps the
+  // ref's contents. Mirrors the onSelectRef/onToggleScopeRef pattern.
+  const dataRef = useRef<{ simulation: Simulation<SimNode, SimLink> | null; simNodes: SimNode[]; simLinks: SimLink[] }>({
+    simulation: null,
+    simNodes: [],
+    simLinks: [],
+  });
+
+  // --- Mount-once scaffold: defs, zoom layer, edges/nodes layers, zoom +
+  // drag/click handlers, resize observer. Runs once so an expand/collapse
+  // (which only changes node/edge *data*, not the scaffold) never tears the
+  // SVG down and back up — that teardown was the visual "jitter" on every
+  // click. Layers persist on simRef for the data effect to join into. ---
   useEffect(() => {
     const host = hostRef.current;
     const svgEl = svgRef.current;
@@ -386,58 +613,11 @@ export function MemoryGraphCanvas({
 
     const width = host.clientWidth || 800;
     const height = host.clientHeight || 600;
-    // Radius (the previous Cytoscape code used diameter for `width`/`height`).
     const nodeSize = interactive ? 23 : 6;
-    const done = DONE_STATUSES;
-
-    const displayNames = graphNodeDisplayNames(subgraph.nodes);
-    const known = new Set(subgraph.nodes.map((node) => node.id));
-    const simNodes: SimNode[] = subgraph.nodes.map((node) => {
-      const status = typeof node.extra?.status === "string" ? node.extra.status.toLowerCase() : "";
-      // Only work that reports an unfinished status is drawn as pending.
-      // Statusless nodes (artifacts, papers, …) are facts, not "incomplete".
-      const pending = Boolean(status) && !done.has(status);
-      // The paper-chain view in MemoryGraphExplorer injects a synthetic node
-      // with `extra.collapsed=true` to summarise a run of intermediate
-      // SubTasks. Carry that flag across so the canvas can render it as a
-      // dashed disc with a "+N" caption rather than a regular SubTask.
-      const collapsed = node.extra?.collapsed === true;
-      const collapsedCount = typeof node.extra?.count === "number" ? node.extra.count : 0;
-      return {
-        id: node.id,
-        label: node.label,
-        name: displayNames.get(node.id) ?? graphNodeName(node),
-        pending,
-        collapsed,
-        collapsedCount,
-      };
-    });
-    // `supersedes` (Artifact version → previous version) is written to the
-    // graph but not drawn here — version history is out of scope for the
-    // chain/canvas view. Dropped before layout so it never claims rank
-    // space, and absent from the Relationships filter list upstream.
-    const simLinks: SimLink[] = subgraph.edges
-      .filter((edge) => edge.type !== "supersedes" && known.has(edge.source) && known.has(edge.target))
-      .map((edge, index) => ({
-        id: `e${index}`,
-        source: edge.source,
-        target: edge.target,
-        type: edge.type,
-      }));
-
-    const componentCenters = computeComponentCenters(
-      simNodes.map((node) => node.id),
-      simLinks,
-      width,
-      height,
-    );
 
     const svgSel = select(svgEl);
     svgSel.selectAll("*").remove();
 
-    // One arrow marker per edge type, coloured from EDGE_COLORS so each
-    // arrowhead matches its line. Tailored small enough that at full zoom
-    // they sit cleanly on the disc edge instead of drowning it.
     const defs = svgSel.append("defs");
     for (const [type, color] of Object.entries(EDGE_COLORS)) {
       defs.append("marker")
@@ -453,16 +633,429 @@ export function MemoryGraphCanvas({
         .attr("fill", color);
     }
 
-    // The zoom transform lives on this inner group so pan/zoom doesn't fight
-    // the outer SVG's coordinate system.
     const zoomLayer = svgSel.append("g").attr("class", "memory-canvas-zoom-layer");
     const edgesLayer = zoomLayer.append("g").attr("class", "memory-canvas-edges");
     const nodesLayer = zoomLayer.append("g").attr("class", "memory-canvas-nodes");
 
-    // Seed initial positions so the bbox has something to fit on the very
-    // first tick — without these, nodes start at (NaN, NaN) and the layout
-    // flashes empty until the first tick fires.
+    let zoomBehavior: ReturnType<typeof zoom<SVGSVGElement, unknown>> | undefined;
+    if (interactive) {
+      zoomBehavior = zoom<SVGSVGElement, unknown>()
+        .scaleExtent([0.2, 2.5])
+        .filter((event: Event) => {
+          if (event.type === "wheel") return true;
+          const target = event.target as Element | null;
+          return !target?.closest(".memory-canvas-node");
+        })
+        .on("zoom", (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
+          zoomLayer.attr("transform", event.transform.toString());
+          const ref = simRef.current;
+          if (ref.edgeSel) applyZoomAdaptation(event.transform.k, ref.edgeSel, interactive);
+        });
+      svgSel.call(zoomBehavior);
+    } else {
+      // Thumbnail: no zoom behaviour, just land the layer at origin so nodes
+      // are visible. The data effect's fit path translates the layer.
+      zoomLayer.attr("transform", "translate(0, 0)");
+    }
+
+    // The click handler reads dataRef so the *current* simNodes drive the
+    // toggle — bound once here, never rebound on expand/collapse.
+    //   - Non-scope nodes (ToolCall/Artifact/Paper/…): a single click selects
+    //     immediately (zero latency). An aggregate (Artifacts/Papers) also
+    //     toggles its group expansion on the same click.
+    //   - A scope (Task, isScope): a SINGLE click selects after a ~250ms
+    //     double-click window; a DOUBLE click toggles expansion (and selects).
+    //     The window is the browser's unavoidable click/dblclick disambiguation
+    //     — a dblclick is two clicks, so the first click's select must wait to
+    //     see whether a second lands. The hover <title> hints "双击展开/收起节点".
+    // A pending single-click select is kept here so a second click cancels it.
+    let pendingScopeSelect: { id: string; timer: ReturnType<typeof setTimeout> } | null = null;
+    const DBLCLICK_WINDOW_MS = 250;
+    const fireSelect = (id: string) => { onSelectRef.current?.(id); };
+    nodesLayer.on("click", (event: MouseEvent) => {
+      const g = (event.target as Element | null)?.closest(".memory-canvas-node") as SVGGElement | null;
+      if (!g) return;
+      const node = select(g).datum() as SimNode;
+      event.stopPropagation();
+      // Aggregate expansion (需求3) is independent of scope expansion — a
+      // click on an Artifacts/Papers node unpacks that aggregate's members
+      // only, NOT the owning scope's child subtree. Selects immediately too.
+      if (node.isAggregate && onToggleGroupRef.current) {
+        if (pendingScopeSelect) { clearTimeout(pendingScopeSelect.timer); pendingScopeSelect = null; }
+        fireSelect(node.id);
+        onToggleGroupRef.current(node.id);
+        return;
+      }
+      if (node.isScope) {
+        // A scope uses dblclick to toggle. If a single-click select is
+        // already pending for THIS scope, this is the second click → cancel
+        // the pending select, toggle expansion, and select now (the dblclick
+        // is confirmed, no need to keep waiting).
+        if (pendingScopeSelect && pendingScopeSelect.id === node.id) {
+          clearTimeout(pendingScopeSelect.timer);
+          pendingScopeSelect = null;
+          fireSelect(node.id);
+          onToggleScopeRef.current?.(node.id);
+          return;
+        }
+        // A click on a *different* scope while another's select is pending:
+        // commit the previous pending select immediately, then start this
+        // scope's dblclick window.
+        if (pendingScopeSelect) { clearTimeout(pendingScopeSelect.timer); fireSelect(pendingScopeSelect.id); pendingScopeSelect = null; }
+        const id = node.id;
+        pendingScopeSelect = {
+          id,
+          timer: setTimeout(() => {
+            // Window expired with no second click → a real single click.
+            pendingScopeSelect = null;
+            fireSelect(id);
+          }, DBLCLICK_WINDOW_MS),
+        };
+        return;
+      }
+      // Plain node: select immediately. Cancel any pending scope select so a
+      // quick scope-click-then-elsewhere does not leave a stale select firing.
+      if (pendingScopeSelect) { clearTimeout(pendingScopeSelect.timer); fireSelect(pendingScopeSelect.id); pendingScopeSelect = null; }
+      fireSelect(node.id);
+    });
+    // Drag: read the current simulation via dataRef so a drag started after a
+    // recent expand controls the latest sim (the old sim is stopped + swapped).
+    if (interactive) {
+      const dragBehavior = drag<SVGGElement, SimNode>()
+        .filter((event: Event) => !(event as MouseEvent).button)
+        .on("start", (event: D3DragEvent<SVGGElement, SimNode, SimNode>, node: SimNode) => {
+          const sim = dataRef.current.simulation;
+          if (!sim) return;
+          if (!event.active) sim.alphaTarget(0.3).restart();
+          for (const other of dataRef.current.simNodes) {
+            if (other === node) continue;
+            if (other.fx != null) other.fx = null;
+            if (other.fy != null) other.fy = null;
+          }
+          node.fx = node.x;
+          node.fy = node.y;
+        })
+        .on("drag", (event: D3DragEvent<SVGGElement, SimNode, SimNode>, node: SimNode) => {
+          node.fx = event.x;
+          node.fy = event.y;
+        })
+        .on("end", (event: D3DragEvent<SVGGElement, SimNode, SimNode>) => {
+          const sim = dataRef.current.simulation;
+          if (sim && !event.active) sim.alphaTarget(0);
+        });
+      // Delegate drag binding to the data effect's nodeSel (the join target),
+      // but the behaviour object is owned here so it survives rebuilds.
+      simRef.current.dragBehavior = dragBehavior;
+    }
+
+    // Re-fit whenever the box actually changes size. Lives here (mount-once)
+    // so the observer isn't torn down/recreated on every expand.
+    let observer: ResizeObserver | undefined;
+    const fitAllFromRef = (duration: number) => {
+      const ref = simRef.current;
+      if (!ref.zoomBehavior || !ref.svgSel) {
+        zoomLayer.attr("transform", "translate(0, 0)");
+        return;
+      }
+      const positions: Array<[number, number]> = [];
+      for (const node of dataRef.current.simNodes) {
+        if (typeof node.x === "number" && typeof node.y === "number") positions.push([node.x, node.y]);
+      }
+      if (positions.length < 2) return;
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const [x, y] of positions) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+      const bboxW = (maxX - minX) || 1;
+      const bboxH = (maxY - minY) || 1;
+      const padding = interactive ? 30 : 8;
+      const scale = Math.min(
+        (ref.width - padding * 2) / (bboxW + nodeSize * 2),
+        (ref.height - padding * 2) / (bboxH + nodeSize * 2),
+        interactive ? 1.5 : 1.1,
+      );
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      const transform = zoomIdentity
+        .translate(ref.width / 2 - centerX * scale, ref.height / 2 - centerY * scale)
+        .scale(scale);
+      ref.svgSel.transition().duration(duration).call(ref.zoomBehavior.transform, transform);
+    };
+    simRef.current.fitAll = fitAllFromRef;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => {
+        const ref = simRef.current;
+        if (!ref.width || !ref.height) return;
+        ref.width = host.clientWidth || ref.width;
+        ref.height = host.clientHeight || ref.height;
+        if (interactive) fitAllFromRef(160);
+      });
+      observer.observe(host);
+    }
+
+    simRef.current = {
+      ...simRef.current,
+      svgSel,
+      zoomLayer,
+      edgesLayer,
+      nodesLayer,
+      edgeSel: null,
+      nodeSel: null,
+      zoomBehavior: zoomBehavior ?? null,
+      width,
+      height,
+      nodeSize,
+      simulation: null,
+      simNodes: [],
+      simLinks: [],
+      positionsReady: false,
+    };
+
+    return () => {
+      observer?.disconnect();
+      simRef.current.dragBehavior = null;
+      simRef.current.fitAll = undefined;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interactive]);
+
+  // --- Data effect: join nodes/edges into the persistent layers, build the
+  // simulation, preserve positions across rebuilds. Runs on signature change
+  // (a scope expand/collapse changes the merged graph's content) but never
+  // tears the SVG down — the layers survive, so only enter/update/exit
+  // touches the DOM and the user's pan/zoom stays put. ---
+  useEffect(() => {
+    const host = hostRef.current;
+    const svgEl = svgRef.current;
+    const ref = simRef.current;
+    if (!host || !svgEl || !ref.edgesLayer || !ref.nodesLayer) return;
+
+    // Whether the previous build had a settled layout — i.e. this is an
+    // incremental rebuild (a scope was just expanded/collapsed) rather than a
+    // fresh canvas. An incremental rebuild preserves existing node positions
+    // and only nudges the sim with a low alpha so the graph does not fling
+    // itself around on every click; a fresh build seeds positions on a circle
+    // and fits the whole canvas once the sim settles.
+    const prev = simRef.current;
+    const prevPositions = new Map<string, SimNode>();
+    if (prev?.simNodes) for (const n of prev.simNodes) prevPositions.set(n.id, n);
+
+    const width = host.clientWidth || 800;
+    const height = host.clientHeight || 600;
+    // Radius (the previous Cytoscape code used diameter for `width`/`height`).
+    const nodeSize = interactive ? 23 : 6;
+    const done = DONE_STATUSES;
+
+    const displayNames = graphNodeDisplayNames(subgraph.nodes);
+    const known = new Set(subgraph.nodes.map((node) => node.id));
+    // Count contains edges per source so a scope node can advertise how many
+    // children it owns (the "▸ N" badge). Folded subgraphs carry the contains
+    // spine (PR2), so this counts real children even before expansion.
+    const containsOut = new Map<string, number>();
+    for (const edge of subgraph.edges) {
+      if (edge.type === "contains" && known.has(edge.source)) {
+        containsOut.set(edge.source, (containsOut.get(edge.source) ?? 0) + 1);
+      }
+    }
+    const simNodes: SimNode[] = subgraph.nodes.map((node) => {
+      const status = typeof node.extra?.status === "string" ? node.extra.status.toLowerCase() : "";
+      // Only work that reports an unfinished status is drawn as pending.
+      // Statusless nodes (artifacts, papers, …) are facts, not "incomplete".
+      const pending = Boolean(status) && !done.has(status);
+      // The paper-chain view in MemoryGraphExplorer injects a synthetic node
+      // with `extra.collapsed=true` to summarise a run of intermediate
+      // SubTasks. Carry that flag across so the canvas can render it as a
+      // dashed disc with a "+N" caption rather than a regular SubTask.
+      const collapsed = node.extra?.collapsed === true;
+      const collapsedCount = typeof node.extra?.count === "number" ? node.extra.count : 0;
+      // A subagent scope is a real ``Task`` whose extra.task_type ===
+      // "subagent" (scope carries the ``Task`` label; its child executions
+      // carry the ``ToolCall`` label — distinguish a scope by task_type). A
+      // child hangs off a scope via contains (first child only — 需求1) or is
+      // reached via the scope-internal next chain: it carries
+      // extra.parent_subtask_id, or its task_id embeds ":exec:". cancelled is a
+      // terminal status PR1 writes on aborted subagents — neither pending
+      // (unfinished) nor completed (succeeded/…), so it gets its own branch.
+      const isScope = isScopeNode(node);
+      const isChild = isChildNode(node);
+      const cancelled = isCancelledNode(node);
+      const expanded = isScope ? expandedScopes?.has(node.id) === true : false;
+      // A folded scope = scope not currently expanded. Drives the stack ghost
+      // discs (shown folded) and the hover hint ("单击展开节点"/"单击收起节点").
+      const folded = isScope ? !expanded : false;
+      // Aggregate virtual node (需求3): a folded scope's >1 same-kind products
+      // collapsed into one ``_group:…`` node. Read the member count from
+      // ``extra.count`` (set by the backend synthesis) so the "▸ N" badge shows
+      // how many products are inside. aggregateExpanded mirrors expandedGroups
+      // so the badge flips ▸→▾ when the aggregate is open.
+      const isAggregate = isAggregateNode(node);
+      const aggregateCount = typeof node.extra?.count === "number" ? node.extra.count : 0;
+      const aggregateExpanded = isAggregate ? expandedGroups?.has(node.id) === true : false;
+      // Resolve this child's owning scope up front so the incremental seed
+      // (below) can place a newly-expanded child near its parent scope's
+      // settled position without re-parsing the id/extra at seed time.
+      const parentScopeId = isChild ? childParentScopeId(node.id, node.extra) : undefined;
+      return {
+        id: node.id,
+        label: node.label,
+        name: displayNames.get(node.id) ?? graphNodeName(node),
+        pending,
+        collapsed,
+        collapsedCount,
+        isScope,
+        // Prefer the pre-computed true child count from the raw folded node
+        // set (stable across collapse/expand) over the visible contains-edge
+        // count, which reads 0 while the scope is collapsed (the fold hides
+        // the spine). Falls back to the visible-edge count for callers that
+        // don't supply scopeChildCounts (e.g. the chain mini-view).
+        childCount: isScope ? (scopeChildCounts?.get(node.id) ?? containsOut.get(node.id) ?? 0) : 0,
+        folded,
+        isChild,
+        parentScopeId,
+        cancelled,
+        expanded,
+        isAggregate,
+        aggregateCount,
+        aggregateExpanded,
+      };
+    });
+    // `supersedes` (Artifact version → previous version) is written to the
+    // graph but not drawn here — version history is out of scope for the
+    // chain/canvas view. Dropped before layout so it never claims rank
+    // space, and absent from the Relationships filter list upstream.
+    const simLinks: SimLink[] = subgraph.edges
+      .filter((edge) => edge.type !== "supersedes" && known.has(edge.source) && known.has(edge.target))
+      .map((edge, index) => ({
+        id: `e${index}`,
+        source: edge.source,
+        target: edge.target,
+        type: edge.type,
+        // Carry the surrogate marker + via_child hop so the render pass can
+        // dash the line and a click can jump to the responsible child (§3.3).
+        surrogate: isSurrogateEdge(edge),
+        viaChild: typeof edge.extra?.via_child === "string" ? edge.extra.via_child : undefined,
+      }));
+
+    const componentCenters = computeComponentCenters(
+      simNodes.map((node) => node.id),
+      simLinks,
+      width,
+      height,
+    );
+
+    // A rebuild is "incremental" only when the previous layout settled *and*
+    // at least one current node already had a position to keep — i.e. there
+    // is real overlap with the previous node set. A brand-new graph (a
+    // different session, a fresh chain view) shares no ids with the previous
+    // set, so it must go through a full-alpha settle + fit instead of the
+    // low-alpha nudge an incremental toggle uses. This keeps scope
+    // expand/collapse gentle while not starving a genuinely new graph of
+    // layout energy.
+    const isIncremental = prev?.positionsReady === true
+      && simNodes.some((node) => prevPositions.has(node.id));
+
+    // Seed initial positions. Survivors (already settled on a previous run)
+    // keep their x/y/vx/vy; new nodes are seeded by BFS layer so a freshly
+    // expanded child subtree grows *out of* its parent scope in connected
+    // layers (children ring the scope, their products ring each child) rather
+    // than landing in one clump on a single diagonal ray. The previous seed
+    // stacked every new child at parent + (off, off) on the *same* y=x ray,
+    // and a too-cold incremental alpha (0.3) couldn't separate them — that
+    // is the "clump" on expand.
+    const seeded = new Set<string>();
+    const posById = new Map<string, { x: number; y: number }>();
+    // 1. Survivors first — reuse their settled position + velocity.
+    simNodes.forEach((node) => {
+      const prev = prevPositions.get(node.id);
+      if (prev && typeof prev.x === "number" && typeof prev.y === "number") {
+        node.x = prev.x;
+        node.y = prev.y;
+        node.vx = prev.vx;
+        node.vy = prev.vy;
+        seeded.add(node.id);
+        posById.set(node.id, { x: prev.x, y: prev.y });
+      }
+    });
+    // 2. New nodes by BFS along the (filtered) edges, layer by layer. Each
+    //    new node seeds on a ring around its already-placed source so
+    //    children ring their scope, products ring each child, etc. The ring
+    //    radius EQUALS the link force's equilibrium distance so the link
+    //    spring is ~0 at the seed (no long pull-in). An earlier version seeded
+    //    at 2.2x equilibrium and started at alpha 0.8: the long spring + hot
+    //    alpha overshot and the new subtree flung far then snapped back into a
+    //    clump. Seeding at equilibrium + a low incremental alpha means the sim
+    //    has no long-distance work to do, so nothing flings and nothing
+    //    snaps back.
+    //
+    //    On an incremental expand the survivors are pinned (fx/fy below) so
+    //    the collide force cannot shove them aside. To avoid overlap we bias
+    //    each new child's seed angle onto the half-arc of its parent's ring
+    //    that faces away from the parent's nearest surviving neighbour: the
+    //    new subtree grows into open canvas rather than into the existing
+    //    graph. Products (next BFS layer) inherit their child's outward
+    //    direction the same way.
+    const adjacency = new Map<string, string[]>();
+    for (const link of simLinks) {
+      const s = typeof link.source === "object" ? link.source.id : link.source;
+      const t = typeof link.target === "object" ? link.target.id : link.target;
+      const arr = adjacency.get(s);
+      if (arr) arr.push(t); else adjacency.set(s, [t]);
+    }
+    const ringRadius = nodeSize * 4.5;
+    // Direction from a parent position toward open canvas: the vector from
+    // the parent's nearest surviving neighbour back to the parent. When the
+    // parent has no surviving neighbour (fresh graph, or the parent itself
+    // is brand-new) fall back to a deterministic angle so the seed is stable
+    // across polls. `selfKey` lets the nearest-search skip the parent itself.
+    const outwardAngle = (parentPos: { x: number; y: number }, selfKey: string): number => {
+      let nearest: { x: number; y: number } | null = null;
+      let nearestDist = Infinity;
+      for (const [id, p] of posById) {
+        if (id === selfKey) continue;
+        const dx = p.x - parentPos.x;
+        const dy = p.y - parentPos.y;
+        const d = dx * dx + dy * dy;
+        if (d < nearestDist) { nearestDist = d; nearest = p; }
+      }
+      if (!nearest) return -Math.PI / 4;
+      return Math.atan2(parentPos.y - nearest.y, parentPos.x - nearest.x);
+    };
+    let frontier = [...seeded];
+    while (frontier.length > 0) {
+      const nextFrontier: string[] = [];
+      for (const parentId of frontier) {
+        const parentPos = posById.get(parentId);
+        if (!parentPos) continue;
+        const children = (adjacency.get(parentId) ?? []).filter((id) => !seeded.has(id));
+        if (!children.length) continue;
+        // Spread children across a half-arc (pi wide) centred on the outward
+        // direction so they fan into open canvas. A full 2pi ring would land
+        // half of them on top of the existing graph.
+        const baseAngle = outwardAngle(parentPos, parentId);
+        const halfArc = Math.PI / 2;
+        children.forEach((childId, i) => {
+          const node = simNodes.find((n) => n.id === childId);
+          if (!node) return;
+          const t = children.length === 1 ? 0.5 : i / (children.length - 1);
+          const angle = baseAngle - halfArc + t * (2 * halfArc);
+          node.x = parentPos.x + Math.cos(angle) * ringRadius;
+          node.y = parentPos.y + Math.sin(angle) * ringRadius;
+          node.vx = 0;
+          node.vy = 0;
+          seeded.add(childId);
+          posById.set(childId, { x: node.x ?? 0, y: node.y ?? 0 });
+          nextFrontier.push(childId);
+        });
+      }
+      frontier = nextFrontier;
+    }
+    // 3. Any remaining orphans (no edge to a placed node, e.g. a fresh graph)
+    //    fall back to the usual seed ring around the canvas centre.
     simNodes.forEach((node, index) => {
+      if (seeded.has(node.id)) return;
       const angle = (index / Math.max(simNodes.length, 1)) * Math.PI * 2;
       node.x = width / 2 + Math.cos(angle) * 80;
       node.y = height / 2 + Math.sin(angle) * 80;
@@ -477,131 +1070,301 @@ export function MemoryGraphCanvas({
       .force("link", forceLink<SimNode, SimLink>(simLinks).id((node: SimNode) => node.id).distance(nodeSize * 4.5))
       .force("charge", forceManyBody().strength(-nodeSize * 9))
       .force("center", forceCenter(width / 2, height / 2))
-      .force("collide", forceCollide<SimNode>().radius(nodeSize + 6))
+      .force("collide", forceCollide<SimNode>().radius(nodeSize + 8))
       .force("x", forceX<SimNode>((node: SimNode) => componentCenters.get(node.id)?.cx ?? width / 2).strength(0.05))
       .force("y", forceY<SimNode>((node: SimNode) => componentCenters.get(node.id)?.cy ?? height / 2).strength(0.05))
-      .alpha(1)
+      // A fresh canvas starts at full alpha so the layout finds a settled
+      // shape. An incremental rebuild (a scope expanded/collapsed) pins the
+      // surviving nodes (fx/fy below) and starts at a low alpha (0.3): the
+      // new child subtree is seeded at the link force's equilibrium distance
+      // on the outward half-arc, so the sim has almost no long-distance work
+      // to do. A higher alpha overshot the spring (seed-at-2.2x + 0.8 flung
+      // far then snapped back into a clump). Low alpha + equilibrium seed =
+      // the subtree settles in place with no fling, no snap-back, no jitter.
+      // Survivors stay pinned for the whole sim so they never drift.
+      .alpha(isIncremental ? 0.3 : 1)
       // Stronger decay than the d3 default so layout settles within a couple
       // of seconds rather than the long, dreamy tail the default produces.
       .alphaDecay(0.05);
 
-    const edgeSel = edgesLayer.selectAll<SVGGElement, SimLink>("g")
+    // Keep the mount-once drag handler pointed at the latest sim. The drag
+    // behaviour was bound in the mount effect and survives rebuilds; only
+    // the simulation it drives changes.
+    dataRef.current = { simulation, simNodes, simLinks };
+
+    // --- Edges: join into the persistent edges layer. enter creates the line
+    // + label + hit-line; update re-applies the stroke/dash/marker (an edge
+    // can flip surrogate↔real when its scope toggles) and the label text;
+    // exit removes. The layer itself is never torn down. ---
+    const edgeSel = ref.edgesLayer.selectAll<SVGGElement, SimLink>("g")
       .data(simLinks, (link: SimLink) => link.id)
-      .join("g")
-      .attr("class", "memory-canvas-edge-group");
-
-    edgeSel.append("line")
-      .attr("class", "memory-canvas-edge")
-      .attr("data-id", (link: SimLink) => link.id)
-      .attr("stroke", (link: SimLink) => EDGE_COLORS[link.type] ?? EDGE_COLOR_LIGHT)
-      .attr("stroke-width", interactive ? 1.8 : 1.0)
-      .attr("marker-end", (link: SimLink) => `url(#memory-canvas-arrow-${link.type})`);
-
-    // Edge type label: a small text positioned next to the arrow and rotated
-    // to run parallel to the edge. Slightly smaller than the node caption so
-    // it reads as a quiet annotation; no white halo so the glyph silhouette
-    // stays clean against the line.
-    edgeSel.append("text")
-      .attr("class", "memory-canvas-edge-label")
-      .attr("text-anchor", "middle")
-      .attr("dominant-baseline", "central")
-      .attr("font-size", 7)
-      .attr("font-weight", 600)
-      .attr("fill", "#475569")
-      .text((link: SimLink) => link.type);
-
-    const nodeSel = nodesLayer.selectAll<SVGGElement, SimNode>("g")
-      .data(simNodes, (node: SimNode) => node.id)
-      .join((enter: Selection<EnterElement, SimNode, SVGGElement, undefined>) => {
-        const g = enter.append("g").attr("class", "memory-canvas-node");
-
-        // Selected-node halo: two concentric rings with SMIL animations, each
-        // pulsing r and stroke-opacity. The second ring is offset by half the
-        // duration so the user sees a continuous wave rather than a single
-        // blink. CSS keeps the rings hidden until the group gets the
-        // `selected-node` class (see memory-graph.css).
-        if (interactive) {
-          const ring1 = g.append("circle")
-            .attr("class", "memory-canvas-selected-ring")
-            .attr("r", nodeSize)
-            .attr("fill", "none")
-            .attr("stroke", "#3b82f6")
-            .attr("stroke-width", 2.5)
-            .attr("pointer-events", "none");
-          ring1.append("animate")
-            .attr("attributeName", "r")
-            .attr("values", `${nodeSize};${nodeSize * 1.55};${nodeSize}`)
-            .attr("dur", "1.8s")
-            .attr("repeatCount", "indefinite");
-          ring1.append("animate")
-            .attr("attributeName", "stroke-opacity")
-            .attr("values", "0.85;0;0.85")
-            .attr("dur", "1.8s")
-            .attr("repeatCount", "indefinite");
-
-          const ring2 = g.append("circle")
-            .attr("class", "memory-canvas-selected-ring")
-            .attr("r", nodeSize)
-            .attr("fill", "none")
-            .attr("stroke", "#60a5fa")
-            .attr("stroke-width", 2)
-            .attr("pointer-events", "none");
-          ring2.append("animate")
-            .attr("attributeName", "r")
-            .attr("values", `${nodeSize};${nodeSize * 1.55};${nodeSize}`)
-            .attr("dur", "1.8s")
-            .attr("begin", "0.9s")
-            .attr("repeatCount", "indefinite");
-          ring2.append("animate")
-            .attr("attributeName", "stroke-opacity")
-            .attr("values", "0.7;0;0.7")
-            .attr("dur", "1.8s")
-            .attr("begin", "0.9s")
-            .attr("repeatCount", "indefinite");
-        }
-
-        g.append("circle")
-          .attr("r", nodeSize)
-          // Pending nodes keep a coloured dashed outline as a "in progress"
-          // marker; settled nodes are borderless so the disc reads as a flat
-          // Morandi swatch without the previous white separator ring. The
-          // synthetic collapsed node (used by the paper chain view) gets a
-          // dashed slate ring so it reads as "summary, click to expand".
-          .attr("stroke", (node: SimNode) => {
-            if (node.collapsed) return "#64748b";
-            return node.pending ? (NODE_COLORS[node.label] ?? "#64748b") : "none";
-          })
-          .attr("stroke-width", (node: SimNode) => {
-            if (node.collapsed) return interactive ? 2 : 1.4;
-            return node.pending ? (interactive ? 2.5 : 1.6) : 0;
-          })
-          .attr("fill", (node: SimNode) => node.collapsed ? "#e2e8f0" : (NODE_COLORS[node.label] ?? "#64748b"))
-          .attr("fill-opacity", (node: SimNode) => node.pending ? 0.18 : 1)
-          .attr("stroke-dasharray", (node: SimNode) => {
-            if (node.collapsed) return interactive ? "4 3" : "2 2";
-            return node.pending ? "3 2" : null;
-          });
-        if (interactive) {
-          // Neo4j Browser writes the caption inside the disc. Doing the same
-          // frees the space between nodes, which is what previously forced
-          // the layout wide enough to keep outside labels from colliding.
-          // Truncate with an ellipsis so long names never overflow the disc.
-          // Collapsed summary nodes show "+N" instead of a name to advertise
-          // that there are N items behind the click.
+      .join(
+        (enter: Selection<EnterElement, SimLink, SVGGElement, undefined>) => {
+          const g = enter.append("g").attr("class", "memory-canvas-edge-group");
+          g.append("line")
+            .attr("class", "memory-canvas-edge")
+            .attr("data-id", (link: SimLink) => link.id)
+            .attr("stroke", (link: SimLink) => link.surrogate ? EDGE_COLOR_LIGHT : (EDGE_COLORS[link.type] ?? EDGE_COLOR_LIGHT))
+            .attr("stroke-width", interactive ? 1.8 : 1.0)
+            .attr("stroke-dasharray", (link: SimLink) => link.surrogate ? "4 3" : null)
+            .attr("marker-end", (link: SimLink) => link.surrogate ? null : `url(#memory-canvas-arrow-${link.type})`);
           g.append("text")
-            .attr("class", "memory-canvas-node-label")
+            .attr("class", "memory-canvas-edge-label")
             .attr("text-anchor", "middle")
-            .attr("dy", "0.35em")
-            .attr("fill", (node: SimNode) => node.collapsed ? "#475569" : "#ffffff")
-            .attr("font-size", (node: SimNode) => node.collapsed ? 9 : 8)
+            .attr("dominant-baseline", "central")
+            .attr("font-size", 7)
             .attr("font-weight", 600)
-            .text((node: SimNode) => {
-              if (node.collapsed) return `+${node.collapsedCount}`;
-              return truncateLabel(node.name, NODE_LABEL_MAX_CHARS);
+            .attr("fill", "#475569");
+          if (interactive) {
+            // Widened transparent hit-line for surrogate edges: the visible
+            // line is pointer-events:none, so clicks land on this instead.
+            g.filter((link: SimLink) => link.surrogate === true)
+              .insert("line", ":first-child")
+              .attr("class", "memory-canvas-edge-hit")
+              .attr("stroke", "transparent")
+              .attr("stroke-width", 12)
+              .style("pointer-events", "all")
+              .style("cursor", "pointer")
+              .on("click", function (event: MouseEvent, link: SimLink) {
+                event.stopPropagation();
+                onEdgeClickRef.current?.({
+                  surrogate: true,
+                  viaChild: link.viaChild,
+                  source: typeof link.source === "object" ? link.source.id : link.source,
+                  target: typeof link.target === "object" ? link.target.id : link.target,
+                  type: link.type,
+                });
+              });
+          }
+          return g;
+        },
+        (update: Selection<SVGGElement, SimLink, SVGGElement, unknown>) => update,
+      );
+
+    // Re-apply per-edge dynamic attrs on enter+update (a toggle can flip an
+    // edge's surrogate flag, so the stroke/dash/marker/label must follow).
+    edgeSel.select("line.memory-canvas-edge")
+      .attr("stroke", (link: SimLink) => link.surrogate ? EDGE_COLOR_LIGHT : (EDGE_COLORS[link.type] ?? EDGE_COLOR_LIGHT))
+      .attr("stroke-dasharray", (link: SimLink) => link.surrogate ? "4 3" : null)
+      .attr("marker-end", (link: SimLink) => link.surrogate ? null : `url(#memory-canvas-arrow-${link.type})`);
+    edgeSel.select("text.memory-canvas-edge-label")
+      .text((link: SimLink) => link.surrogate ? "" : link.type)
+      .attr("opacity", (link: SimLink) => link.surrogate ? 0 : 1);
+
+    // --- Nodes: join into the persistent nodes layer. enter builds the full
+    // node (halo, disc, scope ring, label, badge); update re-applies the
+    // dynamic bits whose value can change across a toggle (the scope badge
+    // text ▸/▾ + count, the disc stroke/fill for status changes); exit
+    // removes. ---
+    const nodeSel = ref.nodesLayer.selectAll<SVGGElement, SimNode>("g")
+      .data(simNodes, (node: SimNode) => node.id)
+      .join(
+        (enter: Selection<EnterElement, SimNode, SVGGElement, undefined>) => {
+          const g = enter.append("g").attr("class", "memory-canvas-node");
+
+          if (interactive) {
+            const ring1 = g.append("circle")
+              .attr("class", "memory-canvas-selected-ring")
+              .attr("r", nodeSize)
+              .attr("fill", "none")
+              .attr("stroke", "#3b82f6")
+              .attr("stroke-width", 2.5)
+              .attr("pointer-events", "none");
+            ring1.append("animate")
+              .attr("attributeName", "r")
+              .attr("values", `${nodeSize};${nodeSize * 1.55};${nodeSize}`)
+              .attr("dur", "1.8s")
+              .attr("repeatCount", "indefinite");
+            ring1.append("animate")
+              .attr("attributeName", "stroke-opacity")
+              .attr("values", "0.85;0;0.85")
+              .attr("dur", "1.8s")
+              .attr("repeatCount", "indefinite");
+
+            const ring2 = g.append("circle")
+              .attr("class", "memory-canvas-selected-ring")
+              .attr("r", nodeSize)
+              .attr("fill", "none")
+              .attr("stroke", "#60a5fa")
+              .attr("stroke-width", 2)
+              .attr("pointer-events", "none");
+            ring2.append("animate")
+              .attr("attributeName", "r")
+              .attr("values", `${nodeSize};${nodeSize * 1.55};${nodeSize}`)
+              .attr("dur", "1.8s")
+              .attr("begin", "0.9s")
+              .attr("repeatCount", "indefinite");
+            ring2.append("animate")
+              .attr("attributeName", "stroke-opacity")
+              .attr("values", "0.7;0;0.7")
+              .attr("dur", "1.8s")
+              .attr("begin", "0.9s")
+              .attr("repeatCount", "indefinite");
+          }
+
+          // A folded subagent scope reads as "holds several nodes inside" by
+          // its blue ring + the hover hint alone — no stack ghost discs behind
+          // it (the earlier translucent offset circles read as stray halos).
+          g.append("circle")
+            .attr("r", nodeSize)
+            .attr("stroke", (node: SimNode) => {
+              if (node.collapsed) return "#64748b";
+              if (node.isScope) return "#3b82f6";
+              if (node.isAggregate) return "#d97706";
+              if (node.cancelled) return "#94a3b8";
+              return node.pending ? (NODE_COLORS[node.label] ?? "#64748b") : "none";
+            })
+            .attr("stroke-width", (node: SimNode) => {
+              if (node.collapsed) return interactive ? 2 : 1.4;
+              if (node.isScope) return interactive ? 2.5 : 1.6;
+              if (node.isAggregate) return interactive ? 2.5 : 1.6;
+              if (node.cancelled) return interactive ? 2 : 1.4;
+              return node.pending ? (interactive ? 2.5 : 1.6) : 0;
+            })
+            .attr("fill", (node: SimNode) => {
+              if (node.collapsed) return "#e2e8f0";
+              if (node.cancelled) return "#cbd5e1";
+              if (node.isAggregate) return "#fbbf24";
+              return NODE_COLORS[node.label] ?? "#64748b";
+            })
+            .attr("fill-opacity", (node: SimNode) => {
+              if (node.cancelled) return 0.5;
+              if (node.isAggregate) return 0.35;
+              return node.pending ? 0.18 : 1;
+            })
+            .attr("stroke-dasharray", (node: SimNode) => {
+              if (node.collapsed) return interactive ? "4 3" : "2 2";
+              if (node.isAggregate) return interactive ? "4 3" : "2 2";
+              return node.pending ? "3 2" : null;
             });
-        }
-        return g;
+          if (interactive) {
+            // The outer ring marks an expandable *aggregate* virtual node
+            // only (需求3): amber ring so it reads as a distinct "stack of
+            // products" vs a scope's blue stack-of-children. A scope no longer
+            // carries the ring or the ▸N badge — its folded state is shown by
+            // the stack ghost discs above instead.
+            g.filter((node: SimNode) => node.isAggregate === true).append("circle")
+              .attr("class", "memory-canvas-scope-ring")
+              .attr("r", nodeSize + 4)
+              .attr("fill", "none")
+              .attr("stroke", "#d97706")
+              .attr("stroke-width", 1.2)
+              .attr("stroke-opacity", 0.45)
+              .attr("pointer-events", "none");
+            g.append("text")
+              .attr("class", "memory-canvas-node-label")
+              .attr("text-anchor", "middle")
+              .attr("dy", "0.35em")
+              .attr("fill", (node: SimNode) => node.collapsed ? "#475569" : "#ffffff")
+              .attr("font-size", (node: SimNode) => node.collapsed ? 9 : 8)
+              .attr("font-weight", 600);
+            // Native SVG <title> hover tooltip for a scope: "单击展开节点"
+            // when folded, "单击收起节点" when expanded. Zero-JS, browser-
+            // rendered. The text is re-bound in the update block below as the
+            // toggle flips the folded state.
+            g.filter((node: SimNode) => node.isScope === true).append("title")
+              .attr("class", "memory-canvas-scope-title");
+            // The ▸N badge is aggregate-only now (a scope's folded state is
+            // shown by the stack discs, not a numeric badge).
+            g.filter((node: SimNode) => node.isAggregate === true).append("text")
+              .attr("class", "memory-canvas-scope-badge")
+              .attr("text-anchor", "start")
+              .attr("x", nodeSize * 0.7)
+              .attr("y", -nodeSize * 0.7)
+              .attr("font-size", 7)
+              .attr("font-weight", 700)
+              .attr("fill", "#d97706")
+              .attr("pointer-events", "none");
+            // Bind the mount-once drag behaviour (created in the mount
+            // effect, survives rebuilds) to the new node group.
+            if (ref.dragBehavior) g.call(ref.dragBehavior);
+          }
+          return g;
+        },
+        (update: Selection<SVGGElement, SimNode, SVGGElement, unknown>) => update,
+      );
+
+    // Re-apply dynamic node attrs on enter+update. The disc's stroke/fill
+    // can change with status (pending→completed), the label with name. The
+    // stack ghost discs' visibility flips with the scope's folded state
+    // (shown folded, hidden expanded), and the <title> tooltip text flips
+    // with it too. The scope badge is aggregate-only now.
+    nodeSel.select("circle:not(.memory-canvas-selected-ring):not(.memory-canvas-scope-ring)")
+      .attr("stroke", (node: SimNode) => {
+        if (node.collapsed) return "#64748b";
+        if (node.isScope) return "#3b82f6";
+        if (node.isAggregate) return "#d97706";
+        if (node.cancelled) return "#94a3b8";
+        return node.pending ? (NODE_COLORS[node.label] ?? "#64748b") : "none";
+      })
+      .attr("stroke-width", (node: SimNode) => {
+        if (node.collapsed) return interactive ? 2 : 1.4;
+        if (node.isScope) return interactive ? 2.5 : 1.6;
+        if (node.isAggregate) return interactive ? 2.5 : 1.6;
+        if (node.cancelled) return interactive ? 2 : 1.4;
+        return node.pending ? (interactive ? 2.5 : 1.6) : 0;
+      })
+      .attr("fill", (node: SimNode) => {
+        if (node.collapsed) return "#e2e8f0";
+        if (node.cancelled) return "#cbd5e1";
+        if (node.isAggregate) return "#fbbf24";
+        return NODE_COLORS[node.label] ?? "#64748b";
+      })
+      .attr("fill-opacity", (node: SimNode) => {
+        if (node.cancelled) return 0.5;
+        if (node.isAggregate) return 0.35;
+        return node.pending ? 0.18 : 1;
+      })
+      .attr("stroke-dasharray", (node: SimNode) => {
+        if (node.collapsed) return interactive ? "4 3" : "2 2";
+        if (node.isAggregate) return interactive ? "4 3" : "2 2";
+        return node.pending ? "3 2" : null;
       });
+    nodeSel.select("text.memory-canvas-node-label")
+      .text((node: SimNode) => {
+        if (node.collapsed) return `+${node.collapsedCount}`;
+        return truncateLabel(node.name, NODE_LABEL_MAX_CHARS);
+      })
+      .attr("fill", (node: SimNode) => node.collapsed ? "#475569" : "#ffffff")
+      .attr("font-size", (node: SimNode) => node.collapsed ? 9 : 8);
+    nodeSel.select("text.memory-canvas-scope-badge")
+      .text((node: SimNode) => node.isAggregate
+        ? `${node.aggregateExpanded ? "▾" : "▸"} ${node.aggregateCount ?? 0}`
+        : "");
+    // The aggregate's amber ring solidifies when expanded. A scope no longer
+    // has a ring (its folded state is shown by the stack discs).
+    nodeSel.select("circle.memory-canvas-scope-ring")
+      .attr("stroke", "#d97706")
+      .attr("stroke-opacity", (node: SimNode) =>
+        node.isAggregate && node.aggregateExpanded ? 0.8 : 0.45);
+    // Hover tooltip: only on a scope that actually has expandable children
+    // (a subagent with no ToolCall children has nothing to expand — the hover
+    // hint would be misleading). Folded → "双击展开节点"; expanded → "双击收起节点".
+    nodeSel.select("title.memory-canvas-scope-title")
+      .text((node: SimNode) => {
+        if (!node.isScope) return null;
+        if (!node.childCount) return null;
+        const hints = scopeHintsRef.current;
+        return node.folded ? (hints?.expand ?? "Click to expand") : (hints?.collapse ?? "Click to collapse");
+      });
+
+    // On an incremental rebuild, pin every surviving node to its settled
+    // position (fx/fy) for the whole sim so the survivors never drift (the
+    // previous jitter complaint). The new child subtree is seeded at the link
+    // force's equilibrium distance on the outward half-arc, so a low alpha
+    // (0.3) is enough to settle it in place — no long pull-in to overshoot.
+    // The pins stay for the life of this sim; d3-force still cools alpha to
+    // alphaMin and fires "end" (pinning freezes position, it does not keep
+    // alpha alive), so the fit/end logic is unaffected. The next data effect
+    // run re-pins from the fresh positions.
+    if (isIncremental) {
+      for (const node of simNodes) {
+        if (prevPositions.has(node.id) && typeof node.x === "number" && typeof node.y === "number") {
+          node.fx = node.x;
+          node.fy = node.y;
+        }
+      }
+    }
 
     simulation.on("tick", () => {
       edgeSel.each(function(link: SimLink) {
@@ -630,7 +1393,11 @@ export function MemoryGraphCanvas({
         const labelX = midX + Math.cos(perpAngle) * labelOffset * perpSign;
         const labelY = midY + Math.sin(perpAngle) * labelOffset * perpSign;
         const g = select(this);
-        g.select("line")
+        // Update *every* line in the edge group — the visible
+        // ``.memory-canvas-edge`` and, when present, the transparent
+        // ``.memory-canvas-edge-hit`` that widens the surrogate's click
+        // target.
+        g.selectAll("line")
           .attr("x1", sourceEdge.x)
           .attr("y1", sourceEdge.y)
           .attr("x2", targetEdge.x)
@@ -641,168 +1408,54 @@ export function MemoryGraphCanvas({
       nodeSel.attr("transform", (node: SimNode) => `translate(${node.x ?? 0}, ${node.y ?? 0})`);
     });
 
-    let zoomBehavior: ReturnType<typeof zoom<SVGSVGElement, unknown>> | undefined;
-    if (interactive) {
-      zoomBehavior = zoom<SVGSVGElement, unknown>()
-        .scaleExtent([0.2, 2.5])
-        // Block zoom/pan that starts on a node — the node drag owns the gesture.
-        .filter((event: Event) => {
-          if (event.type === "wheel") return true;
-          const target = event.target as Element | null;
-          return !target?.closest(".memory-canvas-node");
-        })
-        .on("zoom", (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
-          zoomLayer.attr("transform", event.transform.toString());
-          applyZoomAdaptation(event.transform.k, edgeSel, interactive);
-        });
-      svgSel.call(zoomBehavior);
-      // Apply the initial adaptation so a small fit-scale still gets the
-      // thinned-edge look before the user touches the wheel.
-      applyZoomAdaptation(1, edgeSel, interactive);
-
-      nodeSel.call(
-        drag<SVGGElement, SimNode>()
-          .filter((event: Event) => !(event as MouseEvent).button)
-          .on("start", (event: D3DragEvent<SVGGElement, SimNode, SimNode>, node: SimNode) => {
-            // Restart the sim while a drag is happening so the rest of the
-            // graph follows along instead of freezing mid-position.
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            // Release any previously dragged nodes so the simulation can
-            // reflow them around the new drag target. d3-force treats a
-            // node with `fx`/`fy` set as fixed, so a node dropped in a
-            // prior drag would otherwise stay pinned at its drop position
-            // and the rest of the graph never re-flows around the new
-            // gesture. The just-dropped node keeps its fx/fy below so it
-            // stays where the user released it.
-            for (const other of simNodes) {
-              if (other === node) continue;
-              if (other.fx != null) other.fx = null;
-              if (other.fy != null) other.fy = null;
-            }
-            node.fx = node.x;
-            node.fy = node.y;
-          })
-          .on("drag", (event: D3DragEvent<SVGGElement, SimNode, SimNode>, node: SimNode) => {
-            node.fx = event.x;
-            node.fy = event.y;
-          })
-          .on("end", (event: D3DragEvent<SVGGElement, SimNode, SimNode>, node: SimNode) => {
-            if (!event.active) simulation.alphaTarget(0);
-            // Keep `fx`/`fy` set so the dropped node stays where the user
-            // released it. The drag handler already updated them to the drop
-            // coordinates; resetting them to null would let the simulation
-            // pull the node back to its free position on the next tick.
-          }),
-      );
-
-      // Click to select. D3's drag handler swallows clicks within the drag
-      // threshold, so this fires only on real clicks, not on drags.
-      nodeSel.on("click", (event: MouseEvent, node: SimNode) => {
-        event.stopPropagation();
-        onSelectRef.current?.(node.id);
-      });
-    }
-
-    // Compute the bbox of all node positions and apply a transform that
-    // centres it in the viewport. Called after layout settles, after filters
-    // narrow the view, and after the container resizes.
-    const fitAll = (duration: number) => {
-      const ref = simRef.current;
-      if (!ref.svgSel || !ref.zoomBehavior) {
-        // Thumbnail mode: just translate the zoom layer so the nodes land
-        // somewhere visible without scaling.
-        zoomLayer.attr("transform", `translate(0, 0)`);
-        return;
-      }
-      const positions: Array<[number, number]> = [];
-      for (const node of simNodes) {
-        if (typeof node.x === "number" && typeof node.y === "number") positions.push([node.x, node.y]);
-      }
-      if (positions.length < 2) return;
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const [x, y] of positions) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-      const bboxW = (maxX - minX) || 1;
-      const bboxH = (maxY - minY) || 1;
-      const padding = interactive ? 30 : 8;
-      const scale = Math.min(
-        (ref.width - padding * 2) / (bboxW + nodeSize * 2),
-        (ref.height - padding * 2) / (bboxH + nodeSize * 2),
-        interactive ? 1.5 : 1.1,
-      );
-      const centerX = (minX + maxX) / 2;
-      const centerY = (minY + maxY) / 2;
-      const transform = zoomIdentity
-        .translate(ref.width / 2 - centerX * scale, ref.height / 2 - centerY * scale)
-        .scale(scale);
-      svgSel.transition().duration(duration).call(ref.zoomBehavior.transform, transform);
-    };
+    // Keep the initial zoom adaptation in step with the current edge set
+    // (the mount effect ran it once on the empty layer).
+    if (interactive) applyZoomAdaptation(1, edgeSel, interactive);
 
     simRef.current = {
+      ...simRef.current,
       simulation,
       simNodes,
       simLinks,
       nodeSel,
       edgeSel,
-      zoomBehavior: zoomBehavior ?? null,
-      svgSel,
       width,
       height,
       nodeSize,
       positionsReady: true,
     };
 
-    // Fit once positions are settled. The simulation emits "end" when alpha
-    // drops below alphaMin; a safety timer caps the wait in case the sim
-    // oscillates between alphaMin and a tiny bump (it shouldn't with our
-    // forces, but be defensive).
+    // Fit once positions are settled, but ONLY on the first build (fresh
+    // canvas or a content change that isn't a mere scope toggle). An
+    // incremental expand/collapse keeps the user's pan/zoom so clicking a
+    // scope doesn't yank the viewport back to "fit all".
     let didFit = false;
     const onEnd = () => {
       if (didFit) return;
       didFit = true;
-      fitAll(260);
+      if (isIncremental) return;
+      simRef.current.fitAll?.(260);
     };
     simulation.on("end", onEnd);
     const fitTimer = setTimeout(onEnd, 600);
 
-    // The container is often still animating (modal open) or zero-sized when
-    // the SVG first measures it, which leaves the graph crammed in a corner.
-    // Re-fit whenever the box actually changes size.
-    let observer: ResizeObserver | undefined;
-    if (typeof ResizeObserver !== "undefined") {
-      observer = new ResizeObserver(() => {
-        const ref = simRef.current;
-        if (!ref.width || !ref.height) return;
-        ref.width = host.clientWidth || ref.width;
-        ref.height = host.clientHeight || ref.height;
-        fitAll(160);
-      });
-      observer.observe(host);
-    }
-
     return () => {
       clearTimeout(fitTimer);
-      observer?.disconnect();
       simulation.stop();
+      // Do NOT clear simNodes/positionsReady here — the next data effect run
+      // reads them to preserve positions across an incremental rebuild.
+      // Clearing them (the old cleanup) is what made positionsReady always
+      // read false and forced a full re-layout on every click.
       simRef.current = {
+        ...simRef.current,
         simulation: null,
-        simNodes: [],
-        simLinks: [],
         nodeSel: null,
         edgeSel: null,
-        zoomBehavior: null,
-        svgSel: null,
-        width: 0,
-        height: 0,
-        nodeSize: 0,
-        positionsReady: false,
+        positionsReady: true,
       };
+      dataRef.current.simulation = null;
     };
-  }, [interactive, signature]);
+  }, [interactive, signature, expandedScopes]);
 
   // Filtering: dim rather than remove, so the layout stays stable and the user
   // keeps their spatial bearings while toggling categories.

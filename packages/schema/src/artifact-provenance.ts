@@ -25,6 +25,8 @@ export interface ScientificArtifact {
   createdInSessionId: string;
   createdInSessionTitle: string;
   currentVersion: number;
+  /** User-visible logical deletion. Historical versions remain addressable. */
+  deletedAt?: string;
   description?: string;
   id: string;
   kind: ScientificArtifactKind;

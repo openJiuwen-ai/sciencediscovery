@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import importlib
 import os
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -301,7 +302,7 @@ def test_observe_session_first_message_rejects_missing_token(client: TestClient)
     assert response.status_code == 401
 
 
-# --- observeSessionPlanProposed (SubTask DAG mirror) ------------------------
+# --- observeSessionPlanProposed (ToolCall DAG mirror) ------------------------
 
 def test_observe_session_plan_degrades_without_neo4j(client: TestClient) -> None:
     response = client.post(
@@ -339,6 +340,155 @@ def test_observe_session_plan_rejects_missing_token(client: TestClient) -> None:
         # no auth header
     )
     assert response.status_code == 401
+
+
+# --- query/match -----------------------------------------------------------
+
+def test_match_rejects_bad_mode(client: TestClient) -> None:
+    # mode is whitelisted server-side; an unknown value is a 400 before any
+    # Cypher runs (mirrors by-node-type/by-edge-type's label validation).
+    response = client.post(
+        "/query/match",
+        json={"query": "TP53", "mode": "not_a_mode"},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "bad_request"
+
+
+def test_match_defaults_to_any_term_and_degrades(client: TestClient) -> None:
+    # No mode → defaults to any_term (OR); without a password the driver is
+    # degraded so the call returns the unreachable reason rather than erroring.
+    response = client.post(
+        "/query/match",
+        json={"query": "A Survey on Multi-Agent Systems"},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hits"] == []
+    assert body["reason"] == "memory_graph_unreachable"
+
+
+def test_match_all_terms_degrades_without_neo4j(client: TestClient) -> None:
+    # all_terms (term-AND) takes the same degraded path when Neo4j is down —
+    # the mode only changes the WHERE clause, not the reachability contract.
+    response = client.post(
+        "/query/match",
+        json={"query": "TP53 NSCLC", "mode": "all_terms"},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    assert response.json()["reason"] == "memory_graph_unreachable"
+
+
+# --- query/match: parameterized Cypher (no Neo4j needed) -------------------
+#
+# The WHERE comparison is now parameterized via $min_matched rather than
+# f-string-interpolated, so the Cypher string is identical for both modes.
+# These tests pin that contract: a fake driver captures the (cypher, params)
+# handed to session.run and asserts on them, with no live Neo4j. A real
+# end-to-end recall assertion lives in the @needs_neo4j test below.
+
+
+class _FakeResult:
+    """Iterable-once result shaped like _HttpResult: zero rows → empty hits."""
+    def __iter__(self):
+        return iter([])
+    def single(self):
+        return None
+
+
+class _FakeSession:
+    """Captures the one session.run(cypher, **params) call query_match makes."""
+    def __init__(self, captured: dict):
+        self._captured = captured
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+    def run(self, cypher, **params):
+        self._captured["cypher"] = cypher
+        self._captured["params"] = params
+        return _FakeResult()
+
+
+class _FakeDriver:
+    """is_reachable() → True so query_match reaches session.run instead of
+    degrading; session() yields the capturing _FakeSession."""
+    def __init__(self, captured: dict):
+        self._captured = captured
+    def is_reachable(self):
+        return True
+    def session(self):
+        return _FakeSession(self._captured)
+
+
+@pytest.fixture()
+def captured_match(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Reload query against a fake reachable driver that records the Cypher +
+    params query_match builds. Returns the capture dict for assertions."""
+    from sciencediscovery_memory_graph import query
+    captured: dict = {}
+    monkeypatch.setattr(query, "handle", lambda: _FakeDriver(captured))
+    return captured
+
+
+@pytest.mark.parametrize("mode", ["any_term", "all_terms"])
+def test_match_cypher_is_static_across_modes(captured_match: dict, mode: str) -> None:
+    # The whole point of parameterizing: the Cypher string must NOT embed the
+    # mode — both modes produce byte-identical Cypher, differing only in the
+    # $min_matched parameter. This is the regression guard against reintroducing
+    # f-string interpolation (which would re-open an injection surface).
+    from sciencediscovery_memory_graph import query
+    query.query_match("TP53 NSCLC EGFR", mode=mode)
+    cypher = captured_match["cypher"]
+    assert "{op}" not in cypher and "{threshold}" not in cypher
+    # No mode-derived operator/keyword leaked into the string.
+    assert "= size($tokens)" not in cypher and "> 0" not in cypher
+    assert "matched >= $min_matched" in cypher
+
+
+def test_match_min_matched_param_differs_by_mode(captured_match: dict) -> None:
+    # all_terms (term-AND) demands every token hit: min_matched = token count.
+    # any_term (OR) demands at least one: min_matched = 1. Same Cypher, the
+    # only divergence is this one integer parameter.
+    from sciencediscovery_memory_graph import query
+    query.query_match("TP53 NSCLC EGFR", mode="all_terms")
+    and_params = dict(captured_match["params"])
+    query.query_match("TP53 NSCLC EGFR", mode="any_term")
+    or_params = dict(captured_match["params"])
+    # 3 whitespace-separated tokens → AND needs all 3, OR needs 1.
+    assert and_params["min_matched"] == 3
+    assert or_params["min_matched"] == 1
+    # The query payload itself (tokens/primary/sid/limit) is mode-invariant.
+    assert and_params["tokens"] == or_params["tokens"] == ["tp53", "nsclc", "egfr"]
+    assert and_params["primary"] == or_params["primary"] == "tp53"
+    assert and_params["sid"] is None and or_params["sid"] is None
+    assert and_params["limit"] == or_params["limit"]
+
+
+def test_match_min_matched_equals_token_count_for_all_terms(
+    captured_match: dict,
+) -> None:
+    # min_matched tracks the token count, not a fixed constant — a 6-word
+    # paper title under all_terms needs min_matched == 6. Guards against an
+    # implementation that hardcodes the count or uses size($tokens) in-Cypher.
+    from sciencediscovery_memory_graph import query
+    query.query_match("A Survey on Multi-Agent Systems", mode="all_terms")
+    params = captured_match["params"]
+    # re.split(r"[\W_]+", ...) splits on the hyphen too → 6 tokens.
+    assert params["min_matched"] == 6
+    assert params["tokens"] == ["a", "survey", "on", "multi", "agent", "systems"]
+
+
+def test_match_empty_query_skips_session_run(captured_match: dict) -> None:
+    # A whitespace-only query yields no tokens → returns before touching the
+    # driver, so session.run is never called (the capture stays empty).
+    from sciencediscovery_memory_graph import query
+    result = query.query_match("   ", mode="all_terms")
+    assert result == {"hits": [], "total": 0, "truncated": False}
+    assert "cypher" not in captured_match
 
 
 # --- declare_evidence / declare_claim -------------------------------------
@@ -605,7 +755,7 @@ def test_goal_id_deterministic_dedup(live_client: TestClient) -> None:
 @needs_neo4j
 def test_plan_corrects_goal_and_writes_no_skeleton_subtasks(live_client: TestClient) -> None:
     """A recorded plan corrects the ResearchGoal from plan.scope and does NOT
-    write a step-skeleton SubTask chain (the framework doesn't advance step
+    write a step-skeleton ToolCall chain (the framework doesn't advance step
     status, so a skeleton would stay PENDING and clutter the graph)."""
     headers = {"authorization": "Bearer test-token"}
     # First seed the goal from a first-message fallback (wrong domain).
@@ -632,8 +782,8 @@ def test_plan_corrects_goal_and_writes_no_skeleton_subtasks(live_client: TestCli
     live_client.post("/observe/session-plan", json=payload, headers=headers)
     sub = live_client.get("/subgraph", params={"session_id": "sess-mirror"},
                           headers=headers).json()
-    # No plan-derived SubTask skeletons written.
-    subtasks = [n for n in sub["nodes"] if n["label"] == "SubTask"]
+    # No plan-derived ToolCall skeletons written.
+    subtasks = [n for n in sub["nodes"] if n["label"] == "ToolCall"]
     assert subtasks == []
     # Goal corrected: core_objective overwritten by plan.scope, domain by plan,
     # method tagged corrected_by_plan (added once, not piled up by re-mirror).
@@ -646,9 +796,9 @@ def test_plan_corrects_goal_and_writes_no_skeleton_subtasks(live_client: TestCli
 
 @needs_neo4j
 def test_temporal_chain_only_links_orphans(live_client: TestClient) -> None:
-    """A plan-linked SubTask is not re-linked by the temporal chain."""
+    """A plan-linked ToolCall is not re-linked by the temporal chain."""
     headers = {"authorization": "Bearer test-token"}
-    # Two executions → two auto-inferred SubTasks; the upsert also runs the
+    # Two executions → two auto-inferred ToolCalls; the upsert also runs the
     # temporal-chain linker, which should connect them by finish time.
     for i in (1, 2):
         live_client.post(
@@ -671,7 +821,7 @@ def test_temporal_chain_only_links_orphans(live_client: TestClient) -> None:
     sub = live_client.get("/subgraph", params={"session_id": "sess-orphan"},
                           headers=headers).json()
     next_edges = [e for e in sub["edges"] if e["type"] == "next"]
-    # Exactly one next edge between the two execution SubTasks (idempotent —
+    # Exactly one next edge between the two execution ToolCalls (idempotent —
     # no duplicate edges even though the linker ran on both upserts).
     assert len(next_edges) == 1
     assert (next_edges[0].get("extra") or {}).get("method") == "temporal_chain"
@@ -1143,6 +1293,62 @@ def test_artifact_provenance_empty_when_no_input_edge(live_client: TestClient) -
                             headers=headers).json()
     assert prov["dependencies"] == []
     assert "reason" not in prov
+
+
+@needs_neo4j
+def test_query_match_all_terms_vs_any_term_recall(live_client: TestClient) -> None:
+    """The frontend's term-AND (all_terms) must NOT return the whole corpus
+    on a paper-title query, while the agent's OR (any_term) stays loose.
+
+    Seeds two Papers in one session:
+
+      paper-A — title "A Survey on Multi-Agent Systems" (the query, every
+        token of which paper-A contains).
+      paper-B — title "Another Note on Surveys" + abstract containing the
+        high-frequency word "a" but NOT "multi"/"agent"/"systems".
+
+    Searching paper-A's full title:
+      - all_terms (term-AND): only paper-A matches — the high-frequency
+        tokens ``a``/``on`` no longer drag paper-B in because ``multi``/
+        ``agent``/``systems`` miss it. This is the bug being fixed.
+      - any_term (OR): both papers match — ``a``/``on`` hit paper-B's
+        abstract, the loose recall the agent path relies on.
+    """
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-match-recall"
+    _wipe_session(sid)
+    live_client.post("/observe/mcp-search", json={
+        "invocation_id": "search-recall", "session_id": sid, "turn_id": "turn-recall",
+        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-21T00:00:00Z",
+        "records": [
+            {"url": "https://x.test/paper-recall-a", "title": "A Survey on Multi-Agent Systems"},
+            {
+                "url": "https://x.test/paper-recall-b",
+                "title": "Another Note on Surveys",
+                "abstract": "a brief on prior work",
+            },
+        ],
+    }, headers=headers)
+    query_title = "A Survey on Multi-Agent Systems"
+
+    and_resp = live_client.post("/query/match", json={
+        "query": query_title, "session_id": sid, "mode": "all_terms",
+    }, headers=headers).json()
+    and_links = {h["extra"].get("link") for h in and_resp["hits"]}
+    # term-AND: only paper-A survives. High-frequency ``a``/``on`` no longer
+    # pull in paper-B, which lacks ``multi``/``agent``/``systems``.
+    assert and_links == {"https://x.test/paper-recall-a"}, and_links
+
+    or_resp = live_client.post("/query/match", json={
+        "query": query_title, "session_id": sid, "mode": "any_term",
+    }, headers=headers).json()
+    or_links = {h["extra"].get("link") for h in or_resp["hits"]}
+    # OR: both papers match (``a``/``on``/``survey``/``systems`` hit paper-B's
+    # title or abstract) — the loose recall the agent query_graph path needs.
+    assert "https://x.test/paper-recall-a" in or_links
+    assert "https://x.test/paper-recall-b" in or_links
+
+
 # --- trace_provenance ------------------------------------------------------
 #
 # The degraded-path and validation tests run without Neo4j (the `client`
@@ -1152,6 +1358,336 @@ def test_artifact_provenance_empty_when_no_input_edge(live_client: TestClient) -
 # chain paths need a live graph and live under `needs_neo4j` below.
 
 _HEADERS = {"authorization": "Bearer test-token"}
+
+
+# --- subagent write chain (scope + child + contains + produces→child) ------
+#
+# These exercise the PR1 write chain: a subagent becomes a scope Task
+# (task_type=subagent) mirrored in two phases, and each internal toolcall
+# becomes a child ToolCall (real task_type) hung off the scope via contains,
+# with products hung off the CHILD (never the scope). contains is NOT in
+# get_subgraph's edge whitelist (it is a PR3/PR2 concern), so these assert
+# directly against Neo4j via the driver rather than via /subgraph.
+
+def _cypher(query: str, **params: Any) -> list[dict[str, Any]]:
+    """Run a read Cypher against the live Neo4j and return records as dicts.
+
+    Live-only helper for the subagent tests (contains/produces verification is
+    done against the raw graph, not via the whitelisted /subgraph read).
+    Iterating the driver's _HttpRecord yields its keys (not key/value pairs),
+    so dict(record) fails; dict(record.items()) is the correct conversion.
+    """
+    from sciencediscovery_memory_graph.neo4j_driver import handle
+    with handle().session() as s:
+        result = s.run(query, **params)
+        return [dict(r.items()) for r in result]
+
+
+@needs_neo4j
+def test_subagent_scope_two_phase_and_child_execution_product(live_client: TestClient) -> None:
+    """PR1 core: a subagent's execution becomes a child ToolCall whose produces
+    edge points at the CHILD, not the scope; contains links scope→child.
+
+    Topology:
+        scope (subtask:subagent:<id>, task_type=subagent)
+          -[:contains]-> child (subtask:subagent:<id>:exec:<execId>,
+                                task_type=code_execution)
+          child -[:produces]-> Code -[:produces]-> Artifact
+    The Artifact hangs off the Code (same as the main path), so the view-chain
+    derivation (Artifact ←produces← Code ←produces← child) keeps the Code layer
+    and trace-back lands on the child. The scope has NO produces edge.
+    """
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sub-exec"
+    _wipe_session(sid)
+    sub_id = "sub-exec-1"
+    exec_id = "exec-sub-1"
+    # Start phase: scope running.
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-sub",
+        "objective": "produce a CSV", "task_type": "subagent",
+        "subagent_type": "analyst", "created_at": "2026-08-24T00:00:00Z",
+        "status": "running",
+    }, headers=headers)
+    # One execution inside the subagent → child + contains + produces→child.
+    live_client.post("/observe/execution", json={
+        "execution_id": exec_id, "session_id": sid, "turn_id": "turn-sub",
+        "tool": "run_python", "language": "python", "code_hash": "hash-sub",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-24T00:00:01Z", "finished_at": "2026-08-24T00:00:02Z",
+        "parent_subagent_id": sub_id,
+        "produced_artifacts": [{
+            "artifact_id": "art-sub", "path": "out.csv", "logical_name": "out.csv",
+            "version": 1, "media_type": "text/csv",
+        }],
+    }, headers=headers)
+    # Terminal phase: scope completed.
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-sub",
+        "objective": "produce a CSV", "task_type": "subagent",
+        "subagent_type": "analyst", "created_at": "2026-08-24T00:00:00Z",
+        "status": "completed", "finished_at": "2026-08-24T00:00:03Z",
+        "summary": "done",
+    }, headers=headers)
+
+    scope_tid = f"subtask:subagent:{sub_id}"
+    child_tid = f"subtask:subagent:{sub_id}:exec:{exec_id}"
+    # scope node: task_type=subagent, no parent_subtask_id, has a seq.
+    scope = _cypher("MATCH (s:Task {task_id: $t}) RETURN s", t=scope_tid)
+    assert len(scope) == 1
+    sprops = scope[0]["s"]
+    assert sprops["task_type"] == "subagent"
+    assert sprops["subagent_type"] == "analyst"
+    assert sprops["status"] == "completed"
+    assert sprops["objective"] == "produce a CSV"
+    assert sprops["seq"] is not None
+    assert sprops.get("parent_subtask_id") is None
+    # child node: real task_type=code_execution, parent_subtask_id→scope, seq.
+    child = _cypher("MATCH (c:ToolCall {task_id: $t}) RETURN c", t=child_tid)
+    assert len(child) == 1
+    cprops = child[0]["c"]
+    assert cprops["task_type"] == "code_execution"
+    assert cprops["parent_subtask_id"] == scope_tid
+    assert cprops["seq"] is not None
+    # contains: scope → child (exactly one).
+    contains = _cypher(
+        "MATCH (s:Task {task_id: $s})-[r:contains]->(c:ToolCall {task_id: $c}) "
+        "RETURN count(r) AS n", s=scope_tid, c=child_tid)
+    assert contains[0]["n"] == 1, "contains edge links scope → child"
+    # produces: child → Code, and Code → Artifact (the Artifact hangs off the
+    # Code, same as the main path). Trace-back from the Artifact lands on the
+    # child via Artifact ←produces← Code ←produces← child; the scope carries
+    # no produces edges (products never hang off the scope).
+    child_produces = _cypher(
+        "MATCH (c:ToolCall {task_id: $c})-[:produces]->(x) RETURN labels(x)[0] AS lbl, count(*) AS n",
+        c=child_tid)
+    labels = {row["lbl"]: row["n"] for row in child_produces}
+    assert labels.get("Code") == 1, "child produces the Code"
+    assert labels.get("Artifact") is None, "child does NOT produce the Artifact directly (Code does)"
+    # Code → Artifact (the Code layer stays in the chain so view-chain derivation works).
+    code_produces = _cypher(
+        "MATCH (c:Code {code_id: $cid})-[:produces]->(a:Artifact) RETURN count(a) AS n",
+        cid=exec_id)
+    assert code_produces[0]["n"] == 1, "Code produces the Artifact (child → Code → Artifact)"
+    # scope must NOT produce anything (the scope never carries products).
+    scope_produces = _cypher(
+        "MATCH (s:Task {task_id: $s})-[:produces]->(x) RETURN count(*) AS n", s=scope_tid)
+    assert scope_produces[0]["n"] == 0, "scope carries no products (produces→child only)"
+    # Re-mirror idempotency: re-sending start does not duplicate scope/child.
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-sub",
+        "objective": "produce a CSV", "task_type": "subagent",
+        "subagent_type": "analyst", "created_at": "2026-08-24T00:00:00Z",
+        "status": "running",
+    }, headers=headers)
+    dup_scopes = _cypher("MATCH (s:Task {task_id: $t}) RETURN count(s) AS n", t=scope_tid)
+    assert dup_scopes[0]["n"] == 1, "scope MERGE idempotent on re-mirror"
+    # Terminal ON MATCH only fills gaps: re-running start then terminal keeps
+    # objective (start-phase) and status=completed (terminal-phase).
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-sub",
+        "objective": "produce a CSV", "task_type": "subagent",
+        "subagent_type": "analyst", "created_at": "2026-08-24T00:00:00Z",
+        "status": "completed", "finished_at": "2026-08-24T00:00:09Z",
+        "summary": "final",
+    }, headers=headers)
+    sprops2 = _cypher("MATCH (s:Task {task_id: $t}) RETURN s", t=scope_tid)[0]["s"]
+    assert sprops2["objective"] == "produce a CSV", "terminal ON MATCH does not overwrite objective"
+    assert sprops2["status"] == "completed"
+    assert sprops2["summary"] == "final"
+
+
+@needs_neo4j
+def test_subagent_mcp_search_child_produces_paper(live_client: TestClient) -> None:
+    """PR1 MCP path: a subagent's mcp search becomes a child (task_type=
+    literature_search) hung off the scope; produces runs child→Paper."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sub-mcp"
+    _wipe_session(sid)
+    sub_id = "sub-mcp-1"
+    inv_id = "inv-sub-1"
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-mcp",
+        "objective": "search literature", "task_type": "subagent",
+        "subagent_type": "researcher", "created_at": "2026-08-24T00:00:00Z",
+        "status": "running",
+    }, headers=headers)
+    live_client.post("/observe/mcp-search", json={
+        "invocation_id": inv_id, "session_id": sid, "turn_id": "turn-mcp",
+        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-24T00:00:01Z",
+        "parent_subagent_id": sub_id,
+        "records": [{"url": "https://x.test/paper-sub", "title": "sub paper"}],
+    }, headers=headers)
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-mcp",
+        "objective": "search literature", "task_type": "subagent",
+        "subagent_type": "researcher", "created_at": "2026-08-24T00:00:00Z",
+        "status": "completed", "finished_at": "2026-08-24T00:00:02Z", "summary": "ok",
+    }, headers=headers)
+
+    scope_tid = f"subtask:subagent:{sub_id}"
+    child_tid = f"subtask:subagent:{sub_id}:exec:{inv_id}"
+    child = _cypher("MATCH (c:ToolCall {task_id: $t}) RETURN c", t=child_tid)
+    assert child[0]["c"]["task_type"] == "literature_search"
+    child_produces = _cypher(
+        "MATCH (c:ToolCall {task_id: $t})-[:produces]->(p:Paper) RETURN count(p) AS n", t=child_tid)
+    assert child_produces[0]["n"] == 1, "child produces the Paper"
+    scope_produces = _cypher(
+        "MATCH (s:Task {task_id: $t})-[:produces]->(p:Paper) RETURN count(p) AS n", t=scope_tid)
+    assert scope_produces[0]["n"] == 0, "scope carries no papers"
+    contains = _cypher(
+        "MATCH (s:Task {task_id: $s})-[:contains]->(c:ToolCall {task_id: $c}) "
+        "RETURN count(*) AS n", s=scope_tid, c=child_tid)
+    assert contains[0]["n"] == 1
+
+
+@needs_neo4j
+def test_subagent_timed_out_normalised_to_failed_with_reason(live_client: TestClient) -> None:
+    """timed_out collapses to status=failed (one red label) but is tagged
+    failure_reason=timed_out so it is not confused with a plain error."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sub-timeout"
+    _wipe_session(sid)
+    sub_id = "sub-timeout-1"
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-to",
+        "objective": "slow task", "task_type": "subagent",
+        "subagent_type": "analyst", "created_at": "2026-08-24T00:00:00Z",
+        "status": "running",
+    }, headers=headers)
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-to",
+        "objective": "slow task", "task_type": "subagent",
+        "subagent_type": "analyst", "created_at": "2026-08-24T00:00:00Z",
+        "status": "timed_out", "finished_at": "2026-08-24T00:00:10Z",
+        "summary": "timed out before completion",
+    }, headers=headers)
+    sprops = _cypher(
+        "MATCH (s:Task {task_id: $t}) RETURN s.status AS st, s.failure_reason AS fr",
+        t=f"subtask:subagent:{sub_id}")[0]
+    assert sprops["st"] == "failed", "timed_out normalised to failed"
+    assert sprops["fr"] == "timed_out", "failure_reason keeps the cause distinct"
+
+
+@needs_neo4j
+def test_subagent_summary_nonempty_on_empty_success(live_client: TestClient) -> None:
+    """A successful subagent with no text output still gets a non-empty summary
+    (the deterministic fallback), so the scope node never carries an empty
+    summary."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sub-empty"
+    _wipe_session(sid)
+    sub_id = "sub-empty-1"
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-empty",
+        "objective": "no output", "task_type": "subagent",
+        "subagent_type": "analyst", "created_at": "2026-08-24T00:00:00Z",
+        "status": "running",
+    }, headers=headers)
+    # Terminal: completed with NO summary → Python must backfill the fallback.
+    live_client.post("/observe/subagent", json={
+        "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-empty",
+        "objective": "no output", "task_type": "subagent",
+        "subagent_type": "analyst", "created_at": "2026-08-24T00:00:00Z",
+        "status": "completed", "finished_at": "2026-08-24T00:00:01Z",
+        # summary omitted on purpose
+    }, headers=headers)
+    row = _cypher("MATCH (s:Task {task_id: $t}) RETURN s.summary AS sm",
+                  t=f"subtask:subagent:{sub_id}")[0]
+    assert row["sm"], "summary is non-empty on empty success"
+    assert isinstance(row["sm"], str) and row["sm"].strip(), "summary is a non-blank string"
+
+
+@needs_neo4j
+def test_main_agent_execution_unchanged_no_parent(live_client: TestClient) -> None:
+    """Main-agent executions (no parent_subagent_id) keep building
+    subtask:<execId> with NO contains edge and NO parent_subtask_id — the PR1
+    write chain must not perturb the main path."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-main-unchanged"
+    _wipe_session(sid)
+    exec_id = "exec-main-only"
+    live_client.post("/observe/execution", json={
+        "execution_id": exec_id, "session_id": sid, "turn_id": "turn-main",
+        "tool": "run_python", "language": "python", "code_hash": "h",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-24T00:00:00Z", "finished_at": "2026-08-24T00:00:01Z",
+        # parent_subagent_id NOT sent (main-agent context)
+        "produced_artifacts": [{
+            "artifact_id": "art-main", "path": "m.csv", "logical_name": "m.csv",
+            "version": 1, "media_type": "text/csv",
+        }],
+    }, headers=headers)
+    # task_id is the unchanged main-agent form (no subagent: prefix).
+    st = _cypher("MATCH (s:ToolCall {task_id: $t}) RETURN s", t=f"subtask:{exec_id}")
+    assert len(st) == 1
+    props = st[0]["s"]
+    assert props["task_type"] == "code_execution"
+    assert props.get("parent_subtask_id") is None, "main-agent ToolCall has no parent"
+    # No contains edge incident on this ToolCall (it is not a child).
+    contains = _cypher(
+        "MATCH (s:ToolCall {task_id: $t})-[r:contains]->() RETURN count(r) AS n",
+        t=f"subtask:{exec_id}")
+    assert contains[0]["n"] == 0, "main-agent ToolCall is not a child (no contains out)"
+    # produces still works on the main path: ToolCall → Code, and the Artifact
+    # hangs off the Code (Code → Artifact), exactly as before PR1.
+    produces = _cypher(
+        "MATCH (s:ToolCall {task_id: $t})-[:produces]->(x) "
+        "RETURN labels(x)[0] AS lbl, count(*) AS n", t=f"subtask:{exec_id}")
+    labels = {row["lbl"]: row["n"] for row in produces}
+    assert labels.get("Code") == 1, "main-agent ToolCall produces the Code"
+    art_via_code = _cypher(
+        "MATCH (s:ToolCall {task_id: $t})-[:produces]->(c:Code)-[:produces]->(a:Artifact) "
+        "RETURN count(DISTINCT a) AS n", t=f"subtask:{exec_id}")
+    assert art_via_code[0]["n"] == 1, "Artifact hangs off the Code (unchanged main path)"
+
+
+@needs_neo4j
+def test_running_scope_does_not_pollute_chain_head(live_client: TestClient) -> None:
+    """A subagent scope mirrored only at its start (status=running, no
+    finished_at) does NOT sort to the front of the session temporal chain.
+    The chain orders by seq (assigned at creation), so a still-running scope
+    sits at its creation order, not ahead of earlier-finished tasks."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-seq"
+    _wipe_session(sid)
+    # First: a finished main-agent execution (finished_at set).
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-finished-first", "session_id": sid, "turn_id": "t1",
+        "tool": "run_python", "language": "python", "code_hash": "hf",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-24T00:00:00Z", "finished_at": "2026-08-24T00:00:01Z",
+        "produced_artifacts": [],
+    }, headers=headers)
+    # Second: a running subagent scope (no finished_at). Pre-seq ordering would
+    # have sorted this null-finished_at node to the FRONT, polluting the head.
+    live_client.post("/observe/subagent", json={
+        "subagent_id": "sub-running", "session_id": sid, "turn_id": "t2",
+        "objective": "still running", "task_type": "subagent",
+        "subagent_type": "analyst", "created_at": "2026-08-24T00:00:02Z",
+        "status": "running",
+    }, headers=headers)
+    # The chain head (the ResearchGoal's next target) must be the FIRST-created
+    # node (the finished execution), not the running scope.
+    head = _cypher(
+        "MATCH (g:ResearchGoal {goal_id: $g})-[r:next]->(h:ToolCall) "
+        "WHERE r.method = 'temporal_chain' "
+        "RETURN h.task_id AS head", g=f"goal:session:{sid}")
+    # No first-message was sent, so the goal may not exist yet — fall back to
+    # checking the chain order directly via seq.
+    # The running scope must have a HIGHER seq than the finished execution
+    # (created later), proving it sorts after, not before. The seq query
+    # matches session-main nodes of either label (ToolCall execution nodes
+    # AND Task subagent scopes) — both sit on the temporal chain.
+    seqs = _cypher(
+        "MATCH (s) WHERE s.session_id = $sid AND s.task_id STARTS WITH 'subtask:' "
+        "AND NOT s.task_id CONTAINS ':exec:' "
+        "RETURN s.task_id AS tid, s.seq AS seq ORDER BY s.seq",
+        sid=sid)
+    assert len(seqs) == 2, "both session-main nodes present (finished exec + running scope)"
+    assert seqs[0]["tid"] == "subtask:exec-finished-first", "finished exec sorts first by seq"
+    assert seqs[1]["tid"] == "subtask:subagent:sub-running", "running scope sorts after (no head pollution)"
+    assert seqs[0]["seq"] < seqs[1]["seq"]
 
 
 def test_trace_degrades_without_neo4j(client: TestClient) -> None:
@@ -1205,7 +1741,7 @@ def test_trace_rejects_bad_max_hops(client: TestClient) -> None:
 @needs_neo4j
 def test_observe_execution_mirrors_provenance_fields(live_client: TestClient) -> None:
     """The five provenance fields' addressing info lands on the right nodes:
-    Code mirrors stdout_hash/stderr_hash/env_hash/turn_id; SubTask mirrors
+    Code mirrors stdout_hash/stderr_hash/env_hash/turn_id; ToolCall mirrors
     turn_id (messages routing key — manifest_ids would race manifest
     persistence at mirror time); each Artifact version node mirrors turn_id +
     content_hash. No content blobs are stored — only hashes / routing keys."""
@@ -1246,7 +1782,7 @@ def test_observe_execution_mirrors_provenance_fields(live_client: TestClient) ->
     assert code["extra"]["stderr_hash"] == "stderr-hash-prov"
     assert code["extra"]["env_hash"] == "env-hash-prov"
     assert code["extra"]["turn_id"] == "turn-prov"
-    st = next(n for n in sub["nodes"] if n["label"] == "SubTask")
+    st = next(n for n in sub["nodes"] if n["label"] == "ToolCall")
     assert st["extra"]["turn_id"] == "turn-prov"
     art = next(n for n in sub["nodes"] if n["label"] == "Artifact")
     assert art["extra"]["turn_id"] == "turn-prov"
@@ -1311,7 +1847,7 @@ def test_artifact_provenance_endpoint_returns_addressing(live_client: TestClient
     assert body["stdout_hash"] == "stdout-hash-agg"
     assert body["stderr_hash"] == "stderr-hash-agg"
     assert body["env_hash"] == "env-hash-agg"
-    # messages_turn_id is the producing SubTask's turn_id (messages routing key).
+    # messages_turn_id is the producing ToolCall's turn_id (messages routing key).
     assert body["messages_turn_id"] == "turn-agg"
     assert body["dependencies"] == []  # input edge not landed (derived-from)
     # A missing version returns 200 with empty dependencies + a node_not_found
@@ -1466,7 +2002,7 @@ def test_get_chain_artifact_kind_centered_on_selected_node(live_client: TestClie
     # chain_kind=full (default), same selected node: full is the legacy
     # directional hop-walk from the source. From paper_a it reaches paper_a's
     # own Evidence (extracts in — walking against Paper → Evidence), the
-    # producing SubTask + next-chain SubTasks/Goal (produces in + next in/out).
+    # producing ToolCall + next-chain ToolCalls/Goal (produces in + next in/out).
     # It does NOT cross to paper_b — paper_b sits on a sibling citation fork
     # reached only through the report's stated_in→Claim→supports→Evidence path,
     # which the full hops don't walk. So paper_b's absence here is structural,
@@ -1490,7 +2026,7 @@ def test_get_chain_artifact_kind_no_report_anchor_walks_centered_chain(live_clie
     """chain_kind='artifact' is centered on the selected node itself — it does
     NOT depend on a session report anchor (no Claim-[:stated_in]->Artifact needed).
     An intermediate Paper produced mid-session (before any report exists) still
-    resolves its own upstream tail (Paper <-[:produces]- SubTask), so "view
+    resolves its own upstream tail (Paper <-[:produces]- ToolCall), so "view
     artifact chain" works at any time, not only after a report is declared."""
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-noanchor"
@@ -1508,11 +2044,11 @@ def test_get_chain_artifact_kind_no_report_anchor_walks_centered_chain(live_clie
         "node_id": paper["id"], "session_id": sid, "chain_kind": "artifact",
     }, headers=headers).json()
     # No anchor → the chain is NOT empty: the Paper's own upstream tail (the
-    # SubTask that produced it via mcp-search) is still walked from the center.
+    # ToolCall that produced it via mcp-search) is still walked from the center.
     ids = {n["id"] for n in chain["nodes"]}
     assert paper["id"] in ids, "the selected Paper (the chain's center) must be present"
     labels = {n["label"] for n in chain["nodes"]}
-    assert "SubTask" in labels, "the Paper's producing SubTask must be in the upstream tail"
+    assert "ToolCall" in labels, "the Paper's producing ToolCall must be in the upstream tail"
 
 
 @needs_neo4j
@@ -1591,7 +2127,7 @@ def test_get_chain_artifact_kind_severed_paper_drops_orphan_anchor(live_client: 
     """An UNcited Paper (no Evidence/Claim path back to the report) is a severed
     source: it is NOT reachable from the report anchor via the artifact hops.
     The report anchor must NOT appear as an isolated orphan node in that chain —
-    only the Paper itself plus its upstream task tail (Paper <-produces- SubTask)
+    only the Paper itself plus its upstream task tail (Paper <-produces- ToolCall)
     survives. Regression guard for the case where an uncited Paper's "view artifact
     chain" surfaced an isolated report Artifact that had no edges to anything else.
     """
@@ -1635,7 +2171,7 @@ def test_get_chain_artifact_kind_severed_paper_drops_orphan_anchor(live_client: 
         "artifact_id": ORP_REPORT, "artifact_version": 1,
         "claim_ids": [claim["claim_id"]], "session_id": sid,
     }, headers=headers)
-    # The ORPHAN Paper — produced by a SubTask via mcp-search, but no Evidence
+    # The ORPHAN Paper — produced by a ToolCall via mcp-search, but no Evidence
     # extracts from it (Paper→Evidence) and no Claim cites it, so it has no path back to the
     # report anchor (it is severed).
     live_client.post("/observe/mcp-search", json={
@@ -1657,11 +2193,11 @@ def test_get_chain_artifact_kind_severed_paper_drops_orphan_anchor(live_client: 
     assert report["id"] not in ids, \
         "report anchor must NOT appear as an orphan in an uncited Paper's chain"
     # The Paper's upstream task tail must still be there — it reaches the
-    # SubTask that produced it. (Reaching the ResearchGoal depends on the
+    # ToolCall that produced it. (Reaching the ResearchGoal depends on the
     # `next` chain, which this minimal seed does not build; the real session
     # does, but the orphan-anchor guard does not hinge on it.)
     labels = {n["label"] for n in chain["nodes"]}
-    assert "SubTask" in labels, "the Paper's producing SubTask must be in the tail"
+    assert "ToolCall" in labels, "the Paper's producing ToolCall must be in the tail"
 
 
 @needs_neo4j
@@ -1864,28 +2400,28 @@ def test_get_chain_artifact_kind_no_input_code_still_reaches_goal(live_client: T
 
     This is the supports-connected Artifact path's symmetry guarantee with the
     Evidence path: the Evidence branch reaches the goal via the entry hops'
-    ``produces in SubTask`` + ``next`` chain, but the Artifact derivation tail
+    ``produces in ToolCall`` + ``next`` chain, but the Artifact derivation tail
     (_artifact_derivation_tail) only alternates produces/input between
     Artifact↔Code — and a leaf Code (no input edges) bottoms the alternation
     out at the Code itself. Before the tail anchored each producing Code to its
-    SubTask→next→goal chain, clicking a Claim's "view chain" left the Artifact
+    ToolCall→next→goal chain, clicking a Claim's "view chain" left the Artifact
     branch stuck at the Code node while the Evidence branch reached the goal —
     an asymmetric chain the reviewer reads as a broken citation.
 
     Topology (the minimal reproduction):
-        ResearchGoal -[:next]-> SubTask_fig -[:produces]-> Code_fig
+        ResearchGoal -[:next]-> ToolCall_fig -[:produces]-> Code_fig
                                                 Code_fig -[:produces]-> fig (no inputs)
         fig <-[:supports]- Claim -[:stated_in]-> report
-    The figure's producing Code read no inputs, so without the SubTask→next→goal
+    The figure's producing Code read no inputs, so without the ToolCall→next→goal
     tail the Artifact path stops at Code_fig. The fix runs that tail from each
     newly-discovered producing Code, so fig now reaches the goal through the
-    same SubTask/next spine the Evidence branch uses.
+    same ToolCall/next spine the Evidence branch uses.
     """
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-leafcode"
     _wipe_session(sid)
-    # Seed the ResearchGoal via the first-message fallback so the SubTask→goal
-    # next spine exists (observe/execution alone builds SubTasks but only the
+    # Seed the ResearchGoal via the first-message fallback so the ToolCall→goal
+    # next spine exists (observe/execution alone builds ToolCalls but only the
     # first-message/plan endpoints persist the ResearchGoal they link to).
     live_client.post("/observe/session-first-message", json={
         "session_id": sid, "goal_id": f"goal:session:{sid}",
@@ -1895,7 +2431,7 @@ def test_get_chain_artifact_kind_no_input_code_still_reaches_goal(live_client: T
     # Session-unique artifact_ids (global composite-key constraint would
     # otherwise MERGE-hit another test's art-* v1).
     LC_REPORT, LC_FIG = "art-report-lc", "art-fig-lc"
-    # The report execution seeds the report Artifact + its own SubTask.
+    # The report execution seeds the report Artifact + its own ToolCall.
     live_client.post("/observe/execution", json={
         "execution_id": "exec-lc-report", "session_id": sid,
         "turn_id": "turn-lc-report", "tool": "run_python", "language": "python",
@@ -1944,15 +2480,15 @@ def test_get_chain_artifact_kind_no_input_code_still_reaches_goal(live_client: T
     labels = {n["label"] for n in chain["nodes"]}
     assert fig["id"] in nodes, "the selected figure must be present"
     assert "Code" in labels, "the figure's producing Code must be reached"
-    # The producing SubTask AND the ResearchGoal must both be present — this
+    # The producing ToolCall AND the ResearchGoal must both be present — this
     # is the regression: before the tail bridged the leaf Code to its task
     # chain, neither appeared and the Artifact path stopped at the Code.
-    assert "SubTask" in labels, \
-        "the producing Code's SubTask must be reached (leaf-Code tail bridge)"
+    assert "ToolCall" in labels, \
+        "the producing Code's ToolCall must be reached (leaf-Code tail bridge)"
     assert "ResearchGoal" in labels, \
         "the Artifact path must reach the ResearchGoal, not stop at the Code"
     # The Artifact path must be REACHABLE to the goal through the chain's edges
-    # (not just co-present) — proves the SubTask→next→goal spine actually links
+    # (not just co-present) — proves the ToolCall→next→goal spine actually links
     # the Code to the goal, mirroring the Evidence branch's reach.
     adj: dict[str, set[str]] = {n["id"]: set() for n in chain["nodes"]}
     for e in chain["edges"]:
@@ -1981,22 +2517,22 @@ def test_get_chain_claim_source_cited_artifact_reaches_goal(live_client: TestCli
     Claim source routes through ``_ENTRY_HOPS["Claim"]`` whose ``supports in``
     reaches the cited Artifact AND whose ``produces in`` (run from the cited
     Artifact) reaches the producing Code in one hop. But that second ``produces``
-    hop stops at the Code — the Code's OWN producing SubTask is a further
+    hop stops at the Code — the Code's OWN producing ToolCall is a further
     ``produces`` hop the entry hops don't take, and a leaf Code sits on no
-    ``next`` edge itself. So the SubTask→next→goal spine is reached ONLY if the
+    ``next`` edge itself. So the ToolCall→next→goal spine is reached ONLY if the
     cited Artifact is seeded into ``_artifact_derivation_tail`` (whose
-    ``_CODE_TAIL_HOPS`` walks Code→produces→SubTask→next→goal). Before the fix,
+    ``_CODE_TAIL_HOPS`` walks Code→produces→ToolCall→next→goal). Before the fix,
     ``seed_arts`` was computed from ``keep={claim_eid}`` alone — the Claim is
     not an Artifact, so ``_cited_artifact_eids`` matched nothing, the
     derivation tail was skipped (the early-return branch), and the Artifact
     path stopped at the Code while the Evidence path reached the goal.
 
     Topology (minimal reproduction of the user's report):
-        ResearchGoal -[:next]-> SubTask_fig -[:produces]-> Code_fig
+        ResearchGoal -[:next]-> ToolCall_fig -[:produces]-> Code_fig
                                                     Code_fig -[:produces]-> fig (leaf)
         fig -[:supports]-> Claim -[:stated_in]-> report
     Viewing the Claim's chain: the supports-connected fig's path must reach
-    the goal through fig<-produces-Code<-produces-SubTask<-next-<-Goal, the
+    the goal through fig<-produces-Code<-produces-ToolCall<-next-<-Goal, the
     same reach the Evidence branch has.
     """
     headers = {"authorization": "Bearer test-token"}
@@ -2055,17 +2591,17 @@ def test_get_chain_claim_source_cited_artifact_reaches_goal(live_client: TestCli
               and n["extra"]["artifact_id"] == CL_FIG)
     assert fig["id"] in nodes, "the cited figure must be present"
     assert "Code" in labels, "the figure's producing Code must be reached"
-    # The producing SubTask (Code<-produces-SubTask) AND the ResearchGoal must
+    # The producing ToolCall (Code<-produces-ToolCall) AND the ResearchGoal must
     # both be present — the regression: before the cited Artifact was seeded
     # into the derivation tail, the entry hops reached the Code but NOT its
-    # producing SubTask, the Artifact path dead-ended at the Code, and the
-    # SubTask→Code produces edge did not render (one endpoint missing).
-    assert "SubTask" in labels, \
-        "the producing Code's SubTask must be reached (cited-Artifact seed fix)"
+    # producing ToolCall, the Artifact path dead-ended at the Code, and the
+    # ToolCall→Code produces edge did not render (one endpoint missing).
+    assert "ToolCall" in labels, \
+        "the producing Code's ToolCall must be reached (cited-Artifact seed fix)"
     assert "ResearchGoal" in labels, \
         "the Claim's supports-Artifact path must reach the ResearchGoal"
     # Edge-reachability: fig must connect to the goal through the chain's edges
-    # (not just co-present) — the SubTask→produces→Code→produces→fig spine must
+    # (not just co-present) — the ToolCall→produces→Code→produces→fig spine must
     # actually link the goal to the cited Artifact path.
     adj: dict[str, set[str]] = {n["id"]: set() for n in chain["nodes"]}
     for e in chain["edges"]:
@@ -2379,3 +2915,285 @@ def test_cleanup_project_falls_back_to_project_id_when_sessions_already_deleted(
                   pid=PID).single()["c"]
         assert c == 0, "no Artifact nodes for the project may remain after cleanup"
     _wipe_session(sid)
+
+
+# --- PR2: subagent query layer (contains in subgraph, surrogate edges,
+# scope expansion, search recall, soft-delete, degradation, schema) ---------
+#
+# These exercise PR2's read-side lighting-up of the PR1 write chain. A
+# subagent becomes a scope SubTask; each internal toolcall becomes a child
+# hung off the scope via ``contains`` with products hung off the CHILD. PR2
+# surfaces this read-side: ``get_subgraph`` returns contains + folded
+# surrogate scope→product edges (extra.surrogate + via_child), the scope
+# expansion endpoint returns the child + real edges, and search can recall a
+# scope by its objective/summary/subagent_type.
+#
+# ``_seed_subagent_session`` builds a session with one subagent scope, one
+# code-execution child (producing an Artifact via child→Code→Artifact) and
+# one mcp-search child (producing a Paper via child→Paper) — enough to assert
+# both surrogate paths (Artifact via Code, Paper direct) in one fixture.
+
+def _seed_subagent_session(live_client: TestClient, sid: str) -> tuple[str, str, str, str]:
+    """Seed one session with a subagent scope + two children (exec + mcp).
+
+    Returns (scope_task_id, exec_child_task_id, artifact_id, paper_link).
+    Topology:
+        scope (task_type=subagent)
+          -[:contains]-> exec child (task_type=code_execution)
+            exec child -[:produces]-> Code -[:produces]-> Artifact (v1)
+          -[:contains]-> mcp child (task_type=literature_search)
+            mcp child -[:produces]-> Paper
+    """
+    sub_id = f"sub-{sid}"
+    exec_id = f"exec-{sid}"
+    inv_id = f"inv-{sid}"
+    art_id = f"art-{sid}"
+    paper_link = f"https://example.org/paper-{sid}"
+    # Scope: running, then terminal.
+    for status, extra in (("running", {}), ("completed", {"finished_at": "2026-08-24T00:00:10Z",
+                                                          "summary": "文献综述 done"})):
+        payload = {
+            "subagent_id": sub_id, "session_id": sid, "turn_id": f"turn-{sid}",
+            "objective": "run a 文献综述 of TP53", "task_type": "subagent",
+            "subagent_type": "literature_reviewer", "created_at": "2026-08-24T00:00:00Z",
+            "status": status, **extra,
+        }
+        live_client.post("/observe/subagent", json=payload, headers=_HEADERS)
+    # Execution child → Code → Artifact (v1).
+    live_client.post("/observe/execution", json={
+        "execution_id": exec_id, "session_id": sid, "turn_id": f"turn-{sid}",
+        "tool": "run_python", "language": "python", "code_hash": f"hash-{sid}",
+        "exit_code": 0, "status": "succeeded",
+        "started_at": "2026-08-24T00:00:01Z", "finished_at": "2026-08-24T00:00:02Z",
+        "parent_subagent_id": sub_id,
+        "produced_artifacts": [{
+            "artifact_id": art_id, "path": "out.csv", "logical_name": "out.csv",
+            "version": 1, "media_type": "text/csv",
+        }],
+    }, headers=_HEADERS)
+    # MCP-search child → Paper (direct, no Code layer).
+    live_client.post("/observe/mcp-search", json={
+        "invocation_id": inv_id, "session_id": sid, "turn_id": f"turn-{sid}",
+        "source": "europe-pmc", "tool_type": "search",
+        "retrieved_at": "2026-08-24T00:00:03Z",
+        "parent_subagent_id": sub_id,
+        "records": [{
+            "url": paper_link, "title": "TP53 in lung cancer",
+            "identifier": "123", "identifierType": "PMID", "year": "2023",
+            "source": "europe-pmc",
+        }],
+    }, headers=_HEADERS)
+    scope_tid = f"subtask:subagent:{sub_id}"
+    exec_child_tid = f"subtask:subagent:{sub_id}:exec:{exec_id}"
+    return scope_tid, exec_child_tid, art_id, paper_link
+
+
+@needs_neo4j
+def test_subgraph_returns_contains_edge(live_client: TestClient) -> None:
+    """get_subgraph's edge whitelist now includes contains, so the folded view
+    gets the scope→child spine to expand from."""
+    sid = "sess-pr2-contains"
+    _wipe_session(sid)
+    scope_tid, exec_child_tid, _art_id, _paper_link = _seed_subagent_session(live_client, sid)
+
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=_HEADERS).json()
+    contains = [e for e in sub["edges"] if e["type"] == "contains"]
+    assert any(e["source"] == scope_tid and e["target"] == exec_child_tid for e in contains), \
+        "contains edge scope→child must be returned by get_subgraph"
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_subgraph_surrogate_edges_scope_to_product(live_client: TestClient) -> None:
+    """The folded view gets one surrogate scope→product edge per terminal
+    product: scope→Artifact (via the exec child) and scope→Paper (via the mcp
+    child). Each carries surrogate=True + via_child; real produces edges do
+    NOT carry a surrogate marker."""
+    sid = "sess-pr2-surrogate"
+    _wipe_session(sid)
+    scope_tid, exec_child_tid, art_id, paper_link = _seed_subagent_session(live_client, sid)
+
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=_HEADERS).json()
+    surrogates = [e for e in sub["edges"]
+                  if e.get("extra", {}).get("surrogate") is True]
+    # Artifact surrogate: target is <artifact_id>#v<version>, via the exec child.
+    art_surr = next((e for e in surrogates
+                     if e["target"] == f"{art_id}#v1"), None)
+    assert art_surr is not None, "scope→Artifact surrogate (via Code) must be present"
+    assert art_surr["source"] == scope_tid
+    assert art_surr["type"] == "produces"
+    assert art_surr["extra"]["via_child"] == exec_child_tid, \
+        "via_child must point at the exec child that produced the Artifact"
+    # Paper surrogate: target is the Paper's link identity, via the mcp child.
+    paper_surr = next((e for e in surrogates if e["target"] == paper_link), None)
+    assert paper_surr is not None, "scope→Paper surrogate (direct from child) must be present"
+    assert paper_surr["source"] == scope_tid
+    assert paper_surr["extra"]["surrogate"] is True
+    assert paper_surr["extra"]["via_child"].startswith(f"subtask:subagent:sub-{sid}:exec:"), \
+        "Paper surrogate via_child must point at the mcp search child"
+    # Real produces edges (child→Code, Code→Artifact, child→Paper) carry NO
+    # surrogate marker — the frontend switches on surrogate, so the real edges
+    # must never claim it.
+    real_produces = [e for e in sub["edges"]
+                     if e["type"] == "produces" and not e.get("extra", {}).get("surrogate")]
+    assert real_produces, "real produces edges must still be returned (not only surrogates)"
+    assert all(not e.get("extra", {}).get("surrogate") for e in real_produces), \
+        "real produces edges must not carry surrogate=True"
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_surrogate_target_identity_matches_node_set(live_client: TestClient) -> None:
+    """Surrogate edge targets must use the same identity format as the node
+    set (Artifact → <artifact_id>#v<version>, Paper → link) so the frontend can
+    resolve them to a node that actually exists in the returned nodes."""
+    sid = "sess-pr2-identity"
+    _wipe_session(sid)
+    _scope, _exec, art_id, paper_link = _seed_subagent_session(live_client, sid)
+
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=_HEADERS).json()
+    node_ids = {n["id"] for n in sub["nodes"]}
+    surrogates = [e for e in sub["edges"]
+                  if e.get("extra", {}).get("surrogate") is True]
+    for e in surrogates:
+        assert e["target"] in node_ids, \
+            f"surrogate target {e['target']!r} must be a returned node id"
+        assert e["source"] in node_ids, \
+            f"surrogate source {e['source']!r} must be a returned node id"
+    # Spot-check the two formats explicitly.
+    assert f"{art_id}#v1" in node_ids, "Artifact node id is <artifact_id>#v<version>"
+    assert paper_link in node_ids, "Paper node id is its link"
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_scope_expansion_returns_children_and_real_edges(live_client: TestClient) -> None:
+    """get_scope_expansion returns the scope's children + real produces/
+    contains edges, with NO surrogate markers (the frontend drops surrogates
+    when the expansion is drawn). Child task_type is the real code_execution/
+    literature_search, not 'subagent'."""
+    sid = "sess-pr2-expand"
+    _wipe_session(sid)
+    scope_tid, exec_child_tid, art_id, paper_link = _seed_subagent_session(live_client, sid)
+
+    exp = live_client.post("/query/scope-expansion", json={
+        "scope_task_id": scope_tid, "session_id": sid,
+    }, headers=_HEADERS).json()
+    assert "reason" not in exp, "a seeded scope must expand, not degrade"
+    child_ids = {n["id"] for n in exp["nodes"] if n["label"] == "ToolCall"}
+    assert exec_child_tid in child_ids, "the exec child must be in the expansion"
+    # Child task_type is the real type, not 'subagent' (that's the scope's).
+    children = [n for n in exp["nodes"] if n["label"] == "ToolCall"
+                and n["id"] != scope_tid]
+    assert children, "expansion must contain child ToolCalls"
+    child_types = {n["extra"].get("task_type") for n in children}
+    assert child_types == {"code_execution", "literature_search"}, \
+        f"child task_types must be the real types, got {child_types}"
+    # Real edges present: contains (scope→first child), next (scope-internal
+    # child→child chain), produces (child→Code→Artifact, child→Paper). No
+    # surrogate markers.
+    edge_types = {e["type"] for e in exp["edges"]}
+    assert "contains" in edge_types and "produces" in edge_types
+    assert "next" in edge_types, "scope-internal next chain (scope_chain) returned"
+    assert all(not e.get("extra", {}).get("surrogate") for e in exp["edges"]), \
+        "expansion edges are real — none may carry surrogate=True"
+    assert f"{art_id}#v1" in {n["id"] for n in exp["nodes"]}, \
+        "the Artifact version node is in the expansion"
+    assert paper_link in {n["id"] for n in exp["nodes"]}, \
+        "the Paper node is in the expansion"
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_query_match_recalls_scope_by_objective(live_client: TestClient) -> None:
+    """query_match's haystack now spans objective/summary/subagent_type, so a
+    search for the scope's role/objective hits the scope node (pre-PR2 the scope
+    was invisible to search — only its children's task_type was searchable)."""
+    sid = "sess-pr2-search"
+    _wipe_session(sid)
+    scope_tid, _exec_child_tid, _art_id, _paper_link = _seed_subagent_session(live_client, sid)
+
+    # Search the scope's objective term "文献综述" → hits the scope.
+    hits = live_client.post("/query/match", json={
+        "query": "文献综述", "session_id": sid,
+    }, headers=_HEADERS).json()
+    hit_ids = {h["id"] for h in hits["hits"]}
+    assert scope_tid in hit_ids, "scope must be recallable by its objective/summary"
+    # Search the child's real task_type → hits the exec child (already worked
+    # pre-PR2, regression guard).
+    code_hits = live_client.post("/query/match", json={
+        "query": "code_execution", "session_id": sid,
+    }, headers=_HEADERS).json()
+    code_hit_ids = {h["id"] for h in code_hits["hits"]}
+    assert any(":exec:" in i for i in code_hit_ids), \
+        "child remains recallable by its real task_type"
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_soft_delete_hides_scope_child_and_surrogates(live_client: TestClient) -> None:
+    """All PR2 read paths carry the deleted_session filter: after a session is
+    soft-deleted, get_subgraph (nodes + surrogates) and scope-expansion return
+    nothing for it."""
+    sid = "sess-pr2-softdel"
+    _wipe_session(sid)
+    scope_tid, _exec, _art_id, _paper_link = _seed_subagent_session(live_client, sid)
+    # Soft-delete the session (cleanup marks deleted_session=true, retains nodes).
+    live_client.post("/cleanup/session", json={"session_id": sid}, headers=_HEADERS)
+
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=_HEADERS).json()
+    assert sub["nodes"] == [], "soft-deleted session's nodes must be hidden in get_subgraph"
+    assert sub["edges"] == [], "soft-deleted session's edges (incl. surrogates) must be hidden"
+    exp_resp = live_client.post("/query/scope-expansion", json={
+        "scope_task_id": scope_tid, "session_id": sid,
+    }, headers=_HEADERS)
+    # node_not_found because the scope itself is now soft-deleted → 404 envelope.
+    assert exp_resp.status_code == 404, "soft-deleted scope must not expand (404 node_not_found)"
+    _wipe_session(sid)
+
+
+def test_scope_expansion_degrades_without_neo4j(client: TestClient) -> None:
+    """When Neo4j is unreachable, scope-expansion degrades to an empty subgraph
+    + memory_graph_unreachable rather than erroring (mirrors get_subgraph)."""
+    resp = client.post("/query/scope-expansion", json={
+        "scope_task_id": "subtask:subagent:ghost", "session_id": "sess-ghost",
+    }, headers={"authorization": "Bearer test-token"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["nodes"] == []
+    assert body["edges"] == []
+    assert body["reason"] == "memory_graph_unreachable"
+
+
+def test_scope_expansion_validates_request(client: TestClient) -> None:
+    """Bad requests (empty scope_task_id / session_id) are rejected with 400
+    before any Cypher runs (the schema-validation contract shared by every
+    read route)."""
+    for payload in (
+        {"scope_task_id": "", "session_id": "sess-x"},
+        {"scope_task_id": "subtask:subagent:x", "session_id": ""},
+    ):
+        resp = client.post("/query/scope-expansion", json=payload,
+                            headers={"authorization": "Bearer test-token"})
+        assert resp.status_code == 400, f"{payload} should be 400"
+    # Missing token → 401.
+    resp = client.post("/query/scope-expansion",
+                       json={"scope_task_id": "x", "session_id": "sess-x"})
+    assert resp.status_code == 401
+
+
+def test_schema_enum_has_contains_and_server_whitelist_has_contains() -> None:
+    """The schema contract carries ``contains`` (PR3's frontend can compile:
+    EDGE_COLORS / node.relation.contains resolve). The server's edge whitelist
+    mirrors the schema so /query/by-edge-type accepts ``contains``."""
+    from sciencediscovery_memory_graph import server
+    from sciencediscovery_memory_graph import query as query_mod
+    # server whitelist includes contains (mirrors the schema enum).
+    assert "contains" in server._EDGE_TYPES
+    # Task (subagent scope) chain hops drill into children via a contains
+    # out-hop (trace skips it — it walks in only — so children are not treated
+    # as upstream). contains links scope → *first* child ToolCall only (需求1);
+    # the rest hang off the first via the scope-internal next chain.
+    assert any(h[0] == "contains" and h[1] == "out" for h in query_mod._CHAIN_HOPS["Task"]), \
+        "Task chain hops must include a contains out-hop to drill into children"
+

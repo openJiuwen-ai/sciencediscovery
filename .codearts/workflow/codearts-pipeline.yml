@@ -1,27 +1,3 @@
-# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# Smoke test for the GitCode side of CI, the counterpart of
-# .github/workflows/ci.yml. It does not run UT/ST/E2E yet. It answers the three
-# questions that have to be settled before those layers can be ported here:
-# does the merge-request trigger actually fire, what does the pipeline context
-# carry, and what does the runner already have installed. The artifact file is
-# written and then read back, so both the workspace and the log are verified.
-#
-# Editing this pipeline in the CodeArts web editor may rewrite the file and
-# drop these comments; keep this file the source of truth.
-
 concurrency:
   max: 5
   enable: false
@@ -39,13 +15,8 @@ sources:
     ssh_git_url: git@gitcode.com:openJiuwen/sciencediscovery.git
     endpoint_id: c4451a2a11af48baacd6b2af5eee3075
     repo_id: 10597680
-# The four merge-request types are the GitCode equivalent of the GitHub
-# workflow's opened/synchronize/reopened: `open` and `reopen` cover creating and
-# reopening a merge request, `update` covers every later push to it, and `merge`
-# fires once when it lands on main. code-update stays false so a settings-only
-# change is checked too, matching how GitHub re-runs on every synchronize.
 on:
-  sources: 
+  sources:
     sciencediscovery:
       merge_requests:
         branches:
@@ -54,64 +25,686 @@ on:
         types:
         - open
         - update
-        - merge
         - reopen
         branches-ignore: []
         paths-ignore: []
         code-update: false
+        merge_comment: rerun
+inputs:
+  PR_ID:
+    type: string
+    default: "${MERGE_ID}"
+    manual_override: true
+  HUAWEICLOUD_NPM_REGISTRY:
+    type: string
+    default: https://repo.huaweicloud.com/repository/npm/
+    manual_override: false
+  HUAWEICLOUD_PYPI_INDEX:
+    type: string
+    default: https://repo.huaweicloud.com/repository/pypi/simple
+    manual_override: false
+  NPMMIRROR_PYTHON_INSTALL_MIRROR:
+    type: string
+    default: https://registry.npmmirror.com/-/binary/python-build-standalone
+    manual_override: false
 stages:
-  # The stage identifier was generated when the pipeline was converted to a
-  # repository-hosted definition. It is kept verbatim so the file still matches
-  # the pipeline record on the server.
-  1787408436254dc0bce78-f2e3-4077-9747-9882b5a1fb12:
+  176464703972462e4780d-56ca-4c54-9c49-29291c471dfd:
     jobs:
-      smoke_test:
+      create_label:
         select: selected_by_default
-        name: Smoke test
+        name: Mark PR checks as running
         needs: []
         steps:
-        - name: Report the trigger and the runner
-          run: |
-            echo "=== trigger ==="
-            echo "pipeline run  : #${{ pipeline.run_number }} (${{ pipeline.trigger_type }})"
-            echo "repository    : ${{ sources.sciencediscovery.repo_name }}"
-            echo "merge request : ${{ sources.sciencediscovery.merge_id }}"
-            echo "source branch : ${{ sources.sciencediscovery.source_branch }}"
-            echo "target branch : ${{ sources.sciencediscovery.target_branch }}"
-            echo "commit        : ${{ sources.sciencediscovery.commit_id_short }}"
-            echo
-            echo "=== runner ==="
-            echo "working dir   : $(pwd)"
-            echo "kernel        : $(uname -srm)"
-            # Whether the source is already checked out decides if the ported
-            # layers need an explicit clone step in front of them.
-            echo "checkout here : $(test -f package.json && echo yes || echo no)"
-            for tool in git node pnpm uv docker bwrap; do
-              printf '%-14s: %s\n' "$tool" "$(command -v "$tool" || echo 'not installed')"
-            done
-        - name: Write the artifact file
-          run: |
-            mkdir -p ci-artifacts
-            {
-              echo "ScienceDiscovery CodeArts smoke test"
-              echo "run number    : ${{ pipeline.run_number }}"
-              echo "trigger       : ${{ pipeline.trigger_type }}"
-              echo "merge request : ${{ sources.sciencediscovery.merge_id }}"
-              echo "commit        : ${{ sources.sciencediscovery.commit_id_short }}"
-              echo "generated at  : $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-            } > ci-artifacts/smoke.txt
-        - name: Verify the artifact file
-          run: |
-            ls -l ci-artifacts
-            echo "--- ci-artifacts/smoke.txt ---"
-            cat ci-artifacts/smoke.txt
-            # Fails the job if the previous step produced an empty file.
-            test -s ci-artifacts/smoke.txt
-        if: "${{ default() }}"
+        - name: Create the running label
+          uses: official_devcloud_cloudBuild
+          with:
+            number: "${MERGE_ID}"
+            WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: dc2f05de339b410a972184a84b9f1c6f
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 17736446667235cd01d5c-c29e-41f5-ab85-52bba5fce5ed
+        if: "${{ sources.sciencediscovery.merge_id != '' }}"
         runs-on:
         - default
     pre:
     - type: auto
-    name: Smoke
+    name: Prepare PR
     select: selected_by_default
     fail-fast: false
+  1787542687692903221df-b13e-4e04-a571-d9790b3d3f2d:
+    jobs:
+      ut:
+        select: always
+        name: UT
+        needs: []
+        steps:
+        - name: Download the source commit
+          uses: official_git_clone
+          identifier: 0
+        - name: Checkout the PR source commit
+          uses: official_shell_plugin
+          env:
+            CODEARTS_COMMIT_ID: "${COMMIT_ID}"
+            CODEARTS_MERGE_ID: "${MERGE_ID}"
+            CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              if [ -z "${CODEARTS_MERGE_ID:-}" ]; then
+                echo "MERGE_ID is empty; keeping the downloaded source commit"
+                exit 0
+              fi
+
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              # GitCode's PR or PR-note payload carries the source head for this run.
+              SOURCE_METADATA=$(node <<'NODE'
+              const payloadText = process.env.CODEARTS_WEBHOOK_PAYLOAD;
+              if (!payloadText) throw new Error("CODEARTS_WEBHOOK_PAYLOAD is empty");
+              const payload = JSON.parse(payloadText);
+              const mergeId = process.env.CODEARTS_MERGE_ID;
+              let attributes;
+              if (payload.event_type === "merge_request") {
+                attributes = payload.object_attributes;
+              } else if (
+                payload.event_type === "note" &&
+                payload.object_attributes?.noteable_type === "MergeRequest"
+              ) {
+                attributes = payload.merge_request;
+              } else {
+                throw new Error(`expected a merge_request or PR note payload, received ${String(payload.event_type)}`);
+              }
+              const sourceBranch = attributes?.source_branch;
+              const sourceSha = process.env.CODEARTS_COMMIT_ID;
+              const payloadMergeId = attributes?.iid;
+              if (!attributes) {
+                throw new Error("the webhook payload has no merge_request metadata");
+              }
+              const hasLineBreak = typeof sourceBranch === "string" && (
+                sourceBranch.includes(String.fromCharCode(10)) || sourceBranch.includes(String.fromCharCode(13))
+              );
+              if (typeof sourceBranch !== "string" || sourceBranch.length === 0 || hasLineBreak) {
+                throw new Error("the MR payload has no valid source branch");
+              }
+              if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/i.test(sourceSha)) {
+                throw new Error("the MR payload has no valid source commit SHA");
+              }
+              if (typeof mergeId !== "string" || !/^[1-9][0-9]*$/.test(mergeId)) {
+                throw new Error("CodeArts did not provide a valid merge request number");
+              }
+              if (payloadMergeId !== undefined && String(payloadMergeId) !== mergeId) {
+                throw new Error(`payload merge request ${String(payloadMergeId)} does not match ${mergeId}`);
+              }
+              console.log(sourceBranch);
+              console.log(sourceSha.toLowerCase());
+              console.log(mergeId);
+              NODE
+              )
+              SOURCE_BRANCH=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '1p')
+              SOURCE_SHA=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '2p')
+              MR_NUMBER=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '3p')
+              git check-ref-format --branch "$SOURCE_BRANCH" >/dev/null
+
+              # The upstream merge-request ref exists for both same-repository and
+              # fork PRs. Detach at the event SHA so a later update cannot change
+              # the code covered by this pipeline run.
+              FETCH_REF=refs/remotes/origin/codearts-pr-source
+              git fetch --no-tags --force origin "+refs/merge-requests/$MR_NUMBER/head:$FETCH_REF"
+              if ! git cat-file -e "$SOURCE_SHA^{commit}" 2>/dev/null; then
+                git fetch --no-tags origin "$SOURCE_SHA"
+              fi
+              if ! git merge-base --is-ancestor "$SOURCE_SHA" "$FETCH_REF"; then
+                echo "FATAL: trigger commit $SOURCE_SHA is not reachable from source branch $SOURCE_BRANCH" >&2
+                exit 1
+              fi
+              git checkout --detach "$SOURCE_SHA"
+              ACTUAL_SHA=$(git rev-parse HEAD)
+              if [ "$ACTUAL_SHA" != "$SOURCE_SHA" ]; then
+                echo "FATAL: expected PR source $SOURCE_SHA, checked out $ACTUAL_SHA" >&2
+                exit 1
+              fi
+              echo "checked out PR source: branch=$SOURCE_BRANCH sha=$ACTUAL_SHA"
+              git show -s --format='subject: %s'
+          identifier: 6
+        - name: Provision the runner
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              echo "source directory: $SOURCE_DIR"
+              if [ ! -f "$SOURCE_DIR/pnpm-workspace.yaml" ]; then
+                echo "FATAL: the download task did not create the expected source directory"
+                ls -la "$SHARE_PATH" || true
+                exit 1
+              fi
+              cd "$SOURCE_DIR"
+              export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
+              export CI_PYPI_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              bash .ci/provision-runner.sh
+          identifier: 1
+        - name: Retarget Python lockfiles to Huawei mirror
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
+              export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
+              echo "python install mirror: $UV_PYTHON_INSTALL_MIRROR"
+              for PYTHON_PROJECT in services/gateway services/paper services/memory-graph; do
+                LOCK_FILE="$PYTHON_PROJECT/uv.lock"
+                echo "retargeting $LOCK_FILE to $UV_DEFAULT_INDEX"
+                LOCKED_VERSIONS=$(sed -n -e '/^name = /p' -e '/^version = /p' "$LOCK_FILE")
+                uv lock --project "$PYTHON_PROJECT"
+                RETARGETED_VERSIONS=$(sed -n -e '/^name = /p' -e '/^version = /p' "$LOCK_FILE")
+                if [ "$LOCKED_VERSIONS" != "$RETARGETED_VERSIONS" ]; then
+                  echo "FATAL: retargeting $LOCK_FILE changed locked package versions" >&2
+                  exit 1
+                fi
+              done
+          identifier: 2
+        - name: Run and stage UT log
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
+              export CI_RESULTS_DIR="$PWD/.ci-results"
+              export CI_RUNTIME_DIR="$HOME/ci-runtime-ut"
+              export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
+              echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX, python=$UV_PYTHON_INSTALL_MIRROR"
+              RESULT_DIR=.ci-results/ut-core
+              RESULT_LOG="$RESULT_DIR/run.log"
+              mkdir -p "$RESULT_DIR"
+              set +e
+              pnpm ci:ut:core
+              TEST_RC=$?
+              set -e
+              printf '%s\n' "$TEST_RC" > "$RESULT_DIR/exit-code"
+              if [ ! -f "$RESULT_LOG" ]; then
+                printf 'pnpm ci:ut:core exited with status %s before run.log was created.\n' "$TEST_RC" > "$RESULT_LOG"
+              fi
+              echo "=== UT run.log (last 80 lines) ==="
+              tail -n 80 "$RESULT_LOG"
+          identifier: 3
+        - name: Upload UT log to OBS
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
+            source_file: "${SHARE_PATH}/.ci-results/ut-core/run.log"
+            self_folder: "false"
+          identifier: 4
+        - name: Report UT result
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              TEST_RC=$(cat .ci-results/ut-core/exit-code)
+              echo "UT exited with status $TEST_RC"
+              exit "$TEST_RC"
+          identifier: 5
+        if: "${{ default() }}"
+        runs-on:
+        - codearts-hosted
+        - ubuntu-latest
+        - x64
+        - large
+      st:
+        select: always
+        name: ST
+        needs: []
+        steps:
+        - name: Download the source commit
+          uses: official_git_clone
+          identifier: 0
+        - name: Checkout the PR source commit
+          uses: official_shell_plugin
+          env:
+            CODEARTS_COMMIT_ID: "${COMMIT_ID}"
+            CODEARTS_MERGE_ID: "${MERGE_ID}"
+            CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              if [ -z "${CODEARTS_MERGE_ID:-}" ]; then
+                echo "MERGE_ID is empty; keeping the downloaded source commit"
+                exit 0
+              fi
+
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              # GitCode's PR or PR-note payload carries the source head for this run.
+              SOURCE_METADATA=$(node <<'NODE'
+              const payloadText = process.env.CODEARTS_WEBHOOK_PAYLOAD;
+              if (!payloadText) throw new Error("CODEARTS_WEBHOOK_PAYLOAD is empty");
+              const payload = JSON.parse(payloadText);
+              const mergeId = process.env.CODEARTS_MERGE_ID;
+              let attributes;
+              if (payload.event_type === "merge_request") {
+                attributes = payload.object_attributes;
+              } else if (
+                payload.event_type === "note" &&
+                payload.object_attributes?.noteable_type === "MergeRequest"
+              ) {
+                attributes = payload.merge_request;
+              } else {
+                throw new Error(`expected a merge_request or PR note payload, received ${String(payload.event_type)}`);
+              }
+              const sourceBranch = attributes?.source_branch;
+              const sourceSha = process.env.CODEARTS_COMMIT_ID;
+              const payloadMergeId = attributes?.iid;
+              if (!attributes) {
+                throw new Error("the webhook payload has no merge_request metadata");
+              }
+              const hasLineBreak = typeof sourceBranch === "string" && (
+                sourceBranch.includes(String.fromCharCode(10)) || sourceBranch.includes(String.fromCharCode(13))
+              );
+              if (typeof sourceBranch !== "string" || sourceBranch.length === 0 || hasLineBreak) {
+                throw new Error("the MR payload has no valid source branch");
+              }
+              if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/i.test(sourceSha)) {
+                throw new Error("the MR payload has no valid source commit SHA");
+              }
+              if (typeof mergeId !== "string" || !/^[1-9][0-9]*$/.test(mergeId)) {
+                throw new Error("CodeArts did not provide a valid merge request number");
+              }
+              if (payloadMergeId !== undefined && String(payloadMergeId) !== mergeId) {
+                throw new Error(`payload merge request ${String(payloadMergeId)} does not match ${mergeId}`);
+              }
+              console.log(sourceBranch);
+              console.log(sourceSha.toLowerCase());
+              console.log(mergeId);
+              NODE
+              )
+              SOURCE_BRANCH=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '1p')
+              SOURCE_SHA=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '2p')
+              MR_NUMBER=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '3p')
+              git check-ref-format --branch "$SOURCE_BRANCH" >/dev/null
+
+              # The upstream merge-request ref exists for both same-repository and
+              # fork PRs. Detach at the event SHA so a later update cannot change
+              # the code covered by this pipeline run.
+              FETCH_REF=refs/remotes/origin/codearts-pr-source
+              git fetch --no-tags --force origin "+refs/merge-requests/$MR_NUMBER/head:$FETCH_REF"
+              if ! git cat-file -e "$SOURCE_SHA^{commit}" 2>/dev/null; then
+                git fetch --no-tags origin "$SOURCE_SHA"
+              fi
+              if ! git merge-base --is-ancestor "$SOURCE_SHA" "$FETCH_REF"; then
+                echo "FATAL: trigger commit $SOURCE_SHA is not reachable from source branch $SOURCE_BRANCH" >&2
+                exit 1
+              fi
+              git checkout --detach "$SOURCE_SHA"
+              ACTUAL_SHA=$(git rev-parse HEAD)
+              if [ "$ACTUAL_SHA" != "$SOURCE_SHA" ]; then
+                echo "FATAL: expected PR source $SOURCE_SHA, checked out $ACTUAL_SHA" >&2
+                exit 1
+              fi
+              echo "checked out PR source: branch=$SOURCE_BRANCH sha=$ACTUAL_SHA"
+              git show -s --format='subject: %s'
+          identifier: 5
+        - name: Provision the runner
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              echo "source directory: $SOURCE_DIR"
+              if [ ! -f "$SOURCE_DIR/pnpm-workspace.yaml" ]; then
+                echo "FATAL: the download task did not create the expected source directory"
+                ls -la "$SHARE_PATH" || true
+                exit 1
+              fi
+              cd "$SOURCE_DIR"
+              export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
+              export CI_PYPI_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              bash .ci/provision-runner.sh
+          identifier: 1
+        - name: Run and stage ST log
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
+              export CI_RESULTS_DIR="$PWD/.ci-results"
+              export CI_RUNTIME_DIR="$HOME/ci-runtime-st"
+              export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
+              echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX, python=$UV_PYTHON_INSTALL_MIRROR"
+              RESULT_DIR=.ci-results/st
+              RESULT_LOG="$RESULT_DIR/run.log"
+              mkdir -p "$RESULT_DIR"
+              set +e
+              pnpm ci:st
+              TEST_RC=$?
+              set -e
+              printf '%s\n' "$TEST_RC" > "$RESULT_DIR/exit-code"
+              if [ ! -f "$RESULT_LOG" ]; then
+                printf 'pnpm ci:st exited with status %s before run.log was created.\n' "$TEST_RC" > "$RESULT_LOG"
+              fi
+              echo "=== ST run.log (last 80 lines) ==="
+              tail -n 80 "$RESULT_LOG"
+          identifier: 2
+        - name: Upload ST log to OBS
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
+            source_file: "${SHARE_PATH}/.ci-results/st/run.log"
+            self_folder: "false"
+          identifier: 3
+        - name: Report ST result
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              TEST_RC=$(cat .ci-results/st/exit-code)
+              echo "ST exited with status $TEST_RC"
+              exit "$TEST_RC"
+          identifier: 4
+        if: "${{ default() }}"
+        runs-on:
+        - codearts-hosted
+        - ubuntu-latest
+        - x64
+        - large
+      code_check:
+        select: always
+        name: code_check
+        needs: []
+        steps:
+        - name: code_check
+          uses: official_devcloud_subPipeline
+          with:
+            PR_ID: "${MERGE_ID}"
+            repo_url: "${REPO_URL}"
+            branch: "${test-agentcore_REPOSITORY_BRANCH}"
+            repo_name: "${test-agentcore_REPOSITORY_NAME}"
+            pipeline_name: "${PIPELINE_NAME}"
+            number: "${PR_ID}"
+            webhook_payload: "${WEBHOOK_PAYLOAD}"
+            __sameProject__: "true"
+            __projectId__: ""
+            SYSTEM_DEVCLOUD_SUBPIPELINE_TRIGGER_ID: 2dce32a1e91949d4872f6d10a9d86b2e
+            SYSTEM_DEVCLOUD_SUBPIPELINE_BRANCH: PARENT
+            SYSTEM_DEVCLOUD_SUBPIPELINE_EXECUTE_BRANCH: ""
+            _OFFICIAL_DEVCLOUD_JOB_NAME_: sciencediscovery-jiuwen-codecheck
+            _OFFICIAL_DEVCLOUD_JOB_VERSION_: 3.0
+          identifier: 1787572530852dd5a9499-1b45-4378-bf48-082dc7948978
+        if: "${{ sources.sciencediscovery.merge_id != '' || inputs.PR_ID != '' }}"
+        runs-on:
+        - default
+    pre:
+    - type: auto
+    name: CI
+    select: always
+    fail-fast: false
+post:
+  jobs:
+    prepare_pr_success:
+      select: always
+      name: Prepare successful PR result
+      needs: []
+      steps:
+      - name: Render successful PR result
+        uses: official_shell_plugin
+        with:
+          OFFICIAL_SHELL_SCRIPT_INPUT: |
+            set -eu
+            RESULT_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}/.ci-results/pr-result"
+            RESULT_FILE="$RESULT_DIR/result.html"
+            mkdir -p "$RESULT_DIR"
+            PR_CHECK_URL="https://gitcode.com/openJiuwen/sciencediscovery/pull/${MERGE_ID}/check"
+            CODECHECK_RESULT_BASE="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery"
+            UT_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
+            ST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
+            result_link_cell() {
+              python3 - "$1" <<'PY'
+            import html
+            import json
+            import sys
+            from urllib.parse import urlsplit
+            from urllib.request import Request, urlopen
+
+            result_url = sys.argv[1]
+            try:
+                request = Request(result_url, headers={"User-Agent": "ScienceDiscovery-CodeArts"})
+                with urlopen(request, timeout=30) as response:
+                    link = json.load(response).get("link")
+                parsed = urlsplit(link) if isinstance(link, str) else None
+                if not parsed or parsed.scheme != "https" or not parsed.netloc:
+                    raise ValueError("result link must be an absolute HTTPS URL")
+                print('<a href="{}">点此跳转</a>'.format(html.escape(link, quote=True)))
+            except Exception as error:
+                print("could not load code-check link from {}: {}".format(result_url, error), file=sys.stderr)
+                print("N/A")
+            PY
+            }
+            public_log_cell() {
+              python3 - "$1" "$PR_CHECK_URL" <<'PY'
+            import html
+            import sys
+            from urllib.request import Request, urlopen
+
+            log_url, checks_url = sys.argv[1:3]
+            try:
+                request = Request(
+                    log_url,
+                    headers={"Range": "bytes=0-0", "User-Agent": "ScienceDiscovery-CodeArts"},
+                )
+                with urlopen(request, timeout=10) as response:
+                    if response.status not in (200, 206):
+                        raise ValueError("unexpected HTTP status {}".format(response.status))
+                print('<a href="{}">公开日志</a>'.format(html.escape(log_url, quote=True)))
+            except Exception as error:
+                print("public test log is unavailable at {}: {}".format(log_url, error), file=sys.stderr)
+                print(
+                    '<a href="{}">查看构建日志</a>（公开测试日志未生成）'.format(
+                        html.escape(checks_url, quote=True)
+                    )
+                )
+            PY
+            }
+            CODECHECK_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/codecheck/${MERGE_ID}/codecheck.json")
+            BLACKLIST_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/blacklist/${MERGE_ID}/blacklist.json")
+            ANTI_POISON_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/anti_poison/${MERGE_ID}/anti_poison.json")
+            SCA_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/sca/${MERGE_ID}/sca.json")
+            UT_LOG_CELL=$(public_log_cell "$UT_LOG_URL")
+            ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")
+            cat > "$RESULT_FILE" <<RESULT_HTML
+            <p>&#9989; 流水线 <a href="$PR_CHECK_URL">${{ pipeline.run_id }}</a> 执行成功。</p>
+            <p>可在 <a href="$PR_CHECK_URL">$PR_CHECK_URL</a> 查看完整构建日志。</p>
+            <p>在 PR 评论中发送 <code>rerun</code> 可重新触发 CI 流水线。</p>
+            <table style="border-collapse: collapse">
+              <tr><th>任务名称</th><th>子任务</th><th>状态</th><th>详情</th></tr>
+              <tr><td rowspan="4">代码检查</td><td>SCA（开源合规）</td><td rowspan="4">PASSED（子流水线汇总）</td><td>$SCA_LINK_CELL</td></tr>
+              <tr><td>Anti-poison（防投毒）</td><td>$ANTI_POISON_LINK_CELL</td></tr>
+              <tr><td>CodeCheck（静态检查）</td><td>$CODECHECK_LINK_CELL</td></tr>
+              <tr><td>Blacklist（禁用词）</td><td>$BLACKLIST_LINK_CELL</td></tr>
+              <tr><td>UT</td><td>-</td><td>PASSED</td><td>$UT_LOG_CELL</td></tr>
+              <tr><td>ST</td><td>-</td><td>PASSED</td><td>$ST_LOG_CELL</td></tr>
+            </table>
+            RESULT_HTML
+            test -s "$RESULT_FILE"
+            echo "rendered PR result: $RESULT_FILE"
+        identifier: 1790000000001f3bdf0d-9082-493c-b505-da94b01fd1ef
+      - name: Upload successful PR result to OBS
+        uses: upload-obs
+        with:
+          endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+          endpoint: obs.cn-north-4.myhuaweicloud.com
+          bucket: openjiuwen-ci
+          key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/pr/result.html"
+          source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
+          self_folder: "false"
+        identifier: 1790000000002ca71171-679f-4414-948c-ff6497de4ab7
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'st', 'code_check') }}"
+      runs-on:
+      - default
+    publish_pr_success:
+      select: always
+      name: Publish successful PR result
+      needs:
+      - prepare_pr_success
+      steps:
+      - name: Comment and mark the PR successful
+        uses: official_devcloud_cloudBuild
+        with:
+          number: "${MERGE_ID}"
+          result_html: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/pr/result.html"
+          final_label: ci-successful
+          __sameProject__: "true"
+          __projectId__: ""
+          jobId: 52d1699f53ca463ab77c4c4398be7e5a
+          __repository__: sciencediscovery
+          artifactIdentifier: ""
+        identifier: 17646737830615fa277f2-7774-46a9-9222-bdd6236e9912
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'st', 'code_check') }}"
+      runs-on:
+      - default
+    prepare_pr_failure:
+      select: always
+      name: Prepare failed PR result
+      needs: []
+      steps:
+      - name: Render failed PR result
+        uses: official_shell_plugin
+        with:
+          OFFICIAL_SHELL_SCRIPT_INPUT: |
+            set -eu
+            RESULT_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}/.ci-results/pr-result"
+            RESULT_FILE="$RESULT_DIR/result.html"
+            mkdir -p "$RESULT_DIR"
+            PR_CHECK_URL="https://gitcode.com/openJiuwen/sciencediscovery/pull/${MERGE_ID}/check"
+            CODECHECK_RESULT_BASE="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery"
+            UT_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
+            ST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
+            result_link_cell() {
+              python3 - "$1" <<'PY'
+            import html
+            import json
+            import sys
+            from urllib.parse import urlsplit
+            from urllib.request import Request, urlopen
+
+            result_url = sys.argv[1]
+            try:
+                request = Request(result_url, headers={"User-Agent": "ScienceDiscovery-CodeArts"})
+                with urlopen(request, timeout=30) as response:
+                    link = json.load(response).get("link")
+                parsed = urlsplit(link) if isinstance(link, str) else None
+                if not parsed or parsed.scheme != "https" or not parsed.netloc:
+                    raise ValueError("result link must be an absolute HTTPS URL")
+                print('<a href="{}">点此跳转</a>'.format(html.escape(link, quote=True)))
+            except Exception as error:
+                print("could not load code-check link from {}: {}".format(result_url, error), file=sys.stderr)
+                print("N/A")
+            PY
+            }
+            public_log_cell() {
+              python3 - "$1" "$PR_CHECK_URL" <<'PY'
+            import html
+            import sys
+            from urllib.request import Request, urlopen
+
+            log_url, checks_url = sys.argv[1:3]
+            try:
+                request = Request(
+                    log_url,
+                    headers={"Range": "bytes=0-0", "User-Agent": "ScienceDiscovery-CodeArts"},
+                )
+                with urlopen(request, timeout=10) as response:
+                    if response.status not in (200, 206):
+                        raise ValueError("unexpected HTTP status {}".format(response.status))
+                print('<a href="{}">公开日志</a>'.format(html.escape(log_url, quote=True)))
+            except Exception as error:
+                print("public test log is unavailable at {}: {}".format(log_url, error), file=sys.stderr)
+                print(
+                    '<a href="{}">查看构建日志</a>（公开测试日志未生成）'.format(
+                        html.escape(checks_url, quote=True)
+                    )
+                )
+            PY
+            }
+            job_result() {
+              case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+                completed|passed|success|successful|succeeded) printf 'PASSED' ;;
+                *) printf 'FAILED' ;;
+              esac
+            }
+            CODECHECK_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/codecheck/${MERGE_ID}/codecheck.json")
+            BLACKLIST_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/blacklist/${MERGE_ID}/blacklist.json")
+            ANTI_POISON_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/anti_poison/${MERGE_ID}/anti_poison.json")
+            SCA_LINK_CELL=$(result_link_cell "$CODECHECK_RESULT_BASE/sca/${MERGE_ID}/sca.json")
+            CODECHECK_RESULT=$(job_result "${{ jobs.code_check.status }}")
+            UT_RESULT=$(job_result "${{ jobs.ut.status }}")
+            ST_RESULT=$(job_result "${{ jobs.st.status }}")
+            UT_LOG_CELL=$(public_log_cell "$UT_LOG_URL")
+            ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")
+            cat > "$RESULT_FILE" <<RESULT_HTML
+            <p>&#10060; 流水线 <a href="$PR_CHECK_URL">${{ pipeline.run_id }}</a> 执行失败。</p>
+            <p>可在 <a href="$PR_CHECK_URL">$PR_CHECK_URL</a> 查看完整构建日志。</p>
+            <p>在 PR 评论中发送 <code>rerun</code> 可重新触发 CI 流水线。</p>
+            <table style="border-collapse: collapse">
+              <tr><th>任务名称</th><th>子任务</th><th>状态</th><th>详情</th></tr>
+              <tr><td rowspan="4">代码检查</td><td>SCA（开源合规）</td><td rowspan="4">$CODECHECK_RESULT（子流水线汇总）</td><td>$SCA_LINK_CELL</td></tr>
+              <tr><td>Anti-poison（防投毒）</td><td>$ANTI_POISON_LINK_CELL</td></tr>
+              <tr><td>CodeCheck（静态检查）</td><td>$CODECHECK_LINK_CELL</td></tr>
+              <tr><td>Blacklist（禁用词）</td><td>$BLACKLIST_LINK_CELL</td></tr>
+              <tr><td>UT</td><td>-</td><td>$UT_RESULT</td><td>$UT_LOG_CELL</td></tr>
+              <tr><td>ST</td><td>-</td><td>$ST_RESULT</td><td>$ST_LOG_CELL</td></tr>
+            </table>
+            RESULT_HTML
+            test -s "$RESULT_FILE"
+            echo "rendered PR result: $RESULT_FILE"
+        identifier: 1790000000003e93ccb2-c3d7-4246-a79c-6e6079bb59cd
+      - name: Upload failed PR result to OBS
+        uses: upload-obs
+        with:
+          endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+          endpoint: obs.cn-north-4.myhuaweicloud.com
+          bucket: openjiuwen-ci
+          key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/pr/result.html"
+          source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
+          self_folder: "false"
+        identifier: 1790000000004756cae3-f5a6-4a02-a0e8-ab67c922ed75
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'st', 'code_check') }}"
+      runs-on:
+      - default
+    publish_pr_failure:
+      select: always
+      name: Publish failed PR result
+      needs:
+      - prepare_pr_failure
+      steps:
+      - name: Comment and mark the PR failed
+        uses: official_devcloud_cloudBuild
+        with:
+          number: "${MERGE_ID}"
+          result_html: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/pr/result.html"
+          final_label: ci-failed
+          __sameProject__: "true"
+          __projectId__: ""
+          jobId: 52d1699f53ca463ab77c4c4398be7e5a
+          __repository__: sciencediscovery
+          artifactIdentifier: ""
+        identifier: 1790000000000b7abf11-329f-448a-bdc4-f1db550865d3
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'st', 'code_check') }}"
+      runs-on:
+      - default
+  pre:
+  - type: auto
+  select: always
+  fail-fast: false

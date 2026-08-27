@@ -55,6 +55,7 @@ function testConfig(dataDir: string, runnerUrl: string): ServerConfig {
     gatewayIdleTimeoutMs: 240_000,
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
+    initialExecutionMode: "direct",
     kernelIdleTimeoutMs: 0,
     paperPythonPath: resolve(process.cwd(), "../paper/.venv/bin/python"),
     paperWorkerPath: resolve(process.cwd(), "../paper/paper_worker.py"),
@@ -432,7 +433,7 @@ test("stopping a stuck run ends the stream as cancelled and frees the Session", 
   assert.ok(types.includes("run.cancelled"), `expected a cancel terminal event, saw ${types.join(",")}`);
   assert.ok(!types.includes("run.failed"), "a user stop is not reported as a run failure");
 
-  await waitForGatewayTurn(api, 2);
+  await waitForGatewayTurn(api, 1);
   const queuedCancel = await cancelRun(api, sessionId);
   assert.equal(queuedCancel.status, 200, "the queued follow-up becomes the current run and can be stopped");
   assert.ok((await queuedStream).includes("run.cancelled"));
@@ -452,7 +453,7 @@ test("a stuck Session does not block runs in another Session", async (context) =
   const otherRun = await startRun(api, otherSessionId, "Run in the other Session");
   assert.equal(otherRun.status, 200, "the server isolates run admission per Session");
   const otherStream = readUntilTerminal(otherRun);
-  await waitForGatewayTurn(api, 2);
+  await waitForGatewayTurn(api, 1);
 
   assert.equal((await cancelRun(api, otherSessionId)).status, 200, "each Session cancels its own run");
   assert.ok((await otherStream).includes("run.cancelled"));
@@ -479,7 +480,7 @@ test("cancelling a blocked run persists the approval's terminal state and the to
   assert.equal(eventsResponse.status, 200);
   const events = await eventsResponse.json() as SessionRunEvent[];
 
-  const started = events.find((record) => record.event.type === "tool.started");
+  const started = events.find((record) => record.event.type === "tool.started" && record.event.trace.name === "run_python");
   assert.ok(started?.event.type === "tool.started");
   assert.match(JSON.stringify(started.event.trace.args ?? {}), /print\(1\)/, "the replayed tool call keeps its arguments");
 

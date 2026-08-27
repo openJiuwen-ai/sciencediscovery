@@ -1072,6 +1072,7 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
   assert.deepEqual(store.getSessionSettings("session-1"), {
     effective: {
       enabledConnectorIds: ["pubmed", "uniprot"],
+      enabledSkillLibraries: [],
       enabledSkillIds: ["life-science-evidence-brief", "managed-skill"],
       modelId: "configured-model",
       reviewModelId: "configured-model",
@@ -1086,6 +1087,7 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
     },
     sources: {
       enabledConnectorIds: "session",
+      enabledSkillLibraries: "unset",
       enabledSkillIds: "unset",
       modelId: "session",
       reviewModelId: "session",
@@ -1100,6 +1102,38 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
   await reopened.load();
   assert.deepEqual(reopened.getSessionSettings("session-1"), store.getSessionSettings("session-1"));
   assert.deepEqual(await readPersistedCatalog(tempRoot), firstPersisted);
+});
+
+test("SessionStore defaults new projects to selected mode with no mounted skill libraries", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-default-skills-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  store.setAvailableSkillIds(["life-science-evidence-brief", "managed-skill"]);
+  await store.load();
+  await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+  });
+
+  const project = await store.createProject("Default skill project");
+  assert.deepEqual(project.settingsOverrides, {
+    enabledSkillIds: [],
+    enabledSkillLibraries: [],
+    skillSelectionMode: "selected",
+  });
+
+  const session = await store.createSession(project.id, "Default skill session");
+  const settings = store.getSessionSettings(session.id);
+  assert.deepEqual(settings.effective.enabledSkillIds, []);
+  assert.deepEqual(settings.effective.enabledSkillLibraries, []);
+  assert.equal(settings.effective.skillSelectionMode, "selected");
+  assert.equal(settings.sources.enabledSkillIds, "project");
+  assert.equal(settings.sources.enabledSkillLibraries, "project");
+  assert.equal(settings.sources.skillSelectionMode, "project");
 });
 
 test("SessionStore resolves and persists hierarchical runtime settings", async (context) => {
@@ -1141,6 +1175,7 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
   assert.deepEqual(store.getSessionSettings(session.id), {
     effective: {
       enabledConnectorIds: [],
+      enabledSkillLibraries: [],
       enabledSkillIds: ["life-science-evidence-brief"],
       modelId: modelB.id,
       reviewModelId: modelB.id,
@@ -1150,6 +1185,7 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
     overrides: { reviewModelId: modelB.id },
     sources: {
       enabledConnectorIds: "project",
+      enabledSkillLibraries: "unset",
       enabledSkillIds: "project",
       modelId: "project",
       reviewModelId: "session",
@@ -1416,7 +1452,7 @@ test("skill selection defaults to all, is configured from Project down, and igno
   await store.replaceGlobalSettings({ enabledSkillIds: ["docking"], modelId: model.id, skillSelectionMode: "selected" });
   assert.deepEqual(store.getGlobalSettings().overrides, { modelId: model.id });
 
-  const project = await store.createProject("Skill mode project");
+  const project = await store.createProject("Skill mode project", { skillSelectionMode: "all" });
   const session = await store.createSession(project.id, "Skill mode session");
   const effective = store.resolveRuntimeSettings(session.id).effective;
   assert.equal(effective.skillSelectionMode, "all");
@@ -1790,6 +1826,32 @@ test("SessionStore records plans without coupling them to approval policy", asyn
     steps: ["Inspect inputs", "Run analysis", "Validate findings"],
   });
   assert.equal(revised.version, 2);
+  const started = await store.updateSessionPlanStep(manual.id, {
+    expectedVersion: revised.version,
+    planId: revised.id,
+    status: "in_progress",
+    stepId: revised.steps[0]!.id,
+  });
+  assert.equal(started.steps[0]?.status, "in_progress");
+  let progressing = started;
+  for (const step of started.steps) {
+    progressing = await store.updateSessionPlanStep(manual.id, {
+      expectedVersion: progressing.version,
+      planId: progressing.id,
+      status: "completed",
+      stepId: step.id,
+    });
+  }
+  assert.equal(progressing.state, "completed");
+  await assert.rejects(
+    store.updateSessionPlanStep(manual.id, {
+      expectedVersion: progressing.version,
+      planId: progressing.id,
+      status: "pending",
+      stepId: progressing.steps[0]!.id,
+    }),
+    /Only a recorded plan/u,
+  );
   const automatic = await store.createSession(project.id, "Automatic planning", {}, { approvalMode: "always_allow" });
   const autoPlan = await store.proposeSessionPlan(automatic.id, {
     feasibilityConfidence: "high",
@@ -1797,6 +1859,13 @@ test("SessionStore records plans without coupling them to approval policy", asyn
     steps: ["Summarize inputs", "Write results"],
   });
   assert.equal(autoPlan.state, "recorded");
+  const abandoned = await store.abandonSessionPlan(automatic.id, {
+    expectedVersion: autoPlan.version,
+    planId: autoPlan.id,
+    reason: "The user changed the objective",
+  });
+  assert.equal(abandoned.state, "abandoned");
+  assert.equal(abandoned.abandonmentReason, "The user changed the objective");
   assert.doesNotThrow(() => store.assertSessionWritable(automatic.id));
 });
 

@@ -23,3 +23,63 @@ test("executes tools and creates the canonical result message", async () => {
   assert.equal(result.content, "ok");
   assert.deepEqual(result.message, { role: "tool", name: "echo", tool_call_id: "1", content: "ok" });
 });
+
+test("result observations retain model-declared order across concurrent completion", async () => {
+  const observed: Array<{ name: string; sequence: number }> = [];
+  const registry = new ToolRegistry([
+    {
+      name: "slow", label: "slow", description: "slow", parameters: Type.Object({}),
+      async execute() {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { content: [{ type: "text" as const, text: "slow" }], details: {} };
+      },
+    },
+    {
+      name: "fast", label: "fast", description: "fast", parameters: Type.Object({}),
+      async execute() { return { content: [{ type: "text" as const, text: "fast" }], details: {} }; },
+    },
+  ], {
+    createResultMessage: (call, content) => ({ role: "tool", name: call.name, content }),
+    onResult: ({ call, sequence }) => observed.push({ name: call.name, sequence }),
+  });
+  await Promise.all([
+    registry.execute({ args: {}, id: "1", name: "slow" }, new AbortController().signal),
+    registry.execute({ args: {}, id: "2", name: "fast" }, new AbortController().signal),
+  ]);
+  assert.deepEqual(observed.sort((left, right) => left.sequence - right.sequence), [
+    { name: "slow", sequence: 1 },
+    { name: "fast", sequence: 2 },
+  ]);
+});
+
+test("dynamic availability hides and blocks tools without changing handlers", async () => {
+  let active = false;
+  const registry = new ToolRegistry([{
+    name: "execute", label: "execute", description: "execute", parameters: Type.Object({}),
+    async execute() { return { content: [{ type: "text" as const, text: "done" }], details: {} }; },
+  }], {
+    createResultMessage: resultMessage,
+    isAvailable: () => active,
+  });
+  assert.deepEqual(registry.visibleSpecs(), []);
+  const blocked = await registry.execute({ args: {}, id: "1", name: "execute" }, new AbortController().signal);
+  assert.equal(blocked.isError, true);
+  assert.match(blocked.content, /not available in the current execution mode/u);
+  active = true;
+  assert.deepEqual(registry.visibleSpecs().map((spec) => spec.name), ["execute"]);
+  assert.equal((await registry.execute({ args: {}, id: "2", name: "execute" }, new AbortController().signal)).content, "done");
+});
+
+test("unavailable deferred tools are absent from discovery", async () => {
+  let active = false;
+  const registry = new ToolRegistry([{
+    deferred: true,
+    name: "remote", label: "remote", description: "remote", parameters: Type.Object({}),
+    async execute() { return { content: [], details: {} }; },
+  }], { createResultMessage: resultMessage, isAvailable: () => active });
+  assert.equal(registry.visibleSpecs().some((spec) => spec.name === "tool_search"), false);
+  assert.equal(registry.promptSections().join("\n").includes("remote"), false);
+  active = true;
+  assert.equal(registry.visibleSpecs().some((spec) => spec.name === "tool_search"), true);
+  assert.equal(registry.promptSections().join("\n").includes("remote"), true);
+});

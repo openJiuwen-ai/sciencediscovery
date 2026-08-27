@@ -35,9 +35,9 @@ function visibleReviewerLevel(level: ReviewerSpecialistLevel): VisibleReviewerLe
 
 function planSummary(plan: SessionPlan): string {
   const feasibility = `${plan.feasibilityConfidence} feasibility`;
-  if (plan.state === "recorded") return `${plan.steps.length} steps · saved, not live progress · ${feasibility}`;
   const completed = plan.steps.filter((step) => step.status === "completed").length;
-  return `${completed}/${plan.steps.length} steps completed · ${feasibility}`;
+  const active = plan.steps.filter((step) => step.status === "in_progress").length;
+  return `${completed}/${plan.steps.length} completed${active ? ` · ${active} active` : ""} · ${feasibility}`;
 }
 
 export function PlanCard({
@@ -49,18 +49,17 @@ export function PlanCard({
   onToggle: (expanded: boolean) => void;
   plan: SessionPlan;
 }) {
-  const recorded = plan.state === "recorded";
   return (
     <article className={`plan-card ${plan.state}`}>
       <button aria-expanded={expanded} className="plan-card-heading" onClick={() => onToggle(!expanded)} type="button">
         <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span><strong>{recorded ? "Saved plan" : "Plan"} · v{plan.version}</strong><small>{planSummary(plan)}</small></span>
-        <i>{recorded ? "saved" : plan.state.replaceAll("_", " ")}</i>
+        <span><strong>Plan · v{plan.version}</strong><small>{planSummary(plan)}</small></span>
+        <i>{plan.state === "recorded" ? "active" : plan.state.replaceAll("_", " ")}</i>
       </button>
       {expanded ? <div className="plan-card-body">
         <p>{plan.scope}</p>
         <ol>{plan.steps.map((step) => <li key={step.id} data-status={step.status}>{step.description}</li>)}</ol>
-        {recorded ? <p className="plan-card-note">This plan was recorded when it was proposed. Step status is not tracked as live progress.</p> : null}
+        {plan.abandonmentReason ? <p className="plan-card-note">Abandoned: {plan.abandonmentReason}</p> : null}
         {plan.caveats.length ? <details><summary>Method caveats</summary><ul>{plan.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)}</ul></details> : null}
       </div> : null}
     </article>

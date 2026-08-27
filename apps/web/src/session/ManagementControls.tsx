@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 
-import type { ConnectorManifest, DeletionImpact, ModelProfile, RuntimeSettingsDetails, RuntimeSettingsOverrides, SessionListState, SkillDescriptor } from "@sciencediscovery/schema";
+import type { ConnectorManifest, DeletionImpact, ModelProfile, RuntimeSettingsDetails, RuntimeSettingsOverrides, SessionListState, SkillDescriptor, SkillLibrary } from "@sciencediscovery/schema";
 
 import { ArchiveIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, EditIcon, EllipsisIcon, PlusIcon, RestoreIcon, SettingsIcon, TrashIcon } from "../icons.js";
 import { ScopedSettingsEditor } from "../ScopedSettingsEditor.js";
@@ -260,6 +260,7 @@ export function ProjectCreationDialog({
   models,
   onCancel,
   onCreate,
+  skillLibraries = [],
   skills,
 }: {
   connectors: ConnectorManifest[];
@@ -267,6 +268,7 @@ export function ProjectCreationDialog({
   models: ModelProfile[];
   onCancel: () => void;
   onCreate: (name: string, settingsOverrides: RuntimeSettingsOverrides) => Promise<void> | void;
+  skillLibraries?: SkillLibrary[];
   skills: SkillDescriptor[];
 }) {
   const { t } = useLocale();
@@ -295,6 +297,7 @@ export function ProjectCreationDialog({
         onCancel={onCancel}
         onSave={(settingsOverrides) => onCreate(name.trim(), settingsOverrides)}
         scopeLabel={t("settings.project")}
+        skillLibraries={skillLibraries}
         skillScope="project"
         skills={skills}
         submitLabel={t("project.create")}

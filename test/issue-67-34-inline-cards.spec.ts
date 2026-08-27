@@ -122,7 +122,7 @@ test("plan and subagent cards anchor to their run, collapse by default, and surv
 
   // Round 1: ask for a plan and a subagent to exercise both inline card types.
   await page.locator(".composer textarea").fill(
-    "请严格按顺序执行三步：第一步，先调用 propose_plan 工具提交一个只含两步的小计划；第二步，调用 task 工具启动一个 subagent，让它回答 2+2 等于几；第三步，用一句话简单汇报。",
+    "请使用 Plan 执行模式，并严格按顺序执行三步：第一步，调用 propose_plan 工具提交一个只含两步的小计划；第二步，调用 task 工具启动一个 subagent，让它回答 2+2 等于几；第三步，用一句话简单汇报。",
   );
   await page.getByRole("button", { name: "Run analysis" }).click();
   await expect(page.locator(".plan-card").first()).toBeVisible({ timeout: 420_000 });
@@ -132,8 +132,8 @@ test("plan and subagent cards anchor to their run, collapse by default, and surv
   // Cards default to collapsed summaries.
   await expect(page.locator(".plan-card button").first()).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator(".subagent-card > button").first()).toHaveAttribute("aria-expanded", "false");
-  await expect(page.locator(".plan-card").first()).toContainText("Saved plan");
-  await expect(page.locator(".plan-card").first()).toContainText("not live progress");
+  await expect(page.locator(".plan-card").first()).toContainText("Plan");
+  await expect(page.locator(".plan-card").first()).toContainText(/\d+\/2 completed/);
   await expect(page.locator(".plan-card").first()).not.toContainText("recorded mode");
   await page.screenshot({ path: `${SCREENSHOTS}/01-collapsed.png`, fullPage: true });
 

@@ -111,6 +111,13 @@ export class ArtifactsApiClient extends RunsApiClient {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/artifacts`);
   }
 
+  deleteProjectArtifact(projectId: string, artifactId: string): Promise<{ deleted: string }> {
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}`,
+      { method: "DELETE" },
+    );
+  }
+
   listProjectArtifactVersions(projectId: string, artifactId: string): Promise<ScientificArtifactVersion[]> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/versions`);
   }
@@ -182,6 +189,37 @@ export class ArtifactsApiClient extends RunsApiClient {
   ): Promise<MemoryGraphChainResult> {
     return this.request("/api/memory/query/chain", {
       body: JSON.stringify({ node_id: nodeId, session_id: sessionId, version, chain_kind: chainKind ?? "full" }),
+      method: "POST",
+    });
+  }
+
+  /**
+   * Expand a subagent scope into its child ToolCalls + real produces/contains
+   * /next edges (the "click to expand a scope" payload).
+   * `/api/memory/query/scope-expansion` is reverse-proxied by the Node API to
+   * the memory-graph service's `POST /query/scope-expansion`. A 404 (scope
+   * absent / not a subagent) or an unreachable graph rejects the promise — the
+   * caller's catch shows a "scope gone" notice instead of crashing, keeping
+   * the scope collapsed.
+   */
+  getScopeExpansion(scopeTaskId: string, sessionId: string): Promise<MemorySubgraph> {
+    return this.request("/api/memory/query/scope-expansion", {
+      body: JSON.stringify({ scope_task_id: scopeTaskId, session_id: sessionId }),
+      method: "POST",
+    });
+  }
+
+  /**
+   * Expand a folded Artifacts/Papers aggregate node into its member products
+   * (the "click an Artifacts/Papers aggregate to expand it" payload, 需求3).
+   * `/api/memory/query/group-expansion` is reverse-proxied by the Node API to
+   * the memory-graph service's `POST /query/group-expansion`. A 404 (malformed
+   * id / scope gone) or an unreachable graph rejects the promise — the caller's
+   * catch leaves the aggregate collapsed instead of crashing.
+   */
+  getGroupExpansion(groupId: string, sessionId: string): Promise<MemorySubgraph> {
+    return this.request("/api/memory/query/group-expansion", {
+      body: JSON.stringify({ group_id: groupId, session_id: sessionId }),
       method: "POST",
     });
   }

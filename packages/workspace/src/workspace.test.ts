@@ -13,13 +13,14 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   type ConnectorResult,
+  type CreateSkillPackageRequest,
   type Subagent,
   type Environment,
   type NpuJob,
@@ -123,16 +124,23 @@ test("web search and fetch are stable first-class tools when handlers are provid
 });
 
 test("run_shell executes an existing workspace script without rewriting or path escape", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `workspace-shell-${process.pid}-${Date.now()}`);
-  await mkdir(root, { recursive: true });
-  await writeFile(resolve(root, "run_all.sh"), "printf '%s\\n' \"$1\"\n");
-  context.after(() => rm(root, { force: true, recursive: true }));
-  let executedCode = "";
+  const fixtureRoot = resolve(process.cwd(), ".tmp", `workspace-shell-${process.pid}-${Date.now()}`);
+  const root = resolve(fixtureRoot, "workspace");
+  const subagentRoot = resolve(root, "subagents", "subagent-1");
+  await mkdir(resolve(root, "scripts"), { recursive: true });
+  await mkdir(subagentRoot, { recursive: true });
+  await writeFile(resolve(root, "root script.sh"), "printf '%s\\n' \"$@\"\n");
+  await writeFile(resolve(root, "scripts", "child script.sh"), "printf 'child\\n'\n");
+  await writeFile(resolve(subagentRoot, "agent script.sh"), "printf 'agent\\n'\n");
+  await writeFile(resolve(fixtureRoot, "outside.sh"), "printf 'outside\\n'\n");
+  await symlink(resolve(fixtureRoot, "outside.sh"), resolve(root, "outside-link.sh"));
+  context.after(() => rm(fixtureRoot, { force: true, recursive: true }));
+  const executedCodes: string[] = [];
   const tools = createWorkspaceTools(root, {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
     executeShell: async (code): Promise<ShellExecutionResult> => {
-      executedCode = code;
+      executedCodes.push(code);
       const timestamp = new Date().toISOString();
       return {
         cgroupMode: "none", createdFiles: [],
@@ -148,12 +156,53 @@ test("run_shell executes an existing workspace script without rewriting or path 
   });
   const tool = tools.find((candidate) => candidate.name === "run_shell");
   assert.ok(tool);
-  await tool.execute("shell-call", { arguments: ["value with spaces"], scriptPath: "run_all.sh" });
-  assert.equal(executedCode, "/usr/bin/bash 'run_all.sh' 'value with spaces'");
+  await tool.execute("shell-root", {
+    arguments: ["value with spaces", "quote'value", "$HOME; touch never"],
+    scriptPath: "root script.sh",
+  });
+  await tool.execute("shell-child", { scriptPath: "scripts/child script.sh" });
+  assert.deepEqual(executedCodes, [
+    "/usr/bin/bash '/workspace/root script.sh' 'value with spaces' 'quote'\"'\"'value' '$HOME; touch never'",
+    "/usr/bin/bash '/workspace/scripts/child script.sh'",
+  ]);
+  await assert.rejects(
+    tool.execute("shell-missing", { scriptPath: "missing.sh" }),
+    /scriptPath does not exist in the workspace/,
+  );
+  await assert.rejects(
+    tool.execute("shell-directory", { scriptPath: "scripts" }),
+    /scriptPath must reference a workspace file/,
+  );
   await assert.rejects(
     tool.execute("shell-call", { scriptPath: "../outside.sh" }),
     /escapes the workspace/,
   );
+  await assert.rejects(
+    tool.execute("shell-symlink", { scriptPath: "outside-link.sh" }),
+    /scriptPath escapes the workspace/,
+  );
+
+  let subagentCode = "";
+  const subagentTools = createWorkspaceTools(subagentRoot, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    executeShell: async (code) => {
+      subagentCode = code;
+      return {
+        cgroupMode: "none", createdFiles: [], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" }, executionId: "subagent-shell", exitCode: 0,
+        finishedAt: new Date().toISOString(), kernelId: "persistent:shell", kernelMode: "persistent", language: "shell",
+        modifiedFiles: [], networkPolicy: "none", runnerVersion: "test", sandbox: "bubblewrap",
+        startedAt: new Date().toISOString(), stderr: "", stdout: "agent\n",
+        workingDirectory: "/workspace/subagents/subagent-1",
+      };
+    },
+    readOnlyWorkspaceRoot: root,
+  });
+  const subagentTool = subagentTools.find((candidate) => candidate.name === "run_shell");
+  assert.ok(subagentTool);
+  await subagentTool.execute("subagent-script", { scriptPath: "agent script.sh" });
+  assert.equal(subagentCode, "/usr/bin/bash '/workspace/subagents/subagent-1/agent script.sh'");
 });
 
 test("run_npu_job submits only allowlisted workloads with workspace-scoped inputs", async (context) => {
@@ -692,7 +741,6 @@ test("built-in workspace tool names use the strict provider-safe alphabet", () =
     executeShell: unavailable,
     listArtifacts: unavailable,
     paperExtractPdf: unavailable,
-    proposePlan: unavailable,
     queryGraph: unavailable,
     readArtifact: unavailable,
     remoteHosts: [],
@@ -709,7 +757,135 @@ test("built-in workspace tool names use the strict provider-safe alphabet", () =
   );
 });
 
-test("skill discovery loads frozen instructions progressively", async () => {
+test("propose_skill_library_update only submits dry-run self-evolution proposals", async () => {
+  let captured: unknown;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    proposeSkillLibraryUpdate: async (input) => {
+      captured = input;
+      return {
+        createdAt: "2026-08-25T00:00:00.000Z",
+        id: "proposal-1",
+        libraryId: input.libraryId,
+        rationale: input.rationale,
+        request: input,
+        result: { conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: true },
+        sourceRefs: input.sourceRefs,
+        status: "pending",
+        updatedAt: "2026-08-25T00:00:00.000Z",
+      };
+    },
+  });
+
+  const tool = tools.find((candidate) => candidate.name === "propose_skill_library_update");
+  assert.ok(tool);
+  const result = await tool.execute("tool-call", {
+    libraryId: "project-skills",
+    operations: [{ package: { files: [{ content: "---\nname: learned-skill\ndescription: Learned workflow.\n---\n\nUse it.\n", path: "SKILL.md" }] }, type: "upsert" }],
+    rationale: "A reusable workflow was found.",
+  });
+  assert.deepEqual(captured, {
+    author: { kind: "self-evolution", name: "Agent self-evolution proposal" },
+    dryRun: true,
+    libraryId: "project-skills",
+    operations: [{ package: { files: [{ content: "---\nname: learned-skill\ndescription: Learned workflow.\n---\n\nUse it.\n", path: "SKILL.md" }] }, type: "upsert" }],
+    rationale: "A reusable workflow was found.",
+    sourceRefs: [],
+  });
+  assert.match(result.content[0]?.text ?? "", /proposal-1/);
+});
+
+test("propose_skill_library_update can generate valid SKILL.md from structured fields", async () => {
+  let captured: unknown;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    proposeSkillLibraryUpdate: async (input) => {
+      captured = input;
+      return {
+        createdAt: "2026-08-25T00:00:00.000Z",
+        id: "proposal-structured",
+        libraryId: input.libraryId,
+        rationale: input.rationale,
+        request: input,
+        result: { conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: true },
+        sourceRefs: input.sourceRefs,
+        status: "pending",
+        updatedAt: "2026-08-25T00:00:00.000Z",
+      };
+    },
+  });
+
+  const tool = tools.find((candidate) => candidate.name === "propose_skill_library_update");
+  assert.ok(tool);
+  await tool.execute("tool-call", {
+    libraryId: "project-skills",
+    operations: [{
+      skill: {
+        description: "Reusable checks for tiny task outputs.",
+        instructions: "Check the task output, record reusable steps, and keep the result concise.",
+        metadata: { source: "self-evolution" },
+        name: "tiny-task-check",
+        version: "1.0.0",
+      },
+      type: "upsert_skill",
+    }],
+    rationale: "The same tiny task pattern recurred.",
+  });
+
+  const operation = (captured as { operations: Array<{ package: { files: Array<{ content: string; path: string }> }; type: string }> }).operations[0]!;
+  assert.equal(operation.type, "upsert");
+  assert.equal(operation.package.files[0]?.path, "SKILL.md");
+  assert.match(operation.package.files[0]?.content ?? "", /^---\nname: "tiny-task-check"\ndescription: "Reusable checks for tiny task outputs\."/);
+  assert.match(operation.package.files[0]?.content ?? "", /\n---\n\nCheck the task output/);
+});
+
+test("publish_skill_library_update submits selected proposals", async () => {
+  let captured: unknown;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    publishSkillLibraryUpdate: async (input) => {
+      captured = input;
+      return {
+        proposals: input.proposalIds.map((id) => ({
+          createdAt: "2026-08-25T00:00:00.000Z",
+          id,
+          libraryId: "project-skills",
+          rationale: "Ready to publish.",
+          request: { author: { kind: "self-evolution" }, operations: [] },
+          result: { conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: true },
+          sourceRefs: [],
+          status: "published",
+          updatedAt: "2026-08-25T00:00:00.000Z",
+        })),
+        result: {
+          conflicts: [],
+          diagnostics: [],
+          diff: { added: [], deleted: [], modified: [] },
+          dryRun: false,
+          version: {
+            author: { kind: "self-evolution" },
+            contentHash: "a".repeat(64),
+            createdAt: "2026-08-25T00:00:00.000Z",
+            id: "version-1",
+            libraryId: "project-skills",
+            skills: [],
+          },
+        },
+      };
+    },
+  });
+
+  const tool = tools.find((candidate) => candidate.name === "publish_skill_library_update");
+  assert.ok(tool);
+  const result = await tool.execute("tool-call", { proposalIds: ["proposal-1", "proposal-2"] });
+  assert.deepEqual(captured, { proposalIds: ["proposal-1", "proposal-2"] });
+  assert.match(result.content[0]?.text ?? "", /version-1/);
+});
+
+test("skill loading reads frozen instructions directly by exact id", async () => {
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
@@ -734,13 +910,7 @@ test("skill discovery loads frozen instructions progressively", async () => {
     }],
   });
 
-  const describe = tools.find((candidate) => candidate.name === "describe_skill");
-  assert.ok(describe);
-  const described = await describe.execute("tool-call", { query: "progressive" });
-  const describedText = described.content[0]?.type === "text" ? described.content[0].text : "";
-  assert.match(describedText, /Skill: selected-skill/);
-  assert.match(describedText, /Workflow for selected progressive loading tests/);
-  assert.doesNotMatch(describedText, /Follow the frozen selected workflow/);
+  assert.equal(tools.some((candidate) => candidate.name === "describe_skill"), false);
 
   const readSkill = tools.find((candidate) => candidate.name === "read_skill");
   assert.ok(readSkill);
@@ -793,9 +963,56 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
   );
 });
 
-test("planning and subagent tools preserve structured governance inputs", async () => {
+test("create_skill requires the selected skill-creator instructions before mutating the catalog", async () => {
+  let request: CreateSkillPackageRequest | undefined;
+  const tools = createWorkspaceTools(process.cwd(), {
+    createSkill: async (input) => {
+      request = input;
+      return {
+        createdAt: "2026-08-20T00:00:00.000Z",
+        draftId: "11111111-1111-4111-8111-111111111111",
+        fileCount: 1 + (input.resources?.length ?? 0),
+        name: input.name,
+        updatedAt: "2026-08-20T00:00:00.000Z",
+      };
+    },
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    skills: [{
+      content: "Create focused skills, then call create_skill exactly once.",
+      description: "Create a Skill from an explicit user request.",
+      hash: "c".repeat(64),
+      id: "skill-creator",
+      readResource: () => { throw new Error("not used"); },
+      resources: [],
+      revision: 1,
+      version: "1.0.0",
+    }],
+  });
+  const create = tools.find((tool) => tool.name === "create_skill");
+  const read = tools.find((tool) => tool.name === "read_skill");
+  assert.ok(create);
+  assert.ok(read);
+
+  const parameters = {
+    description: "Checks a result against a reusable rubric.",
+    instructions: "# Workflow\n\nApply the rubric and report failures.",
+    name: "rubric-checker",
+    resources: [{ content: "# Rubric\n\n- Complete\n", path: "references/rubric.md" }],
+    version: "1.0.0",
+  };
+  await assert.rejects(create.execute("create-before-read", parameters), /Load skill-creator/);
+  await read.execute("read-creator", { skillId: "skill-creator" });
+  const result = await create.execute("create-after-read", parameters);
+
+  assert.equal(request?.name, "rubric-checker");
+  assert.equal(request?.metadata?.version, "1.0.0");
+  assert.equal(request?.resources?.[0]?.path, "references/rubric.md");
+  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /pending draft/);
+});
+
+test("subagent tools preserve structured governance inputs", async () => {
   const timestamp = new Date().toISOString();
-  let proposedScope = "";
   let subagentDescription = "";
   let subagentSpecialistId: string | undefined;
   let subagentMaxTurns: number | undefined;
@@ -841,27 +1058,9 @@ test("planning and subagent tools preserve structured governance inputs", async 
       id: "specialist-code",
       name: "Code implementer",
     }],
-    proposePlan: async (input) => {
-      proposedScope = input.scope;
-      return {
-        caveats: input.caveats ?? [],
-        createdAt: timestamp,
-        feasibilityConfidence: input.feasibilityConfidence,
-        id: "plan-1",
-        mode: "recorded",
-        scope: input.scope,
-        sessionId: "session-1",
-        state: "recorded",
-        steps: input.steps.map((description, index) => ({ description, id: `step-${index}`, status: "pending" })),
-        updatedAt: timestamp,
-        version: 1,
-      };
-    },
   });
 
-  const propose = tools.find((candidate) => candidate.name === "propose_plan");
   const task = tools.find((candidate) => candidate.name === "task");
-  assert.ok(propose);
   assert.ok(task);
   const taskProperties = (task.parameters as unknown as { properties: Record<string, unknown> }).properties;
   assert.deepEqual(Object.keys(taskProperties).toSorted(), [
@@ -900,14 +1099,6 @@ test("planning and subagent tools preserve structured governance inputs", async 
   assert.match(task.description, /id: specialist-code; description: Builds and debugs analysis code/);
   assert.doesNotMatch(task.description, /Code implementer/);
   assert.match(task.description, /semantic match against specialist descriptions/);
-  await propose.execute("plan-call", {
-    caveats: ["Reference coverage may be incomplete"],
-    feasibilityConfidence: "medium",
-    scope: "Compare two independent analysis methods",
-    steps: ["Prepare inputs", "Run both methods", "Compare outputs"],
-  });
-  assert.equal(proposedScope, "Compare two independent analysis methods");
-
   const result = await task.execute("task-call", {
     brief: {
       collaborationRules: ["Work independently", "Return one final JSON object"],

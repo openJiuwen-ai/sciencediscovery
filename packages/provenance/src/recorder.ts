@@ -39,9 +39,9 @@ import type {
   ScientificArtifactKind,
   ScientificArtifactVersion,
   ShellExecutionResult,
+  SandboxKind,
 } from "@sciencediscovery/schema";
 import {
-  SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   classifyScientificArtifact,
   epochSandboxNetworkAccess,
 } from "@sciencediscovery/schema";
@@ -54,6 +54,8 @@ import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC,
   DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH,
+  hostSandboxKind,
+  systemShellEnvironmentRevisionId,
 } from "@sciencediscovery/executor";
 
 /** Persistence boundary consumed by provenance recording. */
@@ -90,6 +92,14 @@ function interruptedExecutionStatus(signal: AbortSignal | undefined): "cancelled
   return signal?.aborted ? "cancelled" : "failed";
 }
 
+async function runnerSandboxKind(runnerClient: RunnerClient): Promise<SandboxKind> {
+  try {
+    return (await runnerClient.health()).sandbox;
+  } catch {
+    return hostSandboxKind();
+  }
+}
+
 export interface RecordExecutionOptions {
   agentId: string;
   artifactPathPrefix?: string;
@@ -108,6 +118,10 @@ export interface RecordExecutionOptions {
   signal?: AbortSignal;
   turnId: string;
   workspaceRoot: string;
+  /** When set, this execution runs inside a subagent: products hang off the
+   * subagent's child SubTask instead of a per-execution SubTask. Absent
+   * (undefined) in main-agent context — behavior unchanged. */
+  parentSubagentId?: string;
 }
 
 export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environmentRevisionId" | "language">;
@@ -190,6 +204,10 @@ export class ProvenanceRecorder {
   async declareWorkspaceArtifact(options: {
     description?: string;
     name: string;
+    /** When set, this artifact was declared inside a subagent: its upsert
+     * must carry parentSubagentId so products hang off the subagent's child
+     * SubTask, not a per-execution SubTask. Mirrors the execute* path. */
+    parentSubagentId?: string;
     path: string;
     /**
      * Chip-reference + claim-id accumulator from the calling run scope. Drains
@@ -286,6 +304,7 @@ export class ProvenanceRecorder {
         taskType: "auto_inferred_from_execution",
         tool: run.tool,
         turnId: run.turnId,
+        parentSubagentId: options.parentSubagentId,
       });
     }
     return { artifact, version };
@@ -360,6 +379,7 @@ export class ProvenanceRecorder {
 
   async executeShell(options: RecordShellExecutionOptions): Promise<ShellExecutionResult> {
     const executionId = randomUUID();
+    const sandbox = await runnerSandboxKind(options.runnerClient);
     const shellSpec = await this.cas.put(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC);
     if (shellSpec.hash !== DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH) {
       throw new Error("Shell environment package spec hash is inconsistent");
@@ -386,7 +406,7 @@ export class ProvenanceRecorder {
         cgroupMode: "unavailable",
         code,
         createdFiles: [],
-        environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentRevisionId: systemShellEnvironmentRevisionId(sandbox),
         envSnapshot: null,
         exitCode: null,
         finishedAt: timestamp,
@@ -399,7 +419,7 @@ export class ProvenanceRecorder {
         networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         runnerVersion: "unavailable",
-        sandbox: "bubblewrap",
+        sandbox,
         sessionId: options.sessionId,
         startedAt: timestamp,
         status: interruptedExecutionStatus(options.signal),
@@ -470,12 +490,14 @@ export class ProvenanceRecorder {
       stdoutHash: stdout.hash,
       stderrHash: stderr.hash,
       envHash: null,
+      parentSubagentId: options.parentSubagentId,
     });
     return result;
   }
 
   async executeScientific(options: RecordExecutionOptions): Promise<PythonExecutionResult> {
     const executionId = randomUUID();
+    const sandbox = await runnerSandboxKind(options.runnerClient);
     const language = options.language ?? "python";
     const kernelMode = options.kernelMode ?? "ephemeral";
     if (!options.environmentRevisionId && language === "python") {
@@ -524,7 +546,7 @@ export class ProvenanceRecorder {
         networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         runnerVersion: "unavailable",
-        sandbox: "bubblewrap",
+        sandbox,
         sessionId: options.sessionId,
         startedAt: timestamp,
         status: interruptedExecutionStatus(options.signal),
@@ -621,6 +643,7 @@ export class ProvenanceRecorder {
       stdoutHash: stdout.hash,
       stderrHash: stderr.hash,
       envHash: envRevision?.snapshot.hash ?? null,
+      parentSubagentId: options.parentSubagentId,
     });
     if (environmentSyncError) throw environmentSyncError;
     return result;

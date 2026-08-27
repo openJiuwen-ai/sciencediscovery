@@ -14,7 +14,7 @@
 
 import type { ComposerReference, SkillDescriptor, WorkbenchSearchResult } from "@sciencediscovery/schema";
 
-import { CloseIcon, FileIcon, ProjectIcon, SearchIcon, SessionIcon } from "../icons.js";
+import { CloseIcon, FileIcon, ProjectIcon, SearchIcon, SessionIcon, SparkleIcon } from "../icons.js";
 import { useLocale } from "../i18n/index.js";
 
 export interface ComposerTrigger {
@@ -23,10 +23,32 @@ export interface ComposerTrigger {
   symbol: "#" | "/" | "@";
 }
 
-export interface ComposerSuggestion {
+export type ComposerCommandSuggestion = {
+  command: `/${string}`;
   detail: string;
+  label: string;
+  reference?: never;
+};
+
+export type ComposerSuggestion = ComposerCommandSuggestion | {
+  command?: never;
+  detail: string;
+  label?: never;
   reference: ComposerReference;
-}
+};
+
+export const SKILL_AUTHORING_COMMANDS: ComposerCommandSuggestion[] = [
+  {
+    command: "/skill-creator",
+    detail: "Describe a workflow and let the Agent create a reviewable Skill package",
+    label: "skill-creator",
+  },
+  {
+    command: "/distill-session",
+    detail: "Distill this Session into a reviewable Skill using its conversation and run history",
+    label: "distill-session",
+  },
+];
 
 /**
  * `/` offers exactly the skills the Session can run. `effectiveSkillIds` is the
@@ -73,6 +95,33 @@ export function insertComposerReference(
   return `${text.slice(0, trigger.start)}${composerReferenceToken(reference)} ${text.slice(cursor)}`;
 }
 
+export const GLOBAL_SEARCH_DEBOUNCE_MS = 250;
+
+export function insertComposerCommand(
+  text: string,
+  trigger: ComposerTrigger,
+  command: `/${string}`,
+  cursor = text.length,
+): string {
+  return `${text.slice(0, trigger.start)}${command} ${text.slice(cursor)}`;
+}
+
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function selectedSkillAuthoringCommands(text: string): ComposerCommandSuggestion[] {
+  return SKILL_AUTHORING_COMMANDS.filter(({ command }) =>
+    new RegExp(`(?:^|\\s)${escapeRegularExpression(command)}(?=\\s|$)`).test(text));
+}
+
+export function removeSkillAuthoringCommand(text: string, command: `/${string}`): string {
+  return text
+    .replace(new RegExp(`(^|\\s)${escapeRegularExpression(command)}(?=\\s|$)`, "g"), "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/^[ \t]+/, "");
+}
+
 export function filterSearchResults(results: WorkbenchSearchResult[], query: string): WorkbenchSearchResult[] {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return results.slice(0, 80);
@@ -92,7 +141,7 @@ export function ComposerReferenceMenu({
   const { t } = useLocale();
   const needle = trigger.query.toLocaleLowerCase();
   const visible = suggestions.filter((suggestion) =>
-    `${suggestion.reference.label}\n${suggestion.detail}`.toLocaleLowerCase().includes(needle)).slice(0, 8);
+    `${suggestion.reference?.label ?? suggestion.label}\n${suggestion.detail}`.toLocaleLowerCase().includes(needle)).slice(0, 8);
   if (!visible.length) return null;
 
   return (
@@ -101,9 +150,35 @@ export function ComposerReferenceMenu({
         <strong>{trigger.symbol === "@" ? t("search.artifacts") : trigger.symbol === "#" ? t("sidebar.sessions") : t("search.skills")}</strong>
         <span>{t("search.structuredContext")}</span>
       </div>
-      {visible.map((suggestion) => (
-        <button key={`${suggestion.reference.kind}:${suggestion.reference.id}`} title={`${suggestion.reference.label} · ${suggestion.detail}`} type="button" role="option" onClick={() => onSelect(suggestion)}>
-          <span>{suggestion.reference.label}</span><small>{suggestion.detail}</small>
+      {visible.map((suggestion) => {
+        const label = suggestion.command ?? suggestion.reference.label;
+        return (
+          <button className={suggestion.command ? "composer-command-suggestion" : undefined} key={suggestion.command ?? `${suggestion.reference.kind}:${suggestion.reference.id}`} title={`${label} · ${suggestion.detail}`} type="button" role="option" onClick={() => onSelect(suggestion)}>
+            {suggestion.command ? <i aria-hidden="true"><SparkleIcon size={16} /></i> : null}
+            <span className="composer-suggestion-copy"><strong>{label}</strong><small>{suggestion.detail}</small></span>
+            {suggestion.command ? <em>Authoring</em> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export function ComposerCommandChips({
+  commands,
+  onRemove,
+}: {
+  commands: ComposerCommandSuggestion[];
+  onRemove: (command: ComposerCommandSuggestion) => void;
+}) {
+  if (!commands.length) return null;
+  return (
+    <div className="composer-command-chips" aria-label="Selected Skill authoring commands">
+      {commands.map((command) => (
+        <button aria-label={`Remove ${command.command} from the prompt`} key={command.command} title={`${command.command} · ${command.detail}`} type="button" onClick={() => onRemove(command)}>
+          <i aria-hidden="true"><SparkleIcon size={13} /></i>
+          <span><strong>{command.command}</strong><small>Skill authoring</small></span>
+          <CloseIcon aria-hidden="true" size={12} />
         </button>
       ))}
     </div>
@@ -132,20 +207,26 @@ export function ComposerReferenceChips({
 }
 
 export function GlobalSearchDialog({
+  hasMore,
+  loading,
   onClose,
   onQueryChange,
   onSelect,
   query,
   results,
+  total,
 }: {
+  hasMore: boolean;
+  loading: boolean;
   onClose: () => void;
   onQueryChange: (query: string) => void;
   onSelect: (result: WorkbenchSearchResult) => void;
   query: string;
   results: WorkbenchSearchResult[];
+  total: number;
 }) {
   const { t } = useLocale();
-  const visible = filterSearchResults(results, query);
+  const visible = results.slice(0, 80);
   return (
     <div className="config-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
@@ -164,7 +245,11 @@ export function GlobalSearchDialog({
               <em>{result.kind}</em>
             </button>
           ))}
-          {!visible.length ? <p>{t("search.empty")}</p> : null}
+          {loading ? <p>{t("search.loading")}</p> : null}
+          {!loading && !visible.length ? <p>{t("search.empty")}</p> : null}
+          {!loading && (hasMore || total > visible.length) ? (
+            <p>{t("search.more", { count: visible.length, total })}</p>
+          ) : null}
         </div>
       </section>
     </div>

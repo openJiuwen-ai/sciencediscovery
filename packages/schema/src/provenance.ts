@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { EvidenceIdentifierType } from "./connectors.js";
-import type { ExecutionLanguage, KernelMode } from "./environment.js";
+import type { ExecutionLanguage, KernelMode, SandboxKind } from "./environment.js";
 import type { ModelUsageStatus } from "./model-usage.js";
 import type { EffectiveRuntimeSettings } from "./runtime-settings.js";
 import type { SandboxNetworkMode } from "./sandbox-network.js";
@@ -56,7 +56,7 @@ export interface ExecutionRun {
   /** Historical runs recorded the compute resource profile they ran under. */
   resourceProfile?: Record<string, unknown>;
   runnerVersion: string;
-  sandbox: "bubblewrap";
+  sandbox: SandboxKind;
   sessionId: string;
   startedAt: string;
   /**
@@ -91,6 +91,12 @@ export interface PromptSkillRef {
   version: string;
 }
 
+export interface PromptSkillLibraryRef {
+  contentHash: string;
+  libraryId: string;
+  versionId: string;
+}
+
 export interface PromptManifest {
   costUsd: number | null;
   createdAt: string;
@@ -108,6 +114,8 @@ export interface PromptManifest {
   response?: CasObjectRef;
   runtimeSettings: EffectiveRuntimeSettings;
   sessionId: string;
+  /** Version-pinned skill libraries used to assemble this prompt. */
+  skillLibraryRefs?: PromptSkillLibraryRef[];
   skillRefs: PromptSkillRef[];
   specialistRef?: { id: string; name: string };
   status: "failed" | "succeeded";

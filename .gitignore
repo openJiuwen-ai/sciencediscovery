@@ -41,6 +41,11 @@ logs/
 # here, holding service venvs, session data and bootstrap tokens.
 /.sciencediscovery-data/
 
+# Local runtime state (catalog, sessions, credentials, environments, and logs)
+/data/
+/science-discovery-data/
+/science-agent-data/
+
 # Local Playwright environment and reports
 .e2e/
 # The stack's default data dir (`SCIENCE_AGENT_DATA_DIR`): envs, logs, CAS,

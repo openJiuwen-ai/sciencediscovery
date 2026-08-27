@@ -22,6 +22,9 @@
 #
 # Usage: bash .ci/provision-runner.sh [--sandbox]
 #   --sandbox  bubblewrap is required; fail if it cannot be made to work.
+# Optional environment:
+#   CI_NPM_REGISTRY  npm-compatible registry used by npm, pnpm and Corepack.
+#   CI_PYPI_INDEX    Python package index used to install the pinned uv wheel.
 #
 # PATH is not exported to the caller: a CI step is its own shell. Callers add
 #   export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
@@ -100,12 +103,68 @@ if [ ! -f package.json ]; then
   exit 1
 fi
 
+# npm and pnpm share the user npmrc. Corepack does not read that file, so it
+# needs the same mirror separately and expects its base URL without a trailing
+# slash. The user-level file persists across steps in the same CI job.
+if [ -n "${CI_NPM_REGISTRY:-}" ]; then
+  npm_registry="${CI_NPM_REGISTRY%/}/"
+  export COREPACK_NPM_REGISTRY="${npm_registry%/}"
+  npm config set registry "$npm_registry" --location=user >/dev/null 2>&1 \
+    || { echo "FATAL: could not configure the npm registry." >&2; exit 1; }
+  echo
+  echo "=== npm registry ==="
+  echo "configured: $(npm config get registry)"
+fi
+
 # The pin lives in package.json so the workflow cannot drift from the repository.
 pnpm_spec="$(node -p "require('./package.json').packageManager || 'pnpm@latest'" 2>/dev/null || echo 'pnpm@latest')"
+
+# Corepack verifies registry metadata and npm -g depends on a writable global
+# prefix. When CI supplies an npm-compatible registry, installing the pinned
+# package tarball directly avoids both failure modes and stays under $PNPM_HOME.
+install_pnpm_from_registry() {
+  local registry="$1" version="${pnpm_spec#pnpm@}" archive install_dir expected_sha512 actual_sha512
+  case "$version" in
+    11.1.2)
+      expected_sha512=415a1cc25974731e75455c1468371be74c5aa5fb7621b50d4056d222451609f11412f23fd602e6169f1e060466641f798597e1be961a10688836a67b16569499
+      ;;
+    *)
+      echo "direct registry install has no pinned checksum for pnpm '$version'" >&2
+      return 1
+      ;;
+  esac
+
+  archive="$PNPM_HOME/.downloads/pnpm-$version.tgz"
+  install_dir="$PNPM_HOME/.tools/pnpm/$version"
+  mkdir -p "$(dirname "$archive")" "$install_dir" || return 1
+  echo "fetching ${registry%/}/pnpm/-/pnpm-$version.tgz"
+  if have curl; then
+    curl -fsSL --retry 2 --connect-timeout 15 --max-time 120 \
+      "${registry%/}/pnpm/-/pnpm-$version.tgz" -o "$archive" || return 1
+  elif have wget; then
+    wget -O "$archive" "${registry%/}/pnpm/-/pnpm-$version.tgz" || return 1
+  else
+    return 1
+  fi
+  have sha512sum || return 1
+  actual_sha512="$(sha512sum "$archive" | awk '{print $1}')" || return 1
+  if [ "$actual_sha512" != "$expected_sha512" ]; then
+    echo "pnpm tarball checksum mismatch: expected $expected_sha512, got $actual_sha512" >&2
+    return 1
+  fi
+  tar -xzf "$archive" -C "$install_dir" --strip-components=1 || return 1
+  [ -x "$install_dir/bin/pnpm.mjs" ] || return 1
+  ln -sfn "$install_dir/bin/pnpm.mjs" "$PNPM_HOME/pnpm" || return 1
+  ln -sfn "$install_dir/bin/pnpx.mjs" "$PNPM_HOME/pnpx" || return 1
+  hash -r
+}
+
 echo
 echo "=== pnpm ($pnpm_spec) ==="
 if have pnpm; then
   echo "already present"
+elif [ -n "${npm_registry:-}" ] && install_pnpm_from_registry "$npm_registry"; then
+  echo "installed from configured registry"
 elif have corepack && corepack enable >/dev/null 2>&1 && corepack prepare --activate >/dev/null 2>&1; then
   echo "installed via corepack"
 elif have corepack && as_root corepack enable >/dev/null 2>&1 && corepack prepare --activate >/dev/null 2>&1; then
@@ -122,10 +181,27 @@ else
 fi
 pnpm --version || { echo "FATAL: pnpm installed but not runnable." >&2; exit 1; }
 
+UV_REQUIRED=0.9.26
+install_uv_from_index() {
+  local index="$1" install_dir="$HOME/.local/share/uv/$UV_REQUIRED"
+  have python3 || return 1
+  python3 -m pip --version >/dev/null 2>&1 || return 1
+  mkdir -p "$install_dir" "$HOME/.local/bin" || return 1
+  python3 -m pip install --target "$install_dir" --no-cache-dir --no-deps \
+    --only-binary=:all: --disable-pip-version-check --index-url "$index" \
+    "uv==$UV_REQUIRED" || return 1
+  [ -x "$install_dir/bin/uv" ] || return 1
+  ln -sfn "$install_dir/bin/uv" "$HOME/.local/bin/uv" || return 1
+  ln -sfn "$install_dir/bin/uvx" "$HOME/.local/bin/uvx" || return 1
+  hash -r
+}
+
 echo
-echo "=== uv ==="
+echo "=== uv (uv@$UV_REQUIRED) ==="
 if have uv; then
   echo "already present"
+elif [ -n "${CI_PYPI_INDEX:-}" ] && install_uv_from_index "$CI_PYPI_INDEX"; then
+  echo "installed from configured Python index"
 elif have curl && curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; then
   echo "installed via curl"
 elif have wget && wget -qO- https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; then

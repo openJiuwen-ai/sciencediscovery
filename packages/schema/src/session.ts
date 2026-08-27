@@ -24,9 +24,9 @@ import type { EvolveRun } from "./evolution.js";
 import type { ModelRunInfo } from "./model-usage.js";
 import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, SessionPlan } from "./plan.js";
-import type { ArtifactReviewRun } from "./provenance.js";
+import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
-import type { EffectiveRuntimeSettings, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
+import type { EffectiveRuntimeSettings, EnabledSkillLibrary, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
 import type { Subagent, SubagentStep, SubagentUsage } from "./subagent.js";
 
 export const SESSION_TITLE_MAX_CHARACTERS = 24;
@@ -160,6 +160,14 @@ export interface WorkbenchSearchResult {
   sessionId?: string;
 }
 
+export interface WorkbenchSearchResponse {
+  hasMore: boolean;
+  limit: number;
+  offset: number;
+  results: WorkbenchSearchResult[];
+  total: number;
+}
+
 export interface ToolTrace {
   /** Structured tool arguments as issued by the model. */
   args?: Record<string, unknown>;
@@ -194,6 +202,7 @@ export interface SessionRun {
   assistantMessageId?: string;
   createdAt: string;
   error?: string;
+  executionMode?: { activatedAt: string; modeId: string };
   finishedAt?: string;
   id: string;
   prompt: string;
@@ -202,6 +211,8 @@ export interface SessionRun {
   retryOfRunId?: string;
   sessionId: string;
   settingsSnapshot: EffectiveRuntimeSettings;
+  /** Version-pinned skill libraries declared as prompt sources for this run. */
+  skillLibraryRefs?: PromptSkillLibraryRef[];
   startedAt?: string;
   status: SessionRunStatus;
   userMessageId?: string;
@@ -216,6 +227,7 @@ export type RunStreamEvent =
   | { reason?: string; runId: string; type: "run.cancelled" }
   | { droppedEvents: number; type: "run.history.truncated" }
   | { phase: "thinking"; turn: number; type: "agent.phase" }
+  | { mode: { activatedAt: string; modeId: string }; type: "execution_mode.changed" }
   | { delta: string; turn: number; type: "assistant.thinking.delta" }
   | { content: string; truncated?: boolean; turn: number; type: "assistant.thinking.snapshot" }
   | { delta: string; type: "assistant.delta" }
@@ -282,6 +294,7 @@ export interface CreateSessionRequest {
 export interface UpdateSessionRequest {
   approvalMode?: ApprovalMode;
   enabledConnectorIds?: ConnectorId[];
+  enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
   modelId?: string;
   reviewCriteria?: string[];
@@ -297,7 +310,13 @@ export interface SendMessageRequest {
   annotationIds?: string[];
   content: string;
   references?: ComposerReference[];
+  /** Version-pinned skill libraries the application used to assemble this prompt. */
+  skillLibraryRefs?: PromptSkillLibraryRef[];
   webForceRefresh?: boolean;
+}
+
+export interface CreateSkillEvolutionRunRequest {
+  targetLibraryId?: string;
 }
 
 /** Result of stopping the agent run that is currently streaming for a Session. */

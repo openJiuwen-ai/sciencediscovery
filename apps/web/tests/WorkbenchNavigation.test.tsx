@@ -20,12 +20,17 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  ComposerCommandChips,
   ComposerReferenceMenu,
   composerSkillSuggestions,
-  filterSearchResults,
+  GLOBAL_SEARCH_DEBOUNCE_MS,
   getComposerTrigger,
   GlobalSearchDialog,
+  insertComposerCommand,
   insertComposerReference,
+  removeSkillAuthoringCommand,
+  selectedSkillAuthoringCommands,
+  SKILL_AUTHORING_COMMANDS,
 } from "../src/WorkbenchNavigation.js";
 
 const artifactReference: ComposerReference = {
@@ -43,6 +48,43 @@ test("detects Composer context triggers and inserts a stable reference token", (
   assert.equal(insertComposerReference("Compare @plo", trigger!, artifactReference), "Compare @[plots/result.png] ");
   assert.deepEqual(getComposerTrigger("Use /dock"), { query: "dock", start: 4, symbol: "/" });
   assert.equal(getComposerTrigger("email@example.org"), undefined);
+});
+
+test("inserts Skill authoring commands without attaching a catalog reference", () => {
+  const trigger = getComposerTrigger("/dist");
+  assert.equal(insertComposerCommand("/dist", trigger!, "/distill-session"), "/distill-session ");
+  assert.deepEqual(SKILL_AUTHORING_COMMANDS.map((item) => item.command), ["/skill-creator", "/distill-session"]);
+  const html = renderToStaticMarkup(createElement(ComposerReferenceMenu, {
+    onSelect: () => undefined,
+    suggestions: SKILL_AUTHORING_COMMANDS,
+    trigger: { query: "skill", start: 0, symbol: "/" },
+  }));
+  assert.match(html, /skill-creator/);
+  assert.match(html, /reviewable Skill package/);
+  assert.match(html, /composer-command-suggestion/);
+  assert.match(html, />Authoring</);
+});
+
+test("renders selected Skill authoring commands as removable high-emphasis chips", () => {
+  const message = "/code-engineer /skill-creator Build a presentation review workflow";
+  assert.deepEqual(
+    selectedSkillAuthoringCommands(message).map((item) => item.command),
+    ["/skill-creator"],
+  );
+  assert.equal(
+    removeSkillAuthoringCommand(message, "/skill-creator"),
+    "/code-engineer Build a presentation review workflow",
+  );
+  assert.deepEqual(selectedSkillAuthoringCommands("Explain /skill-creator-like syntax"), []);
+
+  const html = renderToStaticMarkup(createElement(ComposerCommandChips, {
+    commands: selectedSkillAuthoringCommands(message),
+    onRemove: () => undefined,
+  }));
+  assert.match(html, /composer-command-chips/);
+  assert.match(html, /Selected Skill authoring commands/);
+  assert.match(html, /Remove \/skill-creator from the prompt/);
+  assert.match(html, /Skill authoring/);
 });
 
 test("`/` only offers the skills the Session can actually run", () => {
@@ -78,24 +120,46 @@ test("renders typed Composer suggestions as structured context choices", () => {
   assert.match(html, /title="plots\/result\.png · Result · 42 KB"/);
 });
 
-test("global search filters and renders project, Session, and artifact navigation", () => {
-  const results: WorkbenchSearchResult[] = [
-    { detail: "Project", id: "project:1", kind: "project", label: "Proteomics", projectId: "project-1" },
-    { detail: "Proteomics", id: "session:1", kind: "session", label: "Differential analysis", projectId: "project-1", sessionId: "session-1" },
-    { detail: "Proteomics / Differential analysis", id: "artifact:1", kind: "artifact", label: "plots/volcano.png", path: "plots/volcano.png", projectId: "project-1", sessionId: "session-1" },
-  ];
-  assert.deepEqual(filterSearchResults(results, "volcano").map((item) => item.id), ["artifact:1"]);
-
+test("global search renders limited mixed-catalog pages and authoritative server matches", () => {
+  const results: WorkbenchSearchResult[] = Array.from({ length: 301 }, (_, index) => {
+    const kind = (["project", "session", "artifact"] as const)[index % 3]!;
+    return {
+      detail: `Mixed catalog ${kind}`,
+      id: `${kind}:${index}`,
+      kind,
+      label: index === 300 ? "target-after-250.csv" : `${kind}-${index}`,
+      ...(kind === "artifact" ? { path: `artifact-${index}.csv` } : {}),
+      projectId: `project-${index}`,
+      ...(kind === "project" ? {} : { sessionId: `session-${index}` }),
+    };
+  });
   const html = renderToStaticMarkup(createElement(GlobalSearchDialog, {
+    hasMore: true,
+    loading: false,
     onClose: () => undefined,
     onQueryChange: () => undefined,
     onSelect: () => undefined,
     query: "",
-    results,
+    results: results.slice(0, 250),
+    total: 301,
   }));
   assert.match(html, /Search projects, sessions, and artifacts/);
-  assert.match(html, /Proteomics/);
-  assert.match(html, /Differential analysis/);
-  assert.match(html, /plots\/volcano\.png/);
-  assert.match(html, /title="plots\/volcano\.png · Proteomics \/ Differential analysis"/);
+  assert.match(html, /project-0/);
+  assert.match(html, /session-1/);
+  assert.match(html, /artifact-2/);
+  assert.doesNotMatch(html, /project-81/);
+  assert.match(html, /Showing 80 of 301 results/);
+
+  const targetedHtml = renderToStaticMarkup(createElement(GlobalSearchDialog, {
+    hasMore: false,
+    loading: false,
+    onClose: () => undefined,
+    onQueryChange: () => undefined,
+    onSelect: () => undefined,
+    query: "server-authoritative-query",
+    results: [results[300]!],
+    total: 1,
+  }));
+  assert.match(targetedHtml, /target-after-250\.csv/);
+  assert.ok(GLOBAL_SEARCH_DEBOUNCE_MS >= 200 && GLOBAL_SEARCH_DEBOUNCE_MS <= 500);
 });

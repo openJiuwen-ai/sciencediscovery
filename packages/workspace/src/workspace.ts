@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -21,6 +21,7 @@ import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
   ConnectorId,
+  CreateSkillPackageRequest,
   CreateEnvironmentRequest,
   CreateNpuJobRequest,
   CreateRemoteJobRequest,
@@ -41,7 +42,10 @@ import type {
   NpuJobLogs,
   NpuJobResult,
   NpuWorkloadDescriptor,
+  ProposeSkillLibraryUpdateRequest,
+  PublishSkillLibraryUpdateProposalsResult,
   PythonExecutionResult,
+  SkillLibraryUpdateProposal,
   RemoteHostTarget,
   RemoteJob,
   ReviewCheckpointRequest,
@@ -50,9 +54,9 @@ import type {
   ScientificArtifactVersion,
   ScientificExecutionResult,
   ScientificLanguage,
-  SessionPlan,
   SkillResource,
   SkillResourceContent,
+  SkillReviewDraftSummary,
   ShellExecutionResult,
   UninstallEnvironmentRequest,
   EvolveRunProposal,
@@ -93,7 +97,6 @@ export function filterTools<T extends { name: string }>(tools: readonly T[], pol
 
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_DECLARE_ARTIFACT_PATHS = 50;
-const MAX_SKILL_SEARCH_RESULTS = 5;
 const SUBAGENT_RESULT_TEXT_LIMIT = 20_000;
 
 type SubagentContractStopReason = "loop_capped" | "token_capped" | "turn_capped";
@@ -192,6 +195,7 @@ function summarizeSubagentResult(subagent: Subagent): {
 }
 
 export interface WorkspaceToolOptions {
+  createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
   declareArtifact?: (input: {
     description?: string;
     name?: string;
@@ -256,10 +260,6 @@ export interface WorkspaceToolOptions {
   runSubagent?: (input: SubagentInput, signal?: AbortSignal) => Promise<Subagent>;
   remoteHosts?: RemoteHostTarget[];
   proposeRemoteJob?: (input: CreateRemoteJobRequest) => Promise<RemoteJob>;
-  proposePlan?: (
-    input: { caveats?: string[]; feasibilityConfidence: "high" | "low" | "medium"; scope: string; steps: string[] },
-    signal?: AbortSignal,
-  ) => Promise<SessionPlan>;
   /**
    * Start an evolution search from a design the agent worked out itself (the
    * `create_evolve_run` LLM tool).
@@ -306,6 +306,16 @@ export interface WorkspaceToolOptions {
     signal?: AbortSignal,
     toolCallId?: string,
   ) => Promise<ReviewCheckpointResult>;
+  proposeSkillLibraryUpdate?: (
+    input: ProposeSkillLibraryUpdateRequest,
+    signal?: AbortSignal,
+    toolCallId?: string,
+  ) => Promise<SkillLibraryUpdateProposal>;
+  publishSkillLibraryUpdate?: (
+    input: { proposalIds: string[] },
+    signal?: AbortSignal,
+    toolCallId?: string,
+  ) => Promise<PublishSkillLibraryUpdateProposalsResult>;
   /** Trace a node's provenance chain and return whether it is intact
    * (`trace_provenance` tool, reviewer specialist authenticity check).
    * Returns `{startNode, chain, broken, truncated, reason}` — the caller
@@ -353,6 +363,43 @@ function assertWorkspacePath(workspaceRoot: string, requestedPath: string): stri
   return candidate;
 }
 
+function descendantPath(parent: string, child: string): string | undefined {
+  const path = relative(parent, child);
+  if (!path || path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)) return undefined;
+  return path.split(sep).join("/");
+}
+
+async function resolveSandboxScriptPath(
+  workspaceRoot: string,
+  readOnlyWorkspaceRoot: string | undefined,
+  requestedPath: string,
+): Promise<string> {
+  const candidate = assertWorkspacePath(workspaceRoot, requestedPath);
+  let canonicalRoot: string;
+  let canonicalScript: string;
+  try {
+    [canonicalRoot, canonicalScript] = await Promise.all([realpath(workspaceRoot), realpath(candidate)]);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`scriptPath does not exist in the workspace: ${requestedPath}`);
+    }
+    throw error;
+  }
+  if (canonicalScript !== canonicalRoot && !canonicalScript.startsWith(`${canonicalRoot}${sep}`)) {
+    throw new Error(`scriptPath escapes the workspace: ${requestedPath}`);
+  }
+  if (!(await stat(canonicalScript)).isFile()) throw new Error("scriptPath must reference a workspace file");
+
+  let sandboxRoot = "/workspace";
+  if (readOnlyWorkspaceRoot) {
+    const canonicalParent = await realpath(readOnlyWorkspaceRoot);
+    const writablePath = descendantPath(canonicalParent, canonicalRoot);
+    if (writablePath) sandboxRoot = `${sandboxRoot}/${writablePath}`;
+  }
+  const scriptPath = relative(canonicalRoot, canonicalScript).split(sep).join("/");
+  return `${sandboxRoot}/${scriptPath}`;
+}
+
 function normalizeMountedReadPath(requestedPath: string): {
   path: string;
   root: "parent" | "workspace";
@@ -367,63 +414,6 @@ function normalizeMountedReadPath(requestedPath: string): {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-function compileSkillSearchRegex(pattern: string): RegExp {
-  try {
-    return new RegExp(pattern, "i");
-  } catch {
-    return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-  }
-}
-
-function searchSkills<T extends { description: string; id: string }>(skills: readonly T[], query: string): T[] {
-  const trimmed = query.trim();
-  if (!trimmed) return [];
-  if (trimmed.startsWith("select:")) {
-    const wanted = new Set(trimmed.slice("select:".length).split(",").map((name) => name.trim()).filter(Boolean));
-    return skills.filter((skill) => wanted.has(skill.id));
-  }
-  if (trimmed.startsWith("+")) {
-    const [required = "", ...rest] = trimmed.slice(1).split(/\s+/);
-    if (!required) return [];
-    const candidates = skills.filter((skill) => skill.id.toLowerCase().includes(required.toLowerCase()));
-    if (rest.length) {
-      const regex = compileSkillSearchRegex(rest.join(" "));
-      candidates.sort((left, right) => (
-        (right.id.match(regex)?.length ?? 0) + (right.description.match(regex)?.length ?? 0)
-        - (left.id.match(regex)?.length ?? 0) - (left.description.match(regex)?.length ?? 0)
-      ));
-    }
-    return candidates.slice(0, MAX_SKILL_SEARCH_RESULTS);
-  }
-  const regex = compileSkillSearchRegex(trimmed);
-  return skills
-    .map((skill) => {
-      const nameMatch = regex.test(skill.id);
-      const descriptionMatch = regex.test(skill.description);
-      return { score: nameMatch ? 2 : descriptionMatch ? 1 : 0, skill };
-    })
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score)
-    .map((item) => item.skill)
-    .slice(0, MAX_SKILL_SEARCH_RESULTS);
-}
-
-function renderSkillMetadata(skill: NonNullable<WorkspaceToolOptions["skills"]>[number]): string {
-  const resources = skill.resources.length
-    ? skill.resources.map((resource) => `  - ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")
-    : "  (none)";
-  return [
-    `## Skill: ${skill.id}`,
-    `- Description: ${skill.description}`,
-    `- Version: ${skill.version}`,
-    `- Revision: ${skill.revision}`,
-    `- Package hash: ${skill.hash}`,
-    "- Supporting resources:",
-    resources,
-    `- Load instructions: call read_skill with skillId="${skill.id}"`,
-  ].join("\n");
 }
 
 function summarizeSpecialistsForTaskTool(
@@ -468,6 +458,39 @@ export async function scanWorkspace(workspaceRoot: string): Promise<WorkspaceFil
   return files;
 }
 
+function yamlQuoted(value: string): string {
+  return JSON.stringify(value);
+}
+
+function renderGeneratedSkillMarkdown(input: {
+  allowedTools?: string;
+  compatibility?: string;
+  description: string;
+  instructions: string;
+  license?: string;
+  metadata?: Record<string, string>;
+  name: string;
+  version?: string;
+}): string {
+  const lines = [
+    "---",
+    `name: ${yamlQuoted(input.name)}`,
+    `description: ${yamlQuoted(input.description)}`,
+  ];
+  if (input.version) lines.push(`version: ${yamlQuoted(input.version)}`);
+  if (input.allowedTools) lines.push(`allowed-tools: ${yamlQuoted(input.allowedTools)}`);
+  if (input.compatibility) lines.push(`compatibility: ${yamlQuoted(input.compatibility)}`);
+  if (input.license) lines.push(`license: ${yamlQuoted(input.license)}`);
+  const metadata = input.metadata ? Object.entries(input.metadata).filter(([key, value]) => key.trim() && value.trim()) : [];
+  if (metadata.length) {
+    lines.push("metadata:");
+    for (const [key, value] of metadata.toSorted(([left], [right]) => left.localeCompare(right))) {
+      lines.push(`  ${yamlQuoted(key)}: ${yamlQuoted(value)}`);
+    }
+  }
+  return `${lines.join("\n")}\n---\n\n${input.instructions.trim()}\n`;
+}
+
 export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceToolOptions): AgentTool[] {
   const emptyParameters = Type.Object({});
   const pathParameters = Type.Object({ path: Type.String({ minLength: 1 }) });
@@ -475,6 +498,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     && resolve(options.readOnlyWorkspaceRoot) !== resolve(workspaceRoot)
     ? options.readOnlyWorkspaceRoot
     : undefined;
+  const loadedSkillIds = new Set<string>();
 
   const pythonParameters = Type.Object({
     code: Type.String({ minLength: 1 }),
@@ -825,25 +849,6 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(webFetch);
   }
-  if (options.proposePlan) {
-    const planParameters = Type.Object({
-      caveats: Type.Optional(Type.Array(Type.String({ maxLength: 1_000 }), { maxItems: 10 })),
-      feasibilityConfidence: Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
-      scope: Type.String({ maxLength: 2_000, minLength: 1 }),
-      steps: Type.Array(Type.String({ maxLength: 1_000, minLength: 1 }), { maxItems: 20, minItems: 1 }),
-    });
-    const proposePlan: AgentTool<typeof planParameters> = {
-      description: "Record a multi-phase plan with explicit scope and feasibility confidence. Plans are progress records and do not block subsequent execution.",
-      execute: async (_toolCallId, params, signal) => {
-        const plan = await options.proposePlan!(params, signal);
-        return { content: [{ type: "text", text: JSON.stringify(plan) }], details: plan };
-      },
-      label: "Propose plan",
-      name: "propose_plan",
-      parameters: planParameters,
-    };
-    tools.push(proposePlan);
-  }
   if (options.queryGraph) {
     const queryGraphParameters = Type.Object({ query: Type.String({ minLength: 1 }) });
     const queryGraph: AgentTool<typeof queryGraphParameters> = {
@@ -1015,6 +1020,114 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: reviewCheckpointParameters,
     };
     tools.push(reviewCheckpoint);
+  }
+  if (options.proposeSkillLibraryUpdate) {
+    const sourceRefParameters = Type.Object({
+      id: Type.String({ minLength: 1 }),
+      kind: Type.Union([
+        Type.Literal("artifact"),
+        Type.Literal("review-finding"),
+        Type.Literal("run"),
+        Type.Literal("session"),
+        Type.Literal("tool-call"),
+      ]),
+    });
+    const skillPackageParameters = Type.Object({
+      files: Type.Array(Type.Object({
+        content: Type.String({ minLength: 1 }),
+        encoding: Type.Optional(Type.Union([Type.Literal("base64"), Type.Literal("utf8")])),
+        path: Type.String({ minLength: 1 }),
+      }), { minItems: 1, maxItems: 32 }),
+    });
+    const generatedSkillParameters = Type.Object({
+      allowedTools: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+      compatibility: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+      description: Type.String({ minLength: 1, maxLength: 1024 }),
+      instructions: Type.String({ minLength: 1 }),
+      license: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+      metadata: Type.Optional(Type.Record(Type.String({ minLength: 1, maxLength: 64 }), Type.String({ minLength: 1, maxLength: 500 }))),
+      name: Type.String({ minLength: 1, maxLength: 64 }),
+      version: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+    });
+    const operationParameters = Type.Union([
+      Type.Object({ package: skillPackageParameters, type: Type.Literal("upsert") }),
+      Type.Object({ skill: generatedSkillParameters, type: Type.Literal("upsert_skill") }),
+      Type.Object({ skillId: Type.String({ minLength: 1 }), type: Type.Literal("delete") }),
+    ]);
+    const proposeSkillLibraryUpdateParameters = Type.Object({
+      baseVersionId: Type.Optional(Type.String({ minLength: 1 })),
+      libraryId: Type.String({ minLength: 1 }),
+      operations: Type.Array(operationParameters, { minItems: 1, maxItems: 16 }),
+      rationale: Type.String({ minLength: 1, maxLength: 4_000 }),
+      sourceRefs: Type.Optional(Type.Array(sourceRefParameters, { maxItems: 16 })),
+    });
+    const proposeSkillLibraryUpdate: AgentTool<typeof proposeSkillLibraryUpdateParameters> = {
+      description: "Propose a self-evolution update to a writable Skill Library. Prefer operations with type `upsert_skill` and a structured `skill` object; the tool will generate a valid SKILL.md with YAML frontmatter. Use raw `upsert` packages only when extra resource files are needed. This only creates a pending proposal; when the user asks to publish accepted proposals, call `publish_skill_library_update` with the proposal ids.",
+      execute: async (toolCallId, params, signal) => {
+        const operations = params.operations.map((operation) => {
+          if (operation.type !== "upsert_skill") return operation;
+          return {
+            package: {
+              files: [{
+                content: renderGeneratedSkillMarkdown(operation.skill),
+                path: "SKILL.md",
+              }],
+            },
+            type: "upsert" as const,
+          };
+        });
+        const proposal = await options.proposeSkillLibraryUpdate!({
+          author: { kind: "self-evolution", name: "Agent self-evolution proposal" },
+          ...(params.baseVersionId ? { baseVersionId: params.baseVersionId } : {}),
+          dryRun: true,
+          libraryId: params.libraryId,
+          operations,
+          rationale: params.rationale,
+          sourceRefs: params.sourceRefs ?? [],
+        }, signal, toolCallId);
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            conflicts: proposal.result.conflicts,
+            diagnostics: proposal.result.diagnostics,
+            diff: proposal.result.diff,
+            id: proposal.id,
+            libraryId: proposal.libraryId,
+            nextTool: proposal.result.conflicts.length ? undefined : "publish_skill_library_update",
+            status: proposal.status,
+          }, null, 2) }],
+          details: proposal,
+        };
+      },
+      label: "Propose skill library update",
+      name: "propose_skill_library_update",
+      parameters: proposeSkillLibraryUpdateParameters,
+    };
+    tools.push(proposeSkillLibraryUpdate);
+  }
+  if (options.publishSkillLibraryUpdate) {
+    const publishSkillLibraryUpdateParameters = Type.Object({
+      proposalIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
+    });
+    const publishSkillLibraryUpdate: AgentTool<typeof publishSkillLibraryUpdateParameters> = {
+      description: "Publish one or more pending Skill Library self-evolution proposals after user permission is granted. Multiple proposals must belong to the same writable library and are merged into one new library version.",
+      execute: async (toolCallId, params, signal) => {
+        const result = await options.publishSkillLibraryUpdate!({ proposalIds: params.proposalIds }, signal, toolCallId);
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            conflicts: result.result.conflicts,
+            diagnostics: result.result.diagnostics,
+            diff: result.result.diff,
+            proposalIds: result.proposals.map((proposal) => proposal.id),
+            publishedVersionId: result.result.version?.id,
+          }, null, 2) }],
+          details: result,
+        };
+      },
+      label: "Publish skill library update",
+      name: "publish_skill_library_update",
+      parameters: publishSkillLibraryUpdateParameters,
+    };
+    tools.push(publishSkillLibraryUpdate);
   }
   if (options.traceProvenance) {
     const traceProvenanceParameters = Type.Object({
@@ -1279,11 +1392,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         }
         let code = params.command?.trim() ?? "";
         if (params.scriptPath) {
-          const resolvedPath = assertWorkspacePath(workspaceRoot, params.scriptPath);
-          const metadata = await stat(resolvedPath);
-          if (!metadata.isFile()) throw new Error("scriptPath must reference a workspace file");
-          const normalizedPath = relative(resolve(workspaceRoot), resolvedPath).split(sep).join("/");
-          code = ["/usr/bin/bash", shellQuote(normalizedPath), ...(params.arguments ?? []).map(shellQuote)].join(" ");
+          const scriptPath = await resolveSandboxScriptPath(workspaceRoot, options.readOnlyWorkspaceRoot, params.scriptPath);
+          code = ["/usr/bin/bash", shellQuote(scriptPath), ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
         const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal);
         if (result.exitCode !== 0) throw new Error(`Shell exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
@@ -1454,26 +1564,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (selectedSkillsForDiscovery.length) {
     const skillLiterals = selectedSkillsForDiscovery.map((skill) => Type.Literal(skill.id));
     const skillIdSchema = Type.Union(skillLiterals as [typeof skillLiterals[number], ...typeof skillLiterals]);
-    const describeSkillParameters = Type.Object({
-      query: Type.String({
-        description: "Skill name or keyword query. Use select:skill-a,skill-b for exact names.",
-        minLength: 1,
-      }),
-    });
     const selectedSkills = new Map(selectedSkillsForDiscovery.map((skill) => [skill.id, skill]));
-    const describeSkill: AgentTool<typeof describeSkillParameters> = {
-      description: "Search selected skill metadata by name or description before deciding which frozen skill instructions to load. This returns metadata only, not SKILL.md instructions.",
-      execute: async (_toolCallId, params) => {
-        const matched = searchSkills(selectedSkillsForDiscovery, params.query);
-        const text = matched.length
-          ? matched.map(renderSkillMetadata).join("\n\n")
-          : `No selected skills matched: ${params.query}`;
-        return { content: [{ type: "text", text }], details: { matched: matched.map(({ content: _content, readResource: _readResource, ...skill }) => skill), query: params.query } };
-      },
-      label: "Describe skill",
-      name: "describe_skill",
-      parameters: describeSkillParameters,
-    };
     const readSkillParameters = Type.Object({
       skillId: skillIdSchema,
     });
@@ -1482,6 +1573,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       execute: async (_toolCallId, params) => {
         const skill = selectedSkills.get(params.skillId);
         if (!skill) throw new Error(`Skill ${params.skillId} is not selected for this run`);
+        loadedSkillIds.add(skill.id);
         const resources = skill.resources.length
           ? `\n\nAvailable read-only supporting resources (use read_skill_resource only as needed):\n${skill.resources.map((resource) => `- ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")}`
           : "";
@@ -1507,7 +1599,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       name: "read_skill",
       parameters: readSkillParameters,
     };
-    tools.push(describeSkill, readSkill);
+    tools.push(readSkill);
   }
   const skillsWithResources = selectedSkillsForDiscovery.filter((skill) => skill.resources.length);
   if (skillsWithResources.length) {
@@ -1543,6 +1635,50 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: skillResourceParameters,
     };
     tools.push(readSkillResource);
+  }
+  if (options.createSkill && selectedSkillsForDiscovery.some((skill) => skill.id === "skill-creator")) {
+    const createSkillParameters = Type.Object({
+      allowedTools: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      compatibility: Type.Optional(Type.String({ maxLength: 500, minLength: 1 })),
+      description: Type.String({ maxLength: 1_024, minLength: 1 }),
+      instructions: Type.String({ maxLength: 524_288, minLength: 1 }),
+      license: Type.Optional(Type.String({ maxLength: 500, minLength: 1 })),
+      name: Type.String({ maxLength: 64, minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
+      resources: Type.Optional(Type.Array(Type.Object({
+        content: Type.String({ maxLength: 1_000_000, minLength: 1 }),
+        path: Type.String({ maxLength: 240, minLength: 1 }),
+      }), { maxItems: 50 })),
+      version: Type.Optional(Type.String({ maxLength: 100, minLength: 1 })),
+    });
+    const createSkill: AgentTool<typeof createSkillParameters> = {
+      description: "Create a reviewable Agent Skill proposal from an explicit user request. First load skill-creator with read_skill and follow it. Revisions or alternative versions of one logical Skill must reuse the exact same name so they join one version history. The draft remains inactive until the user edits and confirms it; never call this merely because a workflow seems reusable.",
+      execute: async (_toolCallId, params, signal) => {
+        if (!loadedSkillIds.has("skill-creator")) {
+          throw new Error("Load skill-creator with read_skill before creating a Skill");
+        }
+        const created = await options.createSkill!({
+          ...(params.allowedTools ? { allowedTools: params.allowedTools } : {}),
+          ...(params.compatibility ? { compatibility: params.compatibility } : {}),
+          description: params.description,
+          instructions: params.instructions,
+          ...(params.license ? { license: params.license } : {}),
+          ...(params.version ? { metadata: { version: params.version } } : {}),
+          name: params.name,
+          ...(params.resources ? { resources: params.resources } : {}),
+        }, signal);
+        return {
+          content: [{
+            type: "text",
+            text: `${JSON.stringify(created, null, 2)}\n\nThe Skill is a pending draft and is not active yet. Ask the user to open Settings > Skills, review the files and diff, then confirm or discard it.`,
+          }],
+          details: created,
+        };
+      },
+      label: "Create Skill draft",
+      name: "create_skill",
+      parameters: createSkillParameters,
+    };
+    tools.push(createSkill);
   }
   for (const mcpTool of options.mcpTools ?? []) {
     tools.push({

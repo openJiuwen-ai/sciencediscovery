@@ -714,10 +714,11 @@ export class EvolveOrchestrator {
 }
 
 /**
- * The SubTask id this search is mirrored under.
+ * The graph task id this search is mirrored under (a `:ToolCall` node since
+ * upstream's Task/ToolCall split; the `subtask:` prefix is the business key).
  *
  * The `subtask:` prefix is not decoration: the sidecar's temporal-chain rebuild
- * selects auto-mirrored SubTasks by exactly that prefix, and an id without it
+ * selects auto-mirrored task nodes by exactly that prefix, and an id without it
  * would leave the search out of the session's task chain — which is what
  * `trace_provenance` walks when it asks whether the winning artifact can be
  * traced back to the research goal.

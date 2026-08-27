@@ -15,12 +15,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SkillDescriptor } from "@sciencediscovery/schema";
+import type { SkillDescriptor, SkillLibraryUpdateProposal } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { ApiClient } from "../src/api.js";
-import { SkillManager, validateSkillDraft } from "../src/SkillManager.js";
+import { normalizeGitSkillLocation, requestFromDraft, SkillManager, validateSkillDraft } from "../src/SkillManager.js";
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const skill = {
   currentRevision: 1,
@@ -58,7 +61,53 @@ test("validates portable Agent Skills authoring fields", () => {
   }) ?? "", /lowercase letters/);
 });
 
-test("renders an accessible searchable skill catalog with author and import actions", () => {
+test("packages manually authored reference and script resources with the Skill", () => {
+  const request = requestFromDraft({
+    allowedTools: "read_file",
+    compatibility: "Portable text resources",
+    description: "A Skill with supporting files.",
+    instructions: "# Instructions\n\nRead the bundled reference.",
+    license: "MIT",
+    metadata: {},
+    name: "skill-with-resources",
+    resources: [
+      { content: "# Guide", id: 1, path: "references/guide.md" },
+      { content: "print('ok')", id: 2, path: "scripts/helper.py" },
+    ],
+    version: "1.0.0",
+  });
+
+  assert.deepEqual(request.resources, [
+    { content: "# Guide", path: "references/guide.md" },
+    { content: "print('ok')", path: "scripts/helper.py" },
+  ]);
+  assert.equal(request.metadata?.version, "1.0.0");
+});
+
+test("adapts a GitHub marketplace folder link into repository, ref, and search path", () => {
+  assert.deepEqual(normalizeGitSkillLocation({
+    ref: "",
+    repositoryUrl: "https://github.com/anthropics/skills/tree/main/skills",
+    subdirectory: "",
+  }), {
+    adapted: true,
+    ref: "main",
+    repositoryUrl: "https://github.com/anthropics/skills.git",
+    subdirectory: "skills",
+  });
+  assert.deepEqual(normalizeGitSkillLocation({
+    ref: "release",
+    repositoryUrl: "https://github.com/anthropics/skills/tree/main/skills",
+    subdirectory: "skills/pdf",
+  }), {
+    adapted: true,
+    ref: "release",
+    repositoryUrl: "https://github.com/anthropics/skills.git",
+    subdirectory: "skills/pdf",
+  });
+});
+
+test("renders a compact searchable Skill list with grouped create and import actions", () => {
   const html = renderToStaticMarkup(createElement(SkillManager, {
     client: {} as ApiClient,
     onCatalogChange: () => undefined,
@@ -68,13 +117,152 @@ test("renders an accessible searchable skill catalog with author and import acti
   }));
 
   assert.match(html, /Skill manager/);
+  assert.match(html, /role="tab"/);
+  assert.match(html, />Skills</);
+  assert.match(html, />Libraries</);
+  assert.doesNotMatch(html, /Create, import, review, and maintain portable agent workflows/);
   assert.match(html, /aria-label="Search skills"/);
-  assert.match(html, /\+ New/);
-  assert.match(html, />Import</);
+  assert.match(html, /Create Skill/);
+  assert.match(html, /Blank Skill/);
+  assert.match(html, /SKILL.md or ZIP/);
+  assert.match(html, />Folder</);
+  assert.match(html, /Open Skills Explorer/);
+  assert.match(html, /aria-label="Import skill folder"/);
+  assert.match(html, /webkitdirectory=""/);
   assert.match(html, /Describe workflow/);
-  assert.match(html, /Distill Session/);
-  assert.match(html, /Import Git/);
+  assert.match(html, /Distill current Session/);
+  assert.match(html, /Git repository/);
   assert.match(html, /life-science-evidence-brief/);
   assert.match(html, /Built-in/);
   assert.match(html, /aria-label="Skill catalog"/);
+  assert.match(html, /aria-label="Open life-science-evidence-brief in Skills Explorer"/);
+  assert.doesNotMatch(html, /SKILL\.md instructions/);
+  assert.doesNotMatch(html, /Package hash/);
+});
+
+test("opens the clicked Skill directly in the dedicated Explorer", async () => {
+  const client = {
+    listSkillReviewDrafts: async () => [],
+    listSkillVersions: async () => [],
+  } as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(SkillManager, {
+      client,
+      onCatalogChange: () => undefined,
+      onError: (message) => assert.fail(message),
+      skills: [skill],
+    }));
+  });
+
+  const row = renderer!.root.findByProps({
+    "aria-label": `Open ${skill.name} in Skills Explorer`,
+  });
+  await act(async () => row.props.onClick());
+
+  assert.equal(renderer!.root.findAllByProps({ "aria-label": "Skill resource explorer" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-detail" }).length, 0);
+  await act(async () => renderer!.unmount());
+});
+
+test("blank Skill authoring exposes packaged reference resources", async () => {
+  const client = {
+    listSkillReviewDrafts: async () => [],
+  } as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(SkillManager, {
+      client,
+      onCatalogChange: () => undefined,
+      onError: (message) => assert.fail(message),
+      skills: [skill],
+    }));
+  });
+
+  const blankSkill = renderer!.root.findAllByType("button").find((button) => (
+    button.findAllByType("strong").some((strong) => strong.children.join("") === "Blank Skill")
+  ));
+  assert.ok(blankSkill);
+  await act(async () => blankSkill.props.onClick({ currentTarget: { closest: () => undefined } }));
+  const tabs = renderer!.root.findByProps({ "aria-label": "Create Skill sections" });
+  const resourcesTab = tabs.findAllByType("button")[1]!;
+  await act(async () => resourcesTab.props.onClick());
+  const addReference = renderer!.root.findAllByType("button").find((button) => button.children.includes(" Reference"));
+  assert.ok(addReference);
+  await act(async () => addReference.props.onClick());
+
+  assert.equal(renderer!.root.findByProps({ "aria-label": "Resource 1 path" }).props.value, "references/guide.md");
+  assert.equal(renderer!.root.findByProps({ "aria-label": "Resource 1 content" }).props.value, "# Reference\n\n");
+  assert.equal(renderer!.root.findAllByProps({ "aria-label": "Remove resource references/guide.md" }).length, 1);
+  await act(async () => renderer!.unmount());
+});
+
+test("renders skill library cards with pinned head version metadata", async () => {
+  const client = {
+    listSkillLibraries: async () => [{
+      createdAt: "2026-01-01T00:00:00.000Z",
+      headVersionId: "version-alpha",
+      id: "evaluation-skills",
+      name: "Evaluation Skills",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    }],
+    listSkillLibraryVersions: async () => [{
+      author: { kind: "user" as const },
+      contentHash: "abcdef1234567890",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      id: "version-alpha",
+      libraryId: "evaluation-skills",
+      skills: [
+        { description: "Alpha", hash: "a".repeat(64), id: "alpha-skill", version: "1.0.0" },
+        { description: "Beta", hash: "b".repeat(64), id: "beta-skill", version: "1.0.0" },
+      ],
+    }],
+    listSkillLibraryProposals: async (): Promise<SkillLibraryUpdateProposal[]> => [{
+      createdAt: "2026-01-03T00:00:00.000Z",
+      id: "proposal-alpha",
+      libraryId: "evaluation-skills",
+      rationale: "A reusable evaluation workflow was discovered.",
+      request: {
+        author: { kind: "self-evolution" },
+        baseVersionId: "version-alpha",
+        dryRun: true,
+        operations: [{ package: { files: [{ content: "---\nname: gamma-skill\ndescription: Gamma\n---\n\nUse gamma.\n", path: "SKILL.md" }] }, type: "upsert" }],
+      },
+      result: {
+        conflicts: [],
+        diagnostics: [],
+        diff: { added: [{ skillId: "gamma-skill" }], deleted: [], modified: [] },
+        dryRun: true,
+      },
+      sourceRefs: [{ id: "run-1", kind: "run" }],
+      status: "pending",
+      updatedAt: "2026-01-03T00:00:00.000Z",
+    }],
+    publishSkillLibraryProposal: async () => { throw new Error("not used"); },
+    publishSkillLibraryProposals: async () => { throw new Error("not used"); },
+    rejectSkillLibraryProposal: async () => { throw new Error("not used"); },
+  } as Partial<ApiClient> as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(SkillManager, {
+      client,
+      initialView: "libraries",
+      onCatalogChange: () => undefined,
+      onError: () => undefined,
+      skills: [skill],
+    }));
+  });
+  await act(async () => undefined);
+
+  const text = JSON.stringify(renderer!.toJSON()).replace(/","/g, "");
+  assert.match(text, /Evaluation Skills/);
+  assert.match(text, /Head version/);
+  assert.match(text, /2 skills/);
+  assert.match(text, /abcdef123456/);
+  assert.match(text, /Pending proposals/);
+  assert.match(text, /gamma-skill/);
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-library-grid" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-library-card active" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ "aria-label": "Skill library summary" }).length, 1);
+  await act(async () => renderer!.unmount());
 });

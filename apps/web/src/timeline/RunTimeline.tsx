@@ -20,7 +20,7 @@ import type {
   RunStreamEvent,
   ToolTrace,
 } from "@sciencediscovery/schema";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { BrandIcon, CheckIcon, ChevronRightIcon, SpinnerIcon, WarningIcon } from "../icons.js";
 import { MarkdownRenderer } from "../Markdown.js";
@@ -351,14 +351,28 @@ function statusIcon(status: ToolTrace["status"] | "completed" | "running") {
   return <CheckIcon size={14} />;
 }
 
+export function skillDraftNameFromTrace(trace: ToolTrace): string | undefined {
+  const argumentName = trace.args?.name;
+  if (typeof argumentName === "string" && argumentName.trim()) return argumentName.trim();
+  if (!trace.input) return undefined;
+  try {
+    const input = JSON.parse(trace.input) as { name?: unknown };
+    return typeof input.name === "string" && input.name.trim() ? input.name.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function RunTimeline({
   artifactReviews = [],
   entries,
+  footer,
   isRunning,
   modelName,
   loadWorkspaceImage,
   onLoadToolOutput,
   onOpenArtifacts,
+  onOpenSkillReviews,
   onPermissionDecision,
   onToggle,
   references,
@@ -368,12 +382,15 @@ export function RunTimeline({
 }: {
   artifactReviews?: ArtifactReviewRun[];
   entries: RunTimelineEntry[];
+  /** Content that belongs to the completed run, rendered before its final action. */
+  footer?: ReactNode;
   isRunning: boolean;
   modelName?: string;
   loadWorkspaceImage?: (path: string, signal: AbortSignal) => Promise<Blob>;
   /** Fetches the full result of a tool whose output lives in a child stream. */
   onLoadToolOutput?: (trace: ToolTrace) => Promise<string | undefined>;
   onOpenArtifacts?: () => void;
+  onOpenSkillReviews?: (skillId?: string) => void;
   onPermissionDecision?: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   onToggle: (id: string, expanded: boolean) => void;
   /** Chip references (alias → graph node) for the session's latest report
@@ -403,6 +420,11 @@ export function RunTimeline({
     }
   }, [entries, onLoadToolOutput, toolOutputs]);
   if (!entries.length) return null;
+  const reviewTrace = [...entries].reverse().find((entry) =>
+    entry.type === "tool"
+      && entry.trace.name === "create_skill"
+      && entry.trace.status === "completed");
+  const createdSkillId = reviewTrace?.type === "tool" ? skillDraftNameFromTrace(reviewTrace.trace) : undefined;
   async function decidePermission(request: PermissionRequest, decision: PermissionDecision): Promise<void> {
     if (!onPermissionDecision) return;
     const matcher = permissionMatchingKey(request);
@@ -557,6 +579,12 @@ export function RunTimeline({
           </details>
         );
       })}
+      {footer}
+      {reviewTrace && onOpenSkillReviews ? <aside className="skill-review-timeline-cta">
+        <span className="skill-review-timeline-icon"><CheckIcon size={17} /></span>
+        <div><strong>{t("timeline.skillDraftReady")}</strong><small>{t("timeline.skillDraftReadyDescription")}</small></div>
+        <button onClick={() => onOpenSkillReviews(createdSkillId)} type="button">{t("timeline.reviewSkill")}</button>
+      </aside> : null}
     </section>
   );
 }

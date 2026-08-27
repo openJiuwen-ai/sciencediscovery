@@ -26,6 +26,7 @@
     "ci:tags": "node .ci/test-selector.mjs tags",
     "ci:ut": "node .ci/run-layer.mjs ut",
     "ci:ut:core": "node .ci/run-layer.mjs ut-core",
+    "ci:ut:macos": "pnpm build && node --test services/runner/dist/macos-seatbelt.test.js",
     "ci:ut:runner": "node .ci/run-layer.mjs ut-runner",
     "dev": "pnpm --filter @sciencediscovery/api dev",
     "paper:setup": "uv sync --project services/paper --locked",

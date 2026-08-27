@@ -134,9 +134,6 @@ importers:
 
   packages/artifact-manager:
     dependencies:
-      '@sciencediscovery/context':
-        specifier: workspace:*
-        version: link:../context
       '@sciencediscovery/data-source':
         specifier: workspace:*
         version: link:../data-source
@@ -178,12 +175,6 @@ importers:
       '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
-      '@sciencediscovery/schema':
-        specifier: workspace:*
-        version: link:../schema
-      '@sciencediscovery/workspace':
-        specifier: workspace:*
-        version: link:../workspace
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -209,6 +200,41 @@ importers:
       undici:
         specifier: 8.7.0
         version: 8.7.0
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
+  packages/direct-mode:
+    dependencies:
+      '@sciencediscovery/execution-modes':
+        specifier: workspace:*
+        version: link:../execution-modes
+      '@sciencediscovery/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@sciencediscovery/tools':
+        specifier: workspace:*
+        version: link:../tools
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
+  packages/execution-modes:
+    dependencies:
+      '@sciencediscovery/context':
+        specifier: workspace:*
+        version: link:../context
+      '@sciencediscovery/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@sciencediscovery/tools':
+        specifier: workspace:*
+        version: link:../tools
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -307,6 +333,31 @@ importers:
         specifier: 26.1.1
         version: 26.1.1
 
+  packages/plan-mode:
+    dependencies:
+      '@sciencediscovery/context':
+        specifier: workspace:*
+        version: link:../context
+      '@sciencediscovery/execution-modes':
+        specifier: workspace:*
+        version: link:../execution-modes
+      '@sciencediscovery/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@sciencediscovery/tools':
+        specifier: workspace:*
+        version: link:../tools
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/provenance:
     dependencies:
       '@sciencediscovery/artifact-manager':
@@ -358,9 +409,6 @@ importers:
       '@sciencediscovery/cas':
         specifier: workspace:*
         version: link:../cas
-      '@sciencediscovery/context':
-        specifier: workspace:*
-        version: link:../context
       '@sciencediscovery/orchestration':
         specifier: workspace:*
         version: link:../orchestration
@@ -370,6 +418,9 @@ importers:
       '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
+      '@sciencediscovery/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       fflate:
         specifier: 0.8.2
         version: 0.8.2
@@ -396,6 +447,9 @@ importers:
 
   packages/workspace:
     dependencies:
+      '@sciencediscovery/model':
+        specifier: workspace:*
+        version: link:../model
       '@sciencediscovery/orchestration':
         specifier: workspace:*
         version: link:../orchestration
@@ -430,6 +484,12 @@ importers:
       '@sciencediscovery/data-source':
         specifier: workspace:*
         version: link:../../packages/data-source
+      '@sciencediscovery/direct-mode':
+        specifier: workspace:*
+        version: link:../../packages/direct-mode
+      '@sciencediscovery/execution-modes':
+        specifier: workspace:*
+        version: link:../../packages/execution-modes
       '@sciencediscovery/executor':
         specifier: workspace:*
         version: link:../../packages/executor
@@ -451,6 +511,9 @@ importers:
       '@sciencediscovery/orchestration':
         specifier: workspace:*
         version: link:../../packages/orchestration
+      '@sciencediscovery/plan-mode':
+        specifier: workspace:*
+        version: link:../../packages/plan-mode
       '@sciencediscovery/provenance':
         specifier: workspace:*
         version: link:../../packages/provenance

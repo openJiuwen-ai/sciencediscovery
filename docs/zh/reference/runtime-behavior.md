@@ -35,11 +35,11 @@ my-skill/
   assets/           # 可选包资源
 ```
 
-`SKILL.md` 要求小写连字符形式的 `name`（与包目录名一致）以及非空 `description`。管理器支持手工编辑、自然语言工作流草稿、从当前 Session 蒸馏的可审草稿、本地 `SKILL.md`/ZIP 导入，以及 HTTPS/SSH URL + 可选 ref/子目录的 Git 导入。Git 凭证只存在于本机 credential helper 或 SSH 配置中，**不会**出现在仓库 URL 或模型上下文里。不支持注册表、市场、签名与自动更新。
+`SKILL.md` 要求小写连字符形式的 `name`（与包目录名一致）以及非空 `description`。管理器支持手工编辑、自然语言工作流草稿、从当前 Session 蒸馏的可审草稿、本地文件夹/`SKILL.md`/ZIP 导入，以及 HTTPS/SSH URL + 可选 ref/子目录的 Git 导入。用户也可以在对话中明确要求创建技能：主 Agent 必须先按需加载内置 `skill-creator`，再调用 `create_skill` 生成持久化但未激活的审核草稿；子 Agent 不具备该工具。同名待审 Skill 的再次修改会更新同一个审核项，并保留提案历史用于比较。草稿会出现在「系统配置 > Skills」但不会自动弹出审核框；完成 `create_skill` 后，对话中也会显示跳转入口。Skills Explorer 会列出全部 Skill 与包内文件，把已安装 revision 和 Agent 提案放在同一时间线上，并允许将任意两个版本指定为 A/B 后查看逐行对齐 Diff。托管 Skill 中的任意 UTF-8 文件都可编辑，保存会生成下一不可变 revision；内置 Skill 保持只读。只有用户明确确认后才会安装待审 revision；放弃草稿不会改变当前技能目录。文件夹导入会在浏览器中保留相对路径并打包，然后复用 ZIP 校验链路。Git 凭证只存在于本机 credential helper 或 SSH 配置中，**不会**出现在仓库 URL 或模型上下文里。不支持注册表、市场、签名与自动更新。
 
 技能只在全局库中存一份。创建或导入后默认即可用（all 模式），无需在 Global 中勾选——Global 不参与技能设置；如需收窄，在 Project 或 Session 运行时设置中切换为 selected 并勾选白名单。每次托管编辑产生不可变 revision；运行开始时冻结所选 revision，Prompt Manifest 记录技能 ID、revision、version 与包哈希。仅在 selected 模式下引用某技能的 Project 或 Session 会阻止该技能删除；all 模式下的存储列表不阻止删除。
 
-导入内容视为不可信本地数据。ZIP 条目会检查路径穿越、符号链接、加密、重复路径，以及归档限制（上传 25 MiB、解压 50 MiB、500 个文件、单资源 10 MiB、`SKILL.md` 512 KiB）。运行时 Prompt 只列出生效技能的名称、描述与 revision；模型需要时先用 `describe_skill` 查看 metadata，再用 `read_skill` 读取冻结 revision 的完整 instructions。选中的文本资源可在读取技能后通过有界工具 `read_skill_resource` 按需读取。`scripts/` 下文件仅为包可移植性保留，**不会**自动安装、调用或复制进 Python 工作区。
+导入内容视为不可信本地数据。ZIP 条目会检查路径穿越、符号链接、加密、重复路径，以及归档限制（上传 25 MiB、解压 50 MiB、500 个文件、单资源 10 MiB、`SKILL.md` 512 KiB）。运行时 Prompt 只列出生效技能的名称、描述与 revision；模型根据这些 metadata 选择精确 `skillId`，再用 `read_skill` 读取冻结 revision 的完整 instructions。选中的文本资源可在读取技能后通过有界工具 `read_skill_resource` 按需读取。`scripts/` 下文件仅为包可移植性保留，**不会**自动安装、调用或复制进 Python 工作区。
 
 ## 托管科学环境
 

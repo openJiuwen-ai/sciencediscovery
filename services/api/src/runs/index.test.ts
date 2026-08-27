@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { splitArtifactVersionSuffix } from "./index.js";
+import { skillAuthoringCommandPrompt, splitArtifactVersionSuffix } from "./index.js";
 
 // Regression for the artifact-chip failure: some models collapse the
 // artifact_id and version into one string ("uuid#v1") inside
@@ -63,4 +63,16 @@ test("an id that merely contains #v mid-string is not split", () => {
     splitArtifactVersionSuffix("name#v1/segment"),
     { id: "name#v1/segment", version: undefined },
   );
+});
+
+test("Skill authoring slash commands expand into guarded Agent workflows", () => {
+  const creator = skillAuthoringCommandPrompt("/skill-creator Build a reusable evidence checker");
+  assert.match(creator ?? "", /skill-creator Skill as the authoritative/);
+  assert.match(creator ?? "", /Build a reusable evidence checker/);
+  assert.match(creator ?? "", /call create_skill exactly once/i);
+
+  const distill = skillAuthoringCommandPrompt("/distill-session keep the validation steps");
+  assert.match(distill ?? "", /complete prior Session conversation and execution history/);
+  assert.match(distill ?? "", /keep the validation steps/);
+  assert.equal(skillAuthoringCommandPrompt("ordinary message"), undefined);
 });

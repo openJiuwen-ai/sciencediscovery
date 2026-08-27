@@ -22,8 +22,8 @@ export const tagDimensions = {
     description: "Native CPU architecture supported by the case",
     multiple: true,
     values: {
-      amd64: "Linux x86_64 / Node x64",
-      arm64: "Linux aarch64 / Node arm64",
+      amd64: "x86_64 / Node x64",
+      arm64: "aarch64 or Apple Silicon / Node arm64",
     },
   },
   container: {
@@ -72,6 +72,7 @@ export const tagDimensions = {
     description: "Execution sandbox requirement",
     values: {
       bubblewrap: "A working bubblewrap/user-namespace sandbox",
+      seatbelt: "A native macOS Seatbelt sandbox",
       host: "Dedicated native host capability",
       none: "No execution sandbox",
       unreviewed: "Legacy coverage whose sandbox dependency is not audited",
@@ -98,6 +99,16 @@ export const testCases = [
     tags: [
       "arch:amd64", "arch:arm64", "container:conditional", "layer:ut",
       "llm:none", "network:none", "npu:none", "sandbox:bubblewrap",
+    ],
+  },
+  {
+    id: "ut.runner-macos",
+    description: "Native Apple Silicon Runner tests including real Seatbelt execution",
+    command: ["pnpm", "ci:ut:macos"],
+    resultPath: "ut-runner-macos",
+    tags: [
+      "arch:arm64", "container:unsupported", "layer:ut",
+      "llm:none", "network:local", "npu:none", "sandbox:seatbelt",
     ],
   },
   {

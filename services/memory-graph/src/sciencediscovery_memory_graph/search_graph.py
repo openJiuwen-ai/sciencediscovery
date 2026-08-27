@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The `/evolve` search graph: one SubTask binds one SearchRun, under which the
+"""The `/evolve` search graph: one ToolCall binds one SearchRun, under which the
 candidates live.
 
 ```
-SubTask -[:searches]-> SearchRun -[:root]->     SearchNode
+ToolCall -[:searches]-> SearchRun -[:root]->    SearchNode
                                  -[:elected]->  |
                                                 +-[:expands]->  SearchNode
                                                 +-[:inspires]-> SearchNode   (openevolve)
@@ -383,20 +383,26 @@ def bind_subtask(
     status: str = "running",
     finished_at: Any = None,
 ) -> None:
-    """Create the SubTask that owns this search and link it to the SearchRun.
+    """Create the ToolCall that owns this search and link it to the SearchRun.
+
+    ``:ToolCall`` since upstream's Task/ToolCall split: every execution or
+    search node carries that label, and the temporal-chain rebuild only walks
+    ``(st:Task OR st:ToolCall)`` — a ``:SubTask`` node would fall out of the
+    session's chain entirely. The ``subtask:evolve:`` id prefix stays: it is
+    the business key, not the label.
 
     **It creates rather than matches.** An earlier version only MATCHed an
-    existing SubTask, on the assumption that something else mirrored it — nothing
+    existing node, on the assumption that something else mirrored it — nothing
     does, so the `searches` edge never landed and the search sat off the session's
     task chain entirely. That is not cosmetic: `trace_provenance` walks that chain
     to decide whether a saved artifact can be traced back to the research goal,
-    and a search with no SubTask makes every artifact it produced look unrooted.
+    and a search with no task node makes every artifact it produced look unrooted.
 
-    A resumed run is a *second* SubTask continuing the *same* search, so both
+    A resumed run is a *second* ToolCall continuing the *same* search, so both
     point at one SearchRun rather than the run's identity being split.
 
     The `subtask:` prefix is load-bearing: the temporal-chain rebuild selects
-    auto-mirrored SubTasks by exactly that prefix.
+    auto-mirrored task nodes by exactly that prefix.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -404,7 +410,7 @@ def bind_subtask(
     with driver.session() as session:
         session.run(
             """
-            MERGE (st:SubTask {task_id: $task_id})
+            MERGE (st:ToolCall {task_id: $task_id})
               ON CREATE SET st.session_id = $session_id,
                             st.task_type  = 'program_evolution',
                             st.created_at = datetime()
@@ -420,7 +426,7 @@ def bind_subtask(
             # `finished_at`, and Neo4j sorts nulls last ascending — so a running
             # search sits at the tail, which is where the newest step belongs.
             session.run(
-                "MATCH (st:SubTask {task_id: $task_id}) SET st.finished_at = $finished_at",
+                "MATCH (st:ToolCall {task_id: $task_id}) SET st.finished_at = $finished_at",
                 task_id=task_id, finished_at=finished_at,
             ).consume()
             _link_search_subtask_chain(session, session_id)
@@ -434,15 +440,15 @@ def link_search_artifacts(
 ) -> dict[str, Any]:
     """The run's published result — seed and winner — as Artifact nodes.
 
-    Without this the evolve SubTask sat in the graph with a `searches` edge and
+    Without this the evolve ToolCall sat in the graph with a `searches` edge and
     nothing else: the one thing the run existed to produce was in SessionStore
     but invisible to `trace_provenance`, so the winner looked unrooted the
     moment anyone asked where it came from.
 
     Same vocabulary as an execution's I/O: composite-keyed Artifact nodes,
     and the **direction carries the story**. The seed points *into* the search
-    (`(seed)-[:input]->(SubTask)`) and the winner comes *out*
-    (`(SubTask)-[:produces]->(winner)`) — exactly how a Code node relates to
+    (`(seed)-[:input]->(ToolCall)`) and the winner comes *out*
+    (`(ToolCall)-[:produces]->(winner)`) — exactly how a Code node relates to
     what it read and what it wrote. An earlier revision drew `produces` to
     both, and the canvas then showed one search emitting two identically-named
     artifacts, with nothing saying which one the search had started from.
@@ -472,7 +478,7 @@ def link_search_artifacts(
                                 a.created_at   = datetime()
                   ON MATCH  SET a.logical_name = $logical_name,
                                 a.media_type   = $media_type
-                MERGE (st:SubTask {{task_id: $task_id}})
+                MERGE (st:ToolCall {{task_id: $task_id}})
                   ON CREATE SET st.session_id = $session_id,
                                 st.task_type  = 'program_evolution',
                                 st.created_at = datetime()

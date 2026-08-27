@@ -55,6 +55,7 @@ function testConfig(dataDir: string, runnerUrl: string): ServerConfig {
     gatewayIdleTimeoutMs: 120_000,
     gatewayTurnTimeoutMs: 300_000,
     host: "127.0.0.1",
+    initialExecutionMode: "direct",
     kernelIdleTimeoutMs: 300_000,
     paperPythonPath: resolve(process.cwd(), "../paper/.venv/bin/python"),
     paperWorkerPath: resolve(process.cwd(), "../paper/paper_worker.py"),

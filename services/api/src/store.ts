@@ -64,6 +64,7 @@ import type {
   PermissionGrant,
   PermissionGrantScope,
   PermissionRequest,
+  PlanStep,
   PromptManifest,
   Project,
   ProposePlanRequest,
@@ -79,6 +80,7 @@ import type {
   ReviewerSpecialistLevel,
   ReviewerSpecialistSettings,
   RevisePlanRequest,
+  EffectiveRuntimeSettings,
   ResolvedRuntimeSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsField,
@@ -139,6 +141,7 @@ import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   defaultEnvironmentRevision,
   defaultShellEnvironmentRevision,
+  isSystemEnvironmentRevisionId,
 } from "@sciencediscovery/executor";
 import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
@@ -214,6 +217,22 @@ interface StagedDeletion {
   entries: Array<{ source: string; staged: string }>;
   root: string;
   sessionIds: string[];
+}
+
+function withDefaultProjectSkillSettings(input: RuntimeSettingsOverrides): RuntimeSettingsOverrides {
+  if (
+    hasOwn(input, "enabledSkillIds")
+    || hasOwn(input, "enabledSkillLibraries")
+    || hasOwn(input, "skillSelectionMode")
+  ) {
+    return input;
+  }
+  return {
+    ...input,
+    enabledSkillIds: [],
+    enabledSkillLibraries: [],
+    skillSelectionMode: "selected",
+  };
 }
 
 function requiredLabel(value: unknown, field: string): string {
@@ -555,6 +574,9 @@ export class SessionStore {
         snapshot: legacy.snapshot ?? { hash: legacy.packageSpecHash, size: 0 },
       };
     });
+    if (!environmentRevisions.some((revision) => revision.id === DEFAULT_ENVIRONMENT_REVISION_ID)) {
+      environmentRevisions.push(defaultEnvironmentRevision());
+    }
     if (!environmentRevisions.some((revision) => revision.id === defaultShellEnvironmentRevision().id)) {
       environmentRevisions.push(defaultShellEnvironmentRevision());
     }
@@ -590,7 +612,7 @@ export class SessionStore {
     const sessionPlans = savedSessionPlans.map((plan) => ({
       ...plan,
       mode: "recorded" as const,
-      state: plan.state === "completed" ? "completed" as const : "recorded" as const,
+      state: plan.state === "completed" || plan.state === "abandoned" ? plan.state : "recorded" as const,
     }));
     const migratedSessionPlans = JSON.stringify(sessionPlans) !== JSON.stringify(savedSessionPlans);
     const savedSubagents = Array.isArray(saved.subagents)
@@ -713,15 +735,18 @@ export class SessionStore {
       const session = sessionsById.get(createdInSessionId);
       const projectId = legacy.projectId ?? session?.projectId;
       if (!projectId) return [];
+      const deletedAt = typeof legacy.deletedAt === "string" && legacy.deletedAt ? legacy.deletedAt : undefined;
       const baseName = (legacy.name ?? legacy.logicalName).trim();
       let name = baseName;
       let key = `${projectId}\0${name}`;
-      if (usedArtifactNames.has(key)) {
-        name = `${baseName} (s-${createdInSessionId.slice(0, 8)})`;
-        key = `${projectId}\0${name}`;
-        if (usedArtifactNames.has(key)) name = `${name}-${legacy.id.slice(0, 8)}`;
+      if (!deletedAt) {
+        if (usedArtifactNames.has(key)) {
+          name = `${baseName} (s-${createdInSessionId.slice(0, 8)})`;
+          key = `${projectId}\0${name}`;
+          if (usedArtifactNames.has(key)) name = `${name}-${legacy.id.slice(0, 8)}`;
+        }
+        usedArtifactNames.add(`${projectId}\0${name}`);
       }
-      usedArtifactNames.add(`${projectId}\0${name}`);
       const firstVersion = savedVersionsByArtifactId.get(legacy.id)?.toSorted((left, right) => left.version - right.version)[0];
       const origin: ArtifactOrigin = legacy.origin
         ?? (firstVersion?.executionRunIds?.length ? "legacy_auto" : "user_upload");
@@ -730,6 +755,7 @@ export class SessionStore {
         createdInSessionId,
         createdInSessionTitle: legacy.createdInSessionTitle ?? session?.title ?? "Deleted Session",
         currentVersion: legacy.currentVersion,
+        ...(deletedAt ? { deletedAt } : {}),
         ...(legacy.description ? { description: legacy.description } : {}),
         id: legacy.id,
         // `.json` entries recorded before JSON had its own kind are stored as
@@ -1202,6 +1228,7 @@ export class SessionStore {
   ): ResolvedRuntimeSettings {
     const effective: ResolvedRuntimeSettings["effective"] = {
       enabledConnectorIds: [],
+      enabledSkillLibraries: [],
       enabledSkillIds: [],
       semanticReviewEnabled: true,
       skillSelectionMode: DEFAULT_SKILL_SELECTION_MODE,
@@ -1218,6 +1245,7 @@ export class SessionStore {
         const value = overrides[field];
         if (value === undefined) continue;
         if (field === "enabledConnectorIds") effective.enabledConnectorIds = [...value as ConnectorId[]];
+        else if (field === "enabledSkillLibraries") effective.enabledSkillLibraries = structuredClone(value) as EffectiveRuntimeSettings["enabledSkillLibraries"];
         else if (field === "enabledSkillIds") effective.enabledSkillIds = [...value as string[]];
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
@@ -1800,7 +1828,7 @@ export class SessionStore {
   }
 
   async createProject(name: string, input: RuntimeSettingsOverrides = {}): Promise<Project> {
-    const settingsOverrides = this.normalizeSettings(input);
+    const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
     const project: Project = {
       createdAt: new Date().toISOString(),
       id: randomUUID(),
@@ -1987,8 +2015,9 @@ export class SessionStore {
       .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
-  latestSessionPlan(sessionId: string): SessionPlan | undefined {
-    return this.listSessionPlans(sessionId).at(-1);
+  latestSessionPlan(sessionId: string, runId?: string): SessionPlan | undefined {
+    const plans = this.listSessionPlans(sessionId);
+    return (runId ? plans.filter((plan) => plan.runId === runId) : plans).at(-1);
   }
 
   private normalizePlanInput(input: ProposePlanRequest): Pick<SessionPlan, "caveats" | "feasibilityConfidence" | "scope" | "steps"> {
@@ -2011,7 +2040,7 @@ export class SessionStore {
     };
   }
 
-  async proposeSessionPlan(sessionId: string, input: ProposePlanRequest): Promise<SessionPlan> {
+  async proposeSessionPlan(sessionId: string, input: ProposePlanRequest, runId?: string): Promise<SessionPlan> {
     this.assertSessionWritable(sessionId);
     const normalized = this.normalizePlanInput(input);
     const now = new Date().toISOString();
@@ -2020,6 +2049,7 @@ export class SessionStore {
       createdAt: now,
       id: randomUUID(),
       mode: "recorded",
+      ...(runId ? { runId } : {}),
       sessionId,
       state: "recorded",
       updatedAt: now,
@@ -2037,6 +2067,44 @@ export class SessionStore {
     if (plan.state !== "recorded") throw new Error("Only a recorded plan can be revised");
     if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before revising");
     Object.assign(plan, this.normalizePlanInput(input), { updatedAt: new Date().toISOString(), version: plan.version + 1 });
+    await this.saveCatalog();
+    return structuredClone(plan);
+  }
+
+  async updateSessionPlanStep(
+    sessionId: string,
+    input: { expectedVersion: number; planId: string; status: PlanStep["status"]; stepId: string },
+  ): Promise<SessionPlan> {
+    this.assertSessionWritable(sessionId);
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === input.planId && candidate.sessionId === sessionId);
+    if (!plan) throw new Error("Plan not found");
+    if (plan.state !== "recorded") throw new Error("Only a recorded plan can update step progress");
+    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before updating a step");
+    const step = plan.steps.find((candidate) => candidate.id === input.stepId);
+    if (!step) throw new Error("Plan step not found");
+    step.status = input.status;
+    plan.state = plan.steps.every((candidate) => candidate.status === "completed") ? "completed" : "recorded";
+    plan.updatedAt = new Date().toISOString();
+    plan.version += 1;
+    await this.saveCatalog();
+    return structuredClone(plan);
+  }
+
+  async abandonSessionPlan(
+    sessionId: string,
+    input: { expectedVersion: number; planId: string; reason?: string },
+  ): Promise<SessionPlan> {
+    this.assertSessionWritable(sessionId);
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === input.planId && candidate.sessionId === sessionId);
+    if (!plan) throw new Error("Plan not found");
+    if (plan.state !== "recorded") throw new Error("Only a recorded plan can be abandoned");
+    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before abandoning");
+    const reason = input.reason?.trim();
+    if (reason && reason.length > 2_000) throw new Error("Plan abandonment reason must not exceed 2000 characters");
+    plan.state = "abandoned";
+    if (reason) plan.abandonmentReason = reason;
+    plan.updatedAt = new Date().toISOString();
+    plan.version += 1;
     await this.saveCatalog();
     return structuredClone(plan);
   }
@@ -2166,7 +2234,7 @@ export class SessionStore {
 
   listProjectArtifacts(projectId: string): ScientificArtifact[] {
     if (!this.getProject(projectId)) throw new Error("Project not found");
-    return structuredClone(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId))
+    return structuredClone(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId && !artifact.deletedAt))
       .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
@@ -2181,10 +2249,23 @@ export class SessionStore {
     return artifact ? structuredClone(artifact) : undefined;
   }
 
+  async deleteArtifact(projectId: string, artifactId: string): Promise<ScientificArtifact> {
+    if (!this.getProject(projectId)) throw new SessionStoreHttpError("Project not found", 404);
+    const artifact = this.catalog.artifacts.find((candidate) => candidate.id === artifactId && candidate.projectId === projectId);
+    if (!artifact) throw new SessionStoreHttpError("Artifact not found", 404);
+    if (artifact.deletedAt) return structuredClone(artifact);
+    const now = new Date().toISOString();
+    artifact.deletedAt = now;
+    artifact.updatedAt = now;
+    await this.saveCatalog();
+    return structuredClone(artifact);
+  }
+
   getArtifactByName(sessionId: string, name: string): ScientificArtifact | undefined {
     const session = this.getSession(sessionId);
     if (!session) return undefined;
-    const artifact = this.catalog.artifacts.find((candidate) => candidate.projectId === session.projectId && candidate.name === name);
+    const artifact = this.catalog.artifacts.find((candidate) =>
+      candidate.projectId === session.projectId && candidate.name === name && !candidate.deletedAt);
     return artifact ? structuredClone(artifact) : undefined;
   }
 
@@ -2220,7 +2301,7 @@ export class SessionStore {
     const session = this.getSession(sessionId);
     if (!session) return undefined;
     const reportArtifacts = this.catalog.artifacts
-      .filter((artifact) => artifact.projectId === session.projectId && reportKinds.has(artifact.kind))
+      .filter((artifact) => artifact.projectId === session.projectId && !artifact.deletedAt && reportKinds.has(artifact.kind))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     for (const artifact of reportArtifacts) {
       const versions = this.catalog.artifactVersions
@@ -2306,7 +2387,8 @@ export class SessionStore {
       throw new Error("Artifact dependency must reference a version in the same Project");
     }
     const now = new Date().toISOString();
-    let artifact = this.catalog.artifacts.find((candidate) => candidate.projectId === projectId && candidate.name === logicalName);
+    let artifact = this.catalog.artifacts.find((candidate) =>
+      candidate.projectId === projectId && candidate.name === logicalName && !candidate.deletedAt);
     if (artifact && artifact.kind !== input.kind) throw new Error("Artifact kind cannot change across versions");
     if (!artifact) {
       artifact = {
@@ -3255,13 +3337,16 @@ export class SessionStore {
     revisions: EnvironmentRevision[],
   ): Promise<void> {
     this.catalog.environments = structuredClone(environments);
-    const legacy = this.catalog.environmentRevisions.find((revision) => revision.id === DEFAULT_ENVIRONMENT_REVISION_ID)
-      ?? defaultEnvironmentRevision();
-    const shell = this.catalog.environmentRevisions.find((revision) => revision.id === defaultShellEnvironmentRevision().id)
-      ?? defaultShellEnvironmentRevision();
-    this.catalog.environmentRevisions = [legacy, shell, ...structuredClone(revisions)
-      .filter((revision) => revision.id !== DEFAULT_ENVIRONMENT_REVISION_ID
-        && revision.id !== defaultShellEnvironmentRevision().id)];
+    const systemRevisions = this.catalog.environmentRevisions
+      .filter((revision) => isSystemEnvironmentRevisionId(revision.id));
+    if (!systemRevisions.some((revision) => revision.id === DEFAULT_ENVIRONMENT_REVISION_ID)) {
+      systemRevisions.push(defaultEnvironmentRevision());
+    }
+    if (!systemRevisions.some((revision) => revision.id === defaultShellEnvironmentRevision().id)) {
+      systemRevisions.push(defaultShellEnvironmentRevision());
+    }
+    this.catalog.environmentRevisions = [...systemRevisions, ...structuredClone(revisions)
+      .filter((revision) => !isSystemEnvironmentRevisionId(revision.id))];
     await this.saveCatalog();
   }
 
@@ -3298,6 +3383,7 @@ export class SessionStore {
     retryOfRunId?: string;
     sessionId: string;
     settingsSnapshot: SessionRun["settingsSnapshot"];
+    skillLibraryRefs?: SessionRun["skillLibraryRefs"];
     webForceRefresh?: boolean;
   }): Promise<SessionRun> {
     this.assertSessionWritable(input.sessionId);
@@ -3318,6 +3404,7 @@ export class SessionStore {
         ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
         sessionId: input.sessionId,
         settingsSnapshot: structuredClone(input.settingsSnapshot),
+        ...(input.skillLibraryRefs?.length ? { skillLibraryRefs: structuredClone(input.skillLibraryRefs) } : {}),
         ...(input.webForceRefresh ? { webForceRefresh: true } : {}),
         status: "queued",
       };

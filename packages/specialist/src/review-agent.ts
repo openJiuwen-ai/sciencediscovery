@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import {
   type RuntimeSkill,
   type WorkspaceAgentOptions,
-} from "@sciencediscovery/context";
+} from "@sciencediscovery/workspace";
 import { createSubagentProfile, type AgentEvent } from "@sciencediscovery/orchestration";
 import type { AgentHistoryMessage, SubagentProfile } from "@sciencediscovery/orchestration";
 import {
@@ -364,7 +364,6 @@ export function createReviewAgentOptions(input: CreateReviewAgentOptionsInput): 
         history: [],
         memoryGraphEnabled: false,
         mcpTools: [],
-        proposePlan: undefined,
         proposeRemoteJob: undefined,
         queryGraph: undefined,
         remoteHosts: [],

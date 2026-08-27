@@ -27,6 +27,10 @@ import {
   NODE_COLORS,
   graphNodeDisplayNames,
   graphNodeName,
+  isCancelledNode,
+  isChildNode,
+  isScopeNode,
+  isSurrogateEdge,
 } from "../src/MemoryGraphCanvas.js";
 
 // The schema union is the single source of truth for which node labels and
@@ -38,12 +42,12 @@ import {
 // extracts/supports/stated_in) fails loudly here instead of silently dropping
 // arrow markers and filter-chip swatches.
 const EDGE_TYPES: MemoryGraphEdgeType[] = [
-  "next", "produces", "extracts", "supports", "stated_in", "supersedes", "input",
+  "next", "produces", "extracts", "supports", "stated_in", "supersedes", "input", "contains",
   // /evolve search graph.
   "searches", "root", "expands", "inspires", "elected", "occupies",
 ];
 const NODE_LABELS: MemoryGraphNodeLabel[] = [
-  "ResearchGoal", "SubTask", "Paper", "Evidence", "Claim", "Code", "Artifact",
+  "ResearchGoal", "Task", "ToolCall", "Paper", "Evidence", "Claim", "Code", "Artifact",
   // /evolve search graph.
   "SearchRun", "SearchNode", "SearchCell",
 ];
@@ -73,7 +77,7 @@ test("NODE_COLORS has exactly the schema node labels as keys", () => {
 
 test("graphNodeName truncates names longer than 30 characters with an ellipsis", () => {
   const long = "x".repeat(40);
-  const name = graphNodeName({ label: "SubTask", id: "t1", extra: { task_type: long } });
+  const name = graphNodeName({ label: "ToolCall", id: "t1", extra: { task_type: long } });
   assert.equal(name.length, 30);
   assert.ok(name.endsWith("…"));
 });
@@ -114,10 +118,15 @@ test("graphNodeName picks label-specific fields in priority order", () => {
     graphNodeName({ label: "Code", id: "c1", extra: { code_id: "cid", tool: "run_python" } }),
     "run_python",
   );
-  // SubTask prefers `task_type` over `task_id`.
+  // ToolCall prefers `task_type` over `tool_type` over `task_id`.
   assert.equal(
-    graphNodeName({ label: "SubTask", id: "s1", extra: { task_id: "tid", task_type: "analyze" } }),
+    graphNodeName({ label: "ToolCall", id: "s1", extra: { task_id: "tid", task_type: "analyze" } }),
     "analyze",
+  );
+  // Task (subagent scope) prefers `objective` over `task_type` over `task_id`.
+  assert.equal(
+    graphNodeName({ label: "Task", id: "s2", extra: { task_id: "tid2", task_type: "subagent", objective: "find a cure" } }),
+    "find a cure",
   );
   // Paper prefers `title` over `link`.
   assert.equal(
@@ -149,7 +158,7 @@ test("graphNodeName ignores non-string or blank extra fields", () => {
 
 test("graphNodeDisplayNames leaves unique names unchanged", () => {
   const nodes = [
-    { label: "SubTask" as const, id: "s1", extra: { task_type: "analyze" } },
+    { label: "ToolCall" as const, id: "s1", extra: { task_type: "analyze" } },
     { label: "Paper" as const, id: "p1", extra: { title: "My Paper" } },
   ];
   const display = graphNodeDisplayNames(nodes);
@@ -182,13 +191,13 @@ test("graphNodeDisplayNames does not suffixed names that appear only once", () =
 });
 
 test("图谱的 evolve 节点展示搜索内容并能跳到演进面板", () => {
-  // The evolve SubTask used to render a bare status + a raw "program_evolution"
+  // The evolve ToolCall used to render a bare status + a raw "program_evolution"
   // string: the run's substance lives one edge away on the SearchRun, and the
   // panel that could explain it was unreachable from the graph.
   const subtask = {
     extra: { status: "completed", task_type: "program_evolution" },
     id: "subtask:evolve:23601271-4db3-4774-bf69-b2c8bb9b81e5",
-    label: "SubTask" as const,
+    label: "ToolCall" as const,
   };
   const searchRun = {
     extra: {
@@ -257,4 +266,48 @@ test("evolve 相关节点的标题要能读", () => {
     graphNodeName({ label: "SearchRun", id: "r2", extra: { algorithm: "era" } }),
     "era",
   );
+});
+
+// --- subagent surrogate edges, scope/child/cancelled classification (PR3) ---
+
+test("isSurrogateEdge keys on extra.surrogate === true only", () => {
+  // A folded surrogate edge carries the marker + the via_child hop. The
+  // render pass dashes/lightens the line and skips the label only when this
+  // returns true; a real produces edge (no marker) must read false.
+  assert.equal(isSurrogateEdge({ extra: { surrogate: true, via_child: "c1" } }), true);
+  assert.equal(isSurrogateEdge({ extra: { surrogate: 1 } }), false, "truthy-but-not-true must not match");
+  assert.equal(isSurrogateEdge({ extra: { surrogate: false } }), false);
+  assert.equal(isSurrogateEdge({ extra: {} }), false);
+  assert.equal(isSurrogateEdge({}), false, "missing extra must not match");
+});
+
+test("isScopeNode keys on extra.task_type === 'subagent'", () => {
+  // Scope and child share the SubTask label — the scope is distinguished by
+  // task_type, never by label. A plain SubTask or an exec child must read
+  // false so they don't get the expandable ring + ▸N badge.
+  assert.equal(isScopeNode({ id: "s", extra: { task_type: "subagent" } }), true);
+  assert.equal(isScopeNode({ id: "s", extra: { task_type: "code_execution" } }), false);
+  assert.equal(isScopeNode({ id: "s", extra: {} }), false);
+  assert.equal(isScopeNode({ id: "s" }), false);
+});
+
+test("isChildNode keys on parent_subtask_id or an :exec: task_id", () => {
+  // PR1's child task_id shape is `subtask:subagent:<id>:exec:<execId>`; the
+  // child also carries parent_subtask_id pointing back at the scope. Either
+  // marks a node as a child of an expanded scope.
+  assert.equal(isChildNode({ id: "subtask:subagent:sub1:exec:e1", extra: {} }), true);
+  assert.equal(isChildNode({ id: "x", extra: { parent_subtask_id: "scope" } }), true);
+  assert.equal(isChildNode({ id: "subtask:subagent:sub1", extra: { task_type: "subagent" } }), false, "a scope is not a child");
+  assert.equal(isChildNode({ id: "plain", extra: {} }), false);
+});
+
+test("isCancelledNode keys on status === 'cancelled' (case-insensitive)", () => {
+  // cancelled is terminal-but-failed — distinct from pending (unfinished)
+  // and completed (succeeded/…). PR1 writes it on aborted subagents.
+  assert.equal(isCancelledNode({ extra: { status: "cancelled" } }), true);
+  assert.equal(isCancelledNode({ extra: { status: "Cancelled" } }), true);
+  assert.equal(isCancelledNode({ extra: { status: "succeeded" } }), false);
+  assert.equal(isCancelledNode({ extra: { status: "running" } }), false);
+  assert.equal(isCancelledNode({ extra: {} }), false);
+  assert.equal(isCancelledNode({}), false);
 });

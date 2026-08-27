@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ModelProfile } from "@sciencediscovery/schema";
+import { createLocalSessionTitle, type ModelProfile } from "@sciencediscovery/schema";
 
 import { parseProviderUsage, type ProviderUsageBreakdown } from "./provider-usage.js";
 
@@ -30,13 +30,20 @@ function supportsThinkingToggle(model: ModelProfile): boolean {
   } catch {
     // The model registry validates URLs; keep this helper defensive for tests.
   }
-  return hostname === "api.deepseek.com"
+  // Compatible gateways replace the provider hostname but usually preserve
+  // the provider's model id, so use both signals.
+  const modelId = model.model.trim().toLowerCase();
+  const knownModelFamily = /(^|[/_.:-])(deepseek|glm)(?=$|[/_.:-])/u.test(modelId);
+  return knownModelFamily
+    || hostname === "api.deepseek.com"
     || hostname.endsWith(".deepseek.com")
-    // Volcano Engine's ark, which serves GLM among others, honours the same
-    // flag — verified against the live endpoint: reasoning_content goes from
-    // 258 characters to 0 with `thinking: {type: "disabled"}` and the answer
-    // is unchanged. Naming a session is a one-shot call that has nothing to
-    // reason about.
+    || hostname === "open.bigmodel.cn"
+    || hostname.endsWith(".bigmodel.cn")
+    // Volcano Engine's ark serves GLM among others under opaque endpoint ids
+    // ("ep-…"), which the model-family test cannot see — the hostname is the
+    // only signal there. Verified against the live endpoint: reasoning_content
+    // goes from 258 characters to 0 with `thinking: {type: "disabled"}` and
+    // the answer is unchanged.
     || hostname.endsWith(".volces.com");
 }
 
@@ -92,6 +99,51 @@ export interface RefinedSessionTitle {
   usage: ProviderUsageBreakdown;
 }
 
+interface ChatCompletionBody {
+  choices?: Array<{
+    finish_reason?: string;
+    message?: { content?: string; reasoning_content?: string };
+  }>;
+  usage?: {
+    completion_tokens?: number;
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
+}
+
+function reasoningConsumedVisibleAnswer(body: ChatCompletionBody): boolean {
+  const choice = body.choices?.[0];
+  if (sanitizeRefinedSessionTitle(choice?.message?.content ?? "")) return false;
+  const reasoningTokens = body.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+  return reasoningTokens > 0 || Boolean(choice?.message?.reasoning_content?.trim());
+}
+
+function aggregateProviderUsage(attempts: ProviderUsageBreakdown[]): ProviderUsageBreakdown {
+  if (attempts.some((usage) => usage.usageStatus !== "reported")) {
+    return {
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      usageStatus: "provider-not-reported",
+    };
+  }
+  const sum = (field: keyof Omit<ProviderUsageBreakdown, "usageStatus">): number | null => {
+    const values = attempts.map((usage) => usage[field]);
+    return values.every((value): value is number => value !== null)
+      ? values.reduce((total, value) => total + value, 0)
+      : null;
+  };
+  return {
+    cacheReadTokens: sum("cacheReadTokens"),
+    cacheWriteTokens: sum("cacheWriteTokens"),
+    inputTokens: sum("inputTokens"),
+    outputTokens: sum("outputTokens"),
+    totalTokens: sum("totalTokens"),
+    usageStatus: "reported",
+  };
+}
+
 export async function generateRefinedSessionTitle(options: {
   apiToken: string;
   fetchImpl?: typeof fetch;
@@ -99,18 +151,20 @@ export async function generateRefinedSessionTitle(options: {
   model: ModelProfile;
 }): Promise<RefinedSessionTitle> {
   const startedAt = new Date().toISOString();
-  const response = await (options.fetchImpl ?? fetch)(
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const requestCompletion = (disableThinking: boolean) => fetchImpl(
     `${options.model.baseUrl.replace(/\/$/, "")}/chat/completions`,
     {
       body: JSON.stringify({
-        max_tokens: 64,
         messages: [
           { content: SESSION_NAMING_SYSTEM_PROMPT, role: "system" },
           { content: options.firstMessage, role: "user" },
         ],
         model: options.model.model,
         temperature: 0,
-        ...(supportsThinkingToggle(options.model) ? { thinking: { type: "disabled" } } : {}),
+        ...(disableThinking
+          ? { max_tokens: 64, thinking: { type: "disabled" } }
+          : {}),
       }),
       headers: {
         authorization: `Bearer ${options.apiToken}`,
@@ -120,22 +174,37 @@ export async function generateRefinedSessionTitle(options: {
       signal: AbortSignal.timeout(30_000),
     },
   );
+
+  const disableThinking = supportsThinkingToggle(options.model);
+  let response = await requestCompletion(disableThinking);
+  let usedUnboundedFallback = false;
+  // `thinking` is a provider extension. Strict OpenAI-compatible gateways may
+  // reject it. Let the provider choose the output budget on fallback so a
+  // reasoning model can reach its visible answer before we truncate locally.
+  if (disableThinking && (response.status === 400 || response.status === 422)) {
+    response = await requestCompletion(false);
+    usedUnboundedFallback = true;
+  }
   if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}`);
-  const body = await response.json() as {
-    choices?: Array<{
-      finish_reason?: string;
-      message?: { content?: string; reasoning_content?: string };
-    }>;
-    usage?: {
-      completion_tokens?: number;
-      completion_tokens_details?: { reasoning_tokens?: number };
-    };
-  };
+  let body = await response.json() as ChatCompletionBody;
+  const attemptUsages = [parseProviderUsage(body.usage)];
+  // Some compatible gateways accept unknown fields but silently ignore them.
+  // If all limited output was still reasoning, retry once without a provider
+  // limit and use only the visible content from that response.
+  if (disableThinking && !usedUnboundedFallback && reasoningConsumedVisibleAnswer(body)) {
+    response = await requestCompletion(false);
+    usedUnboundedFallback = true;
+    if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}`);
+    body = await response.json() as ChatCompletionBody;
+    attemptUsages.push(parseProviderUsage(body.usage));
+  }
+
   const choice = body.choices?.[0];
-  if (choice?.finish_reason === "length") {
+  const visibleTitle = sanitizeRefinedSessionTitle(choice?.message?.content ?? "");
+  const title = visibleTitle ? createLocalSessionTitle(visibleTitle) : undefined;
+  if (!title && choice?.finish_reason === "length") {
     throw new Error("Session naming model truncated its title at the output token limit");
   }
-  const title = sanitizeRefinedSessionTitle(choice?.message?.content ?? "");
   if (!title) {
     const reasoningTokens = body.usage?.completion_tokens_details?.reasoning_tokens;
     const detail = reasoningTokens
@@ -147,6 +216,6 @@ export async function generateRefinedSessionTitle(options: {
     finishedAt: new Date().toISOString(),
     startedAt,
     title,
-    usage: parseProviderUsage(body.usage),
+    usage: aggregateProviderUsage(attemptUsages),
   };
 }

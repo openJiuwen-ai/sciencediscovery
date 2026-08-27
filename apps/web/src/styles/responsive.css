@@ -19,6 +19,7 @@
   .content-grid { grid-template-columns: minmax(0, 1fr) 340px; }
   .messages { padding-inline: 32px; }
   .workspace-panel { padding-inline: 12px; }
+  .skill-workspace-layout { grid-template-columns: 200px 180px minmax(360px, 1fr) 220px; }
 }
 
 @media (max-width: 900px) {
@@ -43,6 +44,12 @@
   .document-header, .artifact-modal-header { padding: 18px 20px; }
   .document-markdown, .artifact-modal-body { padding: 28px 20px 44px; }
   .environment-source-settings { grid-template-areas: "intro intro" "pip conda" "save save"; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .skill-workspace-dialog { width: calc(100vw - 20px); height: calc(100vh - 20px); }
+  .skill-workspace-layout { grid-template-columns: 190px minmax(0, 1fr); grid-template-rows: 170px minmax(0, 1fr) minmax(120px, 170px); }
+  .skill-workspace-catalog { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--border); }
+  .skill-workspace-skill-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .skill-workspace-history { grid-column: 1 / -1; max-height: 170px; border-top: 1px solid var(--border); border-left: 0; }
+  .skill-workspace-history ol { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 600px) {
@@ -55,6 +62,8 @@
   .session-usage-chip { max-width: none; width: 100%; min-width: 0; flex: none; }
   .timeline-content { padding-left: 16px; }
   .timeline-status { display: none; }
+  .skill-review-timeline-cta { grid-template-columns: 38px minmax(0, 1fr); }
+  .skill-review-timeline-cta button { grid-column: 1 / -1; width: 100%; }
   .composer-footer { align-items: stretch; flex-direction: column; }
   .task-model-picker { align-items: stretch; flex-direction: column; }
   .task-model-picker select { width: 100%; max-width: none; }
@@ -69,18 +78,49 @@
   .settings-group-nav { max-width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
   .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
   .settings-group-detail { padding: 22px 18px 30px; }
-  .skill-manager-grid { grid-template-columns: minmax(0, 1fr); }
-  .skill-catalog-list { max-height: 180px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .skill-manager-toolbar input { flex-basis: 100%; }
-  .skill-manager-toolbar button { flex: 1 1 140px; }
-  .skill-detail > header, .environment-setup-state, .environment-card-heading { align-items: stretch; flex-direction: column; }
-  .skill-detail-actions { width: 100%; }
-  .skill-detail-actions button { flex: 1 1 140px; }
-  .skill-metadata { grid-template-columns: minmax(0, 1fr); }
+  .skill-library-grid { grid-template-columns: minmax(0, 1fr); }
+  .skill-library-catalog { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .skill-library-create, .skill-library-diff-controls, .skill-library-diff { grid-template-columns: minmax(0, 1fr); }
+  .skill-library-create > button, .skill-library-diff-controls > button { width: 100%; }
+  .skill-library-detail > header, .environment-card-heading { align-items: stretch; flex-direction: column; }
+  .skill-manager-hero { align-items: stretch; flex-direction: column; }
+  .skill-manager-hero-actions { width: 100%; align-items: stretch; flex-direction: column; }
+  .skill-manager-tabs { width: 100%; }
+  .skill-manager-tabs button { flex: 1 1 0; }
+  .skill-manager-stats { width: 100%; }
+  .skill-manager-stats > span { flex: 1 1 0; min-width: 0; }
+  .skill-manager-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .skill-search-field, .skill-manager-toolbar .skill-explorer-button { grid-column: 1 / -1; }
+  .skill-toolbar-menu, .skill-toolbar-menu > summary { width: 100%; }
+  .skill-library-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .skill-library-list { max-height: min(52vh, 460px); }
+  .skill-card { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 10px; }
+  .skill-card .skill-source { grid-column: 2; justify-self: start; }
+  .skill-card-open { grid-column: 3; grid-row: 1 / span 2; }
+  .skill-card-open > span { display: none; }
+  .skill-workspace-header-actions > span { display: none; }
   .skill-editor-columns { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .skill-editor-dialog { width: calc(100vw - 24px); height: calc(100vh - 24px); }
+  .skill-resource-authoring > header { flex-direction: column; }
+  .skill-resource-authoring > header > div:last-child { width: 100%; flex-wrap: wrap; }
+  .skill-resource-authoring > header button { flex: 1 1 auto; justify-content: center; }
+  .skill-editor-dialog form > footer { align-items: stretch; flex-direction: column; }
+  .skill-editor-dialog form > footer > div { width: 100%; }
+  .skill-editor-dialog form > footer button { flex: 1; }
+  .skill-review-dialog { width: calc(100vw - 24px); height: calc(100vh - 24px); padding: 0; }
+  .skill-review-header { padding: 18px 18px 14px; }
+  .skill-review-tabs { width: auto; margin: 0 18px 12px; }
+  .skill-review-tabs button { min-width: 0; flex: 1; }
+  .skill-review-workspace { margin: 0 18px; }
+  .skill-review-error-slot { padding: 0 18px; }
+  .skill-review-footer { padding: 14px 18px 16px; }
+  .skill-review-workspace { grid-template-columns: minmax(150px, 36%) minmax(0, 1fr); }
+  .skill-binary-diff { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+  .skill-review-queue { grid-template-columns: 34px minmax(0, 1fr); }
+  .skill-review-queue > button { grid-column: 1 / -1; justify-content: center; width: 100%; }
   .settings-choices { grid-template-columns: 1fr; }
   .timeout-grid, .runtime-status-summary { grid-template-columns: 1fr; }
-  .environment-starter-plan, .environment-create { grid-template-columns: 1fr; }
+  .environment-setup-components, .environment-starter-plan, .environment-create { grid-template-columns: 1fr; }
   .environment-install { grid-template-columns: minmax(0, 1fr); }
   .environment-install .secondary-button, .environment-card-heading .danger-button { width: 100%; }
   .environment-source-settings { grid-template-areas: "intro" "pip" "conda" "save"; grid-template-columns: minmax(0, 1fr); }

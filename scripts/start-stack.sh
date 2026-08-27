@@ -187,11 +187,44 @@ prepare_local() {
   fi
 
   require_command node "Node.js 22.19+ is required."
+  if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)'; then
+    echo "Node.js 22.19+ is required; found $(node --version)." >&2
+    exit 1
+  fi
   require_command pnpm "pnpm 11.1.2 is required."
   require_command python3 "Python 3 is required for workspace analysis."
   require_command uv "uv 0.9+ is required for the Python service environments."
-  require_command bwrap "bubblewrap is required for isolated Python execution."
   require_command curl "curl is required for local service startup checks."
+
+  export SCIENCE_AGENT_PYTHON_PATH="${SCIENCE_AGENT_PYTHON_PATH:-$(command -v python3)}"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    export SCIENCE_AGENT_SHELL_PATH="${SCIENCE_AGENT_SHELL_PATH:-/bin/bash}"
+  else
+    export SCIENCE_AGENT_SHELL_PATH="${SCIENCE_AGENT_SHELL_PATH:-/usr/bin/bash}"
+  fi
+
+  local sandbox_provider="${SCIENCE_AGENT_SANDBOX_PROVIDER:-auto}"
+  if [[ "$sandbox_provider" == "auto" ]]; then
+    case "$(uname -s)" in
+      Darwin) sandbox_provider="seatbelt" ;;
+      Linux) sandbox_provider="bubblewrap" ;;
+      *) echo "Native sandbox execution is unsupported on $(uname -s)." >&2; exit 1 ;;
+    esac
+  fi
+  case "$sandbox_provider" in
+    bubblewrap)
+      require_command "${SCIENCE_AGENT_BWRAP_PATH:-bwrap}" "bubblewrap is required for isolated Linux execution."
+      ;;
+    seatbelt)
+      if [[ "$(uname -s)" != "Darwin" ]]; then
+        echo "Seatbelt sandbox is available only on macOS." >&2
+        exit 1
+      fi
+      require_command "${SCIENCE_AGENT_SEATBELT_PATH:-/usr/bin/sandbox-exec}" \
+        "macOS sandbox-exec is required for isolated execution."
+      ;;
+    *) echo "SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt." >&2; exit 1 ;;
+  esac
 
   data_dir="$(absolute_from_repository "${SCIENCE_DISCOVERY_DATA_DIR:-.sciencediscovery-data}")"
   migrate_legacy_data_dir "$data_dir"
@@ -209,8 +242,14 @@ prepare_local() {
     if [[ -n "${SCIENCE_AGENT_PYPI_INDEX:-}" ]]; then
       export UV_DEFAULT_INDEX="$SCIENCE_AGENT_PYPI_INDEX"
     fi
-    if [[ ! -d node_modules ]]; then
+    # Always reconcile workspace links with the lockfile. A repository update
+    # can add a workspace dependency while leaving an old node_modules folder
+    # in place; checking only for the directory would then fail later at build
+    # or API startup with ERR_MODULE_NOT_FOUND.
+    if [[ "${#pnpm_registry_args[@]}" -gt 0 ]]; then
       pnpm install --frozen-lockfile --ignore-scripts "${pnpm_registry_args[@]}"
+    else
+      pnpm install --frozen-lockfile --ignore-scripts
     fi
     uv_sync_project services/paper "$envs_dir/paper" 1
     # Pinned to Python 3.12 via services/gateway/.python-version.
@@ -263,6 +302,9 @@ prepare_local() {
 
   local runner_environment=(
     "SCIENCE_AGENT_BWRAP_PATH=${SCIENCE_AGENT_BWRAP_PATH:-bwrap}"
+    "SCIENCE_AGENT_SANDBOX_PROVIDER=$sandbox_provider"
+    "SCIENCE_AGENT_SEATBELT_PATH=${SCIENCE_AGENT_SEATBELT_PATH:-/usr/bin/sandbox-exec}"
+    "SCIENCE_AGENT_PYTHON_PATH=$SCIENCE_AGENT_PYTHON_PATH"
     "SCIENCE_AGENT_DATA_DIR=$data_dir"
     "SCIENCE_AGENT_RUNNER_HOST=${SCIENCE_AGENT_RUNNER_HOST:-127.0.0.1}"
     "SCIENCE_AGENT_RUNNER_PORT=${SCIENCE_AGENT_RUNNER_PORT:-4311}"
@@ -375,7 +417,7 @@ start_stack() {
   configure_endpoints
   trap cleanup EXIT INT TERM
 
-  echo "Starting the bubblewrap runner daemon (rootless)..." >&2
+  echo "Starting the sandbox runner daemon..." >&2
   "${runner_command[@]}" &
   pids+=("$!")
   wait_healthy "runner" "$runner_url/health"

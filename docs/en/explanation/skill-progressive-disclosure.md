@@ -5,18 +5,16 @@ This page explains how a model discovers, reads, and audits Agent Skills during 
 ## Design goals
 
 - Keep the system prompt light: list selected skill name, description, version, revision, and resource count, not full `SKILL.md`.
-- Load instructions on demand through `describe_skill` and then `read_skill`.
+- Load instructions on demand by passing an exact catalog id to `read_skill`.
 - Freeze selected revision, package hash, instructions, and resources at run start, so later reads cannot observe a disk edit.
-- Separate discovery from content: `describe_skill` searches the catalog and returns metadata only, while `read_skill` returns content from the frozen snapshot.
+- Separate discovery from content: the prompt contains catalog metadata, while `read_skill` returns content from the frozen snapshot.
 
 ## Runtime flow
 
 ```text
 effective Session skills → API frozen revisions
   ├─ prompt: metadata only
-  └─ tool table: describe_skill / read_skill / read_skill_resource
-       ↓
-describe_skill(query) → catalog search over this run's skills
+  └─ tool table: read_skill / read_skill_resource
        ↓
 read_skill(skillId) → frozen instructions
        ↓
@@ -27,11 +25,10 @@ read_skill_resource(skillId,path) → referenced supporting text only
 
 | Tool | Location | Responsibility |
 |---|---|---|
-| `describe_skill` | Node workspace tool | Search name/description and return metadata, revision, hash, and resource summary |
 | `read_skill` | Node workspace tool | Return full instructions and supporting-resource list from the run snapshot |
 | `read_skill_resource` | Node workspace tool | Read bounded UTF-8 snapshot resource; never execute scripts or install dependencies |
 
-All three come from `createWorkspaceTools` in `packages/workspace` and are invoked in-process by the Node-native loop like any other workspace tool.
+Both come from `createWorkspaceTools` in `packages/workspace` and are invoked in-process by the Node-native loop like any other workspace tool.
 
 ## Why not hand the model a file path?
 

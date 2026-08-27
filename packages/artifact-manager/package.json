@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@sciencediscovery/data-source": "workspace:*",
-    "@sciencediscovery/context": "workspace:*",
     "@sciencediscovery/governance": "workspace:*",
     "@sciencediscovery/mcp-sources": "workspace:*",
     "@sciencediscovery/schema": "workspace:*",

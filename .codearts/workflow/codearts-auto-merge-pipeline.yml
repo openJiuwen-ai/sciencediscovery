@@ -1,0 +1,334 @@
+concurrency:
+  max: 5
+  enable: false
+  preemption:
+    enable: false
+    events:
+    - mr_id
+  exceed-action: IGNORE
+sources:
+  sciencediscovery:
+    type: gitcode
+    name: sciencediscovery
+    branch: main
+    git_url: https://gitcode.com/openJiuwen/sciencediscovery.git
+    ssh_git_url: git@gitcode.com:openJiuwen/sciencediscovery.git
+    endpoint_id: c4451a2a11af48baacd6b2af5eee3075
+    repo_id: 10597680
+on:
+  sources:
+    sciencediscovery:
+      merge_requests:
+        branches:
+        - main
+        paths: []
+        types: []
+        branches-ignore: []
+        paths-ignore: []
+        code-update: false
+        merge_comment: /merge
+stages:
+  17876415983332873c1af-7bdb-4329-8424-4161cf516258:
+    jobs:
+      auto_merge:
+        select: selected_by_default
+        name: Merge the merge request with a rebase
+        needs: []
+        steps:
+        - name: Acknowledge the /merge comment
+          uses: official_shell_plugin
+          env:
+            CODEARTS_MERGE_ID: "${MERGE_ID}"
+            CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              # Runs before the checkout so the PR hears back as soon as the
+              # runner starts. Best effort: nothing here fails the job.
+              REPO_OWNER=openJiuwen
+              REPO_NAME=sciencediscovery
+              GITCODE_TOKEN='${{ env.GITCODE_TOKEN }}'
+              GITCODE_API_BASE=https://api.gitcode.com/api/v5
+              if [ -z "${CODEARTS_MERGE_ID:-}" ] || [ -z "$GITCODE_TOKEN" ]; then
+                echo "no merge request context or token; skipping the acknowledgement"
+                exit 0
+              fi
+              export GITCODE_API_BASE GITCODE_TOKEN REPO_OWNER REPO_NAME CODEARTS_MERGE_ID CODEARTS_WEBHOOK_PAYLOAD
+              python3 - <<'PY' || echo "WARN: could not post the acknowledgement" >&2
+              import json
+              import os
+              import urllib.parse
+              import urllib.request
+
+              payload = json.loads(os.environ["CODEARTS_WEBHOOK_PAYLOAD"] or "{}")
+              note = payload.get("object_attributes") or {}
+              text = (note.get("note") or "").strip()
+              if payload.get("event_type") != "note" or (text.split() or [""])[0] != "/merge":
+                  raise SystemExit("not a /merge note; nothing to acknowledge")
+              user = payload.get("user") or {}
+              commenter = user.get("username") or user.get("login") or user.get("name") or "?"
+              mr = payload.get("merge_request") or {}
+              target = mr.get("target_branch") or ""
+              number = os.environ["CODEARTS_MERGE_ID"]
+              body = "🔄 收到 @{} 的 `/merge`，正在下载代码并把 PR !{} 以 rebase 方式合入 `{}`…".format(commenter, number, target)
+              url = "{}/repos/{}/{}/pulls/{}/comments?access_token={}".format(
+                  os.environ["GITCODE_API_BASE"], os.environ["REPO_OWNER"], os.environ["REPO_NAME"], number,
+                  urllib.parse.quote(os.environ["GITCODE_TOKEN"], safe=""))
+              request = urllib.request.Request(
+                  url, data=json.dumps({"body": body}).encode("utf-8"), method="POST",
+                  headers={"Content-Type": "application/json", "User-Agent": "ScienceDiscovery-CodeArts"})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  print("acknowledged /merge on !{} -> HTTP {}".format(number, response.status))
+              PY
+        - name: Download the pipeline source
+          uses: official_git_clone
+          identifier: 0
+        - name: Merge through the GitCode API
+          uses: official_shell_plugin
+          env:
+            CODEARTS_COMMIT_ID: "${COMMIT_ID}"
+            CODEARTS_MERGE_ID: "${MERGE_ID}"
+            CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              REPO_OWNER=openJiuwen
+              REPO_NAME=sciencediscovery
+              AUTH_BRANCH=main
+              GITCODE_TOKEN='${{ env.GITCODE_TOKEN }}'
+              GITCODE_API_BASE=https://api.gitcode.com/api/v5
+              WORK_DIR="$PWD/.ci-results/auto-merge"
+              mkdir -p "$WORK_DIR"
+
+              if [ -z "$GITCODE_TOKEN" ]; then
+                echo "FATAL: GITCODE_TOKEN is empty; set it as a private pipeline parameter" >&2
+                exit 1
+              fi
+
+              # GitCode REST helper: fields | merge | comment. The token only
+              # ever travels in the request URL; nothing here prints it. An
+              # HTTP error prints "HTTP <code>: <detail>" on stdout and exits 1
+              # so the caller can quote it on the merge request.
+              cat > "$WORK_DIR/gitcode_api.py" <<'PY'
+              import json
+              import os
+              import sys
+              import urllib.error
+              import urllib.parse
+              import urllib.request
+
+              base = os.environ["GITCODE_API_BASE"].rstrip("/")
+              token = os.environ["GITCODE_TOKEN"]
+              owner, repo = os.environ["REPO_OWNER"], os.environ["REPO_NAME"]
+
+
+              def call(method, path, data=None):
+                  url = "{}/repos/{}/{}/{}?access_token={}".format(
+                      base, owner, repo, path, urllib.parse.quote(token, safe=""))
+                  request = urllib.request.Request(
+                      url,
+                      data=None if data is None else json.dumps(data).encode("utf-8"),
+                      method=method,
+                      headers={"Content-Type": "application/json", "User-Agent": "ScienceDiscovery-CodeArts"},
+                  )
+                  try:
+                      with urllib.request.urlopen(request, timeout=60) as response:
+                          return response.read().decode("utf-8")
+                  except urllib.error.HTTPError as error:
+                      detail = error.read().decode("utf-8", "replace")[:500].replace("\n", " ")
+                      print("HTTP {}: {}".format(error.code, detail or error.reason))
+                      sys.exit(1)
+
+
+              command, number = sys.argv[1], sys.argv[2]
+              if command == "fields":
+                  pr = json.loads(call("GET", "pulls/{}".format(number)))
+                  mergeable = pr.get("mergeable")
+                  checks = pr.get("mergeable_state") if isinstance(pr.get("mergeable_state"), dict) else {}
+                  approval_keys = ("approval_reviewers_required_passed",
+                                   "approval_approvers_required_passed",
+                                   "approval_testers_required_passed")
+                  known = [checks.get(key) for key in approval_keys if key in checks]
+                  approvals = "unknown" if not known else ("true" if all(known) else "false")
+                  assignees = ",".join(sorted(
+                      (a.get("login") if isinstance(a, dict) else str(a)) or ""
+                      for a in (pr.get("assignees") or []) + (pr.get("approval_reviewers") or [])))
+                  for value in (
+                      pr.get("state") or "",
+                      (pr.get("base") or {}).get("ref") or "",
+                      ((pr.get("head") or {}).get("sha") or "").lower(),
+                      "null" if mergeable is None else str(bool(mergeable)).lower(),
+                      "true" if pr.get("draft") else "false",
+                      "true" if pr.get("merged") else "false",
+                      approvals,
+                      assignees,
+                  ):
+                      print(str(value).replace("\n", " "))
+              elif command == "merge":
+                  print(call("PUT", "pulls/{}/merge".format(number), {"merge_method": "rebase", "force_merge": True}))
+              elif command == "comment":
+                  with open(sys.argv[3], encoding="utf-8") as body_file:
+                      call("POST", "pulls/{}/comments".format(number), {"body": body_file.read()})
+              else:
+                  raise SystemExit("unknown command {}".format(command))
+              PY
+              export GITCODE_API_BASE GITCODE_TOKEN REPO_OWNER REPO_NAME
+              api() { python3 "$WORK_DIR/gitcode_api.py" "$@"; }
+              # Post a failure report on the PR (best effort) and stop the job.
+              fail() {
+                printf '%s\n' "$1" > "$WORK_DIR/comment.md"
+                api comment "$MR_NUMBER" "$WORK_DIR/comment.md" || echo "WARN: could not post the failure comment" >&2
+                printf 'FATAL: %s\n' "$1" >&2
+                exit 1
+              }
+
+              if [ -z "${CODEARTS_MERGE_ID:-}" ]; then
+                echo "FATAL: no merge request context; this pipeline only runs from a /merge comment on a PR" >&2
+                exit 1
+              fi
+              # The /merge note and its merge request come from the webhook payload.
+              PR_METADATA=$(python3 - <<'PY'
+              import json
+              import os
+              import re
+
+              payload = json.loads(os.environ["CODEARTS_WEBHOOK_PAYLOAD"] or "{}")
+              if payload.get("event_type") != "note":
+                raise SystemExit("expected a PR note payload, received {}".format(payload.get("event_type")))
+              note = payload.get("object_attributes") or {}
+              if note.get("noteable_type") != "MergeRequest":
+                raise SystemExit("the note is not on a merge request")
+              mr = payload.get("merge_request") or {}
+              user = payload.get("user") or {}
+              commenter = user.get("username") or user.get("login") or user.get("name") or ""
+              target = mr.get("target") or {}
+              merge_id = os.environ["CODEARTS_MERGE_ID"]
+              if not re.fullmatch(r"[1-9][0-9]*", merge_id):
+                raise SystemExit("CodeArts did not provide a valid merge request number")
+              if mr.get("iid") is not None and str(mr.get("iid")) != merge_id:
+                raise SystemExit("payload merge request {} does not match {}".format(mr.get("iid"), merge_id))
+              source_sha = os.environ["CODEARTS_COMMIT_ID"]
+              if not re.fullmatch(r"[0-9a-fA-F]{40}", source_sha):
+                raise SystemExit("the payload has no valid source commit SHA")
+              note_text = (note.get("note") or "").strip()
+              first_word = note_text.split()[0] if note_text else ""
+              fields = [
+                commenter,
+                first_word,
+                merge_id,
+                str(target.get("namespace") or ""),
+                str(target.get("name") or ""),
+                source_sha.lower(),
+                str(mr.get("target_branch") or ""),
+              ]
+              for value in fields:
+                if "\n" in value or "\r" in value:
+                    raise SystemExit("payload field contains a line break")
+                print(value)
+              PY
+              )
+              field() { printf '%s\n' "$PR_METADATA" | sed -n "${1}p"; }
+              COMMENTER=$(field 1)
+              NOTE_COMMAND=$(field 2)
+              MR_NUMBER=$(field 3)
+              PR_OWNER=$(field 4)
+              PR_REPO=$(field 5)
+              SOURCE_SHA=$(field 6)
+              # The merge request's own target branch is the merge target.
+              TARGET_BRANCH=$(field 7)
+              echo "merge request !$MR_NUMBER ($PR_OWNER/$PR_REPO -> $TARGET_BRANCH) comment by $COMMENTER: $NOTE_COMMAND"
+              if [ "$PR_OWNER/$PR_REPO" != "$REPO_OWNER/$REPO_NAME" ]; then
+                echo "FATAL: payload repository $PR_OWNER/$PR_REPO is not $REPO_OWNER/$REPO_NAME" >&2
+                exit 1
+              fi
+              if [ "$NOTE_COMMAND" != "/merge" ]; then
+                echo "FATAL: the triggering comment does not start with /merge" >&2
+                exit 1
+              fi
+              if [ -z "$TARGET_BRANCH" ] || ! git check-ref-format --branch "$TARGET_BRANCH" >/dev/null 2>&1; then
+                fail "❌ 自动合并被拒绝：目标分支 \`$TARGET_BRANCH\` 不是合法的分支名。"
+              fi
+              if [ -z "$COMMENTER" ]; then
+                fail "❌ 自动合并被拒绝：无法从评论事件中识别评论者，不能核对 CODEOWNERS。"
+              fi
+
+              # Authorization comes from CODEOWNERS on main, never from the PR.
+              git fetch --no-tags --force origin "+refs/heads/$AUTH_BRANCH:refs/remotes/origin/$AUTH_BRANCH"
+              OWNERS=$(git show "origin/$AUTH_BRANCH:CODEOWNERS" \
+                | sed -e 's/#.*//' | tr -s '[:space:]' '\n' | sed -n 's/^@//p' | tr '[:upper:]' '[:lower:]' | sort -u)
+              COMMENTER_LOWER=$(printf '%s' "$COMMENTER" | tr '[:upper:]' '[:lower:]')
+              echo "authorizing @$COMMENTER against CODEOWNERS of $AUTH_BRANCH@$(git rev-parse --short "origin/$AUTH_BRANCH"): $(printf '%s\n' "$OWNERS" | tr '\n' ' ')"
+              if ! printf '%s\n' "$OWNERS" | grep -qx -- "$COMMENTER_LOWER"; then
+                fail "❌ 自动合并被拒绝：@$COMMENTER 不在 \`$AUTH_BRANCH\` 分支的 CODEOWNERS 中（以 \`$AUTH_BRANCH\` 上的文件为准，PR 里对 CODEOWNERS 的修改不生效），只有 CODEOWNERS 里的成员可以发送 \`/merge\`。"
+              fi
+
+              # The merge request's live state decides, not the comment-time payload.
+              if ! PR_FIELDS=$(api fields "$MR_NUMBER"); then
+                fail "❌ 自动合并失败：读取 PR !$MR_NUMBER 失败（$PR_FIELDS）。"
+              fi
+              pr_field() { printf '%s\n' "$PR_FIELDS" | sed -n "${1}p"; }
+              PR_STATE=$(pr_field 1)
+              PR_BASE=$(pr_field 2)
+              PR_HEAD=$(pr_field 3)
+              PR_MERGEABLE=$(pr_field 4)
+              PR_DRAFT=$(pr_field 5)
+              PR_MERGED=$(pr_field 6)
+              PR_APPROVALS=$(pr_field 7)
+              PR_ASSIGNEES=$(pr_field 8)
+              if [ "$PR_MERGED" = "true" ]; then
+                fail "ℹ️ 自动合并未执行：PR !$MR_NUMBER 已经合并。"
+              fi
+              if [ "$PR_STATE" != "open" ] && [ "$PR_STATE" != "opened" ]; then
+                fail "❌ 自动合并被拒绝：本 PR 当前状态是 \`$PR_STATE\`，不是 open。"
+              fi
+              if [ "$PR_BASE" != "$TARGET_BRANCH" ]; then
+                fail "❌ 自动合并被拒绝：本 PR 的目标分支是 \`$PR_BASE\`，本次自动合并只处理目标为 \`$TARGET_BRANCH\` 的 PR。"
+              fi
+              if [ "$PR_DRAFT" = "true" ]; then
+                fail "❌ 自动合并被拒绝：本 PR 仍是草稿，请先标记为 ready。"
+              fi
+              if [ -n "$SOURCE_SHA" ] && [ "$PR_HEAD" != "$SOURCE_SHA" ]; then
+                fail "❌ 自动合并被拒绝：PR !$MR_NUMBER 在这条 \`/merge\` 评论之后有新提交（评论时 \`$(printf '%.7s' "$SOURCE_SHA")\`，现在 \`$(printf '%.7s' "$PR_HEAD")\`）。确认新提交后请重新发送 \`/merge\`。"
+              fi
+              # The CODEOWNERS /merge comment is the authorization; the merge is
+              # forced past GitCode's approval rule and the report says so.
+              FORCE_NOTE=""
+              if [ "$PR_APPROVALS" = "false" ]; then
+                FORCE_NOTE="GitCode 的审批规则尚未满足（审批人：${PR_ASSIGNEES:-见 PR 页面}），已按 CODEOWNERS 授权强制合入。"
+              fi
+              if [ "$PR_MERGEABLE" = "false" ]; then
+                fail "❌ 自动合并失败：PR !$MR_NUMBER 与 \`$TARGET_BRANCH\` 有冲突，没有合并。请在源分支上 rebase 到最新 \`$TARGET_BRANCH\` 并解决冲突后，再发送 \`/merge\`。"
+              fi
+
+              git fetch --no-tags --force origin "+refs/heads/$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH"
+              TARGET_BEFORE=$(git rev-parse "origin/$TARGET_BRANCH")
+              # GitCode replays the PR's commits onto the target (merge_method=rebase,
+              # force_merge): linear history, no merge commit, and the PR becomes
+              # "merged". force_merge needs the repository's "允许管理员强制合入"
+              # setting and an administrator token.
+              if ! MERGE_RESPONSE=$(api merge "$MR_NUMBER"); then
+                fail "❌ 自动合并失败：GitCode 拒绝以 rebase 强制合并 PR !$MR_NUMBER（$MERGE_RESPONSE）。若提示权限不足，需要仓库开启「允许管理员强制合入」且令牌账号为管理员；冲突时请在源分支上 rebase 到最新 \`$TARGET_BRANCH\`；然后再发送 \`/merge\`。"
+              fi
+              printf '%s\n' "$MERGE_RESPONSE" > "$WORK_DIR/merge-response.json"
+
+              git fetch --no-tags --force origin "+refs/heads/$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH"
+              TARGET_AFTER=$(git rev-parse "origin/$TARGET_BRANCH")
+              PUSHED_COUNT=$(git rev-list --count "$TARGET_BEFORE..$TARGET_AFTER")
+              printf '%s\n' "✅ 自动合并完成（由 @$COMMENTER 的 \`/merge\` 评论触发）。
+
+              PR !$MR_NUMBER 已以 rebase 方式合并到 \`$TARGET_BRANCH\`：\`$(printf '%.7s' "$TARGET_BEFORE")..$(printf '%.7s' "$TARGET_AFTER")\`（$PUSHED_COUNT 个提交）${FORCE_NOTE:+
+
+              $FORCE_NOTE}" > "$WORK_DIR/comment.md"
+              # The merge already happened; a failed report must not fail the job.
+              api comment "$MR_NUMBER" "$WORK_DIR/comment.md" || echo "WARN: merged, but could not post the result comment" >&2
+              echo "merged !$MR_NUMBER into $TARGET_BRANCH: $TARGET_BEFORE..$TARGET_AFTER ($PUSHED_COUNT commits)"
+          identifier: 1
+        if: "${{ sources.sciencediscovery.merge_id != '' }}"
+        runs-on:
+        - default
+    pre:
+    - type: auto
+    name: Auto merge
+    select: selected_by_default
+    fail-fast: false

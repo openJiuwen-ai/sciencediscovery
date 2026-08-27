@@ -29,6 +29,7 @@ import type {
   ArtifactDerivation,
   ArtifactVersionProvenance,
   ArtifactVersionDiff,
+  ConfirmSkillReviewDraftResult,
   CreateProjectResponse,
   DeletionImpact,
   Environment,
@@ -36,6 +37,7 @@ import type {
   EnvironmentRevision,
   EnvironmentSourceSettings,
   ExecutionRun,
+  ModelConnectivityTestResult,
   ModelProfile,
   McpInvocation,
   McpToolResult,
@@ -64,18 +66,22 @@ import type {
   SkillDeletionImpact,
   SkillDescriptor,
   SkillDetail,
+  SkillLibrary,
+  SkillLibraryVersion,
+  SkillReviewDraft,
+  SkillReviewDraftSummary,
   Specialist,
   Subagent,
   SubagentStep,
   SystemTimeoutSettings,
-  WorkbenchSearchResult,
+  WorkbenchSearchResponse,
   WorkspaceFile,
   WorkspaceUploadResult,
 } from "@sciencediscovery/schema";
 import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 import {
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-} from "@sciencediscovery/context";
+} from "@sciencediscovery/workspace";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -116,7 +122,12 @@ function parseSseEvents(stream: string): TestSseEvent[] {
 
 function rootSseGolden(stream: string): string[] {
   return parseSseEvents(stream)
-    .filter((event) => !event.type.startsWith("subagent.") && event.type !== "run.queued" && event.type !== "run.status")
+    .filter((event) =>
+      !event.type.startsWith("subagent.")
+      && event.type !== "execution_mode.changed"
+      && event.type !== "run.queued"
+      && event.type !== "run.status"
+    )
     .map((event) => event.type);
 }
 
@@ -140,6 +151,7 @@ function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1"): ServerCo
     gatewayIdleTimeoutMs: 240_000,
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
+    initialExecutionMode: "direct",
     kernelIdleTimeoutMs: 0,
     paperPythonPath: resolve(process.cwd(), "../paper/.venv/bin/python"),
     paperWorkerPath: resolve(process.cwd(), "../paper/paper_worker.py"),
@@ -201,6 +213,8 @@ async function writePassthroughBwrap(root: string): Promise<string> {
   const implementation = resolve(root, "bwrap-passthrough.mjs");
   await writeFile(implementation, `${[
     'import { spawn } from "node:child_process";',
+    'import { accessSync, constants } from "node:fs";',
+    'import { delimiter, resolve } from "node:path";',
     `const ARITY = ${JSON.stringify(BWRAP_ARITY)};`,
     'const argv = process.argv.slice(2);',
     'if (argv[0] === "--help") { console.log("usage: bwrap --cap-drop --die-with-parent --new-session --seccomp --unshare-all --unshare-user --disable-userns"); process.exit(0); }',
@@ -231,6 +245,16 @@ async function writePassthroughBwrap(root: string): Promise<string> {
     '};',
     'const command = argv.slice(index).map(toHost);',
     'if (command.length === 0) { console.error("bwrap-passthrough: no command"); process.exit(2); }',
+    '// The real sandbox exposes stable /usr/bin paths. The test shim instead',
+    '// runs on the host, where CodeArts may install the same tools in /usr/local.',
+    'const hostCommandNames = new Map([["/usr/bin/python3", "python3"], ["/usr/bin/bash", "bash"]]);',
+    'const hostCommandName = hostCommandNames.get(command[0]);',
+    'if (hostCommandName) {',
+    '  for (const directory of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {',
+    '    const candidate = resolve(directory, hostCommandName);',
+    '    try { accessSync(candidate, constants.X_OK); command[0] = candidate; break; } catch {}',
+    '  }',
+    '}',
     '// --clearenv wipes PATH too; without it the shim could not resolve an',
     '// interpreter that the real sandbox reaches through its own /usr mount.',
     'const childEnv = cleared ? { ...Object.fromEntries(Object.entries(env).filter(([key]) => key === "PATH")), ...env } : env;',
@@ -242,10 +266,29 @@ async function writePassthroughBwrap(root: string): Promise<string> {
     'child.on("exit", (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exit(code ?? 0); });',
   ].join("\n")}\n`);
   const launcher = resolve(root, "bwrap");
-  await writeFile(launcher, `#!/bin/sh\nexec node ${JSON.stringify(implementation)} "$@"\n`);
+  await writeFile(launcher, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(implementation)} "$@"\n`);
   await chmod(launcher, 0o755);
   return launcher;
 }
+
+test("the passthrough sandbox resolves its stable Python path through the host PATH", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `bwrap-path-${Date.now()}-${process.pid}`);
+  const hostBin = resolve(tempRoot, "host-bin");
+  await mkdir(hostBin, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const hostPython = resolve(hostBin, "python3");
+  await writeFile(hostPython, "#!/bin/sh\nprintf 'alternate host python\\n'\n");
+  await chmod(hostPython, 0o755);
+  const bwrap = await writePassthroughBwrap(resolve(tempRoot, "sandbox-stub"));
+  const { stdout } = await execFileAsync(bwrap, [
+    "--clearenv",
+    "--setenv", "PATH", "/usr/bin",
+    "/usr/bin/python3", "-c", "print('sandbox python')",
+  ], { env: { ...process.env, PATH: hostBin } });
+
+  assert.equal(stdout, "alternate host python\n");
+});
 
 async function startTestApi(
   context: TestContext,
@@ -330,6 +373,28 @@ async function startScientificTestApi(
       const setup: ScientificEnvironmentSetup = {
         allowedChannels: ["conda-forge"],
         completedAt: new Date().toISOString(),
+        components: {
+          conda: {
+            action: null,
+            completedAt: new Date().toISOString(),
+            error: null,
+            message: "Conda environments are ready",
+            phase: "complete",
+            startedAt: new Date().toISOString(),
+            state: "ready",
+            updatedAt: new Date().toISOString(),
+          },
+          micromamba: {
+            action: null,
+            completedAt: new Date().toISOString(),
+            error: null,
+            message: "micromamba is ready",
+            phase: "complete",
+            startedAt: new Date().toISOString(),
+            state: "ready",
+            updatedAt: new Date().toISOString(),
+          },
+        },
         error: null,
         managedProvisioner: true,
         message: "Python base environment is ready",
@@ -613,6 +678,81 @@ async function startToolModel(context: TestContext): Promise<{
   };
 }
 
+async function startSkillCreatorModel(context: TestContext): Promise<{
+  baseUrl: string;
+  toolNames: string[][];
+}> {
+  const toolNames: string[][] = [];
+  const modelServer = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      messages?: Array<{ role?: string }>;
+      tools?: Array<{ function?: { name?: string } }>;
+    };
+    toolNames.push(body.tools?.map((tool) => tool.function?.name ?? "") ?? []);
+    const toolResultCount = body.messages?.filter((message) => message.role === "tool").length ?? 0;
+    const completionId = `chatcmpl-skill-creator-${toolResultCount}`;
+    const delta = toolResultCount === 0
+      ? {
+          role: "assistant",
+          tool_calls: [{
+            function: { arguments: JSON.stringify({ skillId: "skill-creator" }), name: "read_skill" },
+            id: "call-read-skill-creator",
+            index: 0,
+            type: "function",
+          }],
+        }
+      : toolResultCount === 1
+        ? {
+            role: "assistant",
+            tool_calls: [{
+              function: {
+                arguments: JSON.stringify({
+                  description: "A reusable Skill created end to end by the Agent.",
+                  instructions: "# Workflow\n\nRead the checklist and report whether the request passes.",
+                  name: "agent-created-demo",
+                  resources: [{ content: "# Checklist\n\n- The result is complete.\n", path: "references/checklist.md" }],
+                  version: "1.0.0",
+                }),
+                name: "create_skill",
+              },
+              id: "call-create-skill",
+              index: 0,
+              type: "function",
+            }],
+          }
+        : { content: "Created a pending agent-created-demo draft for user review.", role: "assistant" };
+    const responseChunk = {
+      choices: [{ delta, finish_reason: null, index: 0 }],
+      created: 1,
+      id: completionId,
+      model: "skill-creator-test-model",
+      object: "chat.completion.chunk",
+    };
+    const finish = {
+      choices: [{ delta: {}, finish_reason: toolResultCount >= 2 ? "stop" : "tool_calls", index: 0 }],
+      created: 1,
+      id: completionId,
+      model: "skill-creator-test-model",
+      object: "chat.completion.chunk",
+    };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify(responseChunk)}\n\n`);
+    response.write(`data: ${JSON.stringify(finish)}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolveListen) => modelServer.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => {
+    modelServer.close(() => resolveClose());
+    modelServer.closeAllConnections();
+  }));
+  return {
+    baseUrl: `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}/v1`,
+    toolNames,
+  };
+}
+
 const CONCURRENCY_BARRIER_TIMEOUT_MS = 10_000;
 
 async function startSubagentModel(
@@ -867,11 +1007,14 @@ async function startTextModel(context: TestContext, delayed = false): Promise<{
   };
 }
 
+const AUTO_NAMING_RESPONSE_TITLE = "Refined TP53 expression study";
+const AUTO_NAMING_STORED_TITLE = createLocalSessionTitle(AUTO_NAMING_RESPONSE_TITLE);
+
 async function startAutoNamingModel(
   context: TestContext,
   delayNaming = false,
   delayTask = false,
-  namingTitle = "Refined TP53 expression study",
+  namingTitle = AUTO_NAMING_RESPONSE_TITLE,
 ): Promise<{
   baseUrl: string;
   namingRequests: Array<{ messages?: Array<{ content?: string; role?: string }> }>;
@@ -965,6 +1108,21 @@ async function listRunEvents(origin: string, sessionId: string, runId: string): 
   );
   assert.equal(events.response.status, 200);
   return events.body;
+}
+
+async function waitForRunEvents(
+  origin: string,
+  sessionId: string,
+  runId: string,
+  predicate: (events: SessionRunEvent[]) => boolean,
+): Promise<SessionRunEvent[]> {
+  let events: SessionRunEvent[] = [];
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    events = await listRunEvents(origin, sessionId, runId);
+    if (predicate(events)) return events;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+  }
+  return events;
 }
 
 async function startLiteratureModel(context: TestContext): Promise<{
@@ -1187,13 +1345,13 @@ test("creating a Project opens an implicit Session and refines its first-message
       `${origin}/api/sessions/${created.body.firstSession.id}`,
       { headers: authorization },
     );
-    if (current.body.title === "Refined TP53 expression study") {
+    if (current.body.title === AUTO_NAMING_STORED_TITLE) {
       named = current.body;
       break;
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
   }
-  assert.equal(named?.title, "Refined TP53 expression study");
+  assert.equal(named?.title, AUTO_NAMING_STORED_TITLE);
   assert.equal(namingModel.namingRequests.length, 1);
   const usage = await jsonRequest<SessionUsageSummary>(
     `${origin}/api/sessions/${created.body.firstSession.id}/usage`,
@@ -1276,13 +1434,13 @@ test("every later unnamed Session independently reuses first-message automatic n
         `${origin}/api/sessions/${createdSession.body.id}`,
         { headers: authorization },
       );
-      if (current.body.title === "Refined TP53 expression study") {
+      if (current.body.title === AUTO_NAMING_STORED_TITLE) {
         named = current.body;
         break;
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
     }
-    assert.equal(named?.title, "Refined TP53 expression study");
+    assert.equal(named?.title, AUTO_NAMING_STORED_TITLE);
   }
   assert.equal(namingModel.namingRequests.length, firstMessages.length);
 });
@@ -1316,13 +1474,13 @@ test("Session title refinement completes while the first task is still running",
         `${origin}/api/sessions/${created.body.firstSession.id}`,
         { headers: authorization },
       );
-      if (current.body.title === "Refined TP53 expression study") {
+      if (current.body.title === AUTO_NAMING_STORED_TITLE) {
         refined = current.body;
         break;
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
     }
-    assert.equal(refined?.title, "Refined TP53 expression study");
+    assert.equal(refined?.title, AUTO_NAMING_STORED_TITLE);
     const runs = await jsonRequest<SessionRun[]>(
       `${origin}/api/sessions/${created.body.firstSession.id}/runs`,
       { headers: authorization },
@@ -1382,25 +1540,33 @@ test("Session title refinement persists when the naming model finishes after the
       `${origin}/api/sessions/${created.body.firstSession.id}`,
       { headers: authorization },
     );
-    if (current.body.title === "Refined TP53 expression study") {
+    if (current.body.title === AUTO_NAMING_STORED_TITLE) {
       refined = current.body;
       break;
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
   }
-  assert.equal(refined?.title, "Refined TP53 expression study");
+  assert.equal(refined?.title, AUTO_NAMING_STORED_TITLE);
 
   const runs = await jsonRequest<SessionRun[]>(
     `${origin}/api/sessions/${created.body.firstSession.id}/runs`,
     { headers: authorization },
   );
-  const events = await listRunEvents(origin, created.body.firstSession.id, runs.body[0]!.id);
-  const terminalIndex = events.findIndex((record) => record.event.type === "run.completed");
-  const refinedIndex = events.findIndex((record) =>
+  const events = await waitForRunEvents(
+    origin,
+    created.body.firstSession.id,
+    runs.body[0]!.id,
+    (records) => records.some((record) =>
+      record.event.type === "session.updated"
+      && record.event.session.title === AUTO_NAMING_STORED_TITLE),
+  );
+  const terminalEvent = events.find((record) => record.event.type === "run.completed");
+  const refinedEvent = events.find((record) =>
     record.event.type === "session.updated"
-    && record.event.session.title === "Refined TP53 expression study");
-  assert.equal(terminalIndex >= 0, true);
-  assert.equal(refinedIndex > terminalIndex, true);
+    && record.event.session.title === AUTO_NAMING_STORED_TITLE);
+  assert.ok(terminalEvent);
+  assert.ok(refinedEvent);
+  assert.ok(refinedEvent.sequence > terminalEvent.sequence);
 });
 
 test("concurrent first messages keep every run and auto-name only once from queue order one", async (context) => {
@@ -2148,9 +2314,24 @@ test("workbench search and Composer references use authenticated authoritative i
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
   const modelServer = await startTextModel(context);
   const { origin } = await startTestApi(context, tempRoot);
+  assert.equal((await fetch(`${origin}/api/execution-modes`)).status, 401);
+  const executionModes = await jsonRequest<Array<{ id: string; label: string }>>(
+    `${origin}/api/execution-modes`,
+    { headers: authorization },
+  );
+  assert.deepEqual(executionModes.body.map((mode) => [mode.id, mode.label]), [
+    ["direct", "Direct"],
+    ["plan", "Plan"],
+  ]);
   const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
-    body: JSON.stringify({ name: "Proteomics" }),
+    body: JSON.stringify({
+      name: "Proteomics",
+      settingsOverrides: {
+        enabledSkillIds: ["life-science-evidence-brief"],
+        skillSelectionMode: "selected",
+      },
+    }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
@@ -2167,11 +2348,15 @@ test("workbench search and Composer references use authenticated authoritative i
   assert.equal(upload.status, 201);
 
   assert.equal((await fetch(`${origin}/api/search?q=result`)).status, 401);
-  const search = await jsonRequest<WorkbenchSearchResult[]>(`${origin}/api/search?q=result`, { headers: authorization });
-  assert.deepEqual(search.body.map((result) => result.kind), ["artifact"]);
-  assert.equal(search.body[0]?.path, "reports/result.md");
-  assert.match(search.body[0]?.id ?? "", /^artifact:/);
-  assert.equal(search.body[0]?.sessionId, session.body.id);
+  const search = await jsonRequest<WorkbenchSearchResponse>(`${origin}/api/search?q=result&limit=1&offset=0`, { headers: authorization });
+  assert.deepEqual(search.body.results.map((result) => result.kind), ["artifact"]);
+  assert.equal(search.body.results[0]?.path, "reports/result.md");
+  assert.match(search.body.results[0]?.id ?? "", /^artifact:/);
+  assert.equal(search.body.results[0]?.sessionId, session.body.id);
+  assert.deepEqual(
+    { hasMore: search.body.hasMore, limit: search.body.limit, offset: search.body.offset, total: search.body.total },
+    { hasMore: false, limit: 1, offset: 0, total: 1 },
+  );
 
   const catalog = await jsonRequest<ScientificArtifact[]>(
     `${origin}/api/projects/${project.body.id}/artifacts`,
@@ -2194,6 +2379,18 @@ test("workbench search and Composer references use authenticated authoritative i
   });
   assert.equal(run.status, 200);
   const stream = await run.text();
+  const modeEvents = parseSseEvents(stream).filter((event) => event.type === "execution_mode.changed");
+  assert.equal(modeEvents.length, 1);
+  const activatedMode = modeEvents[0]?.mode as { activatedAt?: unknown; modeId?: unknown };
+  assert.equal(activatedMode.modeId, "direct");
+  assert.equal(typeof activatedMode.activatedAt, "string");
+  const runs = await jsonRequest<SessionRun[]>(`${origin}/api/sessions/${session.body.id}/runs`, { headers: authorization });
+  assert.equal(runs.body.length, 1);
+  const persistedMode = await jsonRequest<{ mode?: { modeId: string } }>(
+    `${origin}/api/sessions/${session.body.id}/runs/${runs.body[0]!.id}/mode`,
+    { headers: authorization },
+  );
+  assert.equal(persistedMode.body.mode?.modeId, "direct");
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
@@ -2374,6 +2571,8 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
     method: "POST",
   });
   assert.equal(setup.body.state, "ready");
+  assert.equal(setup.body.components.micromamba.state, "ready");
+  assert.equal(setup.body.components.conda.state, "ready");
   const initial = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
   assert.deepEqual(initial.body.map((environment) => environment.id), ["starter-python", "starter-r"]);
   const created = await jsonRequest<Environment>(`${origin}/api/environments`, {
@@ -2618,6 +2817,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
     "report-writer",
     "result-evaluator",
     "science-research-team",
+    "skill-creator",
     "structure-pocket-inspection",
   ]);
   assert.equal(initial.body[0]?.readOnly, true);
@@ -2762,6 +2962,73 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   const diff = await jsonRequest<ArtifactVersionDiff>(`${origin}/api/sessions/${session.body.id}/artifact-versions/${reportVersions.body[1]!.id}/diff`, { headers: authorization });
   assert.ok(diff.body.lines.some((line) => line.kind === "removed" && line.text === "Original value."));
   assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value with units."));
+});
+
+test("Agent-created Skill stays in draft until review publishes it to a Skill Library", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const { origin } = await startTestApi(context, tempRoot);
+  const modelServer = await startSkillCreatorModel(context);
+  const model = await createTestModel(origin, {
+    apiToken: "skill-creator-token",
+    baseUrl: modelServer.baseUrl,
+    model: "skill-creator-test-model",
+    name: "Skill creator test model",
+  });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Agent Skill creation" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Create a reusable Skill" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    body: JSON.stringify({ content: "/skill-creator 请创建一个带检查清单的 Skill。" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(run.status, 200);
+  const stream = await run.text();
+  assert.match(stream, /pending agent-created-demo draft/);
+  assert.ok(modelServer.toolNames.some((names) => names.includes("read_skill")), JSON.stringify(modelServer.toolNames));
+  assert.ok(modelServer.toolNames.some((names) => names.includes("create_skill")), JSON.stringify(modelServer.toolNames));
+
+  assert.equal((await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization })).status, 404);
+  const drafts = await jsonRequest<SkillReviewDraftSummary[]>(`${origin}/api/skill-review-drafts`, {
+    headers: authorization,
+  });
+  assert.equal(drafts.body.length, 1);
+  assert.equal(drafts.body[0]?.name, "agent-created-demo");
+  const draft = await jsonRequest<SkillReviewDraft>(`${origin}/api/skill-review-drafts/${drafts.body[0]!.draftId}`, {
+    headers: authorization,
+  });
+  assert.deepEqual(draft.body.files.map((file) => file.path), ["SKILL.md", "references/checklist.md"]);
+  const published = await jsonRequest<ConfirmSkillReviewDraftResult>(`${origin}/api/skill-review-drafts/${draft.body.draftId}/confirm`, {
+    body: JSON.stringify({
+      expectedUpdatedAt: draft.body.updatedAt,
+      files: draft.body.files.map((file) => ({
+        content: file.path === "references/checklist.md" ? "# Checklist\n\n- The user reviewed this result.\n" : file.content,
+        path: file.path,
+      })),
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(published.response.status, 201);
+  assert.equal(published.body.libraryId, "project-skills");
+  assert.equal(published.body.skillId, "agent-created-demo");
+  assert.equal((await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization })).status, 404);
+  const libraries = await jsonRequest<SkillLibrary[]>(`${origin}/api/skill-libraries`, { headers: authorization });
+  const projectLibrary = libraries.body.find((library) => library.id === "project-skills");
+  assert.equal(projectLibrary?.headVersionId, published.body.versionId);
+  const versions = await jsonRequest<SkillLibraryVersion[]>(`${origin}/api/skill-libraries/project-skills/versions`, { headers: authorization });
+  assert.equal(versions.body.at(-1)?.skills.find((skill) => skill.id === "agent-created-demo")?.version, "1.0.0");
+  assert.equal((await jsonRequest<SkillReviewDraftSummary[]>(`${origin}/api/skill-review-drafts`, { headers: authorization })).body.length, 0);
 });
 
 test("PDF upload extracts full text and tables into the session workspace", async (context) => {
@@ -3303,7 +3570,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.match(subagentUserPrompt, new RegExp(`Private workspace root: subagents/${subagents.body[0]?.id}`));
   assert.match(subagentUserPrompt, /Handoff manifest visible inside your workspace: handoff\.json/);
   assert.ok(fixture.requests.some((request) => request.tools?.some((tool) => tool.function?.name === "task")));
-  assert.ok(fixture.requests.some((request) => request.tools?.some((tool) => tool.function?.name === "propose_plan")));
+  assert.equal(fixture.requests.some((request) => request.tools?.some((tool) => tool.function?.name === "propose_plan")), false);
 
   const parentResultRequest = fixture.requests.find((request) =>
     request.messages?.some((message) => message.role === "tool"));
@@ -4547,7 +4814,12 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
-  assert.deepEqual(project.body.settingsOverrides, { reviewModelId: modelB.id });
+  assert.deepEqual(project.body.settingsOverrides, {
+    enabledSkillIds: [],
+    enabledSkillLibraries: [],
+    reviewModelId: modelB.id,
+    skillSelectionMode: "selected",
+  });
   const renamedProject = await jsonRequest<Project>(`${origin}/api/projects/${project.body.id}`, {
     body: JSON.stringify({ name: "Renamed lifecycle project" }),
     headers: { ...authorization, "content-type": "application/json" },
@@ -4848,6 +5120,47 @@ test("deleting a session/project mirrors the cleanup to the memory-graph sidecar
   // impact.sessionIds mirrors the pre-deletion snapshot (both of projectB's
   // sessions); order-independent.
   assert.deepEqual((projectCall.session_ids as string[]).toSorted(), expectedProjectSessionIds);
+});
+
+test("model connectivity endpoint uses the encrypted saved credential", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-connectivity-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  let providerAuthorization = "";
+  const provider = createHttpServer(async (request, response) => {
+    providerAuthorization = request.headers.authorization ?? "";
+    for await (const _chunk of request) {
+      // Consume the bounded connectivity request before replying.
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+  });
+  await new Promise<void>((resolveListen) => provider.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => provider.close(() => resolveClose())));
+  const providerOrigin = `http://127.0.0.1:${(provider.address() as AddressInfo).port}`;
+  const { origin } = await startTestApi(context, tempRoot);
+  const created = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    body: JSON.stringify({
+      apiToken: "encrypted-connectivity-token",
+      baseUrl: `${providerOrigin}/v1`,
+      model: "connectivity-model",
+      name: "Connectivity model",
+      proxyPolicy: "none",
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal((await fetch(`${origin}/api/models/${created.body.id}/test`, { method: "POST" })).status, 401);
+  const tested = await jsonRequest<ModelConnectivityTestResult>(`${origin}/api/models/${created.body.id}/test`, {
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(tested.response.status, 200);
+  assert.equal(tested.body.category, "ok");
+  assert.equal(tested.body.ok, true);
+  assert.equal(providerAuthorization, "Bearer encrypted-connectivity-token");
+  assert.doesNotMatch(JSON.stringify(tested.body), /encrypted-connectivity-token/);
 });
 
 test("model registry persists multiple profiles and assigns them per session", async (context) => {
@@ -5153,6 +5466,107 @@ test("same-named uploads remain physically isolated and append one Project artif
     { headers: authorization },
   );
   assert.deepEqual(versions.body.map((version) => version.sessionId), [sessionA.body.id, sessionB.body.id]);
+});
+
+test("Artifact deletion endpoint logically deletes without removing history or workspace files", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-lifecycle-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Artifact deletion" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const otherProject = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Other project" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Deletion Session" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const form = new FormData();
+  form.append("files", new Blob([Buffer.from("value\n1\n")], { type: "text/csv" }), "result.csv");
+  const upload = await jsonRequest<WorkspaceUploadResult>(
+    `${origin}/api/sessions/${session.body.id}/workspace/upload`,
+    { body: form, headers: authorization, method: "POST" },
+  );
+  assert.equal(upload.response.status, 201);
+
+  const initial = await jsonRequest<ScientificArtifact[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts`,
+    { headers: authorization },
+  );
+  assert.equal(initial.body.length, 1);
+  const originalArtifact = initial.body[0]!;
+  const originalVersions = await jsonRequest<ScientificArtifactVersion[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts/${originalArtifact.id}/versions`,
+    { headers: authorization },
+  );
+  assert.equal(originalVersions.body.length, 1);
+
+  const crossProject = await jsonRequest<{ error: string }>(
+    `${origin}/api/projects/${otherProject.body.id}/artifacts/${originalArtifact.id}`,
+    { headers: authorization, method: "DELETE" },
+  );
+  assert.equal(crossProject.response.status, 404);
+
+  const deletion = await jsonRequest<{ deleted: string }>(
+    `${origin}/api/projects/${project.body.id}/artifacts/${originalArtifact.id}`,
+    { headers: authorization, method: "DELETE" },
+  );
+  assert.equal(deletion.response.status, 200);
+  assert.equal(deletion.body.deleted, originalArtifact.id);
+  const afterDeletion = await jsonRequest<ScientificArtifact[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts`,
+    { headers: authorization },
+  );
+  assert.deepEqual(afterDeletion.body, []);
+  const retainedVersions = await jsonRequest<ScientificArtifactVersion[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts/${originalArtifact.id}/versions`,
+    { headers: authorization },
+  );
+  assert.deepEqual(retainedVersions.body.map((version) => version.id), [originalVersions.body[0]!.id]);
+  const retainedContent = await fetch(
+    `${origin}/api/projects/${project.body.id}/artifact-versions/${originalVersions.body[0]!.id}/content`,
+    { headers: authorization },
+  );
+  assert.equal(retainedContent.status, 200);
+  assert.equal(await retainedContent.text(), "value\n1\n");
+  const workspaceContent = await fetch(
+    `${origin}/api/sessions/${session.body.id}/file?path=result.csv`,
+    { headers: authorization },
+  );
+  assert.equal(workspaceContent.status, 200);
+  assert.equal(await workspaceContent.text(), "value\n1\n");
+  assert.equal((await fetch(
+    `${origin}/api/projects/${project.body.id}/artifacts/${originalArtifact.id}`,
+    { headers: authorization, method: "DELETE" },
+  )).status, 200);
+
+  const replacementForm = new FormData();
+  replacementForm.append("files", new Blob([Buffer.from("value\n2\n")], { type: "text/csv" }), "result.csv");
+  const replacementUpload = await jsonRequest<WorkspaceUploadResult>(
+    `${origin}/api/sessions/${session.body.id}/workspace/upload?conflict=overwrite`,
+    { body: replacementForm, headers: authorization, method: "POST" },
+  );
+  assert.equal(replacementUpload.response.status, 201);
+  const replacementArtifacts = await jsonRequest<ScientificArtifact[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts`,
+    { headers: authorization },
+  );
+  assert.equal(replacementArtifacts.body.length, 1);
+  assert.equal(replacementArtifacts.body[0]?.name, "result.csv");
+  assert.notEqual(replacementArtifacts.body[0]?.id, originalArtifact.id);
+  const replacementVersions = await jsonRequest<ScientificArtifactVersion[]>(
+    `${origin}/api/projects/${project.body.id}/artifacts/${replacementArtifacts.body[0]!.id}/versions`,
+    { headers: authorization },
+  );
+  assert.deepEqual(replacementVersions.body.map((version) => version.version), [1]);
 });
 
 test("recovery cancels and replays undecided approvals for run and subagent scopes", async (context) => {

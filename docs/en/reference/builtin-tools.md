@@ -29,7 +29,11 @@ Node performs permission, CAS, and `WebInvocation` audit, and calls the vendors 
 
 | Tool | Condition | Key parameters |
 |---|---|---|
-| `propose_plan` | main run | `scope` ≤2000, 1–20 `steps`, `feasibilityConfidence`, optional `caveats`; records progress without gating work |
+| `activate_execution_mode` | first model turn | `modeId: direct\|plan`; exposes that mode's tools on the next model turn |
+| `propose_plan` | Plan Mode | `scope` ≤2000, 1–20 `steps`, `feasibilityConfidence`, optional `caveats`; records progress without gating work |
+| `revise_plan` | Plan Mode with a recorded plan | latest `planId` and `expectedVersion`, plus a replacement plan body |
+| `update_plan_step` | Plan Mode with a recorded plan | latest `planId` and `expectedVersion`, `stepId`, and step status; all completed steps complete the plan |
+| `abandon_plan` | Plan Mode with a recorded plan | latest `planId` and `expectedVersion`, optional reason |
 | `task` | main run; unavailable inside subagents | `description` ≤80, `prompt` ≤20000, optional Brief v1, up to 50 `inputPaths`, `max_turns` ≤300, `timeout_seconds` ≤3600, `specialistId`, and up to 32 whitelisted `tools`; same-turn calls may run in parallel |
 | `query_graph` | Science Memory enabled | case-insensitive cross-Session substring `query`; returns `{hits,total,truncated}` |
 
@@ -73,9 +77,9 @@ Download and extraction require different model turns because same-turn calls ar
 | Tool | Condition | Boundary |
 |---|---|---|
 | `run_npu_job` | Runner has `SCIENCE_AGENT_NPU_BROKER=1` and an NPU workload allowlist loaded | `operation=list_workloads\|submit\|status\|logs\|result\|cancel`; `workload_id` must be allowlisted and `config_path` must be relative to the current Session workspace. Python workloads select a managed scientific environment with `environment_revision_id`, or use the Session revision when omitted. Built-in workload IDs are `npu.smoke_test` and `antibody.protenix.v1` |
-| `describe_skill` | at least one selected skill | Searches metadata and resource summaries; does not return full instructions |
 | `read_skill` | at least one selected skill | Reads full instructions from the frozen selected revision |
 | `read_skill_resource` | a selected skill has text resources | Reads bounded UTF-8 supporting content after the skill; never executes or installs it |
+| `create_skill` | the main Agent selected and loaded `skill-creator` with `read_skill` | Creates an inactive, persistent Skill draft from an explicit user description, with optional version and bounded UTF-8 resources. Revisions to the same pending name update one review item and diff against the previous Agent proposal; the conversation provides a review shortcut, and user confirmation publishes the reviewed package as a new immutable Skill Library version |
 
 `run_npu_job` is not a general host shell. It turns Agent requests into Host NPU Broker job operations inside Runner. The Broker starts only fixed entry points from the JSON allowlist and checks the current Session for status, logs, result, and cancel operations. Default Python workloads resolve `environment_revision_id` through Runner's `.sciencediscovery-data/scientific-envs/` store, so the Agent cannot submit an arbitrary interpreter path. A skill should inspect environments with `environment.list`, probe a candidate revision with `run_python`, and use `environment.create` / `environment.install` when dependencies are missing before submitting the returned revision ID. The built-in antibody workload uses the Protenix path, `antibody.protenix.v1`; other model backends require explicit custom allowlist entries or a future extension.
 

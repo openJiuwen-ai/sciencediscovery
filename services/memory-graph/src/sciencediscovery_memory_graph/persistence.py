@@ -12,18 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Persistence helpers: upsert SubTask / Code / Artifact / Paper + ``produces`` edges.
+"""Persistence helpers: upsert Task/ToolCall / Code / Artifact / Paper + ``produces`` edges.
 
-MVP scope: one SubTask per execution (no DAG / ``inferred_subtask_types``
-state machine — SubTask dedup is intentionally DROPPED), one Code per
-execution (``code_id = executionId``), one Artifact node per logical artifact
-id (latest fields; versioning is v2). ``upsert_mcp_search`` adds one
-auto-inferred SubTask per MCP search invocation
+Node labels: a subagent's scope is ``:Task`` (``task_type='subagent'``);
+every execution/search node — whether session-main or a subagent's internal
+child — is ``:ToolCall`` (``code_execution``/``literature_search``/…). MVP
+scope: one ToolCall per execution (no DAG / ``inferred_subtask_types`` state
+machine — dedup is intentionally DROPPED), one Code per execution
+(``code_id = executionId``), one Artifact node per logical artifact id
+(latest fields; versioning is v2). ``upsert_mcp_search`` adds one
+auto-inferred ToolCall per MCP search invocation
 (``task_id = "subtask:mcp:" + invocation_id``, NOT deduplicated — every
-search is its own SubTask) + Paper nodes deduped by normalized URL (re-search
-only bumps ``retrieved_at`` / ``retrieval_count``) + ``SubTask -produces->
-Paper`` edges. All writes are ``MERGE`` on the unique key so hooks are
-idempotent across retries.
+search is its own ToolCall) + Paper nodes deduped by normalized URL
+(re-search only bumps ``retrieved_at`` / ``retrieval_count``) +
+``ToolCall -produces-> Paper`` edges. All writes are ``MERGE`` on the unique
+key so hooks are idempotent across retries.
 """
 
 from __future__ import annotations
@@ -126,6 +129,7 @@ def upsert_execution(
     stdout_hash: str | None = None,
     stderr_hash: str | None = None,
     env_hash: str | None = None,
+    parent_subagent_id: str | None = None,
 ) -> None:
     """Upsert one execution's worth of nodes (SubTask → Code → Artifacts).
 
@@ -147,6 +151,17 @@ def upsert_execution(
     routing key) + ``content_hash``. None of these store content blobs — only
     hashes / routing keys, per the "graph = directory, CAS/store = warehouse"
     layering (see docs/memory-graph-provenance-fields.md §2).
+
+    ``parent_subagent_id`` selects the write shape. When ``None`` (main-agent
+    context), a per-execution SubTask ``subtask:<execution_id>`` is built and
+    produces the Code/Artifact — the original main behavior, unchanged. When
+    set (this execution ran inside a subagent), a *child* SubTask
+    ``subtask:subagent:<id>:exec:<execution_id>`` is built (task_type is the
+    real ``code_execution`` — NOT ``subagent``), a ``contains`` edge links the
+    subagent's scope node to this child, and produces edges run
+    ``child → Code`` / ``child → Artifact`` (the scope never carries
+    products). The child does not join the session temporal chain — only
+    session-main SubTasks do.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -158,21 +173,50 @@ def upsert_execution(
     # Unify on lowercase completed/failed so the frontend has one green label.
     status = _normalise_subtask_status(status)
 
+    # Subagent child path: this execution ran inside a subagent, so it becomes
+    # a child ToolCall (real task_type=code_execution) hung off the subagent's
+    # scope node via contains. Products hang off the child, never the scope.
+    if parent_subagent_id is not None:
+        _upsert_execution_child(
+            driver=driver,
+            execution_id=execution_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            tool=tool,
+            language=language,
+            code_hash=code_hash,
+            exit_code=exit_code,
+            status=status,
+            started_at=started_at,
+            finished_at=finished_at,
+            produced_artifacts=produced_artifacts,
+            stdout_hash=stdout_hash,
+            stderr_hash=stderr_hash,
+            env_hash=env_hash,
+            parent_subagent_id=parent_subagent_id,
+        )
+        return
+
     task_id = f"subtask:{execution_id}"
     log.debug("upsert starting: execution=%s session=%s artifacts=%d", execution_id, session_id, len(produced_artifacts))
 
     try:
         with driver.session() as session:
-            # SubTask (auto-inferred, one per execution).
+            # ToolCall (auto-inferred, one per execution). seq is assigned once
+            # (ON CREATE) so the temporal chain orders by creation, not by
+            # finished_at — a still-running execution would otherwise sort to
+            # the front and pollute the chain head.
+            seq = _next_session_seq(session, session_id)
             session.run(
                 """
-                MERGE (st:SubTask {task_id: $task_id})
+                MERGE (st:ToolCall {task_id: $task_id})
                   ON CREATE SET st.session_id  = $session_id,
                                 st.status     = $status,
                                 st.task_type  = $task_type,
                                 st.created_at = datetime(),
                                 st.finished_at = $finished_at,
-                                st.turn_id    = $turn_id
+                                st.turn_id    = $turn_id,
+                                st.seq        = $seq
                 """,
                 task_id=task_id,
                 session_id=session_id,
@@ -180,6 +224,7 @@ def upsert_execution(
                 task_type=task_type,
                 finished_at=finished_at,
                 turn_id=turn_id,
+                seq=seq,
             ).consume()
 
             # Code node; code_id is the executionId (1:1 with ExecutionRun.id).
@@ -198,7 +243,7 @@ def upsert_execution(
                                 c.stderr_hash = $stderr_hash,
                                 c.env_hash    = $env_hash,
                                 c.turn_id     = $turn_id
-                MERGE (st:SubTask {task_id: $task_id})
+                MERGE (st:ToolCall {task_id: $task_id})
                 MERGE (st)-[:produces]->(c)
                 """,
                 code_id=execution_id,
@@ -313,6 +358,188 @@ def upsert_execution(
         raise
 
 
+def _upsert_execution_child(
+    *,
+    driver: Any,
+    execution_id: str,
+    session_id: str,
+    turn_id: str,
+    tool: str,
+    language: str | None,
+    code_hash: str,
+    exit_code: int | None,
+    status: str,
+    started_at: str,
+    finished_at: str,
+    produced_artifacts: list[dict[str, Any]],
+    stdout_hash: str | None,
+    stderr_hash: str | None,
+    env_hash: str | None,
+    parent_subagent_id: str,
+) -> None:
+    """Build a subagent child ToolCall for one execution.
+
+    The child ``subtask:subagent:<id>:exec:<execution_id>`` carries the real
+    ``code_execution`` task_type (NOT ``subagent`` — that label is the scope's),
+    a ``parent_subtask_id`` pointing at the subagent's scope, and a session-level
+    ``seq`` assigned once at creation. The scope node is matched (built
+    separately by ``upsert_subagent``) and a ``contains`` edge links
+    scope→child. Products (Code/Artifact) are hung off the CHILD via produces,
+    never the scope — so trace-back from a product lands on the exact child.
+    derived-from / supersedes edges stay on the Code node (unchanged from the
+    main path). The child does not enter the session temporal chain.
+    """
+    scope_task_id = f"subtask:subagent:{parent_subagent_id}"
+    task_id = f"subtask:subagent:{parent_subagent_id}:exec:{execution_id}"
+    log.debug("upsert (child) starting: execution=%s session=%s artifacts=%d scope=%s",
+              execution_id, session_id, len(produced_artifacts), scope_task_id)
+    try:
+        with driver.session() as session:
+            # Child SubTask: real task_type=code_execution, parent_subtask_id
+            # points at the scope, seq assigned once (ON CREATE only — never
+            # overwritten on the terminal re-mirror). The scope is matched
+            # (not MERGEd here — upsert_subagent owns it) and linked via contains.
+            seq = _next_session_seq(session, session_id)
+            session.run(
+                """
+                MERGE (st:ToolCall {task_id: $task_id})
+                  ON CREATE SET st.session_id        = $session_id,
+                                st.status           = $status,
+                                st.task_type        = 'code_execution',
+                                st.parent_subtask_id = $parent_subtask_id,
+                                st.turn_id          = $turn_id,
+                                st.created_at       = datetime(),
+                                st.finished_at       = $finished_at,
+                                st.seq               = $seq
+                  ON MATCH  SET st.status      = $status,
+                                st.finished_at = $finished_at,
+                                st.turn_id     = $turn_id
+                """,
+                task_id=task_id,
+                session_id=session_id,
+                status=status,
+                parent_subtask_id=scope_task_id,
+                turn_id=turn_id,
+                finished_at=finished_at,
+                seq=seq,
+            ).consume()
+            # Rebuild the scope's internal child chain: contains→first child,
+            # next→rest (in seq order). Idempotent (deletes then rebuilds).
+            # Centralised here so both execution and mcp-search child writers
+            # share one ordering path and never write contains themselves.
+            _link_scope_children(session, session_id, scope_task_id)
+
+            # Code node (code_id = executionId, unchanged). produces runs
+            # child → Code (the child is the producer, not the scope).
+            session.run(
+                """
+                MERGE (c:Code {code_id: $code_id})
+                  ON CREATE SET c.session_id  = $session_id,
+                                c.tool        = $tool,
+                                c.language    = $language,
+                                c.code_hash   = $code_hash,
+                                c.exit_code   = $exit_code,
+                                c.status      = $status,
+                                c.started_at  = $started_at,
+                                c.finished_at = $finished_at,
+                                c.stdout_hash = $stdout_hash,
+                                c.stderr_hash = $stderr_hash,
+                                c.env_hash    = $env_hash,
+                                c.turn_id     = $turn_id
+                MERGE (st:ToolCall {task_id: $task_id})
+                MERGE (st)-[:produces]->(c)
+                """,
+                code_id=execution_id,
+                session_id=session_id,
+                tool=tool,
+                language=language,
+                code_hash=code_hash,
+                exit_code=exit_code,
+                status=status,
+                started_at=started_at,
+                finished_at=finished_at,
+                stdout_hash=stdout_hash,
+                stderr_hash=stderr_hash,
+                env_hash=env_hash,
+                turn_id=turn_id,
+                task_id=task_id,
+            ).consume()
+
+            # Artifact versions; produces runs Code → Artifact, exactly as the
+            # main path. The child is still the Code's producer (child → Code
+            # via the produces edge above), so trace-back from an Artifact walks
+            # Artifact ←[:produces]← Code ←[:produces]← child and lands on the
+            # child — not the scope — while keeping the Code layer in the chain
+            # so the view-chain derivation (Artifact ←produces← Code ←input←
+            # Artifact) does not break. Hanging Artifact off the child ToolCall
+            # directly (child → Artifact) skips the Code layer and the frontend's
+            # provenance chain stops at SubTask, dropping the Code node.
+            for art in produced_artifacts:
+                session.run(
+                    """
+                    MERGE (a:Artifact {artifact_id: $artifact_id, version: $version})
+                      ON CREATE SET a.session_id   = $session_id,
+                                    a.project_id   = $project_id,
+                                    a.path          = $path,
+                                    a.logical_name  = $logical_name,
+                                    a.media_type    = $media_type,
+                                    a.created_at    = datetime(),
+                                    a.turn_id       = $turn_id,
+                                    a.content_hash  = $content_hash
+                      ON MATCH  SET a.path          = $path,
+                                    a.project_id    = $project_id,
+                                    a.logical_name  = $logical_name,
+                                    a.media_type    = $media_type,
+                                    a.turn_id       = $turn_id,
+                                    a.content_hash  = $content_hash
+                    MERGE (c:Code {code_id: $code_id})
+                    MERGE (c)-[:produces]->(a)
+                    """,
+                    artifact_id=art.get("artifact_id"),
+                    session_id=session_id,
+                    project_id=art.get("project_id"),
+                    path=art.get("path"),
+                    logical_name=art.get("logical_name"),
+                    version=art.get("version"),
+                    media_type=art.get("media_type"),
+                    turn_id=art.get("turn_id"),
+                    content_hash=art.get("content_hash"),
+                    code_id=execution_id,
+                ).consume()
+                # derived-from and supersedes stay anchored on the Code node,
+                # exactly as the main path — only the producer of the Code
+                # itself changed (child instead of per-exec SubTask).
+                for ref in art.get("input_artifact_versions") or []:
+                    session.run(
+                        """
+                        MATCH (inA:Artifact {artifact_id: $aid, version: $v})
+                        MERGE (c:Code {code_id: $code_id})
+                        MERGE (inA)-[:input]->(c)
+                        """,
+                        aid=ref.get("artifact_id"),
+                        v=ref.get("version"),
+                        code_id=execution_id,
+                    ).consume()
+                version = art.get("version")
+                if isinstance(version, int) and version > 1:
+                    session.run(
+                        """
+                        MATCH (cur:Artifact {artifact_id: $artifact_id, version: $version})
+                        MATCH (prev:Artifact {artifact_id: $artifact_id, version: $prev_version})
+                        MERGE (cur)-[:supersedes]->(prev)
+                        """,
+                        artifact_id=art.get("artifact_id"),
+                        version=version,
+                        prev_version=version - 1,
+                    ).consume()
+
+        log.info("upsert (child) done: execution=%s session=%s scope=%s wrote child + Code + %d Artifact(s)",
+                 execution_id, session_id, scope_task_id, len(produced_artifacts))
+    except Exception as exc:
+        log.exception("upsert (child) failed: execution=%s session=%s: %s", execution_id, session_id, exc)
+        raise
+
+
 def upsert_mcp_search(
     *,
     invocation_id: str,
@@ -322,6 +549,7 @@ def upsert_mcp_search(
     tool_type: str,
     retrieved_at: str,
     records: list[dict[str, Any]],
+    parent_subagent_id: str | None = None,
 ) -> None:
     """Upsert one MCP literature search's worth of nodes (SubTask → Papers).
 
@@ -334,6 +562,13 @@ def upsert_mcp_search(
     re-search of the same paper only bumps ``retrieved_at`` and
     ``retrieval_count``. Each Paper gets a ``SubTask -produces-> Paper`` edge.
     All writes are MERGE; safe to retry.
+
+    ``parent_subagent_id`` (subagent context) reshapes the write exactly like
+    ``upsert_execution``: a *child* SubTask
+    ``subtask:subagent:<id>:exec:<invocation_id>`` (task_type=literature_search)
+    is built, ``contains`` links the subagent scope to it, and produces runs
+    ``child → Paper`` (the scope carries no papers). The child stays out of the
+    session temporal chain. Main-agent context (``None``) is unchanged.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -362,20 +597,38 @@ def upsert_mcp_search(
             "source": rec.get("source"),
         })
 
-    task_id = f"subtask:mcp:{invocation_id}"
-    log.debug("upsert_mcp_search starting: invocation=%s session=%s papers=%d",
-              invocation_id, session_id, len(papers))
-
     if not papers:
         log.info("upsert_mcp_search: invocation=%s had no records with a URL; writing SubTask only",
                  invocation_id)
 
+    # Subagent child path: this search ran inside a subagent → child ToolCall
+    # (real task_type=literature_search) hung off the scope via contains, with
+    # produces child→Paper.
+    if parent_subagent_id is not None:
+        _upsert_mcp_search_child(
+            driver=driver,
+            invocation_id=invocation_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            source=source,
+            tool_type=tool_type,
+            papers=papers,
+            parent_subagent_id=parent_subagent_id,
+        )
+        return
+
+    task_id = f"subtask:mcp:{invocation_id}"
+    log.debug("upsert_mcp_search starting: invocation=%s session=%s papers=%d",
+              invocation_id, session_id, len(papers))
+
     try:
         with driver.session() as session:
-            # SubTask (auto-inferred, one per MCP search; NOT deduped).
+            # ToolCall (auto-inferred, one per MCP search; NOT deduped). seq
+            # assigned once (ON CREATE) so the temporal chain orders by creation.
+            seq = _next_session_seq(session, session_id)
             session.run(
                 """
-                MERGE (st:SubTask {task_id: $task_id})
+                MERGE (st:ToolCall {task_id: $task_id})
                   ON CREATE SET st.session_id  = $session_id,
                                 st.status     = $status,
                                 st.task_type  = 'literature_search',
@@ -383,7 +636,8 @@ def upsert_mcp_search(
                                 st.tool_type  = $tool_type,
                                 st.created_at = datetime(),
                                 st.finished_at = datetime(),
-                                st.result_count = $result_count
+                                st.result_count = $result_count,
+                                st.seq        = $seq
                 """,
                 task_id=task_id,
                 session_id=session_id,
@@ -391,6 +645,7 @@ def upsert_mcp_search(
                 tool_type=tool_type,
                 result_count=len(papers),
                 status="completed",
+                seq=seq,
             ).consume()
 
             # Temporal-chain fallback: when this session has no
@@ -423,7 +678,7 @@ def upsert_mcp_search(
                       ON MATCH SET   p.retrieved_at     = datetime(),
                                     p.retrieval_count  = coalesce(p.retrieval_count, 0) + 1
                     WITH paper, p
-                    MERGE (st:SubTask { task_id: $task_id })
+                    MERGE (st:ToolCall { task_id: $task_id })
                     MERGE (st)-[:produces]->(p)
                     """,
                     papers=papers,
@@ -439,26 +694,380 @@ def upsert_mcp_search(
         raise
 
 
+def _upsert_mcp_search_child(
+    *,
+    driver: Any,
+    invocation_id: str,
+    session_id: str,
+    turn_id: str,
+    source: str,
+    tool_type: str,
+    papers: list[dict[str, Any]],
+    parent_subagent_id: str,
+) -> None:
+    """Build a subagent child ToolCall for one MCP literature search.
+
+    Mirrors ``_upsert_execution_child``: child
+    ``subtask:subagent:<id>:exec:<invocation_id>`` (task_type=literature_search),
+    ``contains`` scope→child, ``produces`` child→Paper. The scope is owned by
+    ``upsert_subagent`` and only matched here. The child stays out of the
+    session temporal chain.
+    """
+    scope_task_id = f"subtask:subagent:{parent_subagent_id}"
+    task_id = f"subtask:subagent:{parent_subagent_id}:exec:{invocation_id}"
+    log.debug("upsert_mcp_search (child) starting: invocation=%s session=%s papers=%d scope=%s",
+              invocation_id, session_id, len(papers), scope_task_id)
+    try:
+        with driver.session() as session:
+            seq = _next_session_seq(session, session_id)
+            session.run(
+                """
+                MERGE (st:ToolCall {task_id: $task_id})
+                  ON CREATE SET st.session_id        = $session_id,
+                                st.status           = 'completed',
+                                st.task_type        = 'literature_search',
+                                st.parent_subtask_id = $parent_subtask_id,
+                                st.source           = $source,
+                                st.tool_type        = $tool_type,
+                                st.turn_id          = $turn_id,
+                                st.created_at       = datetime(),
+                                st.finished_at      = datetime(),
+                                st.result_count      = $result_count,
+                                st.seq              = $seq
+                  ON MATCH  SET st.result_count = $result_count
+                """,
+                task_id=task_id,
+                session_id=session_id,
+                parent_subtask_id=scope_task_id,
+                source=source,
+                tool_type=tool_type,
+                turn_id=turn_id,
+                result_count=len(papers),
+                seq=seq,
+            ).consume()
+            # Rebuild the scope's internal child chain (contains→first,
+            # next→rest) — shared with the execution child writer.
+            _link_scope_children(session, session_id, scope_task_id)
+
+            if papers:
+                session.run(
+                    """
+                    UNWIND $papers AS paper
+                    MERGE (p:Paper { session_id: $session_id, link: paper.link })
+                      ON CREATE SET p.title           = paper.title,
+                                    p.identifier      = paper.identifier,
+                                    p.identifier_type = paper.identifier_type,
+                                    p.year            = paper.year,
+                                    p.authors         = paper.authors,
+                                    p.abstract        = paper.abstract,
+                                    p.source          = paper.source,
+                                    p.retrieval_count = 1,
+                                    p.created_at      = datetime()
+                      ON MATCH SET   p.retrieved_at     = datetime(),
+                                    p.retrieval_count  = coalesce(p.retrieval_count, 0) + 1
+                    WITH paper, p
+                    MERGE (st:ToolCall { task_id: $task_id })
+                    MERGE (st)-[:produces]->(p)
+                    """,
+                    papers=papers,
+                    session_id=session_id,
+                    task_id=task_id,
+                ).consume()
+
+        log.info("upsert_mcp_search (child) done: invocation=%s session=%s scope=%s wrote child + %d Paper(s)",
+                 invocation_id, session_id, scope_task_id, len(papers))
+    except Exception as exc:
+        log.exception("upsert_mcp_search (child) failed: invocation=%s session=%s: %s",
+                       invocation_id, session_id, exc)
+        raise
+
+
+# Normalise a subagent's lifecycle status onto the graph's vocabulary. timed_out
+# collapses to ``failed`` (one red label) but is tagged separately in
+# ``failure_reason`` so it is not confused with a plain error. cancelled and
+# completed pass through verbatim. running is only ever written by the start
+# phase (status="running" never reaches here from a terminal call).
+_SUBAGENT_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "timed_out"}
+
+
+def _normalise_subagent_status(status: str) -> tuple[str, str | None]:
+    """Map a raw subagent status onto (graph_status, failure_reason).
+
+    ``timed_out`` → (``failed``, ``"timed_out"``); the graph stores one
+    ``failed`` label but the structured ``failure_reason`` keeps the cause
+    distinct from a plain error. ``completed``/``cancelled``/``failed`` map to
+    themselves with failure_reason only set on ``failed`` (``"error"``) and
+    ``cancelled`` (``"aborted"``). Unknown statuses pass through unchanged.
+    """
+    if status == "timed_out":
+        return "failed", "timed_out"
+    if status == "failed":
+        return "failed", "error"
+    if status == "cancelled":
+        return "cancelled", "aborted"
+    return status, None
+
+
+def upsert_subagent(
+    *,
+    subagent_id: str,
+    session_id: str,
+    turn_id: str,
+    objective: str,
+    task_type: str,
+    subagent_type: str | None,
+    created_at: str,
+    status: str,
+    finished_at: str | None = None,
+    summary: str | None = None,
+) -> None:
+    """Mirror a subagent's lifecycle into one scope SubTask node.
+
+    Two phases, both MERGEd on ``task_id = subtask:subagent:<subagentId>``:
+
+    - **Start phase** (``status="running"``): writes the stable identity fields
+      — ``objective``, ``task_type`` (the coarse scope label, normally
+      ``subagent``), ``subagent_type`` (role), ``created_at``, ``session_id``,
+      ``turn_id``, and a session-level ``seq`` assigned once at creation. The
+      terminal fields (``finished_at`` / ``summary`` / ``failure_reason``) are
+      NOT written — they are absent while running.
+    - **Terminal phase** (``status`` in completed/failed/cancelled/timed_out):
+      ON MATCH only fills the gaps — writes ``status``, ``finished_at``,
+      ``summary``, ``failure_reason``. It does NOT overwrite the start-phase
+      ``objective`` / ``subagent_type`` / ``created_at`` / ``seq`` (and
+      ``session_id`` is written only on CREATE, so the scope's session is the
+      one that created it — a later re-mirror cannot hijack it).
+
+    ``timed_out`` is normalised to ``failed`` (one red label) with
+    ``failure_reason="timed_out"`` kept distinct. ``summary`` is guaranteed
+    non-empty: on a successful terminal call with no text, the deterministic
+    fallback ``"Subagent completed without a text response."`` is used (matches
+    the placeholder the run itself publishes) so the scope node never carries
+    an empty summary. The scope never carries products — each internal toolcall
+    is a separate child ToolCall built by ``upsert_execution`` /
+    ``upsert_mcp_search`` (with ``parent_subagent_id``) and hung off this scope
+    via ``contains``. The scope does join the session temporal chain (ordered
+    by ``seq``); its children do not.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        log.warning("upsert_subagent skipped: Neo4j not reachable (subagent=%s session=%s)",
+                    subagent_id, session_id)
+        return
+
+    task_id = f"subtask:subagent:{subagent_id}"
+    is_terminal = status in _SUBAGENT_TERMINAL_STATUSES and status != "running"
+    log.debug("upsert_subagent starting: subagent=%s session=%s status=%s terminal=%s",
+              subagent_id, session_id, status, is_terminal)
+
+    try:
+        with driver.session() as session:
+            if not is_terminal:
+                # Start phase: write identity + seq, leave terminal fields absent.
+                seq = _next_session_seq(session, session_id)
+                session.run(
+                    """
+                    MERGE (st:Task {task_id: $task_id})
+                      ON CREATE SET st.session_id     = $session_id,
+                                    st.objective      = $objective,
+                                    st.task_type       = $task_type,
+                                    st.subagent_type   = $subagent_type,
+                                    st.created_at      = $created_at,
+                                    st.turn_id         = $turn_id,
+                                    st.status          = $status,
+                                    st.seq             = $seq
+                      ON MATCH  SET st.status  = $status,
+                                    st.turn_id = $turn_id
+                    """,
+                    task_id=task_id,
+                    session_id=session_id,
+                    objective=objective,
+                    task_type=task_type,
+                    subagent_type=subagent_type,
+                    created_at=created_at,
+                    turn_id=turn_id,
+                    status=status,
+                    seq=seq,
+                ).consume()
+            else:
+                # Terminal phase: normalise status, guarantee non-empty summary,
+                # then ON MATCH fill only the terminal gaps. session_id and seq
+                # are NOT touched on MATCH (ON CREATE owns them; a terminal
+                # re-mirror cannot rehome the scope or bump its seq). If the
+                # start phase never ran (terminal arrives first), ON CREATE
+                # builds the node with the identity fields + a fresh seq, so the
+                # node still has a creation order for the chain.
+                graph_status, failure_reason = _normalise_subagent_status(status)
+                terminal_summary: str | None = summary
+                if graph_status == "completed" and not (summary and summary.strip()):
+                    terminal_summary = "Subagent completed without a text response."
+                seq = _next_session_seq(session, session_id)
+                session.run(
+                    """
+                    MERGE (st:Task {task_id: $task_id})
+                      ON CREATE SET st.session_id     = $session_id,
+                                    st.objective      = $objective,
+                                    st.task_type       = $task_type,
+                                    st.subagent_type   = $subagent_type,
+                                    st.created_at      = $created_at,
+                                    st.turn_id         = $turn_id,
+                                    st.status          = $graph_status,
+                                    st.seq             = $seq
+                      ON MATCH  SET st.status         = $graph_status,
+                                    st.finished_at    = $finished_at,
+                                    st.summary         = $terminal_summary,
+                                    st.failure_reason  = $failure_reason
+                    """,
+                    task_id=task_id,
+                    session_id=session_id,
+                    objective=objective,
+                    task_type=task_type,
+                    subagent_type=subagent_type,
+                    created_at=created_at,
+                    turn_id=turn_id,
+                    graph_status=graph_status,
+                    seq=seq,
+                    finished_at=finished_at,
+                    terminal_summary=terminal_summary,
+                    failure_reason=failure_reason,
+                ).consume()
+
+            # Rebuild the session temporal chain so this scope takes its place
+            # (ordered by seq). Children are excluded from the main chain.
+            _link_subtasks_by_finish_time(session, session_id)
+
+        log.info("upsert_subagent done: subagent=%s session=%s status=%s",
+                 subagent_id, session_id, status)
+    except Exception as exc:
+        log.exception("upsert_subagent failed: subagent=%s session=%s: %s",
+                      subagent_id, session_id, exc)
+        raise
+
+
+def _next_session_seq(session: Any, session_id: str) -> int:
+    """Allocate the next session-level ``seq`` for a SubTask.
+
+    ``seq`` is a per-session monotonic ordering key assigned once at a node's
+    creation (ON CREATE only — never overwritten on a re-mirror). The session
+    temporal chain orders by ``seq`` instead of ``finished_at`` so a SubTask
+    still running (no ``finished_at``) does not sort to the front and pollute
+    the chain head. Children (``subtask:subagent:...:exec:...``) are excluded
+    from the session main chain (they form their own scope-internal chain) but
+    still consume a seq so the allocation stays monotonic across all nodes.
+
+    Read-then-write inside the caller's open session/tx: writes are
+    fire-and-forget and concurrency is best-effort (two concurrent subagent
+    starts in one session can draw the same seq — acceptable for ordering
+    fallback; the chain rebuild is idempotent). Returns the next seq (>= 1).
+    """
+    result = session.run(
+        "MATCH (st) WHERE (st:Task OR st:ToolCall) AND st.session_id = $sid "
+        "RETURN coalesce(max(st.seq), 0) AS m",
+        sid=session_id,
+    )
+    rec = result.single()
+    return int(rec["m"] if rec else 0) + 1
+
+
+def _link_scope_children(session: Any, session_id: str, scope_task_id: str) -> None:
+    """Rebuild one subagent scope's internal child chain: ``contains`` → the
+    *first* child only, then ``next`` links consecutive children in ``seq``
+    order so the scope's internal run reads as an ordered chain rather than a
+    star fanning off ``contains`` edges:
+
+        Task(scope) -[:contains]-> ToolCall₁ -[:next]-> ToolCall₂ -> … -> ToolCallₙ
+
+    Children are ``:ToolCall`` nodes carrying ``parent_subtask_id`` pointing at
+    the scope's ``task_id`` (written by ``_upsert_execution_child`` /
+    ``_upsert_mcp_search_child``). The scope itself is a ``:Task`` (built by
+    ``upsert_subagent``) — matched, not MERGEd here. Idempotent: it first
+    deletes this scope's existing ``scope_chain`` ``contains`` + ``next``
+    edges and rebuilds the whole chain. A scope with 0 or 1 children produces
+    at most the single ``contains`` edge (no ``next``). Runs inside the
+    caller's open session/tx; fire-and-forget, best-effort concurrency.
+
+    The ``contains``-only-first rule (需求1) keeps ``contains`` as the
+    *entry* marker into a scope's child run; ordering between siblings is
+    ``next``'s job — mirroring the session main chain's goal→head→…→last shape.
+    """
+    # Drop this scope's prior scope-internal chain so it can be rebuilt from
+    # scratch as children land / re-order. Only edges where the scope is the
+    # contains source OR where both endpoints are this scope's children are
+    # in scope (a child's task_id pins it to this scope via parent_subtask_id).
+    session.run(
+        """
+        MATCH (scope:Task {task_id: $tid})
+        OPTIONAL MATCH (scope)-[rc:contains]->(:ToolCall)
+        DELETE rc
+        WITH scope
+        MATCH (child:ToolCall {parent_subtask_id: $tid})
+        WHERE child.session_id = $sid
+        OPTIONAL MATCH (child)-[rn:next {method: 'scope_chain'}]->(:ToolCall)
+        DELETE rn
+        """,
+        tid=scope_task_id,
+        sid=session_id,
+    ).consume()
+
+    # Order this scope's children by seq (monotonic across the session,
+    # assigned once at creation). contains → the first; next → each
+    # consecutive pair. method='scope_chain' marks these as visibility
+    # fallbacks (same convention as the session temporal_chain) so the
+    # frontend can de-emphasise them.
+    session.run(
+        """
+        MATCH (child:ToolCall {parent_subtask_id: $tid, session_id: $sid})
+        WITH child ORDER BY coalesce(child.seq, 0), child.finished_at
+        WITH collect(child) AS ordered
+        // First child (if any) hangs off the scope via contains.
+        WITH ordered, ordered[0] AS first
+        CALL (first) {
+          MATCH (scope:Task {task_id: $tid})
+          MERGE (scope)-[:contains]->(first)
+        }
+        // Consecutive pairs (first → second → … → last) via next.
+        WITH ordered
+        UNWIND range(0, size(ordered) - 2) AS i
+        WITH ordered[i] AS a, ordered[i + 1] AS b
+        MERGE (a)-[r:next]->(b)
+          ON CREATE SET r.inferred = true,
+                        r.basis    = 'seq',
+                        r.method   = 'scope_chain'
+          ON MATCH  SET r.inferred = true,
+                        r.basis    = 'seq',
+                        r.method   = 'scope_chain'
+        """,
+        tid=scope_task_id,
+        sid=session_id,
+    ).consume()
+
+
 def _link_subtasks_by_finish_time(session: Any, session_id: str) -> int:
-    """Connect a session's auto-inferred SubTasks (execution/mcp_search) by
-    ``finished_at`` into a single linear ``next`` chain hanging off the
-    ResearchGoal:
+    """Connect a session's main-chain ToolCalls/Tasks by ``seq`` into a single
+    linear ``next`` chain hanging off the ResearchGoal:
 
-        ResearchGoal -[:next]-> SubTask₁ -[:next]-> SubTask₂ -> ... -> SubTaskₙ
+        ResearchGoal -[:next]-> ToolCall₁ -[:next]-> … -> Task(scope) -[:next]-> … -> ToolCallₙ
 
-    The goal connects to the *first* SubTask only; each SubTask then links to
-    the next by finish time. ``r.method='temporal_chain'`` +
-    ``basis='finish_time'`` on every edge marks it as a visibility fallback,
-    not a real dependency, so the frontend can de-emphasize it. Auto-inferred
-    SubTasks are selected by their ``task_id`` prefix (``subtask:`` for
-    execution-mirrored, ``subtask:mcp:`` for MCP-search-mirrored).
+    The goal connects to the *first* node only; each node then links to the
+    next by ``seq``. Ordering by ``seq`` (not ``finished_at``) means a node
+    still running (no ``finished_at`` — e.g. a subagent scope mirrored at its
+    start) is NOT sorted to the front and does not pollute the chain head; it
+    sits at its creation order. ``r.method='temporal_chain'`` +
+    ``basis='seq'`` on every edge marks it as a visibility fallback, not a real
+    dependency, so the frontend can de-emphasize it. Legacy nodes created
+    before ``seq`` existed fall back to ``finished_at`` as a tiebreaker so the
+    chain stays stable.
 
-    Idempotent: it first deletes this session's existing ``temporal_chain``
-    ``next`` edges (both goal→head and subtask→subtask) and rebuilds the whole
-    chain from the current set of auto-inferred SubTasks, so adding a new
-    SubTask mid-chain re-links everything in the right order. Real
-    (non-temporal) ``next`` edges are left untouched. Returns the number of
-    edges added. Runs inside the caller's open session/tx.
+    Scope-internal child ToolCalls (``subtask:subagent:<id>:exec:...``) do NOT
+    enter the session main chain — they are hung off their scope via
+    ``contains`` (first child) + ``next`` (rest, via ``_link_scope_children``)
+    and ordered internally by their own ``seq``. Only session-main nodes
+    (main-agent execution ``subtask:<execId>``, main-agent mcp search
+    ``subtask:mcp:<invId>``, and subagent scopes ``subtask:subagent:<id>``)
+    are selected. Idempotent: it first deletes this session's existing
+    ``temporal_chain`` ``next`` edges and rebuilds the whole
+    chain. Real (non-temporal) ``next`` edges are left untouched. Returns the
+    number of edges added. Runs inside the caller's open session/tx.
     """
     # Drop the previous temporal_chain so the chain can be rebuilt from
     # scratch in the correct order as new SubTasks land. Only edges this
@@ -477,13 +1086,18 @@ def _link_subtasks_by_finish_time(session: Any, session_id: str) -> int:
     # goal → first SubTask (head of the chain). OPTIONAL MATCH so a session
     # whose first-message hook hasn't run (no ResearchGoal yet) still gets
     # the SubTask→SubTask chain below — the goal→head link is added later by
-    # the next upsert once the goal exists.
+    # the next upsert once the goal exists. A child never qualifies as head —
+    # the WHERE clause excludes ``subtask:subagent:...:exec:...`` ids so the
+    # main chain's head is always a session-main node (scope / main exec / main
+    # mcp). seq orders the chain; finished_at is only a legacy tiebreaker.
     session.run(
         """
-        MATCH (st:SubTask)
-        WHERE st.session_id = $sid
+        MATCH (st)
+        WHERE (st:Task OR st:ToolCall)
+          AND st.session_id = $sid
           AND st.task_id STARTS WITH 'subtask:'
-        WITH st ORDER BY st.finished_at
+          AND NOT st.task_id CONTAINS ':exec:'
+        WITH st ORDER BY coalesce(st.seq, 0), st.finished_at
         WITH collect(st)[0] AS head
         CALL (head) {
           OPTIONAL MATCH (g:ResearchGoal {goal_id: $goal_id})
@@ -491,10 +1105,10 @@ def _link_subtasks_by_finish_time(session: Any, session_id: str) -> int:
           WHERE g IS NOT NULL
           MERGE (g)-[r:next]->(head)
             ON CREATE SET r.inferred = true,
-                          r.basis     = 'finish_time',
+                          r.basis     = 'seq',
                           r.method    = 'temporal_chain'
             ON MATCH  SET r.inferred = true,
-                          r.basis     = 'finish_time',
+                          r.basis     = 'seq',
                           r.method    = 'temporal_chain'
         }
         """,
@@ -502,22 +1116,24 @@ def _link_subtasks_by_finish_time(session: Any, session_id: str) -> int:
         goal_id=f"goal:session:{session_id}",
     ).consume()
 
-    # head → next → ... → last (consecutive pairs in finish order).
+    # head → next → ... → last (consecutive pairs in seq order).
     result = session.run(
         """
-        MATCH (st:SubTask)
-        WHERE st.session_id = $sid
+        MATCH (st)
+        WHERE (st:Task OR st:ToolCall)
+          AND st.session_id = $sid
           AND st.task_id STARTS WITH 'subtask:'
-        WITH st ORDER BY st.finished_at
+          AND NOT st.task_id CONTAINS ':exec:'
+        WITH st ORDER BY coalesce(st.seq, 0), st.finished_at
         WITH collect(st) AS ordered
         UNWIND range(0, size(ordered) - 2) AS i
         WITH ordered[i] AS a, ordered[i + 1] AS b
         MERGE (a)-[r:next]->(b)
           ON CREATE SET r.inferred = true,
-                        r.basis    = 'finish_time',
+                        r.basis    = 'seq',
                         r.method   = 'temporal_chain'
           ON MATCH  SET r.inferred = true,
-                        r.basis    = 'finish_time',
+                        r.basis    = 'seq',
                         r.method   = 'temporal_chain'
         RETURN count(r) AS added
         """,

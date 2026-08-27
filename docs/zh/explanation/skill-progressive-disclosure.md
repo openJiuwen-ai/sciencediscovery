@@ -5,9 +5,9 @@
 ## 设计目标
 
 - **系统提示保持轻量**：leader prompt 只列出本次运行已选技能的名称、描述、version、revision 和资源数量，不直接注入完整 `SKILL.md`。
-- **按需加载说明**：模型认为某个技能相关时，先调用 `describe_skill` 查看匹配结果和资源摘要，再调用 `read_skill` 读取完整说明。
+- **按需加载说明**：模型根据目录中的名称和描述判断相关性，再用精确 `skillId` 调用 `read_skill` 读取完整说明。
 - **冻结运行快照**：运行开始时，Node API 已固定所选技能的 revision、包 hash、instructions 和资源清单。模型后续读取的始终是这份快照，而不是磁盘上可能已经变化的文件。
-- **目录检索与内容读取分离**：`describe_skill` 只按名称和描述检索目录并返回 metadata，完整内容由 `read_skill` 从冻结快照返回。
+- **目录与内容读取分离**：系统 Prompt 只提供目录 metadata，完整内容由 `read_skill` 从冻结快照返回。
 
 ## 运行流程
 
@@ -19,12 +19,9 @@ API resolve 技能 revision，生成 frozen snapshot
         │
         ├─ system prompt: 只写 name / description / version / revision
         │
-        └─ 工具表: describe_skill / read_skill / read_skill_resource
+        └─ 工具表: read_skill / read_skill_resource
         ▼
-describe_skill(query)
-        │  按名称和描述检索本次运行的技能目录
-        ▼
-模型选中 skillId
+模型根据目录选中精确 skillId
         │
         ▼
 read_skill(skillId)
@@ -38,11 +35,10 @@ read_skill_resource(skillId, path)
 
 | 工具 | 执行位置 | 职责 |
 |------|----------|------|
-| `describe_skill` | Node 工作区工具 | 按名称和描述检索本次运行的技能目录，只返回 metadata、revision、hash 和资源摘要 |
 | `read_skill` | Node 工作区工具 | 读取本次 run 的冻结 `SKILL.md` instructions，返回完整说明和 supporting resource 清单 |
 | `read_skill_resource` | Node 工作区工具 | 在读取完整技能后，按 path 读取有界 UTF-8 supporting resource；不执行脚本、不安装依赖 |
 
-三者都由 `packages/workspace` 的 `createWorkspaceTools` 产出，和其他工作区工具一样由 Node 原生 loop 在进程内直接调用。
+两者都由 `packages/workspace` 的 `createWorkspaceTools` 产出，和其他工作区工具一样由 Node 原生 loop 在进程内直接调用。
 
 ## 为什么不用「给出文件路径、让模型自己读」
 

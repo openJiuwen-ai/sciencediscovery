@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -53,9 +53,12 @@ async function fixture(context: TestContext) {
 
 test("a persistent shell session keeps exports and cwd across run_shell calls", async (context) => {
   const { manager, workspaceRoot } = await fixture(context);
+  await mkdir(resolve(workspaceRoot, "subdir"), { recursive: true });
+  await writeFile(resolve(workspaceRoot, "root script.sh"), "printf '<%s>\\n' \"$@\"\npwd -P\n");
+  await writeFile(resolve(workspaceRoot, "subdir", "child script.sh"), "printf 'child:%s in %s\\n' \"$1\" \"$(pwd -P)\"\n");
   const first = await manager.execute({
     agentId: "main",
-    code: "export FOO=bar\nmkdir -p subdir\ncd subdir\necho ready",
+    code: "export FOO=bar\ncd subdir\necho ready",
     executionId: "shell-one", kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
   });
   assert.equal(first.exitCode, 0);
@@ -63,6 +66,22 @@ test("a persistent shell session keeps exports and cwd across run_shell calls", 
   assert.equal(first.stdout.trim(), "ready");
   assert.equal(first.workingDirectory, "/workspace/subdir");
   assert.equal(first.environmentVariables.FOO, "bar");
+
+  const rootScript = await manager.execute({
+    agentId: "main",
+    code: "/usr/bin/bash '/workspace/root script.sh' 'value with spaces' 'quote'\"'\"'value'",
+    executionId: "shell-root-script", kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
+  });
+  assert.equal(rootScript.stdout.trim(), "<value with spaces>\n<quote'value>\n/workspace/subdir");
+  assert.equal(rootScript.workingDirectory, "/workspace/subdir");
+
+  const childScript = await manager.execute({
+    agentId: "main",
+    code: "/usr/bin/bash '/workspace/subdir/child script.sh' 'nested value'",
+    executionId: "shell-child-script", kernelMode: "persistent", permissionEpoch: epoch(), workspaceRoot,
+  });
+  assert.equal(childScript.stdout.trim(), "child:nested value in /workspace/subdir");
+  assert.equal(childScript.workingDirectory, "/workspace/subdir");
 
   const second = await manager.execute({
     agentId: "main",

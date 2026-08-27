@@ -19,7 +19,7 @@ import type {
   UpdateWebSettingsRequest,
   WebSettingsDetails,
   WebUsageSummary,
-  WorkbenchSearchResult,
+  WorkbenchSearchResponse,
 } from "@sciencediscovery/schema";
 
 import { EvolveApiClient } from "./evolve.js";
@@ -29,8 +29,9 @@ export class WebApiClient extends EvolveApiClient {
     return this.request("/api/mcp/sources");
   }
 
-  searchWorkbench(query = ""): Promise<WorkbenchSearchResult[]> {
-    return this.request(`/api/search?q=${encodeURIComponent(query)}`);
+  searchWorkbench(query = "", offset = 0, limit = 250): Promise<WorkbenchSearchResponse> {
+    const parameters = new URLSearchParams({ limit: String(limit), offset: String(offset), q: query });
+    return this.request(`/api/search?${parameters.toString()}`);
   }
 
   getWebSettings(): Promise<WebSettingsDetails> {

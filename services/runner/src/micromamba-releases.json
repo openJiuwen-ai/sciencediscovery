@@ -14,5 +14,19 @@
       "filename": "micromamba-linux-64",
       "sha256": "9689782d863c05a1bf5d2d371ba527104e7a4eb4310c1637d8653b751aed9c82"
     }
+  },
+  "darwinReleases": {
+    "arm64": {
+      "dockerArch": "arm64",
+      "packageArch": "osx-arm64",
+      "filename": "micromamba-osx-arm64",
+      "sha256": "de71a646b73af92dd663e6ddc78993a6a4d47ea28b5d8908c3cc2b9c3077e528"
+    },
+    "x64": {
+      "dockerArch": "amd64",
+      "packageArch": "osx-64",
+      "filename": "micromamba-osx-64",
+      "sha256": "b2bd613791c0a524883d7cb66505d630bf15badd1f492bc93ba78550a3a1a94b"
+    }
   }
 }

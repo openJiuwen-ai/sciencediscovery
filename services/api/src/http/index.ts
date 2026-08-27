@@ -21,8 +21,10 @@ import {
   buildWorkspaceSystemPrompt,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
-} from "@sciencediscovery/context";
+} from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
+import { DIRECT_MODE_DESCRIPTOR } from "@sciencediscovery/direct-mode";
+import { PLAN_MODE_DESCRIPTOR } from "@sciencediscovery/plan-mode";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
 import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
@@ -38,15 +40,17 @@ import type {
   AnalyzePaperVisionRequest,
   CancelRunResult,
   ChatMessage,
+  ConfirmSkillReviewDraftRequest,
   ComposerReference,
   MemoryGraphEdgeType,
   MemoryGraphNodeLabel,
   MemoryGraphTraceResult,
   CreateEnvironmentRequest,
+  CreateGitSkillReviewDraftsRequest,
   CreateSkillDialogueDraftRequest,
   CreateArtifactAnnotationRequest,
   CreateArtifactPlanRequest,
-  CreateSkillRequest,
+  CreateSkillPackageRequest,
   CreateModelProfileRequest,
   CreateProjectRequest,
   CreatePermissionRequest,
@@ -66,11 +70,14 @@ import type {
   UpdateProxySettingsRequest,
   UpdateWebSettingsRequest,
   UpdateMemoryGraphSettingsRequest,
+  CreateSkillEvolutionRunRequest,
   DistillSessionSkillRequest,
   Environment,
   EffectiveRuntimeSettings,
   DeleteResourceRequest,
   ImportSkillFromGitRequest,
+  InspectGitSkillRepositoryRequest,
+  MergeSkillReviewDraftsRequest,
   InstallEnvironmentRequest,
   UninstallEnvironmentRequest,
   RunStreamEvent,
@@ -92,6 +99,7 @@ import type {
   ScientificEnvironmentSetup,
   SkillDeletionImpact,
   UpdateSkillRequest,
+  UpdateSkillFileRequest,
   UpdateModelProfileRequest,
   UpdateProjectRequest,
   UpdateSessionRequest,
@@ -105,7 +113,11 @@ import type {
   SubagentStep,
   UpdateSpecialistRequest,
 } from "@sciencediscovery/schema";
-import { UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
+import {
+  BUILT_IN_SKILL_LIBRARY_ID,
+  DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
+  UNTITLED_SESSION_TITLE,
+} from "@sciencediscovery/schema";
 
 import { SessionStoreHttpError } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
@@ -121,6 +133,7 @@ import {
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
 import { inferDomain, mgLog } from "@sciencediscovery/memory";
+import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { createPromptManifest } from "../prompt-manifest.js";
@@ -132,6 +145,8 @@ import {
   SkillCatalogError,
   type RuntimeSkillSnapshot,
 } from "@sciencediscovery/specialist";
+import { SkillLibraryCatalog, SkillLibraryCatalogError } from "../skill-library-catalog.js";
+import { handleSkillLibraryRequest } from "./skill-libraries.js";
 import {
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
@@ -184,6 +199,7 @@ import {
   ApiStatusError,
   cancelCurrentSessionRun,
   cancelSessionRun,
+  createSkillEvolutionRun,
   createQueuedRun,
   emptyMatch,
   emptyTrace,
@@ -194,6 +210,7 @@ import {
   streamStoredRunEvents,
 } from "../runs/index.js";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
+import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
 import {
   createPlatformServices,
   initializePlatformServices,
@@ -232,6 +249,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     store,
     webBroker,
   } = platform;
+  const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
+  const modelConnectivityTests = new ModelConnectivityTestCoordinator();
   const patchEphemeralCallback = (server: Server) => {
     // With an ephemeral port (tests), the configured tool-callback URL cannot
     // know the real port in advance; rewrite it from the bound address.
@@ -241,7 +260,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
     });
   };
-  const ready = initializePlatformServices(platform, config);
+  const ready = skillLibraryCatalog.load()
+    .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
+    .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
+    .then(() => undefined);
 
   const server = createServer(async (request, response) => {
     const requestPath = (request.url ?? "/").split("?", 1)[0] || "/";
@@ -447,7 +469,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/search") {
-        sendJson(response, 200, await searchWorkbench(store, url.searchParams.get("q") ?? ""));
+        sendJson(response, 200, await searchWorkbench(store, url.searchParams.get("q") ?? "", {
+          limit: Number(url.searchParams.get("limit") ?? 250),
+          offset: Number(url.searchParams.get("offset") ?? 0),
+        }));
         return;
       }
       if (url.pathname === "/api/settings" && request.method === "GET") {
@@ -719,6 +744,94 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, skillCatalog.list());
         return;
       }
+      if (url.pathname.startsWith("/api/skill-libraries") || url.pathname.startsWith("/api/skill-library-proposals")) {
+        if (await handleSkillLibraryRequest({ catalog: skillLibraryCatalog, request, response, url })) return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/skill-review-drafts") {
+        sendJson(response, 200, skillCatalog.listReviewDrafts());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/skill-review-drafts/merge") {
+        sendJson(response, 200, await skillCatalog.mergeReviewDrafts(
+          await readJson<MergeSkillReviewDraftsRequest>(request),
+        ));
+        return;
+      }
+      const skillReviewConfirmMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)\/confirm$/);
+      if (skillReviewConfirmMatch && request.method === "POST") {
+        const draftId = decodeURIComponent(skillReviewConfirmMatch[1]!);
+        const body = await readJson<ConfirmSkillReviewDraftRequest>(request);
+        const requestedLibraryId = body.libraryId?.trim();
+        const libraryId = requestedLibraryId || DEFAULT_WRITABLE_SKILL_LIBRARY_ID;
+        if (libraryId === BUILT_IN_SKILL_LIBRARY_ID) {
+          throw new SkillLibraryCatalogError("SKILL_LIBRARY_VALIDATION", "Built-in Skill Library is read-only");
+        }
+        const published = await skillCatalog.publishReviewDraft(draftId, body, async (prepared) => {
+          let library = skillLibraryCatalog.get(libraryId);
+          if (!library) {
+            if (requestedLibraryId && libraryId !== DEFAULT_WRITABLE_SKILL_LIBRARY_ID) {
+              throw new SkillLibraryCatalogError("SKILL_LIBRARY_NOT_FOUND", `Skill library not found: ${libraryId}`);
+            }
+            library = await skillLibraryCatalog.create({ id: libraryId, name: "Project Skills" });
+          }
+          const commit = await skillLibraryCatalog.commitVersion(libraryId, {
+            author: {
+              ...(prepared.provenance.sessionId ? { id: prepared.provenance.sessionId } : {}),
+              kind: "user",
+              name: "Reviewed Skill draft",
+            },
+            baseVersionId: library.headVersionId,
+            evaluation: {
+              review: {
+                draftId,
+                source: prepared.provenance.source,
+                ...(prepared.provenance.sessionId ? { sessionId: prepared.provenance.sessionId } : {}),
+                ...(body.sourceVersionId ? { sourceVersionId: body.sourceVersionId } : {}),
+              },
+            },
+            operations: [{
+              package: {
+                files: [...prepared.files].map(([path, bytes]) => ({
+                  content: bytes.toString("base64"),
+                  encoding: "base64" as const,
+                  path,
+                })),
+              },
+              type: "upsert",
+            }],
+          });
+          if (commit.conflicts.length || !commit.version) {
+            throw new SkillLibraryCatalogError(
+              "SKILL_LIBRARY_CONFLICT",
+              commit.conflicts.map((conflict) => conflict.message).join(" ") || "Skill Library version was not created",
+            );
+          }
+          const skill = commit.version.skills.find((candidate) => candidate.id === prepared.detail.id);
+          if (!skill) throw new Error(`Published Skill is missing from library version: ${prepared.detail.id}`);
+          return {
+            contentHash: commit.version.contentHash,
+            libraryId,
+            skillId: skill.id,
+            versionId: commit.version.id,
+          };
+        });
+        sendJson(response, 201, published);
+        return;
+      }
+      const skillReviewDraftMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)$/);
+      if (skillReviewDraftMatch && request.method === "GET") {
+        const draftId = decodeURIComponent(skillReviewDraftMatch[1]!);
+        const draft = await skillCatalog.getReviewDraft(draftId);
+        if (!draft) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill review draft not found: ${draftId}`);
+        sendJson(response, 200, draft);
+        return;
+      }
+      if (skillReviewDraftMatch && request.method === "DELETE") {
+        const draftId = decodeURIComponent(skillReviewDraftMatch[1]!);
+        await skillCatalog.discardReviewDraft(draftId);
+        sendJson(response, 200, { discarded: draftId });
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/specialists") {
         sendJson(response, 200, store.listSpecialists());
         return;
@@ -741,7 +854,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/skills") {
-        const detail = await skillCatalog.create(await readJson<CreateSkillRequest>(request));
+        const detail = await skillCatalog.createPackage(await readJson<CreateSkillPackageRequest>(request));
         store.setAvailableSkillIds(skillCatalog.ids());
         sendJson(response, 201, detail);
         return;
@@ -751,6 +864,18 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const detail = await skillCatalog.import(upload.filename, upload.bytes);
         store.setAvailableSkillIds(skillCatalog.ids());
         sendJson(response, 201, detail);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/skills/import-git/inspect") {
+        sendJson(response, 200, await skillCatalog.inspectGitRepository(
+          await readJson<InspectGitSkillRepositoryRequest>(request),
+        ));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/skills/import-git/review") {
+        sendJson(response, 201, await skillCatalog.createGitReviewDrafts(
+          await readJson<CreateGitSkillReviewDraftsRequest>(request),
+        ));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/skills/import-git") {
@@ -782,6 +907,30 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const skillId = decodeURIComponent(skillDeletionImpactMatch[1]!);
         if (!skillCatalog.get(skillId)) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         sendJson(response, 200, store.getSkillDeletionImpact(skillId));
+        return;
+      }
+
+      const skillVersionMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/versions\/([^/]+)$/);
+      if (skillVersionMatch && request.method === "GET") {
+        sendJson(response, 200, await skillCatalog.getSkillVersion(
+          decodeURIComponent(skillVersionMatch[1]!),
+          decodeURIComponent(skillVersionMatch[2]!),
+        ));
+        return;
+      }
+      const skillVersionsMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/versions$/);
+      if (skillVersionsMatch && request.method === "GET") {
+        sendJson(response, 200, await skillCatalog.listSkillVersions(decodeURIComponent(skillVersionsMatch[1]!)));
+        return;
+      }
+
+      const skillFileMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/files\/(.+)$/);
+      if (skillFileMatch && request.method === "PUT") {
+        sendJson(response, 200, await skillCatalog.updateFile(
+          decodeURIComponent(skillFileMatch[1]!),
+          decodeURIComponent(skillFileMatch[2]!),
+          await readJson<UpdateSkillFileRequest>(request),
+        ));
         return;
       }
 
@@ -898,6 +1047,20 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const modelConnectivityMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/test$/);
+      if (modelConnectivityMatch && request.method === "POST") {
+        const modelId = decodeURIComponent(modelConnectivityMatch[1]!);
+        const profile = store.getModel(modelId);
+        if (!profile) return sendError(response, 404, "Model not found");
+        const tested = await modelConnectivityTests.run(modelId, () => testModelConnectivity({
+          apiToken: store.getModelApiToken(modelId),
+          profile,
+          resolveProxy: () => resolveProxyForUrl(store.resolveProxy(profile.proxyPolicy), profile.baseUrl),
+        }));
+        sendJson(response, 200, tested);
+        return;
+      }
+
       const modelMatch = url.pathname.match(/^\/api\/models\/([^/]+)$/);
       if (modelMatch && request.method === "PUT") {
         const body = await readJson<UpdateModelProfileRequest>(request);
@@ -950,6 +1113,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const projectArtifactsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/artifacts$/);
       if (projectArtifactsMatch && request.method === "GET") {
         sendJson(response, 200, store.listProjectArtifacts(projectArtifactsMatch[1]!));
+        return;
+      }
+      const projectArtifactMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/artifacts\/([^/]+)$/);
+      if (projectArtifactMatch && request.method === "DELETE") {
+        await store.deleteArtifact(projectArtifactMatch[1]!, projectArtifactMatch[2]!);
+        sendJson(response, 200, { deleted: projectArtifactMatch[2] });
         return;
       }
       const projectArtifactVersionsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/artifacts\/([^/]+)\/versions$/);
@@ -1042,6 +1211,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const sessionPlansMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/plans$/);
       if (sessionPlansMatch && request.method === "GET") {
         sendJson(response, 200, store.listSessionPlans(sessionPlansMatch[1]!));
+        return;
+      }
+
+      if (url.pathname === "/api/execution-modes" && request.method === "GET") {
+        sendJson(response, 200, [DIRECT_MODE_DESCRIPTOR, PLAN_MODE_DESCRIPTOR]);
         return;
       }
       if (sessionPlansMatch && request.method === "POST") {
@@ -1485,10 +1659,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, await store.listSessionRuns(sessionRunsMatch[1]!));
         return;
       }
+      const sessionRunModeMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/mode$/);
+      if (sessionRunModeMatch && request.method === "GET") {
+        const run = await store.getSessionRun(sessionRunModeMatch[1]!, sessionRunModeMatch[2]!);
+        if (!run) return sendError(response, 404, "Run not found");
+        sendJson(response, 200, { mode: run.executionMode });
+        return;
+      }
       if (sessionRunsMatch && request.method === "POST") {
         const sessionId = sessionRunsMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        const run = await createQueuedRun(store, skillCatalog, sessionId, await readJson<SendMessageRequest>(request));
+        const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, await readJson<SendMessageRequest>(request));
         scheduleSessionRuns(
           store,
           runnerClient,
@@ -1501,6 +1682,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           paperService,
           remoteCompute,
           skillCatalog,
+          skillLibraryCatalog,
           memoryGraphSink,
           sessionId,
           config,
@@ -1564,6 +1746,40 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const evolveRunStopMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/stop$/);
       if (evolveRunStopMatch && request.method === "POST") {
         await handleEvolveStopRun(response, evolutionStore, evolveOrchestrator, decodeURIComponent(evolveRunStopMatch[1]!));
+        return;
+      }
+
+      const sessionRunSkillEvolutionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/skill-evolution$/);
+      if (sessionRunSkillEvolutionMatch && request.method === "POST") {
+        const sessionId = sessionRunSkillEvolutionMatch[1]!;
+        const runId = sessionRunSkillEvolutionMatch[2]!;
+        const run = await createSkillEvolutionRun(
+          store,
+          skillCatalog,
+          skillLibraryCatalog,
+          sessionId,
+          runId,
+          await readJson<CreateSkillEvolutionRunRequest>(request),
+        );
+        scheduleSessionRuns(
+          store,
+          runnerClient,
+          provenanceRecorder,
+          mcpBroker,
+          webBroker,
+          mcpRegistry,
+          mcpCatalog,
+          artifactManager,
+          paperService,
+          remoteCompute,
+          skillCatalog,
+          skillLibraryCatalog,
+          memoryGraphSink,
+          sessionId,
+          config,
+          memoryGraphClient,
+        );
+        sendJson(response, 201, run);
         return;
       }
 
@@ -1666,7 +1882,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             };
             const reviewerSkills = skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]);
             const reviewerWorkspace: WorkspaceAgentOptions = {
-              config: { apiToken, baseUrl: selectedModel.baseUrl, dataDir: store.dataDir, model: selectedModel.model },
+              config: {
+                apiToken,
+                baseUrl: selectedModel.baseUrl,
+                dataDir: store.dataDir,
+                model: selectedModel.model,
+                // Deep review creates its own AgentRun rather than reusing the
+                // main-run options. Keep the model profile's resolved proxy on
+                // that path as well; without it, a sandbox that can only reach
+                // the provider through a configured proxy fails as `Failed to fetch`.
+                proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
+              },
               enabledConnectorIds: runtimeSettings.enabledConnectorIds,
               executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
               executeShell: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
@@ -1835,8 +2061,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (request.method === "POST" && url.pathname === "/api/memory/query/match") {
         const body = await readJson<{ query: string; session_id?: string }>(request);
         if (!body.query?.trim()) return sendError(response, 400, "query must be non-empty");
+        // Frontend search box: term-AND so typing a paper's full title returns
+        // just that paper (and nodes sharing its title words), not the whole
+        // corpus. The agent query_graph path pins any_term (OR) separately.
         const result = memoryGraphEnabled()
-          ? await memoryGraphClient.queryMatch(body.query, body.session_id).catch(() => emptyMatch("memory_graph_unreachable"))
+          ? await memoryGraphClient.queryMatch(body.query, body.session_id, "all_terms").catch(() => emptyMatch("memory_graph_unreachable"))
           : emptyMatch("memory_graph_disabled");
         sendJson(response, 200, result);
         return;
@@ -1878,6 +2107,43 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               .catch(() => ({
                 nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_unreachable",
               }))
+          : { nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_disabled" as const };
+        sendJson(response, 200, result);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/memory/query/scope-expansion") {
+        // Subagent scope expansion: returns the scope's child ToolCalls + real
+        // produces/contains/next edges (the "click to expand a scope" payload).
+        // Same reverse-proxy defensive shape as query/chain — toggle off or
+        // sidecar down → empty subgraph with a reason, never a 500. A 404
+        // (scope absent / not a subagent) surfaces as node_not_found so the
+        // frontend can show "scope gone" rather than a blank expansion.
+        const body = await readJson<{ scope_task_id: string; session_id: string }>(request);
+        if (!body.scope_task_id?.trim()) return sendError(response, 400, "scope_task_id must be non-empty");
+        if (!body.session_id?.trim()) return sendError(response, 400, "session_id must be non-empty");
+        const result = memoryGraphEnabled()
+          ? await memoryGraphClient
+              .getScopeExpansion(body.scope_task_id, body.session_id)
+              .catch(() => ({ nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_unreachable" }))
+          : { nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_disabled" as const };
+        sendJson(response, 200, result);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/memory/query/group-expansion") {
+        // Aggregate expansion (需求3): a folded scope with >1 product of one
+        // kind (Artifact/Paper) collapses into a single virtual
+        // `_group:<scopeId>:<Kind>` node in the folded view; this unpacks it
+        // into the real member products + one surrogate scope→member produces
+        // edge each. Same defensive shape as scope-expansion — toggle off or
+        // sidecar down → empty subgraph with a reason; a 404 (malformed id /
+        // absent scope) surfaces as node_not_found.
+        const body = await readJson<{ group_id: string; session_id: string }>(request);
+        if (!body.group_id?.trim()) return sendError(response, 400, "group_id must be non-empty");
+        if (!body.session_id?.trim()) return sendError(response, 400, "session_id must be non-empty");
+        const result = memoryGraphEnabled()
+          ? await memoryGraphClient
+              .getGroupExpansion(body.group_id, body.session_id)
+              .catch(() => ({ nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_unreachable" }))
           : { nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_disabled" as const };
         sendJson(response, 200, result);
         return;
@@ -2034,6 +2300,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           paperService,
           remoteCompute,
           skillCatalog,
+          skillLibraryCatalog,
           memoryGraphSink,
           messagesMatch[1]!,
           await readJson<SendMessageRequest>(request),
@@ -2056,7 +2323,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       const message = error instanceof Error ? error.message : "Request failed";
-      if (error instanceof ApiStatusError) sendError(response, error.statusCode, message);
+      if (error instanceof ApiStatusError || error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message);
       else if (code === "ENOENT") sendError(response, 404, "File not found");
       else if (code === "PAYLOAD_TOO_LARGE" || code === "QUOTA_EXCEEDED") {
         sendError(response, 413, error instanceof Error ? error.message : "Payload too large");
@@ -2065,6 +2332,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (code === "UNSUPPORTED_MEDIA_TYPE") sendError(response, 415, message);
       else if (code === "SKILL_NOT_FOUND") sendError(response, 404, message);
       else if (code === "SKILL_CONFLICT" || code === "SKILL_READ_ONLY") sendError(response, 409, message);
+      else if (code === "SKILL_LIBRARY_NOT_FOUND") sendError(response, 404, message);
+      else if (code === "SKILL_LIBRARY_CONFLICT") sendError(response, 409, message);
+      else if (code === "SKILL_LIBRARY_VALIDATION") sendError(response, 400, message);
       else if (/^(Project|Session|Proxy server) not found$/.test(message)) sendError(response, 404, message);
       else if (message === "Session is archived and read-only") sendError(response, 409, message);
       else if (message.startsWith("Proxy server is referenced by ")) sendError(response, 409, message);

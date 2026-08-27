@@ -78,12 +78,16 @@ export type EgressAddressResolver = (host: string) => Promise<Array<{ address: s
 export interface EgressGatewayOptions {
   log?: EgressGatewayLog;
   resolveAddresses?: EgressAddressResolver;
+  /** Listen on host loopback rather than a Unix socket (macOS Seatbelt). */
+  tcpHost?: string;
 }
 
 export class EgressGateway {
   private readonly server: Server;
   private readonly log?: EgressGatewayLog;
   private readonly resolveAddresses: EgressAddressResolver;
+  private readonly tcpHost?: string;
+  private tcpPort?: number;
   private closed = false;
 
   constructor(
@@ -92,6 +96,7 @@ export class EgressGateway {
     options: EgressGatewayOptions = {},
   ) {
     this.log = options.log;
+    this.tcpHost = options.tcpHost;
     this.resolveAddresses = options.resolveAddresses ?? ((host) => lookup(host, { all: true }));
     this.server = createHttpServer();
     this.server.on("connect", (request, clientSocket: Socket) => {
@@ -105,6 +110,22 @@ export class EgressGateway {
   }
 
   async listen(): Promise<void> {
+    if (this.tcpHost) {
+      await new Promise<void>((resolveListen, reject) => {
+        this.server.once("error", reject);
+        this.server.listen(0, this.tcpHost, () => {
+          this.server.off("error", reject);
+          const address = this.server.address();
+          if (!address || typeof address === "string") {
+            reject(new Error("Egress gateway did not receive a TCP port"));
+            return;
+          }
+          this.tcpPort = address.port;
+          resolveListen();
+        });
+      });
+      return;
+    }
     await mkdir(resolve(this.socketPath, ".."), { recursive: true });
     await rm(this.socketPath, { force: true });
     await new Promise<void>((resolveListen, reject) => {
@@ -122,7 +143,21 @@ export class EgressGateway {
     this.closed = true;
     this.server.closeAllConnections();
     await new Promise<void>((resolveClose) => this.server.close(() => resolveClose()));
-    await rm(this.socketPath, { force: true });
+    if (!this.tcpHost) await rm(this.socketPath, { force: true });
+  }
+
+  /** Loopback proxy URL for a TCP gateway. Only valid after `listen()`. */
+  proxyUrl(): string {
+    if (!this.tcpHost || this.tcpPort === undefined) {
+      throw new Error("This egress gateway is not listening on TCP");
+    }
+    return `http://${this.tcpHost}:${this.tcpPort}`;
+  }
+
+  /** Port allowed by the matching Seatbelt profile. */
+  proxyPort(): number {
+    if (this.tcpPort === undefined) throw new Error("TCP egress gateway is not listening");
+    return this.tcpPort;
   }
 
   /** Decide one target: allowlist first, then the resolved address class. */
@@ -247,10 +282,12 @@ function splitAuthority(authority: string): [string | undefined, string | undefi
  */
 export class EgressGatewayRegistry {
   private readonly gateways = new Map<string, Promise<EgressGateway>>();
+  private readonly tcpGateways = new Map<string, Promise<EgressGateway>>();
 
   constructor(
     private readonly dataDir: string,
     private readonly log?: EgressGatewayLog,
+    private readonly resolveAddresses?: EgressAddressResolver,
   ) {}
 
   socketPath(revision: string): string {
@@ -265,7 +302,10 @@ export class EgressGatewayRegistry {
     let gateway = this.gateways.get(access.revision);
     if (!gateway) {
       gateway = (async () => {
-        const started = new EgressGateway(access, this.socketPath(access.revision), { log: this.log });
+        const started = new EgressGateway(access, this.socketPath(access.revision), {
+          log: this.log,
+          resolveAddresses: this.resolveAddresses,
+        });
         await started.listen();
         return started;
       })();
@@ -275,9 +315,32 @@ export class EgressGatewayRegistry {
     return gateway;
   }
 
+  /** Start (or reuse) a runner-owned loopback proxy for macOS Seatbelt. */
+  acquireTcp(access: SandboxNetworkAccess): Promise<EgressGateway> {
+    if (access.mode !== "domain-allowlist") {
+      throw new Error("Only domain-allowlist policies need an egress gateway");
+    }
+    let gateway = this.tcpGateways.get(access.revision);
+    if (!gateway) {
+      gateway = (async () => {
+        const started = new EgressGateway(access, "", {
+          log: this.log,
+          resolveAddresses: this.resolveAddresses,
+          tcpHost: "127.0.0.1",
+        });
+        await started.listen();
+        return started;
+      })();
+      this.tcpGateways.set(access.revision, gateway);
+      void gateway.catch(() => this.tcpGateways.delete(access.revision));
+    }
+    return gateway;
+  }
+
   async close(): Promise<void> {
-    const gateways = [...this.gateways.values()];
+    const gateways = [...this.gateways.values(), ...this.tcpGateways.values()];
     this.gateways.clear();
+    this.tcpGateways.clear();
     await Promise.all(gateways.map(async (gateway) => {
       await gateway.then((started) => started.close()).catch(() => undefined);
     }));

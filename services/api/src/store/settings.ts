@@ -15,6 +15,7 @@
 import {
   DEFAULT_MEMORY_GRAPH_SETTINGS,
   DEFAULT_WEB_SETTINGS,
+  type EnabledSkillLibrary,
   FREE_SEARCH_ORDER,
   isSkillSelectionMode,
   migrateLegacyWebSettings,
@@ -57,6 +58,7 @@ export function knownConnectorIdSet(): ReadonlySet<string> {
 
 export const RUNTIME_SETTINGS_FIELDS = [
   "enabledConnectorIds",
+  "enabledSkillLibraries",
   "enabledSkillIds",
   "modelId",
   "reviewModelId",
@@ -85,6 +87,55 @@ function normalizeStringArray(
     throw new Error(`${field} contains an unknown value`);
   }
   return [...new Set(value.filter((item): item is string => typeof item === "string" && allowed.has(item)))];
+}
+
+function normalizeEnabledSkillLibraries(value: unknown, strict: boolean): EnabledSkillLibrary[] | undefined {
+  if (!Array.isArray(value)) {
+    if (strict) throw new Error("enabledSkillLibraries must be an array");
+    return undefined;
+  }
+  const normalized: EnabledSkillLibrary[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.libraryId !== "string") {
+      if (strict) throw new Error("enabledSkillLibraries entries require libraryId");
+      continue;
+    }
+    const libraryId = item.libraryId.trim();
+    const versionId = typeof item.versionId === "string" ? item.versionId.trim() : undefined;
+    if (!libraryId || (versionId !== undefined && !versionId)) {
+      if (strict) throw new Error("enabledSkillLibraries entries require non-empty ids");
+      continue;
+    }
+    const priority = typeof item.priority === "number" ? item.priority : undefined;
+    if (item.priority !== undefined && typeof item.priority !== "number") {
+      if (strict) throw new Error("enabledSkillLibraries priority must be an integer");
+      continue;
+    }
+    if (priority !== undefined && (!Number.isSafeInteger(priority) || Math.abs(priority) > 1_000_000)) {
+      if (strict) throw new Error("enabledSkillLibraries priority must be an integer");
+      continue;
+    }
+    const limit = typeof item.limit === "number" ? item.limit : undefined;
+    if (item.limit !== undefined && typeof item.limit !== "number") {
+      if (strict) throw new Error("enabledSkillLibraries limit must be between 1 and 100");
+      continue;
+    }
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)) {
+      if (strict) throw new Error("enabledSkillLibraries limit must be between 1 and 100");
+      continue;
+    }
+    const key = `${libraryId}\0${versionId ?? "head"}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({
+      libraryId,
+      ...(limit === undefined ? {} : { limit }),
+      ...(priority === undefined ? {} : { priority }),
+      ...(versionId === undefined ? {} : { versionId }),
+    });
+  }
+  return normalized;
 }
 
 export function normalizeRuntimeSettings(
@@ -120,6 +171,10 @@ export function normalizeRuntimeSettings(
       strict,
     );
     if (skills) normalized.enabledSkillIds = skills;
+  }
+  if (hasOwn(value, "enabledSkillLibraries")) {
+    const libraries = normalizeEnabledSkillLibraries(value.enabledSkillLibraries, strict);
+    if (libraries) normalized.enabledSkillLibraries = libraries;
   }
   for (const field of ["modelId", "reviewModelId"] as const) {
     if (!hasOwn(value, field)) continue;

@@ -61,6 +61,21 @@
 .artifact-tree-directory[open] > summary .artifact-tree-chevron { transform: rotate(90deg); }
 .artifact-tree-directory > .artifact-tree { margin-left: 12px; border-left: 1px solid var(--border); padding-left: 2px; }
 .artifact-tree-file { grid-template-columns: 14px 14px minmax(0, 1fr); border: 0; background: transparent; padding: 0 7px; text-align: left; cursor: pointer; }
+.artifact-tree-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 50px; min-width: 0; min-height: 30px; align-items: center; }
+.artifact-tree-file-row:hover { background: var(--surface-hover); }
+.artifact-tree-file-row > .artifact-tree-file { min-width: 0; }
+.artifact-tree-file-row > .artifact-tree-file:hover { background: transparent; }
+.artifact-tree-actions { display: grid; grid-template-columns: 48px; align-items: center; gap: 2px; padding-right: 2px; }
+.artifact-tree-action { height: 26px; display: inline-grid; place-items: center; border: 0; border-radius: 5px; background: transparent; padding: 0; color: var(--text-faint); cursor: pointer; font-size: 11px; font-weight: 700; line-height: 1; white-space: nowrap; }
+.artifact-tree-action:hover:not(:disabled) { background: var(--surface-track); color: var(--text-heading); }
+.artifact-tree-action:disabled { cursor: not-allowed; opacity: .45; }
+.artifact-delete-action.armed { background: var(--danger-soft); color: var(--danger); }
+.artifact-delete-action.armed:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+@media (hover: hover) and (pointer: fine) {
+  .artifact-tree-actions { opacity: 0; pointer-events: none; transition: opacity var(--motion-fast); }
+  .artifact-tree-file-row:hover .artifact-tree-actions,
+  .artifact-tree-file-row:focus-within .artifact-tree-actions { opacity: 1; pointer-events: auto; }
+}
 .artifact-tree-file.selection-mode { grid-template-columns: 16px 14px minmax(0, 1fr); }
 .artifact-tree-file.selection-mode.selected { background: var(--accent-soft); color: var(--text-heading); }
 .artifact-tree-selection-control { width: 16px; height: 16px; display: grid; place-items: center; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--surface); padding: 0; color: var(--accent-ink); cursor: pointer; font-size: 10px; font-weight: 800; line-height: 1; }

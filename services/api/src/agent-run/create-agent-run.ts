@@ -14,11 +14,14 @@
 
 import type {
   AgentEvent,
+  AgentHistoryMessage,
   AgentProfile,
   AgentRunInput,
   AgentRunResult,
 } from "@sciencediscovery/orchestration";
-import type { WorkspaceAgentOptions } from "@sciencediscovery/context";
+import type { ContextContributorFactory } from "@sciencediscovery/context";
+import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
+import type { PlanRepository } from "@sciencediscovery/plan-mode";
 
 import {
   createNativeAgent,
@@ -29,7 +32,10 @@ import {
 export interface AgentRunBindings {
   abortSignal?: AbortSignal;
   createAgent?: (options: NativeAgentOptions) => NativeAgentHandle;
+  contextContributorFactories?: readonly ContextContributorFactory<AgentHistoryMessage>[];
+  initialExecutionMode?: string;
   observer?: (event: AgentEvent) => void;
+  planRepository?: PlanRepository;
   runIdleTimeoutMs?: number;
   workspace: WorkspaceAgentOptions;
 }
@@ -48,6 +54,14 @@ export function createAgentRun(
   const gatewayHistory = structuredClone(input.history);
   const agent = (bindings.createAgent ?? createNativeAgent)({
     ...bindings.workspace,
+    ...(bindings.planRepository ? { planRepository: bindings.planRepository } : {}),
+    ...(bindings.contextContributorFactories?.length
+      ? { contextContributorFactories: bindings.contextContributorFactories }
+      : {}),
+    ...(bindings.initialExecutionMode ? { initialExecutionMode: bindings.initialExecutionMode } : {}),
+    contextScope: profile.resources.presetId?.startsWith("reviewer-specialist-")
+      ? "reviewer"
+      : profile.kind,
     enabledConnectorIds: profile.resources.connectorIds as WorkspaceAgentOptions["enabledConnectorIds"],
     gatewayHistory,
     ...(bindings.runIdleTimeoutMs !== undefined

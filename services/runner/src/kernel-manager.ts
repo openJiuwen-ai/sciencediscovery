@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { open } from "node:fs/promises";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 import {
@@ -33,16 +33,18 @@ import {
   DEFAULT_MAX_WORKSPACE_BYTES,
   RESOURCE_LIMIT_MODE,
   RUNNER_VERSION,
-  buildSandboxLaunch,
-  sandboxLaunchProfile,
   environmentPrefixBindArguments,
+  executorSandboxKind,
   executionTimeoutMs,
   hostInterpreterMaskArguments,
   hostRuntimeSupportArguments,
   prepareSandboxEgress,
+  prepareSandboxLaunch,
   resolveProfileChdir,
   resolveQuotaBytes,
   seccompVariantFor,
+  sandboxCommandPath,
+  spawnSandboxProcess,
   truncateToBudget,
   validatedWorkspace,
   workspaceBindArguments,
@@ -52,7 +54,6 @@ import {
   workspaceUsageBytes,
   type SandboxLaunch,
 } from "./executor.js";
-import { ensureSeccompFilter } from "./seccomp.js";
 import { agentExecutionKey, KeyedTaskQueue } from "./agent-execution.js";
 import type { SessionEnvProfile } from "./session-env-profile.js";
 const PYTHON_KERNEL_WORKER = String.raw`
@@ -235,6 +236,7 @@ class ManagedKernel {
     this.session.status = "stopped";
     this.failPending(new Error(reason));
     this.child.kill("SIGKILL");
+    await this.launch.cleanup?.().catch(() => undefined);
   }
 
   private armIdleTimer(): NodeJS.Timeout | undefined {
@@ -260,11 +262,14 @@ class ManagedKernel {
     this.session.status = "stopped";
     this.failPending(new Error(reason));
     this.onUnexpectedExit(this, reason);
+    void this.launch.cleanup?.().catch(() => undefined);
   }
 }
 
 export interface KernelManagerConfig {
   bwrapPath: string;
+  sandboxProvider?: "bubblewrap" | "seatbelt";
+  seatbeltPath?: string;
   dataDir: string;
   /** Wall-clock limit for a single evaluation inside a kernel. */
   execTimeoutMs: number;
@@ -442,11 +447,13 @@ export class KernelManager {
       networkAccessRevision: networkAccess.revision,
       networkPolicy: networkAccess.mode,
       runnerVersion: RUNNER_VERSION,
-      sandbox: "bubblewrap",
+      sandbox: executorSandboxKind(this.config),
       startedAt,
       stderr: response.stderr,
       stdout: response.stdout,
-      workingDirectory: response.cwd ?? kernel.launch.chdir,
+      workingDirectory: response.cwd
+        ? (kernel.launch.toLogicalPath?.(response.cwd) ?? response.cwd)
+        : kernel.launch.chdir,
     };
   }
 
@@ -516,11 +523,8 @@ export class KernelManager {
     networkAccess: SandboxNetworkAccess,
   ): Promise<ManagedKernel> {
     const id = `kernel-${randomUUID()}`;
-    const filter = await open(
-      await ensureSeccompFilter(this.config.dataDir, seccompVariantFor(networkAccess)),
-      "r",
-    );
-    const interpreter = `/opt/science-env/bin/${language === "python" ? "python" : "R"}`;
+    const linuxInterpreter = `/opt/science-env/bin/${language === "python" ? "python" : "R"}`;
+    const hostInterpreter = resolve(prefixPath, "bin", language === "python" ? "python" : "R");
     const worker = language === "python" ? PYTHON_KERNEL_WORKER : R_KERNEL_WORKER;
     const hostInterpreterMasks = await hostInterpreterMaskArguments();
     const hostRuntimeSupport = await hostRuntimeSupportArguments();
@@ -530,32 +534,31 @@ export class KernelManager {
       request.agentId,
       request.permissionEpoch.id,
     );
-    const launch = buildSandboxLaunch({
+    const sandbox = executorSandboxKind(this.config);
+    const launch = await prepareSandboxLaunch(this.config, {
       chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-      ...await sandboxLaunchProfile(this.config.bwrapPath),
-      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways),
+      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox),
       environmentBinds: environmentPrefixBindArguments(prefixPath),
+      environmentPaths: [prefixPath],
       envProfile,
       hostInterpreterMasks,
       hostRuntimeSupport,
       language,
-      pathEnv: "/opt/science-env/bin:/usr/bin",
+      pathEnv: sandbox === "seatbelt" ? `${resolve(prefixPath, "bin")}:/usr/bin:/bin` : "/opt/science-env/bin:/usr/bin",
+      readOnlyWorkspaceRoot,
       workspaceBindArgs: workspaceBinds.args,
+      workspaceRoot,
     });
-    const bwrapArguments = [
-      ...launch.args,
-      ...launch.commandPrefix,
-      interpreter,
+    const commandArguments = [
+      sandboxCommandPath(launch, linuxInterpreter, hostInterpreter),
       ...(language === "python" ? ["-I", "-u", "-c", worker] : ["--vanilla", "--slave", "-e", worker]),
     ];
-    let child;
-    try {
-      child = spawn(this.config.bwrapPath, bwrapArguments, { stdio: ["pipe", "pipe", "pipe", filter.fd] });
-    } catch (error) {
-      await filter.close();
-      throw error;
-    }
-    await filter.close();
+    const child = await spawnSandboxProcess(
+      this.config,
+      launch,
+      commandArguments,
+      seccompVariantFor(networkAccess),
+    );
     if (!child.stdin || !child.stdout || !child.stderr) {
       child.kill("SIGKILL");
       throw new Error("Runner failed to create persistent kernel streams");

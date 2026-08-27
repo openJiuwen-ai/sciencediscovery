@@ -28,6 +28,7 @@ export interface CreatePromptManifestOptions {
   startedAt: string;
   systemPrompt: string;
   systemPromptVersion: string;
+  skillLibraryRefs?: PromptManifest["skillLibraryRefs"];
   skillRefs: PromptManifest["skillRefs"];
   specialistRef?: PromptManifest["specialistRef"];
   turnId: string;
@@ -72,6 +73,7 @@ export async function createPromptManifest(options: CreatePromptManifestOptions)
     ...(response ? { response } : {}),
     runtimeSettings: structuredClone(options.runtimeSettings),
     sessionId: options.sessionId,
+    ...(options.skillLibraryRefs ? { skillLibraryRefs: structuredClone(options.skillLibraryRefs) } : {}),
     skillRefs: options.skillRefs,
     ...(options.specialistRef ? { specialistRef: structuredClone(options.specialistRef) } : {}),
     status: options.error === undefined ? "succeeded" : "failed",

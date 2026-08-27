@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import type { ContextContributorFactory } from "@sciencediscovery/context";
 import type { AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 
 import {
@@ -29,7 +30,7 @@ import {
 } from "./index.js";
 import type { ModelTurn, WireToolSpec } from "@sciencediscovery/model";
 
-function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" | "executePython" | "executeShell" | "sessionId" | "workspaceRoot"> {
+function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" | "executePython" | "executeShell" | "initialExecutionMode" | "sessionId" | "workspaceRoot"> {
   const root = mkdtempSync(join(tmpdir(), "native-agent-"));
   writeFileSync(join(root, "readme.md"), "hello");
   return {
@@ -37,6 +38,7 @@ function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" 
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not called"); },
     executeShell: async () => { throw new Error("not called"); },
+    initialExecutionMode: "direct",
     sessionId: "session-1",
     workspaceRoot: root,
   };
@@ -113,6 +115,289 @@ test("loop streams a tool round trip and returns wire-format final messages", as
     // The second model call saw the tool result in history.
     assert.equal(calls.length, 2);
     assert.equal(calls[1]!.history.at(-1)?.role, "tool");
+  } finally {
+    restore();
+  }
+});
+
+test("an unconfigured run exposes only mode activation before direct tools", async () => {
+  const { calls, streamer } = scriptStreamer([
+    (call) => {
+      assert.deepEqual(call.tools.map((tool) => tool.name), ["activate_execution_mode"]);
+      return toolTurn("activate_execution_mode", { modeId: "direct" });
+    },
+    (call) => {
+      assert.ok(call.tools.some((tool) => tool.name === "list_files"));
+      return toolTurn("list_files", { path: "." });
+    },
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const options = workspace() as NativeAgentOptions;
+    delete options.initialExecutionMode;
+    const agent = createNativeAgent(options);
+    await agent.execute("list files");
+    assert.equal(calls.length, 3);
+  } finally {
+    restore();
+  }
+});
+
+test("Plan Mode exposes lifecycle and execution tools after activation", async () => {
+  let plan: import("@sciencediscovery/schema").SessionPlan | undefined;
+  const options = workspace() as NativeAgentOptions;
+  delete options.initialExecutionMode;
+  options.planRepository = {
+    async abandon() { throw new Error("not called"); },
+    async latest() { return plan && structuredClone(plan); },
+    async propose(input) {
+      plan = {
+        caveats: input.caveats ?? [], createdAt: "now", feasibilityConfidence: input.feasibilityConfidence,
+        id: "plan-1", mode: "recorded", runId: "run-1", scope: input.scope, sessionId: "session-1",
+        state: "recorded", steps: input.steps.map((description, index) => ({ description, id: `step-${index}`, status: "pending" })),
+        updatedAt: "now", version: 1,
+      };
+      return structuredClone(plan);
+    },
+    async revise() { throw new Error("not called"); },
+    async updateStep() { throw new Error("not called"); },
+  };
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("activate_execution_mode", { modeId: "plan" }),
+    (call) => {
+      assert.ok(call.tools.some((tool) => tool.name === "propose_plan"));
+      assert.ok(call.tools.some((tool) => tool.name === "list_files"));
+      return toolTurn("propose_plan", { feasibilityConfidence: "high", scope: "Inspect files", steps: ["List files"] });
+    },
+    (call) => {
+      assert.match(call.systemPrompt + call.history.map((message) => String(message.content ?? "")).join("\n"), /Inspect files/u);
+      return textTurn("planned");
+    },
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    await createNativeAgent(options).execute("plan the inspection");
+    assert.equal(calls[0]?.tools.some((tool) => tool.name === "propose_plan"), false);
+    assert.equal(plan?.scope, "Inspect files");
+  } finally {
+    restore();
+  }
+});
+
+test("main-agent model turns receive one stable workspace and run-contract prompt", async () => {
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("list_files", { path: "." }),
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      runContract: "Compare the supplied evidence without changing the requested scope.",
+    } as NativeAgentOptions);
+    await agent.execute("inspect the workspace");
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]!.systemPrompt, calls[1]!.systemPrompt);
+    assert.match(calls[0]!.systemPrompt, /You are a local science analysis agent/);
+    assert.match(calls[0]!.systemPrompt, /<run_contract>/);
+    assert.match(calls[0]!.systemPrompt, /Compare the supplied evidence without changing the requested scope/);
+    assert.ok(
+      calls[0]!.systemPrompt.indexOf("You are a local science analysis agent") < calls[0]!.systemPrompt.indexOf("<run_contract>"),
+      "workspace instructions must precede the immutable run contract",
+    );
+    assert.ok(calls[0]!.tools.some((tool) => tool.name === "list_files"));
+    assert.equal(calls[1]!.history.at(-1)?.role, "tool");
+  } finally {
+    restore();
+  }
+});
+
+test("dynamic context mode is wired into model input without an external worker", async () => {
+  const { calls, streamer } = scriptStreamer([() => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "dynamic",
+    } as NativeAgentOptions);
+    await agent.execute("inspect");
+    assert.match(calls[0]!.systemPrompt, /You are a local science analysis agent/u);
+  } finally {
+    restore();
+  }
+});
+
+test("capability-package contributor factories are scoped and included without editing NativeAgent", async () => {
+  const { calls, streamer } = scriptStreamer([() => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  const factoryCalls: Array<{ contextId: string; scope: string }> = [];
+  const factory: ContextContributorFactory<AgentHistoryMessage> = {
+    id: "memory.dynamic-context",
+    create(request) {
+      factoryCalls.push(request);
+      return {
+        id: "memory.run-snapshot",
+        scopes: [request.scope],
+        async contribute() {
+          return { systemSections: [{ content: "Package-owned memory snapshot", id: "memory.run-snapshot", slot: "working_context" }] };
+        },
+      };
+    },
+  };
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "dynamic",
+      contextContributorFactories: [factory],
+      contextScope: "subagent",
+    } as NativeAgentOptions);
+    await agent.execute("inspect");
+    assert.equal(factoryCalls.length, 1);
+    assert.match(factoryCalls[0]?.contextId ?? "", /^session-1:/u);
+    assert.equal(factoryCalls[0]?.scope, "subagent");
+    assert.match(calls[0]!.systemPrompt, /Package-owned memory snapshot/u);
+  } finally {
+    restore();
+  }
+});
+
+test("shadow context mode runs native assembly but sends byte-compatible legacy prompt", async () => {
+  let contributions = 0;
+  const { calls, streamer } = scriptStreamer([() => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "shadow",
+      contextContributorFactories: [{
+        id: "shadow.probe",
+        create: ({ scope }) => ({
+          id: "shadow.probe",
+          scopes: [scope],
+          async contribute() {
+            contributions += 1;
+            return { systemSections: [{ content: "shadow-only", id: "shadow.probe", slot: "working_context" }] };
+          },
+        }),
+      }],
+    } as NativeAgentOptions);
+    await agent.execute("inspect");
+    assert.equal(contributions, 1);
+    assert.doesNotMatch(calls[0]!.systemPrompt, /shadow-only/u);
+    assert.match(calls[0]!.systemPrompt, /You are a local science analysis agent/u);
+  } finally {
+    restore();
+  }
+});
+
+test("dynamic context keeps one Skill body and adds a durable lower-authority reference", async () => {
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("read_skill", { skillId: "literature-review" }),
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "dynamic",
+      skills: [{
+        content: "Follow the frozen literature workflow.",
+        description: "Review scientific literature",
+        hash: "a".repeat(64),
+        id: "literature-review",
+        readResource: async () => { throw new Error("not called"); },
+        resources: [],
+        revision: 1,
+        version: "1.0.0",
+      }],
+    } as NativeAgentOptions);
+    await agent.execute("review the literature");
+    assert.doesNotMatch(calls[0]!.systemPrompt, /<loaded_skill/u);
+    assert.doesNotMatch(calls[1]!.systemPrompt, /<loaded_skill/u);
+    assert.doesNotMatch(calls[1]!.systemPrompt, /Follow the frozen literature workflow/u);
+    const historyText = calls[1]!.history.map((message) => String(message.content ?? "")).join("\n");
+    assert.equal(historyText.match(/Follow the frozen literature workflow\./gu)?.length, 1);
+    assert.match(historyText, /channel="active_skills"/u);
+    assert.match(historyText, /instructionsVisibleInHistory":true/u);
+  } finally {
+    restore();
+  }
+});
+
+test("dynamic capability assembly follows deferred tool promotion on the next turn", async () => {
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("tool_search", { query: "select:mcp__biomed__search" }),
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      contextAssemblyMode: "dynamic",
+      mcpTools: [{
+        description: "Search biomedical literature",
+        displayName: "Biomedical search",
+        execute: async () => ({ content: [], details: {}, mcpInvocationId: "inv" }),
+        inputSchema: { type: "object" },
+        name: "mcp__biomed__search",
+        routing: { keywords: [], mode: "off", priority: 0 },
+        sourceId: "biomed",
+        toolId: "search",
+      }],
+    } as NativeAgentOptions);
+    await agent.execute("find literature");
+    assert.equal(calls[0]!.tools.some((tool) => tool.name === "mcp__biomed__search"), false);
+    assert.equal(calls[1]!.tools.some((tool) => tool.name === "mcp__biomed__search"), true);
+    assert.match(calls[1]!.systemPrompt, /mcp__biomed__search/u);
+  } finally {
+    restore();
+  }
+});
+
+test("native loop loads skill-creator before creating a managed Skill", async () => {
+  let createdName = "";
+  const options: NativeAgentOptions = {
+    ...workspace(),
+    createSkill: async (input) => {
+      createdName = input.name;
+      return {
+        createdAt: "2026-08-20T00:00:00.000Z",
+        draftId: "11111111-1111-4111-8111-111111111111",
+        fileCount: 1,
+        name: input.name,
+        updatedAt: "2026-08-20T00:00:00.000Z",
+      };
+    },
+    skills: [{
+      content: "Use create_skill exactly once for an explicit request.",
+      description: "Creates Skills from user descriptions.",
+      hash: "e".repeat(64),
+      id: "skill-creator",
+      readResource: () => { throw new Error("not used"); },
+      resources: [],
+      revision: 1,
+      version: "1.0.0",
+    }],
+  } as NativeAgentOptions;
+  const { calls, streamer } = scriptStreamer([
+    () => toolTurn("read_skill", { skillId: "skill-creator" }, "call-read-creator"),
+    () => toolTurn("create_skill", {
+      description: "A focused reusable workflow.",
+      instructions: "# Workflow\n\nPerform the focused workflow.",
+      name: "focused-workflow",
+    }, "call-create-skill"),
+    () => textTurn("Created focused-workflow."),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent(options);
+    const result = await agent.execute("Create a Skill for the focused workflow");
+
+    assert(calls[0]!.tools.some((tool) => tool.name === "create_skill"));
+    assert.equal(createdName, "focused-workflow");
+    assert.equal(result.finalMessages.at(-1)?.content, "Created focused-workflow.");
   } finally {
     restore();
   }
@@ -277,6 +562,76 @@ test("beginExternalWait pauses both deadlines until released", async () => {
     }, 250);
     const result = await done;
     assert.equal(result.finalMessages.at(-1)?.content, "finished after wait");
+  } finally {
+    restore();
+  }
+});
+
+test("gateway progress cannot re-arm idle while an external wait is active", async () => {
+  let finish!: () => void;
+  let markProgress!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const streamer: ModelTurnStreamer = (_endpoint, _prompt, _history, _tools, _policy, signal, callbacks) =>
+    new Promise((resolve, reject) => {
+      markProgress = () => callbacks?.onProgress?.();
+      finish = () => resolve(textTurn("finished after external wait"));
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      markStarted();
+    });
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({ ...workspace(), runIdleTimeoutMs: 40, runTimeoutMs: 0 } as NativeAgentOptions);
+    const outcome = agent.execute("wait").then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    await started;
+    const release = agent.beginExternalWait();
+    markProgress();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    release();
+    finish();
+    const settled = await outcome;
+    if ("error" in settled) throw settled.error;
+    assert.equal(settled.result?.finalMessages.at(-1)?.content, "finished after external wait");
+  } finally {
+    restore();
+  }
+});
+
+test("one completed parallel wait cannot start parent idle while another remains", async () => {
+  let finish!: () => void;
+  let markProgress!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const streamer: ModelTurnStreamer = (_endpoint, _prompt, _history, _tools, _policy, signal, callbacks) =>
+    new Promise((resolve, reject) => {
+      markProgress = () => callbacks?.onProgress?.();
+      finish = () => resolve(textTurn("both external waits completed"));
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      markStarted();
+    });
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({ ...workspace(), runIdleTimeoutMs: 40, runTimeoutMs: 0 } as NativeAgentOptions);
+    const outcome = agent.execute("parallel waits").then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    await started;
+    const releaseFirst = agent.beginExternalWait();
+    const releaseSecond = agent.beginExternalWait();
+    releaseFirst();
+    // The first task result reaches the parent model stream while the second
+    // task is still running. This progress must not restart parent idle.
+    markProgress();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    releaseSecond();
+    finish();
+    const settled = await outcome;
+    if ("error" in settled) throw settled.error;
+    assert.equal(settled.result?.finalMessages.at(-1)?.content, "both external waits completed");
   } finally {
     restore();
   }

@@ -103,6 +103,35 @@ gitcode schema
 gitcode schema "issue create"
 ```
 
+### PR view JSON shapes
+
+`gitcode pr view` changes its top-level JSON shape when comments are requested:
+
+- `gitcode pr view N -R owner/repo --json` returns the PR object directly.
+- `gitcode pr view N -R owner/repo --comments --json` returns
+  `{ "pull_request": <PR object>, "comments": [...] }`.
+
+Do not read `.number`, `.head`, or `.labels` at the top level of the comments
+form; those fields are below `.pull_request`. Optional arrays such as `labels`
+may be `null`, so normalize them with `// []` before iterating.
+
+```bash
+# PR metadata only
+gitcode pr view N -R owner/repo --json |
+  jq '{number, title, state, head_sha: .head.sha,
+       labels: [((.labels // [])[]) | .name]}'
+
+# PR metadata and comments
+gitcode pr view N -R owner/repo --comments --json |
+  jq '{pr: (.pull_request | {number, title, state, head_sha: .head.sha}),
+       comments: [(.comments // [])[] |
+         {author: (.user.login // .author.login // .author_name),
+          body: (.body // .note // ""), created_at}]}'
+```
+
+Use `gitcode pr comments N -R owner/repo --json` when only the comment list is
+needed.
+
 For complete Issue inventories, treat `length == --limit` as “possibly truncated,” not as a final count. Fetch subsequent pages with the same filters until one returns fewer rows than the limit; combine the pages and deduplicate by `.number`. If the first page returns fewer than the explicit limit, it is complete for those filters at that retrieval time.
 
 - Line comments: `--position` = line on the **new** file (right side of diff). Inline comments appear as `comment_type: diff_comment`.

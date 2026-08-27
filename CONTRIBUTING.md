@@ -126,6 +126,96 @@ part of a default command. See [.ci/README.md](.ci/README.md) for the toolchain
 image, the per-layer Docker commands, and the tag catalog used to select cases
 (`pnpm ci:tags`, `pnpm ci:list`, `pnpm ci:run`).
 
+Two split layers exist for hosts without a working sandbox: `ci:ut:core` is
+`ci:ut` minus the `@sciencediscovery/runner` package, and `ci:ut:runner` is only
+that package.
+
+### What each pipeline covers
+
+Two test-layer pipelines run, and **neither runs everything**. GitCode
+merge-request CI is CodeArts-only; this repository intentionally has no
+`.gitcode/workflows/` Actions pipeline.
+
+| Pipeline | UT | ST | E2E | Release binaries |
+| --- | --- | --- | --- | --- |
+| GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
+| CodeArts — `.codearts/workflow/` | `ci:ut:core` | yes | — | — |
+
+CodeArts's `default` pool has the same shape. The job is a pod on a CCE
+Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
+the unprivileged user `octopus` with Docker's default capability bounding set
+and an active seccomp filter, so `unshare` and bubblewrap are refused outright;
+`sudo` is not setuid, so nothing can be installed with `dnf` either. The
+checked-in workflow therefore runs `ci:ut:core` and the hermetic `ci:st` layer.
+A sandboxed layer needs a self-hosted resource pool
+(`runs-on: [self-hosted, <pool-id>]`) on a machine that allows user namespaces.
+
+The parent CodeArts workflow also invokes the reusable code-check child defined
+in `.codearts/workflow/codearts-pipeline-code-check.yml`. That child runs SCA,
+anti-poison, static-analysis, and blacklist CloudBuild tasks whose complete
+commands remain in CodeArts; it does not write PR labels or comments. On
+merge-request runs, the parent renders one result table from the overall code
+check, UT, and ST job statuses and publishes the final PR label. Manual runs
+always execute UT/ST without modifying a PR; they run the PR-oriented child
+only when a `PR_ID` is supplied.
+
+## Repositories
+
+GitCode and GitHub host **separate repositories**, and GitCode syncs to GitHub
+periodically. They are not two remotes of one history: the same change lands
+under a different SHA on each host.
+
+| Host | Repository | Role |
+| --- | --- | --- |
+| gitcode.com | `openJiuwen/sciencediscovery` | where changes are proposed and reviewed |
+| github.com | `openJiuwen-ai/sciencediscovery` | synced mirror |
+
+Two consequences. A commit id is only meaningful alongside the host it came
+from — `refactor: move domain capabilities into packages` is `c151f58` on
+GitCode and `625d7e0` on GitHub, and neither resolves on the other. And a GitHub
+remote can look diverged when the trees are identical, so compare trees
+(`git diff --stat`) rather than SHAs before concluding that work is missing.
+
+## Opening a merge request
+
+**Run all three layers locally first.** No pipeline runs the full set, so review
+otherwise starts from a change nothing has exercised:
+
+```bash
+pnpm ci:ut     # not ci:ut:core — the sandbox tests run only here and on GitHub
+pnpm ci:st
+pnpm ci:e2e
+```
+
+`ci:ut` and `ci:e2e` need a working sandbox. Check before blaming a change:
+
+```bash
+bwrap --ro-bind / / --dev /dev true && echo sandbox ok
+```
+
+On Ubuntu 24.04 a failure here is usually the AppArmor restriction on
+unprivileged user namespaces, cleared with
+`sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0`. Inside a
+container it is normally unfixable.
+
+Then branch from an up-to-date `main`, push the branch, and open the merge
+request on GitCode. Never push to `main`; rebase rather than merge when it
+moves, so the diff stays readable.
+
+```bash
+git fetch origin && git checkout -b <type>/<short-topic> origin/main
+git push -u origin <branch>
+gitcode pr create -R openJiuwen/sciencediscovery \
+  --head <branch> --base main --title "<type>: <what changed>" --body-file <file>
+```
+
+State in the body what was verified, with the numbers each layer reported.
+"Tests pass" is not reviewable. If the change cannot pass a layer, say which and
+why — do not weaken an assertion to get a green run.
+
+Check `git status` before committing: no `.tmp/`, no local editor or tooling
+config, no private notes.
+
 ## License headers
 
 Every source file starts with the Apache-2.0 header below, written in that

@@ -140,6 +140,8 @@
 .global-search-dialog,
 .skill-editor-dialog,
 .skill-delete-dialog,
+.skill-review-dialog,
+.skill-workspace-dialog,
 .memory-explorer-panel {
   border: 1px solid var(--border);
   border-radius: var(--radius-l);

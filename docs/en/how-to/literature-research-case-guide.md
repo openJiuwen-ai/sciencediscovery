@@ -92,9 +92,10 @@ To create a skill, use any of the following under **System configuration → Ski
 | Method | Operation |
 |---|---|
 | Manual | Add a skill-package directory directly in the manager and fill in `SKILL.md` and the required fields (`name` must be lowercase-hyphenated and match the directory name; `description` must be non-empty) |
+| Agent-created | Explicitly describe the Skill in chat. The Agent loads `skill-creator` and submits a complete inactive draft with `create_skill`; review files and the previous-revision diff in Settings > Skills, then confirm it. Selected mode must explicitly enable the confirmed Skill |
 | Natural-language draft | Describe the workflow in natural language; the manager generates a reviewable draft that is then landed as a skill package |
 | Distill from the current session | Distill a skill draft from the session history and add it to the skill library after review |
-| Local import | Import from a local `SKILL.md` file or a ZIP package; ZIPs are checked for path traversal, symlinks, encryption, duplicates, and size/file-count limits |
+| Local import | Import a local skill folder, `SKILL.md` file, or ZIP package; folder selection preserves relative paths and packages them before import, while ZIPs are checked for path traversal, symlinks, encryption, duplicates, and size/file-count limits |
 | Git repository import | Import from an HTTPS or SSH repository URL (a ref or subdirectory may be specified); credentials are read only from the local credential helper or SSH config and never appear in the repository URL or model context |
 
 ![Skill settings](../../images/skill.png)

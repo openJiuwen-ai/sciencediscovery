@@ -39,6 +39,7 @@ import { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
 import { recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
+import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
 import { NativeWebProviderClient, WebBroker } from "@sciencediscovery/data-source";
@@ -313,6 +314,7 @@ export type PlatformServices = ReturnType<typeof createPlatformServices>;
 export async function initializePlatformServices(
   services: PlatformServices,
   config: ServerConfig,
+  skillLibraryCatalog: SkillLibraryCatalog,
 ): Promise<void> {
   const {
     artifactManager,
@@ -382,6 +384,7 @@ export async function initializePlatformServices(
         paperService,
         remoteCompute,
         skillCatalog,
+        skillLibraryCatalog,
         memoryGraphSink,
         session.id,
         config,

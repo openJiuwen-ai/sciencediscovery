@@ -85,6 +85,50 @@ export function EnvironmentSourceSettingsEditor({
   </>;
 }
 
+function setupStateLabel(state: ScientificEnvironmentSetup["state"]): string {
+  if (state === "ready") return "Ready";
+  if (state === "installing") return "Installing";
+  if (state === "failed") return "Failed";
+  if (state === "disabled") return "Disabled";
+  return "Not configured";
+}
+
+export function EnvironmentSetupStatus({ setup }: { setup: ScientificEnvironmentSetup }) {
+  const cards = [
+    {
+      detail: setup.provisioner
+        ? setup.provisionerVersion ? `micromamba ${setup.provisionerVersion}` : setup.provisioner
+        : "Standalone environment provisioner",
+      key: "micromamba" as const,
+      label: "micromamba bootstrap",
+    },
+    {
+      detail: setup.networkPolicy === "offline-cache"
+        ? "Python base and named environments · configured offline cache"
+        : `Python base and named environments · channels: ${setup.allowedChannels.join(", ") || "none"}`,
+      key: "conda" as const,
+      label: "Conda environments",
+    },
+  ];
+  return <div className={`environment-setup-state environment-setup-components ${setup.state}`}>
+    {cards.map((card) => {
+      const status = setup.components[card.key];
+      return <article className={`environment-setup-component ${status.state}`} key={card.key}>
+        <header><span><strong>{card.label}</strong><small>{card.detail}</small></span><em>{setupStateLabel(status.state)}</em></header>
+        <p>{status.message} · Phase: {status.phase}.</p>
+        {status.error ? <div className="environment-error"><strong>Reported error</strong><span>{status.error}</span>{status.action ? <small>{status.action}</small> : null}</div> : null}
+      </article>;
+    })}
+  </div>;
+}
+
+export function environmentSetupActionLabel(setup: ScientificEnvironmentSetup, busy: boolean): string {
+  if (setup.state === "installing" || busy) return "Installing scientific environment components…";
+  if (setup.components.micromamba.state === "failed") return "Retry micromamba setup";
+  if (setup.components.conda.state === "failed") return "Retry Conda environment setup";
+  return "Install micromamba and Python base";
+}
+
 export function EnvironmentManager({ client, onError }: { client: ApiClient; onError: (message: string) => void }) {
   const [setup, setSetup] = useState<ScientificEnvironmentSetup>();
   const [environments, setEnvironments] = useState<Environment[]>([]);
@@ -203,20 +247,14 @@ export function EnvironmentManager({ client, onError }: { client: ApiClient; onE
       savedSettings={sourceSettings}
     />
 
-    <div className={`environment-setup-state ${setup.state}`}>
-      <div><strong>{setup.state === "ready" ? "Ready" : setup.state === "installing" ? "Installing" : setup.state === "failed" ? "Setup failed" : setup.state === "disabled" ? "Disabled" : "Not configured"}</strong>
-        <small>{setup.message} · Phase: {setup.phase}. {setup.networkPolicy === "offline-cache" ? "Provisioning uses the configured offline cache." : `Provisioning can fetch only through the configured channel arguments: ${setup.allowedChannels.join(", ")}.`} Agent execution remains offline.</small>
-      </div>
-      {setup.provisioner ? <span>{setup.provisionerVersion ? `micromamba ${setup.provisionerVersion}` : setup.provisioner}</span> : null}
-    </div>
-    {setup.error ? <p className="environment-error">{setup.error}</p> : null}
+    <EnvironmentSetupStatus setup={setup} />
 
     {setup.state !== "ready" ? <>
       <div className="environment-starter-plan">
         <div><strong>Python base</strong><small>{setup.starterPackages.python.join(" · ")}</small></div>
       </div>
       <button className="primary-button" disabled={busy || setup.state === "disabled" || setup.state === "installing"} type="button" onClick={() => void run(async () => { setSetup(await client.setupScientificEnvironments()); })}>
-        {setup.state === "installing" || busy ? "Installing managed Python environment…" : setup.state === "failed" ? "Retry Python environment setup" : "Install managed Python environment"}
+        {environmentSetupActionLabel(setup, busy)}
       </button>
       <p className="config-note">Startup begins this work in the background. It downloads the pinned standalone provisioner into the application data directory and creates only the Python base. Creating an R environment later installs the R base on demand. System Python, R, conda, and shell configuration are unchanged.</p>
     </> : <>

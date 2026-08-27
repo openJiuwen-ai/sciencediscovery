@@ -17,14 +17,15 @@ import type { ComposerReferenceKind } from "./session.js";
 
 export type MemoryGraphNodeLabel =
   | "ResearchGoal"
-  | "SubTask"
+  | "Task"
+  | "ToolCall"
   | "Paper"
   | "Evidence"
   | "Claim"
   | "Code"
   | "Artifact"
   /** One `/evolve` search: run-level identity and aggregates. A resumed run is a
-   * second SubTask pointing at the same SearchRun. */
+   * second ToolCall pointing at the same SearchRun. */
   | "SearchRun"
   /** One candidate, including a failed one. Excluded from the session subgraph —
    * hundreds of them would crowd out the nodes a session is actually about. */
@@ -44,6 +45,13 @@ export type MemoryGraphNodeLabel =
  * read to that Code (Artifact → Code), symmetric to `produces`
  * (Code → Artifact); together they form the derived-from chain `input
  * Artifact -[:input]-> Code -[:produces]-> output Artifact`.
+ * `contains` links a subagent scope (Task, task_type=subagent) to its *first*
+ * internal child ToolCall (scope → first child — the entry point into the
+ * scope's internal run). The remaining child ToolCalls are linked to each
+ * other by `next` in seq order (first → second → …), so a scope's internal
+ * run reads as an ordered chain rather than a star. Not written by the MVP
+ * mirror; lands with the subagent write chain (PR1) and is surfaced read-side
+ * in PR2.
  */
 
 export type MemoryGraphEdgeType =
@@ -54,7 +62,8 @@ export type MemoryGraphEdgeType =
   | "stated_in"
   | "supersedes"
   | "input"
-  /** SubTask -> SearchRun: the binding between one step of work and the search
+  | "contains"
+  /** ToolCall -> SearchRun: the binding between one step of work and the search
    * graph it produced. */
   | "searches"
   /** SearchRun -> SearchNode: the seed (baseline) candidate. */
@@ -74,7 +83,7 @@ export interface MemoryGraphNode {
   label: MemoryGraphNodeLabel;
   id: string;
   sessionId?: string;
-  /** Label-specific fields. Paper: { link, title, identifier, identifier_type, year?, authors?, abstract?, source, retrieved_at, retrieval_count, created_at }. SubTask: { task_id, session_id, status, task_type, source?, tool_type?, result_count?, finished_at, created_at, turn_id? }. Code/Artifact: as persisted by their upsert path. ResearchGoal: { goal_id, core_objective, domain, topic_scope?, created_at }. */
+  /** Label-specific fields. Paper: { link, title, identifier, identifier_type, year?, authors?, abstract?, source, retrieved_at, retrieval_count, created_at }. Task (subagent scope): { task_id, session_id, status, task_type:"subagent", subagent_type?, objective?, summary?, failure_reason?, seq, created_at, finished_at?, turn_id? }. ToolCall (code_execution/literature_search/etc.): { task_id, session_id, status, task_type, parent_subtask_id?, source?, tool_type?, result_count?, finished_at, created_at, turn_id?, seq }. Code/Artifact: as persisted by their upsert path. ResearchGoal: { goal_id, core_objective, domain, topic_scope?, created_at }. */
   extra?: Record<string, unknown>;
   createdAt?: string;
 }
@@ -164,7 +173,7 @@ export interface MemoryGraphTraceNode {
   id: string;
   excerpt: string;
   /** 该节点正文内容的 CAS hash(Artifact: content_hash; Code: code_hash)。
-   * 无正文 hash 的 label(SubTask/ResearchGoal/…) 省略此字段。 */
+   * 无正文 hash 的 label(Task/ToolCall/ResearchGoal/…) 省略此字段。 */
   contentHash?: string;
 }
 

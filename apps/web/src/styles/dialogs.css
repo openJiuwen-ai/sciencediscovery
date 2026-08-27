@@ -103,9 +103,18 @@
 .model-list-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 26px 0 10px; color: var(--text-secondary); font-size: 13px; font-weight: 700; }
 .model-list-header button { flex: 0 0 auto; }
 .model-list { display: grid; gap: 7px; max-height: 250px; overflow-y: auto; margin-bottom: 24px; }
-.model-card { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 13px; color: var(--muted); text-align: left; cursor: pointer; }
+.model-card { display: grid; grid-template-columns: minmax(0, 1fr) 112px 28px; align-items: center; gap: 4px; padding: 0 8px 0 13px; color: var(--muted); text-align: left; }
 .model-card:hover, .model-card.active { border-color: var(--accent-border); background: var(--accent-soft); }
 .model-card.active { box-shadow: inset 3px 0 var(--accent); }
+.model-card-main { min-width: 0; height: 100%; display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: center; gap: 11px; border: 0; background: transparent; padding: 0; color: inherit; text-align: left; cursor: pointer; }
+.model-card-open { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; padding: 0; color: var(--text-faint); cursor: pointer; }
+.model-card-open:hover { background: var(--surface-hover); color: var(--text-heading); }
+.model-test-button { width: 112px; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; overflow: hidden; border: 0; border-radius: 6px; background: transparent; padding: 4px 6px; color: var(--accent-strong); cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.model-test-button:hover:not(:disabled) { background: var(--accent-softer); }
+.model-test-button.testing { color: var(--muted); cursor: wait; }
+.model-test-button.success { color: var(--success); }
+.model-test-button.failure { color: var(--danger); }
+.model-test-button:disabled:not(.testing) { color: var(--text-faint); opacity: .8; }
 .model-card strong, .model-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-card strong { color: var(--text-heading); font-size: 14px; }
 .model-card small { margin-top: 4px; color: var(--muted); font-size: 12px; }

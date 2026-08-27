@@ -19,7 +19,7 @@ import type { ArtifactReviewRun, RunStreamEvent } from "@sciencediscovery/schema
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { reduceRunTimeline, RunTimeline, type RunTimelineEntry } from "../src/RunTimeline.js";
+import { reduceRunTimeline, RunTimeline, skillDraftNameFromTrace, type RunTimelineEntry } from "../src/RunTimeline.js";
 
 function apply(events: RunStreamEvent[]): RunTimelineEntry[] {
   return events.reduce(reduceRunTimeline, [] as RunTimelineEntry[]);
@@ -561,4 +561,40 @@ test("structured tool arguments render as raw input text without a JSON wrapper"
   assert.match(html, />print\(6 \* 7\)<\/pre>/);
   assert.doesNotMatch(html, /&quot;code&quot;/);
   assert.match(html, /Loading the full result…/);
+});
+
+test("completed create_skill calls expose a visible review shortcut in the conversation", () => {
+  const entries = apply([
+    { trace: { id: "tool-1", name: "create_skill", status: "running" }, type: "tool.started" },
+    { trace: { id: "tool-1", name: "create_skill", status: "completed", summary: "Draft created" }, type: "tool.completed" },
+    { delta: "The Skill draft is ready.", type: "assistant.delta" },
+  ]);
+  const html = renderToStaticMarkup(createElement(RunTimeline, {
+    entries,
+    footer: createElement("small", null, "Usage summary"),
+    isRunning: false,
+    onOpenSkillReviews: () => undefined,
+    onToggle: () => undefined,
+  }));
+
+  assert.match(html, /skill-review-timeline-cta/);
+  assert.match(html, /Skill draft ready for review/);
+  assert.match(html, />Review Skill</);
+  assert.ok(html.indexOf("Review Skill") > html.indexOf("The Skill draft is ready."));
+  assert.ok(html.indexOf("Review Skill") > html.indexOf("Usage summary"));
+});
+
+test("create_skill review shortcuts retain the generated Skill identity", () => {
+  assert.equal(skillDraftNameFromTrace({
+    args: { name: "ppt-analyzer" },
+    id: "tool-1",
+    name: "create_skill",
+    status: "completed",
+  }), "ppt-analyzer");
+  assert.equal(skillDraftNameFromTrace({
+    id: "tool-2",
+    input: JSON.stringify({ name: "historical-skill" }),
+    name: "create_skill",
+    status: "completed",
+  }), "historical-skill");
 });

@@ -64,6 +64,7 @@ from .persistence import (
     upsert_mcp_search,
     upsert_session_first_message,
     upsert_session_plan,
+    upsert_subagent,
 )
 from .search_graph import bind_subtask, get_search_graph, link_search_artifacts, upsert_search_progress
 from .query import (
@@ -71,6 +72,8 @@ from .query import (
     by_node_type,
     get_artifact_provenance,
     get_chain,
+    get_group_expansion,
+    get_scope_expansion,
     get_subgraph,
     get_trace,
     query_match,
@@ -80,16 +83,16 @@ log = get_logger("server")
 
 app = FastAPI(title="sciencediscovery-memory-graph")
 
-# Node/edge label vocabularies mirrored from ``packages/schema`` (7 + 7).
-# Used for request validation so a bad_request response is returned before
-# any Cypher runs. ``stated_in`` links a Claim to the report Artifact it is
-# stated in (Claim → Artifact); the legacy ``presents``/Report hop has been
-# removed in favor of ``stated_in`` (a Claim is stated in a report Artifact
-# directly, no separate Report label).
-_NODE_LABELS = {"ResearchGoal", "SubTask", "Paper", "Evidence", "Claim", "Code", "Artifact",
-                "SearchRun", "SearchNode", "SearchCell"}
+# Node/edge label vocabularies for request validation, so a bad_request
+# response is returned before any Cypher runs. The union of upstream's set
+# (``contains`` — subagent scope→child; ``SubTask`` kept as the external
+# compatibility name for the Task/ToolCall split) and the evolve search's
+# (SearchRun/SearchNode/SearchCell and the search-structure edges).
+# ``stated_in`` links a Claim to the report Artifact it is stated in.
+_NODE_LABELS = {"ResearchGoal", "SubTask", "Task", "ToolCall", "Paper", "Evidence", "Claim",
+                "Code", "Artifact", "SearchRun", "SearchNode", "SearchCell"}
 _EDGE_TYPES = {"next", "produces", "extracts", "supports", "stated_in", "supersedes", "input",
-               "searches", "root", "expands", "inspires", "elected", "occupies"}
+               "contains", "searches", "root", "expands", "inspires", "elected", "occupies"}
 
 
 def _error(code: str, http: int, message: str, instruction: str | None = None) -> None:
@@ -172,6 +175,13 @@ class ObserveExecutionRequest(BaseModel):
     stdout_hash: str | None = None
     stderr_hash: str | None = None
     env_hash: str | None = None
+    # When set, this execution ran inside a subagent: a child SubTask is built
+    # (task_type=code_execution) hung off the subagent's scope via contains,
+    # and produces runs child→Code/Artifact. Absent in main-agent context —
+    # behavior unchanged. MUST be declared explicitly (Pydantic v2 default
+    # extra="ignore" would otherwise silently drop it and the child branch
+    # would never run, regressing products onto a per-execution SubTask).
+    parent_subagent_id: str | None = None
 
 
 @app.post("/observe/execution", dependencies=[Depends(require_internal_token)])
@@ -199,6 +209,7 @@ def observe_execution(req: ObserveExecutionRequest) -> dict[str, Any]:
             stdout_hash=req.stdout_hash,
             stderr_hash=req.stderr_hash,
             env_hash=req.env_hash,
+            parent_subagent_id=req.parent_subagent_id,
         )
         written = 1 + len(req.produced_artifacts)
         log.info("observe/execution done: execution=%s wrote %d node(s)", req.execution_id, written)
@@ -235,6 +246,12 @@ class ObserveMcpSearchRequest(BaseModel):
     tool_type: str
     retrieved_at: str
     records: list[McpSearchRecord] = Field(default_factory=list)
+    # When set, this search ran inside a subagent: a child SubTask is built
+    # (task_type=literature_search) hung off the subagent's scope via contains,
+    # and produces runs child→Paper. Absent in main-agent context — behavior
+    # unchanged. MUST be declared explicitly (Pydantic v2 default extra="ignore"
+    # would otherwise silently drop it and the child branch would never run).
+    parent_subagent_id: str | None = None
 
 
 @app.post("/observe/mcp-search", dependencies=[Depends(require_internal_token)])
@@ -254,6 +271,7 @@ def observe_mcp_search(req: ObserveMcpSearchRequest) -> dict[str, Any]:
             tool_type=req.tool_type,
             retrieved_at=req.retrieved_at,
             records=[r.model_dump() for r in req.records],
+            parent_subagent_id=req.parent_subagent_id,
         )
         # 1 SubTask + N Papers (only those with a URL; the rest are dropped).
         papers_with_url = sum(1 for r in req.records if r.url)
@@ -263,6 +281,62 @@ def observe_mcp_search(req: ObserveMcpSearchRequest) -> dict[str, Any]:
         return {"status": "healthy", "written": written, "papers": papers_with_url}
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("observe/mcp-search failed: invocation=%s: %s", req.invocation_id, exc)
+        raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
+
+
+# --- Write: observeSubagent (subagent scope node mirror) ---------------------
+
+class ObserveSubagentRequest(BaseModel):
+    """A subagent's lifecycle event, mirrored into one scope SubTask node.
+
+    Sent twice per subagent: once at start (status="running"; finishedAt/
+    summary absent) and once at terminal landing (status=completed/failed/
+    cancelled/timed_out). MERGE on task_id makes both calls idempotent; the
+    terminal call only fills the gaps (status/finishedAt/summary), never
+    overwriting the start-phase identity (objective/subagentType/created_at/
+    seq). task_type is the coarse scope label (normally ``subagent``); the
+    actual subagent role rides in ``subagent_type``. Products are NOT hung off
+    this scope — each internal toolcall is a separate child SubTask built by
+    /observe/execution or /observe/mcp-search with parent_subagent_id.
+    """
+
+    subagent_id: str
+    session_id: str
+    turn_id: str
+    objective: str
+    task_type: str = "subagent"
+    subagent_type: str | None = None
+    created_at: str
+    status: str
+    finished_at: str | None = None
+    summary: str | None = None
+
+
+@app.post("/observe/subagent", dependencies=[Depends(require_internal_token)])
+def observe_subagent(req: ObserveSubagentRequest) -> dict[str, Any]:
+    driver = handle()
+    log.info("observe/subagent in: subagent=%s session=%s status=%s",
+             req.subagent_id, req.session_id, req.status)
+    if not driver.is_reachable():
+        log.warning("observe/subagent skipped: Neo4j not reachable, this subagent will not be mirrored")
+        return {"status": "degraded", "written": 0}
+    try:
+        upsert_subagent(
+            subagent_id=req.subagent_id,
+            session_id=req.session_id,
+            turn_id=req.turn_id,
+            objective=req.objective,
+            task_type=req.task_type,
+            subagent_type=req.subagent_type,
+            created_at=req.created_at,
+            status=req.status,
+            finished_at=req.finished_at,
+            summary=req.summary,
+        )
+        log.info("observe/subagent done: subagent=%s status=%s", req.subagent_id, req.status)
+        return {"status": "healthy", "written": 1}
+    except Exception as exc:  # pragma: no cover - belt-and-suspenders
+        log.exception("observe/subagent failed: subagent=%s: %s", req.subagent_id, exc)
         raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
 
 
@@ -296,6 +370,11 @@ class ByEdgeTypeRequest(BaseModel):
 class MatchRequest(BaseModel):
     query: str
     session_id: str | None = None
+    # any_term = OR (default, backward-compatible, agent query_graph path);
+    # all_terms = term-AND (frontend search box — typing a paper's full title
+    # returns just that paper instead of the whole corpus). The two TS call
+    # sites each pin a fixed value; the LLM never sees this field.
+    mode: str = "any_term"
 
 
 class ChainRequest(BaseModel):
@@ -354,8 +433,10 @@ def read_by_edge_type(req: ByEdgeTypeRequest) -> dict[str, Any]:
 def read_match(req: MatchRequest) -> dict[str, Any]:
     if not req.query.strip():
         _error("bad_request", 400, "query must be non-empty")
-    log.info("match in: query=%s session=%s", req.query, req.session_id or "-")
-    result = query_match(req.query, req.session_id)
+    if req.mode not in {"any_term", "all_terms"}:
+        _error("bad_request", 400, "mode must be 'any_term' or 'all_terms'")
+    log.info("match in: query=%s session=%s mode=%s", req.query, req.session_id or "-", req.mode)
+    result = query_match(req.query, req.session_id, req.mode)
     log.info("match out: %d hit(s)%s%s",
              result["total"],
              " [truncated at 500]" if result["truncated"] else "",
@@ -376,6 +457,65 @@ def read_chain(req: ChainRequest) -> dict[str, Any]:
         _error("not_found", 404, f"node not found: {req.node_id}")
     log.info("chain out: %d node(s) / %d edge(s)%s%s",
              result["total"], len(result["edges"]),
+             " [truncated at 500]" if result["truncated"] else "",
+             f" (reason={result.get('reason')})" if result.get("reason") else "")
+    return result
+
+
+class ScopeExpansionRequest(BaseModel):
+    scope_task_id: str
+    session_id: str
+
+
+@app.post("/query/scope-expansion", dependencies=[Depends(require_internal_token)])
+def read_scope_expansion(req: ScopeExpansionRequest) -> dict[str, Any]:
+    """Expand a subagent scope into its child ToolCalls + real produces/
+    contains/next edges (the "click to expand a scope" payload). Returns real
+    edges only — no surrogate markers; the folded view's surrogates are the
+    frontend's to drop when this expansion is drawn (总方案 §2.4). Unreachable
+    driver → empty + reason; unknown/non-scope scope_task_id → 404 (mirror
+    read_chain).
+    """
+    if not req.scope_task_id.strip():
+        _error("bad_request", 400, "scope_task_id must be non-empty")
+    if not req.session_id.strip():
+        _error("bad_request", 400, "session_id must be non-empty")
+    log.info("scope-expansion in: scope=%s session=%s", req.scope_task_id, req.session_id)
+    result = get_scope_expansion(req.scope_task_id, req.session_id)
+    if result.get("reason") == "node_not_found":
+        _error("not_found", 404, f"scope not found: {req.scope_task_id}")
+    log.info("scope-expansion out: scope=%s %d node(s) / %d edge(s)%s%s",
+             req.scope_task_id, result["total"], len(result["edges"]),
+             " [truncated at 500]" if result["truncated"] else "",
+             f" (reason={result.get('reason')})" if result.get("reason") else "")
+    return result
+
+
+class GroupExpansionRequest(BaseModel):
+    group_id: str
+    session_id: str
+
+
+@app.post("/query/group-expansion", dependencies=[Depends(require_internal_token)])
+def read_group_expansion(req: GroupExpansionRequest) -> dict[str, Any]:
+    """Expand a folded Artifacts/Papers aggregate node into its member products
+    (the "click an Artifacts/Papers aggregate to expand it" payload, 需求3).
+    A folded scope with >1 product of one kind collapses into a single virtual
+    ``_group:<scopeId>:<Kind>`` node in the folded view; this call unpacks it
+    into the real member product nodes + one surrogate ``scope→member`` produces
+    edge each. Unreachable driver → empty + reason; malformed ``group_id`` or
+    absent scope → 404 (mirror read_scope_expansion).
+    """
+    if not req.group_id.strip():
+        _error("bad_request", 400, "group_id must be non-empty")
+    if not req.session_id.strip():
+        _error("bad_request", 400, "session_id must be non-empty")
+    log.info("group-expansion in: group=%s session=%s", req.group_id, req.session_id)
+    result = get_group_expansion(req.group_id, req.session_id)
+    if result.get("reason") == "node_not_found":
+        _error("not_found", 404, f"group not found: {req.group_id}")
+    log.info("group-expansion out: group=%s %d node(s) / %d edge(s)%s%s",
+             req.group_id, result["total"], len(result["edges"]),
              " [truncated at 500]" if result["truncated"] else "",
              f" (reason={result.get('reason')})" if result.get("reason") else "")
     return result
