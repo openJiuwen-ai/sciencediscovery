@@ -156,7 +156,8 @@ test("Composer controls wrap by available container width instead of overlapping
   assert.match(conversation, /\.composer-footer \{[^}]*flex-wrap: wrap;/);
   assert.match(conversation, /\.model-picker \{[^}]*flex: 1 1 280px;[^}]*min-width: 0;/);
   assert.match(conversation, /\.model-picker-popover \{[^}]*position: absolute;[^}]*bottom: calc\(100% \+ 8px\);/);
-  assert.match(conversation, /\.model-picker-thinking input\[type="range"\] \{[^}]*width: 100%;/);
+  assert.match(conversation, /\.model-picker-stops \{[^}]*display: flex;/);
+  assert.match(conversation, /\.model-picker-stop \+ \.model-picker-stop \{[^}]*margin-left: -1px;/);
   assert.match(conversation, /\.model-picker-trigger-name \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
   assert.match(conversation, /\.orchestration-controls \{[^}]*flex-wrap: wrap;/);
   assert.match(responsive, /@container \(max-width: 1024px\)[\s\S]*?\.model-picker \{ flex-basis: 100%; max-width: none; \}/);

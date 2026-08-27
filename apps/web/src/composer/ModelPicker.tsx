@@ -63,9 +63,9 @@ export function parseThinkingChoice(value: string): { effort?: ModelThinkingEffo
 }
 
 /** Small connector-style popover for picking the conversation model, with a
- *  thinking slider whose stops are exactly the legal choices for the selected
- *  model: off (only when it can be disabled) → model default (auto) → efforts
- *  from weakest to strongest. Models without thinking control get no slider. */
+ *  thinking control as a joined row of labelled stop buttons: off (only when
+ *  it can be disabled) → model default (auto) → efforts from weakest to
+ *  strongest. Models without thinking control get no stop row. */
 export function ModelPicker({
   activeModelId,
   controls,
@@ -175,28 +175,20 @@ export function ModelPicker({
       </div>}
       {activeModel ? <div className="model-picker-thinking">
         {stops.length ? <>
-          <label className="model-picker-slider-label" htmlFor="model-thinking-slider">
+          <div className="model-picker-slider-label">
             <span>{t("composer.modelPicker.thinking")}</span>
             <strong aria-live="polite">{currentLabel}</strong>
-          </label>
-          <input
-            aria-label={t("composer.modelPicker.thinkingAria")}
-            aria-valuemax={stops.length - 1}
-            aria-valuemin={0}
-            aria-valuenow={currentIndex}
-            aria-valuetext={currentLabel}
-            disabled={disabled}
-            id="model-thinking-slider"
-            max={stops.length - 1}
-            min={0}
-            onChange={(event) => applyStop(Number(event.target.value))}
-            step={1}
-            type="range"
-            value={currentIndex}
-          />
-          <div className="model-picker-slider-ends" aria-hidden="true">
-            <span>{t(thinkingChoiceLabelKey(stops[0]!))}</span>
-            <span>{t(thinkingChoiceLabelKey(stops[stops.length - 1]!))}</span>
+          </div>
+          <div aria-label={t("composer.modelPicker.thinkingAria")} className="model-picker-stops" role="radiogroup">
+            {stops.map((stop, index) => <button
+              aria-checked={index === currentIndex}
+              className={index === currentIndex ? "model-picker-stop active" : "model-picker-stop"}
+              disabled={disabled}
+              key={stop.value}
+              onClick={() => applyStop(index)}
+              role="radio"
+              type="button"
+            >{t(thinkingChoiceLabelKey(stop))}</button>)}
           </div>
           {controls.legacyBudget ? <small className="model-picker-note">{t("composer.thinkingLegacyNotice")}</small> : null}
         </> : <small className="model-picker-note">{t("composer.modelPicker.thinkingUnsupported")}</small>}
