@@ -51,7 +51,7 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN for the isolated local API only; the stub token has no external access.
  * CostSideEffects: no external cost; temporary model and Project records are deleted in finally.
  */
-test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, async ({ journey, page }) => {
+test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
   test.setTimeout(180_000);
   journey.scenario({
     goal: "一位第一次打开 ScienceDiscovery 的中文用户，要把工作台配起来，"
@@ -110,6 +110,14 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
     if (!response.ok()) return undefined;
     return response.json() as Promise<unknown>;
   };
+
+  // Cleanup runs in `finally` after the page may already be gone, so it uses a
+  // standalone request context instead of `page.request` (which silently fails
+  // once the page fixture is gone). Disposed at the very end of `finally`.
+  const api = await playwright.request.newContext({
+    baseURL: apiBaseUrl(),
+    extraHTTPHeaders: authorizationHeader(),
+  });
 
   try {
     await journey.step(
@@ -175,6 +183,12 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
           .click();
         await expect(reopened.locator(".provider-row").filter({ hasText: providerName }))
           .toContainText("已添加 1");
+        // 手动登记（manual 策略无目录建议）的模型在重开设置后仍占有行内表一行，不被发现为空吞掉。
+        const reopenedRow = reopened.locator(".provider-row").filter({ hasText: providerName });
+        if (!await reopenedRow.locator(".provider-row-detail").count()) {
+          await reopenedRow.locator(".provider-row-summary").click();
+        }
+        await expect(reopenedRow.locator(".provider-model-row").filter({ hasText: stub.model })).toBeVisible();
         await reopened.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
         await expect(reopened).toBeHidden();
       },
@@ -320,15 +334,17 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
       },
     );
   } finally {
-    if (fixture) await cleanupJourney(page, fixture);
     try {
-      if (providerId) {
-        await apiJsonSafe(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
+      if (fixture) {
+        await api.delete(`/api/projects/${encodeURIComponent(fixture.project.id)}`, {
+          data: { confirmationId: fixture.project.id },
+        }).catch(() => undefined);
       }
       if (model) {
         // A manually added model may have become the global default, so clear
         // the runtime-setting reference before deleting it.
-        const settings = await apiJsonSafe("/api/settings") as { overrides?: Record<string, unknown> } | undefined;
+        const settingsRaw: unknown = await api.get("/api/settings").then((r) => r.json());
+        const settings = settingsRaw as { overrides?: Record<string, unknown> } | undefined;
         const overrides = { ...(settings?.overrides ?? {}) };
         let changed = false;
         for (const key of ["modelId", "reviewModelId"]) {
@@ -337,12 +353,16 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
             changed = true;
           }
         }
-        if (changed) await apiJsonSafe("/api/settings", { data: overrides, method: "PUT" });
-        await apiJsonSafe(`/api/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
+        if (changed) await api.put("/api/settings", { data: overrides }).catch(() => undefined);
+        await api.delete(`/api/models/${encodeURIComponent(model.id)}`).catch(() => undefined);
+      }
+      if (providerId) {
+        await api.delete(`/api/providers/${encodeURIComponent(providerId)}`).catch(() => undefined);
       }
     } catch {
       // Best-effort cleanup; the journey result is authoritative.
     }
+    await api.dispose().catch(() => undefined);
     await stub.stop();
   }
 });
