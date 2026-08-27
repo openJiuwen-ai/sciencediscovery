@@ -94,7 +94,6 @@ export function filterTools<T extends { name: string }>(tools: readonly T[], pol
 
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_DECLARE_ARTIFACT_PATHS = 50;
-const MAX_SKILL_SEARCH_RESULTS = 5;
 const SUBAGENT_RESULT_TEXT_LIMIT = 20_000;
 
 type SubagentContractStopReason = "loop_capped" | "token_capped" | "turn_capped";
@@ -384,63 +383,6 @@ function normalizeMountedReadPath(requestedPath: string): {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-function compileSkillSearchRegex(pattern: string): RegExp {
-  try {
-    return new RegExp(pattern, "i");
-  } catch {
-    return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-  }
-}
-
-function searchSkills<T extends { description: string; id: string }>(skills: readonly T[], query: string): T[] {
-  const trimmed = query.trim();
-  if (!trimmed) return [];
-  if (trimmed.startsWith("select:")) {
-    const wanted = new Set(trimmed.slice("select:".length).split(",").map((name) => name.trim()).filter(Boolean));
-    return skills.filter((skill) => wanted.has(skill.id));
-  }
-  if (trimmed.startsWith("+")) {
-    const [required = "", ...rest] = trimmed.slice(1).split(/\s+/);
-    if (!required) return [];
-    const candidates = skills.filter((skill) => skill.id.toLowerCase().includes(required.toLowerCase()));
-    if (rest.length) {
-      const regex = compileSkillSearchRegex(rest.join(" "));
-      candidates.sort((left, right) => (
-        (right.id.match(regex)?.length ?? 0) + (right.description.match(regex)?.length ?? 0)
-        - (left.id.match(regex)?.length ?? 0) - (left.description.match(regex)?.length ?? 0)
-      ));
-    }
-    return candidates.slice(0, MAX_SKILL_SEARCH_RESULTS);
-  }
-  const regex = compileSkillSearchRegex(trimmed);
-  return skills
-    .map((skill) => {
-      const nameMatch = regex.test(skill.id);
-      const descriptionMatch = regex.test(skill.description);
-      return { score: nameMatch ? 2 : descriptionMatch ? 1 : 0, skill };
-    })
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score)
-    .map((item) => item.skill)
-    .slice(0, MAX_SKILL_SEARCH_RESULTS);
-}
-
-function renderSkillMetadata(skill: NonNullable<WorkspaceToolOptions["skills"]>[number]): string {
-  const resources = skill.resources.length
-    ? skill.resources.map((resource) => `  - ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")
-    : "  (none)";
-  return [
-    `## Skill: ${skill.id}`,
-    `- Description: ${skill.description}`,
-    `- Version: ${skill.version}`,
-    `- Revision: ${skill.revision}`,
-    `- Package hash: ${skill.hash}`,
-    "- Supporting resources:",
-    resources,
-    `- Load instructions: call read_skill with skillId="${skill.id}"`,
-  ].join("\n");
 }
 
 function summarizeSpecialistsForTaskTool(
@@ -1401,26 +1343,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (selectedSkillsForDiscovery.length) {
     const skillLiterals = selectedSkillsForDiscovery.map((skill) => Type.Literal(skill.id));
     const skillIdSchema = Type.Union(skillLiterals as [typeof skillLiterals[number], ...typeof skillLiterals]);
-    const describeSkillParameters = Type.Object({
-      query: Type.String({
-        description: "Skill name or keyword query. Use select:skill-a,skill-b for exact names.",
-        minLength: 1,
-      }),
-    });
     const selectedSkills = new Map(selectedSkillsForDiscovery.map((skill) => [skill.id, skill]));
-    const describeSkill: AgentTool<typeof describeSkillParameters> = {
-      description: "Search selected skill metadata by name or description before deciding which frozen skill instructions to load. This returns metadata only, not SKILL.md instructions.",
-      execute: async (_toolCallId, params) => {
-        const matched = searchSkills(selectedSkillsForDiscovery, params.query);
-        const text = matched.length
-          ? matched.map(renderSkillMetadata).join("\n\n")
-          : `No selected skills matched: ${params.query}`;
-        return { content: [{ type: "text", text }], details: { matched: matched.map(({ content: _content, readResource: _readResource, ...skill }) => skill), query: params.query } };
-      },
-      label: "Describe skill",
-      name: "describe_skill",
-      parameters: describeSkillParameters,
-    };
     const readSkillParameters = Type.Object({
       skillId: skillIdSchema,
     });
@@ -1455,7 +1378,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       name: "read_skill",
       parameters: readSkillParameters,
     };
-    tools.push(describeSkill, readSkill);
+    tools.push(readSkill);
   }
   const skillsWithResources = selectedSkillsForDiscovery.filter((skill) => skill.resources.length);
   if (skillsWithResources.length) {

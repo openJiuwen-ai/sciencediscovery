@@ -9,12 +9,14 @@ import type {
   GitSkillRepositoryInspection,
   SkillDeletionImpact,
   SkillDescriptor,
+  SkillLibrary,
   SkillReviewDraft,
   SkillReviewDraftSummary,
   SkillReviewFile,
   SkillVersionSnapshot,
   SkillVersionSummary,
 } from "@sciencediscovery/schema";
+import { BUILT_IN_SKILL_LIBRARY_ID, DEFAULT_WRITABLE_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, ProjectIcon, TrashIcon } from "./icons.js";
@@ -157,6 +159,8 @@ export function SkillWorkspaceDialog({
     candidate: GitSkillImportCandidate;
     inspection: GitSkillRepositoryInspection;
   }>();
+  const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
+  const [targetLibraryId, setTargetLibraryId] = useState(DEFAULT_WRITABLE_SKILL_LIBRARY_ID);
 
   const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
   const pendingDraft = drafts.find((draft) => draft.name === selectedSkillId);
@@ -166,6 +170,28 @@ export function SkillWorkspaceDialog({
   const activeVersions = versionsSkillId === selectedSkillId ? versions : [];
   const activeLeftSnapshot = leftSnapshot?.skillId === selectedSkillId ? leftSnapshot : undefined;
   const activeRightSnapshot = rightSnapshot?.skillId === selectedSkillId ? rightSnapshot : undefined;
+  const writableLibraries = skillLibraries.filter((library) => library.id !== BUILT_IN_SKILL_LIBRARY_ID);
+  const targetLibrary = writableLibraries.find((library) => library.id === targetLibraryId);
+
+  useEffect(() => {
+    let active = true;
+    const request = client.listSkillLibraries?.() ?? Promise.resolve([]);
+    void request.then((libraries) => {
+      if (!active) return;
+      const writable = libraries.filter((library) => library.id !== BUILT_IN_SKILL_LIBRARY_ID);
+      setSkillLibraries(libraries);
+      setTargetLibraryId((current) => (
+        writable.some((library) => library.id === current)
+          ? current
+          : writable.find((library) => library.id === DEFAULT_WRITABLE_SKILL_LIBRARY_ID)?.id
+            ?? writable[0]?.id
+            ?? DEFAULT_WRITABLE_SKILL_LIBRARY_ID
+      ));
+    }).catch(() => {
+      // Publishing can still create the default writable library lazily.
+    });
+    return () => { active = false; };
+  }, [client]);
 
   useEffect(() => {
     if (selectedSkillId && catalog.includes(selectedSkillId)) return;
@@ -401,6 +427,7 @@ export function SkillWorkspaceDialog({
       await client.confirmSkillReviewDraft(pendingDraft.draftId, {
         expectedUpdatedAt: reviewDraftDetail.updatedAt,
         files: reviewFiles,
+        libraryId: targetLibraryId,
         sourceVersionId: reviewVersion.id,
       });
       const [nextSkills, nextDrafts] = await Promise.all([
@@ -611,7 +638,7 @@ export function SkillWorkspaceDialog({
             {loadError ? <div className="skill-workspace-load-error" role="alert"><strong>Could not load this Skill</strong><p>{loadError}</p><button onClick={() => setRefreshKey((current) => current + 1)} type="button">Retry</button></div> : !activeRightSnapshot ? <p className="skill-workspace-empty">Loading version…</p> : mode === "compare" ? leftFile?.binary || rightFile?.binary ? <div className="skill-workspace-empty"><strong>Binary comparison</strong><p>{leftFile?.size ?? 0} bytes → {rightByPath.get(activePath)?.size ?? 0} bytes</p></div> : <SkillLineDiff after={rightFile?.content} before={leftFile?.content} leftLabel={activeLeftSnapshot?.label ?? "Version A"} rightLabel={activeRightSnapshot.label} status={activeStatus} /> : pendingDraft ? !reviewReady ? <p className="skill-workspace-empty">Preparing the selected proposal…</p> : <div className="skill-workspace-draft-editor">
               <div className="skill-workspace-draft-path"><label><span>Package path</span><input defaultValue={activePath} disabled={activePath === "SKILL.md" || busy} key={activePath} onBlur={(event) => renameReviewFile(event.target.value.trim())} spellCheck={false} /></label>{activePath !== "SKILL.md" ? <button aria-label={`Remove ${activePath} from draft`} disabled={busy} onClick={removeReviewFile} title="Remove file" type="button"><TrashIcon size={15} /> Remove</button> : <span>Required entry file</span>}</div>
               {rightFile?.binary ? <div className="skill-binary-editor-note"><strong>Binary resource</strong><p>This file is preserved byte-for-byte. You can rename or remove it, but it cannot be edited as text.</p></div> : <textarea aria-label={`Edit draft file ${activePath}`} disabled={busy || !rightFile} onChange={(event) => updateReviewFile(event.target.value)} spellCheck={false} value={rightFile?.content ?? ""} />}
-              <div className="skill-workspace-review-bar"><div><span><CheckIcon size={14} /> Review target</span><strong>{reviewVersion?.label}</strong><small>{versionSource(reviewVersion!)} · {reviewDraftDetail?.baseRevision === undefined ? "Creates a new Skill" : `Publishes revision r${reviewDraftDetail.baseRevision + 1}`}</small></div><button className="primary-button" disabled={busy || !confirmableReview} onClick={() => void confirmReviewVersion()} type="button">{busy ? "Confirming…" : reviewDraftDetail?.baseRevision === undefined ? "Confirm and create Skill" : `Confirm as revision r${reviewDraftDetail.baseRevision + 1}`}</button></div>
+              <div className="skill-workspace-review-bar"><div><span><CheckIcon size={14} /> Review target</span><strong>{reviewVersion?.label}</strong><small>{versionSource(reviewVersion!)} · publishes an immutable library version</small></div><label className="skill-workspace-review-destination"><span>Publish to</span><select aria-label="Publish Skill draft to library" disabled={busy} onChange={(event) => setTargetLibraryId(event.target.value)} value={targetLibraryId}>{!writableLibraries.some((library) => library.id === DEFAULT_WRITABLE_SKILL_LIBRARY_ID) ? <option value={DEFAULT_WRITABLE_SKILL_LIBRARY_ID}>Project Skills · create on publish</option> : null}{writableLibraries.map((library) => <option key={library.id} value={library.id}>{library.name}</option>)}</select></label><button className="primary-button" disabled={busy || !confirmableReview} onClick={() => void confirmReviewVersion()} title={`Publish to ${targetLibrary?.name ?? "Project Skills"}`} type="button">{busy ? "Publishing…" : "Publish Skill"}</button></div>
             </div> : <>
               <textarea aria-label={`Edit Skill file ${activePath}`} disabled={!editable || busy} onChange={(event) => setEditContent(event.target.value)} spellCheck={false} value={editContent} />
               <div className="skill-workspace-save"><span>{selectedSkill?.source === "built-in" ? "Built-in Skills are read-only." : editable ? "Saving creates a new immutable revision." : "Choose the latest installed revision to edit."}</span><button className="primary-button" disabled={!editable || busy || editContent === rightFile?.content} onClick={() => void saveFile()} type="button">{busy ? "Saving…" : "Save new revision"}</button></div>

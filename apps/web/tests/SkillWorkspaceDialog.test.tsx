@@ -101,9 +101,9 @@ test("edits and confirms an explicitly selected Agent proposal in the Explorer",
   };
   const currentContent = `---\nname: ${draft.name}\ndescription: Current\n---\n\n# Current`;
   const previousContent = `---\nname: ${draft.name}\ndescription: Previous\n---\n\n# Previous`;
-  const confirmed: Array<{ sourceVersionId?: string; files: Array<{ content?: string; path: string }> }> = [];
+  const confirmed: Array<{ libraryId?: string; sourceVersionId?: string; files: Array<{ content?: string; path: string }> }> = [];
   const client = {
-    confirmSkillReviewDraft: async (_draftId: string, body: { sourceVersionId?: string; files: Array<{ content?: string; path: string }> }) => {
+    confirmSkillReviewDraft: async (_draftId: string, body: { libraryId?: string; sourceVersionId?: string; files: Array<{ content?: string; path: string }> }) => {
       confirmed.push(body);
       return {};
     },
@@ -122,6 +122,12 @@ test("edits and confirms an explicitly selected Agent proposal in the Explorer",
       skillId,
     }),
     listSkillReviewDrafts: async () => [],
+    listSkillLibraries: async () => [{
+      createdAt: "2026-08-20T00:00:00.000Z",
+      id: "reviewed-skills",
+      name: "Reviewed Skills",
+      updatedAt: "2026-08-20T00:00:00.000Z",
+    }],
     listSkills: async () => [],
     listSkillVersions: async () => [
       { current: true, fileCount: 1, id: `draft:${draft.draftId}`, kind: "agent-proposal" as const, label: "Current pending proposal" },
@@ -150,9 +156,10 @@ test("edits and confirms an explicitly selected Agent proposal in the Explorer",
   const selectPrevious = renderer!.root.findByProps({ "aria-label": "Select Agent proposal 1 as review target" });
   await act(async () => selectPrevious.props.onClick());
   assert.equal(renderer!.root.findByProps({ "aria-label": "Edit draft file SKILL.md" }).props.value, previousContent);
-  const confirmButton = renderer!.root.findAllByType("button").find((button) => button.children.join("") === "Confirm and create Skill");
+  const confirmButton = renderer!.root.findAllByType("button").find((button) => button.children.join("") === "Publish Skill");
   assert.ok(confirmButton);
   await act(async () => confirmButton.props.onClick());
+  assert.equal(confirmed[0]?.libraryId, "reviewed-skills");
   assert.equal(confirmed[0]?.sourceVersionId, "proposal:old");
   assert.equal(confirmed[0]?.files.find((file) => file.path === "SKILL.md")?.content, previousContent);
   await act(async () => renderer!.unmount());

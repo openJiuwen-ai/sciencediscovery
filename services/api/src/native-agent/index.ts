@@ -243,7 +243,7 @@ class NativeAgent implements NativeAgentHandle {
       },
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
-    this.promptSkills = toolNames.has("describe_skill") && toolNames.has("read_skill")
+    this.promptSkills = toolNames.has("read_skill")
       ? (options.skills ?? [])
       : [];
     const hydratedSkillIds = new Set(this.durableContext.snapshot().skills.map((skill) => skill.id));

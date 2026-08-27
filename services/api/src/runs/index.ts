@@ -101,7 +101,12 @@ import type {
   SubagentStep,
   UpdateSpecialistRequest,
 } from "@sciencediscovery/schema";
-import { BUILT_IN_SKILL_LIBRARY_ID, createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
+import {
+  BUILT_IN_SKILL_LIBRARY_ID,
+  createLocalSessionTitle,
+  DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
+  UNTITLED_SESSION_TITLE,
+} from "@sciencediscovery/schema";
 import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
@@ -211,7 +216,7 @@ const activeSessions = new Map<string, RuntimeSessionRun>();
 const scheduledSessions = new Set<string>();
 const activeRunAbortControllers = new Map<string, AbortController>();
 const cancelledRuns = new Set<string>();
-export const DEFAULT_SELF_EVOLUTION_LIBRARY_ID = "project-skills";
+export const DEFAULT_SELF_EVOLUTION_LIBRARY_ID = DEFAULT_WRITABLE_SKILL_LIBRARY_ID;
 export const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
 
 type RunEventSink = (event: RunStreamEvent) => void | Promise<void>;

@@ -90,7 +90,7 @@ test("renders a multi-file review editor that requires explicit confirmation", (
   assert.match(html, /Edit files/);
   assert.match(html, /Review changes/);
   assert.match(html, /references\/guide.md/);
-  assert.match(html, /Confirm new revision/);
+  assert.match(html, /Publish Skill/);
 });
 
 test("labels a revised pending Skill as a comparison with the previous Agent proposal", () => {
@@ -121,5 +121,5 @@ test("labels a revised pending Skill as a comparison with the previous Agent pro
   assert.match(html, /<mark>revised<\/mark>/);
   assert.match(html, /first/);
   assert.match(html, /revised/);
-  assert.match(html, /Confirm and create Skill/);
+  assert.match(html, /Publish Skill/);
 });

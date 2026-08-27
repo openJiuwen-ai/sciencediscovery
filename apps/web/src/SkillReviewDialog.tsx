@@ -368,7 +368,7 @@ export function SkillReviewDialog({
   return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <section aria-label={`Review Agent Skill draft ${draft.name}`} aria-modal="true" className="skill-review-dialog" role="dialog">
       <header className="skill-review-header">
-        <div><div className="skill-review-heading-row"><span className="eyebrow">{pendingLabel}</span><span className="skill-review-status">{draft.comparisonSource === "previous-agent-draft" ? "Revised proposal" : draft.baseRevision === undefined ? "New Skill" : `Update from r${draft.baseRevision}`}</span></div><h2>{draft.name}</h2><p>Review the package before it becomes available to Agents.{draft.provenance?.git ? ` Source commit ${draft.provenance.git.commit.slice(0, 12)}.` : ""}</p></div>
+        <div><div className="skill-review-heading-row"><span className="eyebrow">{pendingLabel}</span><span className="skill-review-status">{draft.comparisonSource === "previous-agent-draft" ? "Revised proposal" : draft.baseRevision === undefined ? "New Skill" : `Update from r${draft.baseRevision}`}</span></div><h2>{draft.name}</h2><p>Review the package before publishing it to a Skill Library.{draft.provenance?.git ? ` Source commit ${draft.provenance.git.commit.slice(0, 12)}.` : ""}</p></div>
         <button aria-label="Close Skill draft review" className="icon-button" disabled={busy} onClick={onClose} type="button">×</button>
       </header>
       <div className="skill-review-tabs" role="tablist">
@@ -398,7 +398,7 @@ export function SkillReviewDialog({
         </main>
       </div>
       <div className="skill-review-error-slot">{error ? <p className="skill-manager-error" role="alert">{error}</p> : null}</div>
-      <footer className="skill-review-footer"><button className="skill-discard-button" disabled={busy} onClick={onDiscard} type="button">Discard draft</button><div><button className="secondary-button" disabled={busy} onClick={onClose} type="button">Review later</button><button className="primary-button" disabled={busy || !files.some((file) => file.path === "SKILL.md")} onClick={() => onConfirm(files)} type="button">{busy ? "Confirming…" : draft.baseRevision === undefined ? "Confirm and create Skill" : "Confirm new revision"}</button></div></footer>
+      <footer className="skill-review-footer"><button className="skill-discard-button" disabled={busy} onClick={onDiscard} type="button">Discard draft</button><div><button className="secondary-button" disabled={busy} onClick={onClose} type="button">Review later</button><button className="primary-button" disabled={busy || !files.some((file) => file.path === "SKILL.md")} onClick={() => onConfirm(files)} type="button">{busy ? "Publishing…" : "Publish Skill"}</button></div></footer>
     </section>
   </div>;
 }

@@ -15,6 +15,8 @@
 export type SkillSource = "built-in" | "managed";
 
 export const BUILT_IN_SKILL_LIBRARY_ID = "built-in-skills";
+/** Default writable destination for user-reviewed Agent Skill drafts. */
+export const DEFAULT_WRITABLE_SKILL_LIBRARY_ID = "project-skills";
 
 export type SkillResourceKind = "asset" | "other" | "reference" | "script";
 
@@ -164,8 +166,17 @@ export interface ConfirmSkillReviewDraftRequest {
     encodedContent?: string;
     path: string;
   }>;
+  /** Writable Skill Library that receives the reviewed package. */
+  libraryId?: string;
   /** The pending Agent proposal explicitly selected by the reviewer. */
   sourceVersionId?: string;
+}
+
+export interface ConfirmSkillReviewDraftResult {
+  contentHash: string;
+  libraryId: string;
+  skillId: string;
+  versionId: string;
 }
 
 export interface MergeSkillReviewDraftsRequest {

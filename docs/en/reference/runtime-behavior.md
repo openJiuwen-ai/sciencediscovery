@@ -35,7 +35,7 @@ my-skill/
 
 There is one global skill library. New/imported skills are immediately available in all mode; narrow them at Project or Session scope. Each managed edit creates an immutable revision, runs freeze selected revisions, and Prompt Manifest records IDs, revisions, versions, and package hashes. Only selected-mode references prevent deletion.
 
-Imports are untrusted. ZIP validation rejects traversal, symlinks, encryption, duplicates, and excess limits: 25 MiB upload, 50 MiB expanded, 500 files, 10 MiB per resource, and 512 KiB `SKILL.md`. Prompts initially list only name, description, and revision. The model uses `describe_skill`, then `read_skill`, and optionally bounded `read_skill_resource`. `scripts/` are preserved for portability but never installed, run, or copied to the Python workspace automatically.
+Imports are untrusted. ZIP validation rejects traversal, symlinks, encryption, duplicates, and excess limits: 25 MiB upload, 50 MiB expanded, 500 files, 10 MiB per resource, and 512 KiB `SKILL.md`. Prompts initially list only name, description, and revision. The model calls `read_skill` with an exact catalog id and optionally uses bounded `read_skill_resource`. `scripts/` are preserved for portability but never installed, run, or copied to the Python workspace automatically.
 
 ## Managed scientific environments
 

@@ -14,6 +14,7 @@
 
 import type {
   ConfirmSkillReviewDraftRequest,
+  ConfirmSkillReviewDraftResult,
   CreateGitSkillReviewDraftsRequest,
   CreateGitSkillReviewDraftsResponse,
   CreateSkillPackageRequest,
@@ -159,7 +160,7 @@ export class SkillsApiClient extends SettingsApiClient {
     return this.request(`/api/skill-review-drafts/${encodeURIComponent(draftId)}`);
   }
 
-  confirmSkillReviewDraft(draftId: string, body: ConfirmSkillReviewDraftRequest): Promise<SkillDetail> {
+  confirmSkillReviewDraft(draftId: string, body: ConfirmSkillReviewDraftRequest): Promise<ConfirmSkillReviewDraftResult> {
     return this.request(`/api/skill-review-drafts/${encodeURIComponent(draftId)}/confirm`, {
       body: JSON.stringify(body),
       method: "POST",

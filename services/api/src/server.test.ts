@@ -29,6 +29,7 @@ import type {
   ArtifactDerivation,
   ArtifactVersionProvenance,
   ArtifactVersionDiff,
+  ConfirmSkillReviewDraftResult,
   CreateProjectResponse,
   DeletionImpact,
   Environment,
@@ -65,6 +66,8 @@ import type {
   SkillDeletionImpact,
   SkillDescriptor,
   SkillDetail,
+  SkillLibrary,
+  SkillLibraryVersion,
   SkillReviewDraft,
   SkillReviewDraftSummary,
   Specialist,
@@ -2960,7 +2963,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value with units."));
 });
 
-test("Agent loads skill-creator and leaves a described Skill inactive until user confirmation", async (context) => {
+test("Agent-created Skill stays in draft until review publishes it to a Skill Library", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -2984,15 +2987,15 @@ test("Agent loads skill-creator and leaves a described Skill inactive until user
   });
 
   const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
-    body: JSON.stringify({ content: "请使用 skill-creator 创建一个带检查清单的 Skill。" }),
+    body: JSON.stringify({ content: "/skill-creator 请创建一个带检查清单的 Skill。" }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
   assert.equal(run.status, 200);
   const stream = await run.text();
   assert.match(stream, /pending agent-created-demo draft/);
-  assert.ok(modelServer.toolNames[0]?.includes("read_skill"));
-  assert.ok(modelServer.toolNames[0]?.includes("create_skill"));
+  assert.ok(modelServer.toolNames.some((names) => names.includes("read_skill")), JSON.stringify(modelServer.toolNames));
+  assert.ok(modelServer.toolNames.some((names) => names.includes("create_skill")), JSON.stringify(modelServer.toolNames));
 
   assert.equal((await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization })).status, 404);
   const drafts = await jsonRequest<SkillReviewDraftSummary[]>(`${origin}/api/skill-review-drafts`, {
@@ -3004,7 +3007,7 @@ test("Agent loads skill-creator and leaves a described Skill inactive until user
     headers: authorization,
   });
   assert.deepEqual(draft.body.files.map((file) => file.path), ["SKILL.md", "references/checklist.md"]);
-  const created = await jsonRequest<SkillDetail>(`${origin}/api/skill-review-drafts/${draft.body.draftId}/confirm`, {
+  const published = await jsonRequest<ConfirmSkillReviewDraftResult>(`${origin}/api/skill-review-drafts/${draft.body.draftId}/confirm`, {
     body: JSON.stringify({
       expectedUpdatedAt: draft.body.updatedAt,
       files: draft.body.files.map((file) => ({
@@ -3015,16 +3018,16 @@ test("Agent loads skill-creator and leaves a described Skill inactive until user
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
-  assert.equal(created.response.status, 201);
-  assert.equal(created.body.source, "managed");
-  assert.equal(created.body.currentRevision, 1);
-  assert.equal(created.body.version, "1.0.0");
-  assert.deepEqual(created.body.resources.map((resource) => resource.path), ["references/checklist.md"]);
-  const checklist = await jsonRequest<{ content: string }>(
-    `${origin}/api/skills/agent-created-demo/resources/references%2Fchecklist.md`,
-    { headers: authorization },
-  );
-  assert.match(checklist.body.content, /user reviewed/);
+  assert.equal(published.response.status, 201);
+  assert.equal(published.body.libraryId, "project-skills");
+  assert.equal(published.body.skillId, "agent-created-demo");
+  assert.equal((await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization })).status, 404);
+  const libraries = await jsonRequest<SkillLibrary[]>(`${origin}/api/skill-libraries`, { headers: authorization });
+  const projectLibrary = libraries.body.find((library) => library.id === "project-skills");
+  assert.equal(projectLibrary?.headVersionId, published.body.versionId);
+  const versions = await jsonRequest<SkillLibraryVersion[]>(`${origin}/api/skill-libraries/project-skills/versions`, { headers: authorization });
+  assert.equal(versions.body.at(-1)?.skills.find((skill) => skill.id === "agent-created-demo")?.version, "1.0.0");
+  assert.equal((await jsonRequest<SkillReviewDraftSummary[]>(`${origin}/api/skill-review-drafts`, { headers: authorization })).body.length, 0);
 });
 
 test("PDF upload extracts full text and tables into the session workspace", async (context) => {

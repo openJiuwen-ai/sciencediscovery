@@ -310,6 +310,31 @@ test("keeps Agent-authored Skills inactive until a user confirms the reviewed fi
   }
 });
 
+test("keeps a reviewed Agent draft when its external Library publication fails", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const draft = await catalog.createReviewDraft({
+      description: "A draft that must survive a failed Library commit.",
+      instructions: "# Workflow\n\nPublish only after validation.",
+      name: "publication-failure-skill",
+    }, { sessionId: "session-source", source: "agent" });
+    const detail = await catalog.getReviewDraft(draft.draftId);
+    await assert.rejects(catalog.publishReviewDraft(draft.draftId, {
+      expectedUpdatedAt: draft.updatedAt,
+      files: detail!.files.map((file) => ({ content: file.content, path: file.path })),
+    }, async (prepared) => {
+      assert.equal(prepared.detail.id, "publication-failure-skill");
+      assert.equal(prepared.provenance.sessionId, "session-source");
+      throw new Error("Library commit failed");
+    }), /Library commit failed/);
+    assert.deepEqual(catalog.listReviewDrafts().map((candidate) => candidate.draftId), [draft.draftId]);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("updates one pending Agent Skill draft and compares it with the previous proposal", async () => {
   const dataDir = await temporaryDataDir();
   try {

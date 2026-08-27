@@ -211,7 +211,7 @@ M1.6 之后，再进入 M2 的评估辅助发布：
 2. run 创建时 pin 具体库版本。
 3. 运行开始时从挂载库召回 top-N。
 4. 召回候选与手动 selected skills 合并。
-5. Agent 通过 `describe_skill` / `read_skill` 渐进式读取。
+5. Agent 根据 Prompt 中的目录 metadata，通过 `read_skill` 按精确 id 渐进式读取。
 
 因此，自演进只是更新库内容；是否能被 Agent 看到，仍由库挂载、召回和用户设置共同决定。
 

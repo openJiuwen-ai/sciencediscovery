@@ -333,7 +333,11 @@
 .skill-workspace-review-bar span { display: flex; grid-row: 1 / 3; align-items: center; gap: 5px; border-radius: 999px; background: var(--warning-soft); padding: 5px 8px; color: var(--warning); font-size: 8px; font-weight: 800; letter-spacing: .025em; text-transform: uppercase; white-space: nowrap; }
 .skill-workspace-review-bar strong { min-width: 0; overflow: hidden; color: var(--text-heading); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .skill-workspace-review-bar small { min-width: 0; margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.skill-workspace-review-bar > button.primary-button { width: auto; min-width: 190px; min-height: 36px; flex: 0 0 auto; padding: 7px 13px; font-size: 10px; white-space: nowrap; }
+.skill-workspace-review-destination { display: grid; min-width: 150px; gap: 3px; color: var(--muted); font-size: 9px; font-weight: 700; }
+.skill-workspace-review-destination > span { display: block; grid-row: auto; border-radius: 0; background: transparent; padding: 0; color: var(--muted); font-size: 8px; letter-spacing: .04em; }
+.skill-workspace-review-destination select { min-height: 31px; max-width: 190px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 5px 24px 5px 8px; color: var(--text-heading); font: inherit; outline: 0; }
+.skill-workspace-review-destination select:focus { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-softer); }
+.skill-workspace-review-bar > button.primary-button { width: auto; min-width: 112px; min-height: 36px; flex: 0 0 auto; padding: 7px 13px; font-size: 10px; white-space: nowrap; }
 .skill-workspace-save { display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 12px; }
 .skill-workspace-save span { color: var(--muted); font-size: 10px; }
 .skill-workspace-save button { min-height: 34px; padding: 6px 11px; font-size: 10px; }

@@ -106,7 +106,11 @@ import type {
   SubagentStep,
   UpdateSpecialistRequest,
 } from "@sciencediscovery/schema";
-import { UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
+import {
+  BUILT_IN_SKILL_LIBRARY_ID,
+  DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
+  UNTITLED_SESSION_TITLE,
+} from "@sciencediscovery/schema";
 
 import { SessionStoreHttpError } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
@@ -134,7 +138,7 @@ import {
   SkillCatalogError,
   type RuntimeSkillSnapshot,
 } from "@sciencediscovery/specialist";
-import { SkillLibraryCatalog } from "../skill-library-catalog.js";
+import { SkillLibraryCatalog, SkillLibraryCatalogError } from "../skill-library-catalog.js";
 import { handleSkillLibraryRequest } from "./skill-libraries.js";
 import {
   reviewerCheckpointPromptContent,
@@ -729,12 +733,63 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const skillReviewConfirmMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)\/confirm$/);
       if (skillReviewConfirmMatch && request.method === "POST") {
-        const detail = await skillCatalog.confirmReviewDraft(
-          decodeURIComponent(skillReviewConfirmMatch[1]!),
-          await readJson<ConfirmSkillReviewDraftRequest>(request),
-        );
-        store.setAvailableSkillIds(skillCatalog.ids());
-        sendJson(response, 201, detail);
+        const draftId = decodeURIComponent(skillReviewConfirmMatch[1]!);
+        const body = await readJson<ConfirmSkillReviewDraftRequest>(request);
+        const requestedLibraryId = body.libraryId?.trim();
+        const libraryId = requestedLibraryId || DEFAULT_WRITABLE_SKILL_LIBRARY_ID;
+        if (libraryId === BUILT_IN_SKILL_LIBRARY_ID) {
+          throw new SkillLibraryCatalogError("SKILL_LIBRARY_VALIDATION", "Built-in Skill Library is read-only");
+        }
+        const published = await skillCatalog.publishReviewDraft(draftId, body, async (prepared) => {
+          let library = skillLibraryCatalog.get(libraryId);
+          if (!library) {
+            if (requestedLibraryId && libraryId !== DEFAULT_WRITABLE_SKILL_LIBRARY_ID) {
+              throw new SkillLibraryCatalogError("SKILL_LIBRARY_NOT_FOUND", `Skill library not found: ${libraryId}`);
+            }
+            library = await skillLibraryCatalog.create({ id: libraryId, name: "Project Skills" });
+          }
+          const commit = await skillLibraryCatalog.commitVersion(libraryId, {
+            author: {
+              ...(prepared.provenance.sessionId ? { id: prepared.provenance.sessionId } : {}),
+              kind: "user",
+              name: "Reviewed Skill draft",
+            },
+            baseVersionId: library.headVersionId,
+            evaluation: {
+              review: {
+                draftId,
+                source: prepared.provenance.source,
+                ...(prepared.provenance.sessionId ? { sessionId: prepared.provenance.sessionId } : {}),
+                ...(body.sourceVersionId ? { sourceVersionId: body.sourceVersionId } : {}),
+              },
+            },
+            operations: [{
+              package: {
+                files: [...prepared.files].map(([path, bytes]) => ({
+                  content: bytes.toString("base64"),
+                  encoding: "base64" as const,
+                  path,
+                })),
+              },
+              type: "upsert",
+            }],
+          });
+          if (commit.conflicts.length || !commit.version) {
+            throw new SkillLibraryCatalogError(
+              "SKILL_LIBRARY_CONFLICT",
+              commit.conflicts.map((conflict) => conflict.message).join(" ") || "Skill Library version was not created",
+            );
+          }
+          const skill = commit.version.skills.find((candidate) => candidate.id === prepared.detail.id);
+          if (!skill) throw new Error(`Published Skill is missing from library version: ${prepared.detail.id}`);
+          return {
+            contentHash: commit.version.contentHash,
+            libraryId,
+            skillId: skill.id,
+            versionId: commit.version.id,
+          };
+        });
+        sendJson(response, 201, published);
         return;
       }
       const skillReviewDraftMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)$/);

@@ -567,9 +567,11 @@ test("completed create_skill calls expose a visible review shortcut in the conve
   const entries = apply([
     { trace: { id: "tool-1", name: "create_skill", status: "running" }, type: "tool.started" },
     { trace: { id: "tool-1", name: "create_skill", status: "completed", summary: "Draft created" }, type: "tool.completed" },
+    { delta: "The Skill draft is ready.", type: "assistant.delta" },
   ]);
   const html = renderToStaticMarkup(createElement(RunTimeline, {
     entries,
+    footer: createElement("small", null, "Usage summary"),
     isRunning: false,
     onOpenSkillReviews: () => undefined,
     onToggle: () => undefined,
@@ -578,6 +580,8 @@ test("completed create_skill calls expose a visible review shortcut in the conve
   assert.match(html, /skill-review-timeline-cta/);
   assert.match(html, /Skill draft ready for review/);
   assert.match(html, />Review Skill</);
+  assert.ok(html.indexOf("Review Skill") > html.indexOf("The Skill draft is ready."));
+  assert.ok(html.indexOf("Review Skill") > html.indexOf("Usage summary"));
 });
 
 test("create_skill review shortcuts retain the generated Skill identity", () => {

@@ -20,7 +20,7 @@ import type {
   RunStreamEvent,
   ToolTrace,
 } from "@sciencediscovery/schema";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { BrandIcon, CheckIcon, ChevronRightIcon, SpinnerIcon, WarningIcon } from "../icons.js";
 import { MarkdownRenderer } from "../Markdown.js";
@@ -366,6 +366,7 @@ export function skillDraftNameFromTrace(trace: ToolTrace): string | undefined {
 export function RunTimeline({
   artifactReviews = [],
   entries,
+  footer,
   isRunning,
   modelName,
   loadWorkspaceImage,
@@ -381,6 +382,8 @@ export function RunTimeline({
 }: {
   artifactReviews?: ArtifactReviewRun[];
   entries: RunTimelineEntry[];
+  /** Content that belongs to the completed run, rendered before its final action. */
+  footer?: ReactNode;
   isRunning: boolean;
   modelName?: string;
   loadWorkspaceImage?: (path: string, signal: AbortSignal) => Promise<Blob>;
@@ -417,6 +420,11 @@ export function RunTimeline({
     }
   }, [entries, onLoadToolOutput, toolOutputs]);
   if (!entries.length) return null;
+  const reviewTrace = [...entries].reverse().find((entry) =>
+    entry.type === "tool"
+      && entry.trace.name === "create_skill"
+      && entry.trace.status === "completed");
+  const createdSkillId = reviewTrace?.type === "tool" ? skillDraftNameFromTrace(reviewTrace.trace) : undefined;
   async function decidePermission(request: PermissionRequest, decision: PermissionDecision): Promise<void> {
     if (!onPermissionDecision) return;
     const matcher = permissionMatchingKey(request);
@@ -550,12 +558,10 @@ export function RunTimeline({
 
         const outputText = entry.trace.output ?? toolOutputs[entry.trace.id] ?? entry.trace.summary;
 
-        const skillDraftReady = entry.trace.name === "create_skill" && entry.trace.status === "completed";
-        const createdSkillId = skillDraftReady ? skillDraftNameFromTrace(entry.trace) : undefined;
         return (
-          <React.Fragment key={entry.id}>
           <details
             className={`timeline-disclosure tool ${entry.trace.status}`}
+            key={entry.id}
             open={entry.expanded}
             onToggle={(event) => {
               if (event.currentTarget.open !== entry.expanded) onToggle(entry.id, event.currentTarget.open);
@@ -571,14 +577,14 @@ export function RunTimeline({
               <ToolIoSections outputText={outputText} trace={entry.trace} />
             </div>
           </details>
-          {skillDraftReady && onOpenSkillReviews ? <aside className="skill-review-timeline-cta">
-            <span className="skill-review-timeline-icon"><CheckIcon size={17} /></span>
-            <div><strong>{t("timeline.skillDraftReady")}</strong><small>{t("timeline.skillDraftReadyDescription")}</small></div>
-            <button onClick={() => onOpenSkillReviews(createdSkillId)} type="button">{t("timeline.reviewSkill")}</button>
-          </aside> : null}
-          </React.Fragment>
         );
       })}
+      {footer}
+      {reviewTrace && onOpenSkillReviews ? <aside className="skill-review-timeline-cta">
+        <span className="skill-review-timeline-icon"><CheckIcon size={17} /></span>
+        <div><strong>{t("timeline.skillDraftReady")}</strong><small>{t("timeline.skillDraftReadyDescription")}</small></div>
+        <button onClick={() => onOpenSkillReviews(createdSkillId)} type="button">{t("timeline.reviewSkill")}</button>
+      </aside> : null}
     </section>
   );
 }

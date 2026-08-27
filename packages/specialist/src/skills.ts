@@ -165,6 +165,12 @@ export interface RuntimeSkillSnapshot {
   version: string;
 }
 
+export interface PreparedSkillReviewDraft {
+  detail: SkillDetail;
+  files: ReadonlyMap<string, Buffer>;
+  provenance: SkillVersionProvenance;
+}
+
 export class SkillCatalogError extends Error {
   code: "SKILL_CONFLICT" | "SKILL_NOT_FOUND" | "SKILL_READ_ONLY" | "SKILL_VALIDATION";
 
@@ -1342,37 +1348,8 @@ export class SkillCatalog {
   async confirmReviewDraft(draftId: string, input: ConfirmSkillReviewDraftRequest): Promise<SkillDetail> {
     return await this.mutate(async () => {
       this.assertLoaded();
-      const draft = this.reviewDrafts.get(draftId);
-      if (!draft) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill review draft not found: ${draftId}`);
-      if (input.expectedUpdatedAt !== draft.updatedAt) {
-        throw new SkillCatalogError("SKILL_CONFLICT", "Skill review draft changed; reload it before confirming");
-      }
-      let confirmedProvenance = draft.provenance ?? { source: "agent" as const };
-      if (input.sourceVersionId && input.sourceVersionId !== `draft:${draft.draftId}`) {
-        const selectedProposal = draft.proposalHistory?.find(
-          (candidate) => `proposal:${candidate.proposalId}` === input.sourceVersionId,
-        );
-        if (!selectedProposal) {
-          throw validationError(`Skill proposal does not belong to this draft: ${input.sourceVersionId}`);
-        }
-        confirmedProvenance = selectedProposal.provenance ?? confirmedProvenance;
-      }
-      const files = new Map<string, Buffer>();
-      for (const file of input.files) {
-        if (files.has(file.path)) throw validationError(`Duplicate skill package path: ${file.path}`);
-        files.set(file.path, this.storedReviewFileBytes(file));
-      }
-      const current = this.managed.get(draft.name);
-      if (draft.baseRevision !== undefined) {
-        if (!current || current.detail.currentRevision !== draft.baseRevision) {
-          throw new SkillCatalogError("SKILL_CONFLICT", `Skill ${draft.name} changed after this draft was created`);
-        }
-      }
-      const revision = draft.baseRevision === undefined ? 1 : draft.baseRevision + 1;
-      const loaded = validateSkillPackage(files, {
-        ...(draft.baseRevision !== undefined ? { directoryName: draft.name } : {}),
-        revision,
-      });
+      const { draft, loaded, provenance: confirmedProvenance } = this.prepareReviewDraftConfirmation(draftId, input);
+      const revision = loaded.detail.currentRevision;
       if (draft.baseRevision === undefined && (this.builtIns.has(loaded.detail.id) || this.managed.has(loaded.detail.id))) {
         throw new SkillCatalogError("SKILL_CONFLICT", `Skill already exists: ${loaded.detail.id}`);
       }
@@ -1397,6 +1374,68 @@ export class SkillCatalog {
       this.reviewDrafts.delete(draftId);
       return structuredClone(committed.detail);
     });
+  }
+
+  /**
+   * Keep an Agent package inactive while it is reviewed, then hand the exact
+   * reviewed bytes to an external publisher. The draft is removed only after
+   * that publisher succeeds.
+   */
+  async publishReviewDraft<T>(
+    draftId: string,
+    input: ConfirmSkillReviewDraftRequest,
+    publish: (prepared: PreparedSkillReviewDraft) => Promise<T>,
+  ): Promise<T> {
+    return await this.mutate(async () => {
+      this.assertLoaded();
+      const { draft, files, loaded, provenance } = this.prepareReviewDraftConfirmation(draftId, input);
+      const result = await publish({
+        detail: structuredClone(loaded.detail),
+        files: new Map([...files].map(([path, bytes]) => [path, Buffer.from(bytes)])),
+        provenance: structuredClone(provenance),
+      });
+      await rm(this.reviewDraftPath(draft.draftId), { force: true });
+      this.reviewDrafts.delete(draft.draftId);
+      return result;
+    });
+  }
+
+  private prepareReviewDraftConfirmation(draftId: string, input: ConfirmSkillReviewDraftRequest): {
+    draft: StoredSkillReviewDraft;
+    files: Map<string, Buffer>;
+    loaded: LoadedPackage;
+    provenance: SkillVersionProvenance;
+  } {
+    const draft = this.reviewDrafts.get(draftId);
+    if (!draft) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill review draft not found: ${draftId}`);
+    if (input.expectedUpdatedAt !== draft.updatedAt) {
+      throw new SkillCatalogError("SKILL_CONFLICT", "Skill review draft changed; reload it before confirming");
+    }
+    let provenance = draft.provenance ?? { source: "agent" as const };
+    if (input.sourceVersionId && input.sourceVersionId !== `draft:${draft.draftId}`) {
+      const selectedProposal = draft.proposalHistory?.find(
+        (candidate) => `proposal:${candidate.proposalId}` === input.sourceVersionId,
+      );
+      if (!selectedProposal) {
+        throw validationError(`Skill proposal does not belong to this draft: ${input.sourceVersionId}`);
+      }
+      provenance = selectedProposal.provenance ?? provenance;
+    }
+    const files = new Map<string, Buffer>();
+    for (const file of input.files) {
+      if (files.has(file.path)) throw validationError(`Duplicate skill package path: ${file.path}`);
+      files.set(file.path, this.storedReviewFileBytes(file));
+    }
+    const current = this.managed.get(draft.name);
+    if (draft.baseRevision !== undefined && (!current || current.detail.currentRevision !== draft.baseRevision)) {
+      throw new SkillCatalogError("SKILL_CONFLICT", `Skill ${draft.name} changed after this draft was created`);
+    }
+    const revision = draft.baseRevision === undefined ? 1 : draft.baseRevision + 1;
+    const loaded = validateSkillPackage(files, {
+      ...(draft.baseRevision !== undefined ? { directoryName: draft.name } : {}),
+      revision,
+    });
+    return { draft, files, loaded, provenance };
   }
 
   private async commitManaged(

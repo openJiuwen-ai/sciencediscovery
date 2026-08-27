@@ -32,7 +32,7 @@ M1 要补齐：
 5. 同名技能保留最高优先级版本。
 6. 如果同优先级下同名技能 hash 不同，阻塞运行并返回冲突。
 7. 用任务 query 在合并后的库视图中召回候选技能。
-8. 把候选技能 resolve 成冻结快照，交给 `describe_skill/read_skill`。
+8. 把候选技能 resolve 成冻结快照，目录 metadata 进入 Prompt，正文由 `read_skill` 按精确 id 读取。
 
 ## 核心接口
 

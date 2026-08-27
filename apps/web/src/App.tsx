@@ -273,10 +273,14 @@ const SELF_EVOLUTION_LIBRARY_ID = "project-skills";
 const BUILT_IN_SKILL_LIBRARY_ID = "built-in-skills";
 const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
 
-function canSummarizeRunAsSkill(run: SessionRun | undefined): run is SessionRun {
+export function canSummarizeRunAsSkill(run: SessionRun | undefined): run is SessionRun {
   if (!run) return false;
+  const prompt = run.prompt.trimStart().toLocaleLowerCase();
+  const isSkillAuthoringRun = ["/skill-creator", "/distill-session"].some((command) =>
+    prompt === command || prompt.startsWith(`${command} `));
   return (run.status === "completed" || run.status === "failed" || run.status === "interrupted")
-    && !run.prompt.includes(SKILL_EVOLUTION_PROMPT_MARKER);
+    && !run.prompt.includes(SKILL_EVOLUTION_PROMPT_MARKER)
+    && !isSkillAuthoringRun;
 }
 
 export function artifactTreeIconKind(
@@ -3910,6 +3914,10 @@ export function App() {
                       <RunTimeline
                         artifactReviews={artifactReviews}
                         entries={sessionReplayTimelines[block.runId]?.entries ?? EMPTY_TIMELINE}
+                        footer={<>
+                          <RunUsageInline run={runUsageByRunId.get(block.runId)} />
+                          {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) => renderRunActivityGroup(group))}
+                        </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
                         modelName={activeModel?.name}
@@ -3933,14 +3941,16 @@ export function App() {
                         reviewerLevel={reviewerSpecialistSettings?.level}
                         workspaceSessionId={session.id}
                       />
-                      <RunUsageInline run={runUsageByRunId.get(block.runId)} />
                       {renderSkillEvolutionCard(sessionRuns.find((run) => run.id === block.runId))}
-                      {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) => renderRunActivityGroup(group))}
                     </Fragment>
                   ))}
                   <RunTimeline
                     artifactReviews={artifactReviews}
                     entries={runTimeline}
+                    footer={<>
+                      <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
+                      {tailActivityGroups.map((group) => renderRunActivityGroup(group))}
+                    </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}
                     modelName={activeModel?.name}
@@ -3965,8 +3975,6 @@ export function App() {
                     reviewerLevel={reviewerSpecialistSettings?.level}
                     workspaceSessionId={session.id}
                   />
-                  <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
-                  {tailActivityGroups.map((group) => renderRunActivityGroup(group))}
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
                   {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>Latest activity <ChevronDownIcon size={15} /></button></div> : null}
                 </div>

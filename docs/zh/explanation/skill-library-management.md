@@ -2,7 +2,7 @@
 
 本文面向 [GitCode Issue #116](https://gitcode.com/mindspore/ScienceAgent/issues/116) 中的框架侧需求：支持技能库作为可版本化资源被创建、检索、挂载和回滚，并提供应用层自演进循环把技能产物原子写回来的接口。
 
-渐进式披露本身不在本文设计范围内。现有 `describe_skill` / `read_skill` / `read_skill_resource` 的语义继续保留；本设计补齐它前面的库级管理、目录级召回和运行快照选择。
+渐进式披露本身不在本文设计范围内。现有 `read_skill` / `read_skill_resource` 的冻结快照语义继续保留；本设计补齐它前面的库级管理、目录级召回和运行快照选择。
 
 ## 1. 背景与现状
 
@@ -19,7 +19,7 @@
 - 资源模型仍是“全局技能目录 + 单技能 revision”，没有“技能库”这一等资源。
 - 版本只能表达单个技能的更新，不能表达一批技能编辑的原子提交，也不能对库级版本做 diff / rollback。
 - 运行设置只有 `enabledSkillIds` 和 `skillSelectionMode`，无法指定“挂载哪个技能库、哪个版本、多个库的优先级”。
-- `describe_skill` 只在本次运行已选技能内检索。技能数量增长后，人工选择技能和把所有 metadata 写入 prompt 都不可持续。
+- 技能数量增长后，人工选择技能和把所有 metadata 写入 prompt 都不可持续。
 - 应用层自演进循环没有稳定写回接口，只能退化为模拟用户逐个调用技能编辑接口。
 
 ## 2. 目标与非目标
@@ -289,7 +289,7 @@ POST /api/skill-libraries/search
 }
 ```
 
-第一阶段检索实现可沿用 `searchSkills` 的字符串/正则打分并扩展到 `description + domainTags + triggers`。接口层保持稳定，后续可替换为向量索引或混合召回。
+第一阶段库级召回使用确定性的名称/描述 token 打分，并可扩展到 `domainTags + triggers`。接口层保持稳定，后续可替换为向量索引或混合召回；候选进入运行快照后不再经过额外正则匹配。
 
 ### 自演进循环写回
 

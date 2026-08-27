@@ -37,7 +37,7 @@ import type {
 import type { AgentConfig } from "@sciencediscovery/model";
 import type { ToolFilterPolicy, WorkspaceToolOptions } from "./workspace.js";
 
-export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.1";
+export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.2";
 // Bump when the workspace prompt contract changes, including subagent orchestration or skill disclosure rules.
 export const WORKSPACE_SYSTEM_PROMPT = [
   "You are a local science analysis agent.",
@@ -171,10 +171,9 @@ You have access to selected skills that provide optimized workflows for specific
 
 Skill discovery and loading:
 1. Check <available_skills> for a skill whose name or description matches the task.
-2. Call describe_skill(query) when you need searchable metadata or resource summaries before choosing.
-3. If a skill matches, call read_skill(skillId) to load the frozen SKILL.md instructions for this run.
-4. Follow the loaded skill instructions precisely.
-5. Load supporting resources only when the loaded skill references them or they are needed during execution.
+2. If a skill matches, call read_skill(skillId) with its exact name to load the frozen SKILL.md instructions for this run.
+3. Follow the loaded skill instructions precisely.
+4. Load supporting resources only when the loaded skill references them or they are needed during execution.
 
 <available_skills>
 ${skillItems}

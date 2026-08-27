@@ -885,7 +885,7 @@ test("publish_skill_library_update submits selected proposals", async () => {
   assert.match(result.content[0]?.text ?? "", /version-1/);
 });
 
-test("skill discovery loads frozen instructions progressively", async () => {
+test("skill loading reads frozen instructions directly by exact id", async () => {
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
@@ -910,13 +910,7 @@ test("skill discovery loads frozen instructions progressively", async () => {
     }],
   });
 
-  const describe = tools.find((candidate) => candidate.name === "describe_skill");
-  assert.ok(describe);
-  const described = await describe.execute("tool-call", { query: "progressive" });
-  const describedText = described.content[0]?.type === "text" ? described.content[0].text : "";
-  assert.match(describedText, /Skill: selected-skill/);
-  assert.match(describedText, /Workflow for selected progressive loading tests/);
-  assert.doesNotMatch(describedText, /Follow the frozen selected workflow/);
+  assert.equal(tools.some((candidate) => candidate.name === "describe_skill"), false);
 
   const readSkill = tools.find((candidate) => candidate.name === "read_skill");
   assert.ok(readSkill);
