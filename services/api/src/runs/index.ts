@@ -1882,6 +1882,20 @@ async function executeAgentRun(
       errorCode: classifyRunFailure(error),
       type: "run.failed",
     });
+    // Persisted here as well as emitted: this exit *returns* "failed" instead
+    // of throwing, so the caller's catch never sees the reason and its finally
+    // stamps the terminal status with no error. Watched live — a turn died on
+    // the context budget ("input needs ~68683 tokens…"), the event stream had
+    // the message, and the run record said error: null; the diagnosis took a
+    // dig through run-events on disk that the record should have spared.
+    // updateSessionRunStatus patches, so the caller's later stamp keeps this.
+    try {
+      await store.updateSessionRunStatus(sessionId, runId, "failed", {
+        error: runFailureMessage(error),
+      });
+    } catch {
+      // The emitted event remains authoritative if the record write fails.
+    }
     return "failed";
   } finally {
     externalWaitByExecution.clear();
