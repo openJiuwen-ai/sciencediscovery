@@ -69,6 +69,20 @@ async function settle(): Promise<void> {
   await new Promise((done) => setTimeout(done, 60));
 }
 
+/** Poll until the fake graph has received `count` batches.
+
+    A fixed 60ms was enough everywhere but CI, where a loaded box stretched
+    one local HTTP round trip past it and two of these tests read the batch
+    list before the flush landed. Polling asserts the same thing without
+    betting on the machine's speed; the deadline only bounds a real failure. */
+async function delivered(graph: { batches: unknown[] }, count: number): Promise<void> {
+  for (let attempt = 0; attempt < 250; attempt += 1) {
+    if (graph.batches.length >= count) return;
+    await new Promise((done) => setTimeout(done, 20));
+  }
+  assert.equal(graph.batches.length, count, `timed out waiting for ${count} batch(es)`);
+}
+
 test("a terminal event flushes the buffer immediately", async () => {
   const graph = await startFakeGraph();
   after(() => graph.close());
@@ -79,7 +93,7 @@ test("a terminal event flushes the buffer immediately", async () => {
   assert.equal(graph.batches.length, 0, "a partial batch waits for the timer");
 
   sink.observeSearchProgress({ records: [record(3, "search_finished")], searchId: "run-1", sessionId: "s1" });
-  await settle();
+  await delivered(graph, 1);
 
   assert.equal(graph.batches.length, 1, "one batch, not three round trips");
   const batch = graph.batches[0]!;
@@ -94,7 +108,7 @@ test("a partial batch is flushed by the timer", async () => {
   const sink = new MemoryGraphSink(new MemoryGraphClient({ token: "t", url: graph.url }), () => true);
 
   sink.observeSearchProgress({ records: [record(1, "expanded")], searchId: "run-2", sessionId: "s1" });
-  await new Promise((done) => setTimeout(done, 400));
+  await delivered(graph, 1);
 
   assert.equal(graph.batches.length, 1);
 });
@@ -107,7 +121,7 @@ test("a full buffer flushes without waiting for the timer", async () => {
   for (let sequence = 1; sequence <= 50; sequence += 1) {
     sink.observeSearchProgress({ records: [record(sequence, "expanded")], searchId: "run-3", sessionId: "s1" });
   }
-  await settle();
+  await delivered(graph, 1);
 
   assert.equal(graph.batches.length, 1);
   assert.equal(graph.batches[0]!.records.length, 50);
