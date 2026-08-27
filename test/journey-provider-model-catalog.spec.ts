@@ -895,7 +895,16 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         });
         await page.setViewportSize({ width: 1280, height: 720 });
         await openProjectSession(page, fixture);
-        const picker = await pickConversationModel({ model: /J7 no-thinking fixture/ });
+        await page.getByLabel("本任务使用的模型").click();
+        const picker = page.getByRole("dialog", { name: "选择模型" });
+        // 悬停模型行弹出富文本详情（名称/ID/上下文/思考档等），不是原生 tooltip。
+        await picker.getByRole("option", { name: /deepseek-v4-flash/ }).hover();
+        const hoverPopup = picker.locator(".model-picker-row-wrap", { has: page.getByRole("option", { name: /deepseek-v4-flash/ }) })
+          .locator(".model-picker-popup");
+        await expect(hoverPopup).toBeVisible();
+        await expect(hoverPopup).toContainText("deepseek-v4-flash");
+        await expect(hoverPopup).toContainText("思考");
+        await picker.getByRole("option", { name: /J7 no-thinking fixture/ }).click();
         await expect(picker.getByRole("option", { name: /J7 no-thinking fixture/ })).toHaveAttribute("aria-selected", "true");
         await expect(picker.getByText("此模型不暴露思考控制字段")).toBeVisible();
         await expect(thinkingStops(picker)).toHaveCount(0);

@@ -157,6 +157,9 @@ test("Composer controls wrap by available container width instead of overlapping
   assert.match(conversation, /\.model-picker \{[^}]*flex: 1 1 280px;[^}]*min-width: 0;/);
   assert.match(conversation, /\.model-picker-popover \{[^}]*position: absolute;[^}]*bottom: calc\(100% \+ 8px\);/);
   assert.match(conversation, /\.model-picker-stops \{[^}]*display: flex;/);
+  // Conversation model rows reveal a rich hover/focus popup that never swallows the click.
+  assert.match(conversation, /\.model-picker-row-wrap:hover \.model-picker-popup, \.model-picker-row-wrap:focus-within \.model-picker-popup \{[^}]*display: grid;/);
+  assert.match(conversation, /\.model-picker-popup \{[^}]*pointer-events: none;/);
   assert.match(conversation, /\.model-picker-stop \+ \.model-picker-stop \{[^}]*margin-left: -1px;/);
   assert.match(conversation, /\.model-picker-trigger-name \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
   assert.match(conversation, /\.orchestration-controls \{[^}]*flex-wrap: wrap;/);

@@ -22,10 +22,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   groupModelsByProvider,
   ModelPicker,
+  ModelPickerModelFacts,
   parseThinkingChoice,
   thinkingChoiceLabel,
   thinkingChoiceLabelKey,
 } from "../src/composer/ModelPicker.js";
+import { installWebModelCatalog } from "./model-catalog-fixture.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 import { en, zhCN } from "../src/i18n/messages.js";
 import type { ModelThinkingControls } from "../src/modelThinking.js";
@@ -174,6 +176,41 @@ test("the stop row carries exactly the legal stops and the current value", () =>
     "high",
     "max",
   ]);
+});
+
+test("hovering a conversation model row reveals a rich detail card", () => {
+  installWebModelCatalog();
+  const renderFacts = (overrides: Partial<ModelProfile> = {}) => renderToStaticMarkup(createElement(
+    LocaleProvider,
+    { initialLocale: "en" },
+    createElement(ModelPickerModelFacts, {
+      model: {
+        ...model("m1", "DeepSeek V4 Flash", "p1"),
+        model: "deepseek-v4-flash",
+        vision: true,
+        ...overrides,
+      },
+      provider: { ...provider("p1", "DeepSeek"), presetId: "deepseek" },
+    }),
+  ));
+
+  const html = renderFacts();
+  assert.match(html, /role="tooltip"/);
+  assert.match(html, /<strong>DeepSeek V4 Flash<\/strong>/);
+  assert.match(html, /<code>deepseek-v4-flash<\/code>/);
+  assert.match(html, /1,000,000/);
+  assert.match(html, /low \/ high \/ max/);
+  assert.match(html, /CNY 3 \/ 9 \/ 0\.1 · per 1M tokens/);
+  // No native tooltip anywhere on the row popup.
+  assert.doesNotMatch(html, /title=/);
+
+  // User-declared facts win and are marked as the source.
+  const manual = renderFacts({
+    facts: { contextWindow: 64_000, thinkingEfforts: ["high", "max"] },
+  });
+  assert.match(manual, /64,000/);
+  assert.match(manual, /high \/ max/);
+  assert.match(manual, /entered by you/);
 });
 
 test("an empty registry offers a path into the model settings", () => {

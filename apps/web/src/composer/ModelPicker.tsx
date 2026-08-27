@@ -20,6 +20,7 @@ import type {
   ModelThinkingEffort,
   ModelThinkingMode,
 } from "@sciencediscovery/schema";
+import { lookupModelCatalog, resolveModelFacts } from "@sciencediscovery/schema";
 
 import { SparkleIcon } from "../icons.js";
 import { useLocale, type MessageKey } from "../i18n/index.js";
@@ -45,6 +46,49 @@ export function groupModelsByProvider(
   const rest = models.filter((model) => !providers.some((provider) => provider.id === model.providerId));
   if (rest.length) groups.push({ models: rest });
   return groups;
+}
+
+function fullTokenCount(value: number | undefined, unknown: string): string {
+  return value === undefined ? unknown : new Intl.NumberFormat().format(value);
+}
+
+/** Rich hover card for one model row in the conversation picker: everything
+ *  the row abbreviates, with full numbers and raw effort levels. Rendered
+ *  inside a pointer-events:none popup, so it never blocks the click. */
+export function ModelPickerModelFacts({
+  model,
+  provider,
+}: {
+  model: ModelProfile;
+  provider?: ModelProvider | undefined;
+}) {
+  const { t } = useLocale();
+  const unknown = t("providers.metadata.unknown");
+  const catalog = lookupModelCatalog(model.model, provider?.presetId);
+  const resolved = resolveModelFacts({
+    ...(catalog ? { catalog } : {}),
+    ...(model.facts ? { user: model.facts } : {}),
+  });
+  const thinking = resolved.thinkingSupported ?? catalog?.thinking?.supported;
+  const efforts = model.facts?.thinkingEfforts ?? catalog?.thinking?.efforts;
+  const pricing = resolved.pricing;
+  const origin = Object.values(resolved.origins).includes("user")
+    ? t("providers.facts.originUser")
+    : catalog ? t("providers.models.catalog") : unknown;
+  return <div className="model-picker-popup" role="tooltip">
+    <strong>{model.name}</strong>
+    <code>{model.model}</code>
+    <dl>
+      <div><dt>{t("providers.metadata.context")}</dt><dd>{fullTokenCount(resolved.contextWindow, unknown)}</dd></div>
+      <div><dt>{t("providers.metadata.output")}</dt><dd>{fullTokenCount(resolved.maxOutputTokens, unknown)}</dd></div>
+      <div><dt>{t("providers.metadata.vision")}</dt><dd>{model.vision ? t("common.yes") : t("common.no")}</dd></div>
+      <div><dt>{t("providers.metadata.thinking")}</dt><dd>{thinking === undefined ? unknown : thinking ? (efforts?.length ? efforts.join(" / ") : t("common.yes")) : t("common.no")}</dd></div>
+      <div><dt>{t("providers.metadata.price")}</dt><dd>{pricing
+        ? `${pricing.currency} ${pricing.input} / ${pricing.output}${pricing.cachedInput !== undefined ? ` / ${pricing.cachedInput}` : ""} · ${t("providers.metadata.perMillion")}`
+        : unknown}</dd></div>
+      <div><dt>{t("providers.facts.source")}</dt><dd>{origin}</dd></div>
+    </dl>
+  </div>;
 }
 
 export function thinkingChoiceLabelKey(choice: ThinkingChoice): MessageKey | undefined {
@@ -158,7 +202,7 @@ export function ModelPicker({
         {groups.map((group) => <div className="model-picker-group" key={group.provider?.id ?? "other"}>
           <h4>{group.provider ? group.provider.name : t("composer.modelPicker.otherGroup")}</h4>
           <ul>
-            {group.models.map((model) => <li key={model.id}>
+            {group.models.map((model) => <li className="model-picker-row-wrap" key={model.id}>
               <button
                 aria-selected={model.id === activeModelId}
                 className={model.id === activeModelId ? "model-picker-row active" : "model-picker-row"}
@@ -172,6 +216,7 @@ export function ModelPicker({
                 </span>
                 {model.vision ? <span className="model-badge">{t("settings.visionCapable")}</span> : null}
               </button>
+              <ModelPickerModelFacts model={model} {...(group.provider ? { provider: group.provider } : {})} />
             </li>)}
           </ul>
         </div>)}
