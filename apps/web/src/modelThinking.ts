@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type {
+  ModelFactOverrides,
   ModelProfile,
   ModelProvider,
   ModelThinkingEffort,
@@ -81,19 +82,25 @@ const DEFAULT_MODES: ModelThinkingMode[] = ["auto", "enabled", "disabled"];
 export function modelVariantThinkingControls(
   modelId: string,
   variant: ModelProfile["apiVariant"],
+  /** Facts the user stated for this model. A declared effort list replaces the
+   *  catalog's, because a gateway often accepts fewer stops than the vendor
+   *  documents and only its operator knows that. */
+  facts?: ModelFactOverrides,
 ): ModelThinkingControls {
   const catalog = lookupModelCatalog(modelId);
   const effectiveVariant = catalog?.apiVariant ?? variant;
+  const declaredEfforts = facts?.thinkingEfforts?.length ? facts.thinkingEfforts : undefined;
   if (!effectiveVariant || !THINKING_CONTROL_VARIANTS.includes(effectiveVariant)) {
     return { efforts: [], legacyBudget: false, modes: [], supported: false };
   }
-  if (catalog?.thinking?.supported === false) {
+  const supported = facts?.thinkingSupported ?? catalog?.thinking?.supported;
+  if (supported === false) {
     return { efforts: [], legacyBudget: false, modes: [], supported: false };
   }
   const modes = catalog?.thinking?.modes
     ?? (["gemini", "kimi-k3"].includes(effectiveVariant) ? ["auto", "enabled"] : DEFAULT_MODES);
-  let efforts = catalog?.thinking?.efforts ?? [];
-  if (!catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(effectiveVariant)) {
+  let efforts: readonly ModelThinkingEffort[] = declaredEfforts ?? catalog?.thinking?.efforts ?? [];
+  if (!declaredEfforts && !catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(effectiveVariant)) {
     if (effectiveVariant === "gemini") efforts = ["low", "medium", "high"];
     else if (effectiveVariant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
     else if (effectiveVariant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
@@ -122,7 +129,7 @@ export function modelThinkingControls(
   const variant = model.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
   const provider = providers.find((candidate) => candidate.id === model.providerId);
   const catalog = lookupModelCatalog(model.model, provider?.presetId);
-  return modelVariantThinkingControls(model.model, catalog?.apiVariant ?? variant);
+  return modelVariantThinkingControls(model.model, catalog?.apiVariant ?? variant, model.facts);
 }
 
 /** Return only fields whose persisted Session value is illegal for the
@@ -139,7 +146,7 @@ export function normalizeSessionThinking(
   if (!controls.supported) {
     return mode && mode !== "auto" ? { thinkingMode: "auto" } : {};
   }
-  const constrained = constrainCatalogThinking(model.model, mode, effort);
+  const constrained = constrainCatalogThinking(model.model, mode, effort, model.facts);
   const update: ModelThinkingNormalization = {};
   if (mode !== undefined && !controls.modes.includes(mode)) update.thinkingMode = constrained.mode;
   if (effort !== undefined && controls.efforts.length && !controls.efforts.includes(effort)) {

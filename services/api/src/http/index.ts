@@ -1232,8 +1232,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 201, await store.materializeProviderModel(providerId, modelId, {
           ...(body.facts !== undefined ? { facts: body.facts } : {}),
           ...(label !== undefined ? { label } : {}),
-          ...(body.thinkingEffort !== undefined ? { thinkingEffort: body.thinkingEffort } : {}),
-          ...(body.thinkingMode !== undefined ? { thinkingMode: body.thinkingMode } : {}),
           ...(vision !== undefined ? { vision } : {}),
         }));
         return;

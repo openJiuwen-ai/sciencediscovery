@@ -151,23 +151,32 @@ export function constrainCatalogThinking(
   modelId: string,
   mode?: ModelThinkingMode,
   effort?: ModelThinkingEffort,
+  /** Effort stops the user declared for this endpoint. A gateway often accepts
+   *  a narrower set than the vendor documents, and only the person who
+   *  configured it knows that, so the declared list replaces the catalog's. */
+  overrides?: { thinkingEfforts?: readonly ModelThinkingEffort[] },
 ): { effort: ModelThinkingEffort; mode: ModelThinkingMode } {
   const thinking = lookupModelCatalog(modelId)?.thinking;
+  const declared = overrides?.thinkingEfforts?.length ? overrides.thinkingEfforts : undefined;
   const requestedMode = mode ?? thinking?.defaultMode ?? "auto";
   const requestedEffort = effort ?? thinking?.defaultEffort ?? "high";
-  if (!thinking?.supported) return { effort: requestedEffort, mode: requestedMode };
+  // A declared stop list is itself a statement that this endpoint thinks, so
+  // it stands on its own even for a model the catalog has never heard of.
+  if (!thinking?.supported && !declared) return { effort: requestedEffort, mode: requestedMode };
 
-  const modes = thinking.modes;
+  const modes = thinking?.modes;
   const legalMode = modes?.length && !modes.includes(requestedMode)
-    ? thinking.defaultMode ?? (modes.includes("auto") ? "auto" : modes[0]!)
+    ? thinking?.defaultMode ?? (modes.includes("auto") ? "auto" : modes[0]!)
     : requestedMode;
-  const efforts = thinking.efforts;
+  const efforts = declared ?? thinking?.efforts;
   let legalEffort = requestedEffort;
   if (efforts?.length && !efforts.includes(requestedEffort)) {
+    const fallback = thinking?.defaultEffort;
     legalEffort = requestedEffort === "max" && efforts.includes("xhigh")
       ? "xhigh"
-      : thinking.defaultEffort
-        ?? (efforts.includes("high") ? "high" : efforts[0]!);
+      : fallback !== undefined && efforts.includes(fallback)
+        ? fallback
+        : efforts.includes("high") ? "high" : efforts[0]!;
   }
   return { effort: legalEffort, mode: legalMode };
 }

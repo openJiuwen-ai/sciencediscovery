@@ -118,6 +118,10 @@ export interface ModelFactOverrides {
   contextWindow?: number;
   maxOutputTokens?: number;
   pricing?: UserModelPricing;
+  /** The effort stops this endpoint actually accepts, stated by the user in
+   *  the product's own raw names. A gateway often exposes a narrower set than
+   *  the vendor documents, and the catalog cannot know that. */
+  thinkingEfforts?: ModelThinkingEffort[];
   thinkingSupported?: boolean;
 }
 
@@ -151,8 +155,14 @@ export interface ResolvedModelFacts {
   contextWindow?: number;
   maxOutputTokens?: number;
   /** Which source each present fact came from, for the hover explanation. */
-  origins: Partial<Record<"contextWindow" | "maxOutputTokens" | "pricing" | "thinkingSupported", ModelFactOrigin>>;
+  origins: Partial<Record<
+    "contextWindow" | "maxOutputTokens" | "pricing" | "thinkingEfforts" | "thinkingSupported",
+    ModelFactOrigin
+  >>;
   pricing?: ResolvedModelPricing;
+  /** Raw effort names, never translated: they are the values sent on the
+   *  wire, so a user comparing the UI with a vendor's docs sees the same word. */
+  thinkingEfforts?: ModelThinkingEffort[];
   thinkingSupported?: boolean;
 }
 
@@ -209,12 +219,21 @@ export function resolveModelFacts(entry: Pick<ProviderModelEntry, "catalog" | "r
     entry.remote?.pricing,
     entry.catalog?.pricing,
   );
+  // A provider listing never reports effort stops, so this fact has only two
+  // possible sources.
+  const thinkingEfforts = pick<ModelThinkingEffort[]>(
+    "thinkingEfforts",
+    entry.user?.thinkingEfforts?.length ? [...entry.user.thinkingEfforts] : undefined,
+    undefined,
+    entry.catalog?.thinking?.efforts?.length ? [...entry.catalog.thinking.efforts] : undefined,
+  );
 
   return {
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     origins,
     ...(pricing !== undefined ? { pricing } : {}),
+    ...(thinkingEfforts !== undefined ? { thinkingEfforts } : {}),
     ...(thinkingSupported !== undefined ? { thinkingSupported } : {}),
   };
 }
@@ -234,9 +253,6 @@ export interface CreateProviderModelRequest {
   /** Display name for the profile; defaults to the listing or catalog label. */
   label?: string;
   model: string;
-  /** Narrowed to what the model actually accepts before it is stored. */
-  thinkingEffort?: ModelThinkingEffort;
-  thinkingMode?: ModelThinkingMode;
   vision?: boolean;
 }
 

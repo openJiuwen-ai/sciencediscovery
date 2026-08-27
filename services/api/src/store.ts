@@ -1816,9 +1816,19 @@ export class SessionStore {
     return row ? this.decryptModelApiToken(key, row.encrypted_token) : undefined;
   }
 
-  /** Whether a run may start without any saved token (local endpoints). */
+  /**
+   * Whether a run may start without any saved token.
+   *
+   * There is no separate "this endpoint needs no token" switch: saving a
+   * provider with an empty token is that statement, which is what local
+   * endpoints (Ollama), gateways that authenticate by network position, and
+   * test stubs rely on. A standalone profile with no provider still needs its
+   * own token, because nothing else vouches for the endpoint.
+   */
   modelAllowsMissingToken(profile: ModelProfile): boolean {
-    return this.getProvider(profile.providerId)?.tokenOptional === true;
+    const provider = this.getProvider(profile.providerId);
+    if (!provider) return false;
+    return provider.tokenOptional || !provider.hasApiToken;
   }
 
   /** Validate an optional model proxy policy (default inherit) against the
@@ -2021,8 +2031,6 @@ export class SessionStore {
     options: {
       facts?: ModelFactOverrides;
       label?: string;
-      thinkingEffort?: ModelThinkingEffort;
-      thinkingMode?: ModelThinkingMode;
       vision?: boolean;
     } = {},
   ): Promise<ModelProfile> {
@@ -2032,12 +2040,16 @@ export class SessionStore {
     if (!model) throw new Error("Model ID is required");
     if (model.length > 512) throw new Error("Model ID is too long");
     const catalog = lookupModelCatalog(model, provider.presetId);
-    // Requested thinking defaults are narrowed to what this model accepts, so
-    // hand-entered values cannot store a combination the endpoint rejects.
+    // Adding a model never states a thinking default. A new profile starts at
+    // whatever the model's own contract says, which for almost every model is
+    // `auto` — the mode that omits the control field entirely. Per-model
+    // defaults are an edit, made in the model editor, not part of adding.
+    const requestedFacts = normalizeModelFactOverrides(options.facts);
     const { effort: defaultEffort, mode: defaultMode } = constrainCatalogThinking(
       model,
-      options.thinkingMode,
-      options.thinkingEffort,
+      undefined,
+      undefined,
+      requestedFacts,
     );
     const apiVariant = catalog?.apiVariant && MODEL_API_VARIANTS[provider.apiProtocol].includes(catalog.apiVariant)
       ? catalog.apiVariant
@@ -2047,16 +2059,17 @@ export class SessionStore {
       // Adding the same model twice stays idempotent, but a field the caller
       // states explicitly is an instruction, not a duplicate: apply it and
       // leave everything else as saved.
+      const facts = requestedFacts ?? existing.facts;
       const constrained = constrainCatalogThinking(
         model,
-        options.thinkingMode ?? existing.thinkingMode,
-        options.thinkingEffort ?? existing.thinkingEffort,
+        existing.thinkingMode,
+        existing.thinkingEffort,
+        facts,
       );
       const name = options.label === undefined
         ? existing.name
         : cleanLabel(`${provider.name} · ${options.label}`, model);
       const vision = options.vision ?? existing.vision;
-      const facts = normalizeModelFactOverrides(options.facts) ?? existing.facts;
       if (existing.apiVariant !== apiVariant
         || existing.thinkingMode !== constrained.mode
         || existing.thinkingEffort !== constrained.effort
@@ -2077,7 +2090,7 @@ export class SessionStore {
       return existing;
     }
     const now = new Date().toISOString();
-    const facts = normalizeModelFactOverrides(options.facts);
+    const facts = requestedFacts;
     const profile: ModelProfile = {
       apiProtocol: provider.apiProtocol,
       apiVariant,
@@ -3128,6 +3141,7 @@ export class SessionStore {
         nextModel.model,
         nextSettings.thinkingMode,
         nextSettings.thinkingEffort,
+        nextModel.facts,
       );
       if (nextSettings.thinkingMode !== undefined) nextSettings.thinkingMode = constrained.mode;
       if (nextSettings.thinkingEffort !== undefined) nextSettings.thinkingEffort = constrained.effort;

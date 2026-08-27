@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { lookupModelCatalog, resolveModelFacts } from "@sciencediscovery/schema";
+import { constrainCatalogThinking, lookupModelCatalog, resolveModelFacts } from "@sciencediscovery/schema";
 
 import { installTestModelCatalog } from "./models-dev.fixture.js";
 
@@ -89,4 +89,45 @@ test("false and zero are facts, not absences", () => {
   assert.equal(resolved.origins.thinkingSupported, "user");
   assert.equal(resolved.pricing?.input, 0, "a free endpoint is a stated price, not unknown");
   assert.equal(resolved.origins.pricing, "user");
+});
+
+test("declared effort stops replace the catalog's for that endpoint", () => {
+  installTestModelCatalog();
+  const catalog = lookupModelCatalog("gpt-5.5", "openai")!;
+  assert.deepEqual(catalog.thinking?.efforts, ["low", "medium", "high", "xhigh"]);
+
+  const resolved = resolveModelFacts({ catalog, user: { thinkingEfforts: ["low", "high"] } });
+  assert.deepEqual(resolved.thinkingEfforts, ["low", "high"], "the gateway accepts fewer stops than the vendor");
+  assert.equal(resolved.origins.thinkingEfforts, "user");
+
+  // Without a declared list the catalog answers, and with neither the fact is
+  // simply unknown.
+  assert.deepEqual(resolveModelFacts({ catalog }).thinkingEfforts, ["low", "medium", "high", "xhigh"]);
+  assert.equal(resolveModelFacts({ catalog }).origins.thinkingEfforts, "catalog");
+  assert.equal(resolveModelFacts({}).thinkingEfforts, undefined);
+});
+
+test("narrowing honours the declared stops, including for a model the catalog never heard of", () => {
+  installTestModelCatalog();
+  // A stop the user did not declare is pulled back to one that exists.
+  assert.deepEqual(
+    constrainCatalogThinking("gpt-5.5", "enabled", "xhigh", { thinkingEfforts: ["low", "high"] }),
+    { effort: "high", mode: "enabled" },
+  );
+  assert.deepEqual(
+    constrainCatalogThinking("gpt-5.5", "enabled", "low", { thinkingEfforts: ["low", "high"] }),
+    { effort: "low", mode: "enabled" },
+  );
+  // Declaring stops is itself the statement that this endpoint thinks, so it
+  // works without any catalog entry.
+  assert.equal(lookupModelCatalog("self-hosted-mystery-7b"), undefined);
+  assert.deepEqual(
+    constrainCatalogThinking("self-hosted-mystery-7b", "enabled", "max", { thinkingEfforts: ["low", "medium"] }),
+    { effort: "low", mode: "enabled" },
+  );
+  // An empty list is not a statement; the catalog still decides.
+  assert.deepEqual(
+    constrainCatalogThinking("gpt-5.5", "enabled", "max", { thinkingEfforts: [] }),
+    { effort: "xhigh", mode: "enabled" },
+  );
 });

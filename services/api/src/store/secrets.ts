@@ -84,6 +84,28 @@ function normalizeUserPricing(value: unknown): UserModelPricing | undefined {
  * and let the listing and the catalog answer; an empty result is returned as
  * `undefined` so a profile never carries a hollow overrides object.
  */
+const THINKING_EFFORTS: readonly ModelThinkingEffort[] = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * The effort stops the user says this endpoint accepts. Kept in the product's
+ * own raw names because those are the values sent on the wire; the order is
+ * normalized to weakest-first so every display shows one ascending scale
+ * regardless of how the list was typed.
+ */
+function normalizeThinkingEfforts(value: unknown): ModelThinkingEffort[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new Error("The model thinking efforts must be a list");
+  const seen = new Set<ModelThinkingEffort>();
+  for (const entry of value) {
+    if (typeof entry !== "string" || !THINKING_EFFORTS.includes(entry as ModelThinkingEffort)) {
+      throw new Error(`The model thinking efforts must each be one of ${THINKING_EFFORTS.join(", ")}`);
+    }
+    seen.add(entry as ModelThinkingEffort);
+  }
+  if (!seen.size) return undefined;
+  return THINKING_EFFORTS.filter((effort) => seen.has(effort));
+}
+
 export function normalizeModelFactOverrides(value: unknown): ModelFactOverrides | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) throw new Error("The model facts are invalid");
@@ -91,6 +113,7 @@ export function normalizeModelFactOverrides(value: unknown): ModelFactOverrides 
   const contextWindow = factTokenCount(facts.contextWindow, "The model context window");
   const maxOutputTokens = factTokenCount(facts.maxOutputTokens, "The model maximum output");
   const pricing = normalizeUserPricing(facts.pricing);
+  const thinkingEfforts = normalizeThinkingEfforts(facts.thinkingEfforts);
   if (facts.thinkingSupported !== undefined && typeof facts.thinkingSupported !== "boolean") {
     throw new Error("The model thinking support must be true or false");
   }
@@ -98,6 +121,7 @@ export function normalizeModelFactOverrides(value: unknown): ModelFactOverrides 
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(pricing !== undefined ? { pricing } : {}),
+    ...(thinkingEfforts !== undefined ? { thinkingEfforts } : {}),
     ...(facts.thinkingSupported !== undefined ? { thinkingSupported: facts.thinkingSupported } : {}),
   };
   return Object.keys(normalized).length ? normalized : undefined;
@@ -139,12 +163,13 @@ export function validateLiveModel(
   if (!(["low", "medium", "high", "xhigh", "max"] as const).includes(requestedEffort)) {
     throw new Error("The model thinking effort is invalid");
   }
+  const facts = normalizeModelFactOverrides(input.facts);
   const { effort: thinkingEffort, mode: thinkingMode } = constrainCatalogThinking(
     model,
     input.thinkingMode === undefined ? undefined : requestedMode,
     input.thinkingEffort === undefined ? undefined : requestedEffort,
+    facts,
   );
-  const facts = normalizeModelFactOverrides(input.facts);
   return {
     apiProtocol,
     apiVariant,

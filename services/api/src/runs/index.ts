@@ -2140,11 +2140,15 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
       : ["auto", "enabled", "disabled"] as const);
   const requestedMode = snapshot.thinkingMode ?? model.thinkingMode ?? "auto";
   const requestedEffort = snapshot.thinkingEffort ?? model.thinkingEffort ?? "high";
-  const constrained = constrainCatalogThinking(model.model, requestedMode, requestedEffort);
+  const constrained = constrainCatalogThinking(model.model, requestedMode, requestedEffort, model.facts);
   snapshot.thinkingMode = modes.includes(constrained.mode as never) ? constrained.mode : "auto";
 
-  let efforts = catalog?.thinking?.efforts ?? [];
-  if (!catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(variant)) {
+  // The stops the user declared for this endpoint replace the catalog's: a
+  // gateway often accepts fewer than the vendor documents.
+  let efforts = model.facts?.thinkingEfforts?.length
+    ? [...model.facts.thinkingEfforts]
+    : catalog?.thinking?.efforts ?? [];
+  if (!model.facts?.thinkingEfforts?.length && !catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(variant)) {
     if (variant === "gemini") efforts = ["low", "medium", "high"];
     else if (variant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
     else if (variant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];

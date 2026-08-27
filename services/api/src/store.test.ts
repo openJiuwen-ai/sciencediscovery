@@ -3174,21 +3174,18 @@ test("manually added provider models accept a name, vision and legal thinking de
 
   const added = await store.materializeProviderModel(provider.id, "gpt-5.5", {
     label: "Hand entered",
-    thinkingEffort: "medium",
-    thinkingMode: "enabled",
     vision: true,
   });
   assert.match(added.name, /Hand entered$/);
   assert.equal(added.vision, true);
-  assert.equal(added.thinkingMode, "enabled");
-  assert.equal(added.thinkingEffort, "medium");
+  // Adding never states a thinking default: the new profile starts at the mode
+  // that omits the control field, and per-model defaults stay an edit.
+  assert.equal(added.thinkingMode, "auto");
   assert.equal(added.hasApiToken, true, "the model inherits the provider credential");
 
-  // An illegal effort for this model is narrowed rather than stored as sent.
-  const narrowed = await store.materializeProviderModel(provider.id, "gpt-5.5", { thinkingEffort: "max" });
-  assert.equal(narrowed.id, added.id, "re-adding the same model stays idempotent");
-  assert.equal(narrowed.thinkingEffort, "xhigh");
-  assert.equal(narrowed.vision, true, "a field the caller did not state is left alone");
+  const again = await store.materializeProviderModel(provider.id, "gpt-5.5", {});
+  assert.equal(again.id, added.id, "re-adding the same model stays idempotent");
+  assert.equal(again.vision, true, "a field the caller did not state is left alone");
   assert.equal(store.listModels().filter((model) => model.model === "gpt-5.5").length, 1);
 });
 
@@ -3338,4 +3335,107 @@ test("stated facts that cannot be true are rejected instead of stored", async (c
   await assert.rejects(add({ pricing: { currency: "USD", input: -1, output: 2 } }), /zero or greater/);
   await assert.rejects(add({ thinkingSupported: "yes" }), /must be true or false/);
   assert.deepEqual(store.listModels(), [], "nothing was persisted from a rejected request");
+});
+
+test("declared effort stops are normalized, narrowed against, and survive a reopen", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-efforts-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  // Typed in whatever order the user happened to write them, with a repeat.
+  const added = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    facts: { thinkingEfforts: ["high", "low", "high"] },
+  });
+  assert.deepEqual(added.facts?.thinkingEfforts, ["low", "high"],
+    "stops are de-duplicated and ordered weakest first, so every display shows one ascending scale");
+
+  // The session narrows against the declared stops, not the catalog's wider set.
+  const project = await store.createProject("Efforts");
+  const session = await store.createSession(project.id, "Efforts", added.id);
+  await store.updateSession(session.id, { thinkingEffort: "xhigh", thinkingMode: "enabled" });
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "high",
+    "xhigh is not a stop this endpoint accepts");
+  await store.updateSession(session.id, { thinkingEffort: "low", thinkingMode: "enabled" });
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "low");
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getModel(added.id)?.facts?.thinkingEfforts, ["low", "high"]);
+});
+
+test("an effort name outside the product's own scale is rejected", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-effort-invalid-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const add = (thinkingEfforts: unknown) =>
+    store.materializeProviderModel(provider.id, "gpt-5.5", { facts: { thinkingEfforts } as never });
+  await assert.rejects(add(["low", "extreme"]), /must each be one of low, medium, high, xhigh, max/);
+  await assert.rejects(add("low,high"), /must be a list/);
+  assert.deepEqual(store.listModels(), [], "nothing was persisted from a rejected request");
+});
+
+test("a provider saved without a token lets its models run tokenless", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-empty-token-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  // No apiToken and no separate switch: the empty credential is the statement.
+  const provider = await store.createProvider({
+    apiProtocol: "openai-chat-completions",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    name: "Local gateway",
+  });
+  assert.equal(provider.hasApiToken, false, "the list can tell an empty token from a hidden one");
+  assert.equal(store.getProviderApiToken(provider.id), undefined);
+
+  const model = await store.materializeProviderModel(provider.id, "local-model");
+  assert.equal(model.hasApiToken, false);
+  assert.equal(store.modelAllowsMissingToken(model), true);
+
+  // A run starts: the guard that demands a saved token does not fire.
+  const project = await store.createProject("Local");
+  const session = await store.createSession(project.id, "Local", model.id);
+  assert.equal(store.getSession(session.id)?.modelId, model.id);
+
+  // Saving a token later flips both signals back.
+  const secured = await store.updateProvider(provider.id, { apiToken: "now-required" });
+  assert.equal(secured.hasApiToken, true);
+  assert.equal(store.modelAllowsMissingToken(store.getModel(model.id)!), false,
+    "an endpoint that has a credential must use it");
+  assert.equal(store.getModelApiToken(model.id), "now-required");
+
+  // Removing it again returns to the tokenless contract.
+  const cleared = await store.updateProvider(provider.id, { apiToken: null });
+  assert.equal(cleared.hasApiToken, false);
+  assert.equal(store.modelAllowsMissingToken(store.getModel(model.id)!), true);
+});
+
+test("a standalone profile still needs its own token", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `standalone-needs-token-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const profile = await store.createModel({
+    baseUrl: "https://standalone.example.test/v1",
+    model: "standalone-model",
+    name: "Standalone",
+  });
+  // Nothing vouches for this endpoint, so an absent credential is not a
+  // statement that none is needed.
+  assert.equal(store.modelAllowsMissingToken(profile), false);
 });
