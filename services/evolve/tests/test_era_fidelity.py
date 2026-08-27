@@ -35,7 +35,6 @@ import pytest
 from agentdescent.selection import Candidate, FlatPuct, SelectionContext
 
 from sciencediscovery_evolve.vendor.era import (
-    INITIAL_PROGRAM,
     EraTree,
     Program,
     extract_program,
@@ -222,10 +221,23 @@ def test_a_failed_expansion_is_still_a_node():
 # --------------------------------------------------------------------------
 
 
-def test_gate_accepts_the_upstream_baseline_and_rejects_unsafe_code():
+def test_gate_accepts_an_ordinary_baseline_and_rejects_unsafe_code():
     """The gate is not the security boundary — the sandbox is — but it is what
     makes the ordinary accidents fail in-process with a readable message."""
-    assert validate_source(INITIAL_PROGRAM)[0]
+    # Our own minimal baseline, not upstream's verbatim text (which the OSS
+    # scanner flagged and nothing shipped needs): the point is that the gate
+    # admits an ordinary sklearn program, not any particular wording of one.
+    baseline = (
+        "import pandas as pd\n"
+        "from sklearn.linear_model import LinearRegression\n\n"
+        "def train_and_predict(train_path, test_path):\n"
+        "    train = pd.read_csv(train_path)\n"
+        "    test = pd.read_csv(test_path)\n"
+        "    model = LinearRegression()\n"
+        "    model.fit(train.iloc[:, :-1], train.iloc[:, -1])\n"
+        "    return model.predict(test)\n"
+    )
+    assert validate_source(baseline)[0]
     assert not validate_source("import subprocess\ndef train_and_predict(a, b): return []")[0]
     assert not validate_source(
         "def train_and_predict(a, b):\n    return open('/etc/passwd').read()\n")[0]

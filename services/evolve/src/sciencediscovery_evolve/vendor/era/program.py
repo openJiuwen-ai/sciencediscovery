@@ -163,23 +163,6 @@ FORBIDDEN_CALLS = {
     "__import__",
 }
 
-#: Upstream's `initial_code` from `run_experiment`, verbatim.
-INITIAL_PROGRAM = '''import pandas as pd
-import numpy as np
-from sklearn.linear_model import LinearRegression
-
-def train_and_predict(train_path, test_path):
-    train = pd.read_csv(train_path)
-    test = pd.read_csv(test_path)
-
-    X = train.drop('MedHouseVal', axis=1)
-    y = train['MedHouseVal']
-
-    model = LinearRegression()
-    model.fit(X, y)
-
-    return model.predict(test)
-'''
 
 
 @dataclass

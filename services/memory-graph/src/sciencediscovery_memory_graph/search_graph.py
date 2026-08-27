@@ -38,6 +38,8 @@ write here is idempotent and a Neo4j outage costs nothing but a later replay.
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -610,7 +612,7 @@ def _finite(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number == number and number not in (float("inf"), float("-inf")) else None
+    return number if math.isfinite(number) else None
 
 
 def _clean(row: dict[str, Any]) -> dict[str, Any]:

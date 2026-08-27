@@ -49,7 +49,7 @@ from .measurement import Dataset, Measurement, measure_shards, shard_indices, TE
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
 from .vendor.era.domain import Domain
-from .vendor.era.program import INITIAL_PROGRAM, Program
+from .vendor.era.program import Program
 from .vendor.era.sandbox import SandboxCapability
 from .vendor.era.tree import finite as _finite
 
@@ -133,7 +133,12 @@ def scorecard_domain(
         # The scorecard's normalisation has already turned every criterion so
         # that larger is better; the aggregate inherits that.
         metric_better="higher",
-        initial_program=baseline_code or INITIAL_PROGRAM,
+        # No fallback: a run with no starting point is refused upstream (the
+        # proposal validator, then the engine's seed check). Substituting a
+        # canned program here would make "forgot the baseline" run a search on
+        # something nobody asked about — and the canned text was verbatim
+        # upstream code the OSS scanner rightly flagged.
+        initial_program=baseline_code,
         initial_summary="基线程序",
         evaluate=evaluate,
         reward=reward,
