@@ -81,6 +81,7 @@ test("Session title refinement uses an OpenAI-compatible model and records provi
 
   assert.equal(requestBody?.model, model.model);
   assert.equal(requestBody?.thinking, undefined);
+  assert.equal(requestBody?.max_tokens, undefined);
   const messages = requestBody?.messages as Array<{ content: string; role: string }>;
   assert.equal(messages[0]?.role, "system");
   assert.doesNotMatch(messages[0]?.content ?? "", /no more than|characters/i);
@@ -116,18 +117,145 @@ test("Session title refinement disables DeepSeek thinking mode", async () => {
   });
 
   assert.deepEqual(requestBody?.thinking, { type: "disabled" });
+  assert.equal(requestBody?.max_tokens, 64);
   assert.equal(refined.title, "Trump news search");
 });
 
-test("Session title refinement rejects a provider-truncated title", async () => {
+test("Session title refinement disables thinking for compatible DeepSeek and GLM model IDs", async () => {
+  for (const endpoint of [
+    { baseUrl: "https://models.example.test/v1", model: "deepseek-v4-flash" },
+    { baseUrl: "https://api.modelarts-maas.com/openai/v1", model: "glm-5.2" },
+  ]) {
+    let requestBody: Record<string, unknown> | undefined;
+    const refined = await generateRefinedSessionTitle({
+      apiToken: "secret",
+      fetchImpl: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({
+          choices: [{ finish_reason: "stop", message: { content: "模型兼容性分析" } }],
+          usage: { completion_tokens: 4, prompt_tokens: 20, total_tokens: 24 },
+        }), { status: 200 });
+      },
+      firstMessage: "分析模型兼容性",
+      model: { ...model, ...endpoint },
+    });
+
+    assert.deepEqual(requestBody?.thinking, { type: "disabled" });
+    assert.equal(requestBody?.max_tokens, 64);
+    assert.equal(refined.title, "模型兼容性分析");
+  }
+});
+
+test("Session title refinement retries without thinking for a strict compatible endpoint", async () => {
+  const requestBodies: Array<Record<string, unknown>> = [];
+  const refined = await generateRefinedSessionTitle({
+    apiToken: "secret",
+    fetchImpl: async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (requestBodies.length === 1) {
+        return new Response(JSON.stringify({ error: "Unknown field: thinking" }), { status: 400 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: "Gateway fallback" } }],
+        usage: { completion_tokens: 2, prompt_tokens: 20, total_tokens: 22 },
+      }), { status: 200 });
+    },
+    firstMessage: "Test a strict gateway",
+    model: { ...model, model: "deepseek-v4-flash" },
+  });
+
+  assert.equal(requestBodies.length, 2);
+  assert.deepEqual(requestBodies[0]?.thinking, { type: "disabled" });
+  assert.equal(requestBodies[0]?.max_tokens, 64);
+  assert.equal(requestBodies[1]?.thinking, undefined);
+  assert.equal(requestBodies[1]?.max_tokens, undefined);
+  assert.equal(refined.title, "Gateway fallback");
+});
+
+test("Session title refinement retries without a token limit when a gateway ignores thinking control", async () => {
+  const requestBodies: Array<Record<string, unknown>> = [];
+  const visibleAnswer = "A comprehensive analysis of TP53 expression across all treatment cohorts";
+  const refined = await generateRefinedSessionTitle({
+    apiToken: "secret",
+    fetchImpl: async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (requestBodies.length === 1) {
+        return new Response(JSON.stringify({
+          choices: [{
+            finish_reason: "length",
+            message: { content: "", reasoning_content: "The model spent the entire output budget reasoning" },
+          }],
+          usage: {
+            completion_tokens: 64,
+            completion_tokens_details: { reasoning_tokens: 64 },
+            prompt_tokens: 30,
+            total_tokens: 94,
+          },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{
+          finish_reason: "stop",
+          message: {
+            content: visibleAnswer,
+            reasoning_content: "This must not become the Session title",
+          },
+        }],
+        usage: { completion_tokens: 120, prompt_tokens: 30, total_tokens: 150 },
+      }), { status: 200 });
+    },
+    firstMessage: "Analyze TP53 expression across all treatment cohorts",
+    model: { ...model, model: "deepseek-v4-flash" },
+  });
+
+  assert.equal(requestBodies.length, 2);
+  assert.equal(requestBodies[0]?.max_tokens, 64);
+  assert.deepEqual(requestBodies[0]?.thinking, { type: "disabled" });
+  assert.equal(requestBodies[1]?.max_tokens, undefined);
+  assert.equal(requestBodies[1]?.thinking, undefined);
+  assert.equal(refined.title, createLocalSessionTitle(visibleAnswer));
+  assert.equal(Array.from(refined.title).length, SESSION_TITLE_MAX_CHARACTERS);
+  assert.deepEqual(refined.usage, {
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    inputTokens: 60,
+    outputTokens: 184,
+    totalTokens: 244,
+    usageStatus: "reported",
+  });
+});
+
+test("Session title refinement keeps a usable provider-limited title", async () => {
+  const refined = await generateRefinedSessionTitle({
+    apiToken: "secret",
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{
+        finish_reason: "length",
+        message: { content: "A usable title" },
+      }],
+      usage: { completion_tokens: 64, prompt_tokens: 30, total_tokens: 94 },
+    }), { status: 200 }),
+    firstMessage: "Analyze a large multi-cohort study",
+    model,
+  });
+
+  assert.equal(refined.title, "A usable title");
+});
+
+test("Session title refinement rejects a provider-truncated empty title", async () => {
   await assert.rejects(generateRefinedSessionTitle({
     apiToken: "secret",
     fetchImpl: async () => new Response(JSON.stringify({
       choices: [{
         finish_reason: "length",
-        message: { content: "An incomplete title that ends in the middle of" },
+        message: { content: "", reasoning_content: "The model spent the output budget reasoning" },
       }],
-      usage: { completion_tokens: 64, prompt_tokens: 30, total_tokens: 94 },
+      usage: {
+        completion_tokens: 64,
+        completion_tokens_details: { reasoning_tokens: 64 },
+        prompt_tokens: 30,
+        total_tokens: 94,
+      },
     }), { status: 200 }),
     firstMessage: "Analyze a large multi-cohort study",
     model,

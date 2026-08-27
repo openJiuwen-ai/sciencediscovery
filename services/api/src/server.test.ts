@@ -926,11 +926,14 @@ async function startTextModel(context: TestContext, delayed = false): Promise<{
   };
 }
 
+const AUTO_NAMING_RESPONSE_TITLE = "Refined TP53 expression study";
+const AUTO_NAMING_STORED_TITLE = createLocalSessionTitle(AUTO_NAMING_RESPONSE_TITLE);
+
 async function startAutoNamingModel(
   context: TestContext,
   delayNaming = false,
   delayTask = false,
-  namingTitle = "Refined TP53 expression study",
+  namingTitle = AUTO_NAMING_RESPONSE_TITLE,
 ): Promise<{
   baseUrl: string;
   namingRequests: Array<{ messages?: Array<{ content?: string; role?: string }> }>;
@@ -1261,13 +1264,13 @@ test("creating a Project opens an implicit Session and refines its first-message
       `${origin}/api/sessions/${created.body.firstSession.id}`,
       { headers: authorization },
     );
-    if (current.body.title === "Refined TP53 expression study") {
+    if (current.body.title === AUTO_NAMING_STORED_TITLE) {
       named = current.body;
       break;
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
   }
-  assert.equal(named?.title, "Refined TP53 expression study");
+  assert.equal(named?.title, AUTO_NAMING_STORED_TITLE);
   assert.equal(namingModel.namingRequests.length, 1);
   const usage = await jsonRequest<SessionUsageSummary>(
     `${origin}/api/sessions/${created.body.firstSession.id}/usage`,
@@ -1350,13 +1353,13 @@ test("every later unnamed Session independently reuses first-message automatic n
         `${origin}/api/sessions/${createdSession.body.id}`,
         { headers: authorization },
       );
-      if (current.body.title === "Refined TP53 expression study") {
+      if (current.body.title === AUTO_NAMING_STORED_TITLE) {
         named = current.body;
         break;
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
     }
-    assert.equal(named?.title, "Refined TP53 expression study");
+    assert.equal(named?.title, AUTO_NAMING_STORED_TITLE);
   }
   assert.equal(namingModel.namingRequests.length, firstMessages.length);
 });
@@ -1390,13 +1393,13 @@ test("Session title refinement completes while the first task is still running",
         `${origin}/api/sessions/${created.body.firstSession.id}`,
         { headers: authorization },
       );
-      if (current.body.title === "Refined TP53 expression study") {
+      if (current.body.title === AUTO_NAMING_STORED_TITLE) {
         refined = current.body;
         break;
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
     }
-    assert.equal(refined?.title, "Refined TP53 expression study");
+    assert.equal(refined?.title, AUTO_NAMING_STORED_TITLE);
     const runs = await jsonRequest<SessionRun[]>(
       `${origin}/api/sessions/${created.body.firstSession.id}/runs`,
       { headers: authorization },
@@ -1456,13 +1459,13 @@ test("Session title refinement persists when the naming model finishes after the
       `${origin}/api/sessions/${created.body.firstSession.id}`,
       { headers: authorization },
     );
-    if (current.body.title === "Refined TP53 expression study") {
+    if (current.body.title === AUTO_NAMING_STORED_TITLE) {
       refined = current.body;
       break;
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
   }
-  assert.equal(refined?.title, "Refined TP53 expression study");
+  assert.equal(refined?.title, AUTO_NAMING_STORED_TITLE);
 
   const runs = await jsonRequest<SessionRun[]>(
     `${origin}/api/sessions/${created.body.firstSession.id}/runs`,
@@ -1474,12 +1477,12 @@ test("Session title refinement persists when the naming model finishes after the
     runs.body[0]!.id,
     (records) => records.some((record) =>
       record.event.type === "session.updated"
-      && record.event.session.title === "Refined TP53 expression study"),
+      && record.event.session.title === AUTO_NAMING_STORED_TITLE),
   );
   const terminalEvent = events.find((record) => record.event.type === "run.completed");
   const refinedEvent = events.find((record) =>
     record.event.type === "session.updated"
-    && record.event.session.title === "Refined TP53 expression study");
+    && record.event.session.title === AUTO_NAMING_STORED_TITLE);
   assert.ok(terminalEvent);
   assert.ok(refinedEvent);
   assert.ok(refinedEvent.sequence > terminalEvent.sequence);
