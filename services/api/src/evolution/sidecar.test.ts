@@ -111,23 +111,35 @@ test("a sidecar refusal reaches the user as its sentence, not as a response body
   // `{"detail":{"code":"probe_failed","message":"…"}}` pasted onto the screen,
   // with the sentence buried inside the wrapper.
   const wrapped = new Response(
-    JSON.stringify({ detail: { code: "probe_failed", message: "起点本身就跑不起来，它报的是：SyntaxError" } }),
+    JSON.stringify({ detail: { code: "probe_failed", message: "the starting point does not run. It reported: SyntaxError" } }),
     { status: 400 },
   );
-  assert.equal(await refusal(wrapped, "判别力探针没能进行"), "起点本身就跑不起来，它报的是：SyntaxError");
+  assert.equal(
+    await refusal(wrapped, "the discrimination probe could not be taken"),
+    "the starting point does not run. It reported: SyntaxError",
+  );
 });
 
 test("an older handler's bare string detail reads the same way", async () => {
-  const bare = new Response(JSON.stringify({ detail: "这张评分卡没有判据" }), { status: 400 });
-  assert.equal(await refusal(bare, "判别力探针没能进行"), "这张评分卡没有判据");
+  const bare = new Response(JSON.stringify({ detail: "this scorecard has no criteria" }), { status: 400 });
+  assert.equal(
+    await refusal(bare, "the discrimination probe could not be taken"),
+    "this scorecard has no criteria",
+  );
 });
 
 test("a body that is not the shape we expect still says something", async () => {
   // A proxy page, a validation array, an empty body: none of them has a
   // sentence to lift, and silence would be worse than the status code.
   const html = new Response("<html>502 Bad Gateway</html>", { status: 502 });
-  assert.match(await refusal(html, "判别力探针没能进行"), /判别力探针没能进行（502）/);
+  assert.match(
+    await refusal(html, "the discrimination probe could not be taken"),
+    /the discrimination probe could not be taken \(502\)/,
+  );
 
   const validation = new Response(JSON.stringify({ detail: [{ loc: ["body"] }] }), { status: 422 });
-  assert.match(await refusal(validation, "判别力探针没能进行"), /判别力探针没能进行（422）/);
+  assert.match(
+    await refusal(validation, "the discrimination probe could not be taken"),
+    /the discrimination probe could not be taken \(422\)/,
+  );
 });

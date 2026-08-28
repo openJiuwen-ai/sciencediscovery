@@ -33,7 +33,7 @@ at the end, for the winner; anything that reads them during the search has
 spent them.
 
 **One execution serves every criterion that shares a shard.** A scorecard of
-"RMSE + 训练时长" over the same dataset costs one run per shard, not two: the
+"RMSE + training time" over the same dataset costs one run per shard, not two: the
 executions are keyed by ``(train, test)`` and each criterion computes its own
 metric from the same predictions. Without that, adding a cheap second criterion
 would double the wall clock of every expansion.
@@ -60,7 +60,7 @@ GATE = "gate"
 TEST = "test"
 
 #: Measured from the runner payload rather than from predictions, so a criterion
-#: using it needs no dataset of its own. This is what makes a "训练时长 < 300s"
+#: using it needs no dataset of its own. This is what makes a "training time < 300s"
 #: veto expressible: a constraint refers to a criterion, and a criterion needs
 #: something to measure.
 SECONDS_METRIC = "seconds"
@@ -164,19 +164,20 @@ def load_dataset(root: Optional[str], scorecard: Mapping[str, Any]) -> Dataset:
     if not root:
         if needs_data:
             raise DatasetError(
-                "这次搜索没有暂存数据集，但评分卡有 "
-                f"{len(needs_data)} 个判据要在数据上测量：{', '.join(_metric_name(c) for c in needs_data)}"
+                "this search has no staged dataset, but the scorecard has "
+                f"{len(needs_data)} criteria that must be measured on data: "
+                f"{', '.join(_metric_name(c) for c in needs_data)}"
             )
         return Dataset(tuple(CriterionPlan(c["id"], SECONDS_METRIC) for c in criteria))
 
     base = Path(root)
     manifest_path = base / "manifest.json"
     if not manifest_path.exists():
-        raise DatasetError(f"暂存目录 {root} 里没有 manifest.json")
+        raise DatasetError(f"the staging directory {root} has no manifest.json")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
-        raise DatasetError(f"manifest.json 无法解析：{error}") from error
+        raise DatasetError(f"manifest.json does not parse: {error}") from error
 
     staged = manifest.get("criteria") or {}
     plans: List[CriterionPlan] = []
@@ -184,22 +185,23 @@ def load_dataset(root: Optional[str], scorecard: Mapping[str, Any]) -> Dataset:
         metric = _metric_name(criterion)
         if not supported_metric(metric):
             raise DatasetError(
-                f"判据「{criterion.get('name', criterion['id'])}」用的指标 {metric!r} 这个引擎还不会算；"
-                f"支持的是 {sorted(METRICS)} 与 {SECONDS_METRIC!r}"
+                f"criterion \"{criterion.get('name', criterion['id'])}\" uses the metric "
+                f"{metric!r}, which this engine cannot compute yet; supported are "
+                f"{sorted(METRICS)} and {SECONDS_METRIC!r}"
             )
         if metric == SECONDS_METRIC:
             plans.append(CriterionPlan(criterion["id"], metric))
             continue
         entry = staged.get(criterion["id"])
         if not entry:
-            raise DatasetError(f"暂存的数据集里没有判据 {criterion['id']!r} 的分片")
+            raise DatasetError(f"the staged dataset has no shards for criterion {criterion['id']!r}")
         plans.append(CriterionPlan(criterion["id"], metric, _shards(base, entry)))
 
     for role in (ROLLOUT, GATE):
         if needs_data and not any(plan.of_role(role) for plan in plans):
             # Missing gate shards would let every candidate through unmeasured;
             # missing rollout shards leave the search with nothing to rank on.
-            raise DatasetError(f"暂存的数据集没有 {role} 分片，接受门与排名都无从谈起")
+            raise DatasetError(f"the staged dataset has no {role} shards, so there is no acceptance gate and no ranking")
     return Dataset(tuple(plans))
 
 
@@ -210,8 +212,8 @@ def _metric_name(criterion: Mapping[str, Any]) -> str:
         # (test_gate runs a suite, llm_judge calls a model). Refusing by name
         # beats measuring the wrong thing.
         raise DatasetError(
-            f"判据「{criterion.get('name', criterion.get('id'))}」的测量方式 "
-            f"{measure.get('kind')!r} 这个引擎还不支持"
+            f"criterion \"{criterion.get('name', criterion.get('id'))}\" is measured by "
+            f"{measure.get('kind')!r}, which this engine does not support yet"
         )
     return str((measure.get("metric") or {}).get("name") or "")
 
@@ -221,14 +223,14 @@ def _shards(base: Path, entry: Mapping[str, Any]) -> Tuple[Shard, ...]:
     for raw in entry.get("shards") or []:
         role = str(raw.get("role"))
         if role not in (ROLLOUT, GATE, TEST):
-            raise DatasetError(f"分片角色 {role!r} 不认识")
+            raise DatasetError(f"unknown shard role {role!r}")
         truth_path = base / str(raw["truth"])
         try:
             truth = tuple(float(value) for value in json.loads(truth_path.read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
-            raise DatasetError(f"分片 {raw.get('index')} 的真值读不出来：{error}") from error
+            raise DatasetError(f"the truth for shard {raw.get('index')} cannot be read: {error}") from error
         if not truth:
-            raise DatasetError(f"分片 {raw.get('index')} 的真值是空的")
+            raise DatasetError(f"the truth for shard {raw.get('index')} is empty")
         shards.append(Shard(
             index=int(raw.get("index", len(shards))),
             role=role,
@@ -301,7 +303,7 @@ def measure_shards(
     """
     groups = _executions_for(dataset, indices)
     if not groups:
-        return Measurement(ok=False, error=f"没有 {what or '这些'} 分片可测")
+        return Measurement(ok=False, error=f"there are no {what or 'such'} shards to measure")
 
     per_criterion: Dict[str, List[float]] = {}
     durations: List[float] = []
@@ -319,7 +321,7 @@ def measure_shards(
             return Measurement(
                 ok=False,
                 seconds=float(payload.get("seconds") or 0.0),
-                error=str(payload.get("error") or "候选执行失败"),
+                error=str(payload.get("error") or "the candidate failed to run"),
             )
         predictions = payload.get("predictions") or []
         if any(not math.isfinite(value) for value in predictions):
@@ -328,23 +330,24 @@ def measure_shards(
             # makes the same candidate fail differently depending on the
             # scorecard. A NaN score poisons every average it touches and still
             # ranks as a real number downstream.
-            return Measurement(ok=False, error="候选给出了非有限的预测值（NaN 或 inf）")
+            return Measurement(ok=False, error="the candidate produced non-finite predictions (NaN or inf)")
         durations.append(float(payload.get("seconds") or 0.0))
         for criterion_id, metric, truth in wants:
             if len(predictions) != len(truth):
                 return Measurement(
                     ok=False,
-                    error=f"候选给出 {len(predictions)} 个预测，分片要 {len(truth)} 个",
+                    error=f"the candidate produced {len(predictions)} predictions; the shard "
+                          f"needs {len(truth)}",
                 )
             try:
                 value = METRICS[metric](predictions, truth)
             except (ArithmeticError, TypeError, ValueError) as error:
-                return Measurement(ok=False, error=f"指标 {metric} 算不出来：{error}")
+                return Measurement(ok=False, error=f"metric {metric} cannot be computed: {error}")
             if not math.isfinite(value):
                 # A candidate returning NaN is a failed candidate, not a
                 # candidate scoring NaN: the second would poison every average
                 # it touches and rank as a real number downstream.
-                return Measurement(ok=False, error=f"指标 {metric} 得到非有限值")
+                return Measurement(ok=False, error=f"metric {metric} came out non-finite")
             per_criterion.setdefault(criterion_id, []).append(value)
 
     mean_seconds = sum(durations) / len(durations) if durations else 0.0

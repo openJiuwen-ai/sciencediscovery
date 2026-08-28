@@ -142,9 +142,9 @@ def test_criteria_are_flattened_into_queryable_properties() -> None:
 
 def test_an_accepted_candidate_moves_the_elected_edge() -> None:
     result = plan([
-        record(6, {"accepted": True, "nodeIndex": 1, "reason": "留出门分数提升", "type": "merged"}),
+        record(6, {"accepted": True, "nodeIndex": 1, "reason": "the hold-out gate score improved", "type": "merged"}),
         record(7, {"accepted": False, "category": "constraint-violated", "nodeIndex": 2,
-                   "reason": "太慢", "rejectedBy": "too-slow", "type": "merged"}),
+                   "reason": "too slow", "rejectedBy": "too-slow", "type": "merged"}),
     ])
 
     assert result.elected_index == 1, "a refused candidate must not become the best"

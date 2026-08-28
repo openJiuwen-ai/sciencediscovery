@@ -118,7 +118,7 @@ class StubEngine:
                 change_summary=_change_summary(iteration, valid),
                 code_hash=_code_hash(spec.search_id, index),
                 code_chars=420 + 37 * index,
-                error=None if valid else "候选执行失败：SyntaxError: unexpected EOF while parsing",
+                error=None if valid else "the candidate failed to run: SyntaxError: unexpected EOF while parsing",
                 iteration=iteration,
                 worker=(iteration - 1) % max(spec.workers, 1),
             ))
@@ -127,19 +127,19 @@ class StubEngine:
                 emit(events.evaluated(index, score, {"stub": score}, gate_score=score, rollout_score=score))
                 if iteration == _CONSTRAINED_EXPANSION:
                     emit(events.merged(
-                        index, False, "训练时长 412s 超过否决项上限 300s",
+                        index, False, "training time 412s is over the 300s veto limit",
                         category="constraint-violated", rejected_by=_CONSTRAINT_ID,
                     ))
                 else:
                     accepted = score > _best_score(nodes[:-1], baseline)
                     emit(events.merged(
                         index, accepted,
-                        "留出门分数提升" if accepted else "提升不显著",
+                        "the hold-out gate score improved" if accepted else "the improvement is not significant",
                         category=None if accepted else "below-threshold",
                     ))
             else:
                 emit(events.merged(
-                    index, False, "候选无法执行，记为失败节点", category="below-threshold",
+                    index, False, "the candidate would not run; recorded as a failed node", category="below-threshold",
                 ))
 
             tokens += 1400 + 60 * iteration
@@ -217,8 +217,8 @@ def _best_node(nodes: list[_Node]) -> _Node | None:
 
 def _change_summary(iteration: int, valid: bool) -> str:
     if not valid:
-        return "重写特征工程段（候选未通过语法检查）"
-    return f"第 {iteration} 次变异：加入交互特征并调整正则强度"
+        return "rewrote the feature engineering section (the candidate failed the syntax check)"
+    return f"mutation {iteration}: added interaction features and adjusted the regularisation strength"
 
 
 def _code_hash(search_id: str, index: int) -> str:

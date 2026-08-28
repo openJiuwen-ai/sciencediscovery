@@ -124,7 +124,7 @@ def scorecard_domain(
         )
 
     def task_prompt(shard: int) -> str:
-        return f"在分片 {shard} 上评测这个程序"
+        return f"evaluate this program on shard {shard}"
 
     return Domain(
         name=str(scorecard.get("hash") or "scorecard"),
@@ -139,7 +139,7 @@ def scorecard_domain(
         # something nobody asked about — and the canned text was verbatim
         # upstream code the OSS scanner rightly flagged.
         initial_program=baseline_code,
-        initial_summary="基线程序",
+        initial_summary="the baseline program",
         evaluate=evaluate,
         reward=reward,
         prompt=prompt,

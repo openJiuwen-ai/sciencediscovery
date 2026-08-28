@@ -175,7 +175,8 @@ def completion_for(
             # never came back and a model that answered with nothing are the
             # same empty string here and need opposite fixes — one is the
             # provider, one is the prompt or the token ceiling — and reporting
-            # both as "模型返回了空回复" sends the user to read output that was
+            # both as "the model returned an empty reply" sends the user to read
+            # output that was
             # never produced.
             log.warning("completion failed: HTTP %s %s", error.code, detail)
             failures.append(f"HTTP {error.code}：{detail}")

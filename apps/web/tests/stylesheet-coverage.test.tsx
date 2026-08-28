@@ -18,7 +18,7 @@
  * This has now failed silently twice, the same way both times: a wholesale
  * block replacement in `evolve.css` swallowed neighbouring rules, the markup
  * kept referencing the class, and the element rendered bare. The correction
- * box became a two-row postage stamp; the artifact page's "把这个做得更好"
+ * box became a two-row postage stamp; the artifact page's "make this better"
  * button was crushed by its flex row into one character per line. Nothing
  * type-checks a className against a stylesheet, no unit test renders CSS, so
  * the only detector was a person looking at the screen — the slowest and most
@@ -84,6 +84,7 @@ test("every evolve class in the markup still has a rule in the stylesheet", () =
   assert.deepEqual(
     missing.sort(),
     [],
-    `这些 class 在标记里用着，样式表里却没有规则——多半又是一次整块替换把它们吞了：${missing.join(", ")}`,
+    `these classes are used in the markup but have no rule in the stylesheet — most likely `
+    + `another wholesale replacement swallowed them: ${missing.join(", ")}`,
   );
 });

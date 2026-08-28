@@ -38,7 +38,7 @@ const SPLIT: EvolveSplit = {
 
 function criterion(overrides: Partial<EvolveSplit> = {}, target = "y"): ScorecardCriterion {
   return {
-    direction: "maximize", id: "acc", name: "准确率",
+    direction: "maximize", id: "acc", name: "accuracy",
     measure: {
       datasetCas: ["sha256:" + "a".repeat(64)], kind: "dataset_metric",
       metric: { direction: "maximize", name: "accuracy" },
@@ -123,8 +123,8 @@ test("a dataset too small for the requested shards is refused with the numbers",
   assert.throws(() => planSplit(10, SPLIT), (error: Error) => {
     assert.ok(error instanceof DatasetStagingError);
     // The numbers, so the user can see which knob to turn.
-    assert.match(error.message, /10 行/);
-    assert.match(error.message, /15 行/);
+    assert.match(error.message, /10 rows/);
+    assert.match(error.message, /15 in total/);
     return true;
   });
 });
@@ -218,7 +218,7 @@ test("the manifest names every shard and its role", async () => {
 test("a criterion measured on time needs no dataset staged", async () => {
   const directory = await scratch("seconds");
   const seconds: ScorecardCriterion = {
-    direction: "minimize", id: "secs", name: "训练时长",
+    direction: "minimize", id: "secs", name: "training time",
     measure: {
       datasetCas: [], kind: "dataset_metric",
       metric: { direction: "minimize", name: "seconds" },
@@ -280,7 +280,7 @@ test("a dataset that is not in the store is named, not swallowed", async () => {
     stageDataset({ cas: fakeCas({}), directory, scorecard: scorecard([criterion()]) }),
     (error: Error) => {
       assert.ok(error instanceof DatasetStagingError);
-      assert.match(error.message, /不在内容库里/);
+      assert.match(error.message, /not in the content store/);
       return true;
     },
   );

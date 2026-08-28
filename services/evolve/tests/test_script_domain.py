@@ -35,7 +35,7 @@ CARD: Dict[str, Any] = {
     "aggregate": "weighted_sum",
     "constraints": [],
     "criteria": [{
-        "direction": "maximize", "id": "exact_match", "name": "逐字段全对率",
+        "direction": "maximize", "id": "exact_match", "name": "per-field exact match rate",
         "measure": {
             "kind": "custom_script",
             "scriptCas": "sha256:script",
@@ -76,14 +76,14 @@ BAD = "def measure(text):\n    return 0\n"
 
 live = pytest.mark.skipif(
     not detect_local_capability().available,
-    reason="需要真沙箱：候选是模型写的代码，不隔离就不该执行",
+    reason="needs a real sandbox: a candidate is model-written code and must not run unisolated",
 )
 
 
 def domain(script: str = EVALUATOR, card: Dict[str, Any] = CARD):
     return script_domain(
         scorecard=card, script=script, capability=detect_local_capability(),
-        statement="把长度算对", baseline_code=BAD, candidate_timeout=60.0,
+        statement="Get the length right", baseline_code=BAD, candidate_timeout=60.0,
     )
 
 
@@ -123,7 +123,7 @@ def test_a_candidate_printing_on_stdout_does_not_disturb_the_result():
 
 @live
 def test_an_evaluator_that_writes_nothing_names_itself_rather_than_the_candidate():
-    with pytest.raises(ScriptError, match="结果文件"):
+    with pytest.raises(ScriptError, match="result file"):
         domain("import os\n").evaluate(GOOD, [0])
 
 
@@ -173,7 +173,7 @@ def test_an_evaluator_that_crashes_is_a_run_fault_not_a_bad_candidate():
 
 
 def test_an_empty_evaluator_is_refused_before_anything_runs():
-    with pytest.raises(ScriptError, match="脚本是空的"):
+    with pytest.raises(ScriptError, match="the script is empty"):
         script_domain(scorecard=CARD, script="   ", capability=detect_local_capability())
 
 
@@ -186,7 +186,8 @@ def test_the_held_out_shards_are_the_last_ones():
 @live
 def test_an_unexplained_invalid_still_carries_whatever_the_evaluator_did_say():
     # valid:false with no error field, seen on a real run: the candidate card
-    # read "评测脚本判这个候选不成立" and nothing else. The metrics it still
+    # read "the evaluator marked this candidate invalid" and nothing else. The
+    # metrics it still
     # reported are the next best thing to a reason.
     silent = (
         'import json, os\n'
@@ -202,7 +203,7 @@ def test_an_unexplained_invalid_still_carries_whatever_the_evaluator_did_say():
         '    json.dump({"valid": False}, handle)\n'
     )
     _valid, _metrics, error = domain(bare).evaluate(GOOD, [0])
-    assert "没有说原因" in error
+    assert "gave no reason" in error
 
 
 @live
@@ -210,7 +211,7 @@ def test_a_candidate_the_evaluator_calls_invalid_enters_the_tree_scoring_nothing
     refuses = (
         'import json, os\n'
         'with open(os.environ["SCIENCE_AGENT_RESULT"], "w") as handle:\n'
-        '    json.dump({"valid": False, "error": "候选没有 measure 函数"}, handle)\n'
+        '    json.dump({"valid": False, "error": "the candidate has no measure function"}, handle)\n'
     )
     valid, metrics, error = domain(refuses).evaluate("x = 1\n", [0])
     assert valid is False
@@ -222,7 +223,8 @@ def test_a_candidate_the_evaluator_calls_invalid_enters_the_tree_scoring_nothing
 def test_the_evaluators_diagnosis_reaches_the_mutation_prompt():
     """Score-plus-silence is what produced six identical zeros on a real run.
 
-    The evaluator said why — "超出求值预算" — into the error field; the node
+    The evaluator said why — "blew the evaluation budget" — into the error
+    field; the node
     stored it; the UI showed it; and the one reader who could act on it, the
     reflector, was told only the number. It kept proposing new variants of the
     same overspend because nothing distinguished them from wrong answers.
@@ -233,17 +235,17 @@ def test_the_evaluators_diagnosis_reaches_the_mutation_prompt():
     parent = Program(
         program_id="p", iteration=1, parent_id=None, code=GOOD,
         change_summary="", metrics={"score": 0.0}, valid=True,
-        error="3/6 条样例超出求值预算，其余误差正常",
+        error="3 of 6 cases blew the evaluation budget; the rest are fine",
     )
     text = d.prompt(parent)
-    assert "评测对它的诊断" in text
-    assert "超出求值预算" in text
+    assert "What the evaluator said about it" in text
+    assert "blew the evaluation budget" in text
 
     quiet = Program(
         program_id="q", iteration=1, parent_id=None, code=GOOD,
         change_summary="", metrics={"score": 0.5}, valid=True, error="",
     )
-    assert "评测对它的诊断" not in d.prompt(quiet)
+    assert "What the evaluator said about it" not in d.prompt(quiet)
 
 
 
@@ -405,7 +407,7 @@ def test_an_evaluator_that_dies_on_import_is_named_as_the_fault():
         domain.evaluate("def build():\n    return None\n_CODES = build()\n_CODES[1]\n", (0,))
 
     said = str(caught.value)
-    assert "评测脚本" in said
+    assert "evaluator" in said
 
 
 
@@ -475,18 +477,19 @@ def test_the_probe_pays_for_four_evaluations_and_no_more():
 def test_every_code_template_asks_for_one_change_not_a_rewrite():
     """The three code templates drifted, and the drift cost a whole run.
 
-    Only the measured template said "做一处实质改动". The scripted and
-    test-gate ones said just "输出完整可运行的程序", which reads as an
-    invitation to write one from scratch — and a live compression run did
-    exactly that: a working 6571-character RLE+Huffman seed, eleven candidates
-    that each replaced the entire mechanism ("替换原有的 RLE+Huffman 方案"),
-    ten of which did not run, and a tree still flat at depth 1 at the end.
+    Only the measured template said "make one substantive change". The scripted
+    and test-gate ones said just "output a complete runnable program", which
+    reads as an invitation to write one from scratch — and a live compression
+    run did exactly that: a working 6571-character RLE+Huffman seed, eleven
+    candidates that each replaced the entire mechanism ("replaced the RLE+Huffman
+    scheme"), ten of which did not run, and a tree still flat at depth 1 at the
+    end.
 
     Pinned across all three so the next template added cannot quietly omit it.
     """
     from sciencediscovery_evolve.prompt import mutation_prompt
 
-    common = dict(statement="让它更好", scorecard={}, parent_code="def f():\n    return 1\n",
+    common = dict(statement="Make it better", scorecard={}, parent_code="def f():\n    return 1\n",
                   parent_score=0.62, best_score=0.62)
     modes = {
         "measured": mutation_prompt(**common),
@@ -494,20 +497,22 @@ def test_every_code_template_asks_for_one_change_not_a_rewrite():
         "test_gate": mutation_prompt(**common, frozen=["tests/**"]),
     }
     for name, text in modes.items():
-        block = text[text.index("## 怎么改"):]
+        block = text[text.index("## How to change it"):]
         # The objective, stated as the objective: which approach wins is the
-        # search's question. An earlier version led with "不要整套换掉", which
-        # is a rule about the mechanism — the human picking the algorithm and
-        # leaving the run to tune it.
-        assert "唯一的目标是把分数做上去" in block, f"{name} 没把分数摆成目标"
+        # search's question. An earlier version led with "do not replace the
+        # whole thing", which is a rule about the mechanism — the human picking
+        # the algorithm and leaving the run to tune it.
+        assert "The only goal is to raise the score" in block, \
+            f"{name} does not put the score up front as the objective"
         # And the reason the advice holds: a broken candidate scores 0, which
         # is worse than leaving the parent alone, with the expansion spent.
-        assert "跑不起来就是 0 分" in block, f"{name} 没说清失败的代价"
-        assert "一处" in block, f"{name} 没让模型收窄改动范围"
-        assert "不许换方案" not in block.replace("不是因为不许换方案", ""), \
-            f"{name} 把换方案本身当成了错的"
+        assert "does not run scores 0" in block, f"{name} does not say what failure costs"
+        assert "that one part" in block, f"{name} does not narrow the change"
+        assert "forbidden" not in block.replace(
+            "not because swapping the approach is forbidden", ""), \
+            f"{name} treats swapping the approach as wrong in itself"
 
     # The judged mode rewrites prose, where a rewrite neither crashes nor
     # scores zero — the advice would be wrong there, so it must stay out.
-    judged = mutation_prompt(**common, rubric="写得更清楚")
-    assert "跑不起来" not in judged
+    judged = mutation_prompt(**common, rubric="Make it clearer")
+    assert "does not run scores 0" not in judged

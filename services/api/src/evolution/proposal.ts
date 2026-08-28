@@ -87,13 +87,14 @@ const MIN_ROLLOUT = 4;
  *  scoring exactly 0.6000 with the whole budget spent. */
 function splitTooThin(split: EvolveSplit): string | undefined {
   if (split.rolloutShards < MIN_ROLLOUT) {
-    return `rollout 只有 ${split.rolloutShards} 片，不同的候选会拿到同一个分数，`
-      + `搜索没有可比的东西——至少 ${MIN_ROLLOUT} 片`;
+    return `only ${split.rolloutShards} rollout shards means different candidates land on the `
+      + `same score and the search has nothing to compare — use at least ${MIN_ROLLOUT}`;
   }
   if (split.gateShards < split.rolloutShards) {
-    return `留出门 ${split.gateShards} 片比 rollout 的 ${split.rolloutShards} 片还少。`
-      + "每个候选的分数——树用来排名、选择、判定最优的那个数——只在留出门上量，"
-      + "所以它应该是三者里最大的一份，而不是最小的";
+    return `${split.gateShards} gate shards is fewer than the ${split.rolloutShards} rollout `
+      + "shards. Every candidate's score — the number the tree ranks, selects and picks a "
+      + "winner by — is measured on the gate alone, so it should be the largest of the three "
+      + "rather than the smallest";
   }
   return undefined;
 }
@@ -123,7 +124,7 @@ async function storePath(
   try {
     return await deps.store({ path: workspaceRelative(path) });
   } catch (error) {
-    throw new PathRefusal(`${field} 指的 ${path} 读不出来：${
+    throw new PathRefusal(`${field} points at ${path}, which cannot be read: ${
       error instanceof Error ? error.message : String(error)}`);
   }
 }
@@ -177,7 +178,7 @@ export async function startProposedRun(
     const verdict = error instanceof EvolveSidecarError
       && error.status !== undefined && error.status >= 400 && error.status < 500;
     const said = error instanceof Error ? error.message : String(error);
-    return { refusedBecause: verdict ? said : `判别力探针没能进行：${said}` };
+    return { refusedBecause: verdict ? said : `the discrimination probe could not be taken: ${said}` };
   }
   if (probe.flat) {
     return {
@@ -185,10 +186,10 @@ export async function startProposedRun(
       // `flat` requires both numbers, so `worsened` is never null here — a
       // starting point that does not run is refused by the probe itself and
       // arrives on the catch path above with its own sentence.
-      refusedBecause: `把起点${probe.label}之后分数几乎没动（${probe.baseline.toFixed(4)} vs ${
+      refusedBecause: `damaging the starting point (${probe.label}) barely moved the score (${probe.baseline.toFixed(4)} vs ${
         probe.worsened!.toFixed(4)
-      }）——这套评分分不出好坏，搜索会在平坦地形上随机游走。`
-        + "把样例出难一点、细则写得更机械，或者换个更敏感的指标。",
+      }) — this scoring cannot tell good from bad, and the search would wander a flat landscape. `
+        + "Make the cases harder, the rubric more mechanical, or pick a more sensitive metric.",
     };
   }
 
@@ -214,16 +215,18 @@ function shapeOfSearchTuning(search: EvolveSearchTuning | undefined): string | u
   if (!search) return undefined;
   if (search.cPuct !== undefined) {
     if (!Number.isFinite(search.cPuct) || search.cPuct <= 0) {
-      return "cPuct 要是一个正数：它给探索项定标，零或负数会让搜索只认排名或反着走";
+      return "cPuct has to be a positive number: it scales the exploration term, and zero or "
+        + "negative leaves the search reading only the rank, or reading it backwards";
     }
     if (search.cPuct > MAX_C_PUCT) {
-      return `cPuct ${search.cPuct} 太大了：探索项会盖过排名，搜索退化成随机游走。常用范围 0.3–2.5`;
+      return `cPuct ${search.cPuct} is too large: the exploration term would drown out the rank `
+        + "and the search degenerates into a random walk. The usual range is 0.3-2.5";
     }
   }
   const unknown = (search.prior ?? []).filter(
     (factor) => !PRIOR_FACTORS.includes(factor));
   if (unknown.length) {
-    return `不认识的 prior 因子：${unknown.join("、")}。可选：${PRIOR_FACTORS.join("、")}`;
+    return `unknown prior factor(s): ${unknown.join(", ")}. The choices are: ${PRIOR_FACTORS.join(", ")}`;
   }
   return undefined;
 }
@@ -231,52 +234,64 @@ function shapeOfSearchTuning(search: EvolveSearchTuning | undefined): string | u
 function shapeOf(proposal: EvolveRunProposal): string | undefined {
   const needsStart = proposal.mode !== "test_gate";
   if (needsStart && !proposal.startingPointPath && !proposal.startingPointText?.trim()) {
-    return "没有起点。给 startingPointPath 指一个工作区里的文件，或者把起点内容写进 startingPointText";
+    return "there is no starting point. Point startingPointPath at a file in the workspace, "
+      + "or write the starting point into startingPointText";
   }
   if (proposal.expansions < proposal.workers * 4) {
-    return `${proposal.workers} 个并行要配至少 ${proposal.workers * 4} 次扩展，`
-      + "否则第一轮就用掉了大半预算、每个候选都只从起点分叉，树是平的";
+    return `${proposal.workers} workers needs at least ${proposal.workers * 4} expansions, or `
+      + "the first wave spends most of the budget forking only the root and the tree stays flat";
   }
   const tuning = shapeOfSearchTuning(proposal.search);
   if (tuning) return tuning;
   if (proposal.mode === "dataset_metric") {
-    if (!proposal.datasetPath) return "dataset_metric 要指一份 CSV";
-    if (!proposal.targetColumn) return "dataset_metric 要说明预测哪一列";
-    if (!proposal.metric) return "dataset_metric 要给一个指标";
-    if (!proposal.split) return "dataset_metric 要给切分";
+    if (!proposal.datasetPath) return "dataset_metric needs a CSV";
+    if (!proposal.targetColumn) return "dataset_metric needs the column to predict";
+    if (!proposal.metric) return "dataset_metric needs a metric";
+    if (!proposal.split) return "dataset_metric needs a split";
     if (proposal.split.gateShards < MIN_GATE) {
-      return `留出只有 ${proposal.split.gateShards} 片，判不出一次提升是不是噪声`;
+      return `only ${proposal.split.gateShards} held-out shards cannot tell an improvement `
+        + "from noise";
     }
     const thin = splitTooThin(proposal.split);
     if (thin) return thin;
   }
   if (proposal.mode === "custom_script") {
-    if (!proposal.evaluatorSource?.trim()) return "custom_script 要给评测脚本";
+    if (!proposal.evaluatorSource?.trim()) return "custom_script needs an evaluator script";
     for (const name of ["SCIENCE_AGENT_SHARDS", "SCIENCE_AGENT_RESULT"]) {
       if (!proposal.evaluatorSource.includes(name)) {
-        return `评测脚本里没有出现 ${name}——它必须按分片评分，并把结果写到结果文件`;
+        return `the evaluator never mentions ${name} — it has to score by shard and write its result `
+          + "to the result file";
       }
     }
-    if (!proposal.split) return "custom_script 要给 split，且片数要和脚本切的片数一致";
+    if (!proposal.split) {
+      return "custom_script needs a split, and its shard count has to match the one the "
+        + "script slices";
+    }
     if (proposal.split.gateShards < MIN_GATE) {
-      return `留出只有 ${proposal.split.gateShards} 片，判不出一次提升是不是噪声`;
+      return `only ${proposal.split.gateShards} held-out shards cannot tell an improvement `
+        + "from noise";
     }
     const thin = splitTooThin(proposal.split);
     if (thin) return thin;
   }
   if (proposal.mode === "llm_judge") {
-    if (!proposal.rubric?.trim()) return "llm_judge 要写评分细则";
-    if (!proposal.split) return "llm_judge 要给 split：gateShards 就是留出评几次取中位数";
+    if (!proposal.rubric?.trim()) return "llm_judge needs a rubric";
+    if (!proposal.split) {
+      return "llm_judge needs a split: gateShards is how many held-out gradings the median "
+        + "is taken over";
+    }
     if (proposal.split.gateShards < MIN_GATE) {
-      return `留出只评 ${proposal.split.gateShards} 次，看不出评分是不是在抖`;
+      return `only ${proposal.split.gateShards} held-out gradings cannot show whether the grading `
+        + "is wobbling";
     }
   }
   if (proposal.mode === "test_gate") {
-    if (!proposal.testCmd?.trim()) return "test_gate 要给跑测试的命令";
+    if (!proposal.testCmd?.trim()) return "test_gate needs the command that runs the tests";
     if (!proposal.frozenGlobs?.length) {
-      return "test_gate 必须冻结测试路径，否则候选最短的提分路径是把测试改弱";
+      return "test_gate must freeze the test paths, or the shortest path to a higher score is "
+        + "to weaken the tests";
     }
-    if (!proposal.entrypointPath) return "test_gate 要说明候选替换哪个文件";
+    if (!proposal.entrypointPath) return "test_gate needs the file a candidate replaces";
   }
   return undefined;
 }
@@ -488,8 +503,8 @@ export function summariseRun(
       if (planned !== null && made !== null && made < planned) {
         const why = typeof event.stopReason === "string" && event.stopReason
           ? event.stopReason
-          : "未知";
-        stoppedEarly = `计划 ${planned} 次扩展，实际跑了 ${made} 次，停止原因是 ${why}`;
+          : "unknown";
+        stoppedEarly = `planned ${planned} expansions, made ${made}; it stopped because ${why}`;
       }
     }
     // A run can finish `succeeded` having learned nothing — every score

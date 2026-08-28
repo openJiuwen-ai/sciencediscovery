@@ -84,11 +84,11 @@ function placeholderShaped(): EvolveGoal {
         },
         name: "stub", normalize: { kind: "identity" }, weight: 1,
       }],
-      derivedFrom: { draftRunId: "", statement: "把分数做上去" },
+      derivedFrom: { draftRunId: "", statement: "Push the score up" },
       hash: "sha256:placeholder", schemaVersion: 1, solvedThreshold: 0.999,
     },
     schemaVersion: 2,
-    statement: "把分数做上去",
+    statement: "Push the score up",
     target: { entrypoint: "main.py", kind: "program", programId: "p" },
   };
 }
@@ -105,7 +105,7 @@ test("a whole sequence folds into the view the dashboard reads", () => {
     record(3, { ancestorVisits: [{ nodeIndex: 0, visits: 1 }], nodeIndex: 0, puct: 0.5, type: "selected" }),
     record(4, { depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.62, type: "expanded", valid: true }),
     record(5, { criteria: { f1: 0.62 }, nodeIndex: 1, reward: 0.62, type: "evaluated" }),
-    record(6, { accepted: true, nodeIndex: 1, reason: "提升", type: "merged" }),
+    record(6, { accepted: true, nodeIndex: 1, reason: "improved", type: "merged" }),
     record(7, { cents: 21, tokens: 2100, type: "cost" }),
     record(8, { bestNodeIndex: 1, candidates: 2, status: "succeeded", type: "search_finished" }),
   ]);
@@ -163,10 +163,10 @@ test("the two refusal kinds stay distinguishable", () => {
     record(3, { depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.9, type: "expanded", valid: true }),
     record(4, {
       accepted: false, category: "constraint-violated", nodeIndex: 1,
-      reason: "太慢", rejectedBy: "too-slow", type: "merged",
+      reason: "too slow", rejectedBy: "too-slow", type: "merged",
     }),
     record(5, { depth: 1, nodeIndex: 2, parentIndex: 0, score: 0.51, type: "expanded", valid: true }),
-    record(6, { accepted: false, category: "below-threshold", nodeIndex: 2, reason: "不显著", type: "merged" }),
+    record(6, { accepted: false, category: "below-threshold", nodeIndex: 2, reason: "not significant", type: "merged" }),
   ]);
 
   assert.equal(view.candidates[0]?.category, "constraint-violated");
@@ -223,7 +223,7 @@ test("the card survives the panel: finished runs stay listed", () => {
     runs: [run({ id: "a", status: "succeeded" }), run({ id: "b", status: "failed" })],
   }));
 
-  assert.match(markup, /把分数做上去/);
+  assert.match(markup, /Push the score up/);
   assert.match(markup, /已完成/);
   assert.match(markup, /失败/);
 });
@@ -426,7 +426,7 @@ test("the table carries every channel the picture encodes", () => {
   assert.match(markup, /<button[^>]*>[^<]*#1<\/button>/, "every candidate is focusable");
 });
 
-test("种子带上自己的代码哈希，diff 才有 before 可比", () => {
+test("the seed carries its own code hash, so a diff has a before to compare against", () => {
   // Every diff in a live run rendered as pure addition, nothing ever removed.
   // `expanded` carried `codeHash`; `seeded` did not, and `CandidateDetail`
   // diffs against `parent.codeHash`. A flat tree is the PUCT tree's normal shape — ten
@@ -448,8 +448,8 @@ test("种子带上自己的代码哈希，diff 才有 before 可比", () => {
   assert.equal(legacy.candidates.find((c) => c.nodeIndex === 0)?.codeHash, undefined);
 });
 
-test("提前结束的 run 面板要说出原因和缺口", () => {
-  // Twice the user asked "为什么提前结束/为什么8个就结束" about runs whose
+test("a run that stopped early states the reason and the shortfall", () => {
+  // Twice the user asked "why did it stop early / why only 8" about runs whose
   // events carried the answer. The fold dropped stopReason/expansionsPlanned,
   // so the panel had it and never said.
   const view = reduceEvolveRecords(emptyRunView(), [
@@ -470,14 +470,14 @@ test("提前结束的 run 面板要说出原因和缺口", () => {
   assert.equal(legacy.stopReason, undefined);
 });
 
-test("引擎的日志行折进视图，供面板渲染", () => {
+test("the engine's log lines fold into the view for the panel to render", () => {
   // logLines were folded into the view from day one and rendered nowhere in
   // the panel — that render is verified in the browser harness; this pins the
   // fold half so the panel has something to show.
   const view = reduceEvolveRecords(emptyRunView(), [
     record(1, START), record(2, SEED),
-    record(3, { level: "info", message: "修好了一个一分没拿到的候选（0.4781）", type: "log" }),
-    record(4, { level: "warn", message: "9 个候选的分数全都一样", type: "log" }),
+    record(3, { level: "info", message: "repaired a candidate that had scored nothing (0.4781)", type: "log" }),
+    record(4, { level: "warn", message: "all 9 candidates scored the same", type: "log" }),
   ]);
   assert.equal(view.logLines.length, 2);
   assert.equal(view.logLines[1]!.level, "warn");

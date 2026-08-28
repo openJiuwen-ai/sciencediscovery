@@ -91,18 +91,21 @@ def test_gate_domain(
     reference: MutableMapping[str, float] = {} if baseline is None else baseline
     criteria = list(scorecard.get("criteria") or [])
     if not criteria:
-        raise TestGateError("这张评分卡没有判据")
+        raise TestGateError("this scorecard has no criteria")
     criterion = criteria[0]
     measure = criterion.get("measure") or {}
     frozen: Sequence[str] = tuple(measure.get("frozen") or ())
     test_cmd: Sequence[str] = tuple(measure.get("testCmd") or ())
     setup_cmd: Sequence[str] = tuple(measure.get("setupCmd") or ())
     if not test_cmd:
-        raise TestGateError("这张评分卡没有给测试命令")
+        raise TestGateError("this scorecard gives no test command")
     if not frozen:
         # Upstream's note, and it is not a style preference: the shortest path
         # to a high score is to weaken the thing measuring it.
-        raise TestGateError("测试判分必须冻结测试文件，否则候选最短的提分路径是改测试")
+        raise TestGateError(
+            "test-gated scoring must freeze the test files, or the shortest path to a "
+            "higher score is to weaken the tests"
+        )
 
     target = entrypoint_path or _sole_python(workspace)
 
@@ -115,7 +118,7 @@ def test_gate_domain(
         except TestGateError as error:
             raise
         if outcomes is None:
-            return False, {SCORE_KEY: float("-inf")}, "测试套件没有产出可读的结果"
+            return False, {SCORE_KEY: float("-inf")}, "the test suite produced no readable result"
 
         wanted = set(groups)
         seed = int((measure.get("caseSplit") or {}).get("seed") or 0)
@@ -126,7 +129,8 @@ def test_gate_domain(
         }
         if not selected:
             return False, {SCORE_KEY: float("-inf")}, (
-                f"这几组（{sorted(wanted)}）里一个用例都没有——分组数与用例数对不上"
+                f"these groups ({sorted(wanted)}) hold no cases at all — the number of "
+                f"groups does not match the number of cases"
             )
 
         rate = sum(1 for passed in selected.values() if passed) / len(selected)
@@ -174,11 +178,11 @@ def test_gate_domain(
         metric_key=str(criterion["id"]),
         metric_better="higher",
         initial_program=(workspace / target).read_text(encoding="utf-8") if target else "",
-        initial_summary="当前实现",
+        initial_summary="the current implementation",
         evaluate=evaluate,
         reward=reward,
         prompt=prompt,
-        task_prompt=lambda group: f"第 {group} 组用例",
+        task_prompt=lambda group: f"case group {group}",
         test_shards=tuple(_roles(measure)["test"]),
         data_summary={"mode": "test_gate", "frozen": list(frozen)},
     )
@@ -216,14 +220,15 @@ def _run_suite(
         if setup_cmd:
             ok, why = _run(setup_cmd, scratch, capability, timeout, env_extra)
             if not ok:
-                raise TestGateError(f"setup 命令失败了，测试还没开始跑：{why}")
+                raise TestGateError(f"the setup command failed before any test ran: {why}")
         _ran, why = _run(test_cmd, scratch, capability, timeout, env_extra)
 
         if not junit.exists():
             # No report at all means the runner never got as far as writing one,
             # and its own output is the only thing that says why.
             raise TestGateError(
-                f"测试套件没有产出 JUnit 报告。命令 {' '.join(test_cmd)} 说：{why or '（没有输出）'}"
+                f"the test suite produced no JUnit report. The command "
+                f"{' '.join(test_cmd)} said: {why or '(no output)'}"
             )
         return _read_junit(junit)
 
@@ -294,7 +299,7 @@ def _run(
             env=env, timeout=timeout + 30,
         )
     except subprocess.TimeoutExpired:
-        return False, f"命令跑了超过 {timeout + 30:.0f} 秒还没结束"
+        return False, f"the command ran for over {timeout + 30:.0f}s without finishing"
     if completed.returncode == 0:
         return True, ""
     tail = ((completed.stderr or "") + (completed.stdout or "")).strip()[-400:]
@@ -313,7 +318,7 @@ def _read_junit(path: Path) -> Dict[str, bool]:
     try:
         tree = ElementTree.parse(path)
     except ElementTree.ParseError as error:
-        raise TestGateError(f"测试结果不是可解析的 JUnit XML：{error}") from error
+        raise TestGateError(f"the test result is not parsable JUnit XML: {error}") from error
 
     outcomes: Dict[str, bool] = {}
     for case in tree.iter("testcase"):

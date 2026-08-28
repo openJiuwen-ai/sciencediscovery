@@ -154,7 +154,10 @@ export class EvolveSidecarClient {
       // what stands between them and starting a run — and pasting
       // `{"detail":{"code":"probe_failed","message":"…"}}` onto the screen
       // hands them the wrapper and buries the sentence inside it.
-      throw new EvolveSidecarError(await refusal(response, "判别力探针没能进行"), response.status);
+      throw new EvolveSidecarError(
+        await refusal(response, "the discrimination probe could not be taken"),
+        response.status,
+      );
     }
     return await response.json() as {
       baseline: number; flat: boolean; label: string; worsened: number | null;
@@ -278,5 +281,5 @@ export async function refusal(response: Response, prefix: string): Promise<strin
   } catch {
     // Not JSON at all — a proxy page, an empty body. Falls through.
   }
-  return `${prefix}（${response.status}）${text ? `：${text.slice(0, 300)}` : ""}`;
+  return `${prefix} (${response.status})${text ? `: ${text.slice(0, 300)}` : ""}`;
 }

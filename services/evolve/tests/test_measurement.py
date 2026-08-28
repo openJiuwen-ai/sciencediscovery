@@ -95,7 +95,7 @@ def test_a_truth_column_with_no_variance_scores_zero_not_infinity() -> None:
 def test_a_scorecard_needing_data_without_a_staged_dataset_is_refused(tmp_path: Path) -> None:
     with pytest.raises(DatasetError) as error:
         load_dataset(None, {"criteria": [criterion("f1", "accuracy")]})
-    assert "数据集" in str(error.value)
+    assert "dataset" in str(error.value)
 
 
 def test_a_metric_this_engine_cannot_compute_is_named_rather_than_guessed(tmp_path: Path) -> None:
@@ -127,7 +127,7 @@ def test_a_dataset_missing_gate_shards_is_refused(tmp_path: Path) -> None:
 
 
 def test_a_seconds_criterion_needs_no_dataset_of_its_own() -> None:
-    # This is what makes a "训练时长 < 300s" veto expressible: a constraint
+    # This is what makes a "training time < 300s" veto expressible: a constraint
     # refers to a criterion, and a criterion needs something to measure.
     dataset = load_dataset(None, {"criteria": [criterion("t", "seconds", "minimize")]})
     assert [plan.metric for plan in dataset.plans] == ["seconds"]
@@ -238,7 +238,7 @@ def test_a_candidate_returning_nan_is_a_failure_not_a_score(
     # A NaN score would poison every average it touches and still rank as a
     # real number downstream.
     assert not result.ok
-    assert "非有限" in result.error
+    assert "non-finite" in result.error
 
 
 def test_the_wrong_number_of_predictions_is_a_failure(
@@ -291,7 +291,7 @@ def test_a_real_candidate_runs_under_the_real_sandbox_and_is_scored(tmp_path: Pa
 
     dataset = load_dataset(str(tmp_path), {"criteria": [criterion("err", "mae", "minimize")]})
     code = (
-        '"""每个测试行预测 2x。"""\n'
+        '"""Predict 2x for every test row."""\n'
         "import pandas as pd\n\n\n"
         "def train_and_predict(train_path, test_path):\n"
         "    test = pd.read_csv(test_path)\n"

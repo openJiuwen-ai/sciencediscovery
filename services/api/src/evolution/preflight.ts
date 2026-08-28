@@ -88,14 +88,14 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
   if (!input.model) {
     issues.push({
       code: "model_missing",
-      fix: "在向导里选一个已配置的模型",
-      message: "这次搜索指定的模型不存在",
+      fix: "pick a model that is already configured",
+      message: "the model this search names does not exist",
     });
   } else if (!input.model.hasApiToken) {
     issues.push({
       code: "model_no_token",
-      fix: `在模型设置里给 ${input.model.name} 存一个 API token`,
-      message: `模型 ${input.model.name} 没有 API token，变异调用会全部失败`,
+      fix: `save an API token for ${input.model.name} in the model settings`,
+      message: `${input.model.name} has no API token, so every mutation call would fail`,
     });
   }
 
@@ -106,31 +106,40 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
     issues.push({
       code: "max_tokens_too_low",
       fix: quiet
-        ? `把单次调用上限提到 ${floor} 以上`
-        : `把单次调用上限提到 ${floor} 以上，或把思考关掉（下限降到 ${floors.quiet}）`,
+        ? `raise the per-call ceiling above ${floor}`
+        : `raise the per-call ceiling above ${floor}, or turn thinking off (which lowers the floor to ${floors.quiet})`,
       // The failure is silent: the reply comes back empty, the node is recorded
       // as failed, and the run looks like a search that could not find anything.
-      message: `单次调用上限 ${budget.maxTokensPerCall} 低于${quiet ? "" : "开着思考时"}`
-        + `${input.goal.algorithm} 的下限 ${floor}；`
-        + "模型会把预算花在隐藏思考上并返回空回复，而空回复会被记成失败候选",
+      message: `the per-call ceiling ${budget.maxTokensPerCall} is below the ${floor} floor `
+        + `for ${input.goal.algorithm}${quiet ? "" : " with thinking on"}; `
+        + "the model spends the budget on hidden thinking and returns an empty reply, "
+        + "and an empty reply is recorded as a failed candidate",
     });
   }
 
   // --- the budget describes a search that can actually run -------------------
 
   if (budget.workers < 1) {
-    issues.push({ code: "workers_invalid", fix: "worker 数至少为 1", message: "worker 数必须是正整数" });
+    issues.push({
+      code: "workers_invalid",
+      fix: "use at least 1 worker",
+      message: "the worker count must be a positive integer",
+    });
   } else if (budget.expansions % budget.workers !== 0) {
     issues.push({
       code: "expansions_not_divisible",
-      fix: `把扩展次数改成 ${budget.workers} 的倍数`,
-      message: `扩展次数 ${budget.expansions} 不能被 worker 数 ${budget.workers} 整除；`
-        + "引擎按波次派发（一波选 worker 个父节点，下一波才看得到这一波的结果），"
-        + "余数会让最后一波跑不满",
+      fix: `make the expansion count a multiple of ${budget.workers}`,
+      message: `${budget.expansions} expansions does not divide evenly by ${budget.workers} workers; `
+        + "the engine dispatches whole waves (each wave picks that many parents, and only "
+        + "the next wave sees what landed), so the remainder leaves the last wave short",
     });
   }
   if (budget.expansions < 1) {
-    issues.push({ code: "expansions_invalid", fix: "扩展次数至少为 1", message: "扩展次数必须是正整数" });
+    issues.push({
+      code: "expansions_invalid",
+      fix: "use at least 1 expansion",
+      message: "the expansion count must be a positive integer",
+    });
   }
 
   // --- the isolation exists -------------------------------------------------
@@ -144,10 +153,11 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
   if (executes && !input.sandbox.backend) {
     issues.push({
       code: "sandbox_unavailable",
-      fix: "Linux 上安装 bubblewrap（bwrap）；macOS 自带 sandbox-exec",
+      fix: "install bubblewrap (bwrap) on Linux; macOS ships sandbox-exec",
       // Not a portability concession: a candidate is model-written Python that
       // gets executed, and running it unconfined is not a fallback.
-      message: "没有可用的候选隔离后端，候选是模型写的代码，不会在无隔离的情况下执行",
+      message: "there is no isolation backend for candidates, and a candidate is model-written "
+        + "code that will not be executed unisolated",
     });
   }
 
@@ -158,7 +168,7 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
     if (issue.severity !== "error") continue;
     issues.push({
       code: `scorecard_${issue.code}`,
-      fix: "修正评分卡后重试",
+      fix: "fix the scorecard and try again",
       message: issue.message,
     });
   }
@@ -169,9 +179,10 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
     if (measure.split.gateShards >= MIN_GATE_SHARDS) continue;
     issues.push({
       code: "gate_shards_too_few",
-      fix: `把留出门分片数提到 ${MIN_GATE_SHARDS} 以上`,
-      message: `判据「${criterion.name}」的留出门只有 ${measure.split.gateShards} 个分片；`
-        + "接受门读的就是它，太少则无法判断一次提升是不是噪声",
+      fix: `raise the gate shard count above ${MIN_GATE_SHARDS}`,
+      message: `criterion "${criterion.name}" has only ${measure.split.gateShards} gate shards; `
+        + "the acceptance gate reads exactly those, and too few cannot tell an improvement "
+        + "from noise",
     });
   }
 
@@ -184,15 +195,15 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
     if (!measure.judgeModelId) {
       issues.push({
         code: "judge_model_missing",
-        fix: "选一个用来评审的模型",
-        message: `判据「${criterion.name}」要用模型评审，但没有指定评审模型`,
+        fix: "pick a model to grade with",
+        message: `criterion "${criterion.name}" is graded by a model, but names no judge model`,
       });
     }
     if (!measure.rubricCas) {
       issues.push({
         code: "rubric_missing",
-        fix: "写一份评分细则并保存",
-        message: `判据「${criterion.name}」没有评分细则，评审模型无从打分`,
+        fix: "write a rubric and save it",
+        message: `criterion "${criterion.name}" has no rubric, so the judge has nothing to grade against`,
       });
     }
     if (input.goal.scorecard.solvedThreshold >= 0.999) {
@@ -201,8 +212,9 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
       // as the reflector failing when nothing was ever counted as done.
       issues.push({
         code: "solved_threshold_too_high",
-        fix: "模型评审的解决阈值建议 0.85",
-        message: "分级评分几乎到不了 0.999，用默认阈值会让每次 rollout 都请求提案",
+        fix: "0.85 is the suggested solved threshold for model grading",
+        message: "a graded score rarely reaches 0.999, and at the default every rollout asks for "
+          + "a proposal",
       });
     }
     if (!input.goal.frozen.includes(measure.rubricCas)) {
@@ -210,8 +222,9 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
       // instead of getting better.
       issues.push({
         code: "rubric_not_frozen",
-        fix: "把评分细则加进 frozen",
-        message: "评分细则必须冻结，否则搜索可以改判卷标准而不是把内容做好",
+        fix: "add the rubric to frozen",
+        message: "the rubric must be frozen, or the search can rewrite what marks it instead of "
+          + "getting better",
       });
     }
   }
@@ -225,8 +238,8 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
     if (!measure.scriptCas) {
       issues.push({
         code: "script_missing",
-        fix: "让模型写一份评测脚本，或者换一种打分方式",
-        message: `判据「${criterion.name}」说要用评测脚本打分，但没有脚本`,
+        fix: "have the model write an evaluator, or pick a different scoring mode",
+        message: `criterion "${criterion.name}" says it is scored by an evaluator script, but there is none`,
       });
     } else if (!input.goal.frozen.includes(measure.scriptCas)) {
       // Same rule as the rubric, for the same reason: a candidate is executed,
@@ -234,8 +247,9 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
       // instead of getting better.
       issues.push({
         code: "script_not_frozen",
-        fix: "把评测脚本加进 frozen",
-        message: "评测脚本必须冻结，否则搜索可以改评测而不是把东西做好",
+        fix: "add the evaluator to frozen",
+        message: "the evaluator must be frozen, or the search can rewrite what measures it instead "
+          + "of getting better",
       });
     }
   }
@@ -249,8 +263,8 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
     if (!measure.testCmd.length) {
       issues.push({
         code: "test_cmd_missing",
-        fix: "给一条能跑这个项目测试的命令",
-        message: `判据「${criterion.name}」没有测试命令，无从判分`,
+        fix: "give a command that runs this project's tests",
+        message: `criterion "${criterion.name}" has no test command, so there is nothing to score with`,
       });
     }
     if (!measure.frozen.length) {
@@ -258,22 +272,23 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
       // weaken the thing measuring it.
       issues.push({
         code: "tests_not_frozen",
-        fix: "把测试路径写进 frozen，例如 tests/**",
-        message: "测试判分必须冻结测试文件，否则候选最短的提分路径是改测试",
+        fix: "put the test paths in frozen, tests/** for instance",
+        message: "test-gated scoring must freeze the test files, or the shortest path to a higher "
+          + "score is to weaken the tests",
       });
     }
     if (measure.caseSplit.gateGroups < 4) {
       issues.push({
         code: "gate_groups_too_few",
-        fix: "留出组提到 4 以上",
-        message: `留出只有 ${measure.caseSplit.gateGroups} 组，判不出一次提升是不是噪声`,
+        fix: "raise the hold-out groups above 4",
+        message: `only ${measure.caseSplit.gateGroups} hold-out groups cannot tell an improvement from noise`,
       });
     }
     if (measure.caseSplit.rolloutGroups < 1) {
       issues.push({
         code: "rollout_groups_too_few",
-        fix: "至少要有 1 个 rollout 组",
-        message: "没有 rollout 组，搜索没有可以排名的分数",
+        fix: "there must be at least 1 rollout group",
+        message: "with no rollout groups the search has no score to rank by",
       });
     }
   }
@@ -286,8 +301,8 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
     if (measure.datasetCas.length === 0) {
       issues.push({
         code: "dataset_missing",
-        fix: "给这个判据指一份数据集：dataset_metric 要一个 datasetPath",
-        message: `判据「${criterion.name}」没有指定数据集，无从测量`,
+        fix: "point this criterion at a dataset: dataset_metric needs a datasetPath",
+        message: `criterion "${criterion.name}" names no dataset, so there is nothing to measure on`,
       });
       continue;
     }
@@ -296,16 +311,16 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
         if (await input.casHas(casHash(ref))) continue;
         issues.push({
           code: "dataset_not_in_store",
-          fix: "重新上传数据集，或改用一份还在库里的",
-          message: `判据「${criterion.name}」引用的数据集 ${ref} 不在内容库里`,
+          fix: "upload the dataset again, or use one that is still in the store",
+          message: `criterion "${criterion.name}" references dataset ${ref}, which is not in the content store`,
         });
       }
     }
     if (!measure.target) {
       issues.push({
         code: "target_column_missing",
-        fix: "指明候选要预测哪一列",
-        message: `判据「${criterion.name}」没有说要预测哪一列`,
+        fix: "say which column the candidate predicts",
+        message: `criterion "${criterion.name}" does not say which column to predict`,
       });
     }
     // The arithmetic, without the data. Whether *this* dataset has enough rows
@@ -314,8 +329,8 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
     if (impossible) {
       issues.push({
         code: "split_impossible",
-        fix: "调整分片数与每片行数",
-        message: `判据「${criterion.name}」的切分方式不成立：${impossible}`,
+        fix: "adjust the shard count and the rows per shard",
+        message: `the split for criterion "${criterion.name}" does not hold up: ${impossible}`,
       });
     }
   }

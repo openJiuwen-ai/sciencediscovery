@@ -59,11 +59,13 @@ from .vendor.puct.program import available_imports_text
 #: The closing instruction every code-shaped template ends on.
 #:
 #: One block rather than a line per template, because the three drifted: the
-#: measured template said "做一处实质改动" and the other two said only "输出完整
-#: 可运行的程序", which reads as an invitation to write one from scratch. A live
+#: measured template said "make one substantive change" and the other two said
+#: only "output a complete runnable program", which reads as an invitation to
+#: write one from scratch. A live
 #: compression run showed what that costs — a working RLE+Huffman seed of 6571
 #: characters, and eleven candidates that every one of them *replaced the whole
-#: mechanism* ("替换原有的 RLE+Huffman 方案", "重构为 LZ77 字典匹配"), reaching
+#: mechanism* ("replaced the RLE+Huffman scheme", "restructured as LZ77
+#: dictionary matching"), reaching
 #: 15824 characters and implementing arithmetic coding or LZ77 from nothing in a
 #: single reply. Ten of the eleven did not run. The tree stayed flat at depth 1
 #: because no candidate ever beat the seed.
@@ -73,51 +75,60 @@ from .vendor.puct.program import available_imports_text
 #: expansion is spent either way. Upstream gets away without saying this
 #: because its task is a twenty-line sklearn pipeline, where a rewrite is cheap
 #: and rarely broken; a codec is not.
-_HOW_TO_CHANGE = """## 怎么改
+_HOW_TO_CHANGE = """## How to change it
 
-**唯一的目标是把分数做上去。** 换不换方案、用哪种算法，都由这一条决定，没有哪种
-做法本身是对或错的。
+**The only goal is to raise the score.** Whether to swap the approach, and which
+algorithm to use, follow from that one thing. No approach is right or wrong in
+itself.
 
-要注意的只有一件事：**跑不起来就是 0 分，比现在这份还差，而这次机会照样花掉了。**
-所以在现在这份的基础上改，把还能用的部分原样留着——不是因为不许换方案，而是因为
-在一次回复里从零重写一整套，交出来的十有八九跑不起来，那一分也拿不到。真要换掉某个
-环节，就单独换那一个环节，让它周围的代码原样继续跑。
+There is one thing to keep in mind: **a program that does not run scores 0,
+which is worse than the one you were given, and the attempt is spent either
+way.** So work from the current version and leave what still works as it is —
+not because swapping the approach is forbidden, but because rewriting the whole
+thing from nothing in a single reply usually does not run, and that scores
+nothing. If a part genuinely has to be replaced, replace that one part and let
+the code around it keep running unchanged.
 
-「原样保留」有一个例外：**模块 docstring 的第一行每次都必须重写**，用一句中文说清
-这次改了什么。照抄上一版的第一行，整棵搜索树的节点就都叫同一个名字，看图的人没法
-分辨谁是谁。
+"Leave it as it is" has one exception: **the first line of the module docstring
+must be rewritten every time**, saying in one sentence what changed. Copy the
+previous version's first line and every node in the search tree ends up with the
+same name, and nobody reading the graph can tell them apart.
 
-先想清楚现在这份在评分上最薄弱的一环，再动那一处。"""
+Work out which part of the current version is weakest against the scoring, then
+change that part."""
 
-_TEMPLATE = """你在改进一个 Python 程序，让它在下面这套评分标准上得分更高。
+_TEMPLATE = """You are improving a Python program so that it scores higher against the scoring scheme below.
 
-## 目标
+## Goal
 
 {statement}
 
-## 评分标准
+## Scoring
 
 {criteria}
 {constraints}
-## 当前程序
+## Current program
 
-它在留出分片上的表现：{parent_score}。本次搜索至今最好的成绩：{best_score}。
+How it does on the held-out shards: {parent_score}. Best in this search so far: {best_score}.
 
 ```python
 {parent_code}
 ```
 
 {history}
-## 硬性要求
+## Requirements
 
-1. 必须定义 `train_and_predict(train_path, test_path)`：读这两个 CSV，返回一个
-   长度等于测试集行数的一维预测序列（list 或 numpy 数组均可）。
-2. 只能 import：{imports}。
-3. 不能读写除这两个入参之外的任何文件，不能联网，不能 `open`/`eval`/`exec`/
-   `__import__`，不能起子进程。模块顶层只允许 import、函数/类定义和字面量赋值。
-4. 输出**一个** ```python 代码块，里面是完整可运行的程序（不是补丁、不是片段）。
-5. 程序的模块 docstring 第一行用一句中文说明这次改了什么——它会作为这个节点的
-   标签展示给用户。
+1. It must define `train_and_predict(train_path, test_path)`: read those two
+   CSVs and return a one-dimensional sequence of predictions whose length equals
+   the number of test rows (a list or a numpy array, either is fine).
+2. You may import only: {imports}.
+3. No reading or writing any file other than those two arguments, no network, no
+   `open`/`eval`/`exec`/`__import__`, no subprocesses. At module level only
+   imports, function/class definitions and literal assignments are allowed.
+4. Output **one** ```python block containing the complete runnable program (not
+   a patch, not a fragment).
+5. The first line of the program's module docstring says in one sentence what
+   changed this time — it is shown to the user as this node's label.
 
 {how_to_change}
 """
@@ -148,13 +159,13 @@ def mutation_prompt(
         # path before the suite runs — is in `test_gate_domain`, and it is the
         # one that cannot be skipped, because a candidate is executed.
         return _TEST_TEMPLATE.format(
-            statement=statement.strip() or "让测试全部通过。",
+            statement=statement.strip() or "Make all the tests pass.",
             parent_code=parent_code.strip(),
             parent_score=_score(parent_score),
             best_score=_score(best_score),
             feedback=_feedback(feedback),
             history=_history(recent),
-            frozen="、".join(frozen),
+            frozen=", ".join(frozen),
             imports=available_imports_text(),
             how_to_change=_HOW_TO_CHANGE,
         )
@@ -164,11 +175,11 @@ def mutation_prompt(
         # measured-mode template told every candidate to define
         # `train_and_predict(train_path, test_path)` — watched a Gaussian-
         # integral run do exactly that: candidates bolted on CSV readers and
-        # LightGBM regressors "以匹配评分要求", the integral function never
-        # changed, and all nine scores came out identical to ten decimal
-        # places. The search finished "succeeded" having learned nothing.
+        # LightGBM regressors "to match the scoring requirements", the integral
+        # function never changed, and all nine scores came out identical to ten
+        # decimal places. The search finished "succeeded" having learned nothing.
         return _SCRIPT_TEMPLATE.format(
-            statement=statement.strip() or "让评测脚本给出的分数更高。",
+            statement=statement.strip() or "Make the evaluator report a higher score.",
             contract=script_contract.strip(),
             parent_code=parent_code.strip(),
             parent_score=_score(parent_score),
@@ -180,7 +191,7 @@ def mutation_prompt(
         )
     if rubric:
         return _TEXT_TEMPLATE.format(
-            statement=statement.strip() or "按下面的评分细则把它改得更好。",
+            statement=statement.strip() or "Improve it against the rubric below.",
             rubric=rubric.strip(),
             parent_text=parent_code.strip(),
             parent_score=_score(parent_score),
@@ -188,7 +199,7 @@ def mutation_prompt(
             history=_history(recent),
         )
     return _TEMPLATE.format(
-        statement=statement.strip() or "在下面的评分标准上取得可报告的提升。",
+        statement=statement.strip() or "Achieve a reportable improvement against the scoring below.",
         criteria=_criteria(scorecard),
         constraints=_constraints(scorecard),
         parent_score=_score(parent_score),
@@ -200,100 +211,108 @@ def mutation_prompt(
     )
 
 
-_TEST_TEMPLATE = """你在改写一份实现，让它通过更多测试。
+_TEST_TEMPLATE = """You are rewriting an implementation so that it passes more tests.
 
-## 目标
+## Goal
 
 {statement}
 
-## 当前实现
+## Current implementation
 
-通过率：{parent_score}。至今最好的：{best_score}。
+Pass rate: {parent_score}. Best so far: {best_score}.
 {feedback}
 ```python
 {parent_code}
 ```
 
-{history}## 硬性要求
+{history}## Requirements
 
-1. **不要改这些路径**：{frozen}。它们是判分依据，改了也不算——每次运行前都会被
-   还原成原样。把力气花在实现上。
-2. 只能 import：{imports}。
-3. 输出**一个** ```python 代码块，里面是完整可运行的实现（不是补丁、不是片段）。
-4. 模块 docstring 第一行用一句中文说明这次改了什么。
+1. **Do not touch these paths**: {frozen}. They are what decides the score, and
+   changing them counts for nothing — they are restored to the original before
+   every run. Put the effort into the implementation.
+2. You may import only: {imports}.
+3. Output **one** ```python block containing the complete runnable
+   implementation (not a patch, not a fragment).
+4. The first line of the module docstring says in one sentence what changed.
 
 {how_to_change}
 """
 
-_SCRIPT_TEMPLATE = """你在改写一个程序，它由一份**固定的评测脚本**打分。
+_SCRIPT_TEMPLATE = """You are rewriting a program that is scored by a **fixed evaluator script**.
 
-## 目标
+## Goal
 
 {statement}
 
-## 评测脚本对候选的要求
+## What the evaluator requires of a candidate
 
 {contract}
 
-评测脚本会 `import candidate` 并按上面的接口调用。**接口对不上就是零分**——
-不要添加评测脚本没有要求的函数（比如 train_and_predict），那不是这次的契约。
+The evaluator does `import candidate` and calls it through the interface above.
+**An interface that does not match scores zero** — do not add functions the
+evaluator never asked for (`train_and_predict`, for instance); that is not this
+run's contract.
 
-## 当前程序
+## Current program
 
-它的得分：{parent_score}。至今最好的：{best_score}。
+Its score: {parent_score}. Best so far: {best_score}.
 {feedback}
 ```python
 {parent_code}
 ```
 
-{history}## 硬性要求
+{history}## Requirements
 
-1. 按评测脚本要求的接口写，函数名、参数一个都不能差。
-2. 只能 import：{imports}。
-3. 输出**一个** ```python 代码块，里面是完整可运行的程序（不是补丁、不是片段）。
-4. 模块 docstring 第一行用一句中文说明这次改了什么。
+1. Write to the interface the evaluator requires — every function name and
+   argument exactly as it expects them.
+2. You may import only: {imports}.
+3. Output **one** ```python block containing the complete runnable program (not
+   a patch, not a fragment).
+4. The first line of the module docstring says in one sentence what changed.
 
 {how_to_change}
 """
 
-_TEXT_TEMPLATE = """你在改写一段内容，让它按下面的评分细则得分更高。
+_TEXT_TEMPLATE = """You are rewriting a piece of writing so that it scores higher against the rubric below.
 
-## 目标
+## Goal
 
 {statement}
 
-## 评分细则
+## Rubric
 
 {rubric}
 
-## 当前版本
+## Current version
 
-它的得分：{parent_score}。至今最好的：{best_score}。
+Its score: {parent_score}. Best so far: {best_score}.
 
 ```
 {parent_text}
 ```
 
-{history}## 输出格式
+{history}## Output format
 
-先用一行中文说明这次改了什么，然后给出**完整的**新版本，放在一个 ``` 代码块里
-（不是补丁、不是片段、不要解释）。那一行说明会作为这个节点的标签展示给用户。
+Start with one line saying what changed this time, then give the **complete**
+new version inside a single ``` block (not a patch, not a fragment, no
+explanation). That first line is shown to the user as this node's label.
 """
 
 
 def _feedback(text: str) -> str:
     """The evaluator's own diagnosis of the parent, as a prompt section.
 
-    This existed all along — the failing test names, the "3/6 样例超出求值预算"
+    This existed all along — the failing test names, the "3 of 6 cases blew the
+    evaluation budget"
     — stored on the node and shown in the UI, and never put in front of the one
     reader who could act on it. A real ODE run showed the cost: six candidates
     scored exactly 0, each a reasonable adaptive method that burst the eval
-    budget, and the reflector, told only "得分 0", kept trying new variants of
+    budget, and the reflector, told only "score 0", kept trying new variants of
     the same overspend because nothing said *why* the last one died.
     """
     if not text.strip():
         return ""
-    return f"\n评测对它的诊断：{text.strip()[:500]}\n"
+    return f"\nWhat the evaluator said about it: {text.strip()[:500]}\n"
 
 
 def _criteria(scorecard: Mapping[str, Any]) -> str:
@@ -301,11 +320,11 @@ def _criteria(scorecard: Mapping[str, Any]) -> str:
     for criterion in scorecard.get("criteria") or []:
         measure = criterion.get("measure") or {}
         metric = (measure.get("metric") or {}).get("name", "")
-        direction = "越大越好" if criterion.get("direction") == "maximize" else "越小越好"
+        direction = "larger is better" if criterion.get("direction") == "maximize" else "smaller is better"
         weight = criterion.get("weight")
-        weight_text = f"，权重 {weight}" if isinstance(weight, (int, float)) else ""
-        lines.append(f"- **{criterion.get('name', criterion.get('id'))}**（{metric}，{direction}{weight_text}）")
-    return "\n".join(lines) or "- （未指定判据）"
+        weight_text = f", weight {weight}" if isinstance(weight, (int, float)) else ""
+        lines.append(f"- **{criterion.get('name', criterion.get('id'))}** ({metric}, {direction}{weight_text})")
+    return "\n".join(lines) or "- (no criteria given)"
 
 
 def _constraints(scorecard: Mapping[str, Any]) -> str:
@@ -316,16 +335,17 @@ def _constraints(scorecard: Mapping[str, Any]) -> str:
     for constraint in constraints:
         value = constraint.get("value")
         if isinstance(value, Mapping):
-            threshold = f"基线的 {value.get('relativeToBaseline')} 倍"
+            threshold = f"{value.get('relativeToBaseline')}x the baseline"
         else:
             threshold = str(value)
         lines.append(
-            f"- **{constraint.get('name', constraint.get('id'))}**："
-            f"{constraint.get('criterionId')} 必须 {constraint.get('op')} {threshold}"
+            f"- **{constraint.get('name', constraint.get('id'))}**: "
+            f"{constraint.get('criterionId')} must be {constraint.get('op')} {threshold}"
         )
     # Named as a wall rather than a cost: a violated constraint refuses the
     # merge outright, so trading score for headroom below it buys nothing.
-    return "\n## 否决项（越界直接判不通过，不是扣分）\n\n" + "\n".join(lines) + "\n"
+    return ("\n## Vetoes (crossing one fails the candidate outright — it is not a\n"
+            "deduction)\n\n" + "\n".join(lines) + "\n")
 
 
 def _history(recent: Sequence[str]) -> str:
@@ -334,11 +354,11 @@ def _history(recent: Sequence[str]) -> str:
     # What was already tried, so the search does not spend three expansions
     # rediscovering the same idea.
     lines = "\n".join(f"- {item}" for item in recent if item)
-    return f"## 这次搜索里已经试过的改动\n\n{lines}\n\n" if lines else ""
+    return f"## Changes already tried in this search\n\n{lines}\n\n" if lines else ""
 
 
 def _score(value: Optional[float]) -> str:
-    return "尚未测量" if value is None else f"{value:.4f}"
+    return "not measured yet" if value is None else f"{value:.4f}"
 
 
 def repair_prompt(code: str, error: str) -> str:
@@ -356,31 +376,34 @@ def repair_prompt(code: str, error: str) -> str:
     what the ordinary expansion already does.
     """
     return (
-        # Not "跑不起来": it may well run. A candidate reaches here whenever it
-        # scored nothing at all, and "every case came out wrong" is as common a
-        # way to get there as a traceback — telling it the program does not run
-        # when the error says the round trip does not match points the repair
-        # at the wrong thing.
-        "下面这份程序一个用例都没通过。请只修掉它报的这个问题，不要重新设计、"
-        "不要顺手改别的地方——把它改到能正确跑通就行，其余保持原样。\n\n"
-        # "不要换方法"曾经也在上面那句里，而它恰好禁掉了唯一的修法：报错说
-        # `cannot import name 'cwt'` 时，不存在的正是那个方法本身。一次峰
-        # 检测搜索里三个候选伸手去拿 scipy.signal.cwt/ricker（SciPy 1.15 已
-        # 删除），修复触发三次、三次都没救回来。
-        "如果报错说的是某个东西不存在——import 失败、属性没有、函数被删了——"
-        "那么把那一处换成当前版本里确实有的等价做法，**就是**最小修复；"
-        "其余部分照旧不动。\n\n"
-        "## 它报的错\n\n"
-        f"{error.strip()[:1500] or '（评测没有给出原因）'}\n\n"
-        # The environment, because "换成确实有的等价做法" is not actionable
-        # without knowing what is there. Three candidates in one run reached
-        # for `scipy.signal.cwt`, removed in SciPy 1.15; the repair was told to
-        # replace it and given no way to know what with.
-        "## 这个环境里有什么\n\n"
-        f"只能 import：{available_imports_text()}\n\n"
-        "## 当前程序\n\n"
+        # Not "it does not run": it may well run. A candidate reaches here
+        # whenever it scored nothing at all, and "every case came out wrong" is
+        # as common a way to get there as a traceback — telling it the program
+        # does not run when the error says the round trip does not match points
+        # the repair at the wrong thing.
+        "The program below did not pass a single case. Fix only the problem it "
+        "reports: do not redesign it, and do not tidy anything else along the "
+        "way. Get it running correctly and leave the rest as it is.\n\n"
+        # "Do not change the approach" used to be in the sentence above, and it
+        # forbade the one repair available: when the error says `cannot import
+        # name 'cwt'`, the missing thing *is* the approach. In one peak-detection
+        # search three candidates reached for scipy.signal.cwt/ricker (removed in
+        # SciPy 1.15); the repair fired three times and saved none of them.
+        "If the error says something does not exist — a failed import, a missing "
+        "attribute, a function that was removed — then replacing that one thing "
+        "with an equivalent the current version actually has **is** the minimal "
+        "fix. Leave everything else alone.\n\n"
+        "## What it reported\n\n"
+        f"{error.strip()[:1500] or '(the evaluator gave no reason)'}\n\n"
+        # The environment, because "replace it with an equivalent that exists" is
+        # not actionable without knowing what is there. Three candidates in one
+        # run reached for `scipy.signal.cwt`, removed in SciPy 1.15; the repair
+        # was told to replace it and given no way to know what with.
+        "## What this environment has\n\n"
+        f"You may import only: {available_imports_text()}\n\n"
+        "## Current program\n\n"
         "```python\n"
         f"{code}\n"
         "```\n\n"
-        "只输出修好之后的完整程序，放在一个 ```python 代码块里。\n"
+        "Output only the fixed complete program, in a single ```python block.\n"
     )

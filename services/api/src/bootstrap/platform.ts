@@ -212,7 +212,7 @@ export function createPlatformServices(
           content: await evolveCas.put(
             await evolveCas.read(run.goal.baselineProgramCas.replace(/^sha256:/, "")),
           ),
-          description: `演进起点：${run.goal.statement}`.slice(0, 500),
+          description: `Evolution starting point: ${run.goal.statement}`.slice(0, 500),
           executionRunIds: [run.id],
           kind,
           logicalName: name,
@@ -223,7 +223,7 @@ export function createPlatformServices(
         });
         const winnerVersion = await store.createArtifactVersion({
           content: await evolveCas.put(Buffer.from(winner, "utf-8")),
-          description: `演进结果：${run.goal.statement}`.slice(0, 500),
+          description: `Evolution result: ${run.goal.statement}`.slice(0, 500),
           executionRunIds: [run.id],
           // The lineage the version numbers only imply: this came from that.
           inputArtifactVersionIds: [seed.version.id],
@@ -336,8 +336,9 @@ export function createPlatformServices(
         const known = runs.slice(0, 8)
           .map((item) => `${item.id}（${item.status}）`).join("、");
         throw new Error(wanted
-          ? `没有这个搜索：${wanted}。${known ? `这个会话里的搜索：${known}` : "这个会话里还没有搜索。"}`
-          : "这个会话里还没有搜索。");
+          ? `no such search: ${wanted}. ${
+            known ? `The searches in this session: ${known}` : "This session has no searches yet."}`
+          : "this session has no searches yet.");
       }
       return summariseRun(run, await evolutionStore.readEvents(run.id));
     },

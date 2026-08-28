@@ -78,7 +78,7 @@ function goal(expansions = 2, budget: Partial<EvolveGoal["budget"]> = {}): Evolv
       solvedThreshold: 0.999,
     },
     schemaVersion: 2,
-    statement: "把分数做上去",
+    statement: "Push the score up",
     target: { entrypoint: "main.py", kind: "program", programId: "p" },
   };
 }
@@ -273,7 +273,7 @@ test("a stream that ends without a terminal event fails the run rather than hang
     return current?.status === "failed";
   }, "the run to be failed");
 
-  assert.match((await store.readRun(run.id))?.error ?? "", /未收到终态事件/);
+  assert.match((await store.readRun(run.id))?.error ?? "", /no terminal event arrived/);
 });
 
 test("an unreachable sidecar fails the run with a readable error", async () => {
@@ -329,7 +329,7 @@ test("runs left running by a previous process are settled at boot", async () => 
   assert.equal(await orchestrator.adoptOrphanedRuns(), 1);
   const settled = await store.readRun(run.id);
   assert.equal(settled?.status, "failed");
-  assert.match(settled?.error ?? "", /重启/);
+  assert.match(settled?.error ?? "", /control plane restarted/);
   assert.equal(await orchestrator.adoptOrphanedRuns(), 0, "already-terminal runs are left alone");
 });
 
@@ -350,7 +350,7 @@ test("a token gate trips the run and says which budget ran out", async () => {
   assert.ok(sidecar.stopped(), "the search was asked to wind down, not killed");
   const settled = await store.readRun(run.id);
   assert.equal(settled?.status, "budget_exhausted", "not 'stopped' — nobody pressed stop");
-  assert.match(settled?.error ?? "", /token 预算触顶/);
+  assert.match(settled?.error ?? "", /token budget reached/);
   assert.ok(settled?.lastSeq && settled.lastSeq > 0, "the watermark is still a resume point");
 });
 
@@ -367,7 +367,7 @@ test("a cost gate trips the run", async () => {
 
   const run = await orchestrator.start({ goal: goal(6, { maxCostCents: 500 }), sessionId: "s1" });
   await waitFor(async () => (await store.readRun(run.id))?.status === "budget_exhausted", "the cost gate");
-  assert.match((await store.readRun(run.id))?.error ?? "", /费用预算触顶/);
+  assert.match((await store.readRun(run.id))?.error ?? "", /cost budget reached/);
 });
 
 test("a wall-clock gate trips a search that has gone quiet", async () => {
@@ -382,7 +382,7 @@ test("a wall-clock gate trips a search that has gone quiet", async () => {
 
   const run = await orchestrator.start({ goal: goal(6, { maxSeconds: 0.15 }), sessionId: "s1" });
   await waitFor(async () => (await store.readRun(run.id))?.status === "budget_exhausted", "the wall-clock gate");
-  assert.match((await store.readRun(run.id))?.error ?? "", /墙钟预算触顶/);
+  assert.match((await store.readRun(run.id))?.error ?? "", /wall-clock budget reached/);
 });
 
 test("a run inside its budget is untouched", async () => {
@@ -529,7 +529,7 @@ test("a run whose dataset cannot be staged fails with the reason on the record",
   const run = await orchestrator.start({ goal: measuredGoal(), sessionId: "s1" });
   await waitFor(async () => (await store.readRun(run.id))?.status === "failed", "the run to fail");
 
-  assert.match((await store.readRun(run.id))?.error ?? "", /内容库/);
+  assert.match((await store.readRun(run.id))?.error ?? "", /content store/);
   // The sidecar was never asked to start a search it could not measure.
   assert.equal(sidecar.requests().length, 0);
 });
@@ -573,7 +573,7 @@ function judgedGoal(): EvolveGoal {
           split: { gateShards: 4, rolloutShards: 4, seed: 0, shardRows: 1, testShards: 0, trainRows: null },
           varianceThreshold: 0.2,
         },
-        name: "质量",
+        name: "quality",
         normalize: { kind: "identity" },
         weight: 1,
       }],
@@ -636,8 +636,8 @@ test("a judged run is sent a rubric and its own model token, and no dataset", as
     apiOrigin: "http://127.0.0.1:4310",
     cas: {
       read: async (hash: string) => {
-        if (hash === "e".repeat(64)) return Buffer.from("结论是否在开头。0-9 分。", "utf-8");
-        if (hash === "c".repeat(64)) return Buffer.from("这是初稿。", "utf-8");
+        if (hash === "e".repeat(64)) return Buffer.from("Is the conclusion up front? 0-9.", "utf-8");
+        if (hash === "c".repeat(64)) return Buffer.from("This is the first draft.", "utf-8");
         throw new Error("ENOENT");
       },
     },
@@ -653,8 +653,8 @@ test("a judged run is sent a rubric and its own model token, and no dataset", as
   assert.equal(sent.dataset_dir, "");
   // The draft is still read — a judged search starts *from* something, and
   // skipping it would hand the search a blank page.
-  assert.equal(sent.baseline_code, "这是初稿。");
-  assert.match(String(sent.rubric), /结论是否在开头/);
+  assert.equal(sent.baseline_code, "This is the first draft.");
+  assert.match(String(sent.rubric), /conclusion up front/);
 
   // Two tokens, because the proxy pins the model to the token — which is what
   // stops a caller choosing what it is billed for. Which model each one buys is
@@ -769,6 +769,6 @@ test("an interrupted PUCT run is not told it can resume", async () => {
 
   const adopted = await store.readRun(run.id);
   assert.equal(adopted?.status, "failed");
-  assert.match(adopted!.error!, /PUCT 不支持续跑/);
-  assert.doesNotMatch(adopted!.error!, /可从断点续跑/);
+  assert.match(adopted!.error!, /PUCT cannot be resumed/);
+  assert.doesNotMatch(adopted!.error!, /it can be resumed/);
 });

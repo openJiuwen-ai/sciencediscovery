@@ -38,12 +38,12 @@ function proposal(over: Partial<EvolveRunProposal> = {}): EvolveRunProposal {
     datasetPath: "data.csv",
     direction: "minimize",
     expansions: 12,
-    howScored: "在留出的 6 片上算 MAE 取均值，越低分越高。",
+    howScored: "Mean MAE over 6 held-out shards; lower is better.",
     metric: "mae",
     mode: "dataset_metric",
     split: SPLIT,
     startingPointPath: "baseline.py",
-    statement: "把误差降下来",
+    statement: "Bring the error down",
     targetColumn: "y",
     workers: 2,
     ...over,
@@ -58,7 +58,7 @@ function deps(over: Partial<ProposalDeps> = {}) {
     model: () => ({ hasApiToken: true, id: "m1", name: "M" }),
     modelId: "m1",
     orchestrator: {
-      probe: async () => ({ baseline: 0.4, flat: false, label: "把返回值换成常数", worsened: 0.1 }),
+      probe: async () => ({ baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1 }),
       sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
       start: async () => ({ id: "run-1", status: "running" }),
     } as never,
@@ -89,7 +89,10 @@ test("the probe's own verdict reaches the agent unwrapped", async () => {
   const { deps: d } = deps({
     orchestrator: {
       probe: async () => {
-        throw new EvolveSidecarError("评测脚本连起点都跑不完：NameError: name 'foo' is not defined", 400);
+        throw new EvolveSidecarError(
+          "the evaluator could not even finish on the starting point: NameError: name 'foo' is not defined",
+          400,
+        );
       },
       sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
       start: async () => ({ id: "run-1", status: "running" }),
@@ -98,8 +101,11 @@ test("the probe's own verdict reaches the agent unwrapped", async () => {
   const result = await startProposedRun(proposal(), d);
 
   assert.equal(result.run, undefined);
-  assert.equal(result.refusedBecause, "评测脚本连起点都跑不完：NameError: name 'foo' is not defined");
-  assert.ok(!result.refusedBecause?.startsWith("判别力探针没能进行"));
+  assert.equal(
+    result.refusedBecause,
+    "the evaluator could not even finish on the starting point: NameError: name 'foo' is not defined",
+  );
+  assert.ok(!result.refusedBecause?.startsWith("the discrimination probe could not be taken"));
 });
 
 test("a probe that genuinely could not run is reported as the incident it is", async () => {
@@ -114,7 +120,7 @@ test("a probe that genuinely could not run is reported as the incident it is", a
   });
   const result = await startProposedRun(proposal(), d);
 
-  assert.ok(result.refusedBecause?.startsWith("判别力探针没能进行"));
+  assert.ok(result.refusedBecause?.startsWith("the discrimination probe could not be taken"));
   assert.ok(result.refusedBecause?.includes("ECONNREFUSED"));
 });
 
@@ -124,7 +130,7 @@ test("a flat scoring is refused with the numbers that make the refusal checkable
   // event and finds nothing.
   const { deps: d } = deps({
     orchestrator: {
-      probe: async () => ({ baseline: 0.5, flat: true, label: "把返回值换成常数", worsened: 0.4999 }),
+      probe: async () => ({ baseline: 0.5, flat: true, label: "return value replaced with a constant", worsened: 0.4999 }),
       sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
       start: async () => assert.fail("a flat scoring must never reach start()"),
     } as never,
@@ -132,19 +138,19 @@ test("a flat scoring is refused with the numbers that make the refusal checkable
 
   const result = await startProposedRun(proposal(), d);
   assert.match(result.refusedBecause!, /0\.5000 vs 0\.4999/);
-  assert.match(result.refusedBecause!, /分不出好坏/);
+  assert.match(result.refusedBecause!, /cannot tell good from bad/);
 });
 
 test("a refusal names what to change, because its reader is the designer", async () => {
   const { deps: d } = deps();
   const cases: Array<[Partial<EvolveRunProposal>, RegExp]> = [
-    [{ startingPointPath: undefined }, /没有起点/],
-    [{ expansions: 4, workers: 2 }, /树是平的/],
-    [{ split: { ...SPLIT, gateShards: 2 } }, /判不出/],
-    [{ mode: "custom_script", evaluatorSource: undefined }, /要给评测脚本/],
+    [{ startingPointPath: undefined }, /no starting point/],
+    [{ expansions: 4, workers: 2 }, /the tree stays flat/],
+    [{ split: { ...SPLIT, gateShards: 2 } }, /cannot tell an improvement/],
+    [{ mode: "custom_script", evaluatorSource: undefined }, /needs an evaluator script/],
     [{ mode: "custom_script", evaluatorSource: "print(1)" }, /SCIENCE_AGENT_SHARDS/],
-    [{ mode: "llm_judge", rubric: undefined }, /要写评分细则/],
-    [{ mode: "test_gate", testCmd: "pytest -q", frozenGlobs: [] }, /必须冻结测试路径/],
+    [{ mode: "llm_judge", rubric: undefined }, /needs a rubric/],
+    [{ mode: "test_gate", testCmd: "pytest -q", frozenGlobs: [] }, /must freeze the test paths/],
   ];
   for (const [over, expected] of cases) {
     const result = await startProposedRun(proposal(over), d);
@@ -165,7 +171,7 @@ test("the scoring definition is frozen, whichever language it is written in", as
   // scoring. A search that can rewrite what marks it learns to do that instead
   // of getting better, so both land in `frozen`.
   for (const over of [
-    { mode: "llm_judge" as const, rubric: "分项细则…", scaleMax: 10 },
+    { mode: "llm_judge" as const, rubric: "per-item rubric...", scaleMax: 10 },
     {
       evaluatorSource: 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]',
       mode: "custom_script" as const,
@@ -196,12 +202,12 @@ test("a run that learned nothing says so, rather than reporting a status", async
     [
       { event: { baselineScore: 0.667, type: "seeded" } },
       { event: { score: 0.667, type: "expanded", valid: true } },
-      { event: { level: "warn", message: "9 个候选的分数全都一样（0.6670）", type: "log" } },
+      { event: { level: "warn", message: "all 9 candidates scored the same (0.6670)", type: "log" } },
       { event: { type: "search_finished" } },
     ],
   );
 
-  assert.match(summary.note!, /分数全都一样/);
+  assert.match(summary.note!, /candidates scored the same/);
   assert.equal(summary.bestTestScore, null);
 });
 
@@ -225,8 +231,8 @@ test("a run that stopped a third of the way in says so", async () => {
     ],
   );
 
-  assert.match(summary.stoppedEarly!, /计划 20 次扩展/);
-  assert.match(summary.stoppedEarly!, /实际跑了 8 次/);   // the seed is not an expansion
+  assert.match(summary.stoppedEarly!, /planned 20 expansions/);
+  assert.match(summary.stoppedEarly!, /made 8/);   // the seed is not an expansion
   assert.match(summary.stoppedEarly!, /max_iters/);
 });
 
@@ -249,8 +255,8 @@ test("the summary quotes the split the search never saw", async () => {
     { candidates: 12, id: "r", status: "succeeded", tokens: 11_000 },
     [
       { event: { baselineScore: 0.155, type: "seeded" } },
-      { event: { changeSummary: "换成弹性网络", score: 0.56, type: "expanded", valid: true } },
-      { event: { changeSummary: "加二阶交互项", score: 0.6, type: "expanded", valid: true } },
+      { event: { changeSummary: "switched to elastic net", score: 0.56, type: "expanded", valid: true } },
+      { event: { changeSummary: "added second-order interactions", score: 0.6, type: "expanded", valid: true } },
       { event: { score: null, type: "expanded", valid: false } },
       { event: { bestTestScore: 0.58, type: "search_finished" } },
     ],
@@ -258,7 +264,7 @@ test("the summary quotes the split the search never saw", async () => {
 
   assert.equal(summary.baselineScore, 0.155);
   assert.equal(summary.bestScore, 0.6);
-  assert.equal(summary.bestChange, "加二阶交互项");
+  assert.equal(summary.bestChange, "added second-order interactions");
   // The only number quotable outside the run: everything else was optimised
   // against, so an improvement measured on it is inflated by construction.
   assert.equal(summary.bestTestScore, 0.58);
@@ -318,8 +324,8 @@ test("a gate smaller than the rollout is refused", async () => {
   }, d);
 
   assert.equal(result.run, undefined);
-  assert.match(result.refusedBecause!, /留出门/);
-  assert.match(result.refusedBecause!, /最大/);
+  assert.match(result.refusedBecause!, /gate shards/);
+  assert.match(result.refusedBecause!, /largest of the three/);
 });
 
 test("a rollout at the floor is accepted", async () => {

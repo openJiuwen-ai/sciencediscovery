@@ -69,7 +69,7 @@ def test_the_damaged_copy_survives_the_gate_that_judges_real_candidates() -> Non
     assert ok, why
 
     ok, why = validate_source(baseline + _CONSTANT_PREDICTOR)
-    assert ok, f"探针的坏副本被门挡了：{why}"
+    assert ok, f"the probe's damaged copy was stopped by the gate: {why}"
 
 
 def test_a_scorer_that_notices_the_damage_passes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,7 +109,7 @@ def test_a_starting_point_that_will_not_score_is_refused_not_reported(
 
     with pytest.raises(ProbeError) as error:
         run_probe(judged_spec(baseline_code="   "))
-    assert "起点" in str(error.value)
+    assert "starting point" in str(error.value)
 
 
 def test_a_damaged_copy_that_will_not_score_is_not_counted_as_a_pass(
@@ -120,7 +120,7 @@ def test_a_damaged_copy_that_will_not_score_is_not_counted_as_a_pass(
     # A judge that answers for the baseline and then refuses says nothing about
     # discrimination; treating that as "the check passed" would let a flat
     # scorecard through on a transient.
-    marks = ["6", "6", "6", "6", "没有数字", "没有数字", "没有数字", "没有数字"]
+    marks = ["6", "6", "6", "6", "no number", "no number", "no number", "no number"]
     calls = {"n": 0}
 
     def completion(spec: Any, on_usage: Any, should_stop: Any):
@@ -145,7 +145,8 @@ def test_a_judge_that_cannot_agree_with_itself_is_not_a_broken_starting_point(
     """Both arrive as the same ``None`` and point at opposite fixes.
 
     "Undecidable" means the candidate ran perfectly — several times — and the
-    judge disagreed with itself. Reporting that as "起点本身就跑不起来" sends the
+    judge disagreed with itself. Reporting that as "the starting point does not
+    run" sends the
     user to rewrite a starting point that was never the problem, and leaves the
     rubric that actually needs the work untouched.
     """
@@ -157,10 +158,10 @@ def test_a_judge_that_cannot_agree_with_itself_is_not_a_broken_starting_point(
         run_probe(judged_spec())
 
     message = str(caught.value)
-    assert "这套评分自己就不稳" in message
-    assert "跑不起来" not in message
+    assert "unstable on its own terms" in message
+    assert "does not run" not in message
     # And it names the two things that would actually help.
-    assert "细则" in message and "次数" in message
+    assert "rubric" in message and "gradings" in message
 
 
 def test_a_starting_point_already_at_the_solved_threshold_is_refused(
@@ -176,7 +177,7 @@ def test_a_starting_point_already_at_the_solved_threshold_is_refused(
     with pytest.raises(ProbeError) as caught:
         run_probe(judged_spec())
 
-    assert "没有坡可以爬" in str(caught.value)
+    assert "no slope for the search to climb" in str(caught.value)
 
 
 def test_a_scoring_that_wobbles_as_much_as_the_damage_is_refused() -> None:
@@ -198,7 +199,7 @@ def test_a_scoring_that_wobbles_as_much_as_the_damage_is_refused() -> None:
 
     said = str(caught.value)
     assert "0.8000" in said and "0.5500" in said  # both numbers, so it is checkable
-    assert "噪声" in said
+    assert "noise" in said
 
 
 def test_a_steady_scoring_is_left_alone() -> None:
@@ -280,11 +281,11 @@ def test_a_text_candidate_is_damaged_by_replacing_it_not_by_hollowing() -> None:
     """
     from sciencediscovery_evolve.probe import _damage
 
-    prose = "本产品采用了业界领先的先进技术架构，能够为广大用户提供优质服务。"
+    prose = "This product adopts an industry-leading advanced technical architecture, able to provide quality service to the broad user base."
     damaged, label = _damage(prose)
 
     assert damaged.strip() != prose.strip()
-    assert "空话" in label
+    assert "empty phrases" in label
 
 
 def test_code_is_still_damaged_by_hollowing() -> None:
@@ -295,25 +296,28 @@ def test_code_is_still_damaged_by_hollowing() -> None:
 
     assert "y0 * 2" not in damaged
     assert "def solve" in damaged        # the name survives; the answer does not
-    assert "掏空" in label
+    assert "hollowed out" in label
 
 
 def test_damage_labels_read_correctly_in_both_sentences() -> None:
-    """One label is spliced into "把起点{label}之后" and into "{label}后 0.0000".
+    """One label is spliced into two different sentences.
 
-    The first spelling used to start with 把 itself, so the refusal read
-    "把起点把每个函数体掏空之后" — two 把 in a row, in the one sentence whose
-    whole job is to be read and acted on.
+    The refusal says "damaging the starting point ({label}) barely moved the
+    score", and the run card says "{label}: 0.0000". Both need a noun phrase,
+    so a label written as an instruction ("hollow out every function body")
+    reads wrong in at least one of them.
     """
     from sciencediscovery_evolve.probe import _damage
 
-    for source in ("def f():\n    return 1\n", "一段纯文本，没有任何函数。"):
+    for source in ("def f():\n    return 1\n", "A piece of plain text with no functions."):
         _damaged, label = _damage(source)
-        assert not label.startswith("把")
+        first, _, _rest = label.partition(" ")
+        assert not first.endswith("ing") or first == "hollowing", label
+        assert not label.endswith("."), label
 
 
 def test_the_probe_measures_the_slots_the_run_gates_on() -> None:
-    """One program, one 起点 — not 0.7157 in the probe and 0.2218 on the card.
+    """One program, one starting point — not 0.7157 in the probe and 0.2218 on the card.
 
     The engine holds out the tail of the slot list, so every node score the run
     reports is measured on the gate slots. A probe that reads `range(gate)`
@@ -346,7 +350,7 @@ def test_a_scoring_that_pays_for_failing_to_import_is_refused() -> None:
 
     said = str(caught.value)
     assert "1.0000" in said and "0.3704" in said   # both numbers, checkable
-    assert "最差" in said                            # and what to change
+    assert "worst" in said                           # and what to change
 
 
 def test_a_scoring_that_marks_it_worst_is_left_alone() -> None:
@@ -362,7 +366,7 @@ def test_an_evaluator_that_dies_on_the_unimportable_one_is_left_to_its_own_messa
     from sciencediscovery_evolve.script_domain import ScriptError
 
     def evaluate(_code, _shards):
-        raise ScriptError("评测脚本自己崩了")
+        raise ScriptError("the evaluator crashed on its own")
 
     _refuse_rewarding_the_unimportable(evaluate, (0,), 0.5)
 
@@ -380,7 +384,7 @@ def test_a_diagnosis_of_bare_exception_names_is_refused() -> None:
     with pytest.raises(ProbeError) as caught:
         _refuse_nameless_diagnosis("text13: exc IndexError; text37: exc IndexError")
 
-    assert "类名" in str(caught.value)
+    assert "class name" in str(caught.value)
 
 
 def test_a_diagnosis_that_carries_the_message_passes() -> None:
@@ -411,7 +415,7 @@ def test_a_crash_report_without_a_line_number_is_refused():
     ):
         with pytest.raises(ProbeError) as refusal:
             _refuse_locationless_diagnosis(said)
-        assert "哪一行" in str(refusal.value)
+        assert "not where" in str(refusal.value)
 
 
 def test_a_semantic_failure_needs_no_line_number():
@@ -425,7 +429,7 @@ def test_a_semantic_failure_needs_no_line_number():
 
     for said in (
         "case 0(prose): lossy round-trip (len 13641 != 13641)",
-        "3/6 条样例超出求值预算，其余误差正常",
+        "3 of 6 cases blew the evaluation budget; the rest are fine",
         "",
         # Already located, in either of the two shapes a traceback gives.
         'Traceback (most recent call last):\n  File "candidate.py", line 87\nValueError(1)',
@@ -445,7 +449,7 @@ def test_the_location_gate_costs_no_extra_evaluation():
     from sciencediscovery_evolve import probe
 
     source = inspect.getsource(probe._refuse_locationless_diagnosis)
-    assert "evaluate" not in source, "这道闸不该自己再跑一次评测"
+    assert "evaluate" not in source, "this gate must not run the evaluation a second time"
 
 
 def test_run_probe_actually_runs_the_location_gate():

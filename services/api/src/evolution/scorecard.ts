@@ -232,7 +232,7 @@ export function evaluateConstraints(
       violations.push({
         constraintId: constraint.id,
         criterionId: constraint.criterionId,
-        detail: `${constraint.name}：${constraint.criterionId} = ${observed}，要求 ${constraint.op} ${limit}`,
+        detail: `${constraint.name}: ${constraint.criterionId} = ${observed}, requires ${constraint.op} ${limit}`,
         limit,
         observed,
       });
@@ -283,16 +283,16 @@ export function validateScorecard(
   };
 
   if (!scorecard.criteria.length) {
-    push("error", "empty_criteria", "评分卡至少要有一条判据");
+    push("error", "empty_criteria", "a scorecard needs at least one criterion");
     return issues;
   }
 
   const seen = new Set<string>();
   for (const criterion of scorecard.criteria) {
-    if (seen.has(criterion.id)) push("error", "duplicate_criterion_id", `判据 id 重复：${criterion.id}`, criterion.id);
+    if (seen.has(criterion.id)) push("error", "duplicate_criterion_id", `duplicate criterion id: ${criterion.id}`, criterion.id);
     seen.add(criterion.id);
     if (!(criterion.weight > 0)) {
-      push("error", "weight_not_positive", `判据 ${criterion.id} 的权重必须为正`, criterion.id);
+      push("error", "weight_not_positive", `criterion ${criterion.id} needs a positive weight`, criterion.id);
     }
     const allowed = ALLOWED[criterion.normalize.kind] as string[] | undefined;
     if (!allowed) {
@@ -303,35 +303,45 @@ export function validateScorecard(
       push(
         "error",
         "unknown_normalize",
-        `判据 ${criterion.id} 的归一化方式 ${String(criterion.normalize.kind)} 不存在`,
+        `criterion ${criterion.id} uses a normalisation that does not exist: ${String(criterion.normalize.kind)}`,
         criterion.id,
       );
     } else if (!allowed.includes(criterion.direction)) {
       push(
         "error",
         "direction_normalize_mismatch",
-        `判据 ${criterion.id}：${criterion.normalize.kind} 归一化不能用于 ${criterion.direction}——归一化后必须是「越大越好」`,
+        `criterion ${criterion.id}: ${criterion.normalize.kind} normalisation cannot be used `
+        + `with ${criterion.direction} — after normalisation larger must be better`,
         criterion.id,
       );
     } else if (!isMonotone(criterion)) {
       // Belt and braces for a table that says a pairing is fine while the
       // implementation disagrees; cheap, and the failure it catches is silent.
-      push("error", "normalize_not_monotone", `判据 ${criterion.id} 的归一化与方向不单调一致`, criterion.id);
+      push(
+        "error",
+        "normalize_not_monotone",
+        `the normalisation and direction of criterion ${criterion.id} are not monotone together`,
+        criterion.id,
+      );
     }
   }
 
   const weightSum = scorecard.criteria.reduce((sum, criterion) => sum + criterion.weight, 0);
   if (Math.abs(weightSum - 1) > 1e-6) {
-    push("warning", "weights_not_normalised", `权重和为 ${weightSum}，将按比例归一到 1`);
+    push("warning", "weights_not_normalised", `the weights sum to ${weightSum}; they will be scaled to 1`);
   }
 
   for (const constraint of scorecard.constraints) {
     if (!seen.has(constraint.criterionId)) {
-      push("error", "constraint_unknown_criterion", `否决项 ${constraint.id} 指向了不存在的判据 ${constraint.criterionId}`);
+      push(
+        "error",
+        "constraint_unknown_criterion",
+        `veto ${constraint.id} points at criterion ${constraint.criterionId}, which does not exist`,
+      );
     }
   }
   if (!scorecard.constraints.length) {
-    push("warning", "no_constraints", "没有否决项：任何候选只要总分更高就会被接受");
+    push("warning", "no_constraints", "no vetoes: any candidate with a higher total is accepted");
   }
 
   if (!probes) return issues;
@@ -339,7 +349,13 @@ export function validateScorecard(
   for (const criterion of scorecard.criteria) {
     const raw = probes.baseline[criterion.id];
     if (raw === undefined || !Number.isFinite(raw)) {
-      push("error", "criterion_unmeasured", `判据 ${criterion.id} 在 baseline 上没测出数——测不出的判据要删掉，不要留占位`, criterion.id);
+      push(
+        "error",
+        "criterion_unmeasured",
+        `criterion ${criterion.id} produced no number on the baseline — a criterion that `
+        + "cannot be measured should be removed rather than left as a placeholder",
+        criterion.id,
+      );
     }
   }
 
@@ -348,7 +364,8 @@ export function validateScorecard(
     push(
       "error",
       "baseline_violates_constraint",
-      `baseline 自己就违反了否决项「${violation.detail}」：这样搜索第一步就无法接受任何东西，先放宽约束或先优化 baseline`,
+      `the baseline itself violates the veto "${violation.detail}": nothing can be accepted `
+      + "on the first step, so either loosen the constraint or improve the baseline first",
     );
   }
 
@@ -359,8 +376,10 @@ export function validateScorecard(
       push(
         "error",
         "no_discrimination",
-        `整卡没有区分度：baseline 与劣化样本的总分都是 ${baselineScore.toFixed(6)}。`
-        + "单维再灵敏，权重太小也会被加权抹平——搜索会在平坦地形上随机游走，而且不会报错",
+        `the card as a whole does not discriminate: the baseline and the damaged sample both `
+        + `total ${baselineScore.toFixed(6)}. However sensitive one criterion is, too small a `
+        + "weight erases it in the weighted sum — the search wanders a flat landscape and "
+        + "never reports an error",
       );
     }
   }

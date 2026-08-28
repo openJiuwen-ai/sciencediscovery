@@ -58,13 +58,13 @@ function goal(overrides: Partial<EvolveGoal> = {}): EvolveGoal {
           split: { gateShards: 8, rolloutShards: 4, seed: 0, shardRows: 10, testShards: 4, trainRows: null },
           target: "y",
         },
-        name: "宏 F1", normalize: { kind: "identity" }, weight: 1,
+        name: "macro F1", normalize: { kind: "identity" }, weight: 1,
       }],
       derivedFrom: { draftRunId: "", statement: "" },
       hash: "sha256:card", schemaVersion: 1, solvedThreshold: 0.999,
     },
     schemaVersion: 2,
-    statement: "把分数做上去",
+    statement: "Push the score up",
     target: { entrypoint: "main.py", kind: "program", programId: "p" },
     ...overrides,
   };
@@ -131,7 +131,7 @@ test("a refused ceiling offers turning thinking off as the other way out", async
   const issue = issues.find((candidate) => candidate.code === "max_tokens_too_low");
   // Two knobs solve this, and naming only one sends the user to the expensive
   // side of a forty-times token difference.
-  assert.match(issue?.fix ?? "", /思考/);
+  assert.match(issue?.fix ?? "", /thinking off/);
 });
 
 test("expansions that do not divide by workers are refused", async () => {
@@ -235,7 +235,7 @@ function judged(overrides: Partial<{
           split: { gateShards: 8, rolloutShards: 4, seed: 0, shardRows: 1, testShards: 0, trainRows: null },
           varianceThreshold: 0.2,
         },
-        name: "质量",
+        name: "quality",
         normalize: { kind: "identity" },
         weight: 1,
       }],
@@ -304,7 +304,7 @@ test("a test-gated scorecard must freeze the tests it is scored by", async () =>
           kind: "test_gate",
           testCmd: overrides.testCmd ?? ["pytest", "-q"],
         },
-        name: "通过率",
+        name: "pass rate",
         normalize: { kind: "identity" },
         weight: 1,
       }],

@@ -47,9 +47,9 @@ export interface EvolveSandboxCapability {
 }
 
 export const SANDBOX_MISSING_HINT = [
-  "候选程序是模型写的、未经审查的代码，没有隔离就不会执行。",
-  "Linux：安装 bubblewrap（bwrap）。",
-  "macOS：sandbox-exec 随系统提供，无需安装。",
+  "A candidate program is model-written, unreviewed code and will not be executed without isolation.",
+  "Linux: install bubblewrap (bwrap).",
+  "macOS: sandbox-exec ships with the system; nothing to install.",
 ].join(" ");
 
 /**

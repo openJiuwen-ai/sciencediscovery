@@ -23,7 +23,7 @@ function goalWith(target: EvolveGoal["target"]): EvolveGoal {
   return { target } as EvolveGoal;
 }
 
-test("每个 run 的结果 artifact 有自己的名字，不跨 run 归并", () => {
+test("each run's result artifact gets its own name and does not merge across runs", () => {
   // Measured before the fix: every scripted search's entrypoint is the literal
   // `candidate.py`, so compression, peak-detection and enzyme-kinetics runs in
   // one project piled into a single artifact ten versions deep — interleaved
@@ -40,9 +40,9 @@ test("每个 run 的结果 artifact 有自己的名字，不跨 run 归并", () 
   assert.notEqual(enzyme, peaks);
 });
 
-test("文本目标和不合法的入口路径也各有落点", () => {
+test("a text goal and an invalid entrypoint path each land somewhere of their own", () => {
   const text = evolveArtifactName({
-    goal: goalWith({ contentCas: "sha256:x", kind: "text", label: "摘要" }),
+    goal: goalWith({ contentCas: "sha256:x", kind: "text", label: "abstract" }),
     id: "abcd1234-0000-0000-0000-000000000000",
   });
   assert.equal(text, "evolve/abcd1234/evolved.md");

@@ -68,7 +68,7 @@ async function mount(deps: Parameters<typeof handleEvolveCompletion>[3]): Promis
 
 function completion(origin: string, runId: string, token?: string) {
   return fetch(`${origin}/internal/evolve-llm/${runId}/v1/chat/completions`, {
-    body: JSON.stringify({ messages: [{ content: "改进这个程序", role: "user" }] }),
+    body: JSON.stringify({ messages: [{ content: "improve this program", role: "user" }] }),
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -287,7 +287,7 @@ test("the caller's thinking setting reaches the provider, unlike its model", asy
 
   await fetch(`${origin}/internal/evolve-llm/run-1/v1/chat/completions`, {
     body: JSON.stringify({
-      messages: [{ content: "改进这个程序", role: "user" }],
+      messages: [{ content: "improve this program", role: "user" }],
       model: "gpt-expensive",
       thinking: { type: "disabled" },
     }),

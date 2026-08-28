@@ -175,7 +175,7 @@ def test_what_an_engine_grades_with_reaches_it(client: TestClient) -> None:
     try:
         response = client.post("/runs", json={
             "search_id": "run-card", "scorecard_hash": "sha256:card", "engine": "recording",
-            "expansions": 1, "statement": "把准确率做上去",
+            "expansions": 1, "statement": "Push the accuracy up",
             "scorecard": {"criteria": [{"id": "acc"}], "hash": "sha256:card"},
             "dataset_dir": "/staged/run-card", "baseline_code": "def train_and_predict(a, b): ...",
             "candidate_timeout_seconds": 45.0, "max_tokens_per_call": 32_000,
@@ -187,7 +187,7 @@ def test_what_an_engine_grades_with_reaches_it(client: TestClient) -> None:
 
     spec = captured["spec"]
     assert spec.scorecard["criteria"] == [{"id": "acc"}]
-    assert spec.statement == "把准确率做上去"
+    assert spec.statement == "Push the accuracy up"
     assert spec.dataset_dir == "/staged/run-card"
     assert spec.baseline_code.startswith("def train_and_predict")
     assert spec.candidate_timeout_seconds == 45.0
@@ -203,7 +203,7 @@ def test_a_failed_completion_is_an_empty_reply_not_an_exception() -> None:
     # had to guess the API's origin would turn every expansion into a failed
     # candidate for a reason that has nothing to do with candidates.
     complete = completion_for("http://127.0.0.1:1/internal/evolve-llm/x/v1/chat/completions", "t")
-    assert complete("改进这个程序") == ""
+    assert complete("improve this program") == ""
 
     with pytest.raises(CompletionUnavailable):
         completion_for("", "")
@@ -216,7 +216,7 @@ def test_a_stop_takes_effect_during_a_model_call_not_after_it() -> None:
     be cancelled — so it is left to finish on a daemon thread and its answer is
     dropped. The call is already paid for either way; the difference is whether
     the user is made to wait for it. Observed on a real deployment: stop sat at
-    "正在停止…" for four minutes.
+    "stopping..." for four minutes.
     """
     import threading
 
@@ -240,7 +240,7 @@ def test_a_stop_takes_effect_during_a_model_call_not_after_it() -> None:
             "http://127.0.0.1:1/chat/completions", "t", should_stop=stopping.is_set,
         )
         result: list[str] = []
-        caller = threading.Thread(target=lambda: result.append(complete("改进这个程序")))
+        caller = threading.Thread(target=lambda: result.append(complete("improve this program")))
         caller.start()
         assert started.wait(5), "the request never started"
         stopping.set()

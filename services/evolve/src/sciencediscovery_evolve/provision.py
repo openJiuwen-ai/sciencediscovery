@@ -14,7 +14,7 @@
 
 """Putting the packages a search needs into the runtime its candidates use.
 
-The person who types "把误差降下来" has no way to know the search wants a
+The person who types "bring the error down" has no way to know the search wants a
 gradient-boosting library, and no reason to. The drafting agent does know, so it
 says, and this is the half that acts on it.
 
@@ -87,8 +87,8 @@ def _installer(packages: Sequence[str]) -> List[str]:
         return [sys.executable, "-m", "pip", "install", "--no-input",
                 "--disable-pip-version-check", *packages]
     raise ProvisionError(
-        "这个候选运行时里既没有 uv 也没有 pip，装不了东西。"
-        "要么在部署时把包一起装上，要么让 uv 出现在 PATH 上"
+        "this candidate runtime has neither uv nor pip, so nothing can be installed. "
+        "Either ship the packages with the deployment, or put uv on the PATH"
     )
 
 
@@ -123,13 +123,13 @@ def ensure(packages: Sequence[str]) -> Tuple[List[str], str]:
     for package in wanted:
         if not _NAME.match(package):
             raise ProvisionError(
-                f"{package!r} 不是一个包名。这里只接受包名（可以带 ==版本），"
-                "不接受路径、URL、索引地址或 pip 选项"
+                f"{package!r} is not a package name. Only names are accepted here "
+                "(optionally with ==version); not paths, URLs, index addresses or pip options"
             )
 
     absent = missing(wanted)
     if not absent:
-        return [], ("这次要的包都已经装好了" if wanted else "")
+        return [], ("every package this run asked for is already installed" if wanted else "")
 
     command = _installer(absent)
     log.info("installing %s with %s", ", ".join(absent), command[0])
@@ -139,11 +139,11 @@ def ensure(packages: Sequence[str]) -> Tuple[List[str], str]:
         )
     except subprocess.TimeoutExpired as error:
         raise ProvisionError(
-            f"装 {'、'.join(absent)} 超过 {TIMEOUT_SECONDS:.0f} 秒还没结束"
+            f"installing {', '.join(absent)} ran for over {TIMEOUT_SECONDS:.0f}s without finishing"
         ) from error
     if completed.returncode != 0:
         tail = ((completed.stderr or "") + (completed.stdout or "")).strip()[-400:]
-        raise ProvisionError(f"装 {'、'.join(absent)} 失败了：{tail or '（没有输出）'}")
+        raise ProvisionError(f"installing {', '.join(absent)} failed: {tail or '(no output)'}")
 
     # The interpreter cached the failed lookups on the way in, and this process
     # is the one that runs the AST gate — without this the gate keeps reporting
@@ -152,7 +152,7 @@ def ensure(packages: Sequence[str]) -> Tuple[List[str], str]:
     still = missing(absent)
     if still:
         raise ProvisionError(
-            f"装完了但还是 import 不到：{'、'.join(still)}。"
-            "多半是包名和 import 名对不上"
+            f"installed, but still not importable: {', '.join(still)}. Most likely the "
+            "package name and the import name differ"
         )
-    return absent, f"给候选运行时装了 {'、'.join(absent)}"
+    return absent, f"installed {', '.join(absent)} into the candidate runtime"

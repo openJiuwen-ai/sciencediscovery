@@ -41,7 +41,7 @@ from sciencediscovery_evolve.server import app
 from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 
 # The baseline predicts the mean; the candidate learns the (exact) linear rule.
-BASELINE = '''"""基线：一律预测训练集均值。"""
+BASELINE = '''"""Baseline: always predict the training-set mean."""
 import pandas as pd
 
 
@@ -51,10 +51,10 @@ def train_and_predict(train_path, test_path):
     return [float(train["y"].mean())] * len(test)
 '''
 
-CANDIDATE_REPLY = '''我把常数预测换成了线性回归。
+CANDIDATE_REPLY = '''Replaced the constant prediction with a linear regression.
 
 ```python
-"""改用线性回归拟合 x 与 y 的关系。"""
+"""Switched to a linear regression fitting y against x."""
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
@@ -142,7 +142,7 @@ SCORECARD: Dict[str, Any] = {
     "aggregate": "weighted_sum",
     "constraints": [],
     "criteria": [{
-        "direction": "minimize", "id": "err", "name": "平均绝对误差",
+        "direction": "minimize", "id": "err", "name": "mean absolute error",
         "measure": {
             "datasetCas": ["sha256:d"], "kind": "dataset_metric",
             "metric": {"direction": "minimize", "name": "mae"},
@@ -168,7 +168,7 @@ def test_a_real_search_improves_on_its_baseline(tmp_path: Path, model_server: st
     response = client.post("/runs", json={
         "search_id": "run-e2e", "algorithm": "era", "engine": "era", "expansions": 2,
         "scorecard_hash": "sha256:e2e", "scorecard": SCORECARD,
-        "statement": "把预测误差降下来",
+        "statement": "Bring the prediction error down",
         "dataset_dir": stage(tmp_path / "staged"),
         "baseline_code": BASELINE,
         "candidate_timeout_seconds": 120.0,
@@ -222,6 +222,6 @@ def test_a_real_search_improves_on_its_baseline(tmp_path: Path, model_server: st
     assert of("cost")[-1]["tokens"] == 1_200 * len(of("expanded"))
 
     # The prompt carried the objective and the parent program.
-    assert "把预测误差降下来" in _Model.prompts[0]
+    assert "Bring the prediction error down" in _Model.prompts[0]
     assert "train_and_predict" in _Model.prompts[0]
-    assert "平均绝对误差" in _Model.prompts[0]
+    assert "mean absolute error" in _Model.prompts[0]

@@ -87,8 +87,8 @@ export function planSplit(rowCount: number, split: EvolveSplit): SplitPlan {
   const trainWanted = split.trainRows ?? rowCount - measured;
   if (trainWanted < 1 || trainWanted + measured > rowCount) {
     throw new DatasetStagingError(
-      `数据集只有 ${rowCount} 行，装不下 ${shardCount} 个分片 × ${split.shardRows} 行`
-      + `（共 ${measured} 行）加上 ${Math.max(trainWanted, 1)} 行训练数据`,
+      `the dataset has only ${rowCount} rows, which does not hold ${shardCount} shards x `
+      + `${split.shardRows} rows (${measured} in total) plus ${Math.max(trainWanted, 1)} training rows`,
     );
   }
 
@@ -120,9 +120,11 @@ export function planSplit(rowCount: number, split: EvolveSplit): SplitPlan {
  * dataset, and that check stays where the rows are.
  */
 export function validateSplit(split: EvolveSplit): string | undefined {
-  if (split.rolloutShards + split.gateShards + split.testShards < 1) return "评分卡没有要求任何分片";
-  if (split.shardRows < 1) return "每个分片至少要有 1 行";
-  if (split.trainRows !== null && split.trainRows < 1) return "训练行数至少为 1";
+  if (split.rolloutShards + split.gateShards + split.testShards < 1) {
+    return "the scorecard asks for no shards at all";
+  }
+  if (split.shardRows < 1) return "each shard needs at least 1 row";
+  if (split.trainRows !== null && split.trainRows < 1) return "the training row count must be at least 1";
   return undefined;
 }
 
@@ -166,13 +168,15 @@ export async function stageDataset(input: StageDatasetInput): Promise<StagedData
   for (const criterion of criteria) {
     const measure = criterion.measure as Extract<ScorecardCriterion["measure"], { kind: "dataset_metric" }>;
     const table = parseCsv(await readSource(input.cas, measure.datasetCas, criterion));
-    if (table.rows.length === 0) throw new DatasetStagingError(`判据「${criterion.name}」的数据集是空的`);
+    if (table.rows.length === 0) {
+      throw new DatasetStagingError(`the dataset for criterion "${criterion.name}" is empty`);
+    }
 
     const targetColumn = table.header.indexOf(measure.target);
     if (targetColumn < 0) {
       throw new DatasetStagingError(
-        `判据「${criterion.name}」要预测的列 ${JSON.stringify(measure.target)} 不在数据集里；`
-        + `数据集的列是 ${table.header.join(", ")}`,
+        `criterion "${criterion.name}" predicts the column ${JSON.stringify(measure.target)}, `
+        + `which is not in the dataset; its columns are ${table.header.join(", ")}`,
       );
     }
 
@@ -230,7 +234,9 @@ async function readSource(
   refs: string[],
   criterion: ScorecardCriterion,
 ): Promise<string> {
-  if (refs.length === 0) throw new DatasetStagingError(`判据「${criterion.name}」没有指定数据集`);
+  if (refs.length === 0) {
+    throw new DatasetStagingError(`criterion "${criterion.name}" names no dataset`);
+  }
   const parts: Buffer[] = [];
   let total = 0;
   for (const ref of refs) {
@@ -240,12 +246,15 @@ async function readSource(
     } catch {
       // Named rather than swallowed: a dataset that is not in the store is a
       // different problem from one that will not parse.
-      throw new DatasetStagingError(`判据「${criterion.name}」的数据集 ${ref} 不在内容库里`);
+      throw new DatasetStagingError(
+        `the dataset ${ref} for criterion "${criterion.name}" is not in the content store`,
+      );
     }
     total += bytes.length;
     if (total > MAX_SOURCE_BYTES) {
       throw new DatasetStagingError(
-        `判据「${criterion.name}」的数据集超过 ${MAX_SOURCE_BYTES / 1024 / 1024}MB，暂不支持`,
+        `the dataset for criterion "${criterion.name}" is over `
+        + `${MAX_SOURCE_BYTES / 1024 / 1024}MB, which is not supported yet`,
       );
     }
     parts.push(bytes);
@@ -264,7 +273,8 @@ function numeric(raw: string | undefined, criterion: ScorecardCriterion, column:
     // A NaN in the truth would poison every metric computed against it and
     // still come back looking like a number.
     throw new DatasetStagingError(
-      `判据「${criterion.name}」的目标列 ${column} 里有一个不是数字的值：${JSON.stringify(raw ?? null)}`,
+      `the target column ${column} for criterion "${criterion.name}" holds a value that is `
+      + `not a number: ${JSON.stringify(raw ?? null)}`,
     );
   }
   return value;

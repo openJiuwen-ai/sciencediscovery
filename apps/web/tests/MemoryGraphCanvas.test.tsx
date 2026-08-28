@@ -190,7 +190,7 @@ test("graphNodeDisplayNames does not suffixed names that appear only once", () =
   assert.equal(display.get("c2"), "run_shell");
 });
 
-test("图谱的 evolve 节点展示搜索内容并能跳到演进面板", () => {
+test("the graph's evolve node shows what the search did and links to the evolve panel", () => {
   // The evolve ToolCall used to render a bare status + a raw "program_evolution"
   // string: the run's substance lives one edge away on the SearchRun, and the
   // panel that could explain it was unreachable from the graph.
@@ -226,12 +226,12 @@ test("图谱的 evolve 节点展示搜索内容并能跳到演进面板", () => 
     }),
   ));
 
-  assert.match(html, /程序演进/, "task_type 要有译名，不能裸串");
-  assert.match(html, /0\.6626/, "SubTask 详情要透出 SearchRun 的基线");
-  assert.match(html, /0\.7666/, "以及留出测试分");
-  assert.match(html, /打开演进面板/, "以及去面板的按钮");
+  assert.match(html, /程序演进/, "task_type needs its translated name, not the bare string");
+  assert.match(html, /0\.6626/, "the task detail must surface the SearchRun's baseline");
+  assert.match(html, /0\.7666/, "and the held-out test score");
+  assert.match(html, /打开演进面板/, "and the button that goes to the panel");
 
-  // SearchRun 自己的详情也一样能看、能跳。
+  // The SearchRun's own detail reads and links the same way.
   const runHtml = renderToStaticMarkup(createElement(
     LocaleProvider, { initialLocale: "zh-CN" as const },
     createElement(MemoryGraphNodeDetail as never, {
@@ -247,7 +247,7 @@ test("图谱的 evolve 节点展示搜索内容并能跳到演进面板", () => 
   assert.match(runHtml, /0\.7666/);
 });
 
-test("evolve 相关节点的标题要能读", () => {
+test("the titles of evolve-related nodes have to be readable", () => {
   // Two circles both reading "evolve/e…" and one reading just "puct" told the
   // user nothing: which artifact the search started from, which it produced,
   // and what the mystery word meant.

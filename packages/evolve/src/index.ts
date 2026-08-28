@@ -246,25 +246,26 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       // treat its own design mistake as a broken tool.
       if (result.refusedBecause) {
         return {
-          content: [{ type: "text", text: `这次搜索没有起跑：${result.refusedBecause}` }],
+          content: [{ type: "text", text: `the search did not start: ${result.refusedBecause}` }],
           details: result,
         };
       }
       const probe = result.probe;
       const verdict = probe
-        ? `判别力探针：起点 ${probe.baseline.toFixed(4)}，${probe.label}后 ${
-          probe.worsened === null ? "跑不起来" : probe.worsened.toFixed(4)}`
+        ? `Discrimination probe: starting point ${probe.baseline.toFixed(4)}, ${probe.label} ${
+          probe.worsened === null ? "did not run" : probe.worsened.toFixed(4)}`
         : "";
       return {
         content: [{ type: "text", text: [
-          `搜索已创建：${result.run?.id ?? "(无 id)"}`,
+          `Search created: ${result.run?.id ?? "(no id)"}`,
           verdict,
           // The last thing the model reads before deciding what to do next.
           // Left off, it waits: calls get_evolve_run, sees "running", calls it
           // again — showing the user nothing the live card is not already
           // showing them, and spending the budget the search itself needs.
-          "把上面这两个数报给用户，然后结束这一轮。搜索要跑几分钟到几小时，"
-          + "它的卡片会自己实时显示进度，不要在这里等它、也不要轮询 get_evolve_run。",
+          "Report those two numbers to the user and then end the turn. The search runs for "
+          + "minutes to hours and its card streams live progress on its own — do not wait "
+          + "for it here, and do not poll get_evolve_run.",
         ].filter(Boolean).join("\n") }],
         details: result,
       };

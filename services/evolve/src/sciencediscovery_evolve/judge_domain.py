@@ -90,7 +90,7 @@ def judge_domain(
     reference: MutableMapping[str, float] = {} if baseline is None else baseline
     criteria = list(scorecard.get("criteria") or [])
     if not criteria:
-        raise JudgeUnavailable("这张评分卡没有判据")
+        raise JudgeUnavailable("this scorecard has no criteria")
     criterion = criteria[0]
     measure = criterion.get("measure") or {}
     scale = measure.get("scale") or {"max": 10, "min": 0}
@@ -99,7 +99,7 @@ def judge_domain(
 
     def evaluate(text: str, shards: Sequence[int]) -> Tuple[bool, Dict[str, Any], str]:
         if not text.strip():
-            return False, {SCORE_KEY: float("-inf")}, "候选是空的"
+            return False, {SCORE_KEY: float("-inf")}, "the candidate is empty"
 
         gradings: List[float] = []
         for shard in shards:
@@ -113,7 +113,7 @@ def judge_domain(
 
         if len(gradings) < min(MIN_GRADINGS, len(shards) * samples):
             return False, {SCORE_KEY: float("-inf")}, (
-                f"评审模型只给出 {len(gradings)} 个有效评分，判不了"
+                f"the judge returned only {len(gradings)} usable grades, which is not enough to decide"
             )
 
         median = statistics.median(gradings)
@@ -130,8 +130,9 @@ def judge_domain(
             metrics[SCORE_KEY] = float("-inf")
             metrics["undecidable"] = True
             return False, metrics, (
-                f"{len(gradings)} 次评分的极差 {spread:.3f} 超过阈值 "
-                f"{variance_threshold:.3f}，这个候选判不出好坏（不是判成差）"
+                f"the spread across {len(gradings)} gradings, {spread:.3f}, is over the "
+                f"{variance_threshold:.3f} threshold, so this candidate is undecidable "
+                f"(which is not the same as graded badly)"
             )
 
         raw = {criterion["id"]: median}
@@ -168,11 +169,11 @@ def judge_domain(
         metric_key=str(criterion["id"]),
         metric_better="higher",
         initial_program=baseline_text,
-        initial_summary="初稿",
+        initial_summary="first draft",
         evaluate=evaluate,
         reward=reward,
         prompt=prompt,
-        task_prompt=lambda shard: f"第 {shard} 次评审",
+        task_prompt=lambda shard: f"grading pass {shard}",
         test_shards=(),
         data_summary={"mode": "llm_judge"},
     )
@@ -211,26 +212,26 @@ def grader(
     return grade
 
 
-_SOURCE_BLOCK = """## 原始材料（打分的事实依据）
+_SOURCE_BLOCK = """## Source material (what the grade must be faithful to)
 
 {source}
 
 """
 
-_JUDGE_PROMPT = """按下面这份评分细则给这段内容打分。
+_JUDGE_PROMPT = """Grade the piece of writing below against the rubric.
 
-## 评分细则
+## Rubric
 
 {rubric}
 
-{source}## 要打分的内容
+{source}## What to grade
 
 {candidate}
 
-## 输出
+## Output
 
-只输出一个 {low} 到 {high} 之间的数字，不要任何别的文字。
-（评审序号 {seed}，与内容无关，不要写进回答。）"""
+Output a single number between {low} and {high} and nothing else.
+(Grading pass {seed}; it has nothing to do with the content, do not mention it.)"""
 
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 

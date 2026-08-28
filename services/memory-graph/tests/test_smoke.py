@@ -3192,7 +3192,7 @@ def test_schema_enum_has_contains_and_server_whitelist_has_contains() -> None:
     assert "contains" in server._EDGE_TYPES
     # Task (subagent scope) chain hops drill into children via a contains
     # out-hop (trace skips it — it walks in only — so children are not treated
-    # as upstream). contains links scope → *first* child ToolCall only (需求1);
+    # as upstream). contains links scope → *first* child ToolCall only (requirement 1);
     # the rest hang off the first via the scope-internal next chain.
     assert any(h[0] == "contains" and h[1] == "out" for h in query_mod._CHAIN_HOPS["Task"]), \
         "Task chain hops must include a contains out-hop to drill into children"

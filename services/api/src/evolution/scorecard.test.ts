@@ -40,7 +40,7 @@ function criterion(overrides: Partial<ScorecardCriterion> = {}): ScorecardCriter
       split: { gateShards: 4, rolloutShards: 4, seed: 0, shardRows: 100, testShards: 4, trainRows: null },
       target: "y",
     },
-    name: "宏 F1",
+    name: "macro F1",
     normalize: { kind: "identity" },
     weight: 1,
     ...overrides,
@@ -58,7 +58,7 @@ function card(
     confirmedBy: "tester",
     constraints,
     criteria,
-    derivedFrom: { draftRunId: "draft-1", statement: "把分数做上去" },
+    derivedFrom: { draftRunId: "draft-1", statement: "Push the score up" },
     hash: "sha256:placeholder",
     schemaVersion: 1,
     solvedThreshold: 0.999,
@@ -147,7 +147,7 @@ test("a violating candidate keeps its score — the refusal travels beside it", 
       criterion({ id: "f1", weight: 0.7 }),
       criterion({ direction: "minimize", id: "runtime", normalize: { kind: "relative_to_baseline" }, weight: 0.3 }),
     ],
-    [{ criterionId: "runtime", id: "too-slow", name: "太慢", op: "<", value: 300 }],
+    [{ criterionId: "runtime", id: "too-slow", name: "too slow", op: "<", value: 300 }],
   );
   const baseline = { f1: 0.60, runtime: 200 };
 
@@ -166,7 +166,7 @@ test("a violating candidate keeps its score — the refusal travels beside it", 
 test("a constraint can be stated relative to the baseline", () => {
   const scorecard = card(
     [criterion({ id: "rare_recall" })],
-    [{ criterionId: "rare_recall", id: "no-sacrifice", name: "牺牲稀有类", op: ">=", value: { relativeToBaseline: 0.8 } }],
+    [{ criterionId: "rare_recall", id: "no-sacrifice", name: "sacrificing the rare class", op: ">=", value: { relativeToBaseline: 0.8 } }],
   );
   const baseline = { rare_recall: 0.50 };
 
@@ -177,7 +177,7 @@ test("a constraint can be stated relative to the baseline", () => {
 test("an unmeasured criterion neither violates nor silently passes", () => {
   const scorecard = card(
     [criterion({ id: "runtime" })],
-    [{ criterionId: "runtime", id: "too-slow", name: "太慢", op: "<", value: 300 }],
+    [{ criterionId: "runtime", id: "too-slow", name: "too slow", op: "<", value: 300 }],
   );
   // No number means unknown: the constraint cannot fire, and validation is what
   // refuses to start such a run in the first place.
@@ -235,12 +235,12 @@ test("a baseline that already violates a constraint blocks the run", () => {
   // reality, so the search can never accept anything and burns the whole budget.
   const scorecard = card(
     [criterion({ direction: "minimize", id: "runtime", normalize: { kind: "relative_to_baseline" } })],
-    [{ criterionId: "runtime", id: "too-slow", name: "太慢", op: "<", value: 60 }],
+    [{ criterionId: "runtime", id: "too-slow", name: "too slow", op: "<", value: 60 }],
   );
   const issues = validateScorecard(scorecard, { baseline: { runtime: 90 } });
   const blocked = issues.find((issue) => issue.code === "baseline_violates_constraint");
   assert.equal(blocked?.severity, "error");
-  assert.match(blocked?.message ?? "", /先放宽约束或先优化 baseline/);
+  assert.match(blocked?.message ?? "", /loosen the constraint or improve the baseline/);
 });
 
 test("a card that cannot separate the baseline from a worse variant blocks the run", () => {
@@ -264,7 +264,7 @@ test("a card with real discrimination passes", () => {
       criterion({ id: "f1", weight: 0.7 }),
       criterion({ direction: "minimize", id: "runtime", normalize: { kind: "relative_to_baseline" }, weight: 0.3 }),
     ],
-    [{ criterionId: "runtime", id: "too-slow", name: "太慢", op: "<", value: 300 }],
+    [{ criterionId: "runtime", id: "too-slow", name: "too slow", op: "<", value: 300 }],
   );
   const issues = validateScorecard(scorecard, {
     baseline: { f1: 0.60, runtime: 200 },

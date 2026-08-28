@@ -203,7 +203,7 @@ def make_propose(
 _REPAIR_ATTEMPTS = 2
 
 #: What a nothing-came-back candidate scores, wherever it is noticed.
-NO_CANDIDATE = "这次没有拿到候选程序，模型调用没有返回内容"
+NO_CANDIDATE = "no candidate program came back; the model call returned nothing"
 
 
 def _reward(domain: Domain, valid: bool, metrics: Dict[str, Any]) -> float:
@@ -445,7 +445,7 @@ class PuctTreeAggregator:
             # an evaluator that catches its own exceptions that is true of every
             # candidate — so keeping on it swapped the repair in
             # unconditionally, including when it scored the same 0. Watched
-            # live: two repairs both reported 修好了 at 0.0000, each having
+            # live: two repairs both reported "repaired" at 0.0000, each having
             # replaced the original with something no better. A repair earns
             # its place the way a candidate does.
             after = _reward(self.domain, fixed, fixed_metrics)

@@ -160,7 +160,7 @@
    distinct from the green done badge (doc16 §2.5 ⊘ N cancelled). */
 .memory-thumb-cancelled { border-radius: 999px; background: var(--surface-subtle); color: var(--muted); padding: 0 6px; font-size: 9px; font-style: normal; }
 .memory-explorer-scope-note { position: absolute; left: 12px; bottom: 28px; margin: 0; border-radius: 6px; background: var(--warning-soft); color: var(--warning); padding: 3px 8px; font-size: 10px; max-width: calc(100% - 24px); }
-/* Center-screen toast for one-shot scope notices ("该节点暂无可展开的子节点").
+/* Center-screen toast for one-shot scope notices ("this node has no children to expand").
    A grey scrim covers the graph area to focus attention on the notice; the
    notice has NO dismiss button — clicking anywhere outside it (scrim,
    backdrop, canvas, any panel) clears it. Both scrim + toast stop mousedown

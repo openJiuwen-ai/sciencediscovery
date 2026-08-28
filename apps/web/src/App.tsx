@@ -4398,7 +4398,7 @@ export function App() {
             // "better" means is the one question only they can answer.
             setArtifactModalName(undefined);
             setArtifactModalVersion(undefined);
-            setMessage(`/evolve 把产物 ${seed.label} 做得更好：`);
+            setMessage(`/evolve make the artifact ${seed.label} better: `);
           }}
           onMissing={closeMissingArtifact}
           onNavigateArtifact={(name) => {

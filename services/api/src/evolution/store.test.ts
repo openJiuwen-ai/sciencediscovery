@@ -45,7 +45,7 @@ function goal(overrides: Partial<EvolveGoal> = {}): EvolveGoal {
       confirmedAt: "2026-08-19T00:00:00.000Z",
       confirmedBy: "tester",
       constraints: [
-        { criterionId: "runtime", id: "too-slow", name: "太慢", op: "<", value: 300 },
+        { criterionId: "runtime", id: "too-slow", name: "too slow", op: "<", value: 300 },
       ],
       criteria: [
         {
@@ -58,18 +58,18 @@ function goal(overrides: Partial<EvolveGoal> = {}): EvolveGoal {
             split: { gateShards: 4, rolloutShards: 4, seed: 0, shardRows: 619, testShards: 4, trainRows: null },
             target: "y",
           },
-          name: "宏 F1",
+          name: "macro F1",
           normalize: { kind: "identity" },
           weight: 1,
         },
       ],
-      derivedFrom: { draftRunId: "draft-1", statement: "把准确率做上去" },
+      derivedFrom: { draftRunId: "draft-1", statement: "Push the accuracy up" },
       hash: "sha256:card",
       schemaVersion: 1,
       solvedThreshold: 0.999,
     },
     schemaVersion: 2,
-    statement: "把准确率做上去",
+    statement: "Push the accuracy up",
     target: { entrypoint: "classify.py", kind: "program", programId: "p1" },
     ...overrides,
   };

@@ -265,7 +265,7 @@ export class EvolveOrchestrator {
           : {}),
         maxTokensPerCall: goal.budget.maxTokensPerCall,
         // The probe runs the starting point, and the starting point is what
-        // uses these — without them here it fails as "起点本身就跑不起来".
+        // uses these — without them here it fails as "the starting point does not run".
         ...(goal.packages?.length ? { packages: goal.packages } : {}),
         ...(judged ? { rubric: await this.readRubric(judged.rubricCas) } : {}),
         sandbox: toSidecarCapability(await this.sandboxCapability()),
@@ -328,7 +328,7 @@ export class EvolveOrchestrator {
     }
     if (!cas) {
       throw new DatasetStagingError(
-        "这个控制面没有配置内容库，无法为这次搜索准备数据集",
+        "this control plane has no content store configured, so it cannot stage a dataset for this search",
       );
     }
 
@@ -350,7 +350,10 @@ export class EvolveOrchestrator {
   private async snapshotWorkspace(run: EvolveRun): Promise<string> {
     const source = this.options.workspacePath?.(run.sessionId);
     if (!source) {
-      throw new DatasetStagingError("测试判分需要项目文件，但这个控制面拿不到会话的工作区");
+      throw new DatasetStagingError(
+        "test-gated scoring needs the project files, and this control plane cannot reach "
+        + "the session's workspace",
+      );
     }
     const destination = resolve(this.store.runDirectory(run.id), "workspace");
     await cp(source, destination, { recursive: true });
@@ -376,11 +379,15 @@ export class EvolveOrchestrator {
    *  and a rubric is a page of text — smaller than one candidate. */
   private async readRubric(cas: string): Promise<string> {
     const source = this.options.cas;
-    if (!source) throw new DatasetStagingError("这个控制面没有配置内容库，取不到评分细则");
+    if (!source) {
+      throw new DatasetStagingError(
+        "this control plane has no content store configured, so it cannot fetch the rubric",
+      );
+    }
     try {
       return (await source.read(casHash(cas))).toString("utf-8");
     } catch {
-      throw new DatasetStagingError(`评分细则 ${cas} 不在内容库里`);
+      throw new DatasetStagingError(`the rubric ${cas} is not in the content store`);
     }
   }
 
@@ -408,13 +415,15 @@ export class EvolveOrchestrator {
       // What is actually recoverable, per algorithm. PUCT refuses a resume
       // outright — its tree would have to be rebuilt from the event log first,
       // and without that a new node reuses an index the graph already spent.
-      // The banner used to promise "可从断点续跑" to every run regardless, so a
+      // The banner used to promise "it can be resumed" to every run regardless, so a
       // user who lost fifteen candidates to a restart went looking for a resume
       // that does not exist.
       await this.store.finishRun(run.id, "failed", run.algorithm === "puct"
-        ? "控制面重启，该次搜索已中断。PUCT 不支持续跑（树无法从事件日志重建），"
-          + "已跑出的候选可以查看，但要继续只能用同样的设计重开一次"
-        : "控制面重启，该次搜索已中断；可从断点续跑");
+        ? "the control plane restarted and this search was interrupted. PUCT cannot be "
+          + "resumed (the tree cannot be rebuilt from the event log); the candidates it "
+          + "already produced can be read, but continuing means starting again with the "
+          + "same design"
+        : "the control plane restarted and this search was interrupted; it can be resumed");
       adopted += 1;
     }
     if (adopted) apiLog.info("evolve_runs_adopted", { count: adopted });
@@ -569,7 +578,7 @@ export class EvolveOrchestrator {
         // killed mid-run. Either way the run is over and must say so.
         const gate = entry.budgetGate;
         if (gate) await this.finish(run.id, "budget_exhausted", gate);
-        else await this.finish(run.id, "failed", "搜索侧车在结束前断开，未收到终态事件");
+        else await this.finish(run.id, "failed", "the search sidecar disconnected before finishing; no terminal event arrived");
       }
     } catch (error) {
       const message = error instanceof EvolveSidecarError || error instanceof Error
@@ -601,7 +610,7 @@ export class EvolveOrchestrator {
     const seconds = run.goal.budget.maxSeconds;
     if (!Number.isFinite(seconds) || seconds <= 0) return;
     entry.wallClockTimer = setTimeout(() => {
-      void this.tripBudget(run.id, `墙钟预算触顶（${seconds}s）`);
+      void this.tripBudget(run.id, `wall-clock budget reached (${seconds}s)`);
     }, seconds * 1000);
   }
 
@@ -618,11 +627,11 @@ export class EvolveOrchestrator {
   /** Check the spend gates after a cost event. */
   private async checkSpendBudget(runId: string, budget: EvolveBudget, tokens: number, cents: number): Promise<void> {
     if (budget.maxTokens > 0 && tokens >= budget.maxTokens) {
-      await this.tripBudget(runId, `token 预算触顶（${budget.maxTokens}）`);
+      await this.tripBudget(runId, `token budget reached (${budget.maxTokens})`);
       return;
     }
     if (budget.maxCostCents > 0 && cents >= budget.maxCostCents) {
-      await this.tripBudget(runId, `费用预算触顶（${budget.maxCostCents} 分）`);
+      await this.tripBudget(runId, `cost budget reached (${budget.maxCostCents} cents)`);
     }
   }
 

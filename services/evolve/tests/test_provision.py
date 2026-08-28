@@ -31,7 +31,7 @@ def test_nothing_runs_when_nothing_is_missing() -> None:
     # discover that: the wizard is waiting on this before it can probe.
     installed, note = ensure(["numpy", "pandas"])
     assert installed == []
-    assert "已经装好" in note
+    assert "already installed" in note
 
 
 def test_a_distribution_whose_import_name_differs_is_still_found() -> None:
@@ -56,7 +56,7 @@ def test_anything_that_could_redirect_where_a_package_comes_from_is_refused(name
     `lightgbm` is legible. `-i http://…/simple` is a different supply chain
     wearing the same field, and it is a model that fills this field in.
     """
-    with pytest.raises(ProvisionError, match="不是一个包名"):
+    with pytest.raises(ProvisionError, match="is not a package name"):
         ensure([name])
 
 

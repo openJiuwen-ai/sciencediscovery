@@ -344,16 +344,16 @@ def test_the_prompt_gives_versions_not_just_package_names() -> None:
 def test_a_repair_may_replace_something_that_does_not_exist() -> None:
     """The repair prompt used to forbid the only possible fix.
 
-    "不要换方法" is right for an off-by-one and wrong for `cannot import name
-    'cwt'`, where the method itself is what is missing. Watched the repair fire
-    three times on that error and land none of them.
+    "Do not change the approach" is right for an off-by-one and wrong for
+    `cannot import name 'cwt'`, where the approach itself is what is missing.
+    Watched the repair fire three times on that error and land none of them.
     """
     from sciencediscovery_evolve.prompt import repair_prompt
 
     text = repair_prompt("x = 1", "ImportError: cannot import name 'cwt'")
 
-    assert "不要换方法" not in text
-    assert "不存在" in text and "等价" in text
+    assert "do not change the approach" not in text.lower()
+    assert "does not exist" in text and "equivalent" in text
     # Still narrow everywhere else: a redesign is what the ordinary expansion
     # already does.
-    assert "不要重新设计" in text
+    assert "do not redesign it" in text

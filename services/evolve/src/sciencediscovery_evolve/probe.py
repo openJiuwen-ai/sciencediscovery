@@ -62,7 +62,7 @@ TOLERANCE = 0.01
 _CONSTANT_PREDICTOR = '''
 
 def train_and_predict(train_path, test_path):
-    """探针：忽略输入，恒定预测。"""
+    """Probe: ignore the input, predict a constant."""
     import pandas as pd
 
     return [0.0] * len(pd.read_csv(test_path))
@@ -70,7 +70,7 @@ def train_and_predict(train_path, test_path):
 
 #: What a text candidate is damaged into. Any rubric worth running marks this
 #: down; one that does not is not going to rank two real drafts.
-_EMPTY_WORDS = "本工作做了一些事情，取得了一些结果，具有一定的意义。"
+_EMPTY_WORDS = "This work did some things, obtained some results, and has a certain significance."
 
 
 class ProbeError(RuntimeError):
@@ -86,7 +86,8 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
     if spec.packages:
         # The probe runs the starting point, and the starting point is exactly
         # what uses these — a draft that reaches for a boosting library fails
-        # here first, as "起点本身就跑不起来", if the library is not there yet.
+        # here first, as "the starting point does not run", if the library is
+        # not there yet.
         from .provision import ProvisionError, ensure
 
         try:
@@ -98,7 +99,10 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
         return _probe_gated(spec)
 
     if not spec.baseline_code.strip():
-        raise ProbeError("没有起点可测——判别力探针要拿它和一个故意改差的副本比")
+        raise ProbeError(
+            "there is no starting point to measure — the discrimination probe compares "
+            "it against a deliberately damaged copy"
+        )
 
     if mode == "custom_script":
         from .script_domain import ScriptError, script_domain
@@ -123,16 +127,19 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
         # slots instead: with one generator per shard the two slices are
         # different problems, and a live run showed the probe saying 0.7157 for
         # a start the run then seeded at 0.2218. Two numbers for one program,
-        # both called "起点".
+        # both called "the starting point".
         shards = _gate_slots(spec)
         try:
             baseline, _raw, why = _measure(domain.evaluate, spec.baseline_code, shards)
         except ScriptError as error:
-            raise ProbeError(f"评测脚本连起点都跑不完：{error}") from error
+            raise ProbeError(
+                f"the evaluator could not even finish on the starting point: {error}"
+            ) from error
         if baseline is None:
             raise ProbeError(
-                "起点在你的评测脚本下就不成立，搜索里每个分数都是相对它的。"
-                + (f"脚本报的是：{why}" if why.strip() else "脚本没说为什么。")
+                "the starting point does not hold up under your evaluator, and every "
+                "score in the search is measured relative to it. "
+                + (f"The script reported: {why}" if why.strip() else "The script gave no reason.")
             )
         damaged, damage_label = _damage(spec.baseline_code)
         try:
@@ -144,15 +151,18 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
             # reporting that every candidate is broken. Caught here so the fix
             # names the evaluator rather than arriving as a 502.
             raise ProbeError(
-                "评测脚本扛不住坏候选——把起点函数体掏空之后它自己崩了："
-                f"{error}。搜索里大多数候选都长这样，评测脚本必须把它们算作答错、"
-                "而不是跟着一起挂掉。两个地方都要兜："
-                "\n1) `import candidate` 本身——掏空后模块级的语句会拿到 None、"
-                "抛异常，这一步在任何样例之前，per-shard 的 try/except 到不了。"
-                "导入失败要记**最差**分（越大越好的评分里就是 0.0），"
-                "不是满分——写反了搜索会直接收敛到装不进来的候选。"
-                "\n2) 每一条样例的调用。"
-                "\n注意：要健壮的是评测脚本，不是候选——候选被改坏就是这个探针的目的。"
+                "the evaluator does not survive a bad candidate — hollowing out the "
+                f"starting point's function body made it crash: {error}. Most "
+                "candidates in a search look like that, and the evaluator has to score "
+                "them as wrong rather than dying with them. Guard two places:"
+                "\n1) `import candidate` itself — a hollowed-out module can leave a "
+                "module-level name as None or raise outright, and that happens before "
+                "any case, where a per-shard try/except cannot reach it. A failed "
+                "import scores **worst** (0.0 on a larger-is-better scale), not best — "
+                "inverted, the search converges on candidates that do not load."
+                "\n2) Each individual call."
+                "\nNote: it is the evaluator that has to be robust, never the candidate "
+                "— a damaged candidate is exactly what this probe is for."
             ) from error
         flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
         # Ordered by what each costs. The first three read numbers already paid
@@ -179,7 +189,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
             baseline_text=spec.baseline_code,
         )
         shards = tuple(range(_gate_count(spec)))
-        damaged, label = _EMPTY_WORDS, "内容换成空话"
+        damaged, label = _EMPTY_WORDS, "content replaced with empty phrases"
     else:
         from .scorecard_domain import scorecard_domain
 
@@ -197,30 +207,36 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
             baseline=reference,
         )
         shards = shard_indices(dataset, GATE)
-        damaged, label = spec.baseline_code + _CONSTANT_PREDICTOR, "把返回值换成常数"
+        damaged, label = spec.baseline_code + _CONSTANT_PREDICTOR, "return value replaced with a constant"
 
     baseline, raw, why = _measure(domain.evaluate, spec.baseline_code, shards)
     if baseline is None:
         # Two very different failures arrive here as the same `None`, and they
         # point at opposite things to fix. "Undecidable" means the candidate ran
         # perfectly — ten times — and the *judge* could not agree with itself;
-        # reporting that as "起点本身就跑不起来" sends the user to rewrite a
+        # reporting that as "the starting point does not run" sends the user
+        # to rewrite a
         # starting point that was never the problem.
-        if "判不出好坏" in why or "极差" in why:
+        # Matched on the judge domain's own wording; the two move together.
+        if "undecidable" in why or "spread across" in why:
             raise ProbeError(
-                "这套评分自己就不稳：同一份起点评了好几次，分数散得比阈值还开"
-                f"（{why}）。搜索是靠比分数排序的，噪声比差距大就排不出东西来。"
-                "两条出路：把细则写得更机械一点（数得出来的东西，而不是「是否清晰」"
-                "这种见仁见智的），或者把留出的评分次数加上去让中位数稳下来。"
+                "the scoring is unstable on its own terms: the same starting point was "
+                f"graded several times and the scores spread wider than the threshold ({why}). "
+                "The search ranks candidates by comparing scores, and it cannot rank "
+                "anything when the noise is larger than the differences. Two ways out: "
+                "make the rubric more mechanical (things that can be counted, rather "
+                "than \"is it clear\", which is a matter of opinion), or raise the number "
+                "of held-out gradings so the median settles."
             )
         # The starting point really failing is a different and worse problem:
         # every score in the search is expressed relative to it. Named, because
-        # "先修它" without saying what is wrong is not something a user can act
+        # "fix it first" without saying what is wrong is not something a user can act
         # on — and the user is usually not the one who wrote this starting
         # point, since the drafting model writes it when the workspace has none.
         raise ProbeError(
-            "起点本身就跑不起来，搜索里每个分数都是相对它的，所以这次没法开始。"
-            + (f"它报的是：{why}" if why.strip() else "评测那边也没给出原因。")
+            "the starting point does not run, and every score in the search is measured "
+            "relative to it, so this run cannot begin. "
+            + (f"It reported: {why}" if why.strip() else "The evaluation gave no reason either.")
         )
     # Frozen before the damaged copy is scored, so the comparison this probe
     # exists to make is the one the search will make.
@@ -251,11 +267,11 @@ def _probe_gated(spec: RunSpec) -> Dict[str, Any]:
     from .test_gate_domain import TestGateError, test_gate_domain
 
     if not spec.workspace_dir:
-        raise ProbeError("测试判分需要一份工作区副本，探针拿不到")
+        raise ProbeError("test-gated scoring needs a copy of the workspace, and the probe was given none")
     workspace = Path(spec.workspace_dir)
     entrypoint = _entrypoint_of(spec)
     if not entrypoint or not (workspace / entrypoint).is_file():
-        raise ProbeError(f"工作区里没有 {entrypoint or '入口文件'}，探针无从下手")
+        raise ProbeError(f"the workspace has no {entrypoint or 'entrypoint file'}, so the probe has nothing to start from")
 
     original = (workspace / entrypoint).read_text(encoding="utf-8")
     try:
@@ -270,14 +286,16 @@ def _probe_gated(spec: RunSpec) -> Dict[str, Any]:
     baseline, _raw, why = _measure(domain.evaluate, original, groups)
     if baseline is None:
         raise ProbeError(
-            "项目当前的实现连测试都跑不起来，所以没有可比的起点。"
-            + (f"套件报的是：{why}" if why.strip() else "套件没给出原因。")
+            "the project's current implementation does not even get the tests to run, "
+            "so there is no starting point to compare against. "
+            + (f"The suite reported: {why}" if why.strip() else "The suite gave no reason.")
         )
     worsened = _score(domain.evaluate, _hollow_out(original), groups)
 
     flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
     _refuse_saturated(spec, baseline, worsened)
-    return {"baseline": baseline, "flat": flat, "label": "函数体全部掏空", "worsened": worsened}
+    return {"baseline": baseline, "flat": flat, "label": "every function body hollowed out",
+            "worsened": worsened}
 
 
 def _refuse_saturated(spec: RunSpec, baseline: float, worsened: Optional[float] = None) -> None:
@@ -295,10 +313,11 @@ def _refuse_saturated(spec: RunSpec, baseline: float, worsened: Optional[float] 
         _refuse_thin_headroom(spec, baseline, worsened, threshold)
         return
     raise ProbeError(
-        f"起点一上来就把这套评分打到了 {baseline:.4f}，已经过了「算解决」的阈值"
-        f" {threshold:.3f}——搜索没有坡可以爬，跑了也只会原地结束。"
-        "评分需要出得更难：样例加难、容差收紧，或者换一个更挑剔的指标。"
-        "在上面的输入框里说一句「样例出难一点」就能重新设计。"
+        f"the starting point already scores {baseline:.4f} against this scoring, past the "
+        f"{threshold:.3f} solved threshold — there is no slope for the search to climb, and "
+        "a run would finish where it started. The scoring has to be made harder: harder "
+        "cases, tighter tolerances, or a more demanding metric. Saying \"make the cases "
+        "harder\" in the box above is enough to redesign it."
     )
 
 
@@ -318,7 +337,7 @@ def _hollow_out(source: str) -> str:
     try:
         tree = ast.parse(source)
     except SyntaxError as error:
-        raise ProbeError(f"项目当前的实现无法解析：{error}") from error
+        raise ProbeError(f"the project's current implementation does not parse: {error}") from error
 
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -360,7 +379,8 @@ def _measure(
     divided by it by the time a score comes out.
 
     The third is the reason the domain gave, and it used to be dropped on the
-    floor. What the user then saw was "起点本身就跑不起来，先修它" and nothing
+    floor. What the user then saw was "the starting point does not run, fix it
+    first" and nothing
     else — true, and useless: a syntax error, a missing entrypoint and a missing
     dependency all read the same, and none of them is something they can act on
     without being told which. The domain always knows; this is just carrying it.
@@ -433,10 +453,12 @@ def _refuse_noisy(evaluate, baseline_code: str, shards, baseline: float,
     if noise < signal / 2:
         return
     raise ProbeError(
-        f"同一个起点评两次得到 {baseline:.4f} 和 {repeat:.4f}（差 {noise:.4f}），"
-        f"而把它改坏只让分数动了 {signal:.4f}——抖动和真实差异一样大，"
-        "搜索会在噪声上爬坡：跑完会报出一个提升，但那个数字重跑就没了。"
-        "把每一片做大，或者把评分里随机的部分固定住（定住种子、取多次的中位数）"
+        f"the same starting point measured twice gave {baseline:.4f} and {repeat:.4f} "
+        f"(a difference of {noise:.4f}), while damaging it moved the score by only "
+        f"{signal:.4f} — the jitter is as large as the real difference, so the search "
+        "would climb the noise: it would finish reporting an improvement, and that "
+        "number would not survive a re-run. Make each shard bigger, or pin down what is "
+        "random in the scoring (fix the seed, take the median of several passes)"
     )
 
 def _refuse_thin_headroom(spec: RunSpec, baseline: float, worsened: Optional[float],
@@ -463,10 +485,12 @@ def _refuse_thin_headroom(spec: RunSpec, baseline: float, worsened: Optional[flo
     if signal <= TOLERANCE or headroom >= signal / 4:
         return
     raise ProbeError(
-        f"起点已经拿到 {baseline:.4f}，离「算解决」的 {threshold:.3f} 只剩 {headroom:.4f}，"
-        f"而把起点改坏也才让分数动了 {signal:.4f}——能赢的空间比这套评分自己的分辨率还小，"
-        "搜索多半会以「没有候选超过起点」收场。"
-        "把样例出难一点、容差收紧，或者换一个更挑剔的指标，让起点落回 0.3–0.7 之间。"
+        f"the starting point already scores {baseline:.4f}, leaving {headroom:.4f} before the "
+        f"{threshold:.3f} solved threshold, while damaging it moved the score by only "
+        f"{signal:.4f} — there is less room to win than this scoring can resolve, so the run "
+        "will most likely end with no candidate beating the starting point. Make the cases "
+        "harder, tighten the tolerances, or pick a more demanding metric, so the starting "
+        "point lands back in 0.3-0.7."
     )
 
 
@@ -490,8 +514,8 @@ def _damage(source: str) -> Tuple[str, str]:
         # Not parseable as code, so it was never code. Fall through to text.
         hollowed = source
     if hollowed.strip() != source.strip():
-        return hollowed, "函数体全部掏空"
-    return _EMPTY_WORDS, "内容换成空话"
+        return hollowed, "every function body hollowed out"
+    return _EMPTY_WORDS, "content replaced with empty phrases"
 
 
 #: A candidate that cannot be imported at all — the single commonest way a
@@ -531,10 +555,11 @@ def _refuse_rewarding_the_unimportable(evaluate, shards, baseline: float) -> Non
     if unimportable is None or unimportable < baseline - TOLERANCE:
         return
     raise ProbeError(
-        f"一个连导入都失败的候选，在你的评分下拿到了 {unimportable:.4f}，"
-        f"而起点是 {baseline:.4f}——评分在奖励装不进来的程序，搜索会直接收敛到它们。"
-        "多半是 import 的兜底把分数写反了：候选加载不了要记**最差**分（比如 0.0），"
-        "不是满分。"
+        f"a candidate that cannot even be imported scores {unimportable:.4f} under your "
+        f"scoring, against {baseline:.4f} for the starting point — the scoring rewards "
+        "programs that do not load, and the search will converge straight onto them. "
+        "Most likely the import guard has the score inverted: a candidate that fails to "
+        "load must score **worst** (0.0, say), not best."
     )
 
 
@@ -567,10 +592,11 @@ def _refuse_locationless_diagnosis(said: str) -> None:
     if re.search(r'(?:\bline\s+\d+|\.py[\"\']?[,:]\s*\d+|\bFile\s+")', text, flags=re.IGNORECASE):
         return
     raise ProbeError(
-        f"评分说了坏候选抛的是什么，没说在哪一行：「{text[:120]}」。"
-        "读到它的是修复这一步——候选有几百行，异常消息本身不指向任何一处，"
-        "它只能整个推倒重写，而重写出来的十有八九跑不起来。"
-        "把 error 写成裁剪过的 traceback.format_exc()，带上文件和行号。"
+        f"the scoring says what a bad candidate raised but not where: \"{text[:120]}\". "
+        "What reads it is the repair step — a candidate is hundreds of lines and the "
+        "message on its own points at none of them, so the repair can only tear the "
+        "whole thing down and rewrite it, and a rewrite usually does not run. Write "
+        "`error` as a trimmed traceback.format_exc(), carrying a file and a line."
     )
 
 
@@ -601,8 +627,9 @@ def _refuse_nameless_diagnosis(said: str) -> None:
     if residue:
         return
     raise ProbeError(
-        f"评分对坏候选只说了异常的类名：「{text[:120]}」——没有消息、没有行号，"
-        "读到它的是下一个候选的作者，它没法据此修任何东西，只会把整个方案推倒重来。"
-        "把 error 写成 repr(e) 或者裁剪过的 traceback.format_exc()，"
-        "至少要带上异常自己的那句话。"
+        f"the scoring reports only the exception's class name for a bad candidate: "
+        f"\"{text[:120]}\" — no message, no line number. What reads it is whoever writes "
+        "the next candidate, and it cannot fix anything from that; it will discard the "
+        "whole approach and start again. Write `error` as repr(e) or a trimmed "
+        "traceback.format_exc(), carrying at least the exception's own sentence."
     )

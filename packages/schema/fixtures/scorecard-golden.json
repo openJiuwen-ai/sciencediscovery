@@ -405,7 +405,7 @@
           {
             "criterionId": "runtime",
             "id": "too-slow",
-            "name": "太慢",
+            "name": "too slow",
             "op": "<",
             "value": 300
           }
@@ -499,7 +499,7 @@
           {
             "criterionId": "rare",
             "id": "no-sacrifice",
-            "name": "牺牲稀有类",
+            "name": "sacrificing the rare class",
             "op": ">=",
             "value": {
               "relativeToBaseline": 0.8
@@ -567,7 +567,7 @@
           {
             "criterionId": "runtime",
             "id": "too-slow",
-            "name": "太慢",
+            "name": "too slow",
             "op": "<",
             "value": 300
           }

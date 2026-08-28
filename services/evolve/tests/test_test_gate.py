@@ -40,7 +40,7 @@ CARD: Dict[str, Any] = {
     "aggregate": "weighted_sum",
     "constraints": [],
     "criteria": [{
-        "direction": "maximize", "id": "pass_rate", "name": "通过率",
+        "direction": "maximize", "id": "pass_rate", "name": "pass rate",
         "measure": {
             "caseSplit": {"gateGroups": 4, "rolloutGroups": 4, "testGroups": 2},
             "entrypoint": ["solver.py"],
@@ -111,7 +111,7 @@ def test_a_card_with_nothing_frozen_is_refused(tmp_path: Path) -> None:
     with pytest.raises(TestGateError) as error:
         build_domain(scorecard=card, workspace=project(tmp_path),
                          capability=SandboxCapability(backend="seatbelt"))
-    assert "冻结" in str(error.value)
+    assert "freeze the test files" in str(error.value)
 
 
 def test_a_card_with_no_test_command_is_refused(tmp_path: Path) -> None:

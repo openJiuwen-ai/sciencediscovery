@@ -28,13 +28,13 @@ import pytest
 from sciencediscovery_evolve.judge_domain import grader, judge_domain
 from sciencediscovery_evolve.text_candidate import extract_text
 
-RUBRIC = "结论是否在开头；论证是否有据；有无冗余。每项 0-3 分，满分 9。"
+RUBRIC = "Is the conclusion up front; is the argument supported; is there padding. 0-3 each, 9 total."
 
 CARD: Dict[str, Any] = {
     "aggregate": "weighted_sum",
     "constraints": [],
     "criteria": [{
-        "direction": "maximize", "id": "quality", "name": "质量",
+        "direction": "maximize", "id": "quality", "name": "quality",
         "measure": {
             "blind": True, "judgeModelId": "judge-1", "kind": "llm_judge",
             "rubricCas": "sha256:r", "samplesPerCandidate": 1,
@@ -59,7 +59,7 @@ def domain(scores: List[Optional[float]], card: Optional[Dict[str, Any]] = None)
 
     built = judge_domain(
         scorecard=card or CARD, rubric=RUBRIC, grade=grade,
-        statement="把这段写得更好", baseline_text="初稿",
+        statement="Make this piece better", baseline_text="first draft",
     )
     return built, calls
 
@@ -68,7 +68,7 @@ def test_the_median_decides_not_a_single_sample() -> None:
     # One sample of a noisy scorer is a coin flip that the tree would treat as a
     # measurement.
     built, calls = domain([5.4, 4.5, 4.5, 4.5])
-    valid, metrics, error = built.evaluate("候选", (0, 1, 2, 3))
+    valid, metrics, error = built.evaluate("candidate", (0, 1, 2, 3))
 
     assert valid, error
     assert len(calls) == 4
@@ -82,24 +82,24 @@ def test_a_spread_too_wide_is_undecidable_rather_than_bad() -> None:
     # Recording it as a low score would turn the judge's noise into a ranking
     # signal and poison the denominator for every later iteration.
     built, _ = domain([0.0, 9.0, 0.0, 9.0])
-    valid, metrics, error = built.evaluate("候选", (0, 1, 2, 3))
+    valid, metrics, error = built.evaluate("candidate", (0, 1, 2, 3))
 
     assert not valid
     assert metrics["undecidable"] is True
     assert metrics["score"] == float("-inf")
     # And it says which it is: "could not tell" is not "is bad".
-    assert "判不出好坏" in error
-    assert "不是判成差" in error
+    assert "undecidable" in error
+    assert "not the same as graded badly" in error
 
 
 def test_a_judge_that_does_not_answer_is_not_a_zero() -> None:
     # A judge that failed to reply says nothing about the candidate; scoring it
     # would say something.
     built, _ = domain([None, None, None, None])
-    valid, metrics, error = built.evaluate("候选", (0, 1, 2, 3))
+    valid, metrics, error = built.evaluate("candidate", (0, 1, 2, 3))
 
     assert not valid
-    assert "有效评分" in error
+    assert "usable grades" in error
     assert metrics["score"] == float("-inf")
 
 
@@ -108,7 +108,7 @@ def test_an_empty_candidate_is_a_failure_before_any_call_is_paid_for() -> None:
     valid, _metrics, error = built.evaluate("   ", (0, 1, 2, 3))
 
     assert not valid
-    assert "空的" in error
+    assert "candidate is empty" in error
     assert calls == [], "an empty candidate is not worth four model calls"
 
 
@@ -122,12 +122,12 @@ def test_the_judge_is_shown_the_rubric_and_the_candidate_and_nothing_else() -> N
         return "7"
 
     grade = grader(complete, RUBRIC, {"max": 9, "min": 0})
-    assert grade("候选正文", seed=3) == pytest.approx(7.0)
+    assert grade("candidate body", seed=3) == pytest.approx(7.0)
 
     prompt = seen[0]
     assert RUBRIC in prompt
-    assert "候选正文" in prompt
-    for leak in ("迭代", "父", "上一轮", "version", "0.8"):
+    assert "candidate body" in prompt
+    for leak in ("iteration", "parent", "previous round", "version", "0.8"):
         assert leak not in prompt, leak
 
 
@@ -142,45 +142,45 @@ def test_two_identical_candidates_can_be_graded_to_the_same_number() -> None:
         return 6.0
 
     built = judge_domain(scorecard=CARD, rubric=RUBRIC, grade=grade, baseline_text="")
-    built.evaluate("一样的文本", (0, 1))
+    built.evaluate("the same text", (0, 1))
     first = list(seeds)
     seeds.clear()
-    built.evaluate("一样的文本", (0, 1))
+    built.evaluate("the same text", (0, 1))
 
     assert seeds == first
 
 
 def test_the_scale_is_normalised_into_zero_to_one() -> None:
     built, _ = domain([9.0, 9.0, 9.0, 9.0])
-    _valid, metrics, _error = built.evaluate("候选", (0, 1, 2, 3))
+    _valid, metrics, _error = built.evaluate("candidate", (0, 1, 2, 3))
     # Full marks on a 0-9 rubric is 1.0, not 9.
     assert metrics["quality"] == pytest.approx(1.0)
 
     built, _ = domain([0.0, 0.0, 0.0, 0.0])
-    _valid, metrics, _error = built.evaluate("候选", (0, 1, 2, 3))
+    _valid, metrics, _error = built.evaluate("candidate", (0, 1, 2, 3))
     assert metrics["quality"] == pytest.approx(0.0)
 
 
 def test_a_reply_that_is_not_a_number_is_no_answer_rather_than_zero() -> None:
-    grade = grader(lambda prompt: "这段写得不错", RUBRIC, {"max": 9, "min": 0})
-    assert grade("候选", seed=0) is None
+    grade = grader(lambda prompt: "this one reads well", RUBRIC, {"max": 9, "min": 0})
+    assert grade("candidate", seed=0) is None
 
 
 def test_a_judge_answering_outside_the_scale_is_clamped_not_believed() -> None:
     high = grader(lambda prompt: "42", RUBRIC, {"max": 9, "min": 0})
-    assert high("候选", seed=0) == pytest.approx(9.0)
+    assert high("candidate", seed=0) == pytest.approx(9.0)
     low = grader(lambda prompt: "-5", RUBRIC, {"max": 9, "min": 0})
-    assert low("候选", seed=0) == pytest.approx(0.0)
+    assert low("candidate", seed=0) == pytest.approx(0.0)
 
 
 def test_the_mutation_prompt_carries_the_rubric_rather_than_the_program_contract() -> None:
     from sciencediscovery_evolve.vendor.puct.program import Program
 
     built, _ = domain([5.0])
-    prompt = built.prompt(Program("p", 1, None, "当前正文", "上一次改动", {}, True))
+    prompt = built.prompt(Program("p", 1, None, "current body", "the previous change", {}, True))
 
     assert RUBRIC in prompt
-    assert "当前正文" in prompt
+    assert "current body" in prompt
     # None of the program contract applies to a paragraph.
     assert "train_and_predict" not in prompt
     assert "import" not in prompt
@@ -190,19 +190,20 @@ def test_the_mutation_prompt_carries_the_rubric_rather_than_the_program_contract
 
 
 def test_a_fenced_rewrite_keeps_its_summary_line() -> None:
-    candidate, summary = extract_text("把结论提到开头。\n\n```\n新的正文\n第二段\n```")
-    assert candidate == "新的正文\n第二段"
-    assert summary == "把结论提到开头。"
+    candidate, summary = extract_text("Moved the conclusion up front.\n\n```\nthe new body\nsecond paragraph\n```")
+    assert candidate == "the new body\nsecond paragraph"
+    assert summary == "Moved the conclusion up front."
 
 
 def test_an_unfenced_reply_is_the_candidate_rather_than_being_discarded() -> None:
     # Losing a perfectly good rewrite over formatting is the worse failure.
-    candidate, summary = extract_text("就这一段，没有围栏。")
-    assert candidate == "就这一段，没有围栏。"
+    candidate, summary = extract_text("Just this paragraph, no fence.")
+    assert candidate == "Just this paragraph, no fence."
     assert summary == ""
 
 
 def test_the_longest_block_wins_so_an_explanation_is_not_adopted() -> None:
-    reply = "改了开头。\n\n```\n短的说明\n```\n\n```\n这才是完整的新正文，长得多，应该被采纳。\n```"
+    reply = ("Changed the opening.\n\n```\na short note\n```\n\n"
+             "```\nthis is the complete new body, much longer, and the one to adopt.\n```")
     candidate, _summary = extract_text(reply)
-    assert "完整的新正文" in candidate
+    assert "complete new body" in candidate

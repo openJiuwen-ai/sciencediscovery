@@ -986,7 +986,7 @@ def _link_scope_children(session: Any, session_id: str, scope_task_id: str) -> N
     at most the single ``contains`` edge (no ``next``). Runs inside the
     caller's open session/tx; fire-and-forget, best-effort concurrency.
 
-    The ``contains``-only-first rule (需求1) keeps ``contains`` as the
+    The ``contains``-only-first rule (requirement 1) keeps ``contains`` as the
     *entry* marker into a scope's child run; ordering between siblings is
     ``next``'s job — mirroring the session main chain's goal→head→…→last shape.
     """

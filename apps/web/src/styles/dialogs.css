@@ -50,7 +50,7 @@
 .artifact-modal-controls button { width: 34px; height: 34px; border-color: var(--border-strong); background: var(--surface); font-size: 14px; }
 .artifact-modal-controls button:hover { background: var(--surface-soft); }
 /* The one text button in a row of 34px icon squares. Without this override it
- * inherits the icon geometry, crushes to "把这个…" and bleeds past the ✕. */
+ * inherits the icon geometry, crushes to "make this..." and bleeds past the ✕. */
 .artifact-modal-controls .artifact-evolve {
   width: auto;
   height: 34px;

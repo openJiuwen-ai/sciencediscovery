@@ -81,7 +81,7 @@ function goal(expansions = 2): EvolveGoal {
       solvedThreshold: 0.999,
     },
     schemaVersion: 2,
-    statement: "把分数做上去",
+    statement: "Push the score up",
     target: { entrypoint: "main.py", kind: "program", programId: "p" },
   };
 }
@@ -91,7 +91,7 @@ const SEQUENCE: EvolveEvent[] = [
   { baselineScore: 0.5, nodeIndex: 0, type: "seeded" },
   { depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.62, type: "expanded", valid: true },
   { criteria: { f1: 0.62 }, nodeIndex: 1, reward: 0.62, type: "evaluated" },
-  { accepted: true, nodeIndex: 1, reason: "留出门分数提升", type: "merged" },
+  { accepted: true, nodeIndex: 1, reason: "the hold-out gate score improved", type: "merged" },
   { bestNodeIndex: 1, candidates: 2, status: "succeeded", type: "search_finished" },
 ];
 

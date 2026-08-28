@@ -195,7 +195,7 @@ class PuctEngine:
 
         emit(events.search_started(spec.algorithm, spec.scorecard_hash))
         if spec.workers > 1 and _mode(spec) == "serial":
-            emit(events.log("warn", f"这次搜索申请了 {spec.workers} 个 worker，但模式是 serial"))
+            emit(events.log("warn", f"this search asked for {spec.workers} workers, but the mode is serial"))
 
         with tempfile.TemporaryDirectory(prefix=f"evolve-ledger-{spec.search_id}-") as repo:
             try:
@@ -225,7 +225,7 @@ class PuctEngine:
             from .test_gate_domain import TestGateError, test_gate_domain
 
             if not spec.workspace_dir:
-                raise _Refusal("测试判分需要一份工作区副本，这次搜索没有拿到")
+                raise _Refusal("test-gated scoring needs a copy of the workspace, and this search was given none")
             try:
                 domain = test_gate_domain(
                     scorecard=spec.scorecard,
@@ -410,7 +410,7 @@ class PuctEngine:
             # token count belongs to.
             complete = self._completion_factory(spec, None, should_stop)
         except CompletionUnavailable as error:
-            raise _Refusal(f"这次搜索没有模型访问权限：{error}") from error
+            raise _Refusal(f"this search has no access to a model: {error}") from error
 
         def call(prompt: str, iteration: int) -> Tuple[str, str]:
             if should_stop():
@@ -485,11 +485,12 @@ class _Reporter:
         are the same empty string one frame later, and they need opposite fixes.
         Measured on this stack: a thinking-enabled whole-program rewrite ran
         900 seconds without the provider sending a single response header, the
-        proxy's ceiling cut it off, and the search recorded it as "模型返回了空
-        回复" — sending the reader to look for output that never existed.
+        proxy's ceiling cut it off, and the search recorded it as "the model
+        returned an empty reply" — sending the reader to look for output that
+        never existed.
         """
         with self._lock:
-            self._empty[iteration] = f"这次调用没有返回：{reason}"
+            self._empty[iteration] = f"this call returned nothing: {reason}"
 
     def note_empty(self, iteration: int) -> None:
         """Two failures wear the same empty reply and need opposite fixes."""
@@ -500,12 +501,13 @@ class _Reporter:
                 return
             if spent is not None and spent.capped:
                 self._empty[iteration] = (
-                    f"模型把 {spent.completion} 个输出 token 全部花在隐藏思考上，"
-                    f"到达单次调用上限 {self.spec.max_tokens_per_call} 时正文还没开始写。"
-                    "把上限调高，或把思考关掉"
+                    f"the model spent all {spent.completion} output tokens on hidden "
+                    f"thinking and had not started the answer when it hit the "
+                    f"{self.spec.max_tokens_per_call} per-call ceiling. Raise the ceiling, "
+                    "or turn thinking off"
                 )
             else:
-                self._empty[iteration] = "模型返回了空回复"
+                self._empty[iteration] = "the model returned an empty reply"
 
     def on_event(self, kind: str, payload: Dict[str, Any]) -> None:
         if kind == "selected":
@@ -538,11 +540,13 @@ class _Reporter:
             # went, and silently failing hides that the attempt was made.
             self.emit(events.log(
                 "info",
-                # "一分没拿到", not "跑不起来": a candidate that runs and gets
+                # "scored nothing", not "did not run": a candidate that runs and gets
                 # every case wrong lands here just as often as one that raises.
-                ("修好了一个一分没拿到的候选（%.4f）：%s" % (payload["after"], payload["why"]))
+                ("repaired a candidate that had scored nothing (%.4f): %s"
+                 % (payload["after"], payload["why"]))
                 if payload.get("kept") else
-                ("有个候选一分没拿到，试着修了一次没成：%s" % payload["why"]),
+                ("a candidate scored nothing; one repair was tried and did not land: %s"
+                 % payload["why"]),
             ))
 
     def _node(self, payload: Dict[str, Any]) -> None:
@@ -567,7 +571,7 @@ class _Reporter:
             empty = self._empty.pop(iteration, "")
             error = empty or node.program.error
         if not valid:
-            self.failures.append(error or "候选没有产出分数")
+            self.failures.append(error or "the candidate produced no score")
         else:
             self.scored += 1
 
@@ -600,15 +604,15 @@ class _Reporter:
             accepted = node.index == best.index and bool(payload.get("changed"))
             violated = metrics.get("violated")
             if node.program.valid:
-                reason = "成为当前最优" if accepted else "没有超过当前最优"
+                reason = "became the best node" if accepted else "did not beat the best node"
                 category = None if accepted else "below-threshold"
             elif violated:
-                reason = node.program.error or "触发否决项"
+                reason = node.program.error or "tripped a veto"
                 category = "constraint-violated"
             else:
                 # Never reached the point of being compared, which is a different
                 # problem from being compared and losing.
-                reason = node.program.error or "候选没有跑起来"
+                reason = node.program.error or "the candidate did not run"
                 category = "candidate-failed"
             self.emit(events.merged(
                 node.index, accepted, reason,
@@ -645,17 +649,18 @@ class _Reporter:
         self._planned = planned
 
         if error:
-            self.emit(events.log("warn", f"搜索是被一个错误结束的：{error[:300]}"))
+            self.emit(events.log("warn", f"the search was ended by an error: {error[:300]}"))
         if retired:
             self.emit(events.log(
                 "warn",
-                f"{retired} 个 worker 中途退出了——模型调用连续失败到框架认为它们不该再试。"
-                "这次搜索用掉的扩展次数会明显少于计划。",
+                f"{retired} workers dropped out partway through — their model calls failed "
+                "often enough in a row that the framework stopped retrying them. This search "
+                "will make noticeably fewer expansions than planned.",
             ))
         if 0 <= done < planned and reason and reason not in ("max_iters", "max_calls"):
             self.emit(events.log(
                 "info",
-                f"计划 {planned} 次扩展，实际跑了 {done} 次，停下的原因是 {reason}。",
+                f"planned {planned} expansions, made {done}; it stopped because {reason}.",
             ))
 
     def finish(self, status: str) -> None:
@@ -664,24 +669,27 @@ class _Reporter:
             # candidate landed on the same number as the seed — watched a
             # Gaussian-integral run finish 9 nodes all at 0.6666667 — the run
             # walked blind: no candidate ever outranked another, selection had
-            # nothing to select on, and "成为当前最优" was float noise. That is
+            # nothing to select on, and "became the best node" was float noise. That is
             # a scoring problem, not a candidate problem, and it deserves to be
             # said before the status line frames the run as an achievement.
             self.emit(events.log(
                 "warn",
-                f"{len(self.tree.nodes)} 个候选的分数全都一样"
-                f"（{next(iter(self._distinct_scores)):.4f}）。评分对这些改动不敏感，"
-                "这次搜索没有获得任何信号——多半是候选没有实现评测要求的接口，"
-                "或者评分只看它们都没碰的那部分。",
+                f"all {len(self.tree.nodes)} candidates scored the same "
+                f"({next(iter(self._distinct_scores)):.4f}). The scoring is insensitive to "
+                "these changes and the search got no signal at all — most likely the "
+                "candidates do not implement the interface the evaluator calls, or the "
+                "scoring only looks at a part none of them touched.",
             ))
         if status == "succeeded" and self.attempted and not self.scored:
             # Not "the search found nothing": nothing ever ran. Reporting that as
             # success sends the user looking at their scorecard for a fault that
             # is not there.
             status = "failed"
-            common = max(set(self.failures), key=self.failures.count) if self.failures else "未知原因"
+            common = max(set(self.failures), key=self.failures.count) if self.failures else "no reason given"
             self.emit(events.log(
-                "error", f"{self.attempted} 次扩展没有一个候选跑起来，最常见的原因是：{common}",
+                "error",
+                f"none of the {self.attempted} expansions produced a candidate that ran; "
+                f"the most common reason was: {common}",
             ))
 
         best = self.tree.best()
@@ -695,7 +703,7 @@ class _Reporter:
             if valid:
                 test_score = float(metrics[SCORE_KEY])
             else:
-                self.emit(events.log("warn", f"最好的候选在测试分片上跑失败了：{error}"))
+                self.emit(events.log("warn", f"the best candidate failed on the test shards: {error}"))
 
         self.emit(events.search_finished(
             status, best.index if best.program.valid else None, len(self.tree.nodes),
@@ -713,11 +721,12 @@ class _Reporter:
 def _refuse_unrunnable(spec: RunSpec) -> None:
     if spec.resume_from_sequence:
         raise _Refusal(
-            "PUCT 搜索暂不支持续跑：树需要先从事件日志重建，"
-            "否则新节点会用已经用过的编号，图里一个编号对应两份内容"
+            "a PUCT search cannot be resumed yet: the tree would have to be rebuilt from "
+            "the event log first, or new nodes reuse indices that are already taken and one "
+            "index in the graph ends up with two different contents"
         )
     if not spec.scorecard:
-        raise _Refusal("这次搜索没有拿到评分卡，无从判断候选好坏")
+        raise _Refusal("this search was given no scorecard, so there is no way to tell candidates apart")
     # Before the search starts, alongside the other configuration faults. The
     # tree raises on an unknown factor too, but that happens after the run has
     # been announced as started and after the dataset has been staged, so the
@@ -727,24 +736,25 @@ def _refuse_unrunnable(spec: RunSpec) -> None:
             factor for factor in _prior_factors(spec.options) if factor not in PRIOR_FACTORS
         ]
     except ValueError as error:
-        raise _Refusal(f"prior 参数的形状不对：{error}") from error
+        raise _Refusal(f"the prior argument has the wrong shape: {error}") from error
     if unknown:
         raise _Refusal(
-            f"不认识的 prior 因子 {unknown}；这一侧支持的是 {list(PRIOR_FACTORS)}"
+            f"unknown prior factor(s) {unknown}; this side supports {list(PRIOR_FACTORS)}"
         )
     for criterion in spec.scorecard.get("criteria") or []:
         kind = (criterion.get("normalize") or {}).get("kind")
         if kind not in KNOWN_NORMALIZE:
             raise _Refusal(
-                f"判据「{criterion.get('name', criterion.get('id'))}」用的归一化方式 {kind!r} "
-                f"这一侧不认识；支持的是 {sorted(KNOWN_NORMALIZE)}"
+                f"criterion \"{criterion.get('name', criterion.get('id'))}\" uses the "
+                f"normalisation {kind!r}, which this side does not know; supported are "
+                f"{sorted(KNOWN_NORMALIZE)}"
             )
     if _mode_of(spec) == "llm_judge":
         # Nothing is executed, so neither the scientific stack nor the sandbox
         # is needed. Demanding them would refuse exactly the runs this mode
         # exists for — a prompt, an abstract, a protocol.
         if not spec.rubric.strip():
-            raise _Refusal("这张评分卡要用模型评审，但没有给评分细则（rubric）")
+            raise _Refusal("this scorecard is graded by a model but was given no rubric")
         return
     if spec.packages:
         # Before anything is measured, and refused rather than warned about: a
@@ -763,13 +773,13 @@ def _refuse_unrunnable(spec: RunSpec) -> None:
         # Said here rather than at the first expansion: every candidate would
         # fail identically, and a search that reports twelve failed candidates
         # sends the user reading candidates for a fault in the configuration.
-        raise _Refusal("这张评分卡要用评测脚本打分，但没有给脚本")
+        raise _Refusal("this scorecard is scored by an evaluator script but was given none")
     missing = missing_candidate_runtime()
     if missing:
         raise _Refusal(
-            f"侧车缺少候选运行时：{', '.join(missing)}。"
-            "AST 门允许候选 import 它们，装不上就每个候选都会失败。"
-            "在 services/evolve 里跑 `uv sync --extra candidates`"
+            f"the sidecar is missing the candidate runtime: {', '.join(missing)}. "
+            "The AST gate lets candidates import them, so without them every candidate "
+            "fails. Run `uv sync --extra candidates` in services/evolve"
         )
 
 
@@ -802,7 +812,7 @@ def _stages_rows(mode: str) -> bool:
 
     One predicate rather than a list of modes repeated at each site. It was a
     list, and adding the fourth mode missed two of the three copies: the run
-    started, reported "只有 0 个可用分片", and failed before its first candidate —
+    started, reported "only 0 usable shards", and failed before its first candidate —
     because it had asked an empty dataset how many shards existed. Every other
     mode's shards come from the card, and what a shard *is* differs per mode
     (one grading, a set of test ids, whatever the evaluator slices) — which is
@@ -826,10 +836,11 @@ def _group_tasks(spec: RunSpec) -> List[Any]:
     total = counts["rollout"] + counts["gate"]
     if counts["gate"] < 4:
         raise _Refusal(
-            f"留出至少要 4 组才判得出噪声，这张卡只安排了 {counts['gate']} 组"
+            f"the hold-out needs at least 4 groups to tell an improvement from noise; "
+            f"this card allots {counts['gate']}"
         )
     return [
-        Task(id=f"{spec.search_id}:group-{index}", prompt=f"第 {index} 组",
+        Task(id=f"{spec.search_id}:group-{index}", prompt=f"group {index}",
              meta={"shard": index})
         for index in range(total)
     ]
@@ -850,12 +861,13 @@ def _tasks(dataset: Dataset, search_id: str) -> List[Any]:
         for shard in shard_indices(dataset, role):
             ordered.append(Task(
                 id=f"{search_id}:shard-{shard}",
-                prompt=f"在分片 {shard} 上评测这个程序",
+                prompt=f"evaluate this program on shard {shard}",
                 meta={"shard": shard},
             ))
     if len(ordered) < 4:
         raise _Refusal(
-            f"这次搜索只有 {len(ordered)} 个可用分片，接受门至少需要 4 个才判得出噪声"
+            f"this search has only {len(ordered)} usable shards; the acceptance gate needs "
+            f"at least 4 to tell an improvement from noise"
         )
     return ordered
 
@@ -864,7 +876,7 @@ def _group_held_out_frac(spec: RunSpec) -> float:
     counts = _case_groups(spec) if _mode_of(spec) == "test_gate" else _split_of(spec)
     total = counts["rollout"] + counts["gate"]
     if not counts["gate"] or not total:
-        raise _Refusal("这张评分卡没有安排留出组，接受门无从谈起")
+        raise _Refusal("this scorecard allots no hold-out groups, so there is no acceptance gate")
     return counts["gate"] / total
 
 
@@ -872,7 +884,7 @@ def _held_out_frac(dataset: Dataset) -> float:
     gate = len(shard_indices(dataset, GATE))
     total = len(shard_indices(dataset, ROLLOUT)) + gate
     if not gate or not total:
-        raise _Refusal("暂存的数据集没有 gate 分片，接受门无从谈起")
+        raise _Refusal("the staged dataset has no gate shards, so there is no acceptance gate")
     return gate / total
 
 
@@ -882,7 +894,10 @@ def _mode_of(spec: RunSpec) -> str:
     criteria = spec.scorecard.get("criteria") or []
     kinds = {str((c.get("measure") or {}).get("kind") or "") for c in criteria}
     if len(kinds) > 1:
-        raise _Refusal(f"一张评分卡里混了 {sorted(kinds)} 几种测量方式，这个引擎一次只做一种")
+        raise _Refusal(
+            f"one scorecard mixes the measurement kinds {sorted(kinds)}; this engine does "
+            f"one at a time"
+        )
     return next(iter(kinds), "dataset_metric")
 
 
@@ -923,14 +938,14 @@ def _judge_spec(spec: RunSpec) -> RunSpec:
     from dataclasses import replace
 
     if not spec.judge_url or not spec.judge_token:
-        raise _Refusal("这张评分卡要用模型评审，但这次搜索没有拿到评审模型的访问权限")
+        raise _Refusal("this scorecard is graded by a model, but this search was given no access to one")
     return replace(spec, llm_url=spec.judge_url, llm_token=spec.judge_token)
 
 
 def _mode(spec: RunSpec) -> str:
     mode = str(spec.options.get("mode") or ("async" if spec.workers > 1 else "serial"))
     if mode not in ("async", "serial", "sync"):
-        raise _Refusal(f"未知的搜索模式 {mode!r}；可选 serial / sync / async")
+        raise _Refusal(f"unknown search mode {mode!r}; the choices are serial / sync / async")
     return mode
 
 

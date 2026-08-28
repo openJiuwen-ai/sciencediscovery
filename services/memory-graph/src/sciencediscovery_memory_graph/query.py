@@ -140,14 +140,14 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
         # Folded-state surrogate edges: for every subagent scope, synthesize one
         # scope→product edge per terminal product so the collapsed view shows
         # "this scope produced these artifacts/papers" without expanding the
-        # child subtree. Per需求1, ``contains`` now links the scope to the
+        # child subtree. Per requirement 1, ``contains`` now links the scope to the
         # *first* child only; siblings link to each other via ``next``
         # (method='scope_chain'). So reaching every child's products requires
         # walking the scope-internal chain: ``scope-[:contains]->firstChild
         # -[:next*0..]->child-[:produces]->...`` (the ``0..`` lets the first
         # child match with zero next hops). Products hang off the child, never
         # the scope. These are query-time only — never written to the graph
-        # (总方案 §2.2). ``type`` stays ``produces`` (the surrogate stands in
+        # (the overall design §2.2). ``type`` stays ``produces`` (the surrogate stands in
         # for the "scope produces product" relation); ``extra`` carries
         # ``surrogate: True`` so the frontend distinguishes them from real edges
         # and ``via_child`` so a click can jump to the responsible child. The
@@ -191,7 +191,7 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
         seen: set[tuple[str, str, str]] = {
             (e["source"], e["target"], e["type"]) for e in edges
         }
-        # Per需求3: when a folded scope has >1 of the same product kind
+        # Per requirement 3: when a folded scope has >1 of the same product kind
         # (Artifact or Paper) reachable via surrogates, collapse those products
         # into ONE virtual "aggregate" node labelled "Artifacts"/"Papers" so the
         # folded view stays compact. The aggregate node is itself clickable to
@@ -668,13 +668,13 @@ def get_scope_expansion(scope_task_id: str, session_id: str) -> dict[str, Any]:
     those children — ``child-[:produces]->Code-[:produces]->Artifact`` and
     ``child-[:produces]->Paper`` — and the scope-internal ``contains`` + ``next``
     spine itself. Children are matched by ``parent_subtask_id`` (NOT by
-    ``contains``): per需求1, ``contains`` now links the scope to the *first*
+    ``contains``): per requirement 1, ``contains`` now links the scope to the *first*
     child only, and siblings link to each other via ``next`` in seq order:
         Task(scope) -[:contains]-> ToolCall₁ -[:next]-> ToolCall₂ -> …
     so walking ``contains`` alone would drop every child after the first.
     Unlike ``get_subgraph``'s folded surrogate edges, every edge here is a real
     persisted edge (no ``extra.surrogate`` marker); the folded view's surrogates
-    are dropped by the frontend when this expansion is drawn (总方案 §2.4).
+    are dropped by the frontend when this expansion is drawn (the overall design §2.4).
 
     Mirrors ``get_subgraph``'s defensive contract: an unreachable driver
     returns an empty subgraph + ``reason: "memory_graph_unreachable"`` rather
@@ -822,7 +822,7 @@ def get_group_expansion(group_id: str, session_id: str) -> dict[str, Any]:
 
     A folded scope with >1 product of the same kind (Artifact or Paper) is
     rendered in ``get_subgraph`` as ONE virtual aggregate node
-    (``_group:<scopeId>:<Kind>``, 需求3). This call unpacks that aggregate:
+    (``_group:<scopeId>:<Kind>``, requirement 3). This call unpacks that aggregate:
     it resolves the scope + kind from the id, re-walks the scope-internal
     chain (``scope-[:contains]->first-[:next*0..]->child-[:produces]->...``)
     to collect every member product of that kind, and returns those real

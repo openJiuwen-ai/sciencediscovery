@@ -78,7 +78,7 @@ test("mergeExpansions drops a folded scope's surrogate when that scope is expand
   const expansions = new Map([[SCOPE, expansionGraph()]]);
   const merged = mergeExpansions(folded, expansions, new Set([SCOPE]));
   // The surrogate scope→artifact must be gone; the real child→artifact edge
-  // takes over. One relation, one visible edge — never both (总方案 §2.4).
+  // takes over. One relation, one visible edge — never both (the overall design §2.4).
   const surrogates = merged.edges.filter((e) => e.extra?.surrogate === true);
   assert.equal(surrogates.length, 0, "expanded scope's surrogate must be filtered out");
   const realProduces = merged.edges.filter((e) => e.type === "produces" && e.source === CHILD);
@@ -156,7 +156,7 @@ function twoChildExpansion(): MemorySubgraph {
       { id: CHILD2, label: "ToolCall", extra: { task_type: "mcp_search", parent_subtask_id: SCOPE, seq: 7 } },
     ],
     edges: [
-      // contains → first child only (需求1); the rest link via next.
+      // contains → first child only (requirement 1); the rest link via next.
       { source: SCOPE, target: CHILD, type: "contains", extra: {} },
       // Persisted scope-internal next (first → second), method='scope_chain'.
       { source: CHILD, target: CHILD2, type: "next", extra: { inferred: true, basis: "seq", method: "scope_chain" } },
@@ -535,7 +535,7 @@ test("badge split counts completed and cancelled independently", () => {
   assert.equal(cancelled, 1);
 });
 
-// --- aggregate virtual node (需求3): fold >1 same-kind products into one node ---
+// --- aggregate virtual node (requirement 3): fold >1 same-kind products into one node ---
 
 const GROUP_ID = `_group:${SCOPE}:Artifact`;
 const ART2 = "art2#v1";
@@ -624,7 +624,7 @@ test("mergeExpansions hides an aggregate whose owning scope is expanded (real me
   assert.equal(merged.edges.some((e) => e.target === GROUP_ID), false, "no edge to the hidden aggregate");
 });
 
-// --- chain-view scope expansion overlay + fold (链内就地展开/收回) ---
+// --- chain-view scope expansion overlay + fold (expand/collapse in place within the chain) ---
 //
 // A chain carries a folded subagent scope's child ToolCalls as free nodes (the
 // artifact-chain walker reaches them via the producing Code's produces→in hop,

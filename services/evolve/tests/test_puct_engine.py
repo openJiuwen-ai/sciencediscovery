@@ -38,7 +38,7 @@ from sciencediscovery_evolve.vendor.puct.domain import Domain
 from sciencediscovery_evolve.vendor.puct.program import Program
 from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability
 
-BASELINE = '''"""基线。"""
+BASELINE = '''"""Baseline."""
 
 
 def train_and_predict(train_path, test_path):
@@ -46,7 +46,7 @@ def train_and_predict(train_path, test_path):
 '''
 
 CANDIDATE = '''```python
-"""换成梯度提升。"""
+"""Switched to gradient boosting."""
 
 
 def train_and_predict(train_path, test_path):
@@ -57,7 +57,7 @@ SCORECARD: Dict[str, Any] = {
     "aggregate": "weighted_sum",
     "constraints": [],
     "criteria": [{
-        "direction": "maximize", "id": "acc", "name": "准确率",
+        "direction": "maximize", "id": "acc", "name": "accuracy",
         "measure": {
             "datasetCas": ["sha256:d"], "kind": "dataset_metric",
             "metric": {"direction": "maximize", "name": "accuracy"},
@@ -75,7 +75,7 @@ def spec(**overrides: Any) -> RunSpec:
     base: Dict[str, Any] = {
         "algorithm": "puct", "expansions": 2, "scorecard": SCORECARD,
         "scorecard_hash": "sha256:card", "search_id": "run-1",
-        "statement": "把准确率做上去", "dataset_dir": "/staged",
+        "statement": "Push the accuracy up", "dataset_dir": "/staged",
         "baseline_code": BASELINE, "workers": 1,
         "llm_url": "http://127.0.0.1:4310/x", "llm_token": "run-token",
         "sandbox": SandboxCapability(backend="seatbelt"),
@@ -154,19 +154,19 @@ class Harness:
             self._score += 1
             value = self.scores[min(index, len(self.scores) - 1)]
             if value < 0:
-                return False, {"score": float("-inf")}, "候选执行失败：ZeroDivisionError"
+                return False, {"score": float("-inf")}, "the candidate failed to run: ZeroDivisionError"
             if self.violate_from is not None and index >= self.violate_from:
                 return False, {"acc": value, "score": float("-inf"), "violated": "too-slow"}, \
-                    "训练时长 412s 超过否决项上限 300s"
+                    "training time 412s is over the 300s veto limit"
             return True, {"acc": value, "score": value, "seconds": 1.0}, ""
 
         return Domain(
             name="test", entrypoint="train_and_predict", metric_key="acc",
-            metric_better="higher", initial_program=BASELINE, initial_summary="基线程序",
+            metric_better="higher", initial_program=BASELINE, initial_summary="the baseline program",
             evaluate=evaluate,
             reward=lambda metrics: max(0.0, min(1.0, float(metrics.get("score") or 0.0))),
-            prompt=lambda program: f"改进这个程序：{program.change_summary}",
-            task_prompt=lambda shard: f"分片 {shard}",
+            prompt=lambda program: f"improve this program: {program.change_summary}",
+            task_prompt=lambda shard: f"shard {shard}",
             test_shards=self.test_shards,
         )
 
@@ -295,13 +295,14 @@ def test_an_empty_reply_cut_off_by_the_thinking_budget_says_so() -> None:
     harness.run(spec(expansions=1, max_tokens_per_call=16_000))
 
     error = harness.of("expanded")[0]["error"]
-    assert "16001" in error and "思考" in error
+    assert "16001" in error and "hidden thinking" in error
 
 
 def test_a_call_that_never_returned_is_not_reported_as_an_empty_reply() -> None:
     # Measured on a real endpoint: a thinking-enabled whole-program rewrite ran
     # 900 seconds without the provider sending a response header, the proxy's
-    # ceiling cut it off, and the search recorded "模型返回了空回复" — which
+    # ceiling cut it off, and the search recorded "the model returned an empty
+    # reply" — which
     # sends the reader looking for output that was never produced. The two need
     # opposite fixes: one is the provider or the ceiling, one is the prompt.
     harness = Harness(replies=[""])
@@ -309,7 +310,7 @@ def test_a_call_that_never_returned_is_not_reported_as_an_empty_reply() -> None:
     harness.run(spec(expansions=1))
 
     error = harness.of("expanded")[0]["error"]
-    assert "没有返回" in error and "fetch failed" in error
+    assert "returned nothing" in error and "fetch failed" in error
 
 
 def test_a_thinking_cutoff_is_not_overwritten_by_the_generic_empty_reply() -> None:
@@ -319,7 +320,7 @@ def test_a_thinking_cutoff_is_not_overwritten_by_the_generic_empty_reply() -> No
     harness = Harness(replies=[""], capped=True, completion_tokens=16_001)
     harness.run(spec(expansions=1, max_tokens_per_call=16_000))
 
-    assert "思考" in harness.of("expanded")[0]["error"]
+    assert "hidden thinking" in harness.of("expanded")[0]["error"]
 
 
 def test_an_empty_reply_is_an_invalid_node_not_a_node_that_scored_zero() -> None:
@@ -356,7 +357,7 @@ def test_a_run_whose_scores_never_moved_says_so_out_loud() -> None:
     harness.run(spec(expansions=4))
 
     message = " ".join(event.get("message", "") for event in harness.of("log"))
-    assert "分数全都一样" in message
+    assert "candidates scored the same" in message
 
 
 def test_a_run_whose_scores_did_move_is_not_nagged(): 
@@ -365,7 +366,7 @@ def test_a_run_whose_scores_did_move_is_not_nagged():
     harness.run(spec(expansions=4))
 
     message = " ".join(event.get("message", "") for event in harness.of("log"))
-    assert "分数全都一样" not in message
+    assert "candidates scored the same" not in message
 
 
 def test_a_search_in_which_nothing_ran_is_a_failure_not_a_success() -> None:
@@ -374,7 +375,7 @@ def test_a_search_in_which_nothing_ran_is_a_failure_not_a_success() -> None:
 
     assert harness.of("search_finished")[0]["status"] == "failed"
     message = " ".join(event.get("message", "") for event in harness.of("log"))
-    assert "没有一个候选跑起来" in message
+    assert "produced a candidate that ran" in message
 
 
 # --- Refusals -----------------------------------------------------------------
@@ -386,7 +387,7 @@ def test_a_resumed_search_is_refused_rather_than_renumbering_nodes() -> None:
 
     assert harness.of("search_finished")[0]["status"] == "failed"
     assert harness.of("search_started") == []
-    assert any("续跑" in event.get("message", "") for event in harness.of("log"))
+    assert any("cannot be resumed" in event.get("message", "") for event in harness.of("log"))
 
 
 def test_a_search_without_a_scorecard_is_refused() -> None:
@@ -516,7 +517,7 @@ JUDGED_CARD: Dict[str, Any] = {
     "aggregate": "weighted_sum",
     "constraints": [],
     "criteria": [{
-        "direction": "maximize", "id": "quality", "name": "质量",
+        "direction": "maximize", "id": "quality", "name": "quality",
         "measure": {
             "blind": True, "judgeModelId": "judge-1", "kind": "llm_judge",
             "rubricCas": "sha256:r", "samplesPerCandidate": 1,
@@ -541,7 +542,7 @@ class JudgeHarness(Harness):
     """
 
     def __init__(self, marks: List[float], replies: Optional[List[str]] = None) -> None:
-        super().__init__(replies=replies or ["改得更具体。\n\n```\n新的摘要正文\n```"] * 12)
+        super().__init__(replies=replies or ["Made it more specific.\n\n```\nthe new abstract body\n```"] * 12)
         self.marks = marks
         self._mark = 0
         self.judge_prompts: List[str] = []
@@ -550,7 +551,7 @@ class JudgeHarness(Harness):
         def complete(prompt: str, sink: Any = None, on_failure: Any = None) -> str:
             # Both prompts carry the rubric — the mutator should know what it
             # is aiming at — so the grader is told apart by its own opening.
-            if prompt.startswith("按下面这份评分细则给这段内容打分"):
+            if prompt.startswith("Grade the piece of writing below against the rubric"):
                 self.judge_prompts.append(prompt)
                 mark = self.marks[min(self._mark, len(self.marks) - 1)]
                 self._mark += 1
@@ -567,8 +568,8 @@ class JudgeHarness(Harness):
 def judged_spec(**overrides: Any) -> RunSpec:
     base: Dict[str, Any] = {
         "scorecard": JUDGED_CARD,
-        "rubric": "结论是否在开头（0-3）；论证是否有据（0-3）；有无冗余（0-3）",
-        "baseline_code": "这是一段很空洞的初稿。",
+        "rubric": "Is the conclusion up front (0-3); is the argument supported (0-3); is there padding (0-3)",
+        "baseline_code": "This is a very hollow first draft.",
         "judge_url": "http://127.0.0.1:4310/x",
         "judge_token": "judge-token",
         "dataset_dir": "",
@@ -609,7 +610,7 @@ def test_the_judge_never_sees_which_candidate_it_is_marking() -> None:
     harness.run(judged_spec(expansions=2))
 
     for prompt in harness.judge_prompts:
-        for leak in ("nodeIndex", "父节点", "迭代", "上一版", "#1", "#2"):
+        for leak in ("nodeIndex", "parent", "iteration", "previous version", "#1", "#2"):
             assert leak not in prompt, leak
 
 
@@ -618,7 +619,7 @@ def test_a_judged_run_without_a_rubric_is_refused_before_anything_is_spent() -> 
     harness.run(judged_spec(rubric="   "))
 
     assert harness.of("search_finished")[0]["status"] == "failed"
-    assert any("评分细则" in event.get("message", "") for event in harness.of("log"))
+    assert any("no rubric" in event.get("message", "") for event in harness.of("log"))
     assert harness.judge_prompts == []
 
 
@@ -627,7 +628,7 @@ def test_a_judged_run_without_a_judge_token_is_refused_rather_than_silent() -> N
     harness.run(judged_spec(judge_token=""))
 
     assert harness.of("search_finished")[0]["status"] == "failed"
-    assert any("评审模型" in event.get("message", "") for event in harness.of("log"))
+    assert any("graded by a model" in event.get("message", "") for event in harness.of("log"))
 
 
 def test_too_few_gradings_is_refused_with_the_number() -> None:
@@ -639,7 +640,7 @@ def test_too_few_gradings_is_refused_with_the_number() -> None:
     assert harness.of("search_finished")[0]["status"] == "failed"
     # The unit is now "group" for both modes — a repeated grading here, a set of
     # test ids under a test gate — so the message says group.
-    assert any("2 组" in event.get("message", "") for event in harness.of("log"))
+    assert any("allots 2" in event.get("message", "") for event in harness.of("log"))
 
 
 def test_a_crash_inside_the_domain_is_not_a_successful_run() -> None:
@@ -694,7 +695,7 @@ def test_the_framework_s_stop_reason_reaches_the_run() -> None:
     reporter.note_outcome(_Outcome(), planned=24)
 
     said = " ".join(json.dumps(event, ensure_ascii=False) for event in emitted)
-    assert "3 个 worker" in said          # the workers that died
+    assert "3 workers dropped out" in said   # the workers that died
     assert "24" in said and "7" in said   # planned versus actual
     assert "patience" in said             # the framework's own word for it
 
@@ -856,7 +857,7 @@ def test_a_repair_that_did_not_help_is_thrown_away() -> None:
     Keeping the repair was gated on `fixed`, which is `valid`, which an
     evaluator that catches its own exceptions reports for everything — so the
     repaired version replaced the original unconditionally, including when it
-    scored the same 0. The panel said 修好了 twice, both at 0.0000.
+    scored the same 0. The panel said "repaired" twice, both at 0.0000.
     """
     from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
@@ -866,8 +867,8 @@ def test_a_repair_that_did_not_help_is_thrown_away() -> None:
         # Both measure fine, both score nothing — the repair changed the bug,
         # not the outcome.
         if "repaired" in code:
-            return True, {"score": 0.0}, "从修复版来的：还是对不上"
-        return True, {"score": 0.0}, "从原版来的：往返对不上"
+            return True, {"score": 0.0}, "from the repaired version: still does not match"
+        return True, {"score": 0.0}, "from the original: the round trip does not match"
 
     aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = lambda code, error, iteration: "def solve():\n    return 'repaired'\n"
@@ -880,7 +881,7 @@ def test_a_repair_that_did_not_help_is_thrown_away() -> None:
 
     _, _, error = _run_one(aggregator, "def solve():\n    return None\n", {"iteration": "1"})
 
-    assert error.startswith("从原版来的"), "没变好的修复顶掉了原版"
+    assert error.startswith("from the original"), "a repair that did not help displaced the original"
 
 
 def _run_one(aggregator, code, ops):
@@ -965,8 +966,8 @@ def test_each_repair_attempt_sees_what_the_last_one_produced() -> None:
         if "third" in code:
             return True, {"score": 0.7}, ""            # finally works
         if "second" in code:
-            return True, {"score": 0.0}, "第二次的错：还是不行"
-        return True, {"score": 0.0}, "第一次的错：原版坏了"
+            return True, {"score": 0.0}, "second failure: still not working"
+        return True, {"score": 0.0}, "first failure: the original is broken"
 
     aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = repair
@@ -979,8 +980,8 @@ def test_each_repair_attempt_sees_what_the_last_one_produced() -> None:
 
     valid, metrics, _ = _run_one(aggregator, "def f():\n    return None\n", {"iteration": "2"})
 
-    assert saw == ["第一次的错：原版坏了", "第二次的错：还是不行"], saw
-    assert metrics["score"] == 0.7, "第二次修好了，却没被采纳"
+    assert saw == ["first failure: the original is broken", "second failure: still not working"], saw
+    assert metrics["score"] == 0.7, "the second attempt fixed it and was not taken"
 
 
 def test_debugging_stops_as_soon_as_the_candidate_works() -> None:
@@ -994,7 +995,7 @@ def test_debugging_stops_as_soon_as_the_candidate_works() -> None:
     aggregator.domain = type("D", (), {
         "evaluate": staticmethod(lambda code, shards:
                                  (True, {"score": 0.6}, "") if "fixed" in code
-                                 else (True, {"score": 0.0}, "坏了")),
+                                 else (True, {"score": 0.0}, "broken")),
         "reward": staticmethod(lambda m: float(m["score"])),
     })()
     aggregator._held_out_shards = lambda: (0, 1)
@@ -1002,7 +1003,7 @@ def test_debugging_stops_as_soon_as_the_candidate_works() -> None:
 
     _run_one(aggregator, "def f():\n    return None\n", {"iteration": "1"})
 
-    assert len(calls) == 1, f"候选已经能跑了还在继续修：{len(calls)} 次"
+    assert len(calls) == 1, f"the candidate already runs and repair kept going: {len(calls)} attempts"
 
 
 def test_a_later_attempt_cannot_displace_a_better_earlier_one() -> None:
@@ -1015,8 +1016,8 @@ def test_a_later_attempt_cannot_displace_a_better_earlier_one() -> None:
     def evaluate(code, shards):
         for tag, value in scores.items():
             if tag in code:
-                return True, {"score": value}, f"{tag} 的错"
-        return True, {"score": 0.0}, "原版的错"
+                return True, {"score": value}, f"{tag} failure"
+        return True, {"score": 0.0}, "original failure"
 
     aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = lambda code, error, iteration: next(fixes)
@@ -1029,7 +1030,7 @@ def test_a_later_attempt_cannot_displace_a_better_earlier_one() -> None:
 
     _, metrics, _ = _run_one(aggregator, "def f():\n    return None\n", {"iteration": "1"})
 
-    assert metrics["score"] == 0.0001, "更差的第二次顶掉了更好的第一次"
+    assert metrics["score"] == 0.0001, "a worse second attempt displaced a better first one"
 
 
 def test_the_repair_is_told_what_the_environment_actually_has() -> None:
@@ -1080,7 +1081,7 @@ def test_the_engine_passes_the_rollout_budget_not_the_raw_expansions() -> None:
 def test_a_summary_copied_from_the_parent_is_blanked() -> None:
     """Sixteen nodes all read "Lossless text compression: …" on a live run.
 
-    The incremental-edit instruction ("其余部分原样保留") had the model keep
+    The incremental-edit instruction ("leave the rest as it is") had the model keep
     the seed's spec-style docstring header verbatim, and the header doubles as
     the node label. An empty label is honest about carrying no information;
     sixteen identical ones actively claim the candidates are the same thing.
@@ -1093,12 +1094,12 @@ def test_a_summary_copied_from_the_parent_is_blanked() -> None:
 
     seed_code = '"""Lossless text compression: compress(text)->bytes."""\n\nx = 1\n'
     tree = PuctTree(c_puct=1.0)
-    tree.seed(Program("p0", 0, None, seed_code, "基线", {"score": 0.5}, True, ""), 0.5)
+    tree.seed(Program("p0", 0, None, seed_code, "baseline", {"score": 0.5}, True, ""), 0.5)
 
     class _Domain:
         @staticmethod
         def prompt(program):
-            return "改进它"
+            return "improve it"
 
     def complete(prompt, iteration):
         # The model returns new code but keeps the parent's docstring line.
@@ -1111,11 +1112,11 @@ def test_a_summary_copied_from_the_parent_is_blanked() -> None:
 
     # A genuinely new line survives untouched.
     def complete_fresh(prompt, iteration):
-        return ('"""换成 LZ77 滑窗匹配。"""\n\nx = 3\n', "换成 LZ77 滑窗匹配。")
+        return ('"""Switched to LZ77 sliding-window matching."""\n\nx = 3\n', "Switched to LZ77 sliding-window matching.")
 
     propose2 = make_propose(tree, complete_fresh, _Domain())
     payload2 = jsonlib.loads(propose2("", _task(), "", 0.0))
-    assert payload2["change_summary"] == "换成 LZ77 滑窗匹配。"
+    assert payload2["change_summary"] == "Switched to LZ77 sliding-window matching."
 
 
 def _task():
@@ -1151,7 +1152,7 @@ def test_an_unclosed_fence_still_yields_importable_code() -> None:
     assert code == "x = 1\ny = 2"
     # A stray trailing fence goes too.
     code2, _ = extract_program("```python\nz = 3\n```")
-    # 正常配对的围栏走正则路径，不受影响。
+    # A properly paired fence takes the regex path and is unaffected.
     assert code2 == "z = 3"
     code3, _ = extract_program("```\nw = 4")
     assert code3 == "w = 4"

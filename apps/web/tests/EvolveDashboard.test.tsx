@@ -175,7 +175,7 @@ test("a program too large to diff degrades instead of freezing the tab", () => {
 // --- the wizard -----------------------------------------------------------------
 
 
-test("演进卡片在有活跃搜索时轮询，跑完就停", async () => {
+test("the evolve card polls while a search is active and stops when it finishes", async () => {
   // The card shows an expansion count and a status, so a one-shot read froze
   // at whatever "19/20" the list happened to hold when it was fetched — only
   // a session switch corrected it. The effect lives in App.tsx and needs a
@@ -187,7 +187,7 @@ test("演进卡片在有活跃搜索时轮询，跑完就停", async () => {
     source.indexOf("const load = () => {"),
     source.indexOf("}, [activeSessionId, client, evolveRefreshKey]);"),
   );
-  assert.ok(effect.length > 0, "找不到 evolve 列表的加载 effect");
+  assert.ok(effect.length > 0, "the effect that loads the evolve list was not found");
 
   // Re-arms only when something is still running.
   assert.match(effect, /isEvolveRunActive\(run\.status\)/);

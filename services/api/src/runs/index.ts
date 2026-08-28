@@ -1747,8 +1747,9 @@ async function executeAgentRun(
       // reader looking for a bug; saying it was cut at the limit names the one
       // knob that fixes it.
       assistantText = turnTruncated
-        ? "模型这一轮把整个 token 额度用在了思考上，被 max_tokens 截断，没能输出正文。"
-          + "把 SCIENCE_AGENT_LLM_MAX_TOKENS 调大（默认 16384）再试。"
+        ? "the model spent this turn's whole token allowance on thinking, was cut off by "
+          + "max_tokens, and produced no answer. Raise SCIENCE_AGENT_LLM_MAX_TOKENS "
+          + "(16384 by default) and try again."
         : "The run completed without a text response.";
     }
     promptManifest = await createPromptManifest({

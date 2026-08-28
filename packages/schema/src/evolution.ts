@@ -423,7 +423,7 @@ export interface EvolveGoal {
    *
    * Worked out by the drafting agent from the task, not asked of the user: a
    * search over gradient-boosted trees needs a gradient-boosting library, and
-   * the person who typed "把误差降下来" has no way to know that and no reason
+   * the person who typed "bring the error down" has no way to know that and no reason
    * to. Provisioned into the candidate runtime before the probe, so the
    * starting point and every candidate see the same environment.
    *

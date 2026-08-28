@@ -20,8 +20,9 @@ answer, that there is prose a second model can mark. Plenty of real goals have
 none of those. "Write a function that splits Chinese addresses into four
 fields, as accurately as possible" has an obvious deterministic score — run it
 over labelled examples and count exact matches — and no home in any of the
-three. Asked to design that search, the drafting model said so itself: *工作区
-为空、我无法创建文件，因此用 llm_judge*, and fell back to the one non-
+three. Asked to design that search, the drafting model said so itself: *the
+workspace is empty and I cannot create files, so I will use llm_judge*, and
+fell back to the one non-
 deterministic, most gameable mode for a goal that did not need it.
 
 So this mode's answer is: the model writes the evaluator. Same `Domain` seam,
@@ -33,11 +34,11 @@ that fails at the end.** The evaluator is run with its working directory set to
 a throwaway copy; the candidate is beside it; three environment variables say
 where things are; and it writes one JSON object.
 
-    SCIENCE_AGENT_CANDIDATE   候选程序的文件名
-    SCIENCE_AGENT_SHARDS      要评的分片号，逗号分隔
-    SCIENCE_AGENT_RESULT      把结果 JSON 写到这个路径
+    SCIENCE_AGENT_CANDIDATE   the candidate program's filename
+    SCIENCE_AGENT_SHARDS      which shards to score, comma-separated
+    SCIENCE_AGENT_RESULT      where to write the result JSON
 
-    {"valid": true, "metrics": {"<判据 id>": 0.83}, "error": ""}
+    {"valid": true, "metrics": {"<criterion id>": 0.83}, "error": ""}
 
 **The result is a file, not stdout.** A candidate that prints is ordinary; a
 candidate whose print lands in the middle of the result is a run that fails for
@@ -122,7 +123,7 @@ def script_domain(
     reference: MutableMapping[str, float] = {} if baseline is None else baseline
     criteria = list(scorecard.get("criteria") or [])
     if not criteria:
-        raise ScriptError("这张评分卡没有判据")
+        raise ScriptError("this scorecard has no criteria")
     criterion = criteria[0]
     metric_id = str(criterion.get("id") or SCORE_KEY)
     # Slots are positional (the engine holds out by tail); the case behind a slot
@@ -132,7 +133,7 @@ def script_domain(
     _total = total_slots(_split)
     _seed = int(_split.get("seed") or 0)
     if not script.strip():
-        raise ScriptError("这张评分卡说要用评测脚本打分，但脚本是空的")
+        raise ScriptError("this scorecard says it is scored by an evaluator script, but the script is empty")
 
     def evaluate(code: str, shards: Sequence[int]) -> Tuple[bool, Dict[str, Any], str]:
         try:
@@ -149,7 +150,8 @@ def script_domain(
         if not payload.get("valid", False):
             # The failure text is what the reflector learns from and what the
             # user reads on the candidate card. An evaluator that writes
-            # valid:false with no error produces "判这个候选不成立" and nothing
+            # valid:false with no error produces "marked this candidate invalid"
+            # and nothing
             # else — seen on a real run, on a card, saying nothing anyone could
             # act on. Whatever the evaluator *did* say (metrics it still
             # reported, its stdout) is better than that.
@@ -157,11 +159,12 @@ def script_domain(
             if not reason:
                 reported = payload.get("metrics")
                 detail = (
-                    f"它报的数值是 {json.dumps(reported, ensure_ascii=False)[:200]}"
+                    f"the values it reported were {json.dumps(reported, ensure_ascii=False)[:200]}"
                     if isinstance(reported, dict) and reported
-                    else "而且没有说原因——细则里让它在 error 字段里写为什么会更好改"
+                    else "and gave no reason — the contract asks it to say why in the "
+                         "error field, which is what the next author reads"
                 )
-                reason = f"评测脚本判这个候选不成立，{detail}"
+                reason = f"the evaluator marked this candidate invalid: {detail}"
             return False, {SCORE_KEY: float("-inf")}, reason
 
         values = payload.get("metrics")
@@ -170,7 +173,7 @@ def script_domain(
             # kind of message that sends a user to read a hundred lines of
             # someone else's Python.
             raise ScriptError(
-                f"评测脚本没有报出判据 {metric_id}——它给的是 "
+                f"the evaluator did not report criterion {metric_id} — what it gave was "
                 f"{sorted(values) if isinstance(values, dict) else type(values).__name__}"
             )
 
@@ -211,11 +214,11 @@ def script_domain(
         metric_key=metric_id,
         metric_better="higher",
         initial_program=baseline_code,
-        initial_summary="起点程序",
+        initial_summary="the starting point",
         evaluate=evaluate,
         reward=reward,
         prompt=prompt,
-        task_prompt=lambda shard: f"在分片 {shard} 上评测这个程序",
+        task_prompt=lambda shard: f"evaluate this program on shard {shard}",
         test_shards=_test_shards(criterion.get("measure") or {}),
         data_summary={"mode": "custom_script"},
     )
@@ -286,15 +289,15 @@ def _run_evaluator(
                 env=env, timeout=timeout + 30,
             )
         except subprocess.TimeoutExpired as error:
-            raise ScriptError(f"评测脚本跑了超过 {timeout + 30:.0f} 秒还没结束") from error
+            raise ScriptError(f"the evaluator ran for over {timeout + 30:.0f}s without finishing") from error
 
         if result.exists():
             try:
                 payload = json.loads(result.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as error:
-                raise ScriptError(f"评测脚本写出的不是可解析的 JSON：{error}") from error
+                raise ScriptError(f"what the evaluator wrote is not parsable JSON: {error}") from error
             if not isinstance(payload, dict):
-                raise ScriptError("评测脚本写出的 JSON 不是一个对象")
+                raise ScriptError("the JSON the evaluator wrote is not an object")
             # What the candidate itself printed while dying. An evaluator that
             # wraps each case in try/except — which it is told to do — usually
             # records that the case failed and not why, so this is the only
@@ -315,8 +318,9 @@ def _run_evaluator(
 
         tail = ((completed.stderr or "") + (completed.stdout or "")).strip()[-400:]
         raise ScriptError(
-            f"评测脚本既没有写出 {RESULT_ENV} 指的结果文件，输出里也没有结果 JSON。"
-            + (f"它说：{tail}" if tail else _silent_death(completed.returncode))
+            f"the evaluator wrote neither the result file {RESULT_ENV} points at nor a "
+            "result JSON on its output. "
+            + (f"It said: {tail}" if tail else _silent_death(completed.returncode))
         )
 
 
@@ -326,21 +330,23 @@ def _silent_death(returncode: int) -> str:
     The exit code is the only witness left, and the negative ones are signals —
     each pointing somewhere different. Seen live: an evaluator integrating
     near-singular functions was SIGKILLed with empty stdout and stderr, and
-    "它说：（没有输出）" gave the user nothing to act on and us nothing to
+    "It said: (no output)" gave the user nothing to act on and us nothing to
     debug. The code was in `completed.returncode` the whole time; it was just
     never printed.
     """
     if returncode == -9:
         return (
-            "它一个字都没输出就被强制结束了（SIGKILL）——"
-            "多半是内存耗尽被系统杀掉，或超出 CPU 配额。"
-            "让评测脚本别一次性算所有样例、控制数组规模，通常能避开"
+            "it was killed outright (SIGKILL) without printing a word — most likely the "
+            "system killed it for running out of memory, or it went over a CPU quota. "
+            "Having the evaluator work through the cases rather than computing them all "
+            "at once, and keeping the arrays smaller, usually avoids it"
         )
     if returncode == -11:
-        return "它没有输出，段错误退出了（SIGSEGV）——多半是某个二进制依赖在沙箱里崩了"
+        return ("it printed nothing and died with a segmentation fault (SIGSEGV) — most likely a "
+                "binary dependency crashed inside the sandbox")
     if returncode < 0:
-        return f"它没有输出，被信号 {-returncode} 终止了"
-    return f"它没有输出，退出码 {returncode}"
+        return f"it printed nothing and was terminated by signal {-returncode}"
+    return f"it printed nothing and exited with code {returncode}"
 
 
 def _last_result(stdout: str) -> Optional[Dict[str, Any]]:
@@ -396,5 +402,5 @@ def _diagnosis(payload: Mapping[str, Any]) -> str:
     uninformative = not said or ("err=None" in said and "Traceback" not in said)
     if not uninformative:
         return said
-    return (said + "\n" if said else "") + f"候选进程的输出：{tail}"
+    return (said + "\n" if said else "") + f"what the candidate process printed: {tail}"
 

@@ -84,7 +84,7 @@ class RunSpec:
     script: str = ""
     #: Packages the candidates need that this runtime does not have. Worked out
     #: by the drafting agent from the task and installed before anything runs —
-    #: the person who typed "把误差降下来" has no way to know a boosting library
+    #: the person who typed "bring the error down" has no way to know a boosting library
     #: is wanted, and no reason to.
     packages: tuple[str, ...] = ()
     #: A pristine copy of the project, for a test-gated search. Never written

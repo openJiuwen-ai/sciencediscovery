@@ -171,7 +171,7 @@ def evaluate_constraints(
             violations.append(Violation(
                 constraint_id=constraint["id"],
                 criterion_id=criterion_id,
-                detail=f"{criterion_id}={value:g} 不满足 {constraint['op']} {threshold:g}",
+                detail=f"{criterion_id}={value:g} does not satisfy {constraint['op']} {threshold:g}",
             ))
     return violations
 
