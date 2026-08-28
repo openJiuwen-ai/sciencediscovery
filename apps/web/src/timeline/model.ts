@@ -28,6 +28,9 @@ export const EMPTY_TIMELINE: RunTimelineEntry[] = [];
 export interface SessionRunTimeline {
   entries: RunTimelineEntry[];
   lastSequence: number;
+  /** Captured from this run's persisted run.started event, never from the
+   * Session's mutable Composer selection. */
+  modelName?: string;
   runId?: string;
 }
 
@@ -37,6 +40,18 @@ function eventRunId(event: RunStreamEvent): string | undefined {
   if (event.type === "run.started" || (event.type === "run.cancelled" && "runId" in event)) return event.runId;
   if (event.type === "run.queued" || event.type === "run.status") return event.run.id;
   return undefined;
+}
+
+function eventModelName(event: RunStreamEvent): string | undefined {
+  return event.type === "run.started" ? event.model.name : undefined;
+}
+
+function timelineModelNameSnapshot(
+  event: RunStreamEvent,
+  current?: string,
+): Pick<SessionRunTimeline, "modelName"> {
+  const modelName = eventModelName(event) ?? current;
+  return modelName ? { modelName } : {};
 }
 
 function startsRunTimeline(event: RunStreamEvent): boolean {
@@ -78,20 +93,24 @@ export function recordSessionTimelineEvent(
   const currentSequence = startsNewRun ? 0 : existing?.lastSequence ?? 0;
   if (options.sequence !== undefined && options.sequence <= currentSequence) return timelines;
   const next = reduceRunTimeline(current, event);
+  const modelName = eventModelName(event) ?? (startsNewRun ? undefined : existing?.modelName);
   const nextTimeline: SessionRunTimeline = {
     entries: next,
     lastSequence: options.sequence ?? currentSequence,
+    ...(modelName ? { modelName } : {}),
     ...(incomingRunId ?? existing?.runId ? { runId: incomingRunId ?? existing?.runId } : {}),
   };
   if (next === current
     && nextTimeline.lastSequence === existing?.lastSequence
+    && nextTimeline.modelName === existing?.modelName
     && nextTimeline.runId === existing?.runId) return timelines;
   return { ...timelines, [sessionId]: nextTimeline };
 }
 
 /** Start one Session's timeline over without touching what other Sessions buffered. */
 export function clearSessionTimeline(timelines: SessionRunTimelines, sessionId: string): SessionRunTimelines {
-  if (!timelines[sessionId]?.entries.length) return timelines;
+  const timeline = timelines[sessionId];
+  if (!timeline || (!timeline.entries.length && !timeline.modelName && !timeline.runId)) return timelines;
   return { ...timelines, [sessionId]: { entries: EMPTY_TIMELINE, lastSequence: 0 } };
 }
 
@@ -116,6 +135,7 @@ export function hydrateSessionRunTimeline(
     const merged = pending.reduce<SessionRunTimeline>((timeline, record) => ({
       entries: reduceRunTimeline(timeline.entries, record.event),
       lastSequence: Math.max(timeline.lastSequence, record.sequence),
+      ...timelineModelNameSnapshot(record.event, timeline.modelName),
       runId: run.id,
     }), current);
     return { ...timelines, [sessionId]: merged };
@@ -124,6 +144,7 @@ export function hydrateSessionRunTimeline(
     .reduce<SessionRunTimeline>((timeline, record) => ({
       entries: reduceRunTimeline(timeline.entries, record.event),
       lastSequence: Math.max(timeline.lastSequence, record.sequence),
+      ...timelineModelNameSnapshot(record.event, timeline.modelName),
       runId: run.id,
     }), { entries: [], lastSequence: 0, runId: run.id });
   return { ...timelines, [sessionId]: replay };
@@ -191,6 +212,7 @@ export function hydrateTerminalRunTimelines(
     next[run.id] = ordered.reduce<SessionRunTimeline>((timeline, record) => ({
       entries: reduceRunTimeline(timeline.entries, record.event),
       lastSequence: Math.max(timeline.lastSequence, record.sequence),
+      ...timelineModelNameSnapshot(record.event, timeline.modelName),
       runId: run.id,
     }), { entries: [], lastSequence: 0, runId: run.id });
   }

@@ -117,6 +117,14 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
   assert.doesNotMatch(app, /ModelDraftFields/);
 });
 
+test("historical run labels use their recorded model instead of the Composer selection", () => {
+  const app = source("App.tsx");
+
+  assert.doesNotMatch(app, /modelName=\{activeModel\?\.name\}/);
+  assert.match(app, /modelName=\{sessionReplayTimelines\[block\.runId\]\?\.modelName\}/);
+  assert.match(app, /modelName=\{activeRunTimeline\?\.modelName\}/);
+});
+
 test("the system settings dialog uses up to roughly 80% of the viewport", () => {
   const dialogs = source("styles/dialogs.css");
   const responsive = source("styles/responsive.css");

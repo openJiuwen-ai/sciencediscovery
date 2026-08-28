@@ -172,6 +172,65 @@ test("Skill authoring runs do not offer the redundant self-evolution action", ()
   assert.equal(canSummarizeRunAsSkill(distill), false);
 });
 
+function runStarted(runId: string, modelId: string, modelName: string): RunStreamEvent {
+  return {
+    model: { id: modelId, model: modelId, name: modelName },
+    runId,
+    settings: { enabledConnectorIds: [], enabledSkillIds: [], modelId, semanticReviewEnabled: false },
+    type: "run.started",
+  };
+}
+
+test("each live and replayed timeline keeps the model captured when its run started", () => {
+  const liveA = recordSessionTimelineEvent(
+    {},
+    "session-a",
+    runStarted("run-a", "model-a", "Model A"),
+    { sequence: 1 },
+  );
+  const afterComposerSwitch = recordSessionTimelineEvent(
+    liveA,
+    "session-a",
+    { content: "Answer from A", type: "assistant.snapshot" },
+    { runId: "run-a", sequence: 2 },
+  );
+  assert.equal(afterComposerSwitch["session-a"]?.modelName, "Model A");
+
+  const liveB = recordSessionTimelineEvent(
+    afterComposerSwitch,
+    "session-a",
+    runStarted("run-b", "model-b", "Model B"),
+    { sequence: 1 },
+  );
+  assert.equal(liveB["session-a"]?.modelName, "Model B", "a new run gets its own model snapshot");
+  assert.equal(clearSessionTimeline(liveB, "session-a")["session-a"]?.modelName, undefined);
+
+  const finishedA = sessionRun("run-a", 1, "completed");
+  const records: SessionRunEvent[] = [
+    {
+      createdAt: "2026-01-01T00:00:01.000Z",
+      event: runStarted(finishedA.id, "model-a", "Model A"),
+      runId: finishedA.id,
+      sequence: 1,
+      sessionId: finishedA.sessionId,
+    },
+    {
+      createdAt: "2026-01-01T00:00:02.000Z",
+      event: { content: "Persisted answer from A", type: "assistant.snapshot" },
+      runId: finishedA.id,
+      sequence: 2,
+      sessionId: finishedA.sessionId,
+    },
+  ];
+  const replayed = hydrateTerminalRunTimelines({}, [finishedA], { [finishedA.id]: records });
+  assert.equal(replayed[finishedA.id]?.modelName, "Model A", "refresh restores the run's original model");
+
+  const legacy = hydrateTerminalRunTimelines({}, [finishedA], {
+    [finishedA.id]: [records[1]!],
+  });
+  assert.equal(legacy[finishedA.id]?.modelName, undefined, "old records never borrow the current selection");
+});
+
 test("hydrate restores the active run before a newer queued run and deduplicates by sequence", () => {
   const completed = sessionRun("run-completed", 1, "completed");
   const active = sessionRun("run-active", 2, "blocked");

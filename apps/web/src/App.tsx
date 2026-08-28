@@ -1203,7 +1203,8 @@ export function App() {
    * The timeline and folded-in message of the Session whose messages are on
    * screen, so the two always describe the same Session.
    */
-  const runTimeline = (session?.id ? runTimelines[session.id]?.entries : undefined) ?? EMPTY_TIMELINE;
+  const activeRunTimeline = session?.id ? runTimelines[session.id] : undefined;
+  const runTimeline = activeRunTimeline?.entries ?? EMPTY_TIMELINE;
   const timelineMessageId = session?.id ? timelineMessageIds[session.id] : undefined;
 
   useEffect(() => {
@@ -3425,7 +3426,7 @@ export function App() {
   }, [runUsageByRunId, sessionRuns]);
   const displayedMessages = session?.messages.filter((item) => item.id !== timelineMessageId) ?? [];
   const sessionReplayTimelines = (session?.id ? replayTimelines[session.id] : undefined) ?? {};
-  const activeTimelineRunId = session?.id ? runTimelines[session.id]?.runId : undefined;
+  const activeTimelineRunId = activeRunTimeline?.runId;
   const replayedRunIds = new Set(Object.keys(sessionReplayTimelines).filter((runId) => runId !== activeTimelineRunId));
   const conversationBlocks = buildConversationBlocks(displayedMessages, sessionRuns, replayedRunIds);
   const timelinePermissionRequestIds = collectTimelinePermissionRequestIds([
@@ -3917,7 +3918,7 @@ export function App() {
                         </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
-                        modelName={activeModel?.name}
+                        modelName={sessionReplayTimelines[block.runId]?.modelName}
                         onChipClick={handleChipClick}
                         onLoadToolOutput={(trace) => loadToolOutput(session.id, block.runId, trace)}
                         onOpenArtifacts={openMarkdownImageArtifacts}
@@ -3950,25 +3951,29 @@ export function App() {
                     </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}
-                    modelName={activeModel?.name}
+                    modelName={activeRunTimeline?.modelName}
                     onChipClick={handleChipClick}
                     onLoadToolOutput={(trace) => loadToolOutput(session.id, runTimelines[session.id]?.runId, trace)}
                     onOpenArtifacts={openMarkdownImageArtifacts}
                     onOpenSkillReviews={openGeneratedSkillDraftExplorer}
                     onPermissionDecision={decidePermission}
                     references={reportReferences}
-                    onToggle={(id, expanded) => setRunTimelines((current) => ({
-                      ...current,
-                      [session.id]: {
-                        entries: setTimelineEntryExpanded(
-                          current[session.id]?.entries ?? EMPTY_TIMELINE,
-                          id,
-                          expanded,
-                        ),
-                        lastSequence: current[session.id]?.lastSequence ?? 0,
-                        ...(current[session.id]?.runId ? { runId: current[session.id]!.runId } : {}),
-                      },
-                    }))}
+                    onToggle={(id, expanded) => setRunTimelines((current) => {
+                      const timeline = current[session.id];
+                      return {
+                        ...current,
+                        [session.id]: {
+                          entries: setTimelineEntryExpanded(
+                            timeline?.entries ?? EMPTY_TIMELINE,
+                            id,
+                            expanded,
+                          ),
+                          lastSequence: timeline?.lastSequence ?? 0,
+                          ...(timeline?.modelName ? { modelName: timeline.modelName } : {}),
+                          ...(timeline?.runId ? { runId: timeline.runId } : {}),
+                        },
+                      };
+                    })}
                     reviewerLevel={reviewerSpecialistSettings?.level}
                     workspaceSessionId={session.id}
                   />
