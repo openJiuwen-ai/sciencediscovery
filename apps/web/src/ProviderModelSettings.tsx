@@ -12,7 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 import type {
   ModelApiProtocol,
@@ -237,6 +245,33 @@ export function mergeProviderModelRows(
   return sortProviderModels([...byId.values()]);
 }
 
+/** Profiles are stored as "Provider · model label". The provider table already
+ *  supplies that context, so only the model-owned part belongs in the row. */
+export function providerModelDisplayName(model: ProviderModelEntry, provider: ModelProvider): string {
+  if (model.catalog?.label) return model.catalog.label;
+  const name = model.displayName ?? model.id;
+  const prefix = `${provider.name} · `;
+  if (name.startsWith(prefix)) return name.slice(prefix.length);
+  const separator = model.profileId ? name.indexOf(" · ") : -1;
+  return separator >= 0 ? name.slice(separator + 3) : name;
+}
+
+/** Keep row facts outside the settings scroll containers and flip the card
+ *  above bottom rows so the complete card remains inside the viewport. */
+export function providerModelPopupStyle(
+  anchor: { bottom: number; left: number; top: number },
+  width = 320,
+  estimatedHeight = 240,
+  viewport = { height: window.innerHeight, width: window.innerWidth },
+): CSSProperties {
+  const popupWidth = Math.min(width, viewport.width - 16);
+  const left = Math.max(8, Math.min(anchor.left, viewport.width - popupWidth - 8));
+  const flip = anchor.bottom + estimatedHeight > viewport.height;
+  return flip
+    ? { bottom: viewport.height - anchor.top + 4, left, position: "fixed", width: popupWidth }
+    : { left, position: "fixed", top: anchor.bottom + 4, width: popupWidth };
+}
+
 /** Large token counts as integers: 1,000,000 → "1M", 200,000 → "200k". */
 export function compactTokenCount(value: number | undefined): string | undefined {
   if (value === undefined) return undefined;
@@ -279,7 +314,15 @@ function ModelRowFacts({ model }: { model: ProviderModelEntry }) {
 /** Rich hover card for one provider model row: everything the compact badges
  *  abbreviate, with full numbers and the fact's origin. Replaces native
  *  `title` tooltips. */
-function ModelRowPopup({ model, provider }: { model: ProviderModelEntry; provider: ModelProvider }) {
+function ModelRowPopup({
+  model,
+  provider,
+  style,
+}: {
+  model: ProviderModelEntry;
+  provider: ModelProvider;
+  style?: CSSProperties | undefined;
+}) {
   const { t } = useLocale();
   const unknown = t("providers.metadata.unknown");
   const resolved = resolveModelFacts(model);
@@ -290,8 +333,8 @@ function ModelRowPopup({ model, provider }: { model: ProviderModelEntry; provide
   const origin = resolved.origins.contextWindow === "user" || resolved.origins.pricing === "user"
     ? t("providers.facts.originUser")
     : model.remote ? t("providers.models.remote") : t("providers.models.catalog");
-  return <div className="provider-model-popup" role="tooltip">
-    <strong>{model.displayName ?? model.catalog?.label ?? model.id}</strong>
+  return <div className="provider-model-popup" role="tooltip" {...(style ? { style } : {})}>
+    <strong>{providerModelDisplayName(model, provider)}</strong>
     <code>{model.id}</code>
     <dl>
       <div><dt>{t("providers.metadata.context")}</dt><dd>{tokenCount(resolved.contextWindow, unknown)}</dd></div>
@@ -303,6 +346,43 @@ function ModelRowPopup({ model, provider }: { model: ProviderModelEntry; provide
         : unknown}</dd></div>
       <div><dt>{t("providers.facts.source")}</dt><dd>{origin}</dd></div>
     </dl>
+  </div>;
+}
+
+function ProviderModelRow({
+  busy,
+  model,
+  onAddModel,
+  onDeleteModel,
+  provider,
+}: {
+  busy: boolean;
+  model: ProviderModelEntry;
+  onAddModel: () => void;
+  onDeleteModel: (profileId: string) => void;
+  provider: ModelProvider;
+}) {
+  const { t } = useLocale();
+  const [anchor, setAnchor] = useState<DOMRect>();
+  return <div
+    className="provider-model-row"
+    onBlur={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setAnchor(undefined);
+    }}
+    onFocus={(event) => setAnchor(event.currentTarget.getBoundingClientRect())}
+    onMouseEnter={(event) => setAnchor(event.currentTarget.getBoundingClientRect())}
+    onMouseLeave={() => setAnchor(undefined)}
+    role="row"
+  >
+    <span className="provider-model-cell-name">
+      <strong>{providerModelDisplayName(model, provider)}</strong>
+      <code>{model.id}</code>
+    </span>
+    <ModelRowFacts model={model} />
+    {anchor ? <ModelRowPopup model={model} provider={provider} style={providerModelPopupStyle(anchor)} /> : null}
+    {model.profileId
+      ? <button className="danger-button compact-button" disabled={busy} onClick={() => onDeleteModel(model.profileId!)} type="button">{t("common.delete")}</button>
+      : <button className="secondary-button compact-button" disabled={busy} onClick={onAddModel} type="button">{t("providers.models.add")}</button>}
   </div>;
 }
 
@@ -441,6 +521,7 @@ export function ProviderRow({
   expanded,
   listing,
   onAddModel,
+  onDeleteModel,
   onEdit,
   onRefresh,
   onToggle,
@@ -453,6 +534,7 @@ export function ProviderRow({
   expanded: boolean;
   listing?: ListingState | undefined;
   onAddModel: (providerId: string, modelId: string, entry: ProviderModelEntry | undefined, manual: ManualModelForm) => Promise<boolean>;
+  onDeleteModel: (providerId: string, modelId: string, profileId: string) => Promise<boolean>;
   onEdit: (provider: ModelProvider) => void;
   onRefresh: (providerId: string) => void;
   onToggle: (providerId: string) => void;
@@ -523,12 +605,14 @@ export function ProviderRow({
       {listing?.error ? <div className="provider-discovery-error" role="alert"><strong>{t("providers.discovery.failed")}</strong><span>{listing.error}</span><small>{t("providers.discovery.fallback")}</small></div> : null}
       {listing?.list ? <small className="provider-row-source">{listing.list.source === "remote" ? t("providers.models.remote") : t("providers.models.catalog")} · {new Date(listing.list.fetchedAt).toLocaleString()}</small> : null}
       {rows.length ? <div className="provider-model-table" aria-label={t("providers.models.table", { provider: provider.name })} role="table">
-        {rows.map((model) => <div className="provider-model-row" key={model.id} role="row">
-          <span className="provider-model-cell-name"><strong>{model.displayName ?? model.catalog?.label ?? model.id}</strong><code>{model.id}</code></span>
-          <ModelRowFacts model={model} />
-          <ModelRowPopup model={model} provider={provider} />
-          <button className="secondary-button compact-button" disabled={busy || Boolean(model.profileId)} onClick={() => void onAddModel(provider.id, model.id, model, { ...EMPTY_MANUAL_MODEL })} type="button">{model.profileId ? t("providers.models.added") : t("providers.models.add")}</button>
-        </div>)}
+        {rows.map((model) => <ProviderModelRow
+          busy={busy}
+          key={model.id}
+          model={model}
+          onAddModel={() => void onAddModel(provider.id, model.id, model, { ...EMPTY_MANUAL_MODEL })}
+          onDeleteModel={(profileId) => void onDeleteModel(provider.id, model.id, profileId)}
+          provider={provider}
+        />)}
       </div> : listing?.list ? <p className="muted">{t("providers.models.empty")}</p> : null}
       <button aria-expanded={manualOpen} className="provider-add-model-toggle" onClick={() => setManualOpen((current) => !current)} type="button">
         {t("providers.models.add")}
@@ -539,6 +623,7 @@ export function ProviderRow({
         <label><span>{t("providers.manual.context")}</span><input inputMode="numeric" value={manual.contextWindow} onChange={(event) => setManual((current) => ({ ...current, contextWindow: event.target.value }))} placeholder="1000000" /></label>
         <label><span>{t("providers.manual.output")}</span><input inputMode="numeric" value={manual.maxOutputTokens} onChange={(event) => setManual((current) => ({ ...current, maxOutputTokens: event.target.value }))} placeholder="131072" /></label>
         <label><span>{t("providers.manual.efforts")}</span><input value={manual.efforts} onChange={(event) => setManual((current) => ({ ...current, efforts: event.target.value }))} placeholder={t("providers.manual.effortsPlaceholder")} /></label>
+        <label className="provider-manual-vision"><input checked={manual.vision} onChange={(event) => setManual((current) => ({ ...current, vision: event.target.checked }))} type="checkbox" /><span>{t("settings.visionCapable")}</span></label>
         <fieldset className="provider-manual-price">
           <legend>{t("providers.manual.price")}</legend>
           <label><span>{t("providers.manual.priceCurrency")}</span><input value={manual.priceCurrency} onChange={(event) => setManual((current) => ({ ...current, priceCurrency: event.target.value }))} placeholder="USD" /></label>
@@ -546,7 +631,6 @@ export function ProviderRow({
           <label><span>{t("providers.manual.priceOutput")}</span><input inputMode="decimal" value={manual.priceOutput} onChange={(event) => setManual((current) => ({ ...current, priceOutput: event.target.value }))} placeholder="3" /></label>
           <label><span>{t("providers.manual.priceCached")}</span><input inputMode="decimal" value={manual.priceCached} onChange={(event) => setManual((current) => ({ ...current, priceCached: event.target.value }))} placeholder="0.2" /></label>
         </fieldset>
-        <label className="provider-manual-vision"><input checked={manual.vision} onChange={(event) => setManual((current) => ({ ...current, vision: event.target.checked }))} type="checkbox" /><span>{t("settings.visionCapable")}</span></label>
         <button className="secondary-button" disabled={busy || !manual.modelId.trim()} onClick={() => void submitManual()} type="button">{t("providers.models.add")}</button>
       </div> : null}
     </div> : null}
@@ -890,6 +974,44 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     }
   }
 
+  async function deleteModel(providerId: string, modelId: string, profileId: string): Promise<boolean> {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      const deleted = models.find((model) => model.id === profileId);
+      await client.deleteModel(profileId);
+      onModelsChange(models.filter((model) => model.id !== profileId));
+      setListings((current) => {
+        const listing = current[providerId]?.list;
+        if (!listing) return current;
+        return {
+          ...current,
+          [providerId]: {
+            ...current[providerId]!,
+            list: {
+              ...listing,
+              models: listing.models.map((entry) => {
+                if (entry.id !== modelId || entry.profileId !== profileId) return entry;
+                const { profileId: _profileId, ...unadded } = entry;
+                return unadded;
+              }),
+            },
+            loading: false,
+          },
+        };
+      });
+      onNotice(t("providers.notice.modelDeleted"), deleted?.name ?? modelId);
+      return true;
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : "";
+      const fallback = t("error.deleteModel");
+      onError(detail ? `${fallback}: ${detail}` : fallback);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const existing = draft?.providerId ? providers.find((provider) => provider.id === draft.providerId) : undefined;
   return <div className="provider-settings">
     <ModelCatalogStatus
@@ -923,6 +1045,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           key={provider.id}
           {...(listings[provider.id] ? { listing: listings[provider.id] } : {})}
           onAddModel={addModel}
+          onDeleteModel={deleteModel}
           onEdit={editProvider}
           onRefresh={(providerId) => void loadModels(providerId, true)}
           onToggle={toggleRow}

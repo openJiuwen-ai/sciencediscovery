@@ -3360,7 +3360,7 @@ export function App() {
     : activeThinkingMode === "enabled"
       ? activeThinkingEffort
       : activeThinkingMode === "disabled"
-        ? t("composer.modelPicker.off")
+        ? t("composer.modelPicker.thinkingOff")
         : t("settings.thinkingMode.auto");
   useEffect(() => {
     if (!session || !activeModel || isRunning || session.archivedAt) return;

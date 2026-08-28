@@ -21,6 +21,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   groupModelsByProvider,
+  hoverPopupStyle,
+  modelDisplayName,
   ModelPicker,
   ModelPickerModelFacts,
   parseThinkingChoice,
@@ -127,6 +129,7 @@ function renderPicker(locale: "en" | "zh-CN", overrides: {
   providers?: ModelProvider[];
   thinkingEffort?: "high" | "max";
   thinkingMode?: "auto" | "enabled" | "disabled";
+  thinkingSummary?: string;
 } = {}): string {
   return renderToStaticMarkup(createElement(
     LocaleProvider,
@@ -141,18 +144,47 @@ function renderPicker(locale: "en" | "zh-CN", overrides: {
       providers: overrides.providers ?? [],
       thinkingEffort: overrides.thinkingEffort ?? "high",
       thinkingMode: overrides.thinkingMode ?? "auto",
+      thinkingSummary: overrides.thinkingSummary,
     }),
   ));
 }
 
 test("the trigger renders the current model and the popover is connector-style", () => {
-  const models = [model("m1", "DeepSeek Chat", "p1")];
-  const html = renderPicker("en", { activeModelId: "m1", models, providers: [provider("p1", "DeepSeek")] });
+  const models = [model("m1", "DeepSeek · DeepSeek Chat", "p1")];
+  const html = renderPicker("en", {
+    activeModelId: "m1",
+    models,
+    providers: [provider("p1", "DeepSeek")],
+    thinkingSummary: "max",
+  });
   assert.match(html, /class="model-picker-trigger"/);
   assert.match(html, /DeepSeek Chat/);
+  assert.doesNotMatch(html, /DeepSeek · DeepSeek Chat/);
+  assert.match(html, /model-picker-trigger-thinking[^>]*>max/);
   assert.match(html, /aria-haspopup="dialog"/);
   // Closed by default: no popover until the user clicks.
   assert.doesNotMatch(html, /model-picker-popover/);
+});
+
+test("model names drop only their own provider prefix and fixed hover cards do not resize the picker", () => {
+  const p = provider("p1", "DeepSeek（测试中转）");
+  assert.equal(modelDisplayName(model("m1", "DeepSeek（测试中转） · DeepSeek V4 Flash", "p1"), p), "DeepSeek V4 Flash");
+  assert.equal(modelDisplayName(model("m2", "Independent name", "p1"), p), "Independent name");
+
+  const below = hoverPopupStyle(
+    { bottom: 140, left: 970, top: 100 },
+    300,
+    240,
+    { height: 800, width: 1_000 },
+  );
+  assert.deepEqual(below, { left: 692, position: "fixed", top: 144, width: 300 });
+  const flipped = hoverPopupStyle(
+    { bottom: 760, left: 20, top: 720 },
+    300,
+    240,
+    { height: 800, width: 1_000 },
+  );
+  assert.deepEqual(flipped, { bottom: 84, left: 20, position: "fixed", width: 300 });
 });
 
 test("the stop row carries exactly the legal stops and the current value", () => {
@@ -185,7 +217,7 @@ test("hovering a conversation model row reveals a rich detail card", () => {
     { initialLocale: "en" },
     createElement(ModelPickerModelFacts, {
       model: {
-        ...model("m1", "DeepSeek V4 Flash", "p1"),
+        ...model("m1", "DeepSeek · DeepSeek V4 Flash", "p1"),
         model: "deepseek-v4-flash",
         vision: true,
         ...overrides,
@@ -223,4 +255,6 @@ test("model default replaces auto in user-facing labels", () => {
   assert.equal(zhCN["settings.thinkingMode.auto"], "模型默认");
   assert.ok(!Object.values(en).some((value) => value === "Auto"));
   assert.ok(!Object.values(zhCN).some((value) => value === "自动"));
+  assert.equal(en["composer.modelPicker.thinkingOff"], "Thinking off");
+  assert.equal(zhCN["composer.modelPicker.thinkingOff"], "思考关闭");
 });

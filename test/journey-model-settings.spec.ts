@@ -26,10 +26,11 @@ test.use({ locale: "zh-CN" });
  * Steps:
  *   1. 打开系统设置并进入模型注册表：空态、添加控件收在列表下「添加 Provider」按钮后（预置下拉+自定义按钮）、编辑器默认隐藏；旧独立模型入口不再出现。
  *   2. 显式选择自定义服务商：编辑器按分组展开，协议与变种同行紧凑；保存后服务商行自动展开并预载模型列表。
- *   3. 行内手动表单登记模型并以逗号分隔声明可接受强度档（原文）；“已添加”计数与行内模型行出现。
+ *   3. 行内手动表单登记模型并以逗号分隔声明可接受强度档（原文）；视觉紧跟强度且与价格分开；“已添加”计数与行内模型行出现。
  *   4. 编辑 Provider 时保存失败：错误清楚、草稿保留；恢复后保存成功并重开保持一致。
- *   5. manual 发现为空时已添加模型仍在行内表占一行且排前、不出空态；行内模型行事实一行可扫读。
+ *   5. manual 发现为空时已添加模型仍在行内表占一行且排前、不出空态；模型自身名称无服务商前缀，已添加行提供删除。
  *   6. 窄屏（600px）：对话框不越界、高级网格单列、模型行不横向溢出。
+ *   7. 从已添加模型行执行删除，删除成功后行和已添加计数立即更新。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；Provider 与模型由本旅程创建并清理。
  * Type: mocked
  * LLM: none — 仅配置 Provider 与模型并回读，不发起点模型调用。
@@ -151,7 +152,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       "保存自定义服务商并手动登记模型，选最强思考",
       "填写本地端点、令牌、DeepSeek 变种与“手动 ID 与维护目录”后保存；服务商行立即展开并预载。"
       + "行内手动表单收在「添加模型」按钮后；用逗号分隔的原文强度档（如 max）声明可接受思考强度，"
-      + "不提供时默认省略思考参数；登记后出现“已添加”计数与行内模型行。",
+      + "支持视觉紧跟思考强度且不与价格一组；不提供强度时默认省略思考参数。登记后出现“已添加”计数与行内模型行，操作变为删除。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
@@ -174,6 +175,26 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await expect(dialog.getByLabel("思考默认值（可选）")).toHaveCount(0);
         await dialog.getByLabel("手动模型 ID").fill("deepseek-chat");
         await dialog.getByLabel("思考强度档（逗号分隔，可选）").fill("low,max");
+        const manualLayout = await row.locator(".provider-manual-form").evaluate((form) => {
+          const children = Array.from(form.children);
+          const effort = children.findIndex((child) => child.textContent?.includes("思考强度档"));
+          const vision = children.findIndex((child) => child.classList.contains("provider-manual-vision"));
+          const price = children.findIndex((child) => child.classList.contains("provider-manual-price"));
+          const effortRect = children[effort]?.getBoundingClientRect();
+          const visionRect = children[vision]?.getBoundingClientRect();
+          const priceRect = children[price]?.getBoundingClientRect();
+          return {
+            effort,
+            price,
+            sameRow: Boolean(effortRect && visionRect && Math.abs(effortRect.top - visionRect.top) < 2),
+            vision,
+            priceBelow: Boolean(visionRect && priceRect && priceRect.top > visionRect.top + 2),
+          };
+        });
+        expect(manualLayout.vision).toBe(manualLayout.effort + 1);
+        expect(manualLayout.price).toBeGreaterThan(manualLayout.vision);
+        expect(manualLayout.sameRow).toBe(true);
+        expect(manualLayout.priceBelow).toBe(true);
         const modelResponsePromise = page.waitForResponse((response) =>
           response.request().method() === "POST" && new URL(response.url()).pathname
             === `/api/providers/${createdProviderId}/models`);
@@ -183,7 +204,9 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await expect(row).toContainText("已添加 1");
         const modelRow = row.locator(".provider-model-row").filter({ hasText: "deepseek-chat" });
         await expect(modelRow).toBeVisible();
-        await expect(modelRow.getByRole("button", { name: "已添加" })).toBeDisabled();
+        await expect(modelRow.locator(".provider-model-cell-name strong")).toHaveText("DeepSeek Chat");
+        await expect(modelRow.locator(".provider-model-cell-name strong")).not.toContainText(providerName);
+        await expect(modelRow.getByRole("button", { name: "删除" })).toBeEnabled();
       },
     );
 
@@ -233,10 +256,11 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
           await row.locator(".provider-row-summary").click();
         }
         await expect(row).toContainText("已添加 1");
-        // 发现为空也不能吞掉已添加模型：行内表仍有该模型一行且「已添加」禁用。
+        // 发现为空也不能吞掉已添加模型：行内表仍有该模型一行且提供删除。
         const modelRow = row.locator(".provider-model-row").filter({ hasText: "deepseek-chat" });
         await expect(modelRow).toBeVisible();
-        await expect(modelRow.getByRole("button", { name: "已添加" })).toBeDisabled();
+        await expect(modelRow.getByRole("button", { name: "删除" })).toBeEnabled();
+        await expect(modelRow.locator(".provider-model-cell-name strong")).toHaveText("DeepSeek Chat");
         await expect(row.locator(".provider-model-row").first()).toContainText("deepseek-chat");
         await expect(row.getByText("服务商未返回模型")).toHaveCount(0);
         const testSelect = row.getByLabel("选择要测试的模型");
@@ -299,6 +323,38 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await row.locator(".provider-add-model-toggle").click();
         await dialog.getByLabel("思考强度档（逗号分隔，可选）").scrollIntoViewIfNeeded();
         await expect(dialog.getByLabel("思考强度档（逗号分隔，可选）")).toBeInViewport();
+      },
+    );
+
+    await journey.step(
+      "已添加模型可以从行内表删除",
+      "点击已添加模型行的“删除”，请求成功后模型行消失、已添加计数归零；失败时则应保留行并显示服务端错误。",
+      async () => {
+        const modelId = createdModelId!;
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        const row = dialog.locator(".provider-row").filter({ hasText: providerName + " 已更新" });
+        const modelRow = row.locator(".provider-model-row").filter({ hasText: "deepseek-chat" });
+        const modelPath = `/api/models/${encodeURIComponent(modelId)}`;
+        const modelUrl = (url: URL) => url.pathname === modelPath;
+        await page.route(modelUrl, async (route) => {
+          await route.fulfill({
+            body: JSON.stringify({ error: "fixture model is still referenced" }),
+            contentType: "application/json",
+            status: 409,
+          });
+        });
+        await modelRow.getByRole("button", { name: "删除" }).click();
+        await expect(dialog.getByText(/无法删除模型.*fixture model is still referenced/)).toBeVisible();
+        await expect(modelRow).toBeVisible();
+        await page.unroute(modelUrl);
+
+        const responsePromise = page.waitForResponse((response) => response.request().method() === "DELETE"
+          && new URL(response.url()).pathname === modelPath);
+        await modelRow.getByRole("button", { name: "删除" }).click();
+        expect((await responsePromise).ok()).toBe(true);
+        await expect(modelRow).toHaveCount(0);
+        await expect(row).toContainText("已添加 0");
+        createdModelId = undefined;
       },
     );
   } finally {

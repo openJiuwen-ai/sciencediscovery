@@ -137,7 +137,7 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .model-picker-row-text { display: grid; flex: 1; min-width: 0; }
 .model-picker-row-text strong, .model-picker-row-text code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-picker-row-wrap { position: relative; }
-.model-picker-popup { position: absolute; z-index: 30; top: calc(100% + 2px); left: 0; display: none; width: min(300px, 100%); border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow-3); padding: 10px 12px; pointer-events: none; }
+.model-picker-popup { position: absolute; z-index: var(--z-popover); top: calc(100% + 2px); left: 0; display: none; width: min(300px, calc(100vw - 16px)); max-width: calc(100vw - 16px); border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow-3); padding: 10px 12px; pointer-events: none; }
 .model-picker-row-wrap:hover .model-picker-popup, .model-picker-row-wrap:focus-within .model-picker-popup { display: grid; gap: 6px; }
 .model-picker-popup > strong { color: var(--text-heading); font-size: 12px; }
 .model-picker-popup > code { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }

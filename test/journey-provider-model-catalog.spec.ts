@@ -184,7 +184,7 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  *   2. 核对目录状态行：models.dev 来源、打包快照时间与刷新按钮；刷新成功改时间、刷新失败保留旧数据且草稿不丢（浏览器边界伪造目录下载响应）。
  *   3. MiniMax 仅填令牌；Escape 取消关闭保留草稿，底部保存并关闭提交；请求在浏览器边界改写为 loopback/manual。
  *   4. 选择智谱内置预设，仅填令牌连接；核对默认 endpoint/协议未要求用户填写，令牌不回传。
- *   5. 维护目录的 GLM-5.2 展示能力、诚实未知价格（不冒用 z.ai 国际站定价），模型行无每模型来源链接，并添加模型。
+ *   5. 维护目录的 GLM-5.2 展示能力与当前端点目录价，模型名无服务商前缀、底部悬停卡完整，并添加模型后显示删除。
  *   6. 新建自定义兼容 Provider；标题栏取消关闭保留草稿，底部保存发现 loopback 模型，状态提供文本可访问名。
  *   7. 验证远端事实逐字段覆盖、未知事实保持未知、价格单位与来源清楚，并添加 DeepSeek 模型。
  *   8. 用 DeepSeek 预设目录核对 USD 每百万 token 标准单价、缓存输入与规范去重来源（上游不再发布分时价）。
@@ -602,19 +602,25 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await card.hover();
         const popup = card.locator(".provider-model-popup");
         await expect(popup).toBeVisible();
+        await expect(popup).toHaveCSS("position", "fixed");
+        await expect(popup.locator(":scope > strong")).toHaveText("GLM-5.2");
         await expect(popup).toContainText("1,000,000");
         await expect(popup).toContainText("131,072");
         await expect(popup).toContainText("high / max");
         await expect(popup).toContainText("USD 1.4 / 4.4 / 0.26 · 每百万 tokens");
         // 来源仍是维护目录建议，不是厂商实时返回。
         await expect(popup).toContainText("维护建议（并非服务商返回）");
+        const popupBox = await popup.boundingBox();
+        expect(popupBox).not.toBeNull();
+        expect(popupBox!.y).toBeGreaterThanOrEqual(0);
+        expect(popupBox!.y + popupBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1);
         await expect(card.getByRole("link")).toHaveCount(0);
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
           && /\/api\/providers\/[^/]+\/models$/.test(new URL(response.url()).pathname));
         await card.getByRole("button", { name: "添加模型" }).click();
         const profile = await (await responsePromise).json() as ModelProfile;
         modelIds.push(profile.id);
-        await expect(card.getByRole("button", { name: "已添加" })).toBeDisabled();
+        await expect(card.getByRole("button", { name: "删除" })).toBeEnabled();
       },
     );
 
@@ -911,13 +917,19 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await openProjectSession(page, fixture);
         await page.getByLabel("本任务使用的模型").click();
         const picker = page.getByRole("dialog", { name: "选择模型" });
+        const pickerHeightBeforeHover = await picker.evaluate((element) => element.scrollHeight);
         // 悬停模型行弹出富文本详情（名称/ID/上下文/思考档等），不是原生 tooltip。
         await picker.getByRole("option", { name: /deepseek-v4-flash/ }).hover();
         const hoverPopup = picker.locator(".model-picker-row-wrap", { has: page.getByRole("option", { name: /deepseek-v4-flash/ }) })
           .locator(".model-picker-popup");
         await expect(hoverPopup).toBeVisible();
+        await expect(hoverPopup).toHaveCSS("position", "fixed");
+        await expect(hoverPopup.locator(":scope > strong")).toHaveText("DeepSeek V4 Flash");
         await expect(hoverPopup).toContainText("deepseek-v4-flash");
         await expect(hoverPopup).toContainText("思考");
+        expect(await picker.evaluate((element) => element.scrollHeight)).toBe(pickerHeightBeforeHover);
+        await expect(picker.locator(".model-picker-slider-label")).toHaveCount(0);
+        await expect(picker.locator(".model-picker-thinking-marker")).toHaveCount(0);
         await picker.getByRole("option", { name: /J7 no-thinking fixture/ }).click();
         await expect(picker.getByRole("option", { name: /J7 no-thinking fixture/ })).toHaveAttribute("aria-selected", "true");
         await expect(picker.getByText("此模型不暴露思考控制字段")).toBeVisible();
@@ -1050,7 +1062,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(thinkingStops(picker)).toHaveCount(3);
         await expect(picker.getByRole("radio", { name: "关闭" })).toHaveCount(0);
         await setThinkingStop(picker, "low");
-        await expect(picker.locator(".model-picker-slider-label strong")).toHaveText("low");
+        await expect(picker.getByRole("radio", { name: "low" })).toHaveAttribute("aria-checked", "true");
         await closeModelPicker(picker);
         const run = await sendUserMessage(page, fixture!.session.id, "Verify the Kimi K3 effort.");
         expect((await waitForRunTerminal(page, fixture!.session.id, run.id, 120_000)).status).toBe("completed");
@@ -1100,12 +1112,12 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         }
         const anthropicRow2 = dialog.locator(".provider-row").filter({ hasText: "Anthropic" });
         // The expanded Anthropic row lists both the catalog entry and the added
-        // profile; the added row carries a disabled 已添加 button.
+        // profile; the added row carries an enabled delete action.
         const haikuAdded = anthropicRow2.locator(".provider-model-row")
           .filter({ hasText: "claude-haiku-4-5" })
-          .getByRole("button", { name: "已添加" });
+          .getByRole("button", { name: "删除" });
         await expect(haikuAdded).toHaveCount(1);
-        await expect(haikuAdded).toBeDisabled();
+        await expect(haikuAdded).toBeEnabled();
         await expect(dialog.locator(".provider-model-row").first()).toContainText("claude-haiku-4-5");
         await dialog.getByRole("button", { name: "取消并关闭" }).first().click();
         await expect(dialog).toBeHidden();

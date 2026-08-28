@@ -26,6 +26,8 @@ import {
   type ManualModelForm,
   mergeProviderModelRows,
   prefillManualFromCatalog,
+  providerModelDisplayName,
+  providerModelPopupStyle,
   ProviderModelSettings,
   ProviderRow,
   sortProviderModels,
@@ -54,7 +56,7 @@ const EMPTY_FORM: ManualModelForm = {
   priceCurrency: "",
   priceInput: "",
   priceOutput: "",
-  thinking: "",
+  efforts: "",
   vision: false,
 };
 
@@ -92,6 +94,30 @@ test("typing a catalog-known model ID prefills facts without stomping user input
 test("provider model tables sort added models first, then alphabetically", () => {
   const sorted = sortProviderModels([entry("zeta"), entry("alpha"), entry("beta", "profile-1"), entry("gamma", "profile-2")]);
   assert.deepEqual(sorted.map((model) => model.id), ["beta", "gamma", "alpha", "zeta"]);
+});
+
+test("provider model rows remove only their provider prefix and keep hover cards in the viewport", () => {
+  const p = provider("p1", "DeepSeek（测试中转）");
+  assert.equal(providerModelDisplayName({
+    displayName: "DeepSeek（测试中转） · DeepSeek V4 Flash",
+    id: "deepseek-v4-flash",
+  }, p), "DeepSeek V4 Flash");
+  assert.equal(providerModelDisplayName({ displayName: "Independent name", id: "independent" }, p), "Independent name");
+
+  const below = providerModelPopupStyle(
+    { bottom: 140, left: 970, top: 100 },
+    320,
+    240,
+    { height: 800, width: 1_000 },
+  );
+  assert.deepEqual(below, { left: 672, position: "fixed", top: 144, width: 320 });
+  const flipped = providerModelPopupStyle(
+    { bottom: 760, left: 20, top: 720 },
+    320,
+    240,
+    { height: 800, width: 1_000 },
+  );
+  assert.deepEqual(flipped, { bottom: 84, left: 20, position: "fixed", width: 320 });
 });
 
 test("inline table unions added profiles with the listing, added first, no duplicates", () => {
@@ -216,6 +242,7 @@ test("the same model follows the current provider preset's price", () => {
       busy: false,
       expanded: true,
       onAddModel: () => Promise.resolve(true),
+      onDeleteModel: () => Promise.resolve(true),
       onEdit: () => undefined,
       onRefresh: () => undefined,
       onToggle: () => undefined,
@@ -249,6 +276,7 @@ test("manual provider with an empty listing still shows the added model row, nev
         loading: false,
       },
       onAddModel: () => Promise.resolve(true),
+      onDeleteModel: () => Promise.resolve(true),
       onEdit: () => undefined,
       onRefresh: () => undefined,
       onToggle: () => undefined,
@@ -262,7 +290,8 @@ test("manual provider with an empty listing still shows the added model row, nev
   // and nothing discovered".
   assert.match(html, /provider-model-table/);
   assert.match(html, /<code>m1-id<\/code>/);
-  assert.match(html, />Added<\/button>/);
+  assert.match(html, />Delete<\/button>/);
+  assert.doesNotMatch(html, />Added<\/button>/);
   assert.doesNotMatch(html, /No models were returned/);
   // Count, table, and test dropdown all read the same union.
   assert.match(html, /1\/1 models/);
@@ -280,6 +309,7 @@ test("manual provider with an empty listing still shows the added model row, nev
         loading: false,
       },
       onAddModel: () => Promise.resolve(true),
+      onDeleteModel: () => Promise.resolve(true),
       onEdit: () => undefined,
       onRefresh: () => undefined,
       onToggle: () => undefined,
@@ -288,4 +318,39 @@ test("manual provider with an empty listing still shows the added model row, nev
     }),
   ));
   assert.match(chinese, /服务商未返回模型。请手动添加精确模型 ID。/);
+});
+
+test("provider table actions are add for discovered models and delete for added profiles", () => {
+  const p = provider("p1", "DeepSeek（测试中转）");
+  const render = (addedProfiles: ModelProfile[], listing: ProviderModelEntry[]) => renderToStaticMarkup(createElement(
+    LocaleProvider,
+    { initialLocale: "en" },
+    createElement(ProviderRow, {
+      addedProfiles,
+      busy: false,
+      expanded: true,
+      listing: {
+        list: { fetchedAt: "2026-08-27T00:00:00.000Z", models: listing, providerId: "p1", source: "catalog" },
+        loading: false,
+      },
+      onAddModel: () => Promise.resolve(true),
+      onDeleteModel: () => Promise.resolve(true),
+      onEdit: () => undefined,
+      onRefresh: () => undefined,
+      onToggle: () => undefined,
+      provider: p,
+      testModel: () => Promise.reject(new Error("not under test")),
+    }),
+  ));
+
+  const unadded = render([], [{ displayName: "DeepSeek V4 Flash", id: "deepseek-v4-flash" }]);
+  assert.match(unadded, />Add model<\/button>/);
+  assert.doesNotMatch(unadded, />Delete<\/button>/);
+
+  const added = render([
+    { ...profile("flash", "p1"), model: "deepseek-v4-flash", name: "Old provider name · DeepSeek V4 Flash" },
+  ], []);
+  assert.match(added, /<strong>DeepSeek V4 Flash<\/strong>/);
+  assert.doesNotMatch(added, /provider-model-cell-name"><strong>Old provider name · DeepSeek V4 Flash/);
+  assert.match(added, />Delete<\/button>/);
 });

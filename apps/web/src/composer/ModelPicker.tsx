@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import type {
   ModelProfile,
@@ -22,7 +22,6 @@ import type {
 } from "@sciencediscovery/schema";
 import { lookupModelCatalog, resolveModelFacts } from "@sciencediscovery/schema";
 
-import { SparkleIcon } from "../icons.js";
 import { useLocale, type MessageKey } from "../i18n/index.js";
 import type { ModelThinkingControls, ThinkingChoice } from "../modelThinking.js";
 import { thinkingChoiceOptions, thinkingChoiceValue } from "../modelThinking.js";
@@ -48,6 +47,32 @@ export function groupModelsByProvider(
   return groups;
 }
 
+/** Fixed-position hover popup placement: below the row, flipped above when
+ *  there is no room; clamped into the viewport horizontally. Being `fixed`
+ *  keeps it out of any scroll container, so the list height never changes. */
+export function hoverPopupStyle(
+  anchor: { bottom: number; left: number; top: number },
+  width = 300,
+  estimatedHeight = 240,
+  viewport = { height: window.innerHeight, width: window.innerWidth },
+): CSSProperties {
+  const popupWidth = Math.min(width, viewport.width - 16);
+  const flip = anchor.bottom + estimatedHeight > viewport.height;
+  const left = Math.max(8, Math.min(anchor.left, viewport.width - popupWidth - 8));
+  return flip
+    ? { bottom: viewport.height - anchor.top + 4, left, position: "fixed", width: popupWidth }
+    : { left, position: "fixed", top: anchor.bottom + 4, width: popupWidth };
+}
+
+/** Profile names are saved as "Provider · model label"; inside a provider
+ *  group that prefix is noise, so rows show the model's own name. */
+export function modelDisplayName(model: ModelProfile, provider?: ModelProvider): string {
+  const prefix = provider ? `${provider.name} · ` : "";
+  if (prefix && model.name.startsWith(prefix)) return model.name.slice(prefix.length);
+  const separator = model.providerId ? model.name.indexOf(" · ") : -1;
+  return separator >= 0 ? model.name.slice(separator + 3) : model.name;
+}
+
 function fullTokenCount(value: number | undefined, unknown: string): string {
   return value === undefined ? unknown : new Intl.NumberFormat().format(value);
 }
@@ -58,9 +83,11 @@ function fullTokenCount(value: number | undefined, unknown: string): string {
 export function ModelPickerModelFacts({
   model,
   provider,
+  style,
 }: {
   model: ModelProfile;
   provider?: ModelProvider | undefined;
+  style?: CSSProperties | undefined;
 }) {
   const { t } = useLocale();
   const unknown = t("providers.metadata.unknown");
@@ -75,8 +102,8 @@ export function ModelPickerModelFacts({
   const origin = Object.values(resolved.origins).includes("user")
     ? t("providers.facts.originUser")
     : catalog ? t("providers.models.catalog") : unknown;
-  return <div className="model-picker-popup" role="tooltip">
-    <strong>{model.name}</strong>
+  return <div className="model-picker-popup" role="tooltip" {...(style ? { style } : {})}>
+    <strong>{modelDisplayName(model, provider)}</strong>
     <code>{model.model}</code>
     <dl>
       <div><dt>{t("providers.metadata.context")}</dt><dd>{fullTokenCount(resolved.contextWindow, unknown)}</dd></div>
@@ -119,6 +146,45 @@ export function parseThinkingChoice(value: string): { effort?: ModelThinkingEffo
  *  thinking control as a joined row of labelled stop buttons: off (only when
  *  it can be disabled) → model default (auto) → efforts from weakest to
  *  strongest. Models without thinking control get no stop row. */
+function ModelPickerRow({
+  active,
+  model,
+  onSelect,
+  provider,
+}: {
+  active: boolean;
+  model: ModelProfile;
+  onSelect: (modelId: string) => void;
+  provider?: ModelProvider | undefined;
+}) {
+  const { t } = useLocale();
+  const [anchor, setAnchor] = useState<DOMRect>();
+  return <li
+    className="model-picker-row-wrap"
+    onBlur={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setAnchor(undefined);
+    }}
+    onFocus={(event) => setAnchor(event.currentTarget.getBoundingClientRect())}
+    onMouseEnter={(event) => setAnchor(event.currentTarget.getBoundingClientRect())}
+    onMouseLeave={() => setAnchor(undefined)}
+  >
+    <button
+      aria-selected={active}
+      className={active ? "model-picker-row active" : "model-picker-row"}
+      onClick={() => onSelect(model.id)}
+      role="option"
+      type="button"
+    >
+      <span className="model-picker-row-text">
+        <strong>{modelDisplayName(model, provider)}</strong>
+        <code>{model.model}</code>
+      </span>
+      {model.vision ? <span className="model-badge">{t("settings.visionCapable")}</span> : null}
+    </button>
+    {anchor ? <ModelPickerModelFacts model={model} {...(provider ? { provider } : {})} style={hoverPopupStyle(anchor)} /> : null}
+  </li>;
+}
+
 export function ModelPicker({
   activeModelId,
   controls,
@@ -166,10 +232,12 @@ export function ModelPicker({
 
   const groups = groupModelsByProvider(models, providers);
   const activeModel = models.find((model) => model.id === activeModelId);
+  const activeProvider = activeModel?.providerId
+    ? providers.find((provider) => provider.id === activeModel.providerId)
+    : undefined;
   const stops = thinkingChoiceOptions(controls);
   const currentValue = thinkingChoiceValue(thinkingMode, thinkingEffort, stops);
   const currentIndex = Math.max(0, stops.findIndex((stop) => stop.value === currentValue));
-  const currentLabel = stops.length ? thinkingChoiceLabel(stops[currentIndex]!, t) : "";
 
   function applyStop(index: number): void {
     const stop = stops[index];
@@ -190,7 +258,7 @@ export function ModelPicker({
       type="button"
     >
       <i className="live-dot" />
-      <span className="model-picker-trigger-name">{activeModel ? activeModel.name : t("composer.noModel")}</span>
+      <span className="model-picker-trigger-name">{activeModel ? modelDisplayName(activeModel, activeProvider) : t("composer.noModel")}</span>
       {thinkingSummary ? <small className="model-picker-trigger-thinking">{thinkingSummary}</small> : null}
     </button>
     {open ? <div aria-label={t("composer.modelPicker.title")} className="model-picker-popover" role="dialog">
@@ -202,22 +270,13 @@ export function ModelPicker({
         {groups.map((group) => <div className="model-picker-group" key={group.provider?.id ?? "other"}>
           <h4>{group.provider ? group.provider.name : t("composer.modelPicker.otherGroup")}</h4>
           <ul>
-            {group.models.map((model) => <li className="model-picker-row-wrap" key={model.id}>
-              <button
-                aria-selected={model.id === activeModelId}
-                className={model.id === activeModelId ? "model-picker-row active" : "model-picker-row"}
-                onClick={() => onSelect(model.id)}
-                role="option"
-                type="button"
-              >
-                <span className="model-picker-row-text">
-                  <strong>{model.name}</strong>
-                  <code>{model.model}</code>
-                </span>
-                {model.vision ? <span className="model-badge">{t("settings.visionCapable")}</span> : null}
-              </button>
-              <ModelPickerModelFacts model={model} {...(group.provider ? { provider: group.provider } : {})} />
-            </li>)}
+            {group.models.map((model) => <ModelPickerRow
+              active={model.id === activeModelId}
+              key={model.id}
+              model={model}
+              onSelect={onSelect}
+              {...(group.provider ? { provider: group.provider } : {})}
+            />)}
           </ul>
         </div>)}
       </div> : <div className="model-picker-empty">
@@ -229,12 +288,7 @@ export function ModelPicker({
       </div>}
       {activeModel ? <div className="model-picker-thinking">
         {stops.length ? <>
-          <div className="model-picker-slider-label">
-            <span>{t("composer.modelPicker.thinking")}</span>
-            <strong aria-live="polite">{currentLabel}</strong>
-          </div>
           <div className="model-picker-stops-row">
-            <span className="model-picker-thinking-marker" title={t("composer.modelPicker.thinking")}><SparkleIcon size={12} />{t("composer.thinking")}</span>
             <div aria-label={t("composer.modelPicker.thinkingAria")} className="model-picker-stops" role="radiogroup">
               {stops.map((stop, index) => <button
                 aria-checked={index === currentIndex}
