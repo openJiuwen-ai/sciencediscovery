@@ -334,6 +334,129 @@ test("run_npu_job submits only allowlisted workloads with workspace-scoped input
   assert.deepEqual(declaredArtifacts, ["antibody_pipeline/runs/run-1/01_rfdiffusion/output_000000.pdb"]);
 });
 
+test("read_file pages a large file instead of returning it whole", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `workspace-read-page-${process.pid}-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  await writeFile(resolve(root, "big.log"), Array.from({ length: 20_000 }, (_, index) => `line-${index + 1}`).join("\n"));
+
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const read = tools.find((candidate) => candidate.name === "read_file");
+  assert.ok(read);
+
+  const first = await read.execute("read-page-1", { path: "big.log" });
+  const firstText = first.content[0]?.type === "text" ? first.content[0].text : "";
+  assert.equal(first.bounded, true, "read_file bounds its own output");
+  assert.ok(Buffer.byteLength(firstText, "utf8") <= 50 * 1_024, `page is ${Buffer.byteLength(firstText, "utf8")} bytes`);
+  assert.match(firstText, /^\[paginated file] big\.log lines 1-2000 \(/);
+  assert.match(firstText, /Continue with read_file\(path="big\.log", offset=2001\)\./);
+  assert.equal(firstText.includes("line-2000\n"), true);
+  assert.equal(firstText.includes("line-2001"), false, "the omitted tail is not in this result");
+
+  const second = await read.execute("read-page-2", { limit: 5, offset: 2_001, path: "big.log" });
+  const secondText = second.content[0]?.type === "text" ? second.content[0].text : "";
+  assert.match(secondText, /^\[paginated file] big\.log lines 2001-2005 \(/);
+  assert.equal(secondText.endsWith("line-2001\nline-2002\nline-2003\nline-2004\nline-2005\n"), true);
+});
+
+test("read_file returns metadata for a binary file and never its bytes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `workspace-read-binary-${process.pid}-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]),
+    Buffer.alloc(2_048, 0x5a),
+  ]);
+  await writeFile(resolve(root, "plot.png"), png);
+  // A PDB structure is plain ASCII and must stay readable as text.
+  await writeFile(resolve(root, "5FHC.pdb"), "HEADER    HYDROLASE   5FHC\nATOM      1  N   MET A   1\nEND\n");
+
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const read = tools.find((candidate) => candidate.name === "read_file");
+  assert.ok(read);
+
+  const binary = await read.execute("read-binary", { path: "plot.png" });
+  const binaryText = binary.content[0]?.type === "text" ? binary.content[0].text : "";
+  const payload = JSON.parse(binaryText) as { binary: boolean; mediaType: string; size: number };
+  assert.equal(payload.binary, true);
+  assert.equal(payload.mediaType, "image/png");
+  assert.equal(payload.size, png.length);
+  assert.equal(binaryText.includes(png.toString("base64").slice(0, 24)), false, "no base64 body");
+  assert.equal(binaryText.includes("ZZZZZZZZ"), false, "no raw body");
+
+  const structure = await read.execute("read-pdb", { path: "5FHC.pdb" });
+  assert.equal(
+    structure.content[0]?.type === "text" ? structure.content[0].text : "",
+    "HEADER    HYDROLASE   5FHC\nATOM      1  N   MET A   1\nEND\n",
+    "a PDB file is read as text, not rejected as binary",
+  );
+});
+
+test("read_artifact forwards pagination and keeps a binary version out of model text", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const artifact = {
+    createdAt: "2026-08-28T00:00:00.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Structure session",
+    currentVersion: 1,
+    id: "artifact-1",
+    kind: "other" as const,
+    logicalName: "structure",
+    name: "structure",
+    origin: "llm_declared" as const,
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-08-28T00:00:00.000Z",
+  };
+  const version = {
+    artifactId: "artifact-1",
+    content: { hash: "hash-1", size: 4_096 },
+    createdAt: "2026-08-28T00:00:00.000Z",
+    executionRunIds: [],
+    id: "version-1",
+    inputArtifactVersionIds: [],
+    mediaType: "image/png",
+    projectId: "project-1",
+    sessionId: "session-1",
+    version: 1,
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    readArtifact: async (input) => {
+      requests.push(input);
+      return {
+        artifact,
+        binary: true,
+        encoding: "binary" as const,
+        mediaType: "image/png",
+        size: 4_096,
+        truncated: false,
+        version,
+      };
+    },
+  });
+  const read = tools.find((candidate) => candidate.name === "read_artifact");
+  assert.ok(read);
+
+  const schema = read.parameters as { properties: Record<string, unknown> };
+  assert.deepEqual(Object.keys(schema.properties).sort(), ["artifact_id", "limit", "name", "offset", "version"]);
+
+  const result = await read.execute("read-artifact", { limit: 500, name: "structure", offset: 1_001 });
+  assert.deepEqual(requests, [{ limit: 500, name: "structure", offset: 1_001 }]);
+  const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+  const payload = JSON.parse(text) as { binary: boolean; content?: string; encoding: string };
+  assert.equal(payload.binary, true);
+  assert.equal(payload.encoding, "binary");
+  assert.equal("content" in payload, false, "a binary version carries no body");
+});
+
 test("read_file can fall back to a read-only parent workspace", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `workspace-read-private-${process.pid}-${Date.now()}`);
   const parent = resolve(process.cwd(), ".tmp", `workspace-read-parent-${process.pid}-${Date.now()}`);
@@ -444,8 +567,11 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     listArtifacts: async () => [artifact],
     readArtifact: async () => ({
       artifact,
+      binary: false,
       content: "ok",
-      encoding: "utf8",
+      encoding: "utf8" as const,
+      mediaType: "text/plain",
+      size: 2,
       truncated: false,
       version,
     }),

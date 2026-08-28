@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { AgentTool } from "@sciencediscovery/tools";
+import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
 import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
@@ -92,7 +93,6 @@ export function filterTools<T extends { name: string }>(tools: readonly T[], pol
   return allowed.filter((tool) => !disallowed.has(tool.name));
 }
 
-const MAX_FILE_BYTES = 1_000_000;
 const MAX_DECLARE_ARTIFACT_PATHS = 50;
 const SUBAGENT_RESULT_TEXT_LIMIT = 20_000;
 
@@ -269,7 +269,15 @@ export interface WorkspaceToolOptions {
    * report body. */
   declareClaim?: (input: DeclareClaimInput) => Promise<DeclareClaimResult>;
   listArtifacts?: () => Promise<ScientificArtifact[]>;
-  readArtifact?: (input: { artifactId?: string; name?: string; version?: number }) => Promise<ArtifactReadResult>;
+  readArtifact?: (input: {
+    artifactId?: string;
+    /** Maximum lines in the returned text page. */
+    limit?: number;
+    name?: string;
+    /** 1-based line the returned text page starts at. */
+    offset?: number;
+    version?: number;
+  }) => Promise<ArtifactReadResult>;
   reviewCheckpoint?: (
     input: ReviewCheckpointRequest,
     signal?: AbortSignal,
@@ -462,7 +470,18 @@ function renderGeneratedSkillMarkdown(input: {
 
 export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceToolOptions): AgentTool[] {
   const emptyParameters = Type.Object({});
-  const pathParameters = Type.Object({ path: Type.String({ minLength: 1 }) });
+  const readFileParameters = Type.Object({
+    limit: Type.Optional(Type.Integer({
+      description: "Maximum number of lines to return; the page is additionally capped at 40 KB.",
+      maximum: 10_000,
+      minimum: 1,
+    })),
+    offset: Type.Optional(Type.Integer({
+      description: "1-based line to start reading from. Use the offset reported by the previous page to continue.",
+      minimum: 1,
+    })),
+    path: Type.String({ minLength: 1 }),
+  });
   const readOnlyWorkspaceRoot = options.readOnlyWorkspaceRoot
     && resolve(options.readOnlyWorkspaceRoot) !== resolve(workspaceRoot)
     ? options.readOnlyWorkspaceRoot
@@ -499,8 +518,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     parameters: emptyParameters,
   };
 
-  const readWorkspaceFile: AgentTool<typeof pathParameters> = {
-    description: "Read a UTF-8 text file from the current session workspace",
+  const readWorkspaceFile: AgentTool<typeof readFileParameters> = {
+    description: "Read a page of a text file from the current session workspace. Reads start at the first line and return at most 2000 lines or 40 KB; pass offset (1-based line) and limit to page through a larger file. Binary files are not read as text: the result reports the media type and size so you can process the file with run_python or run_shell instead.",
     execute: async (_toolCallId, params) => {
       const requested = normalizeMountedReadPath(params.path);
       const roots = requested.root === "parent"
@@ -522,13 +541,45 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         if (lastError) throw lastError;
         throw new Error("Read-only parent workspace is unavailable");
       }
-      if (metadata.size > MAX_FILE_BYTES) throw new Error("File exceeds the 1 MB M0 read limit");
-      const content = await readFile(path, "utf8");
-      return { content: [{ type: "text", text: content }], details: { path: requested.path } };
+      if (!metadata.isFile()) throw new Error(`Not a readable file: ${requested.path}`);
+
+      if (await detectBinaryFile(path)) {
+        const details = {
+          binary: true,
+          mediaType: guessMediaType(requested.path),
+          note: "Binary content is never inlined into the conversation. Process this file in the sandbox with run_python or run_shell, or expose it to the user with declare_artifact.",
+          path: requested.path,
+          size: metadata.size,
+        };
+        return { bounded: true, content: [{ type: "text", text: JSON.stringify(details) }], details };
+      }
+
+      const page = await readTextFilePage(path, {
+        ...(params.limit === undefined ? {} : { limit: params.limit }),
+        ...(params.offset === undefined ? {} : { offset: params.offset }),
+      });
+      const details = { ...page, path: requested.path, size: metadata.size };
+      // A whole small file keeps its exact bytes and no envelope, so ordinary
+      // reads stay byte-identical to the file on disk.
+      if (page.startLine === 1 && !page.hasMore) {
+        return { bounded: true, content: [{ type: "text", text: page.text }], details };
+      }
+      const header = [
+        `[paginated file] ${requested.path} lines ${page.startLine}-${page.endLine}`
+        + `${page.totalLines === undefined ? "" : ` of ${page.totalLines}`}`
+        + ` (${metadata.size} bytes total, ${page.bytes} bytes shown).`,
+        page.hasMore
+          ? `Continue with read_file(path="${requested.path}", offset=${page.nextOffset}).`
+          : "This is the end of the file.",
+        ...(page.partialLine
+          ? [`Line ${page.startLine} is wider than one page and was cut; read the rest with run_shell (for example cut -c) instead of read_file.`]
+          : []),
+      ].join("\n");
+      return { bounded: true, content: [{ type: "text", text: `${header}\n${page.text}` }], details };
     },
     label: "Read workspace file",
     name: "read_file",
-    parameters: pathParameters,
+    parameters: readFileParameters,
   };
 
   const artifactTools: AgentTool[] = [];
@@ -547,19 +598,30 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (options.readArtifact) {
     const parameters = Type.Object({
       artifact_id: Type.Optional(Type.String({ minLength: 1 })),
+      limit: Type.Optional(Type.Integer({
+        description: "Maximum number of lines to return; the page is additionally capped at 40 KB.",
+        maximum: 10_000,
+        minimum: 1,
+      })),
       name: Type.Optional(Type.String({ minLength: 1 })),
+      offset: Type.Optional(Type.Integer({
+        description: "1-based line to start reading from. Use page.nextOffset from the previous response to continue.",
+        minimum: 1,
+      })),
       version: Type.Optional(Type.Integer({ minimum: 1 })),
     });
     const readArtifact: AgentTool<typeof parameters> = {
-      description: "Read a Project artifact by artifact_id or name, optionally selecting a version. Text is UTF-8; binary content is base64. At least one identifier is required.",
+      description: "Read a Project artifact by artifact_id or name, optionally selecting a version. At least one identifier is required. Text versions return one UTF-8 page (at most 2000 lines or 40 KB) plus a page range; use offset and limit to read the rest. Binary versions return only binary=true with the media type and size — their content is never inlined, so process them with run_python or run_shell instead.",
       execute: async (_toolCallId, params) => {
         if (!params.artifact_id && !params.name) throw new Error("artifact_id or name is required");
         const result = await options.readArtifact!({
           ...(params.artifact_id ? { artifactId: params.artifact_id } : {}),
+          ...(params.limit === undefined ? {} : { limit: params.limit }),
           ...(params.name ? { name: params.name } : {}),
+          ...(params.offset === undefined ? {} : { offset: params.offset }),
           ...(params.version ? { version: params.version } : {}),
         });
-        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+        return { bounded: true, content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
       label: "Read project artifact",
       name: "read_artifact",
@@ -634,7 +696,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
 
   const runPythonTool: AgentTool<typeof pythonParameters> = {
-    description: "Run Python in the current session workspace. Optionally select an Environment Revision and persistent kernel; ephemeral is the default. Save useful outputs as workspace files.",
+    description: "Run Python in the current session workspace. Optionally select an Environment Revision and persistent kernel; ephemeral is the default. Save useful outputs as workspace files. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or have the script write its output to a workspace file and read that file with read_file.",
     execute: async (_toolCallId, params, signal) => {
       const result = options.executeScientific
         ? await options.executeScientific(
@@ -1164,7 +1226,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       scriptPath: Type.Optional(Type.String({ maxLength: 1_000, minLength: 1 })),
     });
     const runShell: AgentTool<typeof shellParameters> = {
-      description: "Run a bounded shell command or an existing shell script from the authorized Session workspace. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable.",
+      description: "Run a bounded shell command or an existing shell script from the authorized Session workspace. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or redirect the output to a workspace file and page through it with read_file.",
       execute: async (_toolCallId, params, signal) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
@@ -1200,7 +1262,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
     });
     const runR: AgentTool<typeof rParameters> = {
-      description: "Run R in the current session workspace using a managed R Environment Revision. Prefer R for R-native statistical or Bioconductor workflows.",
+      description: "Run R in the current session workspace using a managed R Environment Revision. Prefer R for R-native statistical or Bioconductor workflows. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output.",
       execute: async (_toolCallId, params, signal) => {
         const result = await options.executeScientific!(
           "r",

@@ -33,7 +33,7 @@ import {
   resolveSubagentConfig,
   type AgentHistoryMessage,
 } from "@sciencediscovery/orchestration";
-import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { normalizeWorkspaceRelativePath, projectArtifactContent, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import type {
   ArtifactCandidate,
@@ -777,15 +777,12 @@ async function executeAgentRun(
         : versions.find((candidate) => candidate.version === input.version);
       if (!version) throw new Error("Artifact version not found");
       const bytes = await provenanceRecorder.cas.read(version.content.hash);
-      const limit = 1_000_000;
-      const body = bytes.subarray(0, limit);
-      const textMedia = version.mediaType.startsWith("text/")
-        || /(?:json|javascript|xml|x-ipynb|x-tex)/.test(version.mediaType);
       return {
         artifact,
-        content: textMedia ? body.toString("utf8") : body.toString("base64"),
-        encoding: textMedia ? "utf8" as const : "base64" as const,
-        truncated: bytes.length > limit,
+        ...projectArtifactContent(bytes, version.mediaType, {
+          ...(input.limit === undefined ? {} : { limit: input.limit }),
+          ...(input.offset === undefined ? {} : { offset: input.offset }),
+        }),
         version,
       };
     },
