@@ -279,6 +279,14 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
   };
   // The thinking control is a joined row of labelled stop buttons (radio
   // group): click a stop to select it; illegal stops are simply absent.
+  // Provider model rows are anchored by the exact model id in their code
+  // cell. `has` is evaluated against the candidate rows, so the inner locator
+  // must be page-scoped, never dialog-prefixed (a dialog prefix can never be
+  // inside a row and silently yields an empty set).
+  const modelRowById = (dialog: ReturnType<typeof page.getByRole>, id: string) =>
+    dialog.locator(".provider-model-row")
+      .filter({ has: page.locator("code").getByText(id, { exact: true }) });
+
   const thinkingStops = (picker: ReturnType<typeof page.getByRole>) =>
     picker.getByRole("radiogroup", { name: /^(当前对话的思考，从关闭到最强|Thinking for this conversation, off to strongest)$/ })
       .getByRole("radio");
@@ -585,8 +593,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         // 「维护建议」同时出现在行来源行与悬停弹窗的「来源」格，按行来源行精确收敛。
         await expect(dialog.locator(".provider-row-source").filter({ hasText: /维护建议（并非服务商返回）/ })).toBeVisible();
         // 以行内 code 的精确 id 锚定，避免命中预览/Vision 兄弟行。
-        const card = dialog.locator(".provider-model-row")
-          .filter({ has: dialog.locator("code").getByText("glm-5.2", { exact: true }) });
+        const card = modelRowById(dialog, "glm-5.2");
         const facts = card.locator(".provider-model-row-facts .fact");
         await expect(facts.nth(0)).toHaveText("1M / 131k");
         await expect(facts.nth(2)).toHaveText(/high max/);
@@ -642,9 +649,11 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(dialog.getByRole("region", { name: "已配置服务商" })
           .getByRole("button", { name: new RegExp(customName) })
           .getByRole("img", { name: "可用" })).toBeVisible();
-        await expect(dialog.getByText(/服务商返回/)).toBeVisible();
-        await expect(dialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" })).toBeVisible();
-        await expect(dialog.locator(".provider-model-row").filter({ hasText: "fixture-unknown" })).toBeVisible();
+        // 行来源行只属于刚创建的这个自定义 Provider，避免命中其他展开行。
+        const customRow = dialog.locator(".provider-row").filter({ hasText: customName });
+        await expect(customRow.locator(".provider-row-source").filter({ hasText: /服务商返回/ })).toBeVisible();
+        await expect(modelRowById(dialog, "deepseek-v4-flash")).toBeVisible();
+        await expect(modelRowById(dialog, "fixture-unknown")).toBeVisible();
         expect(stub.listAuth).toEqual(["Bearer j7-custom-local-token"]);
       },
     );
@@ -654,7 +663,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       "DeepSeek 卡片以远端返回的 131,072 上下文、视觉与思考为准，输出字段级回退目录 384,000；价格行显示 1.5 / 3 / 0.2 USD/1M（单位在后，悬停为 输入/输出/缓存输入 每百万 tokens）。fixture-unknown 的上下文、输出、视觉、思考和价格均明确显示“未知”，不伪造能力。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        const known = dialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" });
+        const known = modelRowById(dialog, "deepseek-v4-flash");
         const knownFacts = known.locator(".provider-model-row-facts .fact");
         // 远端只有 context_length：上下文 131k 来自远端，输出按字段级回退
         // 取目录的 384k，而不是整行未知。
@@ -667,10 +676,10 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(knownPopup).toContainText("视觉");
         await expect(knownPopup).toContainText("low / high / max");
         await expect(knownPopup).toContainText("每百万 tokens");
-        const unknown = dialog.locator(".provider-model-row").filter({ hasText: "fixture-unknown" });
-        for (const text of await unknown.locator(".provider-model-row-facts .fact").allTextContents()) {
-          expect(text.replace(/[✓—]/gu, "").trim()).toBe("?");
-        }
+        const unknown = modelRowById(dialog, "fixture-unknown");
+        // 未知能力不能放宽：四枚徽标逐字就是 ["? / ?", "?", "?", "?"]。
+        expect(await unknown.locator(".provider-model-row-facts .fact").allTextContents())
+          .toEqual(["? / ?", "?", "?", "?"]);
         await unknown.hover();
         const unknownPopup = unknown.locator(".provider-model-popup");
         await expect(unknownPopup).toBeVisible();
@@ -702,7 +711,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const dialog = await openModelRegistry();
         const registry = dialog.getByRole("region", { name: "已配置服务商" });
         await registry.getByRole("button", { name: /DeepSeek/ }).click();
-        const flash = dialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" });
+        const flash = modelRowById(dialog, "deepseek-v4-flash");
         const flashPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
         await expect(flashPrice).toHaveText("0.14 / 0.28 / 0.0028 USD/1M");
         await flash.hover();
@@ -715,10 +724,10 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await registry.getByRole("button", { name: /DeepSeek/ }).click();
         await expect(dialog.locator(".provider-model-table")).toHaveCount(0);
         await registry.getByRole("button", { name: /DeepSeek/ }).click();
-        await expect(dialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" })).toBeVisible();
+        await expect(modelRowById(dialog, "deepseek-v4-flash")).toBeVisible();
 
         await registry.getByRole("button", { name: new RegExp(customName) }).click();
-        await expect(dialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" })).toBeVisible();
+        await expect(modelRowById(dialog, "deepseek-v4-flash")).toBeVisible();
       },
     );
 
@@ -733,7 +742,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(alert).toContainText("403");
         await expect(alert).toContainText("fixture model-list permission denied");
         await expect(alert).toContainText("上次成功结果仍保留");
-        await expect(dialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" })).toBeVisible();
+        await expect(modelRowById(dialog, "deepseek-v4-flash")).toBeVisible();
         await dialog.locator(".provider-add-model-toggle").click();
         await dialog.getByLabel("手动模型 ID").fill("fixture-manual");
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
@@ -1143,7 +1152,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(englishDialog.getByRole("button", { name: "Custom provider" })).toBeVisible();
         const registry = englishDialog.getByRole("region", { name: "Configured providers" });
         await registry.getByRole("button", { name: /DeepSeek/ }).click();
-        const flash = englishDialog.locator(".provider-model-row").filter({ hasText: "deepseek-v4-flash" });
+        const flash = modelRowById(englishDialog, "deepseek-v4-flash");
         const enPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
         await expect(enPrice).toHaveText("0.14 / 0.28 / 0.0028 USD/1M");
         await flash.hover();

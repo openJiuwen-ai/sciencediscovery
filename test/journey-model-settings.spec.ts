@@ -159,7 +159,6 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await editor.getByLabel("LLM API 令牌").fill(demoToken);
         await editor.getByLabel("基础 URL").fill("http://127.0.0.1:4321/v1");
         await editor.getByLabel("接口变种").selectOption("deepseek");
-        await editor.getByLabel("模型列表").selectOption("manual");
         const providerSave = page.waitForResponse((response) =>
           response.request().method() === "POST" && new URL(response.url()).pathname === "/api/providers");
         await editor.getByRole("button", { name: "保存", exact: true }).click();
@@ -254,7 +253,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     await journey.step(
       "窄屏下设置对话框仍整齐可用",
       "视口收到约 600px 宽后重新打开设置：对话框不超出屏幕、页面无横向滚动；高级配置网格转为单列，"
-      + "行内模型行两端都在对话框边界内，思考档位下拉可见可操作。",
+      + "行内模型行两端都在对话框边界内，逗号分隔的思考强度输入展开后可见可操作。",
       async () => {
         await page.setViewportSize({ width: 600, height: 900 });
         const dialog = await openModelRegistry();
@@ -296,6 +295,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         expect(geometry.singleColumn).toBe(true);
         expect(geometry.modelRowsInside).toBe(true);
         expect(geometry.selectsInside).toBe(true);
+        // 思考档输入在收起的手动表单里：先点该行「添加模型」展开。
+        await row.locator(".provider-add-model-toggle").click();
         await dialog.getByLabel("思考强度档（逗号分隔，可选）").scrollIntoViewIfNeeded();
         await expect(dialog.getByLabel("思考强度档（逗号分隔，可选）")).toBeInViewport();
       },
