@@ -63,6 +63,7 @@ import {
   createPlanLifecycleTools,
   type PlanRepository,
 } from "@sciencediscovery/plan-mode";
+import { createEvolveTools, type EvolveToolRuntime } from "@sciencediscovery/evolve";
 import {
   ExternalWaitController,
   type RunEvent,
@@ -110,6 +111,10 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
   /** Capability-package extension seam; factories are instantiated and frozen per AgentRun. */
   contextContributorFactories?: readonly ContextContributorFactory<WireMessage>[];
   /** Application persistence adapter; when present, registers optional Plan lifecycle capabilities. */
+  /** The `/evolve` capability for this turn, or absent when the deployment has
+   *  none. One object instead of two forwarded callbacks and a deps bundle
+   *  threaded through three run-loop entry points. */
+  evolve?: EvolveToolRuntime;
   planRepository?: PlanRepository;
 }
 
@@ -206,7 +211,11 @@ class NativeAgent implements NativeAgentHandle {
     const planTools = options.planRepository
       ? createPlanLifecycleTools({ repository: options.planRepository })
       : [];
-    this.toolRegistry = new ToolRegistry([...executionTools, ...planTools], {
+    // Same shape as the plan capability: the composition root either built a
+    // runtime for this turn or it did not, and that single fact decides
+    // whether the tools exist. Nothing downstream forwards anything.
+    const evolveTools = createEvolveTools(options.evolve);
+    this.toolRegistry = new ToolRegistry([...executionTools, ...planTools, ...evolveTools], {
       createResultMessage: (call, content) => ({
         role: "tool", tool_call_id: call.id, name: call.name, content,
       }),
@@ -605,7 +614,7 @@ class NativeAgent implements NativeAgentHandle {
  *  Exported for tests: every option here is forwarded by hand, so an option
  *  added at both ends but missed in the middle leaves its tool absent from the
  *  model's list with nothing failing anywhere. */
-export function buildTools(options: NativeAgentOptions): AgentTool[] {
+function buildTools(options: NativeAgentOptions): AgentTool[] {
   return createWorkspaceTools(options.workspaceRoot, {
     ...(options.createSkill ? { createSkill: options.createSkill } : {}),
     enabledConnectorIds: options.enabledConnectorIds,
@@ -632,8 +641,6 @@ export function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.proposeSkillLibraryUpdate ? { proposeSkillLibraryUpdate: options.proposeSkillLibraryUpdate } : {}),
     ...(options.publishSkillLibraryUpdate ? { publishSkillLibraryUpdate: options.publishSkillLibraryUpdate } : {}),
     ...(options.proposeRemoteJob ? { proposeRemoteJob: options.proposeRemoteJob } : {}),
-    ...(options.createEvolveRun ? { createEvolveRun: options.createEvolveRun } : {}),
-    ...(options.getEvolveRun ? { getEvolveRun: options.getEvolveRun } : {}),
     remoteHosts: options.remoteHosts ?? [],
     skills: options.skills ?? [],
     specialists: options.specialists ?? [],

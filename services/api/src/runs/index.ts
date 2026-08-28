@@ -17,6 +17,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
+import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
 import {
@@ -143,7 +144,6 @@ import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
 import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { EvolveRunProposal } from "@sciencediscovery/schema";
-import type { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolutionStore } from "../evolution/store.js";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
@@ -364,21 +364,34 @@ export function splitArtifactVersionSuffix(raw: string): { id: string; version: 
 }
 
 /**
- * What the `create_evolve_run` tool needs from the server.
+ * Builds the `/evolve` capability for one turn, or nothing when the deployment
+ * has none.
  *
- * Bundled rather than threaded as four more positional parameters: this call
- * chain already carries twenty, and the next reader deserves better than
- * counting commas. Optional throughout, so a deployment without the evolve
- * sidecar simply does not offer the tool.
+ * A factory rather than a dependency bundle: `emit`, `beginExternalWait` and
+ * `sessionId` belong to the turn, not the process, so the composition root
+ * cannot hand over a finished object the way it hands over `planRepository`.
+ * What it *can* do is hand over one function — and that is the whole seam.
+ *
+ * Declared `| undefined` rather than `?` on purpose. It still travels through
+ * `executeAgentRun`, `scheduleSessionRuns` and `streamAgentRun` as a positional
+ * parameter, and while it was optional a new route could be added without it
+ * and lose both tools with no type error — silently, because the model does not
+ * report a missing tool, it hand-rolls a search instead. Required-but-nullable
+ * makes that omission a compile error while still letting a deployment without
+ * the evolve sidecar pass `undefined` and offer nothing.
  */
-export interface EvolveToolDeps {
-  casHas?: (hash: string) => Promise<boolean>;
-  /** The run store, for reading a finished search back into the conversation. */
-  evolutionStore: EvolutionStore;
-  model?: (id: string) => unknown;
-  orchestrator: EvolveOrchestrator;
-  /** Per-session storer: text or a workspace path in, `sha256:` ref out. */
-  store: (sessionId: string) => (input: { content?: string; path?: string }) => Promise<string>;
+export type EvolveRuntimeFactory = (context: EvolveTurnContext) => EvolveToolRuntime | undefined;
+
+/** What the capability needs from the turn that is running it. */
+export interface EvolveTurnContext {
+  approvalMode?: "always_allow" | "ask_for_dangerous";
+  /** Publishes `evolve_run.created` into the turn's event stream. */
+  emit: RunEventSink;
+  /** Pauses the agent's idle clock: the discrimination probe runs real
+   *  sandboxed evaluations and outlasts it. */
+  beginExternalWait?: () => (() => void);
+  modelId: string;
+  sessionId: string;
 }
 
 export function skillAuthoringCommandPrompt(content: string): string | undefined {
@@ -427,7 +440,7 @@ async function executeAgentRun(
   emit: RunEventSink,
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
-  evolve?: EvolveToolDeps,
+  evolve: EvolveRuntimeFactory | undefined,
 ): Promise<SessionRunStatus> {
   if (activeSessions.has(sessionId)) {
     throw new ApiStatusError(409, "A run is already active for this session");
@@ -1090,59 +1103,19 @@ async function executeAgentRun(
         }
       },
     } : {}),
-    ...(evolve ? {
-      // The main loop designs the run; this only turns the design into one.
-      // Every gate the wizard used to sit in front of still runs on this side —
-      // the probe, pre-flight, the frozen scoring — because the agent is the
-      // designer and never the authority on whether its own scoring can rank.
-      getEvolveRun: async (runId?: string) => {
-        // The id is optional and prefix-tolerant, because the caller is a model
-        // whose context routinely does not contain it: a search started in an
-        // earlier turn, a compaction in between. Watched live: one call with an
-        // invented number, one with the memory-graph's `subtask:evolve:` handle
-        // — a legitimate id it had just read off the graph.
-        const wanted = runId?.trim().replace(/^subtask:evolve:/, "");
-        const runs = await evolve.evolutionStore.listRuns(sessionId);
-        const run = wanted
-          ? await evolve.evolutionStore.readRun(wanted)
-          : runs.sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-        if (!run) {
-          // The reader is a model deciding what to call next; a bare "not
-          // found" leaves it guessing again. The real ids are right here.
-          const known = runs.slice(0, 8)
-            .map((item) => `${item.id}（${item.status}）`).join("、");
-          throw new Error(wanted
-            ? `没有这个搜索：${wanted}。${known ? `这个会话里的搜索：${known}` : "这个会话里还没有搜索。"}`
-            : "这个会话里还没有搜索。");
-        }
-        return summariseRun(run, await evolve.evolutionStore.readEvents(run.id));
-      },
-      createEvolveRun: async (input: EvolveRunProposal) => {
-        store.assertSessionWritable(sessionId);
-        // The probe runs real evaluations in the sandbox — two or three, each
-        // with the candidate timeout as its ceiling. That is minutes, and the
-        // agent's idle clock is four: without pausing it the turn dies with
-        // "no gateway progress" while the probe is doing exactly what it was
-        // asked to do, and the design work of the whole turn is lost. Same
-        // treatment a permission prompt gets, for the same reason — the wait is
-        // real work, not a stall.
-        const releaseWait = mainExecution?.beginExternalWait();
-        try {
-          const result = await startProposedRun(input, {
-            casHas: evolve.casHas,
-            model: evolve.model,
-            modelId: selectedModel.id,
-            orchestrator: evolve.orchestrator,
-            sessionId,
-            store: evolve.store(sessionId),
-          });
-          if (result.run) await emit({ run: result.run, type: "evolve_run.created" });
-          return result;
-        } finally {
-          releaseWait?.();
-        }
-      },
-    } : {}),
+    ...(() => {
+      // The capability decides for itself whether it exists this turn; the run
+      // loop neither knows its dependencies nor forwards them.
+      const turnExecution = mainExecution;
+      const runtime = evolve?.({
+        approvalMode: session.approvalMode,
+        beginExternalWait: turnExecution ? () => turnExecution.beginExternalWait() : undefined,
+        emit,
+        modelId: selectedModel.id,
+        sessionId,
+      });
+      return runtime ? { evolve: runtime } : {};
+    })(),
     ...(remoteHosts.length ? {
       proposeRemoteJob: async (input: CreateRemoteJobRequest) => {
         let job = await store.createRemoteJob(sessionId, input, { executionId: runId });
@@ -2350,7 +2323,7 @@ export function scheduleSessionRuns(
   sessionId: string,
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
-  evolve?: EvolveToolDeps,
+  evolve: EvolveRuntimeFactory | undefined,
 ): void {
   if (scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
@@ -2589,7 +2562,7 @@ export async function streamAgentRun(
   body: SendMessageRequest,
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
-  evolve?: EvolveToolDeps,
+  evolve: EvolveRuntimeFactory | undefined,
 ): Promise<void> {
   const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, body);
   scheduleSessionRuns(

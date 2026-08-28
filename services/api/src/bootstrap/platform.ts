@@ -20,7 +20,7 @@ import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { reviewerLog } from "@sciencediscovery/provenance";
-import type { EvolveGoal, ResolvedProxy } from "@sciencediscovery/schema";
+import type { EvolveGoal, EvolveRunProposal, ResolvedProxy } from "@sciencediscovery/schema";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 
 import { apiLog, configureApiLogging } from "../logging.js";
@@ -38,6 +38,8 @@ import { RunTokenRegistry } from "../evolution/llm-proxy.js";
 import { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
+import { startProposedRun, summariseRun } from "../evolution/proposal.js";
+import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
@@ -261,27 +263,85 @@ export function createPlatformServices(
     },
   );
 
-  /** What `create_evolve_run` needs. The agent designs a run; this is the only
-   *  path that turns a design into one, and every gate lives behind it. */
-  const evolveToolDeps = {
-    evolutionStore,
-    casHas: async (hash: string) => {
-      try {
-        await evolveCas.read(hash);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    model: (id: string) => store.getModel(id),
-    orchestrator: evolveOrchestrator,
-    store: (sessionId: string) => async (input: { content?: string; path?: string }) => {
+  const casHasEvolve = async (hash: string) => {
+    try {
+      await evolveCas.read(hash);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const storeEvolveInput = (sessionId: string) =>
+    async (input: { content?: string; path?: string }) => {
       const bytes = input.content !== undefined
         ? Buffer.from(input.content, "utf-8")
         : await readFile(resolveWorkspaceFile(store.workspacePath(sessionId), input.path ?? ""));
       return `sha256:${(await evolveCas.put(bytes)).hash}`;
+    };
+
+  /**
+   * The `/evolve` capability, registered once.
+   *
+   * The run loop calls this per turn and spreads whatever comes back into the
+   * agent's options; it never sees `EvolutionStore`, the orchestrator, or the
+   * proposal validator. A composition root that has no evolve sidecar returns
+   * `undefined` here and the tools simply do not exist — this one always has
+   * one, so it always returns a runtime.
+   *
+   * The main loop designs the run; this only turns the design into one. Every
+   * gate the wizard used to sit in front of still runs on this side — the
+   * probe, pre-flight, the frozen scoring — because the agent is the designer
+   * and never the authority on whether its own scoring can rank.
+   */
+  const evolveRuntimeFactory: EvolveRuntimeFactory = (turn) => ({
+    approvalMode: turn.approvalMode,
+    createEvolveRun: async (input: EvolveRunProposal) => {
+      store.assertSessionWritable(turn.sessionId);
+      // The probe runs real evaluations in the sandbox — two or three, each
+      // with the candidate timeout as its ceiling. That is minutes, and the
+      // agent's idle clock is four: without pausing it the turn dies with "no
+      // gateway progress" while the probe is doing exactly what it was asked
+      // to do, and the design work of the whole turn is lost. Same treatment a
+      // permission prompt gets, for the same reason — the wait is real work.
+      const releaseWait = turn.beginExternalWait?.();
+      try {
+        const result = await startProposedRun(input, {
+          casHas: casHasEvolve,
+          model: (id: string) => store.getModel(id),
+          modelId: turn.modelId,
+          orchestrator: evolveOrchestrator,
+          sessionId: turn.sessionId,
+          store: storeEvolveInput(turn.sessionId),
+        });
+        if (result.run) await turn.emit({ run: result.run, type: "evolve_run.created" });
+        return result;
+      } finally {
+        releaseWait?.();
+      }
     },
-  };
+    getEvolveRun: async (runId?: string) => {
+      // The id is optional and prefix-tolerant, because the caller is a model
+      // whose context routinely does not contain it: a search started in an
+      // earlier turn, a compaction in between. Watched live: one call with an
+      // invented number, one with the memory-graph's `subtask:evolve:` handle
+      // — a legitimate id it had just read off the graph.
+      const wanted = runId?.trim().replace(/^subtask:evolve:/, "");
+      const runs = await evolutionStore.listRuns(turn.sessionId);
+      const run = wanted
+        ? await evolutionStore.readRun(wanted)
+        : runs.sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+      if (!run) {
+        // The reader is a model deciding what to call next; a bare "not found"
+        // leaves it guessing again. The real ids are right here.
+        const known = runs.slice(0, 8)
+          .map((item) => `${item.id}（${item.status}）`).join("、");
+        throw new Error(wanted
+          ? `没有这个搜索：${wanted}。${known ? `这个会话里的搜索：${known}` : "这个会话里还没有搜索。"}`
+          : "这个会话里还没有搜索。");
+      }
+      return summariseRun(run, await evolutionStore.readEvents(run.id));
+    },
+  });
 
   return {
     artifactManager,
@@ -289,7 +349,7 @@ export function createPlatformServices(
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
-    evolveToolDeps,
+    evolveRuntimeFactory,
     mcpBroker,
     mcpCatalog,
     mcpGateway,
@@ -320,7 +380,7 @@ export async function initializePlatformServices(
     artifactManager,
     evolutionStore,
     evolveOrchestrator,
-    evolveToolDeps,
+    evolveRuntimeFactory,
     mcpBroker,
     mcpCatalog,
     mcpRegistry,
@@ -389,7 +449,7 @@ export async function initializePlatformServices(
         session.id,
         config,
         memoryGraphClient,
-        evolveToolDeps,
+        evolveRuntimeFactory,
       );
     }
   }

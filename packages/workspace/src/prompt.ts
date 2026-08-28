@@ -318,10 +318,6 @@ export interface WorkspaceAgentOptions {
   /** Trace provenance chain + broken signal (`trace_provenance` tool). */
   traceProvenance?: WorkspaceToolOptions["traceProvenance"];
   proposeRemoteJob?: (input: CreateRemoteJobRequest) => Promise<RemoteJob>;
-  /** Start an evolution search from a design the agent worked out itself
-   *  (`create_evolve_run` tool), and read one back (`get_evolve_run`). */
-  createEvolveRun?: WorkspaceToolOptions["createEvolveRun"];
-  getEvolveRun?: WorkspaceToolOptions["getEvolveRun"];
   remoteHosts?: RemoteHostTarget[];
   skills?: RuntimeSkill[];
   specialist?: { description: string; instructions: string; name: string };

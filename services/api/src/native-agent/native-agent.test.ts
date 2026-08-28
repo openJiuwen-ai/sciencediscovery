@@ -22,7 +22,6 @@ import type { ContextContributorFactory } from "@sciencediscovery/context";
 import type { AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 
 import {
-  buildTools,
   createNativeAgent,
   setModelTurnStreamerForTest,
   type ModelTurnStreamer,
@@ -808,30 +807,35 @@ test("summary checkpoint carries the full durable-context authority contract", a
   }
 });
 
-test("buildTools forwards the evolve handlers, not just declares them", async () => {
-  // The gap this catches: the handlers exist on the run, the tool definitions
-  // exist in createWorkspaceTools, and the option is declared on
-  // WorkspaceAgentOptions — but buildTools forwards each option by hand, and a
-  // pair missed there makes /evolve unreachable with nothing failing. The model
-  // does not say "the tool is missing"; it hand-rolls a search instead.
-  const base = {
-    enabledConnectorIds: [],
-    executePython: async () => ({}) as never,
-    workspaceRoot: process.cwd(),
-  } as unknown as NativeAgentOptions;
-
-  const without = buildTools(base).map((tool) => tool.name);
-  assert.ok(!without.includes("create_evolve_run"));
-
-  const withEvolve = buildTools({
-    ...base,
+test("evolve tools appear on the first model step only when a runtime is registered", async () => {
+  // The gap this catches: evolve is a capability package now, so the only thing
+  // standing between a registered runtime and a reachable tool is one spread in
+  // the ToolRegistry constructor. Asserted against what the model is actually
+  // handed on its first step rather than against a builder's return value —
+  // being in the array and being visible are different failures, and only the
+  // second one is what "/evolve is unreachable" means. When it breaks the model
+  // does not report a missing tool; it hand-rolls a search instead.
+  const runtime = {
     createEvolveRun: async () => ({ refusedBecause: "probe" }),
     getEvolveRun: async () => ({
       baselineScore: null, bestScore: null, bestTestScore: null,
       candidates: 0, id: "run-1", status: "running" as const, tokens: 0,
     }),
-  } as unknown as NativeAgentOptions).map((tool) => tool.name);
+  } as unknown as NativeAgentOptions["evolve"];
 
-  assert.ok(withEvolve.includes("create_evolve_run"));
-  assert.ok(withEvolve.includes("get_evolve_run"));
+  for (const [evolve, expected] of [[undefined, false], [runtime, true]] as const) {
+    const { streamer } = scriptStreamer([
+      (call) => {
+        assert.equal(call.tools.some((tool) => tool.name === "create_evolve_run"), expected);
+        assert.equal(call.tools.some((tool) => tool.name === "get_evolve_run"), expected);
+        return textTurn("done");
+      },
+    ]);
+    const restore = setModelTurnStreamerForTest(streamer);
+    try {
+      await createNativeAgent({ ...workspace(), evolve } as NativeAgentOptions).execute("hello");
+    } finally {
+      restore();
+    }
+  }
 });
