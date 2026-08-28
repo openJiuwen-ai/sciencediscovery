@@ -33,7 +33,6 @@ export interface AgentRunBindings {
   abortSignal?: AbortSignal;
   createAgent?: (options: NativeAgentOptions) => NativeAgentHandle;
   contextContributorFactories?: readonly ContextContributorFactory<AgentHistoryMessage>[];
-  initialExecutionMode?: string;
   observer?: (event: AgentEvent) => void;
   planRepository?: PlanRepository;
   runIdleTimeoutMs?: number;
@@ -58,7 +57,6 @@ export function createAgentRun(
     ...(bindings.contextContributorFactories?.length
       ? { contextContributorFactories: bindings.contextContributorFactories }
       : {}),
-    ...(bindings.initialExecutionMode ? { initialExecutionMode: bindings.initialExecutionMode } : {}),
     contextScope: profile.resources.presetId?.startsWith("reviewer-specialist-")
       ? "reviewer"
       : profile.kind,

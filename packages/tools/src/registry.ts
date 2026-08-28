@@ -29,7 +29,7 @@ export interface ToolSpec {
 
 export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   createResultMessage(call: RuntimeToolCall, content: string): TMessage;
-  /** Dynamic run-scoped capability policy, for example an active execution mode. */
+  /** Optional run-scoped capability policy supplied by the application composition. */
   isAvailable?(tool: AgentTool): boolean;
   loopGuard?: ToolLoopGuard;
   /** Run-scoped observation hook. It cannot alter the result returned to Runtime Core. */
@@ -112,7 +112,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       content = runToolSearch(this.availableDeferredState()!, typeof call.args.query === "string" ? call.args.query : "");
       isError = false;
     } else if (!this.toolIsAvailable(call.name)) {
-      content = `Error: Tool '${call.name}' is not available in the current execution mode.`;
+      content = `Error: Tool '${call.name}' is not available under the current run capability policy.`;
       isError = true;
     } else if (this.availableDeferredState() && hiddenDeferredNames(this.availableDeferredState()).has(call.name)) {
       content = blockedDeferredToolResult(call.name);

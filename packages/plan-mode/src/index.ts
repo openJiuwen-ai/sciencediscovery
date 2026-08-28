@@ -6,7 +6,6 @@ import {
   type AgentScope,
   type ContextContributorFactory,
 } from "@sciencediscovery/context";
-import type { ExecutionModeDescriptor, ExecutionModePlugin } from "@sciencediscovery/execution-modes";
 import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
 import type {
   PlanStep,
@@ -45,18 +44,10 @@ export type PlanModeEvent =
   | { plan: SessionPlan; type: "plan.step_updated" }
   | { plan: SessionPlan; type: "plan.abandoned" };
 
-export interface PlanModeOptions<TMessage extends RuntimeMessage = RuntimeMessage> {
-  executionTools: readonly AgentTool[];
+export interface PlanModeOptions {
   onEvent?(event: PlanModeEvent): void | Promise<void>;
   repository: PlanRepository;
-  scopes?: readonly AgentScope[];
 }
-
-export const PLAN_MODE_DESCRIPTOR: ExecutionModeDescriptor = Object.freeze({
-  description: "Maintain a structured, visible plan while executing a multi-step request. Planning records progress but does not gate ordinary tool use.",
-  id: "plan",
-  label: "Plan",
-});
 
 const planBody = {
   caveats: Type.Optional(Type.Array(Type.String({ maxLength: 1_000 }), { maxItems: 10 })),
@@ -155,15 +146,14 @@ export function createPlanContextFactory<TMessage extends RuntimeMessage>(
         scopes,
         contribute: async ({ signal }) => {
           const plan = await repository.latest(signal);
+          if (!plan) return {};
           return { systemSections: [{
-            content: plan
-              ? [
-                "<plan_mode_state>",
-                "Maintain this plan as execution progresses. Update a step when its state changes; revise only when the plan itself changes.",
-                JSON.stringify(plan),
-                "</plan_mode_state>",
-              ].join("\n")
-              : "<plan_mode_state>No plan has been recorded yet. Understand the objective, then call propose_plan before maintaining step progress. Ordinary execution tools remain available.</plan_mode_state>",
+            content: [
+              "<plan_state>",
+              "Maintain this plan as execution progresses. Update a step when its state changes; revise only when the plan itself changes.",
+              JSON.stringify(plan),
+              "</plan_state>",
+            ].join("\n"),
             id: "plan-mode.state",
             protected: true,
             slot: "task_state",
@@ -171,16 +161,5 @@ export function createPlanContextFactory<TMessage extends RuntimeMessage>(
         },
       });
     },
-  };
-}
-
-export function createPlanMode<TMessage extends RuntimeMessage = RuntimeMessage>(
-  options: PlanModeOptions<TMessage>,
-): ExecutionModePlugin<TMessage> {
-  const scopes = options.scopes ?? ["main", "subagent"];
-  return {
-    contextContributorFactories: [createPlanContextFactory<TMessage>(options.repository, scopes)],
-    descriptor: PLAN_MODE_DESCRIPTOR,
-    tools: [...options.executionTools, ...createPlanLifecycleTools(options)],
   };
 }

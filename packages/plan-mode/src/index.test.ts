@@ -32,7 +32,7 @@ class MemoryPlans implements PlanRepository {
 
 test("plan lifecycle tools record and complete step state", async () => {
   const repository = new MemoryPlans();
-  const tools = createPlanLifecycleTools({ executionTools: [], repository });
+  const tools = createPlanLifecycleTools({ repository });
   const propose = tools.find((tool) => tool.name === "propose_plan")!;
   await propose.execute("1", { caveats: [], feasibilityConfidence: "high", scope: "test", steps: ["one"] }, new AbortController().signal);
   const update = tools.find((tool) => tool.name === "update_plan_step")!;

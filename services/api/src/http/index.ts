@@ -23,8 +23,6 @@ import {
   WORKSPACE_SYSTEM_PROMPT_VERSION,
 } from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
-import { DIRECT_MODE_DESCRIPTOR } from "@sciencediscovery/direct-mode";
-import { PLAN_MODE_DESCRIPTOR } from "@sciencediscovery/plan-mode";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
 import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
@@ -1214,10 +1212,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
-      if (url.pathname === "/api/execution-modes" && request.method === "GET") {
-        sendJson(response, 200, [DIRECT_MODE_DESCRIPTOR, PLAN_MODE_DESCRIPTOR]);
-        return;
-      }
       if (sessionPlansMatch && request.method === "POST") {
         const plan = await store.proposeSessionPlan(
           sessionPlansMatch[1]!,
@@ -1657,13 +1651,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (sessionRunsMatch && request.method === "GET") {
         if (!store.getSession(sessionRunsMatch[1]!)) return sendError(response, 404, "Session not found");
         sendJson(response, 200, await store.listSessionRuns(sessionRunsMatch[1]!));
-        return;
-      }
-      const sessionRunModeMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/mode$/);
-      if (sessionRunModeMatch && request.method === "GET") {
-        const run = await store.getSessionRun(sessionRunModeMatch[1]!, sessionRunModeMatch[2]!);
-        if (!run) return sendError(response, 404, "Run not found");
-        sendJson(response, 200, { mode: run.executionMode });
         return;
       }
       if (sessionRunsMatch && request.method === "POST") {

@@ -124,7 +124,6 @@ function rootSseGolden(stream: string): string[] {
   return parseSseEvents(stream)
     .filter((event) =>
       !event.type.startsWith("subagent.")
-      && event.type !== "execution_mode.changed"
       && event.type !== "run.queued"
       && event.type !== "run.status"
     )
@@ -151,7 +150,6 @@ function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1"): ServerCo
     gatewayIdleTimeoutMs: 240_000,
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
-    initialExecutionMode: "direct",
     kernelIdleTimeoutMs: 0,
     paperPythonPath: resolve(process.cwd(), "../paper/.venv/bin/python"),
     paperWorkerPath: resolve(process.cwd(), "../paper/paper_worker.py"),
@@ -2314,15 +2312,6 @@ test("workbench search and Composer references use authenticated authoritative i
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
   const modelServer = await startTextModel(context);
   const { origin } = await startTestApi(context, tempRoot);
-  assert.equal((await fetch(`${origin}/api/execution-modes`)).status, 401);
-  const executionModes = await jsonRequest<Array<{ id: string; label: string }>>(
-    `${origin}/api/execution-modes`,
-    { headers: authorization },
-  );
-  assert.deepEqual(executionModes.body.map((mode) => [mode.id, mode.label]), [
-    ["direct", "Direct"],
-    ["plan", "Plan"],
-  ]);
   const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
     body: JSON.stringify({
@@ -2379,18 +2368,8 @@ test("workbench search and Composer references use authenticated authoritative i
   });
   assert.equal(run.status, 200);
   const stream = await run.text();
-  const modeEvents = parseSseEvents(stream).filter((event) => event.type === "execution_mode.changed");
-  assert.equal(modeEvents.length, 1);
-  const activatedMode = modeEvents[0]?.mode as { activatedAt?: unknown; modeId?: unknown };
-  assert.equal(activatedMode.modeId, "direct");
-  assert.equal(typeof activatedMode.activatedAt, "string");
   const runs = await jsonRequest<SessionRun[]>(`${origin}/api/sessions/${session.body.id}/runs`, { headers: authorization });
   assert.equal(runs.body.length, 1);
-  const persistedMode = await jsonRequest<{ mode?: { modeId: string } }>(
-    `${origin}/api/sessions/${session.body.id}/runs/${runs.body[0]!.id}/mode`,
-    { headers: authorization },
-  );
-  assert.equal(persistedMode.body.mode?.modeId, "direct");
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
@@ -3571,7 +3550,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.match(subagentUserPrompt, new RegExp(`Private workspace root: subagents/${subagents.body[0]?.id}`));
   assert.match(subagentUserPrompt, /Handoff manifest visible inside your workspace: handoff\.json/);
   assert.ok(fixture.requests.some((request) => request.tools?.some((tool) => tool.function?.name === "task")));
-  assert.equal(fixture.requests.some((request) => request.tools?.some((tool) => tool.function?.name === "propose_plan")), false);
+  assert.equal(leadRequest.tools?.some((tool) => tool.function?.name === "propose_plan"), true);
 
   const parentResultRequest = fixture.requests.find((request) =>
     request.messages?.some((message) => message.role === "tool"));

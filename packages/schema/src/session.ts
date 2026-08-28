@@ -202,7 +202,6 @@ export interface SessionRun {
   assistantMessageId?: string;
   createdAt: string;
   error?: string;
-  executionMode?: { activatedAt: string; modeId: string };
   finishedAt?: string;
   id: string;
   prompt: string;
@@ -227,7 +226,6 @@ export type RunStreamEvent =
   | { reason?: string; runId: string; type: "run.cancelled" }
   | { droppedEvents: number; type: "run.history.truncated" }
   | { phase: "thinking"; turn: number; type: "agent.phase" }
-  | { mode: { activatedAt: string; modeId: string }; type: "execution_mode.changed" }
   | { delta: string; turn: number; type: "assistant.thinking.delta" }
   | { content: string; truncated?: boolean; turn: number; type: "assistant.thinking.snapshot" }
   | { delta: string; type: "assistant.delta" }

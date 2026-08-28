@@ -11,7 +11,6 @@ export type AssistantMessageEvent =
 
 export type AgentEvent =
   | { type: "turn_start" }
-  | { mode: { activatedAt: string; modeId: string }; type: "execution_mode_changed" }
   | { assistantMessageEvent: AssistantMessageEvent; type: "message_update" }
   | { type: "model_usage"; usage?: ModelUsage; usageReported: boolean }
   | { args: Record<string, unknown>; toolCallId: string; toolName: string; type: "tool_execution_start" }

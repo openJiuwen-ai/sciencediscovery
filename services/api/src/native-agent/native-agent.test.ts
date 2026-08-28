@@ -30,7 +30,7 @@ import {
 } from "./index.js";
 import type { ModelTurn, WireToolSpec } from "@sciencediscovery/model";
 
-function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" | "executePython" | "executeShell" | "initialExecutionMode" | "sessionId" | "workspaceRoot"> {
+function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" | "executePython" | "executeShell" | "sessionId" | "workspaceRoot"> {
   const root = mkdtempSync(join(tmpdir(), "native-agent-"));
   writeFileSync(join(root, "readme.md"), "hello");
   return {
@@ -38,7 +38,6 @@ function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" 
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not called"); },
     executeShell: async () => { throw new Error("not called"); },
-    initialExecutionMode: "direct",
     sessionId: "session-1",
     workspaceRoot: root,
   };
@@ -81,6 +80,21 @@ function toolTurn(name: string, args: Record<string, unknown>, id = `call-${name
   };
 }
 
+function toolBatchTurn(calls: Array<{ args: Record<string, unknown>; id: string; name: string }>): ModelTurn {
+  return {
+    assistantMessage: {
+      role: "assistant",
+      content: "",
+      tool_calls: calls.map((call) => ({
+        id: call.id,
+        type: "function",
+        function: { name: call.name, arguments: JSON.stringify(call.args) },
+      })),
+    },
+    toolCalls: calls,
+  };
+}
+
 test("loop streams a tool round trip and returns wire-format final messages", async () => {
   const { calls, streamer } = scriptStreamer([
     (call) => {
@@ -120,34 +134,28 @@ test("loop streams a tool round trip and returns wire-format final messages", as
   }
 });
 
-test("an unconfigured run exposes only mode activation before direct tools", async () => {
+test("ordinary tools are available on the first model step without a mode activation handshake", async () => {
   const { calls, streamer } = scriptStreamer([
     (call) => {
-      assert.deepEqual(call.tools.map((tool) => tool.name), ["activate_execution_mode"]);
-      return toolTurn("activate_execution_mode", { modeId: "direct" });
-    },
-    (call) => {
       assert.ok(call.tools.some((tool) => tool.name === "list_files"));
+      assert.equal(call.tools.some((tool) => tool.name === "activate_execution_mode"), false);
       return toolTurn("list_files", { path: "." });
     },
     () => textTurn("done"),
   ]);
   const restore = setModelTurnStreamerForTest(streamer);
   try {
-    const options = workspace() as NativeAgentOptions;
-    delete options.initialExecutionMode;
-    const agent = createNativeAgent(options);
+    const agent = createNativeAgent(workspace() as NativeAgentOptions);
     await agent.execute("list files");
-    assert.equal(calls.length, 3);
+    assert.equal(calls.length, 2);
   } finally {
     restore();
   }
 });
 
-test("Plan Mode exposes lifecycle and execution tools after activation", async () => {
+test("Plan lifecycle and read_skill can run in the same first-step tool batch", async () => {
   let plan: import("@sciencediscovery/schema").SessionPlan | undefined;
   const options = workspace() as NativeAgentOptions;
-  delete options.initialExecutionMode;
   options.planRepository = {
     async abandon() { throw new Error("not called"); },
     async latest() { return plan && structuredClone(plan); },
@@ -163,22 +171,41 @@ test("Plan Mode exposes lifecycle and execution tools after activation", async (
     async revise() { throw new Error("not called"); },
     async updateStep() { throw new Error("not called"); },
   };
+  options.skills = [{
+    content: "Follow the frozen literature workflow.",
+    description: "Review scientific literature",
+    hash: "a".repeat(64),
+    id: "literature-review",
+    readResource: async () => { throw new Error("not called"); },
+    resources: [],
+    revision: 1,
+    version: "1.0.0",
+  }];
   const { calls, streamer } = scriptStreamer([
-    () => toolTurn("activate_execution_mode", { modeId: "plan" }),
     (call) => {
       assert.ok(call.tools.some((tool) => tool.name === "propose_plan"));
+      assert.ok(call.tools.some((tool) => tool.name === "read_skill"));
       assert.ok(call.tools.some((tool) => tool.name === "list_files"));
-      return toolTurn("propose_plan", { feasibilityConfidence: "high", scope: "Inspect files", steps: ["List files"] });
+      return toolBatchTurn([
+        {
+          args: { feasibilityConfidence: "high", scope: "Inspect files", steps: ["List files"] },
+          id: "call-plan",
+          name: "propose_plan",
+        },
+        { args: { skillId: "literature-review" }, id: "call-skill", name: "read_skill" },
+      ]);
     },
     (call) => {
-      assert.match(call.systemPrompt + call.history.map((message) => String(message.content ?? "")).join("\n"), /Inspect files/u);
+      const input = call.systemPrompt + call.history.map((message) => String(message.content ?? "")).join("\n");
+      assert.match(input, /Inspect files/u);
+      assert.match(input, /Follow the frozen literature workflow/u);
       return textTurn("planned");
     },
   ]);
   const restore = setModelTurnStreamerForTest(streamer);
   try {
     await createNativeAgent(options).execute("plan the inspection");
-    assert.equal(calls[0]?.tools.some((tool) => tool.name === "propose_plan"), false);
+    assert.equal(calls[0]?.tools.some((tool) => tool.name === "activate_execution_mode"), false);
     assert.equal(plan?.scope, "Inspect files");
   } finally {
     restore();

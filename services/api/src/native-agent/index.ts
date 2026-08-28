@@ -57,15 +57,12 @@ import {
   type ModelEndpoint,
   type ModelUsage,
 } from "@sciencediscovery/model";
-import { createDirectMode } from "@sciencediscovery/direct-mode";
-import {
-  createActivateExecutionModeTool,
-  createExecutionModeContextFactory,
-  executionModePromptSection,
-  ExecutionModeRegistry,
-} from "@sciencediscovery/execution-modes";
 import type { Agent, AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
-import { createPlanMode, type PlanRepository } from "@sciencediscovery/plan-mode";
+import {
+  createPlanContextFactory,
+  createPlanLifecycleTools,
+  type PlanRepository,
+} from "@sciencediscovery/plan-mode";
 import {
   ExternalWaitController,
   type RunEvent,
@@ -112,10 +109,8 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
   contextScope?: AgentScope;
   /** Capability-package extension seam; factories are instantiated and frozen per AgentRun. */
   contextContributorFactories?: readonly ContextContributorFactory<WireMessage>[];
-  /** Application persistence adapter; when present, registers the Plan execution-mode plugin. */
+  /** Application persistence adapter; when present, registers optional Plan lifecycle capabilities. */
   planRepository?: PlanRepository;
-  /** Optional embedding preset. Product runs leave this unset so the Agent selects a mode explicitly. */
-  initialExecutionMode?: string;
 }
 
 export interface NativeAgentRunResult {
@@ -184,7 +179,6 @@ function formatRunContract(contract: string): string {
 class NativeAgent implements NativeAgentHandle {
   private readonly listeners = new Set<Listener>();
   private readonly toolRegistry: ToolRegistry<WireMessage>;
-  private readonly modeRegistry: ExecutionModeRegistry<WireMessage>;
   private readonly systemPrompt: string;
   private readonly promptParts: WorkspacePromptPart[];
   private readonly promptSkills: RuntimeSkill[];
@@ -209,26 +203,13 @@ class NativeAgent implements NativeAgentHandle {
       ...(options.runContract ? { runContract: options.runContract } : {}),
     });
     const executionTools = buildTools(options);
-    this.modeRegistry = new ExecutionModeRegistry<WireMessage>()
-      .register(createDirectMode<WireMessage>(executionTools));
-    if (options.planRepository) {
-      this.modeRegistry.register(createPlanMode<WireMessage>({
-        executionTools,
-        repository: options.planRepository,
-        scopes: [options.subagent ? "subagent" : "main"],
-      }));
-    }
-    this.modeRegistry.freeze();
-    this.modeRegistry.subscribe((event) => {
-      if (this.requestText) this.toolRegistry.promoteForRequest(this.requestText);
-      this.emit({ mode: event.mode, type: "execution_mode_changed" });
-    });
-    const modeActivationTool = createActivateExecutionModeTool(this.modeRegistry);
-    this.toolRegistry = new ToolRegistry([...this.modeRegistry.allTools(), modeActivationTool], {
+    const planTools = options.planRepository
+      ? createPlanLifecycleTools({ repository: options.planRepository })
+      : [];
+    this.toolRegistry = new ToolRegistry([...executionTools, ...planTools], {
       createResultMessage: (call, content) => ({
         role: "tool", tool_call_id: call.id, name: call.name, content,
       }),
-      isAvailable: (tool) => this.modeRegistry.isToolAvailable(tool.name),
       onResult: ({ call, content, isError, sequence }) => {
         this.durableContext.observe(call, { content, isError }, sequence);
         if (call.name !== "read_skill" || isError || typeof call.args.skillId !== "string") return;
@@ -276,9 +257,6 @@ class NativeAgent implements NativeAgentHandle {
     this.systemPrompt = [
       baseSystemPrompt,
       options.runContract ? formatRunContract(options.runContract) : "",
-      options.initialExecutionMode
-        ? `<execution_mode_state>Active mode: ${options.initialExecutionMode}.</execution_mode_state>`
-        : executionModePromptSection(this.modeRegistry.descriptors()),
       ...this.toolRegistry.promptSections(),
     ].filter(Boolean).join("\n\n");
     this.history = options.gatewayHistory
@@ -338,9 +316,6 @@ class NativeAgent implements NativeAgentHandle {
     this.controller = new AbortController();
     if (this.abortRequested) this.controller.abort();
     this.requestText = text;
-    if (this.options.initialExecutionMode && !this.modeRegistry.snapshot()) {
-      this.modeRegistry.activate(this.options.initialExecutionMode);
-    }
     this.history.push({ role: "user", content: text });
     this.toolRegistry.promoteForRequest(text);
 
@@ -572,8 +547,9 @@ class NativeAgent implements NativeAgentHandle {
     registerContextContributorFactories(
       registry,
       [
-        createExecutionModeContextFactory(this.modeRegistry, [scope]),
-        ...this.modeRegistry.contextContributorFactories(),
+        ...(this.options.planRepository
+          ? [createPlanContextFactory<WireMessage>(this.options.planRepository, [scope])]
+          : []),
         ...(this.options.contextContributorFactories ?? []),
       ],
       { contextId: this.contextId, scope },

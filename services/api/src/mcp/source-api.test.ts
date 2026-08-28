@@ -47,7 +47,6 @@ test("MCP source API exposes only native MCP sources", async (context) => {
     gatewayIdleTimeoutMs: 240_000,
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
-    initialExecutionMode: "direct",
     kernelIdleTimeoutMs: 0,
     paperPythonPath: resolve(dataDir, "paper-python"),
     paperWorkerPath: resolve(dataDir, "paper-worker.py"),
