@@ -661,7 +661,7 @@
 .provider-manual-form label { display: grid; gap: 5px; min-width: 0; }
 .provider-manual-form label > span { color: var(--text-heading); font-size: 11px; font-weight: 700; }
 .provider-manual-form input, .provider-manual-form select { width: 100%; min-height: 36px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); padding: 6px 8px; font-size: 12px; }
-.provider-manual-form .provider-manual-vision { display: flex; align-items: center; gap: 7px; min-height: 36px; }
+.provider-manual-form .provider-manual-vision { align-self: start; display: flex; align-items: center; gap: 7px; min-height: 36px; }
 .provider-manual-form .provider-manual-vision input { width: 18px; min-width: 18px; min-height: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .provider-manual-form .provider-manual-vision span { color: var(--text-heading); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .provider-editor { border: 1px solid var(--accent-border-soft); border-radius: 10px; background: var(--accent-softer); padding: 14px; }
