@@ -90,6 +90,27 @@ export const WEB_CATALOG_RECORDS: readonly ModelCatalogRecord[] = [
     vision: true,
   },
   {
+    // The same GLM model on domestic vs international vs reseller hosts:
+    // capabilities stay vendor-first; only the reseller has a price.
+    contextWindow: 1_000_000,
+    key: "glm-5.2",
+    label: "GLM-5.2",
+    maxOutputTokens: 131_072,
+    presets: ["zhipu", "zai", "dashscope"],
+    pricing: {
+      dashscope: {
+        currency: "USD",
+        input: 0.6,
+        output: 1.8,
+        source: { retrievedAt: "2026-08-26", url: "https://example.test/dashscope-pricing" },
+        unit: "per-1m-tokens",
+      },
+    },
+    source,
+    thinking: { supported: true, efforts: ["high", "max"] },
+    vision: false,
+  },
+  {
     apiVariant: "kimi-k3",
     contextWindow: 1_048_576,
     key: "kimi-k3",

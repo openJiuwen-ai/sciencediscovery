@@ -180,7 +180,7 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  * E2E-META
  * Purpose: Provider 与模型目录完整用户旅程——草稿安全、内置预设只填令牌、自定义 Provider、发现成功/失败/乱序、双语可溯源价格、模型级思考能力与 Session/wire 一致性，以及桌面/窄屏真实几何。
  * Steps:
- *   1. 打开模型注册表，确认主视图无预设墙、无常驻编辑器；“添加 Provider”下拉列出预置，另有自定义入口。
+ *   1. 打开模型注册表，确认主视图无预设墙、无常驻编辑器；“添加 Provider”下拉列出预置（智谱国内与国际 Z.AI 为两项），另有自定义入口。
  *   2. 核对目录状态行：models.dev 来源、打包快照时间与刷新按钮；刷新成功改时间、刷新失败保留旧数据且草稿不丢（浏览器边界伪造目录下载响应）。
  *   3. MiniMax 仅填令牌；Escape 取消关闭保留草稿，底部保存并关闭提交；请求在浏览器边界改写为 loopback/manual。
  *   4. 选择智谱内置预设，仅填令牌连接；核对默认 endpoint/协议未要求用户填写，令牌不回传。
@@ -387,7 +387,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
   try {
     await journey.step(
       "模型注册表把常见预设收进“添加 Provider”",
-      "模型注册表主视图是目录状态与已配置服务商，而不是铺开的预设墙；设置窗口放大到约 80% 视口保持响应式。展开“添加 Provider”后可见 DeepSeek、智谱 GLM、OpenAI、Anthropic、Gemini、DashScope 等常见预设；每张需密钥的卡片标明“只需令牌”，末尾是“自定义服务商”。",
+      "模型注册表主视图是目录状态与已配置服务商，而不是铺开的预设墙；设置窗口放大到约 80% 视口保持响应式。展开“添加 Provider”后可见 DeepSeek、智谱 GLM、Z.AI（智谱国际）、OpenAI、Anthropic、Gemini、DashScope 等常见预设；每张需密钥的卡片标明“只需令牌”，末尾是“自定义服务商”。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
@@ -408,7 +408,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         // 避免把已展开的面板 toggle 收起。
         await openAddPanel(dialog);
         const optionTexts = await dialog.locator(".provider-add-panel").getByLabel("添加 Provider").locator("option").allTextContents();
-        for (const name of ["DeepSeek", "智谱 GLM", "OpenAI", "Anthropic", "Google Gemini", "Alibaba Cloud Model Studio"]) {
+        for (const name of ["DeepSeek", "智谱 GLM", "Z.AI", "OpenAI", "Anthropic", "Google Gemini", "Alibaba Cloud Model Studio"]) {
           expect(optionTexts.some((text) => text.includes(name))).toBe(true);
         }
         await expect(dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();

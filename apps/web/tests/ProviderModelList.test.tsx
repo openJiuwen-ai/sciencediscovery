@@ -115,7 +115,7 @@ test("inline table unions added profiles with the listing, added first, no dupli
   assert.equal(m2.displayName, "Model m2");
 });
 
-function provider(id: string, name: string): ModelProvider {
+function provider(id: string, name: string, presetId?: "dashscope" | "zhipu" | "zai"): ModelProvider {
   return {
     apiProtocol: "openai-chat-completions",
     apiVariant: "openai",
@@ -125,9 +125,18 @@ function provider(id: string, name: string): ModelProvider {
     id,
     modelDiscovery: "openai-models",
     name,
+    ...(presetId ? { presetId } : {}),
     proxyPolicy: "inherit",
     tokenOptional: false,
     updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function glmProfile(id: string, providerId: string): ModelProfile {
+  return {
+    ...profile(id, providerId),
+    model: "glm-5.2",
+    name: `GLM ${id}`,
   };
 }
 
@@ -195,6 +204,35 @@ test("the registry opens without a preset wall or a resident editor", () => {
   assert.match(chinese, /已添加 1/);
   assert.match(chinese, /数据来源：models\.dev/);
   assert.doesNotMatch(chinese, /provider-editor/);
+});
+
+test("the same model follows the current provider preset's price", () => {
+  installWebModelCatalog();
+  const renderRow = (presetId: "dashscope" | "zhipu") => renderToStaticMarkup(createElement(
+    LocaleProvider,
+    { initialLocale: "en" },
+    createElement(ProviderRow, {
+      addedProfiles: [glmProfile(`m-${presetId}`, presetId)],
+      busy: false,
+      expanded: true,
+      onAddModel: () => Promise.resolve(true),
+      onEdit: () => undefined,
+      onRefresh: () => undefined,
+      onToggle: () => undefined,
+      provider: provider(presetId, presetId, presetId),
+      testModel: () => Promise.reject(new Error("not under test")),
+    }),
+  ));
+
+  // The reseller price shows on the reseller's row…
+  assert.match(renderRow("dashscope"), /0\.6 \/ 1\.8 USD\/1M/);
+  // …while the domestic preset without an official price stays honestly unknown.
+  assert.match(renderRow("zhipu"), /<span class="fact">\?<\/span>/);
+  // Capabilities stay vendor-first on both.
+  for (const html of [renderRow("dashscope"), renderRow("zhipu")]) {
+    assert.match(html, /1M \/ 131k/);
+    assert.match(html, /high max/);
+  }
 });
 
 test("manual provider with an empty listing still shows the added model row, never the empty state", () => {
