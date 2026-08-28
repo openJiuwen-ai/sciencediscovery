@@ -436,6 +436,25 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await expect(modelRow).toBeVisible();
         await page.unroute(modelUrl);
 
+        // The first usable model becomes the global task default. Exercise
+        // the real success path only after removing that public settings
+        // reference; deleting a referenced model is correctly rejected.
+        const settingsResponse = await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
+          headers: authorizationHeader(),
+        });
+        expect(settingsResponse.ok()).toBe(true);
+        const settings = await settingsResponse.json() as { overrides?: Record<string, unknown> };
+        const overrides = { ...(settings.overrides ?? {}) };
+        for (const key of ["modelId", "reviewModelId"]) {
+          if (overrides[key] === modelId) delete overrides[key];
+        }
+        const updateResponse = await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
+          data: overrides,
+          headers: authorizationHeader(),
+          method: "PUT",
+        });
+        expect(updateResponse.ok()).toBe(true);
+
         const responsePromise = page.waitForResponse((response) => response.request().method() === "DELETE"
           && new URL(response.url()).pathname === modelPath);
         await modelRow.getByRole("button", { name: "删除" }).click();
