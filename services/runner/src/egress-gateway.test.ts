@@ -15,14 +15,21 @@
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { connect } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { after, test } from "node:test";
 
 import type { SandboxNetworkAccess } from "@sciencediscovery/schema";
 
-import { EgressGateway, EgressGatewayRegistry, isPrivateAddress } from "./egress-gateway.js";
+import {
+  EGRESS_SOCKET_RELATIVE_BYTES,
+  EgressGateway,
+  EgressGatewayRegistry,
+  EgressSocketPathTooLongError,
+  MAX_UNIX_SOCKET_PATH_BYTES,
+  isPrivateAddress,
+} from "./egress-gateway.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -35,6 +42,20 @@ async function scratchDirectory(): Promise<string> {
 after(async () => {
   for (const directory of temporaryDirectories) await rm(directory, { force: true, recursive: true });
 });
+
+/** A real data directory whose absolute path is exactly `bytes` long. */
+async function dataDirectoryOfLength(bytes: number): Promise<string> {
+  const root = await scratchDirectory();
+  const fillerLength = bytes - root.length - 1;
+  assert.ok(fillerLength > 0, `the scratch root is already ${root.length} bytes`);
+  const directory = join(root, "d".repeat(fillerLength));
+  await mkdir(directory, { recursive: true });
+  assert.equal(Buffer.byteLength(directory), bytes);
+  return directory;
+}
+
+/** The longest data directory that still leaves room for a socket. */
+const FITTING_DATA_DIRECTORY_BYTES = MAX_UNIX_SOCKET_PATH_BYTES - EGRESS_SOCKET_RELATIVE_BYTES;
 
 function access(overrides: Partial<SandboxNetworkAccess> = {}): SandboxNetworkAccess {
   return {
@@ -210,9 +231,60 @@ test("the registry reuses one gateway per policy revision and closes them togeth
     assert.equal(first, again);
     const other = await registry.acquire(access({ allowedDomains: ["other.test"], revision: "other-revision" }));
     assert.notEqual(first.socketPath, other.socketPath);
-    assert.match(first.socketPath, /test-revision\.sock$/);
+    assert.equal(first.socketPath, registry.socketPath("test-revision"));
   } finally {
     await registry.close();
   }
   assert.throws(() => registry.acquire({ ...access(), mode: "none" }), /domain-allowlist/);
+});
+
+test("a socket name is fixed length and per-revision, whatever the revision looks like", async () => {
+  const directory = await scratchDirectory();
+  const registry = new EgressGatewayRegistry(directory);
+  const first = registry.socketPath("test-revision");
+  const other = registry.socketPath("other-revision");
+  // A revision reaches the runner over HTTP, so it may be any string; the name
+  // it produces must stay short and must not walk out of the socket directory.
+  const overlong = registry.socketPath("x".repeat(4_000));
+  const traversal = registry.socketPath("../../escape");
+  for (const path of [first, other, overlong, traversal]) {
+    assert.match(basename(path), /^[0-9a-f]{16}$/);
+    assert.equal(dirname(dirname(path)), directory);
+  }
+  assert.notEqual(first, other);
+  assert.equal(first, registry.socketPath("test-revision"));
+});
+
+test("the longest data directory that fits creates the socket at exactly the reported path", async () => {
+  const dataDir = await dataDirectoryOfLength(FITTING_DATA_DIRECTORY_BYTES);
+  const registry = new EgressGatewayRegistry(dataDir);
+  try {
+    const gateway = await registry.acquire(access());
+    assert.equal(Buffer.byteLength(gateway.socketPath), MAX_UNIX_SOCKET_PATH_BYTES);
+    assert.equal(dirname(dirname(gateway.socketPath)), dataDir);
+    // listen, chmod and rm all use this one string. A truncated bind would put
+    // the socket somewhere else and leave this path missing.
+    assert.equal((await stat(gateway.socketPath)).isSocket(), true);
+    assert.deepEqual(await readdir(dirname(gateway.socketPath)), [basename(gateway.socketPath)]);
+  } finally {
+    await registry.close();
+  }
+});
+
+test("a data directory one byte too long fails before libuv can truncate the path", async () => {
+  const dataDir = await dataDirectoryOfLength(FITTING_DATA_DIRECTORY_BYTES + 1);
+  const registry = new EgressGatewayRegistry(dataDir);
+  try {
+    await assert.rejects(registry.acquire(access()), (error: Error) => {
+      assert.ok(error instanceof EgressSocketPathTooLongError, error.message);
+      assert.match(error.message, new RegExp(`${MAX_UNIX_SOCKET_PATH_BYTES + 1} bytes`));
+      assert.match(error.message, new RegExp(`${MAX_UNIX_SOCKET_PATH_BYTES}-byte Unix socket path limit`));
+      assert.match(error.message, /shorten that directory by at least 1 byte/);
+      return true;
+    });
+    // Fail-closed means nothing was created: no truncated socket, no directory.
+    assert.deepEqual(await readdir(dataDir), []);
+  } finally {
+    await registry.close();
+  }
 });

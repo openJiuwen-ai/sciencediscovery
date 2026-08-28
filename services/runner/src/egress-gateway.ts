@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { chmod, mkdir, rm } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
@@ -38,6 +39,57 @@ import {
  * It filters on the requested host name; it does not terminate TLS, so a
  * broadly scoped allowed domain remains a broadly scoped grant.
  */
+
+/**
+ * Usable bytes in `sockaddr_un.sun_path`, excluding the NUL terminator: Linux
+ * declares `char sun_path[108]`, macOS and the BSDs `char sun_path[104]`.
+ *
+ * libuv does not report an overlong path — it truncates silently. `listen()`
+ * then succeeds against a *different* path than the caller asked for, so the
+ * `chmod` that follows fails with ENOENT on the requested path, and the next
+ * attempt finds the truncated leftover and fails with EADDRINUSE. Neither
+ * error names the real problem, so every path is measured before libuv sees it.
+ */
+export const MAX_UNIX_SOCKET_PATH_BYTES = process.platform === "darwin" ? 103 : 107;
+
+/**
+ * Directory holding the gateway sockets, relative to the runner data directory.
+ * Two characters on purpose: every byte of this path is charged against
+ * `sun_path`, and the sockets are runtime state nothing else reads.
+ */
+const EGRESS_SOCKET_DIRECTORY = "eg";
+
+/** Hex characters of the revision digest used as the socket file name. */
+const EGRESS_SOCKET_NAME_LENGTH = 16;
+
+/** Bytes a socket path costs beyond the data directory: `/eg/` plus the name. */
+export const EGRESS_SOCKET_RELATIVE_BYTES =
+  EGRESS_SOCKET_DIRECTORY.length + EGRESS_SOCKET_NAME_LENGTH + 2;
+
+/**
+ * The socket path does not fit in `sun_path`. `domain-allowlist` fails closed
+ * with an actionable message instead of running against a truncated path.
+ */
+export class EgressSocketPathTooLongError extends Error {
+  constructor(readonly socketPath: string, readonly limit: number) {
+    const bytes = Buffer.byteLength(socketPath);
+    super(
+      `Sandbox network access (domain-allowlist) is unavailable: the egress socket path is ${bytes} bytes, `
+      + `over this platform's ${limit}-byte Unix socket path limit — ${socketPath}. `
+      + "The socket has to stay inside the runner data directory, so shorten that directory by at least "
+      + `${bytes - limit} byte(s) (SCIENCE_DISCOVERY_DATA_DIR); it must leave `
+      + `${EGRESS_SOCKET_RELATIVE_BYTES} bytes for the socket itself.`,
+    );
+    this.name = "EgressSocketPathTooLongError";
+  }
+}
+
+/** Reject an overlong socket path before libuv can truncate it. */
+export function assertUnixSocketPathFits(socketPath: string): void {
+  if (Buffer.byteLength(socketPath) > MAX_UNIX_SOCKET_PATH_BYTES) {
+    throw new EgressSocketPathTooLongError(socketPath, MAX_UNIX_SOCKET_PATH_BYTES);
+  }
+}
 
 export interface EgressGatewayDecision {
   allowed: boolean;
@@ -126,6 +178,9 @@ export class EgressGateway {
       });
       return;
     }
+    // Before anything touches the filesystem: a truncated bind would leave a
+    // socket behind at a path this gateway will never chmod, rm or hand out.
+    assertUnixSocketPathFits(this.socketPath);
     await mkdir(resolve(this.socketPath, ".."), { recursive: true });
     await rm(this.socketPath, { force: true });
     await new Promise<void>((resolveListen, reject) => {
@@ -290,8 +345,21 @@ export class EgressGatewayRegistry {
     private readonly resolveAddresses?: EgressAddressResolver,
   ) {}
 
+  /**
+   * Where the gateway for this policy listens. The layout is as short as the
+   * data directory allows — `<dataDir>/eg/<16 hex>`, no `runner-runtime/`
+   * prefix and no `.sock` suffix — because the whole absolute path has to fit
+   * in `sun_path`; the previous layout cost 44 bytes and truncated inside an
+   * ordinary worktree data directory.
+   *
+   * The name is a digest of the revision rather than the revision itself, so a
+   * revision of any length or shape produces a fixed-length name that cannot
+   * escape the directory. Distinct revisions still get distinct sockets, which
+   * is what makes the socket the policy identity.
+   */
   socketPath(revision: string): string {
-    return resolve(this.dataDir, "runner-runtime", "egress", `${revision}.sock`);
+    const name = createHash("sha256").update(revision).digest("hex").slice(0, EGRESS_SOCKET_NAME_LENGTH);
+    return resolve(this.dataDir, EGRESS_SOCKET_DIRECTORY, name);
   }
 
   /** Start (or reuse) the gateway serving this policy and return its socket. */
