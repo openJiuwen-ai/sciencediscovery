@@ -7,12 +7,15 @@ This page lists tools visible inside the agent loop. `createWorkspaceTools` in `
 | Tool | Parameters | Behavior and boundary |
 |---|---|---|
 | `list_files` | none | Recursively lists workspace paths, sizes, and mtimes; skips symlinks; at most 500 |
-| `read_file` | `path` | Reads UTF-8 text within the workspace, at most 1 MiB, after escape validation |
+| `read_file` | `path`; optional `offset`, `limit` | Reads one page of workspace text after escape validation: at most 2000 lines or 40 KiB, continued with `offset`. Binary files return media type and size only — never a body or base64 |
 | `list_artifacts` | none | Lists user-visible Project Artifacts across Sessions, including origin, creation snapshot, and latest version |
-| `read_artifact` | `artifact_id` or `name`; optional `version` | Reads a Project Artifact version; UTF-8 for text, base64 for binary, at most 1 MiB |
+| `read_artifact` | `artifact_id` or `name`; optional `version`, `offset`, `limit` | Reads one page of a Project Artifact version: UTF-8 text at most 2000 lines or 40 KiB, with the line range and next offset. Binary versions return `binary: true` with media type and size, never a body or base64 |
 | `declare_artifact` | `path` or `paths` (1–50); optional `name`, `description` | Declares writable workspace files as Project Artifacts. Batch entries succeed/fail independently. Logical names can form virtual sidebar directories without moving files; the server infers preview kind |
 | `run_python` | `code`; optional `environmentRevisionId`, `kernelMode` | Runs Python in Bubblewrap; default ephemeral process, optional managed environment and persistent kernel; non-zero exit is a tool error |
 | `run_shell` | exactly one of `command`, `scriptPath`; optional `arguments`, `kernelMode` | Bounded workspace shell; network follows the sandbox network access policy (no network by default). Default persistent Session shell carries `cd`, allowed environment changes, and `source` into later shell/Python/R calls; `ephemeral` is clean |
+| `read_tool_output` | `ref`; optional `offset`, `limit` | Pages back through a tool result that was too large to return in full; `ref` comes from the bounded result's notice |
+
+Every tool result is bounded before it becomes model input: a result over 2000 lines or 50 KiB is replaced by a preview (the head, or the tail for execution output where the exit status lives) plus a `ref` that `read_tool_output` pages back. The full text is retained per Session under `<dataDir>/tool-outputs/<sessionId>/`. This bound applies to MCP results and any newly added tool, not only the tools listed here.
 
 First Python/shell execution requests `code` permission. Generated files retain diff and derivation audit but become Artifacts only after `declare_artifact`; uploaded files, MCP downloads, and collected job outputs are registered at their control-plane entry point.
 

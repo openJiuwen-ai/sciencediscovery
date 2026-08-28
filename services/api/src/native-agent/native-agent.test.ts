@@ -806,3 +806,58 @@ test("summary checkpoint carries the full durable-context authority contract", a
     restore();
   }
 });
+
+test("an oversized execution result enters history as a tail preview the model can page back", async () => {
+  const options = workspace();
+  const stdout = Array.from({ length: 200_000 }, (_, index) => `metric-${index + 1}`).join("\n");
+  let refInHistory = "";
+  const { streamer } = scriptStreamer([
+    () => toolTurn("run_python", { code: "print(metrics)" }),
+    (call) => {
+      refInHistory = /ref "(tool-output-[0-9a-f]{16})"/.exec(String(call.history.at(-1)?.content))?.[1] ?? "";
+      return toolTurn("read_tool_output", { limit: 3, ref: refInHistory }, "call-read-back");
+    },
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...options,
+      executePython: async () => ({
+        createdFiles: [],
+        environmentRevisionId: "rev-1",
+        exitCode: 0,
+        finishedAt: "2026-08-28T00:00:01.000Z",
+        kernelId: "kernel-1",
+        kernelMode: "ephemeral",
+        language: "python",
+        modifiedFiles: [],
+        networkPolicy: "deny",
+        runnerVersion: "test",
+        sandbox: "none",
+        startedAt: "2026-08-28T00:00:00.000Z",
+        stderr: "",
+        stdout,
+        workingDirectory: "/workspace",
+      }),
+    } as unknown as NativeAgentOptions);
+    const result = await agent.execute("run the metrics script");
+
+    const executionResult = String(result.finalMessages.find((message) => message.name === "run_python")?.content);
+    assert.ok(
+      Buffer.byteLength(executionResult, "utf8") < 60 * 1_024,
+      `the result entering history is ${Buffer.byteLength(executionResult, "utf8")} bytes`,
+    );
+    assert.match(executionResult, /^\[bounded tool output] run_python produced 200003 lines/);
+    assert.match(executionResult, /shows the last /, "execution output keeps the tail that carries the outcome");
+    assert.equal(executionResult.includes("metric-1\n"), false, "the omitted head is not in the current result");
+    assert.equal(executionResult.includes("created files: none"), true, "the trailing summary survives");
+    assert.ok(refInHistory, "the bounded result carries a re-read ref");
+
+    const pagedBack = String(result.finalMessages.find((message) => message.name === "read_tool_output")?.content);
+    assert.match(pagedBack, /\[tool output page] run_python ref tool-output-[0-9a-f]{16}: lines 1-3 of 200003/);
+    assert.equal(pagedBack.endsWith("stdout:\nmetric-1\nmetric-2\n"), true, "the omitted head is recoverable");
+  } finally {
+    restore();
+  }
+});
