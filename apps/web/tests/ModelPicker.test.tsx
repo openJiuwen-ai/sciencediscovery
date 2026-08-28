@@ -242,7 +242,7 @@ test("hovering a conversation model row reveals a rich detail card", () => {
   });
   assert.match(manual, /64,000/);
   assert.match(manual, /high \/ max/);
-  assert.match(manual, /entered by you/);
+  assert.match(manual, /Manually entered/);
 });
 
 test("an empty registry offers a path into the model settings", () => {

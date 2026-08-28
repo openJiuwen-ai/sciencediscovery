@@ -587,11 +587,11 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "维护目录给出 GLM 能力与该端点自己的目录价",
-      "GLM-5.2 标明维护建议而非厂商动态返回；紧凑模型行展示 1,000,000 上下文、131,072 最大输出、无视觉、有思考（high/max）。本端点连接 open.bigmodel.cn，捆绑快照里该主机的 glm-5.2 价目为 input 1.4、output 4.4、缓存 0.26，行内显示 1.4 / 4.4 / 0.26 USD/1M（不冒用其他托管商的定价）；界面不再出现每模型「官方来源」链接，数据来源统一是目录状态行的 models.dev。",
+      "GLM-5.2 的来源标为 models.dev 数据库而非厂商动态返回；紧凑模型行展示 1,000,000 上下文、131,072 最大输出、无视觉、有思考（high/max）。本端点连接 open.bigmodel.cn，捆绑快照里该主机的 glm-5.2 价目为 input 1.4、output 4.4、缓存 0.26，行内显示 1.4 / 4.4 / 0.26 USD/1M（不冒用其他托管商的定价）；界面不再出现每模型「官方来源」链接，数据来源统一是目录状态行的 models.dev。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        // 「维护建议」同时出现在行来源行与悬停弹窗的「来源」格，按行来源行精确收敛。
-        await expect(dialog.locator(".provider-row-source").filter({ hasText: /维护建议（并非服务商返回）/ })).toBeVisible();
+        // 「models.dev 数据库」同时出现在行来源行与悬停弹窗的「来源」格，按行来源行精确收敛。
+        await expect(dialog.locator(".provider-row-source").filter({ hasText: /models\.dev 数据库/ })).toBeVisible();
         // 以行内 code 的精确 id 锚定，避免命中预览/Vision 兄弟行。
         const card = modelRowById(dialog, "glm-5.2");
         const facts = card.locator(".provider-model-row-facts .fact");
@@ -608,8 +608,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(popup).toContainText("131,072");
         await expect(popup).toContainText("high / max");
         await expect(popup).toContainText("USD 1.4 / 4.4 / 0.26 · 每百万 tokens");
-        // 来源仍是维护目录建议，不是厂商实时返回。
-        await expect(popup).toContainText("维护建议（并非服务商返回）");
+        // 来源仍是 models.dev 数据库，不是厂商实时返回。
+        await expect(popup).toContainText("models.dev 数据库");
         const popupBox = await popup.boundingBox();
         expect(popupBox).not.toBeNull();
         expect(popupBox!.y).toBeGreaterThanOrEqual(0);
