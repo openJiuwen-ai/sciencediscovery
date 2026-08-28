@@ -352,6 +352,7 @@ export type ModelProviderPresetId =
   | "openai"
   | "openrouter"
   | "siliconflow"
+  | "zai"
   | "zhipu";
 
 /**

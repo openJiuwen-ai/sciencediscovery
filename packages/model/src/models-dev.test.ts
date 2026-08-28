@@ -21,6 +21,7 @@ import {
   lookupModelCatalog,
   mapModelsDevCatalog,
   MODELS_DEV_PROVIDER_MAPPINGS,
+  pricesApplyToPreset,
   setModelCatalogSnapshot,
 } from "@sciencediscovery/schema";
 
@@ -96,14 +97,71 @@ test("confirmed product wire contracts override the document", () => {
   assert.deepEqual(constrainCatalogThinking("kimi-k3", "disabled"), { effort: "max", mode: "enabled" });
 });
 
-test("providers without a listing endpoint still get suggestions when prices are withheld", () => {
+test("two hosts of one brand are priced separately and never borrow each other's rate", () => {
   installTestModelCatalog();
-  // z.ai prices do not apply to the open.bigmodel.cn endpoint our preset uses,
-  // so GLM keeps its facts, loses the price, and stays a suggestion.
-  const suggestions = listCatalogModelsForPreset("zhipu").map((record) => record.key);
-  assert.deepEqual(suggestions, ["glm-5"]);
-  assert.equal(lookupModelCatalog("glm-5", "zhipu")!.pricing, undefined);
+  // Zhipu's mainland and international hosts bill separately, so each preset
+  // takes the rate from the listing whose `api` is its own endpoint.
+  assert.equal(lookupModelCatalog("glm-5", "zhipu")!.pricing?.input, 0.6);
+  assert.equal(lookupModelCatalog("glm-5", "zai")!.pricing?.input, 0.9);
+  // Both still offer the model as a suggestion, since neither host publishes a
+  // listing endpoint.
+  assert.deepEqual(listCatalogModelsForPreset("zhipu").map((record) => record.key), ["glm-5"]);
+  assert.deepEqual(listCatalogModelsForPreset("zai").map((record) => record.key), ["glm-5"]);
+  // Capability facts are one model's facts and stay shared.
   assert.equal(lookupModelCatalog("glm-5", "zhipu")!.contextWindow, 200_000);
+  assert.equal(lookupModelCatalog("glm-5", "zai")!.contextWindow, 200_000);
+});
+
+test("a listing whose endpoint is a different host contributes no price", () => {
+  // Upstream sometimes files a brand's models under one provider while naming
+  // another host in `api`. A rate published for a host we do not call is not a
+  // rate for our endpoint, so it stays unknown rather than being borrowed.
+  assert.equal(
+    pricesApplyToPreset("https://api.z.ai/api/paas/v4", "https://open.bigmodel.cn/api/paas/v4"),
+    false,
+  );
+  // Same host through a different protocol path is the same account and the
+  // same price list.
+  assert.equal(
+    pricesApplyToPreset("https://api.minimaxi.com/anthropic/v1", "https://api.minimaxi.com/v1"),
+    true,
+  );
+  // Upstream states no endpoint for several vendors; there is nothing to
+  // disagree with, so the mapping's own intent decides.
+  assert.equal(pricesApplyToPreset(undefined, "https://api.openai.com/v1"), true);
+  assert.equal(pricesApplyToPreset("not a url", "https://api.openai.com/v1"), true);
+
+  const payload = {
+    zhipuai: {
+      // Filed as the mainland provider but priced for the international host.
+      api: "https://api.z.ai/api/paas/v4",
+      doc: "https://docs.z.ai/guides/overview/pricing",
+      id: "zhipuai",
+      models: {
+        "glm-5.9": {
+          cost: { input: 2, output: 6 },
+          id: "glm-5.9",
+          limit: { context: 200_000, output: 131_072 },
+          modalities: { input: ["text"], output: ["text"] },
+          name: "GLM-5.9",
+          reasoning: true,
+        },
+      },
+    },
+  };
+  setModelCatalogSnapshot({
+    fetchedAt: FIXTURE_FETCHED_AT,
+    origin: "downloaded",
+    records: mapModelsDevCatalog(payload, { fetchedAt: FIXTURE_FETCHED_AT, sourceUrl: FIXTURE_SOURCE_URL }),
+    sourceUrl: FIXTURE_SOURCE_URL,
+  });
+  const entry = lookupModelCatalog("glm-5.9", "zhipu")!;
+  assert.equal(entry.pricing, undefined, "the rate belongs to a host our preset does not call");
+  assert.equal(entry.contextWindow, 200_000, "capability facts are still the model's own");
+  assert.deepEqual(listCatalogModelsForPreset("zhipu").map((record) => record.key), ["glm-5.9"],
+    "and it is still worth suggesting");
+
+  installTestModelCatalog();
 });
 
 test("an absent catalog reports every fact as unknown instead of a default", () => {
@@ -186,11 +244,16 @@ test("a provider that rehosts another brand never overwrites that brand's facts"
     "the vendor publishes an effort scale; the rehosted entries are silent about it");
   assert.equal(merged.label, "GLM-5.2", "and the vendor's own name");
 
-  // Prices stay attributed per endpoint: our Zhipu preset calls
-  // open.bigmodel.cn, which upstream does not price, while SiliconFlow's own
-  // rate applies to the SiliconFlow preset.
-  assert.equal(lookupModelCatalog("glm-5.2", "zhipu")!.pricing, undefined);
+  // Prices stay attributed per endpoint. A user who added DashScope is paying
+  // DashScope, so that row shows the reseller's rate, not Zhipu's — while the
+  // capability facts above still come from the brand that built the model.
+  assert.equal(lookupModelCatalog("glm-5.2", "zhipu")!.pricing?.input, 0.6);
+  assert.equal(lookupModelCatalog("glm-5.2", "dashscope")!.pricing?.input, 0.7);
   assert.equal(lookupModelCatalog("glm-5.2", "siliconflow")!.pricing?.input, 0.5);
+  assert.notEqual(
+    lookupModelCatalog("glm-5.2", "zhipu")!.pricing?.input,
+    lookupModelCatalog("glm-5.2", "dashscope")!.pricing?.input,
+  );
 
   // Every provider that lists it still offers it as a suggestion.
   for (const preset of ["zhipu", "siliconflow", "dashscope"]) {

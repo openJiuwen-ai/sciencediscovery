@@ -55,6 +55,21 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     name: "智谱 GLM",
   },
   {
+    // The same GLM models on Zhipu's international host. It is a separate
+    // provider rather than a base-URL edit of the one above because the two
+    // hosts bill separately and take different keys, so a user has to be able
+    // to configure and price them independently.
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    docsUrl: "https://docs.z.ai/api-reference/llm/chat-completion",
+    id: "zai",
+    // Same as bigmodel.cn: no documented model-list endpoint, so discovery
+    // stays manual and offers catalog suggestions instead.
+    modelDiscovery: "manual",
+    name: "Z.AI",
+  },
+  {
     apiProtocol: "openai-chat-completions",
     apiVariant: "minimax",
     baseUrl: "https://api.minimaxi.com/v1",

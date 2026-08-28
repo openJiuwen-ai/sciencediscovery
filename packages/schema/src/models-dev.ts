@@ -38,6 +38,7 @@ import type {
   ModelCatalogThinking,
   ModelProviderPresetId,
 } from "./model-provider.js";
+import { getModelProviderPreset } from "./model-provider-presets.js";
 import type { ModelApiVariant, ModelThinkingEffort } from "./model-usage.js";
 
 /** The subset of a models.dev model entry this product reads. */
@@ -52,6 +53,11 @@ export interface ModelsDevModel {
 }
 
 export interface ModelsDevProvider {
+  /** The endpoint this listing describes. Upstream states it for most
+   *  providers and omits it for a few; it is the only reliable way to tell two
+   *  hosts of the same brand apart, such as Zhipu's open.bigmodel.cn and
+   *  Z.AI's api.z.ai. */
+  api?: string;
   /** Official vendor page the upstream entry cites for this provider. */
   doc?: string;
   id?: string;
@@ -77,9 +83,44 @@ export type ModelsDevPayload = Record<string, ModelsDevProvider>;
 export interface ModelsDevProviderMapping {
   /** Upstream provider id. */
   id: string;
-  /** Whether the upstream prices apply to the preset's own endpoint. */
+  /**
+   * Whether this listing's prices are meant for the preset's endpoint at all.
+   *
+   * Even when true they are only applied if the listing's own `api` host
+   * agrees with the preset's base URL, so a rate published for one host of a
+   * brand is never shown for another. When upstream states no `api` there is
+   * nothing to disagree with and this flag decides alone.
+   */
   pricing: boolean;
   presetId: ModelProviderPresetId;
+}
+
+/**
+ * Whether a listing's prices may be attributed to a preset's endpoint.
+ *
+ * Compared by host, not by full URL: one host serves the same account and
+ * price list through several paths — MiniMax publishes its
+ * Anthropic-compatible path while our preset uses the OpenAI-compatible one —
+ * and a price list is per account, not per protocol path.
+ */
+export function pricesApplyToPreset(upstreamApi: string | undefined, presetBaseUrl: string | undefined): boolean {
+  const upstreamHost = endpointHost(upstreamApi);
+  const presetHost = endpointHost(presetBaseUrl);
+  // Nothing to disagree with: upstream states no endpoint, or one of the two
+  // is not a URL we can read.
+  if (!upstreamHost || !presetHost) return true;
+  return upstreamHost === presetHost;
+}
+
+/** Host of an absolute URL, without depending on a `URL` implementation:
+ *  this package compiles for both the browser and the control plane and
+ *  carries no DOM or Node lib. */
+function endpointHost(value: string | undefined): string | undefined {
+  const match = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/iu.exec(value?.trim() ?? "");
+  if (!match) return undefined;
+  const authority = match[1]!;
+  const credentials = authority.lastIndexOf("@");
+  return (credentials === -1 ? authority : authority.slice(credentials + 1)).toLowerCase() || undefined;
 }
 
 export const MODELS_DEV_PROVIDER_MAPPINGS: readonly ModelsDevProviderMapping[] = [
@@ -94,10 +135,12 @@ export const MODELS_DEV_PROVIDER_MAPPINGS: readonly ModelsDevProviderMapping[] =
   // listing is the one whose price list applies to them.
   { id: "moonshotai-cn", presetId: "moonshot", pricing: true },
   { id: "minimax-cn", presetId: "minimax", pricing: true },
-  // Upstream only lists Zhipu's international host (z.ai) while our preset
-  // calls open.bigmodel.cn. The models are still worth suggesting; their
-  // prices belong to the other host and are not attributed here.
-  { id: "zhipuai", presetId: "zhipu", pricing: false },
+  // Zhipu's two hosts bill separately, and upstream lists them as separate
+  // providers whose `api` says which is which. Each preset therefore takes its
+  // own listing's prices; the host check above stops one from borrowing the
+  // other's should upstream ever merge them.
+  { id: "zhipuai", presetId: "zhipu", pricing: true },
+  { id: "zai", presetId: "zai", pricing: true },
   // DashScope is the vendor for Qwen but also rehosts other brands — it
   // republishes GLM with a shorter output limit and no effort scale — so it
   // comes after Zhipu. Zhipu publishes no Qwen, so nothing is lost the other
@@ -248,6 +291,13 @@ export function mapModelsDevCatalog(
     // Upstream cites the vendor's own page per provider; fall back to the
     // catalog endpoint so a record never claims a source it does not have.
     const url = typeof provider.doc === "string" && provider.doc.trim() ? provider.doc.trim() : options.sourceUrl;
+    // Resolved once per provider: whether this listing's rates describe the
+    // endpoint our preset actually calls.
+    const priceApplies = mapping.pricing
+      && pricesApplyToPreset(
+        typeof provider.api === "string" ? provider.api : undefined,
+        getModelProviderPreset(mapping.presetId)?.baseUrl,
+      );
     const source = { retrievedAt: options.fetchedAt, url };
     for (const [entryId, entry] of Object.entries(models)) {
       if (!isRecord(entry)) continue;
@@ -289,7 +339,7 @@ export function mapModelsDevCatalog(
         draft.thinking = thinking;
       }
       if (mapping.presetId === "anthropic") draft.apiVariant ??= anthropicVariant(model);
-      if (mapping.pricing && draft.pricing[mapping.presetId] === undefined) {
+      if (priceApplies && draft.pricing[mapping.presetId] === undefined) {
         const pricing = mapPricing(model, source);
         if (pricing) draft.pricing[mapping.presetId] = pricing;
       }

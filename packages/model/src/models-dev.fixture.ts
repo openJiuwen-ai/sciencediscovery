@@ -134,12 +134,30 @@ export const MODELS_DEV_FIXTURE: ModelsDevPayload = {
       },
     },
   },
+  // The two Zhipu hosts bill separately; `api` is what tells them apart.
   zhipuai: {
+    api: "https://open.bigmodel.cn/api/paas/v4",
     doc: "https://docs.z.ai/guides/overview/pricing",
     id: "zhipuai",
     models: {
       "glm-5": {
         cost: { input: 0.6, output: 2.2 },
+        id: "glm-5",
+        limit: { context: 200_000, output: 131_072 },
+        modalities: { input: ["text"], output: ["text"] },
+        name: "GLM-5",
+        reasoning: true,
+        reasoning_options: [{ type: "toggle" }],
+      },
+    },
+  },
+  zai: {
+    api: "https://api.z.ai/api/paas/v4",
+    doc: "https://docs.z.ai/guides/overview/pricing",
+    id: "zai",
+    models: {
+      "glm-5": {
+        cost: { input: 0.9, output: 3 },
         id: "glm-5",
         limit: { context: 200_000, output: 131_072 },
         modalities: { input: ["text"], output: ["text"] },
