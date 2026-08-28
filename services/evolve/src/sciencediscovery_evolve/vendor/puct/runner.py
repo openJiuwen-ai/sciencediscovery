@@ -42,6 +42,7 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import sys
 import json
 import resource
 import time
@@ -88,6 +89,13 @@ def load_entrypoint(path: str):
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load candidate module")
     module = importlib.util.module_from_spec(spec)
+    # Registered before execution: `dataclasses` is on the allowlist, and
+    # `@dataclass` resolves its own module through `sys.modules[cls.__module__]`.
+    # Without this line a candidate that declares one dies with "'NoneType'
+    # object has no attribute '__dict__'" -- which the evaluator scores as the
+    # model having written a broken program, so the search learns the wrong
+    # lesson from an error that was never the candidate's.
+    sys.modules["candidate"] = module
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         spec.loader.exec_module(module)
     entrypoint = getattr(module, "train_and_predict", None)

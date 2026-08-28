@@ -341,6 +341,45 @@ def test_the_prompt_gives_versions_not_just_package_names() -> None:
         assert re.search(r"scipy \d+\.\d+", rendered), kwargs
 
 
+def test_a_candidate_that_resolves_its_own_annotations_can_load(tmp_path) -> None:
+    """`load_entrypoint` registers the module before executing it.
+
+    A candidate written with `from __future__ import annotations` has string
+    annotations, and anything that resolves them -- `typing.get_type_hints`, a
+    `@dataclass` that inspects its own fields, pydantic -- goes looking for the
+    module in `sys.modules[cls.__module__]`. Unregistered, that lookup returns
+    `None` and the candidate dies with "'NoneType' object has no attribute
+    '__dict__'", which the evaluator scores as the model having written a broken
+    program. The search then learns the wrong lesson from an error that was
+    never the candidate's. Upstream registers it; this is that line.
+    """
+    import sys
+
+    from sciencediscovery_evolve.vendor.puct.runner import load_entrypoint
+
+    path = tmp_path / "candidate.py"
+    path.write_text(
+        "from __future__ import annotations\n"
+        "import typing\n"
+        "from dataclasses import dataclass\n"
+        "\n"
+        "@dataclass\n"
+        "class Config:\n"
+        "    width: int = 3\n"
+        "\n"
+        "RESOLVED = typing.get_type_hints(Config)\n"
+        "\n"
+        "def train_and_predict(train_path, test_path):\n"
+        "    return [Config().width]\n"
+    )
+    sys.modules.pop("candidate", None)
+    try:
+        entrypoint = load_entrypoint(str(path))
+        assert entrypoint("a", "b") == [3]
+    finally:
+        sys.modules.pop("candidate", None)
+
+
 def test_a_repair_may_replace_something_that_does_not_exist() -> None:
     """The repair prompt used to forbid the only possible fix.
 

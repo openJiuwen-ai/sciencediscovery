@@ -522,6 +522,32 @@ def test_a_prior_exponent_that_is_not_a_number_refuses_before_anything_is_spent(
     assert harness.prompts == [], "nothing was spent on the refused run"
 
 
+def test_a_discarded_proposal_is_said_out_loud_rather_than_vanishing() -> None:
+    """The aggregator emitted `discarded` and nothing listened.
+
+    Reconstructed from a live run: 20 selections, 18 expansions, and a panel
+    that could only say "planned 20, made 18". The two missing ones were
+    proposals the staleness filter threw away — each a model call the user paid
+    for — and no event, no log and no counter recorded that they had existed.
+    """
+    harness = Harness()
+    reporter_events: List[Dict[str, Any]] = []
+
+    from sciencediscovery_evolve.puct_engine import _Reporter
+
+    reporter = _Reporter.__new__(_Reporter)
+    reporter.discarded = 0
+    reporter.emit = reporter_events.append
+    _Reporter.on_event(reporter, "discarded", {"ops": {"change_summary": "swapped in LZ77"}})
+
+    assert reporter.discarded == 1
+    assert reporter_events, "a discarded proposal leaves a trace"
+    said = reporter_events[0]["message"]
+    assert "thrown away" in said
+    assert "swapped in LZ77" in said, "and says which one, so it is not an anonymous loss"
+    assert harness.of("log") == []
+
+
 # --- Counters -----------------------------------------------------------------# --- Counters -----------------------------------------------------------------
 
 

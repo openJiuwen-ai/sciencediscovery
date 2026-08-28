@@ -452,6 +452,10 @@ class _Reporter:
     emitted from a worker but carries only that worker's own facts.
     """
 
+    #: Class-level so an instance built without `__init__` — which several test
+    #: harnesses here do — reads zero rather than raising from inside `swept`.
+    discarded: int = 0
+
     def __init__(
         self,
         spec: RunSpec,
@@ -474,6 +478,9 @@ class _Reporter:
         self._planned = spec.expansions
         self.attempted = 0
         self.scored = 0
+        #: Proposals the staleness filter threw away. Counted so the finish
+        #: event can say where the gap between planned and made went.
+        self.discarded = 0
         #: Every finite score seen, rounded — one member after a whole run means
         #: the scoring could not tell any candidate from the seed.
         self._distinct_scores: set[float] = set()
@@ -534,6 +541,19 @@ class _Reporter:
             self.emit(events.seeded(
                 0, payload["metrics"].get(SCORE_KEY),
                 code_hash=seed_hash, code_chars=len(seed_code) or None,
+            ))
+        elif kind == "discarded":
+            # A proposal the staleness filter threw away. It cost a model call
+            # and produced no node, so a run that planned 20 expansions and made
+            # 18 has these as the difference — and until this branch existed the
+            # aggregator emitted the event and nobody listened, leaving the
+            # shortfall on the panel with no explanation anywhere.
+            self.discarded += 1
+            self.emit(events.log(
+                "warn",
+                "a candidate was thrown away before it could be measured: the tree had moved "
+                "on by the time it came back, so it was answering a question that no longer "
+                f"had a place in the search ({str(payload.get('ops', {}).get('change_summary') or '').strip()[:120] or 'no summary'})",
             ))
         elif kind == "node":
             self._node(payload)
@@ -666,7 +686,19 @@ class _Reporter:
                 "often enough in a row that the framework stopped retrying them. This search "
                 "will make noticeably fewer expansions than planned.",
             ))
-        if 0 <= done < planned and reason and reason not in ("max_iters", "max_calls"):
+        if 0 <= done < planned and self.discarded:
+            # Said even when the framework's own stop reason is one of the dull
+            # ones. `max_iters` names the budget, and on a run whose selections
+            # all landed the budget was not the binding constraint — the
+            # discarded proposals were, and pointing the reader at a budget knob
+            # that was never the problem is worse than saying nothing.
+            self.emit(events.log(
+                "info",
+                f"planned {planned} expansions, made {done}; {self.discarded} proposal(s) came "
+                "back after the tree had moved on and were thrown away before they could be "
+                "measured.",
+            ))
+        elif 0 <= done < planned and reason and reason not in ("max_iters", "max_calls"):
             self.emit(events.log(
                 "info",
                 f"planned {planned} expansions, made {done}; it stopped because {reason}.",
