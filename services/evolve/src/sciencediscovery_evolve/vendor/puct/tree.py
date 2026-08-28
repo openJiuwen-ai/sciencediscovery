@@ -40,7 +40,7 @@ import math
 import threading
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from agentdescent.selection import Candidate, FlatPuct, SelectionContext
 
@@ -74,7 +74,19 @@ DEAD_NODE_SHARE = 0.1
 #: the ranking has left close together. That is PUCT working as designed, and it
 #: is why `c_puct` and the prior are set together rather than one standing in for
 #: the other.
-PRIOR_FACTORS = ("viable", "frontier", "improvement")
+PRIOR_FACTORS = ("judged", "viable", "frontier", "improvement")
+
+#: What a judged prior spans, from a direction the model rates 0 to one it
+#: rates full marks.
+#:
+#: Seven to one, wider than any mechanical factor, because this is the one that
+#: was *asked for*: the model has read the candidate against a rubric written
+#: for this task, which is more than the tree can work out for itself. Bounded
+#: all the same, and for the reason `DEAD_NODE_SHARE` is not zero — a confident
+#: and wrong judgement must not be able to make a subtree unreachable for the
+#: rest of the run. A node nobody judged takes the midpoint.
+JUDGED_FLOOR = 0.25
+JUDGED_CEILING = 1.75
 
 #: What the improvement factor spans, worst-trending lineage to best.
 #:
@@ -128,13 +140,25 @@ def _gain_ranks(nodes: Sequence["Node"]) -> List[float]:
     return ranks
 
 
-def prior_weights(nodes: Sequence["Node"], factors: Sequence[str]) -> List[float]:
+def prior_weights(
+    nodes: Sequence["Node"],
+    factors: Sequence[str],
+    judged: Optional[Mapping[int, float]] = None,
+) -> List[float]:
     """P(node) for the PUCT exploration term, summing to 1.
 
     ``()`` reproduces upstream exactly: every node gets ``1/N``, which is what
     `FlatPuct` hardcodes. The factors are multiplicative, so asking for several
     composes rather than picking a winner between them.
 
+    * ``judged`` -- the model's own reading of how promising this direction is,
+      in ``[0, 1]``, supplied by the caller in ``judged`` and keyed by node
+      index. This is AlphaZero's ``P(s, a)`` with the policy network replaced by
+      the model that is already writing the candidates: upstream leaves the
+      prior uniform *because* there is nobody to ask, and here there is. What it
+      is asked, and by what standard, is the run's own rubric rather than
+      anything this file decides. A node with no entry takes the midpoint, which
+      is what an unjudged node and a failed judging call both are.
     * ``viable`` -- a node whose program did not run keeps `DEAD_NODE_SHARE` of
       its share. Rank already puts it near the bottom, so this matters in one
       specific shape and not in general: a run where many candidates hard-crash
@@ -156,6 +180,13 @@ def prior_weights(nodes: Sequence["Node"], factors: Sequence[str]) -> List[float
     if count == 0:
         return []
     weights = [1.0] * count
+    if "judged" in factors:
+        span = JUDGED_CEILING - JUDGED_FLOOR
+        scores = judged or {}
+        for index, node in enumerate(nodes):
+            rating = scores.get(node.index)
+            rating = 0.5 if rating is None else min(1.0, max(0.0, float(rating)))
+            weights[index] *= JUDGED_FLOOR + span * rating
     if "viable" in factors:
         for index, node in enumerate(nodes):
             if _is_dead_node(node):
@@ -277,6 +308,11 @@ class PuctTree:
     #: Which prior factors shape the exploration term. Empty is upstream's
     #: uniform ``1/N``; see `prior_weights`.
     prior_factors: Tuple[str, ...] = ()
+    #: ``node index -> the model's rating of that node's direction, in [0, 1]``.
+    #: Written by the engine as nodes land, because the model call belongs to
+    #: the engine and this file stays free of one. Missing keys are the
+    #: midpoint, so a judging call that failed costs nothing but its own tokens.
+    judged: Dict[int, float] = field(default_factory=dict)
     candidate_limit: Optional[int] = None
     nodes: List[Node] = field(default_factory=list)
     _next_iteration: int = 1
@@ -328,7 +364,8 @@ class PuctTree:
             # move as the tree grows, and a prior frozen at seed time is the
             # uniform one wearing a different name.
             policy: FlatPuct = (
-                PriorPuct(self.c_puct, prior_weights(self.nodes, self.prior_factors))
+                PriorPuct(self.c_puct, prior_weights(
+                    self.nodes, self.prior_factors, self.judged))
                 if self.prior_factors else self._policy
             )
             chosen = self.nodes[policy.select(ctx, 1)[0].version]
@@ -371,6 +408,7 @@ class PuctTree:
                 "root_visits": self.nodes[0].num_visits if self.nodes else 0,
                 "c_puct": self.c_puct,
                 "prior_factors": list(self.prior_factors),
+                "judged": dict(self.judged),
                 "tree": [node.summary() for node in self.nodes],
             }
 

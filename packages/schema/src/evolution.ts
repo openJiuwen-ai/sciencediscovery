@@ -47,15 +47,22 @@ export function evolveAlgorithm(raw: unknown): EvolveAlgorithm {
  * A prior factor: how the exploration budget is shared out before the rank is
  * read. Multiplied together when several are asked for.
  *
+ * * `judged` — the model reads each candidate against `priorRubric` and rates
+ *   how much further there is to gain down that path; the rating spans a factor
+ *   of seven. This is AlphaZero's `P(s, a)` with the policy network replaced by
+ *   the model already writing the candidates — upstream leaves the prior
+ *   uniform *because* there is nobody to ask, and here there is. Costs one
+ *   short call per candidate and needs `priorRubric`.
  * * `viable` — a node whose program did not run keeps a tenth of its share.
  * * `frontier` — a node's share is divided by `1 + children`, so a parent
  *   already forked five times yields to one never forked.
  * * `improvement` — a node that beat its parent gets up to three times the
- *   share of one that fell back. The only factor carrying something no other
- *   term has: rank sees the score and the formula sees the visit count, and
- *   neither can tell a climbing lineage from a stalled one at equal score.
+ *   share of one that fell back. The only *mechanical* factor carrying
+ *   something no other term has: rank sees the score and the formula sees the
+ *   visit count, and neither can tell a climbing lineage from a stalled one at
+ *   equal score.
  */
-export type EvolvePriorFactor = "viable" | "frontier" | "improvement";
+export type EvolvePriorFactor = "judged" | "viable" | "frontier" | "improvement";
 
 /**
  * How the search spends its exploration budget — the two knobs of the PUCT
@@ -76,6 +83,21 @@ export interface EvolveSearchTuning {
   cPuct?: number;
   /** Empty or absent is the uniform `1/N` prior upstream pins. */
   prior?: EvolvePriorFactor[];
+  /**
+   * What the `judged` factor rewards, in the drafting agent's own words.
+   *
+   * Required by `judged` and meaningless without it. Written per task rather
+   * than baked in, because "a promising direction" is not the same thing in a
+   * compression search and a parameter fit — the first wants a mechanism kept
+   * and extended, the second wants the search off a local optimum.
+   *
+   * **It cannot move the reported score.** The rating decides where the next
+   * attempt starts; the number a run reports comes from the sandbox on held-out
+   * shards. That asymmetry is what makes it safe to let a model-written rubric
+   * drive it: a rubric that is wrong about "promising" spends budget badly and
+   * reports honestly.
+   */
+  priorRubric?: string;
 }
 
 /** What is being evolved. */
@@ -552,6 +574,10 @@ export type EvolveEvent =
     inspirationIndexes?: number[];
     island?: number;
     iteration?: number;
+    /** puct, `judged` prior only: what the model rated this candidate's
+     *  direction, in `[0, 1]`. Absent when nothing judged it — the factor is
+     *  off, or that one call did not come back. */
+    priorScore?: number;
     nodeIndex: number;
     parentIndex: number | null;
     programId?: string;

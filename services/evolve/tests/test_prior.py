@@ -38,6 +38,8 @@ from sciencediscovery_evolve.vendor.puct.tree import (
     DEAD_NODE_SHARE,
     IMPROVEMENT_CEILING,
     IMPROVEMENT_FLOOR,
+    JUDGED_CEILING,
+    JUDGED_FLOOR,
     Node,
     PriorPuct,
     PuctTree,
@@ -171,6 +173,65 @@ def test_an_all_dead_tree_falls_back_to_uniform() -> None:
     nodes = [_node(0, None, -math.inf), _node(1, 0, -math.inf)]
     assert prior_weights(nodes, ("viable",)) == pytest.approx([0.5, 0.5])
     assert prior_weights([], ("viable",)) == []
+
+
+# --- judged: the model's own reading ------------------------------------------
+
+
+def test_judged_spans_floor_to_ceiling_with_the_models_rating() -> None:
+    nodes = [_node(0, None, 0.5), _node(1, 0, 0.5), _node(2, 0, 0.5)]
+    weights = prior_weights(nodes, ("judged",), {0: 0.0, 1: 0.5, 2: 1.0})
+    raw = [JUDGED_FLOOR, (JUDGED_FLOOR + JUDGED_CEILING) / 2, JUDGED_CEILING]
+    assert weights == pytest.approx([value / sum(raw) for value in raw])
+    # All three scored the same, so nothing but the judgement separates them.
+    assert weights[2] / weights[0] == pytest.approx(JUDGED_CEILING / JUDGED_FLOOR)
+
+
+def test_a_node_nobody_judged_takes_the_midpoint() -> None:
+    # An unjudged node and one whose judging call failed are the same thing from
+    # here: the map simply has no entry. Treating either as 0 would punish a
+    # candidate for a flaky call.
+    nodes = [_node(0, None, 0.5), _node(1, 0, 0.5)]
+    assert prior_weights(nodes, ("judged",), {1: 0.5}) == pytest.approx([0.5, 0.5])
+    assert prior_weights(nodes, ("judged",), {}) == pytest.approx([0.5, 0.5])
+    assert prior_weights(nodes, ("judged",), None) == pytest.approx([0.5, 0.5])
+
+
+def test_a_rating_outside_the_range_is_clamped_not_trusted() -> None:
+    # The value comes from a model reading a model-written rubric. A reply of
+    # "50" out of 10 must not hand one node fifty times the budget.
+    nodes = [_node(0, None, 0.5), _node(1, 0, 0.5)]
+    assert prior_weights(nodes, ("judged",), {0: 5.0, 1: -3.0}) == pytest.approx(
+        prior_weights(nodes, ("judged",), {0: 1.0, 1: 0.0}))
+
+
+def test_a_confident_judge_cannot_make_a_subtree_unreachable() -> None:
+    # Same reason `DEAD_NODE_SHARE` is not zero. The judge is one reading of one
+    # candidate against a rubric nobody has validated; being wrong about it
+    # should cost budget, not close off a branch for the rest of the run.
+    nodes = [_node(0, None, 0.5), _node(1, 0, 0.5)]
+    weights = prior_weights(nodes, ("judged",), {0: 1.0, 1: 0.0})
+    assert weights[1] > 0.0
+
+
+def test_judged_composes_with_the_mechanical_factors() -> None:
+    nodes = [_node(0, None, 0.6), _node(1, 0, 0.0), _node(2, 0, 0.7)]
+    both = prior_weights(nodes, ("judged", "viable"), {0: 1.0, 1: 1.0, 2: 0.0})
+    # Node 1 is rated highly and does not run: the judgement lifts it and
+    # `viable` takes it back down. Neither factor overrides the other.
+    raw = [JUDGED_CEILING, JUDGED_CEILING * DEAD_NODE_SHARE, JUDGED_FLOOR]
+    assert both == pytest.approx([value / sum(raw) for value in raw])
+
+
+def test_the_tree_carries_the_map_the_engine_writes() -> None:
+    tree = PuctTree(c_puct=1.0, prior_factors=("judged",))
+    tree.seed(_program("root"), 0.5)
+    tree.add_node(_program("a"), 0.6, 0)
+    assert tree.judged == {}
+    tree.judged[1] = 0.9
+    weights = prior_weights(tree.nodes, tree.prior_factors, tree.judged)
+    assert weights[1] > weights[0]
+    assert tree.summary()["judged"] == {1: 0.9}
 
 
 # --- Through the tree ---------------------------------------------------------

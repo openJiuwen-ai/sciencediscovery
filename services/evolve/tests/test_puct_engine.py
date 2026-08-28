@@ -443,6 +443,142 @@ def test_a_prior_the_engine_does_know_runs(monkeypatch: Any) -> None:
     assert seen["prior_factors"] == ("viable", "frontier")
 
 
+# --- the judged prior ---------------------------------------------------------
+
+
+class _JudgingHarness(Harness):
+    """A model that also answers the prior-judging call, and counts them."""
+
+    def __init__(self, marks: Optional[List[str]] = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.marks = marks if marks is not None else ["8"] * 20
+        self.prior_prompts: List[str] = []
+        self._mark = 0
+
+    def completion_factory(self, run_spec: RunSpec, on_usage: Any, should_stop: Any):
+        inner = super().completion_factory(run_spec, on_usage, should_stop)
+
+        def complete(prompt: str, sink: Any = None, on_failure: Any = None) -> str:
+            if prompt.startswith("You are rating how promising one direction is"):
+                self.prior_prompts.append(prompt)
+                mark = self.marks[min(self._mark, len(self.marks) - 1)]
+                self._mark += 1
+                if sink is not None:
+                    sink(CompletionUsage(total=200, completion=8, capped=False))
+                if mark is None:
+                    raise RuntimeError("the judging call fell over")
+                return mark
+            return inner(prompt, sink, on_failure)
+
+        return complete
+
+
+def _judged_spec(**overrides: Any) -> RunSpec:
+    options = {"mode": "serial", "prior": ["judged"],
+               "prior_rubric": "Reward changes that build on the mechanism already there."}
+    options.update(overrides.pop("options", {}))
+    return spec(options=options, **overrides)
+
+
+def test_the_judged_prior_asks_the_model_once_per_node() -> None:
+    """One call per node, not one per selection.
+
+    A node's code and its score are fixed the moment it is appended, so a second
+    reading pays for the same answer. Selection reads the cached map on every
+    pick instead, which is what keeps the judged prior affordable: it adds one
+    short call per expansion rather than one per node per iteration.
+    """
+    harness = _JudgingHarness()
+    harness.run(_judged_spec(expansions=3))
+
+    expanded = harness.of("expanded")
+    assert len(harness.prior_prompts) == len(expanded), \
+        "one judging call per node that landed, and no more"
+    # The seed is not a direction, so it is never judged.
+    assert all("nodeIndex" in event for event in expanded)
+    assert all(event.get("priorScore") == pytest.approx(0.8) for event in expanded)
+
+
+def test_the_judging_prompt_carries_the_rubric_and_not_the_siblings() -> None:
+    # Same discipline as the mutation prompt: expansions are independent draws.
+    # A judge shown the field would be ranking, and ranking is the exploitation
+    # half's job — it already has the measured scores.
+    harness = _JudgingHarness()
+    harness.run(_judged_spec(expansions=2))
+
+    for prompt in harness.prior_prompts:
+        assert "Reward changes that build on the mechanism already there." in prompt
+        assert "Push the accuracy up" in prompt          # what the search is for
+        for leak in ("sibling", "the other candidates", "nodeIndex", "rank"):
+            assert leak not in prompt
+
+
+def test_a_judging_call_that_falls_over_leaves_the_node_unjudged() -> None:
+    """A prior is a bonus. A flaky judge degrades the search towards uniform.
+
+    The failure is swallowed on purpose and the node still lands: the
+    alternative is a search that dies on the extra call rather than on anything
+    to do with the candidates.
+    """
+    harness = _JudgingHarness(marks=[None, "9"])
+    harness.run(_judged_spec(expansions=2))
+
+    assert harness.of("search_finished")[0]["status"] == "succeeded"
+    scores = [event.get("priorScore") for event in harness.of("expanded")]
+    assert scores[0] is None, "the failed judging leaves no rating"
+    assert scores[1] == pytest.approx(0.9)
+
+
+def test_a_judge_that_answers_with_prose_leaves_the_node_unjudged() -> None:
+    # `_first_number` returns None rather than guessing, and None has to travel
+    # all the way rather than becoming a zero somewhere in between — a zero
+    # would say something about the candidate that nobody said.
+    harness = _JudgingHarness(marks=["I would rather not say."])
+    harness.run(_judged_spec(expansions=1))
+    assert harness.of("expanded")[0].get("priorScore") is None
+
+
+def test_the_judged_prior_never_touches_the_reported_score() -> None:
+    """The safety property that makes a model-written rubric safe to run.
+
+    The rubric decides where the next attempt starts and nothing else. Two runs
+    whose judges disagree completely must report the same numbers, because the
+    scores come from the sandbox and the prior never reaches them.
+    """
+    high = _JudgingHarness(marks=["10"] * 20)
+    high.run(_judged_spec(expansions=2))
+    low = _JudgingHarness(marks=["0"] * 20)
+    low.run(_judged_spec(expansions=2))
+
+    def scores(harness: _JudgingHarness) -> List[Any]:
+        return [event.get("score") for event in harness.of("expanded")]
+
+    assert scores(high) == scores(low)
+    assert high.of("search_finished")[0].get("bestTestScore") == \
+        low.of("search_finished")[0].get("bestTestScore")
+
+
+def test_asking_for_a_judged_prior_without_a_rubric_is_refused() -> None:
+    # Refused before the run starts, not defaulted: without a rubric the model
+    # would rate candidates against its own idea of promising, which is the one
+    # thing the rubric exists to replace — and it would spend a call per node
+    # doing it.
+    harness = _JudgingHarness()
+    harness.run(spec(options={"mode": "serial", "prior": ["judged"]}))
+
+    assert harness.of("search_finished")[0]["status"] == "failed"
+    assert any("prior_rubric" in event.get("message", "") for event in harness.of("log"))
+    assert harness.prior_prompts == [], "nothing was spent on the refused run"
+
+
+def test_no_judged_factor_means_no_judging_calls_at_all() -> None:
+    harness = _JudgingHarness()
+    harness.run(spec(options={"mode": "serial", "prior": ["improvement"],
+                              "prior_rubric": "ignored without the factor"}))
+    assert harness.of("search_finished")[0]["status"] == "succeeded"
+    assert harness.prior_prompts == []
+
+
 # --- Counters -----------------------------------------------------------------
 
 

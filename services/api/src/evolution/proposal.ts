@@ -205,7 +205,9 @@ export async function startProposedRun(
  *  misspelling that is quietly dropped runs the search under the uniform prior
  *  and reports success, so the run that was meant to test whether the prior
  *  helps has answered a different question. */
-const PRIOR_FACTORS: readonly EvolvePriorFactor[] = ["viable", "frontier", "improvement"];
+const PRIOR_FACTORS: readonly EvolvePriorFactor[] = [
+  "judged", "viable", "frontier", "improvement",
+];
 
 /** Beyond this the exploration term stops being a tie-breaker and starts
  *  outvoting the rank outright, which is a random walk with extra steps. */
@@ -227,6 +229,21 @@ function shapeOfSearchTuning(search: EvolveSearchTuning | undefined): string | u
     (factor) => !PRIOR_FACTORS.includes(factor));
   if (unknown.length) {
     return `unknown prior factor(s): ${unknown.join(", ")}. The choices are: ${PRIOR_FACTORS.join(", ")}`;
+  }
+  // Both directions, because both are a design mistake rather than a typo. A
+  // `judged` prior with no rubric asks the model to rate candidates against its
+  // own idea of promising — the one thing the rubric exists to replace — and
+  // spends a call per candidate doing it. A rubric with no `judged` is a
+  // sentence the drafting agent wrote that nothing will ever read, which reads
+  // afterwards as a prior that was tried and did nothing.
+  const judged = (search.prior ?? []).includes("judged");
+  if (judged && !search.priorRubric?.trim()) {
+    return "the judged prior needs priorRubric: say what counts as a promising direction "
+      + "for this task, or drop \"judged\" from prior";
+  }
+  if (!judged && search.priorRubric?.trim()) {
+    return "priorRubric is only read by the judged prior; add \"judged\" to prior, or drop "
+      + "the rubric";
   }
   return undefined;
 }

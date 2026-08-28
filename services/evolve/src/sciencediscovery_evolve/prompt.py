@@ -361,6 +361,66 @@ def _score(value: Optional[float]) -> str:
     return "not measured yet" if value is None else f"{value:.4f}"
 
 
+#: How much of a candidate the prior judge is shown. Enough to see what the
+#: change actually was; not so much that judging costs what writing cost.
+_PRIOR_CODE_CHARS = 4_000
+
+
+def prior_prompt(
+    *,
+    rubric: str,
+    statement: str,
+    change_summary: str,
+    code: str,
+    score: Optional[float],
+    parent_score: Optional[float],
+    scale: int = 10,
+) -> str:
+    """Ask the model how promising this candidate's direction is.
+
+    This is the policy network AlphaZero has and a program search does not.
+    Upstream leaves ``P(s, a)`` uniform because there is nobody to ask; the
+    model writing the candidates *is* somebody to ask, and what it should be
+    asked is a property of the task, so the rubric arrives from the run's own
+    design rather than being written here.
+
+    **One candidate, on its own.** No siblings, no ranking, no list of what else
+    the search has tried. Two reasons, and they are different reasons. Ranking
+    is the exploitation half's job and it already has the measured scores, so a
+    judge shown the field would be voting twice on the same evidence. And the
+    normalisation happens in `prior_weights`, over independent readings — a
+    judge that had seen the others would be comparing rather than reading, and
+    the comparison would smuggle in an ordering the numbers already carry.
+
+    **It does not affect the score.** The reply steers where the next expansion
+    starts and nothing else; a rubric that is wrong about what "promising" means
+    spends budget badly and cannot move the number the run reports. That is what
+    makes it safe to let a model-written rubric drive it.
+    """
+    trimmed = code.strip()
+    if len(trimmed) > _PRIOR_CODE_CHARS:
+        trimmed = trimmed[:_PRIOR_CODE_CHARS] + "\n# ... (truncated)"
+    return (
+        "You are rating how promising one direction is in a program search, so that "
+        "the search knows where to spend its next attempts. You are not scoring the "
+        "candidate's quality — that is already measured, and both numbers are below.\n\n"
+        "## What the search is for\n\n"
+        f"{statement.strip() or '(not stated)'}\n\n"
+        "## What to reward\n\n"
+        f"{rubric.strip()}\n\n"
+        "## The candidate\n\n"
+        f"What it says it changed: {change_summary.strip() or '(no summary given)'}\n"
+        f"What it measured: {_score(score)}. Its parent measured: {_score(parent_score)}.\n\n"
+        "```python\n"
+        f"{trimmed}\n"
+        "```\n\n"
+        "## Output\n\n"
+        f"Output a single number from 0 to {scale} and nothing else — how much further "
+        "there is to gain by making the next attempt from this candidate rather than "
+        "from somewhere else in the search.\n"
+    )
+
+
 def repair_prompt(code: str, error: str) -> str:
     """Ask for the one bug this candidate has, not for a different candidate.
 

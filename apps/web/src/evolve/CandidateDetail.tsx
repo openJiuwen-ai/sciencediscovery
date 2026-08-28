@@ -95,6 +95,17 @@ export function CandidateDetail({ candidate, client, onClose, parent, runId }: C
       <div><dt>{t("evolve.chart.gate")}</dt><dd>{format(candidate.gateScore)}</dd></div>
       <div><dt>{t("evolve.chart.rollout")}</dt><dd>{format(candidate.rolloutScore ?? candidate.score)}</dd></div>
       <div><dt>visits</dt><dd>{candidate.visits}</dd></div>
+      {/* Only when a judged prior actually rated this one. Rendering a dash for
+          every run without the factor would put an empty column in front of
+          everybody to serve the few runs that use it. */}
+      {typeof candidate.priorScore === "number"
+        ? (
+          <div>
+            <dt>{t("evolve.detail.prior")}</dt>
+            <dd>{candidate.priorScore.toFixed(2)}</dd>
+          </div>
+        )
+        : null}
     </dl>
 
     {candidate.valid ? null : <section className="evolve-detail-error">

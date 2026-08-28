@@ -151,6 +151,13 @@ test("a refusal names what to change, because its reader is the designer", async
     [{ mode: "custom_script", evaluatorSource: "print(1)" }, /SCIENCE_AGENT_SHARDS/],
     [{ mode: "llm_judge", rubric: undefined }, /needs a rubric/],
     [{ mode: "test_gate", testCmd: "pytest -q", frozenGlobs: [] }, /must freeze the test paths/],
+    // A judged prior and its rubric are one thing in two fields; either alone
+    // is a design mistake the drafting agent should hear about now, not a run
+    // that quietly does something else.
+    [{ search: { prior: ["judged" as const] } }, /needs priorRubric/],
+    [{ search: { priorRubric: "keep the mechanism" } }, /only read by the judged prior/],
+    [{ search: { prior: ["promising" as never] } }, /unknown prior factor/],
+    [{ search: { cPuct: 0 } }, /positive number/],
   ];
   for (const [over, expected] of cases) {
     const result = await startProposedRun(proposal(over), d);

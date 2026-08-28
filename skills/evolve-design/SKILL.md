@@ -189,34 +189,68 @@ Above 10 is refused. Note that a coarse score is a *scoring* problem first — w
 before reaching for `cPuct`.
 
 **`prior` — which nodes that exploration budget goes to.** Empty is uniform: every node gets an
-equal share, which is what upstream does because there is no policy network to ask. The factors
-below multiply, so you can ask for more than one.
+equal share. AlphaZero fills this slot with a policy network asked "which move looks promising";
+a program search has no such network, which is why upstream leaves it flat. But it does have a
+model — the one writing the candidates — and `judged` is that model put in the policy network's
+place. The factors multiply, so you can ask for more than one.
 
-State the *objective* — what you want the budget spent on — and pick the factor that says it.
-This is a decision about where to look, and it stays clear of the rule in step 1: it never names
-an approach a candidate should take.
-
+- **`judged`** — the model reads each candidate against a rubric **you write** and rates how much
+  further there is to gain down that path. Spans a factor of seven, the widest of the four,
+  because it is the only one that can carry knowledge about the task; the other three are things
+  the tree works out for itself. Costs one short call per candidate and **requires
+  `priorRubric`**.
 - **`improvement`** — a node that beat its parent gets up to three times the share of one that
-  fell back. Take this when you expect gradual refinement to be the shape of the win, and it is
-  the one worth reaching for first: rank sees the score and the formula sees the visit count, so
-  a node on a climbing lineage and one on a stalled lineage at the same score are invisible to
-  everything else.
-- **`frontier`** — a parent already forked five times yields to one never forked. Take this when
-  you would rather see several distinct approaches tried than one refined, typically on a large
-  search space with plenty of expansions.
-- **`viable`** — a node whose program did not run keeps a tenth of its share. Take this when you
-  expect a lot of candidates to crash: writing from scratch, an unfamiliar library, a strict
-  contract. It is narrow on purpose — a dead node already ranks near the bottom, so this only
-  bites in a run where so many candidates hard-crash that the merely-broken ones drift into the
-  middle of the ordering.
+  fell back. The best mechanical factor: rank sees the score and the formula sees the visit
+  count, so a node on a climbing lineage and one on a stalled lineage at the same score are
+  invisible to everything else.
+- **`frontier`** — a parent already forked five times yields to one never forked. For when you
+  would rather see several distinct approaches tried than one refined.
+- **`viable`** — a node whose program did not run keeps a tenth of its share. For when you expect
+  a lot of candidates to crash. Narrow on purpose: a dead node already ranks near the bottom, so
+  this only bites in a run where so many candidates hard-crash that the merely-broken ones drift
+  into the middle of the ordering.
 
 An unknown factor name is refused, not ignored, so a typo cannot quietly give you the uniform
 prior and a run that answered a different question.
 
+### Writing `priorRubric`
+
+This is the one place in the whole design where you get to say something about the *search* that
+the scoring cannot say. The scoring answers "is this candidate better?" — measured, on held-out
+shards, and it is the only thing that decides the reported number. The rubric answers a different
+question: **"is there more to get by going further down this path?"** A candidate can score well
+and be a dead end; another can score no better than its parent and be one step from the win.
+
+Write two or three sentences, about *this* task:
+
+1. **What a good next step looks like here.** Not "well-written code" — that is true of any task.
+   In a compression search: builds on the mechanism already there rather than replacing it. In a
+   parameter fit: moves the fit off a local optimum rather than tightening one already found.
+2. **What a dead end looks like here.** The specific one you expect. "Bolts on special cases for
+   individual inputs." "Trades accuracy for a speed the scoring does not reward."
+3. Nothing about how to write Python, and nothing that repeats the scoring.
+
+**Two things make this safe to get wrong.** The rating steers where the next attempt starts and
+nothing else — it cannot move the number the run reports, because that comes from the sandbox on
+held-out shards. And the rating is bounded, so a confident and wrong judgement costs a subtree
+budget rather than closing it off. So write the rubric you actually believe, and read the result;
+a run whose ratings were all high and whose scores went nowhere is telling you the rubric
+measured enthusiasm.
+
+**It is still yours to justify.** Reach for `judged` when you know something about the task that
+the tree cannot see — a mechanism worth preserving, a failure mode you expect. When you do not,
+`improvement` is free and honest, and the uniform default is not a bad answer.
+
+> **The trap.** A rubric that names an algorithm — "reward switching to LZ77" — is step 1's
+> mistake in a new place: the human picking the approach and leaving the run to tune it. Say what
+> *kind* of step is promising, never which one to take.
+
 > **Checkpoint 3.** Show the shape in a few lines: what one unit is, how much is held out, how
 > many expansions with how many workers, and roughly what that costs in time and model calls.
 > Mention `search` only if you set it, in one line saying why — "scoring is coarse, so spread the
-> budget" — and leave it out of the glance entirely when you did not.
+> budget" — and leave it out of the glance entirely when you did not. If you set `priorRubric`,
+> show it in full: it is a sentence you wrote about their problem, and it is the one part of the
+> tuning they are better placed than you to correct.
 > This is the last point before real money is spent — say so plainly, and default to the smaller
 > option when unsure.
 

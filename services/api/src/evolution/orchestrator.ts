@@ -119,6 +119,7 @@ function searchOptions(goal: EvolveGoal): { options?: Record<string, unknown> } 
   const options: Record<string, unknown> = {};
   if (goal.search?.cPuct !== undefined) options.c_puct = goal.search.cPuct;
   if (goal.search?.prior?.length) options.prior = goal.search.prior;
+  if (goal.search?.priorRubric?.trim()) options.prior_rubric = goal.search.priorRubric;
   return Object.keys(options).length ? { options } : {};
 }
 

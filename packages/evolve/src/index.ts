@@ -166,18 +166,32 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
         maximum: 10, minimum: 0.01,
       })),
       prior: Type.Optional(Type.Array(Type.Union([
-        Type.Literal("viable"), Type.Literal("frontier"), Type.Literal("improvement"),
+        Type.Literal("judged"), Type.Literal("viable"),
+        Type.Literal("frontier"), Type.Literal("improvement"),
       ]), {
         description: "Which nodes get the exploration budget, before the rank is read. Omit "
-          + "for the uniform default. viable: a node whose program did not run keeps a tenth "
-          + "of its share — worth asking for when candidates are expected to crash often. "
-          + "frontier: a parent already forked many times yields to one never forked — for "
-          + "when you want several distinct approaches tried rather than one refined. "
-          + "improvement: a node that beat its parent gets up to three times the share of one "
-          + "that fell back — the only one carrying something the formula cannot already see, "
-          + "since rank and visits cannot tell a climbing lineage from a stalled one at equal "
-          + "score. They multiply, so asking for two composes.",
-        maxItems: 3,
+          + "for the uniform default. judged: YOU decide what promising means — the model "
+          + "reads each candidate against priorRubric and rates how much further there is to "
+          + "gain down that path, spanning a factor of seven. This is the one that can carry "
+          + "knowledge about the task; the other three are things the tree works out for "
+          + "itself. Costs one short call per candidate and REQUIRES priorRubric. "
+          + "viable: a node whose program did not run keeps a tenth of its share — worth "
+          + "asking for when candidates are expected to crash often. frontier: a parent "
+          + "already forked many times yields to one never forked — for when you want several "
+          + "distinct approaches tried rather than one refined. improvement: a node that beat "
+          + "its parent gets up to three times the share of one that fell back, which rank "
+          + "and visits cannot see. They multiply, so asking for two composes.",
+        maxItems: 4,
+      })),
+      priorRubric: Type.Optional(Type.String({
+        description: "What the judged prior rewards, in your own words — required by it and "
+          + "ignored without it. Write it about THIS task: \"a promising direction\" is not "
+          + "the same thing in a compression search (keep the mechanism, extend it) and a "
+          + "parameter fit (get off the local optimum). Say what a good next step looks like "
+          + "and what a dead end looks like. It steers where the next attempt starts and "
+          + "CANNOT move the score the run reports — that comes from the sandbox on held-out "
+          + "shards — so being wrong here spends budget, it does not inflate a result.",
+        maxLength: 4_000, minLength: 1,
       })),
     }, {
       description: "How the search spends its exploration budget. Omit unless something about "

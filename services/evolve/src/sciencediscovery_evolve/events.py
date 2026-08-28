@@ -181,6 +181,7 @@ def expanded(
     code_chars: int | None = None,
     error: str | None = None,
     iteration: int | None = None,
+    prior_score: float | None = None,
     worker: int | None = None,
 ) -> dict[str, Any]:
     event: dict[str, Any] = {
@@ -197,6 +198,7 @@ def expanded(
         ("codeChars", code_chars),
         ("error", error),
         ("iteration", iteration),
+        ("priorScore", None if prior_score is None else round(float(prior_score), 4)),
         ("worker", worker),
     ):
         if value is not None:

@@ -609,6 +609,35 @@ test("the search tuning reaches the sidecar, renamed into its options bag", asyn
   assert.deepEqual(options, { c_puct: 0.4, prior: ["viable", "improvement"] });
 });
 
+test("the judged prior's rubric travels with it, snake_cased for the engine", async () => {
+  // The rubric is the whole content of a judged prior — the factor name alone
+  // says nothing about what "promising" means for this task. It crosses the
+  // same five hops as the rest of the tuning and gets renamed on the way, so it
+  // has the same silent-drop failure the factor list has, with more to lose:
+  // the engine refuses `judged` without a rubric, so losing it turns a designed
+  // run into a refusal rather than a quiet default.
+  const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
+  after(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "prior-rubric", {
+    cas: csvCas(40),
+  });
+
+  const run = await orchestrator.start({
+    goal: {
+      ...measuredGoal(),
+      baselineProgramCas: `sha256:${"c".repeat(64)}`,
+      search: { prior: ["judged"], priorRubric: "Reward keeping the existing mechanism." },
+    },
+    sessionId: "s1",
+  });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to settle");
+
+  assert.deepEqual(sidecar.requests()[0]!.options, {
+    prior: ["judged"],
+    prior_rubric: "Reward keeping the existing mechanism.",
+  });
+});
+
 test("a goal that says nothing about tuning sends no options at all", async () => {
   // Absent has to stay absent rather than becoming this side's opinion of what
   // upstream's defaults are — two places holding the same default is how they
