@@ -298,16 +298,22 @@ def make_propose(
 
 
 def _tail(text: str, limit: int) -> str:
-    """The **end** of a failure reason, not the beginning.
+    """The failure in one line: the exception, without the stack that reached it.
 
     A traceback's useful half is its last line — the exception and what it says.
-    Everything before it is the call stack that got there, which is longer and
-    which the reader can already guess. Taking the head is what a plain slice
-    does, and on a live run it produced exactly the wrong cut: the log line
-    ended mid-path, three frames in, one token before the sentence that said
-    what had gone wrong.
+    Everything before it is the call stack, which is longer and which the reader
+    can already guess. Two wrong cuts before this one, both on live runs: a
+    plain head slice ended mid-path three frames in, one token before the
+    sentence that said what had gone wrong; then a 300-character tail kept the
+    whole traceback, and six of them turned the run panel into a wall of stack
+    frames.
+
+    The frames are not lost. The repair prompt gets the error untrimmed, which
+    is the reader that needs a file and a line, and the node carries it too.
+    This is for the log stream, where one line per event is the whole format.
     """
-    text = text.strip()
+    lines = [line for line in (text or "").strip().splitlines() if line.strip()]
+    text = lines[-1].strip() if lines else ""
     if len(text) <= limit:
         return text
     return "…" + text[-limit:]

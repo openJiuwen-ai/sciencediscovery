@@ -931,6 +931,35 @@ def test_a_failed_candidate_gets_one_repair_on_its_own_error() -> None:
     assert "IndexError" in repairs[0]["why"]
 
 
+def test_the_repair_log_line_carries_the_exception_not_the_stack() -> None:
+    """One line per log event, or the panel becomes a wall of stack frames.
+
+    Watched live: six repairs on one run, each log line 245-388 characters over
+    4-8 lines, and the only part a reader acts on was the last sentence. The
+    frames are not lost — the repair prompt gets the error untrimmed, which is
+    the reader that needs a file and a line, and the node carries it too.
+    """
+    from sciencediscovery_evolve.vendor.puct.search import _tail
+
+    traceback = (
+        'shard 2: Traceback (most recent call last):\n'
+        '  File "evaluate.py", line 66, in main\n'
+        '    blob = compress(text)\n'
+        '  File "/tmp/evolve-script-x/candidate.py", line 84, in compress\n'
+        '    bpe_data.append(pair[0])\n'
+        'ValueError: byte must be in range(0, 256)'
+    )
+    assert _tail(traceback, 300) == "ValueError: byte must be in range(0, 256)"
+
+    # A semantic failure has no stack and is already one line: unchanged.
+    assert _tail("round trip not lossless on 72 document(s)", 300) == \
+        "round trip not lossless on 72 document(s)"
+    assert _tail("", 300) == ""
+    # And a single line longer than the cap still keeps its end, where the
+    # exception's own words are.
+    assert _tail("ValueError: " + "x" * 400, 20).endswith("x" * 20)
+
+
 def test_the_check_reads_a_rollout_shard_and_never_the_held_out_ones() -> None:
     """The reason the loop moved off the merger, and the more important half.
 
