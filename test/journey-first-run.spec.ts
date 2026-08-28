@@ -134,7 +134,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
 
     await journey.step(
       "在模型注册表添加自定义服务商并手动登记模型",
-      "注册表以服务商为中心：添加是“下拉+自定义服务商按钮”而不再是预置卡墙，编辑器只在显式选择后才出现；填写本地端点与令牌、选 DeepSeek 变种与手动模型列表后，用行内手动表单登记模型并选最强思考；保存后行内显示已添加计数，重开设置后仍在。",
+      "注册表以服务商为中心：添加是“下拉+自定义服务商按钮”而不再是预置卡墙，编辑器只在显式选择后才出现；填写本地端点与令牌、选 DeepSeek 变种后保存（模型列表策略跟随基础接口，不再由用户选择）；行展开后点「添加模型」才出现手动表单，登记模型；保存后行内显示已添加计数，重开设置后仍在。",
       async () => {
         await page.getByRole("button", { name: /^系统设置/ }).click();
         const settings = page.getByRole("dialog", { name: "系统设置" });
@@ -160,11 +160,13 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         const savedProvider = await (await providerSave).json() as { id: string; name: string };
         providerId = savedProvider.id;
         expect(savedProvider.name).toBe(providerName);
-        // 保存后自动展开该服务商并预载；行内手动表单登记模型并选最强思考。
+        // 保存后自动展开该服务商并预载。手动表单收在「添加模型」后面，先点开
+        // 再填；添加不再写思考默认值，新档案落在省略思考参数的模型默认上。
         const row = settings.locator(".provider-row").filter({ hasText: providerName });
         await expect(row.locator(".provider-row-detail")).toBeVisible();
+        await row.locator(".provider-add-model-toggle").click();
+        await expect(settings.getByLabel("思考默认值（可选）")).toHaveCount(0);
         await settings.getByLabel("手动模型 ID").fill(stub.model);
-        await settings.getByLabel("思考默认值（可选）").selectOption("effort:max");
         const modelResponsePromise = page.waitForResponse((response) =>
           response.request().method() === "POST" && new URL(response.url()).pathname
             === `/api/providers/${providerId}/models`);

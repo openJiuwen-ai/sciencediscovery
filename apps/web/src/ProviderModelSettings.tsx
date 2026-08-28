@@ -234,14 +234,26 @@ export function mergeProviderModelRows(
   }
   for (const entry of listingModels ?? []) {
     const existing = byId.get(entry.id);
-    byId.set(entry.id, existing
-      ? {
-          ...entry,
-          catalog: entry.catalog ?? existing.catalog,
-          displayName: entry.displayName ?? existing.displayName,
-          profileId: entry.profileId ?? existing.profileId,
-        }
-      : entry);
+    if (!existing) {
+      byId.set(entry.id, entry);
+      continue;
+    }
+    // The listing describes the vendor's model; the profile row carries what
+    // this installation decided about it. Neither replaces the other. A fact
+    // the user stated has to survive the moment a listing row for the same id
+    // arrives — otherwise adding a model to a provider that already listed its
+    // models would blank the hover card until the next refresh.
+    const vision = existing.remote?.vision ?? entry.remote?.vision;
+    const remote = { ...entry.remote, ...(vision !== undefined ? { vision } : {}) };
+    byId.set(entry.id, {
+      ...entry,
+      catalog: entry.catalog ?? existing.catalog,
+      displayName: entry.displayName ?? existing.displayName,
+      profileId: entry.profileId ?? existing.profileId,
+      ...(Object.keys(remote).length ? { remote } : {}),
+      // The saved profile is the fresher copy: it is what the add just wrote.
+      ...(existing.user ?? entry.user ? { user: existing.user ?? entry.user } : {}),
+    });
   }
   return sortProviderModels([...byId.values()]);
 }
@@ -333,7 +345,9 @@ function ModelRowPopup({
   const thinking = resolved.thinkingSupported ?? model.catalog?.thinking?.supported;
   const efforts = model.user?.thinkingEfforts ?? model.catalog?.thinking?.efforts;
   const pricing = resolved.pricing;
-  const origin = resolved.origins.contextWindow === "user" || resolved.origins.pricing === "user"
+  // Any fact the user stated makes this card theirs, not just a context window
+  // or a price; the conversation picker already reads it this way.
+  const origin = Object.values(resolved.origins).includes("user")
     ? t("providers.facts.originUser")
     : model.remote ? t("providers.models.remote") : t("providers.models.catalog");
   return <div className="provider-model-popup" role="tooltip" {...(style ? { style } : {})}>

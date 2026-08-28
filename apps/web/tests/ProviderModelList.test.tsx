@@ -141,6 +141,42 @@ test("inline table unions added profiles with the listing, added first, no dupli
   assert.equal(m2.displayName, "Model m2");
 });
 
+test("a listing row cannot blank the facts the user just stated", () => {
+  // Adding a model to a provider that already pulled a listing inserts a bare
+  // stub for it. Before, that stub replaced the profile row and the hover card
+  // went all-unknown with the source reading "models.dev database" until the
+  // next refresh, even though the API had the facts saved.
+  const p = provider("p1", "Custom");
+  const stated = {
+    ...profile("m1", "p1"),
+    facts: { contextWindow: 123_456, pricing: { currency: "USD" as const, input: 1, output: 2 } },
+    vision: true,
+  };
+
+  const rows = mergeProviderModelRows(
+    // The stub `addModel` prepends, plus a real listing row for another model.
+    [entry("m1-id", "m1"), entry("other")],
+    [stated],
+    p,
+  );
+  const row = rows.find((model) => model.id === "m1-id")!;
+  assert.deepEqual(row.user, stated.facts, "what the user stated survives the listing row");
+  assert.equal(row.remote?.vision, true, "and so does the vision decision saved on the profile");
+  assert.equal(row.profileId, "m1");
+
+  // A listing that reports its own facts still supplies them; only the
+  // user-stated ones are protected.
+  const withRemote = mergeProviderModelRows(
+    [{ id: "m1-id", profileId: "m1", remote: { contextWindow: 8_000, vision: false } }],
+    [stated],
+    p,
+  );
+  const remoteRow = withRemote.find((model) => model.id === "m1-id")!;
+  assert.equal(remoteRow.remote?.contextWindow, 8_000, "the vendor's own numbers still come through");
+  assert.equal(remoteRow.remote?.vision, true, "but not over a vision the user decided");
+  assert.deepEqual(remoteRow.user, stated.facts);
+});
+
 function provider(id: string, name: string, presetId?: "dashscope" | "zhipu" | "zai"): ModelProvider {
   return {
     apiProtocol: "openai-chat-completions",
