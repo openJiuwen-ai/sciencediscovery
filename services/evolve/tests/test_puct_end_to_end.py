@@ -15,7 +15,7 @@
 """One real search, over HTTP, with only the model faked.
 
 Everything else is the shipping path: the FastAPI route, the event stream, the
-ERA tree, the mutation prompt, the AST gate, the real sandbox, the vendored
+PUCT tree, the mutation prompt, the AST gate, the real sandbox, the vendored
 runner, pandas inside it, the metric computed outside it, the scorecard and
 `DefaultAcceptance`. The model is a local HTTP server returning a canned
 program, because a test that needed a provider key would not run.
@@ -38,7 +38,7 @@ from fastapi.testclient import TestClient
 
 from sciencediscovery_evolve.measurement import GATE, ROLLOUT, TEST, missing_candidate_runtime
 from sciencediscovery_evolve.server import app
-from sciencediscovery_evolve.vendor.era.sandbox import detect_local_capability
+from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 
 # The baseline predicts the mean; the candidate learns the (exact) linear rule.
 BASELINE = '''"""基线：一律预测训练集均值。"""
@@ -208,7 +208,7 @@ def test_a_real_search_improves_on_its_baseline(tmp_path: Path, model_server: st
     assert candidate["score"] > baseline
 
     merged = of("merged")[0]
-    # Under ERA "accepted" is "became the best node": there is no per-candidate
+    # Under PUCT "accepted" is "became the best node": there is no per-candidate
     # statistical gate, the tree's rank ordering is the selection pressure.
     assert merged["accepted"] is True, merged["reason"]
 

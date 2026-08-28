@@ -54,7 +54,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence
 
-from .vendor.era.program import available_imports_text
+from .vendor.puct.program import available_imports_text
 
 #: The closing instruction every code-shaped template ends on.
 #:
@@ -70,7 +70,7 @@ from .vendor.era.program import available_imports_text
 #:
 #: The asymmetry is the part the model was never told: a candidate that does not
 #: run scores zero, which is *worse than leaving the parent alone*, and the
-#: expansion is spent either way. Upstream ERA gets away without saying this
+#: expansion is spent either way. Upstream gets away without saying this
 #: because its task is a twenty-line sklearn pipeline, where a rewrite is cheap
 #: and rarely broken; a codec is not.
 _HOW_TO_CHANGE = """## 怎么改

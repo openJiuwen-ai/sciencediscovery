@@ -49,7 +49,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .candidates import run_candidate
 from .logging_config import get_logger
-from .vendor.era.sandbox import SandboxCapability
+from .vendor.puct.sandbox import SandboxCapability
 
 log = get_logger("measurement")
 
@@ -395,7 +395,7 @@ def missing_candidate_runtime() -> List[str]:
 def default_runner_argv() -> List[str]:
     """The vendored runner, invoked as a file so the sandbox needs no package
     path: ``-I`` in the sandbox command already strips this process's."""
-    from .vendor.era import runner
+    from .vendor.puct import runner
 
     return [str(Path(runner.__file__).resolve())]
 

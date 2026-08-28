@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 from .logging_config import get_logger
-from .vendor.era.program import validate_source
-from .vendor.era.sandbox import (
+from .vendor.puct.program import validate_source
+from .vendor.puct.sandbox import (
     SandboxCapability,
     SandboxUnavailable,
     cpu_seconds_for,

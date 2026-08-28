@@ -39,7 +39,7 @@ function temporaryDataDir(name: string): string {
 
 function goal(expansions = 2, budget: Partial<EvolveGoal["budget"]> = {}): EvolveGoal {
   return {
-    algorithm: "era",
+    algorithm: "puct",
     baselineProgramCas: "sha256:baseline",
     budget: {
       candidateTimeoutSeconds: 60, expansions,
@@ -197,7 +197,7 @@ async function waitFor(predicate: () => Promise<boolean> | boolean, label: strin
 test("a full run is persisted, published and settled", async () => {
   const sidecar = await startFakeSidecar({
     events: [
-      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
       { baselineScore: 0.5, nodeIndex: 0, type: "seeded" },
       EXPANDED,
       { cents: 21, tokens: 2100, type: "cost" },
@@ -235,7 +235,7 @@ test("a full run is persisted, published and settled", async () => {
 test("stop is carried through to the sidecar and leaves a resumable watermark", async () => {
   const sidecar = await startFakeSidecar({
     events: [
-      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
       { baselineScore: 0.5, nodeIndex: 0, type: "seeded" },
       EXPANDED,
     ],
@@ -262,7 +262,7 @@ test("stop is carried through to the sidecar and leaves a resumable watermark", 
 
 test("a stream that ends without a terminal event fails the run rather than hanging", async () => {
   const sidecar = await startFakeSidecar({
-    events: [{ algorithm: "era", scorecardHash: "sha256:card", type: "search_started" }],
+    events: [{ algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" }],
   });
   after(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-truncated");
@@ -302,7 +302,7 @@ test("a replayed record is neither re-logged nor re-published", async () => {
     `${JSON.stringify({ createdAt: "2026-08-19T00:00:00.000Z", event, sequence })}\n`;
   const sidecar = await startFakeSidecar({
     raw: [
-      record(1, { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" }),
+      record(1, { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" }),
       record(2, EXPANDED),
       record(2, EXPANDED),  // the sidecar reconnected and replayed its buffer
       record(3, FINISHED("succeeded", 1)),
@@ -336,7 +336,7 @@ test("runs left running by a previous process are settled at boot", async () => 
 test("a token gate trips the run and says which budget ran out", async () => {
   const sidecar = await startFakeSidecar({
     events: [
-      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
       { cents: 1, tokens: 5_000, type: "cost" },
     ],
     holdUntilStop: true,
@@ -357,7 +357,7 @@ test("a token gate trips the run and says which budget ran out", async () => {
 test("a cost gate trips the run", async () => {
   const sidecar = await startFakeSidecar({
     events: [
-      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
       { cents: 900, tokens: 10, type: "cost" },
     ],
     holdUntilStop: true,
@@ -374,7 +374,7 @@ test("a wall-clock gate trips a search that has gone quiet", async () => {
   // No cost events at all: the run emits nothing after the first event, which
   // is exactly the case a per-event check would never catch.
   const sidecar = await startFakeSidecar({
-    events: [{ algorithm: "era", scorecardHash: "sha256:card", type: "search_started" }],
+    events: [{ algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" }],
     holdUntilStop: true,
   });
   after(() => sidecar.close());
@@ -388,7 +388,7 @@ test("a wall-clock gate trips a search that has gone quiet", async () => {
 test("a run inside its budget is untouched", async () => {
   const sidecar = await startFakeSidecar({
     events: [
-      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
       { cents: 3, tokens: 300, type: "cost" },
       FINISHED("succeeded", 1),
     ],
@@ -403,7 +403,7 @@ test("a run inside its budget is untouched", async () => {
 
 test("a user stop is still reported as a stop, not as a budget", async () => {
   const sidecar = await startFakeSidecar({
-    events: [{ algorithm: "era", scorecardHash: "sha256:card", type: "search_started" }],
+    events: [{ algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" }],
     holdUntilStop: true,
   });
   after(() => sidecar.close());
@@ -512,7 +512,7 @@ test("a measured run is staged before the sidecar is asked to start", async () =
   assert.ok(String(sent.dataset_dir).endsWith("/dataset"), "the staged directory is handed over");
   assert.equal(sent.baseline_code, "def train_and_predict(a, b): ...");
   // No engine pin on this goal, so the algorithm is the engine.
-  assert.equal(sent.engine, "era");
+  assert.equal(sent.engine, "puct");
 
   const manifest = JSON.parse(
     await readFile(resolve(String(sent.dataset_dir), "manifest.json"), "utf-8"),
@@ -582,6 +582,52 @@ function judgedGoal(): EvolveGoal {
   };
 }
 
+test("the search tuning reaches the sidecar, renamed into its options bag", async () => {
+  // Five processes stand between the drafting agent's `search` field and the
+  // tree that reads it, and every hop is optional-shaped: the goal field, the
+  // options bag, the engine's own `options.get`. A value dropped anywhere along
+  // the way runs the search under the defaults and reports success, so the
+  // question "did the prior help?" comes back answered about a run that never
+  // used one. This is the hop that has a name change in it.
+  const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
+  after(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "search-tuning", {
+    cas: csvCas(40),
+  });
+
+  const run = await orchestrator.start({
+    goal: {
+      ...measuredGoal(),
+      baselineProgramCas: `sha256:${"c".repeat(64)}`,
+      search: { cPuct: 0.4, prior: ["viable", "improvement"] },
+    },
+    sessionId: "s1",
+  });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to settle");
+
+  const options = sidecar.requests()[0]!.options as Record<string, unknown>;
+  assert.deepEqual(options, { c_puct: 0.4, prior: ["viable", "improvement"] });
+});
+
+test("a goal that says nothing about tuning sends no options at all", async () => {
+  // Absent has to stay absent rather than becoming this side's opinion of what
+  // upstream's defaults are — two places holding the same default is how they
+  // drift apart.
+  const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
+  after(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "search-tuning-absent", {
+    cas: csvCas(40),
+  });
+
+  const run = await orchestrator.start({
+    goal: { ...measuredGoal(), baselineProgramCas: `sha256:${"c".repeat(64)}` },
+    sessionId: "s1",
+  });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to settle");
+
+  assert.deepEqual(sidecar.requests()[0]!.options, {});
+});
+
 test("a judged run is sent a rubric and its own model token, and no dataset", async () => {
   const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
   after(() => sidecar.close());
@@ -631,7 +677,7 @@ test("a finished run hands its winner to whatever saves results", async () => {
   // different program, and one that has never been scored.
   const sidecar = await startFakeSidecar({
     events: [
-      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
       { baselineScore: 0.5, codeHash: "sha256:seed", nodeIndex: 0, type: "seeded" },
       { codeHash: "sha256:winner", depth: 1, nodeIndex: 1, parentIndex: 0,
         score: 0.83, type: "expanded", valid: true },
@@ -663,7 +709,7 @@ test("nothing is published when the seed won", async () => {
   // told in version numbers.
   const sidecar = await startFakeSidecar({
     events: [
-      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
       { baselineScore: 0.5, codeHash: "sha256:seed", nodeIndex: 0, type: "seeded" },
       { codeHash: "sha256:worse", depth: 1, nodeIndex: 1, parentIndex: 0,
         score: 0.2, type: "expanded", valid: true },
@@ -688,7 +734,7 @@ test("a run that settled stays settled when publishing throws", async () => {
   // the artifact store was busy would lose the far more valuable fact.
   const sidecar = await startFakeSidecar({
     events: [
-      { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
       { baselineScore: 0.5, nodeIndex: 0, type: "seeded" },
       { codeHash: "sha256:winner", depth: 1, nodeIndex: 1, parentIndex: 0,
         score: 0.83, type: "expanded", valid: true },
@@ -707,15 +753,15 @@ test("a run that settled stays settled when publishing throws", async () => {
   assert.equal((await store.readRun(run.id))!.status, "succeeded");
 });
 
-test("an interrupted ERA run is not told it can resume", async () => {
-  // The engine refuses an ERA resume outright: the tree would have to be
+test("an interrupted PUCT run is not told it can resume", async () => {
+  // The engine refuses a PUCT resume outright: the tree would have to be
   // rebuilt from the event log first, and without that a new node reuses an
   // index the graph already spent. The banner promised one anyway, so a user
   // who lost fifteen candidates to a control-plane restart went looking for a
   // resume that does not exist.
   const sidecar = await startFakeSidecar({ events: [] });
   after(() => sidecar.close());
-  const { orchestrator, store } = await harness(sidecar.url, "adopt-era");
+  const { orchestrator, store } = await harness(sidecar.url, "adopt-puct");
 
   const run = await store.createRun({ goal: goal(), sessionId: "s1" });
   await store.patchRun(run.id, { status: "running" });
@@ -723,6 +769,6 @@ test("an interrupted ERA run is not told it can resume", async () => {
 
   const adopted = await store.readRun(run.id);
   assert.equal(adopted?.status, "failed");
-  assert.match(adopted!.error!, /ERA 不支持续跑/);
+  assert.match(adopted!.error!, /PUCT 不支持续跑/);
   assert.doesNotMatch(adopted!.error!, /可从断点续跑/);
 });

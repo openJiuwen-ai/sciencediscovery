@@ -54,9 +54,9 @@ from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional,
 from .logging_config import get_logger
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
-from .vendor.era.domain import Domain
-from .vendor.era.program import Program
-from .vendor.era.tree import finite as _finite
+from .vendor.puct.domain import Domain
+from .vendor.puct.program import Program
+from .vendor.puct.tree import finite as _finite
 
 log = get_logger("judge")
 

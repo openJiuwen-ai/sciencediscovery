@@ -79,7 +79,7 @@ _SCHEMA = [
     "CREATE INDEX IF NOT EXISTS FOR (n:Claim)        ON (n.session_id)",
     "CREATE INDEX IF NOT EXISTS FOR (n:Claim)        ON (n.content_hash)",
     # /evolve search graph. SearchNode is keyed on (search_id, node_index): the
-    # insertion ordinal is the unified key for both algorithms — ERA's upstream
+    # insertion ordinal is the unified key for both algorithms — the PUCT tree's
     # node index already is one, and OpenEvolve's archive history append order
     # is one too (its own program_id rides along as a property).
     "CREATE CONSTRAINT IF NOT EXISTS FOR (n:SearchRun)  REQUIRE n.search_id IS UNIQUE",

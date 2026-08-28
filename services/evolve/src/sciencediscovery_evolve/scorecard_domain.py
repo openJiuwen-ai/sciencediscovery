@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The user's scorecard, as an ERA :class:`Domain`.
+"""The user's scorecard, as a PUCT :class:`Domain`.
 
 Upstream cut this seam so a second task could run on `futs.search` without a
 second copy of the loop: a domain is "the four things the search cannot invent —
@@ -29,7 +29,7 @@ every criterion produces higher-is-better before it is weighed — so the
 aggregate drops straight in. A domain that handed the tree a raw RMSE would have
 the search climbing away from the goal, and nothing downstream would say so.
 
-**A constraint violation is `valid=False`, not a low score.** Under ERA there is
+**A constraint violation is `valid=False`, not a low score.** Under PUCT there is
 no per-candidate statistical gate to hang a veto on: every candidate becomes a
 node, the tree's rank ordering is the whole of the selection pressure, and the
 ledger only ever publishes the best node. So an illegal candidate has to be the
@@ -48,10 +48,10 @@ from .logging_config import get_logger
 from .measurement import Dataset, Measurement, measure_shards, shard_indices, TEST
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
-from .vendor.era.domain import Domain
-from .vendor.era.program import Program
-from .vendor.era.sandbox import SandboxCapability
-from .vendor.era.tree import finite as _finite
+from .vendor.puct.domain import Domain
+from .vendor.puct.program import Program
+from .vendor.puct.sandbox import SandboxCapability
+from .vendor.puct.tree import finite as _finite
 
 log = get_logger("domain")
 

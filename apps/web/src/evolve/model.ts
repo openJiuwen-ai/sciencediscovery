@@ -58,7 +58,7 @@ export interface EvolveCandidateView {
    *  search sees, worse on what decides. */
   gateScore?: number;
   rolloutScore?: number;
-  /** era: the PUCT value at the moment this node was chosen. */
+  /** puct: the PUCT value at the moment this node was chosen. */
   selectedPuct?: number;
   valid: boolean;
   visits: number;

@@ -26,7 +26,7 @@ be able to read the token for its own run. Passing credentials per call is the
 whole point, so the request is built here.
 
 What *is* reused rather than rebuilt: `agentdescent.agents.Usage` counts the
-tokens (see `_Usage` in `era_engine.py`), and `with_retries` wraps this.
+tokens (see `_Usage` in `puct_engine.py`), and `with_retries` wraps this.
 """
 
 from __future__ import annotations

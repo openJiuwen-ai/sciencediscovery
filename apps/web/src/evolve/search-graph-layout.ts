@@ -36,7 +36,7 @@ import type { EvolveCandidateView, EvolveRunView } from "./model.js";
  *  lives here rather than in the stylesheet — the same reason `NODE_COLORS`
  *  does in the memory-graph canvas. */
 export const SEARCH_COLORS = {
-  /** Ramp from worst-ranked to best-ranked. Exploitation in ERA is a *rank*,
+  /** Ramp from worst-ranked to best-ranked. Exploitation in PUCT is a *rank*,
    *  not a value, so the fill follows rank too: a metric's units never change
    *  what the picture means. */
   rank: ["#e2e8f0", "#bfdbfe", "#93c5fd", "#60a5fa", "#3b82f6", "#2563eb"],
@@ -118,7 +118,7 @@ export function rankScores(candidates: readonly EvolveCandidateView[]): Map<numb
 /**
  * Position every candidate.
  *
- * ERA: `x` is depth, `y` is the candidate's order among the nodes at that depth.
+ * PUCT: `x` is depth, `y` is the candidate's order among the nodes at that depth.
  * OpenEvolve: `x` is still depth, but each island gets its own horizontal band,
  * because lineage there is a forest and interleaving the islands would draw
  * crossings that mean nothing.

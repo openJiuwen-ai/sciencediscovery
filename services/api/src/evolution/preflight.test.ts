@@ -39,7 +39,7 @@ const MODEL: ModelProfile = {
 
 function goal(overrides: Partial<EvolveGoal> = {}): EvolveGoal {
   return {
-    algorithm: "era",
+    algorithm: "puct",
     baselineProgramCas: "sha256:baseline",
     budget: {
       candidateTimeoutSeconds: 60, expansions: 6, maxCostCents: 500,

@@ -201,7 +201,7 @@ test("图谱的 evolve 节点展示搜索内容并能跳到演进面板", () => 
   };
   const searchRun = {
     extra: {
-      algorithm: "era", baseline_score: 0.6626, best_test_score: 0.7666,
+      algorithm: "puct", baseline_score: 0.6626, best_test_score: 0.7666,
       candidates: 17, search_id: "23601271-4db3-4774-bf69-b2c8bb9b81e5",
       status: "succeeded", tokens: 56834,
     },
@@ -248,7 +248,7 @@ test("图谱的 evolve 节点展示搜索内容并能跳到演进面板", () => 
 });
 
 test("evolve 相关节点的标题要能读", () => {
-  // Two circles both reading "evolve/e…" and one reading just "era" told the
+  // Two circles both reading "evolve/e…" and one reading just "puct" told the
   // user nothing: which artifact the search started from, which it produced,
   // and what the mystery word meant.
   assert.equal(
@@ -258,13 +258,13 @@ test("evolve 相关节点的标题要能读", () => {
   );
   assert.equal(
     graphNodeName({ label: "SearchRun", id: "r1",
-      extra: { algorithm: "era", best_test_score: 0.766605 } }),
-    "era · 0.77",
+      extra: { algorithm: "puct", best_test_score: 0.766605 } }),
+    "puct · 0.77",
   );
   // Still running: no score yet, the algorithm alone.
   assert.equal(
-    graphNodeName({ label: "SearchRun", id: "r2", extra: { algorithm: "era" } }),
-    "era",
+    graphNodeName({ label: "SearchRun", id: "r2", extra: { algorithm: "puct" } }),
+    "puct",
   );
 });
 

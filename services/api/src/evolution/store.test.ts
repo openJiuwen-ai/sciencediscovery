@@ -13,8 +13,8 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { appendFile, mkdir, readFile, rm, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import type { EvolveEvent, EvolveGoal } from "@sciencediscovery/schema";
@@ -27,7 +27,7 @@ function temporaryDataDir(name: string): string {
 
 function goal(overrides: Partial<EvolveGoal> = {}): EvolveGoal {
   return {
-    algorithm: "era",
+    algorithm: "puct",
     baselineProgramCas: "sha256:baseline",
     budget: {
       candidateTimeoutSeconds: 60,
@@ -92,6 +92,28 @@ test("initialize creates every subdirectory and is idempotent", async () => {
   }
 });
 
+test("a run stored under the old algorithm name still reads back", async () => {
+  // 39 runs on the deployed host were written while the algorithm was called
+  // `"era"`, 66 occurrences across their records. Nothing rewrites them, so the
+  // read path is the only thing standing between an old run and a panel that
+  // opens empty — and it fails silently, because an unknown algorithm string is
+  // not an error anywhere downstream, it just matches no branch.
+  const dataDir = temporaryDataDir("evolution-legacy-algorithm");
+  const store = new EvolutionStore(dataDir);
+  try {
+    await store.initialize();
+    const run = await store.createRun({ goal: goal(), sessionId: "s1" });
+    const file = join(dataDir, "evolution", "runs", run.id, "run.json");
+    await writeFile(file, (await readFile(file, "utf8")).replaceAll('"puct"', '"era"'));
+
+    const reloaded = await store.readRun(run.id);
+    assert.equal(reloaded?.algorithm, "puct");
+    assert.equal(reloaded?.goal.algorithm, "puct");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("a created run round-trips and starts at the zero watermark", async () => {
   const dataDir = temporaryDataDir("evolution-create");
   const store = new EvolutionStore(dataDir);
@@ -100,7 +122,7 @@ test("a created run round-trips and starts at the zero watermark", async () => {
     const run = await store.createRun({ goal: goal(), sessionId: "s1" });
     assert.equal(run.status, "pending");
     assert.equal(run.lastSeq, 0);
-    assert.equal(run.algorithm, "era");
+    assert.equal(run.algorithm, "puct");
 
     const reloaded = await store.readRun(run.id);
     assert.deepEqual(reloaded, run);
@@ -136,7 +158,7 @@ test("replaying the same batch is a no-op: the log and the watermark do not move
     const run = await store.createRun({ goal: goal(), sessionId: "s1" });
     const batch = makeEventRecords(
       [
-        { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+        { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
         { baselineScore: 0.57, nodeIndex: 0, type: "seeded" },
       ],
       1,

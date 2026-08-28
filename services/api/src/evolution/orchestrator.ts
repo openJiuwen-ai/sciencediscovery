@@ -105,6 +105,23 @@ function judgeSetup(goal: EvolveGoal): { judgeModelId: string; rubricCas: string
 }
 
 /** The engine that measures nothing. See `stage`. */
+/**
+ * `goal.search` in the shape the sidecar's engines read: an `options` bag.
+ *
+ * Renamed on the way across on purpose. `options` is the sidecar's own
+ * catch-all — `c_puct`, `islands`, `async_ratio`, whatever an engine happens to
+ * want, snake_cased and untyped — while this side keeps a typed field that
+ * names only what a proposal may set. Omitted entirely when the goal says
+ * nothing, so an unset tuning is upstream's defaults rather than this side's
+ * opinion about what they should be.
+ */
+function searchOptions(goal: EvolveGoal): { options?: Record<string, unknown> } {
+  const options: Record<string, unknown> = {};
+  if (goal.search?.cPuct !== undefined) options.c_puct = goal.search.cPuct;
+  if (goal.search?.prior?.length) options.prior = goal.search.prior;
+  return Object.keys(options).length ? { options } : {};
+}
+
 const STUB_ENGINE = "stub";
 
 export interface EvolveOrchestratorOptions {
@@ -388,14 +405,14 @@ export class EvolveOrchestrator {
     let adopted = 0;
     for (const run of runs) {
       if (!isEvolveRunActive(run.status)) continue;
-      // What is actually recoverable, per algorithm. ERA refuses a resume
+      // What is actually recoverable, per algorithm. PUCT refuses a resume
       // outright — its tree would have to be rebuilt from the event log first,
       // and without that a new node reuses an index the graph already spent.
       // The banner used to promise "可从断点续跑" to every run regardless, so a
       // user who lost fifteen candidates to a restart went looking for a resume
       // that does not exist.
-      await this.store.finishRun(run.id, "failed", run.algorithm === "era"
-        ? "控制面重启，该次搜索已中断。ERA 不支持续跑（树无法从事件日志重建），"
+      await this.store.finishRun(run.id, "failed", run.algorithm === "puct"
+        ? "控制面重启，该次搜索已中断。PUCT 不支持续跑（树无法从事件日志重建），"
           + "已跑出的候选可以查看，但要继续只能用同样的设计重开一次"
         : "控制面重启，该次搜索已中断；可从断点续跑");
       adopted += 1;
@@ -509,6 +526,7 @@ export class EvolveOrchestrator {
           }
           : {}),
         maxTokensPerCall: run.goal.budget.maxTokensPerCall,
+        ...searchOptions(run.goal),
         ...(run.goal.packages?.length ? { packages: run.goal.packages } : {}),
         ...(rubric ? { rubric } : {}),
         resumeFromSequence: run.lastSeq,

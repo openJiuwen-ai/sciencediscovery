@@ -35,7 +35,7 @@ from sciencediscovery_evolve.measurement import (
     load_dataset,
     measure,
 )
-from sciencediscovery_evolve.vendor.era.sandbox import SandboxCapability
+from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability
 
 
 def criterion(cid: str, metric: str, direction: str = "maximize") -> Dict[str, Any]:
@@ -261,7 +261,7 @@ def test_a_real_candidate_runs_under_the_real_sandbox_and_is_scored(tmp_path: Pa
     identically to a bad candidate, which is exactly the confusion this whole
     layer exists to prevent.
     """
-    from sciencediscovery_evolve.vendor.era.sandbox import detect_local_capability
+    from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 
     from sciencediscovery_evolve.measurement import missing_candidate_runtime
 
@@ -314,7 +314,7 @@ def test_the_candidate_runtime_the_gate_promises_is_checked_by_name() -> None:
     covers, which is the half that can silently drift from the gate.
     """
     from sciencediscovery_evolve.measurement import _CANDIDATE_RUNTIME
-    from sciencediscovery_evolve.vendor.era.program import BLOCKED_IMPORTS
+    from sciencediscovery_evolve.vendor.puct.program import BLOCKED_IMPORTS
 
     third_party = {"numpy", "pandas", "scipy", "sklearn"}
     assert set(_CANDIDATE_RUNTIME) == third_party

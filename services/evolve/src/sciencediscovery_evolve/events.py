@@ -135,7 +135,7 @@ def seeded(
 
     `code_hash` was missing here while `expanded` had it, and the detail view
     diffs a candidate against `parent.codeHash`. Almost every node's parent is
-    the root — a flat tree is ERA's normal shape — so with no hash on the seed
+    the root — a flat tree is this search's normal shape — so with no hash on the seed
     the "before" side was empty and *every* diff rendered as pure addition,
     with nothing ever shown as removed.
     """

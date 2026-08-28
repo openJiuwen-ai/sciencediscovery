@@ -42,9 +42,11 @@ import type {
   EvolveRunStatus,
   EvolveRunSummary,
   EvolveGoal,
+  EvolvePriorFactor,
   EvolveRunProposal,
   EvolveRunProposalResult,
   EvolveScoring,
+  EvolveSearchTuning,
   EvolveSplit,
   ScorecardCriterion,
 } from "@sciencediscovery/schema";
@@ -198,6 +200,34 @@ export async function startProposedRun(
  *
  *  Checked before anything is stored: a half-written proposal that already put
  *  an evaluator in the content store leaves a blob nobody chose. */
+/** Every prior factor the engine implements. Refused, never filtered: a
+ *  misspelling that is quietly dropped runs the search under the uniform prior
+ *  and reports success, so the run that was meant to test whether the prior
+ *  helps has answered a different question. */
+const PRIOR_FACTORS: readonly EvolvePriorFactor[] = ["viable", "frontier", "improvement"];
+
+/** Beyond this the exploration term stops being a tie-breaker and starts
+ *  outvoting the rank outright, which is a random walk with extra steps. */
+const MAX_C_PUCT = 10;
+
+function shapeOfSearchTuning(search: EvolveSearchTuning | undefined): string | undefined {
+  if (!search) return undefined;
+  if (search.cPuct !== undefined) {
+    if (!Number.isFinite(search.cPuct) || search.cPuct <= 0) {
+      return "cPuct 要是一个正数：它给探索项定标，零或负数会让搜索只认排名或反着走";
+    }
+    if (search.cPuct > MAX_C_PUCT) {
+      return `cPuct ${search.cPuct} 太大了：探索项会盖过排名，搜索退化成随机游走。常用范围 0.3–2.5`;
+    }
+  }
+  const unknown = (search.prior ?? []).filter(
+    (factor) => !PRIOR_FACTORS.includes(factor));
+  if (unknown.length) {
+    return `不认识的 prior 因子：${unknown.join("、")}。可选：${PRIOR_FACTORS.join("、")}`;
+  }
+  return undefined;
+}
+
 function shapeOf(proposal: EvolveRunProposal): string | undefined {
   const needsStart = proposal.mode !== "test_gate";
   if (needsStart && !proposal.startingPointPath && !proposal.startingPointText?.trim()) {
@@ -207,6 +237,8 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     return `${proposal.workers} 个并行要配至少 ${proposal.workers * 4} 次扩展，`
       + "否则第一轮就用掉了大半预算、每个候选都只从起点分叉，树是平的";
   }
+  const tuning = shapeOfSearchTuning(proposal.search);
+  if (tuning) return tuning;
   if (proposal.mode === "dataset_metric") {
     if (!proposal.datasetPath) return "dataset_metric 要指一份 CSV";
     if (!proposal.targetColumn) return "dataset_metric 要说明预测哪一列";
@@ -301,7 +333,7 @@ async function assembleGoal(
   };
 
   return {
-    algorithm: "era",
+    algorithm: "puct",
     baselineProgramCas: startCas,
     budget: {
       candidateTimeoutSeconds: 180,
@@ -318,6 +350,7 @@ async function assembleGoal(
     frozen: scoringCas ? [scoringCas] : [],
     modelId: deps.modelId,
     ...(proposal.packages?.length ? { packages: proposal.packages } : {}),
+    ...(proposal.search ? { search: proposal.search } : {}),
     scorecard: {
       aggregate: "weighted_sum",
       confirmedAt: now,

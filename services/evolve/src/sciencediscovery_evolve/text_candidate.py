@@ -14,7 +14,7 @@
 
 """Reading a rewritten *text* out of a model's reply.
 
-The fence handling is shared with the program path — `vendor/era/program.py`
+The fence handling is shared with the program path — `vendor/puct/program.py`
 owns the regex, because it is upstream's and the two must agree about what a
 block is. What differs is where the summary comes from: a program carries one
 in its module docstring, and a prompt or an abstract has no docstring, so the
@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Tuple
 
-from .vendor.era.program import FENCE
+from .vendor.puct.program import FENCE
 
 #: A summary longer than this is not a summary; it is the model explaining
 #: itself into the node label.

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""What a task has to supply for the ERA tree search to run on it.
+"""What a task has to supply for the PUCT tree search to run on it.
 
 `futs.search` is indifferent to what it is searching over: it ranks nodes by a
 score it never interprets, expands the one PUCT picks, and appends whatever
@@ -38,7 +38,7 @@ from typing import Any, Callable, Dict, Sequence, Tuple
 
 @dataclass(frozen=True)
 class Domain:
-    """One scientific task, as the ERA search sees it."""
+    """One scientific task, as the PUCT search sees it."""
 
     #: Printed in the run plan and stored in the result file.
     name: str

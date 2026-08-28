@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Vendored ERA port from AgentDescent.
+"""Vendored ERA port from AgentDescent, exposed here as ``puct``.
+
+The upstream files are named after their example ("ERA"); this package is named
+after what the algorithm actually is, because that is what the name has to tell
+a reader picking between it and ``openevolve``. Every ``examples/era/...`` path
+below is a provenance fact and stays as upstream spells it.
 
 Upstream: https://github.com/Birfy/agentdescent @ b3d4240
 Files:    examples/era/era_empirical_software.py, examples/era/_era_support.py,
@@ -35,7 +40,7 @@ engine itself — `evolve()`, `FlatPuct`, `Ledger`, the verifier and the policie
   that looks like poor candidate quality.
 * Imports are rewritten for this package's layout.
 
-The upstream tests came with it (`tests/test_era_fidelity.py`): the two
+The upstream tests came with it (`tests/test_puct_fidelity.py`): the two
 `futs_test.py` fixtures, the line-by-line reproduction of `futs.search`, and the
 gate/parser checks. Moving the code without them would discard the
 `benchmark_faithful` claim, which is the only reason to vendor rather than
@@ -63,17 +68,17 @@ from .program import (
     program_id,
     validate_source,
 )
-from .search import EraStrategy, EraTreeAggregator, make_propose, make_reward, make_run
-from .tree import EraTree, Node
+from .search import PuctStrategy, PuctTreeAggregator, make_propose, make_reward, make_run
+from .tree import PuctTree, Node
 
 __all__ = [
     "BLOCKED_IMPORTS",
     "available_imports",
     "FORBIDDEN_CALLS",
     "Domain",
-    "EraStrategy",
-    "EraTree",
-    "EraTreeAggregator",
+    "PuctStrategy",
+    "PuctTree",
+    "PuctTreeAggregator",
     "Node",
     "Program",
     "extract_program",

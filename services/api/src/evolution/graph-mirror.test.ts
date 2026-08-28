@@ -173,5 +173,5 @@ test("the SubTask id keeps the prefix the temporal chain selects on", () => {
   assert.equal(searchSubTaskId("abc"), "subtask:evolve:abc");
   // The algorithm is not in the id: it lives on the SearchRun, and encoding it
   // here would make "resume with a different algorithm" look like a legal state.
-  assert.equal(searchSubTaskId("abc").includes("era"), false);
+  assert.equal(searchSubTaskId("abc").includes("puct"), false);
 });

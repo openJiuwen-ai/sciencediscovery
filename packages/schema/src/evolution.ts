@@ -27,8 +27,56 @@
  */
 
 /** Which search algorithm runs the loop. Not two code paths — one field. */
-export type EvolveAlgorithm = "era" | "openevolve";
+export type EvolveAlgorithm = "puct" | "openevolve";
 
+/**
+ * The name `"puct"` used to be `"era"`, after the upstream example the port came
+ * from. Runs created before the rename carry the old value in their stored
+ * goal, so every read path normalises rather than the store being rewritten:
+ * a migration would have to touch the run record, its events and the search
+ * graph mirror at once, and getting one of the three wrong is a run that opens
+ * to an empty panel. Accepting one extra string on read costs nothing and is
+ * reversible.
+ */
+export function evolveAlgorithm(raw: unknown): EvolveAlgorithm {
+  return raw === "openevolve" ? "openevolve" : "puct";
+}
+
+
+/**
+ * A prior factor: how the exploration budget is shared out before the rank is
+ * read. Multiplied together when several are asked for.
+ *
+ * * `viable` — a node whose program did not run keeps a tenth of its share.
+ * * `frontier` — a node's share is divided by `1 + children`, so a parent
+ *   already forked five times yields to one never forked.
+ * * `improvement` — a node that beat its parent gets up to three times the
+ *   share of one that fell back. The only factor carrying something no other
+ *   term has: rank sees the score and the formula sees the visit count, and
+ *   neither can tell a climbing lineage from a stalled one at equal score.
+ */
+export type EvolvePriorFactor = "viable" | "frontier" | "improvement";
+
+/**
+ * How the search spends its exploration budget — the two knobs of the PUCT
+ * rule, set together because they scale each other.
+ *
+ * Absent means upstream: `cPuct` 1.0 and a uniform prior. This exists because
+ * the two defaults are not neutral for every task, and because the drafting
+ * agent knows things about the run that the engine cannot see — how noisy the
+ * scoring is, how much budget there is, whether the landscape is flat.
+ */
+export interface EvolveSearchTuning {
+  /**
+   * The exploration constant. Exploitation is the candidate's *rank* in
+   * `[0, 1]`; this scales `P · √totalVisits / (1 + visits)` against it, which is
+   * worth roughly `cPuct / √nodes` at one visit. So it decides among candidates
+   * the ranking has left close together and never overturns a clear one.
+   */
+  cPuct?: number;
+  /** Empty or absent is the uniform `1/N` prior upstream pins. */
+  prior?: EvolvePriorFactor[];
+}
 
 /** What is being evolved. */
 export type EvolveTarget =
@@ -229,7 +277,7 @@ export interface EvolveBudget {
    * and returns an empty reply, and an empty reply becomes a failed node —
    * indistinguishable from a candidate that genuinely would not run. This is
    * measured, not assumed: at 16k a real reasoning model spent 16001 output
-   * tokens on thinking and returned nothing, six times over. ERA needs >= 32k;
+   * tokens on thinking and returned nothing, six times over. PUCT needs >= 32k;
    * OpenEvolve rewrites the whole genome and needs >= 64k.
    */
   maxTokensPerCall: number;
@@ -301,6 +349,9 @@ export interface EvolveRunProposal {
   expansions: number;
   workers: number;
   thinking?: "disabled" | "enabled";
+  /** How the search explores. Omit to take upstream's settings, which is the
+   *  right answer whenever nothing about the task argues against them. */
+  search?: EvolveSearchTuning;
   /** What to watch out for. Shown with the approval, so it has to be about
    *  *this* run — not general cautions about the technique. */
   risks?: string[];
@@ -385,6 +436,8 @@ export interface EvolveGoal {
    *  this exists to pin `stub` for a reproduction, or for a placeholder goal
    *  that has no dataset behind it yet. */
   engine?: string;
+  /** How the search explores. Unset is upstream's own settings. */
+  search?: EvolveSearchTuning;
   /** Which fields came from the drafting agent and were accepted unedited —
    * read when reviewing why a run went the way it did. */
   draftedBy?: { acceptedFields: string[]; runId: string };

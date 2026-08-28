@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fidelity of the vendored ERA port, pinned against upstream's own fixtures.
+"""Fidelity of the vendored port, pinned against upstream's own fixtures.
 
-Moved here from `agentdescent/tests/test_era_example.py` together with the code
+Moved here from `agentdescent/tests/test_puct_example.py` together with the code
 it checks. **Vendoring the port without these would discard the only thing that
 makes vendoring better than re-implementing**: the claim that this is the same
 algorithm, checkable rather than asserted.
@@ -34,8 +34,8 @@ from typing import List, Optional, Tuple
 import pytest
 from agentdescent.selection import Candidate, FlatPuct, SelectionContext
 
-from sciencediscovery_evolve.vendor.era import (
-    EraTree,
+from sciencediscovery_evolve.vendor.puct import (
+    PuctTree,
     Program,
     extract_program,
     validate_source,
@@ -177,7 +177,7 @@ def test_serial_tree_reproduces_upstream_futs():
     trace, best_program, best_score, visits = _upstream_search(
         "v0", 0.0, generate, execute, num_iterations=12)
 
-    tree = EraTree(c_puct=1.0, candidate_limit=12)
+    tree = PuctTree(c_puct=1.0, candidate_limit=12)
     tree.seed(Program("root", 0, None, "v0", "", {"rmse": None}, True), 0.0)
     ours: List[Tuple[int, str, float]] = []
     while True:
@@ -204,7 +204,7 @@ def test_a_failed_expansion_is_still_a_node():
     """Upstream returns `-inf` from a failed execution and appends the node
     anyway. Dropping it would change the rank denominator and the prior on every
     later iteration, so this is fidelity rather than tidiness."""
-    tree = EraTree(c_puct=1.0)
+    tree = PuctTree(c_puct=1.0)
     tree.seed(Program("root", 0, None, "v0", "", {}, True), 0.5)
     tree.add_node(Program("bad", 1, "root", "", "", {}, False), float("-inf"), 0)
 
@@ -275,7 +275,7 @@ def test_the_gate_admits_what_is_installed_and_names_what_is_not() -> None:
 
 
 def test_the_prompt_names_packages_this_deployment_actually_has() -> None:
-    from sciencediscovery_evolve.vendor.era.program import available_imports
+    from sciencediscovery_evolve.vendor.puct.program import available_imports
 
     names = available_imports()
     assert "pandas" in names and "sklearn" in names
@@ -317,7 +317,7 @@ def test_the_prompt_gives_versions_not_just_package_names() -> None:
     """
     import re
 
-    from sciencediscovery_evolve.vendor.era.program import available_imports_text
+    from sciencediscovery_evolve.vendor.puct.program import available_imports_text
 
     text = available_imports_text()
     assert re.search(r"\bnumpy \d+\.\d+", text), text

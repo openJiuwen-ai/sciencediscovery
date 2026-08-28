@@ -26,7 +26,7 @@ from typing import Any, Dict, List
 import pytest
 
 from sciencediscovery_evolve.probe import ProbeError, run_probe
-from test_era_engine import JUDGED_CARD, judged_spec  # noqa: F401 - shared fixtures
+from test_puct_engine import JUDGED_CARD, judged_spec  # noqa: F401 - shared fixtures
 
 
 def judge_returning(marks: List[float], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -43,7 +43,7 @@ def judge_returning(marks: List[float], monkeypatch: pytest.MonkeyPatch) -> None
         return complete
 
     monkeypatch.setattr(probe_module, "_default_completion", completion, raising=False)
-    import sciencediscovery_evolve.era_engine as engine_module
+    import sciencediscovery_evolve.puct_engine as engine_module
     monkeypatch.setattr(engine_module, "_default_completion", completion)
 
 
@@ -58,7 +58,7 @@ def test_the_damaged_copy_survives_the_gate_that_judges_real_candidates() -> Non
     scorecard it was ever given without measuring anything.
     """
     from sciencediscovery_evolve.probe import _CONSTANT_PREDICTOR
-    from sciencediscovery_evolve.vendor.era.program import validate_source
+    from sciencediscovery_evolve.vendor.puct.program import validate_source
 
     baseline = (
         "import pandas as pd\n\n\n"
@@ -130,7 +130,7 @@ def test_a_damaged_copy_that_will_not_score_is_not_counted_as_a_pass(
             return reply
         return complete
 
-    import sciencediscovery_evolve.era_engine as engine_module
+    import sciencediscovery_evolve.puct_engine as engine_module
     monkeypatch.setattr(engine_module, "_default_completion", completion)
     monkeypatch.setattr(probe_module, "_default_completion", completion, raising=False)
 

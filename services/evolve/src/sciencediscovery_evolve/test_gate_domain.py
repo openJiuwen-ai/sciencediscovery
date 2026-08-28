@@ -54,10 +54,10 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence,
 from .logging_config import get_logger
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
-from .vendor.era.domain import Domain
-from .vendor.era.program import Program
-from .vendor.era.sandbox import SandboxCapability, sandbox_command
-from .vendor.era.tree import finite as _finite
+from .vendor.puct.domain import Domain
+from .vendor.puct.program import Program
+from .vendor.puct.sandbox import SandboxCapability, sandbox_command
+from .vendor.puct.tree import finite as _finite
 
 log = get_logger("test-gate")
 

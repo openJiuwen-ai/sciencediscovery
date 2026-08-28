@@ -57,7 +57,7 @@ from agentdescent.staleness import StaleAction, get_policy
 
 from .domain import Domain
 from .program import Program, extract_program, program_id
-from .tree import EraTree, Node
+from .tree import PuctTree, Node
 
 #: Merge outcomes upstream names for this port. `MergeOutcome` covers the
 #: framework's own; these two are the tree's.
@@ -73,7 +73,7 @@ def _noop(_kind: str, _payload: Dict[str, Any]) -> None:
     return None
 
 
-class EraStrategy:
+class PuctStrategy:
     """One executable program, and the parser that turns a reply into a Diff."""
 
     def __init__(self, domain: Domain) -> None:
@@ -140,7 +140,7 @@ def _first_doc_line(code: str) -> str:
 
 
 def make_propose(
-    tree: EraTree,
+    tree: PuctTree,
     complete: Callable[[str, int], Tuple[str, str]],
     domain: Domain,
     *,
@@ -149,7 +149,7 @@ def make_propose(
     """Select a parent and ask the model to rewrite it.
 
     Runs on a worker thread. The selection happens **here**, not in the
-    aggregator, because `EraTree.select_parent` reserves the visit as it picks —
+    aggregator, because `PuctTree.select_parent` reserves the visit as it picks —
     upstream's parallel virtual loss — and the thread that is about to spend
     minutes on this parent is the one that should have reserved it.
 
@@ -287,7 +287,7 @@ def make_reward(domain: Domain) -> Callable[[Task, str], float]:
     return reward
 
 
-class EraTreeAggregator:
+class PuctTreeAggregator:
     """FUTS's expand-execute-append step as an AgentDescent merge optimizer.
 
     ``ingest`` is called from many worker threads and ``step`` from one, which
@@ -305,7 +305,7 @@ class EraTreeAggregator:
         self,
         ledger: Ledger,
         verifier: Any,
-        tree: EraTree,
+        tree: PuctTree,
         config: AggregatorConfig,
         staleness_policy: Any,
         *,
@@ -335,7 +335,7 @@ class EraTreeAggregator:
     def _held_out_shards(self) -> Tuple[int, ...]:
         shards = tuple(sorted(int(task.meta["shard"]) for task in self.verifier.held_out))
         if not shards:
-            raise RuntimeError("ERA needs held-out shards to score a node")
+            raise RuntimeError("the PUCT search needs held-out shards to score a node")
         return shards
 
     def seed(self) -> None:
@@ -349,7 +349,7 @@ class EraTreeAggregator:
             # Upstream prints the initial score and carries on even if it is
             # -inf. Refusing instead: a root that cannot run means the sandbox
             # or the data is broken, and every child would inherit it.
-            raise RuntimeError(f"the initial ERA program failed to run: {error}")
+            raise RuntimeError(f"the initial program failed to run: {error}")
         root = self.tree.seed(
             Program(program_id(code), 0, None, code, self.domain.initial_summary,
                     metrics, valid, error),
@@ -533,7 +533,7 @@ class EraTreeAggregator:
                 accepted = None
                 category = MergeOutcome.CAS_CONFLICT.value
 
-        # Which node became the best, if one did. Under ERA that *is* what
+        # Which node became the best, if one did. Under PUCT that *is* what
         # acceptance means: there is no per-candidate statistical gate, the tree's
         # rank ordering is the selection pressure, and the ledger publishes the
         # best node. Reported here rather than per node above because it is only
@@ -556,7 +556,7 @@ class EraTreeAggregator:
         ]
 
 
-def _ancestor_visits(tree: EraTree, node: Node) -> List[Dict[str, int]]:
+def _ancestor_visits(tree: PuctTree, node: Node) -> List[Dict[str, int]]:
     """The selected node's visit count and every ancestor's, absolute.
 
     Read here rather than by the caller: `select_parent` backpropagates under

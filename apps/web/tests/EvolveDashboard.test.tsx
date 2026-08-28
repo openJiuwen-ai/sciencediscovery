@@ -62,7 +62,7 @@ test("the chart keeps the three measurements apart", () => {
 });
 
 test("an engine that measures once still gets one line, not none", () => {
-  // ERA scores a node on the gate shards and ranks on that same number, so
+  // PUCT scores a node on the gate shards and ranks on that same number, so
   // there is no separate rollout figure to draw. Falling back to `score` beats
   // an empty chart on a run that is working.
   const series = collectSeries(view([candidate({ score: 0.62 })]));

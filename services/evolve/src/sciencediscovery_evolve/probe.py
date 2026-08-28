@@ -79,7 +79,7 @@ class ProbeError(RuntimeError):
 
 def run_probe(spec: RunSpec) -> Dict[str, Any]:
     """`{baseline, worsened, flat, label}` for one scorecard."""
-    from .era_engine import _judge_spec, _mode_of, _scale_of, _default_completion
+    from .puct_engine import _judge_spec, _mode_of, _scale_of, _default_completion
 
     mode = _mode_of(spec)
 
@@ -247,7 +247,7 @@ def _probe_gated(spec: RunSpec) -> Dict[str, Any]:
     supposed to notice, and the one a suite that only checks "does it import"
     will not.
     """
-    from .era_engine import _entrypoint_of
+    from .puct_engine import _entrypoint_of
     from .test_gate_domain import TestGateError, test_gate_domain
 
     if not spec.workspace_dir:

@@ -43,7 +43,7 @@ answers start to disagree.
    it is stated rather than glossed.
 
    It is checked against the kernel rather than by reading the profile back —
-   see `tests/test_era_sandbox.py`.
+   see `tests/test_puct_sandbox.py`.
 """
 
 from __future__ import annotations

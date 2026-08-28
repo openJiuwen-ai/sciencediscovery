@@ -161,8 +161,62 @@ something from scratch 20+.
 **Thinking off unless asked** — with it on, one whole-candidate rewrite can exceed the proxy
 limit and return nothing.
 
+### How the search spends its budget — `search`
+
+Omit this and you get the defaults, which are upstream's and are usually right. Set it when
+something about *this* task argues against them, and say in one line what that something is.
+
+The rule picking the next candidate to expand is
+`rank + cPuct · P(node) · √totalVisits / (1 + visits)`. `rank` is the candidate's position among
+all nodes, normalised to `[0, 1]` — that is the exploitation half, and it is the only place the
+score enters. Everything you can set here belongs to the other half.
+
+**`cPuct` — how much the exploration term is worth.** At one visit it is worth roughly
+`cPuct / √nodes`, against a rank that spans a full 1.0. So it decides between candidates the
+ranking has left close together and never overturns a clear one; treat it as a tie-break weight,
+not as a dial between "greedy" and "random".
+
+- Leave it at **1.0** unless one of the next two is true.
+- **0.3–0.7** when the gate is large enough that you believe its ordering, and the budget is
+  small. Few expansions and a trustworthy ranking is the case for climbing the lineage that is
+  already working instead of sampling around it.
+- **1.5–2.5** when the ranking is not telling you much: a noisy or coarse score, or candidates
+  that keep landing on the same number. If three of five candidates tie exactly, the rank
+  ordering between them is an artefact of insertion order, and spreading the budget is better
+  than trusting it.
+
+Above 10 is refused. Note that a coarse score is a *scoring* problem first — widen the gate
+before reaching for `cPuct`.
+
+**`prior` — which nodes that exploration budget goes to.** Empty is uniform: every node gets an
+equal share, which is what upstream does because there is no policy network to ask. The factors
+below multiply, so you can ask for more than one.
+
+State the *objective* — what you want the budget spent on — and pick the factor that says it.
+This is a decision about where to look, and it stays clear of the rule in step 1: it never names
+an approach a candidate should take.
+
+- **`improvement`** — a node that beat its parent gets up to three times the share of one that
+  fell back. Take this when you expect gradual refinement to be the shape of the win, and it is
+  the one worth reaching for first: rank sees the score and the formula sees the visit count, so
+  a node on a climbing lineage and one on a stalled lineage at the same score are invisible to
+  everything else.
+- **`frontier`** — a parent already forked five times yields to one never forked. Take this when
+  you would rather see several distinct approaches tried than one refined, typically on a large
+  search space with plenty of expansions.
+- **`viable`** — a node whose program did not run keeps a tenth of its share. Take this when you
+  expect a lot of candidates to crash: writing from scratch, an unfamiliar library, a strict
+  contract. It is narrow on purpose — a dead node already ranks near the bottom, so this only
+  bites in a run where so many candidates hard-crash that the merely-broken ones drift into the
+  middle of the ordering.
+
+An unknown factor name is refused, not ignored, so a typo cannot quietly give you the uniform
+prior and a run that answered a different question.
+
 > **Checkpoint 3.** Show the shape in a few lines: what one unit is, how much is held out, how
 > many expansions with how many workers, and roughly what that costs in time and model calls.
+> Mention `search` only if you set it, in one line saying why — "scoring is coarse, so spread the
+> budget" — and leave it out of the glance entirely when you did not.
 > This is the last point before real money is spent — say so plainly, and default to the smaller
 > option when unsure.
 

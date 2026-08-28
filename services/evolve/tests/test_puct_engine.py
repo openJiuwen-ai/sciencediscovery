@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The ERA search, with the model and the measurement substituted.
+"""The PUCT search, with the model and the measurement substituted.
 
-Everything between them is the shipping path and is not mocked: `EraTree`,
-`EraStrategy`, `EraTreeAggregator`, a real `Ledger` (a real git repo), and
+Everything between them is the shipping path and is not mocked: `PuctTree`,
+`PuctStrategy`, `PuctTreeAggregator`, a real `Ledger` (a real git repo), and
 `evolve` / `async_evolve` themselves. What these tests are for is the contract
 the rest of the system reads — which events come out, in what order, carrying
 what — and that it survives being driven by the framework rather than by a loop
@@ -32,10 +32,11 @@ import pytest
 
 from sciencediscovery_evolve.completion import CompletionUsage
 from sciencediscovery_evolve.engine import RunSpec
-from sciencediscovery_evolve.era_engine import EraEngine
-from sciencediscovery_evolve.vendor.era.domain import Domain
-from sciencediscovery_evolve.vendor.era.program import Program
-from sciencediscovery_evolve.vendor.era.sandbox import SandboxCapability
+from sciencediscovery_evolve import puct_engine
+from sciencediscovery_evolve.puct_engine import PuctEngine
+from sciencediscovery_evolve.vendor.puct.domain import Domain
+from sciencediscovery_evolve.vendor.puct.program import Program
+from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability
 
 BASELINE = '''"""基线。"""
 
@@ -72,7 +73,7 @@ SCORECARD: Dict[str, Any] = {
 
 def spec(**overrides: Any) -> RunSpec:
     base: Dict[str, Any] = {
-        "algorithm": "era", "expansions": 2, "scorecard": SCORECARD,
+        "algorithm": "puct", "expansions": 2, "scorecard": SCORECARD,
         "scorecard_hash": "sha256:card", "search_id": "run-1",
         "statement": "把准确率做上去", "dataset_dir": "/staged",
         "baseline_code": BASELINE, "workers": 1,
@@ -171,7 +172,7 @@ class Harness:
 
     def run(self, run_spec: Optional[RunSpec] = None,
             stop: Callable[[], bool] = lambda: False) -> List[Dict[str, Any]]:
-        engine = EraEngine(
+        engine = PuctEngine(
             completion_factory=self.completion_factory,
             domain_factory=self.domain_factory,
             store_root=Path(self._store),
@@ -191,7 +192,7 @@ class Harness:
 @pytest.fixture(autouse=True)
 def staged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The dataset and the candidate runtime are other files' contracts."""
-    from sciencediscovery_evolve import era_engine
+    from sciencediscovery_evolve import puct_engine
     from sciencediscovery_evolve.measurement import CriterionPlan, Dataset, Shard
 
     shards = tuple(
@@ -202,8 +203,8 @@ def staged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
                             (8, "test"), (9, "test")]
     )
     dataset = Dataset((CriterionPlan("acc", "accuracy", shards),))
-    monkeypatch.setattr(era_engine, "load_dataset", lambda root, card: dataset)
-    monkeypatch.setattr(era_engine, "missing_candidate_runtime", lambda: [])
+    monkeypatch.setattr(puct_engine, "load_dataset", lambda root, card: dataset)
+    monkeypatch.setattr(puct_engine, "missing_candidate_runtime", lambda: [])
     Harness._store = str(tmp_path / "candidates")
 
 
@@ -247,11 +248,11 @@ def test_the_winner_is_measured_once_on_shards_that_took_no_part() -> None:
     assert harness.of("search_finished")[0]["bestTestScore"] is not None
 
 
-# --- What a node's fate means under ERA ---------------------------------------
+# --- What a node's fate means under PUCT --------------------------------------
 
 
 def test_becoming_the_best_is_what_acceptance_means_here() -> None:
-    # There is no per-candidate statistical gate in ERA: every candidate becomes
+    # There is no per-candidate statistical gate in PUCT: every candidate becomes
     # a node, the tree's rank ordering is the selection pressure, and the ledger
     # publishes the best. So "accepted" is "this node became the best".
     harness = Harness(scores=[0.9, 0.5])
@@ -278,7 +279,7 @@ def test_a_failed_candidate_still_enters_the_tree() -> None:
 
 def test_a_constraint_violation_is_a_refusal_that_names_the_constraint() -> None:
     # A veto is a wall, not a cost: the candidate scored well and is refused
-    # anyway. Under ERA that has to look like a failed node — `-inf` keeps it out
+    # anyway. Under PUCT that has to look like a failed node — `-inf` keeps it out
     # of `best()` the same way a crash does — but it stays distinguishable.
     harness = Harness(violate_from=0)
     harness.run(spec(expansions=1))
@@ -402,6 +403,43 @@ def test_a_normalisation_this_side_does_not_implement_refuses_the_run() -> None:
 
     assert harness.of("search_finished")[0]["status"] == "failed"
     assert any("linear" in event.get("message", "") for event in harness.of("log"))
+
+
+def test_a_prior_factor_the_engine_does_not_know_refuses_the_run() -> None:
+    """Not filtered down to the ones it recognises, and not ignored.
+
+    The value is drafted by a model and crosses four processes to get here. A
+    dropped misspelling runs under the uniform prior and finishes `succeeded`,
+    so the run that was started to find out whether a prior helps comes back
+    having answered a different question — and nothing in the record says so.
+    """
+    harness = Harness()
+    harness.run(spec(options={"mode": "serial", "prior": ["promising"]}))
+
+    assert harness.of("search_finished")[0]["status"] == "failed"
+    assert any("promising" in event.get("message", "") for event in harness.of("log"))
+
+
+def test_a_prior_the_engine_does_know_runs(monkeypatch: Any) -> None:
+    """The tuning reaches the tree, not just the spec.
+
+    Asserted on the tree's own constructor arguments: the engine reads
+    `options` and the tree validates them, so an engine that read the key and
+    forgot to pass it on would still pass every refusal test above.
+    """
+    seen: Dict[str, Any] = {}
+    real = puct_engine.PuctTree
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(puct_engine, "PuctTree", spy)
+    harness = Harness()
+    harness.run(spec(options={"mode": "serial", "c_puct": 0.4, "prior": ["viable", "frontier"]}))
+
+    assert seen["c_puct"] == 0.4
+    assert seen["prior_factors"] == ("viable", "frontier")
 
 
 # --- Counters -----------------------------------------------------------------
@@ -638,7 +676,7 @@ def test_the_framework_s_stop_reason_reaches_the_run() -> None:
     "succeeded" for a run whose workers had died on their second call, with
     nothing anywhere to contradict it.
     """
-    from sciencediscovery_evolve.era_engine import _Reporter
+    from sciencediscovery_evolve.puct_engine import _Reporter
 
     class _Tree:
         nodes = [object()] * 8   # seed + 7 expansions
@@ -663,7 +701,7 @@ def test_the_framework_s_stop_reason_reaches_the_run() -> None:
 
 def test_a_run_that_spent_its_budget_says_nothing_extra() -> None:
     """max_iters is the ordinary ending; narrating it would be noise."""
-    from sciencediscovery_evolve.era_engine import _Reporter
+    from sciencediscovery_evolve.puct_engine import _Reporter
 
     class _Tree:
         nodes = [object()] * 25
@@ -713,7 +751,7 @@ def test_a_failed_candidate_gets_one_repair_on_its_own_error() -> None:
     again from the parent — a fresh design with a fresh bug. Most of those
     failures were one visible line: an import that raises, an index off by one.
     """
-    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
     asked = []
 
@@ -729,7 +767,7 @@ def test_a_failed_candidate_gets_one_repair_on_its_own_error() -> None:
             return True, {"score": 0.8}, ""
         return False, {"score": float("-inf")}, "IndexError: list index out of range"
 
-    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = repair
     aggregator.domain = type("D", (), {
         "evaluate": staticmethod(evaluate),
@@ -758,7 +796,7 @@ def test_a_candidate_that_crashed_on_every_shard_is_repaired_too() -> None:
     candidates crashed on every shard, all arrived valid, and the run made nine
     model calls: not one repair among them.
     """
-    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
     asked = []
 
@@ -772,7 +810,7 @@ def test_a_candidate_that_crashed_on_every_shard_is_repaired_too() -> None:
         # Valid: the evaluator ran and measured. Zero: nothing worked.
         return True, {"score": 0.0}, "round-trip mismatch"
 
-    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = repair
     aggregator.domain = type("D", (), {
         "evaluate": staticmethod(evaluate),
@@ -794,11 +832,11 @@ def test_a_working_but_worse_candidate_is_left_alone() -> None:
     candidate that works would buy a second draw from the same distribution at
     the price of the diversity between siblings.
     """
-    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
     asked = []
 
-    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = lambda *args: asked.append(args) or "x"
     aggregator.domain = type("D", (), {
         "evaluate": staticmethod(lambda code, shards: (True, {"score": 0.11}, "slow on 2 of 8")),
@@ -820,9 +858,9 @@ def test_a_repair_that_did_not_help_is_thrown_away() -> None:
     repaired version replaced the original unconditionally, including when it
     scored the same 0. The panel said 修好了 twice, both at 0.0000.
     """
-    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
-    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
     def evaluate(code, shards):
         # Both measure fine, both score nothing — the repair changed the bug,
@@ -831,7 +869,7 @@ def test_a_repair_that_did_not_help_is_thrown_away() -> None:
             return True, {"score": 0.0}, "从修复版来的：还是对不上"
         return True, {"score": 0.0}, "从原版来的：往返对不上"
 
-    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = lambda code, error, iteration: "def solve():\n    return 'repaired'\n"
     aggregator.domain = type("D", (), {
         "evaluate": staticmethod(evaluate),
@@ -854,7 +892,7 @@ def _run_one(aggregator, code, ops):
     corrected, proving only that the copy worked. `step()` calls the same
     method, and `test_step_itself_asks_for_the_repair` pins that it still does.
     """
-    from sciencediscovery_evolve.vendor.era.search import _evaluate
+    from sciencediscovery_evolve.vendor.puct.search import _evaluate
 
     valid, metrics, error = _evaluate(aggregator.domain, code, aggregator._held_out_shards())
     _, valid, metrics, error = aggregator._repair_once(code, ops, valid, metrics, error)
@@ -869,9 +907,9 @@ def test_step_itself_asks_for_the_repair() -> None:
     """
     import inspect
 
-    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
-    source = inspect.getsource(EraTreeAggregator.step)
+    source = inspect.getsource(PuctTreeAggregator.step)
     assert "self._repair_once(" in source
 
 
@@ -879,7 +917,7 @@ def test_the_seed_carries_its_source_so_a_diff_has_a_before() -> None:
     """Every diff in a run rendered as pure addition, nothing ever removed.
 
     `expanded` carried `codeHash`; `seeded` did not. The detail view diffs a
-    candidate against `parent.codeHash`, and a flat tree — ERA's normal shape,
+    candidate against `parent.codeHash`, and a flat tree — this search's normal shape,
     ten of eleven nodes forking from the root on one live run — means almost
     every parent *is* the root. With no hash there, the "before" side was
     empty and the whole candidate showed as new.
@@ -899,7 +937,7 @@ def test_the_engine_stores_the_seed_before_announcing_it() -> None:
     """A hash on the event is only useful if the source is fetchable by it."""
     import inspect
 
-    from sciencediscovery_evolve.era_engine import _Reporter
+    from sciencediscovery_evolve.puct_engine import _Reporter
 
     source = inspect.getsource(_Reporter.on_event)
     seeded_block = source[source.index('kind == "seeded"'):source.index('kind == "node"')]
@@ -914,7 +952,7 @@ def test_each_repair_attempt_sees_what_the_last_one_produced() -> None:
     failed were each handed the original traceback with no view of what their
     own change had done.
     """
-    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
     saw = []
     fixes = iter(["def f():\n    return 'second'\n", "def f():\n    return 'third'\n"])
@@ -930,7 +968,7 @@ def test_each_repair_attempt_sees_what_the_last_one_produced() -> None:
             return True, {"score": 0.0}, "第二次的错：还是不行"
         return True, {"score": 0.0}, "第一次的错：原版坏了"
 
-    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = repair
     aggregator.domain = type("D", (), {
         "evaluate": staticmethod(evaluate),
@@ -947,10 +985,10 @@ def test_each_repair_attempt_sees_what_the_last_one_produced() -> None:
 
 def test_debugging_stops_as_soon_as_the_candidate_works() -> None:
     """Every attempt is a model call. A working candidate ends the loop."""
-    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
     calls = []
-    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = lambda code, error, iteration: (
         calls.append(error) or "def f():\n    return 'fixed'\n")
     aggregator.domain = type("D", (), {
@@ -969,7 +1007,7 @@ def test_debugging_stops_as_soon_as_the_candidate_works() -> None:
 
 def test_a_later_attempt_cannot_displace_a_better_earlier_one() -> None:
     """Accepted against the original, so the loop never returns a regression."""
-    from sciencediscovery_evolve.vendor.era.search import EraTreeAggregator
+    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
     fixes = iter(["def f():\n    return 'good'\n", "def f():\n    return 'worse'\n"])
     scores = {"good": 0.0001, "worse": 0.0}     # both still dead, one less so
@@ -980,7 +1018,7 @@ def test_a_later_attempt_cannot_displace_a_better_earlier_one() -> None:
                 return True, {"score": value}, f"{tag} 的错"
         return True, {"score": 0.0}, "原版的错"
 
-    aggregator = EraTreeAggregator.__new__(EraTreeAggregator)
+    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
     aggregator.repair = lambda code, error, iteration: next(fixes)
     aggregator.domain = type("D", (), {
         "evaluate": staticmethod(evaluate),
@@ -1019,7 +1057,7 @@ def test_max_iters_is_a_rollout_budget_not_an_expansion_count() -> None:
     record each scored 0 or 1 with nothing between, 11 of 16 shards came out at
     1.0, and 20 rollouts bought 5 expansions.
     """
-    from sciencediscovery_evolve.era_engine import _rollout_budget
+    from sciencediscovery_evolve.puct_engine import _rollout_budget
 
     # Enough headroom that the planned expansions stay reachable even when most
     # rollouts are solved-skips: at the 75% observed, 20 expansions need 80.
@@ -1032,9 +1070,9 @@ def test_the_engine_passes_the_rollout_budget_not_the_raw_expansions() -> None:
     `spec.expansions`, and a test on the helper alone would not notice."""
     import inspect
 
-    from sciencediscovery_evolve.era_engine import EraEngine
+    from sciencediscovery_evolve.puct_engine import PuctEngine
 
-    source = inspect.getsource(EraEngine._search)
+    source = inspect.getsource(PuctEngine._search)
     assert "max_iters=_rollout_budget(spec.expansions)" in source
     assert "max_iters=spec.expansions" not in source
 
@@ -1049,12 +1087,12 @@ def test_a_summary_copied_from_the_parent_is_blanked() -> None:
     """
     import json as jsonlib
 
-    from sciencediscovery_evolve.vendor.era.search import make_propose
-    from sciencediscovery_evolve.vendor.era.program import Program
-    from sciencediscovery_evolve.vendor.era.tree import EraTree
+    from sciencediscovery_evolve.vendor.puct.search import make_propose
+    from sciencediscovery_evolve.vendor.puct.program import Program
+    from sciencediscovery_evolve.vendor.puct.tree import PuctTree
 
     seed_code = '"""Lossless text compression: compress(text)->bytes."""\n\nx = 1\n'
-    tree = EraTree(c_puct=1.0)
+    tree = PuctTree(c_puct=1.0)
     tree.seed(Program("p0", 0, None, seed_code, "基线", {"score": 0.5}, True, ""), 0.5)
 
     class _Domain:
@@ -1097,9 +1135,9 @@ def test_rollouts_are_never_skipped_as_solved() -> None:
     """
     import inspect
 
-    from sciencediscovery_evolve.era_engine import EraEngine
+    from sciencediscovery_evolve.puct_engine import PuctEngine
 
-    source = inspect.getsource(EraEngine._search)
+    source = inspect.getsource(PuctEngine._search)
     assert '"solved_threshold": 2.0' in source
     assert 'spec.scorecard.get("solvedThreshold")' not in source
 
@@ -1107,7 +1145,7 @@ def test_rollouts_are_never_skipped_as_solved() -> None:
 def test_an_unclosed_fence_still_yields_importable_code() -> None:
     """A truncated reply left ```python as candidate.py line 1 — SyntaxError
     at import, one whole expansion spent on a markdown artifact."""
-    from sciencediscovery_evolve.vendor.era.program import extract_program
+    from sciencediscovery_evolve.vendor.puct.program import extract_program
 
     code, _ = extract_program("```python\nx = 1\ny = 2")
     assert code == "x = 1\ny = 2"

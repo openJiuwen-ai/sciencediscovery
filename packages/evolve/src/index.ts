@@ -153,6 +153,36 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     risks: Type.Optional(Type.Array(Type.String({ maxLength: 400, minLength: 1 }), { maxItems: 2 })),
     rubric: Type.Optional(Type.String({ maxLength: 100_000, minLength: 1 })),
     scaleMax: Type.Optional(Type.Number({ maximum: 100, minimum: 1 })),
+    search: Type.Optional(Type.Object({
+      cPuct: Type.Optional(Type.Number({
+        description: "Exploration constant, default 1.0. Exploitation is the candidate's RANK "
+          + "in [0,1]; this scales the exploration term against it, and that term is worth "
+          + "about cPuct/sqrt(nodes) at one visit — so it decides between candidates the "
+          + "ranking left close together and never overturns a clear one. Lower (0.3-0.7) "
+          + "when the gate is large enough to trust and the budget is small: climb the "
+          + "lineage that works. Higher (1.5-2.5) when the scoring is noisy or several "
+          + "candidates keep tying, which means the ranking is not telling you much. Leave "
+          + "it out when neither is true.",
+        maximum: 10, minimum: 0.01,
+      })),
+      prior: Type.Optional(Type.Array(Type.Union([
+        Type.Literal("viable"), Type.Literal("frontier"), Type.Literal("improvement"),
+      ]), {
+        description: "Which nodes get the exploration budget, before the rank is read. Omit "
+          + "for the uniform default. viable: a node whose program did not run keeps a tenth "
+          + "of its share — worth asking for when candidates are expected to crash often. "
+          + "frontier: a parent already forked many times yields to one never forked — for "
+          + "when you want several distinct approaches tried rather than one refined. "
+          + "improvement: a node that beat its parent gets up to three times the share of one "
+          + "that fell back — the only one carrying something the formula cannot already see, "
+          + "since rank and visits cannot tell a climbing lineage from a stalled one at equal "
+          + "score. They multiply, so asking for two composes.",
+        maxItems: 3,
+      })),
+    }, {
+      description: "How the search spends its exploration budget. Omit unless something about "
+        + "THIS task argues against the defaults — they are upstream's and they are fine.",
+    })),
     split: Type.Optional(Type.Object({
       // The gate is what every candidate's score is measured on — what the
       // tree ranks and selects by — so it is the split that must be largest,

@@ -29,7 +29,7 @@ import subprocess
 import pytest
 
 from sciencediscovery_evolve.candidates import CandidateStore, run_candidate
-from sciencediscovery_evolve.vendor.era.sandbox import (
+from sciencediscovery_evolve.vendor.puct.sandbox import (
     SandboxCapability,
     SandboxUnavailable,
     cpu_seconds_for,
@@ -248,7 +248,7 @@ def test_the_sandbox_binary_is_not_looked_up_on_the_candidate_s_path(monkeypatch
     """
     import shutil as shutil_module
 
-    from sciencediscovery_evolve.vendor.era import sandbox as sandbox_module
+    from sciencediscovery_evolve.vendor.puct import sandbox as sandbox_module
 
     monkeypatch.setattr(
         sandbox_module.shutil, "which",

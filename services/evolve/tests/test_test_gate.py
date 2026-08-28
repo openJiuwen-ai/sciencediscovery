@@ -34,7 +34,7 @@ from sciencediscovery_evolve.test_gate_domain import (
     _roles,
     test_gate_domain as build_domain,
 )
-from sciencediscovery_evolve.vendor.era.sandbox import SandboxCapability
+from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability
 
 CARD: Dict[str, Any] = {
     "aggregate": "weighted_sum",
@@ -197,7 +197,7 @@ def test_a_candidate_that_rewrites_the_tests_at_run_time_gains_nothing(tmp_path:
     assertions.
     """
     from sciencediscovery_evolve.measurement import missing_candidate_runtime
-    from sciencediscovery_evolve.vendor.era.sandbox import detect_local_capability
+    from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 
     capability = detect_local_capability()
     if not capability.available:
@@ -257,7 +257,7 @@ def test_a_missing_runner_says_so_instead_of_blaming_the_candidate(tmp_path: Pat
     deployment problem, and reporting it as "the project's implementation
     cannot even run its tests" sends the user to the wrong file.
     """
-    from sciencediscovery_evolve.vendor.era.sandbox import detect_local_capability
+    from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 
     capability = detect_local_capability()
     if not capability.available:

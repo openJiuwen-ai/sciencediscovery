@@ -48,7 +48,7 @@ import { EvolutionStore } from "./store.js";
 
 function goal(expansions = 2): EvolveGoal {
   return {
-    algorithm: "era",
+    algorithm: "puct",
     baselineProgramCas: "sha256:baseline",
     budget: { candidateTimeoutSeconds: 60, expansions, maxCostCents: 500, maxSeconds: 1800, maxTokens: 200_000 , maxTokensPerCall: 16_000, workers: 1 },
     // These tests are about HTTP, not about search: the stub needs no dataset.
@@ -87,7 +87,7 @@ function goal(expansions = 2): EvolveGoal {
 }
 
 const SEQUENCE: EvolveEvent[] = [
-  { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" },
+  { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
   { baselineScore: 0.5, nodeIndex: 0, type: "seeded" },
   { depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.62, type: "expanded", valid: true },
   { criteria: { f1: 0.62 }, nodeIndex: 1, reward: 0.62, type: "evaluated" },

@@ -22,7 +22,7 @@
 # killed for being fast. That is why the thread environment is pinned. A rewrite
 # fails in a way that looks like poor candidate quality, far from the edit.
 
-"""Sandbox-side runner for the ERA example's candidate programs.
+"""Sandbox-side runner for the candidate programs.
 
 Executed inside Bubblewrap or Seatbelt. Standard library only, and it emits
 exactly one JSON object on stdout -- the candidate's own prints are redirected

@@ -17,7 +17,7 @@
 An engine is handed a :class:`RunSpec`, an ``emit`` callback and a
 ``should_stop`` predicate, and is expected to emit the event sequence described
 in ``events.py``. Two implementations: ``stub_engine`` (deterministic, executes
-nothing) and ``era_engine``; the OpenEvolve port lands behind the same seam
+nothing) and ``puct_engine``; the OpenEvolve port lands behind the same seam
 later.
 
 .. danger:: Parallel expansion uses AgentDescent's ``ThreadExecutor``.
@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 from .events import Emit
-from .vendor.era.sandbox import SandboxCapability
+from .vendor.puct.sandbox import SandboxCapability
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ class RunSpec:
     #: policy — the seed, the shard size, which index is a gate shard — and this
     #: side reads the result; deciding it twice is how two answers disagree.
     dataset_dir: str = ""
-    #: The program the search starts from. Empty means the vendored ERA seed.
+    #: The program the search starts from. Empty means the vendored seed.
     baseline_code: str = ""
     #: Wall-clock ceiling for one candidate execution.
     candidate_timeout_seconds: float = 60.0

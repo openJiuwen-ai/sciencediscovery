@@ -51,11 +51,11 @@ SEEDED = record(2, {"baselineScore": 0.5, "nodeIndex": 0, "type": "seeded"})
 
 def test_a_started_search_sets_the_run_and_seeds_the_root() -> None:
     result = plan([
-        record(1, {"algorithm": "era", "scorecardHash": "sha256:card", "type": "search_started"}),
+        record(1, {"algorithm": "puct", "scorecardHash": "sha256:card", "type": "search_started"}),
         SEEDED,
     ])
 
-    assert result.run["algorithm"] == "era"
+    assert result.run["algorithm"] == "puct"
     assert result.run["scorecard_hash"] == "sha256:card"
     assert result.run["last_seq"] == 2
     assert result.root_index == 0
@@ -81,7 +81,7 @@ def test_visits_are_absolute_so_a_replay_cannot_double_count() -> None:
 
 def test_records_at_or_below_the_watermark_are_dropped() -> None:
     records = [
-        record(1, {"algorithm": "era", "scorecardHash": "h", "type": "search_started"}),
+        record(1, {"algorithm": "puct", "scorecardHash": "h", "type": "search_started"}),
         SEEDED,
         record(3, {"cents": 10, "tokens": 1000, "type": "cost"}),
     ]

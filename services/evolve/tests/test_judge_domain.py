@@ -174,7 +174,7 @@ def test_a_judge_answering_outside_the_scale_is_clamped_not_believed() -> None:
 
 
 def test_the_mutation_prompt_carries_the_rubric_rather_than_the_program_contract() -> None:
-    from sciencediscovery_evolve.vendor.era.program import Program
+    from sciencediscovery_evolve.vendor.puct.program import Program
 
     built, _ = domain([5.0])
     prompt = built.prompt(Program("p", 1, None, "当前正文", "上一次改动", {}, True))

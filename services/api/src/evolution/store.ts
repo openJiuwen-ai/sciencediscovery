@@ -32,7 +32,7 @@
  * Sequence numbers are assigned by the producer (the evolve sidecar), not here.
  * `appendEvents` drops any record at or below the run's watermark, which is what
  * makes a reconnect-and-replay safe: the two non-idempotent quantities in the
- * system (ERA visit counts, MAP-Elites cell occupancy) travel as absolute values
+ * system (PUCT visit counts, MAP-Elites cell occupancy) travel as absolute values
  * precisely so that replaying a prefix cannot double-count them.
  */
 
@@ -47,7 +47,7 @@ import type {
   EvolveRun,
   EvolveRunStatus,
 } from "@sciencediscovery/schema";
-import { isEvolveRunActive } from "@sciencediscovery/schema";
+import { evolveAlgorithm, isEvolveRunActive } from "@sciencediscovery/schema";
 
 /** Subdirectories created by `initialize`. Listed rather than derived so a new
  * one is a visible edit and not a silent side effect of the first write. */
@@ -196,11 +196,20 @@ export class EvolutionStore {
     } catch {
       return undefined;
     }
+    let run: EvolveRun;
     try {
-      return JSON.parse(raw) as EvolveRun;
+      run = JSON.parse(raw) as EvolveRun;
     } catch {
       throw new EvolutionStoreError(`Corrupt evolve run record: ${runId}`);
     }
+    // Runs written before `"era"` was renamed to `"puct"` are normalised here
+    // rather than rewritten on disk, so this is the only place downstream code
+    // can meet the old name. See `evolveAlgorithm`.
+    return {
+      ...run,
+      algorithm: evolveAlgorithm(run.algorithm),
+      goal: { ...run.goal, algorithm: evolveAlgorithm(run.goal?.algorithm) },
+    };
   }
 
   /** Newest first. `sessionId` narrows to one session's runs. */

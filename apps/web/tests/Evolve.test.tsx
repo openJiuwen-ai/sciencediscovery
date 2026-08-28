@@ -63,7 +63,7 @@ test("a goal from before the wizard is still recognisable as a placeholder", () 
 /** A goal shaped like the ones created before the wizard existed. */
 function placeholderShaped(): EvolveGoal {
   return {
-    algorithm: "era",
+    algorithm: "puct",
     baselineProgramCas: "sha256:placeholder",
     budget: {
       candidateTimeoutSeconds: 60, expansions: 6, maxCostCents: 500,
@@ -95,7 +95,7 @@ function placeholderShaped(): EvolveGoal {
 
 // --- the fold ---------------------------------------------------------------
 
-const START: EvolveEvent = { algorithm: "era", scorecardHash: "sha256:card", type: "search_started" };
+const START: EvolveEvent = { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" };
 const SEED: EvolveEvent = { baselineScore: 0.5, nodeIndex: 0, type: "seeded" };
 
 test("a whole sequence folds into the view the dashboard reads", () => {
@@ -111,7 +111,7 @@ test("a whole sequence folds into the view the dashboard reads", () => {
   ]);
 
   assert.equal(view.status, "succeeded");
-  assert.equal(view.algorithm, "era");
+  assert.equal(view.algorithm, "puct");
   assert.equal(view.baselineScore, 0.5);
   assert.equal(view.expansions, 1);
   assert.equal(view.maxDepth, 1);
@@ -197,7 +197,7 @@ test("progress is bounded by the budget", () => {
 function run(overrides: Partial<EvolveRun> = {}): EvolveRun {
   const goal = placeholderShaped();
   return {
-    algorithm: "era",
+    algorithm: "puct",
     candidates: 2,
     costCents: 0,
     createdAt: "2026-08-19T00:00:00.000Z",
@@ -429,7 +429,7 @@ test("the table carries every channel the picture encodes", () => {
 test("种子带上自己的代码哈希，diff 才有 before 可比", () => {
   // Every diff in a live run rendered as pure addition, nothing ever removed.
   // `expanded` carried `codeHash`; `seeded` did not, and `CandidateDetail`
-  // diffs against `parent.codeHash`. A flat tree is ERA's normal shape — ten
+  // diffs against `parent.codeHash`. A flat tree is the PUCT tree's normal shape — ten
   // of eleven nodes forked from the root on one run — so almost every parent
   // *is* the root, and an absent hash meant an empty "before" every time.
   const view = reduceEvolveRecords(emptyRunView(), [

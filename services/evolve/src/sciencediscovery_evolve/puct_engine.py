@@ -12,20 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The ERA search, wired the way upstream's own ERA port wires it.
+"""The PUCT tree search, wired the way upstream's own ERA port wires it.
 
-`futs.search`'s loop body is a Strategy plus an Aggregator (`vendor/era/search.py`);
+`futs.search`'s loop body is a Strategy plus an Aggregator (`vendor/puct/search.py`);
 AgentDescent supplies the workers, the ledger, the evidence cards, the staleness
 handling and the barrier-free runtime. This module is the wiring plus the parts
 that are ours: the scorecard as a :class:`Domain`, the model call, and turning
 the search into the event stream the rest of the system reads.
 
-**Why not a loop of our own.** An earlier revision drove `EraTree` directly and
+**Why not a loop of our own.** An earlier revision drove `PuctTree` directly and
 hand-rolled the wave scheduling, on the reasoning that `evolve()` reports only
 round aggregates and could not describe a tree. That was wrong in its premise:
 `aggregator_factory` is a documented parameter of both `evolve` and
 `async_evolve`, `AggregatorProtocol` is the seam it plugs into, and upstream's
-ERA port puts the whole tree there. Everything the hand-rolled version had to
+the upstream port puts the whole tree there. Everything the hand-rolled version had to
 build — worker pool, virtual loss, wave dispatch, the "results as they finish"
 consumer — is machinery the engine already owns and has tested.
 
@@ -67,17 +67,17 @@ from .judge_domain import JudgeUnavailable, grader, judge_domain
 from .scorecard import KNOWN_NORMALIZE
 from .scorecard_domain import SCORE_KEY, scorecard_domain
 from .text_candidate import extract_text
-from .vendor.era.program import extract_program
-from .vendor.era.search import (
-    EraStrategy,
-    EraTreeAggregator,
+from .vendor.puct.program import extract_program
+from .vendor.puct.search import (
+    PuctStrategy,
+    PuctTreeAggregator,
     make_propose,
     make_reward,
     make_run,
 )
-from .vendor.era.tree import EraTree, Node
+from .vendor.puct.tree import PRIOR_FACTORS, PuctTree, Node
 
-log = get_logger("era")
+log = get_logger("puct")
 
 #: How long the run may sit past its expansion budget before the engine is told
 #: to wind down. The budget is `max_iters`; this is the safety net for a backend
@@ -152,10 +152,10 @@ class _Usage:
             return self._per_expansion.get(iteration)
 
 
-class EraEngine:
+class PuctEngine:
     """One search: seed, expand N times, report the winner."""
 
-    name = "era"
+    name = "puct"
     #: Candidates are model-written Python that gets executed. A run without a
     #: backend is refused at the seam in `server.py`, not here.
     requires_sandbox = True
@@ -285,8 +285,9 @@ class EraEngine:
                 baseline=baseline,
             )
 
-        tree = EraTree(c_puct=float(spec.options.get("c_puct", 1.0)),
-                       candidate_limit=spec.expansions)
+        tree = PuctTree(c_puct=float(spec.options.get("c_puct", 1.0)),
+                        prior_factors=_prior_factors(spec.options),
+                        candidate_limit=spec.expansions)
         store = CandidateStore(self._store_root)
         usage = _Usage()
         reporter = _Reporter(spec, tree, domain, store, usage, emit)
@@ -296,12 +297,12 @@ class EraEngine:
                  else _group_tasks(spec))
         # No colon: the engine refuses an artifact id that is not a safe
         # filename, because it becomes one inside the ledger's git repo.
-        artifact_id = "era-" + "".join(
+        artifact_id = "puct-" + "".join(
             char if char.isalnum() or char in "_.-" else "-" for char in spec.search_id
         )
 
         def factory(ledger: Any, verifier: Any, audit: Any, config: Any, policy: Any) -> Any:
-            aggregator = EraTreeAggregator(
+            aggregator = PuctTreeAggregator(
                 ledger, verifier, tree, config, policy,
                 domain=domain, artifact_id=artifact_id, on_event=reporter.on_event,
                 repair=_repairer(spec, complete, domain),
@@ -346,7 +347,7 @@ class EraEngine:
             # into no-ops.
             "solved_threshold": 2.0,
             "self_verify": False,
-            "strategy": EraStrategy(domain),
+            "strategy": PuctStrategy(domain),
             "usage": None,
         }
 
@@ -378,7 +379,7 @@ class EraEngine:
                     **common,
                 )
         except RuntimeError as error:
-            # `EraTreeAggregator.seed` refuses a root that will not run, and the
+            # `PuctTreeAggregator.seed` refuses a root that will not run, and the
             # engine surfaces it here. Every score in the search is relative to
             # the root, so without it there is nothing for "better" to mean.
             raise _Refusal(str(error)) from error
@@ -396,7 +397,7 @@ class EraEngine:
         usage: _Usage,
         reporter: "_Reporter",
         should_stop: Callable[[], bool],
-        tree: EraTree,
+        tree: PuctTree,
     ) -> Callable[[str, int], Tuple[str, str]]:
         """`(prompt, iteration) -> (code, change_summary)`.
 
@@ -449,7 +450,7 @@ class _Reporter:
     def __init__(
         self,
         spec: RunSpec,
-        tree: EraTree,
+        tree: PuctTree,
         domain: Any,
         store: CandidateStore,
         usage: _Usage,
@@ -582,7 +583,7 @@ class _Reporter:
                 key: float(value) for key, value in metrics.items()
                 if isinstance(value, (int, float)) and key not in (SCORE_KEY, "seconds")
             }
-            # Both numbers are the held-out one under ERA: a node is scored on
+            # Both numbers are the held-out one under PUCT: a node is scored on
             # the gate shards and ranked on that same score. Saying so with two
             # equal fields beats inventing a rollout figure that is not measured.
             self.emit(events.evaluated(
@@ -712,11 +713,25 @@ class _Reporter:
 def _refuse_unrunnable(spec: RunSpec) -> None:
     if spec.resume_from_sequence:
         raise _Refusal(
-            "ERA 搜索暂不支持续跑：树需要先从事件日志重建，"
+            "PUCT 搜索暂不支持续跑：树需要先从事件日志重建，"
             "否则新节点会用已经用过的编号，图里一个编号对应两份内容"
         )
     if not spec.scorecard:
         raise _Refusal("这次搜索没有拿到评分卡，无从判断候选好坏")
+    # Before the search starts, alongside the other configuration faults. The
+    # tree raises on an unknown factor too, but that happens after the run has
+    # been announced as started and after the dataset has been staged, so the
+    # user watches a run begin and then die for a typo.
+    try:
+        unknown = [
+            factor for factor in _prior_factors(spec.options) if factor not in PRIOR_FACTORS
+        ]
+    except ValueError as error:
+        raise _Refusal(f"prior 参数的形状不对：{error}") from error
+    if unknown:
+        raise _Refusal(
+            f"不认识的 prior 因子 {unknown}；这一侧支持的是 {list(PRIOR_FACTORS)}"
+        )
     for criterion in spec.scorecard.get("criteria") or []:
         kind = (criterion.get("normalize") or {}).get("kind")
         if kind not in KNOWN_NORMALIZE:
@@ -919,7 +934,26 @@ def _mode(spec: RunSpec) -> str:
     return mode
 
 
-def _depth(tree: EraTree, node: Node) -> int:
+def _prior_factors(options: Dict[str, Any]) -> Tuple[str, ...]:
+    """``options["prior"]`` as a tuple, refusing anything not recognised.
+
+    Refused rather than filtered. The value is drafted by a model and travels
+    through four processes to get here; silently dropping a misspelling would
+    run the search under the uniform prior and report success, and the run that
+    was supposed to test whether the prior helps would have answered a different
+    question. `PuctTree` does the checking -- this only normalises the shape.
+    """
+    raw = options.get("prior")
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(f"prior must be a list of factor names, got {type(raw).__name__}")
+    return tuple(str(item) for item in raw)
+
+
+def _depth(tree: PuctTree, node: Node) -> int:
     depth, cursor = 0, node
     while cursor.parent_index is not None:
         cursor = tree.nodes[cursor.parent_index]

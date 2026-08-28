@@ -29,7 +29,7 @@ from typing import Any, Dict
 import pytest
 
 from sciencediscovery_evolve.script_domain import ScriptError, script_domain
-from sciencediscovery_evolve.vendor.era.sandbox import detect_local_capability
+from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 
 CARD: Dict[str, Any] = {
     "aggregate": "weighted_sum",
@@ -227,7 +227,7 @@ def test_the_evaluators_diagnosis_reaches_the_mutation_prompt():
     reflector, was told only the number. It kept proposing new variants of the
     same overspend because nothing distinguished them from wrong answers.
     """
-    from sciencediscovery_evolve.vendor.era.program import Program
+    from sciencediscovery_evolve.vendor.puct.program import Program
 
     d = domain()
     parent = Program(

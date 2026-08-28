@@ -49,9 +49,9 @@ from .auth import require_internal_token
 from .engine import Engine, RunSpec
 from .events import HEARTBEAT, EventStream, encode_ndjson
 from .logging_config import get_logger
-from .era_engine import EraEngine
+from .puct_engine import PuctEngine
 from .stub_engine import StubEngine
-from .vendor.era.sandbox import SandboxCapability, detect_local_capability
+from .vendor.puct.sandbox import SandboxCapability, detect_local_capability
 
 log = get_logger("server")
 
@@ -61,12 +61,16 @@ app = FastAPI(title="sciencediscovery-evolve")
 #: pin the stub for a reproduction without touching the API.
 #:
 #: The default is still ``stub``. Flipping it to follow ``algorithm`` waits for
-#: the control plane to stage datasets: until then an ``era`` run has nothing to
+#: the control plane to stage datasets: until then a ``puct`` run has nothing to
 #: measure, and defaulting to it would replace a working demo with a run that
 #: refuses at the first expansion.
-ENGINES: dict[str, Engine] = {"era": EraEngine(), "stub": StubEngine()}
+#: ``"era"`` is the name this engine shipped under before the rename, kept as an
+#: alias because the control plane sends whatever a stored goal recorded and a
+#: run created back then recorded the old one. Unknown engine names are a 400,
+#: so dropping it would turn an old run into a refusal rather than a fallback.
+ENGINES: dict[str, Engine] = {"puct": PuctEngine(), "era": PuctEngine(), "stub": StubEngine()}
 
-_ALGORITHMS = {"era", "openevolve"}
+_ALGORITHMS = {"puct", "era", "openevolve"}
 
 #: Bounded so a slow reader blocks the engine rather than growing memory.
 _QUEUE_DEPTH = 1024
@@ -95,7 +99,7 @@ _running_lock = threading.Lock()
 
 class RunRequest(BaseModel):
     search_id: str = Field(min_length=1, max_length=200)
-    algorithm: str = "era"
+    algorithm: str = "puct"
     expansions: int = Field(default=6, ge=1, le=10_000)
     scorecard_hash: str = Field(min_length=1, max_length=200)
     #: The frozen scorecard body. Absent for engines that grade nothing.

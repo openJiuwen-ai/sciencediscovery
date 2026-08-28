@@ -66,7 +66,7 @@ export interface PreflightInput {
  * few thousand is plenty and demanding more would refuse runs that work.
  */
 const MIN_TOKENS_PER_CALL: Record<string, { thinking: number; quiet: number }> = {
-  era: { quiet: 8_000, thinking: 96_000 },
+  puct: { quiet: 8_000, thinking: 96_000 },
   // OpenEvolve rewrites the whole genome rather than editing it.
   openevolve: { quiet: 16_000, thinking: 128_000 },
 };
@@ -99,7 +99,7 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
     });
   }
 
-  const floors = MIN_TOKENS_PER_CALL[input.goal.algorithm] ?? MIN_TOKENS_PER_CALL.era!;
+  const floors = MIN_TOKENS_PER_CALL[input.goal.algorithm] ?? MIN_TOKENS_PER_CALL.puct!;
   const quiet = input.goal.thinking === "disabled";
   const floor = quiet ? floors.quiet : floors.thinking;
   if (budget.maxTokensPerCall < floor) {

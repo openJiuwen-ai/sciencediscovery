@@ -112,7 +112,7 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
     : node.label === "ToolCall" ? pick("task_type") ?? pick("tool_type") ?? pick("task_id")
     : node.label === "Paper" ? pick("title") ?? pick("link")
     : node.label === "ResearchGoal" ? pick("core_objective") ?? pick("goal_id")
-    // The algorithm alone read as a mystery word ("era"); the held-out score
+    // The algorithm alone read as a mystery word ("puct"); the held-out score
     // is the one number worth a caption, so the two travel together.
     : node.label === "SearchRun" ? (() => {
       const algorithm = pick("algorithm") ?? pick("search_id");

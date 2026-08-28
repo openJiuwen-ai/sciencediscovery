@@ -16,7 +16,7 @@
  * The search graph a `/evolve` run writes: one `SubTask` in the memory graph
  * binds one `SearchRun`, under which the candidates live.
  *
- * The same three types cover both algorithms. ERA's tree and OpenEvolve's island
+ * The same three types cover both algorithms. the PUCT tree and OpenEvolve's island
  * archive differ in *where* a candidate sits, not in what a candidate is, so the
  * shape is: candidates are nodes, lineage is an edge, and the algorithm-specific
  * placement is either a property (`island`) or — for MAP-Elites, where occupancy
@@ -45,11 +45,11 @@ export interface SearchRunSummary {
   islands?: number;
   /** Idempotency watermark; see `EvolveRun.lastSeq`. */
   lastSeq: number;
-  /** era only. */
+  /** puct only. */
   maxDepth?: number;
   /** openevolve only. */
   migrations?: number;
-  /** era only. */
+  /** puct only. */
   rootVisits?: number;
   /** The frozen scorecard this run's scores are comparable under. */
   scorecardHash: string;
@@ -64,7 +64,7 @@ export interface SearchRunSummary {
  * One candidate, including a failed one.
  *
  * `nodeIndex` is the insertion ordinal and is the unified key for both
- * algorithms: ERA's upstream node index already is one, and OpenEvolve's archive
+ * algorithms: the PUCT tree's node index already is one, and OpenEvolve's archive
  * history append order is one too. `programId` carries OpenEvolve's own string
  * identity alongside it rather than replacing it.
  */
@@ -105,12 +105,12 @@ export interface SearchNodeSummary {
   /** `null` for a failed candidate — see `EvolveEvent`'s `expanded`. */
   score: number | null;
   searchId: string;
-  /** era: the PUCT value at the moment this node was chosen for expansion. */
+  /** puct: the PUCT value at the moment this node was chosen for expansion. */
   selectedPuct?: number;
   selectedRankScore?: number;
   selectionCount?: number;
   valid: boolean;
-  /** era: absolute visit count. */
+  /** puct: absolute visit count. */
   visits?: number;
   worker?: number;
 }

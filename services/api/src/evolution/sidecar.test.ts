@@ -87,7 +87,7 @@ test("a keep-alive keeps the socket warm without becoming a record", async () =>
       controller.enqueue(encoder.encode("\n\n"));
       controller.enqueue(encoder.encode(`${JSON.stringify({
         createdAt: "2026-08-20T00:00:00.000Z",
-        event: { algorithm: "era", scorecardHash: "h", type: "search_started" },
+        event: { algorithm: "puct", scorecardHash: "h", type: "search_started" },
         sequence: 1,
       })}\n`));
       controller.enqueue(encoder.encode("\n"));
