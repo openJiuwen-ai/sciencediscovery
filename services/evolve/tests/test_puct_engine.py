@@ -265,7 +265,10 @@ def test_becoming_the_best_is_what_acceptance_means_here() -> None:
 
 
 def test_a_failed_candidate_still_enters_the_tree() -> None:
-    harness = Harness(scores=[-1.0, 0.7])
+    # Every measurement fails, so the worker's fix-it loop spends its redraws
+    # and hands the last one forward anyway. That is the case this pins: a
+    # candidate that could not be saved is a node, not a gap.
+    harness = Harness(scores=[-1.0])
     harness.run(spec(expansions=2))
 
     expanded = harness.of("expanded")
@@ -275,6 +278,8 @@ def test_a_failed_candidate_still_enters_the_tree() -> None:
     assert expanded[0]["score"] is None
     assert len(expanded) == 2
     assert harness.of("merged")[0]["category"] == "candidate-failed"
+    # And the redraws it spent are on the record rather than silent.
+    assert any("drawn again" in event["message"] for event in harness.of("log"))
 
 
 def test_a_constraint_violation_is_a_refusal_that_names_the_constraint() -> None:
@@ -850,6 +855,47 @@ def test_the_stop_reason_survives_onto_the_finish_event() -> None:
     assert event["candidates"] == 9      # planned versus actual, side by side
 
 
+def _fix_loop(draws, checker, *, attempts=2):
+    """Drive the real `make_propose` fix-it loop and report what it did.
+
+    Nothing about the decision is restated here: the loop, the check and the
+    keep-the-last-draw rule are all `make_propose`'s. Two earlier versions of a
+    helper like this spelled the decision out themselves and went on passing
+    after the original was corrected, proving only that the copy worked.
+    """
+    from sciencediscovery_evolve.vendor.puct.search import make_propose
+    from sciencediscovery_evolve.vendor.puct.tree import PuctTree
+
+    tree = PuctTree(c_puct=1.0)
+    tree.seed(Program("p0", 0, None, "seed", "baseline", {"score": 0.5}, True, ""), 0.5)
+
+    prompts, events_seen = [], []
+    drawn = iter(draws)
+
+    def complete(prompt, iteration):
+        prompts.append(prompt)
+        return (*next(drawn), None)
+
+    class _Domain:
+        @staticmethod
+        def prompt(program):
+            return "improve it"
+
+        @staticmethod
+        def reward(metrics):
+            return max(0.0, float(metrics["score"]))
+
+    propose = make_propose(
+        tree, complete, _Domain(),
+        on_event=lambda kind, payload: events_seen.append((kind, payload)),
+        check=checker,
+        repair_prompt=lambda code, error: f"fix: {error}",
+        repair_attempts=attempts,
+    )
+    payload = json.loads(propose("", _task(), "", 0.0))
+    return payload, prompts, [p for k, p in events_seen if k == "repaired"]
+
+
 def test_a_failed_candidate_gets_one_repair_on_its_own_error() -> None:
     """Seven of ten candidates never ran on a live compression search.
 
@@ -857,164 +903,185 @@ def test_a_failed_candidate_gets_one_repair_on_its_own_error() -> None:
     again from the parent — a fresh design with a fresh bug. Most of those
     failures were one visible line: an import that raises, an index off by one.
     """
-    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
+    checked = []
 
-    asked = []
-
-    def repair(code, error, iteration):
-        asked.append((code, error, iteration))
-        return "def solve():\n    return 1\n"
-
-    scored = []
-
-    def evaluate(code, shards):
-        scored.append(code)
+    def check(code):
+        checked.append(code)
         if "return 1" in code:
             return True, {"score": 0.8}, ""
         return False, {"score": float("-inf")}, "IndexError: list index out of range"
 
-    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
-    aggregator.repair = repair
-    aggregator.domain = type("D", (), {
-        "evaluate": staticmethod(evaluate),
-        "reward": staticmethod(lambda m: max(0.0, float(m["score"]))),
-    })()
-    aggregator._held_out_shards = lambda: (0, 1)
-    aggregator.on_event = lambda *args: None
+    payload, prompts, repairs = _fix_loop(
+        [("def solve():\n    return [][0]\n", "first try"),
+         ("def solve():\n    return 1\n", "fixed it")],
+        check,
+    )
 
-    # The shape `step()` runs per surviving card.
-    code = "def solve():\n    return [][0]\n"
-    valid, metrics, error = _run_one(aggregator, code, {"iteration": "7"})
+    assert payload["code"] == "def solve():\n    return 1\n", "the working draw goes forward"
+    assert len(prompts) == 2
+    assert "IndexError" in prompts[1], "the redraw is told what its own draw did"
+    assert repairs and repairs[0]["attempt"] == 1
+    assert "IndexError" in repairs[0]["why"]
 
-    assert asked, "a failed candidate was discarded without a repair attempt"
-    assert asked[0][1].startswith("IndexError")      # its own error, nothing else
-    assert asked[0][2] == 7                          # billed to its own expansion
-    assert valid and metrics["score"] == 0.8         # the repaired one is kept
+
+def test_the_check_reads_a_rollout_shard_and_never_the_held_out_ones() -> None:
+    """The reason the loop moved off the merger, and the more important half.
+
+    On the merger it evaluated on `_held_out_shards()` — the gate — and kept
+    whichever attempt scored best there. A repaired candidate's gate score was
+    then a maximum over three measurements where an unrepaired one's was a
+    single measurement, and the two were ranked against each other. Here the
+    engine hands the loop one rollout shard and the gate is measured once,
+    later, by the merger.
+    """
+    from sciencediscovery_evolve.puct_engine import _rollout_check, _rollout_shards
+
+    class _Spec:
+        scorecard = {"criteria": [{"measure": {"split": {
+            "rolloutShards": 4, "gateShards": 12, "testShards": 4,
+        }}}]}
+
+    shards = _rollout_shards(None, _Spec(), "custom_script")
+    assert shards == (0,), "one rollout shard, and it is not a gate index"
+
+    read = []
+    domain = type("D", (), {"evaluate": staticmethod(
+        lambda code, s: (read.append(tuple(s)) or (True, {"score": 1.0}, "")))})()
+    _rollout_check(domain, shards)("x = 1")
+    assert read == [(0,)]
+
+
+def test_no_rollout_shard_means_no_fix_it_loop_rather_than_a_gate_read() -> None:
+    # Falling back to the held-out shards would be the bug this move exists to
+    # remove, so the loop is turned off instead.
+    from sciencediscovery_evolve.puct_engine import _rollout_check
+
+    assert _rollout_check(object(), ()) is None
 
 
 def test_a_candidate_that_crashed_on_every_shard_is_repaired_too() -> None:
     """The case the first version of this missed, found in a live run.
 
-    An evaluator that catches its own exceptions — the shape every mode here
-    asks for — reports a *successful measurement of a broken candidate*:
-    `valid: true` with a score of 0. Gating the repair on `not valid` therefore
-    never fired for the failures it was built for. On a compression run seven
-    candidates crashed on every shard, all arrived valid, and the run made nine
-    model calls: not one repair among them.
+    An evaluator that catches its own exceptions reports a *successful
+    measurement of a broken candidate*: `valid: true`, score 0.0. Gating the
+    loop on `valid` alone let seven such candidates through untouched.
     """
-    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
+    seen = []
 
-    asked = []
+    def check(code):
+        seen.append(code)
+        if "good" in code:
+            return True, {"score": 0.9}, ""
+        # Valid, and worth nothing: the shape a guarded evaluator produces.
+        return True, {"score": 0.0}, "every case came out wrong"
 
-    def repair(code, error, iteration):
-        asked.append(error)
-        return "def solve():\n    return 1\n"
+    payload, prompts, repairs = _fix_loop(
+        [("broken", "first"), ("good", "second")], check)
 
-    def evaluate(code, shards):
-        if "return 1" in code:
-            return True, {"score": 0.8}, ""
-        # Valid: the evaluator ran and measured. Zero: nothing worked.
-        return True, {"score": 0.0}, "round-trip mismatch"
-
-    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
-    aggregator.repair = repair
-    aggregator.domain = type("D", (), {
-        "evaluate": staticmethod(evaluate),
-        "reward": staticmethod(lambda m: float(m["score"])),
-    })()
-    aggregator._held_out_shards = lambda: (0, 1)
-    aggregator.on_event = lambda *args: None
-
-    valid, metrics, _ = _run_one(aggregator, "def solve():\n    return None\n", {"iteration": "3"})
-
-    assert asked == ["round-trip mismatch"], "a valid-but-zero candidate was never repaired"
-    assert metrics["score"] == 0.8
+    assert len(prompts) == 2, "a valid-but-worthless candidate is still debugged"
+    assert payload["code"] == "good"
+    assert repairs and "every case came out wrong" in repairs[0]["why"]
 
 
 def test_a_working_but_worse_candidate_is_left_alone() -> None:
     """Repair is for candidates that did not run, not for ones that ran badly.
 
-    Making it worse is what the search is for; spending a model call to "fix" a
-    candidate that works would buy a second draw from the same distribution at
-    the price of the diversity between siblings.
+    A candidate scoring below its parent is the ordinary case the search exists
+    to sort out; spending a second model call on it would be paying to remove
+    the variation selection is supposed to weigh.
     """
-    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
+    checked = []
 
-    asked = []
+    def check(code):
+        checked.append(code)
+        return True, {"score": 0.2}, ""      # runs, just not well
 
-    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
-    aggregator.repair = lambda *args: asked.append(args) or "x"
-    aggregator.domain = type("D", (), {
-        "evaluate": staticmethod(lambda code, shards: (True, {"score": 0.11}, "slow on 2 of 8")),
-        "reward": staticmethod(lambda m: float(m["score"])),
-    })()
-    aggregator._held_out_shards = lambda: (0, 1)
-    aggregator.on_event = lambda *args: None
+    payload, prompts, repairs = _fix_loop([("weak", "first"), ("never", "x")], check)
 
-    _run_one(aggregator, "def solve():\n    return 2\n", {"iteration": "3"})
-
-    assert asked == [], "a candidate that ran was sent for repair"
+    assert len(prompts) == 1, "no redraw"
+    assert payload["code"] == "weak"
+    assert repairs == []
 
 
-def test_a_repair_that_did_not_help_is_thrown_away() -> None:
-    """Watched live, one level below the trigger bug and the same shape.
+def test_the_last_draw_goes_forward_even_when_it_is_still_broken() -> None:
+    """Upstream's rule, and the opposite of what the merger version did.
 
-    Keeping the repair was gated on `fixed`, which is `valid`, which an
-    evaluator that catches its own exceptions reports for everything — so the
-    repaired version replaced the original unconditionally, including when it
-    scored the same 0. The panel said "repaired" twice, both at 0.0000.
+    The old one kept whichever attempt scored best on the gate, so a failed
+    repair could not make things worse — at the cost of measuring three times on
+    the split that decides the ranking. Here the loop buys attempts and does not
+    hide a failure: if they run out, the last draw becomes the `-inf` node
+    upstream would have appended on the first one.
     """
-    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
+    def check(code):
+        return True, {"score": 0.0}, f"still broken: {code}"
 
-    def evaluate(code, shards):
-        # Both measure fine, both score nothing — the repair changed the bug,
-        # not the outcome.
-        if "repaired" in code:
-            return True, {"score": 0.0}, "from the repaired version: still does not match"
-        return True, {"score": 0.0}, "from the original: the round trip does not match"
+    payload, prompts, repairs = _fix_loop(
+        [("first", "a"), ("second", "b")], check)
 
-    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
-    aggregator.repair = lambda code, error, iteration: "def solve():\n    return 'repaired'\n"
-    aggregator.domain = type("D", (), {
-        "evaluate": staticmethod(evaluate),
-        "reward": staticmethod(lambda m: float(m["score"])),
-    })()
-    aggregator._held_out_shards = lambda: (0, 1)
-    aggregator.on_event = lambda *args: None
-
-    _, _, error = _run_one(aggregator, "def solve():\n    return None\n", {"iteration": "1"})
-
-    assert error.startswith("from the original"), "a repair that did not help displaced the original"
+    assert len(prompts) == 2
+    assert payload["code"] == "second", "the last draw, not the best of them"
+    assert len(repairs) == 1, "the final draw is not checked, so it reports no verdict"
 
 
-def _run_one(aggregator, code, ops):
-    """Evaluate, then hand the result to the real `_repair_once`.
+def test_each_repair_attempt_sees_what_the_last_one_produced() -> None:
+    """A bounded loop, not one shot: each attempt reads its own predecessor.
 
-    Nothing about the repair is restated here. Two earlier versions of this
-    helper spelled the decision out themselves — first `if not valid`, then the
-    acceptance check — and each went on passing after the original was
-    corrected, proving only that the copy worked. `step()` calls the same
-    method, and `test_step_itself_asks_for_the_repair` pins that it still does.
+    Measured over two live runs: eight one-shot repairs landed two, and the six
+    that failed were each handed the original traceback with no view of what
+    their own fix had done.
     """
-    from sciencediscovery_evolve.vendor.puct.search import _evaluate
+    def check(code):
+        return True, {"score": 0.0}, f"failure of {code}"
 
-    valid, metrics, error = _evaluate(aggregator.domain, code, aggregator._held_out_shards())
-    _, valid, metrics, error = aggregator._repair_once(code, ops, valid, metrics, error)
-    return valid, metrics, error
+    _payload, prompts, _repairs = _fix_loop(
+        [("draw1", "a"), ("draw2", "b"), ("draw3", "c")], check, attempts=3)
+
+    assert len(prompts) == 3
+    assert "failure of draw1" in prompts[1]
+    assert "failure of draw2" in prompts[2], "the third attempt sees the second, not the first"
 
 
-def test_step_itself_asks_for_the_repair() -> None:
-    """The tests above drive `_repair_once`; this pins that `step()` still does.
+def test_debugging_stops_as_soon_as_the_candidate_works() -> None:
+    # The point is a working candidate, not a full budget spent.
+    calls = []
 
-    Exercising a method the real path stopped calling passes just as happily,
-    which is the way a test like that quietly stops meaning anything.
+    def check(code):
+        calls.append(code)
+        return True, {"score": 0.7}, ""
+
+    _payload, prompts, _repairs = _fix_loop(
+        [("works", "a"), ("never", "b"), ("never", "c")], check, attempts=3)
+
+    assert len(calls) == 1
+    assert len(prompts) == 1
+
+
+def test_the_loop_is_off_when_nothing_supplies_a_check() -> None:
+    """Upstream appends a failed candidate as a `-inf` node and moves on.
+
+    That is the behaviour without a check, and it has to stay reachable: the
+    loop is an opt-in a task asks for, not something the port does to every run
+    whether or not there is a rollout shard to spare.
     """
-    import inspect
+    from sciencediscovery_evolve.vendor.puct.search import make_propose
+    from sciencediscovery_evolve.vendor.puct.tree import PuctTree
 
-    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
+    tree = PuctTree(c_puct=1.0)
+    tree.seed(Program("p0", 0, None, "seed", "baseline", {"score": 0.5}, True, ""), 0.5)
+    prompts = []
 
-    source = inspect.getsource(PuctTreeAggregator.step)
-    assert "self._repair_once(" in source
+    def complete(prompt, iteration):
+        prompts.append(prompt)
+        return "broken", "summary", None
+
+    propose = make_propose(
+        tree, complete,
+        type("D", (), {"prompt": staticmethod(lambda p: "improve it")})(),
+    )
+    payload = json.loads(propose("", _task(), "", 0.0))
+
+    assert len(prompts) == 1
+    assert payload["code"] == "broken"
 
 
 def test_the_seed_carries_its_source_so_a_diff_has_a_before() -> None:
@@ -1047,93 +1114,6 @@ def test_the_engine_stores_the_seed_before_announcing_it() -> None:
     seeded_block = source[source.index('kind == "seeded"'):source.index('kind == "node"')]
     assert "self.store.put(" in seeded_block
     assert "code_hash=seed_hash" in seeded_block
-
-
-def test_each_repair_attempt_sees_what_the_last_one_produced() -> None:
-    """One shot cannot debug: the second fix has to read the first fix's error.
-
-    Over two live runs eight one-shot repairs landed two, and the six that
-    failed were each handed the original traceback with no view of what their
-    own change had done.
-    """
-    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
-
-    saw = []
-    fixes = iter(["def f():\n    return 'second'\n", "def f():\n    return 'third'\n"])
-
-    def repair(code, error, iteration):
-        saw.append(error)
-        return next(fixes)
-
-    def evaluate(code, shards):
-        if "third" in code:
-            return True, {"score": 0.7}, ""            # finally works
-        if "second" in code:
-            return True, {"score": 0.0}, "second failure: still not working"
-        return True, {"score": 0.0}, "first failure: the original is broken"
-
-    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
-    aggregator.repair = repair
-    aggregator.domain = type("D", (), {
-        "evaluate": staticmethod(evaluate),
-        "reward": staticmethod(lambda m: float(m["score"])),
-    })()
-    aggregator._held_out_shards = lambda: (0, 1)
-    aggregator.on_event = lambda *args: None
-
-    valid, metrics, _ = _run_one(aggregator, "def f():\n    return None\n", {"iteration": "2"})
-
-    assert saw == ["first failure: the original is broken", "second failure: still not working"], saw
-    assert metrics["score"] == 0.7, "the second attempt fixed it and was not taken"
-
-
-def test_debugging_stops_as_soon_as_the_candidate_works() -> None:
-    """Every attempt is a model call. A working candidate ends the loop."""
-    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
-
-    calls = []
-    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
-    aggregator.repair = lambda code, error, iteration: (
-        calls.append(error) or "def f():\n    return 'fixed'\n")
-    aggregator.domain = type("D", (), {
-        "evaluate": staticmethod(lambda code, shards:
-                                 (True, {"score": 0.6}, "") if "fixed" in code
-                                 else (True, {"score": 0.0}, "broken")),
-        "reward": staticmethod(lambda m: float(m["score"])),
-    })()
-    aggregator._held_out_shards = lambda: (0, 1)
-    aggregator.on_event = lambda *args: None
-
-    _run_one(aggregator, "def f():\n    return None\n", {"iteration": "1"})
-
-    assert len(calls) == 1, f"the candidate already runs and repair kept going: {len(calls)} attempts"
-
-
-def test_a_later_attempt_cannot_displace_a_better_earlier_one() -> None:
-    """Accepted against the original, so the loop never returns a regression."""
-    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
-
-    fixes = iter(["def f():\n    return 'good'\n", "def f():\n    return 'worse'\n"])
-    scores = {"good": 0.0001, "worse": 0.0}     # both still dead, one less so
-
-    def evaluate(code, shards):
-        for tag, value in scores.items():
-            if tag in code:
-                return True, {"score": value}, f"{tag} failure"
-        return True, {"score": 0.0}, "original failure"
-
-    aggregator = PuctTreeAggregator.__new__(PuctTreeAggregator)
-    aggregator.repair = lambda code, error, iteration: next(fixes)
-    aggregator.domain = type("D", (), {
-        "evaluate": staticmethod(evaluate),
-        "reward": staticmethod(lambda m: float(m["score"])),
-    })()
-    aggregator._held_out_shards = lambda: (0, 1)
-    aggregator.on_event = lambda *args: None
-
-    _, metrics, _ = _run_one(aggregator, "def f():\n    return None\n", {"iteration": "1"})
-
-    assert metrics["score"] == 0.0001, "a worse second attempt displaced a better first one"
 
 
 def test_the_repair_is_told_what_the_environment_actually_has() -> None:
@@ -1189,7 +1169,6 @@ def test_a_summary_copied_from_the_parent_is_blanked() -> None:
     the node label. An empty label is honest about carrying no information;
     sixteen identical ones actively claim the candidates are the same thing.
     """
-    import json as jsonlib
 
     from sciencediscovery_evolve.vendor.puct.search import make_propose
     from sciencediscovery_evolve.vendor.puct.tree import PuctTree
@@ -1209,7 +1188,7 @@ def test_a_summary_copied_from_the_parent_is_blanked() -> None:
                 "Lossless text compression: compress(text)->bytes.", None)
 
     propose = make_propose(tree, complete, _Domain())
-    payload = jsonlib.loads(propose("", _task(), "", 0.0))
+    payload = json.loads(propose("", _task(), "", 0.0))
     assert payload["change_summary"] == ""
 
     # A genuinely new line survives untouched.
@@ -1218,7 +1197,7 @@ def test_a_summary_copied_from_the_parent_is_blanked() -> None:
                 "Switched to LZ77 sliding-window matching.", None)
 
     propose2 = make_propose(tree, complete_fresh, _Domain())
-    payload2 = jsonlib.loads(propose2("", _task(), "", 0.0))
+    payload2 = json.loads(propose2("", _task(), "", 0.0))
     assert payload2["change_summary"] == "Switched to LZ77 sliding-window matching."
 
 

@@ -65,7 +65,7 @@ from .judge_domain import grader, judge_domain
 from .scorecard import KNOWN_NORMALIZE
 from .scorecard_domain import SCORE_KEY, scorecard_domain
 from .text_candidate import extract_text
-from .prompt import with_promise_request
+from .prompt import repair_prompt, with_promise_request
 from .vendor.puct.program import extract_program, read_promise
 from .vendor.puct.search import (
     PuctStrategy,
@@ -304,7 +304,6 @@ class PuctEngine:
             aggregator = PuctTreeAggregator(
                 ledger, verifier, tree, config, policy,
                 domain=domain, artifact_id=artifact_id, on_event=reporter.on_event,
-                repair=_repairer(spec, complete, domain),
             )
             # Seeded here so the root's numbers are what everything after is
             # normalised against — the domain's baseline is empty until now.
@@ -326,7 +325,14 @@ class PuctEngine:
             "held_out_frac": (_held_out_frac(dataset) if _stages_rows(mode)
                               else _group_held_out_frac(spec)),
             "n_workers": max(1, min(spec.workers, spec.expansions)),
-            "propose": make_propose(tree, complete, domain, on_event=reporter.on_event),
+            "propose": make_propose(
+                tree, complete, domain, on_event=reporter.on_event,
+                # The fix-it loop runs here, on the worker, and checks on a
+                # rollout shard. Reading the held-out ones would let it choose
+                # between attempts on the split that decides the ranking.
+                check=_rollout_check(domain, _rollout_shards(dataset, spec, mode)),
+                repair_prompt=repair_prompt,
+            ),
             "repo_path": str(repo),
             "run": make_run(domain),
             # A held-out evaluation here is a sandboxed process, not an API call,
@@ -560,18 +566,18 @@ class _Reporter:
         elif kind == "swept":
             self._swept(payload)
         elif kind == "repaired":
-            # A repair is an extra model call the user paid for, so it is said
-            # out loud either way: silently succeeding hides where the budget
-            # went, and silently failing hides that the attempt was made.
+            # An extra model call the user paid for, so it is said out loud. Not
+            # whether it worked: the worker checks on one rollout shard and the
+            # final draw is not checked at all, so the only measurement that
+            # answers "did it land" is the node's own score on the gate, which
+            # arrives with the next `expanded` event.
+            #
+            # "scored nothing", not "did not run": a candidate that runs and
+            # gets every case wrong lands here just as often as one that raises.
             self.emit(events.log(
                 "info",
-                # "scored nothing", not "did not run": a candidate that runs and gets
-                # every case wrong lands here just as often as one that raises.
-                ("repaired a candidate that had scored nothing (%.4f): %s"
-                 % (payload["after"], payload["why"]))
-                if payload.get("kept") else
-                ("a candidate scored nothing; one repair was tried and did not land: %s"
-                 % payload["why"]),
+                "a candidate scored nothing and was drawn again with its own error in hand "
+                "(attempt %s): %s" % (payload.get("attempt", 1), payload.get("why", "")),
             ))
 
     def _node(self, payload: Dict[str, Any]) -> None:
@@ -1007,6 +1013,39 @@ def _prior_exponent(options: Dict[str, Any]) -> float:
     return value
 
 
+def _rollout_shards(dataset: Dataset, spec: RunSpec, mode: str) -> Tuple[int, ...]:
+    """What the worker's fix-it check may read: the rollout split, never the gate.
+
+    One shard is enough and one is what it takes: the question is "does this
+    candidate work at all", not "how well", and every extra shard is time on a
+    worker that could be drawing the next candidate instead.
+    """
+    if _stages_rows(mode):
+        shards = shard_indices(dataset, ROLLOUT)
+    else:
+        counts = _case_groups(spec) if mode == "test_gate" else _split_of(spec)
+        shards = tuple(range(int(counts["rollout"])))
+    return tuple(shards[:1])
+
+
+def _rollout_check(
+    domain: Any, shards: Tuple[int, ...],
+) -> Optional[Callable[[str], Tuple[bool, Dict[str, Any], str]]]:
+    """`code -> (valid, metrics, error)` on a rollout shard, or nothing.
+
+    Absent when there is no rollout shard to spare, which turns the fix-it loop
+    off rather than letting it fall back to the gate — a loop that cannot check
+    without reading the deciding split should not run at all.
+    """
+    if not shards:
+        return None
+
+    def check(code: str) -> Tuple[bool, Dict[str, Any], str]:
+        return domain.evaluate(code, shards)
+
+    return check
+
+
 def _depth(tree: PuctTree, node: Node) -> int:
     depth, cursor = 0, node
     while cursor.parent_index is not None:
@@ -1037,22 +1076,3 @@ def _default_completion(
         on_usage=on_usage,
         should_stop=should_stop,
     )
-
-
-def _repairer(spec: RunSpec, complete, domain) -> Callable[[str, str, int], str]:
-    """One model call that fixes a candidate's own bug, or gives up quietly.
-
-    Bounded on purpose: one attempt, this candidate's code and error only, and
-    any failure returns "" so the run keeps the original verdict rather than
-    stopping. A repair that cannot be had is not worth a failed search.
-    """
-    from .prompt import repair_prompt
-
-    def repair(code: str, error: str, iteration: int) -> str:
-        try:
-            fixed, _summary = complete(repair_prompt(code, error), iteration)
-        except Exception:  # noqa: BLE001 - a repair is a bonus, never a failure mode
-            return ""
-        return fixed or ""
-
-    return repair

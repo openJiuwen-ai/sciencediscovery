@@ -48,7 +48,7 @@ import ast
 import json
 import math
 import threading
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from agentdescent.aggregator import AggregatorConfig, MergeOutcome, MergeReport
 from agentdescent.evolution import Task
@@ -162,63 +162,6 @@ def _read_promise_op(raw: Any) -> Optional[float]:
     return value if math.isfinite(value) and value > 0 else None
 
 
-def make_propose(
-    tree: PuctTree,
-    complete: Callable[[str, int], Tuple[str, str, Optional[float]]],
-    domain: Domain,
-    *,
-    on_event: OnEvent = _noop,
-) -> Callable[[str, Task, str, float], Optional[str]]:
-    """Select a parent and ask the model to rewrite it.
-
-    Runs on a worker thread. The selection happens **here**, not in the
-    aggregator, because `PuctTree.select_parent` reserves the visit as it picks —
-    upstream's parallel virtual loss — and the thread that is about to spend
-    minutes on this parent is the one that should have reserved it.
-
-    ``complete`` is ``(prompt, iteration) -> (code, change_summary, promise)``;
-    the engine owns the model call so that a stop, a token count and an empty
-    reply all mean something to it. ``promise`` is the model's own rating of the
-    direction, read out of the same reply — `P(s, a)` for `FlatPuct`, and
-    ``None`` when the run did not ask for one or the model did not answer.
-    """
-
-    def propose(rendered: str, task: Task, output: str, reward: float) -> Optional[str]:
-        selection = tree.select_parent()
-        if selection is None:
-            return None
-        iteration, parent = selection
-        on_event("selected", {
-            "ancestors": _ancestor_visits(tree, parent),
-            "iteration": iteration,
-            "parent_index": parent.index,
-        })
-        code, summary, promise = complete(domain.prompt(parent.program), iteration)
-        # A summary copied verbatim from the parent is not a summary: the
-        # docstring first line doubles as the node's label, and on one live
-        # compression run every candidate kept the seed's spec-style header,
-        # so sixteen nodes all read "Lossless text compression: …". An empty
-        # label is honest about carrying no information; sixteen identical
-        # ones actively claim the candidates are the same thing.
-        parent_summary = (parent.program.change_summary or "").strip()
-        parent_doc = _first_doc_line(parent.program.code)
-        if summary.strip() and summary.strip() in (parent_summary, parent_doc):
-            summary = ""
-        return json.dumps(
-            {
-                "change_summary": summary,
-                "code": code,
-                "iteration": iteration,
-                "parent_id": parent.program.program_id,
-                "parent_index": parent.index,
-                "promise": "" if promise is None else repr(promise),
-            },
-            separators=(",", ":"),
-        )
-
-    return propose
-
-
 #: How many times a dead candidate may be debugged before the search moves on.
 #:
 #: Two, not one: a repair that reads only the original traceback is guessing,
@@ -244,6 +187,114 @@ def _reward(domain: Domain, valid: bool, metrics: Dict[str, Any]) -> float:
 
 #: How much of a failure reason the repair log line carries.
 _WHY_CHARS = 300
+
+
+def make_propose(
+    tree: PuctTree,
+    complete: Callable[[str, int], Tuple[str, str, Optional[float]]],
+    domain: Domain,
+    *,
+    on_event: OnEvent = _noop,
+    check: Optional[Callable[[str], Tuple[bool, Dict[str, Any], str]]] = None,
+    repair_prompt: Optional[Callable[[str, str], str]] = None,
+    repair_attempts: int = _REPAIR_ATTEMPTS,
+) -> Callable[[str, Task, str, float], Optional[str]]:
+    """Select a parent and ask the model to rewrite it.
+
+    Runs on a worker thread. The selection happens **here**, not in the
+    aggregator, because `PuctTree.select_parent` reserves the visit as it picks —
+    upstream's parallel virtual loss — and the thread that is about to spend
+    minutes on this parent is the one that should have reserved it.
+
+    ``complete`` is ``(prompt, iteration) -> (code, change_summary, promise)``;
+    the engine owns the model call so that a stop, a token count and an empty
+    reply all mean something to it. ``promise`` is the model's own rating of the
+    direction, read out of the same reply — `P(s, a)` for `FlatPuct`, and
+    ``None`` when the run did not ask for one or the model did not answer.
+
+    **The fix-it loop is here, on the worker, and it is off unless a caller
+    supplies ``check``.** Upstream appends a candidate that fails as a node
+    scoring `-inf` and moves on; a task asks for the loop when that is too
+    wasteful. Why a task would: a `-inf` node is a permanent dead end — its
+    rank_score is 0, `FlatPuct` never selects it again, and the direction dies
+    with it, even when the failure was a missing cast or a step size slightly
+    too large.
+
+    Two things about where it runs, and both are the reason it moved here from
+    the aggregator:
+
+    * **``check`` reads a rollout shard, never the held-out ones.** A loop that
+      measured on the gate would be choosing between attempts on the split that
+      decides the ranking, and a repaired candidate's gate score would be a
+      maximum over three measurements where an unrepaired one's is a single
+      measurement. That is a thumb on the scale of the search's own ordering.
+    * **On a worker, in parallel.** The merger is one thread by the protocol's
+      contract, and a repair costs a model call plus an evaluation. Spent there,
+      nothing merges while it runs — and proposals waiting in the buffer go
+      stale and are discarded, which is a second model call thrown away for
+      every one this saved.
+
+    The last draw is the one that goes forward, not the best of them: the loop
+    buys attempts, it does not hide a failure. If they run out, the candidate
+    becomes the `-inf` node upstream would have appended on the first one.
+    """
+
+    def propose(rendered: str, task: Task, output: str, reward: float) -> Optional[str]:
+        selection = tree.select_parent()
+        if selection is None:
+            return None
+        iteration, parent = selection
+        on_event("selected", {
+            "ancestors": _ancestor_visits(tree, parent),
+            "iteration": iteration,
+            "parent_index": parent.index,
+        })
+        prompt = domain.prompt(parent.program)
+        code, summary, promise = "", "", None
+        attempts = max(1, repair_attempts) if check and repair_prompt else 1
+        for attempt in range(attempts):
+            code, summary, drawn = complete(prompt, iteration)
+            # Kept from the first reply that carried one: a redraw is the same
+            # direction being written again, so its rating is a second reading
+            # of one direction rather than a reading of a second.
+            promise = drawn if promise is None else promise
+            last = attempt == attempts - 1
+            if last or not code.strip():
+                break
+            valid, metrics, error = check(code)
+            if not _is_dead(domain, valid, metrics):
+                break
+            # Only that an attempt was made, never whether it landed: the final
+            # draw is not checked -- there is no retry left to spend on the
+            # answer, and the merger measures it moments later anyway. Whether
+            # the redraw worked is the node's own score, which is the only
+            # measurement that was actually taken on the deciding split.
+            on_event("repaired", {"attempt": attempt + 1, "why": _tail(error, _WHY_CHARS)})
+            prompt = repair_prompt(code, error)
+        # A summary copied verbatim from the parent is not a summary: the
+        # docstring first line doubles as the node's label, and on one live
+        # compression run every candidate kept the seed's spec-style header,
+        # so sixteen nodes all read "Lossless text compression: …". An empty
+        # label is honest about carrying no information; sixteen identical
+        # ones actively claim the candidates are the same thing.
+        parent_summary = (parent.program.change_summary or "").strip()
+        parent_doc = _first_doc_line(parent.program.code)
+        if summary.strip() and summary.strip() in (parent_summary, parent_doc):
+            summary = ""
+        return json.dumps(
+            {
+                "change_summary": summary,
+                "code": code,
+                "iteration": iteration,
+                "parent_id": parent.program.program_id,
+                "parent_index": parent.index,
+                "promise": "" if promise is None else repr(promise),
+            },
+            separators=(",", ":"),
+        )
+
+    return propose
+
 
 
 def _tail(text: str, limit: int) -> str:
@@ -341,11 +392,6 @@ class PuctTreeAggregator:
     else is shared.
     """
 
-    #: Class-level so an instance built without `__init__` — which every test
-    #: harness here does — still has a sane bound rather than an AttributeError
-    #: raised from inside the repair path.
-    repair_attempts: int = _REPAIR_ATTEMPTS
-
 
     def __init__(
         self,
@@ -358,8 +404,6 @@ class PuctTreeAggregator:
         domain: Domain,
         artifact_id: str,
         on_event: OnEvent = _noop,
-        repair: Optional[Callable[[str, str, int], str]] = None,
-        repair_attempts: int = _REPAIR_ATTEMPTS,
     ) -> None:
         self.ledger = ledger
         self.verifier = verifier
@@ -369,8 +413,6 @@ class PuctTreeAggregator:
         self.domain = domain
         self.artifact_id = artifact_id
         self.on_event = on_event
-        self.repair = repair
-        self.repair_attempts = repair_attempts
         self.cards: List[EvidenceCard] = []
         self._cards_lock = threading.Lock()
         self._seeded = False
@@ -430,85 +472,6 @@ class PuctTreeAggregator:
 
     # -- the merge -------------------------------------------------------------
 
-    def _repair_once(
-        self,
-        code: str,
-        ops: Mapping[str, str],
-        valid: bool,
-        metrics: Dict[str, Any],
-        error: str,
-    ) -> Tuple[str, bool, Dict[str, Any], str]:
-        """Debug a candidate that scored nothing, in place, before it becomes a node.
-
-        A bounded loop rather than one shot, because **each attempt has to see
-        the error the last attempt produced** — that is what debugging is, and
-        one-shot repair cannot do it. Measured over two live runs: eight repairs
-        fired and two landed, and the six that failed were each handed the
-        original traceback and no view of what their own fix had done.
-
-        Iterating on the latest attempt, accepting the best across all of them
-        measured against the original: a later attempt that comes out worse
-        cannot displace an earlier one that worked, and nothing worse than the
-        candidate we started with is ever returned.
-
-        Stops early the moment the candidate is no longer dead — the point is a
-        working candidate, not a full budget spent.
-
-        A method rather than an inline block so the tests can drive the real
-        thing. Twice now a test rebuilt this shape beside `step()`, and twice
-        the copy went on passing after the original was corrected — proving
-        only that the copy worked.
-
-        Its own error only. Nothing about a sibling goes in: parallel expansions
-        are independent draws, and the diversity between them is what selection
-        has to work with. Its own iteration too, so the extra model calls are
-        billed to the expansion that needed them rather than to the seed.
-        """
-        if self.repair is None or not code.strip() or not (error or "").strip():
-            return code, valid, metrics, error
-        if not _is_dead(self.domain, valid, metrics):
-            return code, valid, metrics, error
-
-        iteration = int(ops.get("iteration", "0"))
-        floor = _reward(self.domain, valid, metrics)
-        best = (code, valid, metrics, error, floor)
-        # The attempt being debugged: the newest one, so its own traceback is
-        # what the next repair reads.
-        current_code, current_error = code, error or ""
-        seen = {code.strip()}
-
-        for attempt in range(1, max(1, self.repair_attempts) + 1):
-            repaired = self.repair(current_code, current_error, iteration)
-            # Nothing back, or the same program again: another call would ask
-            # the same question and be billed for it.
-            if not repaired.strip() or repaired.strip() in seen:
-                break
-            seen.add(repaired.strip())
-
-            fixed, fixed_metrics, fixed_error = _evaluate(
-                self.domain, repaired, self._held_out_shards())
-            # Strictly better, not merely `fixed`. `fixed` is `valid`, and for
-            # an evaluator that catches its own exceptions that is true of every
-            # candidate — so keeping on it swapped the repair in
-            # unconditionally, including when it scored the same 0. Watched
-            # live: two repairs both reported "repaired" at 0.0000, each having
-            # replaced the original with something no better. A repair earns
-            # its place the way a candidate does.
-            after = _reward(self.domain, fixed, fixed_metrics)
-            if after > best[4]:
-                best = (repaired, fixed, fixed_metrics, fixed_error, after)
-            self.on_event("repaired", {
-                "after": after if fixed else None,
-                "attempt": attempt,
-                "kept": after > floor,
-                "why": _tail(current_error or "", _WHY_CHARS),
-            })
-            if not _is_dead(self.domain, fixed, fixed_metrics):
-                break        # it runs and scores: nothing left to debug
-            current_code, current_error = repaired, fixed_error or current_error
-
-        return best[0], best[1], best[2], best[3]
-
     def step(self) -> List[MergeReport]:
         self.seed()
         with self._cards_lock:
@@ -529,8 +492,6 @@ class PuctTreeAggregator:
             ops = card.diff.ops
             code = ops.get("code", "")
             valid, metrics, error = _evaluate(self.domain, code, self._held_out_shards())
-            code, valid, metrics, error = self._repair_once(
-                code, ops, valid, metrics, error)
             program = Program(
                 program_id(code),
                 int(ops.get("iteration", "0")),
