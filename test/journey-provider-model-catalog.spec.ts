@@ -743,8 +743,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     );
 
     await journey.step(
-      "DeepSeek 目录展示标准美元单价并本地化来源",
-      "使用 DeepSeek 内置预设的维护目录（连接参数由测试改为本地 mock 端点）展示 USD/每百万 token 的 0.14 / 0.28 与缓存输入 0.0028。上游已不再发布分时价格，因此界面不再出现高峰/闲时时段，也不暴露 periods 等内部字段名；模型行不再附「官方来源」链接，Provider 行可折叠展开。",
+      "服务商自报价格盖过目录价并本地化展示",
+      "DeepSeek 预设的连接参数由测试改为本地 mock 端点，该端点在 /models 里自报了价格，因此行内展示的是服务商自己的 USD/每百万 token 1.5 / 3 与缓存输入 0.2，而不是目录里的 0.14 / 0.28 / 0.0028——事实优先级是 用户 > 服务商实时返回 > 目录。上游已不再发布分时价格，因此界面不出现高峰/闲时时段，也不暴露 periods 等内部字段名；模型行不再附「官方来源」链接，Provider 行可折叠展开。",
       async () => {
         const deepseekProvider = await apiJson<ModelProvider>(page, "/api/providers", {
           data: {
@@ -761,7 +761,9 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await registry.getByRole("button", { name: /DeepSeek/ }).click();
         const flash = modelRowById(dialog, "deepseek-v4-flash");
         const flashPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
-        await expect(flashPrice).toHaveText("0.14 / 0.28 / 0.0028 USD/1M");
+        // stub 的 /models 自报了 prompt/completion/cache_read，换算成每百万
+        // token 就是 1.5 / 3 / 0.2；它压过目录里的 0.14 / 0.28 / 0.0028。
+        await expect(flashPrice).toHaveText("1.5 / 3 / 0.2 USD/1M");
         await flash.hover();
         await expect(page.locator("body > .provider-model-popup")).toContainText("每百万 tokens");
         await expect(flash).not.toContainText("periods");
@@ -1205,7 +1207,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await registry.getByRole("button", { name: /DeepSeek/ }).click();
         const flash = modelRowById(englishDialog, "deepseek-v4-flash");
         const enPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
-        await expect(enPrice).toHaveText("0.14 / 0.28 / 0.0028 USD/1M");
+        // 同上：展示的是服务商自报价，不是目录价。
+        await expect(enPrice).toHaveText("1.5 / 3 / 0.2 USD/1M");
         await flash.hover();
         await expect(page.locator("body > .provider-model-popup")).toContainText("per 1M tokens");
         await expect(flash).not.toContainText(/Peak|Off-peak|periods/);

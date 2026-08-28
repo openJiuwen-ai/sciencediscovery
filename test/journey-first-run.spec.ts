@@ -327,7 +327,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await editor.getByRole("button", { name: "删除" }).click();
         expect((await deleteResponse).status()).toBe(200);
         await expect(settings.locator(".provider-row")).toHaveCount(0);
-        await expect(settings.getByText("还没有服务商——在上方选择预置或添加自定义服务商。")).toBeVisible();
+        await expect(settings.getByText("还没有服务商——点击下方“添加 Provider”选择预置或自定义服务商。")).toBeVisible();
         // The unreferenced model profile is deleted together with the provider.
         model = undefined;
         const registryCount = await apiJsonSafe("/api/models");
