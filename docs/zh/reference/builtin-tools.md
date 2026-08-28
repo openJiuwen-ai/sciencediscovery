@@ -15,7 +15,7 @@
 | `run_shell` | `command` 或 `scriptPath` 二选一，可选 `arguments`、`kernelMode` | 有界 shell：默认复用 Session 持久 shell 会话（`cd`/`export`/`source` 跨调用生效，白名单变量也注入后续 `run_python`/`run_r`；见 [sandbox-execution.md §8](../explanation/sandbox-execution.md#8-持久-shell-会话与-session-env-profile)）；`kernelMode=ephemeral` 为一次性干净 shell；只见工作区，网络按沙箱网络访问策略（默认无网络） |
 | `read_tool_output` | `ref`，可选 `offset`、`limit` | 回读因过大而未完整返回的工具结果；`ref` 来自被截断结果的提示行 |
 
-所有工具结果在进入模型输入前都会被限界：超过 2000 行或 50 KiB 的结果只保留预览（读取类保留头部，执行类保留尾部，因为退出状态和报错在末尾），并附带一个 `ref`，模型用 `read_tool_output` 按页取回被省略的部分；完整文本按 Session 保存在 `<dataDir>/tool-outputs/<sessionId>/`。该限界发生在工具结果进入 canonical history 的统一边界上，因此同样覆盖 MCP 工具结果和后续新增的工具。
+所有工具结果在进入模型输入前都会被限界：超过 2000 行或 50 KiB 的结果只保留预览（读取类保留头部，执行类保留尾部，因为退出状态和报错在末尾），并附带一个 `ref`，模型用 `read_tool_output` 按页取回被省略的部分；完整文本按 Session 保存在 `<dataDir>/tool-outputs/<sessionId>/`，生命周期与 Session 一致：没有单独的过期时间，随 Session 或 Project 删除时和消息、执行记录一起清理。该限界发生在工具结果进入 canonical history 的统一边界上，因此同样覆盖 MCP 工具结果和后续新增的工具。
 
 `run_python` / `run_shell` 首次执行会触发 `code` 类权限卡片（见[运行时行为参考](runtime-behavior.md#权限与评审器)）。执行产生的文件仍保留 diff 与 derivation 审计，但不会仅因出现在工作区就进入产物目录；Agent 必须调用 `declare_artifact`，用户上传、MCP 下载与拉回的远程任务输出则由控制面在入口处注册。
 

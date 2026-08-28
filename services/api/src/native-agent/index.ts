@@ -29,7 +29,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
 
 import {
   ContextContributorRegistry,
@@ -71,6 +70,7 @@ import {
 import {
   createToolOutputTools,
   ToolOutputGuard,
+  toolOutputStoreRoot,
   ToolOutputStore,
   ToolRegistry,
   type AgentTool,
@@ -144,11 +144,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Keep a session id usable as one directory name under the data directory. */
-function safeDirectorySegment(value: string): string {
-  return value.replaceAll(/[^a-zA-Z0-9._-]/g, "_").slice(0, 128) || "session";
-}
-
 function normalizeHistoryMessage(message: WireMessage): WireMessage {
   const normalized = structuredClone(message);
   if (typeof normalized.name === "string") {
@@ -216,9 +211,10 @@ class NativeAgent implements NativeAgentHandle {
       ? createPlanLifecycleTools({ repository: options.planRepository })
       : [];
     // Retained per Session, not per AgentRun: a bounded result stays in the
-    // replayed history of later runs, so its ref has to keep resolving.
+    // replayed history of later runs, so its ref has to keep resolving for as
+    // long as that history does. Session deletion removes this directory.
     const toolOutputStore = new ToolOutputStore({
-      root: resolve(options.config.dataDir, "tool-outputs", safeDirectorySegment(options.sessionId)),
+      root: toolOutputStoreRoot(options.config.dataDir, options.sessionId),
     });
     this.toolRegistry = new ToolRegistry([...executionTools, ...planTools, ...createToolOutputTools(toolOutputStore)], {
       createResultMessage: (call, content) => ({

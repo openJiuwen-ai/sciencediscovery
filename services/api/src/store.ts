@@ -143,6 +143,7 @@ import {
   defaultShellEnvironmentRevision,
   isSystemEnvironmentRevisionId,
 } from "@sciencediscovery/executor";
+import { toolOutputStoreRoot } from "@sciencediscovery/tools";
 import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
 import { BUNDLED_SKILL_IDS } from "@sciencediscovery/specialist";
@@ -1052,6 +1053,7 @@ export class SessionStore {
       this.evidenceLinksPath(session.id),
       this.evidenceItemsPath(session.id),
       this.mcpInvocationsPath(session.id),
+      toolOutputStoreRoot(this.dataDir, session.id),
       resolve(this.dataDir, "projects", session.projectId, "sessions", session.id),
     ];
   }

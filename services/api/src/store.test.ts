@@ -21,6 +21,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { ArtifactJob, ComposerReference, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
 import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
+import { ToolOutputStore, toolOutputStoreRoot } from "@sciencediscovery/tools";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -1725,6 +1726,33 @@ test("SessionStore permanently deletes Session and Project cascades from catalog
   assert.equal(store.getProject(project.id), undefined);
   assert.equal(store.getSession(second.id), undefined);
   for (const path of secondPaths) await assert.rejects(stat(path), { code: "ENOENT" });
+});
+
+test("deleting a Session removes the stored tool output its history still references", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-delete-tool-output-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+  });
+  const project = await store.createProject("Tool output project");
+  const session = await store.createSession(project.id, "Session", model.id);
+
+  // Write through the real store, at the same path production resolves, so a
+  // renamed or differently sanitized directory cannot slip past deletion.
+  const root = toolOutputStoreRoot(store.dataDir, session.id);
+  const saved = await new ToolOutputStore({ root }).save("run_python", "kept\nlines\n");
+  assert.ok(store.sessionDataPaths(session.id).includes(root), "the tool output root is Session data");
+  assert.equal((await new ToolOutputStore({ root }).read(saved.ref)).text, "kept\nlines\n");
+
+  await store.deleteSession(session.id, session.id);
+  await assert.rejects(stat(root), { code: "ENOENT" });
+  await assert.rejects(new ToolOutputStore({ root }).read(saved.ref), /no longer available/);
 });
 
 test("SessionStore preserves data when deletion staging cannot start", async (context) => {

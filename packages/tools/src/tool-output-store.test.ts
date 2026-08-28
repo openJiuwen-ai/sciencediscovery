@@ -18,7 +18,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 import { ToolOutputGuard } from "./bounded-output.js";
-import { createToolOutputTools, ToolOutputStore } from "./tool-output-store.js";
+import { createToolOutputTools, ToolOutputStore, toolOutputStoreRoot } from "./tool-output-store.js";
 
 const numbered = (count: number) => Array.from({ length: count }, (_, index) => `line-${index + 1}`).join("\n");
 
@@ -80,18 +80,38 @@ test("refs are validated before they can reach the filesystem", async (context) 
   await assert.rejects(store.read("tool-output-00000000000000ff"), /no longer available/);
 });
 
-test("expired records are pruned so a long-lived session directory stays bounded", async (context) => {
+test("a record has no expiry of its own; it lives as long as the session directory", async (context) => {
   const root = await temporaryRoot(context);
-  const expired = new ToolOutputStore({ retentionMs: -1, root });
-  const stale = await expired.save("run_shell", "old output");
-  assert.ok(await new ToolOutputStore({ root }).read(stale.ref), "the record exists before the next store prunes it");
+  const first = await new ToolOutputStore({ root }).save("run_shell", "old output");
 
-  const later = new ToolOutputStore({ retentionMs: -1, root });
-  await later.save("run_shell", "new output");
-  await assert.rejects(new ToolOutputStore({ root }).read(stale.ref), /no longer available/);
+  // Later runs of the same Session keep writing here. Nothing an AgentRun does
+  // may retire an earlier ref, because the notice naming it stays in the
+  // replayed history for as long as the Session exists.
+  for (let run = 0; run < 3; run += 1) {
+    await new ToolOutputStore({ root }).save("run_shell", `run ${run} output`);
+  }
+  const page = await new ToolOutputStore({ root }).read(first.ref);
+  assert.equal(page.text, "old output");
+
+  // Deleting the Session directory is what ends a ref's life.
+  await rm(root, { force: true, recursive: true });
+  await assert.rejects(new ToolOutputStore({ root }).read(first.ref), /no longer available/);
 });
 
-test("retention caps one stored result and reports the dropped bytes", async () => {
+test("the writer and the session deletion path derive the same directory", () => {
+  assert.equal(
+    toolOutputStoreRoot("/data", "session-01H9Z"),
+    resolve("/data", "tool-outputs", "session-01H9Z"),
+  );
+  assert.equal(
+    toolOutputStoreRoot("/data", "weird/../id with spaces"),
+    resolve("/data", "tool-outputs", "weird_.._id_with_spaces"),
+    "a session id is sanitized into exactly one directory name",
+  );
+  assert.equal(toolOutputStoreRoot("/data", ""), resolve("/data", "tool-outputs", "session"));
+});
+
+test("the per-record size cap drops the overflow and reports how much it dropped", async () => {
   const store = new ToolOutputStore({ retainedBytes: 1_000 });
   const saved = await store.save("run_shell", "d\n".repeat(5_000));
   assert.ok(saved.bytes <= 1_000);

@@ -17,15 +17,20 @@
  * input. `ToolOutputGuard` writes the full text here and puts only a reference
  * into canonical history; `read_tool_output` pages it back on demand.
  *
- * Records are written under a caller-supplied session-scoped root so a
- * reference survives the run that produced it (later runs replay the same
- * history) while staying inside that session's data directory. Without a root
- * the store is process-local, which is enough for tests and for a run that
- * only pages back within itself.
+ * Records are written under a session-scoped root so a reference survives the
+ * run that produced it — later runs replay the same history, and the notice
+ * that carries the reference stays in that history for as long as the Session
+ * does. Retention therefore follows the Session: records live until the
+ * Session (or its Project) is deleted, alongside messages, execution runs, and
+ * the other provenance data. There is no separate expiry, because a reference
+ * that outlives its store would hand the model a dead pointer.
+ *
+ * Without a root the store is process-local, which is enough for tests and for
+ * a run that only pages back within itself.
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { Type } from "typebox";
@@ -44,10 +49,17 @@ import type { AgentTool } from "./types.js";
 /** Retention cap for one stored result; the reference stays useful, the disk does not fill. */
 export const DEFAULT_RETAINED_OUTPUT_BYTES = 8 * 1_024 * 1_024;
 
-/** How long a reference keeps resolving. Long enough to outlive a Session's active life. */
-export const DEFAULT_OUTPUT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
-
 const REF_PATTERN = /^tool-output-[0-9a-f]{16}$/;
+
+/**
+ * Where one Session's stored tool output lives. Both the writer and the
+ * Session deletion path resolve it here, so a Session cannot be deleted while
+ * leaving its stored output behind under a differently derived name.
+ */
+export function toolOutputStoreRoot(dataDir: string, sessionId: string): string {
+  const segment = sessionId.replaceAll(/[^a-zA-Z0-9._-]/g, "_").slice(0, 128) || "session";
+  return resolve(dataDir, "tool-outputs", segment);
+}
 
 interface StoredOutput {
   createdAt: string;
@@ -85,13 +97,10 @@ export class ToolOutputStore implements ToolOutputSink {
   private readonly memory = new Map<string, StoredOutput>();
   private readonly root: string | undefined;
   private readonly retainedBytes: number;
-  private readonly retentionMs: number;
-  private pruned = false;
 
-  constructor(options: { retainedBytes?: number; retentionMs?: number; root?: string } = {}) {
+  constructor(options: { retainedBytes?: number; root?: string } = {}) {
     this.root = options.root;
     this.retainedBytes = options.retainedBytes ?? DEFAULT_RETAINED_OUTPUT_BYTES;
-    this.retentionMs = options.retentionMs ?? DEFAULT_OUTPUT_RETENTION_MS;
   }
 
   async save(toolName: string, text: string): Promise<ToolOutputRecord> {
@@ -150,32 +159,10 @@ export class ToolOutputStore implements ToolOutputSink {
   private async persist(ref: string, stored: StoredOutput): Promise<void> {
     if (!this.root) return;
     await mkdir(this.root, { recursive: true });
-    await this.pruneExpired();
     const destination = resolve(this.root, `${ref}.json`);
     const temporary = `${destination}.${process.pid}.tmp`;
     await writeFile(temporary, JSON.stringify(stored), { encoding: "utf8", mode: 0o600 });
     await rename(temporary, destination);
-  }
-
-  /**
-   * Drop expired records once per store, so a long-lived Session directory
-   * cannot grow without bound. Best effort: a failed prune must never fail the
-   * tool call whose output is being stored.
-   */
-  private async pruneExpired(): Promise<void> {
-    if (this.pruned || !this.root) return;
-    this.pruned = true;
-    const deadline = Date.now() - this.retentionMs;
-    try {
-      for (const entry of await readdir(this.root)) {
-        if (!entry.endsWith(".json")) continue;
-        const path = resolve(this.root, entry);
-        const metadata = await stat(path).catch(() => undefined);
-        if (metadata && metadata.mtimeMs < deadline) await unlink(path).catch(() => undefined);
-      }
-    } catch {
-      // A missing or unreadable directory is not a reason to lose the output.
-    }
   }
 
   private async load(ref: string): Promise<StoredOutput | undefined> {
