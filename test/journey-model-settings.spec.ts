@@ -59,6 +59,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
   const demoToken = "sk-e2e-demo-local";
   let createdProviderId: string | undefined;
   let createdModelId: string | undefined;
+  const geometryModelIds = new Set<string>();
 
   // The add panel starts open when nothing is configured yet (first-run
   // path) and stays closed once a provider exists; only click when needed.
@@ -271,20 +272,64 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         const options = await testSelect.locator("option").allTextContents();
         expect(options.some((text) => text.includes("DeepSeek Chat"))).toBe(true);
 
-        // Use a tall desktop viewport so the last row can sit low enough for
-        // the popup to cross the dialog boundary without triggering its
-        // viewport-bottom flip. A descendant popup would be clipped here.
+        // Add enough disposable rows to make the settings detail genuinely
+        // scrollable. Without this fixture, a one-row table stays near the
+        // top of the dialog and cannot exercise the clipping boundary.
+        for (let index = 1; index <= 12; index += 1) {
+          const response = await page.request.fetch(
+            `${apiBaseUrl()}/api/providers/${encodeURIComponent(createdProviderId!)}/models`,
+            {
+              data: {
+                label: `J6 geometry model ${String(index).padStart(2, "0")}`,
+                model: `j6-geometry-${String(index).padStart(2, "0")}`,
+              },
+              headers: authorizationHeader(),
+              method: "POST",
+            },
+          );
+          expect(response.ok(), `geometry model ${index} should be created`).toBe(true);
+          const created = await response.json() as { id: string };
+          geometryModelIds.add(created.id);
+        }
+
+        await page.reload();
+        const geometryDialog = await openModelRegistry();
+        const geometryRow = geometryDialog.locator(".provider-row").filter({ hasText: providerName + " 已更新" });
+        if (!await geometryRow.locator(".provider-row-detail").count()) {
+          await geometryRow.locator(".provider-row-summary").click();
+        }
+        await expect(geometryRow.locator(".provider-model-row")).toHaveCount(13);
+
+        // Use a tall desktop viewport and place the actual last row below the
+        // dialog's clipping boundary while leaving room for the popup below
+        // the anchor. A descendant popup would still be clipped here.
         await page.setViewportSize({ width: 1_360, height: 1_300 });
-        const lastModelRow = row.locator(".provider-model-table .provider-model-row").last();
-        await lastModelRow.evaluate((node) => {
+        const lastModelRow = geometryRow.locator(".provider-model-table .provider-model-row").last();
+        await expect(lastModelRow).toContainText("j6-geometry-12");
+        const placement = await lastModelRow.evaluate((node) => {
           const scroller = node.closest<HTMLElement>(".settings-group-detail");
           const dialogNode = node.closest<HTMLElement>(".system-config-dialog");
           if (!scroller || !dialogNode) throw new Error("model row is outside the settings dialog");
           const current = node.getBoundingClientRect();
           const dialogRect = dialogNode.getBoundingClientRect();
-          const targetBottom = Math.min(window.innerHeight - 244, dialogRect.bottom - 8);
-          scroller.scrollTop += current.bottom - targetBottom;
+          const targetBottom = Math.min(window.innerHeight - 244, dialogRect.bottom - 96);
+          const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+          scroller.scrollTop = Math.min(maxScroll, scroller.scrollTop + current.bottom - targetBottom);
+          const placed = node.getBoundingClientRect();
+          return {
+            dialogBottom: dialogRect.bottom,
+            maxScroll,
+            rowBottom: placed.bottom,
+            scrollTop: scroller.scrollTop,
+            targetBottom,
+            viewportHeight: window.innerHeight,
+          };
         });
+        expect(placement.maxScroll).toBeGreaterThan(0);
+        expect(placement.scrollTop).toBeGreaterThan(0);
+        expect(Math.abs(placement.rowBottom - placement.targetBottom)).toBeLessThan(2);
+        expect(placement.rowBottom).toBeGreaterThan(placement.dialogBottom - 120);
+        expect(placement.rowBottom + 244).toBeLessThanOrEqual(placement.viewportHeight);
         await lastModelRow.hover();
         const popup = page.locator("body > .provider-model-popup");
         await expect(popup).toBeVisible();
@@ -302,8 +347,18 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         expect(popupGeometry.portalAtBody).toBe(true);
         expect(popupGeometry.fullyInViewport).toBe(true);
         expect(popupGeometry.bottom).toBeGreaterThan(popupGeometry.dialogBottom + 1);
-        await dialog.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
-        await expect(dialog).toBeHidden();
+        await geometryDialog.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
+        await expect(geometryDialog).toBeHidden();
+
+        for (const modelId of [...geometryModelIds]) {
+          const response = await page.request.fetch(`${apiBaseUrl()}/api/models/${encodeURIComponent(modelId)}`, {
+            headers: authorizationHeader(),
+            method: "DELETE",
+          });
+          expect(response.ok(), `geometry model ${modelId} should be deleted`).toBe(true);
+          geometryModelIds.delete(modelId);
+        }
+        await page.reload();
       },
     );
 
@@ -391,6 +446,14 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       },
     );
   } finally {
+    for (const modelId of geometryModelIds) {
+      await page.request
+        .fetch(`${apiBaseUrl()}/api/models/${encodeURIComponent(modelId)}`, {
+          headers: authorizationHeader(),
+          method: "DELETE",
+        })
+        .catch(() => undefined);
+    }
     if (createdModelId) {
       // 手动添加的模型可能成为全局默认，删除前先清除 settings 引用。
       try {
