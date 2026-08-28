@@ -582,8 +582,11 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       "GLM-5.2 标明维护建议而非厂商动态返回；紧凑模型行展示 1,000,000 上下文、131,072 最大输出、无视觉、有思考（高/最大）。由于上游只发布智谱国际站（z.ai）的价格、而本端点连接 open.bigmodel.cn，价格诚实地标注为「未知」而不是冒用另一个托管商的定价；界面不再出现每模型「官方来源」链接，数据来源统一是目录状态行的 models.dev。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await expect(dialog.getByText(/维护建议（并非服务商返回）/)).toBeVisible();
-        const card = dialog.locator(".provider-model-row").filter({ hasText: "glm-5.2" });
+        // 「维护建议」同时出现在行来源行与悬停弹窗的「来源」格，按行来源行精确收敛。
+        await expect(dialog.locator(".provider-row-source").filter({ hasText: /维护建议（并非服务商返回）/ })).toBeVisible();
+        // 以行内 code 的精确 id 锚定，避免命中预览/Vision 兄弟行。
+        const card = dialog.locator(".provider-model-row")
+          .filter({ has: dialog.locator("code").getByText("glm-5.2", { exact: true }) });
         const facts = card.locator(".provider-model-row-facts .fact");
         await expect(facts.nth(0)).toHaveText("1M / 131k");
         await expect(facts.nth(2)).toHaveText(/high max/);

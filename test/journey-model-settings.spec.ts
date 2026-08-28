@@ -59,6 +59,15 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
   let createdProviderId: string | undefined;
   let createdModelId: string | undefined;
 
+  // The add panel starts open when nothing is configured yet (first-run
+  // path) and stays closed once a provider exists; only click when needed.
+  const openAddPanel = async (dialog: ReturnType<typeof page.getByRole>) => {
+    if (!await dialog.locator(".provider-add-panel").count()) {
+      await dialog.getByRole("button", { name: /添加 Provider/ }).first().click();
+    }
+    return dialog.locator(".provider-add-panel");
+  };
+
   const openModelRegistry = async () => {
     const dialog = page.getByRole("dialog", { name: "系统设置" });
     if (!await dialog.isVisible()) {
@@ -82,11 +91,9 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
         await expect(dialog.getByText("管理运行时设置可用的模型配置和凭证。")).toBeVisible();
         await expect(dialog.getByText("还没有服务商——点击下方“添加 Provider”选择预置或自定义服务商。")).toBeVisible();
-        const addButton = dialog.getByRole("button", { name: /添加 Provider/ }).first();
-        await expect(addButton).toBeVisible();
-        // 添加控件藏在“添加 Provider”按钮后：未点开时没有预置下拉和自定义按钮。
-        await expect(dialog.locator(".provider-add-panel")).toHaveCount(0);
-        await addButton.click();
+        await expect(dialog.getByRole("button", { name: /添加 Provider/ }).first()).toBeVisible();
+        // 空态即首启路径：添加面板默认已展开，不能再点（那会把面板收起）。
+        await expect(dialog.locator(".provider-add-panel")).toBeVisible();
         await expect(dialog.locator(".provider-add-panel").getByLabel("添加 Provider", { exact: true })).toBeVisible();
         await expect(dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();
         await expect(dialog.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
@@ -106,7 +113,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       + "主区是名称与密钥；高级连接默认展开：基础 URL 独占一行，接口协议、接口变种与 LLM 网络代理服务器同一行，不再单独选择模型列表策略。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: /添加 Provider/ }).first().click();
+        await openAddPanel(dialog);
         await dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ }).click();
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
         await expect(editor).toBeVisible();
@@ -235,8 +242,10 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await expect(row.getByText("服务商未返回模型")).toHaveCount(0);
         const testSelect = row.getByLabel("选择要测试的模型");
         await expect(testSelect).toBeVisible();
+        // 选项文本是显示名（服务商 · 目录标签），按 profile id 锚定而不是原文 id。
+        await expect(testSelect.locator(`option[value="${createdModelId}"]`)).toHaveCount(1);
         const options = await testSelect.locator("option").allTextContents();
-        expect(options.some((text) => text.includes("deepseek-chat"))).toBe(true);
+        expect(options.some((text) => text.includes("DeepSeek Chat"))).toBe(true);
         await dialog.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
         await expect(dialog).toBeHidden();
       },
