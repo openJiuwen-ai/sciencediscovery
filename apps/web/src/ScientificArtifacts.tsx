@@ -295,6 +295,18 @@ function NotebookCells({ cells }: { cells: NotebookCell[] }) {
   })}</div>;
 }
 
+export const ARTIFACT_VERSION_SOURCE_MAX_CHARACTERS = 18;
+
+export function truncateArtifactVersionSource(
+  sessionTitle: string,
+  maxCharacters = ARTIFACT_VERSION_SOURCE_MAX_CHARACTERS,
+): string {
+  const characters = Array.from(sessionTitle);
+  if (characters.length <= maxCharacters) return sessionTitle;
+  if (maxCharacters <= 1) return characters.slice(0, Math.max(0, maxCharacters)).join("");
+  return `${characters.slice(0, maxCharacters - 1).join("")}…`;
+}
+
 export function ScientificArtifactPanelHeader({
   artifactId,
   artifacts,
@@ -316,11 +328,12 @@ export function ScientificArtifactPanelHeader({
   const selectedArtifact = artifacts.find((item) => item.id === artifactId);
   const selectedVersion = versions.find((item) => item.id === versionId);
   const showVersionSources = new Set(versions.map((item) => item.sessionId)).size > 1;
-  const versionLabel = (item: ScientificArtifactVersion) => {
+  const versionLabel = (item: ScientificArtifactVersion, truncateSource = true) => {
     const timestamp = new Date(item.createdAt).toLocaleString(locale);
     if (!showVersionSources) return `v${item.version} · ${timestamp}`;
     const sessionTitle = sessions.find((session) => session.id === item.sessionId)?.title ?? t("app.deletedSession");
-    return `v${item.version} · ${t("artifact.versionSource", { session: sessionTitle })} · ${timestamp}`;
+    const displayTitle = truncateSource ? truncateArtifactVersionSource(sessionTitle) : sessionTitle;
+    return `v${item.version} · ${t("artifact.versionSource", { session: displayTitle })} · ${timestamp}`;
   };
   return <header>
     <h3>Scientific artifacts</h3>
@@ -328,8 +341,8 @@ export function ScientificArtifactPanelHeader({
       <select aria-label="Artifact" onChange={(event) => onArtifactChange(event.target.value)} title={selectedArtifact?.logicalName ?? "Select an artifact"} value={artifactId ?? ""}>
         {artifacts.map((item) => <option key={item.id} value={item.id}>{item.logicalName} · {item.kind}</option>)}
       </select>
-      <select aria-label="Artifact version" onChange={(event) => onVersionChange(event.target.value)} title={selectedVersion ? `Version ${selectedVersion.version}` : "Select an artifact version"} value={versionId ?? ""}>
-        {versions.toReversed().map((item) => <option key={item.id} value={item.id}>{versionLabel(item)}</option>)}
+      <select aria-label="Artifact version" onChange={(event) => onVersionChange(event.target.value)} title={selectedVersion ? versionLabel(selectedVersion, false) : "Select an artifact version"} value={versionId ?? ""}>
+        {versions.toReversed().map((item) => <option key={item.id} title={versionLabel(item, false)} value={item.id}>{versionLabel(item)}</option>)}
       </select>
     </div>
   </header>;
@@ -477,12 +490,13 @@ export function ArtifactModal({
   const version = versions.find((item) => item.id === versionId);
   const sourceSessions = sessions ?? loadedSessions;
   const showVersionSources = new Set(versions.map((item) => item.sessionId)).size > 1;
-  const versionLabel = (item: ScientificArtifactVersion) => {
+  const versionLabel = (item: ScientificArtifactVersion, truncateSource = true) => {
     const timestamp = new Date(item.createdAt).toLocaleString(locale);
     if (!showVersionSources || !sourceSessions) return `v${item.version} · ${timestamp}`;
     const sessionTitle = sourceSessions.find((sourceSession) => sourceSession.id === item.sessionId)?.title
       ?? t("app.deletedSession");
-    return `v${item.version} · ${t("artifact.versionSource", { session: sessionTitle })} · ${timestamp}`;
+    const displayTitle = truncateSource ? truncateArtifactVersionSource(sessionTitle) : sessionTitle;
+    return `v${item.version} · ${t("artifact.versionSource", { session: displayTitle })} · ${timestamp}`;
   };
   // Session used ONLY for memory-graph reads (getMemorySubgraph for view-chain,
   // getMemoryArtifactProvenance for the derived-from row). Non-graph requests
@@ -852,7 +866,7 @@ export function ArtifactModal({
         <div><span className="eyebrow">{artifact?.kind ?? "artifact"}</span><h2>{artifact?.logicalName ?? logicalName}</h2><ArtifactVersionSource sessions={sourceSessions} version={version} /></div>
         <div className="artifact-modal-controls">
           <label className="version-picker"><span>version</span>
-            <select aria-label="Artifact version" onChange={(event) => setVersionId(event.target.value)} value={versionId}>{versions.toReversed().map((item) => <option key={item.id} value={item.id}>{versionLabel(item)}</option>)}</select>
+            <select aria-label="Artifact version" onChange={(event) => setVersionId(event.target.value)} title={version ? versionLabel(version, false) : "Select an artifact version"} value={versionId}>{versions.toReversed().map((item) => <option key={item.id} title={versionLabel(item, false)} value={item.id}>{versionLabel(item)}</option>)}</select>
           </label>
           <ArtifactDownloadButton busy={downloadBusy} disabled={!version} label={t("artifact.downloadCurrent")} onDownload={() => void downloadCurrentVersion()} />
           <button aria-label="Close artifact viewer" className="icon-button" onClick={onClose} title="Close artifact viewer" type="button">✕</button>

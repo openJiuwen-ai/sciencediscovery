@@ -31,6 +31,7 @@ import {
   parseStructureAtoms,
   ProvenanceView,
   ScientificArtifactPanelHeader,
+  truncateArtifactVersionSource,
 } from "../src/ScientificArtifacts.js";
 
 function artifactVersion(id: string, version: number, sessionId: string): ScientificArtifactVersion {
@@ -431,6 +432,11 @@ test("cross-Session Artifact versions display each source Session", () => {
 
   assert.match(html, /Source: Analysis A/);
   assert.match(html, /Source: Analysis B/);
+});
+
+test("long source Session names are truncated in version labels", () => {
+  assert.equal(truncateArtifactVersionSource("12345678901234567890"), "12345678901234567…");
+  assert.equal(truncateArtifactVersionSource("研究会话😀甲乙丙", 7), "研究会话😀甲…");
 });
 
 test("artifact preview identifies the selected version's source Session", () => {
