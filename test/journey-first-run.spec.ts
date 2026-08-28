@@ -225,7 +225,8 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await page.keyboard.press("Escape");
         await expect(picker).toBeHidden();
         await expect(page.locator(".model-picker-trigger-name")).toContainText(stub.model);
-        await expect(page.locator(".model-picker-trigger-thinking")).toContainText("最\u5927");
+        // 手动添加不再写思考默认值，新档案落在省略思考控制字段的「模型默认」上。
+        await expect(page.locator(".model-picker-trigger-thinking")).toContainText("\u6a21\u578b\u9ed8\u8ba4");
       },
     );
 

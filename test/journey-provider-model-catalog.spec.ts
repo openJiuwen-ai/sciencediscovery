@@ -696,7 +696,14 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(customRow.locator(".provider-row-source").filter({ hasText: /服务商返回/ })).toBeVisible();
         await expect(modelRowById(dialog, "deepseek-v4-flash")).toBeVisible();
         await expect(modelRowById(dialog, "fixture-unknown")).toBeVisible();
-        expect(stub.listAuth).toEqual(["Bearer j7-custom-local-token"]);
+        // 到这一步 MiniMax、智谱与这个自定义 Provider 都各自打过一次列表接口，
+        // 所以 stub 累计的是三条记录。要证明的是每次列表请求都带上了该服务商
+        // 自己的令牌，而不是这个数组只有一条。
+        expect(stub.listAuth.every((auth) => auth?.startsWith("Bearer "))).toBe(true);
+        expect(stub.listAuth).toContain("Bearer j7-custom-local-token");
+        // 令牌与端点配对：智谱那次请求带的是智谱自己的令牌，不是别人的。
+        expect(stub.listAuth[stub.listPaths.indexOf("/zhipu/v1/models")])
+          .toBe("Bearer j7-zhipu-local-token");
       },
     );
 
