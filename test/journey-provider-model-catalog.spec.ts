@@ -586,8 +586,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     );
 
     await journey.step(
-      "维护目录给出 GLM 能力与诚实未知价格",
-      "GLM-5.2 标明维护建议而非厂商动态返回；紧凑模型行展示 1,000,000 上下文、131,072 最大输出、无视觉、有思考（高/最大）。由于上游只发布智谱国际站（z.ai）的价格、而本端点连接 open.bigmodel.cn，价格诚实地标注为「未知」而不是冒用另一个托管商的定价；界面不再出现每模型「官方来源」链接，数据来源统一是目录状态行的 models.dev。",
+      "维护目录给出 GLM 能力与该端点自己的目录价",
+      "GLM-5.2 标明维护建议而非厂商动态返回；紧凑模型行展示 1,000,000 上下文、131,072 最大输出、无视觉、有思考（high/max）。本端点连接 open.bigmodel.cn，捆绑快照里该主机的 glm-5.2 价目为 input 1.4、output 4.4、缓存 0.26，行内显示 1.4 / 4.4 / 0.26 USD/1M（不冒用其他托管商的定价）；界面不再出现每模型「官方来源」链接，数据来源统一是目录状态行的 models.dev。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         // 「维护建议」同时出现在行来源行与悬停弹窗的「来源」格，按行来源行精确收敛。
@@ -597,15 +597,17 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const facts = card.locator(".provider-model-row-facts .fact");
         await expect(facts.nth(0)).toHaveText("1M / 131k");
         await expect(facts.nth(2)).toHaveText(/high max/);
-        // 价格诚实地为未知：可见为 "?"，细节在悬停富文本弹窗里。
-        await expect(facts.nth(3)).toHaveText("?");
+        // 国内端点自己的目录价：输入/输出/缓存 + 单位在后。
+        await expect(facts.nth(3)).toHaveText("1.4 / 4.4 / 0.26 USD/1M");
         await card.hover();
         const popup = card.locator(".provider-model-popup");
         await expect(popup).toBeVisible();
         await expect(popup).toContainText("1,000,000");
         await expect(popup).toContainText("131,072");
         await expect(popup).toContainText("high / max");
-        await expect(popup).toContainText("未知");
+        await expect(popup).toContainText("USD 1.4 / 4.4 / 0.26 · 每百万 tokens");
+        // 来源仍是维护目录建议，不是厂商实时返回。
+        await expect(popup).toContainText("维护建议（并非服务商返回）");
         await expect(card.getByRole("link")).toHaveCount(0);
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
           && /\/api\/providers\/[^/]+\/models$/.test(new URL(response.url()).pathname));
