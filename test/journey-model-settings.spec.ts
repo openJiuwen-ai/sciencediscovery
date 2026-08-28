@@ -28,7 +28,7 @@ test.use({ locale: "zh-CN" });
  *   2. 显式选择自定义服务商：编辑器按分组展开，协议与变种同行紧凑；保存后服务商行自动展开并预载模型列表。
  *   3. 行内手动表单登记模型并以逗号分隔声明可接受强度档（原文）；视觉紧跟强度且与价格分开；“已添加”计数与行内模型行出现。
  *   4. 编辑 Provider 时保存失败：错误清楚、草稿保留；恢复后保存成功并重开保持一致。
- *   5. manual 发现为空时已添加模型仍在行内表占一行且排前、不出空态；模型自身名称无服务商前缀，已添加行提供删除。
+ *   5. manual 发现为空时已添加模型仍在行内表占一行且排前、不出空态；模型自身名称无服务商前缀，已添加行提供删除；最后一行悬停详情逃出设置对话框裁切链且完整位于视口。
  *   6. 窄屏（600px）：对话框不越界、高级网格单列、模型行不横向溢出。
  *   7. 从已添加模型行执行删除，删除成功后行和已添加计数立即更新。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；Provider 与模型由本旅程创建并清理。
@@ -248,7 +248,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     await journey.step(
       "已添加模型持久占行，测试下拉可选",
       "manual 发现策略不返回服务商模型列表，但手动登记的模型必须仍在行内表占一行且排最前：保存服务商、重开设置后仍在，"
-      + "不出现“服务商未返回模型”空态；行计数为“已添加 1”，并出现在“选择要测试的模型”下拉中，可单独测试。",
+      + "不出现“服务商未返回模型”空态；行计数为“已添加 1”，并出现在“选择要测试的模型”下拉中，可单独测试。"
+      + "悬停模型表最后一行时，详情卡可以跨出设置对话框边界且仍完整显示在视口内。",
       async () => {
         const dialog = await openModelRegistry();
         const row = dialog.locator(".provider-row").filter({ hasText: providerName + " 已更新" });
@@ -269,6 +270,38 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await expect(testSelect.locator(`option[value="${createdModelId}"]`)).toHaveCount(1);
         const options = await testSelect.locator("option").allTextContents();
         expect(options.some((text) => text.includes("DeepSeek Chat"))).toBe(true);
+
+        // Use a tall desktop viewport so the last row can sit low enough for
+        // the popup to cross the dialog boundary without triggering its
+        // viewport-bottom flip. A descendant popup would be clipped here.
+        await page.setViewportSize({ width: 1_360, height: 1_300 });
+        const lastModelRow = row.locator(".provider-model-table .provider-model-row").last();
+        await lastModelRow.evaluate((node) => {
+          const scroller = node.closest<HTMLElement>(".settings-group-detail");
+          const dialogNode = node.closest<HTMLElement>(".system-config-dialog");
+          if (!scroller || !dialogNode) throw new Error("model row is outside the settings dialog");
+          const current = node.getBoundingClientRect();
+          const dialogRect = dialogNode.getBoundingClientRect();
+          const targetBottom = Math.min(window.innerHeight - 244, dialogRect.bottom - 8);
+          scroller.scrollTop += current.bottom - targetBottom;
+        });
+        await lastModelRow.hover();
+        const popup = page.locator("body > .provider-model-popup");
+        await expect(popup).toBeVisible();
+        const popupGeometry = await popup.evaluate((node) => {
+          const rect = node.getBoundingClientRect();
+          const dialogRect = document.querySelector(".system-config-dialog")!.getBoundingClientRect();
+          return {
+            bottom: rect.bottom,
+            dialogBottom: dialogRect.bottom,
+            fullyInViewport: rect.left >= 0 && rect.top >= 0
+              && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight,
+            portalAtBody: node.parentElement === document.body,
+          };
+        });
+        expect(popupGeometry.portalAtBody).toBe(true);
+        expect(popupGeometry.fullyInViewport).toBe(true);
+        expect(popupGeometry.bottom).toBeGreaterThan(popupGeometry.dialogBottom + 1);
         await dialog.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
         await expect(dialog).toBeHidden();
       },

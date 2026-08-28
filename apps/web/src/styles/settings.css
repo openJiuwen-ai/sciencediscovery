@@ -635,8 +635,7 @@
 .provider-row-test select { max-width: 200px; min-height: 30px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text-heading); padding: 4px 7px; font-size: 11px; }
 .provider-model-table { display: grid; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .provider-model-row { position: relative; display: grid; grid-template-columns: minmax(140px, 1.2fr) minmax(0, 2fr) auto; align-items: center; gap: 10px; min-width: 0; border-bottom: 1px solid var(--border); background: var(--surface-subtle); padding: 7px 10px; }
-.provider-model-popup { position: absolute; z-index: var(--z-popover); top: calc(100% + 4px); left: 10px; display: none; width: min(320px, calc(100vw - 16px)); max-width: calc(100vw - 16px); border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow-3); padding: 10px 12px; pointer-events: none; }
-.provider-model-row:hover .provider-model-popup, .provider-model-row:focus-within .provider-model-popup { display: grid; gap: 6px; }
+.provider-model-popup { position: fixed; z-index: var(--z-popover); display: grid; gap: 6px; width: min(320px, calc(100vw - 16px)); max-width: calc(100vw - 16px); border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow-3); padding: 10px 12px; pointer-events: none; }
 .provider-model-popup > strong { color: var(--text-heading); font-size: 12px; }
 .provider-model-popup > code { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .provider-model-popup dl { display: grid; gap: 4px; margin: 0; }

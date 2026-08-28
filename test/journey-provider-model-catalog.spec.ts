@@ -600,7 +600,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         // 国内端点自己的目录价：输入/输出/缓存 + 单位在后。
         await expect(facts.nth(3)).toHaveText("1.4 / 4.4 / 0.26 USD/1M");
         await card.hover();
-        const popup = card.locator(".provider-model-popup");
+        const popup = page.locator("body > .provider-model-popup");
         await expect(popup).toBeVisible();
         await expect(popup).toHaveCSS("position", "fixed");
         await expect(popup.locator(":scope > strong")).toHaveText("GLM-5.2");
@@ -680,7 +680,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await expect(knownFacts.nth(3)).toHaveText("1.5 / 3 / 0.2 USD/1M");
         await expect(known.getByRole("link")).toHaveCount(0);
         await known.hover();
-        const knownPopup = known.locator(".provider-model-popup");
+        const knownPopup = page.locator("body > .provider-model-popup");
         await expect(knownPopup).toContainText("视觉");
         await expect(knownPopup).toContainText("low / high / max");
         await expect(knownPopup).toContainText("每百万 tokens");
@@ -689,7 +689,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         expect(await unknown.locator(".provider-model-row-facts .fact").allTextContents())
           .toEqual(["? / ?", "?", "?", "?"]);
         await unknown.hover();
-        const unknownPopup = unknown.locator(".provider-model-popup");
+        const unknownPopup = page.locator("body > .provider-model-popup");
         await expect(unknownPopup).toBeVisible();
         await expect(unknownPopup).toContainText("未知");
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
@@ -723,7 +723,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const flashPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
         await expect(flashPrice).toHaveText("0.14 / 0.28 / 0.0028 USD/1M");
         await flash.hover();
-        await expect(flash.locator(".provider-model-popup")).toContainText("每百万 tokens");
+        await expect(page.locator("body > .provider-model-popup")).toContainText("每百万 tokens");
         await expect(flash).not.toContainText("periods");
         await expect(flash.getByRole("link")).toHaveCount(0);
 
@@ -1170,7 +1170,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const enPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
         await expect(enPrice).toHaveText("0.14 / 0.28 / 0.0028 USD/1M");
         await flash.hover();
-        await expect(flash.locator(".provider-model-popup")).toContainText("per 1M tokens");
+        await expect(page.locator("body > .provider-model-popup")).toContainText("per 1M tokens");
         await expect(flash).not.toContainText(/Peak|Off-peak|periods/);
         await expect(flash.getByRole("link")).toHaveCount(0);
       },

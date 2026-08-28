@@ -21,6 +21,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 
 import type {
   ModelApiProtocol,
@@ -256,8 +257,10 @@ export function providerModelDisplayName(model: ProviderModelEntry, provider: Mo
   return separator >= 0 ? name.slice(separator + 3) : name;
 }
 
-/** Keep row facts outside the settings scroll containers and flip the card
- *  above bottom rows so the complete card remains inside the viewport. */
+/** Place row facts in viewport coordinates and flip the card above bottom
+ *  rows so the complete card remains inside the viewport. The rendered card
+ *  is portalled to document.body; fixed positioning alone cannot escape the
+ *  settings dialog's backdrop-filter containing block and overflow chain. */
 export function providerModelPopupStyle(
   anchor: { bottom: number; left: number; top: number },
   width = 320,
@@ -379,7 +382,12 @@ function ProviderModelRow({
       <code>{model.id}</code>
     </span>
     <ModelRowFacts model={model} />
-    {anchor ? <ModelRowPopup model={model} provider={provider} style={providerModelPopupStyle(anchor)} /> : null}
+    {anchor && typeof document !== "undefined"
+      ? createPortal(
+        <ModelRowPopup model={model} provider={provider} style={providerModelPopupStyle(anchor)} />,
+        document.body,
+      )
+      : null}
     {model.profileId
       ? <button className="danger-button compact-button" disabled={busy} onClick={() => onDeleteModel(model.profileId!)} type="button">{t("common.delete")}</button>
       : <button className="secondary-button compact-button" disabled={busy} onClick={onAddModel} type="button">{t("providers.models.add")}</button>}
