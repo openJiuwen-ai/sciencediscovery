@@ -33,6 +33,7 @@ import pytest
 from sciencediscovery_evolve.completion import CompletionUsage
 from sciencediscovery_evolve.engine import RunSpec
 from sciencediscovery_evolve import puct_engine
+from sciencediscovery_evolve.puct_engine import _prior_exponent
 from sciencediscovery_evolve.puct_engine import PuctEngine
 from sciencediscovery_evolve.vendor.puct.domain import Domain
 from sciencediscovery_evolve.vendor.puct.program import Program
@@ -519,6 +520,12 @@ def test_a_reply_without_a_rating_still_becomes_a_node() -> None:
 def test_a_prior_exponent_that_is_not_a_number_refuses_before_anything_is_spent() -> None:
     # Refused alongside the other configuration faults, so a bad value is a
     # refusal rather than a run that starts and then dies.
+    assert _prior_exponent({}) == 0.0
+    assert _prior_exponent({"prior_exponent": 2}) == 2.0
+    for bad in (-1, "sideways", float("inf")):
+        with pytest.raises(ValueError):
+            _prior_exponent({"prior_exponent": bad})
+
     harness = _PromiseHarness()
     harness.run(spec(options={"mode": "serial", "prior_exponent": "sideways"}))
 

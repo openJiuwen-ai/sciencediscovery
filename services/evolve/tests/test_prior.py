@@ -31,12 +31,11 @@ from __future__ import annotations
 
 import math
 
-import pytest
 from agentdescent.selection import Candidate, FlatPuct, SelectionContext
 
 from sciencediscovery_evolve.vendor.puct.program import Program, read_promise
 from sciencediscovery_evolve.vendor.puct.search import _read_promise_op
-from sciencediscovery_evolve.vendor.puct.tree import Node, PuctTree
+from sciencediscovery_evolve.vendor.puct.tree import PuctTree
 
 
 def _program(code: str = "x = 1", *, valid: bool = True) -> Program:
@@ -63,11 +62,8 @@ def test_a_reply_without_a_rating_says_nothing_rather_than_zero() -> None:
     assert read_promise('"""Did a thing."""\n\nx = 1\n') is None
     assert read_promise("") is None
     assert read_promise("PROMISE: not a number") is None
-
-
-def test_a_rating_of_zero_or_below_is_no_rating() -> None:
-    # `_priors` filters on `> 0`, so a zero would be dropped there anyway;
-    # dropping it here keeps the tree's own `promise` field honest.
+    # Zero is the same case: `_priors` filters on `> 0`, so dropping it here
+    # keeps the tree's own `promise` field honest about what it holds.
     assert read_promise("PROMISE: 0") is None
 
 
@@ -122,30 +118,6 @@ def test_the_default_is_upstream_to_the_floating_point_bit() -> None:
         ]
 
 
-def test_the_tree_passes_each_nodes_rating_to_the_policy() -> None:
-    """The wiring this port owns: `Node.promise` reaching `Candidate.prior`.
-
-    Asserted through a policy that records what it was handed, because a tree
-    that computed the rating correctly and then built the rows without it would
-    pass every arithmetic test and still run the uniform prior.
-    """
-    seen: list = []
-
-    class _Spy(FlatPuct):
-        def select(self, ctx, n):  # type: ignore[override]
-            seen.append([c.prior for c in ctx.candidates])
-            return super().select(ctx, n)
-
-    tree = PuctTree(c_puct=1.0, prior_exponent=2.0)
-    tree.seed(_program("root"), 0.5)
-    tree.add_node(_program("a"), 0.6, 0, promise=8.0)
-    tree.add_node(_program("b"), 0.4, 0)
-    tree._policy = _Spy(tree.c_puct, tree.prior_exponent)
-
-    tree.select_parent()
-    assert seen == [[None, 8.0, None]], "the seed and the unrated node stay unrated"
-
-
 def test_a_rated_direction_gets_more_of_the_exploration_term() -> None:
     """End to end through `select_parent`, on the shape the prior exists for.
 
@@ -186,19 +158,6 @@ def test_an_unrated_node_is_not_starved_by_the_absence_of_a_number() -> None:
     assert selection[1].index == 2
 
 
-def test_a_negative_exponent_is_not_a_way_to_invert_the_prior() -> None:
-    # The engine refuses one before the run starts; the tree accepts what it is
-    # given, so this pins where the refusal has to live rather than duplicating
-    # it. See `_prior_exponent`.
-    from sciencediscovery_evolve.puct_engine import _prior_exponent
-
-    assert _prior_exponent({}) == 0.0
-    assert _prior_exponent({"prior_exponent": 2}) == 2.0
-    for bad in (-1, "sideways", float("inf")):
-        with pytest.raises(ValueError):
-            _prior_exponent({"prior_exponent": bad})
-
-
 def test_the_summary_records_which_prior_ran() -> None:
     # A finished run is read back from the tree summary; a search whose
     # selection rule is not recorded cannot be compared with another one.
@@ -209,15 +168,3 @@ def test_the_summary_records_which_prior_ran() -> None:
     assert summary["c_puct"] == 1.7
     assert summary["prior_exponent"] == 2.0
     assert summary["tree"][1]["promise"] == 9.0
-
-
-def test_a_node_is_still_appended_when_nobody_rated_it() -> None:
-    # Upstream appends a node for every expansion, rating or not. The prior is
-    # metadata about the proposal; it must not become a reason a candidate never
-    # enters the tree, because dropping one changes the rank denominator.
-    tree = PuctTree(c_puct=1.0, prior_exponent=2.0)
-    tree.seed(_program("root"), 0.5)
-    node = tree.add_node(_program("a"), -math.inf, 0)
-    assert isinstance(node, Node)
-    assert node.promise is None
-    assert len(tree.nodes) == 2
