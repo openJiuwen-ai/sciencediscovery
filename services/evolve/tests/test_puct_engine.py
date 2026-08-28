@@ -406,27 +406,13 @@ def test_a_normalisation_this_side_does_not_implement_refuses_the_run() -> None:
     assert any("linear" in event.get("message", "") for event in harness.of("log"))
 
 
-def test_a_prior_factor_the_engine_does_not_know_refuses_the_run() -> None:
-    """Not filtered down to the ones it recognises, and not ignored.
+def test_the_tuning_reaches_the_tree_not_just_the_spec() -> None:
+    """Asserted on the tree's own constructor arguments.
 
-    The value is drafted by a model and crosses four processes to get here. A
-    dropped misspelling runs under the uniform prior and finishes `succeeded`,
-    so the run that was started to find out whether a prior helps comes back
-    having answered a different question — and nothing in the record says so.
-    """
-    harness = Harness()
-    harness.run(spec(options={"mode": "serial", "prior": ["promising"]}))
-
-    assert harness.of("search_finished")[0]["status"] == "failed"
-    assert any("promising" in event.get("message", "") for event in harness.of("log"))
-
-
-def test_a_prior_the_engine_does_know_runs(monkeypatch: Any) -> None:
-    """The tuning reaches the tree, not just the spec.
-
-    Asserted on the tree's own constructor arguments: the engine reads
-    `options` and the tree validates them, so an engine that read the key and
-    forgot to pass it on would still pass every refusal test above.
+    The engine reads `options` and the tree is what acts on them, so an engine
+    that read the key and forgot to pass it on would still satisfy every
+    refusal test — and would run the search under the upstream default while
+    reporting that it used a prior.
     """
     seen: Dict[str, Any] = {}
     real = puct_engine.PuctTree
@@ -435,151 +421,108 @@ def test_a_prior_the_engine_does_know_runs(monkeypatch: Any) -> None:
         seen.update(kwargs)
         return real(*args, **kwargs)
 
+    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(puct_engine, "PuctTree", spy)
-    harness = Harness()
-    harness.run(spec(options={"mode": "serial", "c_puct": 0.4, "prior": ["viable", "frontier"]}))
+    try:
+        harness = Harness()
+        harness.run(spec(options={"mode": "serial", "c_puct": 0.4, "prior_exponent": 2.0}))
+    finally:
+        monkeypatch.undo()
 
     assert seen["c_puct"] == 0.4
-    assert seen["prior_factors"] == ("viable", "frontier")
+    assert seen["prior_exponent"] == 2.0
 
 
-# --- the judged prior ---------------------------------------------------------
+# --- the model prior ----------------------------------------------------------
 
 
-class _JudgingHarness(Harness):
-    """A model that also answers the prior-judging call, and counts them."""
+class _PromiseHarness(Harness):
+    """A model whose replies carry a `PROMISE:` line, and that records the prompts."""
 
-    def __init__(self, marks: Optional[List[str]] = None, **kwargs: Any) -> None:
+    def __init__(self, ratings: Optional[List[Optional[str]]] = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.marks = marks if marks is not None else ["8"] * 20
-        self.prior_prompts: List[str] = []
-        self._mark = 0
+        self.ratings = ratings if ratings is not None else ["8"] * 20
+        self._rating = 0
 
     def completion_factory(self, run_spec: RunSpec, on_usage: Any, should_stop: Any):
         inner = super().completion_factory(run_spec, on_usage, should_stop)
 
         def complete(prompt: str, sink: Any = None, on_failure: Any = None) -> str:
-            if prompt.startswith("You are rating how promising one direction is"):
-                self.prior_prompts.append(prompt)
-                mark = self.marks[min(self._mark, len(self.marks) - 1)]
-                self._mark += 1
-                if sink is not None:
-                    sink(CompletionUsage(total=200, completion=8, capped=False))
-                if mark is None:
-                    raise RuntimeError("the judging call fell over")
-                return mark
-            return inner(prompt, sink, on_failure)
+            reply = inner(prompt, sink, on_failure)
+            rating = self.ratings[min(self._rating, len(self.ratings) - 1)]
+            self._rating += 1
+            return reply if rating is None else f"{reply}\n\nPROMISE: {rating}"
 
         return complete
 
 
-def _judged_spec(**overrides: Any) -> RunSpec:
-    options = {"mode": "serial", "prior": ["judged"],
-               "prior_rubric": "Reward changes that build on the mechanism already there."}
-    options.update(overrides.pop("options", {}))
-    return spec(options=options, **overrides)
+def test_the_default_asks_for_no_rating_and_reads_none() -> None:
+    """At the upstream default the request is not even sent.
 
-
-def test_the_judged_prior_asks_the_model_once_per_node() -> None:
-    """One call per node, not one per selection.
-
-    A node's code and its score are fixed the moment it is appended, so a second
-    reading pays for the same answer. Selection reads the cached map on every
-    pick instead, which is what keeps the judged prior affordable: it adds one
-    short call per expansion rather than one per node per iteration.
+    It costs a line of prompt and a line of reply, and a run whose
+    `prior_exponent` is 0 would ignore the number — so asking anyway is paying
+    for nothing.
     """
-    harness = _JudgingHarness()
-    harness.run(_judged_spec(expansions=3))
+    harness = _PromiseHarness()
+    harness.run(spec(expansions=2))
+
+    assert all("PROMISE:" not in prompt for prompt in harness.prompts)
+    assert all(event.get("promise") is None for event in harness.of("expanded"))
+
+
+def test_a_run_that_wants_a_prior_asks_in_the_mutation_prompt() -> None:
+    """No second call. The rating rides the reply the search already paid for.
+
+    This is the whole cost argument for the model prior: one call per expansion,
+    the same as a run without one. A separate judging call would double it.
+    """
+    harness = _PromiseHarness()
+    harness.run(spec(expansions=2, options={"mode": "serial", "prior_exponent": 2.0}))
+
+    assert harness.prompts, "the mutation model was called"
+    assert all("PROMISE:" in prompt for prompt in harness.prompts), \
+        "every mutation prompt carries the request"
+    # One call per expansion — the request adds prompts, not calls.
+    assert len(harness.prompts) == len(harness.of("expanded"))
+
+
+def test_the_rating_reaches_the_node_and_the_event() -> None:
+    harness = _PromiseHarness(ratings=["9", "3"])
+    harness.run(spec(expansions=2, options={"mode": "serial", "prior_exponent": 2.0}))
+
+    # The event is what the panel and the graph read; that the tree hands the
+    # same number to `FlatPuct` is `test_prior.py`'s job.
+    assert [event.get("promise") for event in harness.of("expanded")] == [9.0, 3.0]
+
+
+def test_a_reply_without_a_rating_still_becomes_a_node() -> None:
+    """Absent is not zero, all the way through.
+
+    Upstream appends a node for every expansion. A rating is metadata about the
+    proposal and must never be the reason a candidate does not enter the tree —
+    dropping one would change the rank denominator of every later iteration.
+    """
+    harness = _PromiseHarness(ratings=[None, "7"])
+    harness.run(spec(expansions=2, options={"mode": "serial", "prior_exponent": 2.0}))
 
     expanded = harness.of("expanded")
-    assert len(harness.prior_prompts) == len(expanded), \
-        "one judging call per node that landed, and no more"
-    # The seed is not a direction, so it is never judged.
-    assert all("nodeIndex" in event for event in expanded)
-    assert all(event.get("priorScore") == pytest.approx(0.8) for event in expanded)
+    assert len(expanded) == 2
+    assert expanded[0].get("promise") is None
+    assert expanded[1].get("promise") == 7.0
 
 
-def test_the_judging_prompt_carries_the_rubric_and_not_the_siblings() -> None:
-    # Same discipline as the mutation prompt: expansions are independent draws.
-    # A judge shown the field would be ranking, and ranking is the exploitation
-    # half's job — it already has the measured scores.
-    harness = _JudgingHarness()
-    harness.run(_judged_spec(expansions=2))
-
-    for prompt in harness.prior_prompts:
-        assert "Reward changes that build on the mechanism already there." in prompt
-        assert "Push the accuracy up" in prompt          # what the search is for
-        for leak in ("sibling", "the other candidates", "nodeIndex", "rank"):
-            assert leak not in prompt
-
-
-def test_a_judging_call_that_falls_over_leaves_the_node_unjudged() -> None:
-    """A prior is a bonus. A flaky judge degrades the search towards uniform.
-
-    The failure is swallowed on purpose and the node still lands: the
-    alternative is a search that dies on the extra call rather than on anything
-    to do with the candidates.
-    """
-    harness = _JudgingHarness(marks=[None, "9"])
-    harness.run(_judged_spec(expansions=2))
-
-    assert harness.of("search_finished")[0]["status"] == "succeeded"
-    scores = [event.get("priorScore") for event in harness.of("expanded")]
-    assert scores[0] is None, "the failed judging leaves no rating"
-    assert scores[1] == pytest.approx(0.9)
-
-
-def test_a_judge_that_answers_with_prose_leaves_the_node_unjudged() -> None:
-    # `_first_number` returns None rather than guessing, and None has to travel
-    # all the way rather than becoming a zero somewhere in between — a zero
-    # would say something about the candidate that nobody said.
-    harness = _JudgingHarness(marks=["I would rather not say."])
-    harness.run(_judged_spec(expansions=1))
-    assert harness.of("expanded")[0].get("priorScore") is None
-
-
-def test_the_judged_prior_never_touches_the_reported_score() -> None:
-    """The safety property that makes a model-written rubric safe to run.
-
-    The rubric decides where the next attempt starts and nothing else. Two runs
-    whose judges disagree completely must report the same numbers, because the
-    scores come from the sandbox and the prior never reaches them.
-    """
-    high = _JudgingHarness(marks=["10"] * 20)
-    high.run(_judged_spec(expansions=2))
-    low = _JudgingHarness(marks=["0"] * 20)
-    low.run(_judged_spec(expansions=2))
-
-    def scores(harness: _JudgingHarness) -> List[Any]:
-        return [event.get("score") for event in harness.of("expanded")]
-
-    assert scores(high) == scores(low)
-    assert high.of("search_finished")[0].get("bestTestScore") == \
-        low.of("search_finished")[0].get("bestTestScore")
-
-
-def test_asking_for_a_judged_prior_without_a_rubric_is_refused() -> None:
-    # Refused before the run starts, not defaulted: without a rubric the model
-    # would rate candidates against its own idea of promising, which is the one
-    # thing the rubric exists to replace — and it would spend a call per node
-    # doing it.
-    harness = _JudgingHarness()
-    harness.run(spec(options={"mode": "serial", "prior": ["judged"]}))
+def test_a_prior_exponent_that_is_not_a_number_refuses_before_anything_is_spent() -> None:
+    # Refused alongside the other configuration faults, so a bad value is a
+    # refusal rather than a run that starts and then dies.
+    harness = _PromiseHarness()
+    harness.run(spec(options={"mode": "serial", "prior_exponent": "sideways"}))
 
     assert harness.of("search_finished")[0]["status"] == "failed"
-    assert any("prior_rubric" in event.get("message", "") for event in harness.of("log"))
-    assert harness.prior_prompts == [], "nothing was spent on the refused run"
+    assert any("prior_exponent" in event.get("message", "") for event in harness.of("log"))
+    assert harness.prompts == [], "nothing was spent on the refused run"
 
 
-def test_no_judged_factor_means_no_judging_calls_at_all() -> None:
-    harness = _JudgingHarness()
-    harness.run(spec(options={"mode": "serial", "prior": ["improvement"],
-                              "prior_rubric": "ignored without the factor"}))
-    assert harness.of("search_finished")[0]["status"] == "succeeded"
-    assert harness.prior_prompts == []
-
-
-# --- Counters -----------------------------------------------------------------
+# --- Counters -----------------------------------------------------------------# --- Counters -----------------------------------------------------------------
 
 
 def test_visits_are_absolute_and_backpropagate_to_the_root() -> None:
@@ -1237,7 +1180,7 @@ def test_a_summary_copied_from_the_parent_is_blanked() -> None:
     def complete(prompt, iteration):
         # The model returns new code but keeps the parent's docstring line.
         return ('"""Lossless text compression: compress(text)->bytes."""\n\nx = 2\n',
-                "Lossless text compression: compress(text)->bytes.")
+                "Lossless text compression: compress(text)->bytes.", None)
 
     propose = make_propose(tree, complete, _Domain())
     payload = jsonlib.loads(propose("", _task(), "", 0.0))
@@ -1245,7 +1188,8 @@ def test_a_summary_copied_from_the_parent_is_blanked() -> None:
 
     # A genuinely new line survives untouched.
     def complete_fresh(prompt, iteration):
-        return ('"""Switched to LZ77 sliding-window matching."""\n\nx = 3\n', "Switched to LZ77 sliding-window matching.")
+        return ('"""Switched to LZ77 sliding-window matching."""\n\nx = 3\n',
+                "Switched to LZ77 sliding-window matching.", None)
 
     propose2 = make_propose(tree, complete_fresh, _Domain())
     payload2 = jsonlib.loads(propose2("", _task(), "", 0.0))

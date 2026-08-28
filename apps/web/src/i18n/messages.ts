@@ -484,7 +484,7 @@ export const en = {
   "evolve.chart.empty": "No candidate has been scored yet.",
   "evolve.chart.failed": "did not run",
   "evolve.chart.gate": "held-out gate",
-  "evolve.detail.prior": "direction rating",
+  "evolve.detail.prior": "promise",
   "evolve.chart.rollout": "rollout",
   "evolve.chart.test": "test",
   "evolve.chart.title": "Score over expansions",

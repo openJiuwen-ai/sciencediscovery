@@ -12,11 +12,11 @@ resolution-markers = [
 
 [[package]]
 name = "agentdescent"
-version = "0.4.5"
+version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d5/ab/bda866c8bd327c1047953112c4509e8064a39275b3ee788455d8b269c06c/agentdescent-0.4.5.tar.gz", hash = "sha256:74ff5bef044874dfd2131a8b1261b04afda857c25b2d8d066ed91e95d2d0a7d5", size = 574121, upload-time = "2026-08-19T16:12:30.751Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/05/81/e1f5ba841f108d4b12e9ec418d3121770a9b845530450a256a6783aaafac/agentdescent-0.4.6.tar.gz", hash = "sha256:0b862b5bfe22dd16166403e0a7212ce8b268a67b3d46e7d29166153246a93ce7", size = 603682, upload-time = "2026-08-28T13:14:20.915Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c0/48/ce57d80807f56c51408873e1d6f6963611e709c1feb55d8cac6c721891de/agentdescent-0.4.5-py3-none-any.whl", hash = "sha256:bee960890470cd6859b71808c9dc97e0eb49e33405af64cc90341eefeaae0711", size = 301793, upload-time = "2026-08-19T16:12:29.134Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/fb/f1113529dbda01e56b20f4157f509f57d139503fd0f5ffd500fd1b2d8f09/agentdescent-0.4.6-py3-none-any.whl", hash = "sha256:50e45f63e1bf453bd0d5d680d086fea3fd4a13294d0cfb423bc03d9b64e82098", size = 302740, upload-time = "2026-08-28T13:14:19.341Z" },
 ]
 
 [[package]]
@@ -550,7 +550,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentdescent", specifier = ">=0.4.5" },
+    { name = "agentdescent", specifier = ">=0.4.6" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.0" },
     { name = "numpy", marker = "extra == 'candidates'", specifier = ">=1.26" },

@@ -37,6 +37,7 @@ import ast
 import hashlib
 import importlib.util
 from importlib.metadata import PackageNotFoundError, packages_distributions, version
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -177,6 +178,29 @@ class Program:
     metrics: Dict[str, Any]
     valid: bool
     error: str = ""
+
+
+#: Upstream's `_PROMISE` (examples/era/era_empirical_software.py).
+_PROMISE = re.compile(r"PROMISE:\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+
+
+def read_promise(reply: str) -> Optional[float]:
+    """The model's own rating of the direction, or ``None`` if it did not give one.
+
+    Read out of the reply the port was already paying for, so a prior costs no
+    extra call. **Absent is not zero**: an unrated node falls back to the mean of
+    the rated ones in `FlatPuct._priors`, because a missing number must not be
+    the reason a direction is never explored. Upstream measured 25 replies out
+    of 30 carrying one.
+    """
+    match = _PROMISE.search(reply or "")
+    if not match:
+        return None
+    try:
+        value = float(match.group(1))
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and value > 0 else None
 
 
 def program_id(code: str) -> str:

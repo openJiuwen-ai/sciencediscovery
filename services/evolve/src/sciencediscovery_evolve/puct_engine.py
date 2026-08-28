@@ -50,7 +50,7 @@ from . import events
 from .candidates import CandidateStore
 from .completion import CompletionUnavailable, CompletionUsage, completion_for
 from .engine import RunSpec
-from .events import Emit, finite
+from .events import Emit
 from .logging_config import get_logger
 from .measurement import (
     GATE,
@@ -61,11 +61,12 @@ from .measurement import (
     missing_candidate_runtime,
     shard_indices,
 )
-from .judge_domain import _first_number, grader, judge_domain
+from .judge_domain import grader, judge_domain
 from .scorecard import KNOWN_NORMALIZE
 from .scorecard_domain import SCORE_KEY, scorecard_domain
 from .text_candidate import extract_text
-from .vendor.puct.program import extract_program
+from .prompt import with_promise_request
+from .vendor.puct.program import extract_program, read_promise
 from .vendor.puct.search import (
     PuctStrategy,
     PuctTreeAggregator,
@@ -73,15 +74,9 @@ from .vendor.puct.search import (
     make_reward,
     make_run,
 )
-from .prompt import prior_prompt
-from .vendor.puct.tree import PRIOR_FACTORS, PuctTree, Node
+from .vendor.puct.tree import PuctTree, Node
 
 log = get_logger("puct")
-
-#: Ceiling for one prior-judging call. The answer is a number; anything past a
-#: couple of hundred tokens is a model explaining itself, which is billed and
-#: then discarded by `_first_number`.
-_PRIOR_MAX_TOKENS = 512
 
 #: How long the run may sit past its expansion budget before the engine is told
 #: to wind down. The budget is `max_iters`; this is the safety net for a backend
@@ -290,22 +285,11 @@ class PuctEngine:
             )
 
         tree = PuctTree(c_puct=float(spec.options.get("c_puct", 1.0)),
-                        prior_factors=_prior_factors(spec.options),
+                        prior_exponent=_prior_exponent(spec.options),
                         candidate_limit=spec.expansions)
         store = CandidateStore(self._store_root)
         usage = _Usage()
-        # Its own completion, not the mutation one: a judging call wants a small
-        # ceiling and no thinking — it answers with a single number — while a
-        # mutation writes a whole program. Sharing one would either starve the
-        # mutation or pay reasoning-model prices for a digit.
-        judge = None
-        if "judged" in tree.prior_factors:
-            judge = _prior_judge(
-                spec,
-                self._completion_factory(_prior_spec(spec), None, should_stop),
-                usage,
-            )
-        reporter = _Reporter(spec, tree, domain, store, usage, emit, judge=judge)
+        reporter = _Reporter(spec, tree, domain, store, usage, emit)
 
         complete = self._model_call(spec, usage, reporter, should_stop, tree)
         tasks = (_tasks(dataset, spec.search_id) if _stages_rows(mode)
@@ -413,8 +397,8 @@ class PuctEngine:
         reporter: "_Reporter",
         should_stop: Callable[[], bool],
         tree: PuctTree,
-    ) -> Callable[[str, int], Tuple[str, str]]:
-        """`(prompt, iteration) -> (code, change_summary)`.
+    ) -> Callable[[str, int], Tuple[str, str, Optional[float]]]:
+        """`(prompt, iteration) -> (code, change_summary, promise)`.
 
         Owned here rather than handed to the framework as an `Agent` so a stop, a
         token count and an empty reply each mean something to this engine.
@@ -427,16 +411,21 @@ class PuctEngine:
         except CompletionUnavailable as error:
             raise _Refusal(f"this search has no access to a model: {error}") from error
 
-        def call(prompt: str, iteration: int) -> Tuple[str, str]:
+        # Asked for only when the prior will read it: the request costs a line
+        # of prompt and a line of reply, and a run at the upstream default
+        # ignores the number, so asking anyway would be paying for nothing.
+        ask_promise = _prior_exponent(spec.options) > 0.0
+
+        def call(prompt: str, iteration: int) -> Tuple[str, str, Optional[float]]:
             if should_stop():
                 # Upstream's own way of saying "no more expansions": past the
                 # candidate limit, `select_parent` returns None and the workers
                 # wind down. Reusing it means a stop looks like a finished
                 # budget rather than a special case.
                 tree.candidate_limit = 0
-                return "", ""
+                return "", "", None
             reply = complete(
-                prompt,
+                with_promise_request(prompt) if ask_promise else prompt,
                 lambda spent: usage.add(iteration, spent),
                 lambda reason: reporter.note_failure(iteration, reason),
             )
@@ -446,7 +435,8 @@ class PuctEngine:
                              else extract_program(reply))
             if not code.strip():
                 reporter.note_empty(iteration)
-            return code, summary
+            # Read from the same reply, so the prior costs no extra call.
+            return code, summary, (read_promise(reply) if ask_promise else None)
 
         return call
 
@@ -470,13 +460,9 @@ class _Reporter:
         store: CandidateStore,
         usage: _Usage,
         emit: Emit,
-        judge: Optional[Callable[[Node, Optional[float], int], Optional[float]]] = None,
     ) -> None:
         self.spec = spec
         self.tree = tree
-        #: Absent unless the run asked for a judged prior. Called once per node,
-        #: never for the seed: a starting point is not a direction.
-        self.judge = judge
         self.domain = domain
         self.store = store
         self.usage = usage
@@ -594,17 +580,6 @@ class _Reporter:
         else:
             self.scored += 1
 
-        # Judged once, here, and cached on the tree: a node's code and score do
-        # not change after it is appended, so a second reading would cost a
-        # second call to answer the same question. Selection reads the map
-        # fresh on every pick, which is what makes one call per node enough.
-        rating: Optional[float] = None
-        if self.judge is not None and node.index not in self.tree.judged:
-            parent = self.tree.nodes[node.parent_index] if node.parent_index is not None else None
-            rating = self.judge(node, finite(parent.score) if parent else None, iteration)
-            if rating is not None:
-                self.tree.judged[node.index] = rating
-
         self.emit(events.expanded(
             node.index, node.parent_index, _depth(self.tree, node),
             metrics.get(SCORE_KEY) if valid else None, valid,
@@ -614,7 +589,7 @@ class _Reporter:
             # Written down because it steered the search. A prior that moves
             # where the budget goes and leaves no trace is a run nobody can
             # explain afterwards.
-            prior_score=rating,
+            promise=node.promise,
         ))
         if valid:
             criteria = {
@@ -761,30 +736,12 @@ def _refuse_unrunnable(spec: RunSpec) -> None:
         )
     if not spec.scorecard:
         raise _Refusal("this search was given no scorecard, so there is no way to tell candidates apart")
-    # Before the search starts, alongside the other configuration faults. The
-    # tree raises on an unknown factor too, but that happens after the run has
-    # been announced as started and after the dataset has been staged, so the
-    # user watches a run begin and then die for a typo.
+    # Before the search starts, alongside the other configuration faults, so a
+    # bad number is a refusal rather than a run that begins and then dies.
     try:
-        unknown = [
-            factor for factor in _prior_factors(spec.options) if factor not in PRIOR_FACTORS
-        ]
+        _prior_exponent(spec.options)
     except ValueError as error:
-        raise _Refusal(f"the prior argument has the wrong shape: {error}") from error
-    if unknown:
-        raise _Refusal(
-            f"unknown prior factor(s) {unknown}; this side supports {list(PRIOR_FACTORS)}"
-        )
-    # A judged prior with nothing to judge by would ask the model to rate
-    # candidates against its own idea of "promising", which is the one thing the
-    # rubric exists to replace. Refused rather than defaulted: a search that
-    # spent a call per node on an unstated standard is worse than one that did
-    # not start.
-    if "judged" in _prior_factors(spec.options) and not _prior_rubric(spec.options):
-        raise _Refusal(
-            "the judged prior needs a rubric (prior_rubric) saying what counts as a "
-            "promising direction for this task"
-        )
+        raise _Refusal(str(error)) from error
     for criterion in spec.scorecard.get("criteria") or []:
         kind = (criterion.get("normalize") or {}).get("kind")
         if kind not in KNOWN_NORMALIZE:
@@ -972,22 +929,6 @@ def _scale_of(spec: RunSpec) -> Dict[str, Any]:
     return {"max": 10, "min": 0}
 
 
-def _prior_spec(spec: RunSpec) -> RunSpec:
-    """The mutation model, told to answer briefly and not to think.
-
-    The mutation proxy rather than the judge's: a judged prior is available to
-    every scoring mode, and only `llm_judge` runs have a judge token at all.
-    Same token, different ceiling — the reply is one number, so the per-call
-    budget a reasoning model needs to *write a program* would be spent on
-    thinking about a digit. Measured on the mutation path and the reason
-    `maxTokensPerCall` exists: at 16k a reasoning model returned nothing six
-    times running, having spent it all on hidden reasoning.
-    """
-    from dataclasses import replace
-
-    return replace(spec, max_tokens_per_call=_PRIOR_MAX_TOKENS, thinking="disabled")
-
-
 def _judge_spec(spec: RunSpec) -> RunSpec:
     """The same run, pointed at the judge's own proxy token.
 
@@ -1009,71 +950,29 @@ def _mode(spec: RunSpec) -> str:
     return mode
 
 
-def _prior_factors(options: Dict[str, Any]) -> Tuple[str, ...]:
-    """``options["prior"]`` as a tuple, refusing anything not recognised.
+def _prior_exponent(options: Dict[str, Any]) -> float:
+    """``options["prior_exponent"]``: how sharply the model's rating bends P(s,a).
 
-    Refused rather than filtered. The value is drafted by a model and travels
-    through four processes to get here; silently dropping a misspelling would
-    run the search under the uniform prior and report success, and the run that
-    was supposed to test whether the prior helps would have answered a different
-    question. `PuctTree` does the checking -- this only normalises the shape.
+    ``0.0`` is upstream — a uniform ``1/N`` for every node, to the
+    floating-point bit — and is what an unset option means, so a run that says
+    nothing about the prior is the search upstream ships.
+
+    The power is the point rather than a knob for its own sake. Upstream's own
+    arithmetic: with a prior proportional to the rating, a candidate rated 8
+    against a mean of 5.5 gets 1.45x the exploration term and a dead end rated 2
+    still gets 0.36x. Squared, those become 2.12x and 0.13x — the difference
+    between widening exploration and *aiming* it.
     """
-    raw = options.get("prior")
+    raw = options.get("prior_exponent")
     if raw is None:
-        return ()
-    if isinstance(raw, str):
-        raw = [raw]
-    if not isinstance(raw, (list, tuple)):
-        raise ValueError(f"prior must be a list of factor names, got {type(raw).__name__}")
-    return tuple(str(item) for item in raw)
-
-
-def _prior_rubric(options: Dict[str, Any]) -> str:
-    """``options["prior_rubric"]``: what the judged prior rewards, in words.
-
-    Written by the drafting agent for this task and frozen with the goal. Empty
-    is the ordinary case — the judged factor is opt-in, and asking for it
-    without saying what to reward is refused before the run starts.
-    """
-    raw = options.get("prior_rubric")
-    return str(raw).strip() if isinstance(raw, str) else ""
-
-
-def _prior_judge(
-    spec: RunSpec,
-    complete: Callable[..., str],
-    usage: "_Usage",
-) -> Callable[[Node, Optional[float], int], Optional[float]]:
-    """One short model call per node: how promising is this direction, in [0, 1].
-
-    Billed to the expansion that produced the node, so the extra cost shows up
-    against the thing that incurred it rather than against the seed. A call that
-    fails, times out or comes back without a number returns ``None`` and the
-    node stays unjudged — the prior treats that as the midpoint, so a flaky
-    judge degrades the search towards uniform instead of breaking it.
-    """
-    rubric = _prior_rubric(spec.options)
-
-    def judge(node: Node, parent_score: Optional[float], iteration: int) -> Optional[float]:
-        try:
-            reply = complete(
-                prior_prompt(
-                    rubric=rubric,
-                    statement=spec.statement,
-                    change_summary=node.program.change_summary,
-                    code=node.program.code,
-                    score=finite(node.score),
-                    parent_score=parent_score,
-                ),
-                lambda spent: usage.add(iteration, spent),
-            )
-        except Exception as error:  # noqa: BLE001 - a prior is a bonus, never a failure mode
-            log.warning("prior judging failed for node %s: %s", node.index, error)
-            return None
-        value = _first_number(reply, 0.0, 10.0)
-        return None if value is None else value / 10.0
-
-    return judge
+        return 0.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"prior_exponent must be a number, got {raw!r}") from error
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"prior_exponent must be a non-negative number, got {value!r}")
+    return value
 
 
 def _depth(tree: PuctTree, node: Node) -> int:

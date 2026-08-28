@@ -188,69 +188,42 @@ not as a dial between "greedy" and "random".
 Above 10 is refused. Note that a coarse score is a *scoring* problem first — widen the gate
 before reaching for `cPuct`.
 
-**`prior` — which nodes that exploration budget goes to.** Empty is uniform: every node gets an
-equal share. AlphaZero fills this slot with a policy network asked "which move looks promising";
-a program search has no such network, which is why upstream leaves it flat. But it does have a
-model — the one writing the candidates — and `judged` is that model put in the policy network's
-place. The factors multiply, so you can ask for more than one.
+**`priorExponent` — how much the model's own reading of a direction aims the search.**
+Default `0`, which is upstream: every node gets an equal share of the exploration budget and
+nothing is asked of the model. AlphaZero fills this slot with a policy network; a program search
+has none — but the model writing the candidates is somebody to ask, and it answers in the reply
+the search was already paying for.
 
-- **`judged`** — the model reads each candidate against a rubric **you write** and rates how much
-  further there is to gain down that path. Spans a factor of seven, the widest of the four,
-  because it is the only one that can carry knowledge about the task; the other three are things
-  the tree works out for itself. Costs one short call per candidate and **requires
-  `priorRubric`**.
-- **`improvement`** — a node that beat its parent gets up to three times the share of one that
-  fell back. The best mechanical factor: rank sees the score and the formula sees the visit
-  count, so a node on a climbing lineage and one on a stalled lineage at the same score are
-  invisible to everything else.
-- **`frontier`** — a parent already forked five times yields to one never forked. For when you
-  would rather see several distinct approaches tried than one refined.
-- **`viable`** — a node whose program did not run keeps a tenth of its share. For when you expect
-  a lot of candidates to crash. Narrow on purpose: a dead node already ranks near the bottom, so
-  this only bites in a run where so many candidates hard-crash that the merely-broken ones drift
-  into the middle of the ordering.
+Above zero, the mutation prompt gains one line asking the model to end its reply with
+`PROMISE: <n>` — 1 to 10, **how far this approach could go after further work**, not how good
+this draft is. That distinction is the whole point: asked the other way the rating collapses into
+the score the evaluator already produces, and what a prior is for is separating "weak today,
+right idea" from "fine today, finished".
 
-An unknown factor name is refused, not ignored, so a typo cannot quietly give you the uniform
-prior and a run that answered a different question.
+- **`0`** — the default, and a fine answer. Take it when you have no reason to think the model
+  can tell a promising direction from a dead end on this task.
+- **`2`** — upstream's own non-zero setting. A candidate rated 8 against a mean of 5.5 gets
+  2.12x the exploration term and a dead end rated 2 gets 0.13x. At `1` those would be 1.45x and
+  0.36x — that is widening exploration; the square is *aiming* it.
+- Above `4` is refused: the rating would override the measured ranking rather than break its
+  ties.
 
-### Writing `priorRubric`
+**Reach for it when the failure you expect is a whole-mechanism rewrite.** Measured on a
+compression run: five of eighteen candidates replaced a working RLE+Huffman with a from-scratch
+arithmetic coder, every one ran fine and every one lost data, and each scored exactly 0 — the
+tree learned the same thing five times. A model asked "how far can this approach go" rates those
+low before the search spends the expansion.
 
-This is the one place in the whole design where you get to say something about the *search* that
-the scoring cannot say. The scoring answers "is this candidate better?" — measured, on held-out
-shards, and it is the only thing that decides the reported number. The rubric answers a different
-question: **"is there more to get by going further down this path?"** A candidate can score well
-and be a dead end; another can score no better than its parent and be one step from the win.
-
-Write two or three sentences, about *this* task:
-
-1. **What a good next step looks like here.** Not "well-written code" — that is true of any task.
-   In a compression search: builds on the mechanism already there rather than replacing it. In a
-   parameter fit: moves the fit off a local optimum rather than tightening one already found.
-2. **What a dead end looks like here.** The specific one you expect. "Bolts on special cases for
-   individual inputs." "Trades accuracy for a speed the scoring does not reward."
-3. Nothing about how to write Python, and nothing that repeats the scoring.
-
-**Two things make this safe to get wrong.** The rating steers where the next attempt starts and
-nothing else — it cannot move the number the run reports, because that comes from the sandbox on
-held-out shards. And the rating is bounded, so a confident and wrong judgement costs a subtree
-budget rather than closing it off. So write the rubric you actually believe, and read the result;
-a run whose ratings were all high and whose scores went nowhere is telling you the rubric
-measured enthusiasm.
-
-**It is still yours to justify.** Reach for `judged` when you know something about the task that
-the tree cannot see — a mechanism worth preserving, a failure mode you expect. When you do not,
-`improvement` is free and honest, and the uniform default is not a bad answer.
-
-> **The trap.** A rubric that names an algorithm — "reward switching to LZ77" — is step 1's
-> mistake in a new place: the human picking the approach and leaving the run to tune it. Say what
-> *kind* of step is promising, never which one to take.
+**Two things make it safe.** The rating cannot move the reported score — that comes from the
+sandbox on held-out shards — and a reply with no rating is not a zero: the search gives it the
+mean of the rated nodes, so a direction the model forgot to rate is not thereby abandoned.
+Upstream measured ratings arriving on 25 replies out of 30.
 
 > **Checkpoint 3.** Show the shape in a few lines: what one unit is, how much is held out, how
 > many expansions with how many workers, and roughly what that costs in time and model calls.
 > Mention `search` only if you set it, in one line saying why — "scoring is coarse, so spread the
-> budget" — and leave it out of the glance entirely when you did not. If you set `priorRubric`,
-> show it in full: it is a sentence you wrote about their problem, and it is the one part of the
-> tuning they are better placed than you to correct.
+> budget", "whole rewrites are the failure mode here, so let the model rate the direction" — and
+> leave it out of the glance entirely when you did not.
 > This is the last point before real money is spent — say so plainly, and default to the smaller
 > option when unsure.
 

@@ -42,7 +42,6 @@ import type {
   EvolveRunStatus,
   EvolveRunSummary,
   EvolveGoal,
-  EvolvePriorFactor,
   EvolveRunProposal,
   EvolveRunProposalResult,
   EvolveScoring,
@@ -201,17 +200,14 @@ export async function startProposedRun(
  *
  *  Checked before anything is stored: a half-written proposal that already put
  *  an evaluator in the content store leaves a blob nobody chose. */
-/** Every prior factor the engine implements. Refused, never filtered: a
- *  misspelling that is quietly dropped runs the search under the uniform prior
- *  and reports success, so the run that was meant to test whether the prior
- *  helps has answered a different question. */
-const PRIOR_FACTORS: readonly EvolvePriorFactor[] = [
-  "judged", "viable", "frontier", "improvement",
-];
-
 /** Beyond this the exploration term stops being a tie-breaker and starts
  *  outvoting the rank outright, which is a random walk with extra steps. */
 const MAX_C_PUCT = 10;
+
+/** Past this the prior stops aiming and starts deciding: at 4 a rating of 8
+ *  against a mean of 5.5 is worth 4.5x a rating of 5, which overrides the
+ *  measured ranking with an unmeasured opinion. */
+const MAX_PRIOR_EXPONENT = 4;
 
 function shapeOfSearchTuning(search: EvolveSearchTuning | undefined): string | undefined {
   if (!search) return undefined;
@@ -225,25 +221,17 @@ function shapeOfSearchTuning(search: EvolveSearchTuning | undefined): string | u
         + "and the search degenerates into a random walk. The usual range is 0.3-2.5";
     }
   }
-  const unknown = (search.prior ?? []).filter(
-    (factor) => !PRIOR_FACTORS.includes(factor));
-  if (unknown.length) {
-    return `unknown prior factor(s): ${unknown.join(", ")}. The choices are: ${PRIOR_FACTORS.join(", ")}`;
-  }
-  // Both directions, because both are a design mistake rather than a typo. A
-  // `judged` prior with no rubric asks the model to rate candidates against its
-  // own idea of promising — the one thing the rubric exists to replace — and
-  // spends a call per candidate doing it. A rubric with no `judged` is a
-  // sentence the drafting agent wrote that nothing will ever read, which reads
-  // afterwards as a prior that was tried and did nothing.
-  const judged = (search.prior ?? []).includes("judged");
-  if (judged && !search.priorRubric?.trim()) {
-    return "the judged prior needs priorRubric: say what counts as a promising direction "
-      + "for this task, or drop \"judged\" from prior";
-  }
-  if (!judged && search.priorRubric?.trim()) {
-    return "priorRubric is only read by the judged prior; add \"judged\" to prior, or drop "
-      + "the rubric";
+  if (search.priorExponent !== undefined) {
+    if (!Number.isFinite(search.priorExponent) || search.priorExponent < 0) {
+      return "priorExponent has to be zero or a positive number: zero is the uniform prior "
+        + "upstream ships, and a negative one would aim the search at what the model called "
+        + "a dead end";
+    }
+    if (search.priorExponent > MAX_PRIOR_EXPONENT) {
+      return `priorExponent ${search.priorExponent} is too large: the model's rating would `
+        + "override the measured ranking rather than break its ties. 2 is upstream's own "
+        + "non-zero setting";
+    }
   }
   return undefined;
 }

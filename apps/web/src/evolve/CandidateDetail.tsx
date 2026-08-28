@@ -98,11 +98,11 @@ export function CandidateDetail({ candidate, client, onClose, parent, runId }: C
       {/* Only when a judged prior actually rated this one. Rendering a dash for
           every run without the factor would put an empty column in front of
           everybody to serve the few runs that use it. */}
-      {typeof candidate.priorScore === "number"
+      {typeof candidate.promise === "number"
         ? (
           <div>
             <dt>{t("evolve.detail.prior")}</dt>
-            <dd>{candidate.priorScore.toFixed(2)}</dd>
+            <dd>{candidate.promise.toFixed(1)}</dd>
           </div>
         )
         : null}

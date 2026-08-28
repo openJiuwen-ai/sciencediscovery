@@ -470,7 +470,7 @@ test("a run that stopped early states the reason and the shortfall", () => {
   assert.equal(legacy.stopReason, undefined);
 });
 
-test("the model's direction rating reaches the candidate view", () => {
+test("the model's promise rating reaches the candidate view", () => {
   // A prior that moves where the budget goes and leaves no trace on screen is a
   // run nobody can explain afterwards: the panel is the only place a user can
   // see that the ratings were all high while the scores went nowhere, which is
@@ -479,17 +479,17 @@ test("the model's direction rating reaches the candidate view", () => {
     record(1, START),
     record(2, SEED),
     record(3, {
-      depth: 1, nodeIndex: 1, parentIndex: 0, priorScore: 0.85,
+      depth: 1, nodeIndex: 1, parentIndex: 0, promise: 8.5,
       score: 0.5, type: "expanded", valid: true,
     }),
     record(4, { depth: 1, nodeIndex: 2, parentIndex: 0, score: 0.45, type: "expanded", valid: true }),
   ]);
 
-  assert.equal(view.candidates.find((c) => c.nodeIndex === 1)?.priorScore, 0.85);
-  // Absent, not zero: a run without the judged factor, and a judging call that
-  // did not come back, are both "nobody rated this" and neither says the
-  // direction is worthless.
-  assert.equal(view.candidates.find((c) => c.nodeIndex === 2)?.priorScore, undefined);
+  assert.equal(view.candidates.find((c) => c.nodeIndex === 1)?.promise, 8.5);
+  // Absent, not zero: a run that asked for no prior, and a reply that carried
+  // no rating, are both "nobody rated this" — and neither says the direction is
+  // worthless.
+  assert.equal(view.candidates.find((c) => c.nodeIndex === 2)?.promise, undefined);
 });
 
 test("the engine's log lines fold into the view for the panel to render", () => {

@@ -44,27 +44,6 @@ export function evolveAlgorithm(raw: unknown): EvolveAlgorithm {
 
 
 /**
- * A prior factor: how the exploration budget is shared out before the rank is
- * read. Multiplied together when several are asked for.
- *
- * * `judged` — the model reads each candidate against `priorRubric` and rates
- *   how much further there is to gain down that path; the rating spans a factor
- *   of seven. This is AlphaZero's `P(s, a)` with the policy network replaced by
- *   the model already writing the candidates — upstream leaves the prior
- *   uniform *because* there is nobody to ask, and here there is. Costs one
- *   short call per candidate and needs `priorRubric`.
- * * `viable` — a node whose program did not run keeps a tenth of its share.
- * * `frontier` — a node's share is divided by `1 + children`, so a parent
- *   already forked five times yields to one never forked.
- * * `improvement` — a node that beat its parent gets up to three times the
- *   share of one that fell back. The only *mechanical* factor carrying
- *   something no other term has: rank sees the score and the formula sees the
- *   visit count, and neither can tell a climbing lineage from a stalled one at
- *   equal score.
- */
-export type EvolvePriorFactor = "judged" | "viable" | "frontier" | "improvement";
-
-/**
  * How the search spends its exploration budget — the two knobs of the PUCT
  * rule, set together because they scale each other.
  *
@@ -81,23 +60,28 @@ export interface EvolveSearchTuning {
    * the ranking has left close together and never overturns a clear one.
    */
   cPuct?: number;
-  /** Empty or absent is the uniform `1/N` prior upstream pins. */
-  prior?: EvolvePriorFactor[];
   /**
-   * What the `judged` factor rewards, in the drafting agent's own words.
+   * How sharply the model's own rating of a direction bends `P(s, a)`.
    *
-   * Required by `judged` and meaningless without it. Written per task rather
-   * than baked in, because "a promising direction" is not the same thing in a
-   * compression search and a parameter fit — the first wants a mechanism kept
-   * and extended, the second wants the search off a local optimum.
+   * `0` — the default — is upstream: a uniform `1/N` for every node, to the
+   * floating-point bit, and the rating is not even asked for. Above zero the
+   * mutation prompt gains one line asking the model to end its reply with
+   * `PROMISE: <n>` (1–10, how far this *approach* could go after further work),
+   * and that number becomes the prior. It rides the reply the search was
+   * already paying for, so it costs no extra call.
+   *
+   * The power is the point rather than a knob for its own sake. Upstream's own
+   * arithmetic: with a prior proportional to the rating, a candidate rated 8
+   * against a mean of 5.5 gets 1.45x the exploration term and a dead end rated
+   * 2 still gets 0.36x. Squared, those become 2.12x and 0.13x — the difference
+   * between widening exploration and *aiming* it. `2` is upstream's own
+   * non-zero setting.
    *
    * **It cannot move the reported score.** The rating decides where the next
    * attempt starts; the number a run reports comes from the sandbox on held-out
-   * shards. That asymmetry is what makes it safe to let a model-written rubric
-   * drive it: a rubric that is wrong about "promising" spends budget badly and
-   * reports honestly.
+   * shards.
    */
-  priorRubric?: string;
+  priorExponent?: number;
 }
 
 /** What is being evolved. */
@@ -574,10 +558,12 @@ export type EvolveEvent =
     inspirationIndexes?: number[];
     island?: number;
     iteration?: number;
-    /** puct, `judged` prior only: what the model rated this candidate's
-     *  direction, in `[0, 1]`. Absent when nothing judged it — the factor is
-     *  off, or that one call did not come back. */
-    priorScore?: number;
+    /** puct, when `priorExponent > 0`: the model's own rating of this
+     *  candidate's direction, 1–10, read off the end of the mutation reply.
+     *  Absent when the run did not ask for one, or the model did not answer —
+     *  which is not the same as a zero, and `FlatPuct` treats it as the mean of
+     *  the rated nodes rather than as a dead end. */
+    promise?: number;
     nodeIndex: number;
     parentIndex: number | null;
     programId?: string;

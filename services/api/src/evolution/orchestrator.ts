@@ -118,8 +118,9 @@ function judgeSetup(goal: EvolveGoal): { judgeModelId: string; rubricCas: string
 function searchOptions(goal: EvolveGoal): { options?: Record<string, unknown> } {
   const options: Record<string, unknown> = {};
   if (goal.search?.cPuct !== undefined) options.c_puct = goal.search.cPuct;
-  if (goal.search?.prior?.length) options.prior = goal.search.prior;
-  if (goal.search?.priorRubric?.trim()) options.prior_rubric = goal.search.priorRubric;
+  if (goal.search?.priorExponent !== undefined) {
+    options.prior_exponent = goal.search.priorExponent;
+  }
   return Object.keys(options).length ? { options } : {};
 }
 

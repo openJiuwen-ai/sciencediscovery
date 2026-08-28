@@ -25,7 +25,7 @@ dependencies = [
     # the policies. Zero required dependencies of its own, Python >= 3.9. Only
     # the *ports* are vendored (see vendor/era/__init__.py) — they live under
     # examples/, which the wheel does not package.
-    "agentdescent>=0.4.5",
+    "agentdescent>=0.4.6",
 ]
 
 [project.optional-dependencies]

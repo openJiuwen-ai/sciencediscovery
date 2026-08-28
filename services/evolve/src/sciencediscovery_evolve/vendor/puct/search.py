@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import threading
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -91,7 +92,12 @@ class PuctStrategy:
         return state.get("code", self.domain.initial_program)
 
     def keys(self) -> Sequence[str]:
-        return ("code", "program_id", "change_summary", "parent_id", "parent_index")
+        # `promise` is the model's own rating of the direction, carried so the
+        # aggregator can hand it to `FlatPuct` as `P(s, a)`. Metadata about the
+        # proposal rather than part of the program, and empty unless the run
+        # asked for a prior.
+        return ("code", "program_id", "change_summary", "parent_id", "parent_index",
+                "promise")
 
     def to_diff(
         self,
@@ -125,6 +131,7 @@ class PuctStrategy:
                 "parent_index": str(parent_index),
                 "iteration": str(iteration),
                 "error": str(payload.get("error") or ""),
+                "promise": str(payload.get("promise") or ""),
             },
             author=author,
         )
@@ -139,9 +146,25 @@ def _first_doc_line(code: str) -> str:
     return (doc or "").strip().splitlines()[0][:200] if doc else ""
 
 
+def _read_promise_op(raw: Any) -> Optional[float]:
+    """The rating as it survives the ops dict, which is strings all the way.
+
+    Absent, empty and unparsable all mean the same thing — nobody rated this
+    node — and `FlatPuct._priors` gives such a node the mean of the rated ones
+    rather than zero.
+    """
+    if raw in (None, ""):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
 def make_propose(
     tree: PuctTree,
-    complete: Callable[[str, int], Tuple[str, str]],
+    complete: Callable[[str, int], Tuple[str, str, Optional[float]]],
     domain: Domain,
     *,
     on_event: OnEvent = _noop,
@@ -153,9 +176,11 @@ def make_propose(
     upstream's parallel virtual loss — and the thread that is about to spend
     minutes on this parent is the one that should have reserved it.
 
-    ``complete`` is ``(prompt, iteration) -> (code, change_summary)``; the
-    engine owns the model call so that a stop, a token count and an empty reply
-    all mean something to it.
+    ``complete`` is ``(prompt, iteration) -> (code, change_summary, promise)``;
+    the engine owns the model call so that a stop, a token count and an empty
+    reply all mean something to it. ``promise`` is the model's own rating of the
+    direction, read out of the same reply — `P(s, a)` for `FlatPuct`, and
+    ``None`` when the run did not ask for one or the model did not answer.
     """
 
     def propose(rendered: str, task: Task, output: str, reward: float) -> Optional[str]:
@@ -168,7 +193,7 @@ def make_propose(
             "iteration": iteration,
             "parent_index": parent.index,
         })
-        code, summary = complete(domain.prompt(parent.program), iteration)
+        code, summary, promise = complete(domain.prompt(parent.program), iteration)
         # A summary copied verbatim from the parent is not a summary: the
         # docstring first line doubles as the node's label, and on one live
         # compression run every candidate kept the seed's spec-style header,
@@ -186,6 +211,7 @@ def make_propose(
                 "iteration": iteration,
                 "parent_id": parent.program.program_id,
                 "parent_index": parent.index,
+                "promise": "" if promise is None else repr(promise),
             },
             separators=(",", ":"),
         )
@@ -214,6 +240,26 @@ def _reward(domain: Domain, valid: bool, metrics: Dict[str, Any]) -> float:
         return float(domain.reward(dict(metrics)))
     except Exception:
         return 0.0
+
+
+#: How much of a failure reason the repair log line carries.
+_WHY_CHARS = 300
+
+
+def _tail(text: str, limit: int) -> str:
+    """The **end** of a failure reason, not the beginning.
+
+    A traceback's useful half is its last line — the exception and what it says.
+    Everything before it is the call stack that got there, which is longer and
+    which the reader can already guess. Taking the head is what a plain slice
+    does, and on a live run it produced exactly the wrong cut: the log line
+    ended mid-path, three frames in, one token before the sentence that said
+    what had gone wrong.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return "…" + text[-limit:]
 
 
 def _is_dead(domain: Domain, valid: bool, metrics: Dict[str, Any]) -> bool:
@@ -455,7 +501,7 @@ class PuctTreeAggregator:
                 "after": after if fixed else None,
                 "attempt": attempt,
                 "kept": after > floor,
-                "why": (current_error or "")[:200],
+                "why": _tail(current_error or "", _WHY_CHARS),
             })
             if not _is_dead(self.domain, fixed, fixed_metrics):
                 break        # it runs and scores: nothing left to debug
@@ -498,7 +544,8 @@ class PuctTreeAggregator:
             # `float(metrics["score"])` is -inf on failure, which is upstream's
             # own sentinel -- the node is appended either way.
             node = self.tree.add_node(program, float(metrics["score"]),
-                                      int(ops.get("parent_index", "0")))
+                                      int(ops.get("parent_index", "0")),
+                                      promise=_read_promise_op(ops.get("promise")))
             valid_candidates += int(valid)
             self.on_event("node", {"metrics": metrics, "node": node, "ops": dict(ops)})
 

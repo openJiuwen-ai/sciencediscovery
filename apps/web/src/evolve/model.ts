@@ -58,12 +58,13 @@ export interface EvolveCandidateView {
    *  search sees, worse on what decides. */
   gateScore?: number;
   rolloutScore?: number;
-  /** puct, `judged` prior only: what the model rated this candidate's direction,
-   *  in `[0, 1]`. Absent when nothing judged it — the factor is off, or that one
-   *  call did not come back. Shown because it steered where the search went
-   *  next, and a run whose ratings were all high while its scores went nowhere
-   *  is a rubric that measured enthusiasm. */
-  priorScore?: number;
+  /** puct, when the run asked for a model prior: the model's own rating of this
+   *  candidate's direction, 1–10, read off the end of the mutation reply. Shown
+   *  because it steered where the search went next — a run whose ratings were
+   *  all high while its scores went nowhere is a model that rated its own
+   *  enthusiasm. Absent is not zero: the model did not answer, and the search
+   *  treats that as the mean of the rated nodes. */
+  promise?: number;
   /** puct: the PUCT value at the moment this node was chosen. */
   selectedPuct?: number;
   valid: boolean;
@@ -171,7 +172,7 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
         error: event.error,
         island: event.island,
         parentIndex: event.parentIndex,
-        priorScore: event.priorScore,
+        promise: event.promise,
         score: event.score,
         valid: event.valid,
       }));
