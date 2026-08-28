@@ -26,7 +26,6 @@ import {
 
 const record = (overrides: Partial<ToolOutputRecord> = {}): ToolOutputRecord => ({
   bytes: 4_000,
-  droppedBytes: 0,
   lines: 100,
   ref: "tool-output-00112233445566aa",
   toolName: "mcp__pubmed__search",

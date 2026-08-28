@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
@@ -111,11 +111,37 @@ test("the writer and the session deletion path derive the same directory", () =>
   assert.equal(toolOutputStoreRoot("/data", ""), resolve("/data", "tool-outputs", "session"));
 });
 
-test("the per-record size cap drops the overflow and reports how much it dropped", async () => {
-  const store = new ToolOutputStore({ retainedBytes: 1_000 });
-  const saved = await store.save("run_shell", "d\n".repeat(5_000));
-  assert.ok(saved.bytes <= 1_000);
-  assert.equal(saved.droppedBytes, 10_000 - saved.bytes);
+test("a record keeps the tool output verbatim, with no size cap of its own", async (context) => {
+  const root = await temporaryRoot(context);
+  // Well past the 8 MiB cap the store used to apply, and past the point where
+  // an escaped JSON copy of the text would have been the real constraint.
+  const line = `${"v".repeat(999)}\n`;
+  const text = line.repeat(12_000);
+  assert.ok(Buffer.byteLength(text, "utf8") > 11 * 1_024 * 1_024);
+
+  const saved = await new ToolOutputStore({ root }).save("run_python", text);
+  assert.equal(saved.bytes, Buffer.byteLength(text, "utf8"), "every byte is retained");
+  assert.equal(saved.lines, 12_000);
+
+  // The last line is reachable from a fresh store, so nothing was cut off the end.
+  const laterRun = new ToolOutputStore({ root });
+  const tail = await laterRun.read(saved.ref, { limit: 1, offset: 12_000 });
+  assert.equal(tail.text, line);
+  assert.equal(tail.totalLines, 12_000);
+  assert.equal(tail.hasMore, false);
+
+  // The stored text is the original bytes, not a JSON-escaped copy.
+  assert.equal(await readFile(resolve(root, `${saved.ref}.txt`), "utf8"), text);
+  const meta = JSON.parse(await readFile(resolve(root, `${saved.ref}.json`), "utf8")) as { toolName: string };
+  assert.equal(meta.toolName, "run_python");
+});
+
+test("a bounded notice no longer claims part of the output went unstored", async () => {
+  const store = new ToolOutputStore();
+  const guard = new ToolOutputGuard({ sink: store });
+  const bounded = await guard.apply("run_python", numbered(60_000));
+  assert.equal(bounded.includes("exceeded the retained-output cap"), false);
+  assert.match(bounded, /The full output is stored as ref "tool-output-[0-9a-f]{16}" \(60000 lines/);
 });
 
 test("read_tool_output returns a self-bounded page with a continue hint", async () => {

@@ -68,9 +68,8 @@ export interface BoundedText {
 
 /** Reference to a stored full tool result the model can page back through. */
 export interface ToolOutputRecord {
-  /** Retained bytes; smaller than the original when the retention cap applied. */
+  /** Byte size of the stored output; the tool's result verbatim. */
   bytes: number;
-  droppedBytes: number;
   lines: number;
   ref: string;
   toolName: string;
@@ -231,9 +230,6 @@ function describeBound(toolName: string, bounded: BoundedText, record: ToolOutpu
       `The full output is stored as ref "${record.ref}" (${record.lines} lines, ${formatByteSize(record.bytes)}).`
       + ` Read any part of it with read_tool_output(ref="${record.ref}", offset=<1-based line>, limit=<lines>).`,
     );
-    if (record.droppedBytes > 0) {
-      lines.push(`The last ${formatByteSize(record.droppedBytes)} exceeded the retained-output cap and were not stored.`);
-    }
   } else {
     lines.push("The full output could not be stored for re-reading. Re-run the tool with a narrower request or explicit pagination.");
   }

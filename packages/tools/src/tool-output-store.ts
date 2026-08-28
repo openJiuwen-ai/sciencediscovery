@@ -25,6 +25,12 @@
  * the other provenance data. There is no separate expiry, because a reference
  * that outlives its store would hand the model a dead pointer.
  *
+ * The record is the tool's output verbatim: there is no size cap, because a
+ * cap would silently make part of the result unreachable through the very
+ * reference that promises to reach it. The text is written as its own file
+ * rather than embedded in JSON, so storing it costs one copy instead of an
+ * escaped second one.
+ *
  * Without a root the store is process-local, which is enough for tests and for
  * a run that only pages back within itself.
  */
@@ -46,9 +52,6 @@ import {
 } from "./bounded-output.js";
 import type { AgentTool } from "./types.js";
 
-/** Retention cap for one stored result; the reference stays useful, the disk does not fill. */
-export const DEFAULT_RETAINED_OUTPUT_BYTES = 8 * 1_024 * 1_024;
-
 const REF_PATTERN = /^tool-output-[0-9a-f]{16}$/;
 
 /**
@@ -61,11 +64,14 @@ export function toolOutputStoreRoot(dataDir: string, sessionId: string): string 
   return resolve(dataDir, "tool-outputs", segment);
 }
 
-interface StoredOutput {
+/** Sidecar metadata; the output itself lives beside it in `<ref>.txt`. */
+interface StoredMeta {
   createdAt: string;
-  droppedBytes: number;
-  text: string;
   toolName: string;
+}
+
+interface StoredOutput extends StoredMeta {
+  text: string;
 }
 
 export interface ToolOutputPage {
@@ -96,31 +102,19 @@ export interface ToolOutputPage {
 export class ToolOutputStore implements ToolOutputSink {
   private readonly memory = new Map<string, StoredOutput>();
   private readonly root: string | undefined;
-  private readonly retainedBytes: number;
 
-  constructor(options: { retainedBytes?: number; root?: string } = {}) {
+  constructor(options: { root?: string } = {}) {
     this.root = options.root;
-    this.retainedBytes = options.retainedBytes ?? DEFAULT_RETAINED_OUTPUT_BYTES;
   }
 
   async save(toolName: string, text: string): Promise<ToolOutputRecord> {
-    const totalBytes = Buffer.byteLength(text, "utf8");
-    const retained = totalBytes > this.retainedBytes
-      ? boundText(text, { keep: "head", maxBytes: this.retainedBytes, maxLines: Number.MAX_SAFE_INTEGER }).text
-      : text;
-    const stored: StoredOutput = {
-      createdAt: new Date().toISOString(),
-      droppedBytes: totalBytes - Buffer.byteLength(retained, "utf8"),
-      text: retained,
-      toolName,
-    };
+    const stored: StoredOutput = { createdAt: new Date().toISOString(), text, toolName };
     const ref = `tool-output-${randomBytes(8).toString("hex")}`;
     this.memory.set(ref, stored);
     await this.persist(ref, stored);
     return {
-      bytes: Buffer.byteLength(retained, "utf8"),
-      droppedBytes: stored.droppedBytes,
-      lines: splitKeepingLineEndings(retained).length,
+      bytes: Buffer.byteLength(text, "utf8"),
+      lines: splitKeepingLineEndings(text).length,
       ref,
       toolName,
     };
@@ -156,23 +150,36 @@ export class ToolOutputStore implements ToolOutputSink {
     };
   }
 
+  /**
+   * Text and metadata are separate files. Embedding a multi-hundred-megabyte
+   * result in JSON would need an escaped second copy of it in memory, and past
+   * roughly half of `MAX_STRING_LENGTH` that copy cannot be built at all — the
+   * store would start failing on exactly the outputs it exists to keep.
+   *
+   * The metadata is renamed last, so a record is only discoverable once its
+   * text is fully in place.
+   */
   private async persist(ref: string, stored: StoredOutput): Promise<void> {
     if (!this.root) return;
     await mkdir(this.root, { recursive: true });
-    const destination = resolve(this.root, `${ref}.json`);
-    const temporary = `${destination}.${process.pid}.tmp`;
-    await writeFile(temporary, JSON.stringify(stored), { encoding: "utf8", mode: 0o600 });
-    await rename(temporary, destination);
+    const textPath = resolve(this.root, `${ref}.txt`);
+    const metaPath = resolve(this.root, `${ref}.json`);
+    const meta: StoredMeta = { createdAt: stored.createdAt, toolName: stored.toolName };
+    await writeFile(`${textPath}.${process.pid}.tmp`, stored.text, { encoding: "utf8", mode: 0o600 });
+    await writeFile(`${metaPath}.${process.pid}.tmp`, JSON.stringify(meta), { encoding: "utf8", mode: 0o600 });
+    await rename(`${textPath}.${process.pid}.tmp`, textPath);
+    await rename(`${metaPath}.${process.pid}.tmp`, metaPath);
   }
 
   private async load(ref: string): Promise<StoredOutput | undefined> {
     if (!this.root) return undefined;
     try {
-      const raw = await readFile(resolve(this.root, `${ref}.json`), "utf8");
-      const parsed = JSON.parse(raw) as StoredOutput;
-      if (typeof parsed?.text !== "string") return undefined;
-      this.memory.set(ref, parsed);
-      return parsed;
+      const meta = JSON.parse(await readFile(resolve(this.root, `${ref}.json`), "utf8")) as StoredMeta;
+      const text = await readFile(resolve(this.root, `${ref}.txt`), "utf8");
+      if (typeof meta?.toolName !== "string") return undefined;
+      const stored: StoredOutput = { createdAt: meta.createdAt, text, toolName: meta.toolName };
+      this.memory.set(ref, stored);
+      return stored;
     } catch {
       return undefined;
     }
