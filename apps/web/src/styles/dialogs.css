@@ -43,6 +43,7 @@
 .artifact-modal-panel { display: flex; flex-direction: column; width: min(1080px, 100%); max-height: calc(100vh - 56px); }
 .artifact-modal-header { padding: 22px 26px; border-bottom: 1px solid var(--border); }
 .artifact-modal-header h2 { margin: 3px 0 0; color: var(--text-strong); font-size: 20px; }
+.artifact-version-source { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .artifact-modal-controls { display: flex; align-items: center; gap: 12px; }
 .artifact-modal-controls button { width: 34px; height: 34px; border-color: var(--border-strong); background: var(--surface); font-size: 14px; }
 .artifact-modal-controls button:hover { background: var(--surface-soft); }

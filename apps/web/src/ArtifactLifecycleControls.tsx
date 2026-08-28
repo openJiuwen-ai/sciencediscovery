@@ -30,9 +30,6 @@ interface ArtifactLifecycleContextValue {
   armedDeleteId: string | undefined;
   busyDeleteIds: ReadonlySet<string>;
   clearDeleteConfirmation: () => void;
-  concealArtifactActions: (artifactId: string) => void;
-  revealedArtifactId: string | undefined;
-  revealArtifactActions: (artifactId: string) => void;
   requestDelete: (artifact: ScientificArtifact) => void;
 }
 
@@ -57,11 +54,9 @@ export function ArtifactLifecycleProvider({
   const { t } = useLocale();
   const [armedDeleteId, setArmedDeleteId] = useState<string>();
   const [busyDeleteIds, setBusyDeleteIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [revealedArtifactId, setRevealedArtifactId] = useState<string>();
 
   useEffect(() => {
     setArmedDeleteId(undefined);
-    setRevealedArtifactId(undefined);
   }, [resetKey]);
 
   useEffect(() => {
@@ -113,38 +108,8 @@ export function ArtifactLifecycleProvider({
     armedDeleteId,
     busyDeleteIds,
     clearDeleteConfirmation: () => setArmedDeleteId(undefined),
-    concealArtifactActions: (artifactId) => {
-      setRevealedArtifactId((current) => current === artifactId ? undefined : current);
-    },
-    revealedArtifactId,
-    revealArtifactActions: setRevealedArtifactId,
     requestDelete,
   }}>{children}</ArtifactLifecycleContext.Provider>;
-}
-
-export function ArtifactLifecycleRow({
-  artifact,
-  children,
-}: {
-  artifact: ScientificArtifact;
-  children: ReactNode;
-}): ReactNode {
-  const context = useContext(ArtifactLifecycleContext);
-  if (!context) throw new Error("ArtifactLifecycleRow must be rendered inside ArtifactLifecycleProvider");
-  const actionsVisible = context.revealedArtifactId === artifact.id
-    || context.armedDeleteId === artifact.id
-    || context.busyDeleteIds.has(artifact.id);
-
-  return <div
-    className="artifact-tree-file-row"
-    data-artifact-actions-visible={actionsVisible ? "true" : undefined}
-    data-artifact-row-id={artifact.id}
-    onPointerEnter={() => context.revealArtifactActions(artifact.id)}
-    onPointerLeave={() => context.concealArtifactActions(artifact.id)}
-  >
-    {children}
-    <ArtifactLifecycleControls artifact={artifact} />
-  </div>;
 }
 
 export function ArtifactLifecycleControls({ artifact }: { artifact: ScientificArtifact }): ReactNode {

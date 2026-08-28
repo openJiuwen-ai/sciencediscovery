@@ -22,6 +22,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { findArtifactNodeInGraph, findCodeNodeInGraph } from "../src/MemoryGraphExplorer.js";
 import {
   ArtifactDownloadButton,
+  ArtifactVersionSource,
   CsvArtifactPreview,
   DatasetPreview,
   DatasetTable,
@@ -29,7 +30,6 @@ import {
   JsonSourcePreview,
   parseStructureAtoms,
   ProvenanceView,
-  selectArtifactVersionId,
   ScientificArtifactPanelHeader,
 } from "../src/ScientificArtifacts.js";
 
@@ -398,7 +398,6 @@ test("renders the embedded scientific artifact selectors", () => {
 
 test("cross-Session Artifact versions display each source Session", () => {
   const artifact: ScientificArtifact = {
-    contributingSessionIds: ["session-1", "session-2"],
     createdAt: "2026-07-21T02:47:21.000Z",
     createdInSessionId: "session-1",
     createdInSessionTitle: "Analysis A",
@@ -434,17 +433,17 @@ test("cross-Session Artifact versions display each source Session", () => {
   assert.match(html, /Source: Analysis B/);
 });
 
-test("a Session-group entry selects that Session's newest version", () => {
-  const versions = [
-    artifactVersion("version-1", 1, "session-a"),
-    artifactVersion("version-2", 2, "session-b"),
-    artifactVersion("version-3", 3, "session-a"),
-  ];
+test("artifact preview identifies the selected version's source Session", () => {
+  const html = renderToStaticMarkup(createElement(ArtifactVersionSource, {
+    sessions: [
+      { id: "session-1", title: "Analysis A" },
+      { id: "session-2", title: "Analysis B" },
+    ] as Session[],
+    version: artifactVersion("version-2", 2, "session-2"),
+  }));
 
-  assert.equal(selectArtifactVersionId({ sourceSessionId: "session-a", versions }), "version-3");
-  assert.equal(selectArtifactVersionId({ sourceSessionId: "session-b", versions }), "version-2");
-  assert.equal(selectArtifactVersionId({ initialVersion: 1, sourceSessionId: "session-b", versions }), "version-1");
-  assert.equal(selectArtifactVersionId({ versions }), "version-3");
+  assert.match(html, /Updated in Session Analysis B/);
+  assert.match(html, /title="session-2"/);
 });
 
 const ARTIFACT_NODES: MemoryGraphNode[] = [

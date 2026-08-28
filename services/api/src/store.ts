@@ -2234,18 +2234,7 @@ export class SessionStore {
 
   listProjectArtifacts(projectId: string): ScientificArtifact[] {
     if (!this.getProject(projectId)) throw new Error("Project not found");
-    const contributingSessionIds = new Map<string, string[]>();
-    for (const version of this.catalog.artifactVersions) {
-      if (version.projectId !== projectId) continue;
-      const sessionIds = contributingSessionIds.get(version.artifactId) ?? [];
-      if (!sessionIds.includes(version.sessionId)) sessionIds.push(version.sessionId);
-      contributingSessionIds.set(version.artifactId, sessionIds);
-    }
     return structuredClone(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId && !artifact.deletedAt))
-      .map((artifact) => ({
-        ...artifact,
-        contributingSessionIds: contributingSessionIds.get(artifact.id) ?? [artifact.createdInSessionId],
-      }))
       .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 

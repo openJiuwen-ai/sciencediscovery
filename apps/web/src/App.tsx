@@ -155,7 +155,7 @@ import {
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
 import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
-import { ArtifactLifecycleProvider, ArtifactLifecycleRow } from "./ArtifactLifecycleControls.js";
+import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./ArtifactLifecycleControls.js";
 import { SkillManager } from "./SkillManager.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
@@ -385,7 +385,7 @@ export function ArtifactTreeList({
       <span aria-hidden="true" className="artifact-tree-selection-control"><span>{selection.ids.has(entry.artifact.id) ? "✓" : ""}</span></span>
       <TreeFileIcon kind={artifactTreeIconKind(entry.artifact)} />
       <span className="artifact-tree-label">{entry.name}</span>
-    </button> : lifecycleActions ? <ArtifactLifecycleRow artifact={entry.artifact}>
+    </button> : lifecycleActions ? <div className="artifact-tree-file-row">
       <button
         aria-label={`Open ${entry.artifact.name}`}
         className="artifact-tree-file"
@@ -397,7 +397,8 @@ export function ArtifactTreeList({
         <TreeFileIcon kind={artifactTreeIconKind(entry.artifact)} />
         <span className="artifact-tree-label">{entry.name}</span>
       </button>
-    </ArtifactLifecycleRow> : <button
+      <ArtifactLifecycleControls artifact={entry.artifact} />
+    </div> : <button
       aria-label={`Open ${entry.artifact.name}`}
       className="artifact-tree-file"
       onClick={() => onOpen(entry.artifact)}
@@ -1120,9 +1121,12 @@ export function App() {
   // The version a chip pinned (the one its claim cited) so the ArtifactModal
   // opens that version instead of the drifted-latest. Cleared on navigation.
   const [artifactModalVersion, setArtifactModalVersion] = useState<number>();
-  // The Session context used to open a shared Project Artifact. It selects that
-  // Session's newest version first and pins graph reads to the selected version's
-  // real source. Absent means a URL or parent-link navigation opens global latest.
+  // The Session the opened artifact actually belongs to. The workspace artifact
+  // list is project-scoped (listProjectArtifacts), so a clicked artifact may
+  // live in a different Session than activeSessionId. Memory-graph reads filter
+  // by Session, so this is forwarded to ArtifactModal as artifactSessionId to
+  // pin graph queries to the artifact's own Session. Absent → fall back to
+  // activeSessionId (URL/shared-link and chip-in-current-session paths).
   const [artifactModalSessionId, setArtifactModalSessionId] = useState<string | undefined>();
   // Run state is per Session: the server already isolates runs by Session, and a
   // single global flag left every Session unusable whenever one stream hung.
@@ -2925,16 +2929,8 @@ export function App() {
     }
     if (streamEvent.type === "run.completed") setFiles(streamEvent.files);
     if (streamEvent.type === "artifact.upserted") {
-      setArtifacts((current) => {
-        const previous = current.find((item) => item.id === streamEvent.artifact.id);
-        const contributingSessionIds = [...new Set([
-          ...(streamEvent.artifact.contributingSessionIds ?? previous?.contributingSessionIds ?? []),
-          streamEvent.version?.sessionId ?? streamEvent.artifact.createdInSessionId,
-        ])];
-        const artifact = { ...streamEvent.artifact, contributingSessionIds };
-        return [artifact, ...current.filter((item) => item.id !== artifact.id)]
-          .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-      });
+      setArtifacts((current) => [streamEvent.artifact, ...current.filter((item) => item.id !== streamEvent.artifact.id)]
+        .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
     }
     if (streamEvent.type === "workspace.changed") {
       setFiles(streamEvent.files);
@@ -3211,13 +3207,16 @@ export function App() {
     }
   }
 
-  function openArtifact(artifact: ScientificArtifact, sourceSessionId?: string): void {
+  function openArtifact(artifact: ScientificArtifact): void {
     if (!activeSessionId) {
       pushToast("info", "Artifact retained", "Create or select a Session to open this Project artifact.");
       return;
     }
     setArtifactModalVersion(undefined);
-    setArtifactModalSessionId(sourceSessionId || artifact.createdInSessionId || undefined);
+    // Pin the graph reads to this artifact's own Session (the artifact list is
+    // project-scoped, so the artifact may live in a different Session than
+    // activeSessionId — see artifactModalSessionId note above).
+    setArtifactModalSessionId(artifact.createdInSessionId || undefined);
     setArtifactModalName(artifact.name);
   }
 
@@ -4164,7 +4163,7 @@ export function App() {
                       <ArtifactTreeList
                         entries={buildArtifactTree(group.items)}
                         lifecycleActions
-                        onOpen={(artifact) => openArtifact(artifact, group.sourceSessionId)}
+                        onOpen={openArtifact}
                         onSelectionChange={artifactSelectionMode ? changeArtifactSelection : undefined}
                         selectedArtifactIds={artifactSelectionMode ? selectedArtifactIds : undefined}
                       />

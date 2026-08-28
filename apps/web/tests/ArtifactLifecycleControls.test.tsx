@@ -23,7 +23,6 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import {
   ArtifactLifecycleControls,
   ArtifactLifecycleProvider,
-  ArtifactLifecycleRow,
 } from "../src/ArtifactLifecycleControls.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 
@@ -65,18 +64,6 @@ function view({
 
 function deleteButton(renderer: ReactTestRenderer, artifactId: string): ReactTestInstance {
   return renderer.root.find((node) => node.type === "button" && node.props["data-artifact-id"] === artifactId);
-}
-
-function sharedArtifactView(onDelete: (item: ScientificArtifact) => Promise<void>) {
-  const shared = artifact("artifact-shared");
-  return createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(ArtifactLifecycleProvider, {
-    onDelete,
-    onError: () => undefined,
-    resetKey: "project-1",
-  }, createElement("div", null,
-    createElement(ArtifactLifecycleRow, { artifact: shared }, createElement("button", null, "Session A entry")),
-    createElement(ArtifactLifecycleRow, { artifact: shared }, createElement("button", null, "Session B entry")),
-  )));
 }
 
 test("delete requires two clicks on the same artifact and only one row can be armed", async () => {
@@ -128,32 +115,6 @@ test("moving focus elsewhere cancels an armed deletion", async () => {
   await act(async () => renderer!.unmount());
 });
 
-test("duplicate rows reveal and confirm deletion together by Artifact id", async () => {
-  const deleted: string[] = [];
-  let renderer: ReactTestRenderer;
-  await act(async () => {
-    renderer = create(sharedArtifactView(async (item) => { deleted.push(item.id); }));
-  });
-  const rows = renderer!.root.findAll((node) => node.props["data-artifact-row-id"] === "artifact-shared");
-  const buttons = () => renderer!.root.findAll((node) =>
-    node.type === "button" && node.props["data-artifact-id"] === "artifact-shared");
-
-  await act(async () => { rows[0]!.props.onPointerEnter(); });
-  assert.deepEqual(rows.map((row) => row.props["data-artifact-actions-visible"]), ["true", "true"]);
-
-  await act(async () => { rows[0]!.props.onPointerLeave(); });
-  assert.deepEqual(rows.map((row) => row.props["data-artifact-actions-visible"]), [undefined, undefined]);
-
-  await act(async () => { buttons()[0]!.props.onClick(); });
-  assert.ok(buttons().every((button) => button.props["aria-pressed"] === true));
-  assert.ok(buttons().every((button) => button.children[0] === "删除？"));
-  assert.deepEqual(rows.map((row) => row.props["data-artifact-actions-visible"]), ["true", "true"]);
-
-  await act(async () => { buttons()[1]!.props.onClick(); });
-  assert.deepEqual(deleted, ["artifact-shared"]);
-  await act(async () => renderer!.unmount());
-});
-
 test("mouse presses do not leave lifecycle controls focus-locked", async () => {
   let renderer: ReactTestRenderer;
   await act(async () => {
@@ -178,7 +139,6 @@ test("mouse-only lifecycle controls reveal on row hover while keyboard focus and
   assert.match(css, /@media \(hover: hover\) and \(pointer: fine\)/);
   assert.match(css, /\.artifact-tree-actions \{ opacity: 0; pointer-events: none;/);
   assert.match(css, /\.artifact-tree-file-row:hover \.artifact-tree-actions,/);
-  assert.match(css, /\.artifact-tree-file-row\[data-artifact-actions-visible="true"\] \.artifact-tree-actions,/);
   assert.match(css, /\.artifact-tree-file-row:focus-within \.artifact-tree-actions \{ opacity: 1; pointer-events: auto;/);
 });
 
