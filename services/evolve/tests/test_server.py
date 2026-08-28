@@ -19,7 +19,6 @@ from __future__ import annotations
 import importlib
 import json
 import time
-import os
 
 import pytest
 from fastapi.testclient import TestClient

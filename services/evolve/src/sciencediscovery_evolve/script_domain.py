@@ -59,7 +59,6 @@ exactly the shape the probe refuses to start.
 
 from __future__ import annotations
 
-import os
 import json
 import subprocess
 import tempfile

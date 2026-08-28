@@ -100,7 +100,7 @@ export function findCodeNodeInGraph(
  * ToolCalls, the child→Code→Artifact / child→Paper chain) *and* the synthesised
  * surrogate edges (scope→product, ``extra.surrogate``). That is the raw
  * "everything" read — the folded *view* must hide the child subtree so the
- * collapsed canvas reads as scope→product hints only (the overall design §2.4: one
+ * collapsed canvas reads as scope→product hints only (总方案 §2.4: one
  * relation, one visible edge — the surrogate and the real chain never
  * coexist). An expanded scope does the inverse: drop its surrogate, surface
  * the real child spine (here taken from the cached scope-expansion payload,
@@ -157,7 +157,7 @@ export function mergeExpansions(
   groupGraphs?: ReadonlyMap<string, MemorySubgraph>,
   expandedGroups?: ReadonlySet<string>,
 ): MemorySubgraph {
-  // 0. Aggregate virtual nodes (requirement 3). A folded scope with >1 product of one
+  // 0. Aggregate virtual nodes (需求3). A folded scope with >1 product of one
   //    kind collapses into ONE ``_group:<scopeId>:<Kind>`` node in the folded
   //    read. Two cases drive its visibility here:
   //    - the aggregate is expanded (expandedGroups has its id): drop the
@@ -623,7 +623,7 @@ export function MemoryGraphExplorer({
   const [expansionGraphs, setExpansionGraphs] = useState<Map<string, MemorySubgraph>>(new Map());
   const [expandingScopes, setExpandingScopes] = useState<Set<string>>(new Set());
   const [scopeNotes, setScopeNotes] = useState<Map<string, string>>(new Map());
-  // Aggregate expansion (requirement 3): a folded scope with >1 product of one kind
+  // Aggregate expansion (需求3): a folded scope with >1 product of one kind
   // (Artifact/Paper) collapses into ONE virtual ``_group:<scopeId>:<Kind>``
   // node in the folded view. expandedGroups holds the ids of aggregates whose
   // member products have been unpacked into the on-screen graph; groupGraphs
@@ -647,7 +647,7 @@ export function MemoryGraphExplorer({
   // subtract), so scope expansion is overlaid via ``mergeChainScopeExpansions``
   // instead: each expanded scope's child subtree nodes + real edges are unioned
   // onto the chain (self-loops + surrogates skipped). Letting a user expand a
-  // scope inside a chain is the "expand in place within the chain" choice — the chain keeps its
+  // scope inside a chain is the "链内就地展开" choice — the chain keeps its
   // spine shape and the scope's children light up connected to it.
   const graph = (chain
     ? mergeChainScopeExpansions(chain.graph, expansionGraphs, expandedScopes)
@@ -942,7 +942,7 @@ export function MemoryGraphExplorer({
     }
   }, [client, sessionId, expandingScopes, expandedScopes, t]);
 
-  // Aggregate expansion (requirement 3): clicking an Artifacts/Papers aggregate node
+  // Aggregate expansion (需求3): clicking an Artifacts/Papers aggregate node
   // unpacks its member products into the on-screen graph (a separate fetch +
   // merge from scope expansion — this only unpacks the members of one kind,
   // NOT the scope's child subtree). Folding removes the members + the
@@ -986,7 +986,7 @@ export function MemoryGraphExplorer({
   // expand the owning scope and select the child that via_child points at
   // (the real child→product edge then renders in the merged graph). This is
   // the core reason the surrogate exists — the folded view is navigable into
-  // the expanded subtree (the overall design §2.4). Falls back to selecting the product
+  // the expanded subtree (总方案 §2.4). Falls back to selecting the product
   // when via_child is missing (older payloads) so the click is never a dead end.
   const handleEdgeClick = useCallback((edge: { surrogate: boolean; viaChild?: string; source: string; target: string; type: MemoryGraphEdgeType }) => {
     if (!edge.surrogate) return;

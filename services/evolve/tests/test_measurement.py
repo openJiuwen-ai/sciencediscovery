@@ -30,7 +30,6 @@ from sciencediscovery_evolve import measurement
 from sciencediscovery_evolve.measurement import (
     GATE,
     ROLLOUT,
-    TEST,
     DatasetError,
     load_dataset,
     measure,

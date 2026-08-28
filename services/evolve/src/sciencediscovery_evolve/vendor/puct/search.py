@@ -56,7 +56,7 @@ from agentdescent.ledger import CASConflict, Ledger
 from agentdescent.staleness import StaleAction, get_policy
 
 from .domain import Domain
-from .program import Program, extract_program, program_id
+from .program import Program, program_id
 from .tree import PuctTree, Node
 
 #: Merge outcomes upstream names for this port. `MergeOutcome` covers the

@@ -211,7 +211,7 @@ export class ArtifactsApiClient extends RunsApiClient {
 
   /**
    * Expand a folded Artifacts/Papers aggregate node into its member products
-   * (the "click an Artifacts/Papers aggregate to expand it" payload, requirement 3).
+   * (the "click an Artifacts/Papers aggregate to expand it" payload, 需求3).
    * `/api/memory/query/group-expansion` is reverse-proxied by the Node API to
    * the memory-graph service's `POST /query/group-expansion`. A 404 (malformed
    * id / scope gone) or an unreachable graph rejects the promise — the caller's

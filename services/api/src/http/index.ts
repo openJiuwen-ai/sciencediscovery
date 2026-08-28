@@ -2118,7 +2118,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/memory/query/group-expansion") {
-        // Aggregate expansion (requirement 3): a folded scope with >1 product of one
+        // Aggregate expansion (需求3): a folded scope with >1 product of one
         // kind (Artifact/Paper) collapses into a single virtual
         // `_group:<scopeId>:<Kind>` node in the folded view; this unpacks it
         // into the real member products + one surrogate scope→member produces

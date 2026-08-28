@@ -55,15 +55,13 @@ from .logging_config import get_logger
 from .measurement import (
     GATE,
     ROLLOUT,
-    TEST,
     Dataset,
     DatasetError,
     load_dataset,
-    measure_shards,
     missing_candidate_runtime,
     shard_indices,
 )
-from .judge_domain import JudgeUnavailable, _first_number, grader, judge_domain
+from .judge_domain import _first_number, grader, judge_domain
 from .scorecard import KNOWN_NORMALIZE
 from .scorecard_domain import SCORE_KEY, scorecard_domain
 from .text_candidate import extract_text

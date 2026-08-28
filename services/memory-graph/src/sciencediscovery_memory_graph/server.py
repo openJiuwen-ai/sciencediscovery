@@ -472,7 +472,7 @@ def read_scope_expansion(req: ScopeExpansionRequest) -> dict[str, Any]:
     """Expand a subagent scope into its child ToolCalls + real produces/
     contains/next edges (the "click to expand a scope" payload). Returns real
     edges only — no surrogate markers; the folded view's surrogates are the
-    frontend's to drop when this expansion is drawn (the overall design §2.4). Unreachable
+    frontend's to drop when this expansion is drawn (总方案 §2.4). Unreachable
     driver → empty + reason; unknown/non-scope scope_task_id → 404 (mirror
     read_chain).
     """
@@ -499,7 +499,7 @@ class GroupExpansionRequest(BaseModel):
 @app.post("/query/group-expansion", dependencies=[Depends(require_internal_token)])
 def read_group_expansion(req: GroupExpansionRequest) -> dict[str, Any]:
     """Expand a folded Artifacts/Papers aggregate node into its member products
-    (the "click an Artifacts/Papers aggregate to expand it" payload, requirement 3).
+    (the "click an Artifacts/Papers aggregate to expand it" payload, 需求3).
     A folded scope with >1 product of one kind collapses into a single virtual
     ``_group:<scopeId>:<Kind>`` node in the folded view; this call unpacks it
     into the real member product nodes + one surrogate ``scope→member`` produces

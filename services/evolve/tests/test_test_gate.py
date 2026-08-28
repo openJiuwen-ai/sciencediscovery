@@ -196,7 +196,6 @@ def test_a_candidate_that_rewrites_the_tests_at_run_time_gains_nothing(tmp_path:
     then returns a wrong answer. It must still be scored on the original
     assertions.
     """
-    from sciencediscovery_evolve.measurement import missing_candidate_runtime
     from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 
     capability = detect_local_capability()

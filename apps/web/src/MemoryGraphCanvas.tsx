@@ -88,7 +88,7 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
     const value = extra[key];
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
   };
-  // Aggregate virtual node (requirement 3): a folded scope with >1 product of one
+  // Aggregate virtual node (需求3): a folded scope with >1 product of one
   // kind collapses into one ``_group:<scopeId>:<Kind>`` node. Render it as the
   // plural kind name ("Artifacts"/"Papers") so it reads as a stack to expand.
   if (extra.aggregated === true || node.id.startsWith("_group:")) {
@@ -165,7 +165,7 @@ const DONE_STATUSES = new Set(["succeeded", "success", "completed", "done", "ok"
  * A folded-state surrogate edge (get_subgraph synthesises one scope→product
  * pair per terminal product). `extra.surrogate === true` is the marker the
  * render pass keys its dashed/light/no-label branch on; `extra.via_child` is
- * the responsible child hop a click jumps to (the overall design §2.2).
+ * the responsible child hop a click jumps to (总方案 §2.2).
  */
 export function isSurrogateEdge(edge: { extra?: Record<string, unknown> }): boolean {
   return edge.extra?.surrogate === true;
@@ -194,7 +194,7 @@ export function isChildNode(node: { extra?: Record<string, unknown>; id: string 
 }
 
 /**
- * An aggregate virtual node (requirement 3): a folded scope with >1 product of one
+ * An aggregate virtual node (需求3): a folded scope with >1 product of one
  * kind (Artifact/Paper) collapses into ONE ``_group:<scopeId>:<Kind>`` node
  * synthesised by the backend's ``get_subgraph``. The id prefix + the
  * ``extra.aggregated`` marker both flag it so a renderer can draw it as a
@@ -266,7 +266,7 @@ interface SimNode {
   childCount?: number;
   // True when this scope is folded (isScope && !expanded). Drives the stack
   // ghost discs' visibility (shown folded, hidden expanded) and the hover
-  // hint ("click to expand" vs "click to collapse").
+  // hint ("单击展开节点" vs "单击收起节点").
   folded?: boolean;
   // A child of an expanded scope (extra.parent_subtask_id set, or task_id
   // carries ":exec:"). Rendered slightly smaller / lighter so the scope↔child
@@ -284,7 +284,7 @@ interface SimNode {
   // graph (expandedScopes in the explorer). A folded scope's stack shows;
   // an expanded scope's stack hides so an open scope reads as "open".
   expanded?: boolean;
-  // An aggregate virtual node (requirement 3): a folded scope with >1 product of one
+  // An aggregate virtual node (需求3): a folded scope with >1 product of one
   // kind collapses into ONE ``_group:<scopeId>:<Kind>`` node. Rendered as a
   // dashed double-stacked disc with the plural kind name ("Artifacts"/
   // "Papers") + a "▸ N" badge so it reads as an expandable stack, distinct
@@ -481,7 +481,7 @@ interface MemoryGraphCanvasProps {
    * callers). */
   onToggleScope?: (scopeTaskId: string) => void;
   /** Aggregate virtual node ids currently expanded (member products merged in,
-   * req 3). The canvas marks these aggregates' rings solid so an open aggregate
+   * 需3). The canvas marks these aggregates' rings solid so an open aggregate
    * reads as "open". Pass the live set from the explorer's state. */
   expandedGroups?: ReadonlySet<string>;
   /** Click on an aggregate node (Artifacts/Papers) toggles its expansion
@@ -667,7 +667,7 @@ export function MemoryGraphCanvas({
     //     double-click window; a DOUBLE click toggles expansion (and selects).
     //     The window is the browser's unavoidable click/dblclick disambiguation
     //     — a dblclick is two clicks, so the first click's select must wait to
-    //     see whether a second lands. The hover <title> hints "double-click to expand/collapse".
+    //     see whether a second lands. The hover <title> hints "双击展开/收起节点".
     // A pending single-click select is kept here so a second click cancels it.
     let pendingScopeSelect: { id: string; timer: ReturnType<typeof setTimeout> } | null = null;
     const DBLCLICK_WINDOW_MS = 250;
@@ -677,7 +677,7 @@ export function MemoryGraphCanvas({
       if (!g) return;
       const node = select(g).datum() as SimNode;
       event.stopPropagation();
-      // Aggregate expansion (requirement 3) is independent of scope expansion — a
+      // Aggregate expansion (需求3) is independent of scope expansion — a
       // click on an Artifacts/Papers node unpacks that aggregate's members
       // only, NOT the owning scope's child subtree. Selects immediately too.
       if (node.isAggregate && onToggleGroupRef.current) {
@@ -874,7 +874,7 @@ export function MemoryGraphCanvas({
       // A subagent scope is a real ``Task`` whose extra.task_type ===
       // "subagent" (scope carries the ``Task`` label; its child executions
       // carry the ``ToolCall`` label — distinguish a scope by task_type). A
-      // child hangs off a scope via contains (first child only — requirement 1) or is
+      // child hangs off a scope via contains (first child only — 需求1) or is
       // reached via the scope-internal next chain: it carries
       // extra.parent_subtask_id, or its task_id embeds ":exec:". cancelled is a
       // terminal status PR1 writes on aborted subagents — neither pending
@@ -884,9 +884,9 @@ export function MemoryGraphCanvas({
       const cancelled = isCancelledNode(node);
       const expanded = isScope ? expandedScopes?.has(node.id) === true : false;
       // A folded scope = scope not currently expanded. Drives the stack ghost
-      // discs (shown folded) and the hover hint ("click to expand"/"click to collapse").
+      // discs (shown folded) and the hover hint ("单击展开节点"/"单击收起节点").
       const folded = isScope ? !expanded : false;
-      // Aggregate virtual node (requirement 3): a folded scope's >1 same-kind products
+      // Aggregate virtual node (需求3): a folded scope's >1 same-kind products
       // collapsed into one ``_group:…`` node. Read the member count from
       // ``extra.count`` (set by the backend synthesis) so the "▸ N" badge shows
       // how many products are inside. aggregateExpanded mirrors expandedGroups
@@ -1239,7 +1239,7 @@ export function MemoryGraphCanvas({
             });
           if (interactive) {
             // The outer ring marks an expandable *aggregate* virtual node
-            // only (requirement 3): amber ring so it reads as a distinct "stack of
+            // only (需求3): amber ring so it reads as a distinct "stack of
             // products" vs a scope's blue stack-of-children. A scope no longer
             // carries the ring or the ▸N badge — its folded state is shown by
             // the stack ghost discs above instead.
@@ -1258,8 +1258,8 @@ export function MemoryGraphCanvas({
               .attr("fill", (node: SimNode) => node.collapsed ? "#475569" : "#ffffff")
               .attr("font-size", (node: SimNode) => node.collapsed ? 9 : 8)
               .attr("font-weight", 600);
-            // Native SVG <title> hover tooltip for a scope: "click to expand"
-            // when folded, "click to collapse" when expanded. Zero-JS, browser-
+            // Native SVG <title> hover tooltip for a scope: "单击展开节点"
+            // when folded, "单击收起节点" when expanded. Zero-JS, browser-
             // rendered. The text is re-bound in the update block below as the
             // toggle flips the folded state.
             g.filter((node: SimNode) => node.isScope === true).append("title")
@@ -1339,7 +1339,7 @@ export function MemoryGraphCanvas({
         node.isAggregate && node.aggregateExpanded ? 0.8 : 0.45);
     // Hover tooltip: only on a scope that actually has expandable children
     // (a subagent with no ToolCall children has nothing to expand — the hover
-    // hint would be misleading). Folded → "double-click to expand"; expanded → "double-click to collapse".
+    // hint would be misleading). Folded → "双击展开节点"; expanded → "双击收起节点".
     nodeSel.select("title.memory-canvas-scope-title")
       .text((node: SimNode) => {
         if (!node.isScope) return null;

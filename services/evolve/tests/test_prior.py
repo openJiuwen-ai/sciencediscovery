@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import math
 import random
-from typing import List
 
 import pytest
 from agentdescent.selection import Candidate, FlatPuct, SelectionContext

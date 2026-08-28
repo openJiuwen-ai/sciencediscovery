@@ -997,8 +997,6 @@ def test_a_repair_that_did_not_help_is_thrown_away() -> None:
     """
     from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
 
-    from sciencediscovery_evolve.vendor.puct.search import PuctTreeAggregator
-
     def evaluate(code, shards):
         # Both measure fine, both score nothing — the repair changed the bug,
         # not the outcome.
@@ -1225,7 +1223,6 @@ def test_a_summary_copied_from_the_parent_is_blanked() -> None:
     import json as jsonlib
 
     from sciencediscovery_evolve.vendor.puct.search import make_propose
-    from sciencediscovery_evolve.vendor.puct.program import Program
     from sciencediscovery_evolve.vendor.puct.tree import PuctTree
 
     seed_code = '"""Lossless text compression: compress(text)->bytes."""\n\nx = 1\n'

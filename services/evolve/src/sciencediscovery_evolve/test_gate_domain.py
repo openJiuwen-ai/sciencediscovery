@@ -110,13 +110,10 @@ def test_gate_domain(
     target = entrypoint_path or _sole_python(workspace)
 
     def evaluate(code: str, groups: Sequence[int]) -> Tuple[bool, Dict[str, Any], str]:
-        try:
-            outcomes = _run_suite(
-                code, workspace, target, frozen, setup_cmd, test_cmd,
-                capability=capability, timeout=candidate_timeout,
-            )
-        except TestGateError as error:
-            raise
+        outcomes = _run_suite(
+            code, workspace, target, frozen, setup_cmd, test_cmd,
+            capability=capability, timeout=candidate_timeout,
+        )
         if outcomes is None:
             return False, {SCORE_KEY: float("-inf")}, "the test suite produced no readable result"
 
