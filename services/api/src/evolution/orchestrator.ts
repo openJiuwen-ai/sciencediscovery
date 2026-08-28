@@ -588,11 +588,17 @@ export class EvolveOrchestrator {
       apiLog.warn("evolve_run_failed", { reason: message, runId: run.id });
       await this.finish(run.id, "failed", message).catch(() => undefined);
     } finally {
+      // Revoked before anyone is told the run is over, not after. "Settled"
+      // has to mean the tokens are already dead: a subscriber that reacts to
+      // the settle — the graph mirror, an HTTP stream closing, a test — would
+      // otherwise be looking at a run that is finished and a token that still
+      // spends money, and the window is small enough that nothing would ever
+      // reproduce the one time it mattered.
+      this.runTokens?.revoke(run.id);
       // Always, and only here: a run that died before the sidecar answered has
       // no `search_finished` to close a stream on, and one that finished
       // normally has already published it.
       this.notifySettled(run.id, (await this.store.readRun(run.id))?.status ?? "failed");
-      this.runTokens?.revoke(run.id);
       if (entry.wallClockTimer) clearTimeout(entry.wallClockTimer);
       // A run that died without a terminal event still has buffered records.
       this.graph?.flushSearchProgress(run.id);

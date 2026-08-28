@@ -674,7 +674,14 @@ test("a judged run is sent a rubric and its own model token, and no dataset", as
   });
 
   const run = await orchestrator.start({ goal: judgedGoal(), sessionId: "s1" });
-  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to settle");
+  // Waits for the run to be wound *down*, not merely recorded as finished. The
+  // status lands in the store while the stream is still draining, and the
+  // tokens are revoked after that — polling the status and then asserting the
+  // revocation is a race that passes locally and fails on a slower box.
+  // `isRunning` goes false as the last act of the teardown, so it is the one
+  // signal that means everything below has already happened.
+  await waitFor(async () => !orchestrator.isRunning(run.id), "the run to wind down");
+  assert.equal((await store.readRun(run.id))?.status, "succeeded");
 
   const sent = sidecar.requests()[0]!;
   // Nothing is staged: this mode exists for searches that have no dataset, and
