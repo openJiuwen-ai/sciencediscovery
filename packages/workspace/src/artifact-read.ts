@@ -40,6 +40,8 @@ export interface ArtifactContentProjection {
   content?: string;
   encoding: "binary" | "utf8";
   mediaType: string;
+  /** Actionable explanation of anything line offsets cannot reach. */
+  note?: string;
   page?: ArtifactTextPage;
   size: number;
   /** True when the version is larger than the decodable text window. */
@@ -81,12 +83,18 @@ export function projectArtifactContent(
   const page = boundText(requested, { keep: "head", maxBytes: DEFAULT_READ_PAGE_MAX_BYTES, maxLines: limit });
   const pageLines = page.totalLines - page.omittedLines;
   const endLine = startLine + pageLines - 1;
-  const hasMore = endLine < lines.length || truncated || page.partialLine;
+  // `hasMore` states one thing only: that line paging can still advance inside
+  // the decodable window. Folding `truncated` or `partialLine` in here would
+  // promise a next page that no offset can reach — past the window `nextOffset`
+  // would equal the offset just used, and the model would page forever.
+  const hasMore = endLine < lines.length;
+  const note = describeUnreachable(lines.length, truncated, page.partialLine, startLine, bytes.length);
   return {
     binary: false,
     content: page.text,
     encoding: "utf8",
     mediaType,
+    ...(note ? { note } : {}),
     page: {
       bytes: Buffer.byteLength(page.text, "utf8"),
       endLine,
@@ -99,4 +107,32 @@ export function projectArtifactContent(
     size: bytes.length,
     truncated,
   };
+}
+
+/**
+ * Whatever the line protocol cannot address has to be said out loud, because
+ * `hasMore: false` on its own reads as "you have seen everything".
+ */
+function describeUnreachable(
+  windowLines: number,
+  truncated: boolean,
+  partialLine: boolean,
+  startLine: number,
+  size: number,
+): string | undefined {
+  const notes: string[] = [];
+  if (truncated) {
+    notes.push(
+      `Only the first ${MAX_ARTIFACT_TEXT_BYTES} bytes of this ${size}-byte version are readable as text,`
+      + ` which is ${windowLines} lines; offset cannot reach past line ${windowLines}.`
+      + " Process the rest with run_python or run_shell.",
+    );
+  }
+  if (partialLine) {
+    notes.push(
+      `Line ${startLine} is wider than one page and was cut. Line offsets cannot address the rest of that`
+      + " line; read it with run_python or run_shell instead.",
+    );
+  }
+  return notes.length ? notes.join(" ") : undefined;
 }

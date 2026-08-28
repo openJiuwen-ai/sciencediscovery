@@ -71,7 +71,14 @@ export interface ArtifactTextPage {
   bytes: number;
   /** Last 1-based line included; `startLine - 1` when the page is empty. */
   endLine: number;
+  /**
+   * True only when line paging can still advance inside the decodable text
+   * window. It never covers bytes past that window or the cut-off remainder of
+   * an over-wide line — those are reported by `truncated`, `partialLine`, and
+   * `note`, because no offset can reach them.
+   */
   hasMore: boolean;
+  /** Always greater than the offset just used; absent when `hasMore` is false. */
   nextOffset?: number;
   /**
    * True when one line was wider than the page budget and had to be cut. Line
@@ -79,6 +86,7 @@ export interface ArtifactTextPage {
    */
   partialLine: boolean;
   startLine: number;
+  /** Lines available inside the decodable text window, not the whole version. */
   totalLines: number;
 }
 
@@ -94,6 +102,11 @@ export interface ArtifactReadResult {
   content?: string;
   encoding: "binary" | "utf8";
   mediaType: string;
+  /**
+   * Actionable explanation of content the line protocol cannot address —
+   * bytes past the decodable text window, or the rest of an over-wide line.
+   */
+  note?: string;
   page?: ArtifactTextPage;
   /** Stored byte size of the whole version content. */
   size: number;

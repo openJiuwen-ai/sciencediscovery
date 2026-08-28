@@ -60,8 +60,19 @@ export interface ToolOutputPage {
   bytes: number;
   /** Last 1-based line included in this page; `startLine - 1` for an empty page. */
   endLine: number;
+  /**
+   * True only when line paging can still advance. It does not cover the
+   * cut-off remainder of an over-wide line — no offset can address that, so it
+   * is reported by `partialLine` instead.
+   */
   hasMore: boolean;
+  /** Always greater than the offset just used; absent when `hasMore` is false. */
   nextOffset?: number;
+  /**
+   * True when one line was wider than the page budget and had to be cut. The
+   * page is not the end of that line, even when `hasMore` is false.
+   */
+  partialLine: boolean;
   ref: string;
   startLine: number;
   text: string;
@@ -126,6 +137,7 @@ export class ToolOutputStore implements ToolOutputSink {
       endLine,
       hasMore,
       ...(hasMore ? { nextOffset: endLine + 1 } : {}),
+      partialLine: page.partialLine,
       ref,
       startLine,
       text: page.text,
@@ -212,10 +224,17 @@ export function createToolOutputTools(store: ToolOutputStore): AgentTool[] {
       const header = [
         `[tool output page] ${page.toolName} ref ${page.ref}: lines ${page.startLine}-${page.endLine}`
         + ` of ${page.totalLines} (${formatByteSize(page.totalBytes)} total, ${formatByteSize(page.bytes)} shown).`,
+        ...(page.partialLine
+          ? [`Line ${page.startLine} is wider than one page and was cut here; line offsets cannot address the rest of it.`
+            + " Re-run the original tool with a narrower request, or read the source with run_python or run_shell."]
+          : []),
         page.hasMore
           ? `Continue with read_tool_output(ref="${page.ref}", offset=${page.nextOffset}).`
-          : "This is the end of the stored output.",
-      ].join("\n");
+          // Saying "end of the stored output" after cutting inside a line would
+          // tell the model it has seen everything, which is exactly what it has
+          // not done.
+          : page.partialLine ? "" : "This is the end of the stored output.",
+      ].filter(Boolean).join("\n");
       return {
         bounded: true,
         content: [{ type: "text", text: `${header}\n${page.text}` }],

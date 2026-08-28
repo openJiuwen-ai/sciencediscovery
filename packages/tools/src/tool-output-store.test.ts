@@ -133,3 +133,37 @@ test("an oversized result is stored whole and its omitted head is recoverable", 
   // The stored file lives under the session-scoped root and nowhere else.
   assert.equal(resolve(root, `${ref}.json`).startsWith(root), true);
 });
+
+test("a line wider than one page is flagged instead of being reported as the end of the output", async () => {
+  const store = new ToolOutputStore();
+  // One 200 KiB line, as a minified-JSON MCP result arrives.
+  const saved = await store.save("mcp__pubmed__search", "j".repeat(200_000));
+
+  const page = await store.read(saved.ref);
+  assert.equal(page.totalLines, 1);
+  assert.equal(page.endLine, 1);
+  assert.equal(page.partialLine, true, "the page stops inside line 1");
+  assert.ok(page.bytes <= 40 * 1_024, `page is ${page.bytes} bytes`);
+  assert.equal(page.hasMore, false, "no further line exists, so line paging cannot advance");
+  assert.equal(page.nextOffset, undefined);
+
+  const [readToolOutput] = createToolOutputTools(store);
+  assert.ok(readToolOutput);
+  const text = (await readToolOutput.execute("call-wide", { ref: saved.ref })).content[0]?.text ?? "";
+  assert.equal(
+    text.includes("This is the end of the stored output"),
+    false,
+    "the model must not be told it has seen everything",
+  );
+  assert.match(text, /Line 1 is wider than one page and was cut here; line offsets cannot address the rest of it\./);
+
+  // A wide line followed by real lines still advances normally.
+  const mixed = await store.save("run_shell", `${"k".repeat(200_000)}\ntail-line\n`);
+  const mixedPage = await store.read(mixed.ref);
+  assert.equal(mixedPage.partialLine, true);
+  assert.equal(mixedPage.hasMore, true);
+  assert.equal(mixedPage.nextOffset, 2);
+  const mixedText = (await readToolOutput.execute("call-mixed", { ref: mixed.ref })).content[0]?.text ?? "";
+  assert.match(mixedText, /Line 1 is wider than one page/);
+  assert.match(mixedText, new RegExp(`Continue with read_tool_output\\(ref="${mixed.ref}", offset=2\\)`));
+});
