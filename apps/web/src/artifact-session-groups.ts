@@ -18,6 +18,7 @@ export interface ArtifactSessionGroup {
   id: string;
   items: ScientificArtifact[];
   label: string;
+  sourceSessionId?: string;
 }
 
 export function upsertArtifactSession(sessions: Session[], updated: Session): Session[] {
@@ -44,17 +45,25 @@ export function groupArtifactsBySession({
   const groups = new Map<string, ArtifactSessionGroup>();
 
   for (const artifact of artifacts) {
-    const liveSession = sessionsById.get(artifact.createdInSessionId);
-    const confirmedDeleted = catalogReady && !liveSession;
-    const id = liveSession?.id ?? (confirmedDeleted ? "deleted" : artifact.createdInSessionId);
-    const group = groups.get(id) ?? {
-      id,
-      items: [],
-      label: liveSession?.title
-        ?? (confirmedDeleted ? deletedSessionLabel : artifact.createdInSessionTitle),
-    };
-    group.items.push(artifact);
-    groups.set(id, group);
+    const sourceSessionIds = [...new Set(
+      artifact.contributingSessionIds?.length
+        ? artifact.contributingSessionIds
+        : [artifact.createdInSessionId],
+    )];
+    for (const sourceSessionId of sourceSessionIds) {
+      const liveSession = sessionsById.get(sourceSessionId);
+      const confirmedDeleted = catalogReady && !liveSession;
+      const id = liveSession?.id ?? (confirmedDeleted ? "deleted" : sourceSessionId);
+      const group = groups.get(id) ?? {
+        id,
+        items: [],
+        label: liveSession?.title
+          ?? (confirmedDeleted ? deletedSessionLabel : artifact.createdInSessionTitle),
+        sourceSessionId: confirmedDeleted ? undefined : sourceSessionId,
+      };
+      if (!group.items.some((item) => item.id === artifact.id)) group.items.push(artifact);
+      groups.set(id, group);
+    }
   }
 
   return [...groups.values()];

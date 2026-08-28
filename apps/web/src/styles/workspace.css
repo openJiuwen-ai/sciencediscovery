@@ -74,6 +74,7 @@
 @media (hover: hover) and (pointer: fine) {
   .artifact-tree-actions { opacity: 0; pointer-events: none; transition: opacity var(--motion-fast); }
   .artifact-tree-file-row:hover .artifact-tree-actions,
+  .artifact-tree-file-row[data-artifact-actions-visible="true"] .artifact-tree-actions,
   .artifact-tree-file-row:focus-within .artifact-tree-actions { opacity: 1; pointer-events: auto; }
 }
 .artifact-tree-file.selection-mode { grid-template-columns: 16px 14px minmax(0, 1fr); }

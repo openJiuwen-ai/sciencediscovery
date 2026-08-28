@@ -37,8 +37,9 @@ function session(id: string, title: string): Session {
   };
 }
 
-function artifact(createdInSessionId = "session-1"): ScientificArtifact {
+function artifact(createdInSessionId = "session-1", contributingSessionIds?: string[]): ScientificArtifact {
   return {
+    ...(contributingSessionIds ? { contributingSessionIds } : {}),
     createdAt: "2026-08-01T00:00:00.000Z",
     createdInSessionId,
     createdInSessionTitle: "Captured title",
@@ -53,6 +54,30 @@ function artifact(createdInSessionId = "session-1"): ScientificArtifact {
     updatedAt: "2026-08-01T00:00:00.000Z",
   };
 }
+
+test("a shared Artifact appears in every Session that contributed a version", () => {
+  const shared = artifact("session-1", ["session-1", "session-2"]);
+  const groups = groupArtifactsBySession({
+    artifacts: [shared],
+    catalogProjectId: "project-1",
+    deletedSessionLabel: "Deleted Session",
+    projectId: "project-1",
+    sessions: [
+      session("session-1", "Analysis A"),
+      session("session-2", "Analysis B"),
+      session("session-3", "Unrelated"),
+    ],
+  });
+
+  assert.deepEqual(groups.map((group) => ({
+    artifactIds: group.items.map((item) => item.id),
+    id: group.id,
+    sourceSessionId: group.sourceSessionId,
+  })), [
+    { artifactIds: [shared.id], id: "session-1", sourceSessionId: "session-1" },
+    { artifactIds: [shared.id], id: "session-2", sourceSessionId: "session-2" },
+  ]);
+});
 
 test("artifact groups wait for the complete Session catalog before declaring deletion", () => {
   const pending = groupArtifactsBySession({

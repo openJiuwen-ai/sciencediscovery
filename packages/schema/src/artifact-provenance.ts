@@ -21,6 +21,8 @@ export type ArtifactOrigin = "legacy_auto" | "llm_declared" | "mcp_download" | "
 export type ArtifactOriginMeta = Record<string, boolean | number | string | null>;
 
 export interface ScientificArtifact {
+  /** Session ids that contributed versions. Derived for Artifact list responses. */
+  contributingSessionIds?: string[];
   createdAt: string;
   createdInSessionId: string;
   createdInSessionTitle: string;

@@ -226,7 +226,10 @@ test("workspace file leaves always use the workspace reader regardless of previe
   assert.match(openFile, /await openWorkspacePath\(file\.path\)/);
   assert.doesNotMatch(openFile, /file\.(?:kind|previewKind)|setArtifactModalName/);
   assert.match(app, /<WorkspaceFileTreeList[\s\S]*?onOpen=\{\(file\) => void openWorkspaceFile\(file\)\}/);
-  assert.match(app, /<ArtifactTreeList[\s\S]*?onOpen=\{openArtifact\}/);
+  assert.match(
+    app,
+    /<ArtifactTreeList[\s\S]*?onOpen=\{\(artifact\) => openArtifact\(artifact, group\.sourceSessionId\)\}/,
+  );
 });
 
 test("workspace file tree selection exposes folder and leaf checkboxes independently", () => {

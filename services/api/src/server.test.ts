@@ -5439,6 +5439,7 @@ test("same-named uploads remain physically isolated and append one Project artif
   );
   assert.equal(artifacts.body.length, 1);
   assert.equal(artifacts.body[0]?.name, "input.csv");
+  assert.deepEqual(artifacts.body[0]?.contributingSessionIds, [sessionA.body.id, sessionB.body.id]);
   const versions = await jsonRequest<ScientificArtifactVersion[]>(
     `${origin}/api/projects/${project.body.id}/artifacts/${artifacts.body[0]!.id}/versions`,
     { headers: authorization },
