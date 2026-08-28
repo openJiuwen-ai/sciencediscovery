@@ -20,6 +20,7 @@ import {
   listCatalogModelsForPreset,
   lookupModelCatalog,
   mapModelsDevCatalog,
+  MODELS_DEV_PROVIDER_MAPPINGS,
   setModelCatalogSnapshot,
 } from "@sciencediscovery/schema";
 
@@ -117,4 +118,169 @@ test("a payload that is not a provider map yields no records", () => {
   assert.deepEqual(mapModelsDevCatalog(null, { fetchedAt: FIXTURE_FETCHED_AT, sourceUrl: FIXTURE_SOURCE_URL }), []);
   assert.deepEqual(mapModelsDevCatalog([], { fetchedAt: FIXTURE_FETCHED_AT, sourceUrl: FIXTURE_SOURCE_URL }), []);
   assert.deepEqual(mapModelsDevCatalog({ openai: 7 }, { fetchedAt: FIXTURE_FETCHED_AT, sourceUrl: FIXTURE_SOURCE_URL }), []);
+});
+
+test("a provider that rehosts another brand never overwrites that brand's facts", () => {
+  // The real collision behind the GLM regression: DashScope is the vendor for
+  // Qwen but republishes Zhipu's GLM with a shorter output limit and an empty
+  // `reasoning_options`, and SiliconFlow rehosts it under a prefixed id. All
+  // three entries normalize to the same catalog key, so whichever mapping the
+  // merge reaches first is the one whose facts survive.
+  const payload = {
+    "alibaba-cn": {
+      doc: "https://www.alibabacloud.com/help/en/model-studio/models",
+      id: "alibaba-cn",
+      models: {
+        "glm-5.2": {
+          cost: { input: 0.7, output: 2.5 },
+          id: "glm-5.2",
+          limit: { context: 1_000_000, output: 128_000 },
+          modalities: { input: ["text"], output: ["text"] },
+          name: "GLM-5.2 (Model Studio)",
+          reasoning: true,
+          reasoning_options: [],
+        },
+      },
+    },
+    "siliconflow-cn": {
+      doc: "https://cloud.siliconflow.com/models",
+      id: "siliconflow-cn",
+      models: {
+        "zai-org/GLM-5.2": {
+          cost: { input: 0.5, output: 2 },
+          id: "zai-org/GLM-5.2",
+          limit: { context: 1_000_000, output: 262_000 },
+          modalities: { input: ["text"], output: ["text"] },
+          name: "GLM-5.2 (SiliconFlow)",
+          reasoning: true,
+        },
+      },
+    },
+    zhipuai: {
+      doc: "https://docs.z.ai/guides/overview/pricing",
+      id: "zhipuai",
+      models: {
+        "glm-5.2": {
+          cost: { input: 0.6, output: 2.2 },
+          id: "glm-5.2",
+          limit: { context: 1_000_000, output: 131_072 },
+          modalities: { input: ["text"], output: ["text"] },
+          name: "GLM-5.2",
+          reasoning: true,
+          reasoning_options: [{ type: "effort", values: ["high", "max"] }],
+        },
+      },
+    },
+  };
+
+  setModelCatalogSnapshot({
+    fetchedAt: FIXTURE_FETCHED_AT,
+    origin: "downloaded",
+    records: mapModelsDevCatalog(payload, { fetchedAt: FIXTURE_FETCHED_AT, sourceUrl: FIXTURE_SOURCE_URL }),
+    sourceUrl: FIXTURE_SOURCE_URL,
+  });
+
+  const merged = lookupModelCatalog("glm-5.2")!;
+  assert.equal(merged.maxOutputTokens, 131_072, "the vendor's own output limit, not a rehosted one");
+  assert.deepEqual(merged.thinking?.efforts, ["high", "max"],
+    "the vendor publishes an effort scale; the rehosted entries are silent about it");
+  assert.equal(merged.label, "GLM-5.2", "and the vendor's own name");
+
+  // Prices stay attributed per endpoint: our Zhipu preset calls
+  // open.bigmodel.cn, which upstream does not price, while SiliconFlow's own
+  // rate applies to the SiliconFlow preset.
+  assert.equal(lookupModelCatalog("glm-5.2", "zhipu")!.pricing, undefined);
+  assert.equal(lookupModelCatalog("glm-5.2", "siliconflow")!.pricing?.input, 0.5);
+
+  // Every provider that lists it still offers it as a suggestion.
+  for (const preset of ["zhipu", "siliconflow", "dashscope"]) {
+    assert.deepEqual(listCatalogModelsForPreset(preset).map((record) => record.key), ["glm-5.2"]);
+  }
+
+  installTestModelCatalog();
+});
+
+test("a published effort scale outranks a provider that is merely silent about one", () => {
+  // Order alone is not enough: whichever provider is reached first must not be
+  // able to erase a scale another one documents. A provider that says the
+  // model does not reason at all is a claim, not silence, and is not upgraded.
+  const payload = {
+    openai: {
+      doc: "https://developers.openai.com/api/docs/api-reference/introduction",
+      id: "openai",
+      models: {
+        "gpt-5.5": {
+          cost: { input: 1.25, output: 10 },
+          id: "gpt-5.5",
+          limit: { context: 1_050_000, output: 128_000 },
+          modalities: { input: ["text"], output: ["text"] },
+          name: "GPT-5.5",
+          reasoning: true,
+        },
+        "gpt-image-1.5": {
+          id: "gpt-image-1.5",
+          limit: { context: 4_096, output: 4_096 },
+          modalities: { input: ["text"], output: ["image"] },
+          name: "GPT Image 1.5",
+          reasoning: false,
+        },
+      },
+    },
+    openrouter: {
+      doc: "https://openrouter.ai/docs/quickstart",
+      id: "openrouter",
+      models: {
+        "openai/gpt-5.5": {
+          cost: { input: 1.4, output: 11 },
+          id: "openai/gpt-5.5",
+          limit: { context: 1_050_000, output: 128_000 },
+          modalities: { input: ["text"], output: ["text"] },
+          name: "GPT-5.5 (OpenRouter)",
+          reasoning: true,
+          reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+        },
+        "openai/gpt-image-1.5": {
+          id: "openai/gpt-image-1.5",
+          limit: { context: 4_096, output: 4_096 },
+          modalities: { input: ["text"], output: ["image"] },
+          name: "GPT Image 1.5 (OpenRouter)",
+          reasoning: true,
+          reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+        },
+      },
+    },
+  };
+
+  setModelCatalogSnapshot({
+    fetchedAt: FIXTURE_FETCHED_AT,
+    origin: "downloaded",
+    records: mapModelsDevCatalog(payload, { fetchedAt: FIXTURE_FETCHED_AT, sourceUrl: FIXTURE_SOURCE_URL }),
+    sourceUrl: FIXTURE_SOURCE_URL,
+  });
+
+  const gpt = lookupModelCatalog("gpt-5.5", "openai")!;
+  assert.deepEqual(gpt.thinking?.efforts, ["low", "high"], "the documented scale survives the silent entry");
+  assert.equal(gpt.label, "GPT-5.5", "everything else still comes from the vendor");
+  assert.equal(gpt.pricing?.input, 1.25);
+
+  const image = lookupModelCatalog("gpt-image-1.5", "openai")!;
+  assert.equal(image.thinking?.supported, false, "a stated 'does not reason' is not silence and is not upgraded");
+  assert.equal(image.thinking?.efforts, undefined);
+
+  installTestModelCatalog();
+});
+
+test("every aggregator mapping sits after every vendor mapping", () => {
+  // Capability facts are first-publish-wins, so this ordering is the whole
+  // mechanism behind "the vendor describes its own model". A future insert in
+  // the wrong place would silently hand the facts back to a rehoster.
+  const aggregators = new Set(["openrouter", "siliconflow-cn"]);
+  const firstAggregator = MODELS_DEV_PROVIDER_MAPPINGS
+    .findIndex((mapping) => aggregators.has(mapping.id));
+  const lastVendor = MODELS_DEV_PROVIDER_MAPPINGS
+    .map((mapping, index) => ({ index, isVendor: !aggregators.has(mapping.id) }))
+    .filter((entry) => entry.isVendor)
+    .at(-1)!.index;
+  assert.ok(firstAggregator > lastVendor,
+    `aggregators must follow every vendor; first aggregator at ${firstAggregator}, last vendor at ${lastVendor}`);
 });

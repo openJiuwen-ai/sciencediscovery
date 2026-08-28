@@ -83,21 +83,34 @@ export interface ModelsDevProviderMapping {
 }
 
 export const MODELS_DEV_PROVIDER_MAPPINGS: readonly ModelsDevProviderMapping[] = [
+  // --- The vendors that build the models. Listed first so first-publish-wins
+  // means the model's own maker describes it. ---
   { id: "openai", presetId: "openai", pricing: true },
   { id: "anthropic", presetId: "anthropic", pricing: true },
   { id: "google", presetId: "gemini", pricing: true },
   { id: "deepseek", presetId: "deepseek", pricing: true },
-  // These four presets call the mainland endpoints (api.moonshot.cn,
-  // api.minimaxi.com, dashscope.aliyuncs.com, api.siliconflow.cn), so the
-  // upstream mainland listing is the one whose price list applies to them.
+  // These presets call the mainland endpoints (api.moonshot.cn,
+  // api.minimaxi.com, dashscope.aliyuncs.com), so the upstream mainland
+  // listing is the one whose price list applies to them.
   { id: "moonshotai-cn", presetId: "moonshot", pricing: true },
   { id: "minimax-cn", presetId: "minimax", pricing: true },
-  { id: "alibaba-cn", presetId: "dashscope", pricing: true },
-  { id: "siliconflow-cn", presetId: "siliconflow", pricing: true },
   // Upstream only lists Zhipu's international host (z.ai) while our preset
   // calls open.bigmodel.cn. The models are still worth suggesting; their
   // prices belong to the other host and are not attributed here.
   { id: "zhipuai", presetId: "zhipu", pricing: false },
+  // DashScope is the vendor for Qwen but also rehosts other brands — it
+  // republishes GLM with a shorter output limit and no effort scale — so it
+  // comes after Zhipu. Zhipu publishes no Qwen, so nothing is lost the other
+  // way round.
+  { id: "alibaba-cn", presetId: "dashscope", pricing: true },
+
+  // --- Aggregators, which rehost other vendors' models. They must come after
+  // every vendor above: a rehosted entry often publishes a shorter output
+  // limit and a bare `reasoning: true` with no effort scale, and whichever
+  // mapping is reached first is the one that keeps the fact. `pricing: false`
+  // on a vendor above does not change this — it withholds that vendor's
+  // prices, not its capability facts. ---
+  { id: "siliconflow-cn", presetId: "siliconflow", pricing: true },
   { id: "openrouter", presetId: "openrouter", pricing: true },
 ];
 
@@ -263,7 +276,18 @@ export function mapModelsDevCatalog(
       if (draft.vision === undefined && Array.isArray(inputModalities)) {
         draft.vision = inputModalities.includes("image");
       }
-      draft.thinking ??= mapModelsDevThinking(model);
+      // A provider that names the effort scale is describing the model's
+      // control surface; one that only says `reasoning: true` is silent about
+      // it, not contradicting it. Prefer the specific over the silent, so a
+      // rehoster's thinner entry cannot erase the scale even if it is reached
+      // first. A provider that says the model does not reason at all is never
+      // overridden here — that is a claim, not silence.
+      const thinking = mapModelsDevThinking(model);
+      if (!draft.thinking) draft.thinking = thinking;
+      else if (draft.thinking.supported && !draft.thinking.efforts?.length
+        && thinking?.supported && thinking.efforts?.length) {
+        draft.thinking = thinking;
+      }
       if (mapping.presetId === "anthropic") draft.apiVariant ??= anthropicVariant(model);
       if (mapping.pricing && draft.pricing[mapping.presetId] === undefined) {
         const pricing = mapPricing(model, source);
