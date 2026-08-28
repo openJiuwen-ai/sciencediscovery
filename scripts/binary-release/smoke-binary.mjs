@@ -204,6 +204,26 @@ export async function smokeBinary(options) {
       ?? "payload manifest extracted";
     process.stdout.write(`PASS extract exit=0: ${extractLine}\n`);
 
+    // run --help: USAGE 现在带 run 选项段
+    const runHelp = await runCommand(options.binary, ["run", "--help"], context);
+    const runHelpLine = firstMatchingLine(runHelp.stdout, /^Usage: ScienceDiscovery/);
+    if (!runHelpLine || !/run options:/.test(runHelp.stdout)) {
+      throw new Error("run --help did not print the run options section.");
+    }
+    process.stdout.write(`PASS run --help exit=0: ${runHelpLine}\n`);
+
+    // run 无 serve:探活失败,非零退出 + ECONNREFUSED
+    try {
+      await runCommand(options.binary, ["run", "smoke question", "--auto-approve", "--output", "jsonl"], context);
+      throw new Error("run without a serve unexpectedly exited 0.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!/ECONNREFUSED/.test(detail)) {
+        throw new Error(`run without a serve did not report ECONNREFUSED: ${detail}`);
+      }
+      process.stdout.write(`PASS run no-serve: reported ECONNREFUSED\n`);
+    }
+
     const serve = await runServe(options.binary, context, options.timeoutMs);
     process.stdout.write(
       `PASS serve exit=0 after SIGTERM, health=${serve.healthStatus}: ${serve.readyLine}\n`,

@@ -19,7 +19,7 @@
  * application, and the runtime payload is appended after the ELF image, so the
  * user's whole install story is "download one file and run it".
  */
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createZstdDecompress } from "node:zlib";
@@ -28,6 +28,7 @@ import { parseEnvFile, parseInvocation, USAGE } from "./cli-options.js";
 import { migrateLegacyDirectory } from "./directory-migration.js";
 import { readPayloadLocator } from "./payload-container.js";
 import { resolvePayload } from "./payload-store.js";
+import { runCommand } from "./run.js";
 import { serve } from "./serve.js";
 import { extractTar } from "./tar-extract.js";
 
@@ -77,7 +78,8 @@ async function runExtract(destination: string): Promise<number> {
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
-  const envFile = envFileArgument(argv, process.cwd());
+  const explicitEnvFile = envFileArgument(argv, process.cwd());
+  const envFile = explicitEnvFile ?? (existsSync(".env") ? ".env" : undefined);
   if (envFile) await applyEnvFile(envFile, process.env);
 
   const cwd = process.cwd();
@@ -88,6 +90,14 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   }
   if (invocation.command === "extract") {
     return await runExtract(invocation.extractTo as string);
+  }
+
+  if (invocation.command === "run") {
+    const { exitCode } = await runCommand(
+      { settings: invocation.settings, runSettings: invocation.runSettings!, baseEnv: process.env },
+      write,
+    );
+    return exitCode;
   }
 
   if (invocation.command === "serve" && invocation.usesDefaultDataDir) {

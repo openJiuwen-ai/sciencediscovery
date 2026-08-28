@@ -80,6 +80,7 @@ sudo apk add bubblewrap              # Alpine
 
 ```
 ScienceDiscovery serve [选项]        启动 Web UI、控制 API 与沙箱 runner
+ScienceDiscovery run [输入] [选项]    作为命令行客户端连一个已运行的 serve，跑一个 agent 任务
 ScienceDiscovery extract --to <目录>  只解包内嵌运行时，不启动
 ScienceDiscovery version             打印版本与内置 Node / CPython / micromamba 版本
 ScienceDiscovery help                显示帮助
@@ -97,6 +98,21 @@ ScienceDiscovery help                显示帮助
 | `--no-scientific-envs` | 关 | 不初始化托管科学环境 |
 
 [配置参考](../reference/configuration.md#环境变量本地模式)中的变量同样生效，可直接导出或写进 `--env-file`。API 与 runner 默认都只监听回环。确需对外提供 API 时，应先更换 `SCIENCE_AGENT_AUTH_TOKEN`，在可信且受保护的网络中显式使用 `--host 0.0.0.0`。
+
+### run 子命令（CLI 客户端）
+
+日常交互推荐使用 Web UI（浏览器访问 `http://127.0.0.1:4310`，使用 `serve` 启动时打印的 token 登录）。`run` 是同一 `serve` 的命令行前端，与 Web UI 行为一致，适用于在终端中直接执行或将任务接入管道与脚本。`run` 自动加载与 `serve` 相同的 token（来自 `.env` 或 `--data-dir`），无需显式指定。agent 产出的文件存放于 `--data-dir` 的 `projects/<id>/sessions/<id>/workspace/` 下，不在当前工作目录，可通过该路径直接访问或在 Web UI 产物栏查看。
+
+先起 `serve`，再开一个终端跑 `run`：
+
+```bash
+./ScienceDiscovery serve                 # 终端 1：起服务（常驻）
+./ScienceDiscovery run "帮我写个快排"    # 终端 2：作为客户端跑一个 agent 任务
+```
+
+默认连 `http://127.0.0.1:4310` 并从 `--data-dir`（默认 `./.sciencediscovery-data`）读 `serve` 生成的 token，因此只要 `run` 与 `serve` 用同一个 `--data-dir` 就无需额外设置。终端直接敲默认走 **text 模式**（答案到 stdout、进度到 stderr，遇权限弹 1/2/3 选择）；管道/脚本里跑默认走 **jsonl 模式**，且必须显式 `--auto-approve`（非交互不答权限会拒启）。完整选项见 `./ScienceDiscovery run --help`，设计详见 [issue #23](https://gitcode.com/openJiuwen/sciencediscovery/issues/23)。
+
+> 本地模式下没有 `ScienceDiscovery` 二进制，`run` 用 `node services/launcher/dist/main.js run ...` 跑（指向 `start-stack.sh` 起的 serve，默认地址与 dataDir 一致，同样无需额外设置）。Docker 模式下容器内不跑 `run`，从宿主机跑时需 `--data-dir ./data` 指向 bind mount 的数据目录（或 `--token` 显式给），其余默认。
 
 ### 二进制里有什么
 
