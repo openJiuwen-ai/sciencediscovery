@@ -264,7 +264,6 @@ interface DraftRecord {
   key: string;
   label: string;
   maxOutputTokens?: number;
-  presets: ModelProviderPresetId[];
   pricing: Partial<Record<ModelProviderPresetId, ModelCatalogPricing>>;
   source: { retrievedAt: string; url: string };
   thinking?: ModelCatalogThinking;
@@ -310,13 +309,11 @@ export function mapModelsDevCatalog(
         draft = {
           key,
           label: typeof model.name === "string" && model.name.trim() ? model.name.trim() : key,
-          presets: [],
           pricing: {},
           source,
         };
         drafts.set(key, draft);
       }
-      if (!draft.presets.includes(mapping.presetId)) draft.presets.push(mapping.presetId);
       // Capability facts: the first mapping that publishes one keeps it, so a
       // vendor listing outranks an aggregator that rehosts the same model.
       const limit = isRecord(model.limit) ? model.limit : undefined;
@@ -363,7 +360,6 @@ export function mapModelsDevCatalog(
       key: draft.key,
       label: draft.label,
       ...(draft.maxOutputTokens !== undefined ? { maxOutputTokens: draft.maxOutputTokens } : {}),
-      ...(draft.presets.length ? { presets: draft.presets } : {}),
       ...(Object.keys(draft.pricing).length ? { pricing: draft.pricing } : {}),
       source: draft.source,
       ...(draft.thinking ? { thinking: draft.thinking } : {}),

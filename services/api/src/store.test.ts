@@ -2872,7 +2872,6 @@ test("model providers: custom provider persistence and token-optional runs", asy
     apiProtocol: "openai-chat-completions",
     apiVariant: "qwen",
     baseUrl: "http://127.0.0.1:8000/v1",
-    modelDiscovery: "manual",
     name: "本地网关",
     tokenOptional: true,
   });
@@ -2886,7 +2885,8 @@ test("model providers: custom provider persistence and token-optional runs", asy
   const reProvider = reopened.listProviders()[0]!;
   assert.equal(reProvider.name, "本地网关");
   assert.equal(reProvider.tokenOptional, true);
-  assert.equal(reProvider.modelDiscovery, "manual");
+  assert.equal(reProvider.modelDiscovery, "openai-models",
+    "every provider asks its own endpoint for the model list");
   const reProfile = reopened.listModels().find((model) => model.model === "qwen3-local")!;
   assert.equal(reProfile.providerId, reProvider.id);
   assert.equal(reopened.modelAllowsMissingToken(reProfile), true);
@@ -3063,7 +3063,8 @@ test("standalone profiles are grouped into one migrated provider per connection"
   assert.equal(migrated.getProviderApiToken(sharedProvider.id), undefined);
   assert.equal(migrated.getModelApiToken(flash.id), "shared-endpoint-token");
   assert.equal(migrated.getModelApiToken(other.id), "other-endpoint-token");
-  assert.equal(sharedProvider.modelDiscovery, "manual", "a hand-configured endpoint never proved it lists models");
+  assert.equal(sharedProvider.modelDiscovery, "openai-models",
+    "whether a hand-configured endpoint lists models is discovered by asking it");
   assert.equal(sharedProvider.tokenOptional, false, "standalone profiles always required their own token");
   assert.equal(sharedProvider.presetId, undefined, "migrated providers are custom, not preset-derived");
 
@@ -3438,4 +3439,65 @@ test("a standalone profile still needs its own token", async (context) => {
   // Nothing vouches for this endpoint, so an absent credential is not a
   // statement that none is needed.
   assert.equal(store.modelAllowsMissingToken(profile), false);
+});
+
+test("a catalog that stored the removed catalog-only mode is migrated to asking the provider", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `discovery-migration-${Date.now()}-${process.pid}`);
+  await mkdir(resolve(tempRoot, "messages"), { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  // Written before the model list always came from the provider: `manual` meant
+  // "do not ask the provider, show whatever the catalog knows".
+  const now = new Date().toISOString();
+  await writeFile(resolve(tempRoot, "catalog.json"), `${JSON.stringify({
+    providers: [
+      {
+        apiProtocol: "openai-chat-completions",
+        apiVariant: "deepseek",
+        baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+        createdAt: now,
+        id: "provider-zhipu",
+        modelDiscovery: "manual",
+        name: "智谱 GLM",
+        presetId: "zhipu",
+        proxyPolicy: "inherit",
+        updatedAt: now,
+      },
+      {
+        apiProtocol: "anthropic-messages",
+        apiVariant: "anthropic-adaptive",
+        baseUrl: "https://api.anthropic.com",
+        createdAt: now,
+        id: "provider-anthropic",
+        modelDiscovery: "manual",
+        name: "Anthropic",
+        presetId: "anthropic",
+        proxyPolicy: "inherit",
+        updatedAt: now,
+      },
+    ],
+  }, null, 2)}\n`, "utf8");
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const zhipu = store.listProviders().find((provider) => provider.id === "provider-zhipu")!;
+  assert.equal(zhipu.modelDiscovery, "openai-models", "an existing provider starts asking its own endpoint");
+  assert.equal(zhipu.baseUrl, "https://open.bigmodel.cn/api/coding/paas/v4", "the endpoint the user typed is untouched");
+  // The listing shape follows the protocol, so an Anthropic provider migrates
+  // to the Anthropic route rather than the OpenAI one.
+  assert.equal(
+    store.listProviders().find((provider) => provider.id === "provider-anthropic")!.modelDiscovery,
+    "anthropic-models",
+  );
+
+  // Persisted, so the next process does not have to migrate again.
+  const persisted = await readPersistedCatalog(tempRoot);
+  assert.equal(persisted.providers?.[0]?.modelDiscovery, "openai-models");
+
+  // And an explicit write of the removed value is normalized rather than stored.
+  const updated = await store.updateProvider("provider-zhipu", {
+    modelDiscovery: "manual" as never,
+  });
+  assert.equal(updated.modelDiscovery, "openai-models");
 });

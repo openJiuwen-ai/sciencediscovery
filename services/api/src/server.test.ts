@@ -5259,18 +5259,25 @@ test("provider REST discovers models, reports upstream failure, and keeps manual
   assert.equal(fallback.body.providerId, provider.body.id);
   assert.equal(fallback.body.vision, true);
 
-  const manualProvider = await jsonRequest<ModelProvider>(`${origin}/api/providers`, {
-    body: JSON.stringify({ apiToken: "zhipu-token", presetId: "zhipu" }),
+  // A preset-derived provider is not allowed to answer from the catalog: it
+  // asks its own endpoint like every other provider. Pointed at a path with no
+  // listing route, that is a visible failure rather than a borrowed list.
+  const presetProvider = await jsonRequest<ModelProvider>(`${origin}/api/providers`, {
+    body: JSON.stringify({ apiToken: "zhipu-token", baseUrl: `${upstreamOrigin}/nolist`, presetId: "zhipu" }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
-  const curated = await jsonRequest<ProviderModelList>(
-    `${origin}/api/providers/${manualProvider.body.id}/models`,
+  assert.equal(presetProvider.response.status, 201);
+  assert.equal(presetProvider.body.modelDiscovery, "openai-models",
+    "every preset asks the vendor for its model list");
+  const noSubstitute = await jsonRequest<ApiError>(
+    `${origin}/api/providers/${presetProvider.body.id}/models`,
     { headers: authorization },
   );
-  assert.equal(curated.body.source, "catalog");
-  assert.ok(curated.body.models.some((model) => model.id === "glm-5.2"));
-  assert.ok(curated.body.models.every((model) => model.id !== "glm-5.3"));
+  assert.equal(noSubstitute.response.status, 502);
+  assert.doesNotMatch(JSON.stringify(noSubstitute.body), /glm-/,
+    "the catalog does not supply a list when the endpoint has none");
+  assert.equal(receivedAuth.at(-1), "Bearer zhipu-token", "a saved key is sent with the listing request");
 
   const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
   const catalog = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };

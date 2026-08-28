@@ -33,7 +33,6 @@ export const WEB_CATALOG_RECORDS: readonly ModelCatalogRecord[] = [
     key: "claude-haiku-4-5",
     label: "Claude Haiku 4.5",
     maxOutputTokens: 64_000,
-    presets: ["anthropic"],
     source,
     thinking: { supported: true },
     vision: true,
@@ -44,7 +43,6 @@ export const WEB_CATALOG_RECORDS: readonly ModelCatalogRecord[] = [
     contextWindow: 1_000_000,
     key: "deepseek-v4-flash",
     label: "DeepSeek V4 Flash",
-    presets: ["deepseek"],
     pricing: {
       deepseek: {
         cachedInput: 0.1,
@@ -84,7 +82,6 @@ export const WEB_CATALOG_RECORDS: readonly ModelCatalogRecord[] = [
     contextWindow: 1_048_576,
     key: "gemini-3.7-flash",
     label: "Gemini 3.7 Flash",
-    presets: ["gemini"],
     source,
     thinking: { supported: true, efforts: ["low", "medium", "high"] },
     vision: true,
@@ -96,7 +93,6 @@ export const WEB_CATALOG_RECORDS: readonly ModelCatalogRecord[] = [
     key: "glm-5.2",
     label: "GLM-5.2",
     maxOutputTokens: 131_072,
-    presets: ["zhipu", "zai", "dashscope"],
     pricing: {
       dashscope: {
         currency: "USD",
@@ -115,7 +111,6 @@ export const WEB_CATALOG_RECORDS: readonly ModelCatalogRecord[] = [
     contextWindow: 1_048_576,
     key: "kimi-k3",
     label: "Kimi K3",
-    presets: ["moonshot"],
     source,
     thinking: {
       defaultEffort: "max",
@@ -131,7 +126,6 @@ export const WEB_CATALOG_RECORDS: readonly ModelCatalogRecord[] = [
     key: "gpt-5.5",
     label: "GPT-5.5",
     maxOutputTokens: 128_000,
-    presets: ["openai"],
     source,
     thinking: { supported: true, efforts: ["low", "medium", "high", "xhigh"] },
     vision: true,

@@ -91,8 +91,9 @@ test("T1 服务商草稿不会静默丢失", { tag: "@mocked" }, async ({ journe
       data: {
         apiProtocol: "openai-chat-completions",
         apiVariant: "openai",
+        // A dead loopback port: the listing fails fast, which is the honest
+        // behaviour now that no provider answers from the catalog instead.
         baseUrl: "http://127.0.0.1:1/v1",
-        modelDiscovery: "manual",
         name: providerName,
         tokenOptional: true,
       },

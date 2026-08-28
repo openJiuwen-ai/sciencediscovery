@@ -44,14 +44,17 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     name: "Moonshot Kimi",
   },
   {
-    // GLM also uses `thinking.type` + `reasoning_content`; bigmodel.cn has no
-    // model-list endpoint, so discovery stays manual with catalog suggestions.
+    // GLM also uses `thinking.type` + `reasoning_content`. Both bigmodel.cn
+    // paths answer `GET /models` with 401 rather than 404, so the route exists
+    // and only wants a key: the list comes from the vendor like everywhere
+    // else. An earlier comment here claimed no listing endpoint existed, which
+    // left GLM users seeing only whatever the catalog happened to know.
     apiProtocol: "openai-chat-completions",
     apiVariant: "deepseek",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     docsUrl: "https://docs.bigmodel.cn/cn/guide/develop/openai/introduction.md",
     id: "zhipu",
-    modelDiscovery: "manual",
+    modelDiscovery: "openai-models",
     name: "智谱 GLM",
   },
   {
@@ -64,9 +67,8 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     baseUrl: "https://api.z.ai/api/paas/v4",
     docsUrl: "https://docs.z.ai/api-reference/llm/chat-completion",
     id: "zai",
-    // Same as bigmodel.cn: no documented model-list endpoint, so discovery
-    // stays manual and offers catalog suggestions instead.
-    modelDiscovery: "manual",
+    // Same as bigmodel.cn: `GET /models` answers 401, so the route is there.
+    modelDiscovery: "openai-models",
     name: "Z.AI",
   },
   {

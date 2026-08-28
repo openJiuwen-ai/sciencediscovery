@@ -21,11 +21,16 @@ import type {
 import type { ProxyPolicy } from "./proxy.js";
 
 /**
- * How a provider's model list is obtained. The strategy is derived from the
- * protocol family by default but stays user-overridable because several
- * OpenAI-compatible gateways do not expose a listing endpoint.
+ * How a provider's model list is obtained: which listing endpoint shape to
+ * call. Derived from the protocol family.
+ *
+ * There is deliberately no "do not ask the provider" strategy. The model list
+ * is the provider's own answer; the catalog only annotates the models that
+ * answer contains. A gateway that turns out to have no listing route produces
+ * a visible error and the manual add path, never a list assembled from
+ * somewhere else.
  */
-export type ModelDiscoveryStrategy = "anthropic-models" | "manual" | "openai-models";
+export type ModelDiscoveryStrategy = "anthropic-models" | "openai-models";
 
 export const DEFAULT_MODEL_DISCOVERY: Record<ModelApiProtocol, ModelDiscoveryStrategy> = {
   "anthropic-messages": "anthropic-models",
@@ -260,9 +265,10 @@ export interface ProviderModelList {
   fetchedAt: string;
   models: ProviderModelEntry[];
   providerId: string;
-  /** `remote` = fetched from the provider's listing endpoint; `catalog` =
-   *  curated suggestions for providers without a listing endpoint. */
-  source: "catalog" | "remote";
+  /** Always the provider's own listing endpoint. The catalog annotates the
+   *  models that answer contains; it never supplies the list, so there is no
+   *  second value here. */
+  source: "remote";
 }
 
 /** Thinking capability recorded for a catalog model. */

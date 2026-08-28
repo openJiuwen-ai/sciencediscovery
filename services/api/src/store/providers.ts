@@ -32,9 +32,21 @@ import { cleanLabel } from "@sciencediscovery/governance";
 
 const DISCOVERY_STRATEGIES: readonly ModelDiscoveryStrategy[] = [
   "anthropic-models",
-  "manual",
   "openai-models",
 ];
+
+/** Catalogs written before the model list always came from the provider store
+ *  `"manual"`, which meant "do not ask the provider". That mode is gone, so a
+ *  saved one is read as the protocol's normal listing shape. Migrating here
+ *  rather than in a separate pass means every load and every save converts it,
+ *  including providers the user never edits again. */
+function normalizeSavedDiscovery(
+  value: ModelDiscoveryStrategy | "manual" | undefined,
+  apiProtocol: ModelApiProtocol,
+): ModelDiscoveryStrategy | undefined {
+  if (value === undefined) return undefined;
+  return value === "manual" ? DEFAULT_MODEL_DISCOVERY[apiProtocol] : value;
+}
 
 /** Provider tokens share the encrypted model-secret table under a reserved
  *  key prefix; profile ids are UUIDs so the namespaces cannot collide. */
@@ -77,7 +89,9 @@ export function validateLiveProvider(
     throw new Error(`Model API variant ${apiVariant} is not valid for ${apiProtocol}`);
   }
   const modelDiscovery: ModelDiscoveryStrategy =
-    input.modelDiscovery ?? preset?.modelDiscovery ?? DEFAULT_MODEL_DISCOVERY[apiProtocol];
+    normalizeSavedDiscovery(input.modelDiscovery as ModelDiscoveryStrategy | "manual" | undefined, apiProtocol)
+    ?? preset?.modelDiscovery
+    ?? DEFAULT_MODEL_DISCOVERY[apiProtocol];
   if (!DISCOVERY_STRATEGIES.includes(modelDiscovery)) {
     throw new Error("The provider model discovery strategy is invalid");
   }
@@ -203,9 +217,9 @@ export function planStandaloneProfileMigration(
       // Each migrated profile keeps its own credential; nothing is copied up.
       hasApiToken: false,
       id,
-      // These endpoints were configured by hand and never proved they expose a
-      // listing route, so discovery stays manual instead of guessing one.
-      modelDiscovery: "manual",
+      // The list always comes from the provider; whether this hand-configured
+      // endpoint answers it is discovered by asking, not assumed.
+      modelDiscovery: DEFAULT_MODEL_DISCOVERY[apiProtocol],
       name: cleanLabel(`${host} · ${apiVariant}`, "Migrated provider"),
       proxyPolicy,
       // Standalone profiles always required their own token, and that is what

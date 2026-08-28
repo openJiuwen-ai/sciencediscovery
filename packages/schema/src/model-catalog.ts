@@ -48,11 +48,6 @@ export interface ModelCatalogRecord {
   key: string;
   label: string;
   maxOutputTokens?: number;
-  /** Built-in presets whose provider lists this model. Drives the curated
-   *  suggestions offered for providers without a listing endpoint, and stays
-   *  independent of `pricing` so a provider we deliberately record no prices
-   *  for still contributes suggestions. */
-  presets?: readonly ModelProviderPresetId[];
   pricing?: Readonly<Partial<Record<ModelProviderPresetId, ModelCatalogPricing>>>;
   source: { retrievedAt: string; url: string };
   thinking?: ModelCatalogThinking;
@@ -108,14 +103,6 @@ export function normalizeCatalogModelId(modelId: string): string {
   const slash = lower.lastIndexOf("/");
   const bare = slash === -1 ? lower : lower.slice(slash + 1);
   return bare.replace(/:(free|extended|exacto)$/, "");
-}
-
-/** Curated suggestions for providers without a listing endpoint: the models
- *  the catalog records for this preset. */
-export function listCatalogModelsForPreset(presetId: string): ModelCatalogRecord[] {
-  const preset = presetId as ModelProviderPresetId;
-  return catalogRecords().filter((record) =>
-    record.presets?.includes(preset) || record.pricing?.[preset] !== undefined);
 }
 
 /**

@@ -150,10 +150,10 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await expect(editor).toBeVisible();
         await editor.getByLabel("服务商名称").fill(providerName);
         await editor.getByLabel("LLM API 令牌").fill(stub.apiToken);
-        // 自定义服务商的高级连接默认展开；配置端点、变种与模型列表方式。
+        // 自定义服务商的高级连接默认展开；配置端点与变种。模型列表策略不再由
+        // 用户选择——它跟随基础接口，且总是去问服务商自己的接口。
         await editor.getByLabel("基础 URL").fill(stub.baseUrl);
         await editor.getByLabel("接口变种").selectOption("deepseek");
-        await editor.getByLabel("模型列表").selectOption("manual");
         const providerSave = page.waitForResponse((response) =>
           response.request().method() === "POST" && new URL(response.url()).pathname === "/api/providers");
         await editor.getByRole("button", { name: "保存" }).click();

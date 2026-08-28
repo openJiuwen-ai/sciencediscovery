@@ -30,7 +30,6 @@ import {
   type DiscoveredModel,
 } from "@sciencediscovery/model";
 import {
-  listCatalogModelsForPreset,
   lookupModelCatalog,
   MODEL_PROVIDER_PRESETS,
   type CreateModelProviderRequest,
@@ -1162,30 +1161,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!provider) throw new ApiStatusError(404, "Provider not found");
         const profileFor = (modelId: string) =>
           store.listModels().find((profile) => profile.providerId === providerId && profile.model === modelId)?.id;
-        if (provider.modelDiscovery === "manual") {
-          // No listing endpoint: offer curated catalog suggestions instead of
-          // pretending the vendor reported a list.
-          const models: ProviderModelEntry[] = listCatalogModelsForPreset(provider.presetId ?? "").map((record) => {
-            const profileId = profileFor(record.key);
-            const catalog = lookupModelCatalog(record.key, provider.presetId);
-            const user = savedFacts(profileId);
-            return {
-              id: record.key,
-              ...(record.label !== record.key ? { displayName: record.label } : {}),
-              ...(catalog ? { catalog } : {}),
-              ...(profileId ? { profileId } : {}),
-              ...(user ? { user } : {}),
-            };
-          });
-          const listing: ProviderModelList = {
-            fetchedAt: new Date().toISOString(),
-            models,
-            providerId,
-            source: "catalog",
-          };
-          sendJson(response, 200, listing);
-          return;
-        }
         const refresh = url.searchParams.get("refresh") === "1";
         let cached = providerModelListCache.get(providerId);
         if (refresh || !cached || Date.now() - Date.parse(cached.fetchedAt) > PROVIDER_MODEL_CACHE_TTL_MS) {

@@ -29,7 +29,7 @@ import { endpointRoot, proxyDispatcher } from "./client.js";
 export interface ModelDiscoveryEndpoint {
   apiToken?: string;
   baseUrl: string;
-  discovery: Exclude<ModelDiscoveryStrategy, "manual">;
+  discovery: ModelDiscoveryStrategy;
   proxy?: ResolvedProxy;
 }
 

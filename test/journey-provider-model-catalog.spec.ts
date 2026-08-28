@@ -521,7 +521,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           }
           originalBody = body;
           const localResponse = await page.request.post(`${apiBaseUrl()}/api/providers`, {
-            data: { ...body, baseUrl: stub.baseUrl, modelDiscovery: "manual" },
+            data: { ...body, baseUrl: stub.baseUrl },
             headers: authorizationHeader(),
           });
           await route.fulfill({
@@ -573,7 +573,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           apiProtocol: "openai-chat-completions",
           apiVariant: "deepseek",
           baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-          modelDiscovery: "manual",
+          modelDiscovery: "openai-models",
           presetId: "zhipu",
         });
         const response = await responsePromise;
@@ -703,13 +703,12 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     await journey.step(
       "DeepSeek 目录展示标准美元单价并本地化来源",
-      "使用 DeepSeek 内置预设的维护目录（连接参数由测试改为本地 manual）展示 USD/每百万 token 的 0.14 / 0.28 与缓存输入 0.0028。上游已不再发布分时价格，因此界面不再出现高峰/闲时时段，也不暴露 periods 等内部字段名；模型行不再附「官方来源」链接，Provider 行可折叠展开。",
+      "使用 DeepSeek 内置预设的维护目录（连接参数由测试改为本地 mock 端点）展示 USD/每百万 token 的 0.14 / 0.28 与缓存输入 0.0028。上游已不再发布分时价格，因此界面不再出现高峰/闲时时段，也不暴露 periods 等内部字段名；模型行不再附「官方来源」链接，Provider 行可折叠展开。",
       async () => {
         const deepseekProvider = await apiJson<ModelProvider>(page, "/api/providers", {
           data: {
             apiToken: "j7-deepseek-catalog-local-token",
             baseUrl: stub.baseUrl,
-            modelDiscovery: "manual",
             presetId: "deepseek",
           },
           method: "POST",
@@ -995,7 +994,6 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           data: {
             apiToken: "j7-openai-local-token",
             baseUrl: stub.baseUrl,
-            modelDiscovery: "manual",
             presetId: "openai",
           },
           method: "POST",
@@ -1043,7 +1041,6 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           data: {
             apiToken: "j7-kimi-local-token",
             baseUrl: stub.baseUrl,
-            modelDiscovery: "manual",
             presetId: "moonshot",
           },
           method: "POST",
@@ -1081,7 +1078,6 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           data: {
             apiToken: "j7-anthropic-local-token",
             baseUrl: stub.baseUrl,
-            modelDiscovery: "manual",
             presetId: "anthropic",
           },
           method: "POST",

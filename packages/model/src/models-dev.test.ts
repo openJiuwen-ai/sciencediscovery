@@ -17,7 +17,6 @@ import test from "node:test";
 
 import {
   constrainCatalogThinking,
-  listCatalogModelsForPreset,
   lookupModelCatalog,
   mapModelsDevCatalog,
   MODELS_DEV_PROVIDER_MAPPINGS,
@@ -103,10 +102,6 @@ test("two hosts of one brand are priced separately and never borrow each other's
   // takes the rate from the listing whose `api` is its own endpoint.
   assert.equal(lookupModelCatalog("glm-5", "zhipu")!.pricing?.input, 0.6);
   assert.equal(lookupModelCatalog("glm-5", "zai")!.pricing?.input, 0.9);
-  // Both still offer the model as a suggestion, since neither host publishes a
-  // listing endpoint.
-  assert.deepEqual(listCatalogModelsForPreset("zhipu").map((record) => record.key), ["glm-5"]);
-  assert.deepEqual(listCatalogModelsForPreset("zai").map((record) => record.key), ["glm-5"]);
   // Capability facts are one model's facts and stay shared.
   assert.equal(lookupModelCatalog("glm-5", "zhipu")!.contextWindow, 200_000);
   assert.equal(lookupModelCatalog("glm-5", "zai")!.contextWindow, 200_000);
@@ -158,8 +153,6 @@ test("a listing whose endpoint is a different host contributes no price", () => 
   const entry = lookupModelCatalog("glm-5.9", "zhipu")!;
   assert.equal(entry.pricing, undefined, "the rate belongs to a host our preset does not call");
   assert.equal(entry.contextWindow, 200_000, "capability facts are still the model's own");
-  assert.deepEqual(listCatalogModelsForPreset("zhipu").map((record) => record.key), ["glm-5.9"],
-    "and it is still worth suggesting");
 
   installTestModelCatalog();
 });
@@ -167,7 +160,6 @@ test("a listing whose endpoint is a different host contributes no price", () => 
 test("an absent catalog reports every fact as unknown instead of a default", () => {
   setModelCatalogSnapshot(undefined);
   assert.equal(lookupModelCatalog("gpt-5.5"), undefined);
-  assert.deepEqual(listCatalogModelsForPreset("openai"), []);
   // Without catalog facts a requested value is passed through untouched.
   assert.deepEqual(constrainCatalogThinking("gpt-5.5", "enabled", "max"), { effort: "max", mode: "enabled" });
 });
@@ -254,11 +246,6 @@ test("a provider that rehosts another brand never overwrites that brand's facts"
     lookupModelCatalog("glm-5.2", "zhipu")!.pricing?.input,
     lookupModelCatalog("glm-5.2", "dashscope")!.pricing?.input,
   );
-
-  // Every provider that lists it still offers it as a suggestion.
-  for (const preset of ["zhipu", "siliconflow", "dashscope"]) {
-    assert.deepEqual(listCatalogModelsForPreset(preset).map((record) => record.key), ["glm-5.2"]);
-  }
 
   installTestModelCatalog();
 });
