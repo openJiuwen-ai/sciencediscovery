@@ -187,8 +187,19 @@ test("the epoch's egress policy resolves per execution and pins the proxy it nam
   // the snapshot carries the policy, never the server's address or credentials.
   assert.doesNotMatch(JSON.stringify(viaProxy), /proxy\.example\.test|user:secret/);
 
-  // A referenced server cannot be deleted out from under the policy.
+  // A referenced server cannot be deleted out from under the policy, and a
+  // policy naming a server that is not registered is refused at save time.
   await assert.rejects(store.deleteProxyServer(corporate.id), /sandbox network access/);
+  await assert.rejects(
+    store.replaceSandboxNetworkSettings({
+      allowedDomains: ["api.example.org"],
+      egressProxyPolicy: "proxy:not-registered",
+      mode: "domain-allowlist",
+    }),
+    /egressProxyPolicy references an unknown proxy server/,
+  );
+  // The refused save leaves the stored policy untouched.
+  assert.equal(store.getSandboxNetworkSettings().egressProxyPolicy, `proxy:${corporate.id}`);
 
   await store.replaceSandboxNetworkSettings({
     allowedDomains: ["api.example.org"],

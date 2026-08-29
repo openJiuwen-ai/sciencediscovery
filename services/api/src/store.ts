@@ -1371,7 +1371,11 @@ export class SessionStore {
     rotatedSessionIds: string[];
     settings: SandboxNetworkSettings;
   }> {
-    this.catalog.sandboxNetworkSettings = normalizeSandboxNetworkSettings(value);
+    const settings = normalizeSandboxNetworkSettings(value);
+    // Same guard the other policy surfaces use: reject a dangling reference at
+    // save time rather than letting every later execution fail closed on it.
+    this.assertProxyPolicyKnown(settings.egressProxyPolicy, "egressProxyPolicy");
+    this.catalog.sandboxNetworkSettings = settings;
     const access = this.currentSandboxNetworkAccess();
     const rotatedSessionIds: string[] = [];
     for (const session of this.catalog.sessions) {
