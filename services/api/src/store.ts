@@ -1517,6 +1517,22 @@ export class SessionStore {
     return resolveProxyPolicy(policy, this.proxyRegistryView());
   }
 
+  /**
+   * The outbound route the egress gateway should use for one execution, taken
+   * from the policy that execution's Permission Epoch snapshotted rather than
+   * from the current settings — the epoch is what was granted.
+   *
+   * Returns `undefined` for a sandbox with no network, so an unrelated proxy
+   * misconfiguration cannot fail an execution that never dials out. The result
+   * is resolved per execution and never written into the epoch: a custom proxy
+   * URL is stored encrypted and must not reach the persisted catalog.
+   */
+  resolveSandboxEgressProxy(epoch: PermissionEpoch): ResolvedProxy | undefined {
+    const access = epochSandboxNetworkAccess(epoch);
+    if (access.mode !== "domain-allowlist") return undefined;
+    return this.resolveProxy(access.egressProxyPolicy);
+  }
+
   /** Construct the authenticated settings projection without ever attaching a
    *  decrypted URL to the persisted catalog object. */
   private proxyServerSettingsView(
@@ -1631,6 +1647,9 @@ export class SessionStore {
     const references: string[] = [];
     if (this.catalog.proxyDefaultPolicy === policy) references.push("the global default proxy");
     if (this.catalog.webSettings.proxyPolicy === policy) references.push("web settings");
+    if (this.catalog.sandboxNetworkSettings.egressProxyPolicy === policy) {
+      references.push("sandbox network access");
+    }
     for (const model of this.catalog.models) {
       if (model.proxyPolicy === policy) references.push(`model "${model.name}"`);
     }

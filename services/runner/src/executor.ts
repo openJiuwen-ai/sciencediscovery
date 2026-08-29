@@ -27,6 +27,7 @@ import {
   epochSandboxNetworkAccess,
   type PythonExecutionRequest,
   type PythonExecutionResult,
+  type ResolvedProxy,
   type SandboxNetworkAccess,
   type SandboxKind,
   type ScientificLanguage,
@@ -555,13 +556,19 @@ export async function prepareSandboxEgress(
   access: SandboxNetworkAccess,
   gateways: EgressGatewayRegistry | undefined,
   sandbox: SandboxKind = "bubblewrap",
+  /**
+   * Outbound route for traffic the allowlist accepts, resolved by the API from
+   * the policy this epoch snapshotted. It never reaches the sandbox: only the
+   * runner-side gateway dials through it.
+   */
+  proxy?: ResolvedProxy,
 ): Promise<SandboxEgress | undefined> {
   if (access.mode === "none") return undefined;
   if (!gateways) {
     throw new EgressBridgeUnavailableError("this runner was started without an egress gateway registry");
   }
   if (sandbox === "seatbelt") {
-    const gateway = await gateways.acquireTcp(access);
+    const gateway = await gateways.acquireTcp(access, proxy);
     return {
       bindArgs: [],
       commandPrefix: [],
@@ -569,7 +576,7 @@ export async function prepareSandboxEgress(
       proxyPort: gateway.proxyPort(),
     };
   }
-  const [bridge, gateway] = await Promise.all([resolveEgressBridge(dataDir), gateways.acquire(access)]);
+  const [bridge, gateway] = await Promise.all([resolveEgressBridge(dataDir), gateways.acquire(access, proxy)]);
   return {
     bindArgs: egressBridgeBindArguments(bridge, gateway.socketPath),
     commandPrefix: egressBridgeCommandPrefix(),
@@ -866,7 +873,7 @@ export async function executePython(
   const hostPython = !runtime && language === "python" ? await nativePythonPath(config, sandbox) : undefined;
   const launch = await prepareSandboxLaunch(config, {
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox),
+    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox, request.sandboxEgressProxy),
     environmentBinds: runtime
       ? environmentPrefixBindArguments(runtime.prefixPath)
       : localPythonPackageBindArguments(localPythonPackages),
@@ -977,7 +984,7 @@ export async function executeShell(
   const sandbox = executorSandboxKind(config);
   const launch = await prepareSandboxLaunch(config, {
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox),
+    egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox, request.sandboxEgressProxy),
     environmentBinds: localPythonPackageBindArguments(localPythonPackages),
     environmentPaths: localPythonPackages ? [localPythonPackages] : [],
     envProfile,

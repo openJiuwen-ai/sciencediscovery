@@ -17,6 +17,7 @@ import { externalUrl, externalUrlList } from "@sciencediscovery/external-urls";
 import type { ScientificArtifactKind } from "./artifact-provenance.js";
 import type { NpuBrokerCapability } from "./npu-job.js";
 import type { PermissionEpoch } from "./permission.js";
+import type { ResolvedProxy } from "./proxy.js";
 import type { SandboxNetworkMode } from "./sandbox-network.js";
 import type { CasObjectRef } from "./provenance.js";
 
@@ -103,6 +104,13 @@ export interface ScientificExecutionRequest {
   permissionEpoch: PermissionEpoch;
   /** Optional parent workspace mounted read-only for isolated subagents. */
   readOnlyWorkspaceRoot?: string;
+  /**
+   * Outbound route the egress gateway uses for targets the allowlist accepts,
+   * resolved by the API from the policy this epoch snapshotted. It travels with
+   * the execution rather than inside the epoch so a proxy credential is never
+   * persisted, and it never enters the sandbox: only the runner dials with it.
+   */
+  sandboxEgressProxy?: ResolvedProxy;
   workspaceRoot: string;
 }
 
@@ -188,6 +196,13 @@ export interface ShellExecutionRequest {
   permissionEpoch: PermissionEpoch;
   /** Optional parent workspace mounted read-only for isolated subagents. */
   readOnlyWorkspaceRoot?: string;
+  /**
+   * Outbound route the egress gateway uses for targets the allowlist accepts,
+   * resolved by the API from the policy this epoch snapshotted. It travels with
+   * the execution rather than inside the epoch so a proxy credential is never
+   * persisted, and it never enters the sandbox: only the runner dials with it.
+   */
+  sandboxEgressProxy?: ResolvedProxy;
   workspaceRoot: string;
 }
 

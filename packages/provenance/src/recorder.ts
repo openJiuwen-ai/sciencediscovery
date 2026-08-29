@@ -34,6 +34,7 @@ import type {
   KernelMode,
   PermissionEpoch,
   PythonExecutionResult,
+  ResolvedProxy,
   ScientificLanguage,
   ScientificArtifact,
   ScientificArtifactKind,
@@ -114,6 +115,8 @@ export interface RecordExecutionOptions {
   permissionEpoch: PermissionEpoch;
   readOnlyWorkspaceRoot?: string;
   runnerClient: RunnerClient;
+  /** Outbound route for allowlisted sandbox traffic; see the request field. */
+  sandboxEgressProxy?: ResolvedProxy;
   sessionId: string;
   signal?: AbortSignal;
   turnId: string;
@@ -408,6 +411,7 @@ export class ProvenanceRecorder {
         executionId,
         permissionEpoch: options.permissionEpoch,
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {
@@ -533,6 +537,7 @@ export class ProvenanceRecorder {
         language,
         permissionEpoch: options.permissionEpoch,
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {

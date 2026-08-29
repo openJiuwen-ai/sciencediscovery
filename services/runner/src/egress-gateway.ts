@@ -16,14 +16,24 @@ import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { chmod, mkdir, rm } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { connect, type Socket } from "node:net";
 import { resolve } from "node:path";
 
 import {
   allowedDomainMatches,
   isIpLiteral,
+  type ResolvedProxy,
   type SandboxNetworkAccess,
 } from "@sciencediscovery/schema";
+
+import {
+  connectThroughProxy,
+  egressProxyForTarget,
+  proxyAuthorizationValue,
+  proxyEndpoint,
+  proxyPort,
+} from "./egress-proxy.js";
 
 /**
  * Egress gateway: the single outbound exit of a `domain-allowlist` sandbox.
@@ -121,7 +131,11 @@ export function isPrivateAddress(address: string, family: number): boolean {
 }
 
 export interface EgressGatewayLog {
-  (event: "allowed" | "denied", detail: { host: string; port: number; reason?: string }): void;
+  (
+    event: "allowed" | "denied",
+    /** `proxy` is the endpoint only; a proxy credential is never logged. */
+    detail: { host: string; port: number; proxy?: string; reason?: string },
+  ): void;
 }
 
 /** Name resolution, injectable so tests can decide without touching real DNS. */
@@ -129,6 +143,8 @@ export type EgressAddressResolver = (host: string) => Promise<Array<{ address: s
 
 export interface EgressGatewayOptions {
   log?: EgressGatewayLog;
+  /** Where an allowed connection leaves from. Absent means a direct connection. */
+  proxy?: ResolvedProxy;
   resolveAddresses?: EgressAddressResolver;
   /** Listen on host loopback rather than a Unix socket (macOS Seatbelt). */
   tcpHost?: string;
@@ -141,6 +157,12 @@ export class EgressGateway {
   private readonly tcpHost?: string;
   private tcpPort?: number;
   private closed = false;
+  /**
+   * Outbound route for traffic the allowlist already accepted. Mutable because
+   * one gateway serves a policy revision for as long as that revision is in
+   * use, while the registry entry it resolves to can be edited underneath it.
+   */
+  private proxy: ResolvedProxy;
 
   constructor(
     readonly access: SandboxNetworkAccess,
@@ -148,11 +170,12 @@ export class EgressGateway {
     options: EgressGatewayOptions = {},
   ) {
     this.log = options.log;
+    this.proxy = options.proxy ?? { mode: "direct" };
     this.tcpHost = options.tcpHost;
     this.resolveAddresses = options.resolveAddresses ?? ((host) => lookup(host, { all: true }));
     this.server = createHttpServer();
-    this.server.on("connect", (request, clientSocket: Socket) => {
-      void this.handleConnect(request, clientSocket);
+    this.server.on("connect", (request, clientSocket: Socket, head: Buffer) => {
+      void this.handleConnect(request, clientSocket, head);
     });
     this.server.on("request", (request, response) => {
       void this.handleRequest(request, response as Parameters<typeof this.handleRequest>[1]);
@@ -201,6 +224,14 @@ export class EgressGateway {
     if (!this.tcpHost) await rm(this.socketPath, { force: true });
   }
 
+  /**
+   * Point subsequent connections at a freshly resolved outbound route.
+   * Connections already established keep the route they were opened with.
+   */
+  setProxy(proxy: ResolvedProxy | undefined): void {
+    this.proxy = proxy ?? { mode: "direct" };
+  }
+
   /** Loopback proxy URL for a TCP gateway. Only valid after `listen()`. */
   proxyUrl(): string {
     if (!this.tcpHost || this.tcpPort === undefined) {
@@ -245,11 +276,16 @@ export class EgressGateway {
     return { address: approved, allowed: true };
   }
 
-  private note(allowed: boolean, host: string, port: number, reason?: string): void {
-    this.log?.(allowed ? "allowed" : "denied", { host, port, ...(reason ? { reason } : {}) });
+  private note(allowed: boolean, host: string, port: number, detail: { proxy?: string; reason?: string } = {}): void {
+    this.log?.(allowed ? "allowed" : "denied", {
+      host,
+      port,
+      ...(detail.proxy ? { proxy: detail.proxy } : {}),
+      ...(detail.reason ? { reason: detail.reason } : {}),
+    });
   }
 
-  private async handleConnect(request: IncomingMessage, clientSocket: Socket): Promise<void> {
+  private async handleConnect(request: IncomingMessage, clientSocket: Socket, head: Buffer): Promise<void> {
     const [host, portText] = splitAuthority(request.url ?? "");
     // An omitted port means 443; a present but empty or out-of-range one is a
     // malformed request, not port 0 — reject it here rather than letting the
@@ -259,24 +295,54 @@ export class EgressGateway {
       clientSocket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
       return;
     }
+    // The allowlist decision comes first and is unconditional: a refused target
+    // is answered here, so no proxy ever learns the sandbox wanted to reach it.
     const decision = await this.decide(host, port);
-    this.note(decision.allowed, host, port, decision.reason);
     if (!decision.allowed) {
+      this.note(false, host, port, { reason: decision.reason });
       clientSocket.end(`HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nX-Sandbox-Network: ${decision.reason}\r\n\r\n`);
       return;
     }
-    const upstream = connect({ host: decision.address!, port }, () => {
-      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      upstream.pipe(clientSocket);
-      clientSocket.pipe(upstream);
-    });
-    upstream.on("error", (error) => {
+    let proxy: URL | undefined;
+    try {
+      proxy = egressProxyForTarget(this.proxy, { host, port, tls: true });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "the egress proxy policy could not be applied";
+      this.note(false, host, port, { reason });
+      clientSocket.end(`HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nX-Sandbox-Network: ${reason}\r\n\r\n`);
+      return;
+    }
+    this.note(true, host, port, { ...(proxy ? { proxy: proxyEndpoint(proxy) } : {}) });
+
+    const fail = (message: string) => {
       if (!clientSocket.writableEnded) {
-        clientSocket.end(`HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nX-Sandbox-Network: ${error.message}\r\n\r\n`);
+        clientSocket.end(`HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nX-Sandbox-Network: ${message}\r\n\r\n`);
       }
       clientSocket.destroy();
-    });
-    clientSocket.on("error", () => upstream.destroy());
+    };
+    const tunnel = (upstream: Socket) => {
+      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      // Bytes the client pipelined behind the CONNECT were already read off the
+      // socket by the HTTP parser; without this they would be silently dropped.
+      if (head.length) upstream.write(head);
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+      upstream.on("error", (error: Error) => fail(error.message));
+      clientSocket.on("error", () => upstream.destroy());
+    };
+    if (proxy) {
+      // The proxy resolves the name itself, so the pinned address is not used
+      // here; the allowlist and private-address checks above still ran against
+      // this runner's own resolution.
+      try {
+        tunnel(await connectThroughProxy(proxy, host, port));
+      } catch (error) {
+        fail(error instanceof Error ? error.message : `${proxyEndpoint(proxy)} refused the tunnel`);
+      }
+      return;
+    }
+    const upstream = connect({ host: decision.address!, port }, () => tunnel(upstream));
+    upstream.once("error", (error) => fail(error.message));
   }
 
   private async handleRequest(
@@ -299,18 +365,37 @@ export class EgressGateway {
     }
     const port = Number(target.port || 80);
     const decision = await this.decide(target.hostname, port);
-    this.note(decision.allowed, target.hostname, port, decision.reason);
     if (!decision.allowed) {
+      this.note(false, target.hostname, port, { reason: decision.reason });
       response.writeHead(403, { "content-type": "text/plain" });
       response.end(`${decision.reason}\n`);
       return;
     }
-    const upstream = httpRequest({
-      headers: { ...request.headers, host: request.headers.host ?? target.host },
-      host: decision.address,
+    let proxy: URL | undefined;
+    try {
+      proxy = egressProxyForTarget(this.proxy, { host: target.hostname, port, tls: false });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "the egress proxy policy could not be applied";
+      this.note(false, target.hostname, port, { reason });
+      response.writeHead(502, { "content-type": "text/plain" });
+      response.end(`${reason}\n`);
+      return;
+    }
+    this.note(true, target.hostname, port, { ...(proxy ? { proxy: proxyEndpoint(proxy) } : {}) });
+    const authorization = proxy ? proxyAuthorizationValue(proxy) : undefined;
+    // Through a proxy the request keeps its absolute form and goes to the proxy
+    // endpoint; direct, it is the origin form against the pinned address.
+    const send = proxy?.protocol === "https:" ? httpsRequest : httpRequest;
+    const upstream = send({
+      headers: {
+        ...request.headers,
+        host: request.headers.host ?? target.host,
+        ...(authorization ? { "proxy-authorization": authorization } : {}),
+      },
+      host: proxy ? proxy.hostname : decision.address,
       method: request.method,
-      path: `${target.pathname}${target.search}`,
-      port,
+      path: proxy ? target.href : `${target.pathname}${target.search}`,
+      port: proxy ? proxyPort(proxy) : port,
       setHost: false,
     }, (upstreamResponse) => {
       response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
@@ -318,7 +403,8 @@ export class EgressGateway {
     });
     upstream.on("error", (error) => {
       if (!response.headersSent) response.writeHead(502, { "content-type": "text/plain" });
-      response.end(`Sandbox network access could not reach ${target.hostname}: ${error.message}\n`);
+      const via = proxy ? ` through ${proxyEndpoint(proxy)}` : "";
+      response.end(`Sandbox network access could not reach ${target.hostname}${via}: ${error.message}\n`);
     });
     request.pipe(upstream);
   }
@@ -362,8 +448,15 @@ export class EgressGatewayRegistry {
     return resolve(this.dataDir, EGRESS_SOCKET_DIRECTORY, name);
   }
 
-  /** Start (or reuse) the gateway serving this policy and return its socket. */
-  acquire(access: SandboxNetworkAccess): Promise<EgressGateway> {
+  /**
+   * Start (or reuse) the gateway serving this policy and return its socket.
+   *
+   * `proxy` is the outbound route the API resolved for this execution. It is
+   * re-applied on every acquire rather than frozen at creation, so editing the
+   * proxy registry entry a policy points at takes effect on the next execution
+   * instead of waiting for the revision — and the gateway — to be replaced.
+   */
+  async acquire(access: SandboxNetworkAccess, proxy?: ResolvedProxy): Promise<EgressGateway> {
     if (access.mode !== "domain-allowlist") {
       throw new Error("Only domain-allowlist policies need an egress gateway");
     }
@@ -372,6 +465,7 @@ export class EgressGatewayRegistry {
       gateway = (async () => {
         const started = new EgressGateway(access, this.socketPath(access.revision), {
           log: this.log,
+          ...(proxy ? { proxy } : {}),
           resolveAddresses: this.resolveAddresses,
         });
         await started.listen();
@@ -379,12 +473,15 @@ export class EgressGatewayRegistry {
       })();
       this.gateways.set(access.revision, gateway);
       void gateway.catch(() => this.gateways.delete(access.revision));
+      return await gateway;
     }
-    return gateway;
+    const started = await gateway;
+    started.setProxy(proxy);
+    return started;
   }
 
   /** Start (or reuse) a runner-owned loopback proxy for macOS Seatbelt. */
-  acquireTcp(access: SandboxNetworkAccess): Promise<EgressGateway> {
+  async acquireTcp(access: SandboxNetworkAccess, proxy?: ResolvedProxy): Promise<EgressGateway> {
     if (access.mode !== "domain-allowlist") {
       throw new Error("Only domain-allowlist policies need an egress gateway");
     }
@@ -393,6 +490,7 @@ export class EgressGatewayRegistry {
       gateway = (async () => {
         const started = new EgressGateway(access, "", {
           log: this.log,
+          ...(proxy ? { proxy } : {}),
           resolveAddresses: this.resolveAddresses,
           tcpHost: "127.0.0.1",
         });
@@ -401,8 +499,11 @@ export class EgressGatewayRegistry {
       })();
       this.tcpGateways.set(access.revision, gateway);
       void gateway.catch(() => this.tcpGateways.delete(access.revision));
+      return await gateway;
     }
-    return gateway;
+    const started = await gateway;
+    started.setProxy(proxy);
+    return started;
   }
 
   async close(): Promise<void> {

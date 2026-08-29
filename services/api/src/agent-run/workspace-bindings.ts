@@ -15,6 +15,7 @@
 import type {
   Environment,
   KernelMode,
+  ResolvedProxy,
 } from "@sciencediscovery/schema";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 
@@ -70,6 +71,16 @@ export function createWorkspaceExecutionBindings(
   };
   const refreshEnvironmentCatalog = async () => {
     await syncScientificEnvironmentCatalog(options.store, options.runnerClient, options.provenanceRecorder);
+  };
+  /**
+   * Resolve the egress route for this execution at call time, so a proxy
+   * registry edit lands on the next run without waiting for an epoch rotation.
+   * Spread into the recorder options, which keeps the field absent — rather
+   * than explicitly undefined — for a sandbox with no network.
+   */
+  const sandboxEgressProxy = (): { sandboxEgressProxy?: ResolvedProxy } => {
+    const resolved = options.store.resolveSandboxEgressProxy(options.permission.getEpoch());
+    return resolved ? { sandboxEgressProxy: resolved } : {};
   };
   const readSessionNpuJob = async (jobId: string) => {
     const job = await options.runnerClient.getNpuJob(jobId, options.sessionId);
@@ -138,6 +149,7 @@ export function createWorkspaceExecutionBindings(
         permissionEpoch: options.permission.getEpoch(),
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         runnerClient: options.runnerClient,
+        ...sandboxEgressProxy(),
         sessionId: options.sessionId,
         signal,
         turnId: options.executionId,
@@ -166,6 +178,7 @@ export function createWorkspaceExecutionBindings(
         permissionEpoch: options.permission.getEpoch(),
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         runnerClient: options.runnerClient,
+        ...sandboxEgressProxy(),
         sessionId: options.sessionId,
         signal,
         turnId: options.executionId,

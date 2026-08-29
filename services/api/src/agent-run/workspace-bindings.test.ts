@@ -49,7 +49,11 @@ test("execution bindings apply stable Agent identity with the same permission an
     } as unknown as ProvenanceRecorder,
     runnerClient: {} as RunnerClient,
     sessionId: "session-1",
-    store: { assertSessionWritable() {} } as unknown as SessionStore,
+    store: {
+      assertSessionWritable() {},
+      // No network in this epoch, so the binding resolves no outbound route.
+      resolveSandboxEgressProxy: () => undefined,
+    } as unknown as SessionStore,
     workspaceRoot: "/workspace",
   };
   const main = createWorkspaceExecutionBindings({
@@ -174,7 +178,11 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
       },
     } as unknown as RunnerClient,
     sessionId: "session-1",
-    store: { assertSessionWritable() {} } as unknown as SessionStore,
+    store: {
+      assertSessionWritable() {},
+      // No network in this epoch, so the binding resolves no outbound route.
+      resolveSandboxEgressProxy: () => undefined,
+    } as unknown as SessionStore,
     workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
   });
 

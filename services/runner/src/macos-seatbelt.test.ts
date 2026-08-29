@@ -107,6 +107,7 @@ test("macOS Seatbelt reaches an allowed domain only through the runner gateway",
     networkAccess: {
       allowPrivateNetwork: true,
       allowedDomains: [`runner.test:${address.port}`],
+      egressProxyPolicy: "inherit",
       mode: "domain-allowlist",
       revision: `macos-localhost-${address.port}`,
     },

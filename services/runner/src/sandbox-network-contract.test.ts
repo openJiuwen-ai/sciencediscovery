@@ -82,6 +82,7 @@ test("epochs without a policy snapshot read as no network", () => {
   assert.deepEqual(epochSandboxNetworkAccess(legacy), {
     allowPrivateNetwork: false,
     allowedDomains: [],
+    egressProxyPolicy: "inherit",
     mode: "none",
     revision: "none",
   });
@@ -90,7 +91,13 @@ test("epochs without a policy snapshot read as no network", () => {
 test("a snapshot that disagrees with the epoch mode degrades to no network", () => {
   // Defensive: a hand-edited or partially migrated epoch must never widen access.
   assert.equal(epochSandboxNetworkAccess({
-    networkAccess: { allowPrivateNetwork: false, allowedDomains: ["example.org"], mode: "domain-allowlist", revision: "abc" },
+    networkAccess: {
+      allowPrivateNetwork: false,
+      allowedDomains: ["example.org"],
+      egressProxyPolicy: "inherit",
+      mode: "domain-allowlist",
+      revision: "abc",
+    },
     networkPolicy: "none",
   }).mode, "none");
 });

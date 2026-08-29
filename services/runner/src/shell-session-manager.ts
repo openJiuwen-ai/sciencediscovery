@@ -544,7 +544,7 @@ export class ShellSessionManager {
     const sandbox = executorSandboxKind(this.config);
     const launch = await prepareSandboxLaunch(this.config, {
       chdir: workspaceBinds.chdir,
-      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox),
+      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox, request.sandboxEgressProxy),
       environmentBinds: [],
       environmentPaths: [],
       hostInterpreterMasks: [],

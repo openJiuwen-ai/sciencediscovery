@@ -537,7 +537,7 @@ export class KernelManager {
     const sandbox = executorSandboxKind(this.config);
     const launch = await prepareSandboxLaunch(this.config, {
       chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox),
+      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox, request.sandboxEgressProxy),
       environmentBinds: environmentPrefixBindArguments(prefixPath),
       environmentPaths: [prefixPath],
       envProfile,
