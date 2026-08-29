@@ -28,6 +28,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import {
+  EgressProxyError,
   connectThroughProxy,
   egressProxyForTarget,
   proxyAuthorizationValue,
@@ -307,16 +308,27 @@ export class EgressGateway {
     try {
       proxy = egressProxyForTarget(this.proxy, { host, port, tls: true });
     } catch (error) {
-      const reason = error instanceof Error ? error.message : "the egress proxy policy could not be applied";
-      this.note(false, host, port, { reason });
-      clientSocket.end(`HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nX-Sandbox-Network: ${reason}\r\n\r\n`);
+      const reasons = failureReasons(error, { proxied: true, target: `${host}:${port}` });
+      this.note(false, host, port, { reason: reasons.logged });
+      clientSocket.end(
+        `HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nX-Sandbox-Network: ${reasons.sandbox}\r\n\r\n`,
+      );
       return;
     }
     this.note(true, host, port, { ...(proxy ? { proxy: proxyEndpoint(proxy) } : {}) });
 
-    const fail = (message: string) => {
+    const fail = (error: unknown) => {
+      const reasons = failureReasons(error, { proxied: proxy !== undefined, target: `${host}:${port}` });
+      this.log?.("denied", {
+        host,
+        port,
+        ...(proxy ? { proxy: proxyEndpoint(proxy) } : {}),
+        reason: reasons.logged,
+      });
       if (!clientSocket.writableEnded) {
-        clientSocket.end(`HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nX-Sandbox-Network: ${message}\r\n\r\n`);
+        clientSocket.end(
+          `HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nX-Sandbox-Network: ${reasons.sandbox}\r\n\r\n`,
+        );
       }
       clientSocket.destroy();
     };
@@ -327,7 +339,7 @@ export class EgressGateway {
       if (head.length) upstream.write(head);
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
-      upstream.on("error", (error: Error) => fail(error.message));
+      upstream.on("error", (error: Error) => fail(error));
       clientSocket.on("error", () => upstream.destroy());
     };
     if (proxy) {
@@ -337,12 +349,12 @@ export class EgressGateway {
       try {
         tunnel(await connectThroughProxy(proxy, host, port));
       } catch (error) {
-        fail(error instanceof Error ? error.message : `${proxyEndpoint(proxy)} refused the tunnel`);
+        fail(error);
       }
       return;
     }
     const upstream = connect({ host: decision.address!, port }, () => tunnel(upstream));
-    upstream.once("error", (error) => fail(error.message));
+    upstream.once("error", (error) => fail(error));
   }
 
   private async handleRequest(
@@ -379,10 +391,10 @@ export class EgressGateway {
       // fail on a malformed URL, and this handler is called without a catch.
       authorization = proxy ? proxyAuthorizationValue(proxy) : undefined;
     } catch (error) {
-      const reason = error instanceof Error ? error.message : "the egress proxy policy could not be applied";
-      this.note(false, target.hostname, port, { reason });
+      const reasons = failureReasons(error, { proxied: true, target: target.hostname });
+      this.note(false, target.hostname, port, { reason: reasons.logged });
       response.writeHead(502, { "content-type": "text/plain" });
-      response.end(`${reason}\n`);
+      response.end(`${reasons.sandbox}\n`);
       return;
     }
     this.note(true, target.hostname, port, { ...(proxy ? { proxy: proxyEndpoint(proxy) } : {}) });
@@ -405,12 +417,44 @@ export class EgressGateway {
       upstreamResponse.pipe(response);
     });
     upstream.on("error", (error) => {
+      const reasons = failureReasons(error, { proxied: proxy !== undefined, target: target.hostname });
+      this.log?.("denied", {
+        host: target.hostname,
+        port,
+        ...(proxy ? { proxy: proxyEndpoint(proxy) } : {}),
+        reason: reasons.logged,
+      });
       if (!response.headersSent) response.writeHead(502, { "content-type": "text/plain" });
-      const via = proxy ? ` through ${proxyEndpoint(proxy)}` : "";
-      response.end(`Sandbox network access could not reach ${target.hostname}${via}: ${error.message}\n`);
+      response.end(
+        proxy ? `${reasons.sandbox}\n` : `Sandbox network access could not reach ${target.hostname}: ${reasons.sandbox}\n`,
+      );
     });
     request.pipe(upstream);
   }
+}
+
+/**
+ * Split one failure into what the runner logs and what the sandbox is told.
+ *
+ * The sandbox must never learn where this deployment's egress goes, and an
+ * arbitrary socket error raised while talking to a proxy carries that address
+ * in its text. So anything that happened on a proxied connection collapses to a
+ * fixed sentence naming only the target the sandbox itself asked for; a direct
+ * connection's error refers to that same target and is passed through.
+ */
+function failureReasons(
+  error: unknown,
+  context: { proxied: boolean; target: string },
+): { logged: string; sandbox: string } {
+  const logged = error instanceof Error ? error.message : `${context.target} could not be reached`;
+  if (error instanceof EgressProxyError) return { logged, sandbox: error.sandboxReason };
+  if (context.proxied) {
+    return {
+      logged,
+      sandbox: `Sandbox network access could not reach ${context.target} through this deployment's outbound route`,
+    };
+  }
+  return { logged, sandbox: logged };
 }
 
 function splitAuthority(authority: string): [string | undefined, string | undefined] {

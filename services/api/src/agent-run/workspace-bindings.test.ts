@@ -77,6 +77,49 @@ test("execution bindings apply stable Agent identity with the same permission an
   ]);
 });
 
+test("scientific executions forward the current outbound route and omit it for no-network epochs", async () => {
+  const executed: Array<Record<string, unknown>> = [];
+  const epoch = { id: "epoch-1" };
+  const proxy = { mode: "url", url: "http://proxy.test:3128" } as const;
+  let resolved: typeof proxy | undefined = proxy;
+  const bindings = createWorkspaceExecutionBindings({
+    agentId: "main",
+    executionId: "run-1",
+    permission: {
+      getEpoch: () => epoch,
+      requirePrivilege: async () => undefined,
+    } as unknown as AgentPermissionRuntime,
+    permissionScopeLabel: "in test",
+    provenanceRecorder: {
+      executeScientific: async (options: Record<string, unknown>) => {
+        executed.push(options);
+        return { createdFiles: [], exitCode: 0, stderr: "", stdout: "" };
+      },
+    } as unknown as ProvenanceRecorder,
+    runnerClient: {} as RunnerClient,
+    scientificEnvironments: [],
+    sessionId: "session-1",
+    store: {
+      assertSessionWritable() {},
+      resolveSandboxEgressProxy: () => resolved,
+    } as unknown as SessionStore,
+    workspaceRoot: "/workspace",
+  });
+
+  await bindings.executeScientific!("python", "print('proxied')", undefined, "ephemeral");
+  resolved = undefined;
+  await bindings.executeScientific!("python", "print('offline')", undefined, "ephemeral");
+
+  assert.deepEqual(executed.map((input) => ({
+    hasSandboxEgressProxy: Object.hasOwn(input, "sandboxEgressProxy"),
+    permissionEpoch: input.permissionEpoch,
+    sandboxEgressProxy: input.sandboxEgressProxy,
+  })), [
+    { hasSandboxEgressProxy: true, permissionEpoch: epoch, sandboxEgressProxy: proxy },
+    { hasSandboxEgressProxy: false, permissionEpoch: epoch, sandboxEgressProxy: undefined },
+  ]);
+});
+
 test("environment install forwards the trusted workspace only from the Agent binding", async () => {
   const installInputs: unknown[] = [];
   const permissionSummaries: string[] = [];

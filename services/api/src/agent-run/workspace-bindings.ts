@@ -264,6 +264,7 @@ export function createWorkspaceExecutionBindings(
           permissionEpoch: options.permission.getEpoch(),
           ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
           runnerClient: options.runnerClient,
+          ...sandboxEgressProxy(),
           sessionId: options.sessionId,
           signal,
           turnId: options.executionId,

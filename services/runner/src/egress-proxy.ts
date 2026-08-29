@@ -43,11 +43,35 @@ export interface EgressTarget {
 /** Chaining is a plain HTTP proxy conversation, so only these two schemes work. */
 const SUPPORTED_PROXY_PROTOCOLS = ["http:", "https:"];
 
-export class EgressProxyUnsupportedError extends Error {
+/** How long the proxy has to answer a CONNECT before the attempt is abandoned. */
+export const PROXY_HANDSHAKE_TIMEOUT_MS = 30_000;
+
+/**
+ * A failure of the outbound route.
+ *
+ * `message` is for the runner log and names the proxy endpoint, because an
+ * administrator debugging this needs to know which server misbehaved.
+ * `sandboxReason` is the only part the sandbox may see: the product promises
+ * that sandboxed code never learns where this deployment's egress goes, so it
+ * says nothing about the proxy's host, port, URL or credentials.
+ */
+export class EgressProxyError extends Error {
+  constructor(message: string, readonly sandboxReason: string) {
+    super(message);
+    this.name = "EgressProxyError";
+  }
+}
+
+/** Sandbox-facing wording for a route that cannot be used at all. */
+const MISCONFIGURED_EGRESS =
+  "Sandbox network access cannot use this deployment's configured outbound route; ask an administrator to check it";
+
+export class EgressProxyUnsupportedError extends EgressProxyError {
   constructor(url: URL) {
     super(
       `Sandbox network access cannot send allowed traffic through a ${url.protocol.replace(":", "")} proxy; `
       + "configure an http or https proxy server for the sandbox network egress policy",
+      MISCONFIGURED_EGRESS,
     );
     this.name = "EgressProxyUnsupportedError";
   }
@@ -60,11 +84,12 @@ export class EgressProxyUnsupportedError extends Error {
  * callback would escape as an uncaught exception and take the runner down.
  * The message names the endpoint only — never the credential.
  */
-export class EgressProxyCredentialsError extends Error {
+export class EgressProxyCredentialsError extends EgressProxyError {
   constructor(proxy: URL, field: "username" | "password") {
     super(
       `Sandbox network access cannot read the ${field} of the egress proxy ${proxyEndpoint(proxy)}: `
       + "it is not valid percent-encoding",
+      MISCONFIGURED_EGRESS,
     );
     this.name = "EgressProxyCredentialsError";
   }
@@ -89,9 +114,17 @@ function parseProxyUrl(value: string): URL {
   try {
     url = new URL(value);
   } catch {
-    throw new Error("Sandbox network access received an invalid egress proxy URL");
+    throw new EgressProxyError(
+      "Sandbox network access received an invalid egress proxy URL",
+      MISCONFIGURED_EGRESS,
+    );
   }
-  if (!url.hostname) throw new Error("Sandbox network access received an egress proxy URL without a host");
+  if (!url.hostname) {
+    throw new EgressProxyError(
+      "Sandbox network access received an egress proxy URL without a host",
+      MISCONFIGURED_EGRESS,
+    );
+  }
   if (!SUPPORTED_PROXY_PROTOCOLS.includes(url.protocol)) throw new EgressProxyUnsupportedError(url);
   // Decode the credential here, while the caller is still inside the gateway's
   // route-resolution guard. Leaving it to the point of use would put a throw in
@@ -174,17 +207,45 @@ const PROXY_RESPONSE_HEAD_LIMIT = 64 * 1024;
  * Open a tunnel to `host:port` through `proxy` and resolve the socket once the
  * proxy has confirmed it. Any bytes the proxy sent after the response head are
  * pushed back so the caller can pipe the socket without losing them.
+ *
+ * `timeoutMs` exists so tests do not have to wait out the real guard; it is a
+ * code constant, not a deployment setting.
  */
-export function connectThroughProxy(proxy: URL, host: string, port: number): Promise<Socket> {
+export function connectThroughProxy(
+  proxy: URL,
+  host: string,
+  port: number,
+  timeoutMs: number = PROXY_HANDSHAKE_TIMEOUT_MS,
+): Promise<Socket> {
   return new Promise((resolveSocket, reject) => {
     const endpoint = { host: proxy.hostname, port: proxyPort(proxy) };
     const socket = proxy.protocol === "https:"
       ? tlsConnect({ ...endpoint, servername: proxy.hostname })
       : connect(endpoint);
     let head = Buffer.alloc(0);
-    const fail = (message: string) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    // Every exit runs through settle(), so a proxy that answers nothing, half a
+    // header, or closes the connection cannot leave this promise pending — and
+    // with it the sandbox request that is waiting on the tunnel.
+    const settle = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      socket.off("data", onData);
+      socket.off("error", onError);
+      socket.off("close", onClosed);
+      socket.off("end", onClosed);
+      return true;
+    };
+    const fail = (detail: string) => {
+      if (!settle()) return;
       socket.destroy();
-      reject(new Error(message));
+      reject(new EgressProxyError(
+        detail,
+        `Sandbox network access could not reach ${host}:${port} through this deployment's outbound route`,
+      ));
     };
     const onData = (chunk: Buffer) => {
       head = Buffer.concat([head, chunk]);
@@ -195,8 +256,6 @@ export function connectThroughProxy(proxy: URL, host: string, port: number): Pro
         }
         return;
       }
-      socket.off("data", onData);
-      socket.off("error", onError);
       const statusLine = head.subarray(0, head.indexOf("\r\n")).toString("latin1");
       const status = Number(statusLine.split(" ")[1]);
       if (status !== 200) {
@@ -204,12 +263,29 @@ export function connectThroughProxy(proxy: URL, host: string, port: number): Pro
         return;
       }
       const trailing = head.subarray(separator + 4);
+      if (!settle()) return;
+      // Bytes the proxy sent after the response head belong to the tunnel.
       if (trailing.length) socket.unshift(trailing);
       resolveSocket(socket);
     };
     const onError = (error: Error) => fail(`${proxyEndpoint(proxy)} is unreachable: ${error.message}`);
+    const onClosed = () => fail(
+      `${proxyEndpoint(proxy)} closed the connection before completing the CONNECT to ${host}:${port}`,
+    );
+
+    timer = setTimeout(
+      () => fail(
+        `${proxyEndpoint(proxy)} did not answer the CONNECT to ${host}:${port} within ${timeoutMs} ms`,
+      ),
+      timeoutMs,
+    );
+    // The handshake guard must not by itself keep the runner process alive.
+    timer.unref();
+
     socket.on("data", onData);
     socket.once("error", onError);
+    socket.once("close", onClosed);
+    socket.once("end", onClosed);
     socket.once(proxy.protocol === "https:" ? "secureConnect" : "connect", () => {
       // Nothing outside this listener can catch a throw from it, so any failure
       // building the request has to become a rejection here.

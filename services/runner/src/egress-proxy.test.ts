@@ -13,10 +13,13 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { createServer, type Server, type Socket } from "node:net";
+import { after, test } from "node:test";
 
 import {
   EgressProxyCredentialsError,
+  EgressProxyError,
+  connectThroughProxy,
   egressProxyForTarget,
   proxyAuthorizationHeader,
   proxyAuthorizationValue,
@@ -26,6 +29,30 @@ import {
 
 const TARGET = { host: "example.org", port: 443, tls: true } as const;
 const PLAIN = { host: "example.org", port: 80, tls: false } as const;
+
+const openServers: Array<{ server: Server; sockets: Set<Socket> }> = [];
+
+after(async () => {
+  for (const { server, sockets } of openServers) {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((closed) => { server.close(() => closed()); });
+  }
+});
+
+/** A proxy socket that never completes the CONNECT response head. */
+async function stalledProxy(behaviour: (socket: import("node:net").Socket) => void): Promise<URL> {
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    behaviour(socket);
+  });
+  openServers.push({ server, sockets });
+  await new Promise<void>((listening) => server.listen(0, "127.0.0.1", () => listening()));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  return new URL(`http://127.0.0.1:${port}`);
+}
 
 test("direct and url policies are used exactly as the API resolved them", () => {
   assert.equal(egressProxyForTarget(undefined, TARGET, {}), undefined);
@@ -107,6 +134,7 @@ test("userinfo that cannot be decoded fails where the route is resolved", () => 
         assert.ok(error instanceof EgressProxyCredentialsError, error.message);
         assert.match(error.message, /username of the egress proxy http:\/\/proxy\.test:3128/);
         assert.match(error.message, /not valid percent-encoding/);
+        assert.doesNotMatch(error.sandboxReason, /proxy\.test|3128|%zz|percent-encoding/);
         return true;
       },
     );
@@ -119,6 +147,7 @@ test("userinfo that cannot be decoded fails where the route is resolved", () => 
       assert.ok(error instanceof EgressProxyCredentialsError, error.message);
       assert.match(error.message, /password of the egress proxy/);
       assert.doesNotMatch(error.message, /%zz/);
+      assert.doesNotMatch(error.sandboxReason, /proxy\.test|3128|%zz|percent-encoding/);
       return true;
     });
   }
@@ -128,10 +157,56 @@ test("proxy credentials are used for authorization and kept out of the endpoint 
   const proxy = new URL("http://re%40search:p%40ss@proxy.test:3128");
   assert.equal(proxyAuthorizationValue(proxy), `Basic ${Buffer.from("re@search:p@ss").toString("base64")}`);
   assert.equal(proxyAuthorizationHeader(proxy), `Proxy-Authorization: ${proxyAuthorizationValue(proxy)}\r\n`);
-  // The label reaches logs and sandbox-visible errors, so it carries no secret.
+  // The endpoint label reaches runner logs, so it must carry no secret.
   assert.equal(proxyEndpoint(proxy), "http://proxy.test:3128");
   assert.equal(proxyAuthorizationValue(new URL("http://proxy.test:3128")), undefined);
   assert.equal(proxyAuthorizationHeader(new URL("http://proxy.test:3128")), "");
   assert.equal(proxyPort(new URL("https://proxy.test")), 443);
   assert.equal(proxyPort(new URL("http://proxy.test")), 80);
+});
+
+test("a proxy that never finishes the CONNECT response is abandoned, not waited on forever", async () => {
+  // Accepts the connection and then says nothing. Without the handshake guard
+  // this promise stays pending, and the sandbox request waiting on the tunnel
+  // hangs with it.
+  const silent = await stalledProxy(() => undefined);
+  await assert.rejects(
+    connectThroughProxy(silent, "example.org", 443, 60),
+    (error: Error) => {
+      assert.ok(error instanceof EgressProxyError, error.message);
+      assert.match(error.message, /did not answer the CONNECT to example\.org:443 within 60 ms/);
+      return true;
+    },
+  );
+});
+
+test("a proxy that closes mid-handshake rejects instead of hanging", async () => {
+  // Clean close before any response, and a truncated response head: both used
+  // to leave the promise pending because only "data" and "error" were watched.
+  const abrupt = await stalledProxy((socket) => socket.end());
+  await assert.rejects(
+    connectThroughProxy(abrupt, "example.org", 443, 5_000),
+    (error: Error) => {
+      assert.ok(error instanceof EgressProxyError, error.message);
+      assert.match(error.message, /closed the connection before completing the CONNECT/);
+      return true;
+    },
+  );
+
+  const truncated = await stalledProxy((socket) => {
+    socket.write("HTTP/1.1 200 Connection Est");
+    socket.end();
+  });
+  await assert.rejects(connectThroughProxy(truncated, "example.org", 443, 5_000), /closed the connection/);
+});
+
+test("a tunnel failure tells the sandbox nothing about where the egress goes", () => {
+  // The runner log needs the endpoint; the sandbox must not have it.
+  const error = new EgressProxyError(
+    "http://proxy.test:3128 is unreachable: connect ECONNREFUSED 10.0.0.9:3128",
+    "Sandbox network access could not reach example.org:443 through this deployment's outbound route",
+  );
+  assert.match(error.message, /proxy\.test:3128/);
+  assert.doesNotMatch(error.sandboxReason, /proxy\.test|3128|10\.0\.0\.9/);
+  assert.match(error.sandboxReason, /example\.org:443/);
 });

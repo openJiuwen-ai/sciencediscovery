@@ -383,7 +383,8 @@ test("an unusable proxy fails the allowed request instead of connecting around i
       `GET http://mirror.test:${target.port}/ HTTP/1.1\r\nHost: mirror.test\r\nConnection: close\r\n\r\n`,
     );
     assert.match(response, /^HTTP\/1\.1 502/);
-    assert.match(response, /socks5 proxy/);
+    assert.match(response, /configured outbound route/);
+    assert.doesNotMatch(response, /socks5|127\.0\.0\.1|1080/);
   } finally {
     await gateway.close();
     await target.close();
@@ -396,11 +397,13 @@ test("malformed proxy credentials fail the request instead of killing the runner
   // The registry keeps a custom URL as written, so a stray `%` can reach the
   // gateway. Decoding it used to throw where nothing could catch it: in
   // handleRequest, past the route guard, and in the CONNECT socket callback.
+  const logs: Array<{ proxy?: string; reason?: string }> = [];
   const gateway = new EgressGateway(
     access({ allowPrivateNetwork: true, allowedDomains: ["mirror.test"] }),
     join(directory, "egress.sock"),
     {
-      proxy: { mode: "url", url: "http://user%zz:p@127.0.0.1:1/" },
+      log: (_event, detail) => logs.push(detail),
+      proxy: { mode: "url", url: "http://user%zz:supersecret@proxy.internal.test:3128/" },
       resolveAddresses: async () => [{ address: "127.0.0.1", family: 4 }],
     },
   );
@@ -415,11 +418,29 @@ test("malformed proxy credentials fail the request instead of killing the runner
       `GET http://mirror.test:${target.port}/ HTTP/1.1\r\nHost: mirror.test\r\nConnection: close\r\n\r\n`,
     );
     assert.match(forwarded, /^HTTP\/1\.1 502/);
-    assert.match(forwarded, /not valid percent-encoding/);
+    assert.match(forwarded, /configured outbound route/);
+    assert.doesNotMatch(
+      forwarded,
+      /proxy\.internal\.test|3128|user%zz|supersecret|percent-encoding|http:\/\//,
+    );
 
     const tunnelled = await overSocket(gateway.socketPath, `CONNECT mirror.test:${target.port} HTTP/1.1\r\n\r\n`);
     assert.match(tunnelled, /^HTTP\/1\.1 502/);
-    assert.match(tunnelled, /not valid percent-encoding/);
+    assert.match(tunnelled, /X-Sandbox-Network: .*configured outbound route/i);
+    assert.doesNotMatch(
+      tunnelled,
+      /proxy\.internal\.test|3128|user%zz|supersecret|percent-encoding|http:\/\//,
+    );
+
+    // Runner-side diagnostics retain the endpoint and concrete cause, but the
+    // raw credential is stripped there too.
+    assert.equal(logs.length, 2);
+    for (const detail of logs) {
+      assert.equal(detail.proxy, undefined);
+      assert.match(detail.reason ?? "", /http:\/\/proxy\.internal\.test:3128/);
+      assert.match(detail.reason ?? "", /not valid percent-encoding/);
+      assert.doesNotMatch(detail.reason ?? "", /user%zz|supersecret/);
+    }
 
     // Both paths are handled without a catch above them, so anything that
     // escapes here would have taken the process down in production.
