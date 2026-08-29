@@ -112,7 +112,9 @@ export function createPlatformServices(
     store,
     mcpRegistry,
     mcpBroker,
-    dependencies.connectorFetch ?? fetch,
+    // No `?? fetch` fallback: the manager's own default is the proxy-capable
+    // fetch, and the global one silently breaks every proxied download.
+    dependencies.connectorFetch,
   );
   artifactManager.setCompletedHandler(async ({ candidate, job, plan }) => {
     await provenanceRecorder.registerWorkspaceArtifact({

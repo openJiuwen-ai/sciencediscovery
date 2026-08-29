@@ -14,7 +14,12 @@
 
 from __future__ import annotations
 
+import json
+import os
+import threading
 import unittest
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -22,6 +27,7 @@ import httpx
 from sciencediscovery_gateway.public_biomed_mcp import (
     SERVER,
     _arxiv_search,
+    _pdb_entry,
     _raise_for_status,
     _europe_pmc_search,
     _pmc_pdf_candidate,
@@ -35,6 +41,85 @@ from sciencediscovery_gateway.public_biomed_mcp import (
     pdb_lookup_structure,
     reactome_lookup_pathway,
 )
+
+
+PROXY_ENV_NAMES = (
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+)
+
+
+class _RecordingHandler(BaseHTTPRequestHandler):
+    """Answers both origin-form and forward-proxy absolute-form requests."""
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server naming
+        self.server.seen.append(self.path)  # type: ignore[attr-defined]
+        body = json.dumps({"struct": {"title": "CRAMBIN"}}).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: object) -> None:
+        return
+
+
+@contextmanager
+def _recording_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
+    server.seen = []  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@contextmanager
+def _proxy_environment(**overrides: str):
+    """Replace the whole proxy environment, the way the MCP control plane does
+    when it spawns this server under a resolved policy."""
+    with patch.dict(os.environ, {}, clear=False):
+        for name in PROXY_ENV_NAMES:
+            os.environ.pop(name, None)
+        os.environ.update(overrides)
+        yield
+
+
+class PdbProxyEnvironmentTests(unittest.IsolatedAsyncioTestCase):
+    """The Node control plane hands this process a proxy only through the
+    environment, so the bundled HTTP clients must keep honouring it. Node's own
+    half of the same contract is pinned in
+    `services/api/src/mcp/pdb-proxy.test.ts`."""
+
+    async def test_pdb_metadata_request_goes_through_the_injected_proxy(self) -> None:
+        with _recording_server() as proxy:
+            port = proxy.server_address[1]
+            with _proxy_environment(HTTP_PROXY=f"http://127.0.0.1:{port}"):
+                with patch(
+                    "sciencediscovery_gateway.public_biomed_mcp.format_external_url",
+                    return_value="http://data.rcsb.org/rest/v1/core/entry/1CRN",
+                ):
+                    entry = await _pdb_entry("1crn")
+            self.assertEqual(entry["struct"]["title"], "CRAMBIN")
+            # Absolute-form request target: the metadata hop crossed the proxy.
+            self.assertEqual(proxy.seen, ["http://data.rcsb.org/rest/v1/core/entry/1CRN"])
+
+    async def test_pdb_metadata_request_stays_direct_without_a_proxy(self) -> None:
+        with _recording_server() as proxy, _recording_server() as origin:
+            origin_port = origin.server_address[1]
+            with _proxy_environment():
+                with patch(
+                    "sciencediscovery_gateway.public_biomed_mcp.format_external_url",
+                    return_value=f"http://127.0.0.1:{origin_port}/rest/v1/core/entry/1CRN",
+                ):
+                    await _pdb_entry("1CRN")
+            self.assertEqual(origin.seen, ["/rest/v1/core/entry/1CRN"])
+            self.assertEqual(proxy.seen, [])
 
 
 class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):

@@ -37,7 +37,7 @@ import type {
 } from "@sciencediscovery/schema";
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
-import { proxyDispatcher } from "@sciencediscovery/data-source";
+import { proxyDispatcher, proxyFetch } from "@sciencediscovery/data-source";
 import type { McpGovernanceBroker } from "@sciencediscovery/data-source";
 
 /** Persistence/settings boundary for the governed download state machine. */
@@ -140,7 +140,9 @@ export class GovernedDownloadManager {
     private readonly store: GovernedDownloadStore,
     private readonly registry: McpSourceRegistry,
     private readonly broker: McpGovernanceBroker,
-    private readonly fetchFn: typeof fetch = fetch,
+    // Must stay dispatcher-compatible: `fetchAllowed` pins the MCP server's
+    // proxy on every hop, and Node's global fetch rejects those dispatchers.
+    private readonly fetchFn: typeof fetch = proxyFetch,
     private readonly maxArtifactBytes = DEFAULT_MAX_ARTIFACT_BYTES,
   ) {}
 

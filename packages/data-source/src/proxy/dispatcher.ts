@@ -12,13 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { ProxyAgent, type Dispatcher } from "undici";
+import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from "undici";
 
 import type { ResolvedProxy } from "@sciencediscovery/schema";
 
 import { resolveProxyForUrl } from "./env.js";
 
 const dispatcherCache = new Map<string, Dispatcher>();
+
+/**
+ * The fetch implementation that accepts the dispatchers built here.
+ *
+ * Node's global `fetch` is bound to the runtime's own bundled undici copy,
+ * whose request handlers are a different generation from this workspace's
+ * `undici` package. Handing it a `ProxyAgent` from here fails at request
+ * construction ("invalid onRequestStart method"), so every proxied call would
+ * reject with `TypeError: fetch failed` while direct calls kept working.
+ * Outbound code that pins a dispatcher must therefore fetch through undici.
+ */
+export const proxyFetch = undiciFetch as unknown as typeof fetch;
 
 /**
  * Map a resolved proxy onto an undici dispatcher for Node-side fetch calls.
