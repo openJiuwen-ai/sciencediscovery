@@ -23,7 +23,12 @@ dependencies = [
     # natively in the Node control plane, so nothing here needs a web
     # framework, an agent framework, or the vendor harness.
     "mcp>=1.0.0",
-    "httpx>=0.28.0",
+    # The `socks` extra pulls in socksio, which httpx requires before it can use
+    # a socks5:// proxy. The Node control plane projects the MCP server's proxy
+    # policy onto this process as HTTP_PROXY / HTTPS_PROXY / ALL_PROXY, and
+    # settings accept socks5 URLs, so without the extra those requests fail
+    # while building the client instead of reaching the proxy.
+    "httpx[socks]>=0.28.0",
 ]
 
 [build-system]

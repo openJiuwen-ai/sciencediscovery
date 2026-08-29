@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import socketserver
 import threading
 import unittest
 from contextlib import contextmanager
@@ -90,6 +92,81 @@ def _proxy_environment(**overrides: str):
         yield
 
 
+def _receive_exactly(connection: socket.socket, count: int) -> bytes:
+    chunks = b""
+    while len(chunks) < count:
+        chunk = connection.recv(count - len(chunks))
+        if not chunk:
+            raise ConnectionError("SOCKS5 peer closed mid-message")
+        chunks += chunk
+    return chunks
+
+
+def _relay(source: socket.socket, destination: socket.socket) -> None:
+    try:
+        while True:
+            chunk = source.recv(65536)
+            if not chunk:
+                break
+            destination.sendall(chunk)
+    except OSError:
+        pass
+    finally:
+        try:
+            destination.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+
+class _Socks5Handler(socketserver.BaseRequestHandler):
+    """Minimal RFC 1928 CONNECT with no authentication, tunnelling to one origin.
+
+    Only the domain address type is accepted, which is what a correctly wired
+    client sends: the hostname is resolved by the proxy, not locally.
+    """
+
+    def handle(self) -> None:
+        connection = self.request
+        greeting = _receive_exactly(connection, 2)
+        _receive_exactly(connection, greeting[1])
+        connection.sendall(bytes([0x05, 0x00]))
+
+        header = _receive_exactly(connection, 4)
+        if header[1] != 0x01 or header[3] != 0x03:
+            connection.sendall(bytes([0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]))
+            return
+        length = _receive_exactly(connection, 1)[0]
+        host = _receive_exactly(connection, length).decode("utf-8")
+        port = int.from_bytes(_receive_exactly(connection, 2), "big")
+        self.server.targets.append(f"{host}:{port}")  # type: ignore[attr-defined]
+        connection.sendall(bytes([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]))
+
+        with socket.create_connection(self.server.upstream) as upstream:  # type: ignore[attr-defined]
+            outbound = threading.Thread(target=_relay, args=(connection, upstream), daemon=True)
+            outbound.start()
+            _relay(upstream, connection)
+            outbound.join(timeout=5)
+
+    def handle_error(self, *args: object) -> None:
+        return
+
+
+@contextmanager
+def _socks5_proxy(upstream: tuple[str, int]):
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Socks5Handler)
+    server.daemon_threads = True
+    server.targets = []  # type: ignore[attr-defined]
+    server.upstream = upstream  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 class PdbProxyEnvironmentTests(unittest.IsolatedAsyncioTestCase):
     """The Node control plane hands this process a proxy only through the
     environment, so the bundled HTTP clients must keep honouring it. Node's own
@@ -108,6 +185,23 @@ class PdbProxyEnvironmentTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(entry["struct"]["title"], "CRAMBIN")
             # Absolute-form request target: the metadata hop crossed the proxy.
             self.assertEqual(proxy.seen, ["http://data.rcsb.org/rest/v1/core/entry/1CRN"])
+
+    async def test_pdb_metadata_request_goes_through_a_socks5_proxy(self) -> None:
+        """SOCKS5 needs httpx's `socks` extra; without socksio httpx raises while
+        building the client and the request never reaches the proxy."""
+        with _recording_server() as origin:
+            with _socks5_proxy(("127.0.0.1", origin.server_address[1])) as proxy:
+                port = proxy.server_address[1]
+                with _proxy_environment(HTTP_PROXY=f"socks5://127.0.0.1:{port}"):
+                    with patch(
+                        "sciencediscovery_gateway.public_biomed_mcp.format_external_url",
+                        return_value="http://data.rcsb.org/rest/v1/core/entry/1CRN",
+                    ):
+                        entry = await _pdb_entry("1crn")
+                self.assertEqual(entry["struct"]["title"], "CRAMBIN")
+                # The proxy, not this process, resolved the RCSB hostname.
+                self.assertEqual(proxy.targets, ["data.rcsb.org:80"])
+            self.assertEqual(origin.seen, ["/rest/v1/core/entry/1CRN"])
 
     async def test_pdb_metadata_request_stays_direct_without_a_proxy(self) -> None:
         with _recording_server() as proxy, _recording_server() as origin:

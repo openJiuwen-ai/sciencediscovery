@@ -33,6 +33,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { connect as connectSocket, createServer as createNetServer, type Socket } from "node:net";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
@@ -72,6 +73,10 @@ function entryLookup(pdbId) {
   const proxy = process.env.HTTP_PROXY ?? process.env.http_proxy;
   if (!proxy) return Promise.resolve("direct");
   const via = new URL(proxy);
+  // SOCKS is a TCP-level tunnel this stub does not speak; report the pinned URL
+  // instead. What Node owes this hop is delivering the URL, and the real httpx
+  // client's SOCKS behaviour is pinned on the Python side.
+  if (via.protocol !== "http:" && via.protocol !== "https:") return Promise.resolve("pinned " + proxy);
   return new Promise((settle, fail) => {
     const client = httpRequest({
       headers: { host: target.host },
@@ -161,6 +166,97 @@ async function startRecordingProxy(body: Buffer): Promise<RecordingProxy> {
   };
 }
 
+interface RecordingSocksProxy {
+  close(): Promise<void>;
+  origins: string[];
+  port: number;
+  targets: string[];
+}
+
+/**
+ * A loopback SOCKS5 proxy (RFC 1928 CONNECT, no authentication) in front of a
+ * loopback origin server.
+ *
+ * SOCKS tunnels at the TCP level, so the recorded evidence is split: `targets`
+ * holds what the client asked the proxy to reach, and `origins` holds the HTTP
+ * request that came out of the tunnel. Only the domain address type is
+ * accepted, so a client that resolved the hostname itself fails the handshake
+ * instead of quietly passing.
+ */
+async function startRecordingSocksProxy(body: Buffer): Promise<RecordingSocksProxy> {
+  const origins: string[] = [];
+  const targets: string[] = [];
+  const origin: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    origins.push(`${request.method} ${request.url}`);
+    response.writeHead(200, { "content-length": String(body.length), "content-type": "application/octet-stream" });
+    response.end(body);
+  });
+  await new Promise<void>((listening) => origin.listen(0, "127.0.0.1", listening));
+  const originAddress = origin.address();
+  if (originAddress === null || typeof originAddress === "string") throw new Error("Origin did not bind a port");
+
+  const proxy = createNetServer((socket) => {
+    let stage: "greeting" | "request" | "tunnel" = "greeting";
+    let buffered = Buffer.alloc(0);
+    let upstream: Socket | undefined;
+    let upstreamReady = false;
+    let pending = Buffer.alloc(0);
+    const forward = (chunk: Buffer) => {
+      pending = Buffer.concat([pending, chunk]);
+      if (upstream && upstreamReady && pending.length) {
+        upstream.write(pending);
+        pending = Buffer.alloc(0);
+      }
+    };
+    socket.on("data", (chunk: Buffer) => {
+      if (stage === "tunnel") return forward(chunk);
+      buffered = Buffer.concat([buffered, chunk]);
+      if (stage === "greeting") {
+        if (buffered.length < 2) return;
+        const methods = buffered[1]!;
+        if (buffered.length < 2 + methods) return;
+        buffered = buffered.subarray(2 + methods);
+        socket.write(Buffer.from([0x05, 0x00]));
+        stage = "request";
+      }
+      if (buffered.length < 5) return;
+      if (buffered[1] !== 0x01 || buffered[3] !== 0x03) {
+        socket.end(Buffer.from([0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+        return;
+      }
+      const length = buffered[4]!;
+      if (buffered.length < 7 + length) return;
+      targets.push(`${buffered.subarray(5, 5 + length).toString("utf8")}:${buffered.readUInt16BE(5 + length)}`);
+      const tunnelled = buffered.subarray(7 + length);
+      buffered = Buffer.alloc(0);
+      stage = "tunnel";
+      socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+      upstream = connectSocket(originAddress.port, "127.0.0.1", () => {
+        upstreamReady = true;
+        forward(Buffer.alloc(0));
+        upstream!.pipe(socket);
+      });
+      upstream.on("error", () => socket.destroy());
+      if (tunnelled.length) forward(tunnelled);
+    });
+    socket.on("error", () => undefined);
+  });
+  await new Promise<void>((listening) => proxy.listen(0, "127.0.0.1", listening));
+  const proxyAddress = proxy.address();
+  if (proxyAddress === null || typeof proxyAddress === "string") throw new Error("Proxy did not bind a port");
+
+  return {
+    close: async () => {
+      origin.closeAllConnections();
+      proxy.close();
+      await new Promise<void>((closed) => origin.close(() => closed()));
+    },
+    origins,
+    port: proxyAddress.port,
+    targets,
+  };
+}
+
 async function preparedStore(dataDir: string) {
   const store = new SessionStore(dataDir);
   await store.load();
@@ -228,6 +324,76 @@ test("the PDB metadata hop reaches data.rcsb.org through the biomed proxy policy
   const direct = await invoke("2CRN");
   assert.deepEqual(direct.result.warnings, ["direct"]);
   assert.equal(proxy.requests.length, 1);
+
+  // Settings accept socks5 URLs, so the subprocess has to receive one intact.
+  // Whether httpx then tunnels through it is asserted against a real SOCKS
+  // proxy in `services/gateway/tests/test_public_biomed_mcp.py`.
+  const socksServer = await store.createProxyServer({
+    kind: "custom_url",
+    name: "Lab SOCKS proxy",
+    url: "socks5://127.0.0.1:1080",
+  });
+  await store.updateMcpProxyPolicies({ policies: { biomed: `proxy:${socksServer.id}` } });
+  const socks = await invoke("3CRN");
+  assert.deepEqual(socks.result.warnings, [`pinned ${socksServer.url}`]);
+  assert.equal(proxy.requests.length, 1);
+});
+
+test("the PDB byte hop downloads files.rcsb.org through a socks5 biomed proxy", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `pdb-proxy-socks-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const bytes = Buffer.from("data_1CRN\n# served through the configured SOCKS5 proxy\n");
+  const proxy = await startRecordingSocksProxy(bytes);
+  context.after(() => proxy.close());
+
+  const { project, session, store } = await preparedStore(dataDir);
+  const proxyServer = await store.createProxyServer({
+    kind: "custom_url",
+    name: "Lab SOCKS proxy",
+    url: `socks5://127.0.0.1:${proxy.port}`,
+  });
+  await store.updateMcpProxyPolicies({ policies: { biomed: `proxy:${proxyServer.id}` } });
+
+  const registry = createBuiltinMcpSourceRegistry();
+  const failingTransport = unusedTransport();
+  const broker = new McpGovernanceBroker(
+    dataDir,
+    store,
+    registry,
+    new McpSourceCatalog(registry, failingTransport),
+    failingTransport,
+  );
+  const invocation = await recordPreparedCandidate(broker, store, {
+    bytes,
+    projectId: project.id,
+    sessionId: session.id,
+    sourceUrl: "http://files.rcsb.org/download/1CRN.cif",
+  });
+
+  // No fetch stub: the real default client must tunnel through SOCKS5, which
+  // undici's HTTP `ProxyAgent` cannot do.
+  const manager = new GovernedDownloadManager(store, registry, broker);
+  const creation = await manager.prepare(session.id, {
+    candidateId: "pdb:1CRN:cif",
+    destination: { path: "structures/1CRN.cif", type: "workspace" },
+    mcpInvocationId: invocation.id,
+  });
+  assert.ok(creation.permissionRequest);
+  const terminalPromise = manager.waitForPlanTerminal(session.id, creation.plan.id);
+  await store.decidePermissionRequest(creation.permissionRequest.id, "allow_once");
+  await manager.approveByPermissionRequest(creation.permissionRequest.id);
+  const terminal = await terminalPromise;
+
+  assert.equal(terminal.job?.error?.message, undefined);
+  assert.equal(terminal.status, "completed");
+  // The proxy, not this process, resolved the RCSB hostname.
+  assert.deepEqual(proxy.targets, ["files.rcsb.org:80"]);
+  assert.deepEqual(proxy.origins, ["GET /download/1CRN.cif"]);
+  assert.equal(
+    await readFile(resolve(store.workspacePath(session.id), "structures/1CRN.cif"), "utf8"),
+    bytes.toString("utf8"),
+  );
 });
 
 test("the PDB byte hop downloads files.rcsb.org through the biomed proxy policy", async (context) => {

@@ -36,6 +36,13 @@ export const proxyFetch = undiciFetch as unknown as typeof fetch;
  * Map a resolved proxy onto an undici dispatcher for Node-side fetch calls.
  * Environment policies are first reduced for the concrete target URL, keeping
  * protocol and NO_PROXY semantics identical to the shared resolver.
+ *
+ * Settings accept http, https and socks5 proxy URLs (`normalizeProxyUrl`), and
+ * one `ProxyAgent` covers all three: undici hands a socks5:// or socks:// URI
+ * to its own SOCKS agent, which opens the TCP tunnel, resolves the target
+ * hostname at the proxy, and adds TLS on top for HTTPS targets. Do not add a
+ * scheme branch here; `services/api/src/mcp/pdb-proxy.test.ts` pins the SOCKS5
+ * path against a real loopback proxy.
  */
 export function proxyDispatcher(resolved: ResolvedProxy, target: string | URL): Dispatcher | undefined {
   const effective = resolveProxyForUrl(resolved, target);
