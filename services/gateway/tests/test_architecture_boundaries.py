@@ -32,11 +32,29 @@ VENDOR_PYTHON_REFERENCE = re.compile(
     r"(?:^|\n)\s*(?:from|import)\s+deerflow\b|deerflow\.",
     re.MULTILINE,
 )
+HTTPX_CLIENT = re.compile(r"httpx\.(?:Async)?Client\(")
+# The Node control plane can only steer these subprocesses through the proxy
+# environment it injects, so a client that opts out of the environment silently
+# ignores the MCP server's proxy policy.
+PROXY_OPT_OUT = re.compile(r"\b(?:trust_env\s*=\s*(?!True)|proxy\s*=|proxies\s*=|mounts\s*=)")
 IGNORED_DIRECTORIES = {"__pycache__", "dist", "node_modules"}
 TEXT_SUFFIXES = {
     ".cjs", ".css", ".html", ".js", ".json", ".jsx", ".mdx", ".mjs",
     ".sh", ".ts", ".tsx", ".yaml", ".yml",
 }
+
+
+def _call_arguments(text: str, start: int) -> str:
+    """Return the argument text of the call whose "(" is at `start`."""
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:index]
+    return text[start:]
 
 
 def _files(root: Path):
@@ -74,6 +92,29 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             if VENDOR_PYTHON_REFERENCE.search(path.read_text(encoding="utf-8")):
                 failures.append(path.relative_to(GATEWAY_PACKAGE).as_posix())
         self.assertEqual(failures, [], "vendor dependency reintroduced:\n" + "\n".join(failures))
+
+    def test_bundled_mcp_http_clients_honour_the_injected_proxy_environment(self) -> None:
+        """A new bundled source must not pin or disable its own proxying.
+
+        `McpNodeClient` resolves the MCP server's proxy policy and projects it
+        onto this subprocess as HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY.
+        httpx applies those only while `trust_env` stays on and no explicit
+        proxy or transport mount overrides it. The observable half of this
+        contract lives in `tests/test_public_biomed_mcp.py`.
+        """
+        failures: list[str] = []
+        for path in GATEWAY_PACKAGE.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for match in HTTPX_CLIENT.finditer(text):
+                arguments = _call_arguments(text, match.end() - 1)
+                if PROXY_OPT_OUT.search(arguments):
+                    line = text.count("\n", 0, match.start()) + 1
+                    failures.append(f"{path.relative_to(GATEWAY_PACKAGE).as_posix()}:{line}")
+        self.assertEqual(
+            failures,
+            [],
+            "bundled MCP HTTP clients bypassed the injected proxy environment:\n" + "\n".join(failures),
+        )
 
 
 if __name__ == "__main__":
