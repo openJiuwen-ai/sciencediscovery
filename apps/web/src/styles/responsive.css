@@ -55,7 +55,6 @@
 
 @media (max-width: 600px) {
   :root { --timeline-gutter: 45px; }
-  .composer { max-height: none; }
   .session-bar-meta { width: 100%; }
   .session-bar-project { max-width: 40vw; }
   .session-bar-session-rename { min-width: 0; max-width: none; width: 100%; flex: none; }
