@@ -913,6 +913,91 @@ test("recorder mirrors provenance addressing fields to the memory graph on shell
   }
 });
 
+test("a `./`-prefixed sourcePath still mirrors the artifact to the memory graph", async (context) => {
+  // Regression: declareWorkspaceArtifact matched the artifact-derivation by
+  // string equality `item.path === options.sourcePath`. The derivation path is
+  // stored normalised (the runner writes `createdFiles` as clean relative
+  // paths, e.g. `report.md`), but an LLM-style declare passes `./report.md`.
+  // The mismatch left `run` unset, the gated second observe never fired, and
+  // the Artifact node was never written to the memory graph — silently, with
+  // the declare itself succeeding (registerWorkspaceArtifact normalises `./`
+  // when reading the file). Both the recorder's filter and the binding layer
+  // in runs/index.ts now normalise, so a `./`-prefixed sourcePath still lands
+  // the second observe carrying the produced_artifacts entry.
+  const dataDir = resolve(process.cwd(), ".tmp", `dot-slash-${process.pid}-${Date.now()}`);
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  const model = await store.createModel({ apiToken: "test", baseUrl: "https://models.example.test/v1", model: "test", name: "Test" });
+  const project = await store.createProject("Dot-slash prefix");
+  const session = await store.createSession(project.id, "Dot-slash", { modelId: model.id });
+  const permissionEpoch = store.getSessionPermissionEpoch(session.id)!;
+  const workspaceRoot = store.workspacePath(session.id);
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const runnerClient = {
+    executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
+      await writeFile(resolve(workspaceRoot, "report.md"), "# hi\n");
+      const timestamp = new Date().toISOString();
+      return {
+        cgroupMode: "none", createdFiles: ["report.md"],
+        environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        executionId: request.executionId, exitCode: 0, finishedAt: timestamp,
+        kernelId: `ephemeral:${request.executionId}`, kernelMode: "ephemeral",
+        language: "shell", modifiedFiles: [], networkPolicy: "none",
+        runnerVersion: "test", sandbox: "bubblewrap", startedAt: timestamp,
+        stderr: "", stdout: "ok", workingDirectory: "/workspace",
+      };
+    },
+  } as unknown as RunnerClient;
+
+  let captured: Record<string, unknown> | null = null;
+  const fake = http.createServer((_req, res) => {
+    let data = "";
+    _req.on("data", (chunk) => { data += chunk; });
+    _req.on("end", () => {
+      if (_req.url === "/observe/execution") captured = JSON.parse(data) as Record<string, unknown>;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "healthy", written: 2 }));
+    });
+  });
+  await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
+  const port = (fake.address() as AddressInfo).port;
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${port}`, token: "t" });
+    const sink = new MemoryGraphSink(client, () => true);
+    const recorder = new ProvenanceRecorder(dataDir, store, sink);
+    await recorder.executeShell({
+      agentId: "main",
+      code: "cat > report.md", permissionEpoch, runnerClient,
+      sessionId: session.id, turnId: "turn-dot", workspaceRoot,
+    });
+    // First observe (from executeShell) carries no produced_artifacts — fine.
+    for (let i = 0; i < 50 && !captured; i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(captured, "first observe landed");
+    assert.deepEqual((captured as { produced_artifacts: unknown[] }).produced_artifacts, []);
+
+    // The LLM declares with a `./`-prefixed path — the case that used to drop
+    // the Artifact node. The declare must still land the second observe WITH a
+    // produced_artifacts entry (the Artifact), because the recorder normalises
+    // the sourcePath before matching the derivation.
+    captured = null;
+    await recorder.declareWorkspaceArtifact({
+      name: "report.md", path: "./report.md", sessionId: session.id,
+      sourcePath: "./report.md", turnId: "turn-dot", workspaceRoot,
+    });
+    for (let i = 0; i < 50 && !captured; i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(captured, "second observe fired despite `./`-prefixed sourcePath");
+    const declaredArtifacts = (captured as { produced_artifacts: Array<Record<string, unknown>> }).produced_artifacts;
+    assert.equal(declaredArtifacts.length, 1, "the produced Artifact is mirrored to the graph");
+    assert.equal(declaredArtifacts[0]!.logical_name, "report.md");
+  } finally {
+    await new Promise<void>((r) => fake.close(() => r()));
+  }
+});
+
 test("concurrent runs drain their own chip buffer: a later run's provider never clobbers the earlier run's drain", async (context) => {
   // Regression: the recorder used to hold referencesProvider as a singleton
   // instance field set by setReferencesProvider at the start of each run. When

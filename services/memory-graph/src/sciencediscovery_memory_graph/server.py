@@ -68,8 +68,10 @@ from .persistence import (
 )
 from .search_graph import bind_subtask, get_search_graph, link_search_artifacts, upsert_search_progress
 from .query import (
+    _BUTTON_CHAIN_HOPS,
     by_edge_type,
     by_node_type,
+    chain_exists,
     get_artifact_provenance,
     get_chain,
     get_group_expansion,
@@ -383,11 +385,23 @@ class ChainRequest(BaseModel):
     # Pins an Artifact source to a specific version (composite key); ignored
     # for non-Artifact labels. Absent → latest version of that artifact_id.
     version: int | None = None
-    # Which chain to walk: ``full`` (default, joint upstream↔downstream
-    # subgraph — backward-compatible), ``task`` (pure next+produces spine),
-    # or ``artifact`` (directed walk from the report anchor, pruned to the
-    # path reaching the selected node). The frontend picks one per button.
-    chain_kind: str = "full"
+    # A button-level chain key into the ``_BUTTON_CHAIN_HOPS`` table (e.g.
+    # ``"viewOutput"``, ``"viewCitingArtifactForEvidence"``). Each key walks
+    # exactly that button's directed short chain from the source — the
+    # frontend highlights whatever edges come back, no client-side slicing.
+    kind: str
+
+
+class ChainExistsRequest(BaseModel):
+    node_id: str
+    session_id: str | None = None
+    version: int | None = None
+    # Button-level chain keys to check for a non-empty walk. The frontend
+    # sends every button's kind for the selected node once, then hides the
+    # kinds that come back ``False`` (no chain reachable) before the user
+    # clicks. Same ``_BUTTON_CHAIN_HOPS`` table as the click path, so a
+    # shown button is guaranteed to have a chain when opened.
+    kinds: list[str]
 
 
 class TraceProvenanceRequest(BaseModel):
@@ -448,17 +462,42 @@ def read_match(req: MatchRequest) -> dict[str, Any]:
 def read_chain(req: ChainRequest) -> dict[str, Any]:
     if not req.node_id.strip():
         _error("bad_request", 400, "node_id must be non-empty")
-    if req.chain_kind not in {"full", "task", "artifact"}:
-        _error("bad_request", 400, "chain_kind must be 'full', 'task', or 'artifact'")
+    if req.kind not in _BUTTON_CHAIN_HOPS:
+        _error("bad_request", 400, f"unknown chain kind: {req.kind}")
     log.info("chain in: node_id=%s session=%s version=%s kind=%s",
-             req.node_id, req.session_id or "-", req.version, req.chain_kind)
-    result = get_chain(req.node_id, req.session_id, req.version, req.chain_kind)
+             req.node_id, req.session_id or "-", req.version, req.kind)
+    result = get_chain(req.node_id, req.session_id, req.version, req.kind)
     if result.get("reason") == "node_not_found":
         _error("not_found", 404, f"node not found: {req.node_id}")
     log.info("chain out: %d node(s) / %d edge(s)%s%s",
              result["total"], len(result["edges"]),
              " [truncated at 500]" if result["truncated"] else "",
              f" (reason={result.get('reason')})" if result.get("reason") else "")
+    return result
+
+
+@app.post("/query/chain-exists", dependencies=[Depends(require_internal_token)])
+def read_chain_exists(req: ChainExistsRequest) -> dict[str, Any]:
+    """Batch existence check for a node's button chain kinds.
+
+    Returns ``{<kind>: bool}`` for every requested kind — ``True`` when the
+    button's hop walk reaches at least one node beyond the source. The
+    frontend uses this to hide buttons whose chain is empty *before* the user
+    clicks them. Unknown kinds are dropped (the frontend only sends known
+    kinds); a missing source or unreachable driver reports all-``False``.
+    """
+    if not req.node_id.strip():
+        _error("bad_request", 400, "node_id must be non-empty")
+    if not req.kinds:
+        _error("bad_request", 400, "kinds must be a non-empty list")
+    unknown = [k for k in req.kinds if k not in _BUTTON_CHAIN_HOPS]
+    if unknown:
+        _error("bad_request", 400, f"unknown chain kinds: {unknown}")
+    log.info("chain-exists in: node_id=%s session=%s kinds=%d",
+             req.node_id, req.session_id or "-", len(req.kinds))
+    result = chain_exists(req.node_id, req.session_id, req.version, req.kinds)
+    log.info("chain-exists out: %s",
+             ", ".join(f"{k}={'y' if v else 'n'}" for k, v in result.items()))
     return result
 
 

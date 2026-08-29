@@ -197,7 +197,7 @@ test("getChain forwards the version so an Artifact source pins its version", asy
   }
 });
 
-test("getChain forwards chain_kind for each variant (full default / task / artifact)", async () => {
+test("getChain forwards the button-level kind (no full/task/artifact default)", async () => {
   const captured: { path: string; body: unknown }[] = [];
   const server = await startFakeMemoryGraph((path, body) => {
     captured.push({ path, body });
@@ -205,22 +205,44 @@ test("getChain forwards chain_kind for each variant (full default / task / artif
   });
   try {
     const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
-    // Omitting chainKind must default to "full" (backward-compatible).
+    // ``kind`` is the button-level chain key (e.g. "viewOutput"). Omitting it
+    // sends "" — there is no backward-compatible default anymore.
     await client.getChain("art-1", "sess-1");
-    await client.getChain("art-1", "sess-1", undefined, "task");
-    await client.getChain("art-1", "sess-1", undefined, "artifact");
+    await client.getChain("art-1", "sess-1", undefined, "viewProducingCode");
     const bodies = captured.map((c) => (c.body as Record<string, unknown>));
-    assert.equal(bodies[0]!.chain_kind, "full", "default chain_kind must be 'full'");
-    assert.equal(bodies[1]!.chain_kind, "task");
-    assert.equal(bodies[2]!.chain_kind, "artifact");
-    // chain_kind is always sent (sidecar's validation requires the field's
-    // default, so the client must not drop it even when omitted).
+    assert.equal(bodies[0]!.kind, "", "omitted kind sends empty string");
+    assert.equal(bodies[1]!.kind, "viewProducingCode");
+    // The old chain_kind field is gone entirely.
     for (const b of bodies) {
-      assert.equal(typeof b.chain_kind, "string");
+      assert.equal("chain_kind" in b, false, "chain_kind field must not be sent");
     }
-    // node_id + session_id still travel alongside chain_kind.
-    assert.equal(bodies[2]!.node_id, "art-1");
-    assert.equal(bodies[2]!.session_id, "sess-1");
+    // node_id + session_id still travel alongside kind.
+    assert.equal(bodies[1]!.node_id, "art-1");
+    assert.equal(bodies[1]!.session_id, "sess-1");
+  } finally {
+    await close(server);
+  }
+});
+
+test("chainExists sends kinds batch and maps the {kind: bool} response", async () => {
+  const captured: { path: string; body: unknown }[] = [];
+  const server = await startFakeMemoryGraph((path, body) => {
+    captured.push({ path, body });
+    return { status: 200, json: { viewOutput: true, viewProducingTask: false } };
+  });
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    const result = await client.chainExists("art-1", "sess-1", 2, ["viewOutput", "viewProducingTask"]);
+    const body = captured[0]!.body as Record<string, unknown>;
+    assert.equal(body.node_id, "art-1");
+    assert.equal(body.session_id, "sess-1");
+    assert.equal(body.version, 2);
+    assert.deepEqual(body.kinds, ["viewOutput", "viewProducingTask"]);
+    assert.equal(result.viewOutput, true);
+    assert.equal(result.viewProducingTask, false);
+    // A kind sent but absent from the response body is absent from the result
+    // map too (undefined → falsy → the frontend's availableButtons hides it).
+    assert.equal("viewContainedClaims" in result, false);
   } finally {
     await close(server);
   }

@@ -37,7 +37,7 @@ import {
   executorSandboxKind,
   executionTimeoutMs,
   hostInterpreterMaskArguments,
-  hostRuntimeSupportArguments,
+  resolveHostRuntimeSupport,
   prepareSandboxEgress,
   prepareSandboxLaunch,
   resolveProfileChdir,
@@ -527,7 +527,7 @@ export class KernelManager {
     const hostInterpreter = resolve(prefixPath, "bin", language === "python" ? "python" : "R");
     const worker = language === "python" ? PYTHON_KERNEL_WORKER : R_KERNEL_WORKER;
     const hostInterpreterMasks = await hostInterpreterMaskArguments();
-    const hostRuntimeSupport = await hostRuntimeSupportArguments();
+    const hostRuntimeSupport = await resolveHostRuntimeSupport();
     const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
     const envProfile = this.profileProvider?.(
       request.permissionEpoch.sessionId,

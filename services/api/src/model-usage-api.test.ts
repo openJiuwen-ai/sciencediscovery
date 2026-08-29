@@ -56,6 +56,8 @@ function testConfig(dataDir: string, runnerUrl: string): ServerConfig {
     gatewayTurnTimeoutMs: 300_000,
     host: "127.0.0.1",
     kernelIdleTimeoutMs: 300_000,
+    // No packaging snapshot in tests: the catalog stays empty unless a test installs one.
+    modelCatalogPath: resolve(dataDir, "model-catalog/absent.json"),
     paperPythonPath: resolve(process.cwd(), "../paper/.venv/bin/python"),
     paperWorkerPath: resolve(process.cwd(), "../paper/paper_worker.py"),
     permissionWaitTimeoutMs: 300_000,

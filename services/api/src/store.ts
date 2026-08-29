@@ -51,9 +51,15 @@ import type {
   MemoryGraphSettings,
   MemoryGraphSettingsDetails,
   McpInvocation,
+  ModelFactOverrides,
   ModelInvocationUsage,
   ModelRunInfo,
   ModelProfile,
+  ModelProvider,
+  ModelThinkingEffort,
+  ModelThinkingMode,
+  CreateModelProviderRequest,
+  UpdateModelProviderRequest,
   PaperAcquisition,
   PaperVisionRun,
   PermissionAction,
@@ -138,11 +144,18 @@ import {
 
 import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@sciencediscovery/schema";
 import {
+  constrainCatalogThinking,
+  getModelProviderPreset,
+  lookupModelCatalog,
+  MODEL_API_VARIANTS,
+} from "@sciencediscovery/schema";
+import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
   defaultEnvironmentRevision,
   defaultShellEnvironmentRevision,
   isSystemEnvironmentRevisionId,
 } from "@sciencediscovery/executor";
+import { toolOutputStoreRoot } from "@sciencediscovery/tools";
 import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
 import { BUNDLED_SKILL_IDS } from "@sciencediscovery/specialist";
@@ -173,8 +186,10 @@ import {
   encryptModelApiToken,
   loadOrCreateModelSecretKey,
   normalizeApiToken,
+  normalizeModelFactOverrides,
   validateLiveModel,
 } from "./store/secrets.js";
+import { planStandaloneProfileMigration, providerSecretKey, validateLiveProvider } from "./store/providers.js";
 import {
   knownConnectorIdSet,
   normalizeMcpProxyPolicies,
@@ -501,6 +516,19 @@ export class SessionStore {
       }
     };
 
+    const savedProviders = Array.isArray(saved.providers) ? saved.providers : [];
+    const providers = savedProviders.map((provider) => ({
+      ...validateLiveProvider(provider),
+      createdAt: provider.createdAt,
+      hasApiToken: modelIdsWithSecrets.has(providerSecretKey(provider.id)),
+      id: provider.id,
+      proxyPolicy: normalizeSavedProxyPolicy(provider.proxyPolicy),
+      tokenOptional: provider.tokenOptional === true,
+      updatedAt: provider.updatedAt,
+    }));
+    const providerIds = new Set(providers.map((provider) => provider.id));
+    const providerHasToken = new Map(providers.map((provider) => [provider.id, provider.hasApiToken]));
+
     const savedModels = Array.isArray(saved.models) ? saved.models : [];
     const models = savedModels
       .filter((model) => {
@@ -508,16 +536,35 @@ export class SessionStore {
         return legacy.id !== "builtin-demo" && legacy.demoMode !== true && legacy.model !== "deterministic-demo";
       })
       .map((model) => ({
-        baseUrl: model.baseUrl,
+        ...validateLiveModel(model),
         createdAt: model.createdAt,
-        hasApiToken: modelIdsWithSecrets.has(model.id),
+        hasApiToken: modelIdsWithSecrets.has(model.id)
+          || (typeof model.providerId === "string" && providerHasToken.get(model.providerId) === true),
         id: model.id,
-        model: model.model,
-        name: model.name,
+        // A profile whose provider disappeared keeps working standalone: its
+        // connection fields were always stored on the profile itself.
+        ...(typeof model.providerId === "string" && providerIds.has(model.providerId)
+          ? { providerId: model.providerId }
+          : {}),
         proxyPolicy: normalizeSavedProxyPolicy(model.proxyPolicy),
         updatedAt: model.updatedAt,
-        vision: model.vision === true,
       }));
+
+    // Profiles that predate the provider registry own their connection fields
+    // and used to be edited through a separate "standalone" surface. Group
+    // them by connection so every one of them is reachable through the
+    // provider list, without touching profile ids or endpoints.
+    const standaloneMigration = planStandaloneProfileMigration(models, {
+      newProviderId: () => randomUUID(),
+      now: new Date().toISOString(),
+    });
+    for (const provider of standaloneMigration.providers) providers.push(provider);
+    for (const model of models) {
+      const providerId = standaloneMigration.assignments.get(model.id);
+      if (providerId) model.providerId = providerId;
+    }
+
+    const migratedProviders = JSON.stringify(providers) !== JSON.stringify(savedProviders);
     const migratedModels = JSON.stringify(models) !== JSON.stringify(savedModels);
     const modelIds = new Set(models.map((model) => model.id));
     const fallbackModelId = models[0]?.id;
@@ -807,6 +854,7 @@ export class SessionStore {
       permissionGrants,
       permissionRequests,
       projects,
+      providers,
       proxyDefaultPolicy,
       proxyServers,
       quotaSettings,
@@ -824,6 +872,8 @@ export class SessionStore {
     for (const session of sessions) this.syncSessionCompatibility(session);
     const migratedSessionOverrides = JSON.stringify(sessions) !== JSON.stringify(savedSessions);
     if (!Array.isArray(saved.models)
+      || !Array.isArray(saved.providers)
+      || migratedProviders
       || !Array.isArray(saved.artifacts)
       || !Array.isArray(saved.artifactVersions)
       || !Array.isArray(saved.artifactAnnotations)
@@ -1052,6 +1102,7 @@ export class SessionStore {
       this.evidenceLinksPath(session.id),
       this.evidenceItemsPath(session.id),
       this.mcpInvocationsPath(session.id),
+      toolOutputStoreRoot(this.dataDir, session.id),
       resolve(this.dataDir, "projects", session.projectId, "sessions", session.id),
     ];
   }
@@ -1249,6 +1300,8 @@ export class SessionStore {
         else if (field === "enabledSkillIds") effective.enabledSkillIds = [...value as string[]];
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
+        else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;
+        else if (field === "thinkingEffort") effective.thinkingEffort = value as ModelThinkingEffort;
         else effective[field] = value as string;
         sources[field] = source;
       }
@@ -1279,6 +1332,8 @@ export class SessionStore {
     session.modelId = effective.modelId;
     session.reviewModelId = effective.reviewModelId;
     session.semanticReviewEnabled = effective.semanticReviewEnabled;
+    session.thinkingEffort = effective.thinkingEffort;
+    session.thinkingMode = effective.thinkingMode;
   }
 
   private syncSessionCompatibilityForProject(projectId?: string): void {
@@ -1747,7 +1802,33 @@ export class SessionStore {
   getModelApiToken(modelId?: string): string | undefined {
     if (!modelId || !this.database) return undefined;
     const row = this.database.prepare("SELECT encrypted_token FROM model_secrets WHERE model_id = ?").get(modelId) as { encrypted_token: string } | undefined;
-    return row ? this.decryptModelApiToken(modelId, row.encrypted_token) : undefined;
+    if (row) return this.decryptModelApiToken(modelId, row.encrypted_token);
+    // Provider-backed profiles without a token of their own use the
+    // provider's shared token.
+    const providerId = this.getModel(modelId)?.providerId;
+    return providerId ? this.getProviderApiToken(providerId) : undefined;
+  }
+
+  getProviderApiToken(providerId?: string): string | undefined {
+    if (!providerId || !this.database) return undefined;
+    const key = providerSecretKey(providerId);
+    const row = this.database.prepare("SELECT encrypted_token FROM model_secrets WHERE model_id = ?").get(key) as { encrypted_token: string } | undefined;
+    return row ? this.decryptModelApiToken(key, row.encrypted_token) : undefined;
+  }
+
+  /**
+   * Whether a run may start without any saved token.
+   *
+   * There is no separate "this endpoint needs no token" switch: saving a
+   * provider with an empty token is that statement, which is what local
+   * endpoints (Ollama), gateways that authenticate by network position, and
+   * test stubs rely on. A standalone profile with no provider still needs its
+   * own token, because nothing else vouches for the endpoint.
+   */
+  modelAllowsMissingToken(profile: ModelProfile): boolean {
+    const provider = this.getProvider(profile.providerId);
+    if (!provider) return false;
+    return provider.tokenOptional || !provider.hasApiToken;
   }
 
   /** Validate an optional model proxy policy (default inherit) against the
@@ -1793,13 +1874,21 @@ export class SessionStore {
   async updateModel(modelId: string, input: UpdateModelProfileRequest): Promise<ModelProfile> {
     const profile = this.getModel(modelId);
     if (!profile) throw new Error("Model not found");
-    Object.assign(profile, validateLiveModel(input), { updatedAt: new Date().toISOString() });
+    const normalized = validateLiveModel(input);
+    const provider = this.getProvider(profile.providerId);
+    if (provider && (normalized.baseUrl !== provider.baseUrl || normalized.apiProtocol !== provider.apiProtocol)) {
+      throw new Error("The base URL and API protocol of a provider model cannot be changed here; edit the provider instead");
+    }
+    Object.assign(profile, normalized, { updatedAt: new Date().toISOString() });
+    // `null` is an explicit "drop my overrides" so the listing and the catalog
+    // answer again; an absent key keeps whatever was saved.
+    if (input.facts === null) delete profile.facts;
     if (input.proxyPolicy !== undefined) {
       profile.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
     }
     if (input.apiToken === null) {
       this.setModelApiToken(modelId, undefined);
-      profile.hasApiToken = false;
+      profile.hasApiToken = provider?.hasApiToken === true;
     } else if (input.apiToken !== undefined) {
       this.setModelApiToken(modelId, normalizeApiToken(input.apiToken));
       profile.hasApiToken = true;
@@ -1825,6 +1914,204 @@ export class SessionStore {
     this.setModelApiToken(modelId, undefined);
     this.catalog.models = this.catalog.models.filter((model) => model.id !== modelId);
     await this.saveCatalog();
+  }
+
+  listProviders(): ModelProvider[] {
+    return this.catalog.providers.toSorted((left, right) => left.name.localeCompare(right.name));
+  }
+
+  getProvider(providerId?: string): ModelProvider | undefined {
+    if (!providerId) return undefined;
+    return this.catalog.providers.find((provider) => provider.id === providerId);
+  }
+
+  private setProviderApiToken(providerId: string, apiToken: string | undefined): void {
+    this.setModelApiToken(providerSecretKey(providerId), apiToken);
+  }
+
+  private profileHasOwnToken(modelId: string): boolean {
+    if (!this.database) return false;
+    return Boolean(this.database.prepare("SELECT 1 FROM model_secrets WHERE model_id = ?").get(modelId));
+  }
+
+  /** Mirror provider connection changes onto its profiles. The API variant is
+   *  only reset when the protocol family changed, so a per-model variant
+   *  choice under the same protocol survives provider edits. */
+  private syncProviderModels(provider: ModelProvider, previousProtocol: ModelProfile["apiProtocol"]): void {
+    for (const profile of this.catalog.models) {
+      if (profile.providerId !== provider.id) continue;
+      profile.baseUrl = provider.baseUrl;
+      profile.apiProtocol = provider.apiProtocol;
+      if (provider.apiProtocol !== previousProtocol) profile.apiVariant = provider.apiVariant;
+      profile.proxyPolicy = provider.proxyPolicy;
+      profile.hasApiToken = this.profileHasOwnToken(profile.id) || provider.hasApiToken;
+      profile.updatedAt = provider.updatedAt;
+    }
+  }
+
+  async createProvider(input: CreateModelProviderRequest): Promise<ModelProvider> {
+    const normalized = validateLiveProvider(input);
+    const preset = input.presetId === undefined ? undefined : getModelProviderPreset(input.presetId);
+    const now = new Date().toISOString();
+    const provider: ModelProvider = {
+      ...normalized,
+      createdAt: now,
+      hasApiToken: false,
+      id: randomUUID(),
+      proxyPolicy: this.normalizeModelProxyPolicy(input.proxyPolicy),
+      tokenOptional: input.tokenOptional ?? preset?.tokenOptional ?? false,
+      updatedAt: now,
+    };
+    const apiToken = normalizeApiToken(input.apiToken);
+    if (apiToken) {
+      this.setProviderApiToken(provider.id, apiToken);
+      provider.hasApiToken = true;
+    }
+    this.catalog.providers.push(provider);
+    await this.saveCatalog();
+    return provider;
+  }
+
+  async updateProvider(providerId: string, input: UpdateModelProviderRequest): Promise<ModelProvider> {
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const previousProtocol = provider.apiProtocol;
+    const normalized = validateLiveProvider({
+      apiProtocol: input.apiProtocol ?? provider.apiProtocol,
+      apiVariant: input.apiVariant
+        ?? (input.apiProtocol !== undefined && input.apiProtocol !== provider.apiProtocol ? undefined : provider.apiVariant),
+      baseUrl: input.baseUrl ?? provider.baseUrl,
+      modelDiscovery: input.modelDiscovery ?? provider.modelDiscovery,
+      name: input.name ?? provider.name,
+      presetId: provider.presetId,
+    });
+    Object.assign(provider, normalized, { updatedAt: new Date().toISOString() });
+    if (input.tokenOptional !== undefined) provider.tokenOptional = input.tokenOptional === true;
+    if (input.proxyPolicy !== undefined) {
+      provider.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
+    }
+    if (input.apiToken === null) {
+      this.setProviderApiToken(providerId, undefined);
+      provider.hasApiToken = false;
+    } else if (input.apiToken !== undefined) {
+      this.setProviderApiToken(providerId, normalizeApiToken(input.apiToken));
+      provider.hasApiToken = true;
+    }
+    this.syncProviderModels(provider, previousProtocol);
+    await this.saveCatalog();
+    return provider;
+  }
+
+  async deleteProvider(providerId: string): Promise<void> {
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const children = this.catalog.models.filter((model) => model.providerId === providerId);
+    const referencesModel = (settings: RuntimeSettingsOverrides, id: string) =>
+      settings.modelId === id || settings.reviewModelId === id;
+    for (const child of children) {
+      if (referencesModel(this.catalog.globalSettings, child.id)
+        || this.catalog.projects.some((project) => referencesModel(project.settingsOverrides, child.id))
+        || this.catalog.sessions.some((session) =>
+          session.modelId === child.id || session.reviewModelId === child.id || referencesModel(session.settingsOverrides, child.id))) {
+        throw new Error("Provider models are referenced by runtime settings and cannot be deleted");
+      }
+    }
+    for (const child of children) this.setModelApiToken(child.id, undefined);
+    this.setProviderApiToken(providerId, undefined);
+    this.catalog.models = this.catalog.models.filter((model) => model.providerId !== providerId);
+    this.catalog.providers = this.catalog.providers.filter((entry) => entry.id !== providerId);
+    await this.saveCatalog();
+  }
+
+  /** Ensure a profile backs the given provider/model pair so the rest of the
+   *  product (runs, usage, review model) keeps operating on profile ids. */
+  async materializeProviderModel(
+    providerId: string,
+    modelId: string,
+    options: {
+      facts?: ModelFactOverrides;
+      label?: string;
+      vision?: boolean;
+    } = {},
+  ): Promise<ModelProfile> {
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const model = modelId.trim();
+    if (!model) throw new Error("Model ID is required");
+    if (model.length > 512) throw new Error("Model ID is too long");
+    const catalog = lookupModelCatalog(model, provider.presetId);
+    // Adding a model never states a thinking default. A new profile starts at
+    // whatever the model's own contract says, which for almost every model is
+    // `auto` — the mode that omits the control field entirely. Per-model
+    // defaults are an edit, made in the model editor, not part of adding.
+    const requestedFacts = normalizeModelFactOverrides(options.facts);
+    const { effort: defaultEffort, mode: defaultMode } = constrainCatalogThinking(
+      model,
+      undefined,
+      undefined,
+      requestedFacts,
+    );
+    const apiVariant = catalog?.apiVariant && MODEL_API_VARIANTS[provider.apiProtocol].includes(catalog.apiVariant)
+      ? catalog.apiVariant
+      : provider.apiVariant;
+    const existing = this.catalog.models.find((profile) => profile.providerId === providerId && profile.model === model);
+    if (existing) {
+      // Adding the same model twice stays idempotent, but a field the caller
+      // states explicitly is an instruction, not a duplicate: apply it and
+      // leave everything else as saved.
+      const facts = requestedFacts ?? existing.facts;
+      const constrained = constrainCatalogThinking(
+        model,
+        existing.thinkingMode,
+        existing.thinkingEffort,
+        facts,
+      );
+      const name = options.label === undefined
+        ? existing.name
+        : cleanLabel(`${provider.name} · ${options.label}`, model);
+      const vision = options.vision ?? existing.vision;
+      if (existing.apiVariant !== apiVariant
+        || existing.thinkingMode !== constrained.mode
+        || existing.thinkingEffort !== constrained.effort
+        || existing.name !== name
+        || existing.vision !== vision
+        || JSON.stringify(existing.facts) !== JSON.stringify(facts)) {
+        Object.assign(existing, {
+          apiVariant,
+          ...(facts ? { facts } : {}),
+          name,
+          thinkingEffort: constrained.effort,
+          thinkingMode: constrained.mode,
+          updatedAt: new Date().toISOString(),
+          vision,
+        });
+        await this.saveCatalog();
+      }
+      return existing;
+    }
+    const now = new Date().toISOString();
+    const facts = requestedFacts;
+    const profile: ModelProfile = {
+      apiProtocol: provider.apiProtocol,
+      apiVariant,
+      baseUrl: provider.baseUrl,
+      createdAt: now,
+      ...(facts ? { facts } : {}),
+      hasApiToken: provider.hasApiToken,
+      id: randomUUID(),
+      model,
+      name: cleanLabel(`${provider.name} · ${options.label ?? model}`, model),
+      providerId,
+      proxyPolicy: provider.proxyPolicy,
+      thinkingEffort: defaultEffort,
+      thinkingMode: defaultMode,
+      updatedAt: now,
+      vision: options.vision === true,
+    };
+    this.catalog.models.push(profile);
+    this.defaultGlobalTaskModel(profile);
+    await this.saveCatalog();
+    return profile;
   }
 
   async createProject(name: string, input: RuntimeSettingsOverrides = {}): Promise<Project> {
@@ -1884,7 +2171,8 @@ export class SessionStore {
     ]);
     const selectedModel = this.getModel(resolved.effective.modelId);
     if (!selectedModel && !options.allowUnconfiguredModel) throw new Error("A task model is required");
-    if (selectedModel && !this.getModelApiToken(selectedModel.id) && !options.allowUnconfiguredModel) {
+    if (selectedModel && !this.getModelApiToken(selectedModel.id)
+      && !this.modelAllowsMissingToken(selectedModel) && !options.allowUnconfiguredModel) {
       throw new Error("The task model must have a saved API token");
     }
     const now = new Date().toISOString();
@@ -2847,6 +3135,17 @@ export class SessionStore {
     const { approvalMode, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
     const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
     const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
+    const nextModel = this.getModel(nextSettings.modelId);
+    if (nextModel && (nextSettings.thinkingMode !== undefined || nextSettings.thinkingEffort !== undefined)) {
+      const constrained = constrainCatalogThinking(
+        nextModel.model,
+        nextSettings.thinkingMode,
+        nextSettings.thinkingEffort,
+        nextModel.facts,
+      );
+      if (nextSettings.thinkingMode !== undefined) nextSettings.thinkingMode = constrained.mode;
+      if (nextSettings.thinkingEffort !== undefined) nextSettings.thinkingEffort = constrained.effort;
+    }
     if (approvalMode !== undefined) throw new Error("Use setApprovalMode to change approval policy");
     if (reviewMode !== undefined && reviewMode !== "auto" && reviewMode !== "manual") throw new Error("Invalid review mode");
     if (specialistId && !this.getSpecialist(specialistId)) throw new Error("Specialist not found");
@@ -3841,6 +4140,7 @@ export class SessionStore {
     references?: ComposerReference[],
     annotationIds?: string[],
     kind: ChatMessage["kind"] = "message",
+    modelContext?: ChatMessage["modelContext"],
   ): Promise<ChatMessage> {
     const session = this.assertSessionWritable(sessionId);
     const message: ChatMessage = {
@@ -3849,6 +4149,7 @@ export class SessionStore {
       id: randomUUID(),
       kind,
       ...(model ? { modelId: model.id, modelName: model.name } : {}),
+      ...(modelContext?.length ? { modelContext: structuredClone(modelContext) } : {}),
       ...(references?.length ? { references: structuredClone(references) } : {}),
       role,
     };

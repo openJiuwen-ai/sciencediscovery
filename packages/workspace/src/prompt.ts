@@ -37,6 +37,10 @@ import type {
 import type { AgentConfig } from "@sciencediscovery/model";
 import type { ToolFilterPolicy, WorkspaceToolOptions } from "./workspace.js";
 
+// History entries stay opaque so provider-native blocks (reasoning, tool
+// results) survive replay; the prompt layer only forwards them to the runtime.
+type AgentHistoryMessage = Record<string, unknown> & { role?: string };
+
 export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.2";
 // Bump when the workspace prompt contract changes, including subagent orchestration or skill disclosure rules.
 export const WORKSPACE_SYSTEM_PROMPT = [
@@ -289,7 +293,7 @@ export interface WorkspaceAgentOptions {
     signal?: AbortSignal,
   ) => Promise<ScientificExecutionResult>;
   npuBroker?: WorkspaceToolOptions["npuBroker"];
-  history?: Array<{ content: string; createdAt: string; role: "assistant" | "user" }>;
+  history?: AgentHistoryMessage[];
   artifactDownload?: WorkspaceToolOptions["artifactDownload"];
   declareArtifact?: WorkspaceToolOptions["declareArtifact"];
   listArtifacts?: WorkspaceToolOptions["listArtifacts"];

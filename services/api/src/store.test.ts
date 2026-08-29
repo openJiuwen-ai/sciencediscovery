@@ -20,7 +20,13 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
 import type { ArtifactJob, ComposerReference, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
-import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
+import {
+  lookupModelCatalog,
+  resolveModelFacts,
+  reviewerSpecialistSupportsLevel,
+  setModelCatalogSnapshot,
+} from "@sciencediscovery/schema";
+import { ToolOutputStore, toolOutputStoreRoot } from "@sciencediscovery/tools";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -29,6 +35,7 @@ import {
 import {
   SessionStore,
 } from "./store.js";
+import { API_TEST_CATALOG_RECORDS, installApiTestModelCatalog } from "./model-catalog.fixture.js";
 import { encryptModelApiToken } from "./store/secrets.js";
 import { normalizeMemoryGraphSettings } from "./store/settings.js";
 
@@ -38,6 +45,7 @@ interface PersistedCatalog {
   models: Array<Record<string, unknown>>;
   permissionEpochs: Array<{ id: string; networkPolicy: string }>;
   projects: Array<{ id: string; name: string; settingsOverrides: Record<string, unknown> }>;
+  providers?: Array<Record<string, unknown>>;
   reviewerSpecialistEnabled?: boolean;
   reviewerSpecialistLevel?: string;
   sessions: Array<{
@@ -883,6 +891,99 @@ test("SessionStore encrypts model API tokens and preserves them across reloads",
   assert.equal(reopened.getModelApiToken(model.id), undefined);
 });
 
+test("SessionStore persists model protocol settings and migrates legacy defaults", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-model-protocol-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const responses = await store.createModel({
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    baseUrl: "https://models.example.test/v1",
+    model: "reasoner",
+    name: "Responses model",
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+  });
+  assert.equal(responses.apiProtocol, "openai-responses");
+  assert.equal(responses.apiVariant, "responses");
+  assert.equal(responses.thinkingMode, "enabled");
+  assert.equal(responses.thinkingEffort, "max");
+
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  const row = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
+  const catalog = JSON.parse(row.json) as PersistedCatalog;
+  catalog.models.push({
+    baseUrl: "https://legacy.example.test/api/plan",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    hasApiToken: false,
+    id: "legacy-anthropic",
+    model: "legacy",
+    name: "Legacy",
+    proxyPolicy: "inherit",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    vision: false,
+  });
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(catalog));
+  database.close();
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  // The legacy profile is also adopted by a migrated provider, so assert the
+  // adoption separately and the rest of the shape exactly.
+  const legacy = reopened.getModel("legacy-anthropic")!;
+  const legacyProvider = reopened.getProvider(legacy.providerId);
+  assert.equal(legacyProvider?.baseUrl, "https://legacy.example.test/api/plan");
+  assert.equal(legacyProvider?.apiProtocol, "anthropic-messages");
+  const { providerId: _adopted, ...legacyProfile } = legacy;
+  assert.deepEqual(legacyProfile, {
+    apiProtocol: "anthropic-messages",
+    apiVariant: "anthropic-adaptive",
+    baseUrl: "https://legacy.example.test/api/plan",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    hasApiToken: false,
+    id: "legacy-anthropic",
+    model: "legacy",
+    name: "Legacy",
+    proxyPolicy: "inherit",
+    thinkingEffort: "high",
+    thinkingMode: "auto",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    vision: false,
+  });
+  await assert.rejects(reopened.createModel({
+    apiProtocol: "anthropic-messages",
+    apiVariant: "deepseek",
+    baseUrl: "https://invalid.example.test/v1",
+    model: "invalid",
+    name: "Invalid",
+  }), /not valid for anthropic-messages/);
+});
+
+test("SessionStore preserves provider model context across user turns", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `message-model-context-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({ apiToken: "test-token", baseUrl: "https://models.example.test/v1", model: "test", name: "Test" });
+  const project = await store.createProject("Project");
+  const session = await store.createSession(project.id, "Session", { modelId: model.id });
+  const modelContext = [{
+    role: "assistant",
+    content: "answer",
+    reasoning_content: "reasoning",
+    tool_calls: [{ id: "call-1", type: "function", function: { name: "lookup", arguments: "{}" } }],
+  }];
+  await store.appendMessage(session.id, "assistant", "answer", model, undefined, undefined, "message", modelContext);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual((await reopened.readMessages(session.id))[0]!.modelContext, modelContext);
+});
+
 test("SessionStore removes the legacy demo profile and reassigns sessions to a configured model", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-demo-migration-${Date.now()}-${process.pid}`);
   await mkdir(resolve(tempRoot, "messages"), { recursive: true });
@@ -1093,6 +1194,8 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       reviewModelId: "session",
       semanticReviewEnabled: "session",
       skillSelectionMode: "unset",
+      thinkingEffort: "unset",
+      thinkingMode: "unset",
     },
   });
   const firstPersisted = await readPersistedCatalog(tempRoot);
@@ -1191,6 +1294,8 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
       reviewModelId: "session",
       semanticReviewEnabled: "global",
       skillSelectionMode: "project",
+      thinkingEffort: "unset",
+      thinkingMode: "unset",
     },
   });
 
@@ -1725,6 +1830,33 @@ test("SessionStore permanently deletes Session and Project cascades from catalog
   assert.equal(store.getProject(project.id), undefined);
   assert.equal(store.getSession(second.id), undefined);
   for (const path of secondPaths) await assert.rejects(stat(path), { code: "ENOENT" });
+});
+
+test("deleting a Session removes the stored tool output its history still references", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-delete-tool-output-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+  });
+  const project = await store.createProject("Tool output project");
+  const session = await store.createSession(project.id, "Session", model.id);
+
+  // Write through the real store, at the same path production resolves, so a
+  // renamed or differently sanitized directory cannot slip past deletion.
+  const root = toolOutputStoreRoot(store.dataDir, session.id);
+  const saved = await new ToolOutputStore({ root }).save("run_python", "kept\nlines\n");
+  assert.ok(store.sessionDataPaths(session.id).includes(root), "the tool output root is Session data");
+  assert.equal((await new ToolOutputStore({ root }).read(saved.ref)).text, "kept\nlines\n");
+
+  await store.deleteSession(session.id, session.id);
+  await assert.rejects(stat(root), { code: "ENOENT" });
+  await assert.rejects(new ToolOutputStore({ root }).read(saved.ref), /no longer available/);
 });
 
 test("SessionStore preserves data when deletion staging cannot start", async (context) => {
@@ -2632,4 +2764,740 @@ test("updateMessageReferences leaves a failed run's assistant message with chips
   const stored = (await store.readMessages(session.id)).find((entry) => entry.id === message.id);
   assert.ok(stored?.references?.length, "the failed run's assistant message carries chip references");
   assert.equal(stored!.references![0]!.label, "evidence1");
+});
+
+test("model providers: preset creation, token fallback, sync, and lifecycle", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `providers-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  // A built-in preset needs only a token: endpoint facts come from the preset.
+  const provider = await store.createProvider({ apiToken: "sk-deepseek", presetId: "deepseek" });
+  assert.equal(provider.name, "DeepSeek");
+  assert.equal(provider.baseUrl, "https://api.deepseek.com");
+  assert.equal(provider.apiProtocol, "openai-chat-completions");
+  assert.equal(provider.apiVariant, "deepseek");
+  assert.equal(provider.modelDiscovery, "openai-models");
+  assert.equal(provider.hasApiToken, true);
+  assert.equal(store.getProviderApiToken(provider.id), "sk-deepseek");
+
+  // Materialized models copy the connection and inherit the provider token.
+  const profile = await store.materializeProviderModel(provider.id, "deepseek-v4-flash");
+  assert.equal(profile.providerId, provider.id);
+  assert.equal(profile.baseUrl, provider.baseUrl);
+  assert.equal(profile.apiVariant, "deepseek");
+  assert.equal(profile.hasApiToken, true);
+  assert.equal(store.getModelApiToken(profile.id), "sk-deepseek");
+  const again = await store.materializeProviderModel(provider.id, "deepseek-v4-flash");
+  assert.equal(again.id, profile.id, "re-materializing the same pair reuses the profile");
+  assert.equal(store.getGlobalSettings().effective.modelId, profile.id, "first usable model claims the task-model slot");
+
+  // Per-model variant edits survive same-protocol provider edits; the
+  // connection itself stays provider-managed.
+  await store.updateModel(profile.id, {
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "openai",
+    baseUrl: provider.baseUrl,
+    model: profile.model,
+    name: profile.name,
+  });
+  await store.updateProvider(provider.id, { baseUrl: "https://gateway.example/v1" });
+  const synced = store.getModel(profile.id)!;
+  assert.equal(synced.baseUrl, "https://gateway.example/v1");
+  assert.equal(synced.apiVariant, "openai");
+  await assert.rejects(
+    store.updateModel(profile.id, {
+      apiProtocol: "openai-chat-completions",
+      baseUrl: "https://elsewhere.example/v1",
+      model: profile.model,
+      name: profile.name,
+    }),
+    /cannot be changed here/,
+  );
+
+  // Removing the provider token turns off effective availability everywhere.
+  await store.updateProvider(provider.id, { apiToken: null });
+  assert.equal(store.getModelApiToken(profile.id), undefined);
+  assert.equal(store.getModel(profile.id)!.hasApiToken, false);
+
+  // Deletion is guarded while any child profile is referenced by settings.
+  await assert.rejects(store.deleteProvider(provider.id), /referenced by runtime settings/);
+  await store.replaceGlobalSettings({});
+  await store.deleteProvider(provider.id);
+  assert.equal(store.listProviders().length, 0);
+  assert.equal(store.getModel(profile.id), undefined);
+  assert.equal(store.getProviderApiToken(provider.id), undefined);
+});
+
+test("provider models materialize exact Kimi, Responses, and Anthropic capabilities", async (context) => {
+  installApiTestModelCatalog();
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-capabilities-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const moonshot = await store.createProvider({ apiToken: "moonshot-test", presetId: "moonshot" });
+  const k3 = await store.materializeProviderModel(moonshot.id, "kimi-k3");
+  assert.equal(k3.apiVariant, "kimi-k3");
+  assert.equal(k3.thinkingMode, "enabled");
+  assert.equal(k3.thinkingEffort, "max");
+
+  const anthropic = await store.createProvider({ apiToken: "anthropic-test", presetId: "anthropic" });
+  const haiku = await store.materializeProviderModel(anthropic.id, "claude-haiku-4-5");
+  assert.equal(haiku.apiVariant, "anthropic-legacy");
+
+  const gpt55 = await store.createModel({
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-5.5",
+    name: "Legacy max GPT-5.5",
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+  });
+  assert.equal(gpt55.thinkingEffort, "xhigh", "legacy max is migrated to the nearest legal effort");
+});
+
+test("model providers: custom provider persistence and token-optional runs", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `providers-custom-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const custom = await store.createProvider({
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "qwen",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    name: "本地网关",
+    tokenOptional: true,
+  });
+  assert.equal(custom.presetId, undefined);
+  const localModel = await store.materializeProviderModel(custom.id, "qwen3-local");
+  assert.equal(store.modelAllowsMissingToken(localModel), true);
+  assert.equal(localModel.hasApiToken, false);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const reProvider = reopened.listProviders()[0]!;
+  assert.equal(reProvider.name, "本地网关");
+  assert.equal(reProvider.tokenOptional, true);
+  assert.equal(reProvider.modelDiscovery, "openai-models",
+    "every provider asks its own endpoint for the model list");
+  const reProfile = reopened.listModels().find((model) => model.model === "qwen3-local")!;
+  assert.equal(reProfile.providerId, reProvider.id);
+  assert.equal(reopened.modelAllowsMissingToken(reProfile), true);
+});
+
+test("runtime settings carry legal thinking overrides through scopes and narrow invalid updates", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-overrides-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  // The catalog records this model as accepting only `high` and `max`, which is
+  // what the narrowing below is asserted against.
+  installApiTestModelCatalog();
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const model = await store.createModel({
+    apiToken: "tok",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.example/v1",
+    model: "deepseek-v4-pro",
+    name: "示例模型",
+  });
+  const project = await store.createProject("thinking");
+  const session = await store.createSession(project.id, "会话", { modelId: model.id });
+
+  await store.replaceSessionSettings(session.id, {
+    modelId: model.id,
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+  });
+  const details = store.getSessionSettings(session.id);
+  assert.equal(details.effective.thinkingMode, "enabled");
+  assert.equal(details.effective.thinkingEffort, "max");
+  assert.equal(details.sources.thinkingMode, "session");
+  assert.equal(details.sources.thinkingEffort, "session");
+  assert.equal(store.getSession(session.id)?.thinkingMode, "enabled");
+  assert.equal(store.getSession(session.id)?.thinkingEffort, "max");
+
+  await store.updateSession(session.id, { thinkingEffort: "low", thinkingMode: "enabled" });
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "high");
+  await store.updateSession(session.id, { thinkingEffort: "xhigh", thinkingMode: "enabled" });
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "high");
+
+  await assert.rejects(
+    store.replaceSessionSettings(session.id, { thinkingMode: "sometimes" as never }),
+    /thinkingMode must be/,
+  );
+  await assert.rejects(
+    store.replaceSessionSettings(session.id, { thinkingEffort: "ultra" as never }),
+    /thinkingEffort must be/,
+  );
+
+  // Clearing the override falls back to unset — the profile default applies.
+  await store.replaceSessionSettings(session.id, { modelId: model.id });
+  const cleared = store.getSessionSettings(session.id);
+  assert.equal(cleared.effective.thinkingMode, undefined);
+  assert.equal(cleared.sources.thinkingMode, "unset");
+});
+
+test("switching Session models persists a legal model-level effort across reloads", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-model-switch-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const source = await store.createModel({
+    apiToken: "tok",
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    baseUrl: "https://api.example.test/v1",
+    model: "gpt-5.6-sol",
+    name: "GPT 5.6",
+    thinkingEffort: "max",
+    thinkingMode: "enabled",
+  });
+  const target = await store.createModel({
+    apiToken: "tok",
+    apiProtocol: "openai-responses",
+    apiVariant: "responses",
+    baseUrl: "https://api.example.test/v1",
+    model: "gpt-5.5",
+    name: "GPT 5.5",
+  });
+  const project = await store.createProject("thinking switch");
+  const session = await store.createSession(project.id, "session", { modelId: source.id });
+  await store.updateSession(session.id, { thinkingEffort: "max", thinkingMode: "enabled" });
+
+  const switched = await store.updateSession(session.id, { modelId: target.id });
+  assert.equal(switched.thinkingEffort, "xhigh");
+  assert.equal(store.getSessionSettings(session.id).overrides.thinkingEffort, "xhigh");
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getSession(session.id)?.modelId, target.id);
+  assert.equal(reopened.getSession(session.id)?.thinkingEffort, "xhigh");
+  assert.equal(reopened.getSessionSettings(session.id).overrides.thinkingEffort, "xhigh");
+});
+
+test("standalone profiles are grouped into one migrated provider per connection", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `standalone-migration-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  // Profiles created through the pre-provider API: connection fields live on
+  // the profile and there is no providerId.
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const flash = await store.createModel({
+    apiToken: "shared-endpoint-token",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.example.test/v1",
+    model: "legacy-flash",
+    name: "Legacy flash",
+    thinkingEffort: "high",
+    thinkingMode: "enabled",
+  });
+  const pro = await store.createModel({
+    apiToken: "shared-endpoint-token",
+    apiVariant: "deepseek",
+    // Same endpoint, written with a trailing slash.
+    baseUrl: "https://api.example.test/v1/",
+    model: "legacy-pro",
+    name: "Legacy pro",
+  });
+  const qwen = await store.createModel({
+    apiToken: "qwen-token",
+    apiVariant: "qwen",
+    baseUrl: "https://api.example.test/v1",
+    model: "legacy-qwen",
+    name: "Legacy qwen",
+  });
+  const other = await store.createModel({
+    apiToken: "other-endpoint-token",
+    apiVariant: "deepseek",
+    baseUrl: "https://other.example.test/v1",
+    model: "legacy-other",
+    name: "Legacy other",
+  });
+  const project = await store.createProject("Legacy project");
+  const session = await store.createSession(project.id, "Legacy session", flash.id);
+  await store.replaceGlobalSettings({ modelId: pro.id });
+  assert.deepEqual(store.listProviders(), [], "the pre-migration catalog has no providers");
+
+  const migrated = new SessionStore(tempRoot);
+  await migrated.load();
+
+  const providers = migrated.listProviders();
+  assert.equal(providers.length, 3, "one provider per protocol + variant + endpoint");
+  const providerOf = (modelId: string) => migrated.getModel(modelId)?.providerId;
+  assert.equal(providerOf(flash.id), providerOf(pro.id), "a trailing slash is not a different endpoint");
+  assert.notEqual(providerOf(flash.id), providerOf(qwen.id), "a different dialect is a different provider");
+  assert.notEqual(providerOf(flash.id), providerOf(other.id), "a different host is a different provider");
+
+  // Profile identity and every connection fact survive untouched.
+  for (const before of [flash, pro, qwen, other]) {
+    const after = migrated.getModel(before.id)!;
+    assert.equal(after.id, before.id);
+    assert.equal(after.model, before.model);
+    assert.equal(after.baseUrl, before.baseUrl);
+    assert.equal(after.apiProtocol, before.apiProtocol);
+    assert.equal(after.apiVariant, before.apiVariant);
+    assert.equal(after.thinkingMode, before.thinkingMode);
+    assert.equal(after.thinkingEffort, before.thinkingEffort);
+    assert.equal(after.hasApiToken, true);
+  }
+  assert.equal(migrated.getSession(session.id)?.modelId, flash.id, "session assignment still resolves");
+  assert.equal(migrated.getGlobalSettings().effective.modelId, pro.id, "the global default still resolves");
+
+  // Credentials are not moved. Copying the group's shared token onto the
+  // provider would survive a later "remove saved token" on the profile, so the
+  // provider starts empty and each profile keeps resolving its own.
+  const sharedProvider = migrated.getProvider(providerOf(flash.id))!;
+  assert.equal(sharedProvider.hasApiToken, false);
+  assert.equal(migrated.getProviderApiToken(sharedProvider.id), undefined);
+  assert.equal(migrated.getModelApiToken(flash.id), "shared-endpoint-token");
+  assert.equal(migrated.getModelApiToken(other.id), "other-endpoint-token");
+  assert.equal(sharedProvider.modelDiscovery, "openai-models",
+    "whether a hand-configured endpoint lists models is discovered by asking it");
+  assert.equal(sharedProvider.tokenOptional, false, "standalone profiles always required their own token");
+  assert.equal(sharedProvider.presetId, undefined, "migrated providers are custom, not preset-derived");
+
+  // Reloading plans nothing: the profiles are no longer standalone.
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.deepEqual(
+    reloaded.listProviders().map((provider) => provider.id).toSorted(),
+    providers.map((provider) => provider.id).toSorted(),
+    "a second load does not create a second set of providers",
+  );
+  assert.equal(reloaded.getModel(flash.id)?.providerId, providerOf(flash.id));
+});
+
+test("migrating never merges credentials across profiles in the same group", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `standalone-mixed-token-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const first = await store.createModel({
+    apiToken: "first-token",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.example.test/v1",
+    model: "legacy-a",
+    name: "Legacy A",
+  });
+  const second = await store.createModel({
+    apiToken: "second-token",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.example.test/v1",
+    model: "legacy-b",
+    name: "Legacy B",
+  });
+
+  const migrated = new SessionStore(tempRoot);
+  await migrated.load();
+
+  const [provider] = migrated.listProviders();
+  assert.equal(migrated.listProviders().length, 1, "the same connection is one provider");
+  assert.equal(provider!.hasApiToken, false, "no credential is copied onto the provider");
+  assert.equal(migrated.getProviderApiToken(provider!.id), undefined);
+  assert.equal(migrated.getModelApiToken(first.id), "first-token");
+  assert.equal(migrated.getModelApiToken(second.id), "second-token");
+
+  // Clearing one profile's token still means "no token", not "fall back to a
+  // sibling's": the migration must not widen what a credential can reach.
+  await migrated.updateModel(first.id, {
+    apiToken: null,
+    baseUrl: first.baseUrl,
+    model: first.model,
+    name: first.name,
+    vision: false,
+  });
+  assert.equal(migrated.getModelApiToken(first.id), undefined);
+  assert.equal(migrated.getModelApiToken(second.id), "second-token");
+});
+
+test("a legacy catalog with standalone profiles migrates on load without any user step", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `standalone-legacy-catalog-${Date.now()}-${process.pid}`);
+  await mkdir(resolve(tempRoot, "messages"), { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const now = new Date().toISOString();
+  await writeFile(resolve(tempRoot, "catalog.json"), `${JSON.stringify({
+    models: [{
+      baseUrl: "https://legacy.example.test/v1",
+      createdAt: now,
+      hasApiToken: false,
+      id: "legacy-model-1",
+      model: "legacy-model",
+      name: "Legacy model",
+      updatedAt: now,
+      vision: false,
+    }],
+    projects: [{ createdAt: now, id: "project-1", name: "Legacy project" }],
+    sessions: [{ createdAt: now, id: "session-1", modelId: "legacy-model-1", projectId: "project-1", title: "Legacy task", updatedAt: now }],
+  }, null, 2)}\n`, "utf8");
+  await writeFile(resolve(tempRoot, "messages", "session-1.json"), "[]\n", "utf8");
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const [provider] = store.listProviders();
+  assert.equal(store.listProviders().length, 1);
+  assert.equal(store.getModel("legacy-model-1")?.providerId, provider!.id,
+    "the profile is now reachable through the provider list");
+  assert.equal(store.getModel("legacy-model-1")?.baseUrl, "https://legacy.example.test/v1");
+  assert.equal(store.getModel("legacy-model-1")?.hasApiToken, false, "a profile without a token stays without one");
+  assert.equal(store.getSession("session-1")?.modelId, "legacy-model-1");
+
+  // The migration is persisted, so the next process sees the same shape.
+  const persisted = await readPersistedCatalog(tempRoot);
+  assert.equal(persisted.providers?.length, 1);
+  assert.equal(persisted.models[0]?.providerId, provider!.id);
+});
+
+test("manually added provider models accept a name, vision and legal thinking defaults", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `manual-provider-model-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+
+  const added = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    label: "Hand entered",
+    vision: true,
+  });
+  assert.match(added.name, /Hand entered$/);
+  assert.equal(added.vision, true);
+  // Adding never states a thinking default: the new profile starts at the mode
+  // that omits the control field, and per-model defaults stay an edit.
+  assert.equal(added.thinkingMode, "auto");
+  assert.equal(added.hasApiToken, true, "the model inherits the provider credential");
+
+  const again = await store.materializeProviderModel(provider.id, "gpt-5.5", {});
+  assert.equal(again.id, added.id, "re-adding the same model stays idempotent");
+  assert.equal(again.vision, true, "a field the caller did not state is left alone");
+  assert.equal(store.listModels().filter((model) => model.model === "gpt-5.5").length, 1);
+});
+
+test("facts the user states for a model are persisted and survive a reopen", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-persist-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const added = await store.materializeProviderModel(provider.id, "self-hosted-mystery-7b", {
+    facts: {
+      contextWindow: 262_144,
+      maxOutputTokens: 32_768,
+      pricing: { cachedInput: 0.1, currency: "CNY", input: 2, output: 8 },
+      thinkingSupported: false,
+    },
+    label: "Self hosted",
+    vision: true,
+  });
+  assert.deepEqual(added.facts, {
+    contextWindow: 262_144,
+    maxOutputTokens: 32_768,
+    pricing: { cachedInput: 0.1, currency: "CNY", input: 2, output: 8 },
+    thinkingSupported: false,
+  });
+  assert.equal(added.vision, true);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const saved = reopened.getModel(added.id)!;
+  assert.deepEqual(saved.facts, added.facts, "the overrides are still there after a restart");
+  assert.equal(saved.vision, true);
+  assert.equal(resolveModelFacts({ user: saved.facts }).contextWindow, 262_144);
+});
+
+test("refreshing the model catalog does not overwrite what the user stated", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-refresh-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const added = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    facts: { contextWindow: 2_000_000, pricing: { currency: "USD", input: 0.5, output: 1.5 } },
+  });
+
+  // A later catalog refresh publishes different numbers for the same model.
+  setModelCatalogSnapshot({
+    fetchedAt: "2026-09-01T00:00:00.000Z",
+    origin: "downloaded",
+    records: API_TEST_CATALOG_RECORDS.map((record) => record.key === "gpt-5.5"
+      ? {
+        ...record,
+        contextWindow: 128_000,
+        pricing: {
+          openai: {
+            currency: "USD" as const,
+            input: 9,
+            output: 45,
+            source: { retrievedAt: "2026-09-01", url: "https://example.test/pricing" },
+            unit: "per-1m-tokens" as const,
+          },
+        },
+      }
+      : record),
+    sourceUrl: "https://models.dev/api.json",
+  });
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const saved = reopened.getModel(added.id)!;
+  assert.equal(saved.facts?.contextWindow, 2_000_000, "the refresh cannot reach into a saved profile");
+  assert.equal(saved.facts?.pricing?.input, 0.5);
+
+  // And the override still wins when the row is assembled.
+  const resolved = resolveModelFacts({
+    catalog: lookupModelCatalog("gpt-5.5", "openai"),
+    user: saved.facts,
+  });
+  assert.equal(resolved.contextWindow, 2_000_000);
+  assert.equal(resolved.origins.contextWindow, "user");
+  assert.equal(resolved.pricing?.input, 0.5);
+  assert.equal(resolved.origins.pricing, "user");
+  // A fact the user did not state still follows the refreshed catalog.
+  assert.equal(resolved.maxOutputTokens, 128_000);
+  assert.equal(resolved.origins.maxOutputTokens, "catalog");
+  installApiTestModelCatalog();
+});
+
+test("re-adding a model replaces only the facts the caller states again", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-restate-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const added = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    facts: { contextWindow: 900_000 },
+  });
+
+  const untouched = await store.materializeProviderModel(provider.id, "gpt-5.5", { vision: true });
+  assert.equal(untouched.id, added.id);
+  assert.equal(untouched.facts?.contextWindow, 900_000, "saying nothing about facts keeps them");
+  assert.equal(untouched.vision, true);
+
+  const restated = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    facts: { maxOutputTokens: 4_096 },
+  });
+  assert.deepEqual(restated.facts, { maxOutputTokens: 4_096 }, "a stated overrides object replaces the saved one");
+
+  // Editing the profile can drop the overrides entirely.
+  const cleared = await store.updateModel(restated.id, {
+    apiProtocol: restated.apiProtocol,
+    apiVariant: restated.apiVariant,
+    baseUrl: restated.baseUrl,
+    facts: null,
+    model: restated.model,
+    name: restated.name,
+  });
+  assert.equal(cleared.facts, undefined, "null lets the listing and catalog answer again");
+});
+
+test("stated facts that cannot be true are rejected instead of stored", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-invalid-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const add = (facts: unknown) =>
+    store.materializeProviderModel(provider.id, "gpt-5.5", { facts: facts as never });
+
+  await assert.rejects(add({ contextWindow: 1.5 }), /positive whole number of tokens/);
+  await assert.rejects(add({ contextWindow: 0 }), /positive whole number of tokens/);
+  await assert.rejects(add({ maxOutputTokens: -1 }), /positive whole number of tokens/);
+  await assert.rejects(add({ pricing: { currency: "EUR", input: 1, output: 2 } }), /must be CNY or USD/);
+  await assert.rejects(add({ pricing: { currency: "USD", input: 1 } }), /must state both an input and an output rate/);
+  await assert.rejects(add({ pricing: { currency: "USD", input: -1, output: 2 } }), /zero or greater/);
+  await assert.rejects(add({ thinkingSupported: "yes" }), /must be true or false/);
+  assert.deepEqual(store.listModels(), [], "nothing was persisted from a rejected request");
+});
+
+test("declared effort stops are normalized, narrowed against, and survive a reopen", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-efforts-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  // Typed in whatever order the user happened to write them, with a repeat.
+  const added = await store.materializeProviderModel(provider.id, "gpt-5.5", {
+    facts: { thinkingEfforts: ["high", "low", "high"] },
+  });
+  assert.deepEqual(added.facts?.thinkingEfforts, ["low", "high"],
+    "stops are de-duplicated and ordered weakest first, so every display shows one ascending scale");
+
+  // The session narrows against the declared stops, not the catalog's wider set.
+  const project = await store.createProject("Efforts");
+  const session = await store.createSession(project.id, "Efforts", added.id);
+  await store.updateSession(session.id, { thinkingEffort: "xhigh", thinkingMode: "enabled" });
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "high",
+    "xhigh is not a stop this endpoint accepts");
+  await store.updateSession(session.id, { thinkingEffort: "low", thinkingMode: "enabled" });
+  assert.equal(store.getSessionSettings(session.id).effective.thinkingEffort, "low");
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getModel(added.id)?.facts?.thinkingEfforts, ["low", "high"]);
+});
+
+test("an effort name outside the product's own scale is rejected", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-facts-effort-invalid-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "provider-token", presetId: "openai" });
+  const add = (thinkingEfforts: unknown) =>
+    store.materializeProviderModel(provider.id, "gpt-5.5", { facts: { thinkingEfforts } as never });
+  await assert.rejects(add(["low", "extreme"]), /must each be one of low, medium, high, xhigh, max/);
+  await assert.rejects(add("low,high"), /must be a list/);
+  assert.deepEqual(store.listModels(), [], "nothing was persisted from a rejected request");
+});
+
+test("a provider saved without a token lets its models run tokenless", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-empty-token-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  // No apiToken and no separate switch: the empty credential is the statement.
+  const provider = await store.createProvider({
+    apiProtocol: "openai-chat-completions",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    name: "Local gateway",
+  });
+  assert.equal(provider.hasApiToken, false, "the list can tell an empty token from a hidden one");
+  assert.equal(store.getProviderApiToken(provider.id), undefined);
+
+  const model = await store.materializeProviderModel(provider.id, "local-model");
+  assert.equal(model.hasApiToken, false);
+  assert.equal(store.modelAllowsMissingToken(model), true);
+
+  // A run starts: the guard that demands a saved token does not fire.
+  const project = await store.createProject("Local");
+  const session = await store.createSession(project.id, "Local", model.id);
+  assert.equal(store.getSession(session.id)?.modelId, model.id);
+
+  // Saving a token later flips both signals back.
+  const secured = await store.updateProvider(provider.id, { apiToken: "now-required" });
+  assert.equal(secured.hasApiToken, true);
+  assert.equal(store.modelAllowsMissingToken(store.getModel(model.id)!), false,
+    "an endpoint that has a credential must use it");
+  assert.equal(store.getModelApiToken(model.id), "now-required");
+
+  // Removing it again returns to the tokenless contract.
+  const cleared = await store.updateProvider(provider.id, { apiToken: null });
+  assert.equal(cleared.hasApiToken, false);
+  assert.equal(store.modelAllowsMissingToken(store.getModel(model.id)!), true);
+});
+
+test("a standalone profile still needs its own token", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `standalone-needs-token-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const profile = await store.createModel({
+    baseUrl: "https://standalone.example.test/v1",
+    model: "standalone-model",
+    name: "Standalone",
+  });
+  // Nothing vouches for this endpoint, so an absent credential is not a
+  // statement that none is needed.
+  assert.equal(store.modelAllowsMissingToken(profile), false);
+});
+
+test("a catalog that stored the removed catalog-only mode is migrated to asking the provider", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `discovery-migration-${Date.now()}-${process.pid}`);
+  await mkdir(resolve(tempRoot, "messages"), { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  // Written before the model list always came from the provider: `manual` meant
+  // "do not ask the provider, show whatever the catalog knows".
+  const now = new Date().toISOString();
+  await writeFile(resolve(tempRoot, "catalog.json"), `${JSON.stringify({
+    providers: [
+      {
+        apiProtocol: "openai-chat-completions",
+        apiVariant: "deepseek",
+        baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+        createdAt: now,
+        id: "provider-zhipu",
+        modelDiscovery: "manual",
+        name: "智谱 GLM",
+        presetId: "zhipu",
+        proxyPolicy: "inherit",
+        updatedAt: now,
+      },
+      {
+        apiProtocol: "anthropic-messages",
+        apiVariant: "anthropic-adaptive",
+        baseUrl: "https://api.anthropic.com",
+        createdAt: now,
+        id: "provider-anthropic",
+        modelDiscovery: "manual",
+        name: "Anthropic",
+        presetId: "anthropic",
+        proxyPolicy: "inherit",
+        updatedAt: now,
+      },
+    ],
+  }, null, 2)}\n`, "utf8");
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const zhipu = store.listProviders().find((provider) => provider.id === "provider-zhipu")!;
+  assert.equal(zhipu.modelDiscovery, "openai-models", "an existing provider starts asking its own endpoint");
+  assert.equal(zhipu.baseUrl, "https://open.bigmodel.cn/api/coding/paas/v4", "the endpoint the user typed is untouched");
+  // The listing shape follows the protocol, so an Anthropic provider migrates
+  // to the Anthropic route rather than the OpenAI one.
+  assert.equal(
+    store.listProviders().find((provider) => provider.id === "provider-anthropic")!.modelDiscovery,
+    "anthropic-models",
+  );
+
+  // Persisted, so the next process does not have to migrate again.
+  const persisted = await readPersistedCatalog(tempRoot);
+  assert.equal(persisted.providers?.[0]?.modelDiscovery, "openai-models");
+
+  // And an explicit write of the removed value is normalized rather than stored.
+  const updated = await store.updateProvider("provider-zhipu", {
+    modelDiscovery: "manual" as never,
+  });
+  assert.equal(updated.modelDiscovery, "openai-models");
 });

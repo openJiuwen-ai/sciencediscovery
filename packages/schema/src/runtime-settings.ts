@@ -14,6 +14,7 @@
 
 import type { ConnectorId } from "./connectors.js";
 import type { ExecutionLanguage, KernelMode, KernelSession } from "./environment.js";
+import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { NpuJob } from "./npu-job.js";
 
 export type RuntimeSettingsField =
@@ -23,7 +24,9 @@ export type RuntimeSettingsField =
   | "modelId"
   | "reviewModelId"
   | "semanticReviewEnabled"
-  | "skillSelectionMode";
+  | "skillSelectionMode"
+  | "thinkingEffort"
+  | "thinkingMode";
 
 export type RuntimeSettingsSource = "global" | "project" | "session" | "unset";
 
@@ -53,6 +56,11 @@ export interface RuntimeSettingsOverrides {
   reviewModelId?: string;
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;
+  /** Per-scope thinking overrides. They sit on top of the selected model
+   *  profile's own thinking configuration and only take effect where the
+   *  profile's API variant has a real thinking control field. */
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
 }
 
 export interface EffectiveRuntimeSettings {
@@ -65,6 +73,8 @@ export interface EffectiveRuntimeSettings {
   reviewModelId?: string;
   semanticReviewEnabled: boolean;
   skillSelectionMode: SkillSelectionMode;
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
 }
 
 export interface EnabledSkillLibrary {

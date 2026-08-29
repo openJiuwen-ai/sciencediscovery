@@ -24,6 +24,8 @@ import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 
 import { createRunnerServer, type RunnerConfig } from "@sciencediscovery/runner";
+import { ModelCatalogFetchError } from "@sciencediscovery/model";
+import { resolveModelFacts } from "@sciencediscovery/schema";
 import type {
   ApiError,
   ArtifactDerivation,
@@ -39,6 +41,9 @@ import type {
   ExecutionRun,
   ModelConnectivityTestResult,
   ModelProfile,
+  ModelCatalogDetails,
+  ModelProvider,
+  ModelProviderPreset,
   McpInvocation,
   McpToolResult,
   PaperAcquisition,
@@ -49,6 +54,7 @@ import type {
   PermissionGrant,
   PermissionRequest,
   ProxySettingsDetails,
+  ProviderModelList,
   RunStreamEvent,
   PromptManifest,
   Project,
@@ -151,6 +157,8 @@ function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1"): ServerCo
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
     kernelIdleTimeoutMs: 0,
+    // No packaging snapshot in tests: the catalog stays empty unless a test installs one.
+    modelCatalogPath: resolve(dataDir, "model-catalog/absent.json"),
     paperPythonPath: resolve(process.cwd(), "../paper/.venv/bin/python"),
     paperWorkerPath: resolve(process.cwd(), "../paper/paper_worker.py"),
     port: 0,
@@ -292,6 +300,7 @@ async function startTestApi(
   context: TestContext,
   dataDir: string,
   mcpTransport?: McpTransportClient,
+  configOverrides: Partial<ServerConfig> = {},
 ): Promise<{ origin: string }> {
   const runnerConfig: RunnerConfig = {
     authToken: "runner-test-token",
@@ -313,7 +322,7 @@ async function startTestApi(
   const runnerOrigin = `http://127.0.0.1:${(runner.address() as AddressInfo).port}`;
 
   const server = createApiServer(
-    testConfig(dataDir, runnerOrigin),
+    { ...testConfig(dataDir, runnerOrigin), ...configOverrides },
     mcpTransport ? { mcpTransport } : {},
   );
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
@@ -470,11 +479,19 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<{ body: 
 
 async function createTestModel(
   origin: string,
-  input: { apiToken?: string; baseUrl?: string; model?: string; name?: string; vision?: boolean } = {},
+  input: {
+    apiToken?: string;
+    apiVariant?: ModelProfile["apiVariant"];
+    baseUrl?: string;
+    model?: string;
+    name?: string;
+    vision?: boolean;
+  } = {},
 ): Promise<ModelProfile> {
   const result = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
     body: JSON.stringify({
       apiToken: input.apiToken ?? "test-model-token",
+      ...(input.apiVariant ? { apiVariant: input.apiVariant } : {}),
       baseUrl: input.baseUrl ?? "https://models.example.test/v1",
       model: input.model ?? "test-model",
       name: input.name ?? "Test model",
@@ -3156,6 +3173,7 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
   const toolModel = await startToolModel(context);
   const configuredModel = await createTestModel(origin, {
     apiToken: "ephemeral-test-token",
+    apiVariant: "deepseek",
     baseUrl: toolModel.baseUrl,
     model: "test-tool-model",
     name: "Tool test model",
@@ -5143,6 +5161,133 @@ test("model connectivity endpoint uses the encrypted saved credential", async (c
   assert.doesNotMatch(JSON.stringify(tested.body), /encrypted-connectivity-token/);
 });
 
+test("provider REST discovers models, reports upstream failure, and keeps manual fallback honest", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-api-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  let failDiscovery = false;
+  const receivedAuth: Array<string | undefined> = [];
+  const upstream = createHttpServer((request, response) => {
+    receivedAuth.push(request.headers.authorization);
+    if (request.url !== "/v1/models") {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    if (failDiscovery) {
+      response.writeHead(403, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "model-list permission denied" } }));
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      data: [{ id: "fixture-vision", context_length: 131_072, architecture: { input_modalities: ["text", "image"] } }],
+    }));
+  });
+  await new Promise<void>((resolveListen) => upstream.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => upstream.close(() => resolveClose())));
+  const upstreamOrigin = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+
+  // Zhipu has no listing endpoint, so its suggestions come from the catalog.
+  // The catalog is downloaded at runtime, so the test states the two models it
+  // asserts on instead of depending on whatever the live document says today.
+  const catalogPath = resolve(tempRoot, "packaged/models-dev.json");
+  await mkdir(resolve(tempRoot, "packaged"), { recursive: true });
+  await writeFile(catalogPath, JSON.stringify({
+    fetchedAt: "2026-08-26T00:00:00.000Z",
+    payload: {
+      zhipuai: {
+        doc: "https://docs.z.ai/guides/overview/pricing",
+        id: "zhipuai",
+        models: {
+          "glm-5.2": { id: "glm-5.2", limit: { context: 200_000 }, name: "GLM-5.2", reasoning: true },
+        },
+      },
+    },
+    sourceUrl: "https://models.dev/api.json",
+  }), "utf8");
+
+  const { origin } = await startTestApi(context, tempRoot, undefined, { modelCatalogPath: catalogPath });
+  const registry = await jsonRequest<{ presets: ModelProviderPreset[]; providers: ModelProvider[] }>(
+    `${origin}/api/providers`,
+    { headers: authorization },
+  );
+  assert.equal(registry.response.status, 200);
+  assert.equal(registry.body.providers.length, 0);
+  assert.equal(
+    registry.body.presets.find((preset) => preset.id === "dashscope")?.baseUrl,
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  );
+
+  const provider = await jsonRequest<ModelProvider>(`${origin}/api/providers`, {
+    body: JSON.stringify({
+      apiToken: "provider-secret-must-stay-write-only",
+      baseUrl: `${upstreamOrigin}/v1`,
+      modelDiscovery: "openai-models",
+      name: "Fixture gateway",
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(provider.response.status, 201);
+  assert.equal(provider.body.hasApiToken, true);
+  assert.equal("apiToken" in provider.body, false);
+
+  const listing = await jsonRequest<ProviderModelList>(
+    `${origin}/api/providers/${provider.body.id}/models`,
+    { headers: authorization },
+  );
+  assert.equal(listing.response.status, 200);
+  assert.equal(listing.body.source, "remote");
+  assert.deepEqual(listing.body.models[0]?.remote, { contextWindow: 131_072, vision: true });
+  assert.deepEqual(receivedAuth, ["Bearer provider-secret-must-stay-write-only"]);
+
+  failDiscovery = true;
+  const failedRefresh = await jsonRequest<{ error: string }>(
+    `${origin}/api/providers/${provider.body.id}/models?refresh=1`,
+    { headers: authorization },
+  );
+  assert.equal(failedRefresh.response.status, 502);
+  assert.match(failedRefresh.body.error, /403.*model-list permission denied/);
+
+  const fallback = await jsonRequest<ModelProfile>(`${origin}/api/providers/${provider.body.id}/models`, {
+    body: JSON.stringify({ model: "verified-manual-id", vision: true }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(fallback.response.status, 201);
+  assert.equal(fallback.body.model, "verified-manual-id");
+  assert.equal(fallback.body.providerId, provider.body.id);
+  assert.equal(fallback.body.vision, true);
+
+  // A preset-derived provider is not allowed to answer from the catalog: it
+  // asks its own endpoint like every other provider. Pointed at a path with no
+  // listing route, that is a visible failure rather than a borrowed list.
+  const presetProvider = await jsonRequest<ModelProvider>(`${origin}/api/providers`, {
+    body: JSON.stringify({ apiToken: "zhipu-token", baseUrl: `${upstreamOrigin}/nolist`, presetId: "zhipu" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(presetProvider.response.status, 201);
+  assert.equal(presetProvider.body.modelDiscovery, "openai-models",
+    "every preset asks the vendor for its model list");
+  const noSubstitute = await jsonRequest<ApiError>(
+    `${origin}/api/providers/${presetProvider.body.id}/models`,
+    { headers: authorization },
+  );
+  assert.equal(noSubstitute.response.status, 502);
+  assert.doesNotMatch(JSON.stringify(noSubstitute.body), /glm-/,
+    "the catalog does not supply a list when the endpoint has none");
+  assert.equal(receivedAuth.at(-1), "Bearer zhipu-token", "a saved key is sent with the listing request");
+
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
+  const catalog = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
+  database.close();
+  assert.doesNotMatch(catalog.json, /provider-secret-must-stay-write-only|zhipu-token/);
+  assert.doesNotMatch(await readFile(resolve(tempRoot, "catalog.sqlite"), "utf8"), /provider-secret-must-stay-write-only|zhipu-token/);
+});
+
 test("model registry persists multiple profiles and assigns them per session", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `models-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
@@ -5762,4 +5907,155 @@ test("publishing routes growable payloads into child streams and keeps the main 
   assert.ok(milestone.event.type === "subagent.updated" && milestone.event.subagent.steps.length === 0,
     "the persisted milestone does not repeat accumulated steps");
   assert.ok(subagent.steps.length > 0, "the source subagent still owns its steps");
+});
+
+test("the model catalog endpoint serves the packaged snapshot and keeps it when a refresh fails", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-catalog-api-${Date.now()}-${process.pid}`);
+  await mkdir(resolve(tempRoot, "packaged"), { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const document = (contextWindow: number) => ({
+    openai: {
+      doc: "https://developers.openai.com/api/docs/api-reference/introduction",
+      id: "openai",
+      models: {
+        "gpt-5.5": {
+          cost: { input: 1.25, output: 10 },
+          id: "gpt-5.5",
+          limit: { context: contextWindow, output: 128_000 },
+          modalities: { input: ["text", "image"], output: ["text"] },
+          name: "GPT-5.5",
+          reasoning: true,
+          reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh"] }],
+        },
+      },
+    },
+  });
+  const bundledPath = resolve(tempRoot, "packaged/models-dev.json");
+  await writeFile(bundledPath, JSON.stringify({
+    fetchedAt: "2026-08-20T00:00:00.000Z",
+    payload: document(400_000),
+    sourceUrl: "https://models.dev/api.json",
+  }), "utf8");
+
+  let downloadFails = false;
+  const server = createApiServer(
+    { ...testConfig(tempRoot, "http://127.0.0.1:1"), modelCatalogPath: bundledPath },
+    {
+      fetchModelCatalog: async () => {
+        if (downloadFails) throw new ModelCatalogFetchError("The model catalog is unreachable: connect ECONNREFUSED");
+        return document(1_050_000);
+      },
+    },
+  );
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  assert.equal((await fetch(`${origin}/api/model-catalog`)).status, 401);
+  const packaged = await jsonRequest<ModelCatalogDetails>(`${origin}/api/model-catalog`, { headers: authorization });
+  assert.equal(packaged.body.snapshot?.origin, "bundled");
+  assert.equal(packaged.body.snapshot?.fetchedAt, "2026-08-20T00:00:00.000Z");
+  assert.equal(packaged.body.sourceUrl, "https://models.dev/api.json");
+  assert.equal(
+    packaged.body.snapshot?.records.find((record) => record.key === "gpt-5.5")?.contextWindow,
+    400_000,
+    "the Web app receives the records it needs for its own synchronous lookups",
+  );
+
+  const refreshed = await jsonRequest<ModelCatalogDetails>(`${origin}/api/model-catalog/refresh`, {
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(refreshed.response.status, 200);
+  assert.equal(refreshed.body.snapshot?.origin, "downloaded");
+  assert.notEqual(refreshed.body.snapshot?.fetchedAt, "2026-08-20T00:00:00.000Z");
+  assert.equal(
+    refreshed.body.snapshot?.records.find((record) => record.key === "gpt-5.5")?.contextWindow,
+    1_050_000,
+  );
+
+  downloadFails = true;
+  const failure = await jsonRequest<ApiError>(`${origin}/api/model-catalog/refresh`, {
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(failure.response.status, 502);
+  assert.match(failure.body.error, /unreachable/);
+  const afterFailure = await jsonRequest<ModelCatalogDetails>(`${origin}/api/model-catalog`, { headers: authorization });
+  assert.deepEqual(
+    afterFailure.body.snapshot?.fetchedAt,
+    refreshed.body.snapshot?.fetchedAt,
+    "a failed refresh leaves the last successful catalog in place",
+  );
+});
+
+test("provider model REST saves stated facts and shows them back on the listing", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-model-facts-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const upstream = createHttpServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      data: [{ id: "listed-model", context_length: 131_072, max_tokens: 8_192 }],
+    }));
+  });
+  await new Promise<void>((resolveListen) => upstream.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => upstream.close(() => resolveClose())));
+  const upstreamOrigin = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+
+  const { origin } = await startTestApi(context, tempRoot);
+  const provider = await jsonRequest<ModelProvider>(`${origin}/api/providers`, {
+    body: JSON.stringify({
+      apiToken: "facts-provider-token",
+      baseUrl: `${upstreamOrigin}/v1`,
+      modelDiscovery: "openai-models",
+      name: "Facts gateway",
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+
+  // The listing reports 131,072 tokens; the operator knows this deployment
+  // actually serves a longer window and states it by hand.
+  const added = await jsonRequest<ModelProfile>(`${origin}/api/providers/${provider.body.id}/models`, {
+    body: JSON.stringify({
+      facts: {
+        contextWindow: 1_000_000,
+        pricing: { cachedInput: 0.05, currency: "CNY", input: 1, output: 4 },
+        thinkingSupported: true,
+      },
+      model: "listed-model",
+      vision: true,
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(added.response.status, 201);
+  assert.equal(added.body.facts?.contextWindow, 1_000_000);
+  assert.equal(added.body.facts?.pricing?.currency, "CNY");
+  assert.equal(added.body.vision, true);
+
+  const listing = await jsonRequest<ProviderModelList>(
+    `${origin}/api/providers/${provider.body.id}/models`,
+    { headers: authorization },
+  );
+  const row = listing.body.models.find((model) => model.id === "listed-model")!;
+  assert.equal(row.remote?.contextWindow, 131_072, "the listing still reports what the vendor said");
+  assert.equal(row.user?.contextWindow, 1_000_000, "and the row carries what the user stated");
+  const resolved = resolveModelFacts(row);
+  assert.equal(resolved.contextWindow, 1_000_000);
+  assert.equal(resolved.origins.contextWindow, "user");
+  assert.equal(resolved.maxOutputTokens, 8_192, "a fact the user left alone still comes from the listing");
+  assert.equal(resolved.origins.maxOutputTokens, "remote");
+
+  // A price that cannot be true is refused rather than stored.
+  const rejected = await jsonRequest<ApiError>(`${origin}/api/providers/${provider.body.id}/models`, {
+    body: JSON.stringify({ facts: { pricing: { currency: "USD", input: 1 } }, model: "listed-model" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(rejected.response.status, 400);
+  assert.match(rejected.body.error, /must state both an input and an output rate/);
 });

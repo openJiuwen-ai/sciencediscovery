@@ -44,6 +44,7 @@
   .document-header, .artifact-modal-header { padding: 18px 20px; }
   .document-markdown, .artifact-modal-body { padding: 28px 20px 44px; }
   .environment-source-settings { grid-template-areas: "intro intro" "pip conda" "save save"; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .system-config-dialog { width: calc(100vw - 32px); height: min(80vh, calc(100vh - 56px)); }
   .skill-workspace-dialog { width: calc(100vw - 20px); height: calc(100vh - 20px); }
   .skill-workspace-layout { grid-template-columns: 190px minmax(0, 1fr); grid-template-rows: 170px minmax(0, 1fr) minmax(120px, 170px); }
   .skill-workspace-catalog { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--border); }
@@ -54,6 +55,7 @@
 
 @media (max-width: 600px) {
   :root { --timeline-gutter: 45px; }
+  .composer { max-height: none; }
   .session-bar-meta { width: 100%; }
   .session-bar-project { max-width: 40vw; }
   .session-bar-session-rename { min-width: 0; max-width: none; width: 100%; flex: none; }
@@ -65,8 +67,7 @@
   .skill-review-timeline-cta { grid-template-columns: 38px minmax(0, 1fr); }
   .skill-review-timeline-cta button { grid-column: 1 / -1; width: 100%; }
   .composer-footer { align-items: stretch; flex-direction: column; }
-  .task-model-picker { align-items: stretch; flex-direction: column; }
-  .task-model-picker select { width: 100%; max-width: none; }
+  .model-picker-trigger { width: 100%; max-width: none; }
   .composer-run-actions { width: 100%; flex-direction: column; }
   .send-button { width: 100%; }
   .trust-metrics { grid-template-columns: repeat(2, 1fr); }
@@ -78,6 +79,17 @@
   .settings-group-nav { max-width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
   .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
   .settings-group-detail { padding: 22px 18px 30px; }
+  .provider-editor-primary, .provider-advanced-grid { grid-template-columns: minmax(0, 1fr); }
+  .provider-manual-form, .provider-manual-price { grid-template-columns: minmax(0, 1fr); }
+  .provider-manual-price { grid-column: 1 / -1; }
+  .provider-model-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .provider-model-row-facts { grid-column: 1 / -1; }
+  .provider-row-test { margin-left: 0; }
+  .provider-add-panel { align-items: stretch; flex-direction: column; }
+  .provider-add-panel select { max-width: none; }
+  .provider-section-heading { align-items: stretch; flex-direction: column; }
+  .provider-editor-actions { justify-content: stretch; }
+  .provider-editor-actions button { flex: 1 1 120px; }
   .skill-library-grid { grid-template-columns: minmax(0, 1fr); }
   .skill-library-catalog { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--border); }
   .skill-library-create, .skill-library-diff-controls, .skill-library-diff { grid-template-columns: minmax(0, 1fr); }
@@ -149,21 +161,21 @@
 /* Keep the composer compact so the message list owns the vertical space. */
 @container (max-width: 1024px) {
   .composer-hint { display: none; }
+  .model-picker { flex-basis: 100%; max-width: none; }
 }
 
 @container (max-width: 900px) {
-  .task-model-picker select { max-width: 200px; }
+  .orchestration-controls { flex-basis: 100%; }
+  .composer-run-actions { margin-left: auto; }
 }
 
 @container (max-width: 720px) {
-  .task-model-picker select { max-width: 150px; }
   .orchestration-controls select { max-width: 108px; }
 }
 
 @container (max-width: 620px) {
   .composer-footer { gap: 8px; padding: 8px 8px 8px 12px; }
-  .task-model-picker > span { display: none; }
-  .task-model-picker select { min-width: 96px; }
+  .model-picker-trigger-thinking { display: none; }
   .orchestration-controls select { max-width: 100px; }
   .send-button { padding-inline: 10px; }
 }
@@ -174,7 +186,8 @@
 /* Keep the stacked narrow-screen layout (max-width: 600px) winning over the
    composer container bands above: same specificity, so this must come last. */
 @media (max-width: 600px) {
-  .task-model-picker select { width: 100%; max-width: none; }
+  .model-picker, .orchestration-controls { flex: 0 0 auto; }
+  .model-picker { width: 100%; max-width: none; }
 }
 
 @media (max-height: 900px) {
@@ -186,6 +199,6 @@
   .composer { margin-bottom: 14px; }
   .composer textarea { padding-block: 10px 6px; }
   .composer-footer { padding-block: 7px; }
-  .task-model-picker select { min-height: 32px; }
+  .model-picker-trigger { min-height: 32px; }
   .send-button { min-height: 34px; }
 }

@@ -63,7 +63,7 @@ function launchOptions(egress?: Awaited<ReturnType<typeof prepareSandboxEgress>>
     egress,
     environmentBinds: [],
     hostInterpreterMasks: [],
-    hostRuntimeSupport: [],
+    hostRuntimeSupport: { bindArgs: [], env: {} },
     language: "shell" as const,
     pathEnv: "/usr/bin",
     procMode: "new" as const,

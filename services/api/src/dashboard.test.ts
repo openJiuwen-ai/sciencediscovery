@@ -607,6 +607,8 @@ async function startHttpFixture<T>(
     gatewayTurnTimeoutMs: 0,
     host: "127.0.0.1",
     kernelIdleTimeoutMs: 0,
+    // No packaging snapshot in tests: the catalog stays empty unless a test installs one.
+    modelCatalogPath: resolve(fixture.dataDir, "model-catalog/absent.json"),
     paperPythonPath: resolve(fixture.dataDir, "paper-python"),
     paperWorkerPath: resolve(fixture.dataDir, "paper-worker.py"),
     permissionWaitTimeoutMs: 0,

@@ -23,6 +23,7 @@ import {
   modelOptionLabel,
   shortModelProfileId,
 } from "../src/modelLabels.js";
+import { translate } from "../src/i18n/index.js";
 
 const sourceRoot = new URL("../src/", import.meta.url);
 
@@ -51,9 +52,10 @@ test("model labels add a short profile ID only when visible identities collide",
 
   assert.equal(shortModelProfileId(first.id), "model-…1111");
   assert.equal(duplicateModelProfileId(first, models), "model-…1111");
-  assert.equal(modelOptionLabel(first, models), "Shared · test-model · model-…1111");
-  assert.equal(modelOptionLabel(second, models), "Shared · test-model · model-…2222");
-  assert.equal(modelOptionLabel(unique, models), "Unique · test-model");
+  const t = (key: Parameters<typeof translate>[1]) => translate("en", key);
+  assert.equal(modelOptionLabel(first, models, t), "Shared · test-model · OpenAI standard · Model default · model-…1111");
+  assert.equal(modelOptionLabel(second, models, t), "Shared · test-model · OpenAI standard · Model default · model-…2222");
+  assert.equal(modelOptionLabel(unique, models, t), "Unique · test-model · OpenAI standard · Model default");
 });
 
 test("settings checkboxes expose a 24px control inside clickable labels", () => {
@@ -65,7 +67,6 @@ test("settings checkboxes expose a 24px control inside clickable labels", () => 
   assert.match(settings, /\.settings-choices \{[^}]*grid-template-columns: 1fr 1fr;/);
   assert.match(settings, /\.settings-choices input \{[^}]*width: 24px;[^}]*min-height: 24px;[^}]*height: 24px;/);
   assert.match(settings, /\.config-panel \.timeout-unlimited input \{[^}]*width: 24px;[^}]*min-height: 24px;[^}]*height: 24px;/);
-  assert.match(dialogs, /\.config-panel \.vision-capability \{[^}]*grid-template-columns: 24px minmax\(0, 1fr\)/);
   assert.match(timeline, /\.specialist-layout fieldset \{[^}]*flex-wrap: wrap;/);
   assert.match(timeline, /\.specialist-layout fieldset label \{[^}]*min-height: 32px;[^}]*cursor: pointer;/);
   assert.match(timeline, /\.specialist-layout fieldset input\[type="checkbox"\] \{[^}]*width: 24px;[^}]*min-height: 24px;[^}]*height: 24px;/);
@@ -86,12 +87,51 @@ test("the shared form skeleton also covers scoped settings outside config panels
   assert.match(managementControls, /<ScopedSettingsEditor/);
 });
 
+test("configured providers render one expandable row each with an inline model table", () => {
+  const settings = source("styles/settings.css");
+
+  assert.match(settings, /\.provider-rows \{[^}]*display: grid;/);
+  assert.match(settings, /\.provider-row-summary \{[^}]*grid-template-columns: 9px minmax\(0, 1fr\) auto auto;/);
+  assert.match(settings, /\.provider-model-table \{[^}]*display: grid;[^}]*border: 1px solid var\(--border\)/);
+  assert.match(settings, /\.provider-model-row \{[^}]*grid-template-columns: minmax\(140px, 1\.2fr\) minmax\(0, 2fr\) auto;/);
+  assert.match(settings, /\.provider-manual-form \{[^}]*display: grid;/);
+  assert.match(settings, /\.provider-manual-form \.provider-manual-vision \{[^}]*align-self: end;/);
+  assert.match(settings, /\.provider-add-panel select \{[^}]*max-width: 240px;/);
+  assert.match(settings, /\.provider-editor-actions \{[^}]*flex-wrap: nowrap;/);
+  // The preset wall and the resident editor are gone for good.
+  assert.doesNotMatch(settings, /provider-preset-card/);
+});
+
 test("sidebar ellipsis text nodes carry their full visible names", () => {
   const app = source("App.tsx");
 
   assert.match(app, /<span title=\{project\.name\}>\{label\}<\/span>/);
   assert.match(app, /<span title=\{`\$\{item\.title\}\$\{item\.archivedAt/);
-  assert.equal(app.match(/modelOptionLabel\(item, (?:models|visionModels)\)/g)?.length, 3);
+  // Only the optional vision model picker still uses the long option label;
+  // the composer mounts the ModelPicker popover instead of an inline select.
+  assert.equal(app.match(/modelOptionLabel\(item, (?:models|visionModels), t\)/g)?.length, 1);
+  assert.match(app, /<ModelPicker/);
+  // The advanced standalone model editor is gone; migrated profiles live
+  // under their custom provider instead.
+  assert.doesNotMatch(app, /provider-advanced-profiles/);
+  assert.doesNotMatch(app, /ModelDraftFields/);
+});
+
+test("historical run labels use their recorded model instead of the Composer selection", () => {
+  const app = source("App.tsx");
+
+  assert.doesNotMatch(app, /modelName=\{activeModel\?\.name\}/);
+  assert.match(app, /modelName=\{sessionReplayTimelines\[block\.runId\]\?\.modelName\}/);
+  assert.match(app, /modelName=\{activeRunTimeline\?\.modelName\}/);
+});
+
+test("the system settings dialog uses up to roughly 80% of the viewport", () => {
+  const dialogs = source("styles/dialogs.css");
+  const responsive = source("styles/responsive.css");
+
+  assert.match(dialogs, /\.system-config-dialog \{[^}]*width: min\(80vw, 1600px\);[^}]*height: min\(80vh, 1000px\);/);
+  assert.match(responsive, /@media \(max-width: 900px\)[\s\S]*?\.system-config-dialog \{ width: calc\(100vw - 32px\);/);
+  assert.match(responsive, /@media \(max-width: 600px\)[\s\S]*?\.system-config-dialog \{ width: 100%;/);
 });
 
 test("workspace resize wiring shares a viewport-driven maximum", () => {
@@ -116,4 +156,23 @@ test("dense settings and artifact layouts adapt without fixed-column overflow", 
   assert.match(responsive, /\.dialog-actions \{ flex-wrap: wrap; \}/);
   assert.match(responsive, /\.annotation-editor \{ grid-template-columns: minmax\(0, 1fr\); \}/);
   assert.match(artifacts, /\.artifact-provenance article header \{[^}]*flex-wrap: wrap;/);
+});
+
+test("Composer controls wrap by available container width instead of overlapping", () => {
+  const conversation = source("styles/conversation.css");
+  const responsive = source("styles/responsive.css");
+
+  assert.match(conversation, /\.composer-footer \{[^}]*flex-wrap: wrap;/);
+  assert.match(conversation, /\.model-picker \{[^}]*flex: 1 1 280px;[^}]*min-width: 0;/);
+  assert.match(conversation, /\.model-picker-popover \{[^}]*position: absolute;[^}]*bottom: calc\(100% \+ 8px\);/);
+  assert.match(conversation, /\.model-picker-stops \{[^}]*display: flex;/);
+  // Conversation model rows reveal a rich hover/focus popup that never swallows the click.
+  assert.match(conversation, /\.model-picker-row-wrap:hover \.model-picker-popup, \.model-picker-row-wrap:focus-within \.model-picker-popup \{[^}]*display: grid;/);
+  assert.match(conversation, /\.model-picker-popup \{[^}]*pointer-events: none;/);
+  assert.match(conversation, /\.model-picker-stop \+ \.model-picker-stop \{[^}]*margin-left: -1px;/);
+  assert.match(conversation, /\.model-picker-trigger-name \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
+  assert.match(conversation, /\.orchestration-controls \{[^}]*flex-wrap: wrap;/);
+  assert.match(responsive, /@container \(max-width: 1024px\)[\s\S]*?\.model-picker \{ flex-basis: 100%; max-width: none; \}/);
+  assert.match(responsive, /@container \(max-width: 900px\)[\s\S]*?\.orchestration-controls \{ flex-basis: 100%; \}/);
+  assert.match(responsive, /@media \(max-width: 600px\) \{\s*\.model-picker, \.orchestration-controls \{ flex: 0 0 auto; \}\s*\.model-picker \{ width: 100%; max-width: none;/);
 });

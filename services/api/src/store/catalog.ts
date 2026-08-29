@@ -20,6 +20,7 @@ import type {
   McpProxyPolicies,
   MemoryGraphSettings,
   ModelProfile,
+  ModelProvider,
   ProxyDefaultPolicy,
   ProxyServer,
   PermissionEpoch,
@@ -67,6 +68,7 @@ export interface Catalog {
   memoryGraphSettings: MemoryGraphSettings;
   models: ModelProfile[];
   permissionEpochs: PermissionEpoch[];
+  providers: ModelProvider[];
   proxyDefaultPolicy: ProxyDefaultPolicy;
   proxyServers: ProxyServer[];
   permissionGrants: PermissionGrant[];
@@ -106,6 +108,7 @@ export function emptyCatalog(
     memoryGraphSettings: structuredClone(DEFAULT_MEMORY_GRAPH_SETTINGS),
     models: [],
     permissionEpochs: [],
+    providers: [],
     proxyDefaultPolicy: `proxy:${ENVIRONMENT_PROXY_SERVER_ID}`,
     proxyServers: [environmentProxyServer()],
     permissionGrants: [],

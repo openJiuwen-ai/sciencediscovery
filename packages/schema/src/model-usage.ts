@@ -12,16 +12,87 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Type-only, so the mutual reference with model-provider.ts costs nothing at
+// runtime: the fact-override shape is defined next to the catalog types it
+// competes with, and consumed here by the profile that stores it.
+import type { ModelFactOverrides } from "./model-provider.js";
 import type { ProxyPolicy } from "./proxy.js";
 
+export type ModelApiProtocol =
+  | "anthropic-messages"
+  | "openai-chat-completions"
+  | "openai-responses";
+
+export type ModelApiVariant =
+  | "anthropic-adaptive"
+  | "anthropic-legacy"
+  | "deepseek"
+  | "gemini"
+  | "kimi-k3"
+  | "minimax"
+  | "ollama"
+  | "openai"
+  | "qwen"
+  | "responses";
+
+export type ModelThinkingMode = "auto" | "disabled" | "enabled";
+export type ModelThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export const MODEL_API_VARIANTS: Record<ModelApiProtocol, readonly ModelApiVariant[]> = {
+  "openai-chat-completions": ["openai", "deepseek", "kimi-k3", "qwen", "minimax", "gemini", "ollama"],
+  "openai-responses": ["responses"],
+  "anthropic-messages": ["anthropic-adaptive", "anthropic-legacy"],
+};
+
+export const DEFAULT_MODEL_API_VARIANT: Record<ModelApiProtocol, ModelApiVariant> = {
+  "openai-chat-completions": "openai",
+  "openai-responses": "responses",
+  "anthropic-messages": "anthropic-adaptive",
+};
+
+/** Variants whose thinking toggle maps to real wire fields. The rest treat
+ *  `enabled`/`disabled` as display-only because their endpoints have no
+ *  compatible control field. */
+export const THINKING_CONTROL_VARIANTS: readonly ModelApiVariant[] = [
+  "anthropic-adaptive",
+  "anthropic-legacy",
+  "deepseek",
+  "gemini",
+  "kimi-k3",
+  "minimax",
+  "qwen",
+  "responses",
+];
+
+/** Variants that send a thinking-effort field when thinking is enabled. */
+export const THINKING_EFFORT_VARIANTS: readonly ModelApiVariant[] = [
+  "anthropic-adaptive",
+  "anthropic-legacy",
+  "deepseek",
+  "gemini",
+  "kimi-k3",
+  "responses",
+];
+
 export interface ModelProfile {
+  apiProtocol?: ModelApiProtocol;
+  apiVariant?: ModelApiVariant;
   baseUrl: string;
   createdAt: string;
+  /** Facts the user stated for this model. Saved here rather than in the
+   *  catalog snapshot, so refreshing the catalog cannot overwrite them. */
+  facts?: ModelFactOverrides;
   hasApiToken: boolean;
   id: string;
   model: string;
   name: string;
+  /** Provider this profile belongs to. Connection fields (base URL, protocol,
+   *  variant, proxy) mirror the provider and the provider's token is used
+   *  when the profile has none of its own. Absent for standalone profiles. */
+  providerId?: string;
   proxyPolicy: ProxyPolicy;
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
   updatedAt: string;
   vision: boolean;
 }
@@ -148,18 +219,30 @@ export interface GlobalModelUsageSummary {
 
 export interface CreateModelProfileRequest {
   apiToken?: string;
+  apiProtocol?: ModelApiProtocol;
+  apiVariant?: ModelApiVariant;
   baseUrl: string;
+  facts?: ModelFactOverrides;
   model: string;
   name: string;
   proxyPolicy?: ProxyPolicy;
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
   vision?: boolean;
 }
 
 export interface UpdateModelProfileRequest {
   apiToken?: string | null;
+  apiProtocol?: ModelApiProtocol;
+  apiVariant?: ModelApiVariant;
   baseUrl: string;
+  /** Replaces the saved overrides. `null` clears them and lets the listing and
+   *  catalog answer again. */
+  facts?: ModelFactOverrides | null;
   model: string;
   name: string;
   proxyPolicy?: ProxyPolicy;
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
   vision?: boolean;
 }

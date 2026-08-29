@@ -185,10 +185,25 @@ export class ArtifactsApiClient extends RunsApiClient {
     nodeId: string,
     sessionId?: string,
     version?: number,
-    chainKind?: "full" | "task" | "artifact",
+    kind?: string,
   ): Promise<MemoryGraphChainResult> {
     return this.request("/api/memory/query/chain", {
-      body: JSON.stringify({ node_id: nodeId, session_id: sessionId, version, chain_kind: chainKind ?? "full" }),
+      body: JSON.stringify({ node_id: nodeId, session_id: sessionId, version, kind: kind ?? "" }),
+      method: "POST",
+    });
+  }
+
+  /** Batch existence check: for each button ``kind``, whether a non-empty
+   * chain is reachable from the node. The explorer hides buttons that report
+   * false before the user clicks them. See MemoryGraphClient.chainExists. */
+  chainExists(
+    nodeId: string,
+    sessionId: string | undefined,
+    version: number | undefined,
+    kinds: string[],
+  ): Promise<Record<string, boolean>> {
+    return this.request("/api/memory/query/chain-exists", {
+      body: JSON.stringify({ node_id: nodeId, session_id: sessionId, version, kinds }),
       method: "POST",
     });
   }

@@ -4,6 +4,12 @@
 import type { Static, TSchema } from "typebox";
 
 export interface AgentToolResult {
+  /**
+   * Set by tools that already bound their own model-facing output (pagination,
+   * an explicit preview). The registry then leaves the formatting alone unless
+   * the result still exceeds the hard bound.
+   */
+  bounded?: boolean;
   content: Array<{ text: string; type: "text" }>;
   details: unknown;
 }

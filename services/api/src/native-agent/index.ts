@@ -69,8 +69,12 @@ import {
   type RunEvent,
 } from "@sciencediscovery/runtime-core";
 import {
-  type AgentTool,
+  createToolOutputTools,
+  ToolOutputGuard,
+  toolOutputStoreRoot,
+  ToolOutputStore,
   ToolRegistry,
+  type AgentTool,
 } from "@sciencediscovery/tools";
 import {
   buildSkillSystemSection,
@@ -215,7 +219,16 @@ class NativeAgent implements NativeAgentHandle {
     // runtime for this turn or it did not, and that single fact decides
     // whether the tools exist. Nothing downstream forwards anything.
     const evolveTools = createEvolveTools(options.evolve);
-    this.toolRegistry = new ToolRegistry([...executionTools, ...planTools, ...evolveTools], {
+    // Retained per Session, not per AgentRun: a bounded result stays in the
+    // replayed history of later runs, so its ref has to keep resolving for as
+    // long as that history does. Session deletion removes this directory.
+    const toolOutputStore = new ToolOutputStore({
+      root: toolOutputStoreRoot(options.config.dataDir, options.sessionId),
+    });
+    this.toolRegistry = new ToolRegistry([
+      ...executionTools, ...planTools, ...evolveTools,
+      ...createToolOutputTools(toolOutputStore),
+    ], {
       createResultMessage: (call, content) => ({
         role: "tool", tool_call_id: call.id, name: call.name, content,
       }),
@@ -231,6 +244,7 @@ class NativeAgent implements NativeAgentHandle {
           version: skill.version,
         });
       },
+      outputGuard: new ToolOutputGuard({ sink: toolOutputStore }),
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
     this.promptSkills = toolNames.has("read_skill")
@@ -268,9 +282,7 @@ class NativeAgent implements NativeAgentHandle {
       options.runContract ? formatRunContract(options.runContract) : "",
       ...this.toolRegistry.promptSections(),
     ].filter(Boolean).join("\n\n");
-    this.history = options.gatewayHistory
-      ? options.gatewayHistory.map(normalizeHistoryMessage)
-      : (options.history ?? []).map((message) => ({ role: message.role, content: message.content }));
+    this.history = (options.gatewayHistory ?? options.history ?? []).map(normalizeHistoryMessage);
     // Reasoning models bill hidden thought against the same `max_tokens` as
     // the answer, and on some endpoints the agent loop spends a whole turn on
     // it — tens of thousands of characters, no visible text, no tool call.
@@ -280,9 +292,13 @@ class NativeAgent implements NativeAgentHandle {
     // eventually; until then it is one switch for the deployment.
     const thinking = process.env.SCIENCE_AGENT_AGENT_THINKING?.trim();
     this.endpoint = {
+      ...(options.config.apiProtocol ? { apiProtocol: options.config.apiProtocol } : {}),
+      ...(options.config.apiVariant ? { apiVariant: options.config.apiVariant } : {}),
       baseUrl: options.config.baseUrl,
       ...(options.config.apiToken ? { apiToken: options.config.apiToken } : {}),
       model: options.config.model,
+      ...(options.config.thinkingEffort ? { thinkingEffort: options.config.thinkingEffort } : {}),
+      ...(options.config.thinkingMode ? { thinkingMode: options.config.thinkingMode } : {}),
       ...(options.config.proxy ? { proxy: options.config.proxy } : {}),
       ...(thinking === "disabled" || thinking === "enabled" ? { thinking } : {}),
     };

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 
 import type { RuntimeMessage, RuntimeToolCall, ToolDispatchResult, ToolDispatcher } from "@sciencediscovery/runtime-core";
 
+import type { ToolOutputGuard } from "./bounded-output.js";
 import {
   autoPromoteFromRouting,
   blockedDeferredToolResult,
@@ -39,6 +40,12 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
     isError: boolean;
     sequence: number;
   }): void;
+  /**
+   * Deterministic bound applied to every result before it becomes a canonical
+   * history message. Wiring it here rather than in each tool is what stops a
+   * newly added or MCP-provided tool from reaching the model unbounded.
+   */
+  outputGuard?: ToolOutputGuard;
 }
 
 /**
@@ -104,6 +111,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     const sequence = this.nextExecutionSequence += 1;
     let content: string;
     let isError: boolean;
+    let selfBounded = false;
     if (call.argsParseError) {
       content = JSON.stringify({ ok: false, error: { attempts: 1, code: "INVALID_TOOL_ARGUMENTS", retryable: true,
         message: `Invalid tool arguments: ${call.argsParseError}`.slice(0, 1_000) } });
@@ -118,7 +126,10 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       content = blockedDeferredToolResult(call.name);
       isError = true;
     } else {
-      ({ content, isError } = await this.executeRegistered(call, signal));
+      ({ content, isError, selfBounded } = await this.executeRegistered(call, signal));
+    }
+    if (this.options.outputGuard) {
+      content = await this.options.outputGuard.apply(call.name, content, selfBounded);
     }
     try { this.options.onResult?.({ call, content, isError, sequence }); } catch { /* observer isolation */ }
     return { content, isError, message: this.options.createResultMessage(call, content) };
@@ -145,15 +156,24 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     return state;
   }
 
-  private async executeRegistered(call: RuntimeToolCall, signal: AbortSignal): Promise<{ content: string; isError: boolean }> {
+  private async executeRegistered(
+    call: RuntimeToolCall,
+    signal: AbortSignal,
+  ): Promise<{ content: string; isError: boolean; selfBounded: boolean }> {
     const decision = this.loopGuard.inspect(call.name, call.args);
-    if (decision.action !== "allow") return { content: decision.content, isError: decision.action === "stop" };
+    if (decision.action !== "allow") {
+      return { content: decision.content, isError: decision.action === "stop", selfBounded: false };
+    }
     const tool = this.tools.get(call.name);
-    if (!tool) return { content: `Unknown tool: ${call.name}`, isError: true };
+    if (!tool) return { content: `Unknown tool: ${call.name}`, isError: true, selfBounded: false };
     try {
       const result = await tool.execute(call.id || randomUUID(), call.args as never, signal);
       const text = result.content.map((item) => item.text).join("\n");
-      return { content: isRemoteContentTool(call.name) ? neutralizeUntrustedTags(text) : text, isError: false };
+      return {
+        content: isRemoteContentTool(call.name) ? neutralizeUntrustedTags(text) : text,
+        isError: false,
+        selfBounded: result.bounded === true,
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const invocation = error && typeof error === "object" && "invocation" in error
@@ -165,7 +185,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
         message: message.slice(0, 1_000),
         ...(invocation?.error?.retryAfterMs !== undefined ? { retryAfterMs: invocation.error.retryAfterMs } : {}),
         retryable: invocation?.error?.retryable ?? false,
-      } }), isError: true };
+      } }), isError: true, selfBounded: true };
     }
   }
 }

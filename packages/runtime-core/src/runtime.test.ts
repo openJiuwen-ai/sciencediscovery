@@ -70,6 +70,46 @@ test("runs model and concurrent tools while committing results in call order", a
   assert.equal(loop.snapshot().phase, "completed");
 });
 
+test("the max-turn boundary closes every assistant tool call before returning", async () => {
+  let turn = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 128,
+    contextAssembler: {
+      async assemble({ history }) {
+        const copy = structuredClone([...history]);
+        return { history: copy, modelInput: { history: copy } };
+      },
+    },
+    modelClient: {
+      async invoke() {
+        turn += 1;
+        const id = `call-${turn}`;
+        return {
+          assistantMessage: { role: "assistant", content: "", tool_calls: [{ id }] },
+          toolCalls: [{ id, name: "lookup", args: {} }],
+        };
+      },
+    },
+    toolDispatcher: {
+      async execute(call) {
+        return {
+          content: "ok",
+          isError: false,
+          message: { role: "tool", content: "ok", tool_call_id: call.id },
+        };
+      },
+    },
+  });
+  const result = await loop.run([], new AbortController().signal, () => undefined);
+  assert.equal(result.turns, 128);
+  assert.equal(result.history.length, 256);
+  for (let index = 0; index < result.history.length; index += 2) {
+    const assistant = result.history[index]!;
+    const tool = result.history[index + 1]!;
+    assert.equal(tool.tool_call_id, (assistant.tool_calls as Array<{ id: string }>)[0]!.id);
+  }
+});
+
 test("uses assembler history as the next authoritative state", async () => {
   const loop = new AgentLoop<RuntimeMessage, Input, never>({
     maxModelTurns: 1,

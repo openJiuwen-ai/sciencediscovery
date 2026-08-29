@@ -34,7 +34,7 @@ import {
   resolveSubagentConfig,
   type AgentHistoryMessage,
 } from "@sciencediscovery/orchestration";
-import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { normalizeWorkspaceRelativePath, projectArtifactContent, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import type {
   ArtifactCandidate,
@@ -104,8 +104,13 @@ import type {
 } from "@sciencediscovery/schema";
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
+  constrainCatalogThinking,
   createLocalSessionTitle,
+  DEFAULT_MODEL_API_VARIANT,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
+  lookupModelCatalog,
+  THINKING_CONTROL_VARIANTS,
+  THINKING_EFFORT_VARIANTS,
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
 import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
@@ -139,6 +144,7 @@ import {
   type RuntimeSkillSnapshot,
 } from "@sciencediscovery/specialist";
 import { MAX_PAPER_PDF_BYTES, PaperService } from "../papers.js";
+import { closedModelContext } from "./model-context.js";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
@@ -475,7 +481,7 @@ async function executeAgentRun(
     throw new ApiStatusError(500, "The session Permission Epoch is not available");
   }
   const apiToken = store.getModelApiToken(selectedModel.id);
-  if (!apiToken) {
+  if (!apiToken && !store.modelAllowsMissingToken(selectedModel)) {
     throw new ApiStatusError(400, "The selected model does not have a saved API token");
   }
   if (cancelledRuns.has(runId) || requestAbortController.signal.aborted) {
@@ -567,7 +573,16 @@ async function executeAgentRun(
       createdAt: userMessage.createdAt,
     });
   }
-  const promptHistory = previousMessages.map((message) => ({ ...message, content: messagePromptContent(message) }));
+  const promptHistory: AgentHistoryMessage[] = previousMessages.flatMap((message) => {
+    if (message.role === "assistant" && message.modelContext?.length) {
+      return closedModelContext(message.modelContext as AgentHistoryMessage[]);
+    }
+    return [{ role: message.role, content: messagePromptContent(message) }];
+  });
+  const manifestHistory = previousMessages.map((message) => ({
+    ...message,
+    content: messagePromptContent(message),
+  }));
   const pendingManualNotice = previousMessages.at(-1)?.kind === "review_notice" ? previousMessages.at(-1) : undefined;
   const promptUserMessage = {
     ...userMessage,
@@ -579,7 +594,7 @@ async function executeAgentRun(
       ] : []),
     ].join("\n\n"),
   };
-  const promptMessages = [...promptHistory, promptUserMessage];
+  const promptMessages = [...manifestHistory, promptUserMessage];
   if (cancelledRuns.has(runId) || requestAbortController.signal.aborted) {
     await emit({ reason: "Run cancelled", runId, type: "run.cancelled" });
     activeRunAbortControllers.delete(runId);
@@ -665,6 +680,7 @@ async function executeAgentRun(
   let promptManifest: PromptManifest | undefined;
   const taskInvocationId = randomUUID();
   let lastAgentUsage = unreportedModelUsage();
+  let assistantModelContext: AgentHistoryMessage[] = [];
   let turnNumber = 0;
   const observedTimeouts = new Map<string, { kind: TimeoutKind; reason: string; timeoutMs: number }>();
   const persistedTimeouts = new Set<string>();
@@ -681,9 +697,16 @@ async function executeAgentRun(
 
   const agentConfig: AgentConfig = {
     apiToken,
+    apiProtocol: selectedModel.apiProtocol,
+    apiVariant: selectedModel.apiVariant,
     baseUrl: selectedModel.baseUrl,
     dataDir: store.dataDir,
     model: selectedModel.model,
+    // Conversation-level thinking choices override the profile defaults; the
+    // variant mapping in the model client still decides whether any wire
+    // field is actually sent.
+    thinkingEffort: settingsSnapshot.thinkingEffort ?? selectedModel.thinkingEffort,
+    thinkingMode: settingsSnapshot.thinkingMode ?? selectedModel.thinkingMode,
     // Resolve the profile's proxy policy up front so a broken policy fails
     // the run start with a diagnosable message instead of a hung request.
     // The Gateway receives the one effective URL/direct decision instead of
@@ -759,7 +782,18 @@ async function executeAgentRun(
   ): Pick<WorkspaceAgentOptions, "declareArtifact" | "listArtifacts" | "readArtifact"> => ({
     declareArtifact: async (input) => {
       const defaultName = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
-      const sourcePath = sourcePathPrefix ? `${sourcePathPrefix}/${input.path}` : input.path;
+      // `sourcePath` must match the artifact-derivation path stored by
+      // `recordGeneratedFiles` (which normalises via `assertWorkspacePath`).
+      // Passing `input.path` raw breaks that match when the LLM prefixes the
+      // path with `./` (e.g. `./report.md` vs the stored `report.md`), so
+      // `declareWorkspaceArtifact`'s derivation lookup at recorder.ts:228
+      // fails, the gated second observe never fires, and the Artifact node is
+      // never written to the memory graph (report.md in session 166856ed).
+      // Normalise `input.path` with the same helper `defaultName` already
+      // uses, on both branches; the subagent prefix then joins onto a
+      // normalised tail so a `./`-prefixed path inside a subagent also matches.
+      const normalizedInputPath = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
+      const sourcePath = sourcePathPrefix ? `${sourcePathPrefix}/${normalizedInputPath}` : normalizedInputPath;
       const result = await provenanceRecorder.declareWorkspaceArtifact({
         ...(input.description ? { description: input.description } : {}),
         name: input.name?.trim() || defaultName,
@@ -814,15 +848,12 @@ async function executeAgentRun(
         : versions.find((candidate) => candidate.version === input.version);
       if (!version) throw new Error("Artifact version not found");
       const bytes = await provenanceRecorder.cas.read(version.content.hash);
-      const limit = 1_000_000;
-      const body = bytes.subarray(0, limit);
-      const textMedia = version.mediaType.startsWith("text/")
-        || /(?:json|javascript|xml|x-ipynb|x-tex)/.test(version.mediaType);
       return {
         artifact,
-        content: textMedia ? body.toString("utf8") : body.toString("base64"),
-        encoding: textMedia ? "utf8" as const : "base64" as const,
-        truncated: bytes.length > limit,
+        ...projectArtifactContent(bytes, version.mediaType, {
+          ...(input.limit === undefined ? {} : { limit: input.limit }),
+          ...(input.offset === undefined ? {} : { offset: input.offset }),
+        }),
         version,
       };
     },
@@ -1727,14 +1758,18 @@ async function executeAgentRun(
   );
   try {
     assertRunActive();
-    const latestHistory: AgentHistoryMessage[] =
-      (agentOptions.history ?? []).map(({ content, role }) => ({ content, role }));
     lastAgentUsage = unreportedModelUsage();
-    await mainExecution.executeAgentRun({
-      history: latestHistory,
+    const initialResult = await mainExecution.executeAgentRun({
+      history: promptHistory,
       prompt: promptUserMessage.content,
       purpose: "initial",
     });
+    const promptIndex = initialResult.finalMessages.findLastIndex((message) => (
+      message.role === "user" && message.content === promptUserMessage.content
+    ));
+    assistantModelContext = promptIndex >= 0
+      ? closedModelContext(initialResult.finalMessages.slice(promptIndex + 1))
+      : [];
     const taskUsage = lastAgentUsage;
     assertRunActive();
     await flushWorkspaceRefresh();
@@ -1776,7 +1811,16 @@ async function executeAgentRun(
       runId,
       usage: taskUsage,
     });
-    const message = await store.appendMessage(sessionId, "assistant", assistantText, selectedModel);
+    const message = await store.appendMessage(
+      sessionId,
+      "assistant",
+      assistantText,
+      selectedModel,
+      undefined,
+      undefined,
+      "message",
+      assistantModelContext,
+    );
     // The report Artifact version already carries the chip references drained
     // from this turn's declare_claim calls; mirror them onto the assistant
     // message so the conversation transcript renders [alias] tokens as chips
@@ -2153,15 +2197,59 @@ function refineSessionTitleInBackground(
     });
 }
 
-function computeSettingsSnapshot(store: SessionStore, sessionId: string): EffectiveRuntimeSettings {
+export function computeSettingsSnapshot(store: SessionStore, sessionId: string): EffectiveRuntimeSettings {
   const session = store.assertSessionWritable(sessionId);
   const sessionSpecialist = store.getSpecialist(session.specialistId);
   const resolved = store.resolveRuntimeSettings(sessionId).effective;
-  return {
+  const snapshot: EffectiveRuntimeSettings = {
     ...structuredClone(resolved),
     enabledConnectorIds: [...new Set([...resolved.enabledConnectorIds, ...(sessionSpecialist?.connectorIds ?? [])])],
     enabledSkillIds: [...new Set([...resolved.enabledSkillIds, ...(sessionSpecialist?.enabledSkillIds ?? [])])],
   };
+  const model = store.getModel(snapshot.modelId);
+  if (!model) return snapshot;
+  const protocol = model.apiProtocol ?? (model.baseUrl.includes("/api/plan")
+    ? "anthropic-messages"
+    : "openai-chat-completions");
+  const variant = model.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
+  const provider = store.getProvider(model.providerId);
+  const catalog = lookupModelCatalog(model.model, provider?.presetId);
+  const canControlThinking = THINKING_CONTROL_VARIANTS.includes(variant)
+    && catalog?.thinking?.supported !== false;
+  if (!canControlThinking) {
+    snapshot.thinkingMode = "auto";
+    delete snapshot.thinkingEffort;
+    return snapshot;
+  }
+  const modes = catalog?.thinking?.modes
+    ?? (["gemini", "kimi-k3"].includes(variant)
+      ? ["auto", "enabled"] as const
+      : ["auto", "enabled", "disabled"] as const);
+  const requestedMode = snapshot.thinkingMode ?? model.thinkingMode ?? "auto";
+  const requestedEffort = snapshot.thinkingEffort ?? model.thinkingEffort ?? "high";
+  const constrained = constrainCatalogThinking(model.model, requestedMode, requestedEffort, model.facts);
+  snapshot.thinkingMode = modes.includes(constrained.mode as never) ? constrained.mode : "auto";
+
+  // The stops the user declared for this endpoint replace the catalog's: a
+  // gateway often accepts fewer than the vendor documents.
+  let efforts = model.facts?.thinkingEfforts?.length
+    ? [...model.facts.thinkingEfforts]
+    : catalog?.thinking?.efforts ?? [];
+  if (!model.facts?.thinkingEfforts?.length && !catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(variant)) {
+    if (variant === "gemini") efforts = ["low", "medium", "high"];
+    else if (variant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
+    else if (variant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
+    else if (variant === "kimi-k3") efforts = ["low", "high", "max"];
+    else efforts = ["high", "max"];
+  }
+  if (!efforts.length) {
+    delete snapshot.thinkingEffort;
+  } else {
+    snapshot.thinkingEffort = efforts.includes(constrained.effort)
+      ? constrained.effort
+      : efforts.includes("high") ? "high" : efforts[0];
+  }
+  return snapshot;
 }
 
 export async function createQueuedRun(

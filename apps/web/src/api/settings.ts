@@ -14,10 +14,17 @@
 
 import type {
   CreateModelProfileRequest,
+  CreateModelProviderRequest,
+  CreateProviderModelRequest,
   CreateProxyServerRequest,
   CreateEnvironmentRequest,
   CreateSpecialistRequest,
   ModelProfile,
+  ModelProvider,
+  ModelProviderPreset,
+  ModelThinkingEffort,
+  ModelThinkingMode,
+  ProviderModelList,
   McpProxyPolicies,
   ProxyServer,
   ProxySettingsDetails,
@@ -29,6 +36,7 @@ import type {
   InstallEnvironmentRequest,
   ModelConnectivityTestResult,
   MemoryGraphSettingsDetails,
+  ModelCatalogDetails,
   UninstallEnvironmentRequest,
   RegisterRemoteHostRequest,
   RemoteHostTarget,
@@ -42,6 +50,7 @@ import type {
   UpdateMemoryGraphSettingsRequest,
   UpdateEnvironmentSourceSettingsRequest,
   UpdateModelProfileRequest,
+  UpdateModelProviderRequest,
   UpdateMcpProxyPoliciesRequest,
   UpdateProxyServerRequest,
   UpdateProxySettingsRequest,
@@ -167,6 +176,50 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   listModels(): Promise<ModelProfile[]> {
     return this.request("/api/models");
+  }
+
+  listProviders(): Promise<{ presets: ModelProviderPreset[]; providers: ModelProvider[] }> {
+    return this.request("/api/providers");
+  }
+
+  getModelCatalog(): Promise<ModelCatalogDetails> {
+    return this.request("/api/model-catalog");
+  }
+
+  /** Download a fresh catalog. A failure rejects and the server keeps serving
+   *  the snapshot it already had. */
+  refreshModelCatalog(): Promise<ModelCatalogDetails> {
+    return this.request("/api/model-catalog/refresh", { method: "POST" });
+  }
+
+  createProvider(body: CreateModelProviderRequest): Promise<ModelProvider> {
+    return this.request("/api/providers", { body: JSON.stringify(body), method: "POST" });
+  }
+
+  updateProvider(providerId: string, body: UpdateModelProviderRequest): Promise<ModelProvider> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}`, {
+      body: JSON.stringify(body),
+      method: "PUT",
+    });
+  }
+
+  deleteProvider(providerId: string): Promise<{ deleted: string }> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
+  }
+
+  listProviderModels(providerId: string, refresh = false): Promise<ProviderModelList> {
+    const query = refresh ? "?refresh=1" : "";
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}/models${query}`);
+  }
+
+  addProviderModel(
+    providerId: string,
+    body: CreateProviderModelRequest,
+  ): Promise<ModelProfile> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}/models`, {
+      body: JSON.stringify(body),
+      method: "POST",
+    });
   }
 
   listEnvironmentRevisions(): Promise<EnvironmentRevision[]> {

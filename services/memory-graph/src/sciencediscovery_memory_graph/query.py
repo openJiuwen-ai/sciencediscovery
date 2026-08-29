@@ -593,70 +593,95 @@ def get_chain(
     node_id: str,
     session_id: str | None = None,
     version: int | None = None,
-    chain_kind: str = "full",
+    kind: str = "",
 ) -> dict[str, Any]:
-    """Walk the preset chain from a selected node, scoped to one session when
-    ``session_id`` is given.
+    """Walk **one button's** directed short chain from the selected node,
+    scoped to one session when ``session_id`` is given.
 
-    ``chain_kind`` selects which chain to walk:
+    ``kind`` is a button-level key into the ``_BUTTON_CHAIN_HOPS`` table
+    (e.g. ``"viewOutput"``, ``"viewCitingArtifactForEvidence"``) — each entry
+    is a directed hop list walked from the source node. The returned subgraph
+    is exactly the nodes/edges on that button's short chain (no sibling
+    branches, no other buttons' hops), so the frontend no longer slices a fat
+    chain on its own — it highlights whatever edges come back.
 
-    - ``"full"`` (default, backward-compatible): the joint upstream↔downstream
-      subgraph from the preset ``_CHAIN_HOPS`` table (both ``in`` and ``out``
-      hops, all edge types). Used by ResearchGoal/SubTask/Code single-button
-      nodes and the autoChain entry points.
-    - ``"task"``: the pure task chain — only ``next`` + ``produces`` hops from
-      the preset table (no citation/derived-from edges). Used by the Artifact
-      "task chain" button.
-    - ``"artifact"``: the artifact/derivation chain — centered on the selected
-      node itself, walking ``Artifact ←[:produces]← Code ←[:input]← Artifact …``
-      backward to the root inputs. Used by Paper/Evidence/Claim single-button
-      nodes and the Artifact "artifact chain" button.
-
-    The backend decides which edge/node types to traverse based on the source
-    node's label. Only SubTask/Code/Artifact/Paper + ``produces`` edges are
-    persisted today; the ResearchGoal end label is not yet. Until
-    then this returns whatever portion of the chain exists, never erroring on
-    missing labels — the same Cypher keeps working once the
-    later PRs fill those nodes in.
+    A ``kind`` whose hops are unreachable from this source (e.g. an Evidence
+    source on a session with no ``stated_in`` edges for the
+    ``viewCitingArtifactForEvidence`` button) yields an empty chain — the
+    frontend's existence check hides that button.
 
     ``version`` pins an Artifact source to a specific version: Artifact is
-    keyed on the composite ``(artifact_id, version)``, so a bare
-    ``node_id`` (artifact_id) now matches multiple version nodes. With
-    ``version`` set the source is that exact version; without it the latest
-    version is used (max(version)) so the chain still resolves without error.
+    keyed on the composite ``(artifact_id, version)``, so a bare ``node_id``
+    (artifact_id) may match multiple version nodes. With ``version`` set the
+    source is that exact version; without it the latest version is used
+    (max(version)) so the chain still resolves without error.
     """
     driver = handle()
     if not driver.is_reachable():
         log.warning("get_chain skipped: Neo4j not reachable (node_id=%s)", node_id)
         return {"nodes": [], "edges": [], "total": 0, "truncated": False, "reason": "memory_graph_unreachable"}
 
+    hops = _BUTTON_CHAIN_HOPS.get(kind)
+    if hops is None:
+        return {"nodes": [], "edges": [], "total": 0, "truncated": False, "reason": "unknown_chain_kind"}
+
     with driver.session() as session:
-        # Step 1: locate the source node's elementId + label. Non-Artifact
-        # labels match by their single id field; Artifact by the composite
+        # Locate the source node's elementId + label. Non-Artifact labels match
+        # by their single id field; Artifact by the composite
         # (artifact_id, version). The logic (version suffix peeling, latest-
         # version fallback, cross-label MATCH) lives in _resolve_source_node so
-        # the chain_kind branches below stay readable.
-        src_eid, src_label = _resolve_source_node(session, node_id, version, session_id)
+        # the kind lookup stays readable.
+        src_eid, _src_label = _resolve_source_node(session, node_id, version, session_id)
         if src_eid is None:
             return {"nodes": [], "edges": [], "total": 0, "truncated": False, "reason": "node_not_found"}
-
-        # Step 2: branch on chain_kind. ``artifact`` walks the produces/input
-        # derivation chain centered on the selected node itself
-        # (Artifact ←[:produces]← Code ←[:input]← Artifact …), anchor-free so
-        # it resolves even before a report/Claim exists. ``task`` walks just
-        # the next+produces spine. ``full`` (default, backward-compatible)
-        # walks the whole preset table — the legacy behavior.
-        if chain_kind == "artifact":
-            return _artifact_chain(session, src_eid, src_label, session_id)
-
-        # full / task: walk the preset hops. ``task`` keeps only the next +
-        # produces entries (pure task spine); ``full`` keeps the whole table.
-        if chain_kind == "task":
-            hops = [e for e in _CHAIN_HOPS.get(src_label, []) if e[0] in ("next", "produces")]
-        else:
-            hops = _CHAIN_HOPS.get(src_label, [])
         eids = _walk_hops(session, hops, [src_eid], session_id)
         return _serialize_subgraph(session, eids, session_id)
+
+
+def chain_exists(
+    node_id: str,
+    session_id: str | None,
+    version: int | None,
+    kinds: list[str],
+) -> dict[str, bool]:
+    """Lightweight existence check for a batch of button kinds.
+
+    For each ``kind`` in ``kinds``, walk its hop list from the source (the
+    *same* ``_walk_hops`` engine as ``get_chain``) and report whether the
+    chain is non-empty — i.e. ``len(eids) > 1`` (the source plus ≥1 reached
+    node). This is byte-for-byte the same verdict a click would produce:
+    ``get_chain`` serializes exactly these eids, so a button that reports
+    ``True`` here is guaranteed to open a non-empty chain, and a ``False``
+    button opens empty and is hidden. No second walk, no different criteria.
+
+    The all-or-nothing hop semantics in ``_walk_hops`` make a multi-hop
+    citation chain empty as soon as its terminal hop breaks (e.g.
+    viewCitingArtifactForEvidence = supports→Claim→stated_in→Artifact: if the
+    terminal stated_in reaches nothing, the whole chain is empty and the
+    button hides — even though the intermediate supports hop did reach a
+    Claim). That is the fix for the bug where an Evidence with supports→Claim
+    but no stated_in→Artifact still showed "view citing artifacts".
+
+    Returns ``{kind: bool}`` for every requested kind. Unknown kinds report
+    ``False``. An unreachable driver or missing source node reports ``False``
+    for every kind (the frontend then shows no buttons).
+    """
+    result: dict[str, bool] = {kind: False for kind in kinds}
+    driver = handle()
+    if not driver.is_reachable() or not kinds:
+        return result
+
+    with driver.session() as session:
+        src_eid, _src_label = _resolve_source_node(session, node_id, version, session_id)
+        if src_eid is None:
+            return result
+        for kind in kinds:
+            hops = _BUTTON_CHAIN_HOPS.get(kind)
+            if hops is None:
+                continue
+            eids = _walk_hops(session, hops, [src_eid], session_id)
+            result[kind] = len(eids) > 1
+    return result
 
 
 def get_scope_expansion(scope_task_id: str, session_id: str) -> dict[str, Any]:
@@ -1004,17 +1029,45 @@ def _walk_hops(
 
     Reuses the same directed-traversal engine as the legacy get_chain: each hop
     starts from the elementIds gathered so far and appends the newly-reached
-    nodes' elementIds. A hop that matches nothing simply adds nothing — the
-    walk short-stops there without erroring. Direction ``in`` walks against
-    edge orientation (toward upstream); ``out`` walks along it (toward
-    downstream). ``edge_type`` + ``depth`` come from the ``_CHAIN_HOPS``
-    whitelist (not user input), so interpolating them into the Cypher string is
-    safe; Neo4j does not accept relationship types as query parameters.
+    nodes' elementIds. Direction ``in`` walks against edge orientation (toward
+    upstream); ``out`` walks along it (toward downstream). ``edge_type`` +
+    ``depth`` come from the hop whitelist (not user input), so interpolating
+    them into the Cypher string is safe; Neo4j does not accept relationship
+    types as query parameters.
+
+    Each hop tuple is ``(edge_type, direction, target_label[, depth[, limit]])``.
+    ``target_label`` is carried for documentation/logging only — it is NOT
+    applied as a Cypher label filter (the walk matches any next node of the
+    edge type, same as the legacy behavior), so a ``next`` hop from a Task
+    reaches either a Task or a ToolCall indifferently. ``depth`` (default
+    ``"1"``) is the Cypher variable-length quantifier: ``"1"`` = exactly one
+    hop, ``"1.."`` = one or more. ``limit`` (optional int) caps how many newly
+    reached nodes a single hop contributes — used by the "first/previous/
+    next" buttons (e.g. ``viewPrevTask``) that must keep only the single
+    nearest neighbor rather than every reachable node along that edge type.
+
+    All-or-nothing semantics: a button's short chain is a single directed
+    path, so if ANY hop matches nothing the whole chain is empty (return
+    ``[]``). This keeps ``chain_exists`` (bool = "is the chain non-empty?")
+    identical to ``get_chain`` (serialize the same chain) — both run this
+    walk and both see the same emptiness. The bug this fixes: an Evidence
+    with supports→Claim but no stated_in→Artifact used to report
+    viewCitingArtifactForEvidence as "existing" (the supports hop reached a
+    Claim, len(eids)>1). Now the terminal stated_in hop matches nothing → the
+    whole chain is empty → button hides. The decoration hop that was only
+    there to visually join an isolated ToolCall into the backbone (the trailing
+    next→ResearchGoal on viewProducingTask) is removed from the hop table:
+    that button promises the ToolCall, not the goal, so a goal-less session
+    must NOT hide it. By contrast viewRelatedTask's next→ResearchGoal stays
+    — that button's semantic target IS the full path to the goal, so a
+    goal-less Artifact correctly yields an empty chain. ``viewGoal`` keeps its
+    next→ResearchGoal hop because the goal IS that button's target.
     """
     eids: list[str] = list(start_eids)
     for entry in hops:
         edge_type, direction, _target_label = entry[0], entry[1], entry[2]
         depth = entry[3] if len(entry) > 3 else "1"
+        limit = entry[4] if len(entry) > 4 else None
         rel = f"`{edge_type}`*{depth}"
         pattern = f"<-[:{rel}]-" if direction == "in" else f"-[:{rel}]->"
         step = session.run(
@@ -1028,7 +1081,14 @@ def _walk_hops(
             sid=session_id,
         )
         new_eids = step.single()["new_eids"]
-        eids.extend(e for e in new_eids if e not in eids)
+        if limit is not None:
+            new_eids = new_eids[:limit]
+        fresh = [e for e in new_eids if e not in eids]
+        if not fresh:
+            # All-or-nothing: a broken hop empties the whole short chain so
+            # chain_exists and get_chain agree (both see empty).
+            return []
+        eids.extend(fresh)
     return eids
 
 
@@ -1690,6 +1750,125 @@ def get_trace(
 # observe mirror; Evidence/Claim via the declare tools; input/supersedes via
 # the execution upsert). A Claim no longer ``supports`` a Paper directly — it
 # reaches a Paper only via ``supports Evidence → extracts Paper`` (walked backward).
+# Per-button directed short chains. Each key is a frontend button's ``kind``
+# (the same string the frontend sends as ``kind`` on POST /query/chain); the
+# value is the directed hop list walked from the selected source node via
+# ``_walk_hops``. Every hop tuple is ``(edge_type, direction, target_label[,
+# depth[, limit]])`` — see ``_walk_hops``' docstring for the field meanings.
+# ``target_label`` is documentation only (not a Cypher filter), so a ``next``
+# hop reaches either a Task or a ToolCall indifferently.
+#
+# A button whose hops are unreachable from the source walks an empty chain
+# (``len(eids) == 1``) → ``chain_exists`` reports ``False`` → the frontend
+# hides the button. So "does this button have a chain" is decided entirely by
+# the graph + this table, never by the frontend scraping the whole subgraph
+# for same-typed edges (which used to show e.g. Evidence's
+# "viewCitingArtifactForEvidence" button even when no ``stated_in`` edge
+# reached the source).
+#
+# Direction: ``in`` walks against edge orientation (toward upstream), ``out``
+# walks along it (toward downstream). Edge orientations (see schema):
+#   produces: Code→Artifact, ToolCall→Code/Paper/Evidence
+#   extracts: Paper→Evidence
+#   supports: Evidence/Artifact→Claim
+#   stated_in: Claim→Artifact (report contains the claim)
+#   input: Artifact→Code (derived-from)   ·  next: Task→Task/ToolCall spine
+_BUTTON_CHAIN_HOPS: dict[str, list[tuple]] = {
+    # --- Task spine (Task source) ---
+    # "previous/next task" keep only the single nearest neighbor (limit=1,
+    # depth 1); "goal" walks the next chain back to the ResearchGoal (variable).
+    "viewPrevTask": [("next", "in", "Task", "1", 1)],
+    "viewNextTask": [("next", "out", "Task", "1", 1)],
+    "viewGoal": [("next", "in", "ResearchGoal", "1..")],
+
+    # --- Code (source) ---
+    # "inputs" = the Artifact versions this Code read as inputs (derived-from,
+    # single nearest). "outputs" = Code -[:produces]-> Artifact; "producing
+    # task" = the ToolCall that produced this Code. NOTE: the old hop list
+    # appended a trailing next→ResearchGoal to visually join an isolated
+    # ToolCall into the backbone — that decoration hop is dropped because
+    # _walk_hops is now all-or-nothing (a goal-less session would empty the
+    # whole chain and hide the button even though the ToolCall exists). The
+    # button promises the ToolCall, not the goal; viewGoal covers the goal.
+    "viewInput": [("input", "in", "Artifact", "1", 1)],
+    "viewOutput": [("produces", "out", "Artifact")],
+    "viewProducingTask": [("produces", "in", "ToolCall")],
+
+    # --- Paper (source) ---
+    # The citation chain is forward (paper → extracted evidence → claims it
+    # backs → reports stating those claims), each hop extending the chain.
+    "viewExtractedEvidence": [("extracts", "out", "Evidence")],
+    "viewCitingClaim": [("extracts", "out", "Evidence"), ("supports", "out", "Claim")],
+    "viewCitingArtifact": [
+        ("extracts", "out", "Evidence"),
+        ("supports", "out", "Claim"),
+        ("stated_in", "out", "Artifact"),
+    ],
+    # "searching task" = the ToolCall that produced this Paper (single, the
+    # literature-search call that surfaced it).
+    "viewSearchingTask": [("produces", "in", "ToolCall", "1", 1)],
+
+    # --- Evidence (source) ---
+    "viewSourcePaper": [("extracts", "in", "Paper", "1", 1)],
+    "viewCitingClaimForEvidence": [("supports", "out", "Claim")],
+    "viewCitingArtifactForEvidence": [
+        ("supports", "out", "Claim"),
+        ("stated_in", "out", "Artifact"),
+    ],
+
+    # --- Claim (source) ---
+    # "viewCitingEvidenceForClaim" = the Evidence/Artifact that backs this
+    # Claim (supports-in). Renamed from the colliding "viewCitingEvidence" —
+    # that kind string was also used by the Artifact source below, and since
+    # this table is keyed by kind alone the Artifact's 2-hop list overwrote
+    # the Claim's 1-hop list. The two are genuinely different traversals, so
+    # they get separate kinds (the i18n label "查看引用的证据"/"Citing
+    # evidence" is shared between them in CHAIN_BUTTONS).
+    "viewCitingEvidenceForClaim": [("supports", "in", "Evidence", "1", 1)],
+    "viewContainingArtifact": [("stated_in", "out", "Artifact", "1", 1)],
+
+    # --- Artifact (source) ---
+    # "contained claims" = claims stated_in this report (Artifact←stated_in←Claim).
+    # "citing claim for artifact" = claims this artifact supports (forward).
+    # "producing code" = the Code that produced this artifact (single, nearest).
+    "viewContainedClaims": [("stated_in", "in", "Claim")],
+    "viewCitingClaimForArtifact": [("supports", "out", "Claim")],
+    "viewProducingCode": [("produces", "in", "Code", "1", 1)],
+    # Multi-hop citation ancestry: report → its claims → backing evidence →
+    # source papers. Each hop seeds from the nodes the previous hop reached,
+    # so the chain traces one directed path rather than fanning out. Renamed
+    # from "viewCitingEvidence" to avoid the Claim/Artifact kind collision.
+    "viewCitingEvidenceForArtifact": [
+        ("stated_in", "in", "Claim"),
+        ("supports", "in", "Evidence"),
+    ],
+    "viewCitedPaper": [
+        ("stated_in", "in", "Claim"),
+        ("supports", "in", "Evidence"),
+        ("extracts", "in", "Paper"),
+    ],
+    # "related task" = the producing Code, the ToolCall that ran it, AND the
+    # next spine back to the ResearchGoal — so an Artifact's "related task"
+    # chain reaches the goal, not just the dead-end ToolCall. Unlike
+    # viewProducingTask (Code source: that button promises only the ToolCall),
+    # viewRelatedTask's semantic target IS the full path to the goal, so the
+    # next→ResearchGoal hop stays. All-or-nothing: a session whose Artifact
+    # cannot trace produces→Code→ToolCall→next→goal gets an empty chain (the
+    # button hides), which is correct — the "related task" is the whole path.
+    "viewRelatedTask": [
+        ("produces", "in", "Code"),
+        ("produces", "in", "ToolCall"),
+        ("next", "in", "ResearchGoal", "1.."),
+    ],
+}
+
+
+# DEPRECATED — legacy per-label hop table for the old full/task/artifact
+# chain_kind dispatch. ``get_chain`` no longer reads it (it uses
+# ``_BUTTON_CHAIN_HOPS`` above, one entry per button). Retained so the
+# ``_artifact_chain`` derivation walker (still used by its own call sites if
+# any) and the deprecated ``_CHAIN_HOPS`` remain compilable; a later cleanup
+# removes ``_artifact_chain`` and this table together.
 _CHAIN_HOPS: dict[str, list[tuple]] = {
     "Paper": [
         # upstream: Paper <-produces- Task/ToolCall, then walk the `next` chain

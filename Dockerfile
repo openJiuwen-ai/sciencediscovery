@@ -49,6 +49,19 @@ RUN node scripts/fetch-managed-micromamba.mjs \
       --arch "$TARGETARCH" \
       --output /opt/sciencediscovery/provisioner/micromamba
 
+# The model catalog is deliberately not committed. One snapshot is downloaded
+# here and baked into the image so a first container start with no network
+# still knows model context windows, prices and thinking capabilities; the user
+# refreshes it later from Settings. Architecture-independent, so this stage
+# also runs on the build host.
+FROM --platform=$BUILDPLATFORM ${NODE_RUNTIME_IMAGE} AS model-catalog
+WORKDIR /source
+COPY config/external-urls.json config/external-urls.json
+COPY scripts/fetch-model-catalog.mjs scripts/fetch-model-catalog.mjs
+RUN node scripts/fetch-model-catalog.mjs \
+      --output /opt/sciencediscovery/resources/model-catalog/models-dev.json \
+ && test -s /opt/sciencediscovery/resources/model-catalog/models-dev.json
+
 # ---------------------------------------------------------------- builder ---
 FROM ${NODE_BUILD_IMAGE} AS builder
 ARG PNPM_VERSION
@@ -151,12 +164,14 @@ ENV NODE_ENV=production \
     SCIENCE_AGENT_RUNNER_URL=http://127.0.0.1:4311 \
     SCIENTIFIC_ENVS=1 \
     SCIENCE_AGENT_PROVISIONER_SEED_PATH=/opt/sciencediscovery/provisioner/micromamba \
+    SCIENCE_AGENT_MODEL_CATALOG_PATH=/opt/sciencediscovery/resources/model-catalog/models-dev.json \
     SCIENCE_AGENT_ENVS_ROOT=/opt/sciencediscovery/envs \
     SCIENCE_AGENT_PAPER_PYTHON_PATH=/opt/sciencediscovery/envs/paper/bin/python \
     SCIENCE_AGENT_GATEWAY_PYTHON_PATH=/opt/sciencediscovery/envs/gateway/bin/python
 
 COPY --from=builder /opt/sciencediscovery /opt/sciencediscovery
 COPY --from=micromamba /opt/sciencediscovery/provisioner /opt/sciencediscovery/provisioner
+COPY --from=model-catalog /opt/sciencediscovery/resources /opt/sciencediscovery/resources
 COPY --from=builder /app /app
 
 WORKDIR /app

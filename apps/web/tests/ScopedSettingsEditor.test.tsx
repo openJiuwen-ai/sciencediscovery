@@ -119,7 +119,7 @@ function render(settings: RuntimeSettingsDetails): string {
 test("renders inherited effective values and their field sources", () => {
   const html = render(details());
 
-  assert.match(html, /Inherit · Primary model \(Global setting\)/);
+  assert.match(html, /Inherit · Primary model · test-model · OpenAI standard · Model default \(Global setting\)/);
   assert.doesNotMatch(html, /Session naming|auto-refine|auto-truncate|Manual naming/);
   assert.match(html, /Effective: Project setting/);
   assert.match(html, /Effective: Global setting/);
@@ -148,7 +148,7 @@ test("renders Global settings as direct defaults without inheritance or skill co
   }));
 
   assert.match(html, /These settings are the defaults for all Projects and Sessions/);
-  assert.match(html, /<option value="model-1" selected="">Primary model · test-model<\/option>/);
+  assert.match(html, /<option value="model-1" selected="">Primary model · test-model · OpenAI standard · Model default<\/option>/);
   assert.match(html, /type="checkbox" checked=""/);
   assert.doesNotMatch(html, /Inherit|Override|Built-in fallback|Effective:/);
   assert.doesNotMatch(html, /settings mode/);
@@ -230,8 +230,8 @@ test("disambiguates duplicate model options without removing either profile", ()
     skills,
   }));
 
-  assert.match(html, /Primary model · test-model · model-1/);
-  assert.match(html, /Primary model · test-model · model-…2222/);
+  assert.match(html, /Primary model · test-model · OpenAI standard · Model default · model-1/);
+  assert.match(html, /Primary model · test-model · OpenAI standard · Model default · model-…2222/);
   assert.equal(html.match(/Primary model · test-model/g)?.length, 2);
 
   const inheritedHtml = renderToStaticMarkup(createElement(ScopedSettingsEditor, {
@@ -243,5 +243,5 @@ test("disambiguates duplicate model options without removing either profile", ()
     skillLibraries,
     skills,
   }));
-  assert.match(inheritedHtml, /Inherit · Primary model · test-model · model-1 \(Global setting\)/);
+  assert.match(inheritedHtml, /Inherit · Primary model · test-model · OpenAI standard · Model default · model-1 \(Global setting\)/);
 });

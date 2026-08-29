@@ -481,7 +481,7 @@ export function ArtifactModal({
   const [csvWindowOpen, setCsvWindowOpen] = useState(false);
   const [preview, setPreview] = useState<ArtifactPreviewPayload>();
   const [datasetView, setDatasetView] = useState<DatasetPreviewView>("table");
-  const [chainExplorer, setChainExplorer] = useState<{ nodeId: string; version?: number; chainKind: "task" | "artifact"; subgraph: MemorySubgraph } | null>(null);
+  const [chainExplorer, setChainExplorer] = useState<{ nodeId: string; version?: number; subgraph: MemorySubgraph } | null>(null);
   const [memoryGraphEnabled, setMemoryGraphEnabled] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
   useEffect(() => {
@@ -750,7 +750,7 @@ export function ArtifactModal({
     onNavigateArtifact(name, version);
   }
 
-  async function viewChain(chainKind: "task" | "artifact"): Promise<void> {
+  async function viewChain(): Promise<void> {
     try {
       // Query the artifact's own Session's graph (graphSessionId), not the
       // active Session — the workspace list is project-scoped so the open
@@ -766,12 +766,12 @@ export function ArtifactModal({
         (n.extra?.path === logicalName || n.extra?.artifact_id === artifact?.id) &&
         (currentVersion == null || n.extra?.version === currentVersion));
       if (!node) {
-        onError("This artifact is not yet in the Science Memory.");
+        onError("This artifact is not yet in the ScienceMemory.");
         return;
       }
-      setChainExplorer({ nodeId: node.id, version: currentVersion, chainKind, subgraph });
+      setChainExplorer({ nodeId: node.id, version: currentVersion, subgraph });
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not load Science Memory.");
+      onError(error instanceof Error ? error.message : "Could not load ScienceMemory.");
     }
   }
 
@@ -907,16 +907,15 @@ export function ArtifactModal({
           <button aria-label="Close artifact viewer" className="icon-button" onClick={onClose} title="Close artifact viewer" type="button">✕</button>
         </div>
       </header>
-      <nav className="artifact-mode-tabs"><button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} type="button">Preview</button><button className={mode === "provenance" ? "active" : ""} onClick={() => setMode("provenance")} type="button">Provenance</button>{!embedded && memoryGraphEnabled ? <><button className="view-chain-btn" onClick={() => void viewChain("task")} type="button">{t("chain.viewTask")}</button><button className="view-chain-btn" onClick={() => void viewChain("artifact")} type="button">{t("chain.viewArtifact")}</button></> : null}{version && version.version > 1 && mode === "preview" ? <span className="version-hint">v{version.version} of {versions.length}</span> : null}</nav>
+      <nav className="artifact-mode-tabs"><button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} type="button">Preview</button><button className={mode === "provenance" ? "active" : ""} onClick={() => setMode("provenance")} type="button">Provenance</button>{!embedded && memoryGraphEnabled ? <button className="view-chain-btn" onClick={() => void viewChain()} type="button">{t("chain.viewInMemoryX", { x: t("chain.product") })}</button> : null}{version && version.version > 1 && mode === "preview" ? <span className="version-hint">v{version.version} of {versions.length}</span> : null}</nav>
       <div className="artifact-modal-body">{artifactContent}</div>
       {csvWorkspace}
     </section>
-    {chainExplorer ? <ErrorBoundary label="Science Memory" onError={(message) => { onError(message); setChainExplorer(null); }}><Suspense fallback={null}><MemoryGraphExplorer
+    {chainExplorer ? <ErrorBoundary label="ScienceMemory" onError={(message) => { onError(message); setChainExplorer(null); }}><Suspense fallback={null}><MemoryGraphExplorer
       client={client}
       initialNodeId={chainExplorer.nodeId}
       onOpenEvolveRun={onOpenEvolveRun}
       initialVersion={chainExplorer.version}
-      initialChainKind={chainExplorer.chainKind}
       autoChain
       onClose={() => setChainExplorer(null)}
       onError={onError}

@@ -40,6 +40,10 @@ export interface ServerConfig {
   authTokenSource?: BootstrapTokenSource;
   dataDir: string;
   host: string;
+  /** Model catalog snapshot written at packaging time. It is the offline
+   *  fallback for a first start that has never refreshed the catalog, so a
+   *  Docker image or release binary is useful without network. */
+  modelCatalogPath: string;
   paperPythonPath: string;
   paperWorkerPath: string;
   port: number;
@@ -164,6 +168,10 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     gatewayTurnTimeoutMs,
     host,
     kernelIdleTimeoutMs,
+    modelCatalogPath: resolve(
+      repositoryRoot,
+      env.SCIENCE_AGENT_MODEL_CATALOG_PATH?.trim() || "resources/model-catalog/models-dev.json",
+    ),
     paperPythonPath: env.SCIENCE_AGENT_PAPER_PYTHON_PATH?.trim()
       ? resolve(repositoryRoot, env.SCIENCE_AGENT_PAPER_PYTHON_PATH.trim())
       : resolve(dataDir, "envs/paper/bin/python"),

@@ -66,10 +66,51 @@ export interface ScientificArtifactVersion {
   version: number;
 }
 
+/** Line range returned for one `read_artifact` page. */
+export interface ArtifactTextPage {
+  bytes: number;
+  /** Last 1-based line included; `startLine - 1` when the page is empty. */
+  endLine: number;
+  /**
+   * True only when line paging can still advance inside the decodable text
+   * window. It never covers bytes past that window or the cut-off remainder of
+   * an over-wide line — those are reported by `truncated`, `partialLine`, and
+   * `note`, because no offset can reach them.
+   */
+  hasMore: boolean;
+  /** Always greater than the offset just used; absent when `hasMore` is false. */
+  nextOffset?: number;
+  /**
+   * True when one line was wider than the page budget and had to be cut. Line
+   * offsets cannot address the remainder, so read the version another way.
+   */
+  partialLine: boolean;
+  startLine: number;
+  /** Lines available inside the decodable text window, not the whole version. */
+  totalLines: number;
+}
+
 export interface ArtifactReadResult {
   artifact: ScientificArtifact;
-  content: string;
-  encoding: "base64" | "utf8";
+  /**
+   * True when the version holds binary content. The body is then never
+   * inlined — not raw and not base64 — because it cannot enter model text
+   * input usefully and would consume the whole input budget.
+   */
+  binary: boolean;
+  /** One UTF-8 page of a text version; absent for binary versions. */
+  content?: string;
+  encoding: "binary" | "utf8";
+  mediaType: string;
+  /**
+   * Actionable explanation of content the line protocol cannot address —
+   * bytes past the decodable text window, or the rest of an over-wide line.
+   */
+  note?: string;
+  page?: ArtifactTextPage;
+  /** Stored byte size of the whole version content. */
+  size: number;
+  /** True when the version exceeds the decodable text window. */
   truncated: boolean;
   version: ScientificArtifactVersion;
 }

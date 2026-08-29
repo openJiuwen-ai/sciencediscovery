@@ -133,9 +133,12 @@ cp .env.example .env                               # first time only; never over
 ./scripts/start-stack.sh --mode local --no-build   # start only, after a previous build
 ```
 
-- Runs in the **foreground**; it starts the runner (127.0.0.1:4311) in the
-  background and the API (0.0.0.0:4310) in front. Those two are the whole
-  resident stack.
+- Runs in the **foreground**; it starts the runner (127.0.0.1:4311) and the
+  memory-graph sidecar (127.0.0.1:17674) in the background and the API
+  (0.0.0.0:4310) in front. It also starts the bundled Python MCP sidecars.
+- Backgrounding it (`nohup ./scripts/start-stack.sh --mode local &`, tmux, a
+  supervisor) changes how it must be **stopped** — see *Stopping a backgrounded
+  host stack* below. Ctrl-C no longer applies.
 - First run provisions `.sciencediscovery-data/envs/gateway` and `.sciencediscovery-data/envs/paper` through `uv`
   and needs outbound network.
 - `./scripts/run-local.sh [--no-build]` is the compatibility wrapper; `pnpm start`
@@ -209,8 +212,9 @@ Forward only the API port. The runner (4311) is loopback-only by design.
 | Action | Host processes | Docker Compose |
 |---|---|---|
 | Start | `./scripts/start-stack.sh --mode local [--no-build]` | `docker compose up -d` |
-| Stop | Ctrl-C in that terminal (also stops the runner) | `docker compose down` (`./data` survives) |
-| Restart | Ctrl-C, then start again | `docker compose restart` |
+| Stop (foreground) | Ctrl-C in that terminal (also stops the runner) | `docker compose down` (`./data` survives) |
+| Stop (backgrounded) | signal the instance's process group — see below | same |
+| Restart | stop as above, then start again | `docker compose restart` |
 | Rebuild + restart | start once without `--no-build` | `docker compose up -d --build` |
 | Logs | stdout/stderr of the foreground terminal (or the supervisor's log) | `docker compose logs -f` |
 | State | `ss -ltn \| grep 4310` | `docker compose ps` (includes the health check) |
@@ -219,6 +223,51 @@ Forward only the API port. The runner (4311) is loopback-only by design.
 Component health endpoint in both modes: runner `http://127.0.0.1:4311/health`
 (reachable from inside the container in Docker mode). The API's own `/health`
 echoes the runner status, so it is usually the only one worth checking.
+
+## Stopping a backgrounded host stack
+
+Ctrl-C only reaches a **foreground** stack. Started with `nohup ... &`, tmux or
+any supervisor, the script sits in its own process group and is reparented to
+init, so the terminal's SIGINT never reaches it and its services keep running.
+
+Signalling the script alone is also not enough: `start-stack.sh` runs the API in
+its own foreground and its `trap cleanup EXIT INT TERM` only fires once that API
+exits. `kill -TERM <start-stack.sh PID>` therefore leaves the API, the runner,
+the memory-graph sidecar and the bundled MCP sidecars running and the ports
+bound.
+
+Stop the whole **process group** instead, and identify it from the port this
+instance published — never from the script name, because a developer host often
+runs several stacks on different ports at once:
+
+```bash
+api_port=4310   # this instance's SCIENCE_AGENT_PORT
+api_pid=$(ss -ltnp | grep ":${api_port} " | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+pgid=$(ps -o pgid= -p "$api_pid" | tr -d ' ')
+
+pgrep -g "$pgid" -a            # review the group before signalling it
+kill -TERM -"$pgid"
+
+for _ in $(seq 1 30); do ss -ltn | grep -qE ":(${api_port}|4311|17674)\b" || break; sleep 0.5; done
+ss -ltn | grep -E ":(${api_port}|4311|17674)\b" || echo "ports released"
+pgrep -g "$pgid" -a || echo "no survivors"
+```
+
+List the group with `pgrep -g`, not `ps -g`: `ps` reads a numeric `-g` argument
+as a session id, so it silently prints nothing and the group looks empty.
+
+- Escalate to `kill -KILL -"$pgid"` only for what survives, and only after the
+  30-second wait: SIGTERM lets the runner tear its sandboxes down.
+- **Never** `pkill -f start-stack.sh`, `pkill -f 'node.*server.js'` or
+  `killall node`. Those match every stack and every unrelated Node process on
+  the host; the port-derived process group matches exactly one instance.
+- Neighbour check afterwards: the other stacks' ports must still be listening
+  and their `/health` must still answer.
+- `ss -ltnp` prints the PID only for sockets you own; for another user's stack
+  ask that user rather than widening the match.
+- If the instance uses non-default ports, substitute its own
+  `SCIENCE_AGENT_PORT`, `SCIENCE_AGENT_RUNNER_PORT` and
+  `SCIENCE_AGENT_MEMORY_GRAPH_PORT` everywhere above.
 
 ## Troubleshooting
 
@@ -229,6 +278,8 @@ echoes the runner status, so it is usually the only one worth checking.
 | `.sciencediscovery-data/envs/gateway is missing` | Started with `--no-build` before a build → run once without it (that venv holds the interpreter for the bundled Python MCP servers) |
 | API up but every run fails | Usually the sandbox warning above, or no model profile configured |
 | Port already bound | Change `SCIENCE_AGENT_PORT` / `SCIENCE_AGENT_PUBLISH_PORT` |
+| Ctrl-C did not stop a host stack, ports still bound | It was backgrounded (`nohup`/tmux/supervisor), so SIGINT never reached it → stop its process group, see *Stopping a backgrounded host stack* |
+| Killed the script but the API/runner survived | `start-stack.sh` only runs its cleanup trap after its foreground API exits → signal the process group, not the script PID |
 | `does not support --disable-userns` warning at runner startup | Expected on bwrap < 0.8 (e.g. Ubuntu 22.04's 0.6): nested-userns hardening is skipped, everything else isolates normally. Upgrade bubblewrap for the stronger profile |
 | `supports --disable-userns but cannot use it here` warning at runner startup | Expected under LXC and container runtimes that mount `/proc/sys` read-only, so bubblewrap cannot write `user.max_user_namespaces`. The option is omitted and executions run; everything else isolates normally. Do not grant `privileged` or `systempaths=unconfined` to silence it |
 | First `docker compose build` fails on network | The build resolves pnpm and both uv environments; retry with network available |
@@ -241,7 +292,8 @@ echoes the runner status, so it is usually the only one worth checking.
 4. Deployed only after the user confirmed the environment is acceptable
 5. Verified `/health`, then reported URL + token source
 6. Gave SSH forwarding instructions when the stack is not on the user's own machine
-7. Gave the management command table for the mode used
+7. Gave the management command table for the mode used, including the correct
+   stop for a backgrounded host stack
 
 **Policy**: this skill assists; it does not change host configuration on its own.
 Repository-local writes need a heads-up, host-level changes need the user's

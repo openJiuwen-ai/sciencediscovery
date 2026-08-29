@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 
 import {
   readRenamedStorageItem,
@@ -44,6 +44,12 @@ import type {
   McpInvocation,
   McpSourceManifest,
   ModelProfile,
+  ModelProvider,
+  ModelProviderPreset,
+  ModelApiProtocol,
+  ModelApiVariant,
+  ModelThinkingEffort,
+  ModelThinkingMode,
   ModelUsageBucket,
   MemoryGraphNodeLabel,
   PaperAcquisition,
@@ -90,6 +96,9 @@ import type {
   WorkspaceFile,
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
+import type { ModelCatalogDetails } from "@sciencediscovery/schema";
+import { constrainCatalogThinking, setModelCatalogSnapshot } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import {
   classifyScientificArtifact,
   createLocalSessionTitle,
@@ -166,7 +175,6 @@ import {
 } from "./timeline/RunTimeline.js";
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
 import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
-import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./ArtifactLifecycleControls.js";
 import { SkillManager } from "./SkillManager.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
@@ -201,12 +209,20 @@ import {
 } from "./artifactTree.js";
 import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest, type WebSettingsDraft } from "./WebSettingsEditor.js";
 import { ProxyPolicySelect, ProxySettingsEditor } from "./ProxySettingsEditor.js";
+import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
+import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { EvidenceModal } from "./EvidenceModal.js";
+import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
-import { MemoryGraphView } from "./MemoryGraphView.js";
+import { MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
 import { EvolvePanel } from "./evolve/EvolvePanel.js";
 import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
+// The full-screen explorer is heavy (d3-force + the artifacts panel) and only
+// opened on demand, so it is split out of the main bundle. Lazy-imported at the
+// App layer so the right-rail card can open it directly (previously the only
+// entries were the per-product modals).
+const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ReviewerPanel } from "./ReviewerPanel.js";
@@ -243,6 +259,7 @@ import {
   resolveComposerRunAction,
   type ComposerRunAction,
 } from "./composer/model.js";
+import { ModelPicker } from "./composer/ModelPicker.js";
 import {
   isActiveRunStatus,
   isSessionRunning,
@@ -488,14 +505,6 @@ export function WorkspaceFileTreeList({
   />;
 }
 
-export interface ModelDraft {
-  baseUrl: string;
-  model: string;
-  name: string;
-  proxyPolicy: ProxyPolicy;
-  vision: boolean;
-}
-
 function preserveEqualSnapshot<T>(current: T, next: T): T {
   return JSON.stringify(current) === JSON.stringify(next) ? current : next;
 }
@@ -679,54 +688,6 @@ export function SystemSettingsFooter({
     <button className="primary-button" disabled={busy} onClick={onSaveAndClose} type="button">{busy ? t("common.saving") : t("settings.saveAndClose")}</button>
   </div>;
 }
-
-export const EMPTY_MODEL_DRAFT: ModelDraft = {
-  baseUrl: "",
-  model: "",
-  name: "",
-  proxyPolicy: "inherit",
-  vision: false,
-};
-
-export function modelDraftFromProfile(profile: ModelProfile): ModelDraft {
-  return {
-    baseUrl: profile.baseUrl,
-    model: profile.model,
-    name: profile.name,
-    proxyPolicy: profile.proxyPolicy,
-    vision: profile.vision,
-  };
-}
-
-export function ModelDraftFields({
-  draft,
-  onChange,
-}: {
-  draft: ModelDraft;
-  onChange: (update: Partial<ModelDraft>) => void;
-}) {
-  const { t } = useLocale();
-  return <>
-    <label><span>{t("settings.displayName")}</span><input required value={draft.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Fast analysis" /></label>
-    <label><span>{t("settings.baseUrl")}</span><input required value={draft.baseUrl} onChange={(event) => onChange({ baseUrl: event.target.value })} placeholder={t("settings.baseUrlHint")} /></label>
-    <label><span>{t("settings.modelId")}</span><input required value={draft.model} onChange={(event) => onChange({ model: event.target.value })} /></label>
-  </>;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/** How long the server gets to close a cancelled stream before the client drops it. */
 
 function measureWorkspaceMaxWidth(): number {
   if (typeof window === "undefined") return DEFAULT_WORKSPACE_WIDTH;
@@ -994,14 +955,19 @@ export function App() {
   // rejected with 401, and is handed the Connection settings dialog.
   const [token, setToken] = useState(() => readRenamedStorageItem(localStorage, TOKEN_STORAGE_KEY) ?? "");
   const [models, setModels] = useState<ModelProfile[]>([]);
+  const [modelProviders, setModelProviders] = useState<ModelProvider[]>([]);
+  const [modelProviderPresets, setModelProviderPresets] = useState<ModelProviderPreset[]>([]);
+  // The catalog lives in a process-wide registry so the synchronous lookups in
+  // the model form keep working. This state exists to show its age and to make
+  // React re-render the affected controls after a refresh replaces it.
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogDetails>();
+  const applyModelCatalog = useCallback((details: ModelCatalogDetails) => {
+    setModelCatalogSnapshot(details.snapshot);
+    setModelCatalog(details);
+  }, []);
   const [connectors, setConnectors] = useState<ConnectorManifest[]>([]);
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
   const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
-  const [editingModelId, setEditingModelId] = useState<string>();
-  const [modelDraft, setModelDraft] = useState<ModelDraft>(EMPTY_MODEL_DRAFT);
-  const [draftToken, setDraftToken] = useState("");
-  const [removeStoredToken, setRemoveStoredToken] = useState(false);
-  const [modelSettingsDirty, setModelSettingsDirty] = useState(false);
   const [papers, setPapers] = useState<PaperAcquisition[]>([]);
   const [paperVisionRuns, setPaperVisionRuns] = useState<PaperVisionRun[]>([]);
   const [visionModelId, setVisionModelId] = useState<string>();
@@ -1054,9 +1020,11 @@ export function App() {
   const [openEvolveRunId, setOpenEvolveRunId] = useState<string>();
   /** The sentence a `/evolve` command carried, while its wizard is open. */
   const [evolveRefreshKey, setEvolveRefreshKey] = useState(0);
-
-
-
+  // The right-rail MemoryGraphView card opens the full-screen explorer directly
+  // (previously the explorer was only reachable from a product's "View chain"
+  // button). The snapshot is shared via useMemorySubgraph so the explorer never
+  // re-fetches what the card already polled.
+  const [memoryExplorerOpen, setMemoryExplorerOpen] = useState(false);
   // A graph node a report chip asked to open; MemoryGraphView selects it on
   // change, then clears the pending state. Set by handleChipClick (paper chips).
   const [pendingMemoryNode, setPendingMemoryNode] = useState<{ label: MemoryGraphNodeLabel; id: string } | undefined>();
@@ -1121,6 +1089,7 @@ export function App() {
   // say why it opened instead of looking like an ordinary settings visit.
   const [tokenRejected, setTokenRejected] = useState(false);
   const [systemSettingsSaving, setSystemSettingsSaving] = useState(false);
+  const [providerDraftDirty, setProviderDraftDirty] = useState(false);
   const [projectSettings, setProjectSettings] = useState<RuntimeSettingsDetails>();
   const [settingsTarget, setSettingsTarget] = useState<ResourceTarget>();
   const [scopedSettings, setScopedSettings] = useState<RuntimeSettingsDetails>();
@@ -1157,6 +1126,8 @@ export function App() {
   const [runningSessionIds, setRunningSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [stoppingSessionIds, setStoppingSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const runAbortControllers = useRef(new Map<string, AbortController>());
+  const providerSettingsRef = useRef<ProviderModelSettingsHandle>(null);
+  const thinkingNormalizationInFlight = useRef<string | undefined>(undefined);
   const [error, setErrorState] = useState<string>();
   const [systemSettingsErrors, setSystemSettingsErrors] = useState<string[]>([]);
   const [scopedSettingsErrors, setScopedSettingsErrors] = useState<string[]>([]);
@@ -1300,7 +1271,8 @@ export function App() {
    * The timeline and folded-in message of the Session whose messages are on
    * screen, so the two always describe the same Session.
    */
-  const runTimeline = (session?.id ? runTimelines[session.id]?.entries : undefined) ?? EMPTY_TIMELINE;
+  const activeRunTimeline = session?.id ? runTimelines[session.id] : undefined;
+  const runTimeline = activeRunTimeline?.entries ?? EMPTY_TIMELINE;
   const timelineMessageId = session?.id ? timelineMessageIds[session.id] : undefined;
 
   useEffect(() => {
@@ -1335,6 +1307,7 @@ export function App() {
     let active = true;
     void Promise.all([
       client.listModels(),
+      client.listProviders(),
       client.listConnectors(),
       client.listSkills(),
       client.listSkillLibraries(),
@@ -1344,9 +1317,11 @@ export function App() {
       client.getSandboxNetworkSettings(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
+    ]).then(([modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
       if (!active) return;
       setModels(modelItems);
+      setModelProviders(providerRegistry.providers);
+      setModelProviderPresets(providerRegistry.presets);
       setConnectors(connectorItems);
       setSkills(skillItems);
       setSkillLibraries(skillLibraryItems);
@@ -1430,6 +1405,13 @@ export function App() {
   // Long-lived panels keep these in effect dependencies, so they must not be
   // re-created on every render of this component.
   const reportError = useCallback((message: string) => setError(message || undefined), [setError]);
+
+  // One polled snapshot shared by the right-rail card and the full-screen
+  // explorer (lifted from MemoryGraphView so opening the explorer doesn't
+  // re-fetch what the card already has). The refreshKey mirrors the one the
+  // card used before the lift so the poll resumes on the same triggers.
+  const memoryRefreshKey = `exec:${executionRuns.length}:msg:${session?.messages.length ?? 0}:plans:${plans.length}:mg:${memoryGraphSettings ? `${memoryGraphSettings.enabled ? 1 : 0}:${memoryGraphSettings.memoryGraphStatus}` : "none"}`;
+  const { subgraph: memorySubgraph, health: memoryHealth } = useMemorySubgraph(client, session?.id, memoryRefreshKey, reportError, isRunning);
 
   const refreshGovernedDownloads = useCallback(async (sessionId: string): Promise<void> => {
     const [candidates, jobs, plans, invocations] = await Promise.all([
@@ -1661,6 +1643,8 @@ export function App() {
     void Promise.all([
       client.listProjects(),
       client.listModels(),
+      client.listProviders(),
+      client.getModelCatalog(),
       client.listConnectors(),
       client.listSkills(),
       client.listSkillLibraries(),
@@ -1673,9 +1657,12 @@ export function App() {
       client.listMcpSources(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([projectItems, modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
+    ]).then(([projectItems, modelItems, providerRegistry, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
       setProjects(projectItems);
       setModels(modelItems);
+      setModelProviders(providerRegistry.providers);
+      setModelProviderPresets(providerRegistry.presets);
+      applyModelCatalog(catalog);
       setConnectors(connectorItems);
       setSkills(skillItems);
       setSkillLibraries(skillLibraryItems);
@@ -1706,13 +1693,6 @@ export function App() {
         pendingSettingsRef.current = null;
         const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
         if (target) void openScopedSettings(target);
-      }
-      const selected = modelItems.find((item) => item.id === editingModelId) ?? modelItems[0];
-      if (selected) {
-        setEditingModelId(selected.id);
-        setModelDraft(modelDraftFromProfile(selected));
-        setDraftToken("");
-        setRemoveStoredToken(false);
       }
       setVisionModelId((current) => modelItems.some((item) => item.id === current && item.vision)
         ? current
@@ -2223,49 +2203,6 @@ export function App() {
     }
   }
 
-  function editModel(profile: ModelProfile): void {
-    setEditingModelId(profile.id);
-    setModelDraft(modelDraftFromProfile(profile));
-    setDraftToken("");
-    setRemoveStoredToken(false);
-    setModelSettingsDirty(false);
-  }
-
-  function startNewModel(): void {
-    setEditingModelId(undefined);
-    setModelDraft(EMPTY_MODEL_DRAFT);
-    setDraftToken("");
-    setRemoveStoredToken(false);
-    setModelSettingsDirty(false);
-  }
-
-  function updateModelDraft(update: Partial<ModelDraft>): void {
-    setModelDraft((current) => ({ ...current, ...update }));
-    setModelSettingsDirty(true);
-  }
-
-  async function saveModel(): Promise<void> {
-    reportSystemSettingsError();
-    try {
-      const saved = editingModelId
-        ? await client.updateModel(editingModelId, {
-            ...modelDraft,
-            ...(removeStoredToken ? { apiToken: null } : draftToken.trim() ? { apiToken: draftToken.trim() } : {}),
-          })
-        : await client.createModel({ ...modelDraft, apiToken: draftToken.trim() });
-      setModels((current) => [...current.filter((item) => item.id !== saved.id), saved]
-        .toSorted((left, right) => left.name.localeCompare(right.name)));
-      setEditingModelId(saved.id);
-      setDraftToken("");
-      setRemoveStoredToken(false);
-      setModelSettingsDirty(false);
-      pushToast("success", editingModelId ? "Model updated" : "Model added", saved.name);
-    } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : t("error.saveModel"));
-      throw reason;
-    }
-  }
-
   async function createProxyServer(input: CreateProxyServerRequest): Promise<void> {
     try {
       await client.createProxyServer(input);
@@ -2356,14 +2293,14 @@ export function App() {
     try {
       const saved = await client.updateMemoryGraphSettings(input);
       setMemoryGraphSettings(saved);
-      pushToast("success", "Science Memory settings updated");
+      pushToast("success", "ScienceMemory settings updated");
     } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : "Could not save Science Memory settings");
+      reportSystemSettingsError(reason instanceof Error ? reason.message : "Could not save ScienceMemory settings");
       throw reason;
     }
   }
 
-  function clearSystemSettingsDrafts(discardModel = true): void {
+  function clearSystemSettingsDrafts(): void {
     setGlobalSettingsEdit(undefined);
     setTimeoutSettingsEdit(undefined);
     setQuotaSettingsEdit(undefined);
@@ -2372,17 +2309,6 @@ export function App() {
     setMemoryGraphSettingsEdit(undefined);
     setLocaleEdit(undefined);
     setTokenEdit(undefined);
-    if (discardModel) {
-      const savedModel = models.find((item) => item.id === editingModelId);
-      if (savedModel) {
-        setModelDraft(modelDraftFromProfile(savedModel));
-      } else {
-        setModelDraft(EMPTY_MODEL_DRAFT);
-      }
-    }
-    setDraftToken("");
-    setRemoveStoredToken(false);
-    setModelSettingsDirty(false);
   }
 
   function openSystemSettings(group?: SystemSettingsGroup): void {
@@ -2391,27 +2317,29 @@ export function App() {
     setShowConfig(true);
   }
 
+  function confirmModelRegistryDraftDiscard(): boolean {
+    return !providerDraftDirty || window.confirm(t("providers.unsaved.confirm"));
+  }
+
   function cancelSystemSettings(): void {
+    if (!confirmModelRegistryDraftDiscard()) return;
     clearSystemSettingsDrafts();
     reportSystemSettingsError();
     setSkillWorkspaceLaunch(undefined);
     setShowConfig(false);
   }
 
+  function selectSystemSettingsGroup(group: SystemSettingsGroup): void {
+    if (group !== systemSettingsGroup && systemSettingsGroup === "models") {
+      if (!confirmModelRegistryDraftDiscard()) return;
+    }
+    setSystemSettingsGroup(group);
+  }
+
   async function saveSystemSettings(closeAfterSave: boolean): Promise<void> {
     if (systemSettingsSaving) return;
     reportSystemSettingsError();
     setSystemSettingsSaving(true);
-    const validationError = modelSettingsDirty && (!modelDraft.name.trim() || !modelDraft.baseUrl.trim() || !modelDraft.model.trim())
-      ? "Display name, base URL, and model ID are required"
-      : modelSettingsDirty && !editingModelId && !draftToken.trim()
-        ? "API token is required for a new model"
-        : undefined;
-    if (validationError) {
-      reportSystemSettingsError(validationError);
-      setSystemSettingsSaving(false);
-      return;
-    }
     try {
       // The footer saves every edited section retained while navigating.
       // Persist every edited section, including drafts retained while the user
@@ -2423,10 +2351,13 @@ export function App() {
       if (sandboxNetworkSettingsEdit) await saveSandboxNetworkSettings(sandboxNetworkSettingsEdit);
       if (webSettingsEdit) await saveWebSettings(webSettingsRequest(webSettingsEdit));
       if (memoryGraphSettingsEdit) await saveMemoryGraphSettings(memoryGraphSettingsRequest(memoryGraphSettingsEdit));
-      if (modelSettingsDirty) await saveModel();
+      if (providerSettingsRef.current?.hasUnsavedDraft()) {
+        const saved = await providerSettingsRef.current.saveDraft();
+        if (!saved) return;
+      }
       if (localeEdit) setLocale(localeEdit);
       if (tokenEdit !== undefined) setToken(tokenEdit);
-      clearSystemSettingsDrafts(false);
+      clearSystemSettingsDrafts();
       if (closeAfterSave) {
         reportSystemSettingsError();
         setShowConfig(false);
@@ -2436,22 +2367,6 @@ export function App() {
       // Save can be retried without reconstructing edits from other sections.
     } finally {
       setSystemSettingsSaving(false);
-    }
-  }
-
-  async function deleteModel(): Promise<void> {
-    if (!editingModelId) return;
-    reportSystemSettingsError();
-    try {
-      await client.deleteModel(editingModelId);
-      const remaining = models.filter((item) => item.id !== editingModelId);
-      setModels(remaining);
-      const next = remaining[0];
-      if (next) editModel(next);
-      else startNewModel();
-      pushToast("success", "Model deleted");
-    } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : t("error.deleteModel"));
     }
   }
 
@@ -2475,6 +2390,17 @@ export function App() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("error.updateSession"));
     }
+  }
+
+  async function updateConversationModel(modelId: string): Promise<void> {
+    const nextModel = models.find((model) => model.id === modelId);
+    const currentMode = session?.thinkingMode ?? nextModel?.thinkingMode ?? "auto";
+    const currentEffort = session?.thinkingEffort ?? nextModel?.thinkingEffort ?? "high";
+    const changes: UpdateSessionRequest = {
+      modelId,
+      ...normalizeSessionThinking(nextModel, modelProviders, currentMode, currentEffort),
+    };
+    await updateSessionSettings(changes);
   }
 
   function reconcilePermissionSnapshots(
@@ -3506,6 +3432,60 @@ export function App() {
 
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const activeModel = models.find((item) => item.id === session?.modelId);
+  const activeThinkingControls = modelThinkingControls(activeModel, modelProviders);
+  const requestedThinkingMode = session?.thinkingMode ?? activeModel?.thinkingMode ?? "auto";
+  const requestedThinkingEffort = session?.thinkingEffort ?? activeModel?.thinkingEffort ?? "high";
+  const constrainedActiveThinking = constrainCatalogThinking(activeModel?.model ?? "", requestedThinkingMode, requestedThinkingEffort);
+  const activeThinkingMode = activeThinkingControls.modes.includes(requestedThinkingMode)
+    ? requestedThinkingMode
+    : constrainedActiveThinking.mode;
+  const activeThinkingEffort = activeThinkingControls.efforts.includes(requestedThinkingEffort)
+    ? requestedThinkingEffort
+    : constrainedActiveThinking.effort;
+  const activeThinkingSummary = !activeModel || !activeThinkingControls.supported
+    ? undefined
+    : activeThinkingMode === "enabled"
+      ? activeThinkingEffort
+      : activeThinkingMode === "disabled"
+        ? t("composer.modelPicker.thinkingOff")
+        : t("settings.thinkingMode.auto");
+  useEffect(() => {
+    if (!session || !activeModel || isRunning || session.archivedAt) return;
+    const changes = normalizeSessionThinking(
+      activeModel,
+      modelProviders,
+      session.thinkingMode,
+      session.thinkingEffort,
+    );
+    if (!Object.keys(changes).length) return;
+    const key = `${session.id}:${session.modelId}:${session.thinkingMode}:${session.thinkingEffort}`;
+    if (thinkingNormalizationInFlight.current === key) return;
+    thinkingNormalizationInFlight.current = key;
+    void client.updateSession(session.id, changes)
+      .then((updated) => {
+        syncSessionSummary(updated);
+        setError(undefined);
+      })
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t("error.updateSession")))
+      .finally(() => {
+        if (thinkingNormalizationInFlight.current === key) thinkingNormalizationInFlight.current = undefined;
+      });
+    // This effect deliberately follows persisted Session/model facts; the
+    // update callbacks themselves are stable App operations, not triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeModel, client, isRunning, modelProviders, session?.archivedAt, session?.id, session?.modelId, session?.thinkingEffort, session?.thinkingMode]);
+  useEffect(() => {
+    if (!showConfig) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancelSystemSettings();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+    // The handler must observe the Provider draft state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerDraftDirty, showConfig]);
   const visionModels = models.filter((item) => item.vision);
   const latestExecution = executionRuns.at(-1);
   const latestEnvironmentRevision = environmentRevisions.find((revision) => revision.id === latestExecution?.environmentRevisionId);
@@ -3532,7 +3512,7 @@ export function App() {
   }, [runUsageByRunId, sessionRuns]);
   const displayedMessages = session?.messages.filter((item) => item.id !== timelineMessageId) ?? [];
   const sessionReplayTimelines = (session?.id ? replayTimelines[session.id] : undefined) ?? {};
-  const activeTimelineRunId = session?.id ? runTimelines[session.id]?.runId : undefined;
+  const activeTimelineRunId = activeRunTimeline?.runId;
   const replayedRunIds = new Set(Object.keys(sessionReplayTimelines).filter((runId) => runId !== activeTimelineRunId));
   const conversationBlocks = buildConversationBlocks(displayedMessages, sessionRuns, replayedRunIds);
   const timelinePermissionRequestIds = collectTimelinePermissionRequestIds([
@@ -4024,7 +4004,7 @@ export function App() {
                         </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
-                        modelName={activeModel?.name}
+                        modelName={sessionReplayTimelines[block.runId]?.modelName}
                         onChipClick={handleChipClick}
                         onLoadToolOutput={(trace) => loadToolOutput(session.id, block.runId, trace)}
                         onOpenArtifacts={openMarkdownImageArtifacts}
@@ -4057,25 +4037,29 @@ export function App() {
                     </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}
-                    modelName={activeModel?.name}
+                    modelName={activeRunTimeline?.modelName}
                     onChipClick={handleChipClick}
                     onLoadToolOutput={(trace) => loadToolOutput(session.id, runTimelines[session.id]?.runId, trace)}
                     onOpenArtifacts={openMarkdownImageArtifacts}
                     onOpenSkillReviews={openGeneratedSkillDraftExplorer}
                     onPermissionDecision={decidePermission}
                     references={reportReferences}
-                    onToggle={(id, expanded) => setRunTimelines((current) => ({
-                      ...current,
-                      [session.id]: {
-                        entries: setTimelineEntryExpanded(
-                          current[session.id]?.entries ?? EMPTY_TIMELINE,
-                          id,
-                          expanded,
-                        ),
-                        lastSequence: current[session.id]?.lastSequence ?? 0,
-                        ...(current[session.id]?.runId ? { runId: current[session.id]!.runId } : {}),
-                      },
-                    }))}
+                    onToggle={(id, expanded) => setRunTimelines((current) => {
+                      const timeline = current[session.id];
+                      return {
+                        ...current,
+                        [session.id]: {
+                          entries: setTimelineEntryExpanded(
+                            timeline?.entries ?? EMPTY_TIMELINE,
+                            id,
+                            expanded,
+                          ),
+                          lastSequence: timeline?.lastSequence ?? 0,
+                          ...(timeline?.modelName ? { modelName: timeline.modelName } : {}),
+                          ...(timeline?.runId ? { runId: timeline.runId } : {}),
+                        },
+                      };
+                    })}
                     reviewerLevel={reviewerSpecialistSettings?.level}
                     workspaceSessionId={session.id}
                   />
@@ -4098,14 +4082,23 @@ export function App() {
                     onOpenModelSettings={() => openSystemSettings("models")}
                     reason={composerRunAction.noModelReason}
                   /> : null}
+                  {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
+                    {t("composer.thinkingLegacyNotice")}
+                  </div> : null}
                   <div className="composer-footer">
-                    <label className="task-model-picker">
-                      <span><i className="live-dot" />{t("composer.taskModel")}</span>
-                      <select value={session.modelId ?? ""} onChange={(event) => void updateSessionSettings({ modelId: event.target.value })} disabled={isRunning || sessionArchived || !models.length} aria-label={t("composer.modelAria")}>
-                        {!session.modelId ? <option value="">{t("composer.noModel")}</option> : null}
-                        {models.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, models)}</option>)}
-                      </select>
-                    </label>
+                    <ModelPicker
+                      activeModelId={session.modelId ?? undefined}
+                      controls={activeThinkingControls}
+                      disabled={isRunning || sessionArchived}
+                      models={models}
+                      onOpenSettings={() => openSystemSettings("models")}
+                      onSelect={(modelId) => void updateConversationModel(modelId)}
+                      onThinkingChange={(update) => void updateSessionSettings(update)}
+                      providers={modelProviders}
+                      thinkingEffort={activeThinkingEffort}
+                      thinkingMode={activeThinkingMode}
+                      {...(activeThinkingSummary ? { thinkingSummary: activeThinkingSummary } : {})}
+                    />
                     <span className="composer-hint" title={t("composer.keyboardHint")}>{t("composer.keyboardHint")}</span>
                     <div className="orchestration-controls">
                       <ConnectorPicker
@@ -4282,7 +4275,7 @@ export function App() {
               </div>
             </details> : null}
 
-            {session ? <MemoryGraphView client={client} onError={reportError} refreshKey={`exec:${executionRuns.length}:msg:${session.messages.length}:plans:${plans.length}:mg:${memoryGraphSettings ? `${memoryGraphSettings.enabled ? 1 : 0}:${memoryGraphSettings.memoryGraphStatus}` : "none"}`} sessionId={session.id} /> : null}
+            {session ? <MemoryGraphView subgraph={memorySubgraph} health={memoryHealth} onOpenExplorer={() => setMemoryExplorerOpen(true)} /> : null}
 
             {session ? <EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /> : null}
 
@@ -4306,7 +4299,7 @@ export function App() {
                     <span><UploadIcon size={14} /> Upload full PDF</span><small>50 MiB · 200 pages max</small>
                   </label>
                   {visionModels.length ? (
-                    <label className="vision-picker"><span>Optional vision model</span><select disabled={sessionArchived} value={visionModelId ?? ""} onChange={(event) => setVisionModelId(event.target.value)}>{visionModels.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, visionModels)}</option>)}</select></label>
+                    <label className="vision-picker"><span>Optional vision model</span><select disabled={sessionArchived} value={visionModelId ?? ""} onChange={(event) => setVisionModelId(event.target.value)}>{visionModels.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, visionModels, t)}</option>)}</select></label>
                   ) : <p className="paper-note">Mark a model as vision capable in Model settings to analyze scanned pages or extracted figures. OCR is not run.</p>}
                   <div className="paper-library">
                     {papers.map((paper) => {
@@ -4427,6 +4420,24 @@ export function App() {
         />
       ) : null}
 
+      {memoryExplorerOpen && session && memorySubgraph ? (
+        <ErrorBoundary label="ScienceMemory" onError={(message) => { reportError(message); setMemoryExplorerOpen(false); }}>
+          <Suspense fallback={null}>
+            <MemoryGraphExplorer
+              client={client}
+              // Opened from the right-rail card, not a product modal: no initial
+              // node and no autoChain (autoChain would jump straight into a
+              // chain view; the default here is the full graph backbone, and
+              // removing autoChain entirely is a later commit).
+              onClose={() => setMemoryExplorerOpen(false)}
+              onError={reportError}
+              sessionId={session.id}
+              subgraph={memorySubgraph}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      ) : null}
+
       {evidenceDetailId && activeSessionId ? (
         <EvidenceModal
           onOpenEvolveRun={setOpenEvolveRunId}
@@ -4437,6 +4448,8 @@ export function App() {
         />
       ) : null}
 
+
+
       {showConfig ? (
         <div className="config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelSystemSettings(); }}>
           <section aria-label={t("app.systemConfiguration")} aria-modal="true" className="config-panel system-config-dialog" role="dialog">
@@ -4446,7 +4459,7 @@ export function App() {
               key={detail}
               onDismiss={() => setSystemSettingsErrors((current) => current.filter((item) => item !== detail))}
             />)}
-            <SystemSettingsLayout activeGroup={systemSettingsGroup} onSelect={setSystemSettingsGroup}>
+            <SystemSettingsLayout activeGroup={systemSettingsGroup} onSelect={selectSystemSettingsGroup}>
               {systemSettingsGroup === "global" ? (
                 globalSettings ? <ScopedSettingsEditor allowInheritance={false} connectors={connectors} details={globalSettings} draft={globalSettingsEdit ?? globalSettingsDraft(globalSettings)} models={models} onDraftChange={setGlobalSettingsEdit} onSave={saveGlobalSettings} scopeLabel={t("settings.global")} showActions={false} skillScope="global" skills={skills} /> : <p className="muted">{t("settings.loadingGlobal")}</p>
               ) : null}
@@ -4481,45 +4494,21 @@ export function App() {
               /> : null}
               {systemSettingsGroup === "models" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.providerConfiguration")}</span><h3>{t("settings.modelRegistry")}</h3><p>{t("settings.modelHelp")}</p></div>
-                <div className="model-list-header"><span>{t("settings.configuredModels")}</span><button className="secondary-button compact-button" type="button" onClick={startNewModel}>{t("settings.addModel")}</button></div>
-                <div className="model-list">
-                  {models.map((item) => {
-                    const idHint = duplicateModelProfileId(item, models);
-                    return <div className={item.id === editingModelId ? "model-card active" : "model-card"} key={item.id} title={modelOptionLabel(item, models)}>
-                      <button className="model-card-main" type="button" onClick={() => editModel(item)}>
-                        <span className={item.hasApiToken ? "model-status" : "model-status missing"} />
-                        <span><strong>{item.name}</strong><small>{item.model}{idHint ? ` · ${idHint}` : ""}{item.vision ? " · Vision" : ""} · {item.hasApiToken ? "Key saved" : "Key missing"}</small></span>
-                      </button>
-                      <ModelConnectivityButton
-                        disabled={item.id === editingModelId && modelSettingsDirty}
-                        modelId={item.id}
-                        modelName={item.name}
-                        profileVersion={item.updatedAt}
-                        testModel={(modelId) => client.testModel(modelId)}
-                      />
-                      <button aria-label={`${t("settings.editModel")}: ${item.name}`} className="model-card-open" type="button" onClick={() => editModel(item)} title={t("settings.editModel")}>
-                        <ChevronRightIcon size={16} />
-                      </button>
-                    </div>;
-                  })}
-                </div>
-                <form className="model-editor" onSubmit={(event) => event.preventDefault()}>
-                  <div className="editor-heading"><strong>{editingModelId ? t("settings.editModel") : t("settings.newModel")}</strong><small>Profile settings and an encrypted provider credential are stored by the backend.</small></div>
-                  <ModelDraftFields draft={modelDraft} onChange={updateModelDraft} />
-                  {proxySettings ? <ProxyPolicySelect label="LLM proxy" onChange={(proxyPolicy) => updateModelDraft({ proxyPolicy })} settings={proxySettings} value={modelDraft.proxyPolicy} /> : null}
-                  <label className="vision-capability"><input type="checkbox" checked={modelDraft.vision} onChange={(event) => updateModelDraft({ vision: event.target.checked })} /><span><strong>Vision capable</strong><small>Allow this profile to receive extracted paper page and figure images.</small></span></label>
-                  <label><span>{t("settings.apiToken")}</span><input required={!editingModelId} type="password" value={draftToken} onChange={(event) => { setDraftToken(event.target.value); setRemoveStoredToken(false); setModelSettingsDirty(true); }} placeholder={models.find((item) => item.id === editingModelId)?.hasApiToken ? "Saved · enter a new token to replace it" : "Required for model runs"} /></label>
-                  {editingModelId && models.find((item) => item.id === editingModelId)?.hasApiToken ? (
-                    <button className={removeStoredToken ? "credential-remove pending" : "credential-remove"} type="button" onClick={() => { setDraftToken(""); setRemoveStoredToken((current) => !current); setModelSettingsDirty(true); }}>
-                      {removeStoredToken ? "Saved token will be removed" : "Remove saved token"}
-                    </button>
-                  ) : null}
-                  <div className="model-editor-actions">
-                    {editingModelId ? <button className="danger-button" type="button" onClick={() => void deleteModel()}>{t("settings.delete")}</button> : <span />}
-                    <span className="settings-source">Use the dialog Save action to apply this draft.</span>
-                  </div>
-                </form>
-                <div className="config-note">Model profiles and provider tokens are stored by the local backend. Tokens are encrypted before database persistence, never returned to the browser, and resolved by model ID for chat, review, and vision runs.</div>
+                <ProviderModelSettings
+                  catalog={modelCatalog}
+                  client={client}
+                  models={models}
+                  onCatalogChange={applyModelCatalog}
+                  onDraftStateChange={setProviderDraftDirty}
+                  onError={reportSystemSettingsError}
+                  onModelsChange={setModels}
+                  onNotice={(message, detail) => pushToast("success", message, detail)}
+                  onProvidersChange={setModelProviders}
+                  presets={modelProviderPresets}
+                  providers={modelProviders}
+                  proxySettings={proxySettings}
+                  ref={providerSettingsRef}
+                />
               </> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings

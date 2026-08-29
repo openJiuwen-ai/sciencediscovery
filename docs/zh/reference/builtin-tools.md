@@ -7,12 +7,15 @@
 | 工具 | 参数 | 行为与边界 |
 |---|---|---|
 | `list_files` | 无 | 递归列出会话工作区文件（路径/大小/修改时间），跳过符号链接，最多 500 个 |
-| `read_file` | `path` | 读工作区内 UTF-8 文本文件，上限 1 MB；路径经工作区逃逸校验 |
+| `read_file` | `path`，可选 `offset`、`limit` | 分页读工作区文本：单次最多 2000 行或 40 KiB，用 `offset` 续读；路径经工作区逃逸校验。二进制文件只返回媒体类型与大小，正文与 base64 都不进入模型输入 |
 | `list_artifacts` | 无 | 列出当前 Project 中跨 Session 的用户可见产物，包含来源、创建 Session 快照和最新版本元数据 |
-| `read_artifact` | `artifact_id` 或 `name`，可选 `version` | 按 Project 产物身份读取指定版本；文本返回 UTF-8，二进制返回 base64，内容上限 1 MB |
+| `read_artifact` | `artifact_id` 或 `name`，可选 `version`、`offset`、`limit` | 按 Project 产物身份分页读取指定版本：文本返回 UTF-8，单页最多 2000 行或 40 KiB，并给出行范围与下一 `offset`；二进制版本只返回 `binary: true` 与媒体类型、大小，不返回正文或 base64 |
 | `declare_artifact` | `path` 或 `paths`（1–50 项），可选 `name`、`description` | 将当前 Agent 可写工作区内的文件显式声明为 Project 产物。单 `path` 保留原返回，`name` 默认等于规范化后的工作区相对 `path`，可显式覆盖为其它安全逻辑路径；`paths` 优先且逐项返回 `ok/error`，成功项不回滚，每项使用自身完整相对 path 并忽略顶层 `name/description`；name 中的 `/` 在产物侧边栏显示为虚拟目录，不创建或移动物理文件；预览 kind 由服务端内部推断，最终报告也必须声明 |
 | `run_python` | `code`，可选 `environmentRevisionId`、`kernelMode: ephemeral\|persistent` | 在 bubblewrap 沙箱执行 Python；默认一次性进程，可选托管环境与持久内核；非零退出即工具错误 |
 | `run_shell` | `command` 或 `scriptPath` 二选一，可选 `arguments`、`kernelMode` | 有界 shell：默认复用 Session 持久 shell 会话（`cd`/`export`/`source` 跨调用生效，白名单变量也注入后续 `run_python`/`run_r`；见 [sandbox-execution.md §8](../explanation/sandbox-execution.md#8-持久-shell-会话与-session-env-profile)）；`kernelMode=ephemeral` 为一次性干净 shell；只见工作区，网络按沙箱网络访问策略（默认无网络） |
+| `read_tool_output` | `ref`，可选 `offset`、`limit` | 回读因过大而未完整返回的工具结果；`ref` 来自被截断结果的提示行 |
+
+所有工具结果在进入模型输入前都会被限界：超过 2000 行或 50 KiB 的结果只保留预览（读取类保留头部，执行类保留尾部，因为退出状态和报错在末尾），并附带一个 `ref`，模型用 `read_tool_output` 按页取回被省略的部分；完整文本原样按 Session 保存在 `<dataDir>/tool-outputs/<sessionId>/`（不设大小上限），生命周期与 Session 一致：没有单独的过期时间，随 Session 或 Project 删除时和消息、执行记录一起清理。该限界发生在工具结果进入 canonical history 的统一边界上，因此同样覆盖 MCP 工具结果和后续新增的工具。
 
 `run_python` / `run_shell` 首次执行会触发 `code` 类权限卡片（见[运行时行为参考](runtime-behavior.md#权限与评审器)）。执行产生的文件仍保留 diff 与 derivation 审计，但不会仅因出现在工作区就进入产物目录；Agent 必须调用 `declare_artifact`，用户上传、MCP 下载与拉回的远程任务输出则由控制面在入口处注册。
 

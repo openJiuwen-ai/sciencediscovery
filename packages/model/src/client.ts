@@ -15,36 +15,38 @@
 /**
  * Streaming chat-model clients for the Node-native agent loop.
  *
- * Two provider dialects, one normalized result:
- *   - OpenAI-compatible `/chat/completions` (the default; also serves Gemini
- *     behind OpenAI gateways — raw tool-call fields such as
- *     `thought_signature` are preserved verbatim on the assistant message and
- *     replayed on later requests because the loop keeps wire-format history).
- *   - Anthropic Messages (model profiles whose base URL points at the
- *     internal `/api/plan` endpoint), translated to and from the same
- *     OpenAI-format history the rest of the system stores.
+ * Explicit protocol families share one normalized result. Provider-specific
+ * reasoning payloads stay on the wire-format history so later tool calls and
+ * user turns can replay them without converting between incompatible shapes.
  */
 
 import { randomUUID } from "node:crypto";
 import { Agent as UndiciAgent, ProxyAgent, request, type Dispatcher } from "undici";
 
 import type { RuntimeMessage as AgentHistoryMessage } from "@sciencediscovery/runtime-core";
-import type { ResolvedProxy } from "@sciencediscovery/schema";
+import {
+  constrainCatalogThinking,
+  DEFAULT_MODEL_API_VARIANT,
+  lookupModelCatalog,
+  MODEL_API_VARIANTS,
+  type ModelApiProtocol,
+  type ModelApiVariant,
+  type ModelThinkingEffort,
+  type ModelThinkingMode,
+  type ResolvedProxy,
+} from "@sciencediscovery/schema";
 
 import type { ModelUsage as AgentModelUsage } from "./types.js";
 
 export interface ModelEndpoint {
   apiToken?: string;
+  apiProtocol?: ModelApiProtocol;
+  apiVariant?: ModelApiVariant;
   baseUrl: string;
   model: string;
   proxy?: ResolvedProxy;
-  /** Sent verbatim as `thinking` on OpenAI-compatible endpoints that honour it.
-   *  Left unset for the agent loop, whose whole job is to reason; set to
-   *  "disabled" by one-shot callers, where a reasoning model has been observed
-   *  to spend the entire `max_tokens` on hidden thought and return no content
-   *  at all. Anthropic's dialect defaults to no extended thinking, so the flag
-   *  has nothing to say there. */
-  thinking?: "disabled" | "enabled";
+  thinkingEffort?: ModelThinkingEffort;
+  thinkingMode?: ModelThinkingMode;
 }
 
 export interface WireToolSpec {
@@ -286,11 +288,112 @@ function trimBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
+export function endpointRoot(baseUrl: string): string {
+  return trimBase(baseUrl).replace(/\/(?:chat\/completions|responses|messages)$/, "");
+}
+
 export function isAnthropicEndpoint(baseUrl: string): boolean {
   return baseUrl.includes("/api/plan");
 }
 
-// ── OpenAI-compatible dialect ──
+function endpointProtocol(endpoint: ModelEndpoint): ModelApiProtocol {
+  return endpoint.apiProtocol ?? (isAnthropicEndpoint(endpoint.baseUrl)
+    ? "anthropic-messages"
+    : "openai-chat-completions");
+}
+
+function endpointVariant(endpoint: ModelEndpoint): ModelApiVariant {
+  const protocol = endpointProtocol(endpoint);
+  const configured = endpoint.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
+  const catalogVariant = lookupModelCatalog(endpoint.model)?.apiVariant;
+  return catalogVariant && MODEL_API_VARIANTS[protocol].includes(catalogVariant)
+    ? catalogVariant
+    : configured;
+}
+
+function thinkingMode(endpoint: ModelEndpoint): ModelThinkingMode {
+  return constrainCatalogThinking(endpoint.model, endpoint.thinkingMode, endpoint.thinkingEffort).mode;
+}
+
+function thinkingEffort(endpoint: ModelEndpoint): ModelThinkingEffort {
+  return constrainCatalogThinking(endpoint.model, endpoint.thinkingMode, endpoint.thinkingEffort).effort;
+}
+
+function chatUrl(baseUrl: string): string {
+  return `${endpointRoot(baseUrl)}/chat/completions`;
+}
+
+function responsesUrl(baseUrl: string): string {
+  return `${endpointRoot(baseUrl)}/responses`;
+}
+
+function anthropicUrl(baseUrl: string): string {
+  const base = endpointRoot(baseUrl);
+  return base.endsWith("/v1") ? `${base}/messages` : `${base}/v1/messages`;
+}
+
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (isRecord(content)) {
+    if (typeof content.text === "string") return content.text;
+    if (typeof content.content === "string") return content.content;
+    return contentText(content.content);
+  }
+  if (!Array.isArray(content)) return "";
+  return content.map((item) => {
+    if (!isRecord(item)) return "";
+    if (typeof item.text === "string") return item.text;
+    if (typeof item.content === "string") return item.content;
+    return "";
+  }).join("");
+}
+
+function reasoningText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(reasoningText).join("");
+  if (!isRecord(value)) return "";
+  for (const key of ["text", "content", "reasoning", "reasoning_content"]) {
+    const text = reasoningText(value[key]);
+    if (text) return text;
+  }
+  return "";
+}
+
+function splitInlineThinking(value: string): { text: string; thinking: string } {
+  const thoughts: string[] = [];
+  const text = value.replace(/<think>([\s\S]*?)<\/think>/gi, (_match, thought: string) => {
+    if (thought.trim()) thoughts.push(thought);
+    return "";
+  });
+  return { text: text.trimStart(), thinking: thoughts.join("\n") };
+}
+
+function chatThinkingFields(endpoint: ModelEndpoint): Record<string, unknown> {
+  const mode = thinkingMode(endpoint);
+  if (mode === "auto") return {};
+  const enabled = mode === "enabled";
+  switch (endpointVariant(endpoint)) {
+    case "deepseek":
+      return {
+        thinking: { type: mode },
+        ...(enabled ? { reasoning_effort: thinkingEffort(endpoint) } : {}),
+      };
+    case "kimi-k3":
+      // K3 is always reasoning. `auto` omits the field and lets the official
+      // default (`max`) apply; enabled sends only its top-level effort field.
+      return enabled ? { reasoning_effort: thinkingEffort(endpoint) } : {};
+    case "qwen":
+      return { chat_template_kwargs: { enable_thinking: enabled } };
+    case "minimax":
+      return { reasoning_split: enabled };
+    case "gemini":
+      return enabled
+        ? { reasoning_effort: ["xhigh", "max"].includes(thinkingEffort(endpoint)) ? "high" : thinkingEffort(endpoint) }
+        : { reasoning_effort: "none" };
+    default:
+      return {};
+  }
+}
 
 interface OpenAiToolCallFragment {
   function?: { arguments?: string; name?: string };
@@ -298,6 +401,44 @@ interface OpenAiToolCallFragment {
   index?: number;
   type?: string;
   [key: string]: unknown;
+}
+
+function chatHistory(history: AgentHistoryMessage[], variant: ModelApiVariant): AgentHistoryMessage[] {
+  return history.map((message) => {
+    const result: AgentHistoryMessage = {
+      role: message.role,
+      content: message.content ?? "",
+    };
+    if (typeof message.name === "string") result.name = message.name;
+    if (typeof message.tool_call_id === "string") result.tool_call_id = message.tool_call_id;
+    if (message.role === "assistant") {
+      if ((variant === "deepseek" || variant === "kimi-k3")
+        && typeof message.reasoning_content === "string" && message.reasoning_content) {
+        result.reasoning_content = message.reasoning_content;
+      }
+      if (variant === "qwen" && message.reasoning !== undefined) result.reasoning = structuredClone(message.reasoning);
+      if (Array.isArray(message.tool_calls)) {
+        result.tool_calls = message.tool_calls.map((raw) => {
+          if (!isRecord(raw)) return raw;
+          const call: Record<string, unknown> = {
+            id: raw.id,
+            type: raw.type ?? "function",
+            function: isRecord(raw.function) ? structuredClone(raw.function) : raw.function,
+          };
+          if (variant === "gemini") {
+            if (raw.thought_signature !== undefined) call.thought_signature = raw.thought_signature;
+            if (raw.thoughtSignature !== undefined) call.thoughtSignature = raw.thoughtSignature;
+            // Current Gemini OpenAI-compat places the signature at
+            // tool_calls[].extra_content.google.thought_signature and requires
+            // it back verbatim in history, or multi-turn tool calls fail 400.
+            if (raw.extra_content !== undefined) call.extra_content = structuredClone(raw.extra_content);
+          }
+          return call;
+        });
+      }
+    }
+    return result;
+  });
 }
 
 async function streamOpenAiTurn(
@@ -309,27 +450,21 @@ async function streamOpenAiTurn(
   signal: AbortSignal,
   callbacks: ModelStreamCallbacks,
 ): Promise<ModelTurn> {
+  const variant = endpointVariant(endpoint);
   const { body } = await requestWithRetry({
-    url: `${trimBase(endpoint.baseUrl)}/chat/completions`,
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${endpoint.apiToken || "dummy"}`,
-    },
+    url: chatUrl(endpoint.baseUrl),
+    headers: { "content-type": "application/json", authorization: `Bearer ${endpoint.apiToken || "dummy"}` },
     body: JSON.stringify({
       model: endpoint.model,
-      messages: [{ role: "system", content: systemPrompt }, ...history],
-      ...(tools.length
-        ? {
-            tools: tools.map((tool) => ({
-              type: "function",
-              function: { name: tool.name, description: tool.description, parameters: tool.parameters },
-            })),
-          }
-        : {}),
+      messages: [{ role: "system", content: systemPrompt }, ...chatHistory(history, variant)],
+      ...(tools.length ? { tools: tools.map((tool) => ({
+        type: "function",
+        function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+      })) } : {}),
       stream: true,
       stream_options: { include_usage: true },
       max_tokens: policy.maxTokens,
-      ...(endpoint.thinking ? { thinking: { type: endpoint.thinking } } : {}),
+      ...chatThinkingFields(endpoint),
     }),
     policy,
     proxy: endpoint.proxy,
@@ -337,53 +472,68 @@ async function streamOpenAiTurn(
   });
 
   let text = "";
+  let deepseekReasoning = "";
+  let qwenReasoning: unknown;
+  const minimaxReasoning: unknown[] = [];
   const fragments = new Map<number, OpenAiToolCallFragment>();
   let usage: AgentModelUsage | undefined;
   let truncated = false;
+  const buffersInlineThinking = variant === "minimax" || variant === "ollama";
 
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let chunk: Record<string, unknown>;
     try {
       chunk = JSON.parse(payload) as Record<string, unknown>;
     } catch {
-      continue; // tolerate malformed keepalive frames
+      continue;
     }
     const chunkUsage = normalizeUsage(chunk.usage);
     if (chunkUsage) usage = chunkUsage;
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
     // Read before the `delta` guard below: the chunk that carries
     // `finish_reason` is the closing one, and it has no delta.
-    if (choices.length && isRecord(choices[0])
-      && (choices[0] as Record<string, unknown>).finish_reason === "length") {
+    if (choices.length && isRecord(choices[0]) && choices[0].finish_reason === "length") {
       truncated = true;
     }
-    const delta = choices.length && isRecord(choices[0]) && isRecord((choices[0] as Record<string, unknown>).delta)
-      ? (choices[0] as { delta: Record<string, unknown> }).delta
+    const delta = choices.length && isRecord(choices[0]) && isRecord(choices[0].delta)
+      ? choices[0].delta
       : undefined;
     if (!delta) continue;
-    const reasoning = delta.reasoning_content;
-    if (typeof reasoning === "string" && reasoning) callbacks.onThinkingDelta?.(reasoning);
-    const content = delta.content;
-    if (typeof content === "string" && content) {
-      text += content;
-      callbacks.onTextDelta?.(content);
+
+    if ((variant === "deepseek" || variant === "kimi-k3") && typeof delta.reasoning_content === "string") {
+      deepseekReasoning += delta.reasoning_content;
+      callbacks.onThinkingDelta?.(delta.reasoning_content);
+    } else if (variant === "qwen" && delta.reasoning !== undefined) {
+      if (typeof delta.reasoning === "string") {
+        qwenReasoning = `${typeof qwenReasoning === "string" ? qwenReasoning : ""}${delta.reasoning}`;
+      } else {
+        qwenReasoning = structuredClone(delta.reasoning);
+      }
+      const thought = reasoningText(delta.reasoning);
+      if (thought) callbacks.onThinkingDelta?.(thought);
+    } else if (variant === "minimax" && Array.isArray(delta.reasoning_details)) {
+      minimaxReasoning.push(...structuredClone(delta.reasoning_details));
+      const thought = reasoningText(delta.reasoning_details);
+      if (thought) callbacks.onThinkingDelta?.(thought);
     }
-    const toolCalls = delta.tool_calls;
-    if (Array.isArray(toolCalls)) {
-      for (const fragment of toolCalls) {
-        if (!isRecord(fragment)) continue;
-        const index = typeof fragment.index === "number" ? fragment.index : fragments.size;
+
+    if (typeof delta.content === "string" && delta.content) {
+      text += delta.content;
+      if (!buffersInlineThinking) callbacks.onTextDelta?.(delta.content);
+    }
+    if (Array.isArray(delta.tool_calls)) {
+      for (const raw of delta.tool_calls) {
+        if (!isRecord(raw)) continue;
+        const index = typeof raw.index === "number" ? raw.index : fragments.size;
         const existing = fragments.get(index) ?? { function: { arguments: "", name: "" } };
-        // Merge unknown provider fields (e.g. Gemini thought_signature) so the
-        // stored assistant message replays them verbatim on later requests.
-        for (const [key, value] of Object.entries(fragment)) {
+        for (const [key, value] of Object.entries(raw)) {
           if (key === "index" || key === "function") continue;
           if (value !== undefined && value !== null) existing[key] = value;
         }
-        if (isRecord(fragment.function)) {
+        if (isRecord(raw.function)) {
           const fn = existing.function ?? { arguments: "", name: "" };
-          if (typeof fragment.function.name === "string" && fragment.function.name) fn.name = fragment.function.name;
-          if (typeof fragment.function.arguments === "string") fn.arguments = (fn.arguments ?? "") + fragment.function.arguments;
+          if (typeof raw.function.name === "string" && raw.function.name) fn.name = raw.function.name;
+          if (typeof raw.function.arguments === "string") fn.arguments = (fn.arguments ?? "") + raw.function.arguments;
           existing.function = fn;
         }
         fragments.set(index, existing);
@@ -391,87 +541,214 @@ async function streamOpenAiTurn(
     }
   }
 
-  const orderedFragments = [...fragments.entries()].sort((a, b) => a[0] - b[0]).map(([, fragment]) => fragment);
+  if (buffersInlineThinking) {
+    const split = splitInlineThinking(text);
+    text = split.text;
+    if (split.thinking && !reasoningText(minimaxReasoning).includes(split.thinking)) {
+      callbacks.onThinkingDelta?.(split.thinking);
+    }
+    if (text) callbacks.onTextDelta?.(text);
+  }
+  const orderedFragments = [...fragments.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
   const wireToolCalls = orderedFragments.map((fragment) => ({
     ...fragment,
     id: typeof fragment.id === "string" && fragment.id ? fragment.id : `call_${randomUUID()}`,
     type: typeof fragment.type === "string" && fragment.type ? fragment.type : "function",
-    function: {
-      name: fragment.function?.name ?? "",
-      arguments: fragment.function?.arguments ?? "",
-    },
+    function: { name: fragment.function?.name ?? "", arguments: fragment.function?.arguments ?? "" },
   }));
-  const toolCalls: NormalizedToolCall[] = wireToolCalls
-    .filter((call) => call.function.name)
-    .map((call) => {
-      const { args, error } = parseToolCallArgs(call.function.arguments);
-      return { args, id: call.id, name: call.function.name, ...(error ? { argsParseError: error } : {}) };
-    });
-
+  const toolCalls = wireToolCalls.filter((call) => call.function.name).map((call): NormalizedToolCall => {
+    const parsed = parseToolCallArgs(call.function.arguments);
+    return { args: parsed.args, id: call.id, name: call.function.name, ...(parsed.error ? { argsParseError: parsed.error } : {}) };
+  });
   const assistantMessage: AgentHistoryMessage = {
     role: "assistant",
     content: text,
     ...(wireToolCalls.length ? { tool_calls: wireToolCalls } : {}),
+    ...((variant === "deepseek" || variant === "kimi-k3") && deepseekReasoning
+      ? { reasoning_content: deepseekReasoning }
+      : {}),
+    ...(variant === "qwen" && qwenReasoning !== undefined ? { reasoning: qwenReasoning } : {}),
+    ...(variant === "minimax" && minimaxReasoning.length ? { reasoning_details: minimaxReasoning } : {}),
   };
   return { assistantMessage, toolCalls, ...(usage ? { usage } : {}), ...(truncated ? { truncated } : {}) };
 }
 
-// ── Anthropic Messages dialect (internal /api/plan endpoint) ──
+function responsesInput(history: AgentHistoryMessage[]): unknown[] {
+  const input: unknown[] = [];
+  for (const message of history) {
+    if (message.role === "assistant" && Array.isArray(message.response_items)) {
+      input.push(...structuredClone(message.response_items));
+    } else if (message.role === "tool") {
+      input.push({
+        type: "function_call_output",
+        call_id: typeof message.tool_call_id === "string" ? message.tool_call_id : "",
+        output: contentText(message.content),
+      });
+    } else if (message.role === "user" || message.role === "assistant") {
+      input.push({
+        type: "message",
+        role: message.role,
+        content: [{ type: message.role === "assistant" ? "output_text" : "input_text", text: contentText(message.content) }],
+      });
+    }
+  }
+  return input;
+}
+
+function responsesReasoning(endpoint: ModelEndpoint): Record<string, unknown> {
+  const mode = thinkingMode(endpoint);
+  if (mode === "auto") return {};
+  if (mode === "disabled") return { reasoning: { effort: "none" } };
+  return { reasoning: { effort: thinkingEffort(endpoint), summary: "auto" } };
+}
+
+async function streamResponsesTurn(
+  endpoint: ModelEndpoint,
+  systemPrompt: string,
+  history: AgentHistoryMessage[],
+  tools: WireToolSpec[],
+  policy: ModelClientPolicy,
+  signal: AbortSignal,
+  callbacks: ModelStreamCallbacks,
+): Promise<ModelTurn> {
+  const { body } = await requestWithRetry({
+    url: responsesUrl(endpoint.baseUrl),
+    headers: { "content-type": "application/json", authorization: `Bearer ${endpoint.apiToken || "dummy"}` },
+    body: JSON.stringify({
+      model: endpoint.model,
+      instructions: systemPrompt,
+      input: responsesInput(history),
+      ...(tools.length ? { tools: tools.map((tool) => ({
+        type: "function", name: tool.name, description: tool.description, parameters: tool.parameters,
+      })) } : {}),
+      stream: true,
+      store: false,
+      include: ["reasoning.encrypted_content"],
+      max_output_tokens: policy.maxTokens,
+      ...responsesReasoning(endpoint),
+    }),
+    policy,
+    proxy: endpoint.proxy,
+    signal,
+  });
+
+  let text = "";
+  let usage: AgentModelUsage | undefined;
+  const items = new Map<number, Record<string, unknown>>();
+  for await (const payload of sseData(body, callbacks.onProgress)) {
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(payload) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
+      text += event.delta;
+      callbacks.onTextDelta?.(event.delta);
+    } else if ((event.type === "response.reasoning_text.delta" || event.type === "response.reasoning_summary_text.delta")
+      && typeof event.delta === "string") {
+      callbacks.onThinkingDelta?.(event.delta);
+    } else if (event.type === "response.output_item.done" && isRecord(event.item)) {
+      const index = typeof event.output_index === "number" ? event.output_index : items.size;
+      items.set(index, structuredClone(event.item));
+    } else if (event.type === "response.completed" && isRecord(event.response)) {
+      usage = normalizeUsage(event.response.usage) ?? usage;
+    } else if (event.type === "response.failed") {
+      throw new Error(`Responses API failed${isRecord(event.response) && isRecord(event.response.error) && typeof event.response.error.message === "string" ? `: ${event.response.error.message}` : ""}`);
+    }
+  }
+  const responseItems = [...items.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+  if (!text) {
+    text = responseItems.filter((item) => item.type === "message")
+      .map((item) => contentText(item.content)).join("");
+    if (text) callbacks.onTextDelta?.(text);
+  }
+  const functionCalls = responseItems.filter((item) => item.type === "function_call");
+  const wireToolCalls = functionCalls.map((item) => ({
+    id: typeof item.call_id === "string" ? item.call_id : `call_${randomUUID()}`,
+    type: "function",
+    response_item_id: item.id,
+    function: {
+      name: typeof item.name === "string" ? item.name : "",
+      arguments: typeof item.arguments === "string" ? item.arguments : "{}",
+    },
+  }));
+  const toolCalls = wireToolCalls.filter((call) => call.function.name).map((call): NormalizedToolCall => {
+    const parsed = parseToolCallArgs(call.function.arguments);
+    return { args: parsed.args, id: call.id, name: call.function.name, ...(parsed.error ? { argsParseError: parsed.error } : {}) };
+  });
+  return {
+    assistantMessage: {
+      role: "assistant",
+      content: text,
+      response_items: responseItems,
+      ...(wireToolCalls.length ? { tool_calls: wireToolCalls } : {}),
+    },
+    toolCalls,
+    ...(usage ? { usage } : {}),
+  };
+}
 
 type AnthropicBlock = Record<string, unknown>;
 
-function anthropicContentText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((block) => (isRecord(block) && block.type === "text" && typeof block.text === "string" ? block.text : ""))
-      .join("");
-  }
-  return "";
-}
-
-/** Translate OpenAI-format history into Anthropic messages. */
+/** Translate canonical history into Anthropic Messages while preserving raw
+ * thinking/redacted-thinking blocks from earlier assistant turns verbatim. */
 export function toAnthropicMessages(history: AgentHistoryMessage[]): Array<{ content: AnthropicBlock[]; role: "assistant" | "user" }> {
   const messages: Array<{ content: AnthropicBlock[]; role: "assistant" | "user" }> = [];
   const push = (role: "assistant" | "user", blocks: AnthropicBlock[]) => {
-    const previous = messages[messages.length - 1];
-    if (previous && previous.role === role) previous.content.push(...blocks);
-    else messages.push({ content: blocks, role });
+    const previous = messages.at(-1);
+    if (previous?.role === role) previous.content.push(...blocks);
+    else messages.push({ role, content: blocks });
   };
   for (const message of history) {
-    const role = message.role;
-    if (role === "system") continue;
-    if (role === "user") {
-      push("user", [{ type: "text", text: anthropicContentText(message.content) }]);
-      continue;
-    }
-    if (role === "assistant") {
+    if (message.role === "system") continue;
+    if (message.role === "user") {
+      push("user", [{ type: "text", text: contentText(message.content) }]);
+    } else if (message.role === "assistant") {
+      if (Array.isArray(message.anthropic_content)) {
+        push("assistant", structuredClone(message.anthropic_content).filter(isRecord));
+        continue;
+      }
       const blocks: AnthropicBlock[] = [];
-      const text = anthropicContentText(message.content);
+      const text = contentText(message.content);
       if (text) blocks.push({ type: "text", text });
-      const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-      for (const call of toolCalls) {
-        if (!isRecord(call) || !isRecord(call.function)) continue;
-        const { args } = parseToolCallArgs(typeof call.function.arguments === "string" ? call.function.arguments : "");
+      for (const raw of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
+        if (!isRecord(raw) || !isRecord(raw.function)) continue;
+        const parsed = parseToolCallArgs(typeof raw.function.arguments === "string" ? raw.function.arguments : "");
         blocks.push({
           type: "tool_use",
-          id: typeof call.id === "string" ? call.id : `call_${randomUUID()}`,
-          name: typeof call.function.name === "string" ? call.function.name : "",
-          input: args,
+          id: typeof raw.id === "string" ? raw.id : `call_${randomUUID()}`,
+          name: typeof raw.function.name === "string" ? raw.function.name : "",
+          input: parsed.args,
         });
       }
       if (blocks.length) push("assistant", blocks);
-      continue;
-    }
-    if (role === "tool") {
+    } else if (message.role === "tool") {
       push("user", [{
         type: "tool_result",
         tool_use_id: typeof message.tool_call_id === "string" ? message.tool_call_id : "",
-        content: anthropicContentText(message.content),
+        content: contentText(message.content) || " ",
       }]);
     }
   }
   return messages;
+}
+
+function anthropicThinkingFields(endpoint: ModelEndpoint, maxTokens: number): Record<string, unknown> {
+  const mode = thinkingMode(endpoint);
+  if (mode === "auto") return {};
+  if (mode === "disabled") return { thinking: { type: "disabled" } };
+  if (endpointVariant(endpoint) === "anthropic-legacy") {
+    if (maxTokens <= 1_024) {
+      throw new Error("Anthropic legacy thinking requires max_tokens greater than 1024");
+    }
+    const requested = thinkingEffort(endpoint) === "max" ? 15_360 : 8_192;
+    return { thinking: { type: "enabled", budget_tokens: Math.min(requested, maxTokens - 1) } };
+  }
+  return {
+    thinking: { type: "adaptive", display: "summarized" },
+    output_config: { effort: thinkingEffort(endpoint) },
+  };
 }
 
 async function streamAnthropicTurn(
@@ -484,36 +761,29 @@ async function streamAnthropicTurn(
   callbacks: ModelStreamCallbacks,
 ): Promise<ModelTurn> {
   const { body } = await requestWithRetry({
-    url: `${trimBase(endpoint.baseUrl)}/v1/messages`,
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": endpoint.apiToken || "dummy",
-      "anthropic-version": "2023-06-01",
-    },
+    url: anthropicUrl(endpoint.baseUrl),
+    headers: { "content-type": "application/json", "x-api-key": endpoint.apiToken || "dummy", "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model: endpoint.model,
       system: systemPrompt,
       messages: toAnthropicMessages(history),
-      ...(tools.length
-        ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) }
-        : {}),
+      ...(tools.length ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
       stream: true,
       max_tokens: policy.maxTokens,
+      ...anthropicThinkingFields(endpoint, policy.maxTokens),
     }),
     policy,
     proxy: endpoint.proxy,
     signal,
   });
 
-  let text = "";
   let inputTokens = 0;
   let outputTokens = 0;
   let truncated = false;
   let cacheReadTokens: number | null = null;
   let cacheWriteTokens: number | null = null;
-  interface ToolUseState { id: string; json: string; name: string }
-  const toolUses = new Map<number, ToolUseState>();
-
+  const blocks = new Map<number, AnthropicBlock>();
+  const toolJson = new Map<number, string>();
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let event: Record<string, unknown>;
     try {
@@ -521,30 +791,32 @@ async function streamAnthropicTurn(
     } catch {
       continue;
     }
-    const type = event.type;
-    if (type === "message_start" && isRecord(event.message) && isRecord(event.message.usage)) {
+    if (event.type === "message_start" && isRecord(event.message) && isRecord(event.message.usage)) {
       inputTokens = numberField(event.message.usage, ["input_tokens"]) ?? 0;
       cacheReadTokens = numberField(event.message.usage, ["cache_read_input_tokens"]) ?? null;
       cacheWriteTokens = numberField(event.message.usage, ["cache_creation_input_tokens"]) ?? null;
-    } else if (type === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
-      if (event.content_block.type === "tool_use") {
-        toolUses.set(event.index, {
-          id: typeof event.content_block.id === "string" ? event.content_block.id : `call_${randomUUID()}`,
-          json: "",
-          name: typeof event.content_block.name === "string" ? event.content_block.name : "",
-        });
-      }
-    } else if (type === "content_block_delta" && typeof event.index === "number" && isRecord(event.delta)) {
+    } else if (event.type === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
+      blocks.set(event.index, structuredClone(event.content_block));
+      if (event.content_block.type === "tool_use") toolJson.set(event.index, "");
+    } else if (event.type === "content_block_delta" && typeof event.index === "number" && isRecord(event.delta)) {
+      const block = blocks.get(event.index);
+      if (!block) continue;
       if (event.delta.type === "text_delta" && typeof event.delta.text === "string") {
-        text += event.delta.text;
+        block.text = `${typeof block.text === "string" ? block.text : ""}${event.delta.text}`;
         callbacks.onTextDelta?.(event.delta.text);
       } else if (event.delta.type === "thinking_delta" && typeof event.delta.thinking === "string") {
+        block.thinking = `${typeof block.thinking === "string" ? block.thinking : ""}${event.delta.thinking}`;
         callbacks.onThinkingDelta?.(event.delta.thinking);
+      } else if (event.delta.type === "signature_delta" && typeof event.delta.signature === "string") {
+        block.signature = `${typeof block.signature === "string" ? block.signature : ""}${event.delta.signature}`;
       } else if (event.delta.type === "input_json_delta" && typeof event.delta.partial_json === "string") {
-        const state = toolUses.get(event.index);
-        if (state) state.json += event.delta.partial_json;
+        toolJson.set(event.index, `${toolJson.get(event.index) ?? ""}${event.delta.partial_json}`);
       }
-    } else if (type === "message_delta") {
+    } else if (event.type === "content_block_stop" && typeof event.index === "number") {
+      const block = blocks.get(event.index);
+      const json = toolJson.get(event.index);
+      if (block?.type === "tool_use" && json !== undefined) block.input = parseToolCallArgs(json).args;
+    } else if (event.type === "message_delta") {
       if (isRecord(event.usage)) {
         outputTokens = numberField(event.usage, ["output_tokens"]) ?? outputTokens;
       }
@@ -553,36 +825,35 @@ async function streamAnthropicTurn(
     }
   }
 
-  const orderedToolUses = [...toolUses.entries()].sort((a, b) => a[0] - b[0]).map(([, state]) => state);
-  const wireToolCalls = orderedToolUses.map((state) => ({
-    id: state.id,
+  const anthropicContent = [...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block);
+  const text = anthropicContent.filter((block) => block.type === "text").map((block) => contentText(block)).join("");
+  const toolBlocks = anthropicContent.filter((block) => block.type === "tool_use");
+  const wireToolCalls = toolBlocks.map((block) => ({
+    id: typeof block.id === "string" ? block.id : `call_${randomUUID()}`,
     type: "function",
-    function: { name: state.name, arguments: state.json || "{}" },
+    function: {
+      name: typeof block.name === "string" ? block.name : "",
+      arguments: JSON.stringify(isRecord(block.input) ? block.input : {}),
+    },
   }));
-  const toolCalls: NormalizedToolCall[] = orderedToolUses.map((state) => {
-    const { args, error } = parseToolCallArgs(state.json);
-    return { args, id: state.id, name: state.name, ...(error ? { argsParseError: error } : {}) };
+  const toolCalls = wireToolCalls.map((call): NormalizedToolCall => {
+    const parsed = parseToolCallArgs(call.function.arguments);
+    return { args: parsed.args, id: call.id, name: call.function.name, ...(parsed.error ? { argsParseError: parsed.error } : {}) };
   });
-  const usage: AgentModelUsage = {
-    inputTokens,
-    outputTokens,
-    totalTokens: inputTokens + outputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-  };
   return {
     assistantMessage: {
       role: "assistant",
       content: text,
+      anthropic_content: anthropicContent,
       ...(wireToolCalls.length ? { tool_calls: wireToolCalls } : {}),
     },
     toolCalls,
-    usage,
+    usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens },
     ...(truncated ? { truncated } : {}),
   };
 }
 
-/** Stream one model turn using the dialect implied by the endpoint. */
+/** Stream one model turn using the explicitly configured protocol family. */
 export async function streamModelTurn(
   endpoint: ModelEndpoint,
   systemPrompt: string,
@@ -592,8 +863,12 @@ export async function streamModelTurn(
   signal: AbortSignal,
   callbacks: ModelStreamCallbacks = {},
 ): Promise<ModelTurn> {
-  if (isAnthropicEndpoint(endpoint.baseUrl)) {
-    return streamAnthropicTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
+  switch (endpointProtocol(endpoint)) {
+    case "anthropic-messages":
+      return streamAnthropicTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
+    case "openai-responses":
+      return streamResponsesTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
+    default:
+      return streamOpenAiTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
   }
-  return streamOpenAiTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
 }
