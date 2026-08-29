@@ -20,7 +20,7 @@ import {
   ArtifactManager as ArtifactRegistry,
   type ArtifactVersionInput,
 } from "@sciencediscovery/artifact-manager";
-import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { CasStore } from "@sciencediscovery/cas";
 import type {
   ArtifactDerivation,
@@ -224,8 +224,18 @@ export class ProvenanceRecorder {
     workspaceRoot: string;
   }): Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; instruction?: string }> {
     const derivations = await this.store.listArtifactDerivations(options.sessionId);
+    // Defence-in-depth: the derivation `path` is stored normalised (the runner
+    // writes `createdFiles` as clean relative paths). A caller that passes an
+    // LLM-style `./`-prefixed `sourcePath` (e.g. `./report.md` vs stored
+    // `report.md`) used to fail this string-equality match, leaving `run`
+    // unset so the gated second observe never fired and the Artifact node was
+    // never written to the memory graph (report.md in session 166856ed). The
+    // primary fix is at runs/index.ts:createArtifactBindings (it normalises
+    // `input.path` before building `sourcePath`); normalise both sides here
+    // too so a divergence in any caller can't silently drop the Artifact node.
+    const normalisedSourcePath = normalizeWorkspaceRelativePath(options.workspaceRoot, options.sourcePath);
     const derivation = derivations
-      .filter((item) => item.path === options.sourcePath)
+      .filter((item) => item.path === normalisedSourcePath)
       .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
     const executionId = derivation?.executionRunIds.at(-1);
     const run = executionId

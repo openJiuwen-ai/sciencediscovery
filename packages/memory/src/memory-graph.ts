@@ -648,7 +648,7 @@ export class MemoryGraphClient {
     nodeId: string,
     sessionId?: string,
     version?: number,
-    chainKind?: "full" | "task" | "artifact",
+    kind?: string,
   ): Promise<MemoryGraphChainResult> {
     const body = await this.postJson("/query/chain", {
       node_id: nodeId,
@@ -656,11 +656,11 @@ export class MemoryGraphClient {
       // Pins an Artifact source to a specific version (composite key); absent
       // → sidecar uses the latest version. Ignored for non-Artifact labels.
       ...(version != null ? { version } : {}),
-      // Which chain to walk: full (default, joint subgraph), task (pure
-      // next+produces spine), or artifact (directed walk from the report
-      // anchor, pruned to the path reaching the selected node). The frontend
-      // picks one per button.
-      chain_kind: chainKind ?? "full",
+      // A button-level chain key into the sidecar's hop table (e.g.
+      // "viewOutput", "viewCitingArtifactForEvidence") — each key walks
+      // exactly that button's directed short chain. Required; there is no
+      // default.
+      kind: kind ?? "",
     });
     const result = body as Record<string, unknown>;
     const rawNodes = (result.nodes as Array<Record<string, unknown>>) ?? [];
@@ -673,6 +673,33 @@ export class MemoryGraphClient {
       truncated: Boolean(result.truncated),
       reason: result.reason as string | undefined,
     };
+  }
+
+  /**
+   * Batch existence check for a node's button chain kinds. For each ``kind``
+   * in ``kinds``, returns ``true`` when that button's hop walk reaches at
+   * least one node beyond the source. The frontend uses this to hide buttons
+   * whose chain is empty *before* the user clicks them — same hop table as a
+   * click, so a shown button is guaranteed to have a non-empty chain when
+   * opened. Returns ``{}`` on a degraded/unreachable sidecar.
+   */
+  async chainExists(
+    nodeId: string,
+    sessionId: string | undefined,
+    version: number | undefined,
+    kinds: string[],
+  ): Promise<Record<string, boolean>> {
+    if (!kinds.length) return {};
+    const body = await this.postJson("/query/chain-exists", {
+      node_id: nodeId,
+      ...(sessionId != null ? { session_id: sessionId } : {}),
+      ...(version != null ? { version } : {}),
+      kinds,
+    });
+    const result = body as Record<string, unknown>;
+    const out: Record<string, boolean> = {};
+    for (const kind of kinds) out[kind] = Boolean(result[kind]);
+    return out;
   }
 
   /**

@@ -745,7 +745,18 @@ async function executeAgentRun(
   ): Pick<WorkspaceAgentOptions, "declareArtifact" | "listArtifacts" | "readArtifact"> => ({
     declareArtifact: async (input) => {
       const defaultName = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
-      const sourcePath = sourcePathPrefix ? `${sourcePathPrefix}/${input.path}` : input.path;
+      // `sourcePath` must match the artifact-derivation path stored by
+      // `recordGeneratedFiles` (which normalises via `assertWorkspacePath`).
+      // Passing `input.path` raw breaks that match when the LLM prefixes the
+      // path with `./` (e.g. `./report.md` vs the stored `report.md`), so
+      // `declareWorkspaceArtifact`'s derivation lookup at recorder.ts:228
+      // fails, the gated second observe never fires, and the Artifact node is
+      // never written to the memory graph (report.md in session 166856ed).
+      // Normalise `input.path` with the same helper `defaultName` already
+      // uses, on both branches; the subagent prefix then joins onto a
+      // normalised tail so a `./`-prefixed path inside a subagent also matches.
+      const normalizedInputPath = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
+      const sourcePath = sourcePathPrefix ? `${sourcePathPrefix}/${normalizedInputPath}` : normalizedInputPath;
       const result = await provenanceRecorder.declareWorkspaceArtifact({
         ...(input.description ? { description: input.description } : {}),
         name: input.name?.trim() || defaultName,

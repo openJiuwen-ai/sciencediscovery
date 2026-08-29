@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 
 import {
   readRenamedStorageItem,
@@ -201,8 +201,14 @@ import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./Provi
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { EvidenceModal } from "./EvidenceModal.js";
+import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
-import { MemoryGraphView } from "./MemoryGraphView.js";
+import { MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
+// The full-screen explorer is heavy (d3-force + the artifacts panel) and only
+// opened on demand, so it is split out of the main bundle. Lazy-imported at the
+// App layer so the right-rail card can open it directly (previously the only
+// entries were the per-product modals).
+const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ReviewerPanel } from "./ReviewerPanel.js";
@@ -993,6 +999,11 @@ export function App() {
   const [sessionUsage, setSessionUsage] = useState<SessionUsageSummary>();
   const [globalUsage, setGlobalUsage] = useState<GlobalModelUsageSummary>();
   const [workspaceView, setWorkspaceView] = useState<"session" | "usage">(() => initialView.view === "usage" ? "usage" : "session");
+  // The right-rail MemoryGraphView card opens the full-screen explorer directly
+  // (previously the explorer was only reachable from a product's "View chain"
+  // button). The snapshot is shared via useMemorySubgraph so the explorer never
+  // re-fetches what the card already polled.
+  const [memoryExplorerOpen, setMemoryExplorerOpen] = useState(false);
   // A graph node a report chip asked to open; MemoryGraphView selects it on
   // change, then clears the pending state. Set by handleChipClick (paper chips).
   const [pendingMemoryNode, setPendingMemoryNode] = useState<{ label: MemoryGraphNodeLabel; id: string } | undefined>();
@@ -1337,6 +1348,13 @@ export function App() {
   // Long-lived panels keep these in effect dependencies, so they must not be
   // re-created on every render of this component.
   const reportError = useCallback((message: string) => setError(message || undefined), [setError]);
+
+  // One polled snapshot shared by the right-rail card and the full-screen
+  // explorer (lifted from MemoryGraphView so opening the explorer doesn't
+  // re-fetch what the card already has). The refreshKey mirrors the one the
+  // card used before the lift so the poll resumes on the same triggers.
+  const memoryRefreshKey = `exec:${executionRuns.length}:msg:${session?.messages.length ?? 0}:plans:${plans.length}:mg:${memoryGraphSettings ? `${memoryGraphSettings.enabled ? 1 : 0}:${memoryGraphSettings.memoryGraphStatus}` : "none"}`;
+  const { subgraph: memorySubgraph, health: memoryHealth } = useMemorySubgraph(client, session?.id, memoryRefreshKey, reportError, isRunning);
 
   const refreshGovernedDownloads = useCallback(async (sessionId: string): Promise<void> => {
     const [candidates, jobs, plans, invocations] = await Promise.all([
@@ -2218,9 +2236,9 @@ export function App() {
     try {
       const saved = await client.updateMemoryGraphSettings(input);
       setMemoryGraphSettings(saved);
-      pushToast("success", "Science Memory settings updated");
+      pushToast("success", "ScienceMemory settings updated");
     } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : "Could not save Science Memory settings");
+      reportSystemSettingsError(reason instanceof Error ? reason.message : "Could not save ScienceMemory settings");
       throw reason;
     }
   }
@@ -4189,7 +4207,7 @@ export function App() {
               </div>
             </details> : null}
 
-            {session ? <MemoryGraphView client={client} onError={reportError} refreshKey={`exec:${executionRuns.length}:msg:${session.messages.length}:plans:${plans.length}:mg:${memoryGraphSettings ? `${memoryGraphSettings.enabled ? 1 : 0}:${memoryGraphSettings.memoryGraphStatus}` : "none"}`} sessionId={session.id} /> : null}
+            {session ? <MemoryGraphView subgraph={memorySubgraph} health={memoryHealth} onOpenExplorer={() => setMemoryExplorerOpen(true)} /> : null}
 
             {session ? <ReviewerControlCard
               busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning}
@@ -4308,6 +4326,24 @@ export function App() {
           artifactSessionId={artifactModalSessionId}
           sessions={artifactSessions}
         />
+      ) : null}
+
+      {memoryExplorerOpen && session && memorySubgraph ? (
+        <ErrorBoundary label="ScienceMemory" onError={(message) => { reportError(message); setMemoryExplorerOpen(false); }}>
+          <Suspense fallback={null}>
+            <MemoryGraphExplorer
+              client={client}
+              // Opened from the right-rail card, not a product modal: no initial
+              // node and no autoChain (autoChain would jump straight into a
+              // chain view; the default here is the full graph backbone, and
+              // removing autoChain entirely is a later commit).
+              onClose={() => setMemoryExplorerOpen(false)}
+              onError={reportError}
+              sessionId={session.id}
+              subgraph={memorySubgraph}
+            />
+          </Suspense>
+        </ErrorBoundary>
       ) : null}
 
       {evidenceDetailId && activeSessionId ? (

@@ -76,8 +76,10 @@ export function EvidenceModal({ client, evidenceId, onClose, sessionId }: Eviden
     // chain result's nodes with its full `extra` (the chain serializer uses
     // the same _to_hit as the node-detail path used to). No separate node
     // fetch needed — one chain request carries both the evidence and its
-    // upstream Paper(s).
-    void client.getMemoryChain(evidenceId, sessionId).then((chain) => {
+    // upstream Paper(s). ``viewSourcePaper`` walks one ``extracts`` hop
+    // upstream (Evidence←extracts←Paper), so the returned nodes are the
+    // evidence + its source Paper(s) — exactly what this modal fills in.
+    void client.getMemoryChain(evidenceId, sessionId, undefined, "viewSourcePaper").then((chain) => {
       if (!active) return;
       const chainResult = chain as MemoryGraphChainResult;
       setEvidence((chainResult?.nodes ?? []).find((node) => node.id === evidenceId) ?? null);
@@ -101,13 +103,13 @@ export function EvidenceModal({ client, evidenceId, onClose, sessionId }: Eviden
       // not-yet-mirrored node gets a friendly error instead of a blank graph.
       const present = subgraph.nodes.some((n) => n.id === evidenceId);
       if (!present) {
-        setError("This evidence is not yet in the Science Memory.");
+        setError("This evidence is not yet in the ScienceMemory.");
         return;
       }
       setError(undefined);
       setChainExplorer({ nodeId: evidenceId, subgraph });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load Science Memory.");
+      setError(err instanceof Error ? err.message : "Could not load ScienceMemory.");
     }
   }
 
@@ -132,7 +134,7 @@ export function EvidenceModal({ client, evidenceId, onClose, sessionId }: Eviden
         <nav className="artifact-mode-tabs">
           <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} type="button">Preview</button>
           <button className={mode === "provenance" ? "active" : ""} onClick={() => setMode("provenance")} type="button">Provenance</button>
-          {memoryGraphEnabled ? <button className="view-chain-btn" onClick={() => void viewChain()} type="button">{t("chain.view")}</button> : null}
+          {memoryGraphEnabled ? <button className="view-chain-btn" onClick={() => void viewChain()} type="button">{t("chain.viewInMemoryX", { x: t("chain.evidence") })}</button> : null}
         </nav>
         <div className="artifact-modal-body">
           {error ? <p className="artifact-empty">{error}</p> : null}
@@ -198,7 +200,7 @@ export function EvidenceModal({ client, evidenceId, onClose, sessionId }: Eviden
         </div>
       </section>
       {chainExplorer ? (
-        <ErrorBoundary label="Science Memory" onError={(message) => { setError(message); setChainExplorer(null); }}>
+        <ErrorBoundary label="ScienceMemory" onError={(message) => { setError(message); setChainExplorer(null); }}>
         <Suspense fallback={null}>
           <MemoryGraphExplorer
             client={client}

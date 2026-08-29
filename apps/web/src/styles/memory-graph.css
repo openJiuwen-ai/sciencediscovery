@@ -27,48 +27,76 @@
 .memory-badge { margin-left: auto; font-size: 10px; padding: 1px 7px; border-radius: 8px; border: 1px solid var(--border); white-space: nowrap; }
 .memory-badge-ok { color: #15803d; border-color: #15803d; background: color-mix(in srgb, #22c55e 12%, transparent); }
 .memory-badge-warn { color: #b45309; border-color: #b45309; background: color-mix(in srgb, #f59e0b 12%, transparent); }
+
+/* Interactive right-rail card: the whole section is a clickable entry to the
+   full-screen explorer. Keeps the existing .memory-graph-view shell; adds
+   hover affordance + an explicit open button so the click target is obvious. */
+.memory-graph-entry { cursor: pointer; transition: border-color 0.12s ease, box-shadow 0.12s ease; }
+.memory-graph-entry:hover { border-color: var(--accent-border); box-shadow: var(--shadow-1); }
+.memory-graph-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* --- Memory graph canvas, thumbnail card and full-screen explorer --------- */
 .memory-canvas { width: 100%; height: 100%; }
 .memory-canvas-thumb { height: 156px; }
 
-/* D3-rendered SVG fills the container; cursor hints separate drag-canvas
-   (background, grab) from select-or-move-node (over the disc, pointer).
+/* D3-rendered SVG fills the container. The cursor stays default everywhere
+   — no grab/pointer hint — to match the Neo4j canvas behavior the user wants.
    Text and edges never grab pointer events so the disc owns the hit-test. */
-.memory-canvas svg { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
-.memory-canvas svg:active { cursor: grabbing; }
+.memory-canvas svg { display: block; width: 100%; height: 100%; cursor: default; touch-action: none; }
+.memory-canvas svg:active { cursor: default; }
 .memory-canvas-thumb svg { cursor: default; }
 .memory-canvas-thumb svg:active { cursor: default; }
-.memory-canvas-node { cursor: pointer; }
+.memory-canvas-node { cursor: default; }
 .memory-canvas-node text { pointer-events: none; user-select: none; }
 /* The edge group wraps the line plus its inline label. The group itself
    never grabs the pointer; the line individually does not receive events,
    so the click target is the disc of the two endpoint nodes. */
 .memory-canvas-edge-group { pointer-events: none; }
 .memory-canvas-edge { pointer-events: none; }
+/* Chain-highlight overlay: chain edges are NOT restyled — they keep the normal
+   grey stroke (no bold, no accent colour). The chain reads via node highlight
+   + edges staying visible (not fogged): the two highlighted endpoints + the
+   un-fogged edge between them trace the chain. `chain-edge` class is kept
+   only as a marker (no visual effect) so the dimming logic can identify
+   chain edges; visual emphasis is entirely via the `.search-hit` nodes + the
+   `.edge-faint` / un-fogged edge treatment. */
+.memory-canvas-edge.chain-edge { }
 .memory-canvas-edge-label { pointer-events: none; user-select: none; font-family: inherit; }
+/* Node captions use NVL's default font face (DefaultFontFace = "Open Sans")
+   and a graph-space font-size set inline per node (radius / 4.375). */
+.memory-canvas-node-label { font-family: "Open Sans", sans-serif; }
 /* Invisible wide hit area layered over a surrogate edge so its thin dashed
    line is still clickable (the visible line keeps pointer-events:none). */
-.memory-canvas-edge-hit { pointer-events: all; cursor: pointer; }
+.memory-canvas-edge-hit { pointer-events: all; cursor: default; }
 .memory-canvas .dimmed { opacity: 0.14; }
 .memory-canvas .dimmed text { opacity: 0; }
-/* Search hits stay full-opacity and get an accent ring so the user can spot
-   them among the dimmed non-matches. Pairs with the `search-hit` class the
-   canvas applies when a `matchIds` search narrows the view. */
-.memory-canvas-node.search-hit circle:first-of-type { stroke: var(--accent); stroke-width: 2.5; }
+/* A connecting edge straddling the fog (one endpoint dimmed, one highlighted):
+   faint but visible so the highlighted node reads as connected, not orphaned.
+   Mid opacity — below full-visible, above the 0.14 fog. */
+.memory-canvas-edge-group.edge-faint { opacity: 0.4; }
+.memory-canvas-edge-group.edge-faint .memory-canvas-edge-label { opacity: 0.5; }
+/* Highlighted nodes (chain-hit / entry-focus / search-hit) stay full-opacity
+   against the dimmed "fog" — no halo/glow behind the node (removed per user
+   request), just full opacity so the node reads clearly against the 0.14
+   background. */
 .memory-canvas .search-hit { opacity: 1; }
 
-/* Selected node: the two pulsing rings stay hidden until the group gets
-   the `selected-node` class. A loose drop-shadow on the group gives a
-   soft halo that pairs with the SMIL ripple animation. */
+/* Selected node: the pulse ring (single cyan ring, NVL
+   DefaultSelectedOuterColor #8FE3E8) is hidden until the group gets the
+   `selected-node` class. NVL also draws an animated shadow around a
+   selected/hovered node (calculateShadowAnimation: shadow width animates
+   from 0 to target); we approximate that with a soft drop-shadow in the
+   same cyan, paired with the SMIL ripple. */
 .memory-canvas-selected-ring { visibility: hidden; }
 .memory-canvas-node.selected-node .memory-canvas-selected-ring { visibility: visible; }
 .memory-canvas-node.selected-node {
-  filter: drop-shadow(0 0 5px rgba(59, 130, 246, 0.55));
+  filter: drop-shadow(0 0 10px rgba(143, 227, 232, 0.5));
 }
 /* Subagent scope badge: small ▸N / ▾N caption in the node's top-right.
    The glyph flips on expand (built inline); this just keeps it crisp and
-   non-interactive so the disc's click handler owns the gesture. */
-.memory-canvas-scope-badge { font-family: inherit; }
+   non-interactive so the disc's click handler owns the gesture. Font set
+   inline (font-size + font-family) to match NVL's node caption scaling. */
+.memory-canvas-scope-badge { font-family: "Open Sans", sans-serif; }
 /* Folded-scope stack ghost discs: translucent offset discs painted behind
    the main disc so a folded task reads as a stack. Non-interactive so the
    main disc always owns the click (toggles fold). */
@@ -93,10 +121,25 @@
 .memory-truncated { border-radius: 999px; background: var(--warning-soft); color: var(--warning); padding: 1px 7px; font-size: 9px; }
 .memory-chain-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: 0 0 auto; border-bottom: 1px solid var(--accent-border-soft); background: var(--accent-soft); padding: 7px 20px; color: var(--accent-deep); font-size: 11px; }
 .memory-chain-banner button { border: 1px solid var(--accent-border); border-radius: 7px; background: var(--surface); color: var(--accent-ink); padding: 3px 9px; cursor: pointer; font-size: 10px; }
-.memory-chain-bar { flex: 0 0 auto; display: flex; gap: 10px; border-top: 1px solid var(--border); padding: 9px 14px; }
-.memory-chain-bar button { flex: 1 1 0; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text-secondary); padding: 7px; cursor: pointer; font-size: 11px; }
+.memory-chain-bar { flex: 0 0 auto; display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 8px; border-bottom: 1px solid var(--border); padding: 8px 14px; min-height: 48px; box-sizing: border-box; }
+/* The bar keeps a one-row min-height (48px ≈ one button + padding) and never
+   wraps, so its height is identical across node switches regardless of how
+   many buttons each label has (2-6). The canvas below is flex:1, so any bar
+   height change used to jolt the whole graph area; a stable bar height keeps
+   the canvas's flex basis constant. Extra buttons scroll horizontally (no
+   wrap → no second row → no tall blank under a single-row label). The bar
+   stays mounted (not null'd) during the async chain-exists fetch, so the
+   fetch gap no longer collapses the row either. */
+/* Buttons sit above the canvas alongside the filter chips: content-width
+   (not stretched full-width like the old left-panel row) so a 2-5 button row
+   reads as a compact control, matching the chip density above it. */
+.memory-chain-bar button { flex: 0 0 auto; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text-secondary); padding: 6px 11px; cursor: pointer; font-size: 11px; }
 .memory-chain-bar button:hover { border-color: var(--accent); background: var(--accent-softer); color: var(--accent-ink); }
 .memory-chain-bar button:disabled { opacity: .6; cursor: default; }
+/* The active chain-slice button shows which overlay is currently highlighted
+   on the skeleton — mirrors the rel/node chip `.active` (brightness dial) so
+   one visual language reads across the button row + filter chips. */
+.memory-chain-bar button.active { border-color: var(--accent); background: var(--accent-softer); color: var(--accent-ink); font-weight: 600; }
 
 .memory-explorer-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 /* Sits above the canvas: a bottom border, and a plain surface so the chips
@@ -355,3 +398,74 @@
 .node-raw-field { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 6px; font-size: 10px; }
 .node-raw-field .node-field-label { color: var(--muted); }
 .node-raw-field .node-field-value { color: var(--muted); }
+
+/* --- First-open tour + meaning bubble (doc16 §1.5 redesign) ------------- */
+
+/* The chip wrapper: a shrink-to-fit inline-flex span that wraps each filter
+   chip so a hover listener can capture the chip's rect. It MUST not change the
+   chip's layout — the flex row (.memory-filter-chips) used to lay out the
+   chips directly; now it lays out these wrappers, so the wrapper must behave
+   as a shrink-to-fit flex item whose box == the chip's box (the bubble's
+   anchor rect is this wrapper's rect, which equals the chip's rect). No
+   padding/margin/border so the gap between chips is unchanged. */
+.memory-chip-wrap { display: inline-flex; flex: 0 0 auto; padding: 0; margin: 0; border: 0; }
+
+/* First-open tour: reuses the scope-toast scrim (over the canvas area only)
+   + a centred card. The scrim is positioned inside .memory-explorer-right so
+   the header/filters/left panel stay usable while the tour is up. Clicking the
+   scrim dismisses (stopPropagation so the backdrop's dismiss-on-outside-click
+   doesn't also fire). */
+.memory-tour-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-panel);
+  background: rgba(6, 12, 20, .42);
+  pointer-events: auto;
+}
+.memory-tour-card {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: calc(var(--z-panel) + 1);
+  max-width: min(440px, calc(100% - 48px));
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-3);
+  padding: 18px 22px 16px;
+  pointer-events: auto;
+}
+.memory-tour-title { margin: 0 0 8px; font-size: 14px; font-weight: 700; color: var(--text-strong); line-height: 1.4; }
+.memory-tour-body { margin: 0 0 12px; font-size: 12px; line-height: 1.55; color: var(--text); }
+.memory-tour-progress { display: flex; gap: 5px; margin: 0 0 14px; }
+.memory-tour-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong); }
+.memory-tour-dot-active { background: var(--accent); }
+.memory-tour-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.memory-tour-btn { border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-secondary); padding: 6px 14px; cursor: pointer; font-size: 11px; }
+.memory-tour-btn:hover { border-color: var(--accent-border); color: var(--accent-ink); }
+.memory-tour-primary { border-color: var(--accent-border); background: var(--accent); color: var(--surface); }
+.memory-tour-primary:hover { filter: brightness(.96); }
+/* Skip × in the top-right; separate from the Next/Done actions. */
+.memory-tour-skip { position: absolute; top: 10px; right: 10px; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.memory-tour-skip:hover { background: var(--surface-hover); color: var(--text); }
+
+/* Meaning bubble (A hover lookup + C first-seen, shared). A lightweight
+   popover anchored below the chip, JS-positioned (fixed) by MeaningBubble so
+   it clamps into the viewport. The first-seen variant gets an accent border
+   so it reads as "new" vs the quiet hover lookup. */
+.memory-meaning-bubble {
+  z-index: var(--z-popover);
+  max-width: 280px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-2);
+  padding: 9px 12px;
+  pointer-events: auto;
+}
+.memory-meaning-bubble-body { font-size: 11px; line-height: 1.5; color: var(--text); }
+
+@media (max-width: 900px) {
+  /* Narrow: the tour card uses more of the width; bubble stays clamped. */
+  .memory-tour-card { max-width: min(440px, calc(100% - 24px)); }
+}

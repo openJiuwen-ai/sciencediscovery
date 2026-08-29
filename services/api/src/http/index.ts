@@ -2178,19 +2178,43 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           node_id: string;
           session_id?: string;
           version?: number;
-          chain_kind?: "full" | "task" | "artifact";
+          kind?: string;
         }>(request);
         if (!body.node_id?.trim()) return sendError(response, 400, "node_id must be non-empty");
-        if (body.chain_kind && !["full", "task", "artifact"].includes(body.chain_kind)) {
-          return sendError(response, 400, "chain_kind must be 'full', 'task', or 'artifact'");
-        }
+        // ``kind`` is a button-level chain key (e.g. "viewOutput") forwarded as-is;
+        // the sidecar validates it against its _BUTTON_CHAIN_HOPS table. The old
+        // full/task/artifact chain_kind field is gone.
         const result = memoryGraphEnabled()
           ? await memoryGraphClient
-              .getChain(body.node_id, body.session_id, body.version, body.chain_kind)
+              .getChain(body.node_id, body.session_id, body.version, body.kind)
               .catch(() => ({
                 nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_unreachable",
               }))
           : { nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_disabled" as const };
+        sendJson(response, 200, result);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/memory/query/chain-exists") {
+        // Batch existence check: for each button ``kind``, whether a non-empty
+        // chain is reachable from the node. The explorer hides buttons that
+        // report false before the user clicks them. Same defensive shape as
+        // query/chain — toggle off or sidecar down → all-false (frontend shows
+        // no buttons), never a 500.
+        const body = await readJson<{
+          node_id: string;
+          session_id?: string;
+          version?: number;
+          kinds: string[];
+        }>(request);
+        if (!body.node_id?.trim()) return sendError(response, 400, "node_id must be non-empty");
+        if (!Array.isArray(body.kinds) || body.kinds.length === 0) {
+          return sendError(response, 400, "kinds must be a non-empty list");
+        }
+        const result = memoryGraphEnabled()
+          ? await memoryGraphClient
+              .chainExists(body.node_id, body.session_id, body.version, body.kinds)
+              .catch(() => Object.fromEntries(body.kinds.map((k) => [k, false])))
+          : Object.fromEntries(body.kinds.map((k) => [k, false]));
         sendJson(response, 200, result);
         return;
       }
