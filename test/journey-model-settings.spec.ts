@@ -26,7 +26,7 @@ test.use({ locale: "zh-CN" });
  * Steps:
  *   1. 打开系统设置并进入模型注册表：空态、添加控件收在列表下「添加 Provider」按钮后（预置下拉+自定义按钮）、编辑器默认隐藏；旧独立模型入口不再出现。
  *   2. 显式选择自定义服务商：编辑器按分组展开，协议与变种同行紧凑；保存后服务商行自动展开并预载模型列表。
- *   3. 行内手动表单登记模型并以逗号分隔声明可接受强度档（原文）；视觉紧跟强度且与价格分开；“已添加”计数与行内模型行出现。
+ *   3. 行内手动表单登记模型并以逗号分隔声明可接受强度档（原文）；视觉紧跟强度、与它同行底对齐，价格另起一行；“已添加”计数与行内模型行出现。
  *   4. 编辑 Provider 时保存失败：错误清楚、草稿保留；恢复后保存成功并重开保持一致。
  *   5. manual 发现为空时已添加模型仍在行内表占一行且排前、不出空态；模型自身名称无服务商前缀，已添加行提供删除；最后一行悬停详情逃出设置对话框裁切链且完整位于视口。
  *   6. 窄屏（600px）：对话框不越界、高级网格单列、模型行不横向溢出。
@@ -187,7 +187,11 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
           return {
             effort,
             price,
-            sameRow: Boolean(effortRect && visionRect && Math.abs(effortRect.top - visionRect.top) < 2),
+            // 同行判定看底边，不看顶边：表单是 `align-items: end` 的 grid，视觉
+            // 复选框还额外 `align-self: end`。强度是「标签+输入」比复选框高，
+            // 同一行里两者底边齐平、顶边必然差一截（实测 bottomDiff=0、
+            // topDiff=27），所以比较 top 只会把正确的底对齐判成不同行。
+            sameRow: Boolean(effortRect && visionRect && Math.abs(effortRect.bottom - visionRect.bottom) < 2),
             vision,
             priceBelow: Boolean(visionRect && priceRect && priceRect.top > visionRect.top + 2),
           };
