@@ -390,6 +390,49 @@ test("an unusable proxy fails the allowed request instead of connecting around i
   }
 });
 
+test("malformed proxy credentials fail the request instead of killing the runner", async () => {
+  const directory = await scratchDirectory();
+  const target = await localTarget();
+  // The registry keeps a custom URL as written, so a stray `%` can reach the
+  // gateway. Decoding it used to throw where nothing could catch it: in
+  // handleRequest, past the route guard, and in the CONNECT socket callback.
+  const gateway = new EgressGateway(
+    access({ allowPrivateNetwork: true, allowedDomains: ["mirror.test"] }),
+    join(directory, "egress.sock"),
+    {
+      proxy: { mode: "url", url: "http://user%zz:p@127.0.0.1:1/" },
+      resolveAddresses: async () => [{ address: "127.0.0.1", family: 4 }],
+    },
+  );
+  const escaped: unknown[] = [];
+  const onUncaught = (error: unknown) => escaped.push(error);
+  process.on("uncaughtException", onUncaught);
+  process.on("unhandledRejection", onUncaught);
+  await gateway.listen();
+  try {
+    const forwarded = await overSocket(
+      gateway.socketPath,
+      `GET http://mirror.test:${target.port}/ HTTP/1.1\r\nHost: mirror.test\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(forwarded, /^HTTP\/1\.1 502/);
+    assert.match(forwarded, /not valid percent-encoding/);
+
+    const tunnelled = await overSocket(gateway.socketPath, `CONNECT mirror.test:${target.port} HTTP/1.1\r\n\r\n`);
+    assert.match(tunnelled, /^HTTP\/1\.1 502/);
+    assert.match(tunnelled, /not valid percent-encoding/);
+
+    // Both paths are handled without a catch above them, so anything that
+    // escapes here would have taken the process down in production.
+    await new Promise((settled) => setImmediate(settled));
+    assert.deepEqual(escaped, []);
+  } finally {
+    process.off("uncaughtException", onUncaught);
+    process.off("unhandledRejection", onUncaught);
+    await gateway.close();
+    await target.close();
+  }
+});
+
 test("an IP literal target is rejected even when the allowlist looks permissive", async () => {
   const directory = await scratchDirectory();
   const gateway = new EgressGateway(

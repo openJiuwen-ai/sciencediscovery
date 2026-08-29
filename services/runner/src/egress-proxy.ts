@@ -53,6 +53,37 @@ export class EgressProxyUnsupportedError extends Error {
   }
 }
 
+/**
+ * The proxy URL carries userinfo that is not valid percent-encoding, so the
+ * credential cannot be decoded. Raised where the URL is parsed rather than
+ * where the header is written: a `decodeURIComponent` failure inside a socket
+ * callback would escape as an uncaught exception and take the runner down.
+ * The message names the endpoint only — never the credential.
+ */
+export class EgressProxyCredentialsError extends Error {
+  constructor(proxy: URL, field: "username" | "password") {
+    super(
+      `Sandbox network access cannot read the ${field} of the egress proxy ${proxyEndpoint(proxy)}: `
+      + "it is not valid percent-encoding",
+    );
+    this.name = "EgressProxyCredentialsError";
+  }
+}
+
+function decodeUserinfo(proxy: URL, field: "username" | "password"): string {
+  try {
+    return decodeURIComponent(proxy[field]);
+  } catch {
+    throw new EgressProxyCredentialsError(proxy, field);
+  }
+}
+
+/** `user:password` for a proxy URL that carries userinfo, or `undefined`. */
+function proxyCredentials(proxy: URL): string | undefined {
+  if (!proxy.username && !proxy.password) return undefined;
+  return `${decodeUserinfo(proxy, "username")}:${decodeUserinfo(proxy, "password")}`;
+}
+
 function parseProxyUrl(value: string): URL {
   let url: URL;
   try {
@@ -62,6 +93,10 @@ function parseProxyUrl(value: string): URL {
   }
   if (!url.hostname) throw new Error("Sandbox network access received an egress proxy URL without a host");
   if (!SUPPORTED_PROXY_PROTOCOLS.includes(url.protocol)) throw new EgressProxyUnsupportedError(url);
+  // Decode the credential here, while the caller is still inside the gateway's
+  // route-resolution guard. Leaving it to the point of use would put a throw in
+  // a socket callback, where nothing can catch it.
+  proxyCredentials(url);
   return url;
 }
 
@@ -123,16 +158,14 @@ export function proxyPort(proxy: URL): number {
 
 /** `Proxy-Authorization` header line for a proxy URL that carries userinfo. */
 export function proxyAuthorizationHeader(proxy: URL): string {
-  if (!proxy.username && !proxy.password) return "";
-  const credentials = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`;
-  return `Proxy-Authorization: Basic ${Buffer.from(credentials).toString("base64")}\r\n`;
+  const value = proxyAuthorizationValue(proxy);
+  return value ? `Proxy-Authorization: ${value}\r\n` : "";
 }
 
 /** Header value form of the same credentials, for `http.request` options. */
 export function proxyAuthorizationValue(proxy: URL): string | undefined {
-  if (!proxy.username && !proxy.password) return undefined;
-  const credentials = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`;
-  return `Basic ${Buffer.from(credentials).toString("base64")}`;
+  const credentials = proxyCredentials(proxy);
+  return credentials ? `Basic ${Buffer.from(credentials).toString("base64")}` : undefined;
 }
 
 const PROXY_RESPONSE_HEAD_LIMIT = 64 * 1024;
@@ -178,12 +211,18 @@ export function connectThroughProxy(proxy: URL, host: string, port: number): Pro
     socket.on("data", onData);
     socket.once("error", onError);
     socket.once(proxy.protocol === "https:" ? "secureConnect" : "connect", () => {
-      socket.write(
-        `CONNECT ${host}:${port} HTTP/1.1\r\n`
-        + `Host: ${host}:${port}\r\n`
-        + proxyAuthorizationHeader(proxy)
-        + "Proxy-Connection: keep-alive\r\n\r\n",
-      );
+      // Nothing outside this listener can catch a throw from it, so any failure
+      // building the request has to become a rejection here.
+      try {
+        socket.write(
+          `CONNECT ${host}:${port} HTTP/1.1\r\n`
+          + `Host: ${host}:${port}\r\n`
+          + proxyAuthorizationHeader(proxy)
+          + "Proxy-Connection: keep-alive\r\n\r\n",
+        );
+      } catch (error) {
+        fail(error instanceof Error ? error.message : `${proxyEndpoint(proxy)} could not be addressed`);
+      }
     });
   });
 }

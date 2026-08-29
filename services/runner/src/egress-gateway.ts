@@ -372,8 +372,12 @@ export class EgressGateway {
       return;
     }
     let proxy: URL | undefined;
+    let authorization: string | undefined;
     try {
       proxy = egressProxyForTarget(this.proxy, { host: target.hostname, port, tls: false });
+      // Inside the same guard as the route itself: reading the credential can
+      // fail on a malformed URL, and this handler is called without a catch.
+      authorization = proxy ? proxyAuthorizationValue(proxy) : undefined;
     } catch (error) {
       const reason = error instanceof Error ? error.message : "the egress proxy policy could not be applied";
       this.note(false, target.hostname, port, { reason });
@@ -382,7 +386,6 @@ export class EgressGateway {
       return;
     }
     this.note(true, target.hostname, port, { ...(proxy ? { proxy: proxyEndpoint(proxy) } : {}) });
-    const authorization = proxy ? proxyAuthorizationValue(proxy) : undefined;
     // Through a proxy the request keeps its absolute form and goes to the proxy
     // endpoint; direct, it is the origin form against the pinned address.
     const send = proxy?.protocol === "https:" ? httpsRequest : httpRequest;
