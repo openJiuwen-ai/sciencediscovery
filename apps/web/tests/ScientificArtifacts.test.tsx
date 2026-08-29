@@ -15,13 +15,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ArtifactVersionProvenance, MemoryGraphNode, ScientificArtifact, ScientificArtifactVersion } from "@sciencediscovery/schema";
+import type { ArtifactVersionProvenance, MemoryGraphNode, ScientificArtifact, ScientificArtifactVersion, Session } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { findArtifactNodeInGraph, findCodeNodeInGraph } from "../src/MemoryGraphExplorer.js";
 import {
   ArtifactDownloadButton,
+  ArtifactVersionSource,
   CsvArtifactPreview,
   DatasetPreview,
   DatasetTable,
@@ -30,7 +31,23 @@ import {
   parseStructureAtoms,
   ProvenanceView,
   ScientificArtifactPanelHeader,
+  truncateArtifactVersionSource,
 } from "../src/ScientificArtifacts.js";
+
+function artifactVersion(id: string, version: number, sessionId: string): ScientificArtifactVersion {
+  return {
+    artifactId: "artifact-1",
+    content: { hash: String(version).repeat(64), size: 128 },
+    createdAt: `2026-07-2${version}T02:47:21.000Z`,
+    executionRunIds: [],
+    id,
+    inputArtifactVersionIds: [],
+    mediaType: "text/csv",
+    projectId: "project-1",
+    sessionId,
+    version,
+  };
+}
 
 test("artifact preview exposes a current-version download control", () => {
   const enabled = renderToStaticMarkup(createElement(ArtifactDownloadButton, {
@@ -377,6 +394,62 @@ test("renders the embedded scientific artifact selectors", () => {
   assert.match(html, /Scientific artifacts/);
   assert.match(html, /reports\/marker-matrix\.csv · dataset/);
   assert.match(html, /aria-label="Artifact version"/);
+  assert.doesNotMatch(html, /Source:/);
+});
+
+test("cross-Session Artifact versions display each source Session", () => {
+  const artifact: ScientificArtifact = {
+    createdAt: "2026-07-21T02:47:21.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Analysis A",
+    currentVersion: 2,
+    id: "artifact-1",
+    kind: "dataset",
+    logicalName: "shared.csv",
+    name: "shared.csv",
+    origin: "user_upload",
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-07-22T02:47:21.000Z",
+  };
+  const versions = [
+    artifactVersion("version-1", 1, "session-1"),
+    artifactVersion("version-2", 2, "session-2"),
+  ];
+  const sessions = [
+    { id: "session-1", title: "Analysis A" },
+    { id: "session-2", title: "Analysis B" },
+  ] as Session[];
+  const html = renderToStaticMarkup(createElement(ScientificArtifactPanelHeader, {
+    artifactId: artifact.id,
+    artifacts: [artifact],
+    onArtifactChange: () => undefined,
+    onVersionChange: () => undefined,
+    sessions,
+    versionId: "version-2",
+    versions,
+  }));
+
+  assert.match(html, /Source: Analysis A/);
+  assert.match(html, /Source: Analysis B/);
+});
+
+test("long source Session names are truncated in version labels", () => {
+  assert.equal(truncateArtifactVersionSource("12345678901234567890"), "12345678901234567…");
+  assert.equal(truncateArtifactVersionSource("研究会话😀甲乙丙", 7), "研究会话😀甲…");
+});
+
+test("artifact preview identifies the selected version's source Session", () => {
+  const html = renderToStaticMarkup(createElement(ArtifactVersionSource, {
+    sessions: [
+      { id: "session-1", title: "Analysis A" },
+      { id: "session-2", title: "Analysis B" },
+    ] as Session[],
+    version: artifactVersion("version-2", 2, "session-2"),
+  }));
+
+  assert.match(html, /Updated in Session Analysis B/);
+  assert.match(html, /title="session-2"/);
 });
 
 const ARTIFACT_NODES: MemoryGraphNode[] = [

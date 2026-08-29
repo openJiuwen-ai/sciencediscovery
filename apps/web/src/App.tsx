@@ -4413,6 +4413,7 @@ export function App() {
           onPendingAnnotation={addPendingAnnotation}
           sessionId={activeSessionId}
           artifactSessionId={artifactModalSessionId}
+          sessions={artifactSessions}
         />
       ) : null}
 

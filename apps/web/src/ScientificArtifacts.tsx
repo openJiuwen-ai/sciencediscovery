@@ -21,6 +21,7 @@ import type {
   MemorySubgraph,
   ScientificArtifact,
   ScientificArtifactVersion,
+  Session,
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
@@ -294,11 +295,24 @@ function NotebookCells({ cells }: { cells: NotebookCell[] }) {
   })}</div>;
 }
 
+export const ARTIFACT_VERSION_SOURCE_MAX_CHARACTERS = 18;
+
+export function truncateArtifactVersionSource(
+  sessionTitle: string,
+  maxCharacters = ARTIFACT_VERSION_SOURCE_MAX_CHARACTERS,
+): string {
+  const characters = Array.from(sessionTitle);
+  if (characters.length <= maxCharacters) return sessionTitle;
+  if (maxCharacters <= 1) return characters.slice(0, Math.max(0, maxCharacters)).join("");
+  return `${characters.slice(0, maxCharacters - 1).join("")}…`;
+}
+
 export function ScientificArtifactPanelHeader({
   artifactId,
   artifacts,
   onArtifactChange,
   onVersionChange,
+  sessions = [],
   versionId,
   versions,
 }: {
@@ -306,22 +320,48 @@ export function ScientificArtifactPanelHeader({
   artifacts: ScientificArtifact[];
   onArtifactChange: (artifactId: string) => void;
   onVersionChange: (versionId: string) => void;
+  sessions?: Session[];
   versionId?: string;
   versions: ScientificArtifactVersion[];
 }) {
+  const { locale, t } = useLocale();
   const selectedArtifact = artifacts.find((item) => item.id === artifactId);
   const selectedVersion = versions.find((item) => item.id === versionId);
+  const showVersionSources = new Set(versions.map((item) => item.sessionId)).size > 1;
+  const versionLabel = (item: ScientificArtifactVersion, truncateSource = true) => {
+    const timestamp = new Date(item.createdAt).toLocaleString(locale);
+    if (!showVersionSources) return `v${item.version} · ${timestamp}`;
+    const sessionTitle = sessions.find((session) => session.id === item.sessionId)?.title ?? t("app.deletedSession");
+    const displayTitle = truncateSource ? truncateArtifactVersionSource(sessionTitle) : sessionTitle;
+    return `v${item.version} · ${t("artifact.versionSource", { session: displayTitle })} · ${timestamp}`;
+  };
   return <header>
     <h3>Scientific artifacts</h3>
     <div>
       <select aria-label="Artifact" onChange={(event) => onArtifactChange(event.target.value)} title={selectedArtifact?.logicalName ?? "Select an artifact"} value={artifactId ?? ""}>
         {artifacts.map((item) => <option key={item.id} value={item.id}>{item.logicalName} · {item.kind}</option>)}
       </select>
-      <select aria-label="Artifact version" onChange={(event) => onVersionChange(event.target.value)} title={selectedVersion ? `Version ${selectedVersion.version}` : "Select an artifact version"} value={versionId ?? ""}>
-        {versions.toReversed().map((item) => <option key={item.id} value={item.id}>v{item.version} · {new Date(item.createdAt).toLocaleString()}</option>)}
+      <select aria-label="Artifact version" onChange={(event) => onVersionChange(event.target.value)} title={selectedVersion ? versionLabel(selectedVersion, false) : "Select an artifact version"} value={versionId ?? ""}>
+        {versions.toReversed().map((item) => <option key={item.id} title={versionLabel(item, false)} value={item.id}>{versionLabel(item)}</option>)}
       </select>
     </div>
   </header>;
+}
+
+export function ArtifactVersionSource({
+  sessions,
+  version,
+}: {
+  sessions?: Session[];
+  version?: ScientificArtifactVersion;
+}) {
+  const { t } = useLocale();
+  if (!version || !sessions) return null;
+  const sessionTitle = sessions.find((session) => session.id === version.sessionId)?.title
+    ?? t("app.deletedSession");
+  return <p className="artifact-version-source" title={version.sessionId}>
+    {t("artifact.updatedInSession", { session: sessionTitle })}
+  </p>;
 }
 
 /**
@@ -372,6 +412,7 @@ export function ArtifactModal({
   onPendingAnnotation,
   refreshKey,
   sessionId,
+  sessions,
   artifactSessionId,
 }: {
   client: ApiClient;
@@ -404,6 +445,8 @@ export function ArtifactModal({
   onPendingAnnotation: (annotation: ArtifactAnnotation) => void;
   refreshKey?: string;
   sessionId: string;
+  /** Complete Project Session catalog used to label each Artifact version's source. */
+  sessions?: Session[];
   /** The Session the opened artifact actually belongs to, used ONLY for
     * memory-graph reads (subgraph for view-chain, artifact-provenance for the
     * derived-from row). The workspace artifact list is project-scoped
@@ -418,11 +461,12 @@ export function ArtifactModal({
     * and URL/shared-link paths). */
   artifactSessionId?: string;
 }) {
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   const [artifacts, setArtifacts] = useState<ScientificArtifact[]>([]);
   const [artifactId, setArtifactId] = useState<string>();
   const [versions, setVersions] = useState<ScientificArtifactVersion[]>([]);
   const [versionId, setVersionId] = useState<string>();
+  const [loadedSessions, setLoadedSessions] = useState<Session[]>();
   const [contentUrl, setContentUrl] = useState<string>();
   const [source, setSource] = useState("");
   const [loadedVersionId, setLoadedVersionId] = useState<string>();
@@ -451,6 +495,16 @@ export function ArtifactModal({
   const reportError = useCallback((message: string) => onErrorRef.current(message), []);
   const artifact = artifacts.find((item) => item.id === artifactId);
   const version = versions.find((item) => item.id === versionId);
+  const sourceSessions = sessions ?? loadedSessions;
+  const showVersionSources = new Set(versions.map((item) => item.sessionId)).size > 1;
+  const versionLabel = (item: ScientificArtifactVersion, truncateSource = true) => {
+    const timestamp = new Date(item.createdAt).toLocaleString(locale);
+    if (!showVersionSources || !sourceSessions) return `v${item.version} · ${timestamp}`;
+    const sessionTitle = sourceSessions.find((sourceSession) => sourceSession.id === item.sessionId)?.title
+      ?? t("app.deletedSession");
+    const displayTitle = truncateSource ? truncateArtifactVersionSource(sessionTitle) : sessionTitle;
+    return `v${item.version} · ${t("artifact.versionSource", { session: displayTitle })} · ${timestamp}`;
+  };
   // Session used ONLY for memory-graph reads (getMemorySubgraph for view-chain,
   // getMemoryArtifactProvenance for the derived-from row). Non-graph requests
   // keep using ``sessionId`` — they route by versionId/projectId, not session_id,
@@ -529,6 +583,16 @@ export function ArtifactModal({
     }).catch((error: Error) => { if (active) reportError(error.message); });
     return () => { active = false; };
   }, [client, embedded, logicalName, onMissing, refreshKey, sessionId]);
+
+  useEffect(() => {
+    if (sessions || !artifact?.projectId) return;
+    let active = true;
+    setLoadedSessions(undefined);
+    void client.listSessions(artifact.projectId, "all")
+      .then((items) => { if (active) setLoadedSessions(items); })
+      .catch(() => { if (active) setLoadedSessions([]); });
+    return () => { active = false; };
+  }, [artifact?.projectId, client, sessions]);
 
   useEffect(() => {
     if (!artifactId) { setVersions([]); setVersionId(undefined); return; }
@@ -799,7 +863,7 @@ export function ArtifactModal({
   if (embedded) {
     return <section aria-label="Versioned scientific artifacts" className="scientific-artifacts artifact-embedded-panel">
       <header className="artifact-modal-header">
-        <div><span className="eyebrow">{artifact?.kind ?? "artifact"}</span><h2>{artifact?.logicalName ?? logicalName}</h2></div>
+        <div><span className="eyebrow">{artifact?.kind ?? "artifact"}</span><h2>{artifact?.logicalName ?? logicalName}</h2><ArtifactVersionSource sessions={sourceSessions} version={version} /></div>
         <div className="artifact-modal-controls">
           {version && version.version > 1 ? <span className="version-hint">v{version.version} of {versions.length}</span> : null}
           <ArtifactDownloadButton busy={downloadBusy} disabled={!version} label={t("artifact.downloadCurrent")} onDownload={() => void downloadCurrentVersion()} />
@@ -819,10 +883,10 @@ export function ArtifactModal({
   return <div className="artifact-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section aria-label={`Artifact: ${logicalName}`} aria-modal="true" className="artifact-modal-panel" role="dialog">
       <header className="artifact-modal-header">
-        <div><span className="eyebrow">{artifact?.kind ?? "artifact"}</span><h2>{artifact?.logicalName ?? logicalName}</h2></div>
+        <div><span className="eyebrow">{artifact?.kind ?? "artifact"}</span><h2>{artifact?.logicalName ?? logicalName}</h2><ArtifactVersionSource sessions={sourceSessions} version={version} /></div>
         <div className="artifact-modal-controls">
           <label className="version-picker"><span>version</span>
-            <select aria-label="Artifact version" onChange={(event) => setVersionId(event.target.value)} value={versionId}>{versions.toReversed().map((item) => <option key={item.id} value={item.id}>v{item.version} · {new Date(item.createdAt).toLocaleString()}</option>)}</select>
+            <select aria-label="Artifact version" onChange={(event) => setVersionId(event.target.value)} title={version ? versionLabel(version, false) : "Select an artifact version"} value={versionId}>{versions.toReversed().map((item) => <option key={item.id} title={versionLabel(item, false)} value={item.id}>{versionLabel(item)}</option>)}</select>
           </label>
           <ArtifactDownloadButton busy={downloadBusy} disabled={!version} label={t("artifact.downloadCurrent")} onDownload={() => void downloadCurrentVersion()} />
           {/* The version on screen becomes the starting point, by its stored
