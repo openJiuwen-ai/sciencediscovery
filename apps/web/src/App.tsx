@@ -4390,6 +4390,7 @@ export function App() {
                 sandboxNetworkSettings
                   ? <SandboxNetworkSettingsEditor
                     onChange={setSandboxNetworkSettingsEdit}
+                    proxySettings={proxySettings}
                     settings={sandboxNetworkSettingsEdit ?? sandboxNetworkSettings}
                   />
                   : <p className="muted">{t("settings.loadingSandboxNetwork")}</p>
