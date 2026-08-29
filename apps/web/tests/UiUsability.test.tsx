@@ -95,7 +95,7 @@ test("configured providers render one expandable row each with an inline model t
   assert.match(settings, /\.provider-model-table \{[^}]*display: grid;[^}]*border: 1px solid var\(--border\)/);
   assert.match(settings, /\.provider-model-row \{[^}]*grid-template-columns: minmax\(140px, 1\.2fr\) minmax\(0, 2fr\) auto;/);
   assert.match(settings, /\.provider-manual-form \{[^}]*display: grid;/);
-  assert.match(settings, /\.provider-manual-form \.provider-manual-vision \{[^}]*align-self: start;/);
+  assert.match(settings, /\.provider-manual-form \.provider-manual-vision \{[^}]*align-self: end;/);
   assert.match(settings, /\.provider-add-panel select \{[^}]*max-width: 240px;/);
   assert.match(settings, /\.provider-editor-actions \{[^}]*flex-wrap: nowrap;/);
   // The preset wall and the resident editor are gone for good.

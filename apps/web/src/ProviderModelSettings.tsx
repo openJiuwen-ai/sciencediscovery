@@ -646,14 +646,14 @@ export function ProviderRow({
         <label><span>{t("providers.manual.output")}</span><input inputMode="numeric" value={manual.maxOutputTokens} onChange={(event) => setManual((current) => ({ ...current, maxOutputTokens: event.target.value }))} placeholder="131072" /></label>
         <label><span>{t("providers.manual.efforts")}</span><input value={manual.efforts} onChange={(event) => setManual((current) => ({ ...current, efforts: event.target.value }))} placeholder={t("providers.manual.effortsPlaceholder")} /></label>
         <label className="provider-manual-vision"><input checked={manual.vision} onChange={(event) => setManual((current) => ({ ...current, vision: event.target.checked }))} type="checkbox" /><span>{t("settings.visionCapable")}</span></label>
-        <fieldset className="provider-manual-price">
-          <legend>{t("providers.manual.price")}</legend>
+        <button className="secondary-button provider-manual-submit" disabled={busy || !manual.modelId.trim()} onClick={() => void submitManual()} type="button">{t("providers.models.add")}</button>
+        <div className="provider-manual-price">
+          <span className="provider-manual-price-title">{t("providers.manual.price")}</span>
           <label><span>{t("providers.manual.priceCurrency")}</span><input value={manual.priceCurrency} onChange={(event) => setManual((current) => ({ ...current, priceCurrency: event.target.value }))} placeholder="USD" /></label>
           <label><span>{t("providers.manual.priceInput")}</span><input inputMode="decimal" value={manual.priceInput} onChange={(event) => setManual((current) => ({ ...current, priceInput: event.target.value }))} placeholder="1.5" /></label>
           <label><span>{t("providers.manual.priceOutput")}</span><input inputMode="decimal" value={manual.priceOutput} onChange={(event) => setManual((current) => ({ ...current, priceOutput: event.target.value }))} placeholder="3" /></label>
           <label><span>{t("providers.manual.priceCached")}</span><input inputMode="decimal" value={manual.priceCached} onChange={(event) => setManual((current) => ({ ...current, priceCached: event.target.value }))} placeholder="0.2" /></label>
-        </fieldset>
-        <button className="secondary-button" disabled={busy || !manual.modelId.trim()} onClick={() => void submitManual()} type="button">{t("providers.models.add")}</button>
+        </div>
       </div> : null}
     </div> : null}
   </div>;
