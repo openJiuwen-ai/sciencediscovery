@@ -654,11 +654,11 @@
 .provider-model-row-facts .fact.on { background: var(--accent-softer); color: var(--accent-ink); }
 .provider-model-row-facts .fact svg { flex: 0 0 auto; }
 .provider-model-price-periods { display: grid; gap: 2px; }
-.provider-manual-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; gap: 8px; border-top: 1px dashed var(--border); padding-top: 12px; }
-.provider-manual-price { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; gap: 8px; min-width: 0; }
+.provider-manual-form { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(0, 0.9fr); align-items: end; gap: 8px; border-top: 1px dashed var(--border); padding-top: 12px; }
+.provider-manual-price { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(4, minmax(0, 0.6fr)); align-items: end; gap: 8px; max-width: 720px; min-width: 0; }
 .provider-manual-price-title { grid-column: 1 / -1; color: var(--text-heading); font-size: 11px; font-weight: 700; }
 .provider-manual-price label { display: grid; gap: 5px; min-width: 0; }
-.provider-manual-submit { grid-column: 4; grid-row: 2; align-self: end; min-height: 36px; }
+.provider-manual-submit { grid-column: 1 / -1; justify-self: end; min-height: 36px; }
 .provider-manual-form label { display: grid; gap: 5px; min-width: 0; }
 .provider-manual-form label > span { color: var(--text-heading); font-size: 11px; font-weight: 700; }
 .provider-manual-form input, .provider-manual-form select { width: 100%; min-height: 36px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); padding: 6px 8px; font-size: 12px; }
