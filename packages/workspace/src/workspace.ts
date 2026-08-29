@@ -883,7 +883,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (options.queryGraph) {
     const queryGraphParameters = Type.Object({ query: Type.String({ minLength: 1 }) });
     const queryGraph: AgentTool<typeof queryGraphParameters> = {
-      description: "Browse this session's memory-graph nodes (ResearchGoal/SubTask/Paper/Evidence/Claim/Code/Artifact) by keyword. Returns {hits, total, truncated}. Matching is term-OR: the query is split into words and a node matches if its text contains ANY word; nodes matching more words rank higher. Use it to see what has already been searched (Papers) or produced (Artifacts/Evidence) in this session. This is an exploratory read, not an id lookup — to cite a node, use the id returned by declare_evidence/declare_artifact, or list_artifacts for an existing Artifact. Give concrete entity terms that appear in the graph (e.g. 'TP53 NSCLC'), not meta-words like 'paper' or 'evidence'.",
+      description: "Browse this session's memory-graph nodes (ResearchGoal/Task/ToolCall/Paper/Evidence/Claim/Code/Artifact) by keyword. Returns {hits, total, truncated}. Matching is term-OR: the query is split into words and a node matches if its text contains ANY word; nodes matching more words rank higher. Use it to see what has already been searched (Papers) or produced (Artifacts/Evidence) in this session. This is an exploratory read, not an id lookup — to cite a node, use the id returned by declare_evidence/declare_artifact, or list_artifacts for an existing Artifact. Give concrete entity terms that appear in the graph (e.g. 'TP53 NSCLC'), not meta-words like 'paper' or 'evidence'.",
       execute: async (_toolCallId, params) => {
         const result = await options.queryGraph!(params.query);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
@@ -904,7 +904,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       strength: Type.String(),
     });
     const declareEvidence: AgentTool<typeof declareEvidenceParameters> = {
-      description: "Record a piece of Evidence extracted from a Paper that already exists in this session's memory graph. Creates an Evidence node + an extracted_from edge to the source Paper. Returns {status:'ok', evidence_id} or a structured error (source_paper_not_found when the Paper link is unknown). Use the returned evidence_id as the chip alias target in declare_claim's cites_evidence_aliases and write [evidenceN] in your report body.",
+      description: "Record a piece of Evidence extracted from a Paper that already exists in this session's memory graph. Creates an Evidence node + an extracts edge from the source Paper (Paper → Evidence). Returns {status:'ok', evidence_id} or a structured error (source_paper_not_found when the Paper link is unknown). Use the returned evidence_id as the chip alias target in declare_claim's cites_evidence_aliases and write [evidenceN] in your report body.",
       execute: async (_toolCallId, params) => {
         const result = await options.declareEvidence!({
           content: params.content,
@@ -933,7 +933,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       artifact_id: Type.Optional(Type.String({ minLength: 1 })),
     });
     const declareClaim: AgentTool<typeof declareClaimParameters> = {
-      description: "Record a Claim (a cited assertion) and link it to its supporting nodes. Creates a Claim node + cites edges to the cited Evidence/Artifact. At least one citation target is required. A Claim cites Evidence/Artifact — it does NOT cite a Paper directly: to cite a paper, call declare_evidence first and cite the returned evidence_id here. Choose aliases of the form evidence+number for Evidence (e.g. [evidence1]) or artifact+number for Artifact (e.g. [artifact1]) — no other format. Write each chosen alias token inline in the output body where the claim is asserted; a chip renders only when a [alias] token in the body matches this claim's chip_map.",
+      description: "Record a Claim (a cited assertion) and link it to its supporting nodes. Creates a Claim node + supports edges from the cited Evidence/Artifact (Evidence/Artifact → Claim). At least one citation target is required. A Claim is backed by Evidence/Artifact via supports — it does NOT reach a Paper directly: to cite a paper, call declare_evidence first and cite the returned evidence_id here. Choose aliases of the form evidence+number for Evidence (e.g. [evidence1]) or artifact+number for Artifact (e.g. [artifact1]) — no other format. Write each chosen alias token inline in the output body where the claim is asserted; a chip renders only when a [alias] token in the body matches this claim's chip_map.",
       execute: async (_toolCallId, params) => {
         const result = await options.declareClaim!({
           content: params.content,

@@ -114,20 +114,20 @@ To create a specialist under **System configuration → Specialists**:
 
 This case does not need a custom specialist; the system built-in default is sufficient.
 
-### 3.7 Science Memory (optional)
+### 3.7 ScienceMemory (optional)
 
-The Science Memory module stores the session's execution and argumentation as a graph: the research goal, each task step, the code that runs, the output files, down to each cited claim in the final report and its evidence source, all persisted as nodes and edges so that "how this conclusion came to be" is click-traceable.
+The ScienceMemory module stores the session's execution and argumentation as a graph: the research goal, each task step, the code that runs, the output files, down to each cited claim in the final report and its evidence source, all persisted as nodes and edges so that "how this conclusion came to be" is click-traceable.
 
 Enable and use it as follows:
 
-1. **Prepare Neo4j**: the memory graph requires an external Neo4j service (not packaged in the image). Under **System configuration → Memory graph**, fill in the Bolt address, username, and password.
+1. **Prepare Neo4j**: the memory graph requires an external Neo4j service (not packaged in the image). Under **System configuration → Memory graph**, fill in the HTTP address (default `http://127.0.0.1:7474`), username, and password.
 2. **Enable the service**: turn on the memory-graph feature in system settings. Once enabled, the Python sidecar `services/memory-graph` (loopback `:17674` only) is started and self-checks its health with the Runner on startup.
-3. **Agent-side auto-mirroring**: once enabled, execution events (MCP search, `run_python`) are mirrored automatically into the graph to form a "task chain"; the Agent builds a "citation chain" through the three tools `declare_evidence`, `declare_artifact`, and `declare_claim` when writing the final report.
+3. **Agent-side auto-mirroring**: once enabled, execution events (MCP search, `run_python`) are mirrored automatically into the graph to form a "task chain"; the Agent builds a "citation chain" through `declare_evidence` and `declare_claim` (plus the Node-internal `declare_artifact`) when writing the final report.
 4. **Query and view**: the Agent can call the `query_graph` tool for a case-insensitive substring search; the frontend renders `[alias]` in the report as a clickable chip that jumps to the corresponding evidence or artifact.
 
 When Neo4j is unreachable, this module degrades silently and does not affect the web or conversation main path.
 
-![Science Memory settings](../../images/memory.png)
+![ScienceMemory settings](../../images/memory.png)
 
 ---
 
@@ -199,15 +199,15 @@ Click any Evidence chip to open the Evidence card. The card offers three entries
 |---|---|
 | **Preview** | View the content of the Evidence |
 | **Provenance** | View the provenance of the Evidence, including the code, execution environment, and execution logs that generated it |
-| **View chain** | View the Science Memory graph information related to this Evidence |
+| **View this evidence in ScienceMemory** | View the ScienceMemory graph information related to this Evidence |
 
 ![Preview](../../images/evidence2.jpg)
 ![Provenance](../../images/evidence3.jpg)
 
 ### 7.3 View the generation chain and citation chain
 
-Click **View chain** to inspect the two chains of this Evidence:
+Click **View this evidence in ScienceMemory** to inspect the two chains of this Evidence:
 
 - **Generation chain**: from the research goal, follow the task nodes to the code and execution records that generated the Evidence.
 - **Citation chain**: from the Evidence up to its source literature, and to the Artifact / report claim that declared this Evidence.
-![Science Memory view](../../images/evidence4.jpg)
+![ScienceMemory view](../../images/evidence4.jpg)

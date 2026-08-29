@@ -372,7 +372,7 @@ export function ArtifactVersionSource({
  * requests tolerate the mismatch — they route by versionId/projectId, not
  * ``n.session_id`` — but graph queries filter by ``n.session_id``, so they
  * must target the artifact's own Session or view-chain reports
- * "not yet in the Science Memory".
+ * "not yet in the ScienceMemory".
  *
  * Precedence (most specific first):
  * 1. ``version?.sessionId`` — the Session that actually produced THIS version.
@@ -744,7 +744,7 @@ export function ArtifactModal({
       // Query the artifact's own Session's graph (graphSessionId), not the
       // active Session — the workspace list is project-scoped so the open
       // artifact may live elsewhere; querying activeSession's graph would miss
-      // the node and report "not yet in the Science Memory".
+      // the node and report "not yet in the ScienceMemory".
       const subgraph = await client.getMemorySubgraph(graphSessionId);
       // Artifact is one node per version (composite key); the subgraph holds
       // v1 and v2 as separate nodes. Match the EXACT version the user is

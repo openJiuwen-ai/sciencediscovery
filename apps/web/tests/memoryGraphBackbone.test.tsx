@@ -130,11 +130,11 @@ test("collapseProducesOwner: does NOT include the owner", () => {
 });
 
 test("collapseProducesOwner: shallow — only the owner's direct children, NOT the grandchildren", () => {
-  // 仿新版 Neo4j Browser：折叠只删 owner 亲手拉进来的**直接子**，不递归孙。
-  // 链 tc1→p1→e1→c1：tc1 名下记 p1，p1 名下记 e1，e1 名下记 c1。折叠 tc1
-  // 只删 p1（直接子），e1/c1（孙辈，记在 p1/e1 名下）不碰——它们因还连着
-  // p1 之外的边 / 别的 owner 而留下（对齐：折叠 report2 断 report2↔Claim 边、
-  // Evidence 不动）。经典版会递归删整棵，新版只删一层。
+  // 浅层折叠（仿新版 Browser）：折叠只删 owner 亲手拉进来的**直接子**，不
+  // 递归孙。链 tc1→p1→e1→c1：tc1 名下记 p1，p1 名下记 e1，e1 名下记 c1。
+  // 折叠 tc1 只删 p1（直接子），e1/c1（孙辈，记在 p1/e1 名下）不碰——它们
+  // 因还连着 p1 之外的边 / 别的 owner 而留下（对齐：折叠 report2 断
+  // report2↔Claim 边、Evidence 不动）。经典版会递归删整棵，新版只删一层。
   const m = new Map<string, Set<string>>([
     ["tc1", new Set(["p1"])],
     ["p1", new Set(["e1"])],
@@ -491,7 +491,7 @@ test("countFoldedProducesMembers: 0 for a node with no produces members (Researc
 });
 
 test("projectToCanvas + collapseProducesOwner: shallow collapse breaks the owner's edge but leaves the grandchild", () => {
-  // 回归：浅层折叠（仿新版 Neo4j Browser）对齐用户验证的真实行为。
+  // 回归：浅层折叠（仿新版 Browser）对齐用户验证的真实行为。
   // 真实 session 0bf3c7bd 的拓扑（简化）：ToolCall──produces→Code──produces→
   // Artifact(report2)──supports→Claim←supports──Evidence←extracts──Paper。
   // 用户展开链 lit→code_exec→Code→report2→Claim（Claim 展 Evidence）后再双击

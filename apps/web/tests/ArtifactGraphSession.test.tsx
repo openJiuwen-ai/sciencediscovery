@@ -20,7 +20,7 @@ import { resolveGraphSessionId } from "../src/ScientificArtifacts.js";
 // The workspace artifact list is project-scoped (listProjectArtifacts), so an
 // artifact opened from it may belong to a different Session than the active
 // Session. Memory-graph reads filter by n.session_id, so view-chain must query
-// the artifact's own Session or it reports "not yet in the Science Memory".
+// the artifact's own Session or it reports "not yet in the ScienceMemory".
 // These tests pin the three-level fallback of resolveGraphSessionId.
 
 test("prefers the loaded version's own Session (finest grain — handles same-name artifacts produced across Sessions)", () => {

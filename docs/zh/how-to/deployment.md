@@ -12,7 +12,7 @@
 
 **这三条路径互相独立，请选定一条，不要混用。** 二进制部署从构建到运行全程不涉及 Docker：可执行文件自带 Node、CPython、gateway 依赖、Web 静态资源与 micromamba。需要容器化部署时走镜像路径，不要把二进制包塞进镜像。
 
-三者都不打包 Neo4j。Science Memory 需要外部 Neo4j 服务器，未配置时该功能保持关闭，Web 与对话主路径不受影响。
+三者都不打包 Neo4j。ScienceMemory 需要外部 Neo4j 服务器，未配置时该功能保持关闭，Web 与对话主路径不受影响。
 
 ## 单文件二进制部署
 

@@ -69,7 +69,7 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 | **Host NPU Broker job** | 否（按需） | 仅当 `SCIENCE_AGENT_NPU_BROKER=1` 时由 Runner 启动白名单宿主 workload；不是独立 daemon，不开放任意命令 |
 | **外部模型 / PubMed 等** | 远端 | 出站 HTTPS，不是本机进程 |
 
-因此：逻辑上可以画多个「模块」，**运行时默认同机常驻只有 2 个进程**（启用 Science Memory 时 +1；Host NPU Broker job 只是 Runner 按需派生的子进程）。
+因此：逻辑上可以画多个「模块」，**运行时默认同机常驻只有 2 个进程**（启用 ScienceMemory 时 +1；Host NPU Broker job 只是 Runner 按需派生的子进程）。
 
 ### 2.3 agent 循环跑在哪个进程？
 

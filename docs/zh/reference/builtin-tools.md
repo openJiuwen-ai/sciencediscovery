@@ -37,7 +37,7 @@
 | `update_plan_step` | 已有计划 | 最新 `planId`、`expectedVersion`、`stepId` 与步骤状态；全部步骤完成后计划自动完成 |
 | `abandon_plan` | 已有计划 | 最新 `planId`、`expectedVersion`，可选原因 |
 | `task` | 主运行注入（子 Agent 内不可再派生） | `description`（≤80 字符）、`prompt`（≤20000）、可选 `brief`（Brief v1 契约，见 [subagent-orchestration.md](../explanation/subagent-orchestration.md#41-subagent-brief-v1-契约)）、`inputPaths`（≤50）、`max_turns`（≤300）、`timeout_seconds`（≤3600）、`specialistId`、`tools`（白名单，≤32）；同轮多次调用可并行 |
-| `query_graph` | 在 System Settings 中启用 Science Memory | `query`：跨会话记忆图的大小写不敏感子串搜索，返回 `{hits, total, truncated}` |
+| `query_graph` | 在 System Settings 中启用 ScienceMemory | `query`：跨会话记忆图的大小写不敏感子串搜索，返回 `{hits, total, truncated}` |
 
 ## 科学环境工具
 

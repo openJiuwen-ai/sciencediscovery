@@ -37,7 +37,7 @@ Node performs permission, CAS, and `WebInvocation` audit, and calls the vendors 
 | `update_plan_step` | A plan has been recorded | latest `planId` and `expectedVersion`, `stepId`, and step status; all completed steps complete the plan |
 | `abandon_plan` | A plan has been recorded | latest `planId` and `expectedVersion`, optional reason |
 | `task` | main run; unavailable inside subagents | `description` ≤80, `prompt` ≤20000, optional Brief v1, up to 50 `inputPaths`, `max_turns` ≤300, `timeout_seconds` ≤3600, `specialistId`, and up to 32 whitelisted `tools`; same-turn calls may run in parallel |
-| `query_graph` | Science Memory enabled | case-insensitive cross-Session substring `query`; returns `{hits,total,truncated}` |
+| `query_graph` | ScienceMemory enabled | case-insensitive cross-Session substring `query`; returns `{hits,total,truncated}` |
 
 ## Scientific environment tools
 

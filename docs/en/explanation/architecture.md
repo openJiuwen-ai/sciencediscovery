@@ -41,7 +41,7 @@ The browser is a client, not a repository service. Both HTTP services are loopba
 | Host NPU Broker jobs | on demand | Started by Runner only when `SCIENCE_AGENT_NPU_BROKER=1`; allowlisted host workloads, not a separate daemon or arbitrary command surface |
 | models and scientific databases | remote | Outbound HTTPS, not local processes |
 
-The default is two resident processes. Enabling Science Memory adds one; Host NPU Broker jobs are only Runner-spawned child processes.
+The default is two resident processes. Enabling ScienceMemory adds one; Host NPU Broker jobs are only Runner-spawned child processes.
 
 ### 2.3 Which process runs the agent loop?
 

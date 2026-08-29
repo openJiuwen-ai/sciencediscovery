@@ -12,7 +12,7 @@ The root [README](../../../README.md) provides the shortest startup path. This g
 
 **These paths are independent. Choose one and do not mix them.** The binary path never uses Docker: the executable embeds Node, CPython, gateway dependencies, the web assets, and micromamba. Use the image path for container deployment instead of putting the binary inside an image.
 
-None of the modes bundles Neo4j. Science Memory needs an external Neo4j server and remains disabled when it is not configured; this does not affect the web or conversation path.
+None of the modes bundles Neo4j. ScienceMemory needs an external Neo4j server and remains disabled when it is not configured; this does not affect the web or conversation path.
 
 ## Single-file binary deployment
 

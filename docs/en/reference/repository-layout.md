@@ -14,7 +14,7 @@ sciencediscovery/
 │   ├── gateway/              # bundled Python MCP servers + their venv
 │   ├── runner/               # Bubblewrap executor
 │   ├── paper/                # uv PDF worker
-│   └── memory-graph/         # experimental Science Memory sidecar, off by default
+│   └── memory-graph/         # experimental ScienceMemory sidecar, off by default
 ├── packages/
 │   ├── agent-runtime/        # prompts, tools, agent event types
 │   ├── schema/               # shared TypeScript types and schemas
@@ -114,7 +114,7 @@ See [Configuration reference](configuration.md) for the full layout.
 | Category | Count | Members |
 |---|---:|---|
 | Frontend | 1 | `apps/web` |
-| Backend services | 5 | API, gateway, runner, paper, experimental Science Memory |
+| Backend services | 5 | API, gateway, runner, paper, experimental ScienceMemory |
 | Shared TS packages | 3 | agent-runtime, schema, mcp-sources |
 | Built-in skill packages | 2 | life-science and structure-pocket |
 

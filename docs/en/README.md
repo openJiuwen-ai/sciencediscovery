@@ -13,6 +13,7 @@ This is the complete English documentation set.
 - [Deployment](how-to/deployment.md) — local mode, Docker, and building a single-file binary from source.
 - [Configure the network proxy](how-to/configure-network-proxy.md) — add a proxy on the settings page and choose a policy for LLM, web, and MCP traffic.
 - [Literature research case guide](how-to/literature-research-case-guide.md) — run an end-to-end cross-database literature survey, from service startup to approvals and results.
+- [Install Neo4j and configure ScienceMemory](how-to/science-memory-setup.md) — install an external Neo4j, enable ScienceMemory in system settings, and explore chains in the frontend graph.
 
 ## Reference
 
@@ -27,4 +28,4 @@ This is the complete English documentation set.
 
 ## Explanation
 
-See the [explanation index](explanation/README.md), which covers the overall architecture, control plane, agent backend, sandbox, Ascend NPU host broker, rate limiting, connectors, MCP tool protocol, network proxy, review and provenance, Science Memory, skill progressive disclosure, subagent orchestration, and content-addressable storage.
+See the [explanation index](explanation/README.md), which covers the overall architecture, control plane, agent backend, sandbox, Ascend NPU host broker, rate limiting, connectors, MCP tool protocol, network proxy, review and provenance, ScienceMemory, skill progressive disclosure, subagent orchestration, and content-addressable storage.

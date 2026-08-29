@@ -12,7 +12,7 @@ These pages explain why the system is designed this way and how components coope
 - [MCP tool and protocol design](mcp-tool-protocol.md) — Source Manifest, tool protocol, Agent Loop, permissions, audit, and control-plane interface.
 - [Network proxy](network-proxy.md) — proxy policy resolution, outbound access, and security boundary.
 - [Review and provenance](review-provenance.md) — integrity checks, semantic review, claims/evidence, and Prompt Manifest.
-- [Science Memory](science-memory.md) — task chain, citation chain, module boundary, and storage.
+- [ScienceMemory](science-memory.md) — task chain, citation chain, module boundary, and storage.
 - [Skill progressive disclosure](skill-progressive-disclosure.md) — catalog search and frozen-snapshot reads.
 - [Subagent orchestration](subagent-orchestration.md) — parent/child Agent contract, guardrails, and trade-offs.
 - [Content-addressable storage](cas.md) — CAS addressing, workspace change detection, writers, and lifecycle.
