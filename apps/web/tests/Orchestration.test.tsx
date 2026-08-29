@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SessionPlan, Subagent } from "@sciencediscovery/schema";
+import type { Subagent } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -23,6 +23,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api.js";
 import { BuiltInReviewerSpecialist, OrchestrationPanel, SpecialistManager, SubagentCards } from "../src/Orchestration.js";
 import { activityCardId } from "../src/session/run-activity.js";
+import type { RunPlanSnapshot } from "../src/session/run-activity.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -43,19 +44,15 @@ test("built-in Reviewer Specialist explains that Quick/Deep is chosen per Sessio
   assert.match(html, /aria-checked="true"/);
 });
 
-function buildPlan(overrides: Partial<SessionPlan> = {}): SessionPlan {
+function buildPlan(overrides: Partial<RunPlanSnapshot> = {}): RunPlanSnapshot {
   return {
-    caveats: ["Validate external references"],
-    createdAt: timestamp,
-    feasibilityConfidence: "medium",
-    id: "plan-1",
-    mode: "recorded",
-    scope: "Compare two independent methods",
-    sessionId: "session-1",
-    state: "recorded",
-    steps: [{ description: "Run both methods", id: "step-1", status: "pending" }],
+    agentId: "main",
+    explanation: "Compare two independent methods",
+    items: [{ status: "pending", step: "Run both methods" }],
+    runId: "run-1",
+    toolCallId: "call-plan-1",
+    turn: 1,
     updatedAt: timestamp,
-    version: 1,
     ...overrides,
   };
 }
@@ -97,8 +94,8 @@ test("recorded plan collapses to a live Todo summary", () => {
     plans: [buildPlan()],
   }));
 
-  assert.match(html, /Plan · v1/);
-  assert.match(html, /0\/1 completed · medium feasibility/);
+  assert.match(html, /Plan · main/);
+  assert.match(html, /0\/1 completed/);
   assert.match(html, /active/);
   assert.match(html, /aria-expanded="false"/);
   assert.doesNotMatch(html, /recorded mode/);
@@ -109,10 +106,9 @@ test("recorded plan collapses to a live Todo summary", () => {
 
 test("completed plan summary reports completed step counts", () => {
   const plan = buildPlan({
-    state: "completed",
-    steps: [
-      { description: "Run both methods", id: "step-1", status: "completed" },
-      { description: "Summarize", id: "step-2", status: "pending" },
+    items: [
+      { step: "Run both methods", status: "completed" },
+      { step: "Summarize", status: "pending" },
     ],
   });
   const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
@@ -121,27 +117,27 @@ test("completed plan summary reports completed step counts", () => {
     plans: [plan],
   }));
 
-  assert.match(html, /1\/2 completed · medium feasibility/);
+  assert.match(html, /1\/2 completed/);
   assert.match(html, /completed/);
 });
 
-test("panel renders every plan it is given, not only the latest", () => {
-  const older = buildPlan({ id: "plan-1", version: 1 });
-  const newer = buildPlan({ id: "plan-2", version: 2 });
+test("panel renders independent plan snapshots for different agents", () => {
+  const main = buildPlan({ agentId: "main" });
+  const worker = buildPlan({ agentId: "subagent:worker-1", toolCallId: "call-plan-2" });
   const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
     expandedCards: {},
     onToggleCard: noopToggle,
-    plans: [older, newer],
+    plans: [main, worker],
   }));
 
-  assert.match(html, /Plan · v1/);
-  assert.match(html, /Plan · v2/);
+  assert.match(html, /Plan · main/);
+  assert.match(html, /Plan · subagent:worker-1/);
 });
 
 test("expanded plan card shows the live scope and step states", () => {
   const plan = buildPlan();
   const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
-    expandedCards: { [activityCardId("plan", plan.id)]: true },
+    expandedCards: { [activityCardId("plan", `${plan.runId}:${plan.agentId}`)]: true },
     onToggleCard: noopToggle,
     plans: [plan],
   }));

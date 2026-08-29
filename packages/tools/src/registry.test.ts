@@ -115,6 +115,45 @@ test("result observations retain model-declared order across concurrent completi
   ]);
 });
 
+test("batch policies supersede earlier calls without executing them", async () => {
+  const executed: string[] = [];
+  const registry = new ToolRegistry([{
+    name: "replace", label: "replace", description: "replace", parameters: Type.Object({ value: Type.String() }),
+    async execute(id) {
+      executed.push(id);
+      return { content: [{ type: "text" as const, text: id }], details: {} };
+    },
+  }], {
+    batchPolicies: [{
+      id: "replace.last-declared",
+      decide(calls) {
+        const matching = calls.filter((call) => call.name === "replace");
+        const winner = matching.at(-1);
+        return winner
+          ? matching.slice(0, -1).map((call) => ({ byCallId: winner.id, callId: call.id, kind: "supersede" as const }))
+          : [];
+      },
+    }],
+    createResultMessage: resultMessage,
+  });
+  const calls = [
+    { args: { value: "old" }, id: "first", name: "replace" },
+    { args: {}, id: "echo", name: "missing" },
+    { args: { value: "new" }, id: "last", name: "replace" },
+  ];
+  const batch = registry.prepareBatch(calls);
+  const signal = new AbortController().signal;
+  const results = await Promise.all(calls.map((call) => batch.execute(call, signal)));
+  assert.deepEqual(executed, ["last"]);
+  assert.deepEqual(JSON.parse(results[0]!.content), {
+    ok: true,
+    superseded: true,
+    supersededBy: "last",
+  });
+  assert.equal(results[1]?.isError, true);
+  assert.equal(results[2]?.content, "last");
+});
+
 test("dynamic availability hides and blocks tools without changing handlers", async () => {
   let active = false;
   const registry = new ToolRegistry([{

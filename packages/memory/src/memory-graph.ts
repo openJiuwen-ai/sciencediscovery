@@ -213,8 +213,8 @@ export interface ObserveSubagentPayload {
   summary?: string;
 }
 
-// Passive ResearchGoal fallback + SessionPlan → SubTask DAG mirror.
-// Domain is inferred from message/plan keywords, not read from any
+// Passive ResearchGoal fallback.
+// Domain is inferred from message keywords, not read from any
 // project, so it travels with the payload instead of being looked up.
 
 export interface ObserveSessionFirstMessagePayload {
@@ -226,22 +226,6 @@ export interface ObserveSessionFirstMessagePayload {
   domain?: string;
   topicScope: string[];
   createdAt: string;
-}
-
-export interface PlanStepMirror {
-  id: string;
-  description: string;
-}
-
-export interface ObserveSessionPlanPayload {
-  sessionId: string;
-  goalId: string;
-  planId: string;
-  /** plan.scope — overwrites the first-message goal fallback. */
-  scope: string;
-  /** inferDomain(plan.scope) — re-inferred on plan correction. */
-  domain: string;
-  steps: PlanStepMirror[];
 }
 
 // Uploaded file → SourceFile node + feeds edge to ResearchGoal. The file_id is
@@ -475,27 +459,6 @@ export class MemoryGraphClient {
     } catch (error) {
       mgLog.warn("observeUploadFile failed: session=%s file=%s, error %s",
         payload.sessionId, payload.fileId, error instanceof Error ? error.message : String(error));
-      throw error;
-    }
-  }
-
-  async observeSessionPlan(payload: ObserveSessionPlanPayload): Promise<void> {
-    mgLog.info("observeSessionPlan in: session=%s plan=%s goal=%s steps=%d",
-      payload.sessionId, payload.planId, payload.goalId, payload.steps.length);
-    try {
-      await this.post("/observe/session-plan", {
-        session_id: payload.sessionId,
-        goal_id: payload.goalId,
-        plan_id: payload.planId,
-        scope: payload.scope,
-        domain: payload.domain || null,
-        steps: payload.steps.map((step) => ({ id: step.id, description: step.description })),
-      });
-      mgLog.info("observeSessionPlan done: session=%s plan=%s (goal corrected from plan.scope)",
-        payload.sessionId, payload.planId);
-    } catch (error) {
-      mgLog.warn("observeSessionPlan failed: session=%s plan=%s, error %s",
-        payload.sessionId, payload.planId, error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
@@ -1255,27 +1218,6 @@ export class MemoryGraphSink {
       .catch((error: unknown) => {
         mgLog.warn("mirror failed: first-message session=%s goal=%s, error %s",
           payload.sessionId, payload.goalId,
-          error instanceof Error ? error.message : String(error));
-      });
-  }
-
-  /** Correct the ResearchGoal's scope/domain from a proposed SessionPlan's
-   * scope. Steps are not mirrored into SubTask nodes (the framework doesn't
-   * advance step status, so a skeleton would stay PENDING and clutter the
-   * graph). Never throws; plan flow stays unblocked. */
-  observeSessionPlan(payload: ObserveSessionPlanPayload): void {
-    if (!this.enabled || !this.client) {
-      mgLog.debug("mirror skipped: memory graph not enabled (plan=%s)", payload.planId);
-      return;
-    }
-    mgLog.info("plan proposed, correcting ResearchGoal from plan.scope: session=%s plan=%s",
-      payload.sessionId, payload.planId);
-    void this.client
-      .observeSessionPlan(payload)
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        mgLog.warn("mirror failed: plan=%s session=%s, error %s",
-          payload.planId, payload.sessionId,
           error instanceof Error ? error.message : String(error));
       });
   }

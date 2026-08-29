@@ -122,7 +122,7 @@ test("plan and subagent cards anchor to their run, collapse by default, and surv
 
   // Round 1: ask for a plan and a subagent to exercise both inline card types.
   await page.locator(".composer textarea").fill(
-    "请使用 Plan 执行模式，并严格按顺序执行三步：第一步，调用 propose_plan 工具提交一个只含两步的小计划；第二步，调用 task 工具启动一个 subagent，让它回答 2+2 等于几；第三步，用一句话简单汇报。",
+    "请先调用 update_plan 提交一个只含两步的小计划，再调用 task 工具启动一个 subagent，让它回答 2+2 等于几，最后用一句话简单汇报。",
   );
   await page.getByRole("button", { name: "Run analysis" }).click();
   await expect(page.locator(".plan-card").first()).toBeVisible({ timeout: 420_000 });
@@ -143,7 +143,7 @@ test("plan and subagent cards anchor to their run, collapse by default, and surv
   await expect(page.locator(".plan-card button").first()).toHaveAttribute("aria-expanded", "true");
 
   // Round 2: a plain follow-up in the same session exercises timeline replay.
-  await page.locator(".composer textarea").fill("第二轮：直接回答 1+1 等于几。不要调用 propose_plan，也不要启动 subagent。");
+  await page.locator(".composer textarea").fill("第二轮：直接回答 1+1 等于几。不要调用 update_plan，也不要启动 subagent。");
   await page.getByRole("button", { name: "Run analysis" }).click();
   await waitRunIdle(page);
   await expect(page.locator(".messages > article.message.user")).toHaveCount(2, { timeout: 60_000 });

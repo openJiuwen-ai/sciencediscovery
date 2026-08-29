@@ -78,7 +78,6 @@ import type {
   SessionArtifactOutput,
   SessionDetail,
   SessionListState,
-  SessionPlan,
   SessionRunEvent,
   SessionUsageSummary,
   ScientificArtifact,
@@ -294,11 +293,13 @@ import {
 } from "./session/model.js";
 import {
   activityCardId,
+  collectLatestRunPlans,
   collectRunChangedPaths,
   groupRunActivity,
   setActivityCardExpanded,
   type ActivityCardExpansion,
   type GovernedDownloadCandidate,
+  type RunPlanSnapshot,
   type RunActivityGroup,
 } from "./session/run-activity.js";
 import { ConversationArtifactList } from "./session/ConversationArtifactList.js";
@@ -1122,7 +1123,7 @@ export function App() {
   const [manualReviewerBusyBySession, setManualReviewerBusyBySession] = useState<Record<string, true>>({});
   /** Cancelling a review is independent from stopping the main Agent run. */
   const [stoppingReviewerSessionIds, setStoppingReviewerSessionIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [plans, setPlans] = useState<SessionPlan[]>([]);
+  const [plans, setPlans] = useState<RunPlanSnapshot[]>([]);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [openSubagentId, setOpenSubagentId] = useState<string>();
   const [remoteJobs, setRemoteJobs] = useState<RemoteJob[]>([]);
@@ -1983,7 +1984,7 @@ export function App() {
       return;
     }
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
-    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, paperItems, visionItems, environmentItems, revisionItems, planItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
+    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, paperItems, visionItems, environmentItems, revisionItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
       client.getSession(sessionId),
       client.listFiles(sessionId),
       client.getPermissionEpoch(sessionId),
@@ -2003,7 +2004,6 @@ export function App() {
       client.listPaperVisionRuns(sessionId),
       client.listEnvironments().catch(() => []),
       client.listEnvironmentRevisions().catch(() => []),
-      client.listSessionPlans(sessionId),
       client.listSubagents(sessionId),
       client.listRemoteJobs(sessionId),
       client.listArtifactOutputs(sessionId),
@@ -2057,7 +2057,10 @@ export function App() {
     setPromptManifests(manifests);
     setArtifactReviews(artifactReviewRuns);
     setReviewerAuditTasks(reviewerTasks);
-    setPlans(planItems);
+    setPlans([
+      ...terminalEvents.flatMap(([, events]) => collectLatestRunPlans(events)),
+      ...collectLatestRunPlans(replayEvents),
+    ]);
     setSubagents(subagentItems);
     setRemoteJobs(remoteJobItems);
     setMcpInvocations(invocations);
@@ -3193,8 +3196,12 @@ export function App() {
         return [...current.filter((item) => item.id !== request.id), request];
       });
     }
-    if (streamEvent.type === "plan.proposed") {
-      setPlans((current) => [...current.filter((item) => item.id !== streamEvent.plan.id), streamEvent.plan]);
+    if (streamEvent.type === "plan.updated" && runId) {
+      const plan = { ...streamEvent.plan, runId };
+      setPlans((current) => [
+        ...current.filter((item) => item.runId !== runId || item.agentId !== plan.agentId),
+        plan,
+      ]);
     }
     if (streamEvent.type === "subagent.updated"
       || streamEvent.type === "subagent.step"

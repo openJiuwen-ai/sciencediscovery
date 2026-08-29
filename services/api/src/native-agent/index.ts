@@ -38,7 +38,6 @@ import {
   DefaultContextAssembler,
   DurableContextStore,
   DurableSkillStateContributor,
-  DurableTaskStateContributor,
   DynamicContextAssembler,
   HistoryCompactor,
   resolveContextBudget,
@@ -59,10 +58,11 @@ import {
 } from "@sciencediscovery/model";
 import type { Agent, AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 import {
+  createPlanBatchPolicy,
   createPlanContextFactory,
-  createPlanLifecycleTools,
-  type PlanRepository,
-} from "@sciencediscovery/plan-mode";
+  createPlanTool,
+  type PlanStore,
+} from "@sciencediscovery/plan";
 import { createEvolveTools, type EvolveToolRuntime } from "@sciencediscovery/evolve";
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
@@ -132,12 +132,12 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
   contextScope?: AgentScope;
   /** Capability-package extension seam; factories are instantiated and frozen per AgentRun. */
   contextContributorFactories?: readonly ContextContributorFactory<WireMessage>[];
-  /** Application persistence adapter; when present, registers optional Plan lifecycle capabilities. */
+  /** Run-scoped Plan snapshot projection; when present, registers update_plan and context injection. */
   /** The `/evolve` capability for this turn, or absent when the deployment has
    *  none. One object instead of two forwarded callbacks and a deps bundle
    *  threaded through three run-loop entry points. */
   evolve?: EvolveToolRuntime;
-  planRepository?: PlanRepository;
+  planStore?: PlanStore;
 }
 
 export interface NativeAgentRunResult {
@@ -237,8 +237,8 @@ class NativeAgent implements NativeAgentHandle {
         return result;
       },
     } : {}) });
-    const planTools = options.planRepository
-      ? createPlanLifecycleTools({ repository: options.planRepository })
+    const planTools = options.planStore
+      ? [createPlanTool({ store: options.planStore })]
       : [];
     // Same shape as the plan capability: the composition root either built a
     // runtime for this turn or it did not, and that single fact decides
@@ -257,6 +257,7 @@ class NativeAgent implements NativeAgentHandle {
         tracker: new ToolOutputReadTracker(toolOutputSettings.readPolicy),
       }),
     ], {
+      ...(options.planStore ? { batchPolicies: [createPlanBatchPolicy()] } : {}),
       createResultMessage: (call, content, output) => ({
         role: "tool", tool_call_id: call.id, name: call.name, content,
         ...(output ? { additional_kwargs: { tool_output: output } } : {}),
@@ -650,15 +651,14 @@ class NativeAgent implements NativeAgentHandle {
         return content ? { systemSections: [{ content, id: "tools.capabilities", order: 100, slot: "capabilities" }] } : {};
       },
     }));
-    registry.register(new DurableTaskStateContributor<WireMessage>(this.durableContext, [scope]));
     for (const contributor of createDurableDomainContributors<WireMessage>(this.durableContext, [scope])) {
       registry.register(contributor);
     }
     registerContextContributorFactories(
       registry,
       [
-        ...(this.options.planRepository
-          ? [createPlanContextFactory<WireMessage>(this.options.planRepository, [scope])]
+        ...(this.options.planStore
+          ? [createPlanContextFactory<WireMessage>(this.options.planStore, [scope])]
           : []),
         ...(this.options.contextContributorFactories ?? []),
       ],

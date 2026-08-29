@@ -33,7 +33,6 @@ import type {
   SessionDetail,
   SessionListState,
   SessionReviewerSpecialistSettings,
-  SessionPlan,
   UpdateSessionRequest,
   RotatePermissionEpochRequest,
 } from "@sciencediscovery/schema";
@@ -54,10 +53,6 @@ export class SessionsApiClient extends ProjectsApiClient {
 
   getSession(sessionId: string): Promise<SessionDetail> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}`);
-  }
-
-  listSessionPlans(sessionId: string): Promise<SessionPlan[]> {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/plans`);
   }
 
   listSubagents(sessionId: string): Promise<Subagent[]> {

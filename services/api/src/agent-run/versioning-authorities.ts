@@ -26,7 +26,6 @@ export function versioningAuthorities(store: SessionStore, sessionId: string, ru
     return {
       session: session ? { id: session.id, projectId: session.projectId } : null,
       permission: store.getSessionPermissionEpoch(sessionId) ?? null,
-      plans: store.listSessionPlans(sessionId),
       artifacts: await Promise.all(store.listArtifacts(sessionId).map(async (artifact) => ({
         ...artifact, versions: await Promise.all(store.listArtifactVersions(sessionId, artifact.id).map(async (version) => ({
           ...version, content: await retain(version.content, "data"),

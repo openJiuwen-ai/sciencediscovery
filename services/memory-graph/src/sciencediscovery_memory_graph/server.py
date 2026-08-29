@@ -21,8 +21,6 @@ Routes:
 - ``POST /observe/mcp-search`` (Bearer) → upsert one MCP search's SubTask + Papers
 - ``POST /observe/session-first-message`` (Bearer) → upsert ResearchGoal from
   a session's first user message (passive fallback, one goal per session)
-- ``POST /observe/session-plan`` (Bearer) → mirror a SessionPlan's steps into
-  a SubTask skeleton + linear ``next`` chain, correcting the goal's scope/domain
 - ``POST /observe/upload-file`` (Bearer) → upsert a SourceFile node (an
   uploaded input file) + a ``feeds`` edge to ResearchGoal (fire-and-forget)
 - ``GET /subgraph?session_id=...`` (Bearer) → ``{nodes, edges, total, truncated}``
@@ -65,7 +63,6 @@ from .persistence import (
     upsert_execution,
     upsert_mcp_search,
     upsert_session_first_message,
-    upsert_session_plan,
     upsert_source_file,
     upsert_subagent,
 )
@@ -1250,52 +1247,6 @@ def observe_upload_file(req: ObserveUploadFileRequest) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("observe/upload-file failed: session=%s file=%s: %s",
                       req.session_id, req.file_id, exc)
-        raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
-
-
-# --- Write: observeSessionPlanProposed (SubTask DAG mirror) -------------------
-
-class PlanStepMirror(BaseModel):
-    id: str
-    description: str
-
-
-class ObserveSessionPlanRequest(BaseModel):
-    session_id: str
-    goal_id: str
-    plan_id: str
-    scope: str
-    domain: str | None = None
-    steps: list[PlanStepMirror] = Field(default_factory=list)
-
-
-@app.post("/observe/session-plan", dependencies=[Depends(require_internal_token)])
-def observe_session_plan(req: ObserveSessionPlanRequest) -> dict[str, Any]:
-    driver = handle()
-    log.info("observe/session-plan in: session=%s plan=%s goal=%s steps=%d",
-             req.session_id, req.plan_id, req.goal_id, len(req.steps))
-    if not driver.is_reachable():
-        log.warning("observe/session-plan skipped: Neo4j not reachable, this plan will not be mirrored")
-        return {"status": "degraded", "written": 0, "goal_corrected": False}
-    try:
-        # Corrects the ResearchGoal's scope/domain from plan.scope. Does NOT
-        # mirror steps into SubTask nodes (the framework doesn't advance step
-        # status, so a skeleton would stay PENDING and clutter the graph).
-        result = upsert_session_plan(
-            session_id=req.session_id,
-            goal_id=req.goal_id,
-            plan_id=req.plan_id,
-            scope=req.scope,
-            domain=req.domain,
-            steps=[s.model_dump() for s in req.steps],
-        )
-        corrected = bool(result.get("goal_corrected", False))
-        log.info("observe/session-plan done: session=%s plan=%s goal_corrected=%s",
-                 req.session_id, req.plan_id, corrected)
-        return {"status": "healthy", "written": 0, "goal_corrected": corrected}
-    except Exception as exc:  # pragma: no cover - belt-and-suspenders
-        log.exception("observe/session-plan failed: session=%s plan=%s: %s",
-                      req.session_id, req.plan_id, exc)
         raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
 
 

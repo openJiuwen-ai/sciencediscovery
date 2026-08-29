@@ -38,7 +38,7 @@ React 浏览器 UI，构建后由控制 API 作为静态资源托管；开发时
 | `tool.started` / `tool.completed` | 工具条目状态与摘要 |
 | `tool.output` | 工具输出按子流 `streams/:streamId/events` 增量追加，详情按需展开 |
 | `permission.required` | 权限卡片（动作类型：code/connector/artifact_download/directory/host/remote_job） |
-| `plan.proposed` / `subagent.updated` / `remote_job.proposed` | 按 run 归位的活动卡片：渲染在产生它们的 run 的对话块（回放时间线或消息）之后，默认折叠为一行摘要（名称/状态/步骤数/用量），可展开；展开态由 App 层按卡片 id 维护；待批 remote job 默认展开以便审批、可手动收起 |
+| `plan.updated` / `subagent.updated` / `remote_job.proposed` | 按 run 归位的活动卡片：渲染在产生它们的 run 的对话块（回放时间线或消息）之后，默认折叠为一行摘要（名称/状态/步骤数/用量），可展开；展开态由 App 层按卡片 id 维护；待批 remote job 默认展开以便审批、可手动收起 |
 | `artifact_review.completed` | Reviewer Specialist 卡片与 Artifact 审核结果 |
 | `run.completed` / `run.failed` / `run.cancelled` | 时间线收尾、工作区文件刷新、错误横幅/Toast |
 

@@ -36,7 +36,6 @@ import type {
   ScientificArtifact,
   ScientificArtifactVersion,
   Session,
-  SessionPlan,
   Specialist,
   Subagent,
   SystemQuotaSettings,
@@ -86,7 +85,6 @@ export interface Catalog {
   remoteHosts: RemoteHostTarget[];
   remoteJobs: RemoteJob[];
   remoteWorkspaceSyncs: RemoteWorkspaceSyncRecord[];
-  sessionPlans: SessionPlan[];
   sessions: Session[];
   specialists: Specialist[];
   timeoutSettings: SystemTimeoutSettings;
@@ -130,7 +128,6 @@ export function emptyCatalog(
     remoteHosts: [],
     remoteJobs: [],
     remoteWorkspaceSyncs: [],
-    sessionPlans: [],
     sessions: [],
     // Built-in specialists are seeded (read-only) and all enabled by default
     // (no `enabled` key means enabled).

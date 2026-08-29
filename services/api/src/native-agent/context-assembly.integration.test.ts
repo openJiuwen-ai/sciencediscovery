@@ -29,31 +29,21 @@ interface StructuredExample {
   outputRequirements: string[];
 }
 
-function planRepository(sessionId: string): NonNullable<NativeAgentOptions["planRepository"]> {
-  let current: Awaited<ReturnType<NonNullable<NativeAgentOptions["planRepository"]>["propose"]>> | undefined;
+function planStore(_sessionId: string): NonNullable<NativeAgentOptions["planStore"]> {
+  let current: import("@sciencediscovery/schema").PlanSnapshot | undefined;
   return {
-    async abandon() { throw new Error("not called"); },
     async latest() { return current && structuredClone(current); },
-    async propose(input) {
+    async update(input, toolCallId) {
       current = {
-        caveats: input.caveats ?? [],
-        createdAt: "2026-08-25T00:00:00.000Z",
-        feasibilityConfidence: input.feasibilityConfidence,
-        id: "plan-1",
-        mode: "recorded",
-        scope: input.scope,
-        sessionId,
-        state: "recorded",
-        steps: input.steps.map((description, index) => ({
-          description, id: `step-${index + 1}`, status: "pending",
-        })),
+        agentId: "main",
+        ...(input.explanation ? { explanation: input.explanation } : {}),
+        items: structuredClone(input.plan),
+        toolCallId,
+        turn: 1,
         updatedAt: "2026-08-25T00:00:00.000Z",
-        version: 1,
       };
       return structuredClone(current);
     },
-    async revise() { throw new Error("not called"); },
-    async updateStep() { throw new Error("not called"); },
   };
 }
 
@@ -165,7 +155,7 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
     };
     const mainOptions: NativeAgentOptions = {
       ...workspace(root, "main-example"),
-      planRepository: planRepository("main-example"),
+      planStore: planStore("main-example"),
       runContract: JSON.stringify(mainInput),
       skills: [{
         content: "Search, screen, extract, and cite the selected literature before synthesis.",
@@ -195,10 +185,9 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
       prompt: "Execute the structured research contract.",
       turns: [
         toolTurn("read_skill", { skillId: "literature-review" }),
-        toolTurn("propose_plan", {
-          feasibilityConfidence: "high",
-          scope: "TP53 resistance evidence review",
-          steps: ["search", "screen", "synthesize"],
+        toolTurn("update_plan", {
+          explanation: "TP53 resistance evidence review",
+          plan: ["search", "screen", "synthesize"].map((step) => ({ status: "pending", step })),
         }),
         toolTurn("tool_search", { query: "select:mcp__biomed__search" }),
         textTurn("Structured research context verified."),
@@ -210,22 +199,21 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
     assert.doesNotMatch(mainCalls[1]!.systemPrompt, /Search, screen, extract/u);
     assert.match(String(mainCalls[1]!.history.at(-1)?.content), /active_skills/u);
     assert.match(String(mainCalls[1]!.history.at(-1)?.content), /instructionsVisibleInHistory":true/u);
-    const thirdTurnContext = mainCalls[2]!.history.map((item) => String(item.content ?? "")).join("\n");
-    assert.match(thirdTurnContext, /task_state/u);
+    const thirdTurnContext = mainCalls[2]!.systemPrompt;
+    assert.match(thirdTurnContext, /plan_state/u);
     assert.match(thirdTurnContext, /TP53 resistance evidence review/u);
     assert.equal(mainCalls[0]!.tools.some((tool) => tool.name === "mcp__biomed__search"), false);
     assert.equal(mainCalls[3]!.tools.some((tool) => tool.name === "mcp__biomed__search"), true);
 
     const comparisonLegacyCalls = await runExample({
       mode: "legacy",
-      options: { ...mainOptions, planRepository: planRepository("main-example"), sessionId: "main-example-legacy" },
+      options: { ...mainOptions, planStore: planStore("main-example"), sessionId: "main-example-legacy" },
       prompt: "Execute the structured research contract.",
       turns: [
         toolTurn("read_skill", { skillId: "literature-review" }),
-        toolTurn("propose_plan", {
-          feasibilityConfidence: "high",
-          scope: "TP53 resistance evidence review",
-          steps: ["search", "screen", "synthesize"],
+        toolTurn("update_plan", {
+          explanation: "TP53 resistance evidence review",
+          plan: ["search", "screen", "synthesize"].map((step) => ({ status: "pending", step })),
         }),
         toolTurn("tool_search", { query: "select:mcp__biomed__search" }),
         textTurn("Legacy comparison captured."),
@@ -238,8 +226,8 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
     }
     assert.doesNotMatch(comparisonLegacyCalls[1]!.history.map((item) => item.content).join("\n"), /active_skills/u);
     assert.match(mainCalls[1]!.history.map((item) => item.content).join("\n"), /active_skills/u);
-    assert.doesNotMatch(comparisonLegacyCalls[2]!.history.map((item) => item.content).join("\n"), /task_state/u);
-    assert.match(mainCalls[2]!.history.map((item) => item.content).join("\n"), /task_state/u);
+    assert.doesNotMatch(comparisonLegacyCalls[2]!.systemPrompt, /plan_state/u);
+    assert.match(mainCalls[2]!.systemPrompt, /plan_state/u);
     assert.equal(comparisonLegacyCalls[3]!.tools.some((tool) => tool.name === "mcp__biomed__search"), true);
     assert.equal(mainCalls[3]!.tools.some((tool) => tool.name === "mcp__biomed__search"), true);
 
@@ -338,8 +326,8 @@ test("dynamic durable channels retain plan and skill activation after source res
         id: "historical-plan",
         type: "function",
         function: {
-          name: "propose_plan",
-          arguments: JSON.stringify({ feasibilityConfidence: "high", scope: "durable TP53 review", steps: ["search"] }),
+          name: "update_plan",
+          arguments: JSON.stringify({ explanation: "durable TP53 review", plan: [{ status: "pending", step: "search" }] }),
         },
       }],
     },
@@ -352,8 +340,8 @@ test("dynamic durable channels retain plan and skill activation after source res
     {
       role: "tool",
       tool_call_id: "historical-plan",
-      name: "propose_plan",
-      content: "{\"scope\":\"durable TP53 review\",\"steps\":[{\"description\":\"search\"}]}",
+      name: "update_plan",
+      content: "{\"explanation\":\"durable TP53 review\",\"items\":[{\"status\":\"pending\",\"step\":\"search\"}]}",
     },
   ];
   for (let index = 0; index < 28; index += 1) {
@@ -374,10 +362,16 @@ test("dynamic durable channels retain plan and skill activation after source res
   };
   const restore = setModelTurnStreamerForTest(streamer);
   try {
+    const durablePlanStore = planStore("durable-compaction-example");
+    await durablePlanStore.update({
+      explanation: "durable TP53 review",
+      plan: [{ status: "pending", step: "search" }],
+    }, "historical-plan");
     const agent = createNativeAgent({
       ...workspace(root, "durable-compaction-example"),
       contextAssemblyMode: "dynamic",
       gatewayHistory,
+      planStore: durablePlanStore,
       skills: [{
         content: "FULL-SKILL-BODY",
         description: "Systematic literature review",
@@ -402,7 +396,7 @@ test("dynamic durable channels retain plan and skill activation after source res
   assert.match(joined, /channel="active_skills"/u);
   assert.match(joined, /literature-review/u);
   assert.match(joined, /instructionsVisibleInHistory":false/u);
-  assert.match(joined, /channel="task_state"/u);
-  assert.match(joined, /durable TP53 review/u);
+  assert.match(input.systemPrompt, /plan_state/u);
+  assert.match(input.systemPrompt, /durable TP53 review/u);
   assert.doesNotMatch(input.systemPrompt, /FULL-SKILL-BODY/u);
 });

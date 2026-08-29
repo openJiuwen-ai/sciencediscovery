@@ -87,10 +87,19 @@ export interface ToolDispatchResult<TMessage extends RuntimeMessage> {
   message: TMessage;
 }
 
-export interface ToolDispatcher<TMessage extends RuntimeMessage> {
+export interface PreparedToolBatch<TMessage extends RuntimeMessage> {
   /** Fail-closed scheduling classification; only an explicit parallel result overlaps. */
   executionMode?(call: RuntimeToolCall): ToolExecutionMode;
   execute(call: RuntimeToolCall, signal: AbortSignal): Promise<ToolDispatchResult<TMessage>>;
+}
+
+export interface ToolDispatcher<TMessage extends RuntimeMessage> extends PreparedToolBatch<TMessage> {
+  /**
+   * Optional per-model-step policy seam. It may replace individual calls with
+   * deterministic no-op results, but the Runtime still owns bounded scheduling,
+   * ordering, cancellation, and durable Step boundaries.
+   */
+  prepareBatch?(calls: readonly RuntimeToolCall[]): PreparedToolBatch<TMessage>;
 }
 
 export type AgentLoopPhase =
@@ -315,10 +324,12 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         this.transition("executing_tools", turn);
         // The scheduler drains every started writer on failure/cancellation.
         // Only a successfully settled batch may reach the durable Step boundary.
+        const batch = this.options.toolDispatcher.prepareBatch?.(modelTurn.toolCalls)
+          ?? this.options.toolDispatcher;
         const results = await scheduleToolCalls({
           calls: modelTurn.toolCalls,
-          classify: (call) => this.options.toolDispatcher.executionMode?.(call) ?? "exclusive",
-          execute: (call) => this.options.toolDispatcher.execute(call, signal),
+          classify: (call) => batch.executionMode?.(call) ?? "exclusive",
+          execute: (call) => batch.execute(call, signal),
           maxParallelToolCalls: this.options.maxParallelToolCalls ?? DEFAULT_MAX_PARALLEL_TOOL_CALLS,
           onResult: (call, result) => {
             this.state.history.push(result.message);

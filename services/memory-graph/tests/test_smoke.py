@@ -302,46 +302,6 @@ def test_observe_session_first_message_rejects_missing_token(client: TestClient)
     assert response.status_code == 401
 
 
-# --- observeSessionPlanProposed (ToolCall DAG mirror) ------------------------
-
-def test_observe_session_plan_degrades_without_neo4j(client: TestClient) -> None:
-    response = client.post(
-        "/observe/session-plan",
-        json={
-            "session_id": "sess-plan-1",
-            "goal_id": "goal:session:sess-plan-1",
-            "plan_id": "plan-1",
-            "scope": "TP53 突变频率研究",
-            "domain": "Biology",
-            "steps": [
-                {"id": "s1", "description": "检索 TP53 肺癌文献"},
-                {"id": "s2", "description": "整合为综合摘要"},
-            ],
-        },
-        headers={"authorization": "Bearer test-token"},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "degraded"
-    assert body["written"] == 0
-    assert body["goal_corrected"] is False
-
-
-def test_observe_session_plan_rejects_missing_token(client: TestClient) -> None:
-    response = client.post(
-        "/observe/session-plan",
-        json={
-            "session_id": "sess-plan-2",
-            "goal_id": "goal:session:sess-plan-2",
-            "plan_id": "plan-2",
-            "scope": "x",
-            "steps": [],
-        },
-        # no auth header
-    )
-    assert response.status_code == 401
-
-
 # --- query/match -----------------------------------------------------------
 
 def test_match_rejects_bad_mode(client: TestClient) -> None:
@@ -750,48 +710,6 @@ def test_goal_id_deterministic_dedup(live_client: TestClient) -> None:
                           headers={"authorization": "Bearer test-token"}).json()
     goals = [n for n in sub["nodes"] if n["label"] == "ResearchGoal"]
     assert len(goals) == 1
-
-
-@needs_neo4j
-def test_plan_corrects_goal_and_writes_no_skeleton_subtasks(live_client: TestClient) -> None:
-    """A recorded plan corrects the ResearchGoal from plan.scope and does NOT
-    write a step-skeleton ToolCall chain (the framework doesn't advance step
-    status, so a skeleton would stay PENDING and clutter the graph)."""
-    headers = {"authorization": "Bearer test-token"}
-    # First seed the goal from a first-message fallback (wrong domain).
-    live_client.post("/observe/session-first-message", json={
-        "session_id": "sess-mirror",
-        "goal_id": "goal:session:sess-mirror",
-        "core_objective": "analyze sales.csv",
-        "domain": "DataAnalysis",
-        "topic_scope": [],
-        "created_at": "2026-07-28T00:00:00Z",
-    }, headers=headers)
-    payload = {
-        "session_id": "sess-mirror",
-        "goal_id": "goal:session:sess-mirror",
-        "plan_id": "plan-mirror-1",
-        "scope": "TP53 study",
-        "domain": "Biology",
-        "steps": [
-            {"id": "m1", "description": "search literature"},
-            {"id": "m2", "description": "summarize"},
-        ],
-    }
-    live_client.post("/observe/session-plan", json=payload, headers=headers)
-    live_client.post("/observe/session-plan", json=payload, headers=headers)
-    sub = live_client.get("/subgraph", params={"session_id": "sess-mirror"},
-                          headers=headers).json()
-    # No plan-derived ToolCall skeletons written.
-    subtasks = [n for n in sub["nodes"] if n["label"] == "ToolCall"]
-    assert subtasks == []
-    # Goal corrected: core_objective overwritten by plan.scope, domain by plan,
-    # method tagged corrected_by_plan (added once, not piled up by re-mirror).
-    goal = next(n for n in sub["nodes"] if n["label"] == "ResearchGoal")
-    extra = goal["extra"]
-    assert extra["core_objective"] == "TP53 study"
-    assert extra["domain"] == "Biology"
-    assert extra["method"].count("corrected_by_plan") == 1
 
 
 @needs_neo4j
@@ -3426,4 +3344,3 @@ def test_execution_input_source_file_builds_input_edge(live_client: TestClient) 
     assert len(inputs) == 1
     assert inputs[0]["source"] == fid
     assert inputs[0]["target"] == "exec-sf-read"
-

@@ -130,8 +130,6 @@ import type {
   RemoteRunnerStatus,
   RemoteWorkspaceSyncRequest,
   PromptManifest,
-  ProposePlanRequest,
-  RevisePlanRequest,
   SubagentStep,
   UpdateSpecialistRequest,
 } from "@sciencediscovery/schema";
@@ -164,7 +162,7 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { inferDomain, mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
+import { mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
@@ -1806,51 +1804,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
-      const sessionPlansMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/plans$/);
-      if (sessionPlansMatch && request.method === "GET") {
-        sendJson(response, 200, store.listSessionPlans(sessionPlansMatch[1]!));
-        return;
-      }
-
-      if (sessionPlansMatch && request.method === "POST") {
-        const plan = await store.proposeSessionPlan(
-          sessionPlansMatch[1]!,
-          await readJson<ProposePlanRequest>(request),
-        );
-        // Correct the goal's domain/scope from plan.scope, same as the
-        // streaming propose path. Never blocks the response.
-        memoryGraphSink.observeSessionPlan({
-          sessionId: sessionPlansMatch[1]!,
-          goalId: `goal:session:${sessionPlansMatch[1]!}`,
-          planId: plan.id,
-          scope: plan.scope,
-          domain: inferDomain(plan.scope),
-          steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
-        });
-        sendJson(response, 201, plan);
-        return;
-      }
-      const sessionPlanMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/plans\/([^/]+)$/);
-      if (sessionPlanMatch && request.method === "PUT") {
-        const plan = await store.reviseSessionPlan(
-          sessionPlanMatch[1]!,
-          sessionPlanMatch[2]!,
-          await readJson<RevisePlanRequest>(request),
-        );
-        // Re-mirror a revised plan (steps may have changed). Idempotent: MERGE
-        // on step.id updates the objective without rebuilding the chain. Never
-        // blocks the response.
-        memoryGraphSink.observeSessionPlan({
-          sessionId: sessionPlanMatch[1]!,
-          goalId: `goal:session:${sessionPlanMatch[1]!}`,
-          planId: plan.id,
-          scope: plan.scope,
-          domain: inferDomain(plan.scope),
-          steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
-        });
-        sendJson(response, 200, plan);
-        return;
-      }
       const sessionSubagentsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents$/);
       if (sessionSubagentsMatch && request.method === "GET") {
         sendJson(response, 200, store.listSubagents(sessionSubagentsMatch[1]!));

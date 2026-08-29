@@ -3780,7 +3780,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.equal(subagentToolNames.some((name) => name.startsWith("mcp__")), false);
   assert.equal(subagentToolNames.includes("invoke_connector"), false);
   assert.equal(subagentRequest.tools?.some((tool) => tool.function?.name === "task"), false);
-  assert.equal(subagentRequest.tools?.some((tool) => tool.function?.name === "propose_plan"), false);
+  assert.equal(subagentRequest.tools?.some((tool) => tool.function?.name === "update_plan"), true);
   assert.equal(subagentRequest.tools?.some((tool) => tool.function?.name === "propose_remote_job"), false);
   const subagentSystemPrompt = subagentRequest.messages?.find((message) => message.role === "system")?.content ?? "";
   assert.doesNotMatch(subagentSystemPrompt, /<subagent_system>/);
@@ -3790,13 +3790,12 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.match(subagentSystemPrompt, /<name>code-engineer<\/name>/);
   assert.match(subagentSystemPrompt, /<name>structure-pocket-inspection<\/name>/);
   assert.doesNotMatch(subagentSystemPrompt, /# Code Engineer/);
-  assert.doesNotMatch(subagentSystemPrompt, /Plan governance mode/);
   const subagentUserPrompt = subagentRequest.messages?.find((message) => message.role === "user")?.content ?? "";
   assert.match(subagentUserPrompt, new RegExp(`Workspace ID: ${subagents.body[0]?.handoff?.workspaceId}`));
   assert.match(subagentUserPrompt, /parent Workspace is not mounted or readable/);
   assert.match(subagentUserPrompt, /Handoff manifest visible inside your workspace: handoff\.json/);
   assert.ok(fixture.requests.some((request) => request.tools?.some((tool) => tool.function?.name === "task")));
-  assert.equal(leadRequest.tools?.some((tool) => tool.function?.name === "propose_plan"), true);
+  assert.equal(leadRequest.tools?.some((tool) => tool.function?.name === "update_plan"), true);
 
   const parentResultRequest = fixture.requests.find((request) =>
     request.messages?.some((message) => message.role === "tool"));

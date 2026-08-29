@@ -77,23 +77,21 @@ per-turn inputs are generated as
 After `read_skill` completes, turn two demonstrates the central behavioral
 difference: dynamic input contains an `active_skills` data message with the
 frozen Skill reference while the full body still appears exactly once in its
-ordinary tool result. After `propose_plan`, turn three adds `task_state` as
-lower-authority runtime data. Legacy adds neither projection.
+ordinary tool result. After `update_plan`, turn three adds the current
+`plan_state` as a protected system section. Legacy adds neither projection.
 
 The recorder currently observes the following exact production-pipeline
 inputs (the model transport alone is mocked):
 
-| Turn | Legacy input | Dynamic input | Governed tools |
-| --- | --- | --- | ---: |
-| 1 | Prompt 3671 chars; 1 history message | Prompt 3664 chars; 1 history message; no durable channel yet | 8 |
-| 2 | 3 history messages | 4 history messages; `active_skills` | 8 |
-| 3 | 5 history messages | 7 history messages; `task_state`, `active_skills` | 8 |
-| 4 | 7 history messages | 9 history messages; `task_state`, `active_skills` | 9 |
+| Turn | Legacy input | Dynamic input |
+| --- | --- | --- |
+| 1 | User request and ordinary system prompt | Same task input; no runtime state exists yet |
+| 2 | Ordinary `read_skill` result | Same result plus bounded `active_skills` data |
+| 3 | Ordinary `update_plan` result | Same history plus protected `plan_state` and `active_skills` data |
+| 4 | Promoted MCP schema and prior history | Same schema plus the active Skill and Plan projections |
 
-The seven-character Prompt difference comes from deterministic section
-rendering. The meaningful per-turn difference is the bounded hidden runtime
-data; canonical user/assistant/tool history and ToolRegistry visibility remain
-the same.
+Canonical user/assistant/tool history and ToolRegistry visibility remain the
+same; dynamic assembly adds invocation-local projections only.
 
 ### What changes from the model's point of view
 
@@ -106,7 +104,7 @@ The actual turn-by-turn difference is:
 | --- | --- | --- | --- |
 | 1: initial request | User request, RunContract, Skill catalog | Nothing; no runtime state exists yet | Both paths should choose the same first action. |
 | 2: after `read_skill` | The complete Skill body in the ordinary tool result | Frozen Skill id, version, revision, hash, and `instructionsVisibleInHistory=true` | No immediate behavioral change while the body is recent; Dynamic now knows exactly which frozen Skill is active. |
-| 3: after `propose_plan` | The ordinary Plan tool result | A typed `task_state` snapshot plus the active Skill reference | Again deliberately redundant while history is short; the state can survive later history compaction. |
+| 3: after `update_plan` | The ordinary Plan tool result | A typed protected `plan_state` section plus the active Skill reference | Again deliberately redundant while history is short; the state can survive later history compaction. |
 | 4: after `tool_search` | The promoted MCP schema and prior history | The same promoted schema plus the two durable channels | Tool availability stays governed by ToolRegistry; Dynamic does not invent or prematurely expose a tool. |
 
 These are excerpts from the actual `ProviderModelClient` recorder input, not
@@ -119,15 +117,13 @@ The following values may contain model, tool, subagent, or external text. They a
 </runtime_context_data>
 ```
 
-Turn three additionally adds the recorded Plan under `channel="task_state"`,
-including `scope="TP53 resistance evidence review"`, the three steps
-`search/screen/synthesize`, their current status, and the originating
-`callId="call-propose_plan"`. Both messages are hidden from the UI and exist
-only in the invocation sent to the model; they do not become new Session
-history.
+Turn three additionally adds the current Plan under `<plan_state>`, including
+`explanation="TP53 resistance evidence review"` and the three plan items
+`search/screen/synthesize` with their current status. This section exists only
+in the invocation sent to the model; it does not become new Session history.
 
 The practical difference appears after compaction. In the long-history test,
-the old `read_skill` body and `propose_plan` result are no longer in the recent
+the old `read_skill` body and `update_plan` result are no longer in the recent
 history selected for the model:
 
 ```text
@@ -135,7 +131,7 @@ Compacted canonical recent history before dynamic additions:
   ... newest complete rounds only; no old Skill body; no old Plan result
 
 Dynamic invocation additions:
-  task_state    -> retained structured Plan
+  plan_state    -> retained structured Plan
   active_skills -> retained literature-review@1.0.0 revision 1
                    instructionsVisibleInHistory=false
 ```

@@ -494,11 +494,24 @@ test("SessionStore appends run events losslessly and survives reload", async (co
     turn: 1,
     type: "assistant.thinking.delta",
   });
+  const plan = await store.appendSessionRunEvent(session.id, run.id, {
+    plan: {
+      agentId: "main",
+      explanation: "Persist this snapshot",
+      items: [{ status: "in_progress", step: "Inspect data" }],
+      toolCallId: "call-plan",
+      turn: 1,
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    },
+    type: "plan.updated",
+  });
   assert.equal(first.sequence, 1);
   assert.equal(second.sequence, 2);
+  assert.equal(plan.sequence, 3);
   assert.deepEqual((await store.listSessionRunEvents(session.id, run.id)).map((record) => record.event), [
     { delta: "Inspect ", turn: 1, type: "assistant.thinking.delta" },
     { delta: "the data.", turn: 1, type: "assistant.thinking.delta" },
+    plan.event,
   ], "deltas persist exactly as they were emitted");
   assert.equal((await store.listSessionRunEvents(session.id, run.id, 1))[0]?.sequence, 2);
 
@@ -511,7 +524,7 @@ test("SessionStore appends run events losslessly and survives reload", async (co
     await store.appendSessionRunEvent(session.id, run.id, { phase: "thinking", turn, type: "agent.phase" });
   }
   const retained = await store.listSessionRunEvents(session.id, run.id);
-  assert.equal(retained.length, 1_203, "no record cap drops history");
+  assert.equal(retained.length, 1_204, "no record cap drops history");
   assert.ok(retained.every((record) => record.event.type !== "run.history.truncated"));
 
   const reopened = new SessionStore(tempRoot);
@@ -2242,81 +2255,6 @@ test("SessionStore recovers uncommitted trash and removes committed orphan trash
   assert.equal(reopened.getSession("missing-session"), undefined);
 });
 
-test("SessionStore records plans without coupling them to approval policy", async (context) => {
-  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-plans-${Date.now()}-${process.pid}`);
-  await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
-
-  const store = new SessionStore(tempRoot);
-  await store.load();
-  const model = await store.createModel({
-    apiToken: "plan-test-token",
-    baseUrl: "https://models.example.test/v1",
-    model: "science-model",
-    name: "Plan test model",
-  });
-  const project = await store.createProject("Planning", { modelId: model.id, reviewModelId: model.id });
-  const manual = await store.createSession(project.id, "Manual planning", {}, { approvalMode: "ask_for_dangerous" });
-  const proposed = await store.proposeSessionPlan(manual.id, {
-    caveats: ["Dataset coverage must be checked"],
-    feasibilityConfidence: "medium",
-    scope: "Analyze the study in two phases",
-    steps: ["Inspect inputs", "Run analysis"],
-  });
-  assert.equal(proposed.state, "recorded");
-  assert.doesNotThrow(() => store.assertSessionWritable(manual.id));
-
-  const revised = await store.reviseSessionPlan(manual.id, proposed.id, {
-    caveats: [],
-    expectedVersion: proposed.version,
-    feasibilityConfidence: "high",
-    scope: "Analyze the study with an explicit validation phase",
-    steps: ["Inspect inputs", "Run analysis", "Validate findings"],
-  });
-  assert.equal(revised.version, 2);
-  const started = await store.updateSessionPlanStep(manual.id, {
-    expectedVersion: revised.version,
-    planId: revised.id,
-    status: "in_progress",
-    stepId: revised.steps[0]!.id,
-  });
-  assert.equal(started.steps[0]?.status, "in_progress");
-  let progressing = started;
-  for (const step of started.steps) {
-    progressing = await store.updateSessionPlanStep(manual.id, {
-      expectedVersion: progressing.version,
-      planId: progressing.id,
-      status: "completed",
-      stepId: step.id,
-    });
-  }
-  assert.equal(progressing.state, "completed");
-  await assert.rejects(
-    store.updateSessionPlanStep(manual.id, {
-      expectedVersion: progressing.version,
-      planId: progressing.id,
-      status: "pending",
-      stepId: progressing.steps[0]!.id,
-    }),
-    /Only a recorded plan/u,
-  );
-  const automatic = await store.createSession(project.id, "Automatic planning", {}, { approvalMode: "always_allow" });
-  const autoPlan = await store.proposeSessionPlan(automatic.id, {
-    feasibilityConfidence: "high",
-    scope: "Run a bounded descriptive analysis",
-    steps: ["Summarize inputs", "Write results"],
-  });
-  assert.equal(autoPlan.state, "recorded");
-  const abandoned = await store.abandonSessionPlan(automatic.id, {
-    expectedVersion: autoPlan.version,
-    planId: autoPlan.id,
-    reason: "The user changed the objective",
-  });
-  assert.equal(abandoned.state, "abandoned");
-  assert.equal(abandoned.abandonmentReason, "The user changed the objective");
-  assert.doesNotThrow(() => store.assertSessionWritable(automatic.id));
-});
-
 test("SessionStore persists specialists and isolated subagents", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-specialists-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
@@ -3046,11 +2984,6 @@ test("SessionStore auto-submits remote jobs and keeps manual jobs independently 
   await assert.rejects(store.updateRemoteJob(changedCard), /approval card is immutable/);
 
   await store.setApprovalMode(session.id, "ask_for_dangerous");
-  const pendingPlan = await store.proposeSessionPlan(session.id, {
-    feasibilityConfidence: "medium",
-    scope: "Switch to manual governance before another remote run",
-    steps: ["Inspect remote data", "Run batch job"],
-  });
   const blocked = await store.createRemoteJob(session.id, {
     command: "hostname",
     hostId: host.id,
@@ -3065,7 +2998,6 @@ test("SessionStore auto-submits remote jobs and keeps manual jobs independently 
   );
   assert.equal(approved.state, "approved");
   assert.ok(approved.permissionAuthorizationId);
-  assert.equal(pendingPlan.state, "recorded");
 });
 
 // Regression coverage: [evidence1]/[artifact1] alias tokens in a final assistant

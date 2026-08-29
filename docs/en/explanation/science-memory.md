@@ -65,7 +65,6 @@ The task chain needs no explicit LLM declaration; the Node API mirrors it fire-a
 
 1. **File upload** → `MemoryGraphSink.observeUploadFile` → sidecar `POST /observe/upload-file` → `upsert_source_file`: MERGE `SourceFile` (deterministic `file_id`) + build `SourceFile -[:feeds]-> ResearchGoal`. Mirrored the moment upload completes, fire-and-forget (an unreachable graph = no-op; the upload itself is unaffected). The `ResearchGoal` may not exist yet (a file can be uploaded before the first message); in that case **no placeholder goal node is created** — the file stays dangling (node present, no `feeds` edge) until `upsert_session_first_message` MERGEs the real goal and then attaches every still-dangling SourceFile of the session. Re-uploading the same file hits the same `file_id` and creates no duplicate node.
 2. **First user message** → `MemoryGraphSink.observeSessionFirstMessage` → sidecar `POST /observe/session-first-message` → writes `Session` + `ResearchGoal` + `has_goal`.
-3. **Plan proposed** → `observeSessionPlan` → `POST /observe/session-plan` → uses `plan.scope` to **refine** the `ResearchGoal`'s `core_objective`/`domain` (does not mirror plan steps as ToolCalls, to avoid PENDING skeleton pollution).
 4. **Each code execution completes** → `observeExecution` → `POST /observe/execution` → `upsert_execution`:
    - MERGE a `ToolCall` (`task_type='code_execution'`) + `Code`, build `ToolCall -[:produces]-> Code`;
    - execution diff only records Derivation and CAS; not-yet-declared files are not written to the graph as `produced_artifacts`;
@@ -171,7 +170,6 @@ ScienceMemory adds three kinds of HTTP interfaces: **sidecar native routes** (Py
 | `POST /observe/mcp-search` | Mirrors a literature search → ToolCall + Papers + produces |
 | `POST /observe/subagent` | Mirrors a subagent's lifecycle → a scope `Task` (`task_type='subagent'`); its child executions/searches hang off the scope via `contains` + `next` |
 | `POST /observe/session-first-message` | Writes Session + ResearchGoal + has_goal |
-| `POST /observe/session-plan` | Refines ResearchGoal with plan.scope |
 | `POST /persist/evidence` | CREATE Evidence + extracts→Paper (Paper missing → 422 `source_paper_not_found`) |
 | `POST /persist/claim` | CREATE Claim + supports (Evidence/Artifact→Claim) + optional produces + optional stated_in; returns `chip_map`. No supporting target → 422 `no_cites_target` (triggered before the degrade branch, reported even if the graph is down) |
 | `POST /persist/stated_in` | MERGE stated_in (Claim→report Artifact); the Artifact may not be mirrored yet, polls and waits up to 10×0.3s |

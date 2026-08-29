@@ -34,7 +34,7 @@ test("main and subagent profiles encode policy symmetrically without live runtim
   const subagent = createSubagentProfile({
     ...shared,
     allowedToolNames: ["read_file"],
-    deniedToolNames: ["task", "propose_plan"],
+    deniedToolNames: ["task", "propose_remote_job"],
     maxModelTurns: DEFAULT_SUBAGENT_MAX_TURNS,
     presetId: "general-purpose",
   });
@@ -46,7 +46,7 @@ test("main and subagent profiles encode policy symmetrically without live runtim
   assert.deepEqual(subagent.budget, { maxModelTurns: DEFAULT_SUBAGENT_MAX_TURNS, runTimeoutMs: 30_000 });
   assert.deepEqual(subagent.toolPolicy, {
     allowedToolNames: ["read_file"],
-    deniedToolNames: ["task", "propose_plan"],
+    deniedToolNames: ["task", "propose_remote_job"],
   });
 
   for (const profile of [main, subagent]) {
@@ -75,7 +75,7 @@ test("profile builders detach mutable resource and policy arrays", () => {
     workspaceRoot: "/workspace",
   });
   connectorIds.push("arxiv");
-  deniedToolNames.push("propose_plan");
+  deniedToolNames.push("update_plan");
   skills[0]!.id = "changed";
 
   assert.deepEqual(profile.resources.connectorIds, ["pubmed"]);

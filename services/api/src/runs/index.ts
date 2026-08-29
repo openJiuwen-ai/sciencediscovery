@@ -100,11 +100,11 @@ import type {
   RegisterRemoteHostRequest,
   PromptManifest,
   PromptSkillLibraryRef,
-  ProposePlanRequest,
-  RevisePlanRequest,
+  PlanSnapshot,
   SubagentStep,
   UpdateSpecialistRequest,
 } from "@sciencediscovery/schema";
+import type { PlanStore } from "@sciencediscovery/plan";
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
   constrainCatalogThinking,
@@ -776,6 +776,27 @@ async function executeAgentRun(
   let lastAgentUsage = unreportedModelUsage();
   let assistantModelContext: AgentHistoryMessage[] = [];
   let turnNumber = 0;
+  const plansByAgent = new Map<string, PlanSnapshot>();
+  const createRunPlanStore = (agentId: string, currentTurn = () => turnNumber): PlanStore => ({
+    latest: async () => {
+      const plan = plansByAgent.get(agentId);
+      return plan ? structuredClone(plan) : undefined;
+    },
+    update: async (input, toolCallId, signal) => {
+      if (signal?.aborted) throw signal.reason;
+      const snapshot: PlanSnapshot = {
+        agentId,
+        ...(input.explanation ? { explanation: input.explanation } : {}),
+        items: structuredClone(input.plan),
+        toolCallId,
+        turn: currentTurn(),
+        updatedAt: new Date().toISOString(),
+      };
+      await emit({ plan: snapshot, type: "plan.updated" });
+      plansByAgent.set(agentId, snapshot);
+      return structuredClone(snapshot);
+    },
+  });
   const observedTimeouts = new Map<string, { kind: TimeoutKind; reason: string; timeoutMs: number }>();
   const persistedTimeouts = new Set<string>();
   const rememberTimeout = (timeout: { kind: TimeoutKind; reason: string; timeoutMs: number } | undefined) => {
@@ -968,18 +989,6 @@ async function executeAgentRun(
       };
     },
   });
-  const publishPlan = async (plan: import("@sciencediscovery/schema").SessionPlan, observeGoal = false) => {
-    await emit({ plan, type: "plan.proposed" });
-    if (!observeGoal) return;
-    memoryGraphSink.observeSessionPlan({
-      sessionId,
-      goalId: `goal:session:${sessionId}`,
-      planId: plan.id,
-      scope: plan.scope,
-      domain: inferDomain(plan.scope),
-      steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
-    });
-  };
   const agentOptions: WorkspaceAgentOptions = {
     config: agentConfig,
     createSkill: async (input) => {
@@ -1655,6 +1664,7 @@ async function executeAgentRun(
           bindings: {
             abortSignal: childExecution.abortSignal,
             observer: observeSubagentEvent,
+            planStore: createRunPlanStore(`subagent:${subagent.id}`, () => subagent.turnCount),
             readVersioningAuthorities: versioningAuthorities(store, sessionId, runId),
             runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
             workspace: subagentWorkspace,
@@ -1862,33 +1872,8 @@ async function executeAgentRun(
     bindings: {
       abortSignal: requestExecution.abortSignal,
       observer: observeMainEvent,
+      planStore: createRunPlanStore("main"),
       readVersioningAuthorities: versioningAuthorities(store, sessionId, runId),
-      planRepository: {
-        abandon: async (input) => {
-          const plan = await store.abandonSessionPlan(sessionId, input);
-          await publishPlan(plan);
-          return plan;
-        },
-        latest: async () => store.latestSessionPlan(sessionId, runId),
-        propose: async (input) => {
-          if (store.latestSessionPlan(sessionId, runId)) throw new Error("A plan already exists for this run; call revise_plan instead");
-          const plan = await store.proposeSessionPlan(sessionId, input, runId);
-          // Let plan.scope correct the goal's fallback domain. This remains
-          // non-blocking when the optional graph sidecar is unavailable.
-          await publishPlan(plan, true);
-          return plan;
-        },
-        revise: async (planId, input) => {
-          const plan = await store.reviseSessionPlan(sessionId, planId, input);
-          await publishPlan(plan, true);
-          return plan;
-        },
-        updateStep: async (input) => {
-          const plan = await store.updateSessionPlanStep(sessionId, input);
-          await publishPlan(plan);
-          return plan;
-        },
-      },
       runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
       workspace: agentOptions,
     },

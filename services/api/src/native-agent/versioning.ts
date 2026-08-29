@@ -78,7 +78,7 @@ export function harnessBuildDigest(): Promise<AgentStateRef["digest"]> {
         }
       }
     };
-    const packages = ["runtime-core", "context", "model", "tools", "workspace", "plan-mode", "evolve", "orchestration"];
+    const packages = ["runtime-core", "context", "model", "tools", "workspace", "plan", "evolve", "orchestration"];
     for (const name of packages) {
       const root = dirname(fileURLToPath(import.meta.resolve(`@sciencediscovery/${name}`)));
       hash.update(name); await walk(root, root);

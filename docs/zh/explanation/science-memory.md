@@ -65,7 +65,6 @@
 
 1. **上传文件** → `MemoryGraphSink.observeUploadFile` → sidecar `POST /observe/upload-file` → `upsert_source_file`：MERGE `SourceFile`（`file_id` 确定性）+ 建 `SourceFile -[:feeds]-> ResearchGoal`。上传完成即镜像，fire-and-forget（图谱不可达 = no-op，上传本身不受影响）。`ResearchGoal` 可能尚未存在（上传可能早于首条消息），此时**不建占位 goal 节点**——文件先悬空（有节点、无 `feeds` 边），等首条消息时由 `upsert_session_first_message` MERGE 真实 goal 后统一补挂本会话所有悬空 SourceFile。重传同名文件 MERGE 命中同一 `file_id`，不造重复节点。
 2. **首条用户消息** → `MemoryGraphSink.observeSessionFirstMessage` → sidecar `POST /observe/session-first-message` → 写 `Session` + `ResearchGoal` + `has_goal`。
-3. **提出 plan** → `observeSessionPlan` → `POST /observe/session-plan` → 用 `plan.scope` **修正** `ResearchGoal` 的 `core_objective`/`domain`（不镜像 plan steps 成 ToolCall，避免 PENDING 骨架污染）。
 4. **每次代码执行完成** → `observeExecution` → `POST /observe/execution` → `upsert_execution`：
    - MERGE 一个 `ToolCall`（`task_type='code_execution'`）+ `Code`，建 `ToolCall -[:produces]-> Code`；
    - 执行 diff 只记录 Derivation 与 CAS，不把尚未声明的文件作为 `produced_artifacts` 写图；
@@ -171,7 +170,6 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 | `POST /observe/mcp-search` | 镜像一次文献检索 → ToolCall + Papers + produces |
 | `POST /observe/subagent` | 镜像 subagent 生命周期 → 一个 scope `Task`（`task_type='subagent'`）；其子执行/检索通过 `contains` + `next` 挂到 scope 下 |
 | `POST /observe/session-first-message` | 写 Session + ResearchGoal + has_goal |
-| `POST /observe/session-plan` | 用 plan.scope 修正 ResearchGoal |
 | `POST /persist/evidence` | CREATE Evidence + extracts→Paper（Paper 不存在 → 422 `source_paper_not_found`） |
 | `POST /persist/claim` | CREATE Claim + supports（Evidence/Artifact→Claim）+ 可选 produces + 可选 stated_in；返回 `chip_map`。无支撑目标 → 422 `no_cites_target`（在降级分支前触发，图挂了也报） |
 | `POST /persist/stated_in` | MERGE stated_in（Claim→报告 Artifact）；Artifact 可能尚未镜像，轮询等待最多 10×0.3s |

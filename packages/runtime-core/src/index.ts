@@ -27,6 +27,7 @@ export {
   type ModelClient,
   type ModelClientObserver,
   type ModelTurn,
+  type PreparedToolBatch,
   type RunEvent,
   type RunEventSink,
   type RunTransition,

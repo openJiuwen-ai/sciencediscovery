@@ -323,7 +323,7 @@ importers:
         specifier: 26.1.1
         version: 26.1.1
 
-  packages/plan-mode:
+  packages/plan:
     dependencies:
       '@sciencediscovery/context':
         specifier: workspace:*
@@ -495,9 +495,9 @@ importers:
       '@sciencediscovery/orchestration':
         specifier: workspace:*
         version: link:../../packages/orchestration
-      '@sciencediscovery/plan-mode':
+      '@sciencediscovery/plan':
         specifier: workspace:*
-        version: link:../../packages/plan-mode
+        version: link:../../packages/plan
       '@sciencediscovery/provenance':
         specifier: workspace:*
         version: link:../../packages/provenance

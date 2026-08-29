@@ -35,7 +35,7 @@ The React browser UI is served as static assets by the control API after build a
 | `tool.started`, `tool.completed` | Tool state and summary |
 | `tool.output` | Incremental tool substream; details expand on demand |
 | `permission.required` | Permission card |
-| `plan.proposed`, `subagent.updated`, `remote_job.proposed` | Run-scoped activity cards after their timeline/message; collapsed summary by default except pending remote-job approval |
+| `plan.updated`, `subagent.updated`, `remote_job.proposed` | Run-scoped activity cards after their timeline/message; collapsed summary by default except pending remote-job approval |
 | `artifact_review.completed` | Reviewer Specialist and Artifact result |
 | `run.completed`, `run.failed`, `run.cancelled` | Timeline finalization, file refresh, and error banner/toast |
 

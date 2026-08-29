@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  PreparedToolBatch,
   RuntimeMessage,
   RuntimeToolCall,
   ToolDispatchResult,
@@ -35,6 +36,7 @@ export interface ToolSpec {
 }
 
 export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
+  batchPolicies?: readonly ToolBatchPolicy[];
   createResultMessage(call: RuntimeToolCall, content: string, output?: ToolOutputRecord): TMessage;
   /** Optional run-scoped capability policy supplied by the application composition. */
   isAvailable?(tool: AgentTool): boolean;
@@ -54,6 +56,17 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   outputGuard?: ToolOutputGuard;
   /** Durable raw observation hook; awaited before bounding, never silently dropped. */
   recordResult?(input: { call: RuntimeToolCall; content: string; isError: boolean; sequence: number }): Promise<void>;
+}
+
+export interface ToolBatchSupersedeDecision {
+  byCallId: string;
+  callId: string;
+  kind: "supersede";
+}
+
+export interface ToolBatchPolicy {
+  readonly id: string;
+  decide(calls: readonly RuntimeToolCall[]): readonly ToolBatchSupersedeDecision[];
 }
 
 /**
@@ -123,6 +136,34 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     }
   }
 
+  prepareBatch(calls: readonly RuntimeToolCall[]): PreparedToolBatch<TMessage> {
+    const callIds = new Set(calls.map((call) => call.id));
+    if (callIds.size !== calls.length) throw new Error("Tool batch contains duplicate call ids");
+    const superseded = new Map<string, { byCallId: string; owner: string }>();
+    for (const policy of this.options.batchPolicies ?? []) {
+      for (const decision of policy.decide(calls)) {
+        if (!callIds.has(decision.callId)) {
+          throw new Error(`Tool batch policy ${policy.id} selected unknown call ${decision.callId}`);
+        }
+        if (!callIds.has(decision.byCallId)) {
+          throw new Error(`Tool batch policy ${policy.id} referenced unknown replacement ${decision.byCallId}`);
+        }
+        const existing = superseded.get(decision.callId);
+        if (existing) {
+          throw new Error(`Tool call ${decision.callId} is controlled by both ${existing.owner} and ${policy.id}`);
+        }
+        superseded.set(decision.callId, { byCallId: decision.byCallId, owner: policy.id });
+      }
+    }
+    return {
+      executionMode: (call) => superseded.has(call.id) ? "parallel" : this.executionMode(call),
+      execute: (call, signal) => {
+        const decision = superseded.get(call.id);
+        return decision ? this.supersededResult(call, decision.byCallId) : this.execute(call, signal);
+      },
+    };
+  }
+
   snapshot() {
     return {
       promoted: [...(this.deferredState?.promoted ?? [])].sort(),
@@ -166,6 +207,14 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     }
     try { this.options.onResult?.({ call, content, isError, sequence }); } catch { /* observer isolation */ }
     return { content, isError, message: this.options.createResultMessage(call, content, outputRecord) };
+  }
+
+  private async supersededResult(call: RuntimeToolCall, byCallId: string): Promise<ToolDispatchResult<TMessage>> {
+    const sequence = this.nextExecutionSequence += 1;
+    const content = JSON.stringify({ ok: true, superseded: true, supersededBy: byCallId });
+    if (this.options.recordResult) await this.options.recordResult({ call, content, isError: false, sequence });
+    try { this.options.onResult?.({ call, content, isError: false, sequence }); } catch { /* observer isolation */ }
+    return { content, isError: false, message: this.options.createResultMessage(call, content) };
   }
 
   private availableTools(): readonly AgentTool[] {

@@ -361,7 +361,7 @@ def upsert_execution(
                     ).consume()
 
             # Temporal-chain fallback: when this session has no
-            # SessionPlan-derived chain yet, link its auto-inferred SubTasks
+            # explicit dependency chain yet, link its auto-inferred SubTasks
             # (execution/mcp_search) by finished_at into a linear next chain,
             # only adding edges between consecutive orphans. Idempotent.
             _link_subtasks_by_finish_time(session, session_id)
@@ -717,7 +717,7 @@ def upsert_mcp_search(
             ).consume()
 
             # Temporal-chain fallback: when this session has no
-            # SessionPlan-derived chain yet, link its auto-inferred SubTasks
+            # explicit dependency chain yet, link its auto-inferred SubTasks
             # (execution/mcp_search) by finished_at into a linear next chain,
             # only adding edges between consecutive orphans. Idempotent.
             _link_subtasks_by_finish_time(session, session_id)
@@ -1355,64 +1355,6 @@ def upsert_source_file(
     except Exception as exc:
         log.exception("upsert_source_file failed: session=%s file=%s: %s",
                       session_id, file_id, exc)
-        raise
-
-
-def upsert_session_plan(
-    *,
-    session_id: str,
-    goal_id: str,
-    plan_id: str,
-    scope: str,
-    domain: str | None,
-    steps: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Correct the ResearchGoal's ``core_objective`` / ``domain`` from
-    ``plan.scope`` (the LLM's explicit scope overwrites the first-message
-    fallback).
-
-    The plan's steps are NOT mirrored into SubTask nodes: the framework does
-    not advance ``PlanStep.status`` (a plan is a progress record, not an
-    approval-gated schedule), so a step skeleton would stay PENDING forever
-    and clutter the graph. SubTasks come from actual execution / MCP search
-    instead, linked by a finish-time fallback chain when no real dependency
-    is known. ``steps`` is accepted for API stability but unused here.
-
-    Correct Goal: MERGE ResearchGoal(goal_id); SET core_objective=scope,
-    domain=inferDomain(scope), method += ';corrected_by_plan' (the suffix is
-    added at most once so re-mirroring the same plan doesn't pile it up).
-    Returns ``{goal_corrected: bool}``.
-    """
-    driver = handle()
-    if not driver.is_reachable():
-        log.warning("upsert_session_plan skipped: Neo4j not reachable (session=%s plan=%s)",
-                    session_id, plan_id)
-        return {"goal_corrected": False}
-
-    log.debug("upsert_session_plan starting: session=%s plan=%s steps=%d", session_id, plan_id, len(steps))
-    try:
-        with driver.session() as session:
-            # Correct the ResearchGoal from plan.scope (overwrite, not ON CREATE,
-            # so a revised plan's changed scope refreshes the goal).
-            session.run(
-                """
-                MERGE (g:ResearchGoal {goal_id: $goal_id})
-                  ON CREATE SET g.session_id = $sid, g.created_at = datetime()
-                SET g.core_objective = $scope,
-                    g.domain         = $domain
-                """,
-                goal_id=goal_id,
-                sid=session_id,
-                scope=scope,
-                domain=domain,
-            ).consume()
-
-        log.info("upsert_session_plan done: session=%s plan=%s goal=%s (goal corrected, no step skeleton)",
-                 session_id, plan_id, goal_id)
-        return {"goal_corrected": True}
-    except Exception as exc:
-        log.exception("upsert_session_plan failed: session=%s plan=%s: %s",
-                      session_id, plan_id, exc)
         raise
 
 

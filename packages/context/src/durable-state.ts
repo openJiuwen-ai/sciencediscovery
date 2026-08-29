@@ -35,7 +35,6 @@ export interface DurableContextSnapshot {
     raw: string;
   };
   memory: DurableToolRecord[];
-  plan?: DurableToolRecord;
   reviews: DurableToolRecord[];
   skills: DurableSkillReference[];
 }
@@ -142,7 +141,6 @@ export class DurableContextStore {
   private readonly memory: DurableToolRecord[] = [];
   private readonly reviews: DurableToolRecord[] = [];
   private readonly goal: DurableContextSnapshot["goal"];
-  private plan: DurableToolRecord | undefined;
   private sequence = 0;
 
   constructor(options: { history?: readonly RuntimeMessage[]; runContract?: string } = {}) {
@@ -169,10 +167,6 @@ export class DurableContextStore {
       if (id) this.skillRefs.set(id, { id });
       return;
     }
-    if (["propose_plan", "revise_plan", "update_plan_step", "abandon_plan"].includes(call.name) && !result.isError) {
-      if (!this.plan || sequence >= this.plan.sequence) this.plan = record;
-      return;
-    }
     if (call.name === "task") return this.append(this.delegations, record);
     if (["artifact_download", "declare_artifact", "paper_extract_pdf"].includes(call.name)) {
       if (!result.isError) this.append(this.artifacts, record);
@@ -197,7 +191,6 @@ export class DurableContextStore {
       delegations: this.delegations,
       ...(this.goal ? { goal: this.goal } : {}),
       memory: this.memory,
-      ...(this.plan ? { plan: this.plan } : {}),
       reviews: this.reviews,
       skills: [...this.skillRefs.values()].sort((left, right) => left.id.localeCompare(right.id)),
     });
@@ -226,20 +219,6 @@ export class DurableContextStore {
       }, ++sequence);
       pending.delete(call.id);
     }
-  }
-}
-
-export class DurableTaskStateContributor<TMessage extends RuntimeMessage = RuntimeMessage>
-implements ContextContributor<TMessage> {
-  readonly id = "runtime.durable-task-state";
-  readonly required = true;
-
-  constructor(private readonly store: DurableContextStore, readonly scopes: readonly AgentScope[]) {}
-
-  async contribute(): Promise<ContextContribution<TMessage>> {
-    const snapshot = this.store.snapshot();
-    if (!snapshot.plan) return {};
-    return { messages: [hiddenDataMessage<TMessage>("task_state", { plan: renderRecord(snapshot.plan) })] };
   }
 }
 

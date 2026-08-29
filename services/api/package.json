@@ -24,7 +24,7 @@
     "@sciencediscovery/model": "workspace:*",
     "@sciencediscovery/operational-logging": "workspace:*",
     "@sciencediscovery/orchestration": "workspace:*",
-    "@sciencediscovery/plan-mode": "workspace:*",
+    "@sciencediscovery/plan": "workspace:*",
     "@sciencediscovery/provenance": "workspace:*",
     "@sciencediscovery/runner": "workspace:*",
     "@sciencediscovery/runtime-core": "workspace:*",

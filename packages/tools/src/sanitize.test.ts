@@ -103,7 +103,7 @@ test("denylist covers every framework authority block", () => {
     "packages/workspace/src/prompt.ts",
     "packages/context/src/compaction.ts",
     "packages/tools/src/deferred-tools.ts",
-    "packages/plan-mode/src/index.ts",
+    "packages/plan/src/index.ts",
     "services/api/src/native-agent/index.ts",
   ];
   const emitted = new Set<string>();

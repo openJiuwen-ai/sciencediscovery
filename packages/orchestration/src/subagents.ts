@@ -37,7 +37,7 @@ export const MAX_SUBAGENT_TIMEOUT_SECONDS = 14_400;
 
 export const GENERAL_PURPOSE_SUBAGENT: SubagentPreset = {
   description: "A capable subagent for complex, multi-step tasks that require exploration and action.",
-  disallowedTools: ["task", "propose_plan", "propose_remote_job"],
+  disallowedTools: ["task", "propose_remote_job"],
   maxTurns: DEFAULT_SUBAGENT_MAX_TURNS,
   name: "general-purpose",
   systemPrompt: [

@@ -22,7 +22,7 @@ import type {
   McpInvocation,
   PermissionRequest,
   RemoteJob,
-  SessionPlan,
+  SessionRunEvent,
   SessionRun,
   Subagent,
   WorkspaceFile,
@@ -31,11 +31,40 @@ import type {
 import { isArtifactPreviewFile } from "../src/App.js";
 import {
   activityCardId,
+  collectLatestRunPlans,
   collectRunChangedPaths,
   groupRunActivity,
   setActivityCardExpanded,
   type RunActivityItems,
+  type RunPlanSnapshot,
 } from "../src/session/run-activity.js";
+
+test("folds persisted plan events to the latest snapshot per agent", () => {
+  const event = (sequence: number, agentId: string, step: string): SessionRunEvent => ({
+    createdAt: `2026-07-15T00:00:0${sequence}.000Z`,
+    event: {
+      plan: {
+        agentId,
+        items: [{ status: "pending", step }],
+        toolCallId: `call-${sequence}`,
+        turn: sequence,
+        updatedAt: `2026-07-15T00:00:0${sequence}.000Z`,
+      },
+      type: "plan.updated",
+    },
+    runId: "run-1",
+    sequence,
+    sessionId: "session-1",
+  });
+  assert.deepEqual(
+    collectLatestRunPlans([event(1, "main", "old"), event(2, "subagent:one", "worker"), event(3, "main", "new")])
+      .map(({ agentId, items, runId }) => ({ agentId, runId, step: items[0]?.step })),
+    [
+      { agentId: "subagent:one", runId: "run-1", step: "worker" },
+      { agentId: "main", runId: "run-1", step: "new" },
+    ],
+  );
+});
 
 test("isArtifactPreviewFile accepts any markdown plus the chart/summary pair", () => {
   const at = (path: string, previewKind?: WorkspaceFile["previewKind"]) =>
@@ -116,8 +145,8 @@ const RUN_TWO = buildRun({
 test("attributes items to the run that was active when they were created", () => {
   const items = emptyItems();
   items.plans = [
-    { createdAt: "2026-07-15T00:02:00.000Z", id: "plan-1" } as SessionPlan,
-    { createdAt: "2026-07-15T00:06:00.000Z", id: "plan-2" } as SessionPlan,
+    { agentId: "main", runId: "run-1", updatedAt: "2026-07-15T00:02:00.000Z" } as RunPlanSnapshot,
+    { agentId: "main", runId: "run-2", updatedAt: "2026-07-15T00:06:00.000Z" } as RunPlanSnapshot,
   ];
   items.subagents = [
     { createdAt: "2026-07-15T00:03:00.000Z", id: "subagent-1" } as Subagent,
@@ -134,13 +163,13 @@ test("attributes items to the run that was active when they were created", () =>
   assert.equal(groups.length, 2);
   assert.equal(groups[0]?.runId, "run-1");
   assert.equal(groups[0]?.anchorMessageId, "assistant-1");
-  assert.deepEqual(groups[0]?.plans.map((plan) => plan.id), ["plan-1"]);
+  assert.deepEqual(groups[0]?.plans.map((plan) => plan.runId), ["run-1"]);
   assert.deepEqual(groups[0]?.subagents.map((subagent) => subagent.id), ["subagent-1"]);
   assert.deepEqual(groups[0]?.permissionRequests.map((request) => request.id), ["request-1"]);
   assert.deepEqual(groups[0]?.previewFiles.map((file) => file.path), ["analysis_chart.svg"]);
   assert.equal(groups[1]?.runId, "run-2");
   assert.equal(groups[1]?.anchorMessageId, "assistant-2");
-  assert.deepEqual(groups[1]?.plans.map((plan) => plan.id), ["plan-2"]);
+  assert.deepEqual(groups[1]?.plans.map((plan) => plan.runId), ["run-2"]);
   assert.deepEqual(groups[1]?.subagents.map((subagent) => subagent.id), ["subagent-2"]);
   assert.deepEqual(groups[1]?.remoteJobs.map((job) => job.id), ["job-1"]);
 });
@@ -157,20 +186,17 @@ test("queued runs that never started are not attribution targets", () => {
   assert.deepEqual(groups[0]?.subagents.map((subagent) => subagent.id), ["subagent-1"]);
 });
 
-test("items older than the first started run fall into the unattributed tail group", () => {
+test("plan snapshots use their exact run identity instead of timestamp attribution", () => {
   const items = emptyItems();
-  items.plans = [{ createdAt: "2026-07-14T23:00:00.000Z", id: "plan-legacy" } as SessionPlan];
+  items.plans = [{ agentId: "main", runId: "run-1", updatedAt: "2026-07-14T23:00:00.000Z" } as RunPlanSnapshot];
   items.subagents = [{ createdAt: "2026-07-15T00:02:00.000Z", id: "subagent-1" } as Subagent];
 
   const groups = groupRunActivity([RUN_ONE], items);
 
-  assert.equal(groups.length, 2);
+  assert.equal(groups.length, 1);
   assert.equal(groups[0]?.runId, "run-1");
   assert.deepEqual(groups[0]?.subagents.map((subagent) => subagent.id), ["subagent-1"]);
-  const tail = groups[1]!;
-  assert.equal(tail.runId, undefined);
-  assert.equal(tail.anchorMessageId, undefined);
-  assert.deepEqual(tail.plans.map((plan) => plan.id), ["plan-legacy"]);
+  assert.deepEqual(groups[0]?.plans.map((plan) => plan.runId), ["run-1"]);
 });
 
 test("falls back to the user message when a run has no assistant message", () => {

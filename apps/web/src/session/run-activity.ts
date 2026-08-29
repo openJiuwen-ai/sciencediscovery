@@ -20,11 +20,16 @@ import type {
   PermissionRequest,
   RemoteJob,
   RunStreamEvent,
-  SessionPlan,
+  PlanSnapshot,
+  SessionRunEvent,
   SessionRun,
   Subagent,
   WorkspaceFile,
 } from "@sciencediscovery/schema";
+
+export interface RunPlanSnapshot extends PlanSnapshot {
+  runId: string;
+}
 
 export interface GovernedDownloadCandidate {
   candidate: ArtifactCandidate;
@@ -41,7 +46,7 @@ export interface RunActivityItems {
   downloadJobs: ArtifactJob[];
   downloadPlans: ArtifactPlan[];
   permissionRequests: PermissionRequest[];
-  plans: SessionPlan[];
+  plans: RunPlanSnapshot[];
   previewFiles: WorkspaceFile[];
   remoteJobs: RemoteJob[];
   subagents: Subagent[];
@@ -114,6 +119,16 @@ export function collectRunChangedPaths(events: RunStreamEvent[]): string[] {
     }
   }
   return [...paths];
+}
+
+/** Fold one run's append-only event stream to its latest plan per agent. */
+export function collectLatestRunPlans(events: readonly SessionRunEvent[]): RunPlanSnapshot[] {
+  const latest = new Map<string, RunPlanSnapshot>();
+  for (const record of events) {
+    if (record.event.type !== "plan.updated") continue;
+    latest.set(record.event.plan.agentId, { ...record.event.plan, runId: record.runId });
+  }
+  return [...latest.values()].toSorted((left, right) => left.updatedAt.localeCompare(right.updatedAt));
 }
 
 /**
@@ -226,7 +241,9 @@ export function groupRunActivity(
     downloadBucket(plan?.mcpInvocationId, job.createdAt).downloadJobs.push(job);
   }
 
-  for (const plan of items.plans) bucket(plan.createdAt).plans.push(plan);
+  for (const plan of items.plans) {
+    (startedRunIds.has(plan.runId) ? bucketForRun(plan.runId) : unattributed).plans.push(plan);
+  }
   for (const subagent of items.subagents) bucket(subagent.createdAt).subagents.push(subagent);
   for (const job of items.remoteJobs) bucket(job.createdAt).remoteJobs.push(job);
   for (const request of items.permissionRequests) bucket(request.createdAt).permissionRequests.push(request);

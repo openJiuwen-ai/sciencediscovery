@@ -35,12 +35,11 @@
 
 | 工具 | 出现条件 | 参数要点 |
 |---|---|---|
-| `propose_plan` | 已接入计划持久化 | `scope`（≤2000 字符）、`steps`（1-20 项）、`feasibilityConfidence: high\|medium\|low`、可选 `caveats`；计划是进度记录，不阻塞后续执行 |
-| `revise_plan` | 已有计划 | 最新 `planId`、`expectedVersion` 与完整的新计划内容 |
-| `update_plan_step` | 已有计划 | 最新 `planId`、`expectedVersion`、`stepId` 与步骤状态；全部步骤完成后计划自动完成 |
-| `abandon_plan` | 已有计划 | 最新 `planId`、`expectedVersion`，可选原因 |
+| `update_plan` | Agent run 期间始终可用 | 完整替换的 `plan` 快照（0–20 项，每项包含 `step` 与状态），以及可选 `explanation`；空列表表示清空计划 |
 | `task` | 主运行注入（子 Agent 内不可再派生） | `description`（≤80 字符）、`prompt`（≤20000）、可选 `brief`（Brief v1 契约，见 [subagent-orchestration.md](../explanation/subagent-orchestration.md#41-subagent-brief-v1-契约)）、`inputPaths`（≤50）、`max_turns`（≤300）、`timeout_seconds`（≤3600）、`specialistId`、`tools`（白名单，≤32）；同轮多次调用可并行 |
 | `query_graph` | 在 System Settings 中启用 ScienceMemory | `query`：跨会话记忆图的大小写不敏感子串搜索，返回 `{hits, total, truncated}` |
+
+`update_plan` 是 run 范围内的轻量进度快照，不是审批门禁，也不是治理实体。每次调用都会完整替换计划，因此新增、删除、重排和状态更新共用一个接口。同一 LLM step 声明多个 `update_plan` 时，只提交模型声明顺序中的最后一次；此前调用以 superseded 成功结束。成功提交的 `plan.updated` 写入 run event stream，并折叠后注入下一次模型调用；主 Agent 与各子 Agent 分别维护自己的快照。
 
 ## 科学环境工具
 

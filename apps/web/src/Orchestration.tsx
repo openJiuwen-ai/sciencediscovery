@@ -16,9 +16,9 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type {
   ConnectorManifest,
+  ReviewerSpecialistLevel,
   Subagent,
   SubagentStep,
-  SessionPlan,
   SkillDescriptor,
   Specialist,
 } from "@sciencediscovery/schema";
@@ -27,12 +27,16 @@ import type { ApiClient } from "./api.js";
 import { ChevronRightIcon } from "./icons.js";
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
+import type { RunPlanSnapshot } from "./session/run-activity.js";
 
-function planSummary(plan: SessionPlan): string {
-  const feasibility = `${plan.feasibilityConfidence} feasibility`;
-  const completed = plan.steps.filter((step) => step.status === "completed").length;
-  const active = plan.steps.filter((step) => step.status === "in_progress").length;
-  return `${completed}/${plan.steps.length} completed${active ? ` · ${active} active` : ""} · ${feasibility}`;
+type VisibleReviewerLevel = ReviewerSpecialistLevel;
+
+function visibleReviewerLevel(level: ReviewerSpecialistLevel): VisibleReviewerLevel { return level; }
+
+function planSummary(plan: RunPlanSnapshot): string {
+  const completed = plan.items.filter((item) => item.status === "completed").length;
+  const active = plan.items.filter((item) => item.status === "in_progress").length;
+  return `${completed}/${plan.items.length} completed${active ? ` · ${active} active` : ""}`;
 }
 
 export function PlanCard({
@@ -42,20 +46,18 @@ export function PlanCard({
 }: {
   expanded: boolean;
   onToggle: (expanded: boolean) => void;
-  plan: SessionPlan;
+  plan: RunPlanSnapshot;
 }) {
   return (
-    <article className={`plan-card ${plan.state}`}>
+    <article className="plan-card recorded">
       <button aria-expanded={expanded} className="plan-card-heading" onClick={() => onToggle(!expanded)} type="button">
         <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span><strong>Plan · v{plan.version}</strong><small>{planSummary(plan)}</small></span>
-        <i>{plan.state === "recorded" ? "active" : plan.state.replaceAll("_", " ")}</i>
+        <span><strong>Plan · {plan.agentId}</strong><small>{planSummary(plan)}</small></span>
+        <i>{plan.items.length ? "active" : "cleared"}</i>
       </button>
       {expanded ? <div className="plan-card-body">
-        <p>{plan.scope}</p>
-        <ol>{plan.steps.map((step) => <li key={step.id} data-status={step.status}>{step.description}</li>)}</ol>
-        {plan.abandonmentReason ? <p className="plan-card-note">Abandoned: {plan.abandonmentReason}</p> : null}
-        {plan.caveats.length ? <details><summary>Method caveats</summary><ul>{plan.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)}</ul></details> : null}
+        {plan.explanation ? <p>{plan.explanation}</p> : null}
+        <ol>{plan.items.map((item, index) => <li key={`${index}:${item.step}`} data-status={item.status}>{item.step}</li>)}</ol>
       </div> : null}
     </article>
   );
@@ -66,15 +68,15 @@ export function OrchestrationPanel({
   onToggleCard,
   plans,
 }: ActivityCardDisclosure & {
-  plans: SessionPlan[];
+  plans: RunPlanSnapshot[];
 }) {
   if (!plans.length) return null;
   return <section className="orchestration-panel" aria-label="Plans">
     {plans.map((plan) => {
-      const cardId = activityCardId("plan", plan.id);
+      const cardId = activityCardId("plan", `${plan.runId}:${plan.agentId}`);
       return <PlanCard
         expanded={Boolean(expandedCards[cardId])}
-        key={plan.id}
+        key={`${plan.runId}:${plan.agentId}`}
         onToggle={(expanded) => onToggleCard(cardId, expanded)}
         plan={plan}
       />;

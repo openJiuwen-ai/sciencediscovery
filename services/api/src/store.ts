@@ -76,10 +76,8 @@ import type {
   PermissionGrant,
   PermissionGrantScope,
   PermissionRequest,
-  PlanStep,
   PromptManifest,
   Project,
-  ProposePlanRequest,
   ProxyDefaultPolicy,
   ProxyPolicy,
   ProxyServer,
@@ -95,7 +93,6 @@ import type {
   SessionReviewerSpecialistSettings,
   ReviewerSpecialistLevel,
   ReviewerSpecialistSettings,
-  RevisePlanRequest,
   EffectiveRuntimeSettings,
   ResolvedRuntimeSettings,
   RuntimeSettingsDetails,
@@ -104,7 +101,6 @@ import type {
   RuntimeSettingsSource,
   Session,
   SessionDetail,
-  SessionPlan,
   SessionRun,
   SessionRunEvent,
   SessionRunStatus,
@@ -808,13 +804,6 @@ export class SessionStore {
     ];
     const migratedSpecialists = JSON.stringify(specialists) !== JSON.stringify(savedSpecialists);
     const specialistIds = new Set(specialists.map((specialist) => specialist.id));
-    const savedSessionPlans = Array.isArray(saved.sessionPlans) ? saved.sessionPlans : [];
-    const sessionPlans = savedSessionPlans.map((plan) => ({
-      ...plan,
-      mode: "recorded" as const,
-      state: plan.state === "completed" || plan.state === "abandoned" ? plan.state : "recorded" as const,
-    }));
-    const migratedSessionPlans = JSON.stringify(sessionPlans) !== JSON.stringify(savedSessionPlans);
     const savedSubagents = Array.isArray(saved.subagents)
       ? saved.subagents
       : Array.isArray(saved.delegationTracks) ? saved.delegationTracks : [];
@@ -1056,7 +1045,6 @@ export class SessionStore {
       remoteHosts,
       remoteJobs,
       remoteWorkspaceSyncs,
-      sessionPlans,
       sessions,
       specialists,
       timeoutSettings,
@@ -1077,7 +1065,6 @@ export class SessionStore {
       || !Array.isArray(saved.permissionEpochs)
       || !Array.isArray(saved.permissionGrants)
       || !Array.isArray(saved.permissionRequests)
-      || !Array.isArray(saved.sessionPlans)
       || !Array.isArray(saved.subagents)
       || !Array.isArray(saved.remoteHosts)
       || !Array.isArray(saved.remoteJobs)
@@ -1099,7 +1086,6 @@ export class SessionStore {
       || migratedSessionAssignments
       || migratedSessionOverrides
       || migratedSubagents
-      || migratedSessionPlans
       || migratedPermissionGrants
       || migratedReviewerSpecialistLevel
       || migratedReviewerFeedbackPolicy
@@ -2705,106 +2691,6 @@ export class SessionStore {
     await this.saveCatalog();
   }
 
-  listSessionPlans(sessionId: string): SessionPlan[] {
-    if (!this.getSession(sessionId)) throw new Error("Session not found");
-    return structuredClone(this.catalog.sessionPlans.filter((plan) => plan.sessionId === sessionId))
-      .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
-  }
-
-  latestSessionPlan(sessionId: string, runId?: string): SessionPlan | undefined {
-    const plans = this.listSessionPlans(sessionId);
-    return (runId ? plans.filter((plan) => plan.runId === runId) : plans).at(-1);
-  }
-
-  private normalizePlanInput(input: ProposePlanRequest): Pick<SessionPlan, "caveats" | "feasibilityConfidence" | "scope" | "steps"> {
-    const scope = input.scope?.trim();
-    if (!scope || scope.length > 2_000) throw new Error("Plan scope must be 1-2000 characters");
-    if (!(["high", "medium", "low"] as const).includes(input.feasibilityConfidence)) throw new Error("Invalid feasibility confidence");
-    const descriptions = input.steps?.map((step) => step.trim()).filter(Boolean) ?? [];
-    if (!descriptions.length || descriptions.length > 20 || descriptions.some((step) => step.length > 1_000)) {
-      throw new Error("Plan must contain 1-20 steps of at most 1000 characters each");
-    }
-    const caveats = (input.caveats ?? []).map((caveat) => caveat.trim()).filter(Boolean);
-    if (caveats.length > 10 || caveats.some((caveat) => caveat.length > 1_000)) {
-      throw new Error("Plan supports at most 10 caveats of 1000 characters each");
-    }
-    return {
-      caveats,
-      feasibilityConfidence: input.feasibilityConfidence,
-      scope,
-      steps: descriptions.map((description) => ({ id: randomUUID(), description, status: "pending" })),
-    };
-  }
-
-  async proposeSessionPlan(sessionId: string, input: ProposePlanRequest, runId?: string): Promise<SessionPlan> {
-    this.assertSessionWritable(sessionId);
-    const normalized = this.normalizePlanInput(input);
-    const now = new Date().toISOString();
-    const plan: SessionPlan = {
-      ...normalized,
-      createdAt: now,
-      id: randomUUID(),
-      mode: "recorded",
-      ...(runId ? { runId } : {}),
-      sessionId,
-      state: "recorded",
-      updatedAt: now,
-      version: 1,
-    };
-    this.catalog.sessionPlans.push(plan);
-    await this.saveCatalog();
-    return structuredClone(plan);
-  }
-
-  async reviseSessionPlan(sessionId: string, planId: string, input: RevisePlanRequest): Promise<SessionPlan> {
-    this.assertSessionWritable(sessionId);
-    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === planId && candidate.sessionId === sessionId);
-    if (!plan) throw new Error("Plan not found");
-    if (plan.state !== "recorded") throw new Error("Only a recorded plan can be revised");
-    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before revising");
-    Object.assign(plan, this.normalizePlanInput(input), { updatedAt: new Date().toISOString(), version: plan.version + 1 });
-    await this.saveCatalog();
-    return structuredClone(plan);
-  }
-
-  async updateSessionPlanStep(
-    sessionId: string,
-    input: { expectedVersion: number; planId: string; status: PlanStep["status"]; stepId: string },
-  ): Promise<SessionPlan> {
-    this.assertSessionWritable(sessionId);
-    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === input.planId && candidate.sessionId === sessionId);
-    if (!plan) throw new Error("Plan not found");
-    if (plan.state !== "recorded") throw new Error("Only a recorded plan can update step progress");
-    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before updating a step");
-    const step = plan.steps.find((candidate) => candidate.id === input.stepId);
-    if (!step) throw new Error("Plan step not found");
-    step.status = input.status;
-    plan.state = plan.steps.every((candidate) => candidate.status === "completed") ? "completed" : "recorded";
-    plan.updatedAt = new Date().toISOString();
-    plan.version += 1;
-    await this.saveCatalog();
-    return structuredClone(plan);
-  }
-
-  async abandonSessionPlan(
-    sessionId: string,
-    input: { expectedVersion: number; planId: string; reason?: string },
-  ): Promise<SessionPlan> {
-    this.assertSessionWritable(sessionId);
-    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === input.planId && candidate.sessionId === sessionId);
-    if (!plan) throw new Error("Plan not found");
-    if (plan.state !== "recorded") throw new Error("Only a recorded plan can be abandoned");
-    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before abandoning");
-    const reason = input.reason?.trim();
-    if (reason && reason.length > 2_000) throw new Error("Plan abandonment reason must not exceed 2000 characters");
-    plan.state = "abandoned";
-    if (reason) plan.abandonmentReason = reason;
-    plan.updatedAt = new Date().toISOString();
-    plan.version += 1;
-    await this.saveCatalog();
-    return structuredClone(plan);
-  }
-
   listSubagents(sessionId: string): Subagent[] {
     if (!this.getSession(sessionId)) throw new Error("Session not found");
     return structuredClone(this.catalog.subagents.filter((subagent) => subagent.sessionId === sessionId))
@@ -4019,7 +3905,6 @@ export class SessionStore {
     const previousPermissionEpochs = this.catalog.permissionEpochs;
     const previousPermissionGrants = this.catalog.permissionGrants;
     const previousPermissionRequests = this.catalog.permissionRequests;
-    const previousPlans = this.catalog.sessionPlans;
     const previousSubagents = this.catalog.subagents;
     const previousRemoteJobs = this.catalog.remoteJobs;
     const previousWorkspaceFileRecords = this.catalog.workspaceFileRecords;
@@ -4031,7 +3916,6 @@ export class SessionStore {
       this.catalog.permissionRequests = this.catalog.permissionRequests.filter((request) => request.sessionId !== session.id);
       this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.sessionId !== session.id
         && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
-      this.catalog.sessionPlans = this.catalog.sessionPlans.filter((plan) => plan.sessionId !== session.id);
       this.catalog.subagents = this.catalog.subagents.filter((subagent) => subagent.sessionId !== session.id);
       this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => job.sessionId !== session.id);
       this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.map((record) =>
@@ -4044,7 +3928,6 @@ export class SessionStore {
       this.catalog.permissionEpochs = previousPermissionEpochs;
       this.catalog.permissionGrants = previousPermissionGrants;
       this.catalog.permissionRequests = previousPermissionRequests;
-      this.catalog.sessionPlans = previousPlans;
       this.catalog.subagents = previousSubagents;
       this.catalog.remoteJobs = previousRemoteJobs;
       this.catalog.workspaceFileRecords = previousWorkspaceFileRecords;
@@ -4075,7 +3958,6 @@ export class SessionStore {
     const previousPermissionEpochs = this.catalog.permissionEpochs;
     const previousPermissionGrants = this.catalog.permissionGrants;
     const previousPermissionRequests = this.catalog.permissionRequests;
-    const previousPlans = this.catalog.sessionPlans;
     const previousSubagents = this.catalog.subagents;
     const previousRemoteJobs = this.catalog.remoteJobs;
     const previousRemoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs;
@@ -4098,7 +3980,6 @@ export class SessionStore {
       this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.projectId !== projectId
         && (!grant.sessionId || !sessionIds.has(grant.sessionId))
         && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
-      this.catalog.sessionPlans = this.catalog.sessionPlans.filter((plan) => !sessionIds.has(plan.sessionId));
       this.catalog.subagents = this.catalog.subagents.filter((subagent) => !sessionIds.has(subagent.sessionId));
       this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => !sessionIds.has(job.sessionId));
       this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => !sessionIds.has(record.sessionId));
@@ -4115,7 +3996,6 @@ export class SessionStore {
       this.catalog.permissionEpochs = previousPermissionEpochs;
       this.catalog.permissionGrants = previousPermissionGrants;
       this.catalog.permissionRequests = previousPermissionRequests;
-      this.catalog.sessionPlans = previousPlans;
       this.catalog.subagents = previousSubagents;
       this.catalog.remoteJobs = previousRemoteJobs;
       this.catalog.remoteWorkspaceSyncs = previousRemoteWorkspaceSyncs;

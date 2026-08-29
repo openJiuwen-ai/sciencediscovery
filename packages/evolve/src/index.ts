@@ -15,7 +15,7 @@
 /**
  * `/evolve` as a capability package: the two LLM tools and nothing else.
  *
- * Registered the way `plan-mode` is — the composition root builds the runtime
+ * Registered the way `plan` is — the composition root builds the runtime
  * and hands it over once; a deployment that does not build one simply gets no
  * tools. Before this, `WorkspaceAgentOptions` declared the two callbacks,
  * `createWorkspaceTools` constructed the tools, `buildTools` forwarded the two

@@ -201,23 +201,20 @@ test("ordinary tools are available on the first model step without a mode activa
   }
 });
 
-test("Plan lifecycle and read_skill can run in the same first-step tool batch", async () => {
-  let plan: import("@sciencediscovery/schema").SessionPlan | undefined;
+test("Plan update and read_skill can run in the same first-step tool batch", async () => {
+  let plan: import("@sciencediscovery/schema").PlanSnapshot | undefined;
+  let planUpdates = 0;
   const options = workspace() as NativeAgentOptions;
-  options.planRepository = {
-    async abandon() { throw new Error("not called"); },
+  options.planStore = {
     async latest() { return plan && structuredClone(plan); },
-    async propose(input) {
+    async update(input, toolCallId) {
+      planUpdates += 1;
       plan = {
-        caveats: input.caveats ?? [], createdAt: "now", feasibilityConfidence: input.feasibilityConfidence,
-        id: "plan-1", mode: "recorded", runId: "run-1", scope: input.scope, sessionId: "session-1",
-        state: "recorded", steps: input.steps.map((description, index) => ({ description, id: `step-${index}`, status: "pending" })),
-        updatedAt: "now", version: 1,
+        agentId: "main", ...(input.explanation ? { explanation: input.explanation } : {}),
+        items: structuredClone(input.plan), toolCallId, turn: 1, updatedAt: "now",
       };
       return structuredClone(plan);
     },
-    async revise() { throw new Error("not called"); },
-    async updateStep() { throw new Error("not called"); },
   };
   options.skills = [{
     content: "Follow the frozen literature workflow.",
@@ -232,20 +229,27 @@ test("Plan lifecycle and read_skill can run in the same first-step tool batch", 
   }];
   const { calls, streamer } = scriptStreamer([
     (call) => {
-      assert.ok(call.tools.some((tool) => tool.name === "propose_plan"));
+      assert.ok(call.tools.some((tool) => tool.name === "update_plan"));
       assert.ok(call.tools.some((tool) => tool.name === "read_skill"));
       assert.ok(call.tools.some((tool) => tool.name === "list_files"));
       return toolBatchTurn([
         {
-          args: { feasibilityConfidence: "high", scope: "Inspect files", steps: ["List files"] },
+          args: { explanation: "Outdated draft", plan: [{ status: "pending", step: "Old step" }] },
+          id: "call-plan-old",
+          name: "update_plan",
+        },
+        {
+          args: { explanation: "Inspect files", plan: [{ status: "pending", step: "List files" }] },
           id: "call-plan",
-          name: "propose_plan",
+          name: "update_plan",
         },
         { args: { skillId: "literature-review" }, id: "call-skill", name: "read_skill" },
       ]);
     },
     (call) => {
       const input = call.systemPrompt + call.history.map((message) => String(message.content ?? "")).join("\n");
+      const superseded = call.history.find((message) => message.role === "tool" && message.tool_call_id === "call-plan-old");
+      assert.match(String(superseded?.content ?? ""), /"superseded":true/u);
       assert.match(input, /Inspect files/u);
       assert.match(input, /Follow the frozen literature workflow/u);
       return textTurn("planned");
@@ -255,7 +259,8 @@ test("Plan lifecycle and read_skill can run in the same first-step tool batch", 
   try {
     await createNativeAgent(options).execute("plan the inspection");
     assert.equal(calls[0]?.tools.some((tool) => tool.name === "activate_execution_mode"), false);
-    assert.equal(plan?.scope, "Inspect files");
+    assert.equal(planUpdates, 1);
+    assert.equal(plan?.explanation, "Inspect files");
   } finally {
     restore();
   }

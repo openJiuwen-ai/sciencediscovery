@@ -23,7 +23,7 @@ import type { ConnectorId } from "./connectors.js";
 import type { EvolveRun } from "./evolution.js";
 import type { ModelRunInfo, ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { PermissionRequest } from "./permission.js";
-import type { ApprovalMode, SessionPlan } from "./plan.js";
+import type { ApprovalMode, PlanSnapshot } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
 import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
@@ -376,7 +376,7 @@ export type RunStreamEvent =
   | { chunk: string; toolCallId: string; type: "tool.output" }
   | { changedPaths: string[]; files: WorkspaceFile[]; type: "workspace.changed" }
   | { artifact: ScientificArtifact; type: "artifact.upserted"; version?: ScientificArtifactVersion }
-  | { plan: SessionPlan; type: "plan.proposed" }
+  | { plan: PlanSnapshot; type: "plan.updated" }
   | { subagent: Subagent; type: "subagent.updated" }
   | { step: SubagentStep; subagentId: string; type: "subagent.step" }
   | { subagentId: string; type: "subagent.usage"; usage: SubagentUsage }
