@@ -267,6 +267,16 @@ export interface SkillResourceContent {
   size: number;
 }
 
+/** Frozen package bytes for workspace materialization; never serialize this as tool output. */
+export interface SkillResourceBytes {
+  bytes: Uint8Array;
+  hash: string;
+  path: string;
+  revision: number;
+  skillId: string;
+  size: number;
+}
+
 export interface SkillLibrary {
   createdAt: string;
   headVersionId?: string;

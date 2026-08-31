@@ -485,12 +485,13 @@ async function executeAgentRun(
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "The selected skills are not available");
   }
-  const runtimeSkills = activeSkills.map(({ content, description, hash, id, readResource, resources, revision, version }) => ({
+  const runtimeSkills = activeSkills.map(({ content, description, hash, id, readResource, readResourceBytes, resources, revision, version }) => ({
     content,
     description,
     hash,
     id,
     readResource,
+    readResourceBytes,
     resources,
     revision,
     version,
@@ -1221,8 +1222,8 @@ async function executeAgentRun(
             ...(specialist?.enabledSkillIds ?? []),
             ...(roleSkillId ? [roleSkillId] : []),
           ])];
-          const subagentSkills = skillCatalog.resolve(subagentSkillIds).map(({ content, description, hash, id, readResource, resources, revision, version }) => ({
-            content, description, hash, id, readResource, resources, revision, version,
+          const subagentSkills = skillCatalog.resolve(subagentSkillIds).map(({ content, description, hash, id, readResource, readResourceBytes, resources, revision, version }) => ({
+            content, description, hash, id, readResource, readResourceBytes, resources, revision, version,
           }));
           const subagentConnectorIds = [...new Set([...settingsSnapshot.enabledConnectorIds, ...(specialist?.connectorIds ?? [])])];
           const subagentWorkspaceRoot = resolveWorkspaceFile(store.workspacePath(sessionId), handoff.privateWorkspacePath);

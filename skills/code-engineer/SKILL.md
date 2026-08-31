@@ -48,7 +48,17 @@ Identify what the analysis task requires:
 - **Analysis objectives**: What computational results are expected
 - **Available data**: File paths, data descriptions, format details
 
-### Step 2: Inspect Available Data
+### Step 2: Materialize the Bundled Executor
+
+Before the first inspect or run action, copy the frozen bundled executor into the writable Session workspace:
+
+```text
+materialize_skill_resource({"skillId":"code-engineer","path":"scripts/execute.py"})
+```
+
+Use the returned `dest` as the script path in subsequent `run_shell` commands and pass the requested data paths and options as arguments. Do not load this large script with `read_skill_resource`, read the materialized source back into context, rewrite it, or search the filesystem for another copy.
+
+### Step 3: Inspect Available Data
 
 Before writing analysis code, inspect the data to understand its schema and characteristics:
 
@@ -64,7 +74,7 @@ This returns:
 - Row count per sheet/file
 - Sample data (first 5 rows)
 
-### Step 3: Write and Execute Analysis Code
+### Step 4: Write and Execute Analysis Code
 
 Based on the analysis objectives and data schema, write Python/R code to perform the analysis.
 
@@ -100,7 +110,7 @@ python ./scripts/execute.py \
   --output-file /path/to/outputs/summary_stats.csv
 ```
 
-### Step 4: Document and Return Results
+### Step 5: Document and Return Results
 
 Structure your output per the Output Schema below. Ensure every result includes method justification, data traceability, assumptions, and code-level documentation.
 
@@ -123,7 +133,7 @@ When results may be evaluated downstream (e.g., by the `result-evaluator` skill)
 | `--output-file` | No | Path to export results (CSV/JSON/MD). If the code assigns a DataFrame to `result`, it is exported as structured tabular data; otherwise raw stdout/stderr is exported |
 
 > [!NOTE]
-> Do NOT read the Python file, just call it with the parameters.
+> Do NOT read the Python file. Materialize the frozen resource once, then call the returned workspace path with the parameters.
 
 ## Variable Naming Rules
 

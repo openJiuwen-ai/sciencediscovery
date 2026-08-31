@@ -27,11 +27,13 @@ import {
   discoverGitSkillRoots,
   packageFromUpload,
   parseSkillMarkdown,
+  SKILL_LIMITS,
   SkillCatalog,
   SkillCatalogError,
   validateSkillPackage,
   validateGitSkillImportRequest,
 } from "@sciencediscovery/specialist";
+import { createWorkspaceTools } from "@sciencediscovery/workspace";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -532,6 +534,10 @@ test("persists immutable managed revisions and enforces optimistic concurrency",
     assert.equal(updated.currentRevision, 2);
     assert.equal(updated.resources.length, 2);
     assert.equal(frozen.readResource("references/guide.md").revision, 1);
+    assert.equal(
+      Buffer.from(frozen.readResourceBytes("scripts/unused.py").bytes).toString("utf8"),
+      "print('not run')",
+    );
     assert.throws(
       () => frozen.readResource("../escape.txt"),
       /Unsafe skill package path/,
@@ -554,9 +560,58 @@ test("persists immutable managed revisions and enforces optimistic concurrency",
       await readFile(resolve(dataDir, "skills", "portable-skill", "revisions", "1", "package", "scripts", "unused.py"), "utf8"),
       "print('not run')",
     );
+    await writeFile(
+      resolve(dataDir, "skills", "portable-skill", "revisions", "1", "package", "scripts", "unused.py"),
+      "print('live disk edit')",
+    );
+    const frozenBytesAfterLiveEdit = frozen.readResourceBytes("scripts/unused.py");
+    assert.equal(Buffer.from(frozenBytesAfterLiveEdit.bytes).toString("utf8"), "print('not run')");
+    assert.equal(frozenBytesAfterLiveEdit.revision, 1);
+    const sessionWorkspace = resolve(dataDir, "session-workspace");
+    const materialize = createWorkspaceTools(sessionWorkspace, {
+      enabledConnectorIds: [],
+      executePython: async () => { throw new Error("not used"); },
+      skills: [frozen],
+    }).find((tool) => tool.name === "materialize_skill_resource");
+    assert.ok(materialize);
+    await materialize.execute("materialize-call", {
+      path: "scripts/unused.py",
+      skillId: "portable-skill",
+    });
+    assert.equal(
+      await readFile(resolve(sessionWorkspace, "scripts", "unused.py"), "utf8"),
+      "print('not run')",
+    );
 
     await reloaded.delete("portable-skill");
     assert.equal(reloaded.get("portable-skill"), undefined);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("frozen skill resource bytes bypass the text read limit and remain immutable", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const largeBinary = Buffer.alloc(SKILL_LIMITS.runtimeTextBytes + 1, 0xff);
+    const archive = Buffer.from(zipSync({
+      "large-resource-skill/SKILL.md": strToU8(markdown("large-resource-skill").toString("utf8")),
+      "large-resource-skill/scripts/large.bin": largeBinary,
+    }));
+    await catalog.import("large-resource-skill.zip", archive);
+    const frozen = catalog.resolve(["large-resource-skill"])[0]!;
+
+    assert.throws(
+      () => frozen.readResource("scripts/large.bin"),
+      /exceeds .* text bytes/,
+    );
+    const first = frozen.readResourceBytes("scripts/large.bin");
+    assert.equal(first.size, largeBinary.length);
+    assert.deepEqual(Buffer.from(first.bytes), largeBinary);
+    first.bytes[0] = 0;
+    assert.equal(frozen.readResourceBytes("scripts/large.bin").bytes[0], 0xff);
   } finally {
     await rm(dataDir, { force: true, recursive: true });
   }

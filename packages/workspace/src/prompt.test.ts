@@ -29,6 +29,7 @@ function skill(id: string, description: string): RuntimeSkill {
     hash: "a".repeat(64),
     id,
     readResource: async () => { throw new Error("not called"); },
+    readResourceBytes: async () => { throw new Error("not called"); },
     resources: [],
     revision: 1,
     version: "1.0.0",
@@ -58,6 +59,7 @@ test("system prompt lists selected skill metadata without injecting instructions
       skillId: "selected-skill",
       size: 9,
     }),
+    readResourceBytes: async () => { throw new Error("not called"); },
     resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 9 }],
     revision: 4,
     version: "2.0.0",
@@ -69,6 +71,9 @@ test("system prompt lists selected skill metadata without injecting instructions
   assert.match(prompt, /<revision>4<\/revision>/);
   assert.match(prompt, /<version>2\.0\.0<\/version>/);
   assert.match(prompt, /read_skill/);
+  assert.match(prompt, /materialize_skill_resource/);
+  assert.match(prompt, /do not read the materialized source back into context/i);
+  assert.match(prompt, /do not .*search the filesystem for package resources/i);
   assert.doesNotMatch(prompt, /Use the selected workflow/);
   assert.doesNotMatch(prompt, /references\/guide\.md \(reference, 9 bytes\)/);
   assert.match(prompt, /never invent a paper or identifier/i);

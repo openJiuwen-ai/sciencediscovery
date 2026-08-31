@@ -45,6 +45,7 @@ import type {
   SkillDescriptor,
   SkillDetail,
   SkillResource,
+  SkillResourceBytes,
   SkillResourceContent,
   SkillResourceKind,
   SkillReviewDraft,
@@ -160,6 +161,7 @@ export interface RuntimeSkillSnapshot {
   hash: string;
   id: string;
   readResource: (path: string) => SkillResourceContent;
+  readResourceBytes: (path: string) => SkillResourceBytes;
   resources: SkillResource[];
   revision: number;
   version: string;
@@ -776,6 +778,23 @@ function resourceContent(detail: SkillDetail, files: ReadonlyMap<string, Buffer>
   }
   return {
     content,
+    hash: resource.hash,
+    path,
+    revision: detail.currentRevision,
+    skillId: detail.id,
+    size: bytes.length,
+  };
+}
+
+function resourceBytes(detail: SkillDetail, files: ReadonlyMap<string, Buffer>, rawPath: string): SkillResourceBytes {
+  const path = normalizedPackagePath(rawPath);
+  if (path === "SKILL.md") throw validationError("Use skill detail to read SKILL.md instructions");
+  const resource = detail.resources.find((item) => item.path === path);
+  const bytes = files.get(path);
+  if (!resource || !bytes) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill resource not found: ${path}`);
+  return {
+    // Return a copy so a workspace caller cannot mutate the frozen snapshot.
+    bytes: Buffer.from(bytes),
     hash: resource.hash,
     path,
     revision: detail.currentRevision,
@@ -1839,6 +1858,7 @@ export class SkillCatalog {
         hash: detail.hash,
         id: detail.id,
         readResource: (path: string) => resourceContent(detail, files, path),
+        readResourceBytes: (path: string) => resourceBytes(detail, files, path),
         resources: structuredClone(detail.resources),
         revision: detail.currentRevision,
         version: detail.version,

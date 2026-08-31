@@ -300,6 +300,46 @@ test("skill library search returns bounded candidates from mounted versions", as
   }
 });
 
+test("recalled skill library snapshots expose immutable resource bytes", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    await catalog.create({ id: "resource-library" });
+    const script = Buffer.from([0x00, 0xff, 0x41, 0x42]);
+    const committed = await catalog.commitVersion("resource-library", {
+      author: { kind: "system" },
+      operations: [{
+        package: {
+          files: [
+            {
+              content: "---\nname: binary-resource-skill\ndescription: Materialize a frozen binary resource for analysis.\nmetadata:\n  version: 1.0.0\n---\n\nUse the bundled resource.\n",
+              path: "SKILL.md",
+            },
+            { content: script.toString("base64"), encoding: "base64", path: "scripts/tool.bin" },
+          ],
+        },
+        type: "upsert",
+      }],
+    });
+    const search = await catalog.search({
+      libraries: [{
+        contentHash: committed.version!.contentHash,
+        libraryId: "resource-library",
+        versionId: committed.version!.id,
+      }],
+      query: "frozen binary resource",
+    });
+    const snapshot = (await catalog.resolveSkills(search.candidates))[0]!;
+    const first = snapshot.readResourceBytes("scripts/tool.bin");
+    assert.deepEqual(Buffer.from(first.bytes), script);
+    first.bytes[0] = 0x7f;
+    assert.deepEqual(Buffer.from(snapshot.readResourceBytes("scripts/tool.bin").bytes), script);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("queued runs pin enabled skill library heads to immutable version refs", async () => {
   const dataDir = await temporaryDataDir();
   try {

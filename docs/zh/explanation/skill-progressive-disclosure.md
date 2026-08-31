@@ -8,6 +8,7 @@
 - **按需加载说明**：模型根据目录中的名称和描述判断相关性，再用精确 `skillId` 调用 `read_skill` 读取完整说明。
 - **冻结运行快照**：运行开始时，Node API 已固定所选技能的 revision、包 hash、instructions 和资源清单。模型后续读取的始终是这份快照，而不是磁盘上可能已经变化的文件。
 - **目录与内容读取分离**：系统 Prompt 只提供目录 metadata，完整内容由 `read_skill` 从冻结快照返回。
+- **显式落地可执行资源**：只在工作流引用时把冻结资源字节写入 Session 工作区，工具返回值不把正文送入模型上下文。
 
 ## 运行流程
 
@@ -19,7 +20,7 @@ API resolve 技能 revision，生成 frozen snapshot
         │
         ├─ system prompt: 只写 name / description / version / revision
         │
-        └─ 工具表: read_skill / read_skill_resource
+        └─ 工具表: read_skill / read_skill_resource / materialize_skill_resource
         ▼
 模型根据目录选中精确 skillId
         │
@@ -27,8 +28,12 @@ API resolve 技能 revision，生成 frozen snapshot
 read_skill(skillId)
         │  返回本次 run 冻结的完整 instructions
         ▼
-read_skill_resource(skillId, path)
-           仅按 instructions 引用读取 supporting resource
+        ├─ read_skill_resource(skillId, path)
+        │      仅按 instructions 引用读取 supporting text
+        └─ materialize_skill_resource(skillId, path, dest?)
+               将冻结字节写入可写工作区，只返回 metadata
+                       ▼
+               用现有执行工具按返回路径和显式 argv 执行
 ```
 
 ## 工具职责
@@ -37,8 +42,9 @@ read_skill_resource(skillId, path)
 |------|----------|------|
 | `read_skill` | Node 工作区工具 | 读取本次 run 的冻结 `SKILL.md` instructions，返回完整说明和 supporting resource 清单 |
 | `read_skill_resource` | Node 工作区工具 | 在读取完整技能后，按 path 读取有界 UTF-8 supporting resource；不执行脚本、不安装依赖 |
+| `materialize_skill_resource` | Node 工作区工具 | 把冻结资源的原始字节复制到工作区相对路径，仅返回目标路径、字节数、hash、skill id、revision 与覆盖状态；不执行、不安装文件 |
 
-两者都由 `packages/workspace` 的 `createWorkspaceTools` 产出，和其他工作区工具一样由 Node 原生 loop 在进程内直接调用。
+三个工具都由 `packages/workspace` 的 `createWorkspaceTools` 产出，和其他工作区工具一样由 Node 原生 loop 在进程内直接调用。
 
 ## 为什么不用「给出文件路径、让模型自己读」
 
@@ -52,8 +58,9 @@ ScienceDiscovery 需要更强的可审计性：每次 run 开始时已经固定�
 
 - 注入系统提示的技能条目只含 metadata，不含完整 `content`。
 - `read_skill` 的 `skillId` 枚举限定为本次运行已选择的技能。
-- `read_skill_resource` 的 `path` 限定为 frozen snapshot 中记录的文本资源。
-- `scripts/` 目录仅作为技能包内容保存，运行时不会自动执行、安装或复制到 Python 工作区。
+- 读取与落地的 `path` 都限定为本轮已选 frozen snapshot 中记录的资源；落地 `dest` 必须留在当前可写工作区。
+- 仅仅选择技能不会自动执行、安装或复制 `scripts/`。加载后的工作流可以显式落地一份被引用的脚本，再按工具返回的工作区路径执行。
+- 落地工具只返回 metadata；大文件或二进制字节直接从冻结 snapshot 进入磁盘，不进入模型上下文。不要为寻找包资源而全盘搜索文件系统，也不要把已落地的大脚本重新读回上下文。
 - 所有 skill revision、version、package hash 会进入 Prompt Manifest，便于审计和复现。
 
 ## 相关入口

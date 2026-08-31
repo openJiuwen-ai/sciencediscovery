@@ -26,7 +26,7 @@ New Sessions inherit by default, but creation still requires a resolved task mod
 ```text
 my-skill/
   SKILL.md          # required YAML frontmatter and Markdown instructions
-  scripts/          # optional; retained but never auto-executed
+  scripts/          # optional; retained, never auto-executed or auto-copied
   references/       # optional text resources
   assets/           # optional package resources
 ```
@@ -35,7 +35,7 @@ my-skill/
 
 There is one global skill library. New/imported skills are immediately available in all mode; narrow them at Project or Session scope. Each managed edit creates an immutable revision, runs freeze selected revisions, and Prompt Manifest records IDs, revisions, versions, and package hashes. Only selected-mode references prevent deletion.
 
-Imports are untrusted. ZIP validation rejects traversal, symlinks, encryption, duplicates, and excess limits: 25 MiB upload, 50 MiB expanded, 500 files, 10 MiB per resource, and 512 KiB `SKILL.md`. Prompts initially list only name, description, and revision. The model calls `read_skill` with an exact catalog id and optionally uses bounded `read_skill_resource`. `scripts/` are preserved for portability but never installed, run, or copied to the Python workspace automatically.
+Imports are untrusted. ZIP validation rejects traversal, symlinks, encryption, duplicates, and excess limits: 25 MiB upload, 50 MiB expanded, 500 files, 10 MiB per resource, and 512 KiB `SKILL.md`. Prompts initially list only name, description, and revision. The model calls `read_skill` with an exact catalog id and optionally uses bounded `read_skill_resource` for supporting text. Selecting a Skill never installs, runs, or copies `scripts/` automatically. When loaded instructions reference a bundled executable, the model can explicitly call `materialize_skill_resource`; the tool writes exact frozen-revision bytes to a workspace-relative destination and returns metadata rather than source text. The recommended next step is to invoke that workspace path with explicit argv through an existing execution tool. The model should neither search the filesystem for package resources nor read a large materialized script back into context.
 
 ## Managed scientific environments
 

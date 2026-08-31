@@ -29,6 +29,7 @@ import type {
   ScientificExecutionResult,
   ScientificLanguage,
   SkillResource,
+  SkillResourceBytes,
   SkillResourceContent,
   SkillReviewDraftSummary,
   ShellExecutionResult,
@@ -41,7 +42,7 @@ import type { ToolFilterPolicy, WorkspaceToolOptions } from "./workspace.js";
 // results) survive replay; the prompt layer only forwards them to the runtime.
 type AgentHistoryMessage = Record<string, unknown> & { role?: string };
 
-export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.2";
+export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.3";
 // Bump when the workspace prompt contract changes, including subagent orchestration or skill disclosure rules.
 export const WORKSPACE_SYSTEM_PROMPT = [
   "You are a local science analysis agent.",
@@ -122,6 +123,7 @@ export interface RuntimeSkill {
   hash: string;
   id: string;
   readResource: (path: string) => SkillResourceContent | Promise<SkillResourceContent>;
+  readResourceBytes: (path: string) => SkillResourceBytes | Promise<SkillResourceBytes>;
   resources: SkillResource[];
   revision: number;
   version: string;
@@ -155,7 +157,7 @@ export function buildSkillSystemSection(
   const skillItems = orderedSkills
     .map((skill) => {
       const resources = skill.resources.length
-        ? `\n        <resources>${skill.resources.length} read-only resource(s); call read_skill first, then read_skill_resource only for referenced supporting files.</resources>`
+        ? `\n        <resources>${skill.resources.length} frozen resource(s); call read_skill first, then use read_skill_resource for referenced text or materialize_skill_resource for bundled executable files.</resources>`
         : "";
       return [
         "    <skill>",
@@ -177,7 +179,7 @@ Skill discovery and loading:
 1. Check <available_skills> for a skill whose name or description matches the task.
 2. If a skill matches, call read_skill(skillId) with its exact name to load the frozen SKILL.md instructions for this run.
 3. Follow the loaded skill instructions precisely.
-4. Load supporting resources only when the loaded skill references them or they are needed during execution.
+4. Load supporting text only when the loaded skill references it. For a bundled executable script, call materialize_skill_resource and execute the returned workspace path with explicit argv through the appropriate execution tool; do not read the materialized source back into context or search the filesystem for package resources.
 
 <available_skills>
 ${skillItems}

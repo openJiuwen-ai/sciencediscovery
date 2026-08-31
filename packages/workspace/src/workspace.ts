@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, readdir, realpath, stat } from "node:fs/promises";
-import { createHash } from "node:crypto";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { AgentTool } from "@sciencediscovery/tools";
 import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
@@ -56,6 +56,7 @@ import type {
   ScientificExecutionResult,
   ScientificLanguage,
   SkillResource,
+  SkillResourceBytes,
   SkillResourceContent,
   SkillReviewDraftSummary,
   ShellExecutionResult,
@@ -320,6 +321,7 @@ export interface WorkspaceToolOptions {
     hash: string;
     id: string;
     readResource: (path: string) => SkillResourceContent | Promise<SkillResourceContent>;
+    readResourceBytes: (path: string) => SkillResourceBytes | Promise<SkillResourceBytes>;
     resources: SkillResource[];
     revision: number;
     version: string;
@@ -346,6 +348,65 @@ function assertWorkspacePath(workspaceRoot: string, requestedPath: string): stri
     throw new Error(`Path escapes the workspace: ${requestedPath}`);
   }
   return candidate;
+}
+
+async function lstatIfPresent(path: string): Promise<Awaited<ReturnType<typeof lstat>> | undefined> {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+async function prepareWorkspaceDestination(
+  workspaceRoot: string,
+  requestedPath: string,
+): Promise<{ metadata?: Awaited<ReturnType<typeof lstat>>; path: string }> {
+  const root = resolve(workspaceRoot);
+  const path = assertWorkspacePath(root, requestedPath);
+  await mkdir(root, { recursive: true });
+
+  // Create each missing directory only after confirming that every existing
+  // component is a real directory, so a package copy cannot follow a symlink
+  // out of the writable workspace.
+  const parent = dirname(path);
+  const parentPath = relative(root, parent);
+  let current = root;
+  for (const segment of parentPath ? parentPath.split(sep) : []) {
+    current = resolve(current, segment);
+    let metadata = await lstatIfPresent(current);
+    if (!metadata) {
+      try {
+        await mkdir(current);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      metadata = await lstat(current);
+    }
+    if (metadata.isSymbolicLink()) throw new Error(`Destination follows a workspace symlink: ${requestedPath}`);
+    if (!metadata.isDirectory()) throw new Error(`Destination parent is not a directory: ${requestedPath}`);
+  }
+
+  const [canonicalRoot, canonicalParent] = await Promise.all([realpath(root), realpath(parent)]);
+  if (canonicalParent !== canonicalRoot && !canonicalParent.startsWith(`${canonicalRoot}${sep}`)) {
+    throw new Error(`Destination escapes the workspace: ${requestedPath}`);
+  }
+
+  const metadata = await lstatIfPresent(path);
+  if (metadata?.isSymbolicLink()) throw new Error(`Destination is a workspace symlink: ${requestedPath}`);
+  if (metadata && !metadata.isFile()) throw new Error(`Destination must be a workspace file: ${requestedPath}`);
+  return { ...(metadata ? { metadata } : {}), path };
+}
+
+async function replaceWorkspaceFile(path: string, bytes: Uint8Array): Promise<void> {
+  const temporaryPath = resolve(dirname(path), `.${basename(path)}.materialize-${randomUUID()}`);
+  try {
+    await writeFile(temporaryPath, bytes, { flag: "wx" });
+    await rename(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
 }
 
 function descendantPath(parent: string, child: string): string | undefined {
@@ -1456,7 +1517,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         if (!skill) throw new Error(`Skill ${params.skillId} is not selected for this run`);
         loadedSkillIds.add(skill.id);
         const resources = skill.resources.length
-          ? `\n\nAvailable read-only supporting resources (use read_skill_resource only as needed):\n${skill.resources.map((resource) => `- ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")}`
+          ? `\n\nAvailable frozen resources (use read_skill_resource for needed text; use materialize_skill_resource for bundled executable files):\n${skill.resources.map((resource) => `- ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")}`
           : "";
         return {
           content: [{ type: "text", text: [
@@ -1506,6 +1567,62 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: skillResourceParameters,
     };
     tools.push(readSkillResource);
+
+    const materializeSkillResourceParameters = Type.Object({
+      dest: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      path: Type.String({ maxLength: 240, minLength: 1 }),
+      skillId: Type.Union(skillLiterals as [typeof skillLiterals[number], ...typeof skillLiterals]),
+    });
+    const materializeSkillResource: AgentTool<typeof materializeSkillResourceParameters> = {
+      description: "Copy the exact bytes of a resource from an explicitly selected frozen skill revision into the current writable workspace. The default destination is the package-relative resource path. This does not execute or install the file, and the result contains metadata only, never source content.",
+      execute: async (_toolCallId, params) => {
+        const skill = selectedSkills.get(params.skillId);
+        if (!skill) throw new Error(`Skill ${params.skillId} is not selected for this run`);
+        const resource = skill.resources.find((candidate) => candidate.path === params.path);
+        if (!resource) throw new Error(`Skill resource not found in the frozen snapshot: ${params.path}`);
+
+        const frozen = await skill.readResourceBytes(resource.path);
+        if (
+          frozen.skillId !== skill.id
+          || frozen.revision !== skill.revision
+          || frozen.path !== resource.path
+          || frozen.hash !== resource.hash
+          || frozen.size !== resource.size
+        ) {
+          throw new Error(`Frozen skill resource metadata mismatch: ${skill.id}/${resource.path}`);
+        }
+        const bytes = Buffer.from(frozen.bytes);
+        const hash = createHash("sha256").update(bytes).digest("hex");
+        if (bytes.length !== frozen.size || hash !== frozen.hash) {
+          throw new Error(`Frozen skill resource bytes do not match snapshot metadata: ${skill.id}/${resource.path}`);
+        }
+
+        const destination = await prepareWorkspaceDestination(workspaceRoot, params.dest ?? frozen.path);
+        let overwritten = false;
+        let unchanged = false;
+        if (destination.metadata?.size === bytes.length) {
+          const existingHash = createHash("sha256").update(await readFile(destination.path)).digest("hex");
+          unchanged = existingHash === hash;
+        }
+        if (!unchanged) {
+          overwritten = Boolean(destination.metadata);
+          await replaceWorkspaceFile(destination.path, bytes);
+        }
+        const result = {
+          bytes: bytes.length,
+          dest: relative(resolve(workspaceRoot), destination.path).split(sep).join("/"),
+          hash,
+          overwritten,
+          revision: skill.revision,
+          skillId: skill.id,
+        };
+        return { bounded: true, content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+      label: "Materialize skill resource",
+      name: "materialize_skill_resource",
+      parameters: materializeSkillResourceParameters,
+    };
+    tools.push(materializeSkillResource);
   }
   if (options.createSkill && selectedSkillsForDiscovery.some((skill) => skill.id === "skill-creator")) {
     const createSkillParameters = Type.Object({

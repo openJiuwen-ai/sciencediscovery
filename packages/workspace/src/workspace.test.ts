@@ -13,7 +13,8 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
@@ -1073,6 +1074,7 @@ test("skill loading reads frozen instructions directly by exact id", async () =>
       hash: "b".repeat(64),
       id: "selected-skill",
       readResource: () => { throw new Error("not used"); },
+      readResourceBytes: () => { throw new Error("not used"); },
       resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 24 }],
       revision: 3,
       version: "1.0.0",
@@ -1082,6 +1084,7 @@ test("skill loading reads frozen instructions directly by exact id", async () =>
       hash: "c".repeat(64),
       id: "other-skill",
       readResource: () => { throw new Error("not used"); },
+      readResourceBytes: () => { throw new Error("not used"); },
       resources: [],
       revision: 1,
       version: "1.0.0",
@@ -1121,6 +1124,7 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
           size: 24,
         };
       },
+      readResourceBytes: () => { throw new Error("not used"); },
       resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 24 }],
       revision: 3,
       version: "1.0.0",
@@ -1139,6 +1143,149 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
     tool.execute("tool-call", { path: "references/guide.md", skillId: "unselected-skill" } as never),
     /not selected/,
   );
+});
+
+test("materialize_skill_resource writes frozen bytes without returning source and handles repeated destinations", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `materialize-skill-${process.pid}-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const source = Buffer.from(`print("frozen marker")\n# ${"x".repeat(20_000)}\n`);
+  const hash = createHash("sha256").update(source).digest("hex");
+  let byteReads = 0;
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    skills: [{
+      content: "Materialize the bundled script before execution.",
+      description: "Selected skill with a large executable script.",
+      hash: "b".repeat(64),
+      id: "selected-skill",
+      readResource: (path) => ({
+        content: source.toString("utf8"),
+        hash,
+        path,
+        revision: 3,
+        skillId: "selected-skill",
+        size: source.length,
+      }),
+      readResourceBytes: (path) => {
+        byteReads += 1;
+        return {
+          bytes: Buffer.from(source),
+          hash,
+          path,
+          revision: 3,
+          skillId: "selected-skill",
+          size: source.length,
+        };
+      },
+      resources: [{ hash, kind: "script", path: "scripts/foo.py", size: source.length }],
+      revision: 3,
+      version: "1.0.0",
+    }],
+  });
+
+  await assert.rejects(readFile(resolve(root, "scripts", "foo.py")), /ENOENT/);
+  const readTool = tools.find((candidate) => candidate.name === "read_skill_resource");
+  const materializeTool = tools.find((candidate) => candidate.name === "materialize_skill_resource");
+  assert.ok(readTool);
+  assert.ok(materializeTool);
+  const schema = materializeTool.parameters as { properties?: { skillId?: { anyOf?: Array<{ const?: string }> } } };
+  assert.deepEqual(schema.properties?.skillId?.anyOf?.map((item) => item.const), ["selected-skill"]);
+
+  const readResult = await readTool.execute("read-call", { path: "scripts/foo.py", skillId: "selected-skill" });
+  const readText = readResult.content[0]?.type === "text" ? readResult.content[0].text : "";
+  const first = await materializeTool.execute("materialize-call", { path: "scripts/foo.py", skillId: "selected-skill" });
+  const firstText = first.content[0]?.type === "text" ? first.content[0].text : "";
+  assert.ok(firstText.length < readText.length / 10);
+  assert.doesNotMatch(firstText, /frozen marker/);
+  assert.deepEqual(JSON.parse(firstText), {
+    bytes: source.length,
+    dest: "scripts/foo.py",
+    hash,
+    overwritten: false,
+    revision: 3,
+    skillId: "selected-skill",
+  });
+  assert.deepEqual(first.details, JSON.parse(firstText));
+  assert.doesNotMatch(JSON.stringify(first.details), /frozen marker/);
+  assert.deepEqual(await readFile(resolve(root, "scripts", "foo.py")), source);
+
+  const second = await materializeTool.execute("materialize-call-2", { path: "scripts/foo.py", skillId: "selected-skill" });
+  assert.equal(JSON.parse(second.content[0]?.type === "text" ? second.content[0].text : "").overwritten, false);
+  await writeFile(resolve(root, "scripts", "foo.py"), "workspace edit");
+  const third = await materializeTool.execute("materialize-call-3", { path: "scripts/foo.py", skillId: "selected-skill" });
+  assert.equal(JSON.parse(third.content[0]?.type === "text" ? third.content[0].text : "").overwritten, true);
+  assert.deepEqual(await readFile(resolve(root, "scripts", "foo.py")), source);
+  const custom = await materializeTool.execute("materialize-call-4", {
+    dest: "tools/frozen-foo.py",
+    path: "scripts/foo.py",
+    skillId: "selected-skill",
+  });
+  assert.equal(JSON.parse(custom.content[0]?.type === "text" ? custom.content[0].text : "").dest, "tools/frozen-foo.py");
+  assert.deepEqual(await readFile(resolve(root, "tools", "frozen-foo.py")), source);
+  assert.equal(byteReads, 4);
+});
+
+test("materialize_skill_resource rejects unselected skills, unknown resources, and escaping destinations", async (context) => {
+  const suffix = `${process.pid}-${Date.now()}`;
+  const root = resolve(process.cwd(), ".tmp", `materialize-boundary-${suffix}`);
+  const outside = resolve(process.cwd(), ".tmp", `materialize-outside-${suffix}`);
+  await Promise.all([mkdir(root, { recursive: true }), mkdir(outside, { recursive: true })]);
+  context.after(() => Promise.all([
+    rm(root, { force: true, recursive: true }),
+    rm(outside, { force: true, recursive: true }),
+  ]));
+  const source = Buffer.from("print('safe')\n");
+  const hash = createHash("sha256").update(source).digest("hex");
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    skills: [{
+      content: "Use the bundled script.",
+      description: "Boundary-test skill.",
+      hash: "b".repeat(64),
+      id: "selected-skill",
+      readResource: () => { throw new Error("not used"); },
+      readResourceBytes: (path) => ({
+        bytes: Buffer.from(source),
+        hash,
+        path,
+        revision: 7,
+        skillId: "selected-skill",
+        size: source.length,
+      }),
+      resources: [{ hash, kind: "script", path: "scripts/foo.py", size: source.length }],
+      revision: 7,
+      version: "1.0.0",
+    }],
+  });
+  const tool = tools.find((candidate) => candidate.name === "materialize_skill_resource");
+  assert.ok(tool);
+
+  await assert.rejects(
+    tool.execute("unselected", { path: "scripts/foo.py", skillId: "other-skill" } as never),
+    /not selected/,
+  );
+  await assert.rejects(
+    tool.execute("unknown", { path: "scripts/missing.py", skillId: "selected-skill" }),
+    /not found in the frozen snapshot/,
+  );
+  await assert.rejects(
+    tool.execute("parent", { dest: "../escape.py", path: "scripts/foo.py", skillId: "selected-skill" }),
+    /escapes the workspace/,
+  );
+  await assert.rejects(
+    tool.execute("absolute", { dest: "/escape.py", path: "scripts/foo.py", skillId: "selected-skill" }),
+    /non-empty and relative/,
+  );
+
+  await symlink(outside, resolve(root, "linked"), "dir");
+  await assert.rejects(
+    tool.execute("symlink", { dest: "linked/foo.py", path: "scripts/foo.py", skillId: "selected-skill" }),
+    /workspace symlink/,
+  );
+  await assert.rejects(readFile(resolve(outside, "foo.py")), /ENOENT/);
 });
 
 test("create_skill requires the selected skill-creator instructions before mutating the catalog", async () => {
@@ -1162,6 +1309,7 @@ test("create_skill requires the selected skill-creator instructions before mutat
       hash: "c".repeat(64),
       id: "skill-creator",
       readResource: () => { throw new Error("not used"); },
+      readResourceBytes: () => { throw new Error("not used"); },
       resources: [],
       revision: 1,
       version: "1.0.0",
