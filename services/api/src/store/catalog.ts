@@ -29,6 +29,7 @@ import type {
   Project,
   RemoteHostTarget,
   RemoteJob,
+  RemoteWorkspaceSyncRecord,
   ReviewerSpecialistLevel,
   RuntimeSettingsOverrides,
   SandboxNetworkSettings,
@@ -82,6 +83,7 @@ export interface Catalog {
   reviewerSpecialistLevel: ReviewerSpecialistLevel;
   remoteHosts: RemoteHostTarget[];
   remoteJobs: RemoteJob[];
+  remoteWorkspaceSyncs: RemoteWorkspaceSyncRecord[];
   sessionPlans: SessionPlan[];
   sessions: Session[];
   specialists: Specialist[];
@@ -124,6 +126,7 @@ export function emptyCatalog(
     reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
     remoteHosts: [],
     remoteJobs: [],
+    remoteWorkspaceSyncs: [],
     sessionPlans: [],
     sessions: [],
     // Built-in specialists are seeded (read-only) and all enabled by default

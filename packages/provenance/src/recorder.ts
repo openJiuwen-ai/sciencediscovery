@@ -125,6 +125,8 @@ export interface RecordExecutionOptions {
   permissionEpoch: PermissionEpoch;
   readOnlyWorkspaceRoot?: string;
   skillPackagesRoot?: string;
+  /** Logical runner-local workspace. When set, generated files remain remote until explicit pull. */
+  runnerWorkspaceKey?: string;
   runnerClient: RunnerClient;
   /** Outbound route for allowlisted sandbox traffic; see the request field. */
   sandboxEgressProxy?: ResolvedProxy;
@@ -478,6 +480,7 @@ export class ProvenanceRecorder {
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
+        ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {
@@ -547,19 +550,22 @@ export class ProvenanceRecorder {
     });
 
     const paths = [...new Set([...result.createdFiles, ...result.modifiedFiles])];
-    await this.recordGeneratedFiles({
-      artifactPathPrefix: options.artifactPathPrefix,
-      code: options.code,
-      executionId,
-      finishedAt: result.finishedAt,
-      paths,
-      parentSubagentId: options.parentSubagentId,
-      sessionId: options.sessionId,
-      toolCallId: options.toolCallId,
-      toolName: "run_shell",
-      turnId: options.turnId,
-      workspaceRoot: options.workspaceRoot,
-    });
+    // 远端 runner 的产出留在远端 workspace，只有模型显式 pull 回来才登记。
+    if (!options.runnerWorkspaceKey) {
+      await this.recordGeneratedFiles({
+        artifactPathPrefix: options.artifactPathPrefix,
+        code: options.code,
+        executionId,
+        finishedAt: result.finishedAt,
+        paths,
+        parentSubagentId: options.parentSubagentId,
+        sessionId: options.sessionId,
+        toolCallId: options.toolCallId,
+        toolName: "run_shell",
+        turnId: options.turnId,
+        workspaceRoot: options.workspaceRoot,
+      });
+    }
     this.observeExecution({
       executionId,
       sessionId: options.sessionId,
@@ -610,6 +616,7 @@ export class ProvenanceRecorder {
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
+        ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {
@@ -700,19 +707,21 @@ export class ProvenanceRecorder {
     });
 
     const paths = [...new Set([...result.createdFiles, ...result.modifiedFiles])];
-    await this.recordGeneratedFiles({
-      artifactPathPrefix: options.artifactPathPrefix,
-      code: options.code,
-      executionId,
-      finishedAt: result.finishedAt,
-      paths,
-      parentSubagentId: options.parentSubagentId,
-      sessionId: options.sessionId,
-      toolCallId: options.toolCallId,
-      toolName: result.language === "python" ? "run_python" : "run_r",
-      turnId: options.turnId,
-      workspaceRoot: options.workspaceRoot,
-    });
+    if (!options.runnerWorkspaceKey) {
+      await this.recordGeneratedFiles({
+        artifactPathPrefix: options.artifactPathPrefix,
+        code: options.code,
+        executionId,
+        finishedAt: result.finishedAt,
+        paths,
+        parentSubagentId: options.parentSubagentId,
+        sessionId: options.sessionId,
+        toolCallId: options.toolCallId,
+        toolName: result.language === "python" ? "run_python" : "run_r",
+        turnId: options.turnId,
+        workspaceRoot: options.workspaceRoot,
+      });
+    }
     // env snapshot hash for the provenance mirror: the revision's snapshot.hash
     // (already CAS-verified equal during sync above). Read from the store's
     // environment catalog by revision id so a sync failure (environmentSyncError)

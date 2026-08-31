@@ -113,6 +113,8 @@ export interface ScientificExecutionRequest {
    * persisted, and it never enters the sandbox: only the runner dials with it.
    */
   sandboxEgressProxy?: ResolvedProxy;
+  /** Logical persistent workspace resolved below the runner's own data root. */
+  runnerWorkspaceKey?: string;
   workspaceRoot: string;
 }
 
@@ -207,6 +209,8 @@ export interface ShellExecutionRequest {
    * persisted, and it never enters the sandbox: only the runner dials with it.
    */
   sandboxEgressProxy?: ResolvedProxy;
+  /** Logical persistent workspace resolved below the runner's own data root. */
+  runnerWorkspaceKey?: string;
   workspaceRoot: string;
 }
 

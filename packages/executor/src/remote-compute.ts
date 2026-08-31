@@ -13,15 +13,20 @@
 // limitations under the License.
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { glob, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { createServer } from "node:net";
 
 import type {
   RemoteHostCapabilities,
+  RemoteHostTarget,
   RemoteJob,
   RemoteJobOutputRecord,
+  RemoteRunnerStatus,
 } from "@sciencediscovery/schema";
+import { RunnerClient } from "./runner-client.js";
 
 const MAX_SSH_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_PULLED_OUTPUT_BYTES = 1024 * 1024;
@@ -46,6 +51,14 @@ function validateAlias(alias: string): string {
     throw new Error("SSH host alias must contain only letters, numbers, dots, underscores, and hyphens");
   }
   return normalized;
+}
+
+export function validateRunnerCommand(value: string): string {
+  const command = value.trim() || "sciencediscovery-runner";
+  if (command.length > 500 || !/^(?:[A-Za-z0-9._-]+|\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+)$/.test(command)) {
+    throw new Error("Remote runner command must be an executable name or absolute POSIX path without arguments");
+  }
+  return command;
 }
 
 function validateRemotePath(path: string, label: string): string {
@@ -139,7 +152,9 @@ export class OpenSshTransport implements RemoteTransport {
   }
 }
 
-const PROBE_SCRIPT = `set +e
+function probeScript(runnerCommand: string): string {
+  return `set +e
+printf 'platform='; uname -s 2>/dev/null || true
 printf 'cpu='; getconf _NPROCESSORS_ONLN 2>/dev/null || true
 printf 'memory_kib='; awk '/MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true
 printf 'gpu='; if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1; else printf '\n'; fi
@@ -149,7 +164,9 @@ printf 'modules='; if command -v module >/dev/null 2>&1 || command -v modulecmd 
 printf 'containers='; found=''; for runtime in apptainer singularity docker podman; do if command -v "$runtime" >/dev/null 2>&1; then found="\${found}\${found:+,}$runtime"; fi; done; printf '%s\n' "$found"
 printf 'scratch='; found=''; for path in /scratch /tmp "\${SCRATCH:-}"; do if [ -n "$path" ] && [ -d "$path" ] && [ -w "$path" ]; then found="\${found}\${found:+,}$path"; fi; done; printf '%s\n' "$found"
 printf 'sbatch='; if command -v sbatch >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi
+printf 'runner='; if command -v -- ${shellQuote(runnerCommand)} >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi
 `;
+}
 
 function parseProbe(stdout: string): RemoteHostCapabilities {
   const values = new Map(stdout.split(/\r?\n/).flatMap((line) => {
@@ -166,7 +183,9 @@ function parseProbe(stdout: string): RemoteHostCapabilities {
     gpu: values.get("gpu")?.trim() || null,
     memoryBytes: Number.isSafeInteger(memoryKib) && memoryKib > 0 ? memoryKib * 1024 : null,
     modules: values.get("modules") === "1",
+    platform: values.get("platform")?.trim() || null,
     probedAt: new Date().toISOString(),
+    runnerCommandAvailable: values.get("runner") === "1",
     scratchPaths: [...new Set(values.get("scratch")?.split(",").filter(Boolean) ?? [])],
     slurm: values.get("sbatch") === "1",
   };
@@ -174,6 +193,12 @@ function parseProbe(stdout: string): RemoteHostCapabilities {
 
 export class RemoteComputeClient {
   readonly transport: RemoteTransport;
+  private readonly runnerConnections = new Map<string, {
+    child: ReturnType<typeof spawn>;
+    client: RunnerClient;
+    status: RemoteRunnerStatus;
+  }>();
+  private readonly runnerStatuses = new Map<string, RemoteRunnerStatus>();
 
   constructor(
     readonly sshConfigPath: string,
@@ -186,13 +211,135 @@ export class RemoteComputeClient {
     return [...await collectConfigAliases(this.sshConfigPath)].toSorted();
   }
 
-  async probe(aliasValue: string): Promise<RemoteHostCapabilities> {
+  async probe(aliasValue: string, runnerCommandValue = "sciencediscovery-runner"): Promise<RemoteHostCapabilities> {
     const alias = validateAlias(aliasValue);
+    const runnerCommand = validateRunnerCommand(runnerCommandValue);
     const aliases = await this.configuredAliases();
     if (!aliases.includes(alias)) throw new Error(`SSH host alias ${alias} is not explicitly present in the configured SSH config`);
-    const result = await this.transport.run(alias, PROBE_SCRIPT, 20_000);
+    const result = await this.transport.run(alias, probeScript(runnerCommand), 20_000);
     if (result.exitCode !== 0) throw new Error(`SSH probe failed (${result.exitCode}): ${result.stderr.trim() || "authentication or connection failed"}`);
     return parseProbe(result.stdout);
+  }
+
+  runnerStatus(hostId: string): RemoteRunnerStatus {
+    return structuredClone(this.runnerStatuses.get(hostId) ?? { hostId, state: "disconnected" });
+  }
+
+  runnerClient(hostId: string): RunnerClient {
+    const connection = this.runnerConnections.get(hostId);
+    if (!connection || connection.status.state !== "ready") throw new Error("Remote runner is not connected");
+    return connection.client;
+  }
+
+  async connectRunner(host: RemoteHostTarget, localVersion?: string): Promise<RemoteRunnerStatus> {
+    if (host.status !== "ready" || !host.capabilities) throw new Error("Remote host is not ready");
+    if (host.capabilities.platform !== "Linux") throw new Error("SSH remote runner supports Linux hosts only");
+    if (!host.capabilities.runnerCommandAvailable) {
+      throw new Error(`Pre-installed remote runner executable was not found: ${host.runnerCommand}`);
+    }
+    await this.disconnectRunner(host.id);
+    const runnerCommand = validateRunnerCommand(host.runnerCommand);
+    const status: RemoteRunnerStatus = { hostId: host.id, ...(localVersion ? { localVersion } : {}), state: "connecting" };
+    this.runnerStatuses.set(host.id, status);
+    const localPort = await new Promise<number>((resolvePort, reject) => {
+      const reservation = createServer();
+      reservation.once("error", reject);
+      reservation.listen(0, "127.0.0.1", () => {
+        const address = reservation.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        reservation.close((error) => error ? reject(error) : resolvePort(port));
+      });
+    });
+    const token = randomBytes(32).toString("base64url");
+    const remotePort = 4311;
+    const script = [
+      "set -eu",
+      "test \"$(uname -s)\" = Linux",
+      "data_dir=\"${XDG_DATA_HOME:-$HOME/.local/share}/sciencediscovery/remote-runner\"",
+      "mkdir -p -- \"$data_dir\"",
+      `exec env SCIENCE_AGENT_RUNNER_HOST=127.0.0.1 SCIENCE_AGENT_RUNNER_PORT=${remotePort} SCIENCE_AGENT_RUNNER_TOKEN=${shellQuote(token)} SCIENCE_AGENT_DATA_DIR=\"$data_dir\" ${shellQuote(runnerCommand)}`,
+      "",
+    ].join("\n");
+    const child = spawn("/usr/bin/ssh", [
+      "-F", this.sshConfigPath,
+      "-o", "BatchMode=yes",
+      "-o", "ConnectTimeout=10",
+      "-o", "ExitOnForwardFailure=yes",
+      "-o", "ServerAliveInterval=5",
+      "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
+      "--", validateAlias(host.alias), "sh", "-s",
+    ], { stdio: ["pipe", "ignore", "pipe"] });
+    const client = new RunnerClient(`http://127.0.0.1:${localPort}`, token);
+    const connection = { child, client, status };
+    this.runnerConnections.set(host.id, connection);
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString("utf8")}`.slice(-8_000);
+    });
+    child.once("error", (error) => {
+      stderr = error.message;
+    });
+    child.once("close", (code) => {
+      if (this.runnerConnections.get(host.id)?.child !== child) return;
+      this.runnerConnections.delete(host.id);
+      this.runnerStatuses.set(host.id, {
+        ...connection.status,
+        error: stderr.trim() || `SSH tunnel closed (${code ?? "unknown"})`,
+        state: "error",
+      });
+    });
+    child.stdin?.end(script);
+    const deadline = Date.now() + 15_000;
+    try {
+      let health;
+      while (Date.now() < deadline) {
+        if (child.exitCode !== null) throw new Error(stderr.trim() || `SSH tunnel closed (${child.exitCode})`);
+        try {
+          health = await client.health();
+          break;
+        } catch {
+          await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+        }
+      }
+      if (!health) throw new Error(stderr.trim() || "Remote runner did not become ready within 15 seconds");
+      connection.status = {
+        connectedAt: new Date().toISOString(),
+        hostId: host.id,
+        ...(localVersion ? { localVersion } : {}),
+        remoteVersion: health.runnerVersion,
+        state: "ready",
+        ...(localVersion ? { versionMismatch: localVersion !== health.runnerVersion } : {}),
+      };
+      this.runnerStatuses.set(host.id, connection.status);
+      return structuredClone(connection.status);
+    } catch (error) {
+      child.kill("SIGTERM");
+      this.runnerConnections.delete(host.id);
+      const failed: RemoteRunnerStatus = {
+        error: error instanceof Error ? error.message : "Remote runner connection failed",
+        hostId: host.id,
+        ...(localVersion ? { localVersion } : {}),
+        state: "error",
+      };
+      this.runnerStatuses.set(host.id, failed);
+      return structuredClone(failed);
+    }
+  }
+
+  async disconnectRunner(hostId: string): Promise<RemoteRunnerStatus> {
+    const connection = this.runnerConnections.get(hostId);
+    if (connection) {
+      this.runnerConnections.delete(hostId);
+      connection.child.kill("SIGTERM");
+    }
+    const status: RemoteRunnerStatus = { hostId, state: "disconnected" };
+    this.runnerStatuses.set(hostId, status);
+    return structuredClone(status);
+  }
+
+  close(): void {
+    for (const connection of this.runnerConnections.values()) connection.child.kill("SIGTERM");
+    this.runnerConnections.clear();
   }
 
   async start(job: RemoteJob, workspaceRoot: string): Promise<RemoteJob> {

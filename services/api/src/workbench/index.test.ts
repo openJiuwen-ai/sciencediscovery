@@ -24,6 +24,7 @@ const project: Project = {
   createdAt: "2026-01-01T00:00:00.000Z",
   id: "project-1",
   name: "Mixed catalog",
+  remoteRunnerHostIds: [],
   settingsOverrides: {},
 };
 

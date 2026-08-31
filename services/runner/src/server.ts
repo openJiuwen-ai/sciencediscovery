@@ -13,9 +13,11 @@
 // limitations under the License.
 
 import { execFile } from "node:child_process";
+import { createReadStream } from "node:fs";
+import { lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { userInfo } from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -39,6 +41,7 @@ import type {
   RunnerExecutionStatus,
   RunnerHealth,
   RunnerRuntimeStatus,
+  RemoteWorkspaceFile,
   SandboxNetworkCapability,
   ScientificEnvsCapability,
   SetupScientificEnvironmentsRequest,
@@ -140,15 +143,140 @@ function authorized(request: IncomingMessage, expected: string): boolean {
 }
 
 async function readBody(request: IncomingMessage): Promise<string> {
+  return (await readBytes(request, MAX_BODY_BYTES)).toString("utf8");
+}
+
+async function readBytes(request: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
-    if (total > MAX_BODY_BYTES) throw new Error("Request body exceeds the 2 MB limit");
+    if (maxBytes > 0 && total > maxBytes) throw new Error(`Request body exceeds the ${maxBytes} byte limit`);
     chunks.push(buffer);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+function validateRunnerWorkspaceKey(value: string): string {
+  const key = value.trim();
+  if (!key || key.length > 500 || key.includes("\\") || isAbsolute(key)) {
+    throw new Error("Invalid remote workspace key");
+  }
+  const parts = key.split("/");
+  if (parts.some((part) => !part || part === "." || part === ".." || !/^[A-Za-z0-9._-]+$/.test(part))) {
+    throw new Error("Invalid remote workspace key");
+  }
+  return parts.join("/");
+}
+
+async function remoteWorkspaceRoot(dataDir: string, keyValue: string): Promise<string> {
+  const key = validateRunnerWorkspaceKey(keyValue);
+  const base = resolve(dataDir, "remote-workspaces");
+  const root = resolve(base, key);
+  if (!root.startsWith(`${base}${sep}`)) throw new Error("Remote workspace escapes the runner data directory");
+  await mkdir(root, { recursive: true });
+  return root;
+}
+
+function validateRelativeWorkspacePath(value: string): string {
+  const path = value.trim();
+  if (!path || path.length > 2_000 || path.includes("\\") || isAbsolute(path)) {
+    throw new Error("Workspace path must be a non-empty relative POSIX path");
+  }
+  const parts = path.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    throw new Error("Workspace path contains an invalid segment");
+  }
+  return parts.join("/");
+}
+
+async function readableWorkspaceFile(root: string, pathValue: string): Promise<string> {
+  const path = validateRelativeWorkspacePath(pathValue);
+  const candidate = resolve(root, path);
+  const canonicalRoot = await realpath(root);
+  const canonical = await realpath(candidate);
+  if (!canonical.startsWith(`${canonicalRoot}${sep}`)) throw new Error("Workspace path escapes through a symbolic link");
+  if (!(await stat(canonical)).isFile()) throw new Error("Workspace path is not a regular file");
+  return canonical;
+}
+
+async function writableWorkspaceFile(root: string, pathValue: string): Promise<string> {
+  const path = validateRelativeWorkspacePath(pathValue);
+  const candidate = resolve(root, path);
+  let parent = root;
+  for (const segment of path.split("/").slice(0, -1)) {
+    const next = resolve(parent, segment);
+    try {
+      const details = await lstat(next);
+      if (details.isSymbolicLink() || !details.isDirectory()) {
+        throw new Error("Workspace parent must be a real directory");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await mkdir(next);
+    }
+    parent = next;
+  }
+  try {
+    if ((await lstat(candidate)).isSymbolicLink()) throw new Error("Workspace target is a symbolic link");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return candidate;
+}
+
+async function listRemoteWorkspaceFiles(root: string, selectedPaths?: string[]): Promise<RemoteWorkspaceFile[]> {
+  const files = new Map<string, RemoteWorkspaceFile>();
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = resolve(directory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        await visit(absolute);
+      } else if (entry.isFile()) {
+        const details = await stat(absolute);
+        const path = relative(root, absolute).split(sep).join("/");
+        files.set(path, {
+          modifiedAt: details.mtime.toISOString(),
+          path,
+          size: details.size,
+        });
+      }
+    }
+  };
+  if (!selectedPaths?.length) await visit(root);
+  else {
+    const canonicalRoot = await realpath(root);
+    for (const pathValue of selectedPaths) {
+      const path = validateRelativeWorkspacePath(pathValue);
+      const candidate = resolve(root, path);
+      let details;
+      try { details = await lstat(candidate); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      if (details.isSymbolicLink()) continue;
+      const canonical = await realpath(candidate);
+      if (!canonical.startsWith(`${canonicalRoot}${sep}`)) {
+        throw new Error("Workspace path escapes through a symbolic link");
+      }
+      if (details.isDirectory()) await visit(canonical);
+      else if (details.isFile()) {
+        files.set(path, { modifiedAt: details.mtime.toISOString(), path, size: details.size });
+      }
+    }
+  }
+  return [...files.values()].toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
+async function resolveExecutionWorkspace(
+  config: RunnerConfig,
+  execution: PythonExecutionRequest | ShellExecutionRequest,
+): Promise<void> {
+  if (!execution.runnerWorkspaceKey) return;
+  execution.workspaceRoot = await remoteWorkspaceRoot(config.dataDir, execution.runnerWorkspaceKey);
+  delete execution.readOnlyWorkspaceRoot;
 }
 
 function currentExecutionUser(): string {
@@ -385,6 +513,72 @@ export function createRunnerServer(
         } satisfies RunnerRuntimeStatus);
         return;
       }
+      if ((request.method === "GET" || request.method === "POST") && url.pathname === "/remote-workspace/files") {
+        const input = request.method === "POST"
+          ? JSON.parse(await readBody(request)) as { paths?: string[]; workspace?: string }
+          : undefined;
+        const root = await remoteWorkspaceRoot(
+          config.dataDir,
+          input?.workspace ?? url.searchParams.get("workspace") ?? "",
+        );
+        if (input?.paths && (!Array.isArray(input.paths) || input.paths.length > 50)) {
+          throw new Error("Remote workspace paths must contain at most 50 entries");
+        }
+        sendJson(response, 200, await listRemoteWorkspaceFiles(root, input?.paths));
+        return;
+      }
+      if (request.method === "DELETE" && url.pathname === "/remote-workspace") {
+        const root = await remoteWorkspaceRoot(config.dataDir, url.searchParams.get("workspace") ?? "");
+        await rm(root, { force: true, recursive: true });
+        sendJson(response, 200, { deleted: true });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/remote-workspace/file") {
+        const root = await remoteWorkspaceRoot(config.dataDir, url.searchParams.get("workspace") ?? "");
+        const file = await readableWorkspaceFile(root, url.searchParams.get("path") ?? "");
+        const details = await stat(file);
+        response.writeHead(200, {
+          "cache-control": "no-store",
+          "content-length": details.size,
+          "content-type": "application/octet-stream",
+          "x-content-type-options": "nosniff",
+        });
+        createReadStream(file).pipe(response);
+        return;
+      }
+      if (request.method === "PUT" && url.pathname === "/remote-workspace/file") {
+        const root = await remoteWorkspaceRoot(config.dataDir, url.searchParams.get("workspace") ?? "");
+        const file = await writableWorkspaceFile(root, url.searchParams.get("path") ?? "");
+        const conflict = url.searchParams.get("conflict") ?? "reject";
+        if (conflict !== "reject" && conflict !== "overwrite") throw new Error("Invalid workspace conflict policy");
+        if (conflict === "reject") {
+          try {
+            await lstat(file);
+            sendJson(response, 409, { error: "Remote workspace file already exists" } satisfies ApiError);
+            return;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+        }
+        const bytes = await readBytes(request, config.maxWorkspaceBytes);
+        if (config.maxWorkspaceBytes > 0) {
+          const currentBytes = (await listRemoteWorkspaceFiles(root)).reduce((total, entry) => total + entry.size, 0);
+          let replacedBytes = 0;
+          try { replacedBytes = (await stat(file)).size; } catch { /* New file. */ }
+          if (currentBytes - replacedBytes + bytes.length > config.maxWorkspaceBytes) {
+            throw new Error("Remote workspace exceeds its execution quota");
+          }
+        }
+        const temporary = `${file}.sync-${process.pid}-${Date.now()}`;
+        try {
+          await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+          await rename(temporary, file);
+        } finally {
+          await rm(temporary, { force: true }).catch(() => undefined);
+        }
+        sendJson(response, 201, { path: relative(root, file).split(sep).join("/"), size: bytes.length });
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/npu/workloads") {
         sendJson(response, 200, npuBroker.listWorkloads());
         return;
@@ -587,6 +781,7 @@ export function createRunnerServer(
           return;
         }
         const execution = JSON.parse(body) as ShellExecutionRequest;
+        await resolveExecutionWorkspace(config, execution);
         if (execution.permissionEpoch.executeGrantScope === "once") execution.kernelMode = "ephemeral";
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
@@ -619,6 +814,7 @@ export function createRunnerServer(
           return;
         }
         const execution = JSON.parse(body) as PythonExecutionRequest;
+        await resolveExecutionWorkspace(config, execution);
         if (execution.permissionEpoch.executeGrantScope === "once") execution.kernelMode = "ephemeral";
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {

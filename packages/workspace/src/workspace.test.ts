@@ -1563,10 +1563,12 @@ test("propose_remote_job creates an approval card without executing remote comma
       alias: "cluster",
       capabilities: {
         conda: true, containerRuntimes: ["apptainer"], cpuCores: 32, cuda: null, gpu: null,
-        memoryBytes: 128 * 1024 ** 3, modules: true, probedAt: timestamp, scratchPaths: ["/scratch"], slurm: true,
+        memoryBytes: 128 * 1024 ** 3, modules: true, platform: "Linux", probedAt: timestamp,
+        runnerCommandAvailable: true, scratchPaths: ["/scratch"], slurm: true,
       },
       createdAt: timestamp,
       id: "host-1",
+      runnerCommand: "sciencediscovery-runner",
       status: "ready",
       updatedAt: timestamp,
     }],
@@ -1584,6 +1586,43 @@ test("propose_remote_job creates an approval card without executing remote comma
   });
   assert.equal(proposedCommand, "python analysis.py");
   assert.equal((result.details as RemoteJob).state, "awaiting_approval");
+});
+
+test("sync_remote_workspace exposes only explicit list, push, and pull operations", async () => {
+  const calls: string[] = [];
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    remoteWorkspace: {
+      hostAlias: "linux-runner",
+      list: async () => [{ modifiedAt: "2026-08-31T00:00:00.000Z", path: "results/report.md", size: 12 }],
+      sync: async (input) => {
+        calls.push(`${input.direction}:${input.conflict}:${input.paths.join(",")}`);
+        return {
+          files: input.paths,
+          record: {
+            bytes: 12,
+            createdAt: "2026-08-31T00:00:00.000Z",
+            direction: input.direction,
+            fileCount: 1,
+            hostId: "host-1",
+            id: "sync-1",
+            paths: input.paths,
+            sessionId: "session-1",
+            status: "completed",
+          },
+        };
+      },
+    },
+  });
+  const tool = tools.find((candidate) => candidate.name === "sync_remote_workspace");
+  assert.ok(tool);
+  assert.match(tool.description, /Nothing is mirrored automatically/);
+  const listed = await tool.execute("list-call", { operation: "list" });
+  assert.match((listed.content[0] as { text: string }).text, /results\/report\.md/);
+  await tool.execute("push-call", { operation: "push", paths: ["inputs/data.csv"] });
+  await tool.execute("pull-call", { conflict: "overwrite", operation: "pull", paths: ["results"] });
+  assert.deepEqual(calls, ["push:reject:inputs/data.csv", "pull:overwrite:results"]);
 });
 
 test("query_graph tool forwards the query and returns the memory-graph match", async () => {

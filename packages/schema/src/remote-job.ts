@@ -22,7 +22,11 @@ export interface RemoteHostCapabilities {
   gpu: string | null;
   memoryBytes: number | null;
   modules: boolean;
+  /** Remote operating system reported by `uname -s`. F1 accepts Linux only. */
+  platform: string | null;
   probedAt: string;
+  /** Whether the configured pre-installed runner executable is on the remote PATH. */
+  runnerCommandAvailable: boolean;
   scratchPaths: string[];
   slurm: boolean;
 }
@@ -33,6 +37,10 @@ export interface RemoteHostTarget {
   createdAt: string;
   error?: string;
   id: string;
+  /** Pre-installed executable or absolute executable path; never a shell expression. */
+  runnerCommand: string;
+  /** Ephemeral connection state supplied by the API; never persisted. */
+  runnerStatus?: RemoteRunnerStatus;
   status: "error" | "ready";
   updatedAt: string;
 }
@@ -90,6 +98,47 @@ export interface RemoteJob {
 
 export interface RegisterRemoteHostRequest {
   alias: string;
+  runnerCommand?: string;
+}
+
+export type RemoteRunnerConnectionState = "connecting" | "disconnected" | "error" | "ready";
+
+export interface RemoteRunnerStatus {
+  connectedAt?: string;
+  error?: string;
+  hostId: string;
+  localVersion?: string;
+  remoteVersion?: string;
+  state: RemoteRunnerConnectionState;
+  versionMismatch?: boolean;
+}
+
+export type RemoteWorkspaceSyncDirection = "pull" | "push";
+
+export interface RemoteWorkspaceSyncRequest {
+  conflict?: "overwrite" | "reject";
+  direction: RemoteWorkspaceSyncDirection;
+  /** Session-workspace-relative files or directories. */
+  paths: string[];
+}
+
+export interface RemoteWorkspaceSyncRecord {
+  bytes: number;
+  createdAt: string;
+  direction: RemoteWorkspaceSyncDirection;
+  error?: string;
+  fileCount: number;
+  hostId: string;
+  id: string;
+  paths: string[];
+  sessionId: string;
+  status: "completed" | "failed";
+}
+
+export interface RemoteWorkspaceFile {
+  modifiedAt: string;
+  path: string;
+  size: number;
 }
 
 export interface CreateRemoteJobRequest {

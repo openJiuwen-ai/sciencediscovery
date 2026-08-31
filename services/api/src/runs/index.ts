@@ -157,6 +157,7 @@ import type { EvolutionStore } from "../evolution/store.js";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
 import { createWorkspaceExecutionBindings } from "../agent-run/workspace-bindings.js";
 import { prepareSkillSandbox, skillPackageSetHash } from "../skill-sandbox.js";
+import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
 import {
   reviewerSpecialistAvailable,
   createEvidenceReferenceTracer,
@@ -458,12 +459,6 @@ async function executeAgentRun(
   if (!body.content?.trim()) {
     throw new ApiStatusError(400, "Message content is required");
   }
-  let runnerHealth: RunnerHealth;
-  try {
-    runnerHealth = await runnerClient.health();
-  } catch (error) {
-    throw new ApiStatusError(503, error instanceof Error ? error.message : "Runner is unavailable");
-  }
   const session = store.getSession(sessionId);
   if (!session) {
     throw new ApiStatusError(404, "Session not found");
@@ -471,11 +466,35 @@ async function executeAgentRun(
   if (session.archivedAt) {
     throw new ApiStatusError(409, "Session is archived and read-only");
   }
+  const project = store.getProject(session.projectId);
+  if (!project) throw new ApiStatusError(404, "Project not found");
+  const allowedRemoteHosts = store.listRemoteHosts().filter((host) =>
+    project.remoteRunnerHostIds.includes(host.id) && host.status === "ready");
+  const selectedRemoteHost = session.remoteRunnerHostId
+    ? allowedRemoteHosts.find((host) => host.id === session.remoteRunnerHostId)
+    : undefined;
+  if (session.remoteRunnerHostId && !selectedRemoteHost) {
+    throw new ApiStatusError(409, "The Session's remote runner is no longer allowed or ready");
+  }
+  const remoteHosts = selectedRemoteHost ? [selectedRemoteHost] : [];
+  let executionRunnerClient = runnerClient;
+  if (selectedRemoteHost) {
+    try {
+      executionRunnerClient = remoteCompute.runnerClient(selectedRemoteHost.id);
+    } catch (error) {
+      throw new ApiStatusError(503, error instanceof Error ? error.message : "Remote runner is unavailable");
+    }
+  }
+  let runnerHealth: RunnerHealth;
+  try {
+    runnerHealth = await executionRunnerClient.health();
+  } catch (error) {
+    throw new ApiStatusError(503, error instanceof Error ? error.message : "Runner is unavailable");
+  }
   const sessionSpecialist = store.getSpecialist(session.specialistId);
   const enabledBuiltinSpecialists = store
     .listSpecialists()
     .filter((specialist) => specialist.builtIn && specialist.enabled !== false);
-  const remoteHosts = store.listRemoteHosts().filter((host) => host.status === "ready");
   const selectedModel = store.getModel(settingsSnapshot.modelId);
   const initialPermissionEpoch = store.getSessionPermissionEpoch(sessionId);
   if (!selectedModel) {
@@ -543,7 +562,7 @@ async function executeAgentRun(
   }));
   let scientificEnvironments: Environment[] | undefined;
   if (runnerHealth.scientificEnvs?.available) {
-    await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
+    await syncScientificEnvironmentCatalog(store, executionRunnerClient, provenanceRecorder);
     scientificEnvironments = store.listEnvironments();
   }
   const systemPrompt = buildWorkspaceSystemPrompt(
@@ -553,6 +572,7 @@ async function executeAgentRun(
       approvalMode: session.approvalMode,
       memoryGraphEnabled: memoryGraphSink.enabled,
       remoteHosts,
+      ...(selectedRemoteHost ? { remoteRunner: { hostAlias: selectedRemoteHost.alias } } : {}),
       ...(sessionSpecialist ? { specialist: { description: sessionSpecialist.description, instructions: sessionSpecialist.instructions, name: sessionSpecialist.name } } : {}),
       ...(enabledBuiltinSpecialists.length
         ? { builtinSpecialists: enabledBuiltinSpecialists.map((specialist) => ({ description: specialist.description, name: specialist.name })) }
@@ -912,8 +932,9 @@ async function executeAgentRun(
       permission: requestExecution.permission,
       permissionScopeLabel: "in the Session workspace",
       provenanceRecorder,
-      runnerClient,
+      runnerClient: executionRunnerClient,
       ...(skillPackagesRoot ? { skillPackagesRoot } : {}),
+      ...(selectedRemoteHost ? { runnerWorkspaceKey: remoteWorkspaceKey(session.projectId, session.id) } : {}),
       ...(scientificEnvironments ? { scientificEnvironments } : {}),
       sessionId,
       store,
@@ -950,6 +971,50 @@ async function executeAgentRun(
       permission: requestExecution.permission,
     }),
     approvalMode: session.approvalMode,
+    ...(selectedRemoteHost ? {
+      remoteWorkspace: {
+        hostAlias: selectedRemoteHost.alias,
+        list: async () => await executionRunnerClient.listRemoteWorkspaceFiles(
+          remoteWorkspaceKey(session.projectId, session.id),
+        ),
+        sync: async (input: {
+          conflict: "overwrite" | "reject";
+          direction: "pull" | "push";
+          paths: string[];
+        }, signal?: AbortSignal) => {
+          await requestExecution.permission.requirePrivilege({
+            action: "host",
+            executionId: runId,
+            resource: selectedRemoteHost.alias,
+            signal,
+            summary: `${input.direction === "push" ? "Push to" : "Pull from"} remote runner ${selectedRemoteHost.alias}: ${input.paths.join(", ")}`,
+          });
+          const result = await syncRemoteWorkspace({
+            hostId: selectedRemoteHost.id,
+            input,
+            runnerClient: executionRunnerClient,
+            sessionId,
+            store,
+          });
+          if (input.direction === "pull") {
+            for (const path of result.files) {
+              await provenanceRecorder.registerWorkspaceArtifact({
+                logicalName: path,
+                origin: "user_upload",
+                originMeta: { hostId: selectedRemoteHost.id, source: "remote_runner_pull" },
+                path,
+                sessionId,
+                sourcePath: path,
+                title: path,
+                turnId: runId,
+                workspaceRoot: store.workspacePath(sessionId),
+              });
+            }
+          }
+          return result;
+        },
+      },
+    } : {}),
     remoteHosts,
     proposeSkillLibraryUpdate: async (input, _signal, toolCallId) => {
       const library = skillLibraryCatalog.get(input.libraryId);
@@ -1343,8 +1408,9 @@ async function executeAgentRun(
               artifactPathPrefix: handoff.privateWorkspacePath,
               provenanceRecorder,
               readOnlyWorkspaceRoot: store.workspacePath(sessionId),
-              runnerClient,
+              runnerClient: executionRunnerClient,
               ...(subagentSkillPackagesRoot ? { skillPackagesRoot: subagentSkillPackagesRoot } : {}),
+              ...(selectedRemoteHost ? { runnerWorkspaceKey: remoteWorkspaceKey(session.projectId, session.id) } : {}),
               ...(scientificEnvironments ? { scientificEnvironments } : {}),
               sessionId,
               store,

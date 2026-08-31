@@ -22,8 +22,15 @@ import type { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
-test("execution bindings apply stable Agent identity and trusted Skill package root", async () => {
-  const executed: Array<{ agentId: string; executionTimeoutMs?: number; kernelIdleTimeoutMs?: number; skillPackagesRoot?: string; turnId: string }> = [];
+test("execution bindings apply stable Agent identity, trusted Skill package root, and remote workspace path", async () => {
+  const executed: Array<{
+    agentId: string;
+    executionTimeoutMs?: number;
+    kernelIdleTimeoutMs?: number;
+    runnerWorkspaceKey?: string;
+    skillPackagesRoot?: string;
+    turnId: string;
+  }> = [];
   const permission = {
     getEpoch: () => ({ id: "epoch-1" }),
     requirePrivilege: async () => undefined,
@@ -36,6 +43,7 @@ test("execution bindings apply stable Agent identity and trusted Skill package r
         agentId: string;
         executionTimeoutMs?: number;
         kernelIdleTimeoutMs?: number;
+        runnerWorkspaceKey?: string;
         skillPackagesRoot?: string;
         turnId: string;
       }) => {
@@ -43,6 +51,7 @@ test("execution bindings apply stable Agent identity and trusted Skill package r
           agentId: options.agentId,
           ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),
           ...(options.kernelIdleTimeoutMs !== undefined ? { kernelIdleTimeoutMs: options.kernelIdleTimeoutMs } : {}),
+          ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
           ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
           turnId: options.turnId,
         });
@@ -65,6 +74,7 @@ test("execution bindings apply stable Agent identity and trusted Skill package r
     executionId: "main-execution",
     executionTimeoutMs: 45_000,
     kernelIdleTimeoutMs: 60_000,
+    runnerWorkspaceKey: "project-1/session-1",
   });
   const subagent = createWorkspaceExecutionBindings({
     ...common,
@@ -77,6 +87,7 @@ test("execution bindings apply stable Agent identity and trusted Skill package r
   assert.deepEqual(executed, [
     {
       agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
+      runnerWorkspaceKey: "project-1/session-1",
       skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1", turnId: "main-execution",
     },
     {

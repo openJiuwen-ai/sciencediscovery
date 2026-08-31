@@ -204,6 +204,7 @@ ${skillItems}
 export interface WorkspacePromptGovernance {
   approvalMode?: "always_allow" | "ask_for_dangerous";
   memoryGraphEnabled?: boolean;
+  remoteRunner?: { hostAlias: string };
   remoteHosts?: RemoteHostTarget[];
   specialist?: { description: string; instructions: string; name: string };
   builtinSpecialists?: Array<{ description: string; name: string }>;
@@ -254,6 +255,9 @@ function buildWorkspacePromptValues(
     governance?.remoteHosts?.length
       ? `\nRemote compute is available through these user-controlled SSH targets: ${governance.remoteHosts.map((host) => `${host.id} (${host.alias}, SLURM=${host.capabilities?.slurm ?? false})`).join("; ")}. Remote datasets should stay at their existing absolute paths. Calling propose_remote_job creates an immutable job card.${governance.approvalMode === "always_allow" ? " The current approval policy submits it without a prompt." : " Dangerous remote jobs pause until the user reviews their independent permission card."}`
       : "",
+    governance?.remoteRunner
+      ? `\nThis Session is fixed to the SSH remote runner ${escapePromptTagText(governance.remoteRunner.hostAlias)}. Python, R, shell, persistent kernels, and their sandbox run in that runner's independent persistent workspace. Local workspace file tools do not see remote-only files. Use sync_remote_workspace explicitly to list, push inputs, or pull selected outputs. Never assume files are mirrored; only pulled files can be declared as local Project artifacts.`
+      : "",
     buildSkillSystemSection(skills),
     ...(governance?.memoryGraphEnabled
       ? [
@@ -276,6 +280,7 @@ export function buildWorkspacePromptParts(
     { id: "subagent.identity", kind: "identity", protected: true },
     { id: "subagent.governance", kind: "governance", protected: true },
     { id: "remote-compute.capabilities", kind: "capabilities", protected: false },
+    { id: "remote-runner.capabilities", kind: "capabilities", protected: false },
     { id: "skills.catalog", kind: "skills", protected: false },
     { id: "citation.governance", kind: "governance", protected: true },
   ];

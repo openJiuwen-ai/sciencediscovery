@@ -46,6 +46,7 @@ export interface WorkspaceExecutionBindingOptions {
   readOnlyWorkspaceRoot?: string;
   skillPackagesRoot?: string;
   runnerClient: RunnerClient;
+  runnerWorkspaceKey?: string;
   scientificEnvironments?: Environment[];
   sessionId: string;
   store: SessionStore;
@@ -152,6 +153,7 @@ export function createWorkspaceExecutionBindings(
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         runnerClient: options.runnerClient,
+        ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
         ...sandboxEgressProxy(),
         sessionId: options.sessionId,
         signal,
@@ -184,6 +186,7 @@ export function createWorkspaceExecutionBindings(
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         runnerClient: options.runnerClient,
+        ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
         ...sandboxEgressProxy(),
         sessionId: options.sessionId,
         signal,
@@ -274,6 +277,7 @@ export function createWorkspaceExecutionBindings(
           ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
           ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
           runnerClient: options.runnerClient,
+          ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
           ...sandboxEgressProxy(),
           sessionId: options.sessionId,
           signal,

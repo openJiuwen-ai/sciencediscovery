@@ -73,6 +73,8 @@ export interface Session {
   reviewCriteria: string[];
   /** @deprecated Legacy Semantic Review catalog compatibility. */
   reviewMode: "auto" | "manual";
+  /** Fixed execution target. Undefined means the local runner. */
+  remoteRunnerHostId?: string;
   /** @deprecated Legacy Semantic Review catalog compatibility; no runtime reviewer consumes it. */
   semanticReviewEnabled: boolean;
   settingsOverrides: RuntimeSettingsOverrides;
@@ -406,6 +408,7 @@ export interface CreateSessionRequest {
   approvalMode?: ApprovalMode;
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";
+  remoteRunnerHostId?: string;
   settingsOverrides?: RuntimeSettingsOverrides;
   specialistId?: string;
   title?: string;
@@ -419,6 +422,8 @@ export interface UpdateSessionRequest {
   modelId?: string;
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";
+  /** Set to null to return to the local runner. */
+  remoteRunnerHostId?: string | null;
   reviewModelId?: string;
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;

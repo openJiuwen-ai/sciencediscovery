@@ -23,6 +23,7 @@ import {
   WORKSPACE_SYSTEM_PROMPT_VERSION,
 } from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
+import type { RunnerClient } from "@sciencediscovery/executor";
 import {
   listProviderModels,
   ModelCatalogFetchError,
@@ -123,6 +124,7 @@ import type {
   WorkspaceCapabilities,
   WorkspaceUploadResult,
   RegisterRemoteHostRequest,
+  RemoteWorkspaceSyncRequest,
   PromptManifest,
   ProposePlanRequest,
   RevisePlanRequest,
@@ -136,6 +138,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import { SessionStoreHttpError } from "../store.js";
+import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import {
   parseConflictPolicy,
@@ -770,17 +773,21 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/remote-hosts") {
-        sendJson(response, 200, store.listRemoteHosts());
+        sendJson(response, 200, store.listRemoteHosts().map((host) => ({
+          ...host,
+          runnerStatus: remoteCompute.runnerStatus(host.id),
+        })));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/remote-hosts") {
         const body = await readJson<RegisterRemoteHostRequest>(request);
+        const runnerCommand = body.runnerCommand?.trim() || "sciencediscovery-runner";
         try {
-          const capabilities = await remoteCompute.probe(body.alias ?? "");
-          sendJson(response, 201, await store.registerRemoteHost(body.alias, capabilities));
+          const capabilities = await remoteCompute.probe(body.alias ?? "", runnerCommand);
+          sendJson(response, 201, await store.registerRemoteHost(body.alias, capabilities, undefined, runnerCommand));
         } catch (error) {
           const message = error instanceof Error ? error.message : "SSH probe failed";
-          sendJson(response, 201, await store.registerRemoteHost(body.alias ?? "", undefined, message));
+          sendJson(response, 201, await store.registerRemoteHost(body.alias ?? "", undefined, message, runnerCommand));
         }
         return;
       }
@@ -789,12 +796,18 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const host = store.getRemoteHost(remoteHostProbeMatch[1]!);
         if (!host) return sendError(response, 404, "Remote host not found");
         try {
-          sendJson(response, 200, await store.registerRemoteHost(host.alias, await remoteCompute.probe(host.alias)));
+          sendJson(response, 200, await store.registerRemoteHost(
+            host.alias,
+            await remoteCompute.probe(host.alias, host.runnerCommand),
+            undefined,
+            host.runnerCommand,
+          ));
         } catch (error) {
           sendJson(response, 200, await store.registerRemoteHost(
             host.alias,
             undefined,
             error instanceof Error ? error.message : "SSH probe failed",
+            host.runnerCommand,
           ));
         }
         return;
@@ -802,7 +815,21 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const remoteHostMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)$/);
       if (remoteHostMatch && request.method === "DELETE") {
         await store.deleteRemoteHost(remoteHostMatch[1]!);
+        await remoteCompute.disconnectRunner(remoteHostMatch[1]!);
         sendJson(response, 200, { deleted: remoteHostMatch[1] });
+        return;
+      }
+      const remoteRunnerActionMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/runner\/(connect|disconnect)$/);
+      if (remoteRunnerActionMatch && request.method === "POST") {
+        const host = store.getRemoteHost(remoteRunnerActionMatch[1]!);
+        if (!host) return sendError(response, 404, "Remote host not found");
+        if (remoteRunnerActionMatch[2] === "disconnect") {
+          sendJson(response, 200, await remoteCompute.disconnectRunner(host.id));
+          return;
+        }
+        const localVersion = (await runnerClient.health().catch(() => undefined))?.runnerVersion;
+        const status = await remoteCompute.connectRunner(host, localVersion);
+        sendJson(response, status.state === "ready" ? 200 : 503, status);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/connectors") {
@@ -1241,7 +1268,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "POST" && url.pathname === "/api/projects") {
         const body = await readJson<CreateProjectRequest>(request);
-        const project = await store.createProject(body.name ?? "", body.settingsOverrides);
+        const project = await store.createProject(body.name ?? "", body.settingsOverrides, body.remoteRunnerHostIds);
         try {
           const firstSession = await store.createSession(
             project.id,
@@ -1366,6 +1393,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             approvalMode: body.approvalMode,
             reviewCriteria: body.reviewCriteria,
             reviewMode: body.reviewMode,
+            remoteRunnerHostId: body.remoteRunnerHostId,
             specialistId: body.specialistId,
           },
           {
@@ -1503,6 +1531,69 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const remoteWorkspaceMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/remote-workspace\/(delete|files|sync|sync-records)$/);
+      if (remoteWorkspaceMatch) {
+        const sessionId = remoteWorkspaceMatch[1]!;
+        const session = store.getSession(sessionId);
+        if (!session) return sendError(response, 404, "Session not found");
+        if (!session.remoteRunnerHostId) return sendError(response, 409, "Session uses the local runner");
+        const host = store.getRemoteHost(session.remoteRunnerHostId);
+        const project = store.getProject(session.projectId);
+        if (!host || !project?.remoteRunnerHostIds.includes(host.id)) {
+          return sendError(response, 409, "Selected remote runner is not allowed by the Project");
+        }
+        if (remoteWorkspaceMatch[2] === "sync-records" && request.method === "GET") {
+          sendJson(response, 200, store.listRemoteWorkspaceSyncs(sessionId));
+          return;
+        }
+        let selectedRunner: RunnerClient;
+        try {
+          selectedRunner = remoteCompute.runnerClient(host.id);
+        } catch (error) {
+          return sendError(response, 503, error instanceof Error ? error.message : "Remote runner is unavailable");
+        }
+        if (remoteWorkspaceMatch[2] === "files" && request.method === "GET") {
+          sendJson(response, 200, await selectedRunner.listRemoteWorkspaceFiles(
+            remoteWorkspaceKey(session.projectId, session.id),
+          ));
+          return;
+        }
+        if (remoteWorkspaceMatch[2] === "delete" && request.method === "DELETE") {
+          if (await sessionHasActiveRun(store, sessionId)) {
+            return sendError(response, 409, "Cannot delete a remote workspace during an active run");
+          }
+          await selectedRunner.deleteRemoteWorkspace(remoteWorkspaceKey(session.projectId, session.id));
+          sendJson(response, 200, { deleted: true });
+          return;
+        }
+        if (remoteWorkspaceMatch[2] === "sync" && request.method === "POST") {
+          const input = await readJson<RemoteWorkspaceSyncRequest>(request);
+          const result = await syncRemoteWorkspace({
+            hostId: host.id,
+            input,
+            runnerClient: selectedRunner,
+            sessionId,
+            store,
+          });
+          if (input.direction === "pull") {
+            for (const path of result.files) {
+              await provenanceRecorder.registerWorkspaceArtifact({
+                logicalName: path,
+                origin: "user_upload",
+                originMeta: { hostId: host.id, source: "remote_runner_pull" },
+                path,
+                sessionId,
+                sourcePath: path,
+                title: path,
+                workspaceRoot: store.workspacePath(sessionId),
+              });
+            }
+          }
+          sendJson(response, 201, result);
+          return;
+        }
+      }
+
       const sessionSettingsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/settings$/);
       if (sessionSettingsMatch && request.method === "GET") {
         sendJson(response, 200, store.getSessionSettings(sessionSettingsMatch[1]!));
@@ -1548,6 +1639,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (sessionMatch && request.method === "PATCH") {
         const body = await readJson<UpdateSessionRequest>(request);
         const sessionId = sessionMatch[1]!;
+        if (body.remoteRunnerHostId !== undefined && await sessionHasActiveRun(store, sessionId)) {
+          return sendError(response, 409, "Cannot change the Session runner during an active run");
+        }
         const requestedApprovalMode = body.approvalMode;
         const { approvalMode: _approvalMode, ...remaining } = body;
         const hasRemainingChanges = Object.values(remaining).some((value) => value !== undefined);
@@ -2562,6 +2656,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
     }
   });
+  server.once("close", () => remoteCompute.close());
   patchEphemeralCallback(server);
   return server;
 }

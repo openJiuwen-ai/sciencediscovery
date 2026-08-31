@@ -2843,6 +2843,54 @@ test("one-time preflight authorizations are consumed once without creating a gra
   assert.equal(store.listPermissionGrants().length, 0);
 });
 
+test("Project allowlists gate a Session's fixed Linux remote runner", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-remote-runner-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const host = await store.registerRemoteHost("linux-runner", {
+    conda: true,
+    containerRuntimes: [],
+    cpuCores: 8,
+    cuda: null,
+    gpu: null,
+    memoryBytes: 16 * 1024 ** 3,
+    modules: false,
+    platform: "Linux",
+    probedAt: new Date().toISOString(),
+    runnerCommandAvailable: true,
+    scratchPaths: ["/tmp"],
+    slurm: false,
+  });
+  const project = await store.createProject("Remote runner project");
+  await assert.rejects(
+    store.createSession(project.id, "Blocked", {}, { remoteRunnerHostId: host.id }, { allowUnconfiguredModel: true }),
+    /not allowed by this Project/,
+  );
+  const missingRunner = await store.registerRemoteHost("linux-without-runner", {
+    ...host.capabilities!,
+    runnerCommandAvailable: false,
+  });
+  await assert.rejects(
+    store.updateProject(project.id, { remoteRunnerHostIds: [missingRunner.id] }),
+    /configured runner installed/,
+  );
+  const allowed = await store.updateProject(project.id, { remoteRunnerHostIds: [host.id] });
+  assert.deepEqual(allowed.remoteRunnerHostIds, [host.id]);
+  const session = await store.createSession(
+    project.id,
+    "Remote",
+    {},
+    { remoteRunnerHostId: host.id },
+    { allowUnconfiguredModel: true },
+  );
+  assert.equal(session.remoteRunnerHostId, host.id);
+  await assert.rejects(store.updateProject(project.id, { remoteRunnerHostIds: [] }), /Move Sessions/);
+  assert.equal((await store.updateSession(session.id, { remoteRunnerHostId: null })).remoteRunnerHostId, undefined);
+  assert.deepEqual((await store.updateProject(project.id, { remoteRunnerHostIds: [] })).remoteRunnerHostIds, []);
+});
+
 test("SessionStore auto-submits remote jobs and keeps manual jobs independently approval-gated", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-remote-jobs-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
@@ -2863,7 +2911,9 @@ test("SessionStore auto-submits remote jobs and keeps manual jobs independently 
     gpu: null,
     memoryBytes: 512 * 1024 ** 3,
     modules: true,
+    platform: "Linux",
     probedAt: new Date().toISOString(),
+    runnerCommandAvailable: true,
     scratchPaths: ["/scratch"],
     slurm: true,
   });

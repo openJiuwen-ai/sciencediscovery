@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -680,6 +680,60 @@ test("runner HTTP service requires its internal token", async (context) => {
     "antibody.protenix.v1",
   ]);
   assert.equal(health.npuBroker.workloads.some((workload) => workload.id === "antibody.pipeline.v1"), false);
+});
+
+test("runner keeps logical remote workspaces persistent and transfers only explicit files", async (context) => {
+  const fixture = await workspaceFixture(context);
+  const server = createRunnerServer(config(fixture.dataDir));
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const authorization = { authorization: "Bearer runner-test-token" };
+  const workspace = encodeURIComponent("project-1/session-1");
+  const path = encodeURIComponent("inputs/data.txt");
+
+  const written = await fetch(`${origin}/remote-workspace/file?workspace=${workspace}&path=${path}`, {
+    body: "remote-data",
+    headers: authorization,
+    method: "PUT",
+  });
+  assert.equal(written.status, 201);
+  const collision = await fetch(`${origin}/remote-workspace/file?workspace=${workspace}&path=${path}`, {
+    body: "replacement",
+    headers: authorization,
+    method: "PUT",
+  });
+  assert.equal(collision.status, 409);
+
+  const files = await (await fetch(`${origin}/remote-workspace/files?workspace=${workspace}`, {
+    headers: authorization,
+  })).json() as Array<{ path: string; size: number }>;
+  assert.deepEqual(files.map((file) => [file.path, file.size]), [["inputs/data.txt", 11]]);
+  const content = await (await fetch(`${origin}/remote-workspace/file?workspace=${workspace}&path=${path}`, {
+    headers: authorization,
+  })).text();
+  assert.equal(content, "remote-data");
+  const workspaceRoot = resolve(fixture.dataDir, "remote-workspaces", "project-1", "session-1");
+  assert.equal(await readFile(resolve(workspaceRoot, "inputs", "data.txt"), "utf8"), "remote-data");
+  const outside = resolve(fixture.dataDir, "outside");
+  await mkdir(outside);
+  await symlink(outside, resolve(workspaceRoot, "escape"));
+  const escaped = await fetch(`${origin}/remote-workspace/file?workspace=${workspace}&path=${encodeURIComponent("escape/file.txt")}`, {
+    body: "must-not-escape",
+    headers: authorization,
+    method: "PUT",
+  });
+  assert.equal(escaped.status, 400);
+  await assert.rejects(readFile(resolve(outside, "file.txt")), { code: "ENOENT" });
+  const deleted = await fetch(`${origin}/remote-workspace?workspace=${workspace}`, {
+    headers: authorization,
+    method: "DELETE",
+  });
+  assert.equal(deleted.status, 200);
+  const afterDelete = await (await fetch(`${origin}/remote-workspace/files?workspace=${workspace}`, {
+    headers: authorization,
+  })).json();
+  assert.deepEqual(afterDelete, []);
 });
 
 test("runner NPU Broker runs a signed allowlisted smoke job", async (context) => {

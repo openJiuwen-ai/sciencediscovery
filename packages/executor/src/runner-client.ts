@@ -32,6 +32,7 @@ import type {
   PythonExecutionResult,
   RunnerHealth,
   RunnerRuntimeStatus,
+  RemoteWorkspaceFile,
   ScientificEnvironmentSetup,
   ShellExecutionRequest,
   ShellExecutionResult,
@@ -55,6 +56,53 @@ export class RunnerClient {
 
   async status(): Promise<RunnerRuntimeStatus> {
     return await this.request("/status");
+  }
+
+  async listRemoteWorkspaceFiles(workspaceKey: string, paths?: string[]): Promise<RemoteWorkspaceFile[]> {
+    if (paths?.length) {
+      return await this.request("/remote-workspace/files", {
+        body: JSON.stringify({ paths, workspace: workspaceKey }),
+        method: "POST",
+      });
+    }
+    return await this.request(`/remote-workspace/files?workspace=${encodeURIComponent(workspaceKey)}`);
+  }
+
+  async deleteRemoteWorkspace(workspaceKey: string): Promise<void> {
+    await this.request(`/remote-workspace?workspace=${encodeURIComponent(workspaceKey)}`, { method: "DELETE" });
+  }
+
+  async readRemoteWorkspaceFile(workspaceKey: string, path: string): Promise<Buffer> {
+    const response = await fetch(
+      `${this.baseUrl}/remote-workspace/file?workspace=${encodeURIComponent(workspaceKey)}&path=${encodeURIComponent(path)}`,
+      { headers: { authorization: `Bearer ${this.token}` } },
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+      throw new Error(body.error || `Remote workspace read failed (${response.status})`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  async writeRemoteWorkspaceFile(
+    workspaceKey: string,
+    path: string,
+    content: Uint8Array,
+    conflict: "overwrite" | "reject" = "reject",
+  ): Promise<{ path: string; size: number }> {
+    const response = await fetch(
+      `${this.baseUrl}/remote-workspace/file?workspace=${encodeURIComponent(workspaceKey)}&path=${encodeURIComponent(path)}&conflict=${conflict}`,
+      {
+        body: Buffer.from(content),
+        headers: { authorization: `Bearer ${this.token}`, "content-type": "application/octet-stream" },
+        method: "PUT",
+      },
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+      throw new Error(body.error || `Remote workspace write failed (${response.status})`);
+    }
+    return await response.json() as { path: string; size: number };
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {

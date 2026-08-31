@@ -19,11 +19,14 @@ export interface Project {
   createdAt: string;
   id: string;
   name: string;
+  /** Remote hosts this Project permits Sessions to select. Empty means local-only. */
+  remoteRunnerHostIds: string[];
   settingsOverrides: RuntimeSettingsOverrides;
 }
 
 export interface CreateProjectRequest {
   name: string;
+  remoteRunnerHostIds?: string[];
   settingsOverrides?: RuntimeSettingsOverrides;
 }
 
@@ -37,7 +40,8 @@ export interface CreateProjectResponse extends Project {
 }
 
 export interface UpdateProjectRequest {
-  name: string;
+  name?: string;
+  remoteRunnerHostIds?: string[];
 }
 
 export type SessionListState = "active" | "all" | "archived";

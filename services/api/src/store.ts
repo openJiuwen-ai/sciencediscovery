@@ -82,6 +82,7 @@ import type {
   RemoteHostCapabilities,
   RemoteHostTarget,
   RemoteJob,
+  RemoteWorkspaceSyncRecord,
   ReviewRun,
   ReviewerSpecialistLevel,
   ReviewerSpecialistSettings,
@@ -666,6 +667,9 @@ export class SessionStore {
     }
     const projects = (Array.isArray(saved.projects) ? saved.projects : []).map((project) => ({
       ...project,
+      remoteRunnerHostIds: Array.isArray(project.remoteRunnerHostIds)
+        ? project.remoteRunnerHostIds.filter((id): id is string => typeof id === "string")
+        : [],
       settingsOverrides: normalizeRuntimeSettings(project.settingsOverrides, modelIds, this.skillIds, false),
     }));
     const migratedHierarchicalSettings = saved.globalSettings === undefined
@@ -749,8 +753,21 @@ export class SessionStore {
     });
     const migratedSubagents = !Array.isArray(saved.subagents)
       || JSON.stringify(subagents) !== JSON.stringify(savedSubagents);
-    const remoteHosts = Array.isArray(saved.remoteHosts) ? saved.remoteHosts : [];
+    const savedRemoteHosts = Array.isArray(saved.remoteHosts) ? saved.remoteHosts : [];
+    const remoteHosts = savedRemoteHosts.map((host) => ({
+      ...host,
+      capabilities: host.capabilities ? {
+        ...host.capabilities,
+        platform: typeof host.capabilities.platform === "string" ? host.capabilities.platform : null,
+        runnerCommandAvailable: host.capabilities.runnerCommandAvailable === true,
+      } : undefined,
+      runnerCommand: typeof host.runnerCommand === "string" && host.runnerCommand.trim()
+        ? host.runnerCommand.trim()
+        : "sciencediscovery-runner",
+    }));
+    const migratedRemoteHosts = JSON.stringify(remoteHosts) !== JSON.stringify(savedRemoteHosts);
     const remoteJobs = Array.isArray(saved.remoteJobs) ? saved.remoteJobs : [];
+    const remoteWorkspaceSyncs = Array.isArray(saved.remoteWorkspaceSyncs) ? saved.remoteWorkspaceSyncs : [];
     const timeoutSettings = saved.timeoutSettings === undefined
       ? structuredClone(this.initialTimeoutSettings)
       : normalizeTimeoutSettings(saved.timeoutSettings);
@@ -839,6 +856,7 @@ export class SessionStore {
         reviewModelId,
         reviewCriteria,
         reviewMode,
+        ...(typeof session.remoteRunnerHostId === "string" ? { remoteRunnerHostId: session.remoteRunnerHostId } : {}),
         semanticReviewEnabled,
         settingsOverrides,
         ...(session.specialistId && specialistIds.has(session.specialistId) ? { specialistId: session.specialistId } : { specialistId: undefined }),
@@ -962,6 +980,7 @@ export class SessionStore {
       reviewerSpecialistLevel,
       remoteHosts,
       remoteJobs,
+      remoteWorkspaceSyncs,
       sessionPlans,
       sessions,
       specialists,
@@ -987,6 +1006,7 @@ export class SessionStore {
       || !Array.isArray(saved.subagents)
       || !Array.isArray(saved.remoteHosts)
       || !Array.isArray(saved.remoteJobs)
+      || !Array.isArray(saved.remoteWorkspaceSyncs)
       || !Array.isArray(saved.specialists)
       || saved.timeoutSettings === undefined
       || saved.quotaSettings === undefined
@@ -1010,6 +1030,7 @@ export class SessionStore {
       || migratedSpecialists
       || migratedArtifactCatalog
       || migratedWorkspaceFileProvenance
+      || migratedRemoteHosts
       || importedLegacyCatalog
     ) {
       await this.saveCatalog();
@@ -2258,12 +2279,18 @@ export class SessionStore {
     return profile;
   }
 
-  async createProject(name: string, input: RuntimeSettingsOverrides = {}): Promise<Project> {
+  async createProject(
+    name: string,
+    input: RuntimeSettingsOverrides = {},
+    remoteRunnerHostIds: string[] = [],
+  ): Promise<Project> {
     const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
+    const allowedHosts = this.validateProjectRemoteRunnerHosts(remoteRunnerHostIds);
     const project: Project = {
       createdAt: new Date().toISOString(),
       id: randomUUID(),
       name: cleanLabel(name, "Untitled project"),
+      remoteRunnerHostIds: allowedHosts,
       settingsOverrides,
     };
     this.catalog.projects.push(project);
@@ -2274,9 +2301,41 @@ export class SessionStore {
   async updateProject(projectId: string, changes: UpdateProjectRequest): Promise<Project> {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
-    project.name = requiredLabel(changes.name, "Project name");
+    if (changes.name !== undefined) project.name = requiredLabel(changes.name, "Project name");
+    if (changes.remoteRunnerHostIds !== undefined) {
+      const allowedHosts = this.validateProjectRemoteRunnerHosts(changes.remoteRunnerHostIds);
+      const removed = project.remoteRunnerHostIds.filter((hostId) => !allowedHosts.includes(hostId));
+      const selected = this.catalog.sessions.find((session) => session.projectId === projectId
+        && session.remoteRunnerHostId && removed.includes(session.remoteRunnerHostId));
+      if (selected) throw new Error("Move Sessions using a removed remote runner back to local before changing the Project allowlist");
+      project.remoteRunnerHostIds = allowedHosts;
+    }
     await this.saveCatalog();
     return project;
+  }
+
+  private validateProjectRemoteRunnerHosts(hostIds: string[]): string[] {
+    if (!Array.isArray(hostIds)) throw new Error("Project remote runner allowlist must be an array");
+    const normalized = [...new Set(hostIds.map((id) => id.trim()).filter(Boolean))];
+    for (const hostId of normalized) {
+      const host = this.catalog.remoteHosts.find((candidate) => candidate.id === hostId);
+      if (!host) throw new Error(`Remote host not found: ${hostId}`);
+      if (host.status !== "ready" || host.capabilities?.platform !== "Linux" || !host.capabilities.runnerCommandAvailable) {
+        throw new Error(`Remote runner host must be a ready Linux host with the configured runner installed: ${host.alias}`);
+      }
+    }
+    return normalized;
+  }
+
+  private assertProjectAllowsRemoteRunner(projectId: string, hostId: string): RemoteHostTarget {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error("Project not found");
+    if (!project.remoteRunnerHostIds.includes(hostId)) throw new Error("Remote runner host is not allowed by this Project");
+    const host = this.getRemoteHost(hostId);
+    if (!host || host.status !== "ready" || host.capabilities?.platform !== "Linux" || !host.capabilities.runnerCommandAvailable) {
+      throw new Error("Remote runner host is not a ready Linux host with the configured runner installed");
+    }
+    return host;
   }
 
   getProject(projectId: string): Project | undefined {
@@ -2298,6 +2357,7 @@ export class SessionStore {
       approvalMode?: "always_allow" | "ask_for_dangerous";
       reviewCriteria?: string[];
       reviewMode?: "auto" | "manual";
+      remoteRunnerHostId?: string;
       specialistId?: string;
     } = {},
     options: {
@@ -2323,6 +2383,9 @@ export class SessionStore {
     if (governance.specialistId && !this.getSpecialist(governance.specialistId)) {
       throw new Error("Specialist not found");
     }
+    if (governance.remoteRunnerHostId) {
+      this.assertProjectAllowsRemoteRunner(projectId, governance.remoteRunnerHostId);
+    }
     const sessionId = randomUUID();
     const permissionEpoch = createPermissionEpoch(
       sessionId,
@@ -2343,6 +2406,7 @@ export class SessionStore {
       reviewModelId: resolved.effective.reviewModelId,
       reviewCriteria: this.normalizeReviewCriteria(governance.reviewCriteria),
       reviewMode: governance.reviewMode === "manual" ? "manual" : "auto",
+      ...(governance.remoteRunnerHostId ? { remoteRunnerHostId: governance.remoteRunnerHostId } : {}),
       semanticReviewEnabled: resolved.effective.semanticReviewEnabled,
       settingsOverrides,
       ...(governance.specialistId ? { specialistId: governance.specialistId } : {}),
@@ -3242,19 +3306,30 @@ export class SessionStore {
     return host ? structuredClone(host) : undefined;
   }
 
-  async registerRemoteHost(aliasValue: string, capabilities?: RemoteHostCapabilities, error?: string): Promise<RemoteHostTarget> {
+  async registerRemoteHost(
+    aliasValue: string,
+    capabilities?: RemoteHostCapabilities,
+    error?: string,
+    runnerCommandValue = "sciencediscovery-runner",
+  ): Promise<RemoteHostTarget> {
     const alias = aliasValue.trim();
     if (!/^[A-Za-z0-9._-]{1,255}$/.test(alias)) throw new Error("Invalid SSH host alias");
+    const runnerCommand = runnerCommandValue.trim();
+    if (!/^(?:[A-Za-z0-9._-]+|\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+)$/.test(runnerCommand)) {
+      throw new Error("Invalid remote runner executable");
+    }
     const now = new Date().toISOString();
     const existing = this.catalog.remoteHosts.find((host) => host.alias === alias);
     const host: RemoteHostTarget = existing ?? {
       alias,
       createdAt: now,
       id: randomUUID(),
+      runnerCommand,
       status: "error",
       updatedAt: now,
     };
     host.updatedAt = now;
+    host.runnerCommand = runnerCommand;
     if (capabilities) {
       host.capabilities = structuredClone(capabilities);
       host.status = "ready";
@@ -3273,7 +3348,22 @@ export class SessionStore {
     if (this.catalog.remoteJobs.some((job) => job.card.targetId === hostId)) {
       throw new Error("Remote host is referenced by a job and cannot be deleted");
     }
+    if (this.catalog.projects.some((project) => project.remoteRunnerHostIds.includes(hostId))) {
+      throw new Error("Remote host is allowed by a Project and cannot be deleted");
+    }
     this.catalog.remoteHosts = this.catalog.remoteHosts.filter((host) => host.id !== hostId);
+    await this.saveCatalog();
+  }
+
+  listRemoteWorkspaceSyncs(sessionId: string): RemoteWorkspaceSyncRecord[] {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    return structuredClone(this.catalog.remoteWorkspaceSyncs.filter((record) => record.sessionId === sessionId))
+      .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  async appendRemoteWorkspaceSync(record: RemoteWorkspaceSyncRecord): Promise<void> {
+    this.assertProjectAllowsRemoteRunner(this.assertSessionWritable(record.sessionId).projectId, record.hostId);
+    this.catalog.remoteWorkspaceSyncs.push(structuredClone(record));
     await this.saveCatalog();
   }
 
@@ -3493,6 +3583,7 @@ export class SessionStore {
     const previousSubagents = this.catalog.subagents;
     const previousRemoteJobs = this.catalog.remoteJobs;
     const previousWorkspaceFileRecords = this.catalog.workspaceFileRecords;
+    const previousRemoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs;
     const remoteJobIds = new Set(this.catalog.remoteJobs.filter((job) => job.sessionId === session.id).map((job) => job.id));
     try {
       this.catalog.sessions = this.catalog.sessions.filter((item) => item.id !== session.id);
@@ -3505,6 +3596,7 @@ export class SessionStore {
       this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => job.sessionId !== session.id);
       this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.map((record) =>
         record.sessionId === session.id ? { ...record, sessionTitle: session.title } : record);
+      this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => record.sessionId !== session.id);
       await this.saveCatalog();
     } catch (error) {
       this.catalog.sessions = previousSessions;
@@ -3515,6 +3607,7 @@ export class SessionStore {
       this.catalog.subagents = previousSubagents;
       this.catalog.remoteJobs = previousRemoteJobs;
       this.catalog.workspaceFileRecords = previousWorkspaceFileRecords;
+      this.catalog.remoteWorkspaceSyncs = previousRemoteWorkspaceSyncs;
       await this.rollbackStagedDeletion(operation);
       throw error;
     }
@@ -3539,6 +3632,7 @@ export class SessionStore {
     const previousPlans = this.catalog.sessionPlans;
     const previousSubagents = this.catalog.subagents;
     const previousRemoteJobs = this.catalog.remoteJobs;
+    const previousRemoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs;
     const previousArtifacts = this.catalog.artifacts;
     const previousArtifactVersions = this.catalog.artifactVersions;
     const previousArtifactAnnotations = this.catalog.artifactAnnotations;
@@ -3561,6 +3655,7 @@ export class SessionStore {
       this.catalog.sessionPlans = this.catalog.sessionPlans.filter((plan) => !sessionIds.has(plan.sessionId));
       this.catalog.subagents = this.catalog.subagents.filter((subagent) => !sessionIds.has(subagent.sessionId));
       this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => !sessionIds.has(job.sessionId));
+      this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => !sessionIds.has(record.sessionId));
       this.catalog.artifacts = this.catalog.artifacts.filter((artifact) => artifact.projectId !== projectId);
       this.catalog.artifactVersions = this.catalog.artifactVersions.filter((version) => !projectArtifactIds.has(version.artifactId));
       this.catalog.artifactAnnotations = this.catalog.artifactAnnotations.filter((annotation) => !projectArtifactVersionIds.has(annotation.artifactVersionId));
@@ -3576,6 +3671,7 @@ export class SessionStore {
       this.catalog.sessionPlans = previousPlans;
       this.catalog.subagents = previousSubagents;
       this.catalog.remoteJobs = previousRemoteJobs;
+      this.catalog.remoteWorkspaceSyncs = previousRemoteWorkspaceSyncs;
       this.catalog.artifacts = previousArtifacts;
       this.catalog.artifactVersions = previousArtifactVersions;
       this.catalog.artifactAnnotations = previousArtifactAnnotations;
@@ -3594,7 +3690,7 @@ export class SessionStore {
     changes: UpdateSessionRequest,
   ): Promise<Session> {
     const session = this.assertSessionWritable(sessionId);
-    const { approvalMode, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
+    const { approvalMode, remoteRunnerHostId, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
     const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
     const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
     const nextModel = this.getModel(nextSettings.modelId);
@@ -3611,12 +3707,15 @@ export class SessionStore {
     if (approvalMode !== undefined) throw new Error("Use setApprovalMode to change approval policy");
     if (reviewMode !== undefined && reviewMode !== "auto" && reviewMode !== "manual") throw new Error("Invalid review mode");
     if (specialistId && !this.getSpecialist(specialistId)) throw new Error("Specialist not found");
+    if (remoteRunnerHostId) this.assertProjectAllowsRemoteRunner(session.projectId, remoteRunnerHostId);
     session.settingsOverrides = nextSettings;
     session.title = nextTitle;
     if (reviewMode) session.reviewMode = reviewMode;
     if (reviewCriteria !== undefined) session.reviewCriteria = this.normalizeReviewCriteria(reviewCriteria);
     if (specialistId === null) delete session.specialistId;
     else if (specialistId !== undefined) session.specialistId = specialistId;
+    if (remoteRunnerHostId === null) delete session.remoteRunnerHostId;
+    else if (remoteRunnerHostId !== undefined) session.remoteRunnerHostId = remoteRunnerHostId;
     session.updatedAt = new Date().toISOString();
     this.syncSessionCompatibility(session);
     await this.saveCatalog();

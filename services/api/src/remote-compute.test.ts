@@ -19,7 +19,12 @@ import { test } from "node:test";
 
 import type { RemoteJob } from "@sciencediscovery/schema";
 
-import { RemoteComputeClient, type RemoteCommandResult, type RemoteTransport } from "@sciencediscovery/executor";
+import {
+  RemoteComputeClient,
+  validateRunnerCommand,
+  type RemoteCommandResult,
+  type RemoteTransport,
+} from "@sciencediscovery/executor";
 
 class FakeTransport implements RemoteTransport {
   readonly calls: Array<{ alias: string; script: string; timeoutMs: number }> = [];
@@ -33,6 +38,13 @@ class FakeTransport implements RemoteTransport {
     return result;
   }
 }
+
+test("remote runner executable accepts only one safe executable token", () => {
+  assert.equal(validateRunnerCommand("sciencediscovery-runner"), "sciencediscovery-runner");
+  assert.equal(validateRunnerCommand("/opt/sciencediscovery/bin/runner"), "/opt/sciencediscovery/bin/runner");
+  assert.throws(() => validateRunnerCommand("runner --token secret"), /without arguments/);
+  assert.throws(() => validateRunnerCommand("/opt/runner; reboot"), /without arguments/);
+});
 
 function job(mode: "slurm" | "ssh"): RemoteJob {
   const timestamp = "2026-07-15T00:00:00.000Z";
@@ -71,7 +83,7 @@ test("SSH config aliases gate a read-only capability probe", async (context) => 
   const transport = new FakeTransport([{
     exitCode: 0,
     stderr: "",
-    stdout: "cpu=32\nmemory_kib=65536\ngpu=NVIDIA A100\ncuda=12.4\nconda=1\nmodules=1\ncontainers=apptainer\nscratch=/scratch,/tmp\nsbatch=1\n",
+    stdout: "platform=Linux\ncpu=32\nmemory_kib=65536\ngpu=NVIDIA A100\ncuda=12.4\nconda=1\nmodules=1\ncontainers=apptainer\nscratch=/scratch,/tmp\nsbatch=1\nrunner=1\n",
   }]);
   const client = new RemoteComputeClient(configPath, transport);
 
@@ -80,6 +92,8 @@ test("SSH config aliases gate a read-only capability probe", async (context) => 
   assert.equal(capabilities.cpuCores, 32);
   assert.equal(capabilities.memoryBytes, 64 * 1024 * 1024);
   assert.equal(capabilities.slurm, true);
+  assert.equal(capabilities.platform, "Linux");
+  assert.equal(capabilities.runnerCommandAvailable, true);
   assert.deepEqual(capabilities.scratchPaths, ["/scratch", "/tmp"]);
   assert.doesNotMatch(transport.calls[0]!.script, /\b(?:mkdir|rm|touch)\b|\bsbatch\s+--/);
   await assert.rejects(client.probe("unlisted-host"), /not explicitly present/);

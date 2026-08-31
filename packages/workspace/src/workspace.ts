@@ -58,6 +58,8 @@ import type {
   SkillLibraryUpdateProposal,
   RemoteHostTarget,
   RemoteJob,
+  RemoteWorkspaceFile,
+  RemoteWorkspaceSyncRecord,
   ReviewCheckpointRequest,
   ReviewCheckpointResult,
   ScientificArtifact,
@@ -275,6 +277,15 @@ export interface WorkspaceToolOptions {
   runSubagent?: (input: SubagentInput, signal?: AbortSignal) => Promise<Subagent>;
   remoteHosts?: RemoteHostTarget[];
   proposeRemoteJob?: (input: CreateRemoteJobRequest) => Promise<RemoteJob>;
+  remoteWorkspace?: {
+    hostAlias: string;
+    list: (signal?: AbortSignal) => Promise<RemoteWorkspaceFile[]>;
+    sync: (input: {
+      conflict: "overwrite" | "reject";
+      direction: "pull" | "push";
+      paths: string[];
+    }, signal?: AbortSignal) => Promise<{ files: string[]; record: RemoteWorkspaceSyncRecord }>;
+  };
   /** Cross-session memory-graph substring search (the `query_graph` LLM tool). */
   queryGraph?: (query: string) => Promise<MemoryGraphMatchResponse>;
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
@@ -823,6 +834,40 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   };
 
   const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...provenanceTools, ...artifactTools, runPythonTool];
+  if (options.remoteWorkspace) {
+    const remoteWorkspaceParameters = Type.Object({
+      conflict: Type.Optional(Type.Union([Type.Literal("reject"), Type.Literal("overwrite")])),
+      operation: Type.Union([Type.Literal("list"), Type.Literal("pull"), Type.Literal("push")]),
+      paths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), {
+        maxItems: 50,
+        minItems: 1,
+      })),
+    });
+    const remoteWorkspace: AgentTool<typeof remoteWorkspaceParameters> = {
+      description: [
+        `Explicitly exchange selected paths between the local Session workspace and the independent persistent workspace on ${options.remoteWorkspace.hostAlias}.`,
+        "Use list to inspect remote files. Use push only when remote execution needs local inputs; use pull only for outputs the user should receive locally.",
+        "Nothing is mirrored automatically. Unpulled intermediate files remain remote. The default conflict policy rejects existing destination files; choose overwrite explicitly when intended.",
+      ].join(" "),
+      execute: async (_toolCallId, params, signal) => {
+        if (params.operation === "list") {
+          const files = await options.remoteWorkspace!.list(signal);
+          return { content: [{ type: "text", text: JSON.stringify({ files }) }], details: { files } };
+        }
+        if (!params.paths?.length) throw new Error("paths are required for push and pull");
+        const result = await options.remoteWorkspace!.sync({
+          conflict: params.conflict ?? "reject",
+          direction: params.operation,
+          paths: params.paths,
+        }, signal);
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+      label: "Sync remote workspace",
+      name: "sync_remote_workspace",
+      parameters: remoteWorkspaceParameters,
+    };
+    tools.push(remoteWorkspace);
+  }
   if (options.npuBroker) {
     const npuParameters = Type.Object({
       operation: Type.Union([
