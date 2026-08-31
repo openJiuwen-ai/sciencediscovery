@@ -63,6 +63,7 @@ import type {
   ProxyPolicy,
   ProxyServer,
   ProxySettingsDetails,
+  RemoteHostTarget,
   RemoteJob,
   ReviewerSpecialistSettings,
   RuntimeSettingsDetails,
@@ -1074,6 +1075,7 @@ export function App() {
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [openSubagentId, setOpenSubagentId] = useState<string>();
   const [remoteJobs, setRemoteJobs] = useState<RemoteJob[]>([]);
+  const [remoteHosts, setRemoteHosts] = useState<RemoteHostTarget[]>([]);
   const [specialists, setSpecialists] = useState<Specialist[]>([]);
   const [mcpInvocations, setMcpInvocations] = useState<McpInvocation[]>([]);
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -1308,6 +1310,17 @@ export function App() {
     load();
     return () => { live = false; if (timer) clearTimeout(timer); };
   }, [activeSessionId, client, evolveRefreshKey]);
+  useEffect(() => {
+    if (!session?.remoteRunnerHostId) {
+      setRemoteHosts([]);
+      return;
+    }
+    let cancelled = false;
+    void client.listRemoteHosts()
+      .then((hosts) => { if (!cancelled) setRemoteHosts(hosts); })
+      .catch(() => { if (!cancelled) setRemoteHosts([]); });
+    return () => { cancelled = true; };
+  }, [client, session?.remoteRunnerHostId]);
   const loadMarkdownImage = useCallback(async (path: string, signal: AbortSignal): Promise<Blob> => {
     const sessionId = session?.id;
     if (!sessionId) throw new Error("No active Session is available for this image");
@@ -4130,6 +4143,11 @@ export function App() {
                 ) : null}
               </div>
               <div className="session-bar-meta">
+                {session ? <span className="session-runner-target" title="Fixed Session execution target">
+                  {session.remoteRunnerHostId
+                    ? `Remote runner · ${remoteHosts.find((host) => host.id === session.remoteRunnerHostId)?.alias ?? session.remoteRunnerHostId}`
+                    : "Local runner"}
+                </span> : null}
                 {session ? (
                   <SessionUsageChip
                     breakdown={sessionUsageBreakdown}
@@ -4775,7 +4793,15 @@ export function App() {
               /> : null}
               {systemSettingsGroup === "specialists" ? <SpecialistManager client={client} connectors={connectors} onChanged={setSpecialists} onError={reportSystemSettingsError} skills={skills} /> : null}
               {systemSettingsGroup === "permissions" ? <PermissionGrantManager grants={permissionGrants.filter((grant) => grant.scope !== "once")} onRevoke={(grant) => void revokePermission(grant)} /> : null}
-              {systemSettingsGroup === "remote" ? <RemoteHostManager client={client} onError={reportSystemSettingsError} onPermissionRequest={(request) => setPermissionRequests((current) => [...current.filter((item) => item.id !== request.id), request])} sessionId={activeSessionId} /> : null}
+              {systemSettingsGroup === "remote" ? <RemoteHostManager
+                client={client}
+                onError={reportSystemSettingsError}
+                onPermissionRequest={(request) => setPermissionRequests((current) => [...current.filter((item) => item.id !== request.id), request])}
+                onProjectChange={(updated) => setProjects((current) => current.map((item) => item.id === updated.id ? updated : item))}
+                onSessionChange={syncSessionSummary}
+                project={activeProject}
+                session={session}
+              /> : null}
               {systemSettingsGroup === "environments" ? <EnvironmentManager client={client} onError={reportSystemSettingsError} /> : null}
               {systemSettingsGroup === "connection" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.localAccess")}</span><h3>{t("settings.connection")}</h3><p>{t("settings.connectionHelp")}</p></div>

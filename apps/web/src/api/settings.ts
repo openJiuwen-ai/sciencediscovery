@@ -40,6 +40,7 @@ import type {
   UninstallEnvironmentRequest,
   RegisterRemoteHostRequest,
   RemoteHostTarget,
+  RemoteRunnerStatus,
   ReviewerSpecialistSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,
@@ -121,6 +122,14 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   deleteRemoteHost(hostId: string): Promise<{ deleted: string }> {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}`, { method: "DELETE" });
+  }
+
+  connectRemoteRunner(hostId: string): Promise<RemoteRunnerStatus> {
+    return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/runner/connect`, { method: "POST" });
+  }
+
+  disconnectRemoteRunner(hostId: string): Promise<RemoteRunnerStatus> {
+    return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/runner/disconnect`, { method: "POST" });
   }
 
   getGlobalSettings(): Promise<RuntimeSettingsDetails> {

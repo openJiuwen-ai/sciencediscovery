@@ -36,6 +36,7 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .session-bar-project-rename:focus, .session-bar-session-rename:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .session-bar-project-rename:disabled, .session-bar-session-rename:disabled { color: var(--muted); cursor: wait; }
 .session-bar-meta { display: flex; align-items: center; gap: 10px; flex: 0 1 auto; min-width: 0; margin-left: auto; }
+.session-runner-target { max-width: 220px; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-soft); padding: 3px 8px; color: var(--muted); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .session-bar .session-usage-chip { min-height: 28px; flex: 0 1 320px; min-width: 0; padding: 3px 9px; row-gap: 2px; }
 .session-bar .connection { font-size: 12px; }
 .subagent-conversation { flex: 1; border-right: 0; }
