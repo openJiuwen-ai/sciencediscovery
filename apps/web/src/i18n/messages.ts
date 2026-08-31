@@ -1350,7 +1350,7 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "memory.unreachable": "ScienceMemory 已启用但 Neo4j 不可达。",
   "tour.title": "科学记忆操作指引",
   "tour.step1.card.body": "这是你本次会话的科学记忆——研究目标和每一步执行的任务。打开时默认只显示研究主线:研究目标 → 子任务 → 工具调用。每个任务产出的代码、论文、产物默认折叠不显示,双击任务节点可以把折叠子节点展开。",
-  "tour.step1.chain.body": "这是「{name}」的科学记忆视图。入口节点持续高亮、其余雾化,方便看清这个产物/证据处在什么位置。点任意节点可将其加入高亮进行浏览,雾化的其余部分让主干不喧宾夺主。用顶部的「查看…」按钮追踪具体链路。",
+  "tour.step1.chain.body": "这是「{name}」节点的科学记忆视图，该节点已高亮，请用顶部的「查看…」按钮追踪具体链路。",
   "tour.step2.body": "顶部的色块条是类型筛选：点某个色块只看这一类的节点/边，再点取消。支持同时筛选多类节点/边",
   "tour.next": "下一步",
   "tour.back": "上一步",
