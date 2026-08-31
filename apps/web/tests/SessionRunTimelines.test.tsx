@@ -627,3 +627,33 @@ test("a failed run with no assistantMessageId keeps its assistant message as a m
   assert.equal(assistantBlock?.kind, "message");
   assert.equal(assistantBlock!.kind === "message" && assistantBlock.message.id, "answer-failed");
 });
+
+test("a reopened Session replays the approval switch recorded during its run", () => {
+  const finished = sessionRun("run-audited", 1, "completed");
+  const records: SessionRunEvent[] = [
+    {
+      createdAt: "2026-01-01T00:00:01.000Z",
+      event: { trace: { id: "tool-1", name: "run_python", status: "completed" }, type: "tool.completed" },
+      runId: finished.id,
+      sequence: 1,
+      sessionId: finished.sessionId,
+    },
+    {
+      createdAt: "2026-01-01T00:00:02.000Z",
+      event: {
+        approvalMode: "always_allow",
+        permissionEpochId: "epoch-7",
+        previousApprovalMode: "ask_for_dangerous",
+        type: "session.approval_mode.changed",
+      },
+      runId: finished.id,
+      sequence: 2,
+      sessionId: finished.sessionId,
+    },
+  ];
+
+  const replayed = hydrateTerminalRunTimelines({}, [finished], { [finished.id]: records });
+  const entries = replayed[finished.id]?.entries ?? [];
+  assert.deepEqual(entries.map((entry) => entry.type), ["tool", "approval-mode"]);
+  assert.equal(entries[1]?.type === "approval-mode" && entries[1].previousApprovalMode, "ask_for_dangerous");
+});
