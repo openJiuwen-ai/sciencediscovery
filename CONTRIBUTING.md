@@ -4,7 +4,7 @@ Thanks for your interest in contributing. This document covers the development s
 
 ## Prerequisites
 
-Everything listed under [README → Quick start → Requirements](README.md#requirements) (Linux x86_64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, bubblewrap 0.6+ (0.8+ recommended), git).
+Everything listed under [README → Requirements](README.md#requirements): Linux x86_64/aarch64 or macOS x64/arm64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, and Git. Linux additionally needs Bubblewrap 0.6+ (0.8+ recommended); macOS uses the built-in `/usr/bin/sandbox-exec` Seatbelt launcher.
 
 Run the stack once before running the full check suite — the API agent-path tests spawn the gateway and need its Python environment:
 

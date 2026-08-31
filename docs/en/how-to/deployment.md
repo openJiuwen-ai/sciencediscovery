@@ -8,7 +8,7 @@ The root [README](../../../README.md) provides the shortest startup path. This g
 |---|---|---|---|
 | [Source-built single-file binary](#single-file-binary-deployment) | **One** executable per architecture | Source toolchain at build time; Bubblewrap at runtime | Portable internal release artifacts |
 | [Docker image](#docker-deployment) | Container image and Compose file | Docker Engine 24+ and Compose v2 | Container-based operations |
-| [Local mode](#local-mode-host-processes) | Source repository | Node, pnpm, uv, Python, and Bubblewrap | Development and debugging |
+| [Local mode](#local-mode-host-processes) | Source repository | Node, pnpm, uv, and Python; Linux uses Bubblewrap, while macOS uses the built-in Seatbelt sandbox | Development and debugging |
 
 **These paths are independent. Choose one and do not mix them.** The binary path never uses Docker: the executable embeds Node, CPython, gateway dependencies, the web assets, and micromamba. Use the image path for container deployment instead of putting the binary inside an image.
 
@@ -128,22 +128,31 @@ The output contains both executables, `VERSION`, and `SHA256SUMS`. The gateway d
 
 ## Local mode (host processes)
 
+Source mode supports Linux x86_64/aarch64 and macOS x64/arm64. Both platforms use the same startup command and require Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git, and curl. The sandbox dependency is platform-specific:
+
+- Linux needs Bubblewrap 0.6+ (0.8+ recommended) and usable unprivileged user namespaces.
+- macOS uses the built-in Seatbelt sandbox through `/usr/bin/sandbox-exec`; Bubblewrap is not required.
+
+From the repository root, run:
+
 ```bash
 ./scripts/start-stack.sh --mode local              # install, build, and start all services
 ./scripts/start-stack.sh --mode local --no-build   # start only after a previous build
 ```
 
-In local mode the shared entry point reads the root `.env`, checks the dependencies from [Requirements](../../../README.md#requirements), installs and builds when needed, and starts ordinary host processes:
+In local mode the shared entry point reads the root `.env`, checks the dependencies from [Requirements](../../../README.md#requirements), installs and builds when needed, and starts ordinary host processes. It automatically selects Bubblewrap on Linux and Seatbelt on macOS, so `SCIENCE_AGENT_SANDBOX_PROVIDER` does not need to be set manually:
 
 | Service | Address | Purpose |
 |---|---|---|
 | `services/gateway` | no port | Interpreter environment for the bundled Python MCP servers |
-| `services/runner` | 127.0.0.1:4311 | Rootless Bubblewrap executor (background) |
+| `services/runner` | 127.0.0.1:4311 | Rootless Bubblewrap (Linux) or Seatbelt (macOS) executor (background) |
 | `services/api` | 127.0.0.1:4310 | Control API and Web UI (foreground) |
 
-Ctrl-C stops its background services. `./scripts/run-local.sh [--no-build]` remains a thin compatibility wrapper, and `pnpm start` and `pnpm server` continue to use it. For unattended use, run it under a process manager such as a systemd user unit or tmux, or use [Docker deployment](#docker-deployment). The runner always binds only to loopback.
+After startup, the terminal prints the Web URL and the access token generated on first use. In another terminal, run `curl -fsS http://127.0.0.1:4310/health`, then open <http://127.0.0.1:4310> in a browser. Ctrl-C stops the background services. `./scripts/run-local.sh [--no-build]` remains a thin compatibility wrapper, and `pnpm start` and `pnpm server` continue to use it. For unattended use, run it under a process manager such as a Linux systemd user unit or tmux on either Linux or macOS; Docker remains a Linux-only alternative. The runner always binds only to loopback.
 
-The first start prepares a Python 3.12 gateway environment under `.sciencediscovery-data/envs/gateway`. It holds the interpreter for the bundled Python MCP servers (biomed, UniProt); the repository has no submodules.
+The first start prepares a Python 3.12 gateway environment under `.sciencediscovery-data/envs/gateway`. It holds the interpreter for the bundled Python MCP servers (biomed, UniProt), and startup also provisions the pinned micromamba release for the host platform and architecture, so the first run needs access to the dependency sources. The repository has no submodules.
+
+If macOS reports that Seatbelt is unavailable, first verify that `test -x /usr/bin/sandbox-exec` succeeds and check whether the current terminal or a parent sandbox prevents applying a Seatbelt profile. Startup does not silently fall back to unsandboxed execution. macOS support applies only to local source mode; the Linux single-file binary and Docker paths do not run directly on macOS.
 
 Ascend host NPU workloads use the same local-mode entry point. The Runner exposes `run_npu_job` only after an administrator explicitly sets `SCIENCE_AGENT_NPU_BROKER=1` and configures the workload entry points in `.env`. Before enabling it, create and verify a managed Python scientific environment revision for the Ascend stack; built-in NPU workloads, including smoke tests, submit against that revision rather than `SCIENCE_AGENT_NPU_PYTHON`. See [Configuration reference](../reference/configuration.md#environment-variables-local-mode) for variables and [Ascend NPU Host Broker](../explanation/ascend-npu-runner.md) for the design boundary.
 
