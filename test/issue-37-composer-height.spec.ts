@@ -31,7 +31,7 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
  *  S5 真实 isRunning:mock LLM 挂起制造真实 running，验证 composer-compact
  *  S6 三档视口量测:1366×768 / 1440×900 / 1920×1080 × (空态 / 触顶 / chip)
  *  S7 窄屏 sanity:500 / 600 宽发送与模型选择可达
- *  S8 现场条件回归:右侧工作区打开 + 矮视口(1366×640 / 1280×640)，发送按钮在 composer 卡片内且不叠专家/审批下拉
+ *  S8 现场条件回归:右侧工作区打开 + 矮视口(1366×640 / 1280×640)，发送按钮在 composer 卡片内且不叠专家下拉/审批图标
  *
  * 运行:E2E_BASE_URL=http://127.0.0.1:4310 npx playwright test issue-37-composer-height
  */
@@ -561,7 +561,7 @@ test.describe("会话 Composer 高度 E2E", () => {
       resultsLog.push({ scenario: `S8 workspace open idle ${tag}`, ...idle });
       expectSendInsideComposer(idle);
 
-      // 长草稿压力下仍不得溢出卡片或叠住专家/审批下拉
+      // 长草稿压力下仍不得溢出卡片或叠住专家下拉/审批图标
       const composerTextarea = page.locator(".composer textarea");
       await composerTextarea.fill(LONG_DRAFT);
       await page.waitForTimeout(150);
@@ -570,21 +570,22 @@ test.describe("会话 Composer 高度 E2E", () => {
       expectSendInsideComposer(capped);
       const overlap = await page.evaluate(() => {
         const send = document.querySelector<HTMLElement>(".send-button");
-        const selects = document.querySelectorAll<HTMLElement>(".orchestration-controls select");
+        const specialist = document.querySelector<HTMLElement>(".orchestration-controls select");
+        const approvals = document.querySelector<HTMLElement>(".approval-mode-toggle");
         if (!send) return { send: false, specialist: 0, approvals: 0 };
         const s = send.getBoundingClientRect();
-        const area = (el: HTMLElement | undefined) => {
+        const area = (el: HTMLElement | null) => {
           if (!el) return 0;
           const r = el.getBoundingClientRect();
           const w = Math.min(s.right, r.right) - Math.max(s.x, r.x);
           const h = Math.min(s.bottom, r.bottom) - Math.max(s.y, r.y);
           return w > 0 && h > 0 ? w * h : 0;
         };
-        return { send: true, specialist: area(selects[1]), approvals: area(selects[0]) };
+        return { send: true, specialist: area(specialist), approvals: area(approvals) };
       });
       resultsLog.push({ scenario: `S8 send-vs-select overlap ${tag}`, ...overlap });
       expect(overlap.specialist, `${tag} 发送按钮与专家下拉重叠面积`).toBe(0);
-      expect(overlap.approvals, `${tag} 发送按钮与审批下拉重叠面积`).toBe(0);
+      expect(overlap.approvals, `${tag} 发送按钮与审批图标重叠面积`).toBe(0);
       await screenshot(page, `s8-workspace-open-${tag}`);
     }
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);

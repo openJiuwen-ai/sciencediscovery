@@ -108,6 +108,12 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .connector-picker-trigger.has-enabled { color: var(--accent-ink); }
 .connector-picker-count { min-width: 16px; border-radius: var(--radius-pill); background: var(--surface-track); padding: 1px 5px; font-size: 10px; font-weight: 750; font-variant-numeric: tabular-nums; text-align: center; }
 .connector-picker-trigger.has-enabled .connector-picker-count { background: var(--accent-tint); color: var(--accent-deep); }
+.approval-mode-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 30px; border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--surface); padding: 4px 9px; color: var(--accent-ink); cursor: pointer; font-size: 11px; }
+.approval-mode-toggle:hover { border-color: var(--accent-border); background: var(--accent-soft); }
+.approval-mode-toggle.always-allow { border-color: var(--warning-border); background: var(--warning-soft); color: var(--warning-strong); }
+.approval-mode-toggle.always-allow:hover { border-color: var(--warning-accent); }
+.approval-mode-toggle:disabled { cursor: not-allowed; opacity: 0.55; }
+.approval-mode-toggle-state { font-weight: 650; white-space: nowrap; }
 .connector-picker-popover { position: absolute; z-index: var(--z-panel); left: 12px; bottom: calc(100% + 8px); width: min(340px, calc(100% - 24px)); max-height: min(50vh, 420px); overflow-y: auto; border: 1px solid var(--border-strong); border-radius: var(--radius-l); background: var(--surface); box-shadow: var(--shadow-3); padding: 10px 12px; }
 .connector-picker-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; color: var(--text-heading); font-size: 12px; }
 .connector-picker-heading span { color: var(--muted); font-weight: 650; }

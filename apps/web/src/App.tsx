@@ -228,6 +228,7 @@ import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
+import { ApprovalModeToggle } from "./composer/ApprovalModeToggle.js";
 import { ReviewerPanel } from "./ReviewerPanel.js";
 import { ToastViewport, useToasts } from "./Toasts.js";
 import { createAuthTokenPromptGate } from "./auth-token-prompt.js";
@@ -4156,9 +4157,13 @@ export function App() {
                         enabledIds={session.enabledConnectorIds}
                         onToggle={toggleConnector}
                       />
-                      <label><span>{t("composer.approvals")}</span><select value={session.approvalMode} disabled={sessionArchived} onChange={(event) => void updateSessionSettings({ approvalMode: event.target.value as "always_allow" | "ask_for_dangerous" })}><option value="ask_for_dangerous">{t("composer.askDangerous")}</option><option value="always_allow">{t("composer.alwaysAllow")}</option></select></label>
                       <label><span>{t("composer.specialist")}</span><select value={session.specialistId ?? ""} disabled={isRunning || sessionArchived} onChange={(event) => void updateSessionSettings({ specialistId: event.target.value || null })}><option value="">{t("composer.coordinator")}</option>{specialists.map((specialist) => <option key={specialist.id} value={specialist.id}>{specialist.name}</option>)}</select></label>
                     </div>
+                    <ApprovalModeToggle
+                      disabled={sessionArchived}
+                      mode={session.approvalMode}
+                      onChange={(approvalMode) => void updateSessionSettings({ approvalMode })}
+                    />
                     <ComposerRunButton action={composerRunAction} onStop={() => void stopRun()} />
                   </div>
                 </form>

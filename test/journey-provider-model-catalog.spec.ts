@@ -317,7 +317,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       const footerRect = node.getBoundingClientRect();
       const groupSelectors = [
         { group: "model", selector: ".model-picker-trigger" },
-        { group: "orchestration", selector: ".orchestration-controls select, .orchestration-controls button" },
+        { group: "orchestration", selector: ".orchestration-controls select, .orchestration-controls button, .composer-footer .approval-mode-toggle" },
         { group: "run", selector: ".composer-run-actions button" },
       ];
       const controls = groupSelectors.flatMap(({ group, selector }) => (
@@ -363,6 +363,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           rectangles.filter((rect) => rect.group === group).length,
         ])),
         labelsUnclipped: labelSpans.every((span) => span.scrollWidth <= span.clientWidth + 1),
+        approvalToggleHeight: node.querySelector<HTMLElement>(".approval-mode-toggle")?.getBoundingClientRect().height ?? 0,
         modelTriggerHeight: node.querySelector<HTMLElement>(".model-picker-trigger")?.getBoundingClientRect().height ?? 0,
         overlaps,
         pageScrollWidth: document.documentElement.scrollWidth,
@@ -383,8 +384,10 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     if (width <= 600) {
       expect(geometry.modelTriggerHeight).toBeGreaterThanOrEqual(24);
       expect(geometry.modelTriggerHeight).toBeLessThanOrEqual(48);
-      expect(geometry.selectHeights.length).toBeGreaterThanOrEqual(2);
+      expect(geometry.selectHeights.length).toBeGreaterThanOrEqual(1);
       expect(geometry.selectHeights.every((height) => height >= 24 && height <= 48)).toBe(true);
+      expect(geometry.approvalToggleHeight).toBeGreaterThanOrEqual(24);
+      expect(geometry.approvalToggleHeight).toBeLessThanOrEqual(48);
     }
     for (const label of labels) await expect(page.getByLabel(label)).toBeVisible();
     await expect(page.getByRole("button", { name: runButton })).toBeVisible();
