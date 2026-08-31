@@ -98,22 +98,24 @@ function buildSessionBody(input: ResolvedInput, approvalMode: string, runSetting
   if (modelId) body.modelId = modelId;
   const settingsOverrides: Record<string, unknown> = {};
   if (modelId) settingsOverrides.modelId = modelId;
-  const skills = splitList(runSettings.skills);
+  const skills = splitList(runSettings.skills) ?? input.enabledSkillIds;
   if (skills) settingsOverrides.enabledSkillIds = skills;
-  const connectors = splitList(runSettings.connectors);
+  const connectors = splitList(runSettings.connectors) ?? input.enabledConnectorIds;
   if (connectors) settingsOverrides.enabledConnectorIds = connectors;
   if (Object.keys(settingsOverrides).length) body.settingsOverrides = settingsOverrides;
   body.approvalMode = approvalMode;
-  if (runSettings.review) body.reviewMode = runSettings.review;
+  const review = runSettings.review ?? input.reviewMode;
+  if (review) body.reviewMode = review;
   return body;
 }
 
-function buildSettingsOverrides(runSettings: RunSettings): Record<string, unknown> {
+function buildSettingsOverrides(runSettings: RunSettings, input: ResolvedInput): Record<string, unknown> {
   const overrides: Record<string, unknown> = {};
-  if (runSettings.modelId) overrides.modelId = runSettings.modelId;
-  const skills = splitList(runSettings.skills);
+  const modelId = runSettings.modelId ?? input.modelId;
+  if (modelId) overrides.modelId = modelId;
+  const skills = splitList(runSettings.skills) ?? input.enabledSkillIds;
   if (skills) overrides.enabledSkillIds = skills;
-  const connectors = splitList(runSettings.connectors);
+  const connectors = splitList(runSettings.connectors) ?? input.enabledConnectorIds;
   if (connectors) overrides.enabledConnectorIds = connectors;
   return overrides;
 }
@@ -140,8 +142,11 @@ export async function runCommand(context: RunContext, log: (message: string) => 
   // 3. 输出模式 + 交互性
   const isTty = Boolean(process.stdout.isTTY);
   const outputMode = runSettings.output ?? (isTty ? "text" : "jsonl");
-  const autoApprove = runSettings.autoApprove || runSettings.approval === "always_allow";
-  const approvalMode = autoApprove ? "always_allow" : (runSettings.approval || "ask_for_dangerous");
+  const autoApprove =
+    runSettings.autoApprove || runSettings.approval === "always_allow" || input.approvalMode === "always_allow";
+  const approvalMode = autoApprove
+    ? "always_allow"
+    : (runSettings.approval ?? input.approvalMode ?? "ask_for_dangerous");
   const interactive = isTty && !autoApprove;
 
   // 非交互式 + 无 auto-approve 拒启
@@ -175,35 +180,33 @@ export async function runCommand(context: RunContext, log: (message: string) => 
   let sessionId = runSettings.sessionId ?? input.sessionId;
 
   if (!projectId && !sessionId) {
-    const created = await client.createProject({ title: "cli" });
-    projectId = String(
-      created.projectId ?? created.id ?? (created as { project?: { id?: string } }).project?.id ?? "",
-    );
-    sessionId = String(
-      created.sessionId ?? (created as { session?: { id?: string } }).session?.id ?? "",
-    );
+    const created = await client.createProject({ name: "cli" });
+    projectId = String(created.id ?? created.project?.id ?? "");
+    sessionId = String(created.firstSession?.id ?? "");
   }
   if (!sessionId && projectId) {
     const session = await client.createSession(projectId, buildSessionBody(input, approvalMode, runSettings));
     sessionId = session.id;
   } else if (sessionId) {
     // 复用已有会话:分次写设置(approvalMode 必须单独 PATCH,后端既有约束)
-    if (runSettings.modelId || runSettings.skills || runSettings.connectors) {
-      await client.replaceSessionSettings(sessionId, buildSettingsOverrides(runSettings));
+    const overrides = buildSettingsOverrides(runSettings, input);
+    if (Object.keys(overrides).length) {
+      await client.replaceSessionSettings(sessionId, overrides);
     }
-    if (autoApprove || runSettings.approval) {
+    if (autoApprove || runSettings.approval || input.approvalMode) {
       await client.updateSession(sessionId, { approvalMode });
     }
-    if (runSettings.review) {
-      await client.updateSession(sessionId, { reviewMode: runSettings.review });
+    const review = runSettings.review ?? input.reviewMode;
+    if (review) {
+      await client.updateSession(sessionId, { reviewMode: review });
     }
   }
-  if (!sessionId || !projectId) throw new Error("internal: failed to resolve project/session");
+  if (!sessionId) throw new Error("internal: failed to resolve session");
 
   if (outputMode === "text") {
-    log(`[run] project=${projectId} session=${sessionId}`);
+    log(`[run] project=${projectId ?? "—"} session=${sessionId}`);
   } else {
-    process.stdout.write(JSON.stringify({ type: "session", sessionId, projectId }) + "\n");
+    process.stdout.write(JSON.stringify({ type: "session", sessionId, projectId: projectId ?? null }) + "\n");
   }
 
   // 6. 发任务
@@ -232,8 +235,10 @@ export async function runCommand(context: RunContext, log: (message: string) => 
       }, runSettings.timeout)
     : undefined;
 
-  // SIGINT → cancel
+  // SIGINT → cancel: 先本地置位 finalStatus,让汇总走 cancelled 分支(exit 130),
+  // 否则 SSE 连接一断、后端 run.cancelled 事件收不到,会卡在初态导致 exitCode 0。
   const onSigInt = () => {
+    finalStatus = "cancelled";
     abortController.abort();
     void client.cancelRun(sessionId!, run.id).catch(() => undefined);
   };
@@ -402,12 +407,11 @@ export async function runCommand(context: RunContext, log: (message: string) => 
     process.off("SIGINT", onSigInt);
   }
 
-  // 8. 取 usage(后端 SSE 不含,§5.2 汇总行另取)
+  // 8. 取 usage(后端 SSE 不含,§5.2 汇总行另取)——走 Web 同一条用量接口 /api/sessions/:id/usage
   let usage: unknown = null;
-  if (finalStatus === "completed" || finalStatus === "failed") {
+  if (finalStatus === "completed" || finalStatus === "failed" || finalStatus === "cancelled") {
     try {
-      const finalRun = await client.getRun(sessionId, run.id);
-      usage = (finalRun as { usage?: unknown }).usage ?? null;
+      usage = await client.getSessionUsage(sessionId);
     } catch {
       // 用量取不到不阻塞
     }
@@ -436,7 +440,7 @@ export async function runCommand(context: RunContext, log: (message: string) => 
         type: "result",
         runId: run.id,
         sessionId,
-        status: finalStatus,
+        status: timedOut ? "timed_out" : finalStatus,
         content: finalMessageContent ?? null,
         files: finalFiles ?? null,
         error: finalError ?? null,

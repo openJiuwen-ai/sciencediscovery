@@ -62,7 +62,9 @@ export interface Session {
 export interface CreateProjectResponse {
   id?: string;
   projectId?: string;
-  sessionId?: string;
+  /** The untitled session the backend creates alongside the project. */
+  firstSession?: { id?: string; [key: string]: unknown };
+  project?: { id?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
 
@@ -152,6 +154,11 @@ export class ControlPlaneClient {
 
   getRun(sessionId: string, runId: string): Promise<SessionRun> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}`);
+  }
+
+  /** GET /api/sessions/:id/usage — the same route the Web UI uses for usage. */
+  getSessionUsage(sessionId: string): Promise<unknown> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/usage`);
   }
 
   cancelRun(sessionId: string, runId: string): Promise<unknown> {
