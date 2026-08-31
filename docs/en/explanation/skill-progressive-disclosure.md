@@ -17,13 +17,13 @@ effective Session skills → API frozen revisions
   └─ prepareSkillSandbox writes the complete packages to a per-execution snapshot root
        ↓
   sandbox starts with the packages already mounted
-    ├─ /skills                (read-only, $SCIENCEDISCOVERY_SKILLS_DIR)
+    ├─ $SCIENCEDISCOVERY_SKILLS_DIR            (read-only; /skills under bubblewrap)
     │    └─ <skillId>/SKILL.md, scripts/, references/, assets/…
-    └─ /skill-extensions      (writable, $SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR)
+    └─ $SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR  (writable; /skill-extensions under bubblewrap)
        ↓
   prompt lists <package_path> and <package_hash> per selected skill
        ↓
-  read /skills/<skillId>/SKILL.md with read_file  (read_skill remains a fallback)
+  read $SCIENCEDISCOVERY_SKILLS_DIR/<skillId>/SKILL.md with read_file  (read_skill remains a fallback)
     ├─ read referenced supporting text from the same package path
     └─ execute a bundled script in place with explicit argv
 ```
@@ -32,17 +32,19 @@ effective Session skills → API frozen revisions
 
 | Path | Mode | Purpose |
 |---|---|---|
-| `/skills/<skillId>` | read-only | Complete frozen package for one selected Skill, including `SKILL.md`, `scripts/`, `references/`, and assets |
-| `/skills/.sciencediscovery-snapshot.json` | read-only | Manifest recording each staged skill id, revision, version, and package hash |
-| `/skill-extensions` | writable | Reserved extension area for later self-evolution; empty by default and never part of the frozen tree |
+| `$SCIENCEDISCOVERY_SKILLS_DIR/<skillId>` | read-only | Complete frozen package for one selected Skill, including `SKILL.md`, `scripts/`, `references/`, and assets |
+| `$SCIENCEDISCOVERY_SKILLS_DIR/.sciencediscovery-snapshot.json` | read-only | Manifest recording each staged skill id, revision, version, and package hash |
+| `$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` | writable | Reserved extension area for later self-evolution; empty by default and never part of the frozen tree |
 
-`$SCIENCEDISCOVERY_SKILLS_DIR` and `$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` resolve to these locations inside `run_shell`, `run_python`, and `run_r`, so a skill instruction can quote the variable instead of a hardcoded mount path.
+Always address a package through `$SCIENCEDISCOVERY_SKILLS_DIR`, which is the form the prompt advertises as `<package_path>`. The expanded value is platform-specific: under bubblewrap it is the bind path `/skills`, while macOS Seatbelt has no mount namespace and the variable holds the real host snapshot directory. Hardcoding `/skills` therefore works on Linux and breaks on macOS.
+
+Both sides understand the variable form. Shells and Python expand it normally; the Node-side workspace tools (`read_file`, `list_files`, and `run_shell`'s `scriptPath`) accept `$SCIENCEDISCOVERY_SKILLS_DIR/...`, `${SCIENCEDISCOVERY_SKILLS_DIR}/...`, and the bare bind path as aliases for the same file, and `run_shell` re-emits a script path through the variable so the generated command runs unchanged on either sandbox.
 
 ## Tool responsibilities
 
 | Tool | Location | Responsibility |
 |---|---|---|
-| `read_file` | Node workspace tool | Page through any staged package file under `/skills`, exactly as for a workspace file |
+| `read_file` | Node workspace tool | Page through any staged package file under the packages root, exactly as for a workspace file |
 | `run_shell` / `run_python` / `run_r` | Runner sandbox | Execute a bundled script in place from its package path with explicit argv |
 | `read_skill` | Node workspace tool | Compatibility channel returning the same frozen instructions and the package path |
 | `read_skill_resource` | Node workspace tool | Bounded UTF-8 read of one snapshot resource; never executes scripts or installs dependencies |
@@ -56,8 +58,8 @@ Exposing the catalog's live `SKILL.md` location would let a mid-run disk edit ch
 ## Security boundary
 
 - Skill entries injected into the prompt contain metadata and paths, not content.
-- Only skills selected for the run are staged; an unselected skill never appears under `/skills`.
-- The default package tree is read-only: writes and deletes inside `/skills` fail in the sandbox, and the staged files are mode `0444` on the host.
+- Only skills selected for the run are staged; an unselected skill never appears under the packages root.
+- The default package tree is read-only: writes and deletes inside the packages root fail in the sandbox, and the staged files are mode `0444` on the host.
 - Staging a package is not installing or running it. `scripts/` are never auto-executed and dependencies are never auto-installed merely because a Skill is selected; execution requires an explicit argv call from the Agent.
 - Large or binary package bytes go from the frozen snapshot straight to disk and never enter model context. Do not read a large bundled script back into context, and do not search the filesystem for package resources — the prompt already carries the path.
 - Revision, version, and package hash enter the Prompt Manifest and the staged manifest file, so an execution can be replayed against an exact package.

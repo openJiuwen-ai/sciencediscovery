@@ -384,6 +384,19 @@ export class KernelManager {
         kernel.session.memoryLostReason ?? "Persistent kernel stopped; persistent memory was lost");
       kernel = undefined;
     }
+    // Skill selection can legitimately change inside one Session-Agent identity.
+    // A started sandbox cannot re-bind, so restart it and report the loss rather
+    // than failing the execution the way a real mount conflict does.
+    if (kernel
+      && kernel.skillPackagesRoot !== skillRoots?.packagesRoot
+      && kernel.workspaceRoot === workspaceRoot
+      && kernel.readOnlyWorkspaceRoot === readOnlyWorkspaceRoot) {
+      await kernel.stop("Selected Skills changed; persistent memory was lost");
+      this.kernels.delete(key);
+      this.lostState.set(lostStateKey,
+        kernel.session.memoryLostReason ?? "Selected Skills changed; persistent memory was lost");
+      kernel = undefined;
+    }
     if (!kernel) {
       kernel = await this.startKernel(
         request,

@@ -24,7 +24,7 @@ import { strToU8, zipSync } from "fflate";
 import { SKILL_EXTENSIONS_WORKSPACE_PATH } from "@sciencediscovery/schema";
 import { hashSkillPackageFiles, SkillCatalog, type RuntimeSkillSnapshot } from "@sciencediscovery/specialist";
 
-import { prepareSkillSandbox, SKILL_SNAPSHOT_MANIFEST } from "./skill-sandbox.js";
+import { prepareSkillSandbox, skillPackageSetHash, SKILL_SNAPSHOT_MANIFEST } from "./skill-sandbox.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -104,6 +104,28 @@ test("prepares only selected complete frozen Skill packages before sandbox execu
   selectedSource.set("scripts/foo.py", Buffer.from("print('live edit')\n"));
   await prepareSkillSandbox(snapshotRoot, workspaceRoot, [selected]);
   assert.deepEqual(await readFile(resolve(snapshotRoot, "selected-skill", "scripts", "foo.py")), script);
+});
+
+test("the package set hash is stable per selected Skill set so one snapshot is shared", () => {
+  const alpha = snapshot("alpha-skill", new Map([["SKILL.md", Buffer.from("alpha\n")]]), 2);
+  const beta = snapshot("beta-skill", new Map([["SKILL.md", Buffer.from("beta\n")]]), 5);
+
+  // Two runs selecting the same revisions must resolve to the same directory,
+  // otherwise a persistent kernel would see its read-only mount change per run.
+  assert.equal(skillPackageSetHash([alpha, beta]), skillPackageSetHash([alpha, beta]));
+  assert.equal(skillPackageSetHash([alpha, beta]), skillPackageSetHash([beta, alpha]));
+  assert.match(skillPackageSetHash([alpha]), /^[0-9a-f]{64}$/);
+
+  // A different selection, revision, or package content must not collide.
+  assert.notEqual(skillPackageSetHash([alpha]), skillPackageSetHash([alpha, beta]));
+  assert.notEqual(
+    skillPackageSetHash([alpha]),
+    skillPackageSetHash([snapshot("alpha-skill", new Map([["SKILL.md", Buffer.from("alpha\n")]]), 3)]),
+  );
+  assert.notEqual(
+    skillPackageSetHash([alpha]),
+    skillPackageSetHash([snapshot("alpha-skill", new Map([["SKILL.md", Buffer.from("edited\n")]]), 2)]),
+  );
 });
 
 test("stages the frozen revision even after the live package is edited on disk", async (context) => {

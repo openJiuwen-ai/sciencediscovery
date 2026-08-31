@@ -220,15 +220,19 @@ test("a Session-Agent identity rejects reuse with different workspace mounts", a
     skillPackagesRoot,
     workspaceRoot: differentRoot,
   }), /cannot be reused with different workspace mounts/);
-  await assert.rejects(manager.execute({
+  // A changed Skill selection restarts the shell on the new read-only mount and
+  // reports the lost environment, rather than failing the execution.
+  const restarted = await manager.execute({
     agentId: "main",
-    code: "echo wrong",
+    code: "echo restarted",
     executionId: "mount-three",
     kernelMode: "persistent",
     permissionEpoch: epoch(),
     skillPackagesRoot: differentSkillPackagesRoot,
     workspaceRoot,
-  }), /cannot be reused with different workspace mounts/);
+  });
+  assert.equal(restarted.stdout.trim(), "restarted");
+  assert.match(restarted.memoryStateLost ?? "", /Selected Skills changed/);
 });
 
 test("shell exports sediment into the session env profile and reach ephemeral python and shell", async (context) => {

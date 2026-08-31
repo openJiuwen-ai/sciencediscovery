@@ -421,6 +421,20 @@ export class ShellSessionManager {
       this.profiles.clear(sessionId, request.agentId, request.permissionEpoch.id);
       shellSession = undefined;
     }
+    // Skill selection can legitimately change inside one Session-Agent identity.
+    // A started sandbox cannot re-bind, so restart it and report the loss rather
+    // than failing the execution the way a real mount conflict does.
+    if (shellSession
+      && shellSession.skillPackagesRoot !== skillRoots?.packagesRoot
+      && shellSession.workspaceRoot === workspaceRoot
+      && shellSession.readOnlyWorkspaceRoot === readOnlyWorkspaceRoot) {
+      await shellSession.stop("Selected Skills changed; the persistent shell environment was lost");
+      this.lostState.set(agentKey, shellSession.session.memoryLostReason
+        ?? "Selected Skills changed; the persistent shell environment was lost");
+      this.sessions.delete(key);
+      this.profiles.clear(sessionId, request.agentId, request.permissionEpoch.id);
+      shellSession = undefined;
+    }
     if (!shellSession) {
       shellSession = await this.startSession(request, key, workspaceRoot, readOnlyWorkspaceRoot, skillRoots, networkAccess);
       this.sessions.set(key, shellSession);

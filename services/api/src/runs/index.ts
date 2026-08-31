@@ -108,7 +108,7 @@ import {
   DEFAULT_MODEL_API_VARIANT,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
   lookupModelCatalog,
-  SANDBOX_SKILL_PACKAGES_ROOT,
+  SKILL_PACKAGES_PORTABLE_ROOT,
   THINKING_CONTROL_VARIANTS,
   THINKING_EFFORT_VARIANTS,
   UNTITLED_SESSION_TITLE,
@@ -151,7 +151,7 @@ import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestra
 import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
 import { createWorkspaceExecutionBindings } from "../agent-run/workspace-bindings.js";
-import { prepareSkillSandbox } from "../skill-sandbox.js";
+import { prepareSkillSandbox, skillPackageSetHash } from "../skill-sandbox.js";
 import {
   reviewerSpecialistAvailable,
   createEvidenceReferenceTracer,
@@ -487,7 +487,9 @@ async function executeAgentRun(
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "The selected skills are not available");
   }
-  const skillPackagesRoot = activeSkills.length ? store.skillPackagesPath(sessionId, runId) : undefined;
+  const skillPackagesRoot = activeSkills.length
+    ? store.skillPackagesPath(sessionId, skillPackageSetHash(activeSkills))
+    : undefined;
   if (skillPackagesRoot) {
     await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
   }
@@ -496,7 +498,7 @@ async function executeAgentRun(
     description,
     hash,
     id,
-    packagePath: `${SANDBOX_SKILL_PACKAGES_ROOT}/${id}`,
+    packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}`,
     readResource,
     resources,
     revision,
@@ -1233,7 +1235,7 @@ async function executeAgentRun(
           const subagentWorkspaceRoot = resolveWorkspaceFile(store.workspacePath(sessionId), handoff.privateWorkspacePath);
           const subagentSnapshots = skillCatalog.resolve(subagentSkillIds);
           const subagentSkillPackagesRoot = subagentSnapshots.length
-            ? store.skillPackagesPath(sessionId, subagent.id)
+            ? store.skillPackagesPath(sessionId, skillPackageSetHash(subagentSnapshots))
             : undefined;
           if (subagentSkillPackagesRoot) {
             await prepareSkillSandbox(subagentSkillPackagesRoot, subagentWorkspaceRoot, subagentSnapshots);
@@ -1243,7 +1245,7 @@ async function executeAgentRun(
             description,
             hash,
             id,
-            packagePath: `${SANDBOX_SKILL_PACKAGES_ROOT}/${id}`,
+            packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}`,
             readResource,
             resources,
             revision,

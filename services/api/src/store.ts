@@ -4707,11 +4707,12 @@ export class SessionStore {
     return resolve(this.dataDir, "projects", session.projectId, "sessions", session.id, "workspace");
   }
 
-  skillPackagesPath(sessionId: string, executionId: string): string {
+  /** Content-addressed root for one selected Skill set, shared by every run that selects it. */
+  skillPackagesPath(sessionId: string, packageSetHash: string): string {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(executionId)) {
-      throw new Error("Execution id is unsafe for a Skill snapshot path");
+    if (!/^[0-9a-f]{64}$/.test(packageSetHash)) {
+      throw new Error("Skill package set hash is unsafe for a Skill snapshot path");
     }
     return resolve(
       this.dataDir,
@@ -4720,7 +4721,7 @@ export class SessionStore {
       "sessions",
       session.id,
       "skill-snapshots",
-      executionId,
+      packageSetHash,
     );
   }
 }

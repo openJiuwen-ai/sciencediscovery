@@ -47,6 +47,19 @@ function stableManifest(manifest: SkillSnapshotManifest): string {
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
+/**
+ * Identity of one selected Skill set, used as the content-addressed snapshot
+ * directory name. Runs that select the same frozen revisions reuse one staged
+ * tree, which also keeps a persistent kernel's mounts stable across runs.
+ */
+export function skillPackageSetHash(skills: readonly RuntimeSkillSnapshot[]): string {
+  const hash = createHash("sha256");
+  for (const skill of [...skills].toSorted((left, right) => left.id.localeCompare(right.id))) {
+    hash.update(`${skill.id}\n${skill.revision}\n${skill.version}\n${skill.hash}\n`);
+  }
+  return hash.digest("hex");
+}
+
 async function existingSnapshotMatches(root: string, expected: string): Promise<boolean> {
   try {
     return await readFile(resolve(root, SKILL_SNAPSHOT_MANIFEST), "utf8") === expected;
@@ -123,7 +136,11 @@ export async function prepareSkillSandbox(
     try {
       await rename(staging, root);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !await existingSnapshotMatches(root, expectedManifest)) {
+      // Concurrent runs sharing one content-addressed root race here; POSIX
+      // reports a non-empty destination as ENOTEMPTY or EEXIST depending on the
+      // platform. Either is fine as long as the winner staged the same bytes.
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code !== "EEXIST" && code !== "ENOTEMPTY") || !await existingSnapshotMatches(root, expectedManifest)) {
         throw error;
       }
     }

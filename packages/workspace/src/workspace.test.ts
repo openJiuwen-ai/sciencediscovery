@@ -1072,7 +1072,7 @@ test("skill loading reads frozen instructions directly by exact id", async () =>
       description: "Workflow for selected progressive loading tests.",
       hash: "b".repeat(64),
       id: "selected-skill",
-      packagePath: "/skills/selected-skill",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill",
       readResource: () => { throw new Error("not used"); },
       resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 24 }],
       revision: 3,
@@ -1082,7 +1082,7 @@ test("skill loading reads frozen instructions directly by exact id", async () =>
       description: "Unrelated workflow.",
       hash: "c".repeat(64),
       id: "other-skill",
-      packagePath: "/skills/other-skill",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/other-skill",
       readResource: () => { throw new Error("not used"); },
       resources: [],
       revision: 1,
@@ -1112,7 +1112,7 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
       description: "Selected skill with one reference.",
       hash: "b".repeat(64),
       id: "selected-skill",
-      packagePath: "/skills/selected-skill",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill",
       readResource: (path) => {
         requestedPath = path;
         return {
@@ -1178,7 +1178,7 @@ test("ordinary file and shell tools use the pre-mounted complete frozen Skill pa
       description: "Selected complete package.",
       hash: "b".repeat(64),
       id: "selected-skill",
-      packagePath: "/skills/selected-skill",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill",
       readResource: () => { throw new Error("not used"); },
       resources: [{ hash: "a".repeat(64), kind: "script", path: "scripts/run.sh", size: 22 }],
       revision: 7,
@@ -1194,16 +1194,32 @@ test("ordinary file and shell tools use the pre-mounted complete frozen Skill pa
   assert.ok(readTool);
   assert.ok(listTool);
   assert.ok(shellTool);
-  const readResult = await readTool.execute("read", { path: "/skills/selected-skill/SKILL.md" });
-  assert.equal(readResult.content[0]?.type === "text" ? readResult.content[0].text : "", "Frozen instructions\n");
+  // The prompt advertises the environment-variable form, which these Node-side
+  // tools never see expanded; the bubblewrap bind path stays valid as an alias.
+  for (const packageRoot of [
+    "$SCIENCEDISCOVERY_SKILLS_DIR",
+    "${SCIENCEDISCOVERY_SKILLS_DIR}",
+    "/skills",
+  ]) {
+    const readResult = await readTool.execute("read", { path: `${packageRoot}/selected-skill/SKILL.md` });
+    assert.equal(readResult.content[0]?.type === "text" ? readResult.content[0].text : "", "Frozen instructions\n");
+  }
   const listed = await listTool.execute("list", {});
-  assert.match(listed.content[0]?.type === "text" ? listed.content[0].text : "", /\/skills\/selected-skill\/scripts\/run\.sh/);
-  await shellTool.execute("shell", {
-    arguments: ["value with spaces"],
-    kernelMode: "ephemeral",
-    scriptPath: "/skills/selected-skill/scripts/run.sh",
-  });
+  assert.match(
+    listed.content[0]?.type === "text" ? listed.content[0].text : "",
+    /\$SCIENCEDISCOVERY_SKILLS_DIR\/selected-skill\/scripts\/run\.sh/,
+  );
+
+  // Every accepted spelling produces the same portable command, so a script runs
+  // by path on bubblewrap and on macOS Seatbelt, where /skills does not exist.
+  for (const scriptPath of [
+    "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill/scripts/run.sh",
+    "/skills/selected-skill/scripts/run.sh",
+  ]) {
+    await shellTool.execute("shell", { arguments: ["value with spaces"], kernelMode: "ephemeral", scriptPath });
+  }
   assert.deepEqual(executedCodes, [
+    "/usr/bin/bash \"${SCIENCEDISCOVERY_SKILLS_DIR}\"/'selected-skill/scripts/run.sh' 'value with spaces'",
     "/usr/bin/bash \"${SCIENCEDISCOVERY_SKILLS_DIR}\"/'selected-skill/scripts/run.sh' 'value with spaces'",
   ]);
 });
@@ -1228,7 +1244,7 @@ test("create_skill requires the selected skill-creator instructions before mutat
       description: "Create a Skill from an explicit user request.",
       hash: "c".repeat(64),
       id: "skill-creator",
-      packagePath: "/skills/skill-creator",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/skill-creator",
       readResource: () => { throw new Error("not used"); },
       resources: [],
       revision: 1,

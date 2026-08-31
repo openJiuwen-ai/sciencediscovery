@@ -271,13 +271,30 @@ test("a persistent Kernel rejects writable and read-only mount changes for one S
     executionId: "mount-eval-read-only-mismatch",
     readOnlyWorkspaceRoot: otherReadOnlyWorkspaceRoot,
   }), /cannot be reused with different workspace mounts/);
-  await assert.rejects(manager.execute({
-    ...request,
-    code: "print('wrong Skill mount')",
-    executionId: "mount-eval-skill-mismatch",
-    skillPackagesRoot: otherSkillPackagesRoot,
-  }), /cannot be reused with different workspace mounts/);
   assert.deepEqual(manager.list().map((kernel) => kernel.id), [first.kernelId]);
+
+  // Changing the selected Skill set is legitimate, so the kernel restarts on the
+  // new read-only mount and reports the memory loss instead of failing the call.
+  const restarted = await manager.execute({
+    ...request,
+    code: "print('new Skill mount')",
+    executionId: "mount-eval-skill-change",
+    skillPackagesRoot: otherSkillPackagesRoot,
+  });
+  assert.notEqual(restarted.kernelId, first.kernelId);
+  assert.equal(restarted.stdout.trim(), "new Skill mount");
+  assert.match(restarted.memoryStateLost ?? "", /Selected Skills changed/);
+  assert.deepEqual(manager.list().map((kernel) => kernel.id), [restarted.kernelId]);
+
+  // The restarted kernel is a fresh interpreter, so earlier state is really gone.
+  const afterRestart = await manager.execute({
+    ...request,
+    code: "print(x)",
+    executionId: "mount-eval-skill-change-state",
+    skillPackagesRoot: otherSkillPackagesRoot,
+  });
+  assert.notEqual(afterRestart.exitCode, 0);
+  assert.match(afterRestart.stderr, /NameError/);
 });
 
 test("persistent R kernel path retains state and reports a generated workspace artifact", async (context) => {

@@ -282,6 +282,17 @@ export const SKILL_EXTENSIONS_WORKSPACE_PATH = ".sciencediscovery/skill-extensio
 export const SKILL_PACKAGES_ENVIRONMENT_VARIABLE = "SCIENCEDISCOVERY_SKILLS_DIR";
 export const SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE = "SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR";
 
+// The bind paths above are literal only under bubblewrap. macOS Seatbelt has no
+// mount namespace, so every advertised path uses the environment variable form,
+// which both shells and the workspace path resolver understand on either host.
+export const SKILL_PACKAGES_PORTABLE_ROOT = `$${SKILL_PACKAGES_ENVIRONMENT_VARIABLE}`;
+export const SKILL_EXTENSIONS_PORTABLE_ROOT = `$${SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE}`;
+
+/** Every spelling of a mounted Skill root the model may send back to a tool. */
+export function skillRootAliases(bindRoot: string, variable: string): string[] {
+  return [bindRoot, `$${variable}`, `\${${variable}}`];
+}
+
 export interface SkillLibrary {
   createdAt: string;
   headVersionId?: string;

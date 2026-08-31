@@ -23,6 +23,8 @@ import {
   SKILL_EXTENSIONS_WORKSPACE_PATH,
   SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE,
   SKILL_PACKAGES_ENVIRONMENT_VARIABLE,
+  SKILL_PACKAGES_PORTABLE_ROOT,
+  skillRootAliases,
 } from "@sciencediscovery/schema";
 import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
 import type {
@@ -414,19 +416,29 @@ async function resolveSandboxScriptPath(
   return { path: `${sandboxRoot}/${relativeScriptPath}` };
 }
 
+const SKILL_PACKAGE_ALIASES = skillRootAliases(SANDBOX_SKILL_PACKAGES_ROOT, SKILL_PACKAGES_ENVIRONMENT_VARIABLE);
+const SKILL_EXTENSION_ALIASES = skillRootAliases(SANDBOX_SKILL_EXTENSIONS_ROOT, SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE);
+
+/** Strip any accepted spelling of a mounted root, returning the package-relative remainder. */
+function stripMountedRoot(path: string, aliases: readonly string[]): string | undefined {
+  for (const alias of aliases) {
+    if (path === alias) return ".";
+    if (path.startsWith(`${alias}/`)) return path.slice(alias.length + 1);
+  }
+  return undefined;
+}
+
 function normalizeMountedReadPath(requestedPath: string): {
   path: string;
   root: "extensions" | "parent" | "skills" | "workspace";
 } {
   const path = requestedPath.trim();
-  if (path === SANDBOX_SKILL_PACKAGES_ROOT) return { path: ".", root: "skills" };
-  if (path.startsWith(`${SANDBOX_SKILL_PACKAGES_ROOT}/`)) {
-    return { path: path.slice(SANDBOX_SKILL_PACKAGES_ROOT.length + 1), root: "skills" };
-  }
-  if (path === SANDBOX_SKILL_EXTENSIONS_ROOT) return { path: ".", root: "extensions" };
-  if (path.startsWith(`${SANDBOX_SKILL_EXTENSIONS_ROOT}/`)) {
-    return { path: path.slice(SANDBOX_SKILL_EXTENSIONS_ROOT.length + 1), root: "extensions" };
-  }
+  // Prompts advertise the environment-variable form because it resolves on both
+  // bubblewrap and Seatbelt; tools are Node-side, so accept it unexpanded too.
+  const skills = stripMountedRoot(path, SKILL_PACKAGE_ALIASES);
+  if (skills !== undefined) return { path: skills, root: "skills" };
+  const extensions = stripMountedRoot(path, SKILL_EXTENSION_ALIASES);
+  if (extensions !== undefined) return { path: extensions, root: "extensions" };
   if (path === "/parent_workspace") return { path: ".", root: "parent" };
   if (path.startsWith("/parent_workspace/")) return { path: path.slice("/parent_workspace/".length), root: "parent" };
   if (path === "/workspace") return { path: ".", root: "workspace" };
@@ -562,7 +574,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             ? [readOnlyFiles.length ? `Read-only parent workspace:\n${readOnlyFiles.map((file) => file.path).join("\n")}` : "Read-only parent workspace is empty"]
             : []),
           ...(skillPackagesRoot
-            ? [skillFiles.length ? `Read-only Skill packages (${SANDBOX_SKILL_PACKAGES_ROOT}):\n${skillFiles.map((file) => `${SANDBOX_SKILL_PACKAGES_ROOT}/${file.path}`).join("\n")}` : "Read-only Skill packages are empty"]
+            ? [skillFiles.length ? `Read-only Skill packages (${SKILL_PACKAGES_PORTABLE_ROOT}):\n${skillFiles.map((file) => `${SKILL_PACKAGES_PORTABLE_ROOT}/${file.path}`).join("\n")}` : "Read-only Skill packages are empty"]
             : []),
         ].join("\n\n");
         return {
