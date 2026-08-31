@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type {
+  ApprovalMode,
   ArtifactReviewRun,
   ComposerReference,
   PermissionDecision,
@@ -79,7 +80,17 @@ export type RunTimelineEntry =
       id: string;
       request: PermissionRequest;
       type: "permission";
+    }
+  | {
+      approvalMode: ApprovalMode;
+      id: string;
+      previousApprovalMode: ApprovalMode;
+      type: "approval-mode";
     };
+
+function approvalModeLabelKey(mode: ApprovalMode): "timeline.approvalModeAlwaysAllow" | "timeline.approvalModeAsk" {
+  return mode === "always_allow" ? "timeline.approvalModeAlwaysAllow" : "timeline.approvalModeAsk";
+}
 
 function finishThinking(entries: RunTimelineEntry[]): RunTimelineEntry[] {
   return entries
@@ -254,6 +265,20 @@ export function reduceRunTimeline(
       id: `permission-${event.request.id}`,
       request: event.request,
       type: "permission",
+    }];
+  }
+
+  // One entry per real switch. The epoch id keys it, so replaying the stream
+  // after a reload rebuilds the same card instead of stacking duplicates.
+  if (event.type === "session.approval_mode.changed") {
+    const finished = finishThinking(entries);
+    const id = `approval-mode-${event.permissionEpochId}`;
+    if (finished.some((entry) => entry.id === id)) return finished;
+    return [...finished, {
+      approvalMode: event.approvalMode,
+      id,
+      previousApprovalMode: event.previousApprovalMode,
+      type: "approval-mode",
     }];
   }
 
@@ -450,6 +475,18 @@ export function RunTimeline({
             <aside className="boundary-note" key={entry.id}>
               <span><WarningIcon size={15} /></span>
               <p>{entry.droppedEvents} run event(s) were removed by the retention policy; approval records are kept.</p>
+            </aside>
+          );
+        }
+
+        if (entry.type === "approval-mode") {
+          return (
+            <aside className="boundary-note" key={entry.id}>
+              <span><WarningIcon size={15} /></span>
+              <p>{t("timeline.approvalModeChanged", {
+                from: t(approvalModeLabelKey(entry.previousApprovalMode)),
+                to: t(approvalModeLabelKey(entry.approvalMode)),
+              })}</p>
             </aside>
           );
         }

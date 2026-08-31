@@ -222,6 +222,7 @@ import {
   emptyMatch,
   emptyTrace,
   getActiveSessionRun,
+  publishApprovalModeChange,
   scheduleSessionRuns,
   sessionHasActiveRun,
   streamAgentRun,
@@ -1553,7 +1554,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (requestedApprovalMode && hasRemainingChanges) {
           return sendError(response, 400, "approvalMode must be changed in a dedicated request");
         }
-        if (requestedApprovalMode && store.getSession(sessionId)?.approvalMode !== requestedApprovalMode) {
+        // Read the mode in force before the switch: it is both the guard against
+        // recording a no-op re-selection and the "from" side of the audit entry.
+        const previousApprovalMode = requestedApprovalMode ? store.getSession(sessionId)?.approvalMode : undefined;
+        if (requestedApprovalMode && previousApprovalMode !== requestedApprovalMode) {
           const teardown = (await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available
             ? await runnerClient.teardownKernels(sessionId, "Approval mode changed; persistent memory was lost")
             : undefined;
@@ -1569,6 +1573,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             remoteCompute,
             provenanceRecorder,
           );
+          if (previousApprovalMode) {
+            await publishApprovalModeChange(store, sessionId, {
+              approvalMode: modeChange.session.approvalMode,
+              permissionEpochId: modeChange.permissionEpoch.id,
+              previousApprovalMode,
+            });
+          }
         }
         sendJson(response, 200, hasRemainingChanges
           ? await store.updateSession(sessionId, remaining)

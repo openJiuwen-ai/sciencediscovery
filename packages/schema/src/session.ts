@@ -331,6 +331,18 @@ export interface SessionRun {
 export type RunStreamEvent =
   | { model: ModelRunInfo; runId: string; settings: EffectiveRuntimeSettings; type: "run.started" }
   | { session: Session; type: "session.updated" }
+  /**
+   * The Session's approval policy was switched while this run's timeline was the
+   * one being written. Recorded only for a real change, so a replay reads back
+   * when the policy moved and in which direction; the tool calls after it are
+   * judged by `approvalMode`.
+   */
+  | {
+      approvalMode: ApprovalMode;
+      permissionEpochId: string;
+      previousApprovalMode: ApprovalMode;
+      type: "session.approval_mode.changed";
+    }
   | { run: SessionRun; type: "run.queued" }
   | { reason?: string; run: SessionRun; status: SessionRunStatus; type: "run.status" }
   | { reason?: string; runId: string; type: "run.cancelled" }

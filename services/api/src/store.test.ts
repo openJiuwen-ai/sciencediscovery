@@ -2750,6 +2750,13 @@ test("SessionStore resolves every pending action when always-allow is enabled an
     && Boolean(request.permissionAuthorizationId)));
   assert.equal(store.listPermissionGrants().length, 0);
 
+  // Re-selecting the mode already in force is not a policy change: it must not
+  // rotate the epoch, so nothing downstream records a switch that never happened.
+  const repeated = await store.setApprovalMode(session.id, "always_allow");
+  assert.equal(repeated.permissionEpoch.id, changed.permissionEpoch.id);
+  assert.deepEqual(repeated.resolvedPendingRequests, []);
+  assert.equal(store.listPermissionEpochs(session.id).length, 2);
+
   await store.setApprovalMode(session.id, "ask_for_dangerous");
   const orphan = await store.requestPermission(
     session.id,

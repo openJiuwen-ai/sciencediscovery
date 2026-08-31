@@ -39,6 +39,7 @@ import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
+  ApprovalMode,
   CancelRunResult,
   ChatMessage,
   ComposerReference,
@@ -2149,6 +2150,33 @@ export async function publishRunEvent(
     for (const subscriber of subscribers) subscriber(record);
   }
   return record;
+}
+
+/**
+ * Put an approval-policy switch on the run timeline the user reads it back on.
+ * The in-flight run owns the entry while one is streaming — that is the run
+ * whose later tool calls the new policy judges. A switch made between runs is
+ * recorded on the Session's newest started run instead, so it is still replayed
+ * after a reload; a Session that has never started a run has no timeline to
+ * carry it and keeps only the Permission Epoch as its audit record.
+ */
+export async function publishApprovalModeChange(
+  store: SessionStore,
+  sessionId: string,
+  change: {
+    approvalMode: ApprovalMode;
+    permissionEpochId: string;
+    previousApprovalMode: ApprovalMode;
+  },
+): Promise<SessionRunEvent | undefined> {
+  const runs = await store.listSessionRuns(sessionId);
+  const target = runs.findLast((run) => run.status === "running" || run.status === "blocked")
+    ?? runs.findLast((run) => run.status !== "queued");
+  if (!target) return undefined;
+  return await publishRunEvent(store, sessionId, target.id, {
+    ...change,
+    type: "session.approval_mode.changed",
+  });
 }
 
 async function applyInitialSessionTitle(

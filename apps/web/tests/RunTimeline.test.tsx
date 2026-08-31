@@ -598,3 +598,39 @@ test("create_skill review shortcuts retain the generated Skill identity", () => 
     status: "completed",
   }), "historical-skill");
 });
+
+test("an approval policy switch stays on the timeline between the steps it separates", () => {
+  const entries = apply([
+    { trace: { id: "tool-1", name: "run_python", status: "running" }, type: "tool.started" },
+    { trace: { id: "tool-1", name: "run_python", status: "completed", summary: "step 1" }, type: "tool.completed" },
+    {
+      approvalMode: "always_allow",
+      permissionEpochId: "epoch-2",
+      previousApprovalMode: "ask_for_dangerous",
+      type: "session.approval_mode.changed",
+    },
+    { trace: { id: "tool-2", name: "run_python", status: "running" }, type: "tool.started" },
+    { trace: { id: "tool-2", name: "run_python", status: "completed", summary: "step 2" }, type: "tool.completed" },
+  ]);
+
+  assert.deepEqual(entries.map((entry) => entry.type), ["tool", "approval-mode", "tool"]);
+  const html = renderToStaticMarkup(createElement(RunTimeline, {
+    entries,
+    isRunning: false,
+    onToggle: () => undefined,
+  }));
+  assert.match(html, /Approval policy changed from “Ask for dangerous actions” to “Always allow”/);
+});
+
+test("replaying the same approval switch does not stack duplicate timeline records", () => {
+  const change: RunStreamEvent = {
+    approvalMode: "ask_for_dangerous",
+    permissionEpochId: "epoch-3",
+    previousApprovalMode: "always_allow",
+    type: "session.approval_mode.changed",
+  };
+  const entries = apply([change, change]);
+
+  assert.deepEqual(entries.map((entry) => entry.type), ["approval-mode"]);
+  assert.equal(entries[0]?.type === "approval-mode" && entries[0].approvalMode, "ask_for_dangerous");
+});

@@ -4297,6 +4297,286 @@ test("switching an active run to always-allow resolves its pending subagent acti
   assert.equal(authorizations.body[0]?.source, "always_allow");
 });
 
+/**
+ * A model that calls run_python twice and then answers. Both calls are governed
+ * `code` privileges, so the pair is what an approval-mode switch made between
+ * them has to act on. `pauseBeforeSecondCall` holds the second turn until the
+ * test releases it, which is the window a test needs when the first call was
+ * auto-allowed and nothing else would stop the run.
+ */
+async function startTwoPythonCallModel(
+  context: TestContext,
+  options: { pauseBeforeSecondCall?: boolean } = {},
+): Promise<{ baseUrl: string; releaseSecondCall: () => void }> {
+  let releaseSecondCall = () => {};
+  const secondCallGate = new Promise<void>((resolveGate) => {
+    releaseSecondCall = () => resolveGate();
+  });
+  const modelServer = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { messages?: Array<{ role?: string }> };
+    const toolResultCount = body.messages?.filter((message) => message.role === "tool").length ?? 0;
+    if (toolResultCount === 1 && options.pauseBeforeSecondCall) await secondCallGate;
+    const completionId = `chatcmpl-approval-toggle-${toolResultCount}`;
+    const delta = toolResultCount >= 2
+      ? { content: "Both Python steps finished.", role: "assistant" }
+      : {
+          role: "assistant",
+          tool_calls: [{
+            function: {
+              arguments: JSON.stringify({ code: `print("step ${toolResultCount + 1}")` }),
+              name: "run_python",
+            },
+            id: `call-python-${toolResultCount + 1}`,
+            index: 0,
+            type: "function",
+          }],
+        };
+    const responseChunk = {
+      choices: [{ delta, finish_reason: null, index: 0 }],
+      created: 1,
+      id: completionId,
+      model: "approval-toggle-model",
+      object: "chat.completion.chunk",
+    };
+    const finish = {
+      choices: [{ delta: {}, finish_reason: toolResultCount >= 2 ? "stop" : "tool_calls", index: 0 }],
+      created: 1,
+      id: completionId,
+      model: "approval-toggle-model",
+      object: "chat.completion.chunk",
+    };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify(responseChunk)}\n\n`);
+    response.write(`data: ${JSON.stringify(finish)}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolveListen) => modelServer.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => {
+    modelServer.close(() => resolveClose());
+    modelServer.closeAllConnections();
+  }));
+  return {
+    baseUrl: `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}/v1`,
+    releaseSecondCall,
+  };
+}
+
+test("switching to always-allow during a run stops asking for the tool calls that follow", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-always-allow-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const { origin } = await startTestApi(context, tempRoot);
+  const fixture = await startTwoPythonCallModel(context);
+  const model = await createTestModel(origin, {
+    baseUrl: fixture.baseUrl,
+    model: "approval-toggle-model",
+    name: "Approval toggle model",
+  });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Approval toggle project" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ approvalMode: "ask_for_dangerous", modelId: model.id, title: "Toggle to always allow" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    body: JSON.stringify({ content: "Run two Python steps." }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.ok(run.body);
+  const reader = run.body.getReader();
+  const decoder = new TextDecoder();
+  let stream = "";
+  let permissionRequestId: string | undefined;
+  while (!permissionRequestId) {
+    const chunk = await reader.read();
+    assert.equal(chunk.done, false, "run ended before the first tool asked for permission");
+    stream += decoder.decode(chunk.value, { stream: true });
+    const completed = stream.slice(0, Math.max(0, stream.lastIndexOf("\n\n") + 2));
+    const required = parseSseEvents(completed).find((event) => event.type === "permission.required");
+    permissionRequestId = (required?.request as { id?: string } | undefined)?.id;
+  }
+
+  const changed = await jsonRequest<Session>(`${origin}/api/sessions/${session.body.id}`, {
+    body: JSON.stringify({ approvalMode: "always_allow" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PATCH",
+  });
+  assert.equal(changed.response.status, 200);
+  assert.equal(changed.body.approvalMode, "always_allow");
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    stream += decoder.decode(chunk.value, { stream: true });
+  }
+  stream += decoder.decode();
+  assert.match(stream, /"type":"run.completed"/);
+
+  const events = parseSseEvents(stream);
+  assert.equal(
+    events.filter((event) => event.type === "tool.completed").length,
+    2,
+    "both Python calls must have run",
+  );
+  assert.equal(
+    events.filter((event) => event.type === "permission.required").length,
+    1,
+    "only the call made before the switch may ask",
+  );
+  const authorizations = await jsonRequest<PermissionAuthorization[]>(
+    `${origin}/api/sessions/${session.body.id}/permission-authorizations`,
+    { headers: authorization },
+  );
+  assert.equal(authorizations.body.length, 2);
+  const unprompted = authorizations.body.filter((record) => !record.permissionRequestId);
+  assert.equal(unprompted.length, 1, "the call after the switch must not go through a request");
+  assert.equal(unprompted[0]?.source, "always_allow");
+  assert.equal(unprompted[0]?.approvalMode, "always_allow");
+
+  // The switch is auditable from the run's own persisted timeline, so a reload
+  // replays it rather than depending on the live stream.
+  const runId = parseSseEvents(stream).find((event) => event.type === "run.started")?.runId as string | undefined;
+  assert.ok(runId);
+  const replay = await listRunEvents(origin, session.body.id, runId);
+  const recorded = replay.filter((record) => record.event.type === "session.approval_mode.changed");
+  assert.equal(recorded.length, 1);
+  assert.deepEqual(
+    recorded[0]?.event.type === "session.approval_mode.changed"
+      ? { approvalMode: recorded[0].event.approvalMode, previousApprovalMode: recorded[0].event.previousApprovalMode }
+      : undefined,
+    { approvalMode: "always_allow", previousApprovalMode: "ask_for_dangerous" },
+  );
+
+  // Re-selecting the mode already in force is not a policy change and must not
+  // leave a second audit entry.
+  const unchanged = await jsonRequest<Session>(`${origin}/api/sessions/${session.body.id}`, {
+    body: JSON.stringify({ approvalMode: "always_allow" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PATCH",
+  });
+  assert.equal(unchanged.response.status, 200);
+  const replayAgain = await listRunEvents(origin, session.body.id, runId);
+  assert.equal(
+    replayAgain.filter((record) => record.event.type === "session.approval_mode.changed").length,
+    1,
+  );
+
+  // A switch made between runs is still audited: it lands on the Session's
+  // newest run, which is the timeline a reload shows.
+  const tightened = await jsonRequest<Session>(`${origin}/api/sessions/${session.body.id}`, {
+    body: JSON.stringify({ approvalMode: "ask_for_dangerous" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PATCH",
+  });
+  assert.equal(tightened.response.status, 200);
+  const afterIdleSwitch = (await listRunEvents(origin, session.body.id, runId))
+    .filter((record) => record.event.type === "session.approval_mode.changed");
+  assert.equal(afterIdleSwitch.length, 2);
+  const idleSwitch = afterIdleSwitch.at(-1)?.event;
+  assert.equal(
+    idleSwitch?.type === "session.approval_mode.changed" ? idleSwitch.approvalMode : undefined,
+    "ask_for_dangerous",
+  );
+});
+
+test("switching to ask during a run stops the tool calls that follow for approval", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-ask-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const { origin } = await startTestApi(context, tempRoot);
+  const fixture = await startTwoPythonCallModel(context, { pauseBeforeSecondCall: true });
+  const model = await createTestModel(origin, {
+    baseUrl: fixture.baseUrl,
+    model: "approval-toggle-model",
+    name: "Approval toggle model",
+  });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Approval tighten project" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ approvalMode: "always_allow", modelId: model.id, title: "Toggle to ask" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    body: JSON.stringify({ content: "Run two Python steps." }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.ok(run.body);
+  const reader = run.body.getReader();
+  const decoder = new TextDecoder();
+  let stream = "";
+  while (!parseSseEvents(stream.slice(0, Math.max(0, stream.lastIndexOf("\n\n") + 2)))
+    .some((event) => event.type === "tool.completed")) {
+    const chunk = await reader.read();
+    assert.equal(chunk.done, false, "run ended before the first tool call finished");
+    stream += decoder.decode(chunk.value, { stream: true });
+  }
+  assert.equal(
+    parseSseEvents(stream).filter((event) => event.type === "permission.required").length,
+    0,
+    "the first call ran under always-allow and must not have asked",
+  );
+
+  const changed = await jsonRequest<Session>(`${origin}/api/sessions/${session.body.id}`, {
+    body: JSON.stringify({ approvalMode: "ask_for_dangerous" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PATCH",
+  });
+  assert.equal(changed.response.status, 200);
+  assert.equal(changed.body.approvalMode, "ask_for_dangerous");
+  fixture.releaseSecondCall();
+
+  let permissionRequestId: string | undefined;
+  while (!permissionRequestId) {
+    const chunk = await reader.read();
+    assert.equal(chunk.done, false, "run ended before the second tool asked for permission");
+    stream += decoder.decode(chunk.value, { stream: true });
+    const completed = stream.slice(0, Math.max(0, stream.lastIndexOf("\n\n") + 2));
+    const required = parseSseEvents(completed).find((event) => event.type === "permission.required");
+    permissionRequestId = (required?.request as { id?: string } | undefined)?.id;
+  }
+  const decision = await jsonRequest(`${origin}/api/permission-requests/${permissionRequestId}/decision`, {
+    body: JSON.stringify({ decision: "allow_once" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(decision.response.status, 200);
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    stream += decoder.decode(chunk.value, { stream: true });
+  }
+  stream += decoder.decode();
+  assert.match(stream, /"type":"run.completed"/);
+  assert.equal(parseSseEvents(stream).filter((event) => event.type === "tool.completed").length, 2);
+
+  const modeChange = parseSseEvents(stream).find((event) => event.type === "session.approval_mode.changed");
+  assert.deepEqual(
+    modeChange && { approvalMode: modeChange.approvalMode, previousApprovalMode: modeChange.previousApprovalMode },
+    { approvalMode: "ask_for_dangerous", previousApprovalMode: "always_allow" },
+  );
+  const authorizations = await jsonRequest<PermissionAuthorization[]>(
+    `${origin}/api/sessions/${session.body.id}/permission-authorizations`,
+    { headers: authorization },
+  );
+  assert.equal(authorizations.body.length, 2);
+  const unprompted = authorizations.body.find((record) => record.source === "always_allow");
+  const prompted = authorizations.body.find((record) => record.source === "user_once");
+  assert.ok(unprompted, "the call made before the switch ran unprompted");
+  // The call after the switch was judged under the policy the switch installed.
+  assert.equal(prompted?.approvalMode, "ask_for_dangerous");
+});
+
 test("manual concurrent actions keep independent live waiters and resume independently", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-independent-permissions-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
