@@ -17,9 +17,10 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import type { RemoteJob } from "@sciencediscovery/schema";
+import type { RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
 
 import {
+  OpenSshTransport,
   RemoteComputeClient,
   validateRunnerCommand,
   type RemoteCommandResult,
@@ -39,11 +40,96 @@ class FakeTransport implements RemoteTransport {
   }
 }
 
+async function writeFakeSsh(
+  root: string,
+  name: string,
+  exitCode: number,
+  stderr = "",
+): Promise<{ capturePath: string; executablePath: string }> {
+  const capturePath = resolve(root, `${name}-args.json`);
+  const executablePath = resolve(root, `${name}.mjs`);
+  await writeFile(executablePath, [
+    `#!${process.execPath}`,
+    'import { writeFileSync } from "node:fs";',
+    `writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(process.argv.slice(2)));`,
+    `process.stderr.write(${JSON.stringify(stderr)});`,
+    "process.stdin.resume();",
+    `process.stdin.once("end", () => process.exit(${exitCode}));`,
+    "",
+  ].join("\n"), { mode: 0o700 });
+  return { capturePath, executablePath };
+}
+
+async function capturedSshArguments(capturePath: string): Promise<string[]> {
+  return JSON.parse(await readFile(capturePath, "utf8")) as string[];
+}
+
+function assertStrictHostKeyChecking(arguments_: string[]): void {
+  assert.equal(arguments_.some((value, index) => value === "StrictHostKeyChecking=yes" && arguments_[index - 1] === "-o"), true);
+  assert.equal(arguments_.some((value) => value.startsWith("UserKnownHostsFile=")), false);
+}
+
+function readyRemoteHost(): RemoteHostTarget {
+  const timestamp = "2026-08-31T00:00:00.000Z";
+  return {
+    alias: "cluster",
+    capabilities: {
+      conda: true,
+      containerRuntimes: [],
+      cpuCores: 8,
+      cuda: null,
+      gpu: null,
+      memoryBytes: 16 * 1024 * 1024 * 1024,
+      modules: false,
+      platform: "Linux",
+      probedAt: timestamp,
+      runnerCommandAvailable: true,
+      scratchPaths: ["/tmp"],
+      slurm: false,
+    },
+    createdAt: timestamp,
+    id: "host-1",
+    runnerCommand: "sciencediscovery-runner",
+    status: "ready",
+    updatedAt: timestamp,
+  };
+}
+
 test("remote runner executable accepts only one safe executable token", () => {
   assert.equal(validateRunnerCommand("sciencediscovery-runner"), "sciencediscovery-runner");
   assert.equal(validateRunnerCommand("/opt/sciencediscovery/bin/runner"), "/opt/sciencediscovery/bin/runner");
   assert.throws(() => validateRunnerCommand("runner --token secret"), /without arguments/);
   assert.throws(() => validateRunnerCommand("/opt/runner; reboot"), /without arguments/);
+});
+
+test("both SSH command and runner tunnel force strict host key checking", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `remote-ssh-arguments-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+
+  const commandSsh = await writeFakeSsh(root, "command-ssh", 0);
+  const command = await new OpenSshTransport(resolve(root, "config"), commandSsh.executablePath).run("cluster", "true\n", 2_000);
+  assert.equal(command.exitCode, 0);
+  assertStrictHostKeyChecking(await capturedSshArguments(commandSsh.capturePath));
+
+  const runnerSsh = await writeFakeSsh(root, "runner-ssh", 255, "Host key verification failed.\n");
+  const runner = new RemoteComputeClient(resolve(root, "config"), undefined, runnerSsh.executablePath);
+  const status = await runner.connectRunner(readyRemoteHost(), "1.0.0");
+  assert.equal(status.state, "error");
+  assert.match(status.error ?? "", /SSH config alias[\s\S]*default known_hosts/);
+  assertStrictHostKeyChecking(await capturedSshArguments(runnerSsh.capturePath));
+});
+
+test("host key failures direct the user to SSH config and default known_hosts", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `remote-host-key-error-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const configPath = resolve(root, "config");
+  await writeFile(configPath, "Host cluster\n  HostName hpc.example.test\n");
+  const ssh = await writeFakeSsh(root, "host-key-failure", 255, "Host key verification failed.\n");
+  const client = new RemoteComputeClient(configPath, undefined, ssh.executablePath);
+
+  await assert.rejects(client.probe("cluster"), /SSH config alias[\s\S]*default known_hosts/);
 });
 
 function job(mode: "slurm" | "ssh"): RemoteJob {

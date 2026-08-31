@@ -30,6 +30,7 @@ import { RunnerClient } from "./runner-client.js";
 
 const MAX_SSH_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_PULLED_OUTPUT_BYTES = 1024 * 1024;
+const SSH_HOST_KEY_GUIDANCE = "Verify the SSH config alias and update the host key in the user's default known_hosts file before retrying.";
 
 export interface RemoteCommandResult {
   exitCode: number;
@@ -39,6 +40,24 @@ export interface RemoteCommandResult {
 
 export interface RemoteTransport {
   run(alias: string, script: string, timeoutMs: number): Promise<RemoteCommandResult>;
+}
+
+function sshConnectionArguments(configPath: string): string[] {
+  return [
+    "-F", configPath,
+    "-o", "BatchMode=yes",
+    "-o", "StrictHostKeyChecking=yes",
+    "-o", "ConnectTimeout=10",
+    "-o", "ServerAliveInterval=5",
+  ];
+}
+
+function describeSshFailure(detail: string, fallback: string): string {
+  const message = detail.trim() || fallback;
+  if (message.includes(SSH_HOST_KEY_GUIDANCE)) return message;
+  return /host key|known_hosts|remote host identification has changed/i.test(message)
+    ? `${message}\n${SSH_HOST_KEY_GUIDANCE}`
+    : message;
 }
 
 function shellQuote(value: string): string {
@@ -108,10 +127,7 @@ export class OpenSshTransport implements RemoteTransport {
   run(alias: string, script: string, timeoutMs: number): Promise<RemoteCommandResult> {
     return new Promise((resolveRun, reject) => {
       const child = spawn(this.sshPath, [
-        "-F", this.configPath,
-        "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=10",
-        "-o", "ServerAliveInterval=5",
+        ...sshConnectionArguments(this.configPath),
         "--", validateAlias(alias), "sh", "-s",
       ], { stdio: ["pipe", "pipe", "pipe"] });
       let stdout = Buffer.alloc(0);
@@ -145,7 +161,13 @@ export class OpenSshTransport implements RemoteTransport {
         clearTimeout(timer);
         if (settled) return;
         settled = true;
-        resolveRun({ exitCode: code ?? 255, stderr: stderr.toString("utf8"), stdout: stdout.toString("utf8") });
+        const exitCode = code ?? 255;
+        const stderrText = stderr.toString("utf8");
+        resolveRun({
+          exitCode,
+          stderr: exitCode === 0 ? stderrText : describeSshFailure(stderrText, "SSH command failed"),
+          stdout: stdout.toString("utf8"),
+        });
       });
       child.stdin.end(script);
     });
@@ -203,8 +225,9 @@ export class RemoteComputeClient {
   constructor(
     readonly sshConfigPath: string,
     transport?: RemoteTransport,
+    private readonly sshPath = "/usr/bin/ssh",
   ) {
-    this.transport = transport ?? new OpenSshTransport(sshConfigPath);
+    this.transport = transport ?? new OpenSshTransport(sshConfigPath, sshPath);
   }
 
   async configuredAliases(): Promise<string[]> {
@@ -217,7 +240,9 @@ export class RemoteComputeClient {
     const aliases = await this.configuredAliases();
     if (!aliases.includes(alias)) throw new Error(`SSH host alias ${alias} is not explicitly present in the configured SSH config`);
     const result = await this.transport.run(alias, probeScript(runnerCommand), 20_000);
-    if (result.exitCode !== 0) throw new Error(`SSH probe failed (${result.exitCode}): ${result.stderr.trim() || "authentication or connection failed"}`);
+    if (result.exitCode !== 0) {
+      throw new Error(`SSH probe failed (${result.exitCode}): ${describeSshFailure(result.stderr, "authentication or connection failed")}`);
+    }
     return parseProbe(result.stdout);
   }
 
@@ -260,12 +285,9 @@ export class RemoteComputeClient {
       `exec env SCIENCE_AGENT_RUNNER_HOST=127.0.0.1 SCIENCE_AGENT_RUNNER_PORT=${remotePort} SCIENCE_AGENT_RUNNER_TOKEN=${shellQuote(token)} SCIENCE_AGENT_DATA_DIR=\"$data_dir\" ${shellQuote(runnerCommand)}`,
       "",
     ].join("\n");
-    const child = spawn("/usr/bin/ssh", [
-      "-F", this.sshConfigPath,
-      "-o", "BatchMode=yes",
-      "-o", "ConnectTimeout=10",
+    const child = spawn(this.sshPath, [
+      ...sshConnectionArguments(this.sshConfigPath),
       "-o", "ExitOnForwardFailure=yes",
-      "-o", "ServerAliveInterval=5",
       "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
       "--", validateAlias(host.alias), "sh", "-s",
     ], { stdio: ["pipe", "ignore", "pipe"] });
@@ -284,7 +306,7 @@ export class RemoteComputeClient {
       this.runnerConnections.delete(host.id);
       this.runnerStatuses.set(host.id, {
         ...connection.status,
-        error: stderr.trim() || `SSH tunnel closed (${code ?? "unknown"})`,
+        error: describeSshFailure(stderr, `SSH tunnel closed (${code ?? "unknown"})`),
         state: "error",
       });
     });
@@ -293,7 +315,9 @@ export class RemoteComputeClient {
     try {
       let health;
       while (Date.now() < deadline) {
-        if (child.exitCode !== null) throw new Error(stderr.trim() || `SSH tunnel closed (${child.exitCode})`);
+        if (child.exitCode !== null) {
+          throw new Error(describeSshFailure(stderr, `SSH tunnel closed (${child.exitCode})`));
+        }
         try {
           health = await client.health();
           break;
