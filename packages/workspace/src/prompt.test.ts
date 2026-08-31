@@ -28,8 +28,8 @@ function skill(id: string, description: string): RuntimeSkill {
     description,
     hash: "a".repeat(64),
     id,
+    packagePath: `/skills/${id}`,
     readResource: async () => { throw new Error("not called"); },
-    readResourceBytes: async () => { throw new Error("not called"); },
     resources: [],
     revision: 1,
     version: "1.0.0",
@@ -51,6 +51,7 @@ test("system prompt lists selected skill metadata without injecting instructions
     description: "A selected workflow for testing progressive skill loading.",
     hash: "b".repeat(64),
     id: "selected-skill",
+    packagePath: "/skills/selected-skill",
     readResource: () => ({
       content: "reference",
       hash: "a".repeat(64),
@@ -59,7 +60,6 @@ test("system prompt lists selected skill metadata without injecting instructions
       skillId: "selected-skill",
       size: 9,
     }),
-    readResourceBytes: async () => { throw new Error("not called"); },
     resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 9 }],
     revision: 4,
     version: "2.0.0",
@@ -70,10 +70,13 @@ test("system prompt lists selected skill metadata without injecting instructions
   assert.match(prompt, /A selected workflow for testing progressive skill loading/);
   assert.match(prompt, /<revision>4<\/revision>/);
   assert.match(prompt, /<version>2\.0\.0<\/version>/);
+  assert.match(prompt, /<package_path>\/skills\/selected-skill<\/package_path>/);
+  assert.match(prompt, /<package_hash>b{64}<\/package_hash>/);
   assert.match(prompt, /read_skill/);
-  assert.match(prompt, /materialize_skill_resource/);
-  assert.match(prompt, /do not read the materialized source back into context/i);
-  assert.match(prompt, /do not .*search the filesystem for package resources/i);
+  assert.doesNotMatch(prompt, /materialize_skill_resource/);
+  assert.match(prompt, /complete frozen packages already exist.*\/skills/i);
+  assert.match(prompt, /Do not read a large script into context/i);
+  assert.match(prompt, /search the filesystem for package resources/i);
   assert.doesNotMatch(prompt, /Use the selected workflow/);
   assert.doesNotMatch(prompt, /references\/guide\.md \(reference, 9 bytes\)/);
   assert.match(prompt, /never invent a paper or identifier/i);
@@ -81,6 +84,28 @@ test("system prompt lists selected skill metadata without injecting instructions
   assert.match(prompt, /Do not issue a PDF extraction in the same turn/i);
   assert.match(prompt, /fails or returns no records, state that evidence gap/i);
   assert.doesNotMatch(prompt, /unselected-skill/);
+});
+
+test("skill disclosure falls back to read_skill when no package is staged for the agent", () => {
+  const prompt = buildSkillSystemSection([{
+    content: "Use the selected workflow.",
+    description: "A selected workflow without a sandbox.",
+    hash: "b".repeat(64),
+    id: "selected-skill",
+    readResource: async () => { throw new Error("not called"); },
+    resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 9 }],
+    revision: 4,
+    version: "2.0.0",
+  }]);
+
+  // A nested agent without a sandbox must not be told about a path it cannot read.
+  assert.doesNotMatch(prompt, /package_path/);
+  assert.doesNotMatch(prompt, /\/skills/);
+  assert.doesNotMatch(prompt, /materialize_skill_resource/);
+  assert.match(prompt, /call read_skill\(skillId\) with its exact name/);
+  assert.match(prompt, /read_skill_resource/);
+  assert.match(prompt, /Do not search the filesystem for package resources/i);
+  assert.match(prompt, /<package_hash>b{64}<\/package_hash>/);
 });
 
 test("dynamic skill catalog prioritizes the current task and marks committed loads", () => {

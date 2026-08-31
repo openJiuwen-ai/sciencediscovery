@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -220,11 +219,11 @@ test("run_shell executes an existing workspace script without rewriting or path 
   ]);
   await assert.rejects(
     tool.execute("shell-missing", { scriptPath: "missing.sh" }),
-    /scriptPath does not exist in the workspace/,
+    /scriptPath does not exist in an authorized mount/,
   );
   await assert.rejects(
     tool.execute("shell-directory", { scriptPath: "scripts" }),
-    /scriptPath must reference a workspace file/,
+    /scriptPath must reference a regular file/,
   );
   await assert.rejects(
     tool.execute("shell-call", { scriptPath: "../outside.sh" }),
@@ -232,7 +231,7 @@ test("run_shell executes an existing workspace script without rewriting or path 
   );
   await assert.rejects(
     tool.execute("shell-symlink", { scriptPath: "outside-link.sh" }),
-    /scriptPath escapes the workspace/,
+    /scriptPath escapes its authorized mount/,
   );
 
   let subagentCode = "";
@@ -1073,8 +1072,8 @@ test("skill loading reads frozen instructions directly by exact id", async () =>
       description: "Workflow for selected progressive loading tests.",
       hash: "b".repeat(64),
       id: "selected-skill",
+      packagePath: "/skills/selected-skill",
       readResource: () => { throw new Error("not used"); },
-      readResourceBytes: () => { throw new Error("not used"); },
       resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 24 }],
       revision: 3,
       version: "1.0.0",
@@ -1083,8 +1082,8 @@ test("skill loading reads frozen instructions directly by exact id", async () =>
       description: "Unrelated workflow.",
       hash: "c".repeat(64),
       id: "other-skill",
+      packagePath: "/skills/other-skill",
       readResource: () => { throw new Error("not used"); },
-      readResourceBytes: () => { throw new Error("not used"); },
       resources: [],
       revision: 1,
       version: "1.0.0",
@@ -1113,6 +1112,7 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
       description: "Selected skill with one reference.",
       hash: "b".repeat(64),
       id: "selected-skill",
+      packagePath: "/skills/selected-skill",
       readResource: (path) => {
         requestedPath = path;
         return {
@@ -1124,7 +1124,6 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
           size: 24,
         };
       },
-      readResourceBytes: () => { throw new Error("not used"); },
       resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 24 }],
       revision: 3,
       version: "1.0.0",
@@ -1145,147 +1144,68 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
   );
 });
 
-test("materialize_skill_resource writes frozen bytes without returning source and handles repeated destinations", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `materialize-skill-${process.pid}-${Date.now()}`);
-  await mkdir(root, { recursive: true });
-  context.after(() => rm(root, { force: true, recursive: true }));
-  const source = Buffer.from(`print("frozen marker")\n# ${"x".repeat(20_000)}\n`);
-  const hash = createHash("sha256").update(source).digest("hex");
-  let byteReads = 0;
+test("ordinary file and shell tools use the pre-mounted complete frozen Skill package", async (context) => {
+  const fixtureRoot = resolve(process.cwd(), ".tmp", `mounted-skill-${process.pid}-${Date.now()}`);
+  const root = resolve(fixtureRoot, "workspace");
+  const skillRoot = resolve(fixtureRoot, "skill-snapshot");
+  await Promise.all([
+    mkdir(root, { recursive: true }),
+    mkdir(resolve(skillRoot, "selected-skill", "scripts"), { recursive: true }),
+    mkdir(resolve(skillRoot, "selected-skill", "references"), { recursive: true }),
+  ]);
+  await writeFile(resolve(skillRoot, "selected-skill", "SKILL.md"), "Frozen instructions\n");
+  await writeFile(resolve(skillRoot, "selected-skill", "references", "guide.md"), "Frozen guide\n");
+  await writeFile(resolve(skillRoot, "selected-skill", "scripts", "run.sh"), "printf 'not auto-run\\n'\n");
+  context.after(() => rm(fixtureRoot, { force: true, recursive: true }));
+  const executedCodes: string[] = [];
   const tools = createWorkspaceTools(root, {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
+    executeShell: async (code): Promise<ShellExecutionResult> => {
+      executedCodes.push(code);
+      const timestamp = new Date().toISOString();
+      return {
+        cgroupMode: "none", createdFiles: [], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentVariables: {}, executionId: "shell", exitCode: 0, finishedAt: timestamp,
+        kernelId: "shell", kernelMode: "ephemeral", language: "shell", modifiedFiles: [],
+        networkPolicy: "none", runnerVersion: "test", sandbox: "bubblewrap", startedAt: timestamp,
+        stderr: "", stdout: "ok\n", workingDirectory: "/workspace",
+      };
+    },
+    skillPackagesRoot: skillRoot,
     skills: [{
-      content: "Materialize the bundled script before execution.",
-      description: "Selected skill with a large executable script.",
+      content: "Frozen instructions",
+      description: "Selected complete package.",
       hash: "b".repeat(64),
       id: "selected-skill",
-      readResource: (path) => ({
-        content: source.toString("utf8"),
-        hash,
-        path,
-        revision: 3,
-        skillId: "selected-skill",
-        size: source.length,
-      }),
-      readResourceBytes: (path) => {
-        byteReads += 1;
-        return {
-          bytes: Buffer.from(source),
-          hash,
-          path,
-          revision: 3,
-          skillId: "selected-skill",
-          size: source.length,
-        };
-      },
-      resources: [{ hash, kind: "script", path: "scripts/foo.py", size: source.length }],
-      revision: 3,
-      version: "1.0.0",
-    }],
-  });
-
-  await assert.rejects(readFile(resolve(root, "scripts", "foo.py")), /ENOENT/);
-  const readTool = tools.find((candidate) => candidate.name === "read_skill_resource");
-  const materializeTool = tools.find((candidate) => candidate.name === "materialize_skill_resource");
-  assert.ok(readTool);
-  assert.ok(materializeTool);
-  const schema = materializeTool.parameters as { properties?: { skillId?: { anyOf?: Array<{ const?: string }> } } };
-  assert.deepEqual(schema.properties?.skillId?.anyOf?.map((item) => item.const), ["selected-skill"]);
-
-  const readResult = await readTool.execute("read-call", { path: "scripts/foo.py", skillId: "selected-skill" });
-  const readText = readResult.content[0]?.type === "text" ? readResult.content[0].text : "";
-  const first = await materializeTool.execute("materialize-call", { path: "scripts/foo.py", skillId: "selected-skill" });
-  const firstText = first.content[0]?.type === "text" ? first.content[0].text : "";
-  assert.ok(firstText.length < readText.length / 10);
-  assert.doesNotMatch(firstText, /frozen marker/);
-  assert.deepEqual(JSON.parse(firstText), {
-    bytes: source.length,
-    dest: "scripts/foo.py",
-    hash,
-    overwritten: false,
-    revision: 3,
-    skillId: "selected-skill",
-  });
-  assert.deepEqual(first.details, JSON.parse(firstText));
-  assert.doesNotMatch(JSON.stringify(first.details), /frozen marker/);
-  assert.deepEqual(await readFile(resolve(root, "scripts", "foo.py")), source);
-
-  const second = await materializeTool.execute("materialize-call-2", { path: "scripts/foo.py", skillId: "selected-skill" });
-  assert.equal(JSON.parse(second.content[0]?.type === "text" ? second.content[0].text : "").overwritten, false);
-  await writeFile(resolve(root, "scripts", "foo.py"), "workspace edit");
-  const third = await materializeTool.execute("materialize-call-3", { path: "scripts/foo.py", skillId: "selected-skill" });
-  assert.equal(JSON.parse(third.content[0]?.type === "text" ? third.content[0].text : "").overwritten, true);
-  assert.deepEqual(await readFile(resolve(root, "scripts", "foo.py")), source);
-  const custom = await materializeTool.execute("materialize-call-4", {
-    dest: "tools/frozen-foo.py",
-    path: "scripts/foo.py",
-    skillId: "selected-skill",
-  });
-  assert.equal(JSON.parse(custom.content[0]?.type === "text" ? custom.content[0].text : "").dest, "tools/frozen-foo.py");
-  assert.deepEqual(await readFile(resolve(root, "tools", "frozen-foo.py")), source);
-  assert.equal(byteReads, 4);
-});
-
-test("materialize_skill_resource rejects unselected skills, unknown resources, and escaping destinations", async (context) => {
-  const suffix = `${process.pid}-${Date.now()}`;
-  const root = resolve(process.cwd(), ".tmp", `materialize-boundary-${suffix}`);
-  const outside = resolve(process.cwd(), ".tmp", `materialize-outside-${suffix}`);
-  await Promise.all([mkdir(root, { recursive: true }), mkdir(outside, { recursive: true })]);
-  context.after(() => Promise.all([
-    rm(root, { force: true, recursive: true }),
-    rm(outside, { force: true, recursive: true }),
-  ]));
-  const source = Buffer.from("print('safe')\n");
-  const hash = createHash("sha256").update(source).digest("hex");
-  const tools = createWorkspaceTools(root, {
-    enabledConnectorIds: [],
-    executePython: async () => { throw new Error("not used"); },
-    skills: [{
-      content: "Use the bundled script.",
-      description: "Boundary-test skill.",
-      hash: "b".repeat(64),
-      id: "selected-skill",
+      packagePath: "/skills/selected-skill",
       readResource: () => { throw new Error("not used"); },
-      readResourceBytes: (path) => ({
-        bytes: Buffer.from(source),
-        hash,
-        path,
-        revision: 7,
-        skillId: "selected-skill",
-        size: source.length,
-      }),
-      resources: [{ hash, kind: "script", path: "scripts/foo.py", size: source.length }],
+      resources: [{ hash: "a".repeat(64), kind: "script", path: "scripts/run.sh", size: 22 }],
       revision: 7,
       version: "1.0.0",
     }],
   });
-  const tool = tools.find((candidate) => candidate.name === "materialize_skill_resource");
-  assert.ok(tool);
 
-  await assert.rejects(
-    tool.execute("unselected", { path: "scripts/foo.py", skillId: "other-skill" } as never),
-    /not selected/,
-  );
-  await assert.rejects(
-    tool.execute("unknown", { path: "scripts/missing.py", skillId: "selected-skill" }),
-    /not found in the frozen snapshot/,
-  );
-  await assert.rejects(
-    tool.execute("parent", { dest: "../escape.py", path: "scripts/foo.py", skillId: "selected-skill" }),
-    /escapes the workspace/,
-  );
-  await assert.rejects(
-    tool.execute("absolute", { dest: "/escape.py", path: "scripts/foo.py", skillId: "selected-skill" }),
-    /non-empty and relative/,
-  );
-
-  await symlink(outside, resolve(root, "linked"), "dir");
-  await assert.rejects(
-    tool.execute("symlink", { dest: "linked/foo.py", path: "scripts/foo.py", skillId: "selected-skill" }),
-    /workspace symlink/,
-  );
-  await assert.rejects(readFile(resolve(outside, "foo.py")), /ENOENT/);
+  assert.equal(tools.some((candidate) => candidate.name === "materialize_skill_resource"), false);
+  await assert.rejects(readFile(resolve(root, "skills", "selected-skill", "SKILL.md")), /ENOENT/);
+  const readTool = tools.find((candidate) => candidate.name === "read_file");
+  const listTool = tools.find((candidate) => candidate.name === "list_files");
+  const shellTool = tools.find((candidate) => candidate.name === "run_shell");
+  assert.ok(readTool);
+  assert.ok(listTool);
+  assert.ok(shellTool);
+  const readResult = await readTool.execute("read", { path: "/skills/selected-skill/SKILL.md" });
+  assert.equal(readResult.content[0]?.type === "text" ? readResult.content[0].text : "", "Frozen instructions\n");
+  const listed = await listTool.execute("list", {});
+  assert.match(listed.content[0]?.type === "text" ? listed.content[0].text : "", /\/skills\/selected-skill\/scripts\/run\.sh/);
+  await shellTool.execute("shell", {
+    arguments: ["value with spaces"],
+    kernelMode: "ephemeral",
+    scriptPath: "/skills/selected-skill/scripts/run.sh",
+  });
+  assert.deepEqual(executedCodes, [
+    "/usr/bin/bash \"${SCIENCEDISCOVERY_SKILLS_DIR}\"/'selected-skill/scripts/run.sh' 'value with spaces'",
+  ]);
 });
 
 test("create_skill requires the selected skill-creator instructions before mutating the catalog", async () => {
@@ -1308,8 +1228,8 @@ test("create_skill requires the selected skill-creator instructions before mutat
       description: "Create a Skill from an explicit user request.",
       hash: "c".repeat(64),
       id: "skill-creator",
+      packagePath: "/skills/skill-creator",
       readResource: () => { throw new Error("not used"); },
-      readResourceBytes: () => { throw new Error("not used"); },
       resources: [],
       revision: 1,
       version: "1.0.0",

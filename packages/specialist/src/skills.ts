@@ -44,8 +44,8 @@ import type {
   MergeSkillReviewDraftsRequest,
   SkillDescriptor,
   SkillDetail,
+  SkillPackageFileBytes,
   SkillResource,
-  SkillResourceBytes,
   SkillResourceContent,
   SkillResourceKind,
   SkillReviewDraft,
@@ -160,8 +160,8 @@ export interface RuntimeSkillSnapshot {
   description: string;
   hash: string;
   id: string;
+  readPackageFiles: () => SkillPackageFileBytes[];
   readResource: (path: string) => SkillResourceContent;
-  readResourceBytes: (path: string) => SkillResourceBytes;
   resources: SkillResource[];
   revision: number;
   version: string;
@@ -497,7 +497,7 @@ function resourceKind(path: string): SkillResourceKind {
   return "other";
 }
 
-function packageHash(files: ReadonlyMap<string, Buffer>): string {
+export function hashSkillPackageFiles(files: ReadonlyMap<string, Uint8Array>): string {
   const hash = createHash("sha256");
   for (const path of [...files.keys()].toSorted()) {
     const bytes = files.get(path)!;
@@ -604,7 +604,7 @@ export function validateSkillPackage(
       description,
       diagnostics,
       frontmatter: structuredClone(parsed.frontmatter),
-      hash: packageHash(files),
+      hash: hashSkillPackageFiles(files),
       id: name,
       instructions: parsed.instructions,
       name,
@@ -786,21 +786,15 @@ function resourceContent(detail: SkillDetail, files: ReadonlyMap<string, Buffer>
   };
 }
 
-function resourceBytes(detail: SkillDetail, files: ReadonlyMap<string, Buffer>, rawPath: string): SkillResourceBytes {
-  const path = normalizedPackagePath(rawPath);
-  if (path === "SKILL.md") throw validationError("Use skill detail to read SKILL.md instructions");
-  const resource = detail.resources.find((item) => item.path === path);
-  const bytes = files.get(path);
-  if (!resource || !bytes) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill resource not found: ${path}`);
-  return {
-    // Return a copy so a workspace caller cannot mutate the frozen snapshot.
-    bytes: Buffer.from(bytes),
-    hash: resource.hash,
-    path,
-    revision: detail.currentRevision,
-    skillId: detail.id,
-    size: bytes.length,
-  };
+function packageFileBytes(files: ReadonlyMap<string, Buffer>): SkillPackageFileBytes[] {
+  return [...files]
+    .map(([path, bytes]) => ({
+      bytes: Buffer.from(bytes),
+      hash: sha256(bytes),
+      path,
+      size: bytes.length,
+    }))
+    .toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
 export class SkillCatalog {
@@ -1857,8 +1851,8 @@ export class SkillCatalog {
         description: detail.description,
         hash: detail.hash,
         id: detail.id,
+        readPackageFiles: () => packageFileBytes(files),
         readResource: (path: string) => resourceContent(detail, files, path),
-        readResourceBytes: (path: string) => resourceBytes(detail, files, path),
         resources: structuredClone(detail.resources),
         revision: detail.currentRevision,
         version: detail.version,

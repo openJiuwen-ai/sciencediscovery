@@ -227,10 +227,14 @@ test("a persistent Kernel rejects writable and read-only mount changes for one S
   const workspaceRoot = resolve(readOnlyWorkspaceRoot, "subagents", "subagent-1");
   const otherWorkspaceRoot = resolve(readOnlyWorkspaceRoot, "subagents", "subagent-2");
   const otherReadOnlyWorkspaceRoot = resolve(dataDir, "projects", "project", "shared-inputs");
+  const skillPackagesRoot = resolve(dataDir, "projects", "project", "skill-snapshots", "run-1");
+  const otherSkillPackagesRoot = resolve(dataDir, "projects", "project", "skill-snapshots", "run-2");
   await Promise.all([
     mkdir(workspaceRoot, { recursive: true }),
     mkdir(otherWorkspaceRoot, { recursive: true }),
     mkdir(otherReadOnlyWorkspaceRoot, { recursive: true }),
+    mkdir(skillPackagesRoot, { recursive: true }),
+    mkdir(otherSkillPackagesRoot, { recursive: true }),
   ]);
   const manager = new KernelManager({
     bwrapPath: BWRAP_PATH,
@@ -246,6 +250,7 @@ test("a persistent Kernel rejects writable and read-only mount changes for one S
     language: "python" as const,
     permissionEpoch: epoch(),
     readOnlyWorkspaceRoot,
+    skillPackagesRoot,
     workspaceRoot,
   };
 
@@ -265,6 +270,12 @@ test("a persistent Kernel rejects writable and read-only mount changes for one S
     code: "print('wrong read-only mount')",
     executionId: "mount-eval-read-only-mismatch",
     readOnlyWorkspaceRoot: otherReadOnlyWorkspaceRoot,
+  }), /cannot be reused with different workspace mounts/);
+  await assert.rejects(manager.execute({
+    ...request,
+    code: "print('wrong Skill mount')",
+    executionId: "mount-eval-skill-mismatch",
+    skillPackagesRoot: otherSkillPackagesRoot,
   }), /cannot be reused with different workspace mounts/);
   assert.deepEqual(manager.list().map((kernel) => kernel.id), [first.kernelId]);
 });

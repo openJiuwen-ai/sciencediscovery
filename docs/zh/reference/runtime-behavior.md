@@ -39,7 +39,7 @@ my-skill/
 
 技能只在全局库中存一份。创建或导入后默认即可用（all 模式），无需在 Global 中勾选——Global 不参与技能设置；如需收窄，在 Project 或 Session 运行时设置中切换为 selected 并勾选白名单。每次托管编辑产生不可变 revision；运行开始时冻结所选 revision，Prompt Manifest 记录技能 ID、revision、version 与包哈希。仅在 selected 模式下引用某技能的 Project 或 Session 会阻止该技能删除；all 模式下的存储列表不阻止删除。
 
-导入内容视为不可信本地数据。ZIP 条目会检查路径穿越、符号链接、加密、重复路径，以及归档限制（上传 25 MiB、解压 50 MiB、500 个文件、单资源 10 MiB、`SKILL.md` 512 KiB）。运行时 Prompt 只列出生效技能的名称、描述与 revision；模型根据这些 metadata 选择精确 `skillId`，再用 `read_skill` 读取冻结 revision 的完整 instructions。选中的文本资源可在读取技能后通过有界工具 `read_skill_resource` 按需读取。仅选择技能**不会**自动安装、调用或复制 `scripts/`。当已加载 instructions 引用捆绑可执行文件时，模型可以显式调用 `materialize_skill_resource`：工具把冻结 revision 的原始字节写到工作区相对目标，只返回 metadata 而不返回源码正文；推荐随后通过现有执行工具，按该工作区路径和显式 argv 调用文件。不要为寻找包资源而全盘搜索文件系统，也不要把已落地的大脚本重新读回上下文。
+导入内容视为不可信本地数据。ZIP 条目会检查路径穿越、符号链接、加密、重复路径，以及归档限制（上传 25 MiB、解压 50 MiB、500 个文件、单资源 10 MiB、`SKILL.md` 512 KiB）。运行时 Prompt 列出生效技能的名称、描述、revision、包路径与包 hash，而不是包正文。沙箱启动前，每个已选技能的**完整冻结包**已放入只读的 `/skills/<skillId>`（沙箱内为 `$SCIENCEDISCOVERY_SKILLS_DIR`），因此模型把 `SKILL.md`、supporting text 和捆绑文件当作普通路径读取，并可直接在包路径上用显式 argv 执行捆绑脚本。`read_skill` 与有界的 `read_skill_resource` 作为兼容通道保留。**放入不等于安装**：仅选择技能不会自动运行 `scripts/`，也不会自动安装依赖，且默认包目录拒绝写入和删除。`/skill-extensions`（`$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR`）是为后续自演进预留的可写目录，初始为空。不要为寻找包资源而全盘搜索文件系统（Prompt 已给出路径），也不要把捆绑大脚本重新读回上下文。
 
 ## 托管科学环境
 

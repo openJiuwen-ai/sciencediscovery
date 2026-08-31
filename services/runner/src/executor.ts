@@ -22,6 +22,11 @@ import {
   type SandboxProcMode,
 } from "@sciencediscovery/sandbox-capability";
 import {
+  SANDBOX_SKILL_EXTENSIONS_ROOT,
+  SANDBOX_SKILL_PACKAGES_ROOT,
+  SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE,
+  SKILL_EXTENSIONS_WORKSPACE_PATH,
+  SKILL_PACKAGES_ENVIRONMENT_VARIABLE,
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
   SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID,
   epochSandboxNetworkAccess,
@@ -258,6 +263,24 @@ export function workspaceBindArguments(workspaceRoot: string, readOnlyWorkspaceR
     ],
     chdir: "/workspace",
   };
+}
+
+export interface SandboxSkillRoots {
+  extensionsRoot: string;
+  packagesRoot: string;
+}
+
+export async function resolveSandboxSkillRoots(
+  dataDir: string,
+  workspaceRoot: string,
+  requestedPackagesRoot: string | undefined,
+): Promise<SandboxSkillRoots | undefined> {
+  if (!requestedPackagesRoot) return undefined;
+  const packagesRoot = await validatedWorkspace(dataDir, requestedPackagesRoot);
+  if (!(await stat(packagesRoot)).isDirectory()) throw new Error("Runner Skill packages root must be a directory");
+  const extensionsRoot = resolve(workspaceRoot, SKILL_EXTENSIONS_WORKSPACE_PATH);
+  await mkdir(extensionsRoot, { recursive: true });
+  return { extensionsRoot, packagesRoot };
 }
 
 export async function hostInterpreterMaskArguments(): Promise<string[]> {
@@ -631,6 +654,7 @@ export function buildSandboxLaunch(options: {
   pathEnv: string;
   procMode: SandboxProcMode;
   pythonPathEnv?: string;
+  skillRoots?: SandboxSkillRoots;
   workspaceBindArgs: string[];
 }): SandboxLaunch {
   // Runner-owned baseline first; profile variables never override it
@@ -639,6 +663,10 @@ export function buildSandboxLaunch(options: {
   if (options.pythonPathEnv) env.PYTHONPATH = options.pythonPathEnv;
   if (options.language === "python" || options.pythonPathEnv) env.PYTHONNOUSERSITE = "1";
   if (options.language === "r") env.R_ENVIRON_USER = "/dev/null";
+  if (options.skillRoots) {
+    env[SKILL_PACKAGES_ENVIRONMENT_VARIABLE] = SANDBOX_SKILL_PACKAGES_ROOT;
+    env[SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE] = SANDBOX_SKILL_EXTENSIONS_ROOT;
+  }
   Object.assign(env, options.hostRuntimeSupport.env);
   Object.assign(env, options.egress?.env ?? {});
   for (const [name, value] of Object.entries(options.envProfile?.variables ?? {})) {
@@ -664,6 +692,10 @@ export function buildSandboxLaunch(options: {
       ...options.environmentBinds,
       ...(options.egress?.bindArgs ?? []),
       ...options.workspaceBindArgs,
+      ...(options.skillRoots ? [
+        "--ro-bind", options.skillRoots.packagesRoot, SANDBOX_SKILL_PACKAGES_ROOT,
+        "--bind", options.skillRoots.extensionsRoot, SANDBOX_SKILL_EXTENSIONS_ROOT,
+      ] : []),
       "--chdir", options.chdir,
       "--clearenv",
       ...Object.entries(env).flatMap(([name, value]) => ["--setenv", name, value]),
@@ -685,6 +717,7 @@ interface NativeSandboxLaunchOptions {
   pythonPathEnv?: string;
   readOnlyWorkspaceRoot?: string;
   readPaths: string[];
+  skillRoots?: SandboxSkillRoots;
   workspaceRoot: string;
 }
 
@@ -695,6 +728,7 @@ function launchEnvironment(options: {
   language: "python" | "r" | "shell";
   pathEnv: string;
   pythonPathEnv?: string;
+  skillRoots?: SandboxSkillRoots;
   temp?: string;
 }): Record<string, string> {
   const env: Record<string, string> = { HOME: options.home, PATH: options.pathEnv };
@@ -706,6 +740,10 @@ function launchEnvironment(options: {
   if (options.pythonPathEnv) env.PYTHONPATH = options.pythonPathEnv;
   if (options.language === "python" || options.pythonPathEnv) env.PYTHONNOUSERSITE = "1";
   if (options.language === "r") env.R_ENVIRON_USER = "/dev/null";
+  if (options.skillRoots) {
+    env[SKILL_PACKAGES_ENVIRONMENT_VARIABLE] = options.skillRoots.packagesRoot;
+    env[SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE] = options.skillRoots.extensionsRoot;
+  }
   Object.assign(env, options.egress?.env ?? {});
   for (const [name, value] of Object.entries(options.envProfile?.variables ?? {})) {
     if (profileKeyAllowed(name)) env[name] = value;
@@ -735,6 +773,7 @@ async function buildSeatbeltLaunch(
     readPaths: [
       options.workspaceRoot,
       ...(options.readOnlyWorkspaceRoot ? [options.readOnlyWorkspaceRoot] : []),
+      ...(options.skillRoots ? [options.skillRoots.packagesRoot] : []),
       ...options.readPaths,
     ],
     writePaths: [options.workspaceRoot, privateTemp],
@@ -765,6 +804,7 @@ export interface PreparedSandboxOptions {
   pathEnv: string;
   pythonPathEnv?: string;
   readOnlyWorkspaceRoot?: string;
+  skillRoots?: SandboxSkillRoots;
   workspaceBindArgs: string[];
   workspaceRoot: string;
 }
@@ -847,6 +887,7 @@ export async function executePython(
   const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
     ? await validatedWorkspace(config.dataDir, request.readOnlyWorkspaceRoot)
     : undefined;
+  const skillRoots = await resolveSandboxSkillRoots(config.dataDir, workspaceRoot, request.skillPackagesRoot);
   const before = await workspaceSnapshot(workspaceRoot);
   const startedAt = new Date().toISOString();
   const runtime = environmentStore?.capability.available
@@ -893,6 +934,7 @@ export async function executePython(
       ? (sandbox === "seatbelt" ? localPythonPackages : LOCAL_PYTHON_PACKAGES_MOUNT)
       : undefined,
     readOnlyWorkspaceRoot,
+    skillRoots,
     workspaceBindArgs: workspaceBinds.args,
     workspaceRoot,
   });
@@ -976,6 +1018,7 @@ export async function executeShell(
   const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
     ? await validatedWorkspace(config.dataDir, request.readOnlyWorkspaceRoot)
     : undefined;
+  const skillRoots = await resolveSandboxSkillRoots(config.dataDir, workspaceRoot, request.skillPackagesRoot);
   const before = await workspaceSnapshot(workspaceRoot);
   const startedAt = new Date().toISOString();
   const hostRuntimeSupport = await resolveHostRuntimeSupport();
@@ -996,6 +1039,7 @@ export async function executeShell(
       ? (sandbox === "seatbelt" ? localPythonPackages : LOCAL_PYTHON_PACKAGES_MOUNT)
       : undefined,
     readOnlyWorkspaceRoot,
+    skillRoots,
     workspaceBindArgs: workspaceBinds.args,
     workspaceRoot,
   });

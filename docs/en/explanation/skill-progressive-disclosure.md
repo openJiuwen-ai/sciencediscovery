@@ -1,51 +1,66 @@
 # Skill Progressive Disclosure
 
-This page explains how a model discovers, reads, and audits Agent Skills during a run. It follows a catalog-first pattern and retains ScienceDiscovery's frozen-snapshot semantics.
+This page explains how a model discovers, reads, and audits Agent Skills during a run. Selected Skills are staged into the sandbox as complete frozen packages, and the prompt still stays light by carrying metadata and paths rather than content.
 
 ## Design goals
 
-- Keep the system prompt light: list selected skill name, description, version, revision, and resource count, not full `SKILL.md`.
-- Load instructions on demand by passing an exact catalog id to `read_skill`.
+- Keep the system prompt light: list selected skill name, description, version, revision, package path, and package hash, not full `SKILL.md`.
+- Stage every selected Skill as a complete package under a fixed sandbox path before the model loop starts, so no mount, extract, or copy tool call is needed.
 - Freeze selected revision, package hash, instructions, and resources at run start, so later reads cannot observe a disk edit.
-- Separate discovery from content: the prompt contains catalog metadata, while `read_skill` returns content from the frozen snapshot.
-- Materialize bundled executable resources explicitly into the Session workspace without returning their bytes to the model.
+- Separate discovery from content: the prompt names locations, while file and execution tools read the staged frozen bytes on demand.
+- Keep the default package tree read-only, and reserve a separate writable area for later self-evolution.
 
 ## Runtime flow
 
 ```text
 effective Session skills → API frozen revisions
-  ├─ prompt: metadata only
-  └─ tool table: read_skill / read_skill_resource / materialize_skill_resource
+  └─ prepareSkillSandbox writes the complete packages to a per-execution snapshot root
        ↓
-read_skill(skillId) → frozen instructions
-       ├─ read_skill_resource(skillId,path) → referenced supporting text only
-       └─ materialize_skill_resource(skillId,path,dest?) → frozen bytes in the writable workspace; metadata-only result
-              ↓
-          execute the returned workspace path with explicit argv through an existing execution tool
+  sandbox starts with the packages already mounted
+    ├─ /skills                (read-only, $SCIENCEDISCOVERY_SKILLS_DIR)
+    │    └─ <skillId>/SKILL.md, scripts/, references/, assets/…
+    └─ /skill-extensions      (writable, $SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR)
+       ↓
+  prompt lists <package_path> and <package_hash> per selected skill
+       ↓
+  read /skills/<skillId>/SKILL.md with read_file  (read_skill remains a fallback)
+    ├─ read referenced supporting text from the same package path
+    └─ execute a bundled script in place with explicit argv
 ```
+
+## Locations
+
+| Path | Mode | Purpose |
+|---|---|---|
+| `/skills/<skillId>` | read-only | Complete frozen package for one selected Skill, including `SKILL.md`, `scripts/`, `references/`, and assets |
+| `/skills/.sciencediscovery-snapshot.json` | read-only | Manifest recording each staged skill id, revision, version, and package hash |
+| `/skill-extensions` | writable | Reserved extension area for later self-evolution; empty by default and never part of the frozen tree |
+
+`$SCIENCEDISCOVERY_SKILLS_DIR` and `$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` resolve to these locations inside `run_shell`, `run_python`, and `run_r`, so a skill instruction can quote the variable instead of a hardcoded mount path.
 
 ## Tool responsibilities
 
 | Tool | Location | Responsibility |
 |---|---|---|
-| `read_skill` | Node workspace tool | Return full instructions and supporting-resource list from the run snapshot |
-| `read_skill_resource` | Node workspace tool | Read bounded UTF-8 snapshot resource; never execute scripts or install dependencies |
-| `materialize_skill_resource` | Node workspace tool | Copy exact snapshot bytes to a workspace-relative destination and return only destination, byte count, hash, skill id, revision, and overwrite status; never execute or install the file |
+| `read_file` | Node workspace tool | Page through any staged package file under `/skills`, exactly as for a workspace file |
+| `run_shell` / `run_python` / `run_r` | Runner sandbox | Execute a bundled script in place from its package path with explicit argv |
+| `read_skill` | Node workspace tool | Compatibility channel returning the same frozen instructions and the package path |
+| `read_skill_resource` | Node workspace tool | Bounded UTF-8 read of one snapshot resource; never executes scripts or installs dependencies |
 
-All three come from `createWorkspaceTools` in `packages/workspace` and are invoked in-process by the Node-native loop like any other workspace tool.
+Staging happens in `prepareSkillSandbox` (`services/api`), the mounts are applied by `services/runner`, and the tools come from `createWorkspaceTools` in `packages/workspace`.
 
-## Why not hand the model a file path?
+## Why a staged snapshot rather than the live catalog path
 
-A common alternative is to expose the `SKILL.md` filesystem location and let the model open it with a generic read tool. ScienceDiscovery records a fixed revision and package hash in the Prompt Manifest, and reading a live path mid-run could observe a later edit and break reproducibility. Content therefore comes back through the typed `read_skill` tool, backed by the frozen snapshot.
+Exposing the catalog's live `SKILL.md` location would let a mid-run disk edit change what the model reads, breaking the fixed revision and package hash recorded in the Prompt Manifest. Staging solves both halves: the model gets an ordinary file path, and the bytes behind it are the frozen revision copied once per execution, verified against the recorded package hash before the sandbox starts.
 
 ## Security boundary
 
-- Skill entries injected into the prompt contain metadata, not content.
-- `read_skill.skillId` is an enum of skills selected for the run.
-- Read and materialize paths are restricted to resources in the selected frozen snapshot; materialize destinations must stay inside the current writable workspace.
-- `scripts/` are retained in packages but never auto-executed, installed, or copied into workspaces merely because a Skill is selected. A loaded Skill may explicitly materialize one referenced script and then execute the returned workspace path.
-- Materialization returns metadata only. Large or binary resource bytes go directly from the frozen snapshot to disk and are not placed in model context; do not search the filesystem for package resources or read a materialized large script back into context.
-- Revision, version, and package hash enter Prompt Manifest.
+- Skill entries injected into the prompt contain metadata and paths, not content.
+- Only skills selected for the run are staged; an unselected skill never appears under `/skills`.
+- The default package tree is read-only: writes and deletes inside `/skills` fail in the sandbox, and the staged files are mode `0444` on the host.
+- Staging a package is not installing or running it. `scripts/` are never auto-executed and dependencies are never auto-installed merely because a Skill is selected; execution requires an explicit argv call from the Agent.
+- Large or binary package bytes go from the frozen snapshot straight to disk and never enter model context. Do not read a large bundled script back into context, and do not search the filesystem for package resources — the prompt already carries the path.
+- Revision, version, and package hash enter the Prompt Manifest and the staged manifest file, so an execution can be replayed against an exact package.
 
 ## Related entry points
 

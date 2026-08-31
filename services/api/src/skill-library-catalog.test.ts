@@ -300,7 +300,7 @@ test("skill library search returns bounded candidates from mounted versions", as
   }
 });
 
-test("recalled skill library snapshots expose immutable resource bytes", async () => {
+test("recalled skill library snapshots expose immutable complete package files", async () => {
   const dataDir = await temporaryDataDir();
   try {
     const catalog = new SkillLibraryCatalog(dataDir);
@@ -331,10 +331,14 @@ test("recalled skill library snapshots expose immutable resource bytes", async (
       query: "frozen binary resource",
     });
     const snapshot = (await catalog.resolveSkills(search.candidates))[0]!;
-    const first = snapshot.readResourceBytes("scripts/tool.bin");
+    const first = snapshot.readPackageFiles().find((file) => file.path === "scripts/tool.bin")!;
     assert.deepEqual(Buffer.from(first.bytes), script);
     first.bytes[0] = 0x7f;
-    assert.deepEqual(Buffer.from(snapshot.readResourceBytes("scripts/tool.bin").bytes), script);
+    assert.deepEqual(
+      Buffer.from(snapshot.readPackageFiles().find((file) => file.path === "scripts/tool.bin")!.bytes),
+      script,
+    );
+    assert.ok(snapshot.readPackageFiles().some((file) => file.path === "SKILL.md"));
   } finally {
     await rm(dataDir, { force: true, recursive: true });
   }

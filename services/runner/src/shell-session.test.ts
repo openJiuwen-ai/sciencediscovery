@@ -193,15 +193,22 @@ test("concurrent calls for one Session-Agent create one shell and execute in sub
 });
 
 test("a Session-Agent identity rejects reuse with different workspace mounts", async (context) => {
-  const { manager, workspaceRoot } = await fixture(context);
+  const { dataDir, manager, workspaceRoot } = await fixture(context);
   const differentRoot = resolve(workspaceRoot, "different");
-  await mkdir(differentRoot, { recursive: true });
+  const skillPackagesRoot = resolve(dataDir, "projects", "project", "skill-snapshots", "run-1");
+  const differentSkillPackagesRoot = resolve(dataDir, "projects", "project", "skill-snapshots", "run-2");
+  await Promise.all([
+    mkdir(differentRoot, { recursive: true }),
+    mkdir(skillPackagesRoot, { recursive: true }),
+    mkdir(differentSkillPackagesRoot, { recursive: true }),
+  ]);
   await manager.execute({
     agentId: "main",
     code: "echo ready",
     executionId: "mount-one",
     kernelMode: "persistent",
     permissionEpoch: epoch(),
+    skillPackagesRoot,
     workspaceRoot,
   });
   await assert.rejects(manager.execute({
@@ -210,7 +217,17 @@ test("a Session-Agent identity rejects reuse with different workspace mounts", a
     executionId: "mount-two",
     kernelMode: "persistent",
     permissionEpoch: epoch(),
+    skillPackagesRoot,
     workspaceRoot: differentRoot,
+  }), /cannot be reused with different workspace mounts/);
+  await assert.rejects(manager.execute({
+    agentId: "main",
+    code: "echo wrong",
+    executionId: "mount-three",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    skillPackagesRoot: differentSkillPackagesRoot,
+    workspaceRoot,
   }), /cannot be reused with different workspace mounts/);
 });
 

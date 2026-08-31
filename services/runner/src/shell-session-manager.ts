@@ -37,6 +37,7 @@ import {
   resolveHostRuntimeSupport,
   prepareSandboxEgress,
   prepareSandboxLaunch,
+  resolveSandboxSkillRoots,
   resolveQuotaBytes,
   seccompVariantFor,
   spawnSandboxProcess,
@@ -48,6 +49,7 @@ import {
   workspaceSnapshot,
   workspaceUsageBytes,
   type SandboxLaunch,
+  type SandboxSkillRoots,
 } from "./executor.js";
 import { agentExecutionKey, KeyedTaskQueue } from "./agent-execution.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
@@ -148,6 +150,7 @@ class ManagedShellSession {
     readonly launch: SandboxLaunch,
     readonly workspaceRoot: string,
     readonly readOnlyWorkspaceRoot: string | undefined,
+    readonly skillPackagesRoot: string | undefined,
     private idleTimeoutMs: number,
     /** Invoked exactly once, on every stop path (idle, teardown, exit, error). */
     private readonly onStopped: (shellSession: ManagedShellSession, reason: string) => void,
@@ -388,6 +391,7 @@ export class ShellSessionManager {
     const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
       ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot)
       : undefined;
+    const skillRoots = await resolveSandboxSkillRoots(this.config.dataDir, workspaceRoot, request.skillPackagesRoot);
     const maxWorkspaceBytes = resolveQuotaBytes(
       request.maxWorkspaceBytes,
       this.config.maxWorkspaceBytes ?? DEFAULT_MAX_WORKSPACE_BYTES,
@@ -418,10 +422,11 @@ export class ShellSessionManager {
       shellSession = undefined;
     }
     if (!shellSession) {
-      shellSession = await this.startSession(request, key, workspaceRoot, readOnlyWorkspaceRoot, networkAccess);
+      shellSession = await this.startSession(request, key, workspaceRoot, readOnlyWorkspaceRoot, skillRoots, networkAccess);
       this.sessions.set(key, shellSession);
     } else if (shellSession.workspaceRoot !== workspaceRoot
-      || shellSession.readOnlyWorkspaceRoot !== readOnlyWorkspaceRoot) {
+      || shellSession.readOnlyWorkspaceRoot !== readOnlyWorkspaceRoot
+      || shellSession.skillPackagesRoot !== skillRoots?.packagesRoot) {
       throw new Error("Persistent shell Session-Agent identity cannot be reused with different workspace mounts");
     }
     // Snapshot before evaluating: a loss caused by THIS evaluation (e.g. user
@@ -535,6 +540,7 @@ export class ShellSessionManager {
     key: string,
     workspaceRoot: string,
     readOnlyWorkspaceRoot: string | undefined,
+    skillRoots: SandboxSkillRoots | undefined,
     networkAccess: SandboxNetworkAccess,
   ): Promise<ManagedShellSession> {
     const id = `shell-${randomUUID()}`;
@@ -552,6 +558,7 @@ export class ShellSessionManager {
       language: "shell",
       pathEnv: "/usr/bin:/bin",
       readOnlyWorkspaceRoot,
+      skillRoots,
       workspaceBindArgs: workspaceBinds.args,
       workspaceRoot,
     });
@@ -592,6 +599,7 @@ export class ShellSessionManager {
       launch,
       workspaceRoot,
       readOnlyWorkspaceRoot,
+      skillRoots?.packagesRoot,
       idleTimeoutMs,
       (shellSession, reason) => {
         if (this.sessions.get(key) === shellSession) this.sessions.delete(key);

@@ -44,6 +44,7 @@ export interface WorkspaceExecutionBindingOptions {
   permissionScopeLabel: string;
   provenanceRecorder: ProvenanceRecorder;
   readOnlyWorkspaceRoot?: string;
+  skillPackagesRoot?: string;
   runnerClient: RunnerClient;
   scientificEnvironments?: Environment[];
   sessionId: string;
@@ -149,6 +150,7 @@ export function createWorkspaceExecutionBindings(
         maxWorkspaceBytes: options.maxWorkspaceBytes,
         permissionEpoch: options.permission.getEpoch(),
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         runnerClient: options.runnerClient,
         ...sandboxEgressProxy(),
         sessionId: options.sessionId,
@@ -180,6 +182,7 @@ export function createWorkspaceExecutionBindings(
         maxWorkspaceBytes: options.maxWorkspaceBytes,
         permissionEpoch: options.permission.getEpoch(),
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         runnerClient: options.runnerClient,
         ...sandboxEgressProxy(),
         sessionId: options.sessionId,
@@ -269,6 +272,7 @@ export function createWorkspaceExecutionBindings(
           language,
           permissionEpoch: options.permission.getEpoch(),
           ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+          ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
           runnerClient: options.runnerClient,
           ...sandboxEgressProxy(),
           sessionId: options.sessionId,

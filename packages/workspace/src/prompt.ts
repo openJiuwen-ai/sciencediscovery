@@ -29,7 +29,6 @@ import type {
   ScientificExecutionResult,
   ScientificLanguage,
   SkillResource,
-  SkillResourceBytes,
   SkillResourceContent,
   SkillReviewDraftSummary,
   ShellExecutionResult,
@@ -42,7 +41,7 @@ import type { ToolFilterPolicy, WorkspaceToolOptions } from "./workspace.js";
 // results) survive replay; the prompt layer only forwards them to the runtime.
 type AgentHistoryMessage = Record<string, unknown> & { role?: string };
 
-export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.3";
+export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.4";
 // Bump when the workspace prompt contract changes, including subagent orchestration or skill disclosure rules.
 export const WORKSPACE_SYSTEM_PROMPT = [
   "You are a local science analysis agent.",
@@ -122,8 +121,9 @@ export interface RuntimeSkill {
   description: string;
   hash: string;
   id: string;
+  /** Sandbox path of the staged frozen package; absent for nested agents that run without a sandbox. */
+  packagePath?: string;
   readResource: (path: string) => SkillResourceContent | Promise<SkillResourceContent>;
-  readResourceBytes: (path: string) => SkillResourceBytes | Promise<SkillResourceBytes>;
   resources: SkillResource[];
   revision: number;
   version: string;
@@ -154,15 +154,20 @@ export function buildSkillSystemSection(
     .map((skill, index) => ({ index, score: score(skill), skill }))
     .sort((left, right) => right.score - left.score || left.index - right.index)
     .map(({ skill }) => skill);
+  // Packages are staged only for agents that own a sandbox, so the disclosure
+  // steps fall back to read_skill when no path can be advertised.
+  const staged = orderedSkills.some((skill) => skill.packagePath);
   const skillItems = orderedSkills
     .map((skill) => {
       const resources = skill.resources.length
-        ? `\n        <resources>${skill.resources.length} frozen resource(s); call read_skill first, then use read_skill_resource for referenced text or materialize_skill_resource for bundled executable files.</resources>`
+        ? `\n        <resources>${skill.resources.length} frozen resource(s)${skill.packagePath ? " inside the complete read-only package" : "; load referenced text with read_skill_resource"}.</resources>`
         : "";
       return [
         "    <skill>",
         `        <name>${escapePromptTagText(skill.id)}</name>`,
         `        <description>${escapePromptTagText(skill.description)}</description>`,
+        ...(skill.packagePath ? [`        <package_path>${escapePromptTagText(skill.packagePath)}</package_path>`] : []),
+        `        <package_hash>${skill.hash}</package_hash>`,
         `        <revision>${skill.revision}</revision>`,
         `        <version>${escapePromptTagText(skill.version)}</version>${
           state.loadedSkillIds ? `\n        <loaded>${state.loadedSkillIds.has(skill.id)}</loaded>` : ""
@@ -172,14 +177,23 @@ export function buildSkillSystemSection(
     })
     .join("\n");
 
+  const intro = staged
+    ? "You have access to selected skills that provide optimized workflows for specific tasks. Their complete frozen packages already exist in the sandbox under /skills before any tool call. The default package tree is read-only; /skill-extensions is reserved as a writable extension area, but no self-evolution workflow is implied."
+    : "You have access to selected skills that provide optimized workflows for specific tasks. Skill instructions use progressive disclosure: full SKILL.md content is not in this system prompt.";
+  const loadStep = staged
+    ? "2. If a skill matches, read its exact <package_path>/SKILL.md with read_file. read_skill(skillId) remains a compatibility fallback for the same frozen instructions."
+    : "2. If a skill matches, call read_skill(skillId) with its exact name to load the frozen SKILL.md instructions for this run.";
+  const resourceStep = staged
+    ? "4. Read only supporting text referenced by those instructions. Execute a bundled script directly from its package path with explicit argv; shell and Python sandboxes expose the same tree through $SCIENCEDISCOVERY_SKILLS_DIR. Do not read a large script into context, search the filesystem for package resources, modify/delete the read-only package, or execute/install anything merely because the package is present."
+    : "4. Load supporting text only when the loaded skill references it with read_skill_resource. Do not search the filesystem for package resources.";
   return `<skill_system>
-You have access to selected skills that provide optimized workflows for specific tasks. Skill instructions use progressive disclosure: full SKILL.md content is not in this system prompt.
+${intro}
 
 Skill discovery and loading:
 1. Check <available_skills> for a skill whose name or description matches the task.
-2. If a skill matches, call read_skill(skillId) with its exact name to load the frozen SKILL.md instructions for this run.
+${loadStep}
 3. Follow the loaded skill instructions precisely.
-4. Load supporting text only when the loaded skill references it. For a bundled executable script, call materialize_skill_resource and execute the returned workspace path with explicit argv through the appropriate execution tool; do not read the materialized source back into context or search the filesystem for package resources.
+${resourceStep}
 
 <available_skills>
 ${skillItems}
@@ -333,5 +347,6 @@ export interface WorkspaceAgentOptions {
   subagent?: { instructions: string; name: string };
   toolPolicy?: ToolFilterPolicy;
   readOnlyWorkspaceRoot?: string;
+  skillPackagesRoot?: string;
   workspaceRoot: string;
 }

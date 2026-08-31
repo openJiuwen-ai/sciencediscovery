@@ -104,6 +104,8 @@ export interface ScientificExecutionRequest {
   permissionEpoch: PermissionEpoch;
   /** Optional parent workspace mounted read-only for isolated subagents. */
   readOnlyWorkspaceRoot?: string;
+  /** Trusted host directory containing this Agent run's frozen Skill packages. */
+  skillPackagesRoot?: string;
   /**
    * Outbound route the egress gateway uses for targets the allowlist accepts,
    * resolved by the API from the policy this epoch snapshotted. It travels with
@@ -196,6 +198,8 @@ export interface ShellExecutionRequest {
   permissionEpoch: PermissionEpoch;
   /** Optional parent workspace mounted read-only for isolated subagents. */
   readOnlyWorkspaceRoot?: string;
+  /** Trusted host directory containing this Agent run's frozen Skill packages. */
+  skillPackagesRoot?: string;
   /**
    * Outbound route the egress gateway uses for targets the allowlist accepts,
    * resolved by the API from the policy this epoch snapshotted. It travels with

@@ -40,6 +40,7 @@ import {
   resolveHostRuntimeSupport,
   prepareSandboxEgress,
   prepareSandboxLaunch,
+  resolveSandboxSkillRoots,
   resolveProfileChdir,
   resolveQuotaBytes,
   seccompVariantFor,
@@ -53,6 +54,7 @@ import {
   workspaceSnapshot,
   workspaceUsageBytes,
   type SandboxLaunch,
+  type SandboxSkillRoots,
 } from "./executor.js";
 import { agentExecutionKey, KeyedTaskQueue } from "./agent-execution.js";
 import type { SessionEnvProfile } from "./session-env-profile.js";
@@ -129,6 +131,7 @@ class ManagedKernel {
     readonly launch: SandboxLaunch,
     readonly workspaceRoot: string,
     readonly readOnlyWorkspaceRoot: string | undefined,
+    readonly skillPackagesRoot: string | undefined,
     private idleTimeoutMs: number,
     private readonly onIdle: (kernel: ManagedKernel) => void,
     private readonly onUnexpectedExit: (kernel: ManagedKernel, reason: string) => void,
@@ -348,6 +351,7 @@ export class KernelManager {
     const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
       ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot)
       : undefined;
+    const skillRoots = await resolveSandboxSkillRoots(this.config.dataDir, workspaceRoot, request.skillPackagesRoot);
     const maxWorkspaceBytes = resolveQuotaBytes(
       request.maxWorkspaceBytes,
       this.config.maxWorkspaceBytes ?? DEFAULT_MAX_WORKSPACE_BYTES,
@@ -388,11 +392,13 @@ export class KernelManager {
         language,
         workspaceRoot,
         readOnlyWorkspaceRoot,
+        skillRoots,
         networkAccess,
       );
       this.kernels.set(key, kernel);
     } else if (kernel.workspaceRoot !== workspaceRoot
-      || kernel.readOnlyWorkspaceRoot !== readOnlyWorkspaceRoot) {
+      || kernel.readOnlyWorkspaceRoot !== readOnlyWorkspaceRoot
+      || kernel.skillPackagesRoot !== skillRoots?.packagesRoot) {
       throw new Error("Persistent kernel Session-Agent identity cannot be reused with different workspace mounts");
     }
 
@@ -520,6 +526,7 @@ export class KernelManager {
     language: ScientificLanguage,
     workspaceRoot: string,
     readOnlyWorkspaceRoot: string | undefined,
+    skillRoots: SandboxSkillRoots | undefined,
     networkAccess: SandboxNetworkAccess,
   ): Promise<ManagedKernel> {
     const id = `kernel-${randomUUID()}`;
@@ -546,6 +553,7 @@ export class KernelManager {
       language,
       pathEnv: sandbox === "seatbelt" ? `${resolve(prefixPath, "bin")}:/usr/bin:/bin` : "/opt/science-env/bin:/usr/bin",
       readOnlyWorkspaceRoot,
+      skillRoots,
       workspaceBindArgs: workspaceBinds.args,
       workspaceRoot,
     });
@@ -594,6 +602,7 @@ export class KernelManager {
       launch,
       workspaceRoot,
       readOnlyWorkspaceRoot,
+      skillRoots?.packagesRoot,
       idleTimeoutMs,
       (kernel) => {
         const reason = `Persistent kernel idle timeout after ${kernel.configuredIdleTimeoutMs} ms`;

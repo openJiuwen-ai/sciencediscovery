@@ -622,6 +622,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.mcpTools ? { mcpTools: options.mcpTools } : {}),
     ...(options.paperExtractPdf ? { paperExtractPdf: options.paperExtractPdf } : {}),
     ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+    ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
     ...(options.webFetch ? { webFetch: options.webFetch } : {}),
     ...(options.webSearch ? { webSearch: options.webSearch } : {}),
     ...(options.queryGraph ? { queryGraph: options.queryGraph } : {}),

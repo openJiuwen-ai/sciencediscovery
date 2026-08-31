@@ -12,11 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { mkdir, readdir, realpath, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { AgentTool } from "@sciencediscovery/tools";
+import {
+  SANDBOX_SKILL_EXTENSIONS_ROOT,
+  SANDBOX_SKILL_PACKAGES_ROOT,
+  SKILL_EXTENSIONS_WORKSPACE_PATH,
+  SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE,
+  SKILL_PACKAGES_ENVIRONMENT_VARIABLE,
+} from "@sciencediscovery/schema";
 import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
 import type {
   ArtifactDownloadResult,
@@ -56,7 +63,6 @@ import type {
   ScientificExecutionResult,
   ScientificLanguage,
   SkillResource,
-  SkillResourceBytes,
   SkillResourceContent,
   SkillReviewDraftSummary,
   ShellExecutionResult,
@@ -245,6 +251,8 @@ export interface WorkspaceToolOptions {
   }>;
   /** Optional parent workspace exposed to read-only tools for isolated subagents. */
   readOnlyWorkspaceRoot?: string;
+  /** Host root of this Agent run's complete frozen Skill packages. */
+  skillPackagesRoot?: string;
   npuBroker?: {
     cancel: (jobId: string, signal?: AbortSignal) => Promise<NpuJob>;
     get: (jobId: string, signal?: AbortSignal) => Promise<NpuJob>;
@@ -320,8 +328,9 @@ export interface WorkspaceToolOptions {
     description: string;
     hash: string;
     id: string;
+    /** Sandbox path of the staged frozen package; absent for nested agents that run without a sandbox. */
+    packagePath?: string;
     readResource: (path: string) => SkillResourceContent | Promise<SkillResourceContent>;
-    readResourceBytes: (path: string) => SkillResourceBytes | Promise<SkillResourceBytes>;
     resources: SkillResource[];
     revision: number;
     version: string;
@@ -350,65 +359,6 @@ function assertWorkspacePath(workspaceRoot: string, requestedPath: string): stri
   return candidate;
 }
 
-async function lstatIfPresent(path: string): Promise<Awaited<ReturnType<typeof lstat>> | undefined> {
-  try {
-    return await lstat(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-}
-
-async function prepareWorkspaceDestination(
-  workspaceRoot: string,
-  requestedPath: string,
-): Promise<{ metadata?: Awaited<ReturnType<typeof lstat>>; path: string }> {
-  const root = resolve(workspaceRoot);
-  const path = assertWorkspacePath(root, requestedPath);
-  await mkdir(root, { recursive: true });
-
-  // Create each missing directory only after confirming that every existing
-  // component is a real directory, so a package copy cannot follow a symlink
-  // out of the writable workspace.
-  const parent = dirname(path);
-  const parentPath = relative(root, parent);
-  let current = root;
-  for (const segment of parentPath ? parentPath.split(sep) : []) {
-    current = resolve(current, segment);
-    let metadata = await lstatIfPresent(current);
-    if (!metadata) {
-      try {
-        await mkdir(current);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
-      metadata = await lstat(current);
-    }
-    if (metadata.isSymbolicLink()) throw new Error(`Destination follows a workspace symlink: ${requestedPath}`);
-    if (!metadata.isDirectory()) throw new Error(`Destination parent is not a directory: ${requestedPath}`);
-  }
-
-  const [canonicalRoot, canonicalParent] = await Promise.all([realpath(root), realpath(parent)]);
-  if (canonicalParent !== canonicalRoot && !canonicalParent.startsWith(`${canonicalRoot}${sep}`)) {
-    throw new Error(`Destination escapes the workspace: ${requestedPath}`);
-  }
-
-  const metadata = await lstatIfPresent(path);
-  if (metadata?.isSymbolicLink()) throw new Error(`Destination is a workspace symlink: ${requestedPath}`);
-  if (metadata && !metadata.isFile()) throw new Error(`Destination must be a workspace file: ${requestedPath}`);
-  return { ...(metadata ? { metadata } : {}), path };
-}
-
-async function replaceWorkspaceFile(path: string, bytes: Uint8Array): Promise<void> {
-  const temporaryPath = resolve(dirname(path), `.${basename(path)}.materialize-${randomUUID()}`);
-  try {
-    await writeFile(temporaryPath, bytes, { flag: "wx" });
-    await rename(temporaryPath, path);
-  } finally {
-    await rm(temporaryPath, { force: true });
-  }
-}
-
 function descendantPath(parent: string, child: string): string | undefined {
   const path = relative(parent, child);
   if (!path || path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)) return undefined;
@@ -418,23 +368,42 @@ function descendantPath(parent: string, child: string): string | undefined {
 async function resolveSandboxScriptPath(
   workspaceRoot: string,
   readOnlyWorkspaceRoot: string | undefined,
+  skillPackagesRoot: string | undefined,
   requestedPath: string,
-): Promise<string> {
-  const candidate = assertWorkspacePath(workspaceRoot, requestedPath);
+): Promise<{ environmentVariable?: string; path: string }> {
+  const mounted = normalizeMountedReadPath(requestedPath);
+  const mountedRoot = mounted.root === "skills"
+    ? skillPackagesRoot
+    : mounted.root === "extensions"
+      ? resolve(workspaceRoot, SKILL_EXTENSIONS_WORKSPACE_PATH)
+      : undefined;
+  const hostRoot = mountedRoot ?? workspaceRoot;
+  if ((mounted.root === "skills" || mounted.root === "extensions") && !mountedRoot) {
+    throw new Error(`The mounted ${mounted.root} directory is unavailable`);
+  }
+  const candidate = assertWorkspacePath(hostRoot, mounted.path);
   let canonicalRoot: string;
   let canonicalScript: string;
   try {
-    [canonicalRoot, canonicalScript] = await Promise.all([realpath(workspaceRoot), realpath(candidate)]);
+    [canonicalRoot, canonicalScript] = await Promise.all([realpath(hostRoot), realpath(candidate)]);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`scriptPath does not exist in the workspace: ${requestedPath}`);
+      throw new Error(`scriptPath does not exist in an authorized mount: ${requestedPath}`);
     }
     throw error;
   }
   if (canonicalScript !== canonicalRoot && !canonicalScript.startsWith(`${canonicalRoot}${sep}`)) {
-    throw new Error(`scriptPath escapes the workspace: ${requestedPath}`);
+    throw new Error(`scriptPath escapes its authorized mount: ${requestedPath}`);
   }
-  if (!(await stat(canonicalScript)).isFile()) throw new Error("scriptPath must reference a workspace file");
+  if (!(await stat(canonicalScript)).isFile()) throw new Error("scriptPath must reference a regular file");
+
+  const relativeScriptPath = relative(canonicalRoot, canonicalScript).split(sep).join("/");
+  if (mounted.root === "skills") {
+    return { environmentVariable: SKILL_PACKAGES_ENVIRONMENT_VARIABLE, path: relativeScriptPath };
+  }
+  if (mounted.root === "extensions") {
+    return { environmentVariable: SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE, path: relativeScriptPath };
+  }
 
   let sandboxRoot = "/workspace";
   if (readOnlyWorkspaceRoot) {
@@ -442,15 +411,22 @@ async function resolveSandboxScriptPath(
     const writablePath = descendantPath(canonicalParent, canonicalRoot);
     if (writablePath) sandboxRoot = `${sandboxRoot}/${writablePath}`;
   }
-  const scriptPath = relative(canonicalRoot, canonicalScript).split(sep).join("/");
-  return `${sandboxRoot}/${scriptPath}`;
+  return { path: `${sandboxRoot}/${relativeScriptPath}` };
 }
 
 function normalizeMountedReadPath(requestedPath: string): {
   path: string;
-  root: "parent" | "workspace";
+  root: "extensions" | "parent" | "skills" | "workspace";
 } {
   const path = requestedPath.trim();
+  if (path === SANDBOX_SKILL_PACKAGES_ROOT) return { path: ".", root: "skills" };
+  if (path.startsWith(`${SANDBOX_SKILL_PACKAGES_ROOT}/`)) {
+    return { path: path.slice(SANDBOX_SKILL_PACKAGES_ROOT.length + 1), root: "skills" };
+  }
+  if (path === SANDBOX_SKILL_EXTENSIONS_ROOT) return { path: ".", root: "extensions" };
+  if (path.startsWith(`${SANDBOX_SKILL_EXTENSIONS_ROOT}/`)) {
+    return { path: path.slice(SANDBOX_SKILL_EXTENSIONS_ROOT.length + 1), root: "extensions" };
+  }
   if (path === "/parent_workspace") return { path: ".", root: "parent" };
   if (path.startsWith("/parent_workspace/")) return { path: path.slice("/parent_workspace/".length), root: "parent" };
   if (path === "/workspace") return { path: ".", root: "workspace" };
@@ -564,6 +540,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     && resolve(options.readOnlyWorkspaceRoot) !== resolve(workspaceRoot)
     ? options.readOnlyWorkspaceRoot
     : undefined;
+  const skillPackagesRoot = options.skillPackagesRoot;
+  const skillExtensionsRoot = resolve(workspaceRoot, SKILL_EXTENSIONS_WORKSPACE_PATH);
   const loadedSkillIds = new Set<string>();
 
   const pythonParameters = Type.Object({
@@ -576,14 +554,20 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     execute: async () => {
       const files = await scanWorkspace(workspaceRoot);
       const readOnlyFiles = readOnlyWorkspaceRoot ? await scanWorkspace(readOnlyWorkspaceRoot) : [];
-      if (readOnlyWorkspaceRoot) {
+      const skillFiles = skillPackagesRoot ? await scanWorkspace(skillPackagesRoot) : [];
+      if (readOnlyWorkspaceRoot || skillPackagesRoot) {
         const text = [
           files.length ? `Writable workspace:\n${files.map((file) => file.path).join("\n")}` : "Writable workspace is empty",
-          readOnlyFiles.length ? `Read-only parent workspace:\n${readOnlyFiles.map((file) => file.path).join("\n")}` : "Read-only parent workspace is empty",
+          ...(readOnlyWorkspaceRoot
+            ? [readOnlyFiles.length ? `Read-only parent workspace:\n${readOnlyFiles.map((file) => file.path).join("\n")}` : "Read-only parent workspace is empty"]
+            : []),
+          ...(skillPackagesRoot
+            ? [skillFiles.length ? `Read-only Skill packages (${SANDBOX_SKILL_PACKAGES_ROOT}):\n${skillFiles.map((file) => `${SANDBOX_SKILL_PACKAGES_ROOT}/${file.path}`).join("\n")}` : "Read-only Skill packages are empty"]
+            : []),
         ].join("\n\n");
         return {
           content: [{ type: "text", text }],
-          details: { files, readOnlyFiles },
+          details: { files, readOnlyFiles, skillFiles },
         };
       }
       return {
@@ -602,7 +586,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       const requested = normalizeMountedReadPath(params.path);
       const roots = requested.root === "parent"
         ? readOnlyWorkspaceRoot ? [readOnlyWorkspaceRoot] : []
-        : [workspaceRoot, ...(readOnlyWorkspaceRoot ? [readOnlyWorkspaceRoot] : [])];
+        : requested.root === "skills"
+          ? skillPackagesRoot ? [skillPackagesRoot] : []
+          : requested.root === "extensions"
+            ? [skillExtensionsRoot]
+            : [workspaceRoot, ...(readOnlyWorkspaceRoot ? [readOnlyWorkspaceRoot] : [])];
       let path = "";
       let metadata: Awaited<ReturnType<typeof stat>> | undefined;
       let lastError: unknown;
@@ -617,7 +605,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       }
       if (!metadata) {
         if (lastError) throw lastError;
-        throw new Error("Read-only parent workspace is unavailable");
+        throw new Error(`The mounted ${requested.root} directory is unavailable`);
       }
       if (!metadata.isFile()) throw new Error(`Not a readable file: ${requested.path}`);
 
@@ -1326,15 +1314,23 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       scriptPath: Type.Optional(Type.String({ maxLength: 1_000, minLength: 1 })),
     });
     const runShell: AgentTool<typeof shellParameters> = {
-      description: "Run a bounded shell command or an existing shell script from the authorized Session workspace. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or redirect the output to a workspace file and page through it with read_file.",
+      description: "Run a bounded shell command or an existing shell script from the authorized Session workspace or read-only /skills mount. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or redirect the output to a workspace file and page through it with read_file.",
       execute: async (toolCallId, params, signal) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
         }
         let code = params.command?.trim() ?? "";
         if (params.scriptPath) {
-          const scriptPath = await resolveSandboxScriptPath(workspaceRoot, options.readOnlyWorkspaceRoot, params.scriptPath);
-          code = ["/usr/bin/bash", shellQuote(scriptPath), ...(params.arguments ?? []).map(shellQuote)].join(" ");
+          const script = await resolveSandboxScriptPath(
+            workspaceRoot,
+            options.readOnlyWorkspaceRoot,
+            skillPackagesRoot,
+            params.scriptPath,
+          );
+          const scriptWord = script.environmentVariable
+            ? `"\${${script.environmentVariable}}"/${shellQuote(script.path)}`
+            : shellQuote(script.path);
+          code = ["/usr/bin/bash", scriptWord, ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
         const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal, toolCallId);
         if (result.exitCode !== 0) throw new Error(`Shell exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
@@ -1517,7 +1513,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         if (!skill) throw new Error(`Skill ${params.skillId} is not selected for this run`);
         loadedSkillIds.add(skill.id);
         const resources = skill.resources.length
-          ? `\n\nAvailable frozen resources (use read_skill_resource for needed text; use materialize_skill_resource for bundled executable files):\n${skill.resources.map((resource) => `- ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")}`
+          ? `\n\n${skill.packagePath
+            ? `Complete frozen package: ${skill.packagePath}\nAvailable resources (read referenced text or execute scripts directly from this read-only package):`
+            : "Available resources (use read_skill_resource for referenced text):"}\n${skill.resources.map((resource) => `- ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")}`
           : "";
         return {
           content: [{ type: "text", text: [
@@ -1531,6 +1529,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             description: skill.description,
             hash: skill.hash,
             id: skill.id,
+            ...(skill.packagePath ? { packagePath: skill.packagePath } : {}),
             resources: skill.resources,
             revision: skill.revision,
             version: skill.version,
@@ -1567,62 +1566,6 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: skillResourceParameters,
     };
     tools.push(readSkillResource);
-
-    const materializeSkillResourceParameters = Type.Object({
-      dest: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
-      path: Type.String({ maxLength: 240, minLength: 1 }),
-      skillId: Type.Union(skillLiterals as [typeof skillLiterals[number], ...typeof skillLiterals]),
-    });
-    const materializeSkillResource: AgentTool<typeof materializeSkillResourceParameters> = {
-      description: "Copy the exact bytes of a resource from an explicitly selected frozen skill revision into the current writable workspace. The default destination is the package-relative resource path. This does not execute or install the file, and the result contains metadata only, never source content.",
-      execute: async (_toolCallId, params) => {
-        const skill = selectedSkills.get(params.skillId);
-        if (!skill) throw new Error(`Skill ${params.skillId} is not selected for this run`);
-        const resource = skill.resources.find((candidate) => candidate.path === params.path);
-        if (!resource) throw new Error(`Skill resource not found in the frozen snapshot: ${params.path}`);
-
-        const frozen = await skill.readResourceBytes(resource.path);
-        if (
-          frozen.skillId !== skill.id
-          || frozen.revision !== skill.revision
-          || frozen.path !== resource.path
-          || frozen.hash !== resource.hash
-          || frozen.size !== resource.size
-        ) {
-          throw new Error(`Frozen skill resource metadata mismatch: ${skill.id}/${resource.path}`);
-        }
-        const bytes = Buffer.from(frozen.bytes);
-        const hash = createHash("sha256").update(bytes).digest("hex");
-        if (bytes.length !== frozen.size || hash !== frozen.hash) {
-          throw new Error(`Frozen skill resource bytes do not match snapshot metadata: ${skill.id}/${resource.path}`);
-        }
-
-        const destination = await prepareWorkspaceDestination(workspaceRoot, params.dest ?? frozen.path);
-        let overwritten = false;
-        let unchanged = false;
-        if (destination.metadata?.size === bytes.length) {
-          const existingHash = createHash("sha256").update(await readFile(destination.path)).digest("hex");
-          unchanged = existingHash === hash;
-        }
-        if (!unchanged) {
-          overwritten = Boolean(destination.metadata);
-          await replaceWorkspaceFile(destination.path, bytes);
-        }
-        const result = {
-          bytes: bytes.length,
-          dest: relative(resolve(workspaceRoot), destination.path).split(sep).join("/"),
-          hash,
-          overwritten,
-          revision: skill.revision,
-          skillId: skill.id,
-        };
-        return { bounded: true, content: [{ type: "text", text: JSON.stringify(result) }], details: result };
-      },
-      label: "Materialize skill resource",
-      name: "materialize_skill_resource",
-      parameters: materializeSkillResourceParameters,
-    };
-    tools.push(materializeSkillResource);
   }
   if (options.createSkill && selectedSkillsForDiscovery.some((skill) => skill.id === "skill-creator")) {
     const createSkillParameters = Type.Object({

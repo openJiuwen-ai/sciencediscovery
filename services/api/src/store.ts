@@ -4706,4 +4706,21 @@ export class SessionStore {
     if (!session) throw new Error("Session not found");
     return resolve(this.dataDir, "projects", session.projectId, "sessions", session.id, "workspace");
   }
+
+  skillPackagesPath(sessionId: string, executionId: string): string {
+    const session = this.getSession(sessionId);
+    if (!session) throw new Error("Session not found");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(executionId)) {
+      throw new Error("Execution id is unsafe for a Skill snapshot path");
+    }
+    return resolve(
+      this.dataDir,
+      "projects",
+      session.projectId,
+      "sessions",
+      session.id,
+      "skill-snapshots",
+      executionId,
+    );
+  }
 }

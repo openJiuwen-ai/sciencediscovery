@@ -48,22 +48,18 @@ Identify what the analysis task requires:
 - **Analysis objectives**: What computational results are expected
 - **Available data**: File paths, data descriptions, format details
 
-### Step 2: Materialize the Bundled Executor
+### Step 2: Use the Bundled Executor
 
-Before the first inspect or run action, copy the frozen bundled executor into the writable Session workspace:
-
-```text
-materialize_skill_resource({"skillId":"code-engineer","path":"scripts/execute.py"})
-```
-
-Use the returned `dest` as the script path in subsequent `run_shell` commands and pass the requested data paths and options as arguments. Do not load this large script with `read_skill_resource`, read the materialized source back into context, rewrite it, or search the filesystem for another copy.
+The complete frozen package is already available read-only at
+`$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer` when the execution sandbox starts. Invoke
+`scripts/execute.py` directly from that fixed package path and pass requested data paths and options as arguments. Do not load this large script into context, copy or rewrite it, search the filesystem for another copy, or execute it until the workflow requires an explicit inspect or run action.
 
 ### Step 3: Inspect Available Data
 
 Before writing analysis code, inspect the data to understand its schema and characteristics:
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action inspect \
   --files /path/to/data.xlsx
 ```
@@ -81,7 +77,7 @@ Based on the analysis objectives and data schema, write Python/R code to perform
 #### Execute Python Code
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action run \
   --language python \
   --code-file /path/to/workspace/analysis_step1.py \
@@ -92,7 +88,7 @@ python ./scripts/execute.py \
 #### Execute R Code
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action run \
   --language r \
   --code-file /path/to/workspace/analysis_step1.R \
@@ -103,7 +99,7 @@ python ./scripts/execute.py \
 #### Run Inline Code Snippet
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action run \
   --language python \
   --code "import pandas as pd; df = pd.read_excel('/path/to/data.xlsx'); print(df.describe())" \
@@ -133,7 +129,7 @@ When results may be evaluated downstream (e.g., by the `result-evaluator` skill)
 | `--output-file` | No | Path to export results (CSV/JSON/MD). If the code assigns a DataFrame to `result`, it is exported as structured tabular data; otherwise raw stdout/stderr is exported |
 
 > [!NOTE]
-> Do NOT read the Python file. Materialize the frozen resource once, then call the returned workspace path with the parameters.
+> Do NOT read or copy the Python file. Call its fixed read-only package path with the parameters.
 
 ## Variable Naming Rules
 
@@ -151,7 +147,7 @@ Task: "Analyze the correlation between variable X and Y in dataset.csv, and test
 ### Step 1: Inspect the data file
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action inspect \
   --files /path/to/dataset.csv
 ```
@@ -159,7 +155,7 @@ python ./scripts/execute.py \
 ### Step 2: Write analysis code and execute
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action run \
   --language python \
   --code-file /path/to/workspace/correlation_analysis.py \

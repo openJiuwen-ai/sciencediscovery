@@ -84,10 +84,9 @@
 | `run_npu_job` | Runner 启用 `SCIENCE_AGENT_NPU_BROKER=1` 且加载到 NPU workload 白名单 | `operation=list_workloads\|submit\|status\|logs\|result\|cancel`；`workload_id` 必须来自白名单，`config_path` 必须是当前 Session workspace 相对路径；需要 Python 的 workload 使用 `environment_revision_id` 选择托管科学环境，省略时使用 Session 当前 revision；内置 workload 为 `npu.smoke_test` 与 `antibody.protenix.v1` |
 | `read_skill` | 本次运行至少选择一个技能 | `skillId`（枚举限定为本次运行选中的技能）；按需读取冻结 revision 的完整 `SKILL.md` instructions，并列出可选 supporting resources |
 | `read_skill_resource` | 选中的技能中至少一个带文本资源 | `skillId`（枚举限定为本次运行选中的技能）+ `path`；读取 `read_skill` 后按需加载 supporting resource，返回有界 UTF-8 内容，**从不**执行或安装 |
-| `materialize_skill_resource` | 选中的技能中至少一个带资源 | `skillId` + snapshot `path` + 可选工作区相对 `dest`；把冻结原始字节写入当前 Session 可写工作区，只返回 metadata。工具不执行、不安装文件；仅选择技能时不会复制任何资源 |
 | `create_skill` | 主 Agent 本次运行选中且已通过 `read_skill` 加载 `skill-creator` | 从用户明确描述生成持久化但未激活的 Skill 草稿；同名待审 Skill 的再次修改会更新同一个审核项，并与上一次 Agent 提案做 Diff；对话中提供审核入口，用户确认后把审核内容发布为 Skill Library 的新不可变版本 |
 
-技能加载流程见 [skill-progressive-disclosure.md](../explanation/skill-progressive-disclosure.md)：模型从 Prompt 中的目录 metadata 选择精确 `skillId`，再按资源用途用 `read_skill`、`read_skill_resource` 或 `materialize_skill_resource` 访问本次运行的冻结快照。
+技能加载流程见 [skill-progressive-disclosure.md](../explanation/skill-progressive-disclosure.md)。本次运行已选技能的**完整冻结包**在沙箱启动前就已放入只读的 `/skills/<skillId>`（沙箱内为 `$SCIENCEDISCOVERY_SKILLS_DIR`），Prompt 逐个给出包路径和包 hash。因此 `read_file` 可以直接分页读取 `/skills/...` 下的包文件，`run_shell` 的 `scriptPath` 也可以直接指向包内脚本并用 `arguments` 传显式 argv，无需先复制到工作区。`/skill-extensions`（`$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR`）是为后续自演进预留的可写目录，默认为空。放入技能包**不等于**自动执行或安装其中的 `scripts/`；执行必须由 Agent 显式发起。`read_skill` / `read_skill_resource` 作为兼容通道保留。
 
 `run_npu_job` 不是通用宿主 shell。它只把 Agent 请求转成 Runner 内 Host NPU Broker 的作业操作，由 Broker 按 JSON 白名单启动固定 entrypoint，并按当前 Session 校验 job 的 status / logs / result / cancel。默认 NPU workload 的 Python 由 Runner 根据 `environment_revision_id` 在 `.sciencediscovery-data/scientific-envs/` 中解析，Agent 不能提交任意解释器路径。技能应先用 `environment.list` 和指定 revision 的 `run_python` 验证依赖；没有满足条件的环境时，通过 `environment.create` / `environment.install` 创建新 revision，再把返回的 revision ID 交给 `run_npu_job`。内置抗体 workload 使用 Protenix 路径 `antibody.protenix.v1`；其他模型后端需要显式自定义白名单或后续扩展。
 

@@ -124,6 +124,7 @@ export interface RecordExecutionOptions {
   maxWorkspaceBytes?: number;
   permissionEpoch: PermissionEpoch;
   readOnlyWorkspaceRoot?: string;
+  skillPackagesRoot?: string;
   runnerClient: RunnerClient;
   /** Outbound route for allowlisted sandbox traffic; see the request field. */
   sandboxEgressProxy?: ResolvedProxy;
@@ -475,6 +476,7 @@ export class ProvenanceRecorder {
         executionId,
         permissionEpoch: options.permissionEpoch,
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
@@ -606,6 +608,7 @@ export class ProvenanceRecorder {
         language,
         permissionEpoch: options.permissionEpoch,
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);

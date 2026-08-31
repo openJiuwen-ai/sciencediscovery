@@ -267,15 +267,20 @@ export interface SkillResourceContent {
   size: number;
 }
 
-/** Frozen package bytes for workspace materialization; never serialize this as tool output. */
-export interface SkillResourceBytes {
+/** One immutable file from a complete frozen Skill package; never serialize these bytes into model context. */
+export interface SkillPackageFileBytes {
   bytes: Uint8Array;
   hash: string;
   path: string;
-  revision: number;
-  skillId: string;
   size: number;
 }
+
+/** Stable logical locations shared by prompts, workspace adapters, and sandboxes. */
+export const SANDBOX_SKILL_PACKAGES_ROOT = "/skills";
+export const SANDBOX_SKILL_EXTENSIONS_ROOT = "/skill-extensions";
+export const SKILL_EXTENSIONS_WORKSPACE_PATH = ".sciencediscovery/skill-extensions";
+export const SKILL_PACKAGES_ENVIRONMENT_VARIABLE = "SCIENCEDISCOVERY_SKILLS_DIR";
+export const SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE = "SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR";
 
 export interface SkillLibrary {
   createdAt: string;

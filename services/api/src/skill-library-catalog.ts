@@ -730,19 +730,14 @@ export class SkillLibraryCatalog {
             size: resource.size,
           };
         },
-        readResourceBytes: (path: string) => {
-          const resource = detail.resources.find((item) => item.path === path);
-          const bytes = clonedFiles.get(path);
-          if (!resource || !bytes) throw validationError(`Skill resource not found: ${path}`);
-          return {
+        readPackageFiles: () => [...clonedFiles]
+          .map(([path, bytes]) => ({
             bytes: Buffer.from(bytes),
-            hash: resource.hash,
-            path: resource.path,
-            revision: detail.currentRevision,
-            skillId: detail.id,
-            size: resource.size,
-          };
-        },
+            hash: createHash("sha256").update(bytes).digest("hex"),
+            path,
+            size: bytes.length,
+          }))
+          .toSorted((left, right) => left.path.localeCompare(right.path)),
         resources: structuredClone(detail.resources),
         revision: detail.currentRevision,
         version: detail.version,
