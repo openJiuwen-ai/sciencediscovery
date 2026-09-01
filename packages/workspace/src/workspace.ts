@@ -78,6 +78,11 @@ export interface WorkspaceFileInfo {
   size: number;
 }
 
+export interface WorkspaceScanResult {
+  files: WorkspaceFileInfo[];
+  truncated: boolean;
+}
+
 export interface ToolFilterPolicy {
   allowed?: readonly string[] | null;
   disallowed?: readonly string[] | null;
@@ -409,15 +414,17 @@ function summarizeSpecialistsForTaskTool(
     .join("; ");
 }
 
-export async function scanWorkspace(workspaceRoot: string): Promise<WorkspaceFileInfo[]> {
+const MAX_WORKSPACE_SCAN_FILES = 500;
+
+export async function scanWorkspaceWithStatus(workspaceRoot: string): Promise<WorkspaceScanResult> {
   await mkdir(workspaceRoot, { recursive: true });
   const files: WorkspaceFileInfo[] = [];
 
   async function visit(directory: string): Promise<void> {
-    if (files.length >= 500) return;
+    if (files.length > MAX_WORKSPACE_SCAN_FILES) return;
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (files.length >= 500) break;
+      if (files.length > MAX_WORKSPACE_SCAN_FILES) break;
       const fullPath = resolve(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
@@ -435,7 +442,14 @@ export async function scanWorkspace(workspaceRoot: string): Promise<WorkspaceFil
   }
 
   await visit(resolve(workspaceRoot));
-  return files;
+  return {
+    files: files.slice(0, MAX_WORKSPACE_SCAN_FILES),
+    truncated: files.length > MAX_WORKSPACE_SCAN_FILES,
+  };
+}
+
+export async function scanWorkspace(workspaceRoot: string): Promise<WorkspaceFileInfo[]> {
+  return (await scanWorkspaceWithStatus(workspaceRoot)).files;
 }
 
 function yamlQuoted(value: string): string {

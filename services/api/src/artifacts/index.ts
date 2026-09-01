@@ -13,8 +13,15 @@
 // limitations under the License.
 
 import { createHash } from "node:crypto";
+import type { Stats } from "node:fs";
+import { lstat } from "node:fs/promises";
+import { relative, resolve, sep } from "node:path";
 
-import { normalizeWorkspaceRelativePath, scanWorkspace } from "@sciencediscovery/workspace";
+import {
+  normalizeWorkspaceRelativePath,
+  resolveWorkspaceFile,
+  scanWorkspaceWithStatus,
+} from "@sciencediscovery/workspace";
 import { classifyScientificArtifact } from "@sciencediscovery/schema";
 import type {
   ArtifactVersionDiff,
@@ -35,10 +42,43 @@ export function classifyWorkspaceFilePreview(path: string): WorkspaceFile["previ
   return classifyScientificArtifact(path);
 }
 
+async function workspaceFileMetadata(workspaceRoot: string, path: string): Promise<Stats | undefined> {
+  const root = resolve(workspaceRoot);
+  const target = resolveWorkspaceFile(root, path);
+  const segments = relative(root, target).split(sep).filter(Boolean);
+  let current = root;
+  let fileMetadata: Stats | undefined;
+  for (let index = 0; index < segments.length; index += 1) {
+    current = resolve(current, segments[index]!);
+    let metadata: Stats;
+    try {
+      metadata = await lstat(current);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+      throw error;
+    }
+    if (metadata.isSymbolicLink()) return undefined;
+    if (index < segments.length - 1) {
+      if (!metadata.isDirectory()) return undefined;
+    } else {
+      if (!metadata.isFile()) return undefined;
+      fileMetadata = metadata;
+    }
+  }
+  return fileMetadata;
+}
+
 export async function listWorkspaceFiles(store: SessionStore, sessionId: string): Promise<WorkspaceFile[]> {
   const baseline = store.snapshotWorkspaceFileRevisions(sessionId);
-  const files = await scanWorkspace(store.workspacePath(sessionId));
-  const provenance = await store.reconcileWorkspaceFiles(sessionId, files, baseline);
+  const scan = await scanWorkspaceWithStatus(store.workspacePath(sessionId));
+  const provenance = await store.reconcileWorkspaceFiles(
+    sessionId,
+    scan.files,
+    baseline,
+    { scanComplete: !scan.truncated },
+  );
+  const files = scan.files;
   return files.map((file) => {
     const previewKind = classifyWorkspaceFilePreview(file.path);
     const summary = provenance.get(file.path);
@@ -55,9 +95,16 @@ export async function workspaceFileProvenance(
   sessionId: string,
   pathInput: string,
 ): Promise<WorkspaceFileProvenance> {
-  const path = normalizeWorkspaceRelativePath(store.workspacePath(sessionId), pathInput);
-  const files = await listWorkspaceFiles(store, sessionId);
-  if (!files.some((file) => file.path === path)) throw new SessionStoreHttpError("Workspace file not found", 404);
+  const workspaceRoot = store.workspacePath(sessionId);
+  const path = normalizeWorkspaceRelativePath(workspaceRoot, pathInput);
+  const baseline = store.snapshotWorkspaceFileRevisions(sessionId);
+  const metadata = await workspaceFileMetadata(workspaceRoot, path);
+  if (!metadata) throw new SessionStoreHttpError("Workspace file not found", 404);
+  await store.reconcileWorkspaceFiles(sessionId, [{
+    modifiedAt: metadata.mtime.toISOString(),
+    path,
+    size: metadata.size,
+  }], baseline, { scanComplete: false });
   const provenance = store.getWorkspaceFileProvenance(sessionId, path);
   if (!provenance) throw new SessionStoreHttpError("Workspace file provenance not found", 404);
   return provenance;

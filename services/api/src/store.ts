@@ -2661,6 +2661,7 @@ export class SessionStore {
     sessionId: string,
     files: Array<Pick<WorkspaceFile, "modifiedAt" | "path" | "size">>,
     baseline?: ReadonlyMap<string, string>,
+    options: { scanComplete?: boolean } = {},
   ): Promise<Map<string, WorkspaceFileProvenanceSummary>> {
     const workspaceRoot = this.workspacePath(sessionId);
     const reconciliationBaseline = baseline ?? this.snapshotWorkspaceFileRevisions(sessionId);
@@ -2676,14 +2677,16 @@ export class SessionStore {
       const now = new Date().toISOString();
       let changed = false;
 
-      for (const record of this.catalog.workspaceFileRecords) {
-        if (record.sessionId === sessionId
-          && !record.deletedAt
-          && reconciliationBaseline.get(record.path) === record.currentRevisionId
-          && !scannedPaths.has(record.path)) {
-          record.deletedAt = now;
-          record.updatedAt = now;
-          changed = true;
+      if (options.scanComplete !== false) {
+        for (const record of this.catalog.workspaceFileRecords) {
+          if (record.sessionId === sessionId
+            && !record.deletedAt
+            && reconciliationBaseline.get(record.path) === record.currentRevisionId
+            && !scannedPaths.has(record.path)) {
+            record.deletedAt = now;
+            record.updatedAt = now;
+            changed = true;
+          }
         }
       }
 
