@@ -213,22 +213,35 @@ export async function loadOrCreateModelSecretKey(path: string): Promise<Buffer> 
   }
 }
 
-export function encryptModelApiToken(secretKey: Buffer, modelId: string, apiToken: string): string {
+/**
+ * Encrypt one stored credential. `context` names what the value belongs to and
+ * is authenticated with it, so a row copied between tables or between ids fails
+ * to decrypt rather than silently authenticating as something else.
+ */
+export function encryptSecretValue(secretKey: Buffer, context: string, value: string): string {
   const nonce = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", secretKey, nonce);
-  cipher.setAAD(Buffer.from(modelId));
-  const ciphertext = Buffer.concat([cipher.update(apiToken, "utf8"), cipher.final()]);
+  cipher.setAAD(Buffer.from(context));
+  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
   return [MODEL_SECRET_VERSION, nonce.toString("base64"), tag.toString("base64"), ciphertext.toString("base64")].join(".");
 }
 
-export function decryptModelApiToken(secretKey: Buffer, modelId: string, encrypted: string): string {
+export function decryptSecretValue(secretKey: Buffer, context: string, encrypted: string): string {
   const [version, nonce, tag, ciphertext] = encrypted.split(".");
   if (version !== MODEL_SECRET_VERSION || !nonce || !tag || ciphertext === undefined) {
-    throw new Error("The saved model credential has an unsupported format");
+    throw new Error("The saved credential has an unsupported format");
   }
   const decipher = createDecipheriv("aes-256-gcm", secretKey, Buffer.from(nonce, "base64"));
-  decipher.setAAD(Buffer.from(modelId));
+  decipher.setAAD(Buffer.from(context));
   decipher.setAuthTag(Buffer.from(tag, "base64"));
   return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64")), decipher.final()]).toString("utf8");
+}
+
+export function encryptModelApiToken(secretKey: Buffer, modelId: string, apiToken: string): string {
+  return encryptSecretValue(secretKey, modelId, apiToken);
+}
+
+export function decryptModelApiToken(secretKey: Buffer, modelId: string, encrypted: string): string {
+  return decryptSecretValue(secretKey, modelId, encrypted);
 }

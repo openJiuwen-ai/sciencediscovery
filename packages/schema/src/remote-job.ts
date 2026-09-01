@@ -22,6 +22,11 @@ export interface RemoteHostCapabilities {
   gpu: string | null;
   memoryBytes: number | null;
   modules: boolean;
+  /**
+   * Remote `node --version`, used to decide whether the product can deploy its
+   * own runner bundle to this host. `null` means no usable Node was found.
+   */
+  nodeVersion: string | null;
   /** Remote operating system reported by `uname -s`. F1 accepts Linux only. */
   platform: string | null;
   probedAt: string;
@@ -31,11 +36,34 @@ export interface RemoteHostCapabilities {
   slurm: boolean;
 }
 
+/**
+ * How the control plane reaches a remote runner.
+ *
+ * - `ssh`: the product opens an SSH session to `alias`, deploys the runner when
+ *   it is missing, and forwards a loopback port to the remote listener.
+ * - `direct`: the user started a runner themselves on another machine; the
+ *   product connects to `endpoint` and authenticates with a stored token.
+ */
+export type RemoteHostConnectionKind = "direct" | "ssh";
+
+export interface RemoteHostEndpoint {
+  /** IP address or hostname of a self-deployed runner. */
+  host: string;
+  port: number;
+  protocol: "http" | "https";
+}
+
 export interface RemoteHostTarget {
+  /** SSH config alias for `ssh` hosts; the user's label for `direct` hosts. */
   alias: string;
   capabilities?: RemoteHostCapabilities;
+  connectionKind: RemoteHostConnectionKind;
   createdAt: string;
+  /** Present only for `direct` hosts. */
+  endpoint?: RemoteHostEndpoint;
   error?: string;
+  /** Whether a connection token is stored for this host; the token itself never leaves the API. */
+  hasToken?: boolean;
   id: string;
   /** Pre-installed executable or absolute executable path; never a shell expression. */
   runnerCommand: string;
@@ -97,14 +125,22 @@ export interface RemoteJob {
 }
 
 export interface RegisterRemoteHostRequest {
+  /** SSH config alias, or the display label of a self-deployed runner. */
   alias: string;
+  connectionKind?: RemoteHostConnectionKind;
+  /** Required for `direct`: where the self-deployed runner listens. */
+  endpoint?: Partial<RemoteHostEndpoint>;
   runnerCommand?: string;
+  /** Required for `direct`: the runner's `SCIENCE_AGENT_RUNNER_TOKEN`. Stored encrypted, never returned. */
+  token?: string;
 }
 
 export type RemoteRunnerConnectionState = "connecting" | "disconnected" | "error" | "ready";
 
 export interface RemoteRunnerStatus {
   connectedAt?: string;
+  /** True when this connection deployed the runner bundle to the remote host. */
+  deployed?: boolean;
   error?: string;
   hostId: string;
   localVersion?: string;

@@ -26,9 +26,7 @@ import type {
   PermissionAuthorization,
   PermissionRequest,
   RemoteJob,
-  RemoteWorkspaceFile,
   RemoteWorkspaceSyncRecord,
-  RemoteWorkspaceSyncRequest,
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,
   Session,
@@ -81,26 +79,12 @@ export class SessionsApiClient extends ProjectsApiClient {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/remote-jobs/${encodeURIComponent(jobId)}/refresh`, { method: "POST" });
   }
 
-  listRemoteWorkspaceFiles(sessionId: string): Promise<RemoteWorkspaceFile[]> {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/remote-workspace/files`);
-  }
-
   deleteRemoteWorkspace(sessionId: string): Promise<{ deleted: boolean }> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/remote-workspace/delete`, { method: "DELETE" });
   }
 
   listRemoteWorkspaceSyncs(sessionId: string): Promise<RemoteWorkspaceSyncRecord[]> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/remote-workspace/sync-records`);
-  }
-
-  syncRemoteWorkspace(
-    sessionId: string,
-    body: RemoteWorkspaceSyncRequest,
-  ): Promise<{ files: string[]; record: RemoteWorkspaceSyncRecord }> {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/remote-workspace/sync`, {
-      body: JSON.stringify(body),
-      method: "POST",
-    });
   }
 
   updateSession(sessionId: string, body: UpdateSessionRequest): Promise<Session> {

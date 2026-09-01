@@ -20,7 +20,7 @@ test("explicit remote workspace push and pull preserve independent files and rec
   context.after(() => rm(root, { force: true, recursive: true }));
   const store = new SessionStore(root);
   await store.load();
-  const host = await store.registerRemoteHost("linux-runner", {
+  const host = await store.registerRemoteHost({ alias: "linux-runner", capabilities: {
     conda: false,
     containerRuntimes: [],
     cpuCores: 4,
@@ -28,12 +28,13 @@ test("explicit remote workspace push and pull preserve independent files and rec
     gpu: null,
     memoryBytes: 8 * 1024 ** 3,
     modules: false,
+    nodeVersion: null,
     platform: "Linux",
     probedAt: new Date().toISOString(),
     runnerCommandAvailable: true,
     scratchPaths: ["/tmp"],
     slurm: false,
-  });
+  } });
   const project = await store.createProject("Remote", {}, [host.id]);
   const session = await store.createSession(
     project.id,

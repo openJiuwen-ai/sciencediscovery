@@ -543,7 +543,11 @@ async function executeAgentRun(
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "The selected skills are not available");
   }
-  const skillPackagesRoot = activeSkills.length
+  // Skill packages are staged on the machine that owns the sandbox. A Session
+  // bound to a remote runner has no such directory there, so it keeps the
+  // instructions and reads resources through read_skill_resource instead of a
+  // mounted read-only package.
+  const skillPackagesRoot = activeSkills.length && !selectedRemoteHost
     ? store.skillPackagesPath(sessionId, skillPackageSetHash(activeSkills))
     : undefined;
   if (skillPackagesRoot) {
@@ -554,7 +558,7 @@ async function executeAgentRun(
     description,
     hash,
     id,
-    packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}`,
+    ...(skillPackagesRoot ? { packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}` } : {}),
     readResource,
     resources,
     revision,
@@ -1350,7 +1354,7 @@ async function executeAgentRun(
           const subagentConnectorIds = [...new Set([...settingsSnapshot.enabledConnectorIds, ...(specialist?.connectorIds ?? [])])];
           const subagentWorkspaceRoot = resolveWorkspaceFile(store.workspacePath(sessionId), handoff.privateWorkspacePath);
           const subagentSnapshots = skillCatalog.resolve(subagentSkillIds);
-          const subagentSkillPackagesRoot = subagentSnapshots.length
+          const subagentSkillPackagesRoot = subagentSnapshots.length && !selectedRemoteHost
             ? store.skillPackagesPath(sessionId, skillPackageSetHash(subagentSnapshots))
             : undefined;
           if (subagentSkillPackagesRoot) {
@@ -1361,7 +1365,7 @@ async function executeAgentRun(
             description,
             hash,
             id,
-            packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}`,
+            ...(subagentSkillPackagesRoot ? { packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}` } : {}),
             readResource,
             resources,
             revision,

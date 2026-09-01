@@ -1563,9 +1563,10 @@ test("propose_remote_job creates an approval card without executing remote comma
       alias: "cluster",
       capabilities: {
         conda: true, containerRuntimes: ["apptainer"], cpuCores: 32, cuda: null, gpu: null,
-        memoryBytes: 128 * 1024 ** 3, modules: true, platform: "Linux", probedAt: timestamp,
+        memoryBytes: 128 * 1024 ** 3, modules: true, nodeVersion: null, platform: "Linux", probedAt: timestamp,
         runnerCommandAvailable: true, scratchPaths: ["/scratch"], slurm: true,
       },
+      connectionKind: "ssh",
       createdAt: timestamp,
       id: "host-1",
       runnerCommand: "sciencediscovery-runner",

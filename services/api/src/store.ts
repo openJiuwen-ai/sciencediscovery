@@ -80,6 +80,8 @@ import type {
   ProxySettingsDetails,
   ResolvedProxy,
   RemoteHostCapabilities,
+  RemoteHostConnectionKind,
+  RemoteHostEndpoint,
   RemoteHostTarget,
   RemoteJob,
   RemoteWorkspaceSyncRecord,
@@ -192,12 +194,15 @@ import {
 } from "./store/sandbox-network.js";
 import {
   decryptModelApiToken,
+  decryptSecretValue,
   encryptModelApiToken,
+  encryptSecretValue,
   loadOrCreateModelSecretKey,
   normalizeApiToken,
   normalizeModelFactOverrides,
   validateLiveModel,
 } from "./store/secrets.js";
+import { normalizePersistedRemoteHost, normalizeRemoteHostEndpoint, remoteRunnerUnusableReason } from "./store/remote-hosts.js";
 import { planStandaloneProfileMigration, providerSecretKey, validateLiveProvider } from "./store/providers.js";
 import {
   knownConnectorIdSet,
@@ -478,6 +483,10 @@ export class SessionStore {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         encrypted_password TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS remote_host_secrets (
+        host_id TEXT PRIMARY KEY,
+        encrypted_token TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS permission_authorizations (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -754,17 +763,7 @@ export class SessionStore {
     const migratedSubagents = !Array.isArray(saved.subagents)
       || JSON.stringify(subagents) !== JSON.stringify(savedSubagents);
     const savedRemoteHosts = Array.isArray(saved.remoteHosts) ? saved.remoteHosts : [];
-    const remoteHosts = savedRemoteHosts.map((host) => ({
-      ...host,
-      capabilities: host.capabilities ? {
-        ...host.capabilities,
-        platform: typeof host.capabilities.platform === "string" ? host.capabilities.platform : null,
-        runnerCommandAvailable: host.capabilities.runnerCommandAvailable === true,
-      } : undefined,
-      runnerCommand: typeof host.runnerCommand === "string" && host.runnerCommand.trim()
-        ? host.runnerCommand.trim()
-        : "sciencediscovery-runner",
-    }));
+    const remoteHosts = savedRemoteHosts.map(normalizePersistedRemoteHost);
     const migratedRemoteHosts = JSON.stringify(remoteHosts) !== JSON.stringify(savedRemoteHosts);
     const remoteJobs = Array.isArray(saved.remoteJobs) ? saved.remoteJobs : [];
     const remoteWorkspaceSyncs = Array.isArray(saved.remoteWorkspaceSyncs) ? saved.remoteWorkspaceSyncs : [];
@@ -2318,11 +2317,10 @@ export class SessionStore {
     if (!Array.isArray(hostIds)) throw new Error("Project remote runner allowlist must be an array");
     const normalized = [...new Set(hostIds.map((id) => id.trim()).filter(Boolean))];
     for (const hostId of normalized) {
-      const host = this.catalog.remoteHosts.find((candidate) => candidate.id === hostId);
+      const host = this.getRemoteHost(hostId);
       if (!host) throw new Error(`Remote host not found: ${hostId}`);
-      if (host.status !== "ready" || host.capabilities?.platform !== "Linux" || !host.capabilities.runnerCommandAvailable) {
-        throw new Error(`Remote runner host must be a ready Linux host with the configured runner installed: ${host.alias}`);
-      }
+      const unusable = remoteRunnerUnusableReason(host);
+      if (unusable) throw new Error(`Remote runner host ${host.alias} cannot run Sessions: ${unusable}`);
     }
     return normalized;
   }
@@ -2332,8 +2330,9 @@ export class SessionStore {
     if (!project) throw new Error("Project not found");
     if (!project.remoteRunnerHostIds.includes(hostId)) throw new Error("Remote runner host is not allowed by this Project");
     const host = this.getRemoteHost(hostId);
-    if (!host || host.status !== "ready" || host.capabilities?.platform !== "Linux" || !host.capabilities.runnerCommandAvailable) {
-      throw new Error("Remote runner host is not a ready Linux host with the configured runner installed");
+    const unusable = host ? remoteRunnerUnusableReason(host) : "it no longer exists";
+    if (!host || unusable) {
+      throw new Error(`Remote runner host cannot run this Session: ${unusable}`);
     }
     return host;
   }
@@ -3298,30 +3297,42 @@ export class SessionStore {
   }
 
   listRemoteHosts(): RemoteHostTarget[] {
-    return structuredClone(this.catalog.remoteHosts).toSorted((left, right) => left.alias.localeCompare(right.alias));
+    return structuredClone(this.catalog.remoteHosts)
+      .map((host) => ({ ...host, hasToken: this.remoteHostToken(host.id) !== undefined }))
+      .toSorted((left, right) => left.alias.localeCompare(right.alias));
   }
 
   getRemoteHost(hostId: string): RemoteHostTarget | undefined {
     const host = this.catalog.remoteHosts.find((candidate) => candidate.id === hostId);
-    return host ? structuredClone(host) : undefined;
+    return host ? { ...structuredClone(host), hasToken: this.remoteHostToken(hostId) !== undefined } : undefined;
   }
 
-  async registerRemoteHost(
-    aliasValue: string,
-    capabilities?: RemoteHostCapabilities,
-    error?: string,
-    runnerCommandValue = "sciencediscovery-runner",
-  ): Promise<RemoteHostTarget> {
-    const alias = aliasValue.trim();
+  async registerRemoteHost(input: {
+    alias: string;
+    capabilities?: RemoteHostCapabilities;
+    connectionKind?: RemoteHostConnectionKind;
+    endpoint?: RemoteHostEndpoint;
+    error?: string;
+    runnerCommand?: string;
+    /** Connection token of a self-deployed runner; `undefined` keeps the stored one. */
+    token?: string;
+  }): Promise<RemoteHostTarget> {
+    const alias = input.alias.trim();
     if (!/^[A-Za-z0-9._-]{1,255}$/.test(alias)) throw new Error("Invalid SSH host alias");
-    const runnerCommand = runnerCommandValue.trim();
+    const runnerCommand = (input.runnerCommand ?? "sciencediscovery-runner").trim();
     if (!/^(?:[A-Za-z0-9._-]+|\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+)$/.test(runnerCommand)) {
       throw new Error("Invalid remote runner executable");
     }
+    const connectionKind = input.connectionKind ?? "ssh";
+    const endpoint = connectionKind === "direct" ? normalizeRemoteHostEndpoint(input.endpoint) : undefined;
     const now = new Date().toISOString();
     const existing = this.catalog.remoteHosts.find((host) => host.alias === alias);
+    if (existing && existing.connectionKind !== connectionKind) {
+      throw new Error(`A ${existing.connectionKind === "ssh" ? "SSH" : "self-deployed"} runner named ${alias} already exists`);
+    }
     const host: RemoteHostTarget = existing ?? {
       alias,
+      connectionKind,
       createdAt: now,
       id: randomUUID(),
       runnerCommand,
@@ -3330,17 +3341,46 @@ export class SessionStore {
     };
     host.updatedAt = now;
     host.runnerCommand = runnerCommand;
-    if (capabilities) {
-      host.capabilities = structuredClone(capabilities);
+    if (endpoint) host.endpoint = endpoint;
+    if (input.capabilities) {
+      host.capabilities = structuredClone(input.capabilities);
       host.status = "ready";
       delete host.error;
     } else {
       host.status = "error";
-      host.error = error?.slice(0, 2_000) || "SSH probe failed";
+      host.error = input.error?.slice(0, 2_000) || "SSH probe failed";
     }
     if (!existing) this.catalog.remoteHosts.push(host);
+    if (input.token !== undefined) this.setRemoteHostToken(host.id, input.token);
+    host.hasToken = this.remoteHostToken(host.id) !== undefined;
     await this.saveCatalog();
     return structuredClone(host);
+  }
+
+  /**
+   * The connection token of a self-deployed runner. It stays encrypted beside
+   * the model credentials and is never written to the catalog JSON or returned
+   * over HTTP; only the outbound runner connection reads it back.
+   */
+  remoteHostToken(hostId: string): string | undefined {
+    if (!this.database || !this.secretKey) return undefined;
+    const row = this.database.prepare("SELECT encrypted_token FROM remote_host_secrets WHERE host_id = ?")
+      .get(hostId) as { encrypted_token: string } | undefined;
+    return row ? decryptSecretValue(this.secretKey, `remote-host:${hostId}`, row.encrypted_token) : undefined;
+  }
+
+  private setRemoteHostToken(hostId: string, token: string): void {
+    if (!this.database || !this.secretKey) throw new Error("Remote host credential storage is not initialized");
+    const normalized = token.trim();
+    if (!normalized) {
+      this.database.prepare("DELETE FROM remote_host_secrets WHERE host_id = ?").run(hostId);
+      return;
+    }
+    if (normalized.length > 4_096) throw new Error("The runner connection token is too long");
+    this.database.prepare(
+      "INSERT INTO remote_host_secrets (host_id, encrypted_token) VALUES (?, ?)"
+      + " ON CONFLICT(host_id) DO UPDATE SET encrypted_token = excluded.encrypted_token",
+    ).run(hostId, encryptSecretValue(this.secretKey, `remote-host:${hostId}`, normalized));
   }
 
   async deleteRemoteHost(hostId: string): Promise<void> {
@@ -3352,6 +3392,7 @@ export class SessionStore {
       throw new Error("Remote host is allowed by a Project and cannot be deleted");
     }
     this.catalog.remoteHosts = this.catalog.remoteHosts.filter((host) => host.id !== hostId);
+    this.database?.prepare("DELETE FROM remote_host_secrets WHERE host_id = ?").run(hostId);
     await this.saveCatalog();
   }
 

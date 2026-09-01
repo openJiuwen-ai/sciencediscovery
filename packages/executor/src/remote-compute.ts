@@ -21,11 +21,13 @@ import { createServer } from "node:net";
 
 import type {
   RemoteHostCapabilities,
+  RemoteHostEndpoint,
   RemoteHostTarget,
   RemoteJob,
   RemoteJobOutputRecord,
   RemoteRunnerStatus,
 } from "@sciencediscovery/schema";
+import { RUNNER_BUNDLE_ENTRY, type RunnerBundle } from "./runner-bundle.js";
 import { RunnerClient } from "./runner-client.js";
 
 const MAX_SSH_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -187,6 +189,7 @@ printf 'containers='; found=''; for runtime in apptainer singularity docker podm
 printf 'scratch='; found=''; for path in /scratch /tmp "\${SCRATCH:-}"; do if [ -n "$path" ] && [ -d "$path" ] && [ -w "$path" ]; then found="\${found}\${found:+,}$path"; fi; done; printf '%s\n' "$found"
 printf 'sbatch='; if command -v sbatch >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi
 printf 'runner='; if command -v -- ${shellQuote(runnerCommand)} >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi
+printf 'node='; if command -v node >/dev/null 2>&1; then node --version 2>/dev/null || printf '\n'; else printf '\n'; fi
 `;
 }
 
@@ -205,6 +208,7 @@ function parseProbe(stdout: string): RemoteHostCapabilities {
     gpu: values.get("gpu")?.trim() || null,
     memoryBytes: Number.isSafeInteger(memoryKib) && memoryKib > 0 ? memoryKib * 1024 : null,
     modules: values.get("modules") === "1",
+    nodeVersion: values.get("node")?.trim() || null,
     platform: values.get("platform")?.trim() || null,
     probedAt: new Date().toISOString(),
     runnerCommandAvailable: values.get("runner") === "1",
@@ -213,10 +217,68 @@ function parseProbe(stdout: string): RemoteHostCapabilities {
   };
 }
 
+export interface RemoteRunnerConnectOptions {
+  /**
+   * Deployable runner tree used when the SSH host has no pre-installed runner.
+   * Omitting it keeps the pre-installed-only behaviour.
+   */
+  bundle?: RunnerBundle;
+  /** Local runner version, reported beside the remote one so differences show. */
+  localVersion?: string;
+  /** Connection token of a self-deployed runner; required for `direct` hosts. */
+  token?: string;
+}
+
+/** Where the product keeps its own files on a remote host. */
+function remoteDataDirScript(): string {
+  return "data_dir=\"${XDG_DATA_HOME:-$HOME/.local/share}/sciencediscovery/remote-runner\"";
+}
+
+/**
+ * Install the runner bundle under the remote data directory.
+ *
+ * The archive travels inside the shell script as a quoted here-document, which
+ * keeps every line short — a single multi-megabyte argument is what a remote
+ * `sh` is least likely to accept. The extracted tree is swapped into place only
+ * after it is complete, so an interrupted transfer cannot leave a half-written
+ * runner behind, and a host that already carries this bundle id is skipped.
+ */
+function deployScript(bundle: RunnerBundle): string[] {
+  const payload = bundle.archive.toString("base64").replaceAll(/(.{76})/g, "$1\n");
+  return [
+    "app_dir=\"$data_dir/app\"",
+    `if [ -f "$app_dir/.deployment-id" ] && [ "$(cat "$app_dir/.deployment-id")" = ${shellQuote(bundle.id)} ]; then`,
+    "  printf 'deploy=reused\\n'",
+    "else",
+    "  command -v tar >/dev/null 2>&1 || { echo 'tar is required to deploy the ScienceDiscovery runner' >&2; exit 1; }",
+    "  command -v base64 >/dev/null 2>&1 || { echo 'base64 is required to deploy the ScienceDiscovery runner' >&2; exit 1; }",
+    "  stage=\"$data_dir/.stage\"",
+    "  rm -rf -- \"$stage\"",
+    "  mkdir -p -- \"$stage\"",
+    "  base64 -d > \"$stage/bundle.tar.gz\" <<'SCIENCEDISCOVERY_RUNNER_BUNDLE'",
+    payload,
+    "SCIENCEDISCOVERY_RUNNER_BUNDLE",
+    "  tar -xzf \"$stage/bundle.tar.gz\" -C \"$stage\"",
+    "  rm -f -- \"$stage/bundle.tar.gz\"",
+    `  printf '%s' ${shellQuote(bundle.id)} > "$stage/.deployment-id"`,
+    "  rm -rf -- \"$data_dir/.previous\"",
+    "  if [ -d \"$app_dir\" ]; then mv -- \"$app_dir\" \"$data_dir/.previous\"; fi",
+    "  mv -- \"$stage\" \"$app_dir\"",
+    "  rm -rf -- \"$data_dir/.previous\"",
+    "  printf 'deploy=installed\\n'",
+    "fi",
+  ];
+}
+
+function directBaseUrl(endpoint: RemoteHostEndpoint): string {
+  const authority = endpoint.host.includes(":") ? `[${endpoint.host}]` : endpoint.host;
+  return `${endpoint.protocol}://${authority}:${endpoint.port}`;
+}
+
 export class RemoteComputeClient {
   readonly transport: RemoteTransport;
   private readonly runnerConnections = new Map<string, {
-    child: ReturnType<typeof spawn>;
+    child?: ReturnType<typeof spawn>;
     client: RunnerClient;
     status: RemoteRunnerStatus;
   }>();
@@ -246,6 +308,35 @@ export class RemoteComputeClient {
     return parseProbe(result.stdout);
   }
 
+  /**
+   * Capabilities of a runner the user deployed themselves. There is no shell on
+   * this path, so the runner's own health report is the only source; the token
+   * is exercised against an authenticated endpoint so registering with a wrong
+   * token fails here rather than at the first execution.
+   */
+  async probeDirect(endpoint: RemoteHostEndpoint, token: string): Promise<RemoteHostCapabilities> {
+    const client = new RunnerClient(directBaseUrl(endpoint), token);
+    const health = await client.health();
+    await client.status().catch(() => {
+      throw new Error("The runner rejected this token");
+    });
+    return {
+      conda: false,
+      containerRuntimes: [],
+      cpuCores: null,
+      cuda: null,
+      gpu: null,
+      memoryBytes: null,
+      modules: false,
+      nodeVersion: null,
+      platform: health.platform === "linux" ? "Linux" : health.platform,
+      probedAt: new Date().toISOString(),
+      runnerCommandAvailable: true,
+      scratchPaths: [],
+      slurm: false,
+    };
+  }
+
   runnerStatus(hostId: string): RemoteRunnerStatus {
     return structuredClone(this.runnerStatuses.get(hostId) ?? { hostId, state: "disconnected" });
   }
@@ -256,16 +347,117 @@ export class RemoteComputeClient {
     return connection.client;
   }
 
-  async connectRunner(host: RemoteHostTarget, localVersion?: string): Promise<RemoteRunnerStatus> {
-    if (host.status !== "ready" || !host.capabilities) throw new Error("Remote host is not ready");
-    if (host.capabilities.platform !== "Linux") throw new Error("SSH remote runner supports Linux hosts only");
-    if (!host.capabilities.runnerCommandAvailable) {
-      throw new Error(`Pre-installed remote runner executable was not found: ${host.runnerCommand}`);
-    }
-    await this.disconnectRunner(host.id);
+  /**
+   * Make sure the remote host has a runner to start, and report where it lives.
+   *
+   * A pre-installed executable is used as-is. Otherwise the product deploys the
+   * runner it ships with, keyed by the bundle's content hash, so reconnecting to
+   * an already-deployed host transfers nothing.
+   */
+  private async prepareSshRunner(host: RemoteHostTarget, bundle?: RunnerBundle): Promise<{
+    dataDir: string;
+    deployed: boolean;
+    startCommand: string;
+  }> {
+    const capabilities = host.capabilities!;
     const runnerCommand = validateRunnerCommand(host.runnerCommand);
-    const status: RemoteRunnerStatus = { hostId: host.id, ...(localVersion ? { localVersion } : {}), state: "connecting" };
+    const deploy = !capabilities.runnerCommandAvailable;
+    if (deploy) {
+      if (!bundle) throw new Error(`Pre-installed remote runner executable was not found: ${host.runnerCommand}`);
+      const major = Number(/^v(\d+)\./.exec(capabilities.nodeVersion ?? "")?.[1]);
+      if (!Number.isSafeInteger(major) || major < 22) {
+        throw new Error(
+          `Automatic deployment needs Node.js 22 or newer on ${host.alias} (found ${capabilities.nodeVersion ?? "none"}).`
+          + ` Install Node.js there, install ${host.runnerCommand}, or register the machine as a self-deployed runner instead.`,
+        );
+      }
+    }
+    const script = [
+      "set -eu",
+      "test \"$(uname -s)\" = Linux",
+      remoteDataDirScript(),
+      "mkdir -p -- \"$data_dir/run\"",
+      "chmod 700 -- \"$data_dir\" \"$data_dir/run\"",
+      // Sockets of runners whose SSH session died days ago are the only files
+      // this ever removes; a live connection keeps its socket mtime fresh.
+      "find \"$data_dir/run\" -maxdepth 1 -type s -mmin +1440 -delete 2>/dev/null || true",
+      ...(deploy ? deployScript(bundle!) : []),
+      "printf 'data_dir=%s\\n' \"$data_dir\"",
+      "",
+    ].join("\n");
+    const result = await this.transport.run(validateAlias(host.alias), script, 180_000);
+    if (result.exitCode !== 0) {
+      throw new Error(`Remote runner deployment failed (${result.exitCode}): ${describeSshFailure(result.stderr, "the SSH command failed")}`);
+    }
+    const dataDir = /^data_dir=(.+)$/m.exec(result.stdout)?.[1]?.trim();
+    if (!dataDir?.startsWith("/")) throw new Error("The remote host did not report its ScienceDiscovery data directory");
+    return {
+      dataDir,
+      deployed: deploy,
+      startCommand: deploy
+        ? `node ${shellQuote(`${dataDir}/app/${RUNNER_BUNDLE_ENTRY}`)}`
+        : shellQuote(runnerCommand),
+    };
+  }
+
+  async connectRunner(host: RemoteHostTarget, options: RemoteRunnerConnectOptions = {}): Promise<RemoteRunnerStatus> {
+    const { localVersion } = options;
+    if (host.status !== "ready" || !host.capabilities) throw new Error("Remote host is not ready");
+    await this.disconnectRunner(host.id);
+    this.runnerStatuses.set(host.id, { hostId: host.id, ...(localVersion ? { localVersion } : {}), state: "connecting" });
+    try {
+      return host.connectionKind === "direct"
+        ? await this.connectDirectRunner(host, options)
+        : await this.connectSshRunner(host, options);
+    } catch (error) {
+      const failed: RemoteRunnerStatus = {
+        error: error instanceof Error ? error.message : "Remote runner connection failed",
+        hostId: host.id,
+        ...(localVersion ? { localVersion } : {}),
+        state: "error",
+      };
+      this.runnerStatuses.set(host.id, failed);
+      return structuredClone(failed);
+    }
+  }
+
+  /**
+   * Connect to a runner the user started on another machine. The token is the
+   * whole access control here, so it is checked against an authenticated
+   * endpoint before the connection counts as ready: `/health` is deliberately
+   * unauthenticated and would accept any token.
+   */
+  private async connectDirectRunner(host: RemoteHostTarget, options: RemoteRunnerConnectOptions): Promise<RemoteRunnerStatus> {
+    if (!host.endpoint) throw new Error("This runner has no address; re-register it with an IP address and port");
+    const token = options.token?.trim();
+    if (!token) throw new Error("This runner needs its connection token; re-register the machine with the token it was started with");
+    const client = new RunnerClient(directBaseUrl(host.endpoint), token);
+    const health = await client.health().catch((error: unknown) => {
+      throw new Error(`Could not reach the runner at ${host.endpoint!.host}:${host.endpoint!.port}: ${error instanceof Error ? error.message : "connection failed"}`);
+    });
+    if (health.platform !== "linux") {
+      throw new Error(`Remote runners must run on Linux; ${host.alias} reports ${health.platform}`);
+    }
+    await client.status().catch(() => {
+      throw new Error("The runner rejected this token. Re-register the machine with the token it was started with.");
+    });
+    const status: RemoteRunnerStatus = {
+      connectedAt: new Date().toISOString(),
+      hostId: host.id,
+      ...(options.localVersion ? { localVersion: options.localVersion } : {}),
+      remoteVersion: health.runnerVersion,
+      state: "ready",
+      ...(options.localVersion ? { versionMismatch: options.localVersion !== health.runnerVersion } : {}),
+    };
+    this.runnerConnections.set(host.id, { client, status });
     this.runnerStatuses.set(host.id, status);
+    return structuredClone(status);
+  }
+
+  private async connectSshRunner(host: RemoteHostTarget, options: RemoteRunnerConnectOptions): Promise<RemoteRunnerStatus> {
+    const { localVersion } = options;
+    if (host.capabilities!.platform !== "Linux") throw new Error("SSH remote runner supports Linux hosts only");
+    const prepared = await this.prepareSshRunner(host, options.bundle);
     const localPort = await new Promise<number>((resolvePort, reject) => {
       const reservation = createServer();
       reservation.once("error", reject);
@@ -276,22 +468,32 @@ export class RemoteComputeClient {
       });
     });
     const token = randomBytes(32).toString("base64url");
-    const remotePort = 4311;
+    // The runner listens on a per-connection Unix socket instead of a port, so
+    // the remote host exposes nothing to its network and two connections never
+    // collide on one address.
+    const socketPath = `${prepared.dataDir}/run/${randomBytes(8).toString("hex")}.sock`;
+    if (Buffer.byteLength(socketPath) > 100) {
+      throw new Error(`The remote data directory path is too long for a Unix socket: ${prepared.dataDir}`);
+    }
     const script = [
       "set -eu",
       "test \"$(uname -s)\" = Linux",
-      "data_dir=\"${XDG_DATA_HOME:-$HOME/.local/share}/sciencediscovery/remote-runner\"",
-      "mkdir -p -- \"$data_dir\"",
-      `exec env SCIENCE_AGENT_RUNNER_HOST=127.0.0.1 SCIENCE_AGENT_RUNNER_PORT=${remotePort} SCIENCE_AGENT_RUNNER_TOKEN=${shellQuote(token)} SCIENCE_AGENT_DATA_DIR=\"$data_dir\" ${shellQuote(runnerCommand)}`,
+      `exec env SCIENCE_AGENT_RUNNER_SOCKET=${shellQuote(socketPath)} SCIENCE_AGENT_RUNNER_TOKEN=${shellQuote(token)} SCIENCE_AGENT_DATA_DIR=${shellQuote(prepared.dataDir)} ${prepared.startCommand}`,
       "",
     ].join("\n");
     const child = spawn(this.sshPath, [
       ...sshConnectionArguments(this.sshConfigPath),
       "-o", "ExitOnForwardFailure=yes",
-      "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
+      "-L", `127.0.0.1:${localPort}:${socketPath}`,
+      // Force a pseudo-terminal so the remote runner is hung up when this
+      // connection ends. Without one, sshd only closes the channel and the
+      // runner keeps running on the host after a disconnect or an API crash,
+      // which is exactly the process this product must not leave behind.
+      "-tt",
       "--", validateAlias(host.alias), "sh", "-s",
     ], { stdio: ["pipe", "ignore", "pipe"] });
     const client = new RunnerClient(`http://127.0.0.1:${localPort}`, token);
+    const status: RemoteRunnerStatus = { hostId: host.id, ...(localVersion ? { localVersion } : {}), state: "connecting" };
     const connection = { child, client, status };
     this.runnerConnections.set(host.id, connection);
     let stderr = "";
@@ -311,7 +513,7 @@ export class RemoteComputeClient {
       });
     });
     child.stdin?.end(script);
-    const deadline = Date.now() + 15_000;
+    const deadline = Date.now() + 30_000;
     try {
       let health;
       while (Date.now() < deadline) {
@@ -325,9 +527,10 @@ export class RemoteComputeClient {
           await new Promise((resolveWait) => setTimeout(resolveWait, 150));
         }
       }
-      if (!health) throw new Error(stderr.trim() || "Remote runner did not become ready within 15 seconds");
+      if (!health) throw new Error(stderr.trim() || "Remote runner did not become ready within 30 seconds");
       connection.status = {
         connectedAt: new Date().toISOString(),
+        ...(prepared.deployed ? { deployed: true } : {}),
         hostId: host.id,
         ...(localVersion ? { localVersion } : {}),
         remoteVersion: health.runnerVersion,
@@ -339,14 +542,7 @@ export class RemoteComputeClient {
     } catch (error) {
       child.kill("SIGTERM");
       this.runnerConnections.delete(host.id);
-      const failed: RemoteRunnerStatus = {
-        error: error instanceof Error ? error.message : "Remote runner connection failed",
-        hostId: host.id,
-        ...(localVersion ? { localVersion } : {}),
-        state: "error",
-      };
-      this.runnerStatuses.set(host.id, failed);
-      return structuredClone(failed);
+      throw error;
     }
   }
 
@@ -354,7 +550,7 @@ export class RemoteComputeClient {
     const connection = this.runnerConnections.get(hostId);
     if (connection) {
       this.runnerConnections.delete(hostId);
-      connection.child.kill("SIGTERM");
+      connection.child?.kill("SIGTERM");
     }
     const status: RemoteRunnerStatus = { hostId, state: "disconnected" };
     this.runnerStatuses.set(hostId, status);
@@ -362,7 +558,7 @@ export class RemoteComputeClient {
   }
 
   close(): void {
-    for (const connection of this.runnerConnections.values()) connection.child.kill("SIGTERM");
+    for (const connection of this.runnerConnections.values()) connection.child?.kill("SIGTERM");
     this.runnerConnections.clear();
   }
 

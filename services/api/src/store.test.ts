@@ -2849,7 +2849,7 @@ test("Project allowlists gate a Session's fixed Linux remote runner", async (con
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
   const store = new SessionStore(tempRoot);
   await store.load();
-  const host = await store.registerRemoteHost("linux-runner", {
+  const host = await store.registerRemoteHost({ alias: "linux-runner", capabilities: {
     conda: true,
     containerRuntimes: [],
     cpuCores: 8,
@@ -2857,24 +2857,25 @@ test("Project allowlists gate a Session's fixed Linux remote runner", async (con
     gpu: null,
     memoryBytes: 16 * 1024 ** 3,
     modules: false,
+    nodeVersion: null,
     platform: "Linux",
     probedAt: new Date().toISOString(),
     runnerCommandAvailable: true,
     scratchPaths: ["/tmp"],
     slurm: false,
-  });
+  } });
   const project = await store.createProject("Remote runner project");
   await assert.rejects(
     store.createSession(project.id, "Blocked", {}, { remoteRunnerHostId: host.id }, { allowUnconfiguredModel: true }),
     /not allowed by this Project/,
   );
-  const missingRunner = await store.registerRemoteHost("linux-without-runner", {
+  const missingRunner = await store.registerRemoteHost({ alias: "linux-without-runner", capabilities: {
     ...host.capabilities!,
     runnerCommandAvailable: false,
-  });
+  } });
   await assert.rejects(
     store.updateProject(project.id, { remoteRunnerHostIds: [missingRunner.id] }),
-    /configured runner installed/,
+    /no runner can be deployed there/,
   );
   const allowed = await store.updateProject(project.id, { remoteRunnerHostIds: [host.id] });
   assert.deepEqual(allowed.remoteRunnerHostIds, [host.id]);
@@ -2903,7 +2904,7 @@ test("SessionStore auto-submits remote jobs and keeps manual jobs independently 
     model: "science-model",
     name: "Remote test model",
   });
-  const host = await store.registerRemoteHost("cluster", {
+  const host = await store.registerRemoteHost({ alias: "cluster", capabilities: {
     conda: true,
     containerRuntimes: ["apptainer"],
     cpuCores: 64,
@@ -2911,12 +2912,13 @@ test("SessionStore auto-submits remote jobs and keeps manual jobs independently 
     gpu: null,
     memoryBytes: 512 * 1024 ** 3,
     modules: true,
+    nodeVersion: null,
     platform: "Linux",
     probedAt: new Date().toISOString(),
     runnerCommandAvailable: true,
     scratchPaths: ["/scratch"],
     slurm: true,
-  });
+  } });
   const project = await store.createProject("Remote work", { modelId: model.id, reviewModelId: model.id });
   const session = await store.createSession(project.id, "Remote analysis", {}, { approvalMode: "always_allow" });
   const job = await store.createRemoteJob(session.id, {
@@ -3800,4 +3802,80 @@ test("a catalog that stored the removed catalog-only mode is migrated to asking 
     modelDiscovery: "manual" as never,
   });
   assert.equal(updated.modelDiscovery, "openai-models");
+});
+
+test("a self-deployed runner keeps its token out of the catalog and loses it with the host", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-direct-runner-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const host = await store.registerRemoteHost({
+    alias: "lab-workstation",
+    capabilities: {
+      conda: false, containerRuntimes: [], cpuCores: null, cuda: null, gpu: null, memoryBytes: null,
+      modules: false, nodeVersion: null, platform: "Linux", probedAt: new Date().toISOString(),
+      runnerCommandAvailable: true, scratchPaths: [], slurm: false,
+    },
+    connectionKind: "direct",
+    endpoint: { host: "192.168.1.20", port: 4311, protocol: "http" },
+    token: "runner-connection-token",
+  });
+  assert.equal(host.connectionKind, "direct");
+  assert.equal(host.endpoint?.port, 4311);
+  assert.equal(host.hasToken, true);
+  assert.equal(JSON.stringify(host).includes("runner-connection-token"), false);
+  assert.equal(store.remoteHostToken(host.id), "runner-connection-token");
+
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
+  const catalogJson = (database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string }).json;
+  assert.equal(catalogJson.includes("runner-connection-token"), false);
+  const secret = database.prepare("SELECT encrypted_token FROM remote_host_secrets WHERE host_id = ?")
+    .get(host.id) as { encrypted_token: string };
+  assert.equal(secret.encrypted_token.includes("runner-connection-token"), false);
+  database.close();
+
+  // Re-registering without a token keeps the stored one rather than clearing it.
+  const reprobed = await store.registerRemoteHost({
+    alias: "lab-workstation",
+    capabilities: host.capabilities!,
+    connectionKind: "direct",
+    endpoint: host.endpoint!,
+  });
+  assert.equal(reprobed.id, host.id);
+  assert.equal(store.remoteHostToken(host.id), "runner-connection-token");
+
+  await assert.rejects(
+    store.registerRemoteHost({ alias: "lab-workstation", connectionKind: "ssh" }),
+    /already exists/,
+  );
+  await assert.rejects(
+    store.registerRemoteHost({ alias: "broken", connectionKind: "direct", endpoint: { host: "192.168.1.20", port: 0, protocol: "http" }, token: "t" }),
+    /between 1 and 65535/,
+  );
+
+  await store.deleteRemoteHost(host.id);
+  assert.equal(store.remoteHostToken(host.id), undefined);
+});
+
+test("hosts saved before self-deployed runners existed load as SSH targets", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-legacy-remote-host-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  await store.registerRemoteHost({ alias: "cluster", error: "probe failed" });
+
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  const saved = JSON.parse((database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string }).json) as {
+    remoteHosts: Array<Record<string, unknown>>;
+  };
+  for (const host of saved.remoteHosts) delete host.connectionKind;
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(saved));
+  database.close();
+
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.equal(reloaded.listRemoteHosts()[0]?.connectionKind, "ssh");
 });

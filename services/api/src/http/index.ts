@@ -23,7 +23,8 @@ import {
   WORKSPACE_SYSTEM_PROMPT_VERSION,
 } from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
-import type { RunnerClient } from "@sciencediscovery/executor";
+import type { RunnerBundle, RunnerClient } from "@sciencediscovery/executor";
+import { packRunnerBundle } from "@sciencediscovery/executor";
 import {
   listProviderModels,
   ModelCatalogFetchError,
@@ -124,6 +125,7 @@ import type {
   WorkspaceCapabilities,
   WorkspaceUploadResult,
   RegisterRemoteHostRequest,
+  RemoteHostTarget,
   RemoteWorkspaceSyncRequest,
   PromptManifest,
   ProposePlanRequest,
@@ -139,6 +141,7 @@ import {
 
 import { SessionStoreHttpError } from "../store.js";
 import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
+import { normalizeRemoteHostEndpoint } from "../store/remote-hosts.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import {
   parseConflictPolicy,
@@ -336,6 +339,55 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
     .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
     .then(() => undefined);
+
+  /**
+   * Register or re-probe one execution machine.
+   *
+   * An SSH target is probed over SSH; a self-deployed runner is probed by
+   * talking to it with the token the user supplied. Either way a failed probe
+   * still stores the host, so the settings page can show why it is unusable
+   * instead of losing what the user typed.
+   */
+  const registerRemoteHost = async (body: RegisterRemoteHostRequest): Promise<RemoteHostTarget> => {
+    const alias = body.alias?.trim() ?? "";
+    const runnerCommand = body.runnerCommand?.trim() || "sciencediscovery-runner";
+    if (body.connectionKind === "direct") {
+      const endpoint = normalizeRemoteHostEndpoint(body.endpoint);
+      const existing = store.listRemoteHosts().find((host) => host.alias === alias);
+      const token = body.token?.trim() || (existing ? store.remoteHostToken(existing.id) : undefined);
+      if (!token) throw new ApiStatusError(400, "A self-deployed runner needs the token it was started with");
+      const common = { alias, connectionKind: "direct" as const, endpoint, runnerCommand, token };
+      try {
+        return await store.registerRemoteHost({ ...common, capabilities: await remoteCompute.probeDirect(endpoint, token) });
+      } catch (error) {
+        if (error instanceof ApiStatusError) throw error;
+        return await store.registerRemoteHost({
+          ...common,
+          error: error instanceof Error ? error.message : "The runner did not answer",
+        });
+      }
+    }
+    const common = { alias, connectionKind: "ssh" as const, runnerCommand };
+    try {
+      return await store.registerRemoteHost({ ...common, capabilities: await remoteCompute.probe(alias, runnerCommand) });
+    } catch (error) {
+      return await store.registerRemoteHost({
+        ...common,
+        error: error instanceof Error ? error.message : "SSH probe failed",
+      });
+    }
+  };
+
+  /**
+   * The runner tree deployed to SSH hosts that have none. Packing it reads the
+   * product's own installation, so it is done once and reused: the bundle only
+   * changes when the product itself is replaced.
+   */
+  let runnerBundle: Promise<RunnerBundle> | undefined;
+  const deployableRunnerBundle = async (): Promise<RunnerBundle | undefined> => {
+    runnerBundle ??= packRunnerBundle();
+    return await runnerBundle.catch(() => undefined);
+  };
 
   const server = createServer(async (request, response) => {
     const requestPath = (request.url ?? "/").split("?", 1)[0] || "/";
@@ -781,35 +833,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "POST" && url.pathname === "/api/remote-hosts") {
         const body = await readJson<RegisterRemoteHostRequest>(request);
-        const runnerCommand = body.runnerCommand?.trim() || "sciencediscovery-runner";
-        try {
-          const capabilities = await remoteCompute.probe(body.alias ?? "", runnerCommand);
-          sendJson(response, 201, await store.registerRemoteHost(body.alias, capabilities, undefined, runnerCommand));
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "SSH probe failed";
-          sendJson(response, 201, await store.registerRemoteHost(body.alias ?? "", undefined, message, runnerCommand));
-        }
+        sendJson(response, 201, await registerRemoteHost(body));
         return;
       }
       const remoteHostProbeMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/probe$/);
       if (remoteHostProbeMatch && request.method === "POST") {
         const host = store.getRemoteHost(remoteHostProbeMatch[1]!);
         if (!host) return sendError(response, 404, "Remote host not found");
-        try {
-          sendJson(response, 200, await store.registerRemoteHost(
-            host.alias,
-            await remoteCompute.probe(host.alias, host.runnerCommand),
-            undefined,
-            host.runnerCommand,
-          ));
-        } catch (error) {
-          sendJson(response, 200, await store.registerRemoteHost(
-            host.alias,
-            undefined,
-            error instanceof Error ? error.message : "SSH probe failed",
-            host.runnerCommand,
-          ));
-        }
+        sendJson(response, 200, await registerRemoteHost({
+          alias: host.alias,
+          connectionKind: host.connectionKind,
+          ...(host.endpoint ? { endpoint: host.endpoint } : {}),
+          runnerCommand: host.runnerCommand,
+        }));
         return;
       }
       const remoteHostMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)$/);
@@ -828,7 +864,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return;
         }
         const localVersion = (await runnerClient.health().catch(() => undefined))?.runnerVersion;
-        const status = await remoteCompute.connectRunner(host, localVersion);
+        const status = await remoteCompute.connectRunner(host, {
+          ...(host.connectionKind === "ssh" && !host.capabilities?.runnerCommandAvailable
+            ? { bundle: await deployableRunnerBundle() }
+            : {}),
+          ...(localVersion ? { localVersion } : {}),
+          ...(host.connectionKind === "direct" ? { token: store.remoteHostToken(host.id) ?? "" } : {}),
+        });
         sendJson(response, status.state === "ready" ? 200 : 503, status);
         return;
       }
@@ -1531,7 +1573,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
-      const remoteWorkspaceMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/remote-workspace\/(delete|files|sync|sync-records)$/);
+      // Transferring files is the model's job: the control plane exposes only
+      // what the user needs to see the result and to clean the remote host up.
+      const remoteWorkspaceMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/remote-workspace\/(delete|sync-records)$/);
       if (remoteWorkspaceMatch) {
         const sessionId = remoteWorkspaceMatch[1]!;
         const session = store.getSession(sessionId);
@@ -1552,44 +1596,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         } catch (error) {
           return sendError(response, 503, error instanceof Error ? error.message : "Remote runner is unavailable");
         }
-        if (remoteWorkspaceMatch[2] === "files" && request.method === "GET") {
-          sendJson(response, 200, await selectedRunner.listRemoteWorkspaceFiles(
-            remoteWorkspaceKey(session.projectId, session.id),
-          ));
-          return;
-        }
         if (remoteWorkspaceMatch[2] === "delete" && request.method === "DELETE") {
           if (await sessionHasActiveRun(store, sessionId)) {
             return sendError(response, 409, "Cannot delete a remote workspace during an active run");
           }
           await selectedRunner.deleteRemoteWorkspace(remoteWorkspaceKey(session.projectId, session.id));
           sendJson(response, 200, { deleted: true });
-          return;
-        }
-        if (remoteWorkspaceMatch[2] === "sync" && request.method === "POST") {
-          const input = await readJson<RemoteWorkspaceSyncRequest>(request);
-          const result = await syncRemoteWorkspace({
-            hostId: host.id,
-            input,
-            runnerClient: selectedRunner,
-            sessionId,
-            store,
-          });
-          if (input.direction === "pull") {
-            for (const path of result.files) {
-              await provenanceRecorder.registerWorkspaceArtifact({
-                logicalName: path,
-                origin: "user_upload",
-                originMeta: { hostId: host.id, source: "remote_runner_pull" },
-                path,
-                sessionId,
-                sourcePath: path,
-                title: path,
-                workspaceRoot: store.workspacePath(sessionId),
-              });
-            }
-          }
-          sendJson(response, 201, result);
           return;
         }
       }
