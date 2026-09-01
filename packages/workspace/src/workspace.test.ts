@@ -1158,11 +1158,13 @@ test("ordinary file and shell tools use the pre-mounted complete frozen Skill pa
   await writeFile(resolve(skillRoot, "selected-skill", "scripts", "run.sh"), "printf 'not auto-run\\n'\n");
   context.after(() => rm(fixtureRoot, { force: true, recursive: true }));
   const executedCodes: string[] = [];
+  const executedToolCallIds: (string | undefined)[] = [];
   const tools = createWorkspaceTools(root, {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
-    executeShell: async (code): Promise<ShellExecutionResult> => {
+    executeShell: async (code, _kernelMode, _signal, toolCallId): Promise<ShellExecutionResult> => {
       executedCodes.push(code);
+      executedToolCallIds.push(toolCallId);
       const timestamp = new Date().toISOString();
       return {
         cgroupMode: "none", createdFiles: [], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
@@ -1222,6 +1224,8 @@ test("ordinary file and shell tools use the pre-mounted complete frozen Skill pa
     "/usr/bin/bash \"${SCIENCEDISCOVERY_SKILLS_DIR}\"/'selected-skill/scripts/run.sh' 'value with spaces'",
     "/usr/bin/bash \"${SCIENCEDISCOVERY_SKILLS_DIR}\"/'selected-skill/scripts/run.sh' 'value with spaces'",
   ]);
+  // The Skill mount must not cost run_shell its file-provenance attribution.
+  assert.deepEqual(executedToolCallIds, ["shell", "shell"]);
 });
 
 test("create_skill requires the selected skill-creator instructions before mutating the catalog", async () => {
