@@ -229,6 +229,10 @@
       "name": "DeepSeek",
       "doc": "https://api-docs.deepseek.com/quick_start/pricing",
       "models": {
+        "deepseek-chat": {
+          "id": "deepseek-chat",
+          "name": "DeepSeek Chat"
+        },
         "deepseek-v4-flash": {
           "id": "deepseek-v4-flash",
           "name": "DeepSeek V4 Flash",

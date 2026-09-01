@@ -141,6 +141,31 @@ test("inline table unions added profiles with the listing, added first, no dupli
   assert.equal(m2.displayName, "Model m2");
 });
 
+test("manual provider rows use catalog labels and keep unknown IDs honest", () => {
+  installWebModelCatalog();
+  const p = provider("p1", "Custom DeepSeek");
+  const knownProfile = {
+    ...profile("known", p.id),
+    model: "deepseek-chat",
+    name: `${p.name} · deepseek-chat`,
+  };
+  const unknownProfile = {
+    ...profile("unknown", p.id),
+    model: "self-hosted-mystery-7b",
+    name: `${p.name} · self-hosted-mystery-7b`,
+  };
+
+  const rows = mergeProviderModelRows([], [knownProfile, unknownProfile], p);
+  const known = rows.find((model) => model.id === "deepseek-chat")!;
+  const unknown = rows.find((model) => model.id === "self-hosted-mystery-7b")!;
+
+  assert.equal(known.catalog?.label, "DeepSeek Chat", "the installed catalog is attached to the manual row");
+  assert.equal(providerModelDisplayName(known, p), "DeepSeek Chat");
+  assert.equal(known.id, "deepseek-chat", "the registered model ID remains available beside the title");
+  assert.equal(unknown.catalog, undefined);
+  assert.equal(providerModelDisplayName(unknown, p), "self-hosted-mystery-7b");
+});
+
 test("a listing row cannot blank the facts the user just stated", () => {
   // Adding a model to a provider that already pulled a listing inserts a bare
   // stub for it. Before, that stub replaced the profile row and the hover card

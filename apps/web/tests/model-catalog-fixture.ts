@@ -25,6 +25,11 @@ const source = { retrievedAt: "2026-08-26", url: "https://example.test/model-doc
 
 export const WEB_CATALOG_RECORDS: readonly ModelCatalogRecord[] = [
   {
+    key: "deepseek-chat",
+    label: "DeepSeek Chat",
+    source,
+  },
+  {
     // Legacy Anthropic thinking: a fixed token budget, so the form offers the
     // toggle and no effort scale.
     aliases: ["claude-haiku-4-5-20251001"],
