@@ -9,7 +9,8 @@ repository intentionally does not use GitCode Actions.
 ## Pipeline inventory
 
 `.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
-runs the repository's `ci:ut:core` and hermetic `ci:st` entry points, invokes
+runs the repository's `ci:ut:core`, experimental QEMU-hosted
+`ci:ut:runner`, and hermetic `ci:st` entry points, invokes
 the reusable code-check pipeline, builds the x86_64 debug binary on a hosted
 runner, invokes an ARM CodeArts Build task for aarch64, and renders the final
 PR result. The code check is an externally registered CodeArts pipeline containing the SCA,
@@ -88,9 +89,9 @@ parent before verification, and keep the final publisher in `post` with
 `select: always` so failed checks can still report their status.
 
 Interpret results in the parent workflow, not in the PR bot. The parent
-includes both `binary_aarch64` and its OBS verification job in the
-`completed(...)` gate that selects mutually exclusive success and failure post
-jobs. It renders a complete result
+includes `ut_runner_qemu`, both `binary_aarch64` and its OBS verification job
+in the `completed(...)` gate that selects mutually exclusive success and
+failure post jobs. It renders a complete result
 HTML file from the UT/ST/binary job statuses and each code-check child's own
 public result JSON, uploads that file to OBS, and passes its OBS key plus the
 already chosen `final_label` to the bot. The bot downloads and posts the HTML
@@ -161,9 +162,25 @@ longer reachable from the MR ref.
 
 The default CCE pool is an unprivileged EulerOS 2.0 SP10 pod even when YAML
 requests `ubuntu-latest`. It runs as `octopus`, has no usable root, and cannot
-create user namespaces. Runner UT and E2E therefore remain excluded. A
-sandboxed layer requires a self-hosted resource pool that passes an actual
-bubblewrap probe.
+create user namespaces. Runner UT and E2E therefore cannot run directly in
+that pod. Do not use QEMU user-mode emulation as a workaround: it still shares
+the host kernel and its namespace restriction.
+
+The CI-branch experiment instead runs `pnpm ci:ut:runner` in a full Ubuntu
+guest under `qemu-system-x86_64 -accel tcg,thread=multi`. TCG is software-only,
+so `/dev/kvm` is neither requested nor required. The host script downloads a
+date-pinned TUNA Ubuntu cloud image, verifies its SHA256, obtains QEMU as
+uninstalled `.deb` files when it is absent, and boots with a NoCloud seed over
+QEMU user networking. The guest clears its own Ubuntu AppArmor userns sysctl,
+passes the real bubblewrap probe as the unprivileged `ci` user, and invokes the
+unchanged layer entry point. Only the exact
+`QEMU_SANDBOX_TEST_RESULT=<exit-code>` serial marker can make the host job
+pass; the host removes serial CR characters before matching, and missing or
+malformed markers fail closed. The guest sets Node's test-file concurrency to
+one to avoid emulator-induced disconnect timing races without skipping or
+changing assertions. This is slower than a native
+worker and currently covers Runner UT only. A self-hosted Linux resource pool
+that passes the real bubblewrap probe remains the preferred long-term route.
 
 The debug x86_64 binary job keeps the repository's proven hosted labels
 `[codearts-hosted, ubuntu-latest, x64, large]`. The aarch64 parent job runs on
@@ -264,7 +281,7 @@ https://gitcode.com/openJiuwen/sciencediscovery/pull/<MR_NUMBER>/check
 ```
 
 List all four code-check subtasks (SCA, anti-poison, CodeCheck, and blacklist),
-plus UT, ST, and both binary architectures. User-facing status cells contain
+plus core UT, QEMU Runner UT, ST, and both binary architectures. User-facing status cells contain
 only `PASSED` or `FAILED`. CodeArts may report successful jobs as lifecycle
 state `completed`; normalize `completed`, `passed`, `success`, `successful`,
 and `succeeded` to `PASSED`, and every other value to `FAILED`. Do not print
@@ -326,6 +343,8 @@ workflow again before pushing. Never overwrite a new UI commit blindly.
 | `download task did not create the expected source directory` while files are listed directly under `share` | The shell expected a nested repository directory; use `${SHARE_PATH}` itself. |
 | `target path should be absolutely path which start with:[.../share]` | An `upload-obs` source is relative or outside `${SHARE_PATH}`. |
 | `sudo: /bin/sudo must be owned by uid 0 and have the setuid bit set` | The default pool has no usable root; install user-space tools under `$HOME` or the workspace. |
+| QEMU reports `could not load module for type tcg-accel-ops` | A workspace-extracted QEMU needs `QEMU_MODULE_DIR=<root>/usr/lib/x86_64-linux-gnu/qemu`; also pass its data directory with `-L` and its SeaBIOS path explicitly. |
+| QEMU exits without `QEMU_SANDBOX_TEST_RESULT=<code>` | Guest provisioning, cloud-init, or the test harness did not finish. Keep the job red and inspect the run-scoped `ut-runner-qemu/run.log`; do not infer success from QEMU's process status alone. |
 | YAML requests `ubuntu-latest`, but logs show `octopus_container` and EulerOS | The default CCE execution mode ignored or overrode the OS label; use a dedicated pool for an actual Ubuntu rootfs. |
 | A child CloudBuild command ends with bare `--pr_id` | The child read `${MERGE_ID}`, which is not inherited from the parent. Pass the parent's MR ID as `PR_ID` and consume `${PR_ID}` inside every child task. |
 | `fatal: couldn't find remote ref refs/heads/<source>` on a fork PR | The checkout tried to fetch a fork-only branch from upstream. Fetch `refs/merge-requests/<MERGE_ID>/head` and detach at the validated event SHA. |

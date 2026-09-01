@@ -30,11 +30,14 @@ Two pipelines exist and neither runs everything.
 
 | Pipeline | Trigger | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- | --- |
-| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, merge, reopen) or a `rerun` comment on it | `ci:ut:core` | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, merge, reopen) or a `rerun` comment on it | `ci:ut:core` + experimental `ci:ut:runner` in QEMU TCG | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
 | GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
-CodeArts's default pool cannot create user namespaces, so Runner UT and E2E
-run only on GitHub or on a self-hosted pool that passes a bubblewrap probe.
+CodeArts's default pool cannot create user namespaces, so it cannot run Runner
+UT or E2E directly. The debug pipeline experimentally runs the unchanged
+`ci:ut:runner` layer in a full Ubuntu guest under software-only QEMU TCG; a
+self-hosted pool that passes a bubblewrap probe remains preferable, and E2E is
+still excluded.
 The CodeArts parent workflow also invokes the externally registered code-check
 child (SCA, anti-poison, static analysis, blacklist), reads each task's public
 result JSON independently, and renders one result comment with those four
@@ -87,6 +90,8 @@ GitCode Actions unless the user changes that policy.
 | Symptom | Meaning |
 | --- | --- |
 | `bwrap: No permissions to create new namespace` | The host forbids user namespaces. Use only the repository's sandbox-free layer there; do not weaken Runner tests. |
+| QEMU reports `could not load module for type tcg-accel-ops` | A workspace-extracted QEMU cannot find its modules. Point `QEMU_MODULE_DIR` at the extracted architecture-specific QEMU module directory. |
+| QEMU boots but the guest emits no `QEMU_SANDBOX_TEST_RESULT` marker | The VM timed out, failed before the guest harness ran, or could not shut down cleanly. Keep the job failed and read `ut-runner-qemu/run.log`. |
 | API test expects `runner_exec`, gets `undefined` | An execution never ran; check sandbox availability first. |
 | `BLOCKED: isolated E2E stack did not become healthy` | The Runner refused to serve; inspect the sandbox probe before application logs. |
 | `ERR_PNPM_OUTDATED_LOCKFILE` | `pnpm-lock.yaml` is behind a `package.json`; regenerate it with `pnpm install --lockfile-only`. |

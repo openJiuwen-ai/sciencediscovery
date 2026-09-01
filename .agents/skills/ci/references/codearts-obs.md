@@ -44,6 +44,8 @@ openjiuwen-ci/
     |       `-- <run-id>/
     |           |-- ut/
     |           |   `-- run.log
+    |           |-- ut-runner-qemu/
+    |           |   `-- run.log
     |           |-- st/
     |           |   `-- run.log
     |           |-- binary/

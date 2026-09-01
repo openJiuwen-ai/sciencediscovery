@@ -139,7 +139,7 @@ merge-request CI is CodeArts-only; this repository intentionally has no
 | Pipeline | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
-| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | `ci:ut:core` | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | `ci:ut:core` + experimental `ci:ut:runner` in QEMU TCG | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
 
 The CodeArts row above is a temporary `ci/verify-pr-ci`-only debug pipeline,
 not a release gate for `main`. Its x86_64 and aarch64 jobs each call
@@ -171,9 +171,14 @@ Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
 the unprivileged user `octopus` with Docker's default capability bounding set
 and an active seccomp filter, so `unshare` and bubblewrap are refused outright;
 `sudo` is not setuid, so nothing can be installed with `dnf` either. The
-checked-in workflow therefore runs `ci:ut:core` and the hermetic `ci:st` layer.
-A sandboxed layer needs a self-hosted resource pool
-(`runs-on: [self-hosted, <pool-id>]`) on a machine that allows user namespaces.
+checked-in workflow runs `ci:ut:core` and the hermetic `ci:st` layer directly.
+On this debug branch, a separate hosted x64 job experimentally runs the
+existing `ci:ut:runner` entry point inside an Ubuntu VM under QEMU's
+software-only TCG accelerator. The VM supplies an independent kernel whose
+user namespaces work even though the outer CodeArts container denies them;
+`/dev/kvm` is not requested. This is much slower than a native worker and does
+not add E2E coverage. A self-hosted Linux resource pool that passes the real
+bubblewrap probe remains the preferred long-term sandbox runner.
 
 The parent CodeArts workflow also invokes the externally registered reusable
 code-check child. That child runs SCA, anti-poison, static-analysis, and
@@ -222,7 +227,8 @@ bwrap --ro-bind / / --dev /dev true && echo sandbox ok
 On Ubuntu 24.04 a failure here is usually the AppArmor restriction on
 unprivileged user namespaces, cleared with
 `sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0`. Inside a
-container it is normally unfixable.
+container it is normally unfixable for a process using that same host kernel;
+a full-system VM can instead provide an independent guest kernel.
 
 Then branch from an up-to-date `main`, push the branch, and open the merge
 request on GitCode. Never push to `main`; rebase rather than merge when it
