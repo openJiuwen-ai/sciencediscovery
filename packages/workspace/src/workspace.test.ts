@@ -1196,6 +1196,16 @@ test("ordinary file and shell tools use the pre-mounted complete frozen Skill pa
   assert.ok(readTool);
   assert.ok(listTool);
   assert.ok(shellTool);
+
+  // Tool descriptions are model-visible, so they must address the mounts through
+  // the variables. A bare /skills is only a real path under bubblewrap and would
+  // send the model to a non-existent location on macOS Seatbelt.
+  assert.match(shellTool.description, /\$SCIENCEDISCOVERY_SKILLS_DIR/);
+  for (const tool of tools) {
+    assert.doesNotMatch(tool.description, /(^|[^A-Z_])\/skills\b/, `${tool.name} description hardcodes the bind path`);
+    assert.doesNotMatch(tool.description, /(^|[^A-Z_])\/skill-extensions\b/, `${tool.name} description hardcodes the bind path`);
+  }
+
   // The prompt advertises the environment-variable form, which these Node-side
   // tools never see expanded; the bubblewrap bind path stays valid as an alias.
   for (const packageRoot of [
