@@ -93,6 +93,7 @@ import type {
   WebSettingsDetails,
   WorkspaceCapabilities,
   WorkspaceFile,
+  WorkspaceFileProvenance,
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
 import type { ModelCatalogDetails } from "@sciencediscovery/schema";
@@ -123,6 +124,7 @@ import {
   EditIcon,
   FileIcon,
   ImageIcon,
+  InfoIcon,
   MarkdownIcon,
   NotebookIcon,
   PanelRightIcon,
@@ -177,6 +179,7 @@ import { RemoteHostManager, RemoteJobsPanel } from "./RemoteCompute.js";
 import { RunUsageInline, UsagePage } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
+import { WorkspaceFileProvenanceModal } from "./WorkspaceFileProvenanceModal.js";
 import {
   artifactArchiveBlob,
   artifactArchiveLimitError,
@@ -432,14 +435,17 @@ export function ArtifactTreeList({
 export function WorkspaceFileTreeList({
   entries,
   onOpen,
+  onShowProvenance,
   onSelectionChange,
   selectedPaths,
 }: {
   entries: readonly WorkspaceFileTreeEntry[];
   onOpen: (file: WorkspaceFile) => void;
+  onShowProvenance?: (file: WorkspaceFile) => void;
   onSelectionChange?: (files: readonly WorkspaceFile[], selected: boolean) => void;
   selectedPaths?: ReadonlySet<string>;
 }): ReactNode {
+  const { t } = useLocale();
   const selection = selectedPaths && onSelectionChange
     ? { change: onSelectionChange, paths: selectedPaths }
     : undefined;
@@ -477,7 +483,26 @@ export function WorkspaceFileTreeList({
       <span aria-hidden="true" className="artifact-tree-selection-control"><span>{selection.paths.has(entry.file.path) ? "✓" : ""}</span></span>
       <TreeFileIcon kind={workspaceFileTreeIconKind(entry.file)} />
       <span className="artifact-tree-label">{entry.name}</span>
-    </button> : <button
+    </button> : onShowProvenance ? <div className="workspace-file-tree-row">
+      <button
+        aria-label={`Open ${entry.file.path}`}
+        className="artifact-tree-file workspace-file-tree-leaf"
+        onClick={() => onOpen(entry.file)}
+        title={entry.file.path}
+        type="button"
+      >
+        <span className="artifact-tree-spacer" aria-hidden="true" />
+        <TreeFileIcon kind={workspaceFileTreeIconKind(entry.file)} />
+        <span className="artifact-tree-label">{entry.name}</span>
+      </button>
+      <button
+        aria-label={t("workspaceProvenance.open", { name: entry.file.path })}
+        className="workspace-file-provenance-action"
+        onClick={() => onShowProvenance(entry.file)}
+        title={t("workspaceProvenance.open", { name: entry.file.path })}
+        type="button"
+      ><InfoIcon size={14} /></button>
+    </div> : <button
       aria-label={`Open ${entry.file.path}`}
       className="artifact-tree-file workspace-file-tree-leaf"
       onClick={() => onOpen(entry.file)}
@@ -973,6 +998,12 @@ export function App() {
   const [artifactSessions, setArtifactSessions] = useState<Session[]>([]);
   const [artifactSessionCatalogProjectId, setArtifactSessionCatalogProjectId] = useState<string>();
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
+  const [workspaceFileProvenanceTarget, setWorkspaceFileProvenanceTarget] = useState<{
+    error?: string;
+    file: WorkspaceFile;
+    provenance?: WorkspaceFileProvenance;
+    sessionId: string;
+  }>();
   const [workspaceCapabilities, setWorkspaceCapabilities] = useState<WorkspaceCapabilities>();
   const [permissionEpoch, setPermissionEpoch] = useState<PermissionEpoch>();
   const [permissionGrants, setPermissionGrants] = useState<PermissionGrant[]>([]);
@@ -1420,6 +1451,7 @@ export function App() {
   useEffect(() => {
     setWorkspaceFileSelectionMode(false);
     setSelectedWorkspaceFilePaths(new Set());
+    setWorkspaceFileProvenanceTarget(undefined);
   }, [activeSessionId]);
 
   useEffect(() => {
@@ -3136,6 +3168,23 @@ export function App() {
     }
   }
 
+  async function openWorkspaceFileProvenance(file: WorkspaceFile): Promise<void> {
+    if (!activeSessionId) return;
+    const sessionId = activeSessionId;
+    setWorkspaceFileProvenanceTarget({ file, sessionId });
+    try {
+      const provenance = await client.getWorkspaceFileProvenance(sessionId, file.path);
+      setWorkspaceFileProvenanceTarget((current) => current?.sessionId === sessionId && current.file.path === file.path
+        ? { ...current, provenance }
+        : current);
+    } catch (reason) {
+      const error = reason instanceof Error ? reason.message : "Could not load file provenance";
+      setWorkspaceFileProvenanceTarget((current) => current?.sessionId === sessionId && current.file.path === file.path
+        ? { ...current, error }
+        : current);
+    }
+  }
+
   function openArtifact(artifact: ScientificArtifact): void {
     if (!activeSessionId) {
       pushToast("info", "Artifact retained", "Create or select a Session to open this Project artifact.");
@@ -4200,6 +4249,7 @@ export function App() {
                   : <WorkspaceFileTreeList
                     entries={buildWorkspaceFileTree(files)}
                     onOpen={(file) => void openWorkspaceFile(file)}
+                    onShowProvenance={(file) => void openWorkspaceFileProvenance(file)}
                     onSelectionChange={workspaceFileSelectionMode ? changeWorkspaceFileSelection : undefined}
                     selectedPaths={workspaceFileSelectionMode ? selectedWorkspaceFilePaths : undefined}
                   />}
@@ -4327,6 +4377,13 @@ export function App() {
           sessions={artifactSessions}
         />
       ) : null}
+
+      {workspaceFileProvenanceTarget && workspaceFileProvenanceTarget.sessionId === activeSessionId ? <WorkspaceFileProvenanceModal
+        error={workspaceFileProvenanceTarget.error}
+        file={workspaceFileProvenanceTarget.file}
+        onClose={() => setWorkspaceFileProvenanceTarget(undefined)}
+        provenance={workspaceFileProvenanceTarget.provenance}
+      /> : null}
 
       {memoryExplorerOpen && session && memorySubgraph ? (
         <ErrorBoundary label="ScienceMemory" onError={(message) => { reportError(message); setMemoryExplorerOpen(false); }}>

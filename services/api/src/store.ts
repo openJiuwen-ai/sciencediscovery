@@ -123,6 +123,12 @@ import type {
   UpdateSpecialistRequest,
   UpdateWebSettingsRequest,
   WebSettingsDetails,
+  WorkspaceFile,
+  WorkspaceFileProvenance,
+  WorkspaceFileProvenanceSummary,
+  WorkspaceFileRecord,
+  WorkspaceFileRevision,
+  WorkspaceFileRevisionInput,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
@@ -156,6 +162,7 @@ import {
   isSystemEnvironmentRevisionId,
 } from "@sciencediscovery/executor";
 import { toolOutputStoreRoot } from "@sciencediscovery/tools";
+import { normalizeWorkspaceRelativePath } from "@sciencediscovery/workspace";
 import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
 import { BUNDLED_SKILL_IDS } from "@sciencediscovery/specialist";
@@ -279,6 +286,75 @@ function isReviewerSpecialistLevel(value: unknown): value is ReviewerSpecialistL
     && (REVIEWER_SPECIALIST_LEVELS as readonly string[]).includes(value);
 }
 
+const WORKSPACE_FILE_ORIGINS = new Set<WorkspaceFileRevision["origin"]>([
+  "agent",
+  "mcp-download",
+  "remote-compute",
+  "subagent",
+  "system",
+  "tool",
+  "unknown",
+  "upload",
+]);
+
+function savedWorkspaceFileRecord(value: unknown): WorkspaceFileRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  const required = ["createdAt", "currentRevisionId", "id", "path", "projectId", "sessionId", "sessionTitle", "updatedAt"];
+  if (required.some((field) => typeof value[field] !== "string" || !value[field])) return undefined;
+  if (Number.isNaN(Date.parse(value.createdAt as string)) || Number.isNaN(Date.parse(value.updatedAt as string))) return undefined;
+  return {
+    createdAt: value.createdAt as string,
+    currentRevisionId: value.currentRevisionId as string,
+    ...(typeof value.deletedAt === "string" && value.deletedAt ? { deletedAt: value.deletedAt } : {}),
+    id: value.id as string,
+    path: value.path as string,
+    projectId: value.projectId as string,
+    sessionId: value.sessionId as string,
+    sessionTitle: value.sessionTitle as string,
+    updatedAt: value.updatedAt as string,
+  };
+}
+
+function savedWorkspaceFileRevision(value: unknown): WorkspaceFileRevision | undefined {
+  if (!isRecord(value) || !WORKSPACE_FILE_ORIGINS.has(value.origin as WorkspaceFileRevision["origin"])) return undefined;
+  const required = ["createdAt", "fileId", "id", "modifiedAt", "path", "projectId", "sessionId"];
+  if (required.some((field) => typeof value[field] !== "string" || !value[field])) return undefined;
+  if (Number.isNaN(Date.parse(value.createdAt as string)) || Number.isNaN(Date.parse(value.modifiedAt as string))) return undefined;
+  if (typeof value.size !== "number" || !Number.isFinite(value.size) || value.size < 0) return undefined;
+  const optionalString = (field: string): Record<string, string> =>
+    typeof value[field] === "string" && value[field] ? { [field]: value[field] as string } : {};
+  const originMeta = isRecord(value.originMeta)
+    ? Object.fromEntries(Object.entries(value.originMeta).filter((entry): entry is [string, boolean | number | string | null] => {
+        const item = entry[1];
+        return item === null || typeof item === "boolean" || typeof item === "number" || typeof item === "string";
+      }))
+    : undefined;
+  return {
+    artifactVersionIds: Array.isArray(value.artifactVersionIds)
+      ? [...new Set(value.artifactVersionIds.filter((id): id is string => typeof id === "string" && Boolean(id)))]
+      : [],
+    ...(typeof value.contentHash === "string" && /^[a-f0-9]{64}$/.test(value.contentHash)
+      ? { contentHash: value.contentHash }
+      : {}),
+    createdAt: value.createdAt as string,
+    ...optionalString("executionRunId"),
+    fileId: value.fileId as string,
+    id: value.id as string,
+    modifiedAt: value.modifiedAt as string,
+    origin: value.origin as WorkspaceFileRevision["origin"],
+    ...(originMeta && Object.keys(originMeta).length ? { originMeta } : {}),
+    ...optionalString("parentRevisionId"),
+    path: value.path as string,
+    projectId: value.projectId as string,
+    ...optionalString("runId"),
+    sessionId: value.sessionId as string,
+    size: value.size,
+    ...optionalString("subagentId"),
+    ...optionalString("toolCallId"),
+    ...optionalString("toolName"),
+  } as WorkspaceFileRevision;
+}
+
 export class SessionStoreHttpError extends Error {
   constructor(message: string, readonly statusCode: 400 | 404 | 409) {
     super(message);
@@ -292,6 +368,7 @@ export class SessionStore {
   private readonly streamAppendQueues = new Map<string, Promise<void>>();
   private readonly streamTailSequences = new Map<string, number>();
   private readonly subagentMutationQueues = new Map<string, Promise<void>>();
+  private readonly workspaceFileMutationQueues = new Map<string, Promise<void>>();
   private catalog: Catalog = emptyCatalog();
   private database?: DatabaseSync;
   private loaded = false;
@@ -769,6 +846,27 @@ export class SessionStore {
       } as Session;
     });
     const sessionsById = new Map(sessions.map((session) => [session.id, session]));
+    const projectIds = new Set(projects.map((project) => project.id));
+    const savedWorkspaceFileRecords = Array.isArray(saved.workspaceFileRecords) ? saved.workspaceFileRecords : [];
+    const normalizedWorkspaceFileRecords = savedWorkspaceFileRecords
+      .flatMap((value) => savedWorkspaceFileRecord(value) ?? [])
+      .filter((record) => projectIds.has(record.projectId)
+        && (!sessionsById.has(record.sessionId) || sessionsById.get(record.sessionId)?.projectId === record.projectId));
+    const workspaceFileProjects = new Map(normalizedWorkspaceFileRecords.map((record) => [record.id, record.projectId]));
+    const savedWorkspaceFileRevisions = Array.isArray(saved.workspaceFileRevisions) ? saved.workspaceFileRevisions : [];
+    const normalizedWorkspaceFileRevisions = savedWorkspaceFileRevisions
+      .flatMap((value) => savedWorkspaceFileRevision(value) ?? [])
+      .filter((revision) => workspaceFileProjects.get(revision.fileId) === revision.projectId);
+    const workspaceFileRevisionIds = new Set(normalizedWorkspaceFileRevisions.map((revision) => revision.id));
+    const workspaceFileRecords = normalizedWorkspaceFileRecords
+      .filter((record) => workspaceFileRevisionIds.has(record.currentRevisionId));
+    const retainedWorkspaceFileRecordIds = new Set(workspaceFileRecords.map((record) => record.id));
+    const workspaceFileRevisions = normalizedWorkspaceFileRevisions
+      .filter((revision) => retainedWorkspaceFileRecordIds.has(revision.fileId));
+    const migratedWorkspaceFileProvenance = !Array.isArray(saved.workspaceFileRecords)
+      || !Array.isArray(saved.workspaceFileRevisions)
+      || JSON.stringify(workspaceFileRecords) !== JSON.stringify(savedWorkspaceFileRecords)
+      || JSON.stringify(workspaceFileRevisions) !== JSON.stringify(savedWorkspaceFileRevisions);
     const savedVersionsByArtifactId = new Map<string, ScientificArtifactVersion[]>();
     for (const version of savedArtifactVersions) {
       const values = savedVersionsByArtifactId.get(version.artifactId) ?? [];
@@ -868,6 +966,8 @@ export class SessionStore {
       specialists,
       timeoutSettings,
       webSettings,
+      workspaceFileRecords,
+      workspaceFileRevisions,
     };
     for (const session of sessions) this.syncSessionCompatibility(session);
     const migratedSessionOverrides = JSON.stringify(sessions) !== JSON.stringify(savedSessions);
@@ -908,6 +1008,7 @@ export class SessionStore {
       || migratedReviewerSpecialistLevel
       || migratedSpecialists
       || migratedArtifactCatalog
+      || migratedWorkspaceFileProvenance
       || importedLegacyCatalog
     ) {
       await this.saveCatalog();
@@ -940,6 +1041,25 @@ export class SessionStore {
       release();
       if (this.subagentMutationQueues.get(subagentId) === queued) {
         this.subagentMutationQueues.delete(subagentId);
+      }
+    }
+  }
+
+  private async withWorkspaceFileMutation<T>(sessionId: string, mutation: () => Promise<T>): Promise<T> {
+    const previous = this.workspaceFileMutationQueues.get(sessionId) ?? Promise.resolve();
+    let release!: () => void;
+    const next = new Promise<void>((resolveRelease) => {
+      release = resolveRelease;
+    });
+    const queued = previous.then(() => next, () => next);
+    this.workspaceFileMutationQueues.set(sessionId, queued);
+    try {
+      await previous.catch(() => {});
+      return await mutation();
+    } finally {
+      release();
+      if (this.workspaceFileMutationQueues.get(sessionId) === queued) {
+        this.workspaceFileMutationQueues.delete(sessionId);
       }
     }
   }
@@ -2537,6 +2657,286 @@ export class SessionStore {
     });
   }
 
+  async reconcileWorkspaceFiles(
+    sessionId: string,
+    files: Array<Pick<WorkspaceFile, "modifiedAt" | "path" | "size">>,
+    baseline?: ReadonlyMap<string, string>,
+  ): Promise<Map<string, WorkspaceFileProvenanceSummary>> {
+    const workspaceRoot = this.workspacePath(sessionId);
+    const reconciliationBaseline = baseline ?? this.snapshotWorkspaceFileRevisions(sessionId);
+    const normalizedFiles = files.map((file) => ({
+      modifiedAt: file.modifiedAt,
+      path: normalizeWorkspaceRelativePath(workspaceRoot, file.path),
+      size: file.size,
+    }));
+    return await this.withWorkspaceFileMutation(sessionId, async () => {
+      const session = this.getSession(sessionId);
+      if (!session) throw new Error("Session not found");
+      const scannedPaths = new Set(normalizedFiles.map((file) => file.path));
+      const now = new Date().toISOString();
+      let changed = false;
+
+      for (const record of this.catalog.workspaceFileRecords) {
+        if (record.sessionId === sessionId
+          && !record.deletedAt
+          && reconciliationBaseline.get(record.path) === record.currentRevisionId
+          && !scannedPaths.has(record.path)) {
+          record.deletedAt = now;
+          record.updatedAt = now;
+          changed = true;
+        }
+      }
+
+      const summaries = new Map<string, WorkspaceFileProvenanceSummary>();
+      for (const file of normalizedFiles) {
+        let record = this.catalog.workspaceFileRecords.find((candidate) =>
+          candidate.sessionId === sessionId && candidate.path === file.path && !candidate.deletedAt);
+        let revision = record
+          ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === record!.currentRevisionId)
+          : undefined;
+        if (!record || !revision) {
+          const fileId = randomUUID();
+          revision = {
+            artifactVersionIds: [],
+            createdAt: now,
+            fileId,
+            id: randomUUID(),
+            modifiedAt: file.modifiedAt,
+            origin: "unknown",
+            path: file.path,
+            projectId: session.projectId,
+            sessionId,
+            size: file.size,
+          };
+          record = {
+            createdAt: now,
+            currentRevisionId: revision.id,
+            id: fileId,
+            path: file.path,
+            projectId: session.projectId,
+            sessionId,
+            sessionTitle: session.title,
+            updatedAt: now,
+          };
+          this.catalog.workspaceFileRevisions.push(revision);
+          this.catalog.workspaceFileRecords.push(record);
+          changed = true;
+        } else if (reconciliationBaseline.get(file.path) === revision.id
+          && (revision.modifiedAt !== file.modifiedAt || revision.size !== file.size)) {
+          revision = {
+            artifactVersionIds: [],
+            createdAt: now,
+            fileId: record.id,
+            id: randomUUID(),
+            modifiedAt: file.modifiedAt,
+            origin: "unknown",
+            path: file.path,
+            projectId: session.projectId,
+            sessionId,
+            size: file.size,
+          };
+          this.catalog.workspaceFileRevisions.push(revision);
+          record.currentRevisionId = revision.id;
+          record.sessionTitle = session.title;
+          record.updatedAt = now;
+          changed = true;
+        }
+        summaries.set(file.path, {
+          fileId: record.id,
+          origin: revision.origin,
+          recordedAt: revision.createdAt,
+          revisionId: revision.id,
+        });
+      }
+      if (changed) await this.saveCatalog();
+      return summaries;
+    });
+  }
+
+  snapshotWorkspaceFileRevisions(sessionId: string): Map<string, string> {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    return new Map(this.catalog.workspaceFileRecords
+      .filter((record) => record.sessionId === sessionId && !record.deletedAt)
+      .map((record) => [record.path, record.currentRevisionId]));
+  }
+
+  async recordWorkspaceFileRevision(
+    sessionId: string,
+    input: WorkspaceFileRevisionInput,
+  ): Promise<WorkspaceFileRevision> {
+    return (await this.recordWorkspaceFileRevisions(sessionId, [input]))[0]!;
+  }
+
+  async recordWorkspaceFileRevisions(
+    sessionId: string,
+    inputs: WorkspaceFileRevisionInput[],
+  ): Promise<WorkspaceFileRevision[]> {
+    const workspaceRoot = this.workspacePath(sessionId);
+    const prepared = inputs.map((input) => {
+      const path = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
+      if (!Number.isSafeInteger(input.size) || input.size < 0) throw new Error("Workspace file size is invalid");
+      if (!input.modifiedAt || Number.isNaN(Date.parse(input.modifiedAt))) {
+        throw new Error("Workspace file modification time is invalid");
+      }
+      if (input.contentHash && !/^[a-f0-9]{64}$/.test(input.contentHash)) {
+        throw new Error("Workspace file content hash is invalid");
+      }
+      return { input, path };
+    });
+    if (!prepared.length) return [];
+    return await this.withWorkspaceFileMutation(sessionId, async () => {
+      const session = this.getSession(sessionId);
+      if (!session) throw new Error("Session not found");
+      for (const { input } of prepared) {
+        if (input.parentRevisionId && !this.catalog.workspaceFileRevisions.some((candidate) =>
+          candidate.id === input.parentRevisionId && candidate.projectId === session.projectId)) {
+          throw new Error("Workspace file parent revision must belong to the same Project");
+        }
+        if (input.artifactVersionId && !this.catalog.artifactVersions.some((candidate) =>
+          candidate.id === input.artifactVersionId && candidate.projectId === session.projectId)) {
+          throw new Error("Workspace file Artifact version must belong to the same Project");
+        }
+      }
+      let catalogChanged = false;
+      const revisions: WorkspaceFileRevision[] = [];
+      for (const { input, path } of prepared) {
+        const parent = input.parentRevisionId
+          ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === input.parentRevisionId)
+          : undefined;
+        let record = this.catalog.workspaceFileRecords.find((candidate) =>
+          candidate.sessionId === sessionId && candidate.path === path && !candidate.deletedAt);
+        const current = record
+          ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === record!.currentRevisionId)
+          : undefined;
+        const sameObservedState = current
+          && current.size === input.size
+          && current.modifiedAt === input.modifiedAt
+          && (!input.contentHash || !current.contentHash || current.contentHash === input.contentHash);
+
+        if (current && input.mode === "observe" && sameObservedState) {
+          revisions.push(structuredClone(current));
+          continue;
+        }
+        if (current && input.mode === "link" && sameObservedState) {
+          if (input.contentHash && !current.contentHash) {
+            current.contentHash = input.contentHash;
+            catalogChanged = true;
+          }
+          if (input.artifactVersionId && !current.artifactVersionIds.includes(input.artifactVersionId)) {
+            current.artifactVersionIds.push(input.artifactVersionId);
+            catalogChanged = true;
+          }
+          revisions.push(structuredClone(current));
+          continue;
+        }
+
+        const now = new Date().toISOString();
+        const fileId = record?.id ?? randomUUID();
+        const contentHash = input.contentHash ?? parent?.contentHash;
+        const revision: WorkspaceFileRevision = {
+          artifactVersionIds: input.artifactVersionId ? [input.artifactVersionId] : [],
+          ...(contentHash ? { contentHash } : {}),
+          createdAt: now,
+          ...(input.executionRunId ? { executionRunId: input.executionRunId } : {}),
+          fileId,
+          id: randomUUID(),
+          modifiedAt: input.modifiedAt,
+          origin: input.origin,
+          ...(input.originMeta ? { originMeta: structuredClone(input.originMeta) } : {}),
+          ...(parent ? { parentRevisionId: parent.id } : {}),
+          path,
+          projectId: session.projectId,
+          ...(input.runId ? { runId: input.runId } : {}),
+          sessionId,
+          size: input.size,
+          ...(input.subagentId ? { subagentId: input.subagentId } : {}),
+          ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
+          ...(input.toolName ? { toolName: input.toolName } : {}),
+        };
+        this.catalog.workspaceFileRevisions.push(revision);
+        if (!record) {
+          record = {
+            createdAt: now,
+            currentRevisionId: revision.id,
+            id: fileId,
+            path,
+            projectId: session.projectId,
+            sessionId,
+            sessionTitle: session.title,
+            updatedAt: now,
+          };
+          this.catalog.workspaceFileRecords.push(record);
+        } else {
+          record.currentRevisionId = revision.id;
+          record.sessionTitle = session.title;
+          record.updatedAt = now;
+        }
+        catalogChanged = true;
+        revisions.push(structuredClone(revision));
+      }
+      if (catalogChanged) await this.saveCatalog();
+      return revisions;
+    });
+  }
+
+  getWorkspaceFileProvenance(sessionId: string, pathInput: string): WorkspaceFileProvenance | undefined {
+    const session = this.getSession(sessionId);
+    if (!session) return undefined;
+    const path = normalizeWorkspaceRelativePath(this.workspacePath(sessionId), pathInput);
+    const file = this.catalog.workspaceFileRecords.find((candidate) =>
+      candidate.sessionId === sessionId && candidate.path === path && !candidate.deletedAt);
+    if (!file) return undefined;
+    const currentRevision = this.catalog.workspaceFileRevisions.find((candidate) =>
+      candidate.id === file.currentRevisionId && candidate.fileId === file.id);
+    if (!currentRevision) return undefined;
+    const revisions = this.catalog.workspaceFileRevisions
+      .filter((candidate) => candidate.fileId === file.id)
+      .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+    const sourceSessionFor = (record: WorkspaceFileRecord) => {
+      const liveSession = this.catalog.sessions.find((candidate) => candidate.id === record.sessionId);
+      return {
+        deleted: !liveSession,
+        id: record.sessionId,
+        title: liveSession?.title ?? record.sessionTitle,
+      };
+    };
+    const lineage: WorkspaceFileProvenance["lineage"] = [];
+    const visited = new Set<string>();
+    let parentRevisionId = currentRevision.parentRevisionId;
+    while (parentRevisionId && lineage.length < 20 && !visited.has(parentRevisionId)) {
+      visited.add(parentRevisionId);
+      const parentRevision = this.catalog.workspaceFileRevisions.find((candidate) =>
+        candidate.id === parentRevisionId && candidate.projectId === session.projectId);
+      if (!parentRevision) break;
+      const parentFile = this.catalog.workspaceFileRecords.find((candidate) => candidate.id === parentRevision.fileId);
+      if (!parentFile) break;
+      lineage.push({
+        fileId: parentFile.id,
+        origin: parentRevision.origin,
+        path: parentRevision.path,
+        revisionId: parentRevision.id,
+        session: sourceSessionFor(parentFile),
+      });
+      parentRevisionId = parentRevision.parentRevisionId;
+    }
+    const artifacts = currentRevision.artifactVersionIds.flatMap((versionId) => {
+      const version = this.catalog.artifactVersions.find((candidate) =>
+        candidate.id === versionId && candidate.projectId === session.projectId);
+      if (!version) return [];
+      const artifact = this.catalog.artifacts.find((candidate) => candidate.id === version.artifactId);
+      if (!artifact) return [];
+      return [{ artifactId: artifact.id, name: artifact.name, version: version.version, versionId }];
+    });
+    return structuredClone({
+      artifacts,
+      currentRevision,
+      file,
+      lineage,
+      revisions,
+      sourceSession: sourceSessionFor(file),
+    });
+  }
+
   listArtifacts(sessionId: string): ScientificArtifact[] {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
@@ -3063,6 +3463,7 @@ export class SessionStore {
     const previousPlans = this.catalog.sessionPlans;
     const previousSubagents = this.catalog.subagents;
     const previousRemoteJobs = this.catalog.remoteJobs;
+    const previousWorkspaceFileRecords = this.catalog.workspaceFileRecords;
     const remoteJobIds = new Set(this.catalog.remoteJobs.filter((job) => job.sessionId === session.id).map((job) => job.id));
     try {
       this.catalog.sessions = this.catalog.sessions.filter((item) => item.id !== session.id);
@@ -3073,6 +3474,8 @@ export class SessionStore {
       this.catalog.sessionPlans = this.catalog.sessionPlans.filter((plan) => plan.sessionId !== session.id);
       this.catalog.subagents = this.catalog.subagents.filter((subagent) => subagent.sessionId !== session.id);
       this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => job.sessionId !== session.id);
+      this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.map((record) =>
+        record.sessionId === session.id ? { ...record, sessionTitle: session.title } : record);
       await this.saveCatalog();
     } catch (error) {
       this.catalog.sessions = previousSessions;
@@ -3082,6 +3485,7 @@ export class SessionStore {
       this.catalog.sessionPlans = previousPlans;
       this.catalog.subagents = previousSubagents;
       this.catalog.remoteJobs = previousRemoteJobs;
+      this.catalog.workspaceFileRecords = previousWorkspaceFileRecords;
       await this.rollbackStagedDeletion(operation);
       throw error;
     }
@@ -3109,6 +3513,8 @@ export class SessionStore {
     const previousArtifacts = this.catalog.artifacts;
     const previousArtifactVersions = this.catalog.artifactVersions;
     const previousArtifactAnnotations = this.catalog.artifactAnnotations;
+    const previousWorkspaceFileRecords = this.catalog.workspaceFileRecords;
+    const previousWorkspaceFileRevisions = this.catalog.workspaceFileRevisions;
     const remoteJobIds = new Set(this.catalog.remoteJobs.filter((job) => sessionIds.has(job.sessionId)).map((job) => job.id));
     const projectArtifactIds = new Set(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId).map((artifact) => artifact.id));
     const projectArtifactVersionIds = new Set(this.catalog.artifactVersions
@@ -3129,6 +3535,8 @@ export class SessionStore {
       this.catalog.artifacts = this.catalog.artifacts.filter((artifact) => artifact.projectId !== projectId);
       this.catalog.artifactVersions = this.catalog.artifactVersions.filter((version) => !projectArtifactIds.has(version.artifactId));
       this.catalog.artifactAnnotations = this.catalog.artifactAnnotations.filter((annotation) => !projectArtifactVersionIds.has(annotation.artifactVersionId));
+      this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.filter((record) => record.projectId !== projectId);
+      this.catalog.workspaceFileRevisions = this.catalog.workspaceFileRevisions.filter((revision) => revision.projectId !== projectId);
       await this.saveCatalog();
     } catch (error) {
       this.catalog.projects = previousProjects;
@@ -3142,6 +3550,8 @@ export class SessionStore {
       this.catalog.artifacts = previousArtifacts;
       this.catalog.artifactVersions = previousArtifactVersions;
       this.catalog.artifactAnnotations = previousArtifactAnnotations;
+      this.catalog.workspaceFileRecords = previousWorkspaceFileRecords;
+      this.catalog.workspaceFileRevisions = previousWorkspaceFileRevisions;
       await this.rollbackStagedDeletion(operation);
       throw error;
     }

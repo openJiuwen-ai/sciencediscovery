@@ -283,19 +283,21 @@ export interface WorkspaceAgentOptions {
   environments?: Environment[];
   environmentManagement?: WorkspaceToolOptions["environmentManagement"];
   runSubagent?: (input: SubagentInput, signal?: AbortSignal) => Promise<Subagent>;
-  executePython: (code: string, signal?: AbortSignal) => Promise<import("@sciencediscovery/schema").PythonExecutionResult>;
-  executeShell: (code: string, kernelMode: KernelMode, signal?: AbortSignal) => Promise<ShellExecutionResult>;
+  executePython: (code: string, signal?: AbortSignal, toolCallId?: string) => Promise<import("@sciencediscovery/schema").PythonExecutionResult>;
+  executeShell: (code: string, kernelMode: KernelMode, signal?: AbortSignal, toolCallId?: string) => Promise<ShellExecutionResult>;
   executeScientific?: (
     language: ScientificLanguage,
     code: string,
     environmentRevisionId: string | undefined,
     kernelMode: KernelMode,
     signal?: AbortSignal,
+    toolCallId?: string,
   ) => Promise<ScientificExecutionResult>;
   npuBroker?: WorkspaceToolOptions["npuBroker"];
   history?: AgentHistoryMessage[];
   artifactDownload?: WorkspaceToolOptions["artifactDownload"];
   declareArtifact?: WorkspaceToolOptions["declareArtifact"];
+  getFileProvenance?: WorkspaceToolOptions["getFileProvenance"];
   listArtifacts?: WorkspaceToolOptions["listArtifacts"];
   readArtifact?: WorkspaceToolOptions["readArtifact"];
   mcpTools?: WorkspaceToolOptions["mcpTools"];

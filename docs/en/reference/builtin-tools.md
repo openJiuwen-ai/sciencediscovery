@@ -8,6 +8,7 @@ This page lists tools visible inside the agent loop. `createWorkspaceTools` in `
 |---|---|---|
 | `list_files` | none | Recursively lists workspace paths, sizes, and mtimes; skips symlinks; at most 500 |
 | `read_file` | `path`; optional `offset`, `limit` | Reads one page of workspace text after escape validation: at most 2000 lines or 40 KiB, continued with `offset`. Binary files return media type and size only — never a body or base64 |
+| `get_file_provenance` | `path` | Returns the backend-recorded file identity, current source, revision history, execution context, parent lineage, and linked Artifact versions. `origin: unknown` is explicit and must not be replaced with a model inference |
 | `list_artifacts` | none | Lists user-visible Project Artifacts across Sessions, including origin, creation snapshot, and latest version |
 | `read_artifact` | `artifact_id` or `name`; optional `version`, `offset`, `limit` | Reads one page of a Project Artifact version: UTF-8 text at most 2000 lines or 40 KiB, with the line range and next offset. Binary versions return `binary: true` with media type and size, never a body or base64 |
 | `declare_artifact` | `path` or `paths` (1–50); optional `name`, `description` | Declares writable workspace files as Project Artifacts. Batch entries succeed/fail independently. Logical names can form virtual sidebar directories without moving files; the server infers preview kind |

@@ -60,6 +60,7 @@ import type {
   SkillReviewDraftSummary,
   ShellExecutionResult,
   UninstallEnvironmentRequest,
+  WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 import { Type, type TSchema } from "typebox";
 import {
@@ -199,14 +200,15 @@ export interface WorkspaceToolOptions {
     path: string;
   }) => Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; instruction?: string }>;
   enabledConnectorIds: ConnectorId[];
-  executePython: (code: string, signal?: AbortSignal) => Promise<PythonExecutionResult>;
-  executeShell?: (code: string, kernelMode: KernelMode, signal?: AbortSignal) => Promise<ShellExecutionResult>;
+  executePython: (code: string, signal?: AbortSignal, toolCallId?: string) => Promise<PythonExecutionResult>;
+  executeShell?: (code: string, kernelMode: KernelMode, signal?: AbortSignal, toolCallId?: string) => Promise<ShellExecutionResult>;
   executeScientific?: (
     language: ScientificLanguage,
     code: string,
     environmentRevisionId: string | undefined,
     kernelMode: KernelMode,
     signal?: AbortSignal,
+    toolCallId?: string,
   ) => Promise<ScientificExecutionResult>;
   environments?: Environment[];
   environmentManagement?: {
@@ -269,6 +271,7 @@ export interface WorkspaceToolOptions {
    * report body. */
   declareClaim?: (input: DeclareClaimInput) => Promise<DeclareClaimResult>;
   listArtifacts?: () => Promise<ScientificArtifact[]>;
+  getFileProvenance?: (path: string) => Promise<WorkspaceFileProvenance>;
   readArtifact?: (input: {
     artifactId?: string;
     /** Maximum lines in the returned text page. */
@@ -582,6 +585,27 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     parameters: readFileParameters,
   };
 
+  const provenanceTools: AgentTool[] = [];
+  if (options.getFileProvenance) {
+    const provenanceParameters = Type.Object({
+      path: Type.String({ minLength: 1 }),
+    });
+    const getFileProvenance: AgentTool<typeof provenanceParameters> = {
+      description: "Return recorded source, revision history, copy lineage, execution context, and linked Artifacts for one file in the current writable workspace. An unknown origin means the backend has no trustworthy attribution and must not be guessed.",
+      execute: async (_toolCallId, params) => {
+        const provenance = await options.getFileProvenance!(params.path);
+        return {
+          content: [{ type: "text", text: JSON.stringify(provenance, null, 2) }],
+          details: provenance,
+        };
+      },
+      label: "Get file provenance",
+      name: "get_file_provenance",
+      parameters: provenanceParameters,
+    };
+    provenanceTools.push(getFileProvenance);
+  }
+
   const artifactTools: AgentTool[] = [];
   if (options.listArtifacts) {
     artifactTools.push({
@@ -697,7 +721,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
 
   const runPythonTool: AgentTool<typeof pythonParameters> = {
     description: "Run Python in the current session workspace. Optionally select an Environment Revision and persistent kernel; ephemeral is the default. Save useful outputs as workspace files. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or have the script write its output to a workspace file and read that file with read_file.",
-    execute: async (_toolCallId, params, signal) => {
+    execute: async (toolCallId, params, signal) => {
       const result = options.executeScientific
         ? await options.executeScientific(
           "python",
@@ -705,8 +729,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           params.environmentRevisionId,
           params.kernelMode ?? "ephemeral",
           signal,
+          toolCallId,
         )
-        : await options.executePython(params.code, signal);
+        : await options.executePython(params.code, signal, toolCallId);
       if (result.exitCode !== 0) {
         throw new Error(`Python exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
       }
@@ -722,7 +747,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     parameters: pythonParameters,
   };
 
-  const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...artifactTools, runPythonTool];
+  const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...provenanceTools, ...artifactTools, runPythonTool];
   if (options.npuBroker) {
     const npuParameters = Type.Object({
       operation: Type.Union([
@@ -791,7 +816,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "When operation=result returns job.createdFiles, those workspace files are automatically declared as Project artifacts when artifact declaration is available; otherwise call declare_artifact on those exact paths.",
         "Do not use run_shell to access /home, source host env.sh, write host_launch_request.json, or expect NPU devices inside bwrap.",
       ].join(" "),
-      execute: async (_toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal) => {
         const broker = options.npuBroker!;
         if (params.operation === "list_workloads") {
           const workloads = await broker.listWorkloads(signal);
@@ -1011,7 +1036,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Run one focused task in a subagent. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
         specialistSummary ? `Choose specialistId by semantic match against specialist descriptions. Set specialistId so the specialist's instructions, skills, and connectors are applied. Available specialists: ${specialistSummary}` : "",
       ].filter(Boolean).join(" "),
-      execute: async (_toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal) => {
         const subagent = await options.runSubagent!({
           ...(params.brief ? { brief: params.brief } : {}),
           description: params.description,
@@ -1227,7 +1252,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     });
     const runShell: AgentTool<typeof shellParameters> = {
       description: "Run a bounded shell command or an existing shell script from the authorized Session workspace. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or redirect the output to a workspace file and page through it with read_file.",
-      execute: async (_toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
         }
@@ -1236,7 +1261,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           const scriptPath = await resolveSandboxScriptPath(workspaceRoot, options.readOnlyWorkspaceRoot, params.scriptPath);
           code = ["/usr/bin/bash", shellQuote(scriptPath), ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
-        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal);
+        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal, toolCallId);
         if (result.exitCode !== 0) throw new Error(`Shell exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
         return {
           content: [{ type: "text", text: [
@@ -1263,13 +1288,14 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     });
     const runR: AgentTool<typeof rParameters> = {
       description: "Run R in the current session workspace using a managed R Environment Revision. Prefer R for R-native statistical or Bioconductor workflows. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output.",
-      execute: async (_toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal) => {
         const result = await options.executeScientific!(
           "r",
           params.code,
           params.environmentRevisionId,
           params.kernelMode ?? "ephemeral",
           signal,
+          toolCallId,
         );
         if (result.exitCode !== 0) throw new Error(`R exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
         return {

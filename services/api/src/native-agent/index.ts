@@ -616,6 +616,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.npuBroker ? { npuBroker: options.npuBroker } : {}),
     ...(options.artifactDownload ? { artifactDownload: options.artifactDownload } : {}),
     ...(options.declareArtifact ? { declareArtifact: options.declareArtifact } : {}),
+    ...(options.getFileProvenance ? { getFileProvenance: options.getFileProvenance } : {}),
     ...(options.listArtifacts ? { listArtifacts: options.listArtifacts } : {}),
     ...(options.readArtifact ? { readArtifact: options.readArtifact } : {}),
     ...(options.mcpTools ? { mcpTools: options.mcpTools } : {}),

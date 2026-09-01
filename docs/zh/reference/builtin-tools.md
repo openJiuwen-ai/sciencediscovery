@@ -8,6 +8,7 @@
 |---|---|---|
 | `list_files` | 无 | 递归列出会话工作区文件（路径/大小/修改时间），跳过符号链接，最多 500 个 |
 | `read_file` | `path`，可选 `offset`、`limit` | 分页读工作区文本：单次最多 2000 行或 40 KiB，用 `offset` 续读；路径经工作区逃逸校验。二进制文件只返回媒体类型与大小，正文与 base64 都不进入模型输入 |
+| `get_file_provenance` | `path` | 返回后端已记录的文件身份、当前来源、修订历史、执行上下文、上游来源链和关联产物版本；`origin: unknown` 表示来源不可证实，Agent 不得自行推断 |
 | `list_artifacts` | 无 | 列出当前 Project 中跨 Session 的用户可见产物，包含来源、创建 Session 快照和最新版本元数据 |
 | `read_artifact` | `artifact_id` 或 `name`，可选 `version`、`offset`、`limit` | 按 Project 产物身份分页读取指定版本：文本返回 UTF-8，单页最多 2000 行或 40 KiB，并给出行范围与下一 `offset`；二进制版本只返回 `binary: true` 与媒体类型、大小，不返回正文或 base64 |
 | `declare_artifact` | `path` 或 `paths`（1–50 项），可选 `name`、`description` | 将当前 Agent 可写工作区内的文件显式声明为 Project 产物。单 `path` 保留原返回，`name` 默认等于规范化后的工作区相对 `path`，可显式覆盖为其它安全逻辑路径；`paths` 优先且逐项返回 `ok/error`，成功项不回滚，每项使用自身完整相对 path 并忽略顶层 `name/description`；name 中的 `/` 在产物侧边栏显示为虚拟目录，不创建或移动物理文件；预览 kind 由服务端内部推断，最终报告也必须声明 |

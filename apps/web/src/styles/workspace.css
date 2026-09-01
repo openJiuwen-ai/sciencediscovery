@@ -82,8 +82,57 @@
 .artifact-tree-selection-control[aria-checked="true"], .artifact-tree-selection-control[aria-checked="mixed"], .artifact-tree-file.selected .artifact-tree-selection-control { border-color: var(--accent-border); background: var(--accent-soft); }
 .artifact-tree-file:hover .artifact-tree-node-icon { color: var(--accent); }
 .artifact-tree-spacer { width: 14px; }
+.workspace-file-tree-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px; min-width: 0; min-height: 30px; align-items: center; }
+.workspace-file-tree-row:hover { background: var(--surface-hover); }
+.workspace-file-tree-row > .artifact-tree-file { min-width: 0; }
+.workspace-file-tree-row > .artifact-tree-file:hover { background: transparent; }
+.workspace-file-provenance-action { width: 26px; height: 26px; display: inline-grid; place-items: center; border: 0; border-radius: 5px; background: transparent; padding: 0; color: var(--text-faint); cursor: pointer; }
+.workspace-file-provenance-action:hover { background: var(--surface-track); color: var(--accent-ink); }
+@media (hover: hover) and (pointer: fine) {
+  .workspace-file-provenance-action { opacity: 0; pointer-events: none; transition: opacity var(--motion-fast); }
+  .workspace-file-tree-row:hover .workspace-file-provenance-action,
+  .workspace-file-tree-row:focus-within .workspace-file-provenance-action { opacity: 1; pointer-events: auto; }
+}
 .physical-files { margin-top: 14px; }
 .physical-files .file-list { gap: 0; margin-top: 0; padding: 4px 9px 7px; }
+
+.workspace-provenance { color: var(--text-secondary); }
+.workspace-provenance > section { padding: 0 0 22px; }
+.workspace-provenance > section + section { border-top: 1px solid var(--border); padding-top: 22px; }
+.workspace-provenance h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; color: var(--text-heading); font-size: 14px; }
+.workspace-provenance h3 > span { color: var(--text-faint); font-size: 11px; font-weight: 600; }
+.workspace-provenance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 28px; margin: 0; }
+.workspace-provenance-grid > div { min-width: 0; }
+.workspace-provenance-grid dt { margin-bottom: 4px; color: var(--text-faint); font-size: 11px; font-weight: 700; }
+.workspace-provenance-grid dd { min-width: 0; overflow: hidden; margin: 0; color: var(--text-heading); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-provenance-grid dd code { font-size: 11px; }
+.workspace-provenance-grid dd small { margin-left: 7px; color: var(--danger); font-size: 10px; }
+.workspace-provenance-expandable { display: inline-flex; max-width: 100%; align-items: center; gap: 3px; vertical-align: top; }
+.workspace-provenance-expandable code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-provenance-expandable.is-expanded { align-items: flex-start; }
+.workspace-provenance-expandable.is-expanded code { overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; }
+.workspace-provenance-expandable button { display: inline-grid; width: 20px; height: 20px; flex: 0 0 20px; place-items: center; border: 0; border-radius: 4px; background: transparent; padding: 0; color: var(--text-faint); cursor: pointer; }
+.workspace-provenance-expandable button:hover { background: var(--surface-hover); color: var(--text-heading); }
+.workspace-provenance-expandable button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.workspace-provenance-session { display: inline-block; max-width: min(100%, 420px); overflow: hidden; vertical-align: bottom; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-provenance-unknown, .workspace-provenance-error { margin: 0 0 16px; border-left: 3px solid var(--warning-accent); background: var(--warning-soft); padding: 10px 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.workspace-provenance-error { border-left-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+.workspace-provenance-loading { min-height: 180px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+.workspace-provenance-list, .workspace-provenance-revisions { margin: 0; padding: 0; list-style: none; }
+.workspace-provenance-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 38px; border-top: 1px solid var(--border); font-size: 12px; }
+.workspace-provenance-list li:first-child { border-top: 0; }
+.workspace-provenance-list li strong { min-width: 0; overflow: hidden; color: var(--text-heading); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-provenance-list li code, .workspace-provenance-list li small { color: var(--text-faint); font-size: 10px; }
+.workspace-provenance-list.lineage li { grid-template-columns: minmax(120px, .7fr) minmax(0, 1fr) auto; }
+.workspace-provenance-list.lineage li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-provenance-revisions li { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(160px, .8fr) minmax(0, 1fr); align-items: center; gap: 12px; min-height: 44px; border-top: 1px solid var(--border); font-size: 11px; }
+.workspace-provenance-revisions li:first-child { border-top: 0; }
+.workspace-provenance-revisions li > div { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.workspace-provenance-revisions strong { overflow: hidden; color: var(--text-heading); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-provenance-revisions em { border-radius: 4px; background: var(--accent-soft); padding: 2px 5px; color: var(--accent-ink); font-size: 9px; font-style: normal; font-weight: 700; }
+.workspace-provenance-revisions span, .workspace-provenance-revisions small { overflow: hidden; color: var(--text-faint); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-provenance-revisions .workspace-provenance-revision-context { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; white-space: normal; }
+.workspace-provenance-revision-context > span { display: inline-flex; max-width: 100%; align-items: center; }
 
 .workspace-fold { margin-top: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); }
 .workspace-fold > summary { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 8px 11px; color: var(--text-secondary); cursor: pointer; list-style: none; }

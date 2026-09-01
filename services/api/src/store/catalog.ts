@@ -41,6 +41,8 @@ import type {
   SystemQuotaSettings,
   SystemTimeoutSettings,
   WebSettings,
+  WorkspaceFileRecord,
+  WorkspaceFileRevision,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
@@ -85,6 +87,8 @@ export interface Catalog {
   specialists: Specialist[];
   timeoutSettings: SystemTimeoutSettings;
   webSettings: WebSettings;
+  workspaceFileRecords: WorkspaceFileRecord[];
+  workspaceFileRevisions: WorkspaceFileRevision[];
 }
 
 export function emptyCatalog(
@@ -127,6 +131,8 @@ export function emptyCatalog(
     specialists: BUILTIN_SPECIALISTS.map((specialist) => ({ ...structuredClone(specialist) })),
     timeoutSettings: structuredClone(initialTimeoutSettings),
     webSettings: structuredClone(DEFAULT_WEB_SETTINGS),
+    workspaceFileRecords: [],
+    workspaceFileRevisions: [],
   };
 }
 

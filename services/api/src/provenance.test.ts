@@ -186,6 +186,7 @@ test("shell execution records authoritative code, logs, environment, and generat
     permissionEpoch,
     runnerClient,
     sessionId: session.id,
+    toolCallId: "shell-tool-call",
     turnId: "turn-shell",
     workspaceRoot,
   });
@@ -197,6 +198,7 @@ test("shell execution records authoritative code, logs, environment, and generat
   assert.equal(await recorder.cas.verify(run!.code.hash), true);
   assert.equal(await recorder.cas.verify(run!.stdout.hash), true);
   assert.equal(run?.workingDirectory, "/workspace");
+  assert.equal(run?.toolCallId, "shell-tool-call");
   assert.ok(run?.envSnapshot);
   assert.deepEqual(
     JSON.parse((await recorder.cas.read(run!.envSnapshot!.hash)).toString("utf8")),
@@ -205,6 +207,13 @@ test("shell execution records authoritative code, logs, environment, and generat
   const [derivation] = await store.listArtifactDerivations(session.id);
   assert.equal(derivation?.path, "shell-output.txt");
   assert.deepEqual(derivation?.executionRunIds, [run!.id]);
+  const fileProvenance = store.getWorkspaceFileProvenance(session.id, "shell-output.txt");
+  assert.ok(fileProvenance);
+  assert.equal(fileProvenance.currentRevision.origin, "tool");
+  assert.equal(fileProvenance.currentRevision.executionRunId, run!.id);
+  assert.equal(fileProvenance.currentRevision.runId, "turn-shell");
+  assert.equal(fileProvenance.currentRevision.toolCallId, "shell-tool-call");
+  assert.equal(fileProvenance.currentRevision.toolName, "run_shell");
 });
 
 test("execution provenance distinguishes runs by working directory and env snapshot", async (context) => {
@@ -317,6 +326,7 @@ test("subagent execution prefixes generated artifact paths with the private work
     artifactPathPrefix: subagentPath,
     code: "cat > report.md",
     permissionEpoch,
+    parentSubagentId: "subagent-1",
     runnerClient,
     sessionId: session.id,
     turnId: "subagent-turn",
@@ -325,6 +335,9 @@ test("subagent execution prefixes generated artifact paths with the private work
 
   const derivations = await store.listArtifactDerivations(session.id);
   assert.equal(derivations.at(-1)?.path, "subagents/subagent-1/report.md");
+  const generatedFile = store.getWorkspaceFileProvenance(session.id, "subagents/subagent-1/report.md");
+  assert.equal(generatedFile?.currentRevision.origin, "subagent");
+  assert.equal(generatedFile?.currentRevision.subagentId, "subagent-1");
   assert.equal(store.listArtifacts(session.id).length, 1, "execution output is not cataloged until declared");
 
   const declared = await recorder.declareWorkspaceArtifact({

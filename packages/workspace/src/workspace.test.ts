@@ -27,6 +27,7 @@ import {
   type PythonExecutionResult,
   type RemoteJob,
   type ShellExecutionResult,
+  type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
 import { createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath } from "./workspace.js";
@@ -52,10 +53,12 @@ test("run_python executes code and reports output without resource selection", a
   await mkdir(root, { recursive: true });
   context.after(() => rm(root, { force: true, recursive: true }));
   let executedCode = "";
+  let executedToolCallId = "";
   const tools = createWorkspaceTools(root, {
     enabledConnectorIds: [],
-    executePython: async (code): Promise<PythonExecutionResult> => {
+    executePython: async (code, _signal, toolCallId): Promise<PythonExecutionResult> => {
       executedCode = code;
+      executedToolCallId = toolCallId ?? "";
       return {
         cgroupMode: "none",
         createdFiles: [],
@@ -85,7 +88,56 @@ test("run_python executes code and reports output without resource selection", a
 
   const result = await tool.execute("tool-call", { code: "print('ok')" });
   assert.equal(executedCode, "print('ok')");
+  assert.equal(executedToolCallId, "tool-call");
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /stdout:\nok/);
+});
+
+test("get_file_provenance returns the backend record without inferring fields", async () => {
+  const timestamp = "2026-08-01T10:00:00.000Z";
+  const revision = {
+    artifactVersionIds: [],
+    createdAt: timestamp,
+    fileId: "file-1",
+    id: "revision-1",
+    modifiedAt: timestamp,
+    origin: "unknown" as const,
+    path: "legacy.txt",
+    projectId: "project-1",
+    sessionId: "session-1",
+    size: 6,
+  };
+  const expected: WorkspaceFileProvenance = {
+    artifacts: [],
+    currentRevision: revision,
+    file: {
+      createdAt: timestamp,
+      currentRevisionId: revision.id,
+      id: revision.fileId,
+      path: revision.path,
+      projectId: revision.projectId,
+      sessionId: revision.sessionId,
+      sessionTitle: "Legacy Session",
+      updatedAt: timestamp,
+    },
+    lineage: [],
+    revisions: [revision],
+    sourceSession: { deleted: false, id: "session-1", title: "Legacy Session" },
+  };
+  let requestedPath = "";
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => ({}) as PythonExecutionResult,
+    getFileProvenance: async (path) => {
+      requestedPath = path;
+      return expected;
+    },
+  });
+  const tool = tools.find((candidate) => candidate.name === "get_file_provenance");
+  assert.ok(tool);
+  const result = await tool.execute("provenance-call", { path: "legacy.txt" });
+  assert.equal(requestedPath, "legacy.txt");
+  assert.deepEqual(result.details, expected);
+  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /\"origin\": \"unknown\"/);
 });
 
 test("web search and fetch are stable first-class tools when handlers are provided", async () => {

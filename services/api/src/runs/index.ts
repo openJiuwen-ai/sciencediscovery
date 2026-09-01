@@ -167,6 +167,7 @@ import {
   artifactVersionProvenance,
   listWorkspaceFiles,
   mcpConnectorManifest,
+  workspaceFileProvenance,
 } from "../artifacts/index.js";
 import {
   advanceResolvedPermissionRequests,
@@ -742,7 +743,7 @@ async function executeAgentRun(
     turnId: string,
     sourcePathPrefix?: string,
     parentSubagentId?: string,
-  ): Pick<WorkspaceAgentOptions, "declareArtifact" | "listArtifacts" | "readArtifact"> => ({
+  ): Pick<WorkspaceAgentOptions, "declareArtifact" | "getFileProvenance" | "listArtifacts" | "readArtifact"> => ({
     declareArtifact: async (input) => {
       const defaultName = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
       // `sourcePath` must match the artifact-derivation path stored by
@@ -798,6 +799,14 @@ async function executeAgentRun(
         }
       }
       return result;
+    },
+    getFileProvenance: async (path) => {
+      const normalizedPath = normalizeWorkspaceRelativePath(workspaceRoot, path);
+      return await workspaceFileProvenance(
+        store,
+        sessionId,
+        sourcePathPrefix ? `${sourcePathPrefix}/${normalizedPath}` : normalizedPath,
+      );
     },
     listArtifacts: async () => store.listProjectArtifacts(session.projectId),
     readArtifact: async (input) => {

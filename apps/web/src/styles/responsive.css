@@ -55,6 +55,8 @@
 
 @media (max-width: 600px) {
   :root { --timeline-gutter: 45px; }
+  .workspace-provenance-grid { grid-template-columns: minmax(0, 1fr); }
+  .workspace-provenance-revisions li, .workspace-provenance-list.lineage li { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 9px 0; }
   .session-bar-meta { width: 100%; }
   .session-bar-project { max-width: 40vw; }
   .session-bar-session-rename { min-width: 0; max-width: none; width: 100%; flex: none; }

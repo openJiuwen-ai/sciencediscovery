@@ -14,7 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -25,8 +25,9 @@ import type {
   PaperExtractionManifest,
   PaperSourceId,
   PaperVisionRun,
+  WorkspaceFileRevisionInput,
 } from "@sciencediscovery/schema";
-import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { resolveWorkspaceFile, scanWorkspace } from "@sciencediscovery/workspace";
 import { CasStore } from "@sciencediscovery/cas";
 
 import { SessionStore } from "./store.js";
@@ -63,6 +64,7 @@ interface StorePaperOptions {
   identifier: string;
   license: string;
   outputPathPrefix?: string;
+  parentRevisionId?: string;
   sessionId: string;
   signal?: AbortSignal;
   sourceUrl: string;
@@ -131,6 +133,7 @@ export class PaperService {
       identifier: input.candidate.sourceRecordId,
       license: input.candidate.license,
       outputPathPrefix: input.outputPathPrefix,
+      parentRevisionId: this.store.getWorkspaceFileProvenance(input.sessionId, input.path)?.currentRevision.id,
       sessionId: input.sessionId,
       signal: input.signal,
       sourceUrl: input.candidate.sourceUrl,
@@ -288,7 +291,9 @@ export class PaperService {
     const id = randomUUID();
     const resultPath = `papers/${acquisition.id}/vision/${id}.md`;
     await mkdir(resolve(workspace, dirname(resultPath)), { recursive: true });
-    await writeFile(resolve(workspace, resultPath), `# Vision analysis\n\n${content}\n`, "utf8");
+    const resultTarget = resolve(workspace, resultPath);
+    const resultBytes = Buffer.from(`# Vision analysis\n\n${content}\n`, "utf8");
+    await writeFile(resultTarget, resultBytes);
     const run: PaperVisionRun = {
       completedAt: new Date().toISOString(),
       id,
@@ -304,6 +309,21 @@ export class PaperService {
       sessionId: input.sessionId,
       status: "succeeded",
     };
+    const [resultStat, resultRef] = await Promise.all([stat(resultTarget), this.cas.put(resultBytes)]);
+    const sourceRevisionId = this.store
+      .getWorkspaceFileProvenance(input.sessionId, acquisition.pdfPath)
+      ?.currentRevision.id;
+    await this.store.recordWorkspaceFileRevision(input.sessionId, {
+      contentHash: resultRef.hash,
+      mode: "write",
+      modifiedAt: resultStat.mtime.toISOString(),
+      origin: "system",
+      originMeta: { kind: "paper-vision-analysis", paperId: acquisition.id },
+      ...(sourceRevisionId ? { parentRevisionId: sourceRevisionId } : {}),
+      path: resultPath,
+      runId: id,
+      size: resultStat.size,
+    });
     await this.store.appendPaperVisionRun(run);
     return run;
   }
@@ -354,6 +374,41 @@ export class PaperService {
         status: "succeeded",
         title: cleanTitle(options.title, options.identifier),
       };
+      const extractedFiles = await scanWorkspace(targetRoot);
+      let sourceRevisionId: string | undefined;
+      const extractedProvenanceInputs: WorkspaceFileRevisionInput[] = [];
+      for (const file of extractedFiles.toSorted((left, right) =>
+        left.path === "source.pdf" ? -1 : right.path === "source.pdf" ? 1 : left.path.localeCompare(right.path))) {
+        const path = `${relativeRoot}/${file.path}`;
+        const content = file.path === "source.pdf"
+          ? pdf
+          : await this.cas.put(await readFile(resolveWorkspaceFile(targetRoot, file.path)));
+        const revisionInput: WorkspaceFileRevisionInput = {
+          contentHash: content.hash,
+          mode: "write",
+          modifiedAt: file.modifiedAt,
+          origin: file.path === "source.pdf"
+            ? options.connectorId === "upload" ? "upload" : "mcp-download"
+            : "system",
+          originMeta: {
+            connectorId: options.connectorId,
+            kind: file.path === "source.pdf" ? "paper-source" : "paper-extraction",
+            paperId: id,
+            ...(options.sourceUrl ? { sourceUrl: options.sourceUrl } : {}),
+          },
+          ...(file.path === "source.pdf"
+            ? options.parentRevisionId ? { parentRevisionId: options.parentRevisionId } : {}
+            : sourceRevisionId ? { parentRevisionId: sourceRevisionId } : {}),
+          path,
+          size: file.size,
+        };
+        if (file.path === "source.pdf") {
+          sourceRevisionId = (await this.store.recordWorkspaceFileRevision(options.sessionId, revisionInput)).id;
+        } else {
+          extractedProvenanceInputs.push(revisionInput);
+        }
+      }
+      await this.store.recordWorkspaceFileRevisions(options.sessionId, extractedProvenanceInputs);
       await this.store.appendPaperAcquisition(acquisition);
       return acquisition;
     } catch (error) {

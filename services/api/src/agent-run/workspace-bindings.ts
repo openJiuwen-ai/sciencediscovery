@@ -129,13 +129,14 @@ export function createWorkspaceExecutionBindings(
         });
       },
     } } : {}),
-    executePython: async (code: string, signal?: AbortSignal) => {
+    executePython: async (code: string, signal?: AbortSignal, toolCallId?: string) => {
       options.store.assertSessionWritable(options.sessionId);
       await options.permission.requirePrivilege({
         action: "code",
         executionId: options.executionId,
         resource: "workspace-code",
         signal,
+        ...(toolCallId ? { toolCallId } : {}),
         summary: `Run Python code ${options.permissionScopeLabel}`,
       });
       return options.provenanceRecorder.executePython({
@@ -152,18 +153,20 @@ export function createWorkspaceExecutionBindings(
         ...sandboxEgressProxy(),
         sessionId: options.sessionId,
         signal,
+        ...(toolCallId ? { toolCallId } : {}),
         turnId: options.executionId,
         workspaceRoot: options.workspaceRoot,
         parentSubagentId: options.parentSubagentId,
       });
     },
-    executeShell: async (code: string, kernelMode: KernelMode, signal?: AbortSignal) => {
+    executeShell: async (code: string, kernelMode: KernelMode, signal?: AbortSignal, toolCallId?: string) => {
       options.store.assertSessionWritable(options.sessionId);
       await options.permission.requirePrivilege({
         action: "code",
         executionId: options.executionId,
         resource: "workspace-code",
         signal,
+        ...(toolCallId ? { toolCallId } : {}),
         summary: `Run a shell script ${options.permissionScopeLabel}`,
       });
       return options.provenanceRecorder.executeShell({
@@ -181,6 +184,7 @@ export function createWorkspaceExecutionBindings(
         ...sandboxEgressProxy(),
         sessionId: options.sessionId,
         signal,
+        ...(toolCallId ? { toolCallId } : {}),
         turnId: options.executionId,
         workspaceRoot: options.workspaceRoot,
         parentSubagentId: options.parentSubagentId,
@@ -241,6 +245,7 @@ export function createWorkspaceExecutionBindings(
         environmentRevisionId: string | undefined,
         kernelMode: Parameters<NonNullable<WorkspaceAgentOptions["executeScientific"]>>[3],
         signal?: AbortSignal,
+        toolCallId?: string,
       ) => {
         options.store.assertSessionWritable(options.sessionId);
         await options.permission.requirePrivilege({
@@ -248,6 +253,7 @@ export function createWorkspaceExecutionBindings(
           executionId: options.executionId,
           resource: "workspace-code",
           signal,
+          ...(toolCallId ? { toolCallId } : {}),
           summary: `Run ${language} code ${options.permissionScopeLabel}`,
         });
         return options.provenanceRecorder.executeScientific({
@@ -267,6 +273,7 @@ export function createWorkspaceExecutionBindings(
           ...sandboxEgressProxy(),
           sessionId: options.sessionId,
           signal,
+          ...(toolCallId ? { toolCallId } : {}),
           turnId: options.executionId,
           workspaceRoot: options.workspaceRoot,
           parentSubagentId: options.parentSubagentId,

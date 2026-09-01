@@ -215,6 +215,19 @@ test("WorkspaceFileTreeList renders compact physical file leaves with full-path 
   assert.doesNotMatch(markup, /file-row|file-kind/);
 });
 
+test("WorkspaceFileTreeList exposes a provenance action outside selection mode", () => {
+  const tree = buildWorkspaceFileTree([workspaceFile("results/report.md", "markdown")]);
+  const markup = renderToStaticMarkup(createElement(WorkspaceFileTreeList, {
+    entries: tree,
+    onOpen: () => undefined,
+    onShowProvenance: () => undefined,
+  }));
+
+  assert.match(markup, /workspace-file-tree-row/);
+  assert.match(markup, /View provenance for results\/report\.md/);
+  assert.match(markup, /workspace-file-provenance-action/);
+});
+
 test("workspace file leaves always use the workspace reader regardless of preview kind", () => {
   const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
   const openFileStart = app.indexOf("async function openWorkspaceFile(file: WorkspaceFile)");

@@ -14,7 +14,7 @@
 
 import { createHash } from "node:crypto";
 
-import { scanWorkspace } from "@sciencediscovery/workspace";
+import { normalizeWorkspaceRelativePath, scanWorkspace } from "@sciencediscovery/workspace";
 import { classifyScientificArtifact } from "@sciencediscovery/schema";
 import type {
   ArtifactVersionDiff,
@@ -24,21 +24,43 @@ import type {
   ExecutionRun,
   ScientificArtifactVersion,
   WorkspaceFile,
+  WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
 import { MemoryGraphClient, type ArtifactProvenanceGraphResult } from "@sciencediscovery/memory";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
-import { SessionStore } from "../store.js";
+import { SessionStore, SessionStoreHttpError } from "../store.js";
 
 export function classifyWorkspaceFilePreview(path: string): WorkspaceFile["previewKind"] {
   return classifyScientificArtifact(path);
 }
 
 export async function listWorkspaceFiles(store: SessionStore, sessionId: string): Promise<WorkspaceFile[]> {
-  return (await scanWorkspace(store.workspacePath(sessionId))).map((file) => {
+  const baseline = store.snapshotWorkspaceFileRevisions(sessionId);
+  const files = await scanWorkspace(store.workspacePath(sessionId));
+  const provenance = await store.reconcileWorkspaceFiles(sessionId, files, baseline);
+  return files.map((file) => {
     const previewKind = classifyWorkspaceFilePreview(file.path);
-    return { ...file, ...(previewKind ? { previewKind } : {}) };
+    const summary = provenance.get(file.path);
+    return {
+      ...file,
+      ...(previewKind ? { previewKind } : {}),
+      ...(summary ? { provenance: summary } : {}),
+    };
   });
+}
+
+export async function workspaceFileProvenance(
+  store: SessionStore,
+  sessionId: string,
+  pathInput: string,
+): Promise<WorkspaceFileProvenance> {
+  const path = normalizeWorkspaceRelativePath(store.workspacePath(sessionId), pathInput);
+  const files = await listWorkspaceFiles(store, sessionId);
+  if (!files.some((file) => file.path === path)) throw new SessionStoreHttpError("Workspace file not found", 404);
+  const provenance = store.getWorkspaceFileProvenance(sessionId, path);
+  if (!provenance) throw new SessionStoreHttpError("Workspace file provenance not found", 404);
+  return provenance;
 }
 
 async function readProcessEnvironment(
