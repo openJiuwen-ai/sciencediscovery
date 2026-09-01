@@ -39,6 +39,7 @@ const RUNNER_HEALTH: RunnerHealth = {
   networkPolicy: "none",
   noNewPrivileges: true,
   npuBroker: { enabled: false, queueConcurrency: 1, workloads: [] },
+  platform: "linux",
   runnerVersion: "test",
   sandbox: "bubblewrap",
   sandboxNetwork: { available: true, modes: ["none", "domain-allowlist"] },

@@ -13,11 +13,11 @@
 // limitations under the License.
 
 import { execFile } from "node:child_process";
-import { createReadStream } from "node:fs";
-import { lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createReadStream, rmSync } from "node:fs";
+import { chmod, lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { userInfo } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -91,6 +91,12 @@ export interface RunnerConfig extends ExecutorConfig {
   authToken: string;
   host: string;
   port: number;
+  /**
+   * When set, the runner listens on this Unix socket instead of a TCP port.
+   * An SSH-deployed runner uses it so the remote host exposes no listening
+   * port at all: the control plane forwards a loopback port onto the socket.
+   */
+  socketPath?: string;
   provisionerPath?: string;
   scientificAllowedChannels?: string[];
   scientificEnvsEnabled?: boolean;
@@ -336,6 +342,7 @@ export function loadRunnerConfig(env: NodeJS.ProcessEnv = process.env, cwd = rep
     maxOutputBytes: parseByteQuota("SCIENCE_AGENT_MAX_OUTPUT_BYTES", DEFAULT_MAX_OUTPUT_BYTES),
     maxWorkspaceBytes: parseByteQuota("SCIENCE_AGENT_MAX_WORKSPACE_BYTES", DEFAULT_MAX_WORKSPACE_BYTES),
     host: env.SCIENCE_AGENT_RUNNER_HOST?.trim() || "127.0.0.1",
+    ...(env.SCIENCE_AGENT_RUNNER_SOCKET?.trim() ? { socketPath: resolve(cwd, env.SCIENCE_AGENT_RUNNER_SOCKET.trim()) } : {}),
     npuBrokerEnabled: /^(?:1|true|yes)$/i.test(env.SCIENCE_AGENT_NPU_BROKER?.trim() || "0"),
     npuProtenixScriptPath: env.SCIENCE_AGENT_NPU_PROTENIX_SCRIPT?.trim() || undefined,
     npuPythonPath: env.SCIENCE_AGENT_NPU_PYTHON?.trim() || undefined,
@@ -487,6 +494,7 @@ export function createRunnerServer(
           networkPolicy: "none",
           noNewPrivileges: executorSandboxKind(config) === "bubblewrap",
           npuBroker: npuBroker.capability(),
+          platform: process.platform,
           runnerVersion: RUNNER_VERSION,
           sandbox: executorSandboxKind(config),
           sandboxNetwork: await sandboxNetworkCapability(executorSandboxKind(config)),
@@ -997,17 +1005,42 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     egressGateways,
   );
   server.once("close", () => { void kernelManager.close(); });
+  if (config.socketPath) {
+    // A stale socket file from a killed runner would make bind fail; only this
+    // product writes into the directory it hands out, so removing it is safe.
+    await mkdir(dirname(config.socketPath), { mode: 0o700, recursive: true });
+    await rm(config.socketPath, { force: true });
+  }
   await new Promise<void>((resolveListen, reject) => {
     server.once("error", reject);
-    server.listen(config.port, config.host, () => {
+    const ready = (): void => {
       server.off("error", reject);
       resolveListen();
-    });
+    };
+    if (config.socketPath) server.listen(config.socketPath, ready);
+    else server.listen(config.port, config.host, ready);
   });
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : config.port;
-  logger.info("service_started", { host: config.host, port });
-  console.log(`ScienceDiscovery runner listening on http://${config.host}:${port}`);
+  if (config.socketPath) {
+    const socketPath = config.socketPath;
+    await chmod(socketPath, 0o600);
+    server.once("close", () => { void rm(socketPath, { force: true }); });
+    // A socket-mode runner is tied to the SSH session that started it, and that
+    // session ends with a hangup rather than a graceful stop. Removing the
+    // socket here keeps a dead address from being left behind on the host.
+    for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] as const) {
+      process.once(signal, () => {
+        rmSync(socketPath, { force: true });
+        process.exit(0);
+      });
+    }
+    logger.info("service_started", { socketPath });
+    console.log(`ScienceDiscovery runner listening on unix:${socketPath}`);
+  } else {
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : config.port;
+    logger.info("service_started", { host: config.host, port });
+    console.log(`ScienceDiscovery runner listening on http://${config.host}:${port}`);
+  }
   const workspaceLabel = config.maxWorkspaceBytes === 0
     ? "unlimited"
     : `${config.maxWorkspaceBytes} bytes`;

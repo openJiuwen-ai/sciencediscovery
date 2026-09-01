@@ -457,6 +457,8 @@ export interface RunnerHealth {
   /** Linux Bubblewrap sets no-new-privileges; Seatbelt reports false. */
   noNewPrivileges: boolean;
   npuBroker: NpuBrokerCapability;
+  /** `process.platform` of the machine running this runner; remote runners must report `linux`. */
+  platform: string;
   runnerVersion: string;
   sandbox: SandboxKind;
   /** Whether this runner can serve `domain-allowlist` executions at all. */

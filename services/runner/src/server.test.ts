@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
-import type { Server } from "node:http";
+import { request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, resolve } from "node:path";
@@ -1912,4 +1912,37 @@ test("runner shell endpoint keeps a persistent session per Session-Agent and dow
     method: "POST",
   })).json() as { count: number };
   assert.equal(teardown.count, 1);
+});
+
+test("a runner started for an SSH tunnel listens on a private socket and opens no port", async (context) => {
+  const fixture = await workspaceFixture(context);
+  // Short path: a Unix socket address is limited to about 100 bytes, and the
+  // per-test data directory is already long.
+  const socketPath = resolve(await mkdtemp(resolve(tmpdir(), "sd-sock-")), "runner.sock");
+  const server = await startRunnerServer({ ...config(fixture.dataDir), socketPath });
+  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
+  context.after(() => rm(dirname(socketPath), { force: true, recursive: true }));
+
+  assert.equal(server.address(), socketPath);
+  assert.equal((await stat(socketPath)).mode & 0o777, 0o600);
+  const health = await new Promise<RunnerHealth>((resolveBody, reject) => {
+    const request = httpRequest({ path: "/health", socketPath }, (response) => {
+      let body = "";
+      response.on("data", (chunk: Buffer) => { body += chunk.toString("utf8"); });
+      response.once("end", () => resolveBody(JSON.parse(body) as RunnerHealth));
+    });
+    request.once("error", reject);
+    request.end();
+  });
+  assert.equal(health.status, "ok");
+  assert.equal(health.platform, process.platform);
+});
+
+test("the runner socket is configured by environment like every other listener setting", () => {
+  const socketConfig = loadRunnerConfig({
+    SCIENCE_AGENT_DATA_DIR: "/tmp/data",
+    SCIENCE_AGENT_RUNNER_SOCKET: "/tmp/data/run/runner.sock",
+  }, "/tmp");
+  assert.equal(socketConfig.socketPath, "/tmp/data/run/runner.sock");
+  assert.equal(loadRunnerConfig({}, "/tmp").socketPath, undefined);
 });
