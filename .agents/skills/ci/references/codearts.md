@@ -2,14 +2,17 @@
 
 Read this reference for `.codearts/workflow/`, CodeArts Pipeline failures,
 GitCode merge-request checks backed by CodeArts, the default CCE runner, or OBS
-test logs. This repository intentionally does not use GitCode Actions.
+test logs. For the OBS bucket, object-key layout, upload contract, public reads,
+and toolchain cache, also read [codearts-obs.md](codearts-obs.md). This
+repository intentionally does not use GitCode Actions.
 
 ## Pipeline inventory
 
 `.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
 runs the repository's `ci:ut:core` and hermetic `ci:st` entry points, invokes
-the reusable code-check pipeline, and renders the final PR result. The code
-check is an externally registered CodeArts pipeline containing the SCA,
+the reusable code-check pipeline, builds the x86_64 debug binary on a hosted
+runner, invokes an ARM CodeArts Build task for aarch64, and renders the final
+PR result. The code check is an externally registered CodeArts pipeline containing the SCA,
 anti-poison, static-analysis, and blacklist CloudBuild tasks. Its former local
 definition `.codearts/workflow/codearts-pipeline-code-check.yml` was migrated
 out of this repository and intentionally deleted. Do not recreate it or remove
@@ -84,10 +87,12 @@ child, but it must not enable labels or comments. Keep the label task in the
 parent before verification, and keep the final publisher in `post` with
 `select: always` so failed checks can still report their status.
 
-Interpret results in the parent workflow, not in the PR bot. The parent uses
-`completed('ut', 'st', 'code_check')` to select mutually exclusive success and
-failure post jobs, renders a complete result HTML file from
-`jobs.<job_id>.status`, uploads that file to OBS, and passes its OBS key plus the
+Interpret results in the parent workflow, not in the PR bot. The parent
+includes both `binary_aarch64` and its OBS verification job in the
+`completed(...)` gate that selects mutually exclusive success and failure post
+jobs. It renders a complete result
+HTML file from the UT/ST/binary job statuses and each code-check child's own
+public result JSON, uploads that file to OBS, and passes its OBS key plus the
 already chosen `final_label` to the bot. The bot downloads and posts the HTML
 unchanged; it must not read other result artifacts or derive a result
 independently, because stale artifacts can disagree with the current run.
@@ -160,6 +165,81 @@ create user namespaces. Runner UT and E2E therefore remain excluded. A
 sandboxed layer requires a self-hosted resource pool that passes an actual
 bubblewrap probe.
 
+The debug x86_64 binary job keeps the repository's proven hosted labels
+`[codearts-hosted, ubuntu-latest, x64, large]`. The aarch64 parent job runs on
+`default` only to invoke ARM Build task `b6e9c483743d470d9725a1b23c6d1d91`;
+the Build task, not the parent job's `runs-on`, owns the ARM executor. Its
+console shell is a reusable bootstrap: it fetches `GIT_REPO_URL` at `GIT_REF`,
+requires the requested commit to equal or remain reachable from that ref,
+detaches at the Build system's `COMMIT_ID` (accepting a console-provided
+`GIT_COMMIT` alias only as a fallback), then invokes the repository's
+`.ci/codearts-build-dispatch.sh`. Do not add a duplicate custom commit
+parameter when the Build task already provides `COMMIT_ID`.
+
+The graphical Build shell action embeds its command in a Groovy
+`WorkflowScript` before Bash sees it. A literal backslash in the pasted command
+can therefore fail Groovy compilation with `unexpected char` before checkout.
+Use the published ASCII-only bootstrap with no backslashes or empty lines as-is;
+if a different command must contain backslashes, double every one for the
+Groovy layer. Rich-text copy can insert `U+200B` on an apparently blank line;
+paste as plain text and remove that invisible line if Bash reports it as a
+command. The bootstrap
+captures both success and failure output as `run.log`, records the real command
+status in `exit-code`, and returns success only so the following OBS action can
+preserve those diagnostics. The parent OBS verification job remains the final
+failure authority and rejects any nonzero `exit-code`.
+
+Runtime parameters from the parent are `GIT_REPO_URL`, `GIT_REF`,
+`SH_FILE_PATH`, `ARTIFACT_PATH`, `OBS_BUCKET`, `OBS_DIRECTORY`,
+`OBS_ENDPOINT`, `ENVS`, and `ARGS`. `SH_FILE_PATH` and `ARTIFACT_PATH` are
+repository-relative. `ENVS` contains one `NAME=VALUE` record per line, and
+`ARGS` contains one argument per line; values and arguments are not
+shell-evaluated. The dispatcher rejects paths outside the checkout, malformed
+environment names, and shell-control variables such as `PATH`, `BASH_ENV`,
+and `LD_PRELOAD`, then uses `exec bash` so the child exit status becomes the
+Build result. Keep long build commands in the referenced script rather than in
+the pipeline parameter, whose custom value is limited by CodeArts.
+
+The Build task's following OBS action uploads
+`.codearts-build/repository/${ARTIFACT_PATH}/*` with an empty destination file
+name, folder upload disabled, and failure continuation disabled. The parent
+does not treat `artifactIdentifier` as evidence for this OBS upload. A
+dependent job probes the commit-qualified aarch64 binary, `SHA256SUMS`,
+`VERSION`, `run.log`, and `exit-code` at the exact run-specific OBS prefix,
+requires the exit code to be zero, and validates the checksum file format.
+It checks `exit-code` before optional cache-transfer objects so a failed build
+is reported as such rather than being masked by a missing cache file. Missing
+objects therefore fail closed.
+
+The aarch64 package script asserts both the pipeline's expected commit and
+`uname -m` before packaging. It calls the repository-owned package entry
+point, verifies the normalized binary and `SHA256SUMS`, and leaves the binary,
+`SHA256SUMS`, `VERSION`, `run.log`, and `exit-code` in the artifact directory.
+Both architecture paths probe bubblewrap independently. If the probe fails,
+the job may use the script's explicit `--skip-smoke` downgrade, but the log
+and PR documentation must say the artifact is packaging-only rather than
+release-smoke verified.
+
+Debug binaries use the CodeArts source context's eight-character
+`commit_id_short` and are named
+`ScienceDiscovery-<commit_id_short>-linux-<architecture>`. Keep the local
+rename, OBS key, verifier, checksum regex, and PR result link synchronized when
+this convention changes. `VERSION` continues to record the full commit.
+
+Raw GitHub Release downloads can time out repeatedly from mainland CodeArts
+runners. The debug binary jobs therefore set `MICROMAMBA_CONDA_MIRROR` to the
+Tsinghua TUNA conda-forge mirror. `fetch-managed-micromamba.mjs` downloads the
+architecture-specific pinned `.tar.bz2`, verifies the archive SHA256, extracts
+`bin/micromamba`, and still verifies the executable against the upstream raw
+binary SHA256. Do not replace this with an untrusted GitHub proxy or disable
+either checksum. Without the environment variable, runtime provisioning keeps
+the upstream GitHub Release URL.
+
+The OBS layout and verified toolchain cache contract are defined in
+[codearts-obs.md](codearts-obs.md). Keep public runtime scripts on the generic
+`BINARY_CACHE_URL` / `BINARY_CACHE_DIR` mechanism; CodeArts-specific variable
+translation stays in `.ci/` and `.codearts/`.
+
 Install Node, pnpm, uv, and other user-space tools with
 `.ci/provision-runner.sh`; do not use `dnf` or rely on `sudo`. Pipeline `env`
 entries are parameters, not implicit shell exports, so pass mirror values into
@@ -169,29 +249,10 @@ change.
 
 ## Upload test logs to OBS
 
-Preserve diagnostics without hiding test failures: run the layer, stage its
-exit code, guarantee `run.log` exists, upload the log, and then exit with the
-staged code.
-
-`upload-obs` validates its local input before contacting OBS. `source_file`
-must be an absolute path below the current `${SHARE_PATH}`:
-
-```yaml
-- name: Upload ST log to OBS
-  uses: upload-obs
-  with:
-    key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
-    source_file: "${SHARE_PATH}/.ci-results/st/run.log"
-    self_folder: "false"
-```
-
-Use both the source commit and `pipeline.run_id` in `key`: one commit can run
-more than once, and a commit-only key overwrites earlier diagnostics. This
-source expansion and OBS layout passed on CodeArts on 2026-08-24.
-
-An early checkout or provisioning failure occurs before `run.log` is staged
-and before `upload-obs` runs. In that case the public OBS URL is expected to be
-missing and may return HTTP `403`; do not publish it as if a log exists.
+Follow the upload and failure-preservation contract in
+[codearts-obs.md](codearts-obs.md). In particular, keep the real layer exit
+code, upload only from an absolute path below `${SHARE_PATH}`, and use both the
+source commit and `pipeline.run_id` in the object key.
 
 ## Publish the PR result
 
@@ -203,15 +264,26 @@ https://gitcode.com/openJiuwen/sciencediscovery/pull/<MR_NUMBER>/check
 ```
 
 List all four code-check subtasks (SCA, anti-poison, CodeCheck, and blacklist),
-plus UT and ST. User-facing status cells contain only `PASSED` or `FAILED`.
-CodeArts may report successful jobs as lifecycle state `completed`; normalize
-`completed`, `passed`, `success`, `successful`, and `succeeded` to `PASSED`, and
-every other value to `FAILED`. Do not print `COMPLETED` in the table.
+plus UT, ST, and both binary architectures. User-facing status cells contain
+only `PASSED` or `FAILED`. CodeArts may report successful jobs as lifecycle
+state `completed`; normalize `completed`, `passed`, `success`, `successful`,
+and `succeeded` to `PASSED`, and every other value to `FAILED`. Do not print
+`COMPLETED` in the table.
 
-For code-check detail links, read the public result JSON created by the child
-pipeline and publish its validated absolute HTTPS `link`; use `N/A` when the
-JSON or link is unavailable. For UT/ST, probe the public OBS object with a
-small ranged request (`Range: bytes=0-0`) and accept only HTTP `200` or `206`.
+The four code-check rows do **not** share the parent `jobs.code_check.status`.
+Read the SCA, anti-poison, CodeCheck, and blacklist public result JSON files
+independently. Normalize each JSON `status` after trimming and lowercasing it:
+only `completed`, `pass`, `passed`, `success`, `successful`, and `succeeded`
+map to `PASSED`; missing, malformed, unknown, and all other values map to
+`FAILED`. This deliberately treats the observed provider typo `FIALED` as
+`FAILED` instead of guessing intent or hiding the failure behind the parent
+summary.
+
+Validate each code-check JSON `link` separately from its status and publish it
+only when it is an absolute HTTPS URL; otherwise show `N/A`. A missing or
+invalid link must not change a valid status. For UT/ST and failed binary rows,
+probe the public OBS log object with a small ranged request
+(`Range: bytes=0-0`) and accept only HTTP `200` or `206`.
 If the object is missing or inaccessible, link to the GitCode Checks page and
 say that the public test log was not generated. This probe controls only link
 availability; `jobs.<job_id>.status` controls the reported test result.
@@ -230,12 +302,9 @@ described in the create-pr skill; this section is about the run itself.
 The MR check page (`/pull/<number>/check`) exposes the job status and
 build-log entry. Complete CodeArts
 run details may still require CodeArts credentials; if those credentials are
-not available, ask the user for the complete job log. When upload ran, UT/ST
-`run.log` files are also archived at:
-
-```text
-obs://openjiuwen-ci/sciencediscovery/ci/<commit>/<pipeline.run_id>/<ut|st>/run.log
-```
+not available, ask the user for the complete job log. When upload ran, the
+public diagnostics and artifact paths follow the layout in
+[codearts-obs.md](codearts-obs.md).
 
 Do not infer a root cause from the generic final `COCT.1140002.450`; use the
 first failing step and its inner command or plugin error.
@@ -261,6 +330,16 @@ workflow again before pushing. Never overwrite a new UI commit blindly.
 | A child CloudBuild command ends with bare `--pr_id` | The child read `${MERGE_ID}`, which is not inherited from the parent. Pass the parent's MR ID as `PR_ID` and consume `${PR_ID}` inside every child task. |
 | `fatal: couldn't find remote ref refs/heads/<source>` on a fork PR | The checkout tried to fetch a fork-only branch from upstream. Fetch `refs/merge-requests/<MERGE_ID>/head` and detach at the validated event SHA. |
 | The PR table reports `COMPLETED` | The workflow exposed a raw CodeArts lifecycle state. Normalize it to `PASSED`; map every non-success state to `FAILED`. |
+| All four code-check rows show one shared status | The parent job status was reused. Read and normalize the four public child result JSON files independently. |
+| A child result says `FIALED` or another unknown value | It is outside the success allowlist and must render as `FAILED`; fail closed rather than correcting arbitrary provider strings. |
+| An `arm64` binary job runs on `x86_64` | Runner labels or scheduling are wrong. Fail the architecture preflight before packaging; do not call a cross-build a native ARM64 runner result. |
+| Managed micromamba times out on `github.com/mamba-org/micromamba-releases` | Mainland egress cannot reach the raw GitHub Release reliably. For the debug binary jobs, use the pinned TUNA conda package through `MICROMAMBA_CONDA_MIRROR`; keep both archive and extracted-binary SHA256 checks. |
+| A stable OBS toolchain object is missing or has the wrong checksum | Treat it as a cache miss, fetch the pinned source, and refill OBS only from a successful binary job. Never weaken the repository checksum to accept the cache. |
+| ARM provisioning says no matching `uv` version even though the mirror index lists it | pip's compatibility filter rejected the wheel. Read the logged Python and pip versions before deciding whether the cause is the Python requirement or platform-tag support. Provisioning avoids both variables by fetching the architecture-specific pinned TUNA wheel (or `CI_UV_WHEEL_URL`) with the repository SHA256, then extracting its verified `uv` and `uvx` scripts directly. |
+| ARM Build logs a staged CPython cache file, but the verifier gets `403` for its raw `+` URL | OBS has the object; the unescaped path is wrong. Percent-encode the basename (`+` becomes `%2B`) before probing or downloading, then verify SHA256 as usual. |
+| ARM Build fails with Groovy `unexpected char: '\'` before any shell output | The graphical shell action compiled a literal backslash as Groovy source. Replace the pasted content with the zero-backslash bootstrap, or double every backslash before saving. |
+| ARM Build prints an apparently blank command and exits 127 with `command not found` | Rich-text copy inserted an invisible `U+200B` character. Paste the ASCII-only bootstrap as plain text; its published form contains no empty lines where the editor can add that character. |
+| The ARM Build task is green but an aarch64 OBS object is missing | The bootstrap or OBS action is missing/misconfigured, or the parent and child prefixes differ. Keep the parent OBS-verification job red; compare `OBS_DIRECTORY`, `ARTIFACT_PATH`, and the five expected object names. |
 | A generated UT/ST OBS URL returns `403` after checkout or provisioning failed | The upload step never ran and the object does not exist. Probe the object before linking and fall back to the GitCode Checks page. |
 | `独占任务official_devcloud_cloudBuild所在的job下不能配置其他step` | The bot CloudBuild task shares its job with rendering or upload. Move preparation into a separate prerequisite job. |
 | A CodeArts UI save restores old pipeline logic | The UI committed a stale expanded snapshot. Diff the new `main` commit, preserve its generated fields, and reapply the lost logic. |

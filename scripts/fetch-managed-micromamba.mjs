@@ -14,11 +14,17 @@
 // limitations under the License.
 
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { execFile } from "node:child_process";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const MAX_PROVISIONER_BYTES = 64 * 1024 * 1024;
+const DOWNLOAD_ATTEMPTS = 3;
+const DOWNLOAD_TIMEOUT_MS = 300_000;
+const RETRY_DELAY_MS = 2_000;
+const execFileAsync = promisify(execFile);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const defaultManifestPath = resolve(scriptDirectory, "../services/runner/src/micromamba-releases.json");
 
@@ -76,7 +82,34 @@ export async function loadRelease(architecture, manifestPath = defaultManifestPa
   const sha256 = assertSafeField(release.sha256, "SHA256");
   if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("Invalid SHA256 in micromamba release manifest");
 
+  let condaPackage;
+  if (release.condaPackage !== undefined) {
+    const cacheFilename = assertSafeField(release.condaPackage.cacheFilename, "conda cache filename");
+    if (!/^[0-9A-Za-z._+-]+$/.test(cacheFilename) || !cacheFilename.endsWith(".tar.bz2")) {
+      throw new Error("Invalid conda cache filename in micromamba release manifest");
+    }
+    const packageSubdir = assertSafeField(release.condaPackage.subdir, "conda package subdirectory");
+    if (!/^[a-z0-9-]+$/.test(packageSubdir)) {
+      throw new Error("Invalid conda package subdirectory in micromamba release manifest");
+    }
+    const packageFilename = assertSafeField(release.condaPackage.filename, "conda package filename");
+    if (packageFilename.includes("/") || packageFilename.includes("\\") || !packageFilename.endsWith(".tar.bz2")) {
+      throw new Error("Invalid conda package filename in micromamba release manifest");
+    }
+    const packageSha256 = assertSafeField(release.condaPackage.sha256, "conda package SHA256");
+    if (!/^[a-f0-9]{64}$/.test(packageSha256)) {
+      throw new Error("Invalid conda package SHA256 in micromamba release manifest");
+    }
+    condaPackage = {
+      cacheFilename,
+      filename: packageFilename,
+      sha256: packageSha256,
+      subdir: packageSubdir,
+    };
+  }
+
   return {
+    condaPackage,
     dockerArch: assertSafeField(release.dockerArch, "Docker architecture"),
     filename,
     packageArch: assertSafeField(release.packageArch, "package architecture"),
@@ -87,18 +120,194 @@ export async function loadRelease(architecture, manifestPath = defaultManifestPa
   };
 }
 
-async function acquireBytes(release, source) {
-  if (source) return await readFile(source);
-  const response = await fetch(release.url, { redirect: "follow", signal: AbortSignal.timeout(120_000) });
-  if (!response.ok) throw new Error(`Managed micromamba download failed (${response.status})`);
-  const declaredLength = Number(response.headers.get("content-length") ?? "0");
-  if (declaredLength > MAX_PROVISIONER_BYTES) throw new Error("Managed micromamba download exceeds size limit");
-  return Buffer.from(await response.arrayBuffer());
+export function micromambaCacheUrl(release, cacheBaseUrl) {
+  if (!release.condaPackage) {
+    throw new Error(`Managed micromamba has no pinned conda package for architecture ${release.runtimeArch}`);
+  }
+  let parsed;
+  try {
+    parsed = new URL(cacheBaseUrl);
+  } catch {
+    throw new Error("BINARY_CACHE_URL must be a valid HTTPS URL");
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error("BINARY_CACHE_URL must be an HTTPS URL without credentials, query, or fragment");
+  }
+  return `${parsed.href.replace(/\/$/, "")}/${encodeURIComponent(release.condaPackage.cacheFilename)}`;
 }
 
-export async function fetchManagedMicromamba({ architecture, manifestPath, output, source }) {
+export function condaPackageUrl(release, mirrorBaseUrl) {
+  if (!release.condaPackage) {
+    throw new Error(`Managed micromamba has no pinned conda package for architecture ${release.runtimeArch}`);
+  }
+  let parsed;
+  try {
+    parsed = new URL(mirrorBaseUrl);
+  } catch {
+    throw new Error("MICROMAMBA_CONDA_MIRROR must be a valid HTTPS URL");
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error("MICROMAMBA_CONDA_MIRROR must be an HTTPS URL without credentials, query, or fragment");
+  }
+  const baseUrl = parsed.href.replace(/\/$/, "");
+  return `${baseUrl}/${release.condaPackage.subdir}/${release.condaPackage.filename}`;
+}
+
+function retryableStatus(status) {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+class RetryableDownloadError extends Error {}
+
+function retryableError(error) {
+  return error instanceof RetryableDownloadError
+    || error instanceof TypeError
+    || error?.name === "AbortError"
+    || error?.name === "TimeoutError";
+}
+
+export async function downloadBytesWithRetry(url, {
+  attempts = DOWNLOAD_ATTEMPTS,
+  fetchImplementation = fetch,
+  retryDelayMs = RETRY_DELAY_MS,
+  timeoutMs = DOWNLOAD_TIMEOUT_MS,
+} = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetchImplementation(url, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        const message = `Managed micromamba download failed (${response.status})`;
+        if (retryableStatus(response.status)) throw new RetryableDownloadError(message);
+        throw new Error(message);
+      }
+      const declaredLength = Number(response.headers.get("content-length") ?? "0");
+      if (declaredLength > MAX_PROVISIONER_BYTES) {
+        throw new Error("Managed micromamba download exceeds size limit");
+      }
+      return Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      if (attempt === attempts || !retryableError(error)) throw error;
+      process.stderr.write(
+        `Managed micromamba download attempt ${attempt}/${attempts} failed: ${errorMessage(error)}; retrying.\n`,
+      );
+      if (retryDelayMs > 0) {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, retryDelayMs * attempt));
+      }
+    }
+  }
+  throw new Error("Managed micromamba download exhausted all attempts");
+}
+
+async function extractMicromambaFromCondaPackage(archiveBytes, temporaryParent) {
+  await mkdir(temporaryParent, { recursive: true });
+  const temporaryDirectory = await mkdtemp(resolve(temporaryParent, ".micromamba-conda-"));
+  const archivePath = resolve(temporaryDirectory, "micromamba.tar.bz2");
+  try {
+    await writeFile(archivePath, archiveBytes);
+    await execFileAsync("tar", ["-xjf", archivePath, "-C", temporaryDirectory, "bin/micromamba"]);
+    return await readFile(resolve(temporaryDirectory, "bin/micromamba"));
+  } catch (error) {
+    throw new Error(`Managed micromamba conda package extraction failed: ${errorMessage(error)}`);
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+}
+
+export async function acquireManagedMicromambaBytes(release, source, {
+  binaryCacheBaseUrl,
+  binaryCacheDirectory,
+  condaMirrorBaseUrl,
+  downloadImplementation = downloadBytesWithRetry,
+  extractImplementation = extractMicromambaFromCondaPackage,
+  temporaryParent = ".",
+} = {}) {
+  if (source) return await readFile(source);
+  if (!release.condaPackage) return await downloadImplementation(release.url);
+
+  const verifyPackage = (bytes) => {
+    if (!bytes.length || bytes.length > MAX_PROVISIONER_BYTES) {
+      throw new Error("Managed micromamba conda package has an invalid size");
+    }
+    const actualPackageSha256 = createHash("sha256").update(bytes).digest("hex");
+    if (actualPackageSha256 !== release.condaPackage.sha256) {
+      throw new Error(
+        `Managed micromamba conda package failed SHA256 verification: expected ${release.condaPackage.sha256}, got ${actualPackageSha256}`,
+      );
+    }
+    return bytes;
+  };
+
+  const archivePath = binaryCacheDirectory
+    ? join(binaryCacheDirectory, release.condaPackage.cacheFilename)
+    : undefined;
+  let archiveBytes;
+  if (archivePath) {
+    try {
+      archiveBytes = verifyPackage(await readFile(archivePath));
+      process.stderr.write(`Binary local cache hit: ${release.condaPackage.cacheFilename}\n`);
+    } catch {
+      await rm(archivePath, { force: true });
+    }
+  }
+
+  if (!archiveBytes && binaryCacheBaseUrl) {
+    const cacheUrl = micromambaCacheUrl(release, binaryCacheBaseUrl);
+    process.stderr.write(`Checking remote cache: ${cacheUrl}\n`);
+    try {
+      archiveBytes = verifyPackage(await downloadImplementation(cacheUrl));
+      process.stderr.write(`Binary remote cache hit: ${release.condaPackage.cacheFilename}\n`);
+    } catch (error) {
+      process.stderr.write(
+        `Binary remote cache miss or invalid entry for ${release.condaPackage.cacheFilename}: ${errorMessage(error)}\n`,
+      );
+    }
+  }
+
+  if (!archiveBytes && condaMirrorBaseUrl) {
+    const mirrorUrl = condaPackageUrl(release, condaMirrorBaseUrl);
+    process.stderr.write(`Downloading managed micromamba from conda mirror: ${mirrorUrl}\n`);
+    archiveBytes = verifyPackage(await downloadImplementation(mirrorUrl));
+  }
+
+  if (!archiveBytes) return await downloadImplementation(release.url);
+
+  if (archivePath) {
+    await mkdir(binaryCacheDirectory, { recursive: true });
+    const temporaryArchive = `${archivePath}.${process.pid}.tmp`;
+    try {
+      await writeFile(temporaryArchive, archiveBytes);
+      await rename(temporaryArchive, archivePath);
+    } finally {
+      await rm(temporaryArchive, { force: true });
+    }
+  }
+  return await extractImplementation(archiveBytes, temporaryParent);
+}
+
+export async function fetchManagedMicromamba({
+  architecture,
+  binaryCacheBaseUrl = process.env.BINARY_CACHE_URL,
+  binaryCacheDirectory = process.env.BINARY_CACHE_DIR,
+  condaMirrorBaseUrl = process.env.MICROMAMBA_CONDA_MIRROR,
+  manifestPath,
+  output,
+  source,
+}) {
   const release = await loadRelease(architecture, manifestPath);
-  const bytes = await acquireBytes(release, source);
+  await mkdir(dirname(output), { recursive: true });
+  const bytes = await acquireManagedMicromambaBytes(release, source, {
+    binaryCacheBaseUrl,
+    binaryCacheDirectory: binaryCacheDirectory ? resolve(binaryCacheDirectory) : undefined,
+    condaMirrorBaseUrl,
+    temporaryParent: dirname(output),
+  });
   if (!bytes.length || bytes.length > MAX_PROVISIONER_BYTES) {
     throw new Error("Managed micromamba download has an invalid size");
   }
@@ -107,7 +316,6 @@ export async function fetchManagedMicromamba({ architecture, manifestPath, outpu
     throw new Error(`Managed micromamba failed SHA256 verification: expected ${release.sha256}, got ${actualSha256}`);
   }
 
-  await mkdir(dirname(output), { recursive: true });
   const temporary = `${output}.${process.pid}.tmp`;
   try {
     // Write the bytes that were hashed, rather than re-reading a source file

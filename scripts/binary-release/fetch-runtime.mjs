@@ -33,6 +33,12 @@ const USAGE = `Usage: fetch-runtime.mjs --runtime node|python --arch x86_64|aarc
 Options:
   --cache <directory>   Where verified archives are kept (default: <output>/../.downloads)
   --print-json          Print the resolved manifest entry and exit without downloading
+
+Environment:
+  UV_PYTHON_INSTALL_MIRROR  Override the Python archive base URL. The archive
+                            filename and SHA256 remain pinned by runtimes.json.
+  BINARY_CACHE_URL          Remote cache base URL checked before the source URL.
+  BINARY_CACHE_DIR          Local verified-archive staging directory.
 `;
 
 function parseArguments(argv) {
@@ -63,14 +69,15 @@ export async function loadManifest() {
   return JSON.parse(await readFile(manifestPath, "utf8"));
 }
 
-export function resolveRuntime(manifest, runtime, architecture) {
+export function resolveRuntime(manifest, runtime, architecture, baseUrlOverride = "") {
   const section = manifest[runtime];
   if (!section) throw new Error(`Unknown runtime: ${runtime}`);
   const entry = section.architectures[architecture];
   if (!entry) throw new Error(`${runtime} is not pinned for architecture ${architecture}`);
+  const baseUrl = baseUrlOverride.trim().replace(/\/+$/, "") || section.baseUrl;
   const url = runtime === "python"
-    ? `${section.baseUrl}/${section.release}/${entry.filename}`
-    : `${section.baseUrl}/${section.version}/${entry.filename}`;
+    ? `${baseUrl}/${section.release}/${entry.filename}`
+    : `${baseUrl}/${section.version}/${entry.filename}`;
   return { ...entry, url, version: section.version };
 }
 
@@ -89,23 +96,71 @@ async function exists(path) {
   }
 }
 
-/** Fetch to a cache directory, reusing an archive that already verifies. */
-async function download(entry, cacheDirectory) {
-  await mkdir(cacheDirectory, { recursive: true });
-  const target = join(cacheDirectory, entry.filename);
-  if (await exists(target)) {
-    if (await sha256(target) === entry.sha256) return target;
-    await rm(target, { force: true });
+export function binaryCacheUrl(baseUrl, filename) {
+  if (!/^[0-9A-Za-z._+-]+$/.test(filename)) {
+    throw new Error(`Invalid binary cache filename: ${filename}`);
   }
-  process.stderr.write(`Downloading ${entry.url}\n`);
-  const response = await fetch(entry.url, { redirect: "follow" });
-  if (!response.ok) throw new Error(`Download failed (${response.status}): ${entry.url}`);
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("BINARY_CACHE_URL must be a valid HTTPS URL");
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error("BINARY_CACHE_URL must be an HTTPS URL without credentials, query, or fragment");
+  }
+  return `${parsed.href.replace(/\/$/, "")}/${encodeURIComponent(filename)}`;
+}
+
+async function downloadVerifiedBytes(entry, url, fetchImplementation) {
+  const response = await fetchImplementation(url, { redirect: "follow" });
+  if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
   const bytes = Buffer.from(await response.arrayBuffer());
   const digest = createHash("sha256").update(bytes).digest("hex");
   if (digest !== entry.sha256) {
     throw new Error(`Checksum mismatch for ${entry.filename}: expected ${entry.sha256}, got ${digest}`);
   }
-  await writeFile(target, bytes);
+  return bytes;
+}
+
+/** Fetch to a cache directory, reusing an archive that already verifies. */
+export async function downloadRuntimeArchive(entry, cacheDirectory, {
+  binaryCacheBaseUrl = "",
+  fetchImplementation = fetch,
+} = {}) {
+  await mkdir(cacheDirectory, { recursive: true });
+  const target = join(cacheDirectory, entry.filename);
+  if (await exists(target)) {
+    if (await sha256(target) === entry.sha256) {
+      process.stderr.write(`Binary local cache hit: ${entry.filename}\n`);
+      return target;
+    }
+    await rm(target, { force: true });
+  }
+
+  let bytes;
+  if (binaryCacheBaseUrl) {
+    const cacheUrl = binaryCacheUrl(binaryCacheBaseUrl, entry.filename);
+    process.stderr.write(`Checking remote cache: ${cacheUrl}\n`);
+    try {
+      bytes = await downloadVerifiedBytes(entry, cacheUrl, fetchImplementation);
+      process.stderr.write(`Binary remote cache hit: ${entry.filename}\n`);
+    } catch (error) {
+      process.stderr.write(`Binary remote cache miss or invalid entry for ${entry.filename}: ${error.message}\n`);
+    }
+  }
+
+  if (!bytes) {
+    process.stderr.write(`Downloading authoritative source: ${entry.url}\n`);
+    bytes = await downloadVerifiedBytes(entry, entry.url, fetchImplementation);
+  }
+  const temporary = `${target}.${process.pid}.tmp`;
+  try {
+    await writeFile(temporary, bytes);
+    await rename(temporary, target);
+  } finally {
+    await rm(temporary, { force: true });
+  }
   return target;
 }
 
@@ -132,14 +187,20 @@ async function unpackSingleRoot(archivePath, output) {
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const manifest = await loadManifest();
-  const entry = resolveRuntime(manifest, options.runtime, options.architecture);
+  const baseUrlOverride = options.runtime === "python"
+    ? process.env.UV_PYTHON_INSTALL_MIRROR ?? ""
+    : "";
+  const entry = resolveRuntime(manifest, options.runtime, options.architecture, baseUrlOverride);
   if (options.printJson) {
     process.stdout.write(`${JSON.stringify(entry)}\n`);
     return;
   }
   if (!options.output) throw new Error("--output is required unless --print-json is used");
-  const cache = options.cache ?? join(dirname(options.output), ".downloads");
-  const archivePath = await download(entry, cache);
+  const configuredCache = process.env.BINARY_CACHE_DIR?.trim();
+  const cache = options.cache ?? (configuredCache ? resolve(configuredCache) : join(dirname(options.output), ".downloads"));
+  const archivePath = await downloadRuntimeArchive(entry, cache, {
+    binaryCacheBaseUrl: process.env.BINARY_CACHE_URL?.trim() ?? "",
+  });
   await unpackSingleRoot(archivePath, options.output);
   process.stderr.write(`Unpacked ${options.runtime} ${entry.version} (${options.architecture}) into ${options.output}\n`);
 }
