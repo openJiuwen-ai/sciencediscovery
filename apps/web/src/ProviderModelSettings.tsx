@@ -998,9 +998,11 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
 
   async function deleteModel(providerId: string, modelId: string, profileId: string): Promise<boolean> {
     if (busy) return false;
+    const target = models.find((model) => model.id === profileId);
+    if (!window.confirm(t("providers.models.deleteConfirm", { name: target?.name ?? modelId }))) return false;
     setBusy(true);
     try {
-      const deleted = models.find((model) => model.id === profileId);
+      const deleted = target;
       await client.deleteModel(profileId);
       onModelsChange(models.filter((model) => model.id !== profileId));
       setListings((current) => {

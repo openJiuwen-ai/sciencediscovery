@@ -221,7 +221,7 @@ test("clicking a subagent card selects that SubAgent for navigation", async () =
   await act(async () => renderer!.unmount());
 });
 
-test("specialist form uses the primary action button skeleton", () => {
+test("specialist editor starts collapsed behind the specialist list", () => {
   const html = renderToStaticMarkup(createElement(SpecialistManager, {
     client: {} as ApiClient,
     connectors: [],
@@ -230,7 +230,9 @@ test("specialist form uses the primary action button skeleton", () => {
     skills: [],
   }));
 
-  assert.match(html, /class="primary-button"[^>]*>Create specialist</);
+  // The list-type setting shows the list first; the blank create form only
+  // opens after "New specialist" is clicked.
+  assert.match(html, />＋ New specialist</);
+  assert.doesNotMatch(html, /specialist-form-card/);
   assert.doesNotMatch(html, /specialist-description-card/);
-  assert.match(html, />Description<\/span><textarea required="" rows="4" maxLength="500"/);
 });

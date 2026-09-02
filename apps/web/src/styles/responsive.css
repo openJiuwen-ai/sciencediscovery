@@ -45,6 +45,15 @@
   .document-markdown, .artifact-modal-body { padding: 28px 20px 44px; }
   .environment-source-settings { grid-template-areas: "intro intro" "pip conda" "save save"; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .system-config-dialog { width: calc(100vw - 32px); height: min(80vh, calc(100vh - 56px)); }
+  /* In the 601-900px band the dialog is narrower than its 240px nav plus the
+     inner multi-column grids (skill toolbar, environment form, host cards),
+     so the detail pane clipped content at the right edge. Below 900px the
+     layout goes single-column with a horizontal nav, the same pattern the
+     <=600px band already uses. */
+  .system-config-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .settings-group-nav { max-width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
+  .settings-group-detail { padding: 22px 18px 30px; }
   .skill-workspace-dialog { width: calc(100vw - 20px); height: calc(100vh - 20px); }
   .skill-workspace-layout { grid-template-columns: 190px minmax(0, 1fr); grid-template-rows: 170px minmax(0, 1fr) minmax(120px, 170px); }
   .skill-workspace-catalog { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--border); }
@@ -76,10 +85,6 @@
   .config-panel { max-height: calc(100vh - 24px); padding: 24px 20px; }
   .system-config-dialog { width: 100%; height: calc(100vh - 24px); padding: 0; }
   .system-config-dialog > .config-header { padding: 18px; }
-  .system-config-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .settings-group-nav { max-width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
-  .settings-group-detail { padding: 22px 18px 30px; }
   .provider-editor-primary, .provider-advanced-grid { grid-template-columns: minmax(0, 1fr); }
   .provider-manual-form, .provider-manual-price { grid-template-columns: minmax(0, 1fr); }
   .provider-manual-price { grid-column: 1 / -1; }
@@ -95,7 +100,10 @@
   .skill-library-catalog { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--border); }
   .skill-library-create, .skill-library-diff-controls, .skill-library-diff { grid-template-columns: minmax(0, 1fr); }
   .skill-library-create > button, .skill-library-diff-controls > button { width: 100%; }
-  .skill-library-detail > header, .environment-card-heading { align-items: stretch; flex-direction: column; }
+  .skill-library-create-actions { width: 100%; }
+  .skill-library-create-actions > button { flex: 1 1 0; }
+  .skill-library-detail > header { align-items: stretch; flex-direction: column; }
+  .environment-card-heading { align-items: flex-start; flex-direction: column; }
   .skill-manager-hero { align-items: stretch; flex-direction: column; }
   .skill-manager-hero-actions { width: 100%; align-items: stretch; flex-direction: column; }
   .skill-manager-tabs { width: 100%; }
@@ -135,7 +143,7 @@
   .timeout-grid, .runtime-status-summary { grid-template-columns: 1fr; }
   .environment-setup-components, .environment-starter-plan, .environment-create { grid-template-columns: 1fr; }
   .environment-install { grid-template-columns: minmax(0, 1fr); }
-  .environment-install .secondary-button, .environment-card-heading .danger-button { width: 100%; }
+  .environment-install .secondary-button { width: 100%; }
   .environment-source-settings { grid-template-areas: "intro" "pip" "conda" "save"; grid-template-columns: minmax(0, 1fr); }
   .environment-source-save { justify-self: stretch; width: 100%; }
   .specialist-layout { grid-template-columns: minmax(0, 1fr); }

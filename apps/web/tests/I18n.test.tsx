@@ -45,6 +45,11 @@ test("provides localized dialog error feedback actions", () => {
   assert.equal(translate("zh-CN", "error.dismiss"), "关闭错误");
 });
 
+test("localizes destructive model-profile confirmation", () => {
+  assert.equal(translate("en", "providers.models.deleteConfirm", { name: "Analysis model" }), "Delete model profile “Analysis model”?");
+  assert.equal(translate("zh-CN", "providers.models.deleteConfirm", { name: "分析模型" }), "删除模型配置“分析模型”？");
+});
+
 test("persists a locale switch and synchronizes the document language", () => {
   const writes: Array<[string, string]> = [];
   const documentElement = { lang: "en" };

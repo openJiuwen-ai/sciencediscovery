@@ -598,6 +598,7 @@ function SkillLibraryManager({
   const [proposals, setProposals] = useState<SkillLibraryUpdateProposal[]>([]);
   const [libraryName, setLibraryName] = useState("");
   const [libraryId, setLibraryId] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
   const [skillMarkdown, setSkillMarkdown] = useState(DEFAULT_LIBRARY_SKILL);
   const [dryRun, setDryRun] = useState(true);
   const [status, setStatus] = useState<string>();
@@ -681,6 +682,7 @@ function SkillLibraryManager({
       });
       setLibraryId("");
       setLibraryName("");
+      setCreateOpen(false);
       setStatus(`Created library ${created.name}.`);
       await refresh(created.id);
     } catch (reason) {
@@ -739,6 +741,7 @@ function SkillLibraryManager({
 
   async function rollback(): Promise<void> {
     if (!selectedLibrary || !selectedVersion) return;
+    if (!window.confirm(`Rollback library “${selectedLibrary.name}” to version ${selectedVersion.id.slice(0, 8)}? This publishes a new version with that content.`)) return;
     setBusy(true);
     setStatus(undefined);
     try {
@@ -840,11 +843,12 @@ function SkillLibraryManager({
         </div>
       </div>
     </section>
-    <form className="skill-library-create" onSubmit={(event) => void createLibrary(event)}>
+    {!createOpen ? <button className="secondary-button skill-library-create-toggle" disabled={busy} onClick={() => setCreateOpen(true)} type="button">New library</button> : null}
+    {createOpen ? <form className="skill-library-create" onSubmit={(event) => void createLibrary(event)}>
       <label><span>Library name</span><input onChange={(event) => setLibraryName(event.target.value)} placeholder="Evaluation skills" value={libraryName} /></label>
       <label><span>Stable id</span><input onChange={(event) => setLibraryId(event.target.value)} placeholder="evaluation-skills" value={libraryId} /></label>
-      <button className="primary-button" disabled={busy} type="submit">Create library</button>
-    </form>
+      <div className="skill-library-create-actions"><button className="secondary-button" disabled={busy} onClick={() => { setLibraryId(""); setLibraryName(""); setCreateOpen(false); }} type="button">Cancel</button><button className="primary-button" disabled={busy} type="submit">Create library</button></div>
+    </form> : null}
     {status ? <p className="skill-manager-error" role="status">{status}</p> : null}
     <div className="skill-library-grid">
       <div aria-label="Skill libraries" className="skill-library-catalog">

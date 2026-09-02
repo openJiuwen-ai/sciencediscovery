@@ -152,6 +152,7 @@ export function SpecialistManager({
 }) {
   const [specialists, setSpecialists] = useState<Specialist[]>([]);
   const [editingId, setEditingId] = useState<string>();
+  const [formOpen, setFormOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -249,6 +250,17 @@ export function SpecialistManager({
     setInstructions(specialist?.instructions ?? "");
     setSelectedSkills(specialist?.enabledSkillIds ?? []);
     setSelectedConnectors(specialist?.connectorIds ?? []);
+    setFormOpen(true);
+  }
+
+  function closeEditor(): void {
+    setEditingId(undefined);
+    setName("");
+    setDescription("");
+    setInstructions("");
+    setSelectedSkills([]);
+    setSelectedConnectors([]);
+    setFormOpen(false);
   }
 
   async function save(event: FormEvent): Promise<void> {
@@ -258,10 +270,24 @@ export function SpecialistManager({
       const body = { connectorIds: selectedConnectors as Specialist["connectorIds"], description, enabledSkillIds: selectedSkills, instructions, name };
       if (editingId) await client.updateSpecialist(editingId, body);
       else await client.createSpecialist(body);
-      edit();
+      closeEditor();
       await refresh();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not save specialist");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(specialist: Specialist): Promise<void> {
+    if (!window.confirm(`Delete specialist “${specialist.name}”? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      await client.deleteSpecialist(specialist.id);
+      closeEditor();
+      await refresh();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not delete specialist");
     } finally {
       setBusy(false);
     }
@@ -315,15 +341,15 @@ export function SpecialistManager({
         })}
       </section>;
     })() : null}
-    <div className="specialist-layout"><div className="specialist-list"><button type="button" className={!editingId ? "active" : ""} onClick={() => edit()}>＋ New specialist</button>{userSpecialists.map((specialist) => <button className={editingId === specialist.id ? "active" : ""} key={specialist.id} title={`${specialist.name} · ${specialist.enabledSkillIds.length} skills · ${specialist.connectorIds.length} connectors`} type="button" onClick={() => edit(specialist)}><strong>{specialist.name}</strong><small>{specialist.enabledSkillIds.length} skills · {specialist.connectorIds.length} connectors</small></button>)}</div>
-      <form onSubmit={(event) => void save(event)}>
+    <div className={formOpen ? "specialist-layout" : "specialist-layout idle"}><div className="specialist-list"><button type="button" className={formOpen && !editingId ? "active" : ""} onClick={() => edit()}>＋ New specialist</button>{userSpecialists.map((specialist) => <button className={formOpen && editingId === specialist.id ? "active" : ""} key={specialist.id} title={`${specialist.name} · ${specialist.enabledSkillIds.length} skills · ${specialist.connectorIds.length} connectors`} type="button" onClick={() => edit(specialist)}><strong>{specialist.name}</strong><small>{specialist.enabledSkillIds.length} skills · {specialist.connectorIds.length} connectors</small></button>)}</div>
+      {formOpen ? <form onSubmit={(event) => void save(event)}>
         <section className="specialist-form-card"><label><span>Name</span><input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label></section>
         <section className="specialist-form-card"><label><span>Description</span><textarea required rows={4} maxLength={500} value={description} onChange={(event) => setDescription(event.target.value)} /></label></section>
         <section className="specialist-form-card"><label><span>Instructions</span><textarea required rows={9} maxLength={20_000} value={instructions} onChange={(event) => setInstructions(event.target.value)} /></label></section>
         <fieldset><legend>Skills</legend>{skills.map((skill) => <label key={skill.id}><input type="checkbox" checked={selectedSkills.includes(skill.id)} onChange={() => setSelectedSkills((current) => current.includes(skill.id) ? current.filter((id) => id !== skill.id) : [...current, skill.id])} />{skill.name}</label>)}</fieldset>
         <fieldset><legend>Connectors</legend>{connectors.map((connector) => <label key={connector.id}><input type="checkbox" checked={selectedConnectors.includes(connector.id)} onChange={() => setSelectedConnectors((current) => current.includes(connector.id) ? current.filter((id) => id !== connector.id) : [...current, connector.id])} />{connector.id}</label>)}</fieldset>
-        <div className="specialist-actions"><button className="primary-button" disabled={busy || !name.trim() || !description.trim() || !instructions.trim()} type="submit">{editingId ? "Save specialist" : "Create specialist"}</button>{editingId ? <button className="danger-button" disabled={busy} type="button" onClick={() => void (async () => { try { await client.deleteSpecialist(editingId); edit(); await refresh(); } catch (error) { onError(error instanceof Error ? error.message : "Could not delete specialist"); } })()}>Delete</button> : null}</div>
-      </form>
+        <div className="specialist-actions"><button className="primary-button" disabled={busy || !name.trim() || !description.trim() || !instructions.trim()} type="submit">{editingId ? "Save specialist" : "Create specialist"}</button><span className="specialist-actions-secondary"><button className="secondary-button" disabled={busy} type="button" onClick={closeEditor}>Cancel</button>{editingId ? <button className="danger-button" disabled={busy} type="button" onClick={() => { const specialist = userSpecialists.find((item) => item.id === editingId); if (specialist) void remove(specialist); }}>Delete</button> : null}</span></div>
+      </form> : null}
     </div>
   </div>;
 }

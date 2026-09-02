@@ -37,10 +37,13 @@ test("mixed action rows assign semantic button classes", () => {
   const environments = source("EnvironmentManager.tsx");
   assert.match(environments, /<button className="primary-button"[^>]*type="submit">Create</);
   assert.match(environments, /<button className="secondary-button".*?Install packages/);
+  assert.match(environments, /window\.confirm\(`Delete named environment/);
 
   const remoteCompute = source("RemoteCompute.tsx");
   assert.match(remoteCompute, /<button className="primary-button"[^>]*>Probe and add</);
   assert.match(remoteCompute, /<button className="secondary-button".*?Refresh probe/);
+  assert.match(remoteCompute, /className="remote-host-actions">.*?Refresh probe.*?Delete/s);
+  assert.match(remoteCompute, /window\.confirm\(`Delete \$\{host\.alias\} from the machine catalog/);
 
   const proxySettings = source("ProxySettingsEditor.tsx");
   assert.match(proxySettings, /className="proxy-server-actions">[\s\S]*?className="secondary-button compact-button"[\s\S]*?className="danger-button compact-button"/);

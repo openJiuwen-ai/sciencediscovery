@@ -268,8 +268,7 @@ export function EnvironmentManager({ client, onError, compact = false }: { clien
         <div><strong>Create named environment</strong><small>Choose initial tools; add Python, R or other packages to the same environment. Updates apply in place; revisions record history, not runnable copies.</small></div>
         <select aria-label="Initial environment tools" disabled={busy} value={language} onChange={(event) => setLanguage(event.target.value as ScientificLanguage)}><option value="python">Start with Python</option><option value="r">Start with R</option></select>
         <input aria-label="Environment name" disabled={busy} maxLength={80} required value={name} onChange={(event) => setName(event.target.value)} placeholder="single-cell" />
-        <button className="primary-button" disabled={busy || !name.trim()} type="submit">Create</button>
-        <button className="secondary-button" disabled={busy} type="button" onClick={() => setCreating(false)}>Cancel</button>
+        <div className="environment-create-actions"><button className="secondary-button" disabled={busy} type="button" onClick={() => { setName(""); setCreating(false); }}>Cancel</button><button className="primary-button" disabled={busy || !name.trim()} type="submit">Create</button></div>
       </form>}
 
       <div className="environment-catalog">
