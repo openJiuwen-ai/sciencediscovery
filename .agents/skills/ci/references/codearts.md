@@ -170,14 +170,16 @@ The CI-branch experiment instead runs `pnpm ci:ut:runner` in a full Ubuntu
 guest under `qemu-system-x86_64 -accel tcg,thread=multi`. TCG is software-only,
 so `/dev/kvm` is neither requested nor required. The host script downloads a
 date-pinned TUNA Ubuntu cloud image and verifies its SHA256. When the host has
-no QEMU, the script verifies fixed `apk.static` and Alpine signing-key package
-checksums, then uses the signed Alpine package indexes to assemble QEMU plus
-its musl runtime in the workspace. This user-space bootstrap is independent of
-the host package manager and glibc, requires no root access, and runs package
-scripts neither on the host nor in a chroot. The VM boots with a NoCloud seed
-over QEMU user networking. The guest clears its own Ubuntu AppArmor userns
-sysctl, passes the real bubblewrap probe as the unprivileged `ci` user, and
-invokes the unchanged layer entry point. Only the exact
+no QEMU, the script verifies fixed `apk.static`, Alpine signing-key, and CA
+bundle package checksums. The CA bundle authenticates the mirror's HTTPS
+certificate, while the signing key independently authenticates Alpine indexes
+and packages. The script then assembles QEMU plus its musl runtime in the
+workspace. This user-space bootstrap is independent of the host package
+manager and glibc, requires no root access, and runs package scripts neither on
+the host nor in a chroot. The VM boots with a NoCloud seed over QEMU user
+networking. The guest clears its own Ubuntu AppArmor userns sysctl, passes the
+real bubblewrap probe as the unprivileged `ci` user, and invokes the unchanged
+layer entry point. Only the exact
 `QEMU_SANDBOX_TEST_RESULT=<exit-code>` serial marker can make the host job
 pass; the host removes serial CR characters before matching, and missing or
 malformed markers fail closed. The guest sets Node's test-file concurrency to

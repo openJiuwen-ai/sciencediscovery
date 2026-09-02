@@ -93,6 +93,9 @@ else
   alpine_keys_url="$alpine_mirror/$alpine_release/main/x86_64/alpine-keys-2.5-r0.apk"
   alpine_keys_sha256=1069fa68769607690e46b0d689f1ad9b5e346be2752ece313685b4f29ec70e25
   alpine_signing_key=alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
+  ca_bundle_file="$cache_dir/ca-certificates-bundle-20260611-r0.apk"
+  ca_bundle_url="$alpine_mirror/$alpine_release/main/x86_64/ca-certificates-bundle-20260611-r0.apk"
+  ca_bundle_sha256=a18fd1bd8bea03966ee5719aa61e44d9a810db2c8b6641b45f92b30e860f0927
 
   download_verified() {
     local url=$1
@@ -129,12 +132,20 @@ else
     echo "Preparing signed Alpine QEMU packages without installing host packages"
     download_verified "$apk_tools_url" "$apk_tools_file" "$apk_tools_sha256"
     download_verified "$alpine_keys_url" "$alpine_keys_file" "$alpine_keys_sha256"
+    download_verified "$ca_bundle_url" "$ca_bundle_file" "$ca_bundle_sha256"
     rm -rf -- "$bootstrap_dir" "$qemu_root"
     mkdir -p "$bootstrap_dir" "$qemu_root"
     extract_archive_member "$apk_tools_file" sbin/apk.static
     extract_archive_member \
       "$alpine_keys_file" "usr/share/apk/keys/$alpine_signing_key"
-    "$bootstrap_dir/sbin/apk.static" \
+    extract_archive_member \
+      "$ca_bundle_file" etc/ssl/certs/ca-certificates.crt
+    ca_bundle="$bootstrap_dir/etc/ssl/certs/ca-certificates.crt"
+    if [ ! -s "$ca_bundle" ]; then
+      echo "FATAL: the verified TLS CA bundle is empty or missing." >&2
+      exit 1
+    fi
+    SSL_CERT_FILE="$ca_bundle" "$bootstrap_dir/sbin/apk.static" \
       --root "$qemu_root" \
       --arch x86_64 \
       --keys-dir "$bootstrap_dir/usr/share/apk/keys" \
