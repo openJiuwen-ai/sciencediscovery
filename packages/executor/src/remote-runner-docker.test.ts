@@ -152,6 +152,22 @@ test("a real SSH machine without a runner is deployed to, connected, and used", 
     "a,b\n1,2\n",
   );
 
+  // The same machine registered by address and explicit port, with no Host
+  // entry in the config to fall back on: the deployment and the tunnel have to
+  // carry that port too, not only the probe. Two connections to one machine
+  // also confirm the per-connection socket leaves them no address to collide on.
+  const byAddressHost: RemoteHostTarget = {
+    ...host,
+    alias: "127.0.0.1",
+    capabilities: byAddress,
+    id: "docker-host-by-address",
+    port,
+  };
+  const connectedByAddress = await client.connectRunner(byAddressHost, { bundle, localVersion: "local-build" });
+  assert.equal(connectedByAddress.state, "ready", connectedByAddress.error ?? "the runner did not become ready by address");
+  assert.equal((await client.runnerClient(byAddressHost.id).status()).status, "ok");
+  await client.disconnectRunner(byAddressHost.id);
+
   // Disconnecting must leave no runner process behind on the machine.
   await client.disconnectRunner(host.id);
   for (let attempt = 0; attempt < 20; attempt += 1) {

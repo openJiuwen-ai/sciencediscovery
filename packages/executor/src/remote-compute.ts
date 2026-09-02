@@ -381,7 +381,7 @@ export class RemoteComputeClient {
       "printf 'data_dir=%s\\n' \"$data_dir\"",
       "",
     ].join("\n");
-    const result = await this.transport.run(validateSshDestination(host.alias), script, 180_000);
+    const result = await this.transport.run(validateSshDestination(host.alias), script, 180_000, host.port);
     if (result.exitCode !== 0) {
       throw new Error(`Remote runner deployment failed (${result.exitCode}): ${describeSshFailure(result.stderr, "the SSH command failed")}`);
     }
@@ -478,7 +478,7 @@ export class RemoteComputeClient {
       "",
     ].join("\n");
     const child = spawn(this.sshPath, [
-      ...sshConnectionArguments(this.sshConfigPath),
+      ...sshConnectionArguments(this.sshConfigPath, host.port),
       "-o", "ExitOnForwardFailure=yes",
       "-L", `127.0.0.1:${localPort}:${socketPath}`,
       // Force a pseudo-terminal so the remote runner is hung up when this

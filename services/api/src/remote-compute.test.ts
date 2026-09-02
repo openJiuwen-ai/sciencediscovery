@@ -42,19 +42,29 @@ class FakeTransport implements RemoteTransport {
   }
 }
 
+/**
+ * A stand-in for `ssh` that records what it was called with. One connection can
+ * spawn it more than once — a deployment and then the tunnel — so every
+ * invocation is appended, and `capturePath` keeps the most recent one.
+ */
 async function writeFakeSsh(
   root: string,
   name: string,
   exitCode: number,
   stderr = "",
-): Promise<{ capturePath: string; executablePath: string; scriptPath: string }> {
+  stdout = "",
+): Promise<{ capturePath: string; executablePath: string; invocationsPath: string; scriptPath: string }> {
   const capturePath = resolve(root, `${name}-args.json`);
+  const invocationsPath = resolve(root, `${name}-invocations.jsonl`);
   const scriptPath = resolve(root, `${name}-stdin.txt`);
   const executablePath = resolve(root, `${name}.mjs`);
   await writeFile(executablePath, [
     `#!${process.execPath}`,
-    'import { writeFileSync } from "node:fs";',
-    `writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(process.argv.slice(2)));`,
+    'import { appendFileSync, writeFileSync } from "node:fs";',
+    "const argv = JSON.stringify(process.argv.slice(2));",
+    `writeFileSync(${JSON.stringify(capturePath)}, argv);`,
+    `appendFileSync(${JSON.stringify(invocationsPath)}, argv + "\\n");`,
+    `process.stdout.write(${JSON.stringify(stdout)});`,
     `process.stderr.write(${JSON.stringify(stderr)});`,
     'const chunks = [];',
     'process.stdin.on("data", (chunk) => chunks.push(chunk));',
@@ -64,7 +74,12 @@ async function writeFakeSsh(
     "});",
     "",
   ].join("\n"), { mode: 0o700 });
-  return { capturePath, executablePath, scriptPath };
+  return { capturePath, executablePath, invocationsPath, scriptPath };
+}
+
+async function capturedSshInvocations(invocationsPath: string): Promise<string[][]> {
+  const content = await readFile(invocationsPath, "utf8");
+  return content.split("\n").filter(Boolean).map((line) => JSON.parse(line) as string[]);
 }
 
 async function capturedSshArguments(capturePath: string): Promise<string[]> {
@@ -169,7 +184,7 @@ function job(mode: "slurm" | "ssh"): RemoteJob {
   };
 }
 
-test("SSH config aliases gate a read-only capability probe", async (context) => {
+test("the capability probe is read-only and reports what the machine offers", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `remote-probe-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   context.after(() => rm(root, { force: true, recursive: true }));
@@ -383,4 +398,58 @@ test("automatic deployment is refused when the host has neither a runner nor a u
   const withoutBundle = await client.connectRunner(sshHostWithoutRunner("v22.19.0"), {});
   assert.match(withoutBundle.error ?? "", /Pre-installed remote runner executable was not found/);
   assert.equal(transport.calls.length, 0);
+});
+
+/**
+ * Connect once against a fake `ssh` and return the argv of every spawn it made.
+ * The fake reports a remote data directory so the deployment step succeeds and
+ * the tunnel is reached; the tunnel then closes immediately, which is enough to
+ * observe how it was invoked.
+ */
+async function sshInvocationsForConnect(
+  root: string,
+  name: string,
+  host: RemoteHostTarget,
+  bundle: Awaited<ReturnType<typeof packRunnerBundle>>,
+): Promise<string[][]> {
+  const ssh = await writeFakeSsh(
+    root,
+    name,
+    0,
+    "",
+    "deploy=installed\ndata_dir=/home/scientist/.local/share/sciencediscovery/remote-runner\n",
+  );
+  const client = new RemoteComputeClient(resolve(root, "config"), undefined, ssh.executablePath);
+  const status = await client.connectRunner(host, { bundle, localVersion: "local-build" });
+  assert.equal(status.state, "error", "the fake tunnel closes, so the connection cannot become ready");
+  return await capturedSshInvocations(ssh.invocationsPath);
+}
+
+test("an explicit SSH port reaches the deployment and the tunnel, not only the probe", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `remote-connect-port-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const bundle = await packRunnerBundle();
+  const host = sshHostWithoutRunner("v22.19.0");
+
+  // A machine registered by address and port has no SSH config entry to fall
+  // back on, so every step of the connection has to carry that port.
+  const withPort = await sshInvocationsForConnect(root, "with-port", { ...host, alias: "10.0.0.8", port: 2222 }, bundle);
+  assert.equal(withPort.length, 2, "connecting spawns ssh once to deploy and once for the tunnel");
+  for (const argv of withPort) {
+    assert.equal(argv[argv.indexOf("-p") + 1], "2222");
+    assert.equal(argv.at(-3), "10.0.0.8");
+    assertStrictHostKeyChecking(argv);
+  }
+  assert.equal(withPort[1]!.includes("-L"), true, "the second spawn is the runner tunnel");
+
+  // Without a port the destination is left for the user's SSH configuration to
+  // resolve, so no port may be forced onto the command line.
+  const withoutPort = await sshInvocationsForConnect(root, "without-port", { ...host, alias: "institution-hpc" }, bundle);
+  assert.equal(withoutPort.length, 2);
+  for (const argv of withoutPort) {
+    assert.equal(argv.includes("-p"), false);
+    assert.equal(argv.at(-3), "institution-hpc");
+    assertStrictHostKeyChecking(argv);
+  }
 });
