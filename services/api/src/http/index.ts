@@ -183,6 +183,7 @@ import {
   listWorkspaceFiles,
   mcpConnectorManifest,
   toolSummary,
+  workspaceFileProvenance,
 } from "../artifacts/index.js";
 import {
   advanceResolvedPermissionRequests,
@@ -1779,6 +1780,18 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (filesMatch && request.method === "GET") {
         if (!store.getSession(filesMatch[1]!)) return sendError(response, 404, "Session not found");
         sendJson(response, 200, await listWorkspaceFiles(store, filesMatch[1]!));
+        return;
+      }
+
+      const workspaceProvenanceMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/workspace\/provenance$/);
+      if (workspaceProvenanceMatch && request.method === "GET") {
+        const sessionId = workspaceProvenanceMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        sendJson(response, 200, await workspaceFileProvenance(
+          store,
+          sessionId,
+          url.searchParams.get("path") ?? "",
+        ));
         return;
       }
 

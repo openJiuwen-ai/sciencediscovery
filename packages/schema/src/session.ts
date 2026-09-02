@@ -152,7 +152,110 @@ export interface WorkspaceFile {
   modifiedAt: string;
   path: string;
   previewKind?: ScientificArtifactKind;
+  provenance?: WorkspaceFileProvenanceSummary;
   size: number;
+}
+
+export type WorkspaceFileOrigin =
+  | "agent"
+  | "mcp-download"
+  | "remote-compute"
+  | "subagent"
+  | "system"
+  | "tool"
+  | "unknown"
+  | "upload";
+
+export type WorkspaceFileOriginMeta = Record<string, boolean | number | string | null>;
+
+export interface WorkspaceFileProvenanceSummary {
+  fileId: string;
+  origin: WorkspaceFileOrigin;
+  recordedAt: string;
+  revisionId: string;
+}
+
+/** Stable logical identity of one file while it remains in a Session workspace. */
+export interface WorkspaceFileRecord {
+  createdAt: string;
+  currentRevisionId: string;
+  deletedAt?: string;
+  id: string;
+  path: string;
+  projectId: string;
+  sessionId: string;
+  /** Snapshot used when the source Session is later deleted. */
+  sessionTitle: string;
+  updatedAt: string;
+}
+
+/** Immutable attribution for one observed content state of a Workspace file. */
+export interface WorkspaceFileRevision {
+  artifactVersionIds: string[];
+  contentHash?: string;
+  createdAt: string;
+  executionRunId?: string;
+  fileId: string;
+  id: string;
+  modifiedAt: string;
+  origin: WorkspaceFileOrigin;
+  originMeta?: WorkspaceFileOriginMeta;
+  parentRevisionId?: string;
+  path: string;
+  projectId: string;
+  runId?: string;
+  sessionId: string;
+  size: number;
+  subagentId?: string;
+  toolCallId?: string;
+  toolName?: string;
+}
+
+export interface WorkspaceFileRevisionInput {
+  artifactVersionId?: string;
+  contentHash?: string;
+  executionRunId?: string;
+  mode: "link" | "observe" | "write";
+  modifiedAt: string;
+  origin: WorkspaceFileOrigin;
+  originMeta?: WorkspaceFileOriginMeta;
+  parentRevisionId?: string;
+  path: string;
+  runId?: string;
+  size: number;
+  subagentId?: string;
+  toolCallId?: string;
+  toolName?: string;
+}
+
+export interface WorkspaceFileSourceSession {
+  deleted: boolean;
+  id: string;
+  title: string;
+}
+
+export interface WorkspaceFileLineageEntry {
+  fileId: string;
+  origin: WorkspaceFileOrigin;
+  path: string;
+  revisionId: string;
+  session: WorkspaceFileSourceSession;
+}
+
+export interface WorkspaceFileArtifactLink {
+  artifactId: string;
+  name: string;
+  version: number;
+  versionId: string;
+}
+
+export interface WorkspaceFileProvenance {
+  artifacts: WorkspaceFileArtifactLink[];
+  currentRevision: WorkspaceFileRevision;
+  file: WorkspaceFileRecord;
+  lineage: WorkspaceFileLineageEntry[];
+  revisions: WorkspaceFileRevision[];
+  sourceSession: WorkspaceFileSourceSession;
 }
 
 export type WorkbenchSearchResultKind = "artifact" | "project" | "session";

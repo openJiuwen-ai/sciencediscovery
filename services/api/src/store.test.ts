@@ -35,6 +35,7 @@ import {
 import {
   SessionStore,
 } from "./store.js";
+import { listWorkspaceFiles, workspaceFileProvenance } from "./artifacts/index.js";
 import { API_TEST_CATALOG_RECORDS, installApiTestModelCatalog } from "./model-catalog.fixture.js";
 import { encryptModelApiToken } from "./store/secrets.js";
 import { normalizeMemoryGraphSettings } from "./store/settings.js";
@@ -118,6 +119,200 @@ test("Reviewer Specialist levels are cumulative", () => {
   assert.equal(reviewerSpecialistSupportsLevel("quick", "deep"), false);
   assert.equal(reviewerSpecialistSupportsLevel("deep", "quick"), true);
   assert.equal(reviewerSpecialistSupportsLevel("deep", "deep"), true);
+});
+
+test("SessionStore keeps stable Workspace file identities, revisions, and cross-Session lineage", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `workspace-provenance-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Workspace provenance");
+  const sourceSession = await store.createSession(
+    project.id,
+    "Source Session with a retained title",
+    {},
+    {},
+    { allowUnconfiguredModel: true },
+  );
+  const targetSession = await store.createSession(
+    project.id,
+    "Target Session",
+    {},
+    {},
+    { allowUnconfiguredModel: true },
+  );
+  const firstModifiedAt = "2026-08-01T10:00:00.000Z";
+  const firstScan = await store.reconcileWorkspaceFiles(sourceSession.id, [{
+    modifiedAt: firstModifiedAt,
+    path: "results/data.csv",
+    size: 12,
+  }]);
+  const legacy = firstScan.get("results/data.csv");
+  assert.ok(legacy);
+  assert.equal(legacy.origin, "unknown");
+  const unchangedScan = await store.reconcileWorkspaceFiles(sourceSession.id, [{
+    modifiedAt: firstModifiedAt,
+    path: "results/data.csv",
+    size: 12,
+  }]);
+  assert.deepEqual(unchangedScan.get("results/data.csv"), legacy, "an unchanged scan reuses both stable ids");
+
+  const uploaded = await store.recordWorkspaceFileRevision(sourceSession.id, {
+    contentHash: "a".repeat(64),
+    mode: "write",
+    modifiedAt: "2026-08-01T10:01:00.000Z",
+    origin: "upload",
+    originMeta: { uploadedFilename: "data.csv" },
+    path: "results/data.csv",
+    size: 14,
+  });
+  const generated = await store.recordWorkspaceFileRevision(sourceSession.id, {
+    contentHash: "b".repeat(64),
+    executionRunId: "execution-1",
+    mode: "write",
+    modifiedAt: "2026-08-01T10:02:00.000Z",
+    origin: "tool",
+    path: "results/data.csv",
+    runId: "run-1",
+    size: 16,
+    toolCallId: "tool-call-1",
+    toolName: "run_python",
+  });
+  assert.equal(uploaded.fileId, legacy.fileId);
+  assert.equal(generated.fileId, legacy.fileId);
+  assert.notEqual(uploaded.id, generated.id);
+  const source = store.getWorkspaceFileProvenance(sourceSession.id, "results/data.csv");
+  assert.ok(source);
+  assert.equal(source.currentRevision.id, generated.id);
+  assert.equal(source.currentRevision.toolCallId, "tool-call-1");
+  assert.deepEqual(source.revisions.map((revision) => revision.origin), ["unknown", "upload", "tool"]);
+
+  const copied = await store.recordWorkspaceFileRevision(targetSession.id, {
+    contentHash: generated.contentHash,
+    mode: "write",
+    modifiedAt: "2026-08-01T10:03:00.000Z",
+    origin: "system",
+    originMeta: { kind: "copy" },
+    parentRevisionId: generated.id,
+    path: "imports/data.csv",
+    size: generated.size,
+  });
+  assert.notEqual(copied.fileId, generated.fileId, "a copy has a new logical file identity");
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const persisted = reopened.getWorkspaceFileProvenance(targetSession.id, "imports/data.csv");
+  assert.ok(persisted);
+  assert.equal(persisted.lineage[0]?.revisionId, generated.id);
+  assert.equal(persisted.lineage[0]?.session.title, sourceSession.title);
+
+  const renamedSource = await reopened.updateSession(sourceSession.id, { title: "Renamed source before deletion" });
+  await reopened.deleteSession(sourceSession.id, sourceSession.id);
+  const afterSourceDeletion = reopened.getWorkspaceFileProvenance(targetSession.id, "imports/data.csv");
+  assert.equal(afterSourceDeletion?.lineage[0]?.session.deleted, true);
+  assert.equal(afterSourceDeletion?.lineage[0]?.session.title, renamedSource.title);
+});
+
+test("SessionStore marks an unrecorded Workspace overwrite as unknown", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `workspace-observation-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Workspace observation");
+  const session = await store.createSession(project.id, "Observed Session", {}, {}, { allowUnconfiguredModel: true });
+  const known = await store.recordWorkspaceFileRevision(session.id, {
+    contentHash: "c".repeat(64),
+    mode: "write",
+    modifiedAt: "2026-08-01T11:00:00.000Z",
+    origin: "upload",
+    path: "sample.txt",
+    size: 5,
+  });
+  const staleScanBaseline = store.snapshotWorkspaceFileRevisions(session.id);
+  const concurrentWrite = await store.recordWorkspaceFileRevision(session.id, {
+    contentHash: "d".repeat(64),
+    mode: "write",
+    modifiedAt: "2026-08-01T11:01:00.000Z",
+    origin: "tool",
+    path: "sample.txt",
+    size: 7,
+    toolName: "run_shell",
+  });
+  await store.reconcileWorkspaceFiles(session.id, [{
+    modifiedAt: known.modifiedAt,
+    path: "sample.txt",
+    size: known.size,
+  }], staleScanBaseline);
+  assert.equal(
+    store.getWorkspaceFileProvenance(session.id, "sample.txt")?.currentRevision.id,
+    concurrentWrite.id,
+    "a stale scan cannot replace a revision recorded after the scan began",
+  );
+
+  await store.reconcileWorkspaceFiles(session.id, [{
+    modifiedAt: "2026-08-01T11:02:00.000Z",
+    path: "sample.txt",
+    size: 8,
+  }]);
+  const provenance = store.getWorkspaceFileProvenance(session.id, "sample.txt");
+  assert.ok(provenance);
+  assert.equal(provenance.file.id, known.fileId);
+  assert.equal(provenance.currentRevision.origin, "unknown");
+  assert.equal(provenance.revisions.length, 3);
+});
+
+test("truncated Workspace scans preserve provenance beyond the 500-file list limit", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `workspace-scan-limit-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Workspace scan limit");
+  const session = await store.createSession(
+    project.id,
+    "Large Workspace",
+    {},
+    {},
+    { allowUnconfiguredModel: true },
+  );
+  const workspaceRoot = store.workspacePath(session.id);
+  const listedPaths = Array.from({ length: 500 }, (_, index) => `file-${String(index).padStart(3, "0")}.txt`);
+  const overflowPath = "zz-overflow.txt";
+  await Promise.all([...listedPaths, overflowPath].map(async (path) => {
+    await writeFile(resolve(workspaceRoot, path), path);
+  }));
+  const overflowMetadata = await stat(resolve(workspaceRoot, overflowPath));
+  const recorded = await store.recordWorkspaceFileRevision(session.id, {
+    mode: "write",
+    modifiedAt: overflowMetadata.mtime.toISOString(),
+    origin: "upload",
+    path: overflowPath,
+    size: overflowMetadata.size,
+  });
+
+  const listed = await listWorkspaceFiles(store, session.id);
+  assert.equal(listed.length, 500);
+  assert.equal(listed.some((file) => file.path === overflowPath), false);
+  const afterList = store.getWorkspaceFileProvenance(session.id, overflowPath);
+  assert.equal(afterList?.file.id, recorded.fileId);
+  assert.equal(afterList?.currentRevision.id, recorded.id);
+  assert.equal(afterList?.currentRevision.origin, "upload");
+
+  const exact = await workspaceFileProvenance(store, session.id, overflowPath);
+  assert.equal(exact.file.id, recorded.fileId);
+  assert.equal(exact.currentRevision.id, recorded.id);
+  assert.equal(exact.currentRevision.origin, "upload");
+
+  await rm(resolve(workspaceRoot, overflowPath));
+  await listWorkspaceFiles(store, session.id);
+  assert.equal(
+    store.getWorkspaceFileProvenance(session.id, overflowPath),
+    undefined,
+    "an exact 500-file scan remains complete and can reconcile a real deletion",
+  );
 });
 
 test("SessionStore persists a Reviewer Specialist conversation checkpoint", async (context) => {

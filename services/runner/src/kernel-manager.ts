@@ -40,6 +40,7 @@ import {
   resolveHostRuntimeSupport,
   prepareSandboxEgress,
   prepareSandboxLaunch,
+  resolveSandboxSkillRoots,
   resolveProfileChdir,
   resolveQuotaBytes,
   seccompVariantFor,
@@ -53,6 +54,7 @@ import {
   workspaceSnapshot,
   workspaceUsageBytes,
   type SandboxLaunch,
+  type SandboxSkillRoots,
 } from "./executor.js";
 import { agentExecutionKey, KeyedTaskQueue } from "./agent-execution.js";
 import type { SessionEnvProfile } from "./session-env-profile.js";
@@ -129,6 +131,7 @@ class ManagedKernel {
     readonly launch: SandboxLaunch,
     readonly workspaceRoot: string,
     readonly readOnlyWorkspaceRoot: string | undefined,
+    readonly skillPackagesRoot: string | undefined,
     private idleTimeoutMs: number,
     private readonly onIdle: (kernel: ManagedKernel) => void,
     private readonly onUnexpectedExit: (kernel: ManagedKernel, reason: string) => void,
@@ -348,6 +351,7 @@ export class KernelManager {
     const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
       ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot)
       : undefined;
+    const skillRoots = await resolveSandboxSkillRoots(this.config.dataDir, workspaceRoot, request.skillPackagesRoot);
     const maxWorkspaceBytes = resolveQuotaBytes(
       request.maxWorkspaceBytes,
       this.config.maxWorkspaceBytes ?? DEFAULT_MAX_WORKSPACE_BYTES,
@@ -380,6 +384,19 @@ export class KernelManager {
         kernel.session.memoryLostReason ?? "Persistent kernel stopped; persistent memory was lost");
       kernel = undefined;
     }
+    // Skill selection can legitimately change inside one Session-Agent identity.
+    // A started sandbox cannot re-bind, so restart it and report the loss rather
+    // than failing the execution the way a real mount conflict does.
+    if (kernel
+      && kernel.skillPackagesRoot !== skillRoots?.packagesRoot
+      && kernel.workspaceRoot === workspaceRoot
+      && kernel.readOnlyWorkspaceRoot === readOnlyWorkspaceRoot) {
+      await kernel.stop("Selected Skills changed; persistent memory was lost");
+      this.kernels.delete(key);
+      this.lostState.set(lostStateKey,
+        kernel.session.memoryLostReason ?? "Selected Skills changed; persistent memory was lost");
+      kernel = undefined;
+    }
     if (!kernel) {
       kernel = await this.startKernel(
         request,
@@ -388,11 +405,13 @@ export class KernelManager {
         language,
         workspaceRoot,
         readOnlyWorkspaceRoot,
+        skillRoots,
         networkAccess,
       );
       this.kernels.set(key, kernel);
     } else if (kernel.workspaceRoot !== workspaceRoot
-      || kernel.readOnlyWorkspaceRoot !== readOnlyWorkspaceRoot) {
+      || kernel.readOnlyWorkspaceRoot !== readOnlyWorkspaceRoot
+      || kernel.skillPackagesRoot !== skillRoots?.packagesRoot) {
       throw new Error("Persistent kernel Session-Agent identity cannot be reused with different workspace mounts");
     }
 
@@ -520,6 +539,7 @@ export class KernelManager {
     language: ScientificLanguage,
     workspaceRoot: string,
     readOnlyWorkspaceRoot: string | undefined,
+    skillRoots: SandboxSkillRoots | undefined,
     networkAccess: SandboxNetworkAccess,
   ): Promise<ManagedKernel> {
     const id = `kernel-${randomUUID()}`;
@@ -537,7 +557,7 @@ export class KernelManager {
     const sandbox = executorSandboxKind(this.config);
     const launch = await prepareSandboxLaunch(this.config, {
       chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
-      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox),
+      egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox, request.sandboxEgressProxy),
       environmentBinds: environmentPrefixBindArguments(prefixPath),
       environmentPaths: [prefixPath],
       envProfile,
@@ -546,6 +566,7 @@ export class KernelManager {
       language,
       pathEnv: sandbox === "seatbelt" ? `${resolve(prefixPath, "bin")}:/usr/bin:/bin` : "/opt/science-env/bin:/usr/bin",
       readOnlyWorkspaceRoot,
+      skillRoots,
       workspaceBindArgs: workspaceBinds.args,
       workspaceRoot,
     });
@@ -594,6 +615,7 @@ export class KernelManager {
       launch,
       workspaceRoot,
       readOnlyWorkspaceRoot,
+      skillRoots?.packagesRoot,
       idleTimeoutMs,
       (kernel) => {
         const reason = `Persistent kernel idle timeout after ${kernel.configuredIdleTimeoutMs} ms`;

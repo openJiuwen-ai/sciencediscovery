@@ -730,6 +730,14 @@ export class SkillLibraryCatalog {
             size: resource.size,
           };
         },
+        readPackageFiles: () => [...clonedFiles]
+          .map(([path, bytes]) => ({
+            bytes: Buffer.from(bytes),
+            hash: createHash("sha256").update(bytes).digest("hex"),
+            path,
+            size: bytes.length,
+          }))
+          .toSorted((left, right) => left.path.localeCompare(right.path)),
         resources: structuredClone(detail.resources),
         revision: detail.currentRevision,
         version: detail.version,

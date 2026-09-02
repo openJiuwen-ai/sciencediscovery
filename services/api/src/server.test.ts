@@ -82,6 +82,7 @@ import type {
   SystemTimeoutSettings,
   WorkbenchSearchResponse,
   WorkspaceFile,
+  WorkspaceFileProvenance,
   WorkspaceUploadResult,
 } from "@sciencediscovery/schema";
 import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
@@ -3083,6 +3084,19 @@ test("PDF upload extracts full text and tables into the session workspace", asyn
   });
   assert.equal(textResponse.status, 200);
   assert.match(await textResponse.text(), /Scientific result with embedded text/);
+  const sourceProvenance = await jsonRequest<WorkspaceFileProvenance>(
+    `${origin}/api/sessions/${session.body.id}/workspace/provenance?path=${encodeURIComponent(uploaded.body.pdfPath)}`,
+    { headers: authorization },
+  );
+  assert.equal(sourceProvenance.body.currentRevision.origin, "upload");
+  assert.equal(sourceProvenance.body.currentRevision.originMeta?.kind, "paper-source");
+  const textProvenance = await jsonRequest<WorkspaceFileProvenance>(
+    `${origin}/api/sessions/${session.body.id}/workspace/provenance?path=${encodeURIComponent(textPath)}`,
+    { headers: authorization },
+  );
+  assert.equal(textProvenance.body.currentRevision.origin, "system");
+  assert.equal(textProvenance.body.currentRevision.originMeta?.kind, "paper-extraction");
+  assert.equal(textProvenance.body.lineage[0]?.revisionId, sourceProvenance.body.currentRevision.id);
 
   let visionAuthorization = "";
   let visionPayload: { messages?: Array<{ content?: unknown[] }> } = {};
@@ -3119,6 +3133,13 @@ test("PDF upload extracts full text and tables into the session workspace", asyn
     headers: authorization,
   });
   assert.match(await visionFile.text(), /two-column experimental results table/);
+  const visionProvenance = await jsonRequest<WorkspaceFileProvenance>(
+    `${origin}/api/sessions/${session.body.id}/workspace/provenance?path=${encodeURIComponent(vision.body.resultPath)}`,
+    { headers: authorization },
+  );
+  assert.equal(visionProvenance.body.currentRevision.origin, "system");
+  assert.equal(visionProvenance.body.currentRevision.originMeta?.kind, "paper-vision-analysis");
+  assert.equal(visionProvenance.body.lineage[0]?.revisionId, sourceProvenance.body.currentRevision.id);
   assert.doesNotMatch(await readFile(resolve(tempRoot, "catalog.sqlite"), "utf8"), /ephemeral-vision-token/);
 });
 
@@ -3749,6 +3770,14 @@ test("subagent handoff copies only declared or referenced parent files", async (
   assert.equal((await readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/needed.csv"), "utf8")), "value\n1\n");
   await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/inputs/notneeded.csv")));
   await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/inputs/unmentioned.csv")));
+  const copiedProvenance = store.getWorkspaceFileProvenance(
+    session.id,
+    "subagents/subagent-selective-test/inputs/needed.csv",
+  );
+  assert.equal(copiedProvenance?.currentRevision.origin, "system");
+  assert.equal(copiedProvenance?.currentRevision.originMeta?.kind, "subagent-handoff-copy");
+  assert.equal(copiedProvenance?.lineage[0]?.path, "needed.csv");
+  assert.equal(copiedProvenance?.lineage[0]?.session.id, session.id);
   const manifest = JSON.parse(await readFile(resolve(workspaceRoot, handoff.manifestPath), "utf8")) as {
     availableParentInputPaths?: string[];
     parentInputPaths?: string[];
@@ -5481,7 +5510,22 @@ test("WSP-001 multipart upload preserves hashes and exposes specific workspace p
     assert.equal(files.find((file) => file.path === "protein.pdb")?.previewKind, "structure");
     assert.equal(Object.hasOwn(files.find((file) => file.path === "scratch.bin")!, "previewKind"), false);
     assert.equal(files.some((file) => Object.hasOwn(file, "kind")), false);
+    assert.equal(files.every((file) => file.provenance?.origin === "upload"), true);
   }
+
+  const initialCsvSummary = listed.body.find((file) => file.path === "input.csv")?.provenance;
+  assert.ok(initialCsvSummary);
+  const initialCsvProvenance = await jsonRequest<WorkspaceFileProvenance>(
+    `${origin}/api/sessions/${session.body.id}/workspace/provenance?path=${encodeURIComponent("input.csv")}`,
+    { headers: authorization },
+  );
+  assert.equal(initialCsvProvenance.response.status, 200);
+  assert.equal(initialCsvProvenance.body.currentRevision.origin, "upload");
+  assert.equal(initialCsvProvenance.body.sourceSession.id, session.body.id);
+  assert.equal(initialCsvProvenance.body.sourceSession.title, "Upload session");
+  assert.equal(initialCsvProvenance.body.file.id, initialCsvSummary.fileId);
+  assert.equal(initialCsvProvenance.body.currentRevision.id, initialCsvSummary.revisionId);
+  assert.equal(initialCsvProvenance.body.artifacts.length, 1);
 
   const csvHash = createHash("sha256").update(csv).digest("hex");
   const pdfHash = createHash("sha256").update(pdf).digest("hex");
@@ -5496,6 +5540,23 @@ test("WSP-001 multipart upload preserves hashes and exposes specific workspace p
   assert.equal(createHash("sha256").update(Buffer.from(await readCsv.arrayBuffer())).digest("hex"), csvHash);
   assert.equal(createHash("sha256").update(Buffer.from(await readPdf.arrayBuffer())).digest("hex"), pdfHash);
   assert.equal(createHash("sha256").update(Buffer.from(await readPng.arrayBuffer())).digest("hex"), pngHash);
+
+  const overwrite = new FormData();
+  overwrite.append("files", new Blob([Buffer.from("metric,value\nrows,4\n")], { type: "text/csv" }), "input.csv");
+  const overwritten = await jsonRequest<WorkspaceUploadResult>(
+    `${origin}/api/sessions/${session.body.id}/workspace/upload?conflict=overwrite`,
+    { body: overwrite, headers: authorization, method: "POST" },
+  );
+  assert.equal(overwritten.response.status, 201);
+  const overwrittenCsv = overwritten.body.files.find((file) => file.path === "input.csv");
+  assert.equal(overwrittenCsv?.provenance?.fileId, initialCsvSummary.fileId);
+  assert.notEqual(overwrittenCsv?.provenance?.revisionId, initialCsvSummary.revisionId);
+  const overwrittenProvenance = await jsonRequest<WorkspaceFileProvenance>(
+    `${origin}/api/sessions/${session.body.id}/workspace/provenance?path=input.csv`,
+    { headers: authorization },
+  );
+  assert.deepEqual(overwrittenProvenance.body.revisions.map((revision) => revision.origin), ["upload", "upload"]);
+  assert.equal(overwrittenProvenance.body.artifacts[0]?.version, 2);
 });
 
 test("WSP-003 rejects traversal upload paths and leaves the host untouched", async (context) => {

@@ -724,24 +724,25 @@ export function MemoryGraphExplorer({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [groupGraphs, setGroupGraphs] = useState<Map<string, MemorySubgraph>>(new Map());
   const [expandingGroups, setExpandingGroups] = useState<Set<string>>(new Set());
-  // produces 成员折叠（规则3）：任意非 scope/aggregate 节点双击展开其
-  // produces/citation 邻接（一层），再双击级联折叠。独立于 expandedScopes
-  // （subagent scope 子树）和 expandedGroups（aggregate 成员）——三套各管
-  // 各的折叠面，互不干扰。上游的 mergeExpansions 只折叠 subagent scope
-  // 的 contains 子树，单 agent session 没有 subagent scope 时整图无折叠；
-  // 这套 expandedNodeMap 补上「每个节点的 produces 产出默认折叠」。
+  // produces 成员折叠（规则3，「谁展开谁折叠」模型，边为中心）：任意非
+  // scope/aggregate 节点双击展开其 produces/citation 邻接（一层），再双击
+  // 级联折叠。独立于 expandedScopes（subagent scope 子树）和 expandedGroups
+  // （aggregate 成员）——三套各管各的折叠面，互不干扰。上游的 mergeExpansions
+  // 只折叠 subagent scope 的 contains 子树，单 agent session 没有 subagent
+  // scope 时整图无折叠；这套 expandedNodeMap 补上「每个节点的 produces 产出
+  // 默认折叠」。
   //
-  // 「谁展开谁折叠」模型（仿 Neo4j，边为中心）：ownerId → 它**亲手拉进来**
-  // 的子节点 id 集。展开时只记当前不可见的新成员（expandProducesOwner）；
-  // 折叠时只删 owner 名下的 + 递归删它们各自名下的（collapseProducesOwner）。
-  // 一个节点若被别的 owner 拉进来，折叠当前 owner 不碰它——它因还连着那个
-  // owner 的边而留下（「边为中心、对端不收」）。
+  // expandedNodeMap：ownerId → 它**亲手拉进来**的子节点 id 集。展开时只记
+  // 当前不可见的新成员（expandProducesOwner）；折叠时只删 owner 名下的 +
+  // 递归删它们各自名下的（collapseProducesOwner）。一个节点若被别的 owner
+  // 拉进来，折叠当前 owner 不碰它——它因还连着那个 owner 的边而留下
+  // （「边为中心、对端不收」）。
   const [expandedNodeMap, setExpandedNodeMap] = useState<Map<string, Set<string>>>(new Map());
-  // 「已出现节点集」（等价 Neo4j nodeMap 键集）：节点被任一次展开拉进来就进
-  // 这个集，折叠只从该集移除被显式删除的**直接子**（浅层），孙辈留下。这让
-  // 浅层折叠 report2 后 Claim 消失、Evidence 留着——Evidence 在 appearedIds，
-  // Claim 被删也不失保（脱离 owner 仍可见，Neo4j nodeMap 语义）。projectToCanvas
-  // 的 keep 集 produces 部分从这里推，不再从 expandedNodeMap 的 children 推。
+  // appearedIds（「已出现节点集」）：节点被任一次展开拉进来就进这个集，
+  // 折叠只从该集移除被显式删除的**直接子**（浅层），孙辈留下。这让浅层折叠
+  // report2 后 Claim 消失、Evidence 留着——Evidence 在 appearedIds，Claim
+  // 被删也不失保。keep 集 produces 部分从这里推，不再从 expandedNodeMap
+  // 的 children 推。
   const [appearedIds, setAppearedIds] = useState<Set<string>>(new Set());
   const { t } = useLocale();
 
@@ -1324,26 +1325,25 @@ export function MemoryGraphExplorer({
     }
   }, [client, sessionId, expandingGroups, expandedGroups]);
 
-  // produces 成员折叠（规则3）：双击非 scope/aggregate 节点 → 展开其直接
-  // 相邻的 produces/citation 成员（一层，只拉当前不可见的）；已展开时再
-  // 双击 → 折叠它亲手拉进来的子树。纯客户端，不 fetch——成员已在 subgraph
-  // 里（后端 get_subgraph 返回全图，折叠是前端投影）。「谁展开谁折叠」模型
-  // （仿 Neo4j，边为中心）：展开记新成员到 owner 名下，折叠只删 owner 名下
-  // 的 + 递归。对端节点若被别的 owner 拉进来，折叠当前 owner 不碰它。
+  // produces 成员折叠（规则3，「谁展开谁折叠」模型，边为中心）：双击非
+  // scope/aggregate 节点 → 展开其直接相邻的 produces/citation 成员（一层，
+  // 只拉当前不可见的）；已展开时再双击 → 折叠它亲手拉进来的子树。纯客户端，
+  // 不 fetch——成员已在 subgraph 里（后端 get_subgraph 返回全图，折叠是前端
+  // 投影）。展开记新成员到 owner 名下，折叠只删 owner 名下的 + 递归。对端
+  // 节点若被别的 owner 拉进来，折叠当前 owner 不碰它。
   const toggleProduces = useCallback((ownerId: string) => {
     setExpandedNodeMap((current) => {
-      // 判定「已展开」只看 expandedNodeMap 里有没有这个 key（对齐 Neo4j
+      // 判定「已展开」只看 expandedNodeMap 里有没有这个 key（对应
       // nodeDblClicked 的 `if (d.expanded)`——节点级布尔标志，展开过即 true，
-      // 与名下当前记了多少子节点无关）。Neo4j 折叠后把 expandedNodeMap[id]
-      // 置空数组（key 仍在），我们折叠时 delete key，所以「key 在不在」等价于
-      // 「展开过没有」。这样 report2.md 这类展开过但名下已被清空的节点，双击
-      // 走折叠分支：collapseProducesOwner 对空/不存在的子集返回空，静默 no-op，
-      // 不弹「无可展开子节点」toast（对齐 Neo4j collapseNode 对空 map 的 return）。
+      // 折叠后置空数组（key 仍在），我们折叠时 delete key，所以「key 在不在」
+      // 等价于「展开过没有」。这样 report2.md 这类展开过但名下已被清空的
+      // 节点，双击走折叠分支：collapseProducesOwner 对空/不存在的子集返回空，
+      // 静默 no-op，不弹「无可折叠子节点」toast。
       if (current.has(ownerId)) {
-        // 浅层折叠（仿新版 Neo4j Browser）：collapseProducesOwner 只返回 owner
-        // 亲手拉进来的**直接子**（不递归孙）。从 appearedIds 移除这些直接子 →
-        // 它们从 keep 消失（节点 + 触边一起没，因为两端不齐）。孙辈留在
-        // appearedIds → 仍可见（脱离被删的 owner 也留，Neo4j nodeMap 语义）。
+        // 浅层折叠：collapseProducesOwner 只返回 owner 亲手拉进来的**直接子**
+        // （不递归孙）。从 appearedIds 移除这些直接子 → 它们从 keep 消失（节点
+        // + 触边一起没，因为两端不齐）。孙辈留在 appearedIds → 仍可见（脱离被
+        // 删的 owner 也留）。
         // 例：report2 名下 Claim、Claim 名下 Evidence；折叠 report2 移除
         // Claim（直接子），Evidence 留（孙，不在 remove）→ Claim 消失、
         // report2↔Claim 边断、Evidence 留着连 Paper。
@@ -1377,7 +1377,7 @@ export function MemoryGraphExplorer({
         });
         return next;
       }
-      // 展开：算 owner 当前还能拉进来的**新**成员（仿 Neo4j addExpandedNodes
+      // 展开：算 owner 当前还能拉进来的**新**成员（对应 addExpandedNodes
       // 的 if findNode==null，只记当前不可见的）。visibleIds = 当前投影图节点集。
       const visibleIds = new Set(graph.nodes.map((n) => n.id));
       const fresh = expandProducesOwner(subgraph, ownerId, visibleIds);
@@ -1394,9 +1394,8 @@ export function MemoryGraphExplorer({
       }
       const next = new Map(current);
       next.set(ownerId, fresh);
-      // 拉进来的新成员进 appearedIds（等价 Neo4j addExpandedNodes 把新节点加进
-      // nodeMap——永久在，除非显式折叠移除）。折叠时只移除直接子，这些节点
-      // 脱离 owner 仍可见。
+      // 拉进来的新成员进 appearedIds（等价把新节点加进 nodeMap——永久在，
+      // 除非显式折叠移除）。折叠时只移除直接子，这些节点脱离 owner 仍可见。
       setAppearedIds((prev) => {
         const n = new Set(prev);
         for (const f of fresh) n.add(f);
@@ -1529,9 +1528,9 @@ export function MemoryGraphExplorer({
             <div className="memory-filter-block">
               <span className="memory-filter-title">Nodes ({graph.nodes.length})</span>
               <div className="memory-filter-chips">
-                {/* Node-label chips render as Neo4j-Browser-style pill/capsule
-                    tags: a single rounded button whose border-radius is exactly
-                    half its height (24px / 2 = 12px), so both ends form complete
+                {/* Node-label chips render as pill/capsule tags: a single
+                    rounded button whose border-radius is exactly half its
+                    height (24px / 2 = 12px), so both ends form complete
                     semicircles. No SVG, no point caps — unlike the relationship
                     chips' hexagon. Background stays per-label (NODE_COLORS). */}
                 {labelCounts.map(({ label }) => <span
@@ -1553,10 +1552,10 @@ export function MemoryGraphExplorer({
             <div className="memory-filter-block">
               <span className="memory-filter-title">Relationships ({graph.edges.length})</span>
               <div className="memory-filter-chips">
-                {/* Relationship chips render as Neo4j-Browser-style double-pointed
-                    hexagon tags: a flat body flanked by left/right SVG point caps.
-                    The same path is used for both caps; the right cap is mirrored
-                    via scaleX(-1). Background colour is carried on --chip-bg so all
+                {/* Relationship chips render as double-pointed hexagon tags:
+                    a flat body flanked by left/right SVG point caps. The same
+                    path is used for both caps; the right cap is mirrored via
+                    scaleX(-1). Background colour is carried on --chip-bg so all
                     three pieces share one fill; typography is untouched. */}
                 {edgeCounts.map(({ type }) => <span
                   className="memory-chip-wrap"
@@ -1635,7 +1634,7 @@ export function MemoryGraphExplorer({
             />
             {scopeNotes.size > 0 ? (
               // Grey scrim + center notice, scoped to the GRAPH area only (not
-              // the whole Science Memory panel — the header/filters/product
+              // the whole ScienceMemory panel — the header/filters/product
               // panel stay clear). The scrim greys out the graph to focus the
               // notice; clicking anywhere outside the notice (scrim, backdrop,
               // canvas, any panel) clears it. stopPropagation on the notice so

@@ -227,10 +227,14 @@ test("a persistent Kernel rejects writable and read-only mount changes for one S
   const workspaceRoot = resolve(readOnlyWorkspaceRoot, "subagents", "subagent-1");
   const otherWorkspaceRoot = resolve(readOnlyWorkspaceRoot, "subagents", "subagent-2");
   const otherReadOnlyWorkspaceRoot = resolve(dataDir, "projects", "project", "shared-inputs");
+  const skillPackagesRoot = resolve(dataDir, "projects", "project", "skill-snapshots", "run-1");
+  const otherSkillPackagesRoot = resolve(dataDir, "projects", "project", "skill-snapshots", "run-2");
   await Promise.all([
     mkdir(workspaceRoot, { recursive: true }),
     mkdir(otherWorkspaceRoot, { recursive: true }),
     mkdir(otherReadOnlyWorkspaceRoot, { recursive: true }),
+    mkdir(skillPackagesRoot, { recursive: true }),
+    mkdir(otherSkillPackagesRoot, { recursive: true }),
   ]);
   const manager = new KernelManager({
     bwrapPath: BWRAP_PATH,
@@ -246,6 +250,7 @@ test("a persistent Kernel rejects writable and read-only mount changes for one S
     language: "python" as const,
     permissionEpoch: epoch(),
     readOnlyWorkspaceRoot,
+    skillPackagesRoot,
     workspaceRoot,
   };
 
@@ -267,6 +272,29 @@ test("a persistent Kernel rejects writable and read-only mount changes for one S
     readOnlyWorkspaceRoot: otherReadOnlyWorkspaceRoot,
   }), /cannot be reused with different workspace mounts/);
   assert.deepEqual(manager.list().map((kernel) => kernel.id), [first.kernelId]);
+
+  // Changing the selected Skill set is legitimate, so the kernel restarts on the
+  // new read-only mount and reports the memory loss instead of failing the call.
+  const restarted = await manager.execute({
+    ...request,
+    code: "print('new Skill mount')",
+    executionId: "mount-eval-skill-change",
+    skillPackagesRoot: otherSkillPackagesRoot,
+  });
+  assert.notEqual(restarted.kernelId, first.kernelId);
+  assert.equal(restarted.stdout.trim(), "new Skill mount");
+  assert.match(restarted.memoryStateLost ?? "", /Selected Skills changed/);
+  assert.deepEqual(manager.list().map((kernel) => kernel.id), [restarted.kernelId]);
+
+  // The restarted kernel is a fresh interpreter, so earlier state is really gone.
+  const afterRestart = await manager.execute({
+    ...request,
+    code: "print(x)",
+    executionId: "mount-eval-skill-change-state",
+    skillPackagesRoot: otherSkillPackagesRoot,
+  });
+  assert.notEqual(afterRestart.exitCode, 0);
+  assert.match(afterRestart.stderr, /NameError/);
 });
 
 test("persistent R kernel path retains state and reports a generated workspace artifact", async (context) => {

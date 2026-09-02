@@ -48,12 +48,18 @@ Identify what the analysis task requires:
 - **Analysis objectives**: What computational results are expected
 - **Available data**: File paths, data descriptions, format details
 
-### Step 2: Inspect Available Data
+### Step 2: Use the Bundled Executor
+
+The complete frozen package is already available read-only at
+`$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer` when the execution sandbox starts. Invoke
+`scripts/execute.py` directly from that fixed package path and pass requested data paths and options as arguments. Do not load this large script into context, copy or rewrite it, search the filesystem for another copy, or execute it until the workflow requires an explicit inspect or run action.
+
+### Step 3: Inspect Available Data
 
 Before writing analysis code, inspect the data to understand its schema and characteristics:
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action inspect \
   --files /path/to/data.xlsx
 ```
@@ -64,14 +70,14 @@ This returns:
 - Row count per sheet/file
 - Sample data (first 5 rows)
 
-### Step 3: Write and Execute Analysis Code
+### Step 4: Write and Execute Analysis Code
 
 Based on the analysis objectives and data schema, write Python/R code to perform the analysis.
 
 #### Execute Python Code
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action run \
   --language python \
   --code-file /path/to/workspace/analysis_step1.py \
@@ -82,7 +88,7 @@ python ./scripts/execute.py \
 #### Execute R Code
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action run \
   --language r \
   --code-file /path/to/workspace/analysis_step1.R \
@@ -93,14 +99,14 @@ python ./scripts/execute.py \
 #### Run Inline Code Snippet
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action run \
   --language python \
   --code "import pandas as pd; df = pd.read_excel('/path/to/data.xlsx'); print(df.describe())" \
   --output-file /path/to/outputs/summary_stats.csv
 ```
 
-### Step 4: Document and Return Results
+### Step 5: Document and Return Results
 
 Structure your output per the Output Schema below. Ensure every result includes method justification, data traceability, assumptions, and code-level documentation.
 
@@ -123,7 +129,7 @@ When results may be evaluated downstream (e.g., by the `result-evaluator` skill)
 | `--output-file` | No | Path to export results (CSV/JSON/MD). If the code assigns a DataFrame to `result`, it is exported as structured tabular data; otherwise raw stdout/stderr is exported |
 
 > [!NOTE]
-> Do NOT read the Python file, just call it with the parameters.
+> Do NOT read or copy the Python file. Call its fixed read-only package path with the parameters.
 
 ## Variable Naming Rules
 
@@ -141,7 +147,7 @@ Task: "Analyze the correlation between variable X and Y in dataset.csv, and test
 ### Step 1: Inspect the data file
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action inspect \
   --files /path/to/dataset.csv
 ```
@@ -149,7 +155,7 @@ python ./scripts/execute.py \
 ### Step 2: Write analysis code and execute
 
 ```bash
-python ./scripts/execute.py \
+python "$SCIENCEDISCOVERY_SKILLS_DIR/code-engineer/scripts/execute.py" \
   --action run \
   --language python \
   --code-file /path/to/workspace/correlation_analysis.py \

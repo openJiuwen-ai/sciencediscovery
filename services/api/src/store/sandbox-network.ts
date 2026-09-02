@@ -17,11 +17,14 @@ import { createHash } from "node:crypto";
 import {
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   NO_SANDBOX_NETWORK_ACCESS,
+  PROXY_POLICY_INHERIT,
   isSandboxNetworkMode,
   normalizeAllowedDomains,
   type SandboxNetworkAccess,
   type SandboxNetworkSettings,
 } from "@sciencediscovery/schema";
+
+import { normalizeProxyPolicy } from "./settings.js";
 
 /**
  * Sandbox network access settings: the admin-owned policy that decides whether
@@ -37,6 +40,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const SANDBOX_NETWORK_FIELDS = [
   "allowPrivateNetwork",
   "allowedDomains",
+  "egressProxyPolicy",
   "mode",
 ] as const satisfies readonly (keyof SandboxNetworkSettings)[];
 
@@ -61,7 +65,12 @@ export function normalizeSandboxNetworkSettings(value: unknown): SandboxNetworkS
   if (mode === "domain-allowlist" && allowedDomains.length === 0) {
     throw new Error("Sandbox network mode domain-allowlist requires at least one allowed domain");
   }
-  return { allowPrivateNetwork, allowedDomains, mode };
+  // Catalogs written before this field existed behave as the shared default.
+  const egressProxyPolicy = normalizeProxyPolicy(
+    value.egressProxyPolicy ?? PROXY_POLICY_INHERIT,
+    "egressProxyPolicy",
+  );
+  return { allowPrivateNetwork, allowedDomains, egressProxyPolicy, mode };
 }
 
 /** Fill missing fields from the fallback (catalog migration / partial PUT). */
@@ -74,6 +83,7 @@ export function resolveSandboxNetworkSettings(
   return normalizeSandboxNetworkSettings({
     allowPrivateNetwork: value.allowPrivateNetwork ?? fallback.allowPrivateNetwork,
     allowedDomains: value.allowedDomains ?? fallback.allowedDomains,
+    egressProxyPolicy: value.egressProxyPolicy ?? fallback.egressProxyPolicy,
     mode: value.mode ?? fallback.mode,
   });
 }
@@ -86,7 +96,15 @@ export function resolveSandboxNetworkSettings(
  */
 export function sandboxNetworkRevision(settings: SandboxNetworkSettings): string {
   if (settings.mode === "none") return NO_SANDBOX_NETWORK_ACCESS.revision;
-  const canonical = JSON.stringify([settings.mode, settings.allowedDomains, settings.allowPrivateNetwork]);
+  // The egress proxy policy is part of the identity: changing it changes where
+  // allowed traffic leaves from, so the epoch — and with it every persistent
+  // kernel and shell — has to rotate.
+  const canonical = JSON.stringify([
+    settings.mode,
+    settings.allowedDomains,
+    settings.allowPrivateNetwork,
+    settings.egressProxyPolicy,
+  ]);
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
 

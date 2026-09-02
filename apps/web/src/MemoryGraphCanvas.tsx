@@ -54,11 +54,10 @@ export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
 };
 
 /**
- * Every edge is the same colour — Neo4j NVL base.mjs's `defaultRelationshipColor`
- * (#818790). The relationship *type* is not encoded by colour; each line carries
- * an inline label on its midpoint, so this swatch is purely the line + arrowhead
- * colour (and the filter chip swatch in `MemoryGraphExplorer` reads the keys
- * without change). One unified grey matches the new Browser.
+ * Every edge is the same colour (#818790). The relationship *type* is not
+ * encoded by colour; each line carries an inline label on its midpoint, so
+ * this swatch is purely the line + arrowhead colour (and the filter chip
+ * swatch in `MemoryGraphExplorer` reads the keys without change).
  */
 export const EDGE_COLORS: Record<MemoryGraphEdgeType, string> = {
   produces: "#818790",
@@ -97,8 +96,8 @@ function isChainEdge(
 }
 
 /** Lighter tint of the edge grey used when the canvas is zoomed out, so edges
- *  recede. A softened #818790 (NVL defaultRelationshipColor) for the low-scale
- *  band; the full grey takes over past t=0.5. */
+ *  recede. The low-scale band softens to this tint; the full grey takes over
+ *  past t=0.5. */
 const EDGE_COLOR_LIGHT = "#a8aeb6";
 
 /** Short, human-facing name for a node — mirrors MemoryGraphView's picking rules. */
@@ -382,9 +381,8 @@ function truncateToEdge(from: SimNode, to: SimNode, radius: number): { x: number
 
 /**
  * A single shared off-DOM canvas used to measure text width for the
- * multi-line caption fit below. Mirrors Neo4j's measureText
- * (utils/textMeasurement.ts): one 2D context, font set per measure. Created
- * lazily so SSR / non-DOM environments don't blow up.
+ * multi-line caption fit below. One 2D context, font set per measure.
+ * Created lazily so SSR / non-DOM environments don't blow up.
  */
 const measureCanvas: { ctx: CanvasRenderingContext2D | null } = { ctx: null };
 function getMeasureCtx(): CanvasRenderingContext2D | null {
@@ -397,18 +395,18 @@ function getMeasureCtx(): CanvasRenderingContext2D | null {
 
 /**
  * Roughly the max text length a disc of `radius` can hold at `fontSize`,
- * as an area ratio (Neo4j GraphGeometryModel.ts:94). Used to pre-trim very
- * long names before the per-line word-fit so the fit loop stays cheap.
+ * as an area ratio. Used to pre-trim very long names before the per-line
+ * word-fit so the fit loop stays cheap.
  */
 function maxCaptionChars(radius: number, fontSize: number): number {
   return Math.floor((radius * radius * Math.PI) / (fontSize * fontSize));
 }
 
 /**
- * Width of `text` at `fontSize`, measured via canvas (cached by Neo4j's
- * textMeasurement LRU; we cache inline with a plain object — the measure
- * set is small and stable across polls). Returns 0 when no canvas context
- * is available (SSR), in which case the caller falls back to char counts.
+ * Width of `text` at `fontSize`, measured via the canvas context (we cache
+ * inline with a plain object — the measure set is small and stable across
+ * polls). Returns 0 when no canvas context is available (SSR), in which case
+ * the caller falls back to char counts.
  */
 const textWidthCache = new Map<string, number>();
 function measureText(text: string, fontSize: number): number {
@@ -431,10 +429,10 @@ function measureText(text: string, fontSize: number): number {
 /**
  * The width of a horizontal chord through a disc of `radius` at the vertical
  * offset `lineYFromCenter` (positive = below centre). At the centre the chord
- * is the full diameter; near the top/bottom it shrinks to 0. This is how Neo4j
- * knows how much text each line can hold without overflowing the circle:
+ * is the full diameter; near the top/bottom it shrinks to 0. This is how the
+ * fit knows how much text each line can hold without overflowing the circle:
  * line N sits at a y-offset, and the chord at that height bounds its width.
- * (GraphGeometryModel.ts:118-119 — `Math.sqrt(r² - d²) * 2`.)
+ * (Formula: `Math.sqrt(r² - d²) * 2`.)
  */
 function chordWidth(radius: number, lineYFromCenter: number): number {
   const d = Math.abs(lineYFromCenter);
@@ -443,13 +441,12 @@ function chordWidth(radius: number, lineYFromCenter: number): number {
 }
 
 /**
- * Fit a node's display name into its disc as up-to-N lines, mirroring NVL's
- * per-char line breaker bc() (@neo4j-nvl/base base.mjs:56199-56282) + the
- * chord-per-line geometry (GraphGeometryModel.ts:88-191). We walk a FLAT
+ * Fit a node's display name into its disc as up-to-N lines. We walk a FLAT
  * stream of characters, greedily filling each line up to its chord width
  * (chord-at-baseline shrinks near the disc's top/bottom). Spaces are soft
  * break points; spaceless CJK breaks mid-token at the chord boundary — the
- * same two modes NVL's bc() supports. Overflow gets a trailing ellipsis.
+ * same two modes a per-char line breaker supports. Overflow gets a trailing
+ * ellipsis.
  *
  * The earlier implementation kept a mutable word list and splice()d leftover
  * fragments back into it across the 1..maxLines sweep; because the list
@@ -465,8 +462,8 @@ function fitCaptionIntoCircle(name: string, radius: number, fontSize: number): s
   const maxLines = Math.max(1, Math.floor((radius * 2) / fontSize));
 
   // Chord width available on line `li` (0-indexed) of a `lineCount`-line
-  // layout, centred around the disc centre — Neo4j's chord-at-baseline model
-  // (GraphGeometryModel.ts:118-119). The baseline is centred around 0.
+  // layout, centred around the disc centre (chord-at-baseline model). The
+  // baseline is centred around 0.
   const chordForLine = (lineCount: number, li: number): number => {
     const baseline = (1 + li - lineCount / 2) * fontSize;
     const chordCentreDistance = li < lineCount / 2
@@ -501,7 +498,7 @@ function fitCaptionIntoCircle(name: string, radius: number, fontSize: number): s
         if (bufWidth + cw > chord) {
           // Even one char doesn't fit this line's chord: force it onto the
           // line anyway so we make progress (avoids a stuck loop where every
-          // line stays empty). NVL's MinNodeSize floor prevents this in
+          // line stays empty). A min-node-size floor prevents this in
           // practice, but we guard against tiny-node / large-font edge cases.
           if (!buf) { buf = c; ci++; }
           break;
@@ -512,7 +509,7 @@ function fitCaptionIntoCircle(name: string, radius: number, fontSize: number): s
         // After adding a space, this is a natural break point — if the next
         // char won't fit, stop here (the space is already in buf but trimmed
         // below). For spaceless CJK this never triggers, so we break mid-token
-        // at the chord boundary instead — same as NVL's bc() char breaker.
+        // at the chord boundary instead — same as the per-char breaker.
         if (c === " ") break;
       }
       out.push(buf.replace(/\s+$/, ""));
@@ -521,8 +518,8 @@ function fitCaptionIntoCircle(name: string, radius: number, fontSize: number): s
   };
 
   // Try 1..maxLines, keep the densest layout that fits all chars; if none fit,
-  // take maxLines and ellipsis the overflow on the last line (NVL bc() does the
-  // same — last line gets a trailing ellipsis when content overflows).
+  // take maxLines and ellipsis the overflow on the last line (last line gets a
+  // trailing ellipsis when content overflows).
   let best: { lines: string[]; consumed: number } = { lines: [], consumed: 0 };
   for (let lc = 1; lc <= maxLines; lc++) {
     const cand = fillLines(lc);
@@ -545,20 +542,19 @@ function fitCaptionIntoCircle(name: string, radius: number, fontSize: number): s
   return lines.filter(Boolean);
 }
 
-// Cap the rendered lines so a huge disc doesn't grow a wall of text; Neo4j's
+// Cap the rendered lines so a huge disc doesn't grow a wall of text;
 // maxLines = (radius*2)/fontSize gives ~4 at r=23/10px, we keep the same.
 
 /**
  * Caption font size in GRAPH space (before the zoom transform scales it to
- * screen pixels). Mirrors NVL's prepareNodeCaptionData
- * (@neo4j-nvl/base base.mjs:56405-56418):
+ * screen pixels). The base size derives from a node-size ratio:
  *   fontSize = radius / divisor[captionSize] / fontInfoLevel
  *   captionSize default 1 → divisor = 3.5 (the {1:3.5, 2:2.75, 3:2} table)
  *   fontInfoLevel default 1.25 (oc() with no zoom input)
  * so fontSize = radius / 3.5 / 1.25 = radius / 4.375. For nodeSize (radius)
  * 12 that is ~2.74 graph units; the on-screen size is this × zoom scale, so
- * at a typical fit (scale ~3-4×) the caption reads ~8-11px — the same as
- * NVL. The previous fixed 10px (graph space) was ~3.6× too large.
+ * at a typical fit (scale ~3-4×) the caption reads ~8-11px. The previous
+ * fixed 10px (graph space) was ~3.6× too large.
  *
  * Computed per-build from the live nodeSize so a thumbnail canvas (nodeSize 5)
  * gets proportionally smaller captions too.
@@ -583,8 +579,8 @@ function applyZoomAdaptation(
   if (!edgeSel) return;
   // t = 0 at scale 0.3, t = 1 at scale 1.0 (clamped).
   const t = Math.max(0, Math.min(1, (scale - 0.3) / 0.7));
-  // NVL base.mjs default relationship width = 1 (f = void 0 === f ? 1 : f).
-  // Same base for interactive/non-interactive; the zoom factor scales it below.
+  // Default relationship width is 1; same base for interactive/non-interactive,
+  // the zoom factor scales it below.
   const baseWidth = 1.0;
   const strokeWidth = baseWidth * (0.4 + 0.6 * t);
   const edgeOpacity = 0.35 + 0.65 * t;
@@ -608,9 +604,8 @@ function applyZoomAdaptation(
 }
 
 /**
- * Hide node captions once the node shrinks below a readable size on screen,
- * mirroring the new Neo4j Browser's NVL info-level gate. NVL computes
- * (@neo4j-nvl/base base.mjs:56053-56059, 58231):
+ * Hide node captions once the node shrinks below a readable size on screen.
+ * The visibility gate is derived from the node's screen-area ratio:
  *   o = (radius² · π · zoom²) / (refArea / 100)   // node screen area as a
  *                                                 //   % of a 1600×1200 reference
  *   nodeInfoLevel = nc(o, Js)   // Js = [[0.04, 1], [100, 2]]
@@ -618,19 +613,18 @@ function applyZoomAdaptation(
  * The reference area is a FIXED 1600·dpr × 1200·dpr (not the live canvas), so
  * the cutoff behaves the same regardless of viewport size — a node whose
  * on-screen radius·zoom falls below ~15.6px (= √(0.04·19200/π)) drops its
- * caption. We use the exact NVL formula and reference area; dpr cancels out
+ * caption. We use the exact formula and reference area; dpr cancels out
  * for our logical-pixel SVG, so we take refArea/100 = 1600·1200/100 = 19200.
  *
- * NVL's textOpacity is a binary target that its animation handler eases
+ * The textOpacity target is a binary value that an animation handler eases
  * toward (so the transition is a short fade, not a hard pop). We mirror that
  * by fading caption opacity across a narrow band straddling the o=0.04 line,
- * so zooming past the threshold reads as the same gentle fade NVL shows.
+ * so zooming past the threshold reads as the same gentle fade.
  */
-// NVL reference: 1600·dpr × 1200·dpr canvas, /100 → 1600·1200/100 = 19200 (dpr=1).
 const NVL_REF_AREA_OVER_100 = 19200;
-// NVL Js threshold: caption hidden when o < 0.04. (Kept for reference; the
-// live gate below is relative to baselineScale per the user's "show only when
-// the node is bigger than at first open" request, not NVL's absolute ratio.)
+// Caption hidden when o < 0.04. (Kept for reference; the live gate below is
+// relative to baselineScale per the user's "show only when the node is bigger
+// than at first open" request, not an absolute ratio.)
 const NVL_LABEL_HIDE_O = 0.04;
 // Captions appear only once the current zoom exceeds the first-open fit scale
 // by this factor — i.e. the node must be ~1.3× its "just opened" screen size
@@ -655,10 +649,10 @@ function applyNodeLabelVisibility(
 }
 
 /**
- * Scale node caption font with zoom, mirroring NVL's fontInfoLevel multiplier
- * (@neo4j-nvl/base base.mjs:56050-56060, 56404-56418). NVL does NOT keep the
- * caption at a fixed graph-unit size — it recomputes the size every zoom tick
- * so the caption grows *super-linearly* as the node fills more of the screen:
+ * Scale node caption font with zoom via a fontInfoLevel multiplier. The caption
+ * is NOT kept at a fixed graph-unit size — it recomputes the size every zoom
+ * tick so the caption grows *super-linearly* as the node fills more of the
+ * screen:
  *
  *   o = (radius² · π · zoom²) / (refArea / 100)
  *   fontInfoLevel = nc(o, ec)   // ec = [[0.8, 1.1], [3, 1.6], [8, 2.5]]
@@ -666,16 +660,16 @@ function applyNodeLabelVisibility(
  *
  * That last `· fontInfoLevel` is what the static captionFontSizeFor() omits —
  * it is the difference between captions that stay illegible at max zoom and
- * ones that bloom to a readable size. Because NVL's `refArea` is the live
- * canvas (1600·dpr × 1200·dpr), the threshold `o` represents "how much of the
- * screen the node occupies", not an absolute pixel count — we mirror that by
- * using the real canvas area, not the fixed 1600×1200. With our smaller pane
+ * ones that bloom to a readable size. Because the reference `refArea` is the
+ * live canvas (1600·dpr × 1200·dpr), the threshold `o` represents "how much of
+ * the screen the node occupies", not an absolute pixel count — we mirror that
+ * by using the real canvas area, not the fixed 1600×1200. With our smaller pane
  * that means the ec table actually engages (instead of staying pinned at 1.1),
- * so the font-boost fires on zoom-in exactly when NVL's would.
+ * so the font-boost fires on zoom-in exactly when it should.
  *
- * `nc` is NVL's step lookup (base.mjs:56043-56048): first threshold `> o`, else
- * the last entry's value. Mutating font-size on the live <text> re-flows the
- * tspans because their `dy` is in em (relative), so no re-emit is needed.
+ * `nc` is the step lookup: first threshold `> o`, else the last entry's value.
+ * Mutating font-size on the live <text> re-flows the tspans because their `dy`
+ * is in em (relative), so no re-emit is needed.
  */
 const NVL_FONTINFO_EC: Array<[number, number]> = [[0.8, 1.1], [3, 1.6], [8, 2.5]];
 function ncLookup(o: number, table: Array<[number, number]>): number {
@@ -689,8 +683,8 @@ function ncLookup(o: number, table: Array<[number, number]>): number {
 // on name, radius (fixed per build) and fontSize; fontSize takes 4 discrete
 // values (one per fontInfoLevel), so keying on fontInfoLevel makes a zoom that
 // stays within one level a Map hit rather than a per-char measureText pass.
-// NVL re-runs the wrap every frame too, but it lives in WebGL; for our SVG
-// path this cache keeps the per-tick cost down to attribute writes.
+// The wrap is re-ran every frame in a WebGL renderer; for our SVG path this
+// cache keeps the per-tick cost down to attribute writes.
 const captionWrapCache = new Map<string, string[]>();
 function wrappedLinesFor(name: string, nodeSize: number, fontInfoLevel: number): string[] {
   const key = `${name} ${fontInfoLevel}`;
@@ -715,14 +709,14 @@ function applyNodeLabelFontSize(
   const fontInfoLevel = ncLookup(o, NVL_FONTINFO_EC);
   const fontSize = captionFontSizeFor(nodeSize) * fontInfoLevel;
 
-  // NVL re-wraps + re-positions every frame (Cc is called per render at the
-  // live zoom). We mirror that: re-run fitCaptionIntoCircle at the boosted
-  // font size and re-emit tspans positioned by NVL's yPos formula
-  // (base.mjs:56628-56636: yPos0 = -(lineCount-2)·fontSize/2, line k at
-  // yPos0 + k·fontSize). This is what keeps captions inside the disc and
-  // vertically centred at every zoom — the earlier "wrap once, only mutate
-  // font-size" shortcut made the wrap stale the moment fontInfoLevel grew,
-  // so text overflowed (bug 1) and centring drifted (bug 2).
+  // The wrap + positioning is recomputed every render at the live zoom. We
+  // mirror that: re-run fitCaptionIntoCircle at the boosted font size and
+  // re-emit tspans positioned by the absolute-y formula
+  // (yPos0 = -(lineCount-2)·fontSize/2, line k at yPos0 + k·fontSize). This is
+  // what keeps captions inside the disc and vertically centred at every zoom —
+  // the earlier "wrap once, only mutate font-size" shortcut made the wrap
+  // stale the moment fontInfoLevel grew, so text overflowed (bug 1) and
+  // centring drifted (bug 2).
   nodeSel.each(function (node: SimNode) {
     const sel = select(this);
     const label = sel.select("text.memory-canvas-node-label");
@@ -736,7 +730,7 @@ function applyNodeLabelFontSize(
     tspans.enter().append("tspan")
       .merge(tspans)
       .attr("x", 0)
-      // Absolute y per line (NVL: yPos0 + k·fontSize), NOT a dy chain. This
+      // Absolute y per line (yPos0 + k·fontSize), NOT a dy chain. This
       // centres the block on the node centre for any line count; the old
       // dy=0.35em+1.1em chain centred on the first line, leaving the top half
       // of the disc empty (bug 2).
@@ -845,11 +839,10 @@ interface MemoryGraphCanvasProps {
    * ``expand`` shows when the scope is folded, ``collapse`` when expanded. */
   scopeHints?: { expand: string; collapse: string };
   /** produces 成员折叠（规则3，「谁展开谁折叠」模型）的归属映射：
-   * ownerId → 它**亲手拉进来**的子节点 id 集（仿 Neo4j expandedNodeMap，一
-   * 个新节点只记在第一个拉它进来的 owner 名下）。canvas 用它判定一个非
-   * scope/aggregate 节点是否已展开（名下有非空子集 → producesExpanded →
-   * 挂「双击收起节点」tooltip，否则「双击展开节点」）。独立于
-   * expandedScopes/expandedGroups。 */
+   * ownerId → 它**亲手拉进来**的子节点 id 集（一个新节点只记在第一个拉它
+   * 进来的 owner 名下）。canvas 用它判定一个非 scope/aggregate 节点是否
+   * 已展开（名下有非空子集 → producesExpanded → 挂「双击收起节点」tooltip，
+   * 否则「双击展开节点」）。独立于 expandedScopes/expandedGroups。 */
   expandedNodeMap?: ReadonlyMap<string, ReadonlySet<string>>;
   /** 双击非 scope/aggregate 节点 → toggle 其 produces 成员展开/折叠。explorer
    * 的 toggleProduces 纯客户端（成员已在 subgraph 里，前端投影），无 fetch。
@@ -1010,10 +1003,10 @@ export function MemoryGraphCanvas({
 
     const width = host.clientWidth || 800;
     const height = host.clientHeight || 600;
-    // NVL DefaultNodeSize = 25 (diameter); the WebGL point sprite uses
+    // The design node size is 25 (diameter); a WebGL point sprite uses
     // gl_PointSize = a_size, so `size` is the full drawn diameter. Our SVG
     // draws with radius, so nodeSize is the RADIUS: 25/2 ≈ 12. The previous 23
-    // (radius → 46px diameter) made nodes nearly 2× Neo4j's size and inflated
+    // (radius → 46px diameter) made nodes nearly 2× too large and inflated
     // every distance parameter that scales with it.
     const nodeSize = interactive ? 12 : 5;
 
@@ -1021,20 +1014,20 @@ export function MemoryGraphCanvas({
     svgSel.selectAll("*").remove();
 
     const defs = svgSel.append("defs");
-    // Arrowhead is a notched chevron (mirrors Neo4j NVL base.mjs Ks(): headHeight=9,
-    // headChinHeight=2, headWidth=7 — a 4-point path with a rear chin notch, not a
-    // solid triangle). NVL's headFactor = n×(lineWidth>1 ? lineWidth/2 : 1), so at the
-    // default lineWidth=1 the arrow is a FIXED size — it does NOT scale with line
-    // width. To match that we set markerUnits=userSpaceOnUse (the default
-    // markerUnits=strokeWidth would multiply markerWidth by stroke-width, shrinking
-    // the arrow whenever the zoom-adapted line narrows — wrong).
+    // Arrowhead is a notched chevron (headHeight=9, headChinHeight=2, headWidth=7 —
+    // a 4-point path with a rear chin notch, not a solid triangle). The head factor
+    // is n×(lineWidth>1 ? lineWidth/2 : 1), so at the default lineWidth=1 the arrow
+    // is a FIXED size — it does NOT scale with line width. To match that we set
+    // markerUnits=userSpaceOnUse (the default markerUnits=strokeWidth would multiply
+    // markerWidth by stroke-width, shrinking the arrow whenever the zoom-adapted
+    // line narrows — wrong).
     //
-    // NVL node default radius = 25 (diameter 50); our canvas node radius = 12
-    // (diameter 24), i.e. 0.48× Neo4j. We scale the arrow by the same factor so the
-    // arrow/node proportion matches Neo4j's: headHeight 9×0.48≈4.3, headWidth 7×0.48≈3.4.
-    // Tip at (9,0) lands on the target node border (refX=9); the notch at (2,0) gives
-    // the concave rear that reads as Neo4j's relationship arrow.
-    const arrowScale = 0.48; // our node diameter (24) / NVL node diameter (50)
+    // The design node default radius is 25 (diameter 50); our canvas node radius = 12
+    // (diameter 24), i.e. 0.48× the design size. We scale the arrow by the same
+    // factor so the arrow/node proportion matches: headHeight 9×0.48≈4.3, headWidth
+    // 7×0.48≈3.4. Tip at (9,0) lands on the target node border (refX=9); the notch at
+    // (2,0) gives the concave rear that reads as a relationship arrow.
+    const arrowScale = 0.48;  // our node diameter (24) / design node diameter (50)
     const arrowW = 9 * arrowScale;   // ≈ 4.3
     const arrowH = 7 * arrowScale;   // ≈ 3.4
     for (const [type, color] of Object.entries(EDGE_COLORS)) {
@@ -1059,12 +1052,12 @@ export function MemoryGraphCanvas({
     let zoomBehavior: ReturnType<typeof zoom<SVGSVGElement, unknown>> | undefined;
     if (interactive) {
       zoomBehavior = zoom<SVGSVGElement, unknown>()
-        // NVL defaults: minZoom 0.075, maxZoom 10 (base.mjs:64283-64284). The
-        // old 0.2–2.5 range capped zoom so low that captions never reached a
-        // readable size — the font-boost in applyNodeLabelFontSize only fires
-        // once the node fills enough of the screen, which needs real zoom-in
-        // headroom. Matching NVL's 10× max lets a user blow the graph up until
-        // a single node's caption is fully legible, exactly as in the Browser.
+        // Design zoom defaults: minZoom 0.075, maxZoom 10. The old 0.2–2.5 range
+        // capped zoom so low that captions never reached a readable size — the
+        // font-boost in applyNodeLabelFontSize only fires once the node fills
+        // enough of the screen, which needs real zoom-in headroom. The 10× max
+        // lets a user blow the graph up until a single node's caption is fully
+        // legible, exactly as in the Browser.
         .scaleExtent([0.075, 10])
         .filter((event: Event) => {
           if (event.type === "wheel") return true;
@@ -1079,11 +1072,11 @@ export function MemoryGraphCanvas({
           // (ref.baselineScale): labels only appear once zoomed in past it, so
           // a freshly-opened graph shows no node text until you zoom in a touch.
           if (ref.nodeSel) applyNodeLabelVisibility(event.transform.k, ref.nodeSel, ref.baselineScale);
-          // NVL recomputes caption font every zoom tick so it grows super-
-          // linearly with zoom (fontInfoLevel, base.mjs:56050-56060). Uses the
-          // LIVE canvas area (not NVL's fixed 1600×1200) so the ec thresholds
-          // engage on our smaller pane — otherwise captions stay pinned at the
-          // 1.1× floor and never become readable, even at max zoom.
+          // Caption font is recomputed every zoom tick so it grows super-
+          // linearly with zoom (fontInfoLevel). It uses the LIVE canvas area
+          // (not a fixed 1600×1200) so the ec thresholds engage on our smaller
+          // pane — otherwise captions stay pinned at the 1.1× floor and never
+          // become readable, even at max zoom.
           if (ref.nodeSel && ref.width && ref.height) {
             applyNodeLabelFontSize(event.transform.k, ref.nodeSel, ref.nodeSize, ref.width * ref.height);
           }
@@ -1105,7 +1098,7 @@ export function MemoryGraphCanvas({
 
     // The click handler reads dataRef so the *current* simNodes drive the
     // toggle — bound once here, never rebound on expand/collapse.
-    //   - 统一交互模型（参考 Neo4j browser 新版）：原生 click + dblclick，
+    //   - 统一交互模型：原生 click + dblclick，
     //     全部节点不用 250ms 防抖窗口。单击 = 选中（立即，零延迟）；双击 =
     //     toggle 该节点的展开/折叠（scope→子树, aggregate→成员, 其他→produces）。
     //     双击 = 第一次 click（已选中）再 dblclick（展开），浏览器原生事件序。
@@ -1128,7 +1121,7 @@ export function MemoryGraphCanvas({
     //   - aggregate (Artifacts/Papers)：toggleGroup（fetch 成员，上游）
     //   - 其他：toggleProduces（纯客户端投影，produces 成员一层）
     // 不阻止 click 默认行为——浏览器 dblclick 在 click 之后触发，第一次
-    // click 已完成选中（Neo4j browser 新版做法）。
+    // click 已完成选中，第二次再展开。
     nodesLayer.on("dblclick", (event: MouseEvent) => {
       if (!interactive) return;
       const g = (event.target as Element | null)?.closest(".memory-canvas-node") as SVGGElement | null;
@@ -1182,16 +1175,15 @@ export function MemoryGraphCanvas({
     // Re-fit whenever the box actually changes size. Lives here (mount-once)
     // so the observer isn't torn down/recreated on every expand.
     let observer: ResizeObserver | undefined;
-    // Fit the whole graph into view, mirroring Neo4j's
-    // getZoomScaleFactorToFitWholeGraph (Visualization.ts:273): scale purely
-    // by how the graph's bbox fills the pane (with a 5%-ish padding), capped
-    // only at an upper bound so a tiny graph isn't blown up huge — Neo4j caps
-    // at ZOOM_MAX_SCALE=2; we cap at 1.5 (interactive). After an expand, this
-    // is what keeps the now-larger graph from overflowing into a cramped
-    // tangle: the canvas scales back so every node fits with room. There is
-    // no "only shrink" guard — the whole point the user reported is that
-    // Neo4j DOES re-fit to the new node count after expanding, and that is
-    // what makes expanded children not crowd.
+    // Fit the whole graph into view: the scale is purely determined by how
+    // the graph's bbox fills the pane (with a 5%-ish padding), capped at an
+    // upper bound so a tiny graph isn't blown up huge — capped at 2 by design,
+    // we cap at 1.5 (interactive). After an expand, this is what keeps the
+    // now-larger graph from overflowing into a cramped tangle: the canvas
+    // scales back so every node fits with room. There is no "only shrink"
+    // guard — the whole point the user reported is that the view DOES re-fit
+    // to the new node count after expanding, and that is what makes expanded
+    // children not crowd.
     const fitAllFromRef = (duration: number, noPan = false) => {
       const ref = simRef.current;
       if (!ref.zoomBehavior || !ref.svgSel) {
@@ -1220,8 +1212,7 @@ export function MemoryGraphCanvas({
       );
       const graphCenterX = (minX + maxX) / 2;
       const graphCenterY = (minY + maxY) / 2;
-      // NVL's post-layout fit uses `{ noPan: true }` on the initial settle
-      // (graph-visualization.tsx onLayoutComputing): the zoom adjusts so every
+      // The post-layout fit can preserve the pan: the zoom adjusts so every
       // node is visible, but the *current viewport centre is preserved* — the
       // graph is not yanked to the canvas middle. That keeps the user's pan
       // across an incremental expand. We mirror it: keep the existing screen
@@ -1315,7 +1306,6 @@ export function MemoryGraphCanvas({
 
     const width = host.clientWidth || 800;
     const height = host.clientHeight || 600;
-    // Radius (see mount effect): 25/2 ≈ 12 to match NVL DefaultNodeSize.
     const nodeSize = interactive ? 12 : 5;
     const done = DONE_STATUSES;
 
@@ -1365,7 +1355,7 @@ export function MemoryGraphCanvas({
       const aggregateCount = typeof node.extra?.count === "number" ? node.extra.count : 0;
       const aggregateExpanded = isAggregate ? expandedGroups?.has(node.id) === true : false;
       // produces 成员折叠（规则3，「谁展开谁折叠」）：非 scope/aggregate
-      // 节点是否处于「展开态」（expandedNodeMap 里有没有它的 key，对齐 Neo4j
+      // 节点是否处于「展开态」（expandedNodeMap 里有没有它的 key，对应
       // d.expanded 节点级布尔：展开过即 true，折叠删 key 即 false）。由
       // explorer 维护，独立于 expandedScopes/expandedGroups。仅对普通节点
       // 有意义（scope/aggregate 的展开态各自有 expanded/aggregateExpanded）。
@@ -1449,13 +1439,12 @@ export function MemoryGraphCanvas({
     const isIncremental = prev?.positionsReady === true
       && simNodes.some((node) => prevPositions.has(node.id));
 
-    // Seed initial positions. Mirrors the new Neo4j Browser's NVL D3ForceLayout
-    // (@neo4j-nvl/base base.mjs). NVL keeps a persistent `d3Nodes` map across
-    // updates, so survivors (already in the map with settled x/y) keep their
-    // positions; only nodes NEW to the map are unlocated.
+    // Seed initial positions. The force layout keeps a persistent `d3Nodes` map
+    // across updates, so survivors (already in the map with settled x/y) keep
+    // their positions; only nodes NEW to the map are unlocated.
     //
-    // NVL's circularLayout runs ONLY when `firstTimeAddingNodes` holds —
-    // i.e. when the canvas was empty and is getting its first nodes
+    // The circularLayout runs ONLY on the first fill — i.e. when the canvas
+    // was empty and is getting its first nodes
     // (`d = s && 0 === Object.keys(this.d3Nodes).length`). On that first fill
     // it seeds every unlocated node on a ring of radius `45 * sqrt(nodeCount)`
     // centred on the graph origin. On every LATER update (an expand), the
@@ -1463,9 +1452,9 @@ export function MemoryGraphCanvas({
     // undefined x/y, d3-force initialises them near the origin, and the
     // two-stage preheat (below) with its doubled charge (-800) blasts them
     // apart into the "blooming" arrangement. That is why expanding a ToolCall
-    // in Neo4j visibly fans its children out: the preheat's strong repulsion
-    // pushes the new (unseeded) nodes away from the survivors and each other,
-    // which in turn pushes the survivor ToolCalls apart.
+    // visibly fans its children out: the preheat's strong repulsion pushes the
+    // new (unseeded) nodes away from the survivors and each other, which in
+    // turn pushes the survivor ToolCalls apart.
     //
     // We mirror that exactly: survivors copy their settled x/y/vx/vy; new
     // nodes get NO seeded position on an incremental expand (left undefined
@@ -1486,12 +1475,12 @@ export function MemoryGraphCanvas({
       }
     });
     // 2. On a FRESH canvas only, place the unlocated nodes on a circular
-    //    layout (NVL firstTimeAddingNodes path). NVL's centre is the graph
+    //    layout (the firstTimeAddingNodes path). The layout centre is the
     //    origin {0,0}; we use the survivors' centroid / canvas centre.
     //    radius = 45 * sqrt(totalNodeCount) — square-root growth keeps the
     //    initial cluster tight. Incremental expands skip this entirely (the
     //    preheat below does the blooming).
-    const LINK_DISTANCE_CONST = 45; // NVL LINK_DISTANCE constant
+    const LINK_DISTANCE_CONST = 45;  // link-distance constant
     const unlocated = simNodes.filter((node) => !seeded.has(node.id));
     if (unlocated.length && !isIncremental) {
       let cx = 0, cy = 0;
@@ -1514,7 +1503,7 @@ export function MemoryGraphCanvas({
         seeded.add(node.id);
       });
     } else if (unlocated.length && isIncremental) {
-      // NVL incremental: new nodes enter unlocated. d3-force jiggles
+      // Incremental: new nodes enter unlocated. d3-force jiggles
       // undefined-position nodes to a small random offset around the existing
       // nodes' centroid; give them that seed explicitly so they start near
       // the live cluster (not the canvas origin) before the preheat blasts
@@ -1543,13 +1532,13 @@ export function MemoryGraphCanvas({
       });
     }
 
-    // Degree count per node for the link-strength weighting (mirrors NVL's
-    // nodeRelCount + FORCE_LINK_STRENGTH). `count[i]` is the number of links
-    // incident to node i; a hub node's edges get weakened so high-degree nodes
-    // don't drag their whole neighbourhood rigidly. d3-force's forceLink
+    // Degree count per node for the link-strength weighting (mirrors the
+    // nodeRelCount + FORCE_LINK_STRENGTH formula). `count[i]` is the number of
+    // links incident to node i; a hub node's edges get weakened so high-degree
+    // nodes don't drag their whole neighbourhood rigidly. d3-force's forceLink
     // exposes the per-node degree via the `strength` accessor's second arg,
     // but computing it once here keeps the weighting formula readable and
-    // matches NVL's `countNodeRels()`.
+    // matches the `countNodeRels()` shape.
     const relCount = new Map<string, number>();
     for (const link of simLinks) {
       const s = typeof link.source === "object" ? link.source.id : link.source;
@@ -1558,27 +1547,26 @@ export function MemoryGraphCanvas({
       relCount.set(t, (relCount.get(t) ?? 0) + 1);
     }
 
-    // Force parameters mirror the NVL D3ForceLayout
-    // (recovered from @neo4j-nvl/base dist/base.mjs, D3ForceLayout.layout +
-    // the module-scope constants). These are the ACTUAL new-Browser values
+    // Force parameters mirror the new-Browser D3 force layout constants (the
+    // module-scope values). These are the ACTUAL new-Browser values
     // (the previous comments wrongly cited the classic Browser's constants).
-    //   NVL charge strength: a function returning -400 (FORCE_CHARGE); on the
+    //   charge strength: a function returning -400 (FORCE_CHARGE); on the
     //     initial two-stage preheat it is temporarily doubled to -800
     //     (FORCE_CHARGE_START = 2*po) to blast the cluster apart first.
-    //   NVL link distance: src.r + tgt.r + 90  (lo = linkDistance accessor;
+    //   link distance: src.r + tgt.r + 90  (linkDistance accessor;
     //     `90` = 2*LINK_DISTANCE). Falls back to 45 when endpoints are ids.
-    //   NVL link strength: 1.2 / (min(srcRels, tgtRels) + (max-1)/100),
+    //   link strength: 1.2 / (min(srcRels, tgtRels) + (max-1)/100),
     //     clamped to [0.06, 1] — high-degree edges are weakened.
-    //   NVL collide radius: node.r + 25 (ho).
-    //   NVL velocityDecay 0.4, alphaMin 0.05, centerX/Y strength 0.1.
+    //   collide radius: node.r + 25.
+    //   velocityDecay 0.4, alphaMin 0.05, centerX/Y strength 0.1.
     // We keep forceX/forceY with the per-component centers (we have multiple
     // disconnected components placed on a grid, where a per-component center
-    // pull reads better than NVL's single-cluster model); NVL's 0.1 strength
-    // applies. forceCenter is dropped (forceX/Y subsume it) per NVL.
+    // pull reads better than a single-cluster model); the 0.1 strength
+    // applies. forceCenter is dropped (forceX/Y subsume it).
     const linkDistanceFor = (_link: SimLink): number => {
-      // NVL lo: src.size + tgt.size + 2*LINK_DISTANCE (=90). All our nodes
-      // share `nodeSize`, so this is nodeSize*2 + 90. (Kept as a function to
-      // mirror NVL's per-link accessor shape; the link arg is unused.)
+      // src.size + tgt.size + 2*LINK_DISTANCE (=90). All our nodes share
+      // `nodeSize`, so this is nodeSize*2 + 90. (Kept as a function to
+      // mirror the per-link accessor shape; the link arg is unused.)
       return nodeSize + nodeSize + 90;
     };
     const linkStrengthFor = (link: SimLink): number => {
@@ -1588,37 +1576,34 @@ export function MemoryGraphCanvas({
       const tC = relCount.get(tId) ?? 1;
       const minR = Math.min(sC, tC);
       const maxR = Math.max(sC, tC);
-      // NVL FORCE_LINK_STRENGTH: 1.2 / (min + (max-1)/100), clamp [0.06, 1].
       const r = 1.2 / (minR + (maxR - 1) / 100);
       return Math.max(Math.min(r, 1), 0.06);
     };
-    const chargeForce = forceManyBody().strength(-400); // NVL FORCE_CHARGE (po)
-    const chargeForceStart = forceManyBody().strength(-800); // NVL FORCE_CHARGE_START (vo = 2*po)
+    const chargeForce = forceManyBody().strength(-400);
+    const chargeForceStart = forceManyBody().strength(-800);
     const simulation = forceSimulation<SimNode>(simNodes)
-      .velocityDecay(0.4) // NVL VELOCITY_DECAY
+      .velocityDecay(0.4)
       .force("link", forceLink<SimNode, SimLink>(simLinks)
         .id((node: SimNode) => node.id)
         .distance(linkDistanceFor)
         .strength(linkStrengthFor))
-      .force("charge", chargeForce) // NVL FORCE_CHARGE; swapped to chargeForceStart during preheat
-      .force("collide", forceCollide<SimNode>().radius(() => nodeSize + 25)) // NVL FORCE_COLLIDE_RADIUS (ho)
-      .force("x", forceX<SimNode>((node: SimNode) => componentCenters.get(node.id)?.cx ?? width / 2).strength(0.1)) // NVL FORCE_CENTER_X
-      .force("y", forceY<SimNode>((node: SimNode) => componentCenters.get(node.id)?.cy ?? height / 2).strength(0.1)) // NVL FORCE_CENTER_Y
-      .alpha(1) // NVL DEFAULT_ALPHA
-      // NVL uses alphaMin(0.05) (DEFAULT_ALPHA_MIN) as the stop threshold.
-      // Settles within a couple of seconds rather than the d3-default
-      // alphaMin(0.001) dreamy tail.
+      .force("charge", chargeForce)  // ; swapped to chargeForceStart during preheat
+      .force("collide", forceCollide<SimNode>().radius(() => nodeSize + 25))
+      .force("x", forceX<SimNode>((node: SimNode) => componentCenters.get(node.id)?.cx ?? width / 2).strength(0.1))
+      .force("y", forceY<SimNode>((node: SimNode) => componentCenters.get(node.id)?.cy ?? height / 2).strength(0.1))
+      .alpha(1)
+      // alphaMin(0.05) is the stop threshold; settles within a couple of
+      // seconds rather than the d3-default alphaMin(0.001) dreamy tail.
       .alphaMin(0.05)
-      .alphaTarget(0); // NVL DEFAULT_ALPHA_TARGET — fixed target, alpha cools to 0
+      .alphaTarget(0);  // fixed target, alpha cools to 0
 
-    // NVL's two-stage preheat runs ONLY on the first layout (the `if (r)`
-    // block in D3ForceLayout.layout, where r = firstTimeAddingNodes). It does
-    // NOT run on an incremental expand — that path is the `shouldReheatNodes`
-    // branch (base.mjs:48734): `simulation.alpha(1).restart()`. The "flow"/
-    // float the user wants to SEE comes from that reheat: alpha is reset to
-    // 1, then d3-force's native rAF timer ticks at high frequency while alpha
-    // decays naturally from 1 → alphaMin (0.05) over ~1-2s — every tick fires
-    // our `on("tick")` below and redraws, so the newly-added nodes visibly
+    // The two-stage preheat runs ONLY on the first layout (the
+    // firstTimeAddingNodes path). It does NOT run on an incremental expand —
+    // that path is the `shouldReheatNodes` branch: `simulation.alpha(1).restart()`.
+    // The "flow"/ float the user wants to SEE comes from that reheat: alpha is
+    // reset to 1, then d3-force's native rAF timer ticks at high frequency while
+    // alpha decays naturally from 1 → alphaMin (0.05) over ~1-2s — every tick
+    // fires our `on("tick")` below and redraws, so the newly-added nodes visibly
     // drift into place instead of snapping. The preheat's synchronous settle
     // (stage1 alpha(1)-every-tick, stage2 natural decay) is for a FRESH canvas
     // so the first paint is converged; the post-restart native decay is the
@@ -1630,7 +1615,7 @@ export function MemoryGraphCanvas({
       const stage1Start = performance.now();
       let preheatTicks = 0;
       while (performance.now() - stage1Start < 300 && preheatTicks < 200) {
-        simulation.alpha(1); // NVL: reset alpha to full every tick (forced oscillation)
+        simulation.alpha(1);  // reset alpha to full every tick (forced oscillation)
         simulation.tick(1);
         preheatTicks++;
       }
@@ -1639,17 +1624,16 @@ export function MemoryGraphCanvas({
       while (performance.now() - stage2Start < 100 && simulation.alpha() >= 0.05) {
         simulation.tick(1); // natural alpha decay this stage
       }
-      // NVL: requestAnimationFrame(() => computing=false); simulation.restart();
-      // restart() re-arms d3's rAF timer; alpha carries over from stage2
-      // (~alphaMin) so a fresh canvas barely floats — its settle was off-screen.
+      // requestAnimationFrame clears the "computing" flag; restart() re-arms
+      // d3's rAF timer; alpha carries over from stage2 (~alphaMin) so a fresh
+      // canvas barely floats — its settle was off-screen.
       simulation.restart();
     } else {
-      // NVL shouldReheatNodes branch (base.mjs:48735): alpha(1).restart().
-      // Resetting alpha to 1 is what gives the incremental expand its visible
-      // float — d3 then ticks at full energy and decays to alphaMin over the
-      // next ~1-2s, each tick redrawing via on("tick") below. Without the
-      // alpha(1) the new subtree would barely move (alpha already ~alphaMin
-      // from the previous settle).
+      // shouldReheatNodes branch: alpha(1).restart(). Resetting alpha to 1 is
+      // what gives the incremental expand its visible float — d3 then ticks at
+      // full energy and decays to alphaMin over the next ~1-2s, each tick
+      // redrawing via on("tick") below. Without the alpha(1) the new subtree
+      // would barely move (alpha already ~alphaMin from the previous settle).
       simulation.alpha(1).restart();
     }
 
@@ -1678,7 +1662,7 @@ export function MemoryGraphCanvas({
             .attr("class", "memory-canvas-edge-label")
             .attr("text-anchor", "middle")
             .attr("dominant-baseline", "central")
-            // NVL DOM-mode edge caption: 6 * captionSize * DPR (base.mjs:59559).
+            // DOM-mode edge caption size: 6 * captionSize * DPR.
             // captionSize default 1, DPR 1 → 6 graph units; the zoom transform
             // scales it to screen.
             .attr("font-size", 6)
@@ -1738,19 +1722,18 @@ export function MemoryGraphCanvas({
             .attr("transform", (node: SimNode) => `translate(${node.x ?? 0}, ${node.y ?? 0})`);
 
           if (interactive) {
-            // Selected-node ring. NVL's expanding pulse
-            // (calculatePulseAnimation, base.mjs:58076) only fires on
-            // `activated` nodes (`_ = !n && p`), NOT on the steady selected
-            // state — selection draws a STATIC ring (DefaultSelectedOuterColor
-            // #8FE3E8) plus an animated shadow (calculateShadowAnimation).
-            // The user confirmed Neo4j's selection has no outward-spreading
-            // animation, so this is a single static ring; the soft halo comes
-            // from the `selected-node` drop-shadow in the CSS.
+            // Selected-node ring. An expanding pulse only fires on `activated`
+            // nodes (`_ = !n && p`), NOT on the steady selected state —
+            // selection draws a STATIC ring (DefaultSelectedOuterColor #8FE3E8)
+            // plus an animated shadow. The user confirmed the selection has no
+            // outward-spreading animation, so this is a single static ring;
+            // the soft halo comes from the `selected-node` drop-shadow in the
+            // CSS.
             g.append("circle")
               .attr("class", "memory-canvas-selected-ring")
               .attr("r", nodeSize)
               .attr("fill", "none")
-              .attr("stroke", "#8FE3E8") // NVL DefaultSelectedOuterColor
+              .attr("stroke", "#8FE3E8")  // DefaultSelectedOuterColor
               .attr("stroke-width", 4)
               .attr("pointer-events", "none");
           }
@@ -1807,7 +1790,7 @@ export function MemoryGraphCanvas({
             g.append("text")
               .attr("class", "memory-canvas-node-label")
               .attr("text-anchor", "middle")
-              // Each tspan carries its own absolute y (NVL yPos0 + k·fontSize,
+              // Each tspan carries its own absolute y (yPos0 + k·fontSize,
               // set in the update block + applyNodeLabelFontSize); the <text>
               // container sits at the node centre (y=0 in the translated group).
               .attr("fill", (node: SimNode) => node.collapsed ? "#475569" : "#ffffff")
@@ -1882,10 +1865,10 @@ export function MemoryGraphCanvas({
     // the base font (fontInfoLevel 1, captionFontSizeFor); applyNodeLabelFontSize
     // re-runs the wrap + re-positions on every zoom tick at the boosted size,
     // so this is just the first-frame seed. Both paths position lines the SAME
-    // way: absolute y = yPos0 + k·fontSize (NVL base.mjs:56628-56636), which
-    // centres the block on the node centre for any line count. The wrap goes
-    // through wrappedLinesFor so the first frame shares the same cache the
-    // zoom path uses (keyed on fontInfoLevel).
+    // way: absolute y = yPos0 + k·fontSize, which centres the block on the
+    // node centre for any line count. The wrap goes through wrappedLinesFor so
+    // the first frame shares the same cache the zoom path uses (keyed on
+    // fontInfoLevel).
     const captionFontSize = captionFontSizeFor(nodeSize);
     nodeSel.select("text.memory-canvas-node-label")
       .attr("fill", (node: SimNode) => node.collapsed ? "#475569" : "#ffffff")
@@ -1901,7 +1884,7 @@ export function MemoryGraphCanvas({
         tspans.enter().append("tspan")
           .merge(tspans)
           .attr("x", 0)
-          // Absolute y per line (NVL yPos0 + k·fontSize), not a dy chain —
+          // Absolute y per line (yPos0 + k·fontSize), not a dy chain —
           // centres the whole block on the node centre regardless of line
           // count. Must stay in sync with applyNodeLabelFontSize's positioning.
           .attr("y", (_line: string, i: number) => yPos0 + i * captionFontSize)
@@ -1953,8 +1936,8 @@ export function MemoryGraphCanvas({
       });
 
     // Live animation: d3-force's native rAF timer fires `on("tick")` at high
-    // frequency while alpha > alphaMin. NVL does NOT drive ticks itself nor
-    // add EXTRA_TICKS_PER_RENDER — it relies on this native cadence (the
+    // frequency while alpha > alphaMin. The layout does NOT drive ticks itself
+    // nor add EXTRA_TICKS_PER_RENDER — it relies on this native cadence (the
     // layout's update() only restarts/reheats; the Renderer redraws on each
     // native tick via the React wrapper). That native ~1ms tick cadence over
     // the alpha 1→0.05 decay is the "float" feel: nodes drift continuously
@@ -2035,14 +2018,13 @@ export function MemoryGraphCanvas({
 
     // Fit once positions are settled — on BOTH a fresh build AND an
     // incremental expand/collapse. This is the behaviour the user observed in
-    // the new Neo4j Browser: after expanding a node the canvas re-fits to the
+    // the new Browser: after expanding a node the canvas re-fits to the
     // new, larger graph so every node stays visible with room instead of
-    // overflowing into a cramped tangle. NVL does this in
-    // onLayoutComputing(false) → `nvl.fit(allIds, { noPan: true })`: the zoom
-    // adjusts so every node is visible, but the current viewport centre is
-    // preserved (the graph is not yanked to the canvas middle). We mirror that
-    // on an incremental expand (noPan=true); a fresh build centres normally.
-    // Capped at 1.5× inside fitAllFromRef so a small graph isn't blown up huge.
+    // overflowing into a cramped tangle. The post-layout fit adjusts so every
+    // node is visible, but the current viewport centre is preserved (the graph
+    // is not yanked to the canvas middle). We mirror that on an incremental
+    // expand (noPan=true); a fresh build centres normally. Capped at 1.5×
+    // inside fitAllFromRef so a small graph isn't blown up huge.
     let didFit = false;
     const onEnd = () => {
       if (didFit) return;
@@ -2178,11 +2160,11 @@ export function MemoryGraphCanvas({
     ref.svgSel.transition().duration(260).call(ref.zoomBehavior.transform, transform);
   }, [interactive, matchIds, signature, visibleEdgeTypes, visibleLabels]);
 
-  // Highlight the selected node. Mirrors Neo4j Browser's interaction model
-  // (use-managed-node-state.ts onNodeClick): selecting a node only toggles its
-  // `selected` state for the highlight (the CSS `selected-node` class flips the
-  // pulsing rings + halo) — the canvas itself NEVER auto-pans or auto-zooms to
-  // the selection. The previous version animated a centre-and-zoom on every
+  // Highlight the selected node. Mirrors the interaction model: selecting a
+  // node only toggles its `selected` state for the highlight (the CSS
+  // `selected-node` class flips the pulsing rings + halo) — the canvas itself
+  // NEVER auto-pans or auto-zooms to the selection. The previous version
+  // animated a centre-and-zoom on every
   // selection past the first, which read as "double-clicking a node to expand
   // it suddenly enlarges and centres the view" — because a double-click fires
   // a click (select) then a dblclick (expand → signature change → reset), so

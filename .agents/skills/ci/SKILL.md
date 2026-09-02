@@ -28,16 +28,17 @@ comment the bot posts on it are in
 
 Two pipelines exist and neither runs everything.
 
-| Pipeline | Trigger | UT | ST | E2E | Release binaries |
+| Pipeline | Trigger | UT | ST | E2E | Binary packages |
 | --- | --- | --- | --- | --- | --- |
-| CodeArts — `.codearts/workflow/codearts-pipeline.yml` | merge request to `main` on gitcode.com (open, update, reopen) or a `rerun` comment on it | `ci:ut:core` | `ci:st` | — | — |
+| CodeArts — `.codearts/workflow/codearts-pipeline.yml` | merge request to `main` on gitcode.com (open, update, merge, reopen) or a `rerun` comment on it | `ci:ut:core` | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
 | GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
 CodeArts's default pool cannot create user namespaces, so Runner UT and E2E
 run only on GitHub or on a self-hosted pool that passes a bubblewrap probe.
 The CodeArts parent workflow also invokes the externally registered code-check
-child (SCA, anti-poison, static analysis, blacklist) and renders one result
-comment from the code check, UT, and ST job statuses. A second CodeArts
+child (SCA, anti-poison, static analysis, blacklist), reads each task's public
+result JSON independently, and renders one result comment with those four
+statuses, UT, ST, and both binary jobs. A second CodeArts
 pipeline, `codearts-auto-merge-pipeline.yml`, lands a merge request when a
 `CODEOWNERS` member comments `/merge` on it, through GitCode's merge API with
 `merge_method=rebase` (see the CodeArts reference). This repository
@@ -61,6 +62,11 @@ GitCode Actions unless the user changes that policy.
    one), on a checkout of the commit the run tested, with `CI_RESULTS_DIR` /
    `CI_RUNTIME_DIR` pointed somewhere writable. Each layer leaves `run.log`
    and a summary under `CI_RESULTS_DIR/<layer>/`.
+6. Do not copy the parent `code_check` job status into all four child rows.
+   Normalize each child JSON independently; only the explicit success aliases
+   documented in the CodeArts reference pass, and every other value fails
+   closed. Validate its detail link separately so a missing link does not
+   overwrite a valid status.
 
 ## Platform routing
 
@@ -70,6 +76,10 @@ GitCode Actions unless the user changes that policy.
 - For `.codearts/workflow/`, CodeArts runs on GitCode merge requests, OBS test
   logs, or the CodeArts CCE runner, read
   [references/codearts.md](references/codearts.md) completely before acting.
+- For CodeArts OBS object keys, public URLs, uploads, run artifacts,
+  code-check JSON, or the verified toolchain cache, also read
+  [references/codearts-obs.md](references/codearts-obs.md) completely before
+  acting.
 - For cross-platform comparisons or changes, read every applicable reference.
 
 ## Common failure signals
@@ -83,4 +93,5 @@ GitCode Actions unless the user changes that policy.
 | Playwright is green with fewer tests than expected | A skip is not a pass. Check counts and not-passed titles; a BLOCKED precondition is reported as skipped. |
 | `fatal: couldn't find remote ref refs/heads/<source>` on a fork PR | The job fetched a fork-only branch from the upstream repository. Fetch GitCode's upstream merge-request ref instead; see the CodeArts reference. |
 | The PR result table says `COMPLETED` | A CodeArts lifecycle state leaked into user-facing output. Normalize each task to `PASSED` or `FAILED` in the parent workflow. |
+| One code-check JSON says `FIALED`, is missing, or contains an unknown status | It is not a success alias. Fail that child closed to `FAILED`; do not reuse the parent or another child's status. |
 | A UT/ST public OBS link returns `403` after an early job failure | The job failed before the upload step, so the object was never created. Probe the object and fall back to the GitCode Checks page. |

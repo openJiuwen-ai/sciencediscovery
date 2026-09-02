@@ -4,7 +4,7 @@ Thanks for your interest in contributing. This document covers the development s
 
 ## Prerequisites
 
-Everything listed under [README → Quick start → Requirements](README.md#requirements) (Linux x86_64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, bubblewrap 0.6+ (0.8+ recommended), git).
+Everything listed under [README → Requirements](README.md#requirements): Linux x86_64/aarch64 or macOS x64/arm64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, and Git. Linux additionally needs Bubblewrap 0.6+ (0.8+ recommended); macOS uses the built-in `/usr/bin/sandbox-exec` Seatbelt launcher.
 
 Run the stack once before running the full check suite — the API agent-path tests spawn the gateway and need its Python environment:
 
@@ -136,10 +136,38 @@ Two test-layer pipelines run, and **neither runs everything**. GitCode
 merge-request CI is CodeArts-only; this repository intentionally has no
 `.gitcode/workflows/` Actions pipeline.
 
-| Pipeline | UT | ST | E2E | Release binaries |
+| Pipeline | UT | ST | E2E | Binary packages |
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
-| CodeArts — `.codearts/workflow/` | `ci:ut:core` | yes | — | — |
+| CodeArts — `.codearts/workflow/` targeting `main` | `ci:ut:core` | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
+
+The CodeArts pipeline validates merge requests targeting `main`. Its x86_64
+and aarch64 jobs each call
+`scripts/package-binary-release.sh` and verify `SHA256SUMS`. The x86_64 job
+runs directly on the hosted x64 runner and uploads its files to a run-specific
+OBS path. These CI artifacts do not replace the smoke-gated release binaries
+from GitHub Actions. The aarch64 job invokes the separately configured ARM
+CodeArts Build task: the pipeline passes only
+`.ci/package-binary-codearts.sh`, line-oriented environment records, and
+line-oriented arguments, while
+the Build task's reusable bootstrap fetches the MR ref, locks the checkout to
+its system `COMMIT_ID`, and calls `.ci/codearts-build-dispatch.sh`. The pasted
+bootstrap deliberately contains no backslashes because the graphical Build
+shell action compiles its command as Groovy before invoking Bash. It records
+the real command status and full output even on failure so the following Build
+step can upload available artifacts plus `run.log` and `exit-code` to the
+run-specific aarch64 OBS path. A dependent pipeline job probes the binary,
+`SHA256SUMS`, `VERSION`, `run.log`, and `exit-code`, then validates the recorded
+exit code and checksum format, so an empty or misconfigured Build task cannot
+produce a false successful result. Both paths probe bubblewrap before
+packaging; if the runner cannot create user namespaces, they pass
+`--skip-smoke` and log that the artifact is packaging-only rather than
+claiming that the release smoke gate passed. Both Linux packaging paths fetch
+the pinned micromamba conda package from the Tsinghua TUNA conda-forge mirror,
+verify the package SHA256, extract `bin/micromamba`, and then verify the
+executable against the existing release-binary SHA256. The mirror is limited
+to the CodeArts packaging jobs; normal runtime provisioning keeps its upstream
+URL.
 
 CodeArts's `default` pool has the same shape. The job is a pod on a CCE
 Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
@@ -150,14 +178,15 @@ checked-in workflow therefore runs `ci:ut:core` and the hermetic `ci:st` layer.
 A sandboxed layer needs a self-hosted resource pool
 (`runs-on: [self-hosted, <pool-id>]`) on a machine that allows user namespaces.
 
-The parent CodeArts workflow also invokes the reusable code-check child defined
-in `.codearts/workflow/codearts-pipeline-code-check.yml`. That child runs SCA,
-anti-poison, static-analysis, and blacklist CloudBuild tasks whose complete
-commands remain in CodeArts; it does not write PR labels or comments. On
-merge-request runs, the parent renders one result table from the overall code
-check, UT, and ST job statuses and publishes the final PR label. Manual runs
-always execute UT/ST without modifying a PR; they run the PR-oriented child
-only when a `PR_ID` is supplied.
+The parent CodeArts workflow also invokes the externally registered reusable
+code-check child. That child runs SCA, anti-poison, static-analysis, and
+blacklist CloudBuild tasks whose complete commands remain in CodeArts; it does
+not write PR labels or comments. On merge-request runs, the parent reads each
+child task's result JSON and renders its own `PASSED` or `FAILED` status and
+detail link, alongside UT, ST, and both binary jobs, before publishing
+the final PR label. Manual runs always execute UT/ST and both binary jobs
+without modifying a PR; they run the PR-oriented child only when a `PR_ID` is
+supplied.
 
 ## Repositories
 

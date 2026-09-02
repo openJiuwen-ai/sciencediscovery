@@ -523,6 +523,60 @@ test("bubblewrap runner can read but not write the parent workspace mount", asyn
   await assert.rejects(readFile(resolve(parentWorkspaceRoot, "final/new.txt")));
 });
 
+test("bubblewrap runner starts with complete read-only Skill packages and a writable extension root", async (context) => {
+  const fixture = await workspaceFixture(context);
+  const skillPackagesRoot = resolve(dirname(fixture.workspaceRoot), "skill-snapshots", "run-1");
+  const packageRoot = resolve(skillPackagesRoot, "selected-skill");
+  await Promise.all([
+    mkdir(resolve(packageRoot, "scripts"), { recursive: true }),
+    mkdir(resolve(packageRoot, "references"), { recursive: true }),
+  ]);
+  await writeFile(resolve(packageRoot, "SKILL.md"), "Frozen instructions\n");
+  await writeFile(resolve(packageRoot, "references", "guide.md"), "Frozen guide\n");
+  await writeFile(resolve(packageRoot, "scripts", "not-auto.py"), "open('/workspace/auto-run.txt', 'w').write('bad')\n");
+
+  const result = await executePython(config(fixture.dataDir), {
+    agentId: "main",
+    code: [
+      "import os",
+      "from pathlib import Path",
+      "skills = Path(os.environ['SCIENCEDISCOVERY_SKILLS_DIR'])",
+      "extensions = Path(os.environ['SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR'])",
+      "print((skills / 'selected-skill/SKILL.md').read_text().strip())",
+      "print((skills / 'selected-skill/references/guide.md').read_text().strip())",
+      "try:",
+      "    (skills / 'selected-skill/SKILL.md').write_text('changed')",
+      "    print('skill_write=allowed')",
+      "except OSError:",
+      "    print('skill_write=denied')",
+      "try:",
+      "    (skills / 'selected-skill/scripts/not-auto.py').unlink()",
+      "    print('skill_delete=allowed')",
+      "except OSError:",
+      "    print('skill_delete=denied')",
+      "(extensions / 'proposal.txt').write_text('future')",
+      "print('extension_write=ok')",
+    ].join("\n"),
+    executionId: "execution-skill-packages",
+    permissionEpoch: epoch(),
+    skillPackagesRoot,
+    workspaceRoot: fixture.workspaceRoot,
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /^Frozen instructions$/m);
+  assert.match(result.stdout, /^Frozen guide$/m);
+  assert.match(result.stdout, /^skill_write=denied$/m);
+  assert.match(result.stdout, /^skill_delete=denied$/m);
+  assert.match(result.stdout, /^extension_write=ok$/m);
+  await assert.rejects(readFile(resolve(fixture.workspaceRoot, "auto-run.txt")), /ENOENT/);
+  assert.equal(
+    await readFile(resolve(fixture.workspaceRoot, ".sciencediscovery", "skill-extensions", "proposal.txt"), "utf8"),
+    "future",
+  );
+  assert.equal(await readFile(resolve(packageRoot, "SKILL.md"), "utf8"), "Frozen instructions\n");
+});
+
 test("runner rejects workspaces outside its configured projects root", async (context) => {
   const fixture = await workspaceFixture(context);
   await assert.rejects(

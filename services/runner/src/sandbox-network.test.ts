@@ -52,6 +52,7 @@ after(async () => {
 const ALLOWLIST: SandboxNetworkAccess = {
   allowPrivateNetwork: true,
   allowedDomains: ["mirror.test"],
+  egressProxyPolicy: "inherit",
   mode: "domain-allowlist",
   revision: "test-revision",
 };

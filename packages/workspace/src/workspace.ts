@@ -17,6 +17,15 @@ import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { AgentTool } from "@sciencediscovery/tools";
+import {
+  SANDBOX_SKILL_EXTENSIONS_ROOT,
+  SANDBOX_SKILL_PACKAGES_ROOT,
+  SKILL_EXTENSIONS_WORKSPACE_PATH,
+  SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE,
+  SKILL_PACKAGES_ENVIRONMENT_VARIABLE,
+  SKILL_PACKAGES_PORTABLE_ROOT,
+  skillRootAliases,
+} from "@sciencediscovery/schema";
 import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
 import type {
   ArtifactDownloadResult,
@@ -60,6 +69,7 @@ import type {
   SkillReviewDraftSummary,
   ShellExecutionResult,
   UninstallEnvironmentRequest,
+  WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 import { Type, type TSchema } from "typebox";
 import {
@@ -75,6 +85,11 @@ export interface WorkspaceFileInfo {
   modifiedAt: string;
   path: string;
   size: number;
+}
+
+export interface WorkspaceScanResult {
+  files: WorkspaceFileInfo[];
+  truncated: boolean;
 }
 
 export interface ToolFilterPolicy {
@@ -199,14 +214,15 @@ export interface WorkspaceToolOptions {
     path: string;
   }) => Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; instruction?: string }>;
   enabledConnectorIds: ConnectorId[];
-  executePython: (code: string, signal?: AbortSignal) => Promise<PythonExecutionResult>;
-  executeShell?: (code: string, kernelMode: KernelMode, signal?: AbortSignal) => Promise<ShellExecutionResult>;
+  executePython: (code: string, signal?: AbortSignal, toolCallId?: string) => Promise<PythonExecutionResult>;
+  executeShell?: (code: string, kernelMode: KernelMode, signal?: AbortSignal, toolCallId?: string) => Promise<ShellExecutionResult>;
   executeScientific?: (
     language: ScientificLanguage,
     code: string,
     environmentRevisionId: string | undefined,
     kernelMode: KernelMode,
     signal?: AbortSignal,
+    toolCallId?: string,
   ) => Promise<ScientificExecutionResult>;
   environments?: Environment[];
   environmentManagement?: {
@@ -237,6 +253,8 @@ export interface WorkspaceToolOptions {
   }>;
   /** Optional parent workspace exposed to read-only tools for isolated subagents. */
   readOnlyWorkspaceRoot?: string;
+  /** Host root of this Agent run's complete frozen Skill packages. */
+  skillPackagesRoot?: string;
   npuBroker?: {
     cancel: (jobId: string, signal?: AbortSignal) => Promise<NpuJob>;
     get: (jobId: string, signal?: AbortSignal) => Promise<NpuJob>;
@@ -269,6 +287,7 @@ export interface WorkspaceToolOptions {
    * report body. */
   declareClaim?: (input: DeclareClaimInput) => Promise<DeclareClaimResult>;
   listArtifacts?: () => Promise<ScientificArtifact[]>;
+  getFileProvenance?: (path: string) => Promise<WorkspaceFileProvenance>;
   readArtifact?: (input: {
     artifactId?: string;
     /** Maximum lines in the returned text page. */
@@ -311,6 +330,8 @@ export interface WorkspaceToolOptions {
     description: string;
     hash: string;
     id: string;
+    /** Sandbox path of the staged frozen package; absent for nested agents that run without a sandbox. */
+    packagePath?: string;
     readResource: (path: string) => SkillResourceContent | Promise<SkillResourceContent>;
     resources: SkillResource[];
     revision: number;
@@ -349,23 +370,42 @@ function descendantPath(parent: string, child: string): string | undefined {
 async function resolveSandboxScriptPath(
   workspaceRoot: string,
   readOnlyWorkspaceRoot: string | undefined,
+  skillPackagesRoot: string | undefined,
   requestedPath: string,
-): Promise<string> {
-  const candidate = assertWorkspacePath(workspaceRoot, requestedPath);
+): Promise<{ environmentVariable?: string; path: string }> {
+  const mounted = normalizeMountedReadPath(requestedPath);
+  const mountedRoot = mounted.root === "skills"
+    ? skillPackagesRoot
+    : mounted.root === "extensions"
+      ? resolve(workspaceRoot, SKILL_EXTENSIONS_WORKSPACE_PATH)
+      : undefined;
+  const hostRoot = mountedRoot ?? workspaceRoot;
+  if ((mounted.root === "skills" || mounted.root === "extensions") && !mountedRoot) {
+    throw new Error(`The mounted ${mounted.root} directory is unavailable`);
+  }
+  const candidate = assertWorkspacePath(hostRoot, mounted.path);
   let canonicalRoot: string;
   let canonicalScript: string;
   try {
-    [canonicalRoot, canonicalScript] = await Promise.all([realpath(workspaceRoot), realpath(candidate)]);
+    [canonicalRoot, canonicalScript] = await Promise.all([realpath(hostRoot), realpath(candidate)]);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`scriptPath does not exist in the workspace: ${requestedPath}`);
+      throw new Error(`scriptPath does not exist in an authorized mount: ${requestedPath}`);
     }
     throw error;
   }
   if (canonicalScript !== canonicalRoot && !canonicalScript.startsWith(`${canonicalRoot}${sep}`)) {
-    throw new Error(`scriptPath escapes the workspace: ${requestedPath}`);
+    throw new Error(`scriptPath escapes its authorized mount: ${requestedPath}`);
   }
-  if (!(await stat(canonicalScript)).isFile()) throw new Error("scriptPath must reference a workspace file");
+  if (!(await stat(canonicalScript)).isFile()) throw new Error("scriptPath must reference a regular file");
+
+  const relativeScriptPath = relative(canonicalRoot, canonicalScript).split(sep).join("/");
+  if (mounted.root === "skills") {
+    return { environmentVariable: SKILL_PACKAGES_ENVIRONMENT_VARIABLE, path: relativeScriptPath };
+  }
+  if (mounted.root === "extensions") {
+    return { environmentVariable: SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE, path: relativeScriptPath };
+  }
 
   let sandboxRoot = "/workspace";
   if (readOnlyWorkspaceRoot) {
@@ -373,15 +413,32 @@ async function resolveSandboxScriptPath(
     const writablePath = descendantPath(canonicalParent, canonicalRoot);
     if (writablePath) sandboxRoot = `${sandboxRoot}/${writablePath}`;
   }
-  const scriptPath = relative(canonicalRoot, canonicalScript).split(sep).join("/");
-  return `${sandboxRoot}/${scriptPath}`;
+  return { path: `${sandboxRoot}/${relativeScriptPath}` };
+}
+
+const SKILL_PACKAGE_ALIASES = skillRootAliases(SANDBOX_SKILL_PACKAGES_ROOT, SKILL_PACKAGES_ENVIRONMENT_VARIABLE);
+const SKILL_EXTENSION_ALIASES = skillRootAliases(SANDBOX_SKILL_EXTENSIONS_ROOT, SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE);
+
+/** Strip any accepted spelling of a mounted root, returning the package-relative remainder. */
+function stripMountedRoot(path: string, aliases: readonly string[]): string | undefined {
+  for (const alias of aliases) {
+    if (path === alias) return ".";
+    if (path.startsWith(`${alias}/`)) return path.slice(alias.length + 1);
+  }
+  return undefined;
 }
 
 function normalizeMountedReadPath(requestedPath: string): {
   path: string;
-  root: "parent" | "workspace";
+  root: "extensions" | "parent" | "skills" | "workspace";
 } {
   const path = requestedPath.trim();
+  // Prompts advertise the environment-variable form because it resolves on both
+  // bubblewrap and Seatbelt; tools are Node-side, so accept it unexpanded too.
+  const skills = stripMountedRoot(path, SKILL_PACKAGE_ALIASES);
+  if (skills !== undefined) return { path: skills, root: "skills" };
+  const extensions = stripMountedRoot(path, SKILL_EXTENSION_ALIASES);
+  if (extensions !== undefined) return { path: extensions, root: "extensions" };
   if (path === "/parent_workspace") return { path: ".", root: "parent" };
   if (path.startsWith("/parent_workspace/")) return { path: path.slice("/parent_workspace/".length), root: "parent" };
   if (path === "/workspace") return { path: ".", root: "workspace" };
@@ -406,15 +463,17 @@ function summarizeSpecialistsForTaskTool(
     .join("; ");
 }
 
-export async function scanWorkspace(workspaceRoot: string): Promise<WorkspaceFileInfo[]> {
+const MAX_WORKSPACE_SCAN_FILES = 500;
+
+export async function scanWorkspaceWithStatus(workspaceRoot: string): Promise<WorkspaceScanResult> {
   await mkdir(workspaceRoot, { recursive: true });
   const files: WorkspaceFileInfo[] = [];
 
   async function visit(directory: string): Promise<void> {
-    if (files.length >= 500) return;
+    if (files.length > MAX_WORKSPACE_SCAN_FILES) return;
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (files.length >= 500) break;
+      if (files.length > MAX_WORKSPACE_SCAN_FILES) break;
       const fullPath = resolve(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
@@ -432,7 +491,14 @@ export async function scanWorkspace(workspaceRoot: string): Promise<WorkspaceFil
   }
 
   await visit(resolve(workspaceRoot));
-  return files;
+  return {
+    files: files.slice(0, MAX_WORKSPACE_SCAN_FILES),
+    truncated: files.length > MAX_WORKSPACE_SCAN_FILES,
+  };
+}
+
+export async function scanWorkspace(workspaceRoot: string): Promise<WorkspaceFileInfo[]> {
+  return (await scanWorkspaceWithStatus(workspaceRoot)).files;
 }
 
 function yamlQuoted(value: string): string {
@@ -486,6 +552,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     && resolve(options.readOnlyWorkspaceRoot) !== resolve(workspaceRoot)
     ? options.readOnlyWorkspaceRoot
     : undefined;
+  const skillPackagesRoot = options.skillPackagesRoot;
+  const skillExtensionsRoot = resolve(workspaceRoot, SKILL_EXTENSIONS_WORKSPACE_PATH);
   const loadedSkillIds = new Set<string>();
 
   const pythonParameters = Type.Object({
@@ -498,14 +566,20 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     execute: async () => {
       const files = await scanWorkspace(workspaceRoot);
       const readOnlyFiles = readOnlyWorkspaceRoot ? await scanWorkspace(readOnlyWorkspaceRoot) : [];
-      if (readOnlyWorkspaceRoot) {
+      const skillFiles = skillPackagesRoot ? await scanWorkspace(skillPackagesRoot) : [];
+      if (readOnlyWorkspaceRoot || skillPackagesRoot) {
         const text = [
           files.length ? `Writable workspace:\n${files.map((file) => file.path).join("\n")}` : "Writable workspace is empty",
-          readOnlyFiles.length ? `Read-only parent workspace:\n${readOnlyFiles.map((file) => file.path).join("\n")}` : "Read-only parent workspace is empty",
+          ...(readOnlyWorkspaceRoot
+            ? [readOnlyFiles.length ? `Read-only parent workspace:\n${readOnlyFiles.map((file) => file.path).join("\n")}` : "Read-only parent workspace is empty"]
+            : []),
+          ...(skillPackagesRoot
+            ? [skillFiles.length ? `Read-only Skill packages (${SKILL_PACKAGES_PORTABLE_ROOT}):\n${skillFiles.map((file) => `${SKILL_PACKAGES_PORTABLE_ROOT}/${file.path}`).join("\n")}` : "Read-only Skill packages are empty"]
+            : []),
         ].join("\n\n");
         return {
           content: [{ type: "text", text }],
-          details: { files, readOnlyFiles },
+          details: { files, readOnlyFiles, skillFiles },
         };
       }
       return {
@@ -524,7 +598,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       const requested = normalizeMountedReadPath(params.path);
       const roots = requested.root === "parent"
         ? readOnlyWorkspaceRoot ? [readOnlyWorkspaceRoot] : []
-        : [workspaceRoot, ...(readOnlyWorkspaceRoot ? [readOnlyWorkspaceRoot] : [])];
+        : requested.root === "skills"
+          ? skillPackagesRoot ? [skillPackagesRoot] : []
+          : requested.root === "extensions"
+            ? [skillExtensionsRoot]
+            : [workspaceRoot, ...(readOnlyWorkspaceRoot ? [readOnlyWorkspaceRoot] : [])];
       let path = "";
       let metadata: Awaited<ReturnType<typeof stat>> | undefined;
       let lastError: unknown;
@@ -539,7 +617,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       }
       if (!metadata) {
         if (lastError) throw lastError;
-        throw new Error("Read-only parent workspace is unavailable");
+        throw new Error(`The mounted ${requested.root} directory is unavailable`);
       }
       if (!metadata.isFile()) throw new Error(`Not a readable file: ${requested.path}`);
 
@@ -581,6 +659,27 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     name: "read_file",
     parameters: readFileParameters,
   };
+
+  const provenanceTools: AgentTool[] = [];
+  if (options.getFileProvenance) {
+    const provenanceParameters = Type.Object({
+      path: Type.String({ minLength: 1 }),
+    });
+    const getFileProvenance: AgentTool<typeof provenanceParameters> = {
+      description: "Return recorded source, revision history, copy lineage, execution context, and linked Artifacts for one file in the current writable workspace. An unknown origin means the backend has no trustworthy attribution and must not be guessed.",
+      execute: async (_toolCallId, params) => {
+        const provenance = await options.getFileProvenance!(params.path);
+        return {
+          content: [{ type: "text", text: JSON.stringify(provenance, null, 2) }],
+          details: provenance,
+        };
+      },
+      label: "Get file provenance",
+      name: "get_file_provenance",
+      parameters: provenanceParameters,
+    };
+    provenanceTools.push(getFileProvenance);
+  }
 
   const artifactTools: AgentTool[] = [];
   if (options.listArtifacts) {
@@ -697,7 +796,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
 
   const runPythonTool: AgentTool<typeof pythonParameters> = {
     description: "Run Python in the current session workspace. Optionally select an Environment Revision and persistent kernel; ephemeral is the default. Save useful outputs as workspace files. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or have the script write its output to a workspace file and read that file with read_file.",
-    execute: async (_toolCallId, params, signal) => {
+    execute: async (toolCallId, params, signal) => {
       const result = options.executeScientific
         ? await options.executeScientific(
           "python",
@@ -705,8 +804,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           params.environmentRevisionId,
           params.kernelMode ?? "ephemeral",
           signal,
+          toolCallId,
         )
-        : await options.executePython(params.code, signal);
+        : await options.executePython(params.code, signal, toolCallId);
       if (result.exitCode !== 0) {
         throw new Error(`Python exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
       }
@@ -722,7 +822,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     parameters: pythonParameters,
   };
 
-  const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...artifactTools, runPythonTool];
+  const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...provenanceTools, ...artifactTools, runPythonTool];
   if (options.npuBroker) {
     const npuParameters = Type.Object({
       operation: Type.Union([
@@ -791,7 +891,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "When operation=result returns job.createdFiles, those workspace files are automatically declared as Project artifacts when artifact declaration is available; otherwise call declare_artifact on those exact paths.",
         "Do not use run_shell to access /home, source host env.sh, write host_launch_request.json, or expect NPU devices inside bwrap.",
       ].join(" "),
-      execute: async (_toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal) => {
         const broker = options.npuBroker!;
         if (params.operation === "list_workloads") {
           const workloads = await broker.listWorkloads(signal);
@@ -883,7 +983,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (options.queryGraph) {
     const queryGraphParameters = Type.Object({ query: Type.String({ minLength: 1 }) });
     const queryGraph: AgentTool<typeof queryGraphParameters> = {
-      description: "Browse this session's memory-graph nodes (ResearchGoal/SubTask/Paper/Evidence/Claim/Code/Artifact) by keyword. Returns {hits, total, truncated}. Matching is term-OR: the query is split into words and a node matches if its text contains ANY word; nodes matching more words rank higher. Use it to see what has already been searched (Papers) or produced (Artifacts/Evidence) in this session. This is an exploratory read, not an id lookup — to cite a node, use the id returned by declare_evidence/declare_artifact, or list_artifacts for an existing Artifact. Give concrete entity terms that appear in the graph (e.g. 'TP53 NSCLC'), not meta-words like 'paper' or 'evidence'.",
+      description: "Browse this session's memory-graph nodes (ResearchGoal/Task/ToolCall/Paper/Evidence/Claim/Code/Artifact) by keyword. Returns {hits, total, truncated}. Matching is term-OR: the query is split into words and a node matches if its text contains ANY word; nodes matching more words rank higher. Use it to see what has already been searched (Papers) or produced (Artifacts/Evidence) in this session. This is an exploratory read, not an id lookup — to cite a node, use the id returned by declare_evidence/declare_artifact, or list_artifacts for an existing Artifact. Give concrete entity terms that appear in the graph (e.g. 'TP53 NSCLC'), not meta-words like 'paper' or 'evidence'.",
       execute: async (_toolCallId, params) => {
         const result = await options.queryGraph!(params.query);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
@@ -904,7 +1004,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       strength: Type.String(),
     });
     const declareEvidence: AgentTool<typeof declareEvidenceParameters> = {
-      description: "Record a piece of Evidence extracted from a Paper that already exists in this session's memory graph. Creates an Evidence node + an extracted_from edge to the source Paper. Returns {status:'ok', evidence_id} or a structured error (source_paper_not_found when the Paper link is unknown). Use the returned evidence_id as the chip alias target in declare_claim's cites_evidence_aliases and write [evidenceN] in your report body.",
+      description: "Record a piece of Evidence extracted from a Paper that already exists in this session's memory graph. Creates an Evidence node + an extracts edge from the source Paper (Paper → Evidence). Returns {status:'ok', evidence_id} or a structured error (source_paper_not_found when the Paper link is unknown). Use the returned evidence_id as the chip alias target in declare_claim's cites_evidence_aliases and write [evidenceN] in your report body.",
       execute: async (_toolCallId, params) => {
         const result = await options.declareEvidence!({
           content: params.content,
@@ -933,7 +1033,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       artifact_id: Type.Optional(Type.String({ minLength: 1 })),
     });
     const declareClaim: AgentTool<typeof declareClaimParameters> = {
-      description: "Record a Claim (a cited assertion) and link it to its supporting nodes. Creates a Claim node + cites edges to the cited Evidence/Artifact. At least one citation target is required. A Claim cites Evidence/Artifact — it does NOT cite a Paper directly: to cite a paper, call declare_evidence first and cite the returned evidence_id here. Choose aliases of the form evidence+number for Evidence (e.g. [evidence1]) or artifact+number for Artifact (e.g. [artifact1]) — no other format. Write each chosen alias token inline in the output body where the claim is asserted; a chip renders only when a [alias] token in the body matches this claim's chip_map.",
+      description: "Record a Claim (a cited assertion) and link it to its supporting nodes. Creates a Claim node + supports edges from the cited Evidence/Artifact (Evidence/Artifact → Claim). At least one citation target is required. A Claim is backed by Evidence/Artifact via supports — it does NOT reach a Paper directly: to cite a paper, call declare_evidence first and cite the returned evidence_id here. Choose aliases of the form evidence+number for Evidence (e.g. [evidence1]) or artifact+number for Artifact (e.g. [artifact1]) — no other format. Write each chosen alias token inline in the output body where the claim is asserted; a chip renders only when a [alias] token in the body matches this claim's chip_map.",
       execute: async (_toolCallId, params) => {
         const result = await options.declareClaim!({
           content: params.content,
@@ -1011,7 +1111,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Run one focused task in a subagent. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
         specialistSummary ? `Choose specialistId by semantic match against specialist descriptions. Set specialistId so the specialist's instructions, skills, and connectors are applied. Available specialists: ${specialistSummary}` : "",
       ].filter(Boolean).join(" "),
-      execute: async (_toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal) => {
         const subagent = await options.runSubagent!({
           ...(params.brief ? { brief: params.brief } : {}),
           description: params.description,
@@ -1226,17 +1326,25 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       scriptPath: Type.Optional(Type.String({ maxLength: 1_000, minLength: 1 })),
     });
     const runShell: AgentTool<typeof shellParameters> = {
-      description: "Run a bounded shell command or an existing shell script from the authorized Session workspace. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or redirect the output to a workspace file and page through it with read_file.",
-      execute: async (_toolCallId, params, signal) => {
+      description: "Run a bounded shell command or an existing shell script from the authorized Session workspace or the read-only $SCIENCEDISCOVERY_SKILLS_DIR Skill package mount. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or redirect the output to a workspace file and page through it with read_file.",
+      execute: async (toolCallId, params, signal) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
         }
         let code = params.command?.trim() ?? "";
         if (params.scriptPath) {
-          const scriptPath = await resolveSandboxScriptPath(workspaceRoot, options.readOnlyWorkspaceRoot, params.scriptPath);
-          code = ["/usr/bin/bash", shellQuote(scriptPath), ...(params.arguments ?? []).map(shellQuote)].join(" ");
+          const script = await resolveSandboxScriptPath(
+            workspaceRoot,
+            options.readOnlyWorkspaceRoot,
+            skillPackagesRoot,
+            params.scriptPath,
+          );
+          const scriptWord = script.environmentVariable
+            ? `"\${${script.environmentVariable}}"/${shellQuote(script.path)}`
+            : shellQuote(script.path);
+          code = ["/usr/bin/bash", scriptWord, ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
-        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal);
+        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal, toolCallId);
         if (result.exitCode !== 0) throw new Error(`Shell exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
         return {
           content: [{ type: "text", text: [
@@ -1263,13 +1371,14 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     });
     const runR: AgentTool<typeof rParameters> = {
       description: "Run R in the current session workspace using a managed R Environment Revision. Prefer R for R-native statistical or Bioconductor workflows. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output.",
-      execute: async (_toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal) => {
         const result = await options.executeScientific!(
           "r",
           params.code,
           params.environmentRevisionId,
           params.kernelMode ?? "ephemeral",
           signal,
+          toolCallId,
         );
         if (result.exitCode !== 0) throw new Error(`R exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
         return {
@@ -1416,7 +1525,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         if (!skill) throw new Error(`Skill ${params.skillId} is not selected for this run`);
         loadedSkillIds.add(skill.id);
         const resources = skill.resources.length
-          ? `\n\nAvailable read-only supporting resources (use read_skill_resource only as needed):\n${skill.resources.map((resource) => `- ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")}`
+          ? `\n\n${skill.packagePath
+            ? `Complete frozen package: ${skill.packagePath}\nAvailable resources (read referenced text or execute scripts directly from this read-only package):`
+            : "Available resources (use read_skill_resource for referenced text):"}\n${skill.resources.map((resource) => `- ${resource.path} (${resource.kind}, ${resource.size} bytes)`).join("\n")}`
           : "";
         return {
           content: [{ type: "text", text: [
@@ -1430,6 +1541,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             description: skill.description,
             hash: skill.hash,
             id: skill.id,
+            ...(skill.packagePath ? { packagePath: skill.packagePath } : {}),
             resources: skill.resources,
             revision: skill.revision,
             version: skill.version,

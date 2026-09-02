@@ -110,11 +110,12 @@ export function producesMembersOf(subgraph: MemorySubgraph, ownerId: string): Se
 }
 
 /**
- * ownerId 的**当前已折叠（不可见）的** produces/citation 相邻成员集（一层，
- * 非递归）。仿 Neo4j `addExpandedNodes` 的 `if (findNode==null)` 规则：只
- * 收**当前不在可见集里**的新成员——已在图里的成员归别的 owner，不重复记
- * 到本 owner 名下。返回集即「这次双击 owner 该记到 expandedNodeMap[owner]
- * 名下的新成员」。空集 → owner 无新成员可展开（走 toast/静默分支）。
+ * 算 owner 当前还能拉进来的**新**成员：ownerId → 它**当前已折叠（不可见）
+ * 的** produces/citation 相邻成员集（一层，仿 `expandedNodeMap` 的只记新节点
+ * 规则）。收**当前不在可见集里**的新成员——已在图里的成员归别的 owner，
+ * 不重复记到本 owner 名下。返回集即「这次双击 owner 该记到
+ * expandedNodeMap[owner] 名下的新成员」。空集 → owner 无新成员可展开（走
+ * toast/静默分支）。
  *
  * 「谁展开谁折叠」模型（边为中心）的关键：一个新节点只记在**第一个**拉它
  * 进来的 owner 名下。之后别的 owner 再连到它时，它已在可见集里，本函数不
@@ -186,7 +187,7 @@ export function countFoldedProducesMembers(
 }
 
 /**
- * 折叠 ownerId：仿 Neo4j `collapseNode`，**只删 ownerId 亲手拉进来的子节点**
+ * 折叠 ownerId：仿 `collapseNode`，**只删 ownerId 亲手拉进来的子节点**
  * （记录在 `expandedNodeMap[ownerId]` 名下的），递归删它们各自名下的孙节点
  * （整棵）。这是「谁展开谁折叠」的边为中心模型——折叠一个节点不动它没拉
  * 进来的对端：若某节点是被**别的** owner 拉进来的（记在别的 owner 名下），
@@ -207,7 +208,7 @@ export function collapseProducesOwner(
   expandedNodeMap: ReadonlyMap<string, ReadonlySet<string>>,
   ownerId: string,
 ): Set<string> {
-  // **浅层折叠**（仿新版 Neo4j Browser）：只删 ownerId 亲手拉进来的**直接子节点**，
+  // **浅层折叠**（仿新版 Browser）：只删 ownerId 亲手拉进来的**直接子节点**，
   // 不递归删孙节点。例如 report2 名下记 Claim、Claim 名下记 Evidence；折叠
   // report2 只删 Claim，不碰 Evidence——Evidence 因还在别的 owner(Claim) 名下 /
   // 或连着别的边而留下（对齐用户在真实新版 Browser 上验证的行为：折叠 report2
@@ -241,12 +242,11 @@ export function collapseProducesOwner(
  * 用旧签名）。
  *
  * `expandedNodeMap` 是「谁展开谁折叠」模型：ownerId → 它**亲手拉进来**
- * 的子节点 id 集（仿 Neo4j `expandedNodeMap`，一个新节点只记在第一个拉它
- * 进来的 owner 名下）。**不再驱动 keep**——keep 的 produces 部分改由
- * `appearedIds`（「已出现节点集」，等价 Neo4j nodeMap 键集）推导。这里仍
- * 传入 expandedNodeMap 仅为 canvas 的 `producesExpanded` 判定（记「谁展开
- * 过谁」）。一个节点若被别的 owner 拉进 appearedIds，折叠当前 owner 删其
- * key 不影响该节点可见性——它脱离 owner 仍可见，正是 Neo4j 的 nodeMap 语义。
+ * 的子节点 id 集（仿 `expandedNodeMap`，一个新节点只记在第一个拉它进来的
+ * owner 名下）。**不再驱动 keep**——keep 的 produces 部分改由 `appearedIds`
+ * 推导。这里仍传入 expandedNodeMap 仅为 canvas 的 `producesExpanded` 判定
+ * （记「谁展开过谁」）。一个节点若被别的 owner 拉进 appearedIds，折叠当前
+ * owner 删其名下子节点时，它因还在别的 owner 名下/连着别的边而留下。
  */
 export function projectToCanvas(
   mergedGraph: MemorySubgraph,
@@ -265,12 +265,11 @@ export function projectToCanvas(
   extraKeepIds?: ReadonlySet<string>,
 ): MemorySubgraph {
   // 保留集：主干 ∪ appearedIds（「已出现节点集」）∪ scope 展开的 contains 成员。
-  // appearedIds 等价 Neo4j nodeMap 键集：节点被任一次展开拉进来就进这个集，
   // 折叠只从该集移除被显式删除的**直接子**（浅层），孙辈留下——于是浅层折叠
   // report2 后 Claim 消失、Evidence 留着（它在 appearedIds，Claim 被删也不失保）。
   // 不再用「owner 自身 + 其 children」推导——那会让删 owner key 时连带失保孙，
-  // 无法表达「节点加进来后脱离 owner 仍可见」的 Neo4j 语义。expandedNodeMap 仍
-  // 传入（canvas 的 producesExpanded 判定用，记「谁展开过谁」），但不再驱动 keep。
+  // 无法表达「节点加进来后脱离 owner 仍可见」的语义。expandedNodeMap 仍传入
+  // （canvas 的 producesExpanded 判定用，记「谁展开过谁」），但不再驱动 keep。
   const keep = new Set<string>(mainChain);
   for (const id of appearedIds) keep.add(id);
   // expandedNodeMap 不再驱动 keep——appearedIds 已含所有曾出现节点。owner

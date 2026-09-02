@@ -267,6 +267,32 @@ export interface SkillResourceContent {
   size: number;
 }
 
+/** One immutable file from a complete frozen Skill package; never serialize these bytes into model context. */
+export interface SkillPackageFileBytes {
+  bytes: Uint8Array;
+  hash: string;
+  path: string;
+  size: number;
+}
+
+/** Stable logical locations shared by prompts, workspace adapters, and sandboxes. */
+export const SANDBOX_SKILL_PACKAGES_ROOT = "/skills";
+export const SANDBOX_SKILL_EXTENSIONS_ROOT = "/skill-extensions";
+export const SKILL_EXTENSIONS_WORKSPACE_PATH = ".sciencediscovery/skill-extensions";
+export const SKILL_PACKAGES_ENVIRONMENT_VARIABLE = "SCIENCEDISCOVERY_SKILLS_DIR";
+export const SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE = "SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR";
+
+// The bind paths above are literal only under bubblewrap. macOS Seatbelt has no
+// mount namespace, so every advertised path uses the environment variable form,
+// which both shells and the workspace path resolver understand on either host.
+export const SKILL_PACKAGES_PORTABLE_ROOT = `$${SKILL_PACKAGES_ENVIRONMENT_VARIABLE}`;
+export const SKILL_EXTENSIONS_PORTABLE_ROOT = `$${SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE}`;
+
+/** Every spelling of a mounted Skill root the model may send back to a tool. */
+export function skillRootAliases(bindRoot: string, variable: string): string[] {
+  return [bindRoot, `$${variable}`, `\${${variable}}`];
+}
+
 export interface SkillLibrary {
   createdAt: string;
   headVersionId?: string;

@@ -28,6 +28,7 @@ function skill(id: string, description: string): RuntimeSkill {
     description,
     hash: "a".repeat(64),
     id,
+    packagePath: `$SCIENCEDISCOVERY_SKILLS_DIR/${id}`,
     readResource: async () => { throw new Error("not called"); },
     resources: [],
     revision: 1,
@@ -50,6 +51,7 @@ test("system prompt lists selected skill metadata without injecting instructions
     description: "A selected workflow for testing progressive skill loading.",
     hash: "b".repeat(64),
     id: "selected-skill",
+    packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill",
     readResource: () => ({
       content: "reference",
       hash: "a".repeat(64),
@@ -68,7 +70,19 @@ test("system prompt lists selected skill metadata without injecting instructions
   assert.match(prompt, /A selected workflow for testing progressive skill loading/);
   assert.match(prompt, /<revision>4<\/revision>/);
   assert.match(prompt, /<version>2\.0\.0<\/version>/);
+  assert.match(prompt, /<package_path>\$SCIENCEDISCOVERY_SKILLS_DIR\/selected-skill<\/package_path>/);
+  // The advertised path must be the portable form; a literal /skills only exists under bubblewrap.
+  assert.doesNotMatch(prompt, /<package_path>\/skills/);
+  assert.match(prompt, /<package_hash>b{64}<\/package_hash>/);
   assert.match(prompt, /read_skill/);
+  assert.doesNotMatch(prompt, /materialize_skill_resource/);
+  assert.match(prompt, /complete frozen packages already exist.*\$SCIENCEDISCOVERY_SKILLS_DIR/i);
+  // No bind-only literal may leak into the prompt: /skills does not exist under Seatbelt.
+  assert.doesNotMatch(prompt, /(?<!\$)\{?SCIENCEDISCOVERY_SKILLS_DIR\}?[^\s]*\/skills/);
+  assert.doesNotMatch(prompt, /\s\/skills\b/);
+  assert.doesNotMatch(prompt, /\s\/skill-extensions\b/);
+  assert.match(prompt, /Do not read a large script into context/i);
+  assert.match(prompt, /search the filesystem for package resources/i);
   assert.doesNotMatch(prompt, /Use the selected workflow/);
   assert.doesNotMatch(prompt, /references\/guide\.md \(reference, 9 bytes\)/);
   assert.match(prompt, /never invent a paper or identifier/i);
@@ -76,6 +90,28 @@ test("system prompt lists selected skill metadata without injecting instructions
   assert.match(prompt, /Do not issue a PDF extraction in the same turn/i);
   assert.match(prompt, /fails or returns no records, state that evidence gap/i);
   assert.doesNotMatch(prompt, /unselected-skill/);
+});
+
+test("skill disclosure falls back to read_skill when no package is staged for the agent", () => {
+  const prompt = buildSkillSystemSection([{
+    content: "Use the selected workflow.",
+    description: "A selected workflow without a sandbox.",
+    hash: "b".repeat(64),
+    id: "selected-skill",
+    readResource: async () => { throw new Error("not called"); },
+    resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 9 }],
+    revision: 4,
+    version: "2.0.0",
+  }]);
+
+  // A nested agent without a sandbox must not be told about a path it cannot read.
+  assert.doesNotMatch(prompt, /package_path/);
+  assert.doesNotMatch(prompt, /\/skills/);
+  assert.doesNotMatch(prompt, /materialize_skill_resource/);
+  assert.match(prompt, /call read_skill\(skillId\) with its exact name/);
+  assert.match(prompt, /read_skill_resource/);
+  assert.match(prompt, /Do not search the filesystem for package resources/i);
+  assert.match(prompt, /<package_hash>b{64}<\/package_hash>/);
 });
 
 test("dynamic skill catalog prioritizes the current task and marks committed loads", () => {

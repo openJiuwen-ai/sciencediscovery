@@ -21,14 +21,32 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SandboxNetworkSettingsEditor } from "../src/RuntimeControls.js";
 import { en, zhCN } from "../src/i18n/messages.js";
 
-function render(settings: Parameters<typeof SandboxNetworkSettingsEditor>[0]["settings"]): string {
-  return renderToStaticMarkup(createElement(SandboxNetworkSettingsEditor, { onChange: () => undefined, settings }));
+type Settings = Parameters<typeof SandboxNetworkSettingsEditor>[0]["settings"];
+type ProxySettings = Parameters<typeof SandboxNetworkSettingsEditor>[0]["proxySettings"];
+
+const PROXY_REGISTRY: ProxySettings = {
+  defaultPolicy: "none",
+  servers: [{
+    createdAt: "2026-01-01T00:00:00.000Z",
+    hasUrl: true,
+    id: "corp",
+    kind: "custom_url",
+    name: "Corporate",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }],
+};
+
+function render(settings: Settings, proxySettings?: ProxySettings): string {
+  return renderToStaticMarkup(
+    createElement(SandboxNetworkSettingsEditor, { onChange: () => undefined, proxySettings, settings }),
+  );
 }
 
 test("renders the sandbox network access modes and allowed domains", () => {
   const html = render({
     allowPrivateNetwork: false,
     allowedDomains: ["api.example.org", "*.pypi.org"],
+    egressProxyPolicy: "inherit",
     mode: "domain-allowlist",
   });
   assert.match(html, /Sandbox network access/);
@@ -43,26 +61,74 @@ test("renders the sandbox network access modes and allowed domains", () => {
 });
 
 test("the allowed-domain controls are disabled while the mode is No network", () => {
-  const html = render({ allowPrivateNetwork: false, allowedDomains: [], mode: "none" });
-  assert.equal((html.match(/disabled/g) ?? []).length, 2);
+  const html = render(
+    { allowPrivateNetwork: false, allowedDomains: [], egressProxyPolicy: "inherit", mode: "none" },
+    PROXY_REGISTRY,
+  );
+  // The domain list, the private-address switch and the outbound route: all
+  // three only mean something once a domain can be allowed at all.
+  assert.equal((html.match(/disabled/g) ?? []).length, 3);
+});
+
+test("the outbound route offers the same three choices a model does", () => {
+  const html = render(
+    {
+      allowPrivateNetwork: false,
+      allowedDomains: ["api.example.org"],
+      egressProxyPolicy: "proxy:corp",
+      mode: "domain-allowlist",
+    },
+    PROXY_REGISTRY,
+  );
+  assert.match(html, /Outbound route for allowed traffic/);
+  assert.match(html, /<option value="inherit">/);
+  assert.match(html, /<option value="none">/);
+  assert.match(html, /<option value="proxy:corp"[^>]*>Corporate · Custom URL</);
+  assert.match(html, /<option value="proxy:corp" selected/);
+  // The ordering is the point of the whole feature, so it is stated next to
+  // the control rather than left to the reader.
+  assert.match(html, /Applied only <em>after<\/em> a domain is allowed/);
+  assert.match(html, /never offered onward/);
+  // Without the registry the control degrades instead of guessing a value.
+  const withoutRegistry = render({
+    allowPrivateNetwork: false,
+    allowedDomains: ["api.example.org"],
+    egressProxyPolicy: "inherit",
+    mode: "domain-allowlist",
+  });
+  assert.match(withoutRegistry, /Loading the registered servers/);
+  assert.doesNotMatch(withoutRegistry, /aria-label="Outbound route for allowed traffic"/);
 });
 
 /**
  * Naming regression: this capability is "sandbox network access", never a
  * proxy. The Network proxies settings group (Web/MCP outbound) is a separate
  * face and keeps its own wording.
+ *
+ * The outbound-route control does pick an entry from that other registry, so
+ * proxy wording legitimately appears there — as a reference to Network proxies
+ * and as the shared route choices. What must never happen is this capability
+ * being *named* a proxy, so the guard is on the names it gives itself: the
+ * heading, the group legends and the labels of its own controls.
  */
 test("the sandbox network settings never call this capability a proxy", () => {
   const html = render({
     allowPrivateNetwork: true,
     allowedDomains: ["api.example.org"],
+    egressProxyPolicy: "proxy:corp",
     mode: "domain-allowlist",
-  });
-  // One cross-reference is allowed: it names the other feature and says it does
-  // not apply here. Everything else must be free of proxy wording.
-  const crossReference = /Web and MCP outbound servers are configured separately under Network proxies[^.]*\./;
-  assert.match(html, crossReference);
-  assert.doesNotMatch(html.replace(crossReference, ""), /prox(?:y|ies)|代理/i);
+  }, PROXY_REGISTRY);
+  // The cross-reference that names the other feature and scopes it out stays.
+  assert.match(html, /Web and MCP outbound servers are configured separately under Network proxies[^.]*\./);
+  // No phrasing anywhere that turns this capability into "a proxy".
+  assert.doesNotMatch(html, /sandbox\s*prox|prox\w*\s+sandbox|沙箱\s*代理/i);
+  const ownNames = [
+    ...html.matchAll(/<(?:h3|legend)>([^<]*)</g),
+    ...html.matchAll(/<span>([^<]*)</g),
+    ...html.matchAll(/aria-label="([^"]*)"/g),
+  ].map((match) => match[1] ?? "");
+  assert.ok(ownNames.length >= 6, `expected the section's own names, saw ${ownNames.join(" | ")}`);
+  for (const name of ownNames) assert.doesNotMatch(name, /prox(?:y|ies)|代理/i);
 });
 
 test("the settings group labels describe sandbox network access without proxy wording", () => {

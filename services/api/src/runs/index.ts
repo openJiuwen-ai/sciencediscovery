@@ -109,6 +109,7 @@ import {
   DEFAULT_MODEL_API_VARIANT,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
   lookupModelCatalog,
+  SKILL_PACKAGES_PORTABLE_ROOT,
   THINKING_CONTROL_VARIANTS,
   THINKING_EFFORT_VARIANTS,
   UNTITLED_SESSION_TITLE,
@@ -154,6 +155,7 @@ import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolutionStore } from "../evolution/store.js";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
 import { createWorkspaceExecutionBindings } from "../agent-run/workspace-bindings.js";
+import { prepareSkillSandbox, skillPackageSetHash } from "../skill-sandbox.js";
 import {
   reviewerSpecialistAvailable,
   createEvidenceReferenceTracer,
@@ -171,6 +173,7 @@ import {
   artifactVersionProvenance,
   listWorkspaceFiles,
   mcpConnectorManifest,
+  workspaceFileProvenance,
 } from "../artifacts/index.js";
 import {
   advanceResolvedPermissionRequests,
@@ -520,11 +523,18 @@ async function executeAgentRun(
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "The selected skills are not available");
   }
+  const skillPackagesRoot = activeSkills.length
+    ? store.skillPackagesPath(sessionId, skillPackageSetHash(activeSkills))
+    : undefined;
+  if (skillPackagesRoot) {
+    await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
+  }
   const runtimeSkills = activeSkills.map(({ content, description, hash, id, readResource, resources, revision, version }) => ({
     content,
     description,
     hash,
     id,
+    packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}`,
     readResource,
     resources,
     revision,
@@ -779,7 +789,7 @@ async function executeAgentRun(
     turnId: string,
     sourcePathPrefix?: string,
     parentSubagentId?: string,
-  ): Pick<WorkspaceAgentOptions, "declareArtifact" | "listArtifacts" | "readArtifact"> => ({
+  ): Pick<WorkspaceAgentOptions, "declareArtifact" | "getFileProvenance" | "listArtifacts" | "readArtifact"> => ({
     declareArtifact: async (input) => {
       const defaultName = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
       // `sourcePath` must match the artifact-derivation path stored by
@@ -835,6 +845,14 @@ async function executeAgentRun(
         }
       }
       return result;
+    },
+    getFileProvenance: async (path) => {
+      const normalizedPath = normalizeWorkspaceRelativePath(workspaceRoot, path);
+      return await workspaceFileProvenance(
+        store,
+        sessionId,
+        sourcePathPrefix ? `${sourcePathPrefix}/${normalizedPath}` : normalizedPath,
+      );
     },
     listArtifacts: async () => store.listProjectArtifacts(session.projectId),
     readArtifact: async (input) => {
@@ -894,6 +912,7 @@ async function executeAgentRun(
       permissionScopeLabel: "in the Session workspace",
       provenanceRecorder,
       runnerClient,
+      ...(skillPackagesRoot ? { skillPackagesRoot } : {}),
       ...(scientificEnvironments ? { scientificEnvironments } : {}),
       sessionId,
       store,
@@ -1262,11 +1281,26 @@ async function executeAgentRun(
             ...(specialist?.enabledSkillIds ?? []),
             ...(roleSkillId ? [roleSkillId] : []),
           ])];
-          const subagentSkills = skillCatalog.resolve(subagentSkillIds).map(({ content, description, hash, id, readResource, resources, revision, version }) => ({
-            content, description, hash, id, readResource, resources, revision, version,
-          }));
           const subagentConnectorIds = [...new Set([...settingsSnapshot.enabledConnectorIds, ...(specialist?.connectorIds ?? [])])];
           const subagentWorkspaceRoot = resolveWorkspaceFile(store.workspacePath(sessionId), handoff.privateWorkspacePath);
+          const subagentSnapshots = skillCatalog.resolve(subagentSkillIds);
+          const subagentSkillPackagesRoot = subagentSnapshots.length
+            ? store.skillPackagesPath(sessionId, skillPackageSetHash(subagentSnapshots))
+            : undefined;
+          if (subagentSkillPackagesRoot) {
+            await prepareSkillSandbox(subagentSkillPackagesRoot, subagentWorkspaceRoot, subagentSnapshots);
+          }
+          const subagentSkills = subagentSnapshots.map(({ content, description, hash, id, readResource, resources, revision, version }) => ({
+            content,
+            description,
+            hash,
+            id,
+            packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}`,
+            readResource,
+            resources,
+            revision,
+            version,
+          }));
           const subagentProfile = createSubagentProfile({
             allowedToolNames: subagentConfig.tools ?? undefined,
             connectorIds: subagentConnectorIds,
@@ -1309,6 +1343,7 @@ async function executeAgentRun(
               provenanceRecorder,
               readOnlyWorkspaceRoot: store.workspacePath(sessionId),
               runnerClient,
+              ...(subagentSkillPackagesRoot ? { skillPackagesRoot: subagentSkillPackagesRoot } : {}),
               ...(scientificEnvironments ? { scientificEnvironments } : {}),
               sessionId,
               store,
@@ -1454,6 +1489,7 @@ async function executeAgentRun(
               throw new Error("Nested subagents are disabled");
             },
             readOnlyWorkspaceRoot: store.workspacePath(sessionId),
+            ...(subagentSkillPackagesRoot ? { skillPackagesRoot: subagentSkillPackagesRoot } : {}),
             subagent: {
               instructions: subagentConfig.systemPrompt,
               name: subagentConfig.name,
@@ -1629,6 +1665,7 @@ async function executeAgentRun(
     },
     ...(sessionSpecialist ? { specialist: { description: sessionSpecialist.description, instructions: sessionSpecialist.instructions, name: sessionSpecialist.name } } : {}),
     history: promptHistory,
+    ...(skillPackagesRoot ? { skillPackagesRoot } : {}),
     skills: runtimeSkills,
     specialists: store.listSpecialists()
       .filter((specialist) => specialist.enabled !== false)

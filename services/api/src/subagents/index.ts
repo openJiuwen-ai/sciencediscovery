@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
-import type { Subagent, SubagentBrief, SubagentInput, WorkspaceFile } from "@sciencediscovery/schema";
+import type { Subagent, SubagentBrief, SubagentInput, WorkspaceFile, WorkspaceFileRevisionInput } from "@sciencediscovery/schema";
 
 import { validateSubagentOutputValue } from "../subagent-brief.js";
 import { SessionStore } from "../store.js";
@@ -98,6 +98,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
   const skippedInputPaths: NonNullable<NonNullable<Subagent["handoff"]>["skippedInputPaths"]> = [...selected.skippedInputPaths];
   let copiedBytes = 0;
   let copiedFiles = 0;
+  const provenanceInputs: WorkspaceFileRevisionInput[] = [];
   for (const file of parentInputFiles) {
     if (copiedFiles >= MAX_SUBAGENT_HANDOFF_FILES) {
       skippedInputPaths.push({ path: file.path, reason: "handoff file count limit exceeded", size: file.size });
@@ -118,9 +119,31 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
     try {
       await mkdir(dirname(snapshotDestination), { recursive: true });
       await copyFile(source, snapshotDestination);
+      const snapshotStat = await stat(snapshotDestination);
+      provenanceInputs.push({
+        mode: "write",
+        modifiedAt: snapshotStat.mtime.toISOString(),
+        origin: "system",
+        originMeta: { kind: "subagent-handoff-copy", sourcePath: file.path },
+        ...(file.provenance ? { parentRevisionId: file.provenance.revisionId } : {}),
+        path: `${privateWorkspacePath}/${copiedPath}`,
+        size: snapshotStat.size,
+        subagentId,
+      });
       if (originalPathDestination !== snapshotDestination) {
         await mkdir(dirname(originalPathDestination), { recursive: true });
         await copyFile(source, originalPathDestination);
+        const originalStat = await stat(originalPathDestination);
+        provenanceInputs.push({
+          mode: "write",
+          modifiedAt: originalStat.mtime.toISOString(),
+          origin: "system",
+          originMeta: { kind: "subagent-handoff-copy", sourcePath: file.path },
+          ...(file.provenance ? { parentRevisionId: file.provenance.revisionId } : {}),
+          path: `${privateWorkspacePath}/${file.path}`,
+          size: originalStat.size,
+          subagentId,
+        });
       }
       inputPaths.push(copiedPath);
       copiedBytes += file.size;
@@ -133,7 +156,8 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
       });
     }
   }
-  await writeFile(resolveWorkspaceFile(workspaceRoot, manifestPath), `${JSON.stringify({
+  const manifestTarget = resolveWorkspaceFile(workspaceRoot, manifestPath);
+  await writeFile(manifestTarget, `${JSON.stringify({
     createdAt: new Date().toISOString(),
     inputPaths,
     parentInputPaths: parentInputFiles.map((file) => file.path),
@@ -141,6 +165,17 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
     ...(skippedInputPaths.length ? { skippedInputPaths } : {}),
     subagentId,
   }, null, 2)}\n`, "utf8");
+  const manifestStat = await stat(manifestTarget);
+  provenanceInputs.push({
+    mode: "write",
+    modifiedAt: manifestStat.mtime.toISOString(),
+    origin: "system",
+    originMeta: { kind: "subagent-handoff-manifest" },
+    path: manifestPath,
+    size: manifestStat.size,
+    subagentId,
+  });
+  await store.recordWorkspaceFileRevisions(sessionId, provenanceInputs);
   return {
     inputPaths,
     manifestPath,

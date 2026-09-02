@@ -121,9 +121,9 @@
 
 启用与使用方式：
 
-1. **准备 Neo4j**：记忆图谱需要外部 Neo4j 服务（不在镜像中打包）。在 **系统配置 → Memory graph** 中填写 Bolt 地址、用户名与密码。
+1. **准备 Neo4j**：记忆图谱需要外部 Neo4j 服务（不在镜像中打包）。在 **系统配置 → Memory graph** 中填写 HTTP 地址（默认 `http://127.0.0.1:7474`）、用户名与密码。
 2. **启用服务**：在系统设置中开启记忆图谱功能。启用后，Python 侧车 `services/memory-graph`（仅回环 `:17674`）会被启动，并随 Runner 启动而自检健康状态。
-3. **Agent 侧自动镜像**：启用后，执行事件（MCP 检索、`run_python`）会被自动镜像到图中，形成"任务链"；Agent 在写最终报告时通过 `declare_evidence`、`declare_artifact`、`declare_claim` 三个工具建立"引用链"。
+3. **Agent 侧自动镜像**：启用后，执行事件（MCP 检索、`run_python`）会被自动镜像到图中，形成"任务链"；Agent 在写最终报告时通过 `declare_evidence`、`declare_claim`（外加 Node 内部的 `declare_artifact`）建立"引用链"。
 4. **查询与查看**：Agent 可调用 `query_graph` 工具对图做大小写不敏感子串检索；前端会在报告里把 `[alias]` 渲染为可点击 chip，点击后跳转到对应证据或产物。
 
 Neo4j 不可达时该模块静默降级，不影响 Web 与对话主路径。
@@ -201,14 +201,14 @@ contradictory findings across studies.
 |---|---|
 | **Preview** | 查看 Evidence 的内容 |
 | **Provenance** | 查看 Evidence 的溯源信息，包括生成该 Evidence 所引用的代码、执行环境、执行日志等 |
-| **View chain** | 查看与该 Evidence 相关的科学记忆图谱信息 |
+| **在科学记忆中查看此证据** | 查看与该 Evidence 相关的科学记忆图谱信息 |
 
 ![Preview](../../images/evidence2.jpg)
 ![Provenance](../../images/evidence3.jpg)
 
 ### 7.3 查看生成链与引用链
 
-点击 **View chain**，可进一步查看该 Evidence 的两条链路：
+点击 **在科学记忆中查看此证据**，可进一步查看该 Evidence 的两条链路：
 
 - **生成链**：从研究目标出发，沿任务节点追溯到生成该 Evidence 的代码与执行记录。
 - **引用链**：从 Evidence 上溯至其来源文献，以及声明该 Evidence 的 Artifact / 报告断言。

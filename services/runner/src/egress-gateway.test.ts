@@ -61,6 +61,7 @@ function access(overrides: Partial<SandboxNetworkAccess> = {}): SandboxNetworkAc
   return {
     allowPrivateNetwork: false,
     allowedDomains: ["example.org"],
+    egressProxyPolicy: "inherit",
     mode: "domain-allowlist",
     revision: "test-revision",
     ...overrides,
@@ -206,6 +207,253 @@ test("an allowed domain is forwarded and reaches the target", async () => {
   }
 });
 
+/**
+ * A proxy that records what it was asked for and then reaches the local target,
+ * whatever authority the request named. Standing in for a corporate proxy, it
+ * makes both halves observable: what the gateway asked it to reach, and whether
+ * it was asked at all.
+ */
+async function recordingProxy(forwardPort: number): Promise<{
+  authorizations: (string | undefined)[];
+  close: () => Promise<void>;
+  connects: string[];
+  port: number;
+  requests: string[];
+}> {
+  const connects: string[] = [];
+  const requests: string[] = [];
+  const authorizations: (string | undefined)[] = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url ?? "");
+    authorizations.push(request.headers["proxy-authorization"] as string | undefined);
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end(`proxied ${request.url}`);
+  });
+  server.on("connect", (request, clientSocket) => {
+    connects.push(request.url ?? "");
+    authorizations.push(request.headers["proxy-authorization"] as string | undefined);
+    const upstream = connect({ host: "127.0.0.1", port: forwardPort }, () => {
+      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+    });
+    upstream.on("error", () => clientSocket.destroy());
+    clientSocket.on("error", () => upstream.destroy());
+  });
+  await new Promise<void>((listening) => server.listen(0, "127.0.0.1", () => listening()));
+  const address = server.address();
+  return {
+    authorizations,
+    close: () => new Promise<void>((closed) => { server.closeAllConnections(); server.close(() => closed()); }),
+    connects,
+    port: typeof address === "object" && address ? address.port : 0,
+    requests,
+  };
+}
+
+test("an allowed domain leaves through the configured proxy, by name", async () => {
+  const directory = await scratchDirectory();
+  const target = await localTarget();
+  const proxy = await recordingProxy(target.port);
+  const gateway = new EgressGateway(
+    access({ allowPrivateNetwork: true, allowedDomains: ["mirror.test"] }),
+    join(directory, "egress.sock"),
+    {
+      proxy: { mode: "url", url: `http://re%40search:p%40ss@127.0.0.1:${proxy.port}` },
+      resolveAddresses: async () => [{ address: "127.0.0.1", family: 4 }],
+    },
+  );
+  await gateway.listen();
+  try {
+    // CONNECT: the tunnel is opened by the proxy, and the sandbox still gets
+    // an end-to-end connection to the origin.
+    const tunnelled = await overSocket(
+      gateway.socketPath,
+      `CONNECT mirror.test:${target.port} HTTP/1.1\r\n\r\n`
+      + `GET /through HTTP/1.1\r\nHost: mirror.test\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(tunnelled, /^HTTP\/1\.1 200 Connection Established/);
+    assert.match(tunnelled, /ok \/through/);
+    assert.deepEqual(proxy.connects, [`mirror.test:${target.port}`]);
+
+    // Absolute-form HTTP keeps its absolute URI and goes to the proxy instead
+    // of the pinned address.
+    const forwarded = await overSocket(
+      gateway.socketPath,
+      `GET http://mirror.test:${target.port}/plain HTTP/1.1\r\nHost: mirror.test:${target.port}\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(forwarded, /^HTTP\/1\.1 200/);
+    assert.match(forwarded, /proxied http:\/\/mirror\.test:\d+\/plain/);
+    assert.deepEqual(proxy.requests, [`http://mirror.test:${target.port}/plain`]);
+
+    // Credentials in the registry URL are presented to the proxy, and only there.
+    const expected = `Basic ${Buffer.from("re@search:p@ss").toString("base64")}`;
+    assert.deepEqual(proxy.authorizations, [expected, expected]);
+  } finally {
+    await gateway.close();
+    await proxy.close();
+    await target.close();
+  }
+});
+
+test("a refused domain is answered by the gateway and never offered to the proxy", async () => {
+  const directory = await scratchDirectory();
+  const target = await localTarget();
+  const proxy = await recordingProxy(target.port);
+  const gateway = new EgressGateway(
+    access({ allowPrivateNetwork: true, allowedDomains: ["mirror.test"] }),
+    join(directory, "egress.sock"),
+    {
+      proxy: { mode: "url", url: `http://127.0.0.1:${proxy.port}` },
+      resolveAddresses: async () => [{ address: "127.0.0.1", family: 4 }],
+    },
+  );
+  await gateway.listen();
+  try {
+    const denied = await overSocket(gateway.socketPath, `CONNECT blocked.test:443 HTTP/1.1\r\n\r\n`);
+    assert.match(denied, /^HTTP\/1\.1 403 Forbidden/);
+    const deniedPlain = await overSocket(
+      gateway.socketPath,
+      "GET http://blocked.test/ HTTP/1.1\r\nHost: blocked.test\r\nConnection: close\r\n\r\n",
+    );
+    assert.match(deniedPlain, /^HTTP\/1\.1 403/);
+    // The allowlist decision happens first, so the proxy never learns the
+    // sandbox wanted blocked.test at all.
+    assert.deepEqual(proxy.connects, []);
+    assert.deepEqual(proxy.requests, []);
+  } finally {
+    await gateway.close();
+    await proxy.close();
+    await target.close();
+  }
+});
+
+test("the outbound route is re-resolved on every acquire", async () => {
+  const directory = await scratchDirectory();
+  const target = await localTarget();
+  const proxy = await recordingProxy(target.port);
+  const registry = new EgressGatewayRegistry(directory, undefined, async () => [{ address: "127.0.0.1", family: 4 }]);
+  const policy = access({ allowPrivateNetwork: true, allowedDomains: ["mirror.test"] });
+  try {
+    const direct = await registry.acquire(policy);
+    assert.match(
+      await overSocket(direct.socketPath, `GET http://mirror.test:${target.port}/a HTTP/1.1\r\nHost: m\r\nConnection: close\r\n\r\n`),
+      /ok \/a/,
+    );
+    assert.deepEqual(proxy.requests, []);
+
+    // Same revision, so the same gateway and socket — but a registry edit
+    // applies to the next execution instead of waiting for a policy change.
+    const viaProxy = await registry.acquire(policy, { mode: "url", url: `http://127.0.0.1:${proxy.port}` });
+    assert.equal(viaProxy, direct);
+    assert.match(
+      await overSocket(viaProxy.socketPath, `GET http://mirror.test:${target.port}/b HTTP/1.1\r\nHost: m\r\nConnection: close\r\n\r\n`),
+      /proxied http:/,
+    );
+    assert.deepEqual(proxy.requests, [`http://mirror.test:${target.port}/b`]);
+
+    const backToDirect = await registry.acquire(policy, { mode: "direct" });
+    assert.match(
+      await overSocket(backToDirect.socketPath, `GET http://mirror.test:${target.port}/c HTTP/1.1\r\nHost: m\r\nConnection: close\r\n\r\n`),
+      /ok \/c/,
+    );
+    assert.equal(proxy.requests.length, 1);
+  } finally {
+    await registry.close();
+    await proxy.close();
+    await target.close();
+  }
+});
+
+test("an unusable proxy fails the allowed request instead of connecting around it", async () => {
+  const directory = await scratchDirectory();
+  const target = await localTarget();
+  const gateway = new EgressGateway(
+    access({ allowPrivateNetwork: true, allowedDomains: ["mirror.test"] }),
+    join(directory, "egress.sock"),
+    {
+      proxy: { mode: "url", url: "socks5://127.0.0.1:1080" },
+      resolveAddresses: async () => [{ address: "127.0.0.1", family: 4 }],
+    },
+  );
+  await gateway.listen();
+  try {
+    const response = await overSocket(
+      gateway.socketPath,
+      `GET http://mirror.test:${target.port}/ HTTP/1.1\r\nHost: mirror.test\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(response, /^HTTP\/1\.1 502/);
+    assert.match(response, /configured outbound route/);
+    assert.doesNotMatch(response, /socks5|127\.0\.0\.1|1080/);
+  } finally {
+    await gateway.close();
+    await target.close();
+  }
+});
+
+test("malformed proxy credentials fail the request instead of killing the runner", async () => {
+  const directory = await scratchDirectory();
+  const target = await localTarget();
+  // The registry keeps a custom URL as written, so a stray `%` can reach the
+  // gateway. Decoding it used to throw where nothing could catch it: in
+  // handleRequest, past the route guard, and in the CONNECT socket callback.
+  const logs: Array<{ proxy?: string; reason?: string }> = [];
+  const gateway = new EgressGateway(
+    access({ allowPrivateNetwork: true, allowedDomains: ["mirror.test"] }),
+    join(directory, "egress.sock"),
+    {
+      log: (_event, detail) => logs.push(detail),
+      proxy: { mode: "url", url: "http://user%zz:supersecret@proxy.internal.test:3128/" },
+      resolveAddresses: async () => [{ address: "127.0.0.1", family: 4 }],
+    },
+  );
+  const escaped: unknown[] = [];
+  const onUncaught = (error: unknown) => escaped.push(error);
+  process.on("uncaughtException", onUncaught);
+  process.on("unhandledRejection", onUncaught);
+  await gateway.listen();
+  try {
+    const forwarded = await overSocket(
+      gateway.socketPath,
+      `GET http://mirror.test:${target.port}/ HTTP/1.1\r\nHost: mirror.test\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(forwarded, /^HTTP\/1\.1 502/);
+    assert.match(forwarded, /configured outbound route/);
+    assert.doesNotMatch(
+      forwarded,
+      /proxy\.internal\.test|3128|user%zz|supersecret|percent-encoding|http:\/\//,
+    );
+
+    const tunnelled = await overSocket(gateway.socketPath, `CONNECT mirror.test:${target.port} HTTP/1.1\r\n\r\n`);
+    assert.match(tunnelled, /^HTTP\/1\.1 502/);
+    assert.match(tunnelled, /X-Sandbox-Network: .*configured outbound route/i);
+    assert.doesNotMatch(
+      tunnelled,
+      /proxy\.internal\.test|3128|user%zz|supersecret|percent-encoding|http:\/\//,
+    );
+
+    // Runner-side diagnostics retain the endpoint and concrete cause, but the
+    // raw credential is stripped there too.
+    assert.equal(logs.length, 2);
+    for (const detail of logs) {
+      assert.equal(detail.proxy, undefined);
+      assert.match(detail.reason ?? "", /http:\/\/proxy\.internal\.test:3128/);
+      assert.match(detail.reason ?? "", /not valid percent-encoding/);
+      assert.doesNotMatch(detail.reason ?? "", /user%zz|supersecret/);
+    }
+
+    // Both paths are handled without a catch above them, so anything that
+    // escapes here would have taken the process down in production.
+    await new Promise((settled) => setImmediate(settled));
+    assert.deepEqual(escaped, []);
+  } finally {
+    process.off("uncaughtException", onUncaught);
+    process.off("unhandledRejection", onUncaught);
+    await gateway.close();
+    await target.close();
+  }
+});
+
 test("an IP literal target is rejected even when the allowlist looks permissive", async () => {
   const directory = await scratchDirectory();
   const gateway = new EgressGateway(
@@ -235,7 +483,7 @@ test("the registry reuses one gateway per policy revision and closes them togeth
   } finally {
     await registry.close();
   }
-  assert.throws(() => registry.acquire({ ...access(), mode: "none" }), /domain-allowlist/);
+  await assert.rejects(registry.acquire({ ...access(), mode: "none" }), /domain-allowlist/);
 });
 
 test("a socket name is fixed length and per-revision, whatever the revision looks like", async () => {

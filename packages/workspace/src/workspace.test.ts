@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
@@ -27,6 +27,7 @@ import {
   type PythonExecutionResult,
   type RemoteJob,
   type ShellExecutionResult,
+  type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
 import { createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath } from "./workspace.js";
@@ -52,10 +53,12 @@ test("run_python executes code and reports output without resource selection", a
   await mkdir(root, { recursive: true });
   context.after(() => rm(root, { force: true, recursive: true }));
   let executedCode = "";
+  let executedToolCallId = "";
   const tools = createWorkspaceTools(root, {
     enabledConnectorIds: [],
-    executePython: async (code): Promise<PythonExecutionResult> => {
+    executePython: async (code, _signal, toolCallId): Promise<PythonExecutionResult> => {
       executedCode = code;
+      executedToolCallId = toolCallId ?? "";
       return {
         cgroupMode: "none",
         createdFiles: [],
@@ -85,7 +88,56 @@ test("run_python executes code and reports output without resource selection", a
 
   const result = await tool.execute("tool-call", { code: "print('ok')" });
   assert.equal(executedCode, "print('ok')");
+  assert.equal(executedToolCallId, "tool-call");
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /stdout:\nok/);
+});
+
+test("get_file_provenance returns the backend record without inferring fields", async () => {
+  const timestamp = "2026-08-01T10:00:00.000Z";
+  const revision = {
+    artifactVersionIds: [],
+    createdAt: timestamp,
+    fileId: "file-1",
+    id: "revision-1",
+    modifiedAt: timestamp,
+    origin: "unknown" as const,
+    path: "legacy.txt",
+    projectId: "project-1",
+    sessionId: "session-1",
+    size: 6,
+  };
+  const expected: WorkspaceFileProvenance = {
+    artifacts: [],
+    currentRevision: revision,
+    file: {
+      createdAt: timestamp,
+      currentRevisionId: revision.id,
+      id: revision.fileId,
+      path: revision.path,
+      projectId: revision.projectId,
+      sessionId: revision.sessionId,
+      sessionTitle: "Legacy Session",
+      updatedAt: timestamp,
+    },
+    lineage: [],
+    revisions: [revision],
+    sourceSession: { deleted: false, id: "session-1", title: "Legacy Session" },
+  };
+  let requestedPath = "";
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => ({}) as PythonExecutionResult,
+    getFileProvenance: async (path) => {
+      requestedPath = path;
+      return expected;
+    },
+  });
+  const tool = tools.find((candidate) => candidate.name === "get_file_provenance");
+  assert.ok(tool);
+  const result = await tool.execute("provenance-call", { path: "legacy.txt" });
+  assert.equal(requestedPath, "legacy.txt");
+  assert.deepEqual(result.details, expected);
+  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /\"origin\": \"unknown\"/);
 });
 
 test("web search and fetch are stable first-class tools when handlers are provided", async () => {
@@ -167,11 +219,11 @@ test("run_shell executes an existing workspace script without rewriting or path 
   ]);
   await assert.rejects(
     tool.execute("shell-missing", { scriptPath: "missing.sh" }),
-    /scriptPath does not exist in the workspace/,
+    /scriptPath does not exist in an authorized mount/,
   );
   await assert.rejects(
     tool.execute("shell-directory", { scriptPath: "scripts" }),
-    /scriptPath must reference a workspace file/,
+    /scriptPath must reference a regular file/,
   );
   await assert.rejects(
     tool.execute("shell-call", { scriptPath: "../outside.sh" }),
@@ -179,7 +231,7 @@ test("run_shell executes an existing workspace script without rewriting or path 
   );
   await assert.rejects(
     tool.execute("shell-symlink", { scriptPath: "outside-link.sh" }),
-    /scriptPath escapes the workspace/,
+    /scriptPath escapes its authorized mount/,
   );
 
   let subagentCode = "";
@@ -1020,6 +1072,7 @@ test("skill loading reads frozen instructions directly by exact id", async () =>
       description: "Workflow for selected progressive loading tests.",
       hash: "b".repeat(64),
       id: "selected-skill",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill",
       readResource: () => { throw new Error("not used"); },
       resources: [{ hash: "a".repeat(64), kind: "reference", path: "references/guide.md", size: 24 }],
       revision: 3,
@@ -1029,6 +1082,7 @@ test("skill loading reads frozen instructions directly by exact id", async () =>
       description: "Unrelated workflow.",
       hash: "c".repeat(64),
       id: "other-skill",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/other-skill",
       readResource: () => { throw new Error("not used"); },
       resources: [],
       revision: 1,
@@ -1058,6 +1112,7 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
       description: "Selected skill with one reference.",
       hash: "b".repeat(64),
       id: "selected-skill",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill",
       readResource: (path) => {
         requestedPath = path;
         return {
@@ -1089,6 +1144,100 @@ test("read_skill_resource exposes only resources from selected frozen skills", a
   );
 });
 
+test("ordinary file and shell tools use the pre-mounted complete frozen Skill package", async (context) => {
+  const fixtureRoot = resolve(process.cwd(), ".tmp", `mounted-skill-${process.pid}-${Date.now()}`);
+  const root = resolve(fixtureRoot, "workspace");
+  const skillRoot = resolve(fixtureRoot, "skill-snapshot");
+  await Promise.all([
+    mkdir(root, { recursive: true }),
+    mkdir(resolve(skillRoot, "selected-skill", "scripts"), { recursive: true }),
+    mkdir(resolve(skillRoot, "selected-skill", "references"), { recursive: true }),
+  ]);
+  await writeFile(resolve(skillRoot, "selected-skill", "SKILL.md"), "Frozen instructions\n");
+  await writeFile(resolve(skillRoot, "selected-skill", "references", "guide.md"), "Frozen guide\n");
+  await writeFile(resolve(skillRoot, "selected-skill", "scripts", "run.sh"), "printf 'not auto-run\\n'\n");
+  context.after(() => rm(fixtureRoot, { force: true, recursive: true }));
+  const executedCodes: string[] = [];
+  const executedToolCallIds: (string | undefined)[] = [];
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    executeShell: async (code, _kernelMode, _signal, toolCallId): Promise<ShellExecutionResult> => {
+      executedCodes.push(code);
+      executedToolCallIds.push(toolCallId);
+      const timestamp = new Date().toISOString();
+      return {
+        cgroupMode: "none", createdFiles: [], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+        environmentVariables: {}, executionId: "shell", exitCode: 0, finishedAt: timestamp,
+        kernelId: "shell", kernelMode: "ephemeral", language: "shell", modifiedFiles: [],
+        networkPolicy: "none", runnerVersion: "test", sandbox: "bubblewrap", startedAt: timestamp,
+        stderr: "", stdout: "ok\n", workingDirectory: "/workspace",
+      };
+    },
+    skillPackagesRoot: skillRoot,
+    skills: [{
+      content: "Frozen instructions",
+      description: "Selected complete package.",
+      hash: "b".repeat(64),
+      id: "selected-skill",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill",
+      readResource: () => { throw new Error("not used"); },
+      resources: [{ hash: "a".repeat(64), kind: "script", path: "scripts/run.sh", size: 22 }],
+      revision: 7,
+      version: "1.0.0",
+    }],
+  });
+
+  assert.equal(tools.some((candidate) => candidate.name === "materialize_skill_resource"), false);
+  await assert.rejects(readFile(resolve(root, "skills", "selected-skill", "SKILL.md")), /ENOENT/);
+  const readTool = tools.find((candidate) => candidate.name === "read_file");
+  const listTool = tools.find((candidate) => candidate.name === "list_files");
+  const shellTool = tools.find((candidate) => candidate.name === "run_shell");
+  assert.ok(readTool);
+  assert.ok(listTool);
+  assert.ok(shellTool);
+
+  // Tool descriptions are model-visible, so they must address the mounts through
+  // the variables. A bare /skills is only a real path under bubblewrap and would
+  // send the model to a non-existent location on macOS Seatbelt.
+  assert.match(shellTool.description, /\$SCIENCEDISCOVERY_SKILLS_DIR/);
+  for (const tool of tools) {
+    assert.doesNotMatch(tool.description, /(^|[^A-Z_])\/skills\b/, `${tool.name} description hardcodes the bind path`);
+    assert.doesNotMatch(tool.description, /(^|[^A-Z_])\/skill-extensions\b/, `${tool.name} description hardcodes the bind path`);
+  }
+
+  // The prompt advertises the environment-variable form, which these Node-side
+  // tools never see expanded; the bubblewrap bind path stays valid as an alias.
+  for (const packageRoot of [
+    "$SCIENCEDISCOVERY_SKILLS_DIR",
+    "${SCIENCEDISCOVERY_SKILLS_DIR}",
+    "/skills",
+  ]) {
+    const readResult = await readTool.execute("read", { path: `${packageRoot}/selected-skill/SKILL.md` });
+    assert.equal(readResult.content[0]?.type === "text" ? readResult.content[0].text : "", "Frozen instructions\n");
+  }
+  const listed = await listTool.execute("list", {});
+  assert.match(
+    listed.content[0]?.type === "text" ? listed.content[0].text : "",
+    /\$SCIENCEDISCOVERY_SKILLS_DIR\/selected-skill\/scripts\/run\.sh/,
+  );
+
+  // Every accepted spelling produces the same portable command, so a script runs
+  // by path on bubblewrap and on macOS Seatbelt, where /skills does not exist.
+  for (const scriptPath of [
+    "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill/scripts/run.sh",
+    "/skills/selected-skill/scripts/run.sh",
+  ]) {
+    await shellTool.execute("shell", { arguments: ["value with spaces"], kernelMode: "ephemeral", scriptPath });
+  }
+  assert.deepEqual(executedCodes, [
+    "/usr/bin/bash \"${SCIENCEDISCOVERY_SKILLS_DIR}\"/'selected-skill/scripts/run.sh' 'value with spaces'",
+    "/usr/bin/bash \"${SCIENCEDISCOVERY_SKILLS_DIR}\"/'selected-skill/scripts/run.sh' 'value with spaces'",
+  ]);
+  // The Skill mount must not cost run_shell its file-provenance attribution.
+  assert.deepEqual(executedToolCallIds, ["shell", "shell"]);
+});
+
 test("create_skill requires the selected skill-creator instructions before mutating the catalog", async () => {
   let request: CreateSkillPackageRequest | undefined;
   const tools = createWorkspaceTools(process.cwd(), {
@@ -1109,6 +1258,7 @@ test("create_skill requires the selected skill-creator instructions before mutat
       description: "Create a Skill from an explicit user request.",
       hash: "c".repeat(64),
       id: "skill-creator",
+      packagePath: "$SCIENCEDISCOVERY_SKILLS_DIR/skill-creator",
       readResource: () => { throw new Error("not used"); },
       resources: [],
       revision: 1,

@@ -36,6 +36,7 @@ function kindLabel(kind: ProxyServerKind, t: ReturnType<typeof useLocale>["t"]):
 }
 
 export function ProxyPolicySelect({
+  disabled = false,
   id,
   includeInherit = true,
   label,
@@ -43,6 +44,7 @@ export function ProxyPolicySelect({
   settings,
   value,
 }: {
+  disabled?: boolean;
   id?: string;
   includeInherit?: boolean;
   label?: string;
@@ -53,6 +55,7 @@ export function ProxyPolicySelect({
   const { t } = useLocale();
   const select = <select
     aria-label={label}
+    disabled={disabled}
     id={id}
     onChange={(event) => onChange(event.target.value as ProxyPolicy)}
     value={value}

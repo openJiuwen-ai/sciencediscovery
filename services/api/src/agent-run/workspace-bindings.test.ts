@@ -22,8 +22,8 @@ import type { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
-test("execution bindings apply stable Agent identity with the same permission and provenance path", async () => {
-  const executed: Array<{ agentId: string; executionTimeoutMs?: number; kernelIdleTimeoutMs?: number; turnId: string }> = [];
+test("execution bindings apply stable Agent identity and trusted Skill package root", async () => {
+  const executed: Array<{ agentId: string; executionTimeoutMs?: number; kernelIdleTimeoutMs?: number; skillPackagesRoot?: string; turnId: string }> = [];
   const permission = {
     getEpoch: () => ({ id: "epoch-1" }),
     requirePrivilege: async () => undefined,
@@ -36,12 +36,14 @@ test("execution bindings apply stable Agent identity with the same permission an
         agentId: string;
         executionTimeoutMs?: number;
         kernelIdleTimeoutMs?: number;
+        skillPackagesRoot?: string;
         turnId: string;
       }) => {
         executed.push({
           agentId: options.agentId,
           ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),
           ...(options.kernelIdleTimeoutMs !== undefined ? { kernelIdleTimeoutMs: options.kernelIdleTimeoutMs } : {}),
+          ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
           turnId: options.turnId,
         });
         return { createdFiles: [], exitCode: 0, stderr: "", stdout: "" };
@@ -49,7 +51,12 @@ test("execution bindings apply stable Agent identity with the same permission an
     } as unknown as ProvenanceRecorder,
     runnerClient: {} as RunnerClient,
     sessionId: "session-1",
-    store: { assertSessionWritable() {} } as unknown as SessionStore,
+    skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1",
+    store: {
+      assertSessionWritable() {},
+      // No network in this epoch, so the binding resolves no outbound route.
+      resolveSandboxEgressProxy: () => undefined,
+    } as unknown as SessionStore,
     workspaceRoot: "/workspace",
   };
   const main = createWorkspaceExecutionBindings({
@@ -68,8 +75,58 @@ test("execution bindings apply stable Agent identity with the same permission an
   await main.executePython("print('main')");
   await subagent.executePython("print('subagent')");
   assert.deepEqual(executed, [
-    { agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000, turnId: "main-execution" },
-    { agentId: "subagent:subagent-1", turnId: "subagent-execution" },
+    {
+      agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
+      skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1", turnId: "main-execution",
+    },
+    {
+      agentId: "subagent:subagent-1",
+      skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1",
+      turnId: "subagent-execution",
+    },
+  ]);
+});
+
+test("scientific executions forward the current outbound route and omit it for no-network epochs", async () => {
+  const executed: Array<Record<string, unknown>> = [];
+  const epoch = { id: "epoch-1" };
+  const proxy = { mode: "url", url: "http://proxy.test:3128" } as const;
+  let resolved: typeof proxy | undefined = proxy;
+  const bindings = createWorkspaceExecutionBindings({
+    agentId: "main",
+    executionId: "run-1",
+    permission: {
+      getEpoch: () => epoch,
+      requirePrivilege: async () => undefined,
+    } as unknown as AgentPermissionRuntime,
+    permissionScopeLabel: "in test",
+    provenanceRecorder: {
+      executeScientific: async (options: Record<string, unknown>) => {
+        executed.push(options);
+        return { createdFiles: [], exitCode: 0, stderr: "", stdout: "" };
+      },
+    } as unknown as ProvenanceRecorder,
+    runnerClient: {} as RunnerClient,
+    scientificEnvironments: [],
+    sessionId: "session-1",
+    store: {
+      assertSessionWritable() {},
+      resolveSandboxEgressProxy: () => resolved,
+    } as unknown as SessionStore,
+    workspaceRoot: "/workspace",
+  });
+
+  await bindings.executeScientific!("python", "print('proxied')", undefined, "ephemeral");
+  resolved = undefined;
+  await bindings.executeScientific!("python", "print('offline')", undefined, "ephemeral");
+
+  assert.deepEqual(executed.map((input) => ({
+    hasSandboxEgressProxy: Object.hasOwn(input, "sandboxEgressProxy"),
+    permissionEpoch: input.permissionEpoch,
+    sandboxEgressProxy: input.sandboxEgressProxy,
+  })), [
+    { hasSandboxEgressProxy: true, permissionEpoch: epoch, sandboxEgressProxy: proxy },
+    { hasSandboxEgressProxy: false, permissionEpoch: epoch, sandboxEgressProxy: undefined },
   ]);
 });
 
@@ -174,7 +231,11 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
       },
     } as unknown as RunnerClient,
     sessionId: "session-1",
-    store: { assertSessionWritable() {} } as unknown as SessionStore,
+    store: {
+      assertSessionWritable() {},
+      // No network in this epoch, so the binding resolves no outbound route.
+      resolveSandboxEgressProxy: () => undefined,
+    } as unknown as SessionStore,
     workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
   });
 

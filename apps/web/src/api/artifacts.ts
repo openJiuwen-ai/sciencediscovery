@@ -44,6 +44,7 @@ import type {
   UploadFileRequest,
   WorkspaceCapabilities,
   WorkspaceFile,
+  WorkspaceFileProvenance,
   WorkspaceUploadResult,
 } from "@sciencediscovery/schema";
 import type { ArtifactDashboard, ArtifactPreviewPayload } from "../artifact-dashboard.js";
@@ -376,6 +377,12 @@ export class ArtifactsApiClient extends RunsApiClient {
 
   listFiles(sessionId: string): Promise<WorkspaceFile[]> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/files`);
+  }
+
+  getWorkspaceFileProvenance(sessionId: string, path: string): Promise<WorkspaceFileProvenance> {
+    return this.request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/workspace/provenance?path=${encodeURIComponent(path)}`,
+    );
   }
 
   uploadFile(sessionId: string, body: UploadFileRequest): Promise<WorkspaceFile> {

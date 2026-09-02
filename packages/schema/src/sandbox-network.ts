@@ -26,6 +26,8 @@
  * so it must stay free of Node built-ins.
  */
 
+import { PROXY_POLICY_INHERIT, type ProxyPolicy } from "./proxy.js";
+
 export const SANDBOX_NETWORK_MODES = ["none", "domain-allowlist"] as const;
 
 /**
@@ -53,12 +55,22 @@ export interface SandboxNetworkSettings {
    * either form with a `:port` suffix restricting the entry to that port.
    */
   allowedDomains: string[];
+  /**
+   * How the egress gateway reaches an already-allowed target: the same policy
+   * shape every other outbound module uses (`inherit` | `none` | `proxy:<id>`,
+   * resolved against the Network proxies registry). It applies strictly *after*
+   * the allowlist decision, so a refused domain never reaches a proxy, and it
+   * changes nothing inside the sandbox — the workload's outbound variables keep
+   * pointing at the internal bridge.
+   */
+  egressProxyPolicy: ProxyPolicy;
   mode: SandboxNetworkMode;
 }
 
 export const DEFAULT_SANDBOX_NETWORK_SETTINGS: SandboxNetworkSettings = {
   allowPrivateNetwork: false,
   allowedDomains: [],
+  egressProxyPolicy: PROXY_POLICY_INHERIT,
   mode: "none",
 };
 

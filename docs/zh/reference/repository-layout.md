@@ -14,7 +14,7 @@ sciencediscovery/
 │   ├── gateway/              # 随包 Python MCP server 及其 venv
 │   ├── runner/               # bubblewrap 执行器
 │   ├── paper/                # PDF worker（uv 项目）
-│   └── memory-graph/         # 实验性 Science Memory 侧车（默认禁用；需 Neo4j）
+│   └── memory-graph/         # 实验性 ScienceMemory 侧车（默认禁用；需 Neo4j）
 ├── packages/
 │   ├── agent-runtime/        # 系统提示、工作区工具定义、Agent 事件类型
 │   ├── schema/               # 共享 TypeScript 类型与 schema
@@ -143,7 +143,7 @@ sciencediscovery/
 | 类别 | 数量 | 成员 |
 |------|------|------|
 | 前端应用 | 1 | `apps/web` |
-| 后端服务 | 5 | `api`、`gateway`、`runner`、`paper`、`memory-graph`（Science Memory；实验性，默认禁用） |
+| 后端服务 | 5 | `api`、`gateway`、`runner`、`paper`、`memory-graph`（ScienceMemory；实验性，默认禁用） |
 | 共享 TS 包 | 3 | `agent-runtime`、`schema`、`mcp-sources`（科研 MCP manifest 与治理校验） |
 | 内置技能包 | 2 | life-science / structure-pocket |
 

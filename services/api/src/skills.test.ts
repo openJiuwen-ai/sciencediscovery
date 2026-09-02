@@ -27,6 +27,7 @@ import {
   discoverGitSkillRoots,
   packageFromUpload,
   parseSkillMarkdown,
+  SKILL_LIMITS,
   SkillCatalog,
   SkillCatalogError,
   validateSkillPackage,
@@ -532,6 +533,10 @@ test("persists immutable managed revisions and enforces optimistic concurrency",
     assert.equal(updated.currentRevision, 2);
     assert.equal(updated.resources.length, 2);
     assert.equal(frozen.readResource("references/guide.md").revision, 1);
+    assert.equal(
+      Buffer.from(frozen.readPackageFiles().find((file) => file.path === "scripts/unused.py")!.bytes).toString("utf8"),
+      "print('not run')",
+    );
     assert.throws(
       () => frozen.readResource("../escape.txt"),
       /Unsafe skill package path/,
@@ -554,9 +559,46 @@ test("persists immutable managed revisions and enforces optimistic concurrency",
       await readFile(resolve(dataDir, "skills", "portable-skill", "revisions", "1", "package", "scripts", "unused.py"), "utf8"),
       "print('not run')",
     );
+    await writeFile(
+      resolve(dataDir, "skills", "portable-skill", "revisions", "1", "package", "scripts", "unused.py"),
+      "print('live disk edit')",
+    );
+    const frozenBytesAfterLiveEdit = frozen.readPackageFiles();
+    assert.equal(
+      Buffer.from(frozenBytesAfterLiveEdit.find((file) => file.path === "scripts/unused.py")!.bytes).toString("utf8"),
+      "print('not run')",
+    );
+    assert.ok(frozenBytesAfterLiveEdit.some((file) => file.path === "SKILL.md"));
 
     await reloaded.delete("portable-skill");
     assert.equal(reloaded.get("portable-skill"), undefined);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("complete frozen Skill package files bypass the text read limit and remain immutable", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const largeBinary = Buffer.alloc(SKILL_LIMITS.runtimeTextBytes + 1, 0xff);
+    const archive = Buffer.from(zipSync({
+      "large-resource-skill/SKILL.md": strToU8(markdown("large-resource-skill").toString("utf8")),
+      "large-resource-skill/scripts/large.bin": largeBinary,
+    }));
+    await catalog.import("large-resource-skill.zip", archive);
+    const frozen = catalog.resolve(["large-resource-skill"])[0]!;
+
+    assert.throws(
+      () => frozen.readResource("scripts/large.bin"),
+      /exceeds .* text bytes/,
+    );
+    const first = frozen.readPackageFiles().find((file) => file.path === "scripts/large.bin")!;
+    assert.equal(first.size, largeBinary.length);
+    assert.deepEqual(Buffer.from(first.bytes), largeBinary);
+    first.bytes[0] = 0;
+    assert.equal(frozen.readPackageFiles().find((file) => file.path === "scripts/large.bin")!.bytes[0], 0xff);
   } finally {
     await rm(dataDir, { force: true, recursive: true });
   }

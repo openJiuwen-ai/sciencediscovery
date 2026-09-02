@@ -193,15 +193,22 @@ test("concurrent calls for one Session-Agent create one shell and execute in sub
 });
 
 test("a Session-Agent identity rejects reuse with different workspace mounts", async (context) => {
-  const { manager, workspaceRoot } = await fixture(context);
+  const { dataDir, manager, workspaceRoot } = await fixture(context);
   const differentRoot = resolve(workspaceRoot, "different");
-  await mkdir(differentRoot, { recursive: true });
+  const skillPackagesRoot = resolve(dataDir, "projects", "project", "skill-snapshots", "run-1");
+  const differentSkillPackagesRoot = resolve(dataDir, "projects", "project", "skill-snapshots", "run-2");
+  await Promise.all([
+    mkdir(differentRoot, { recursive: true }),
+    mkdir(skillPackagesRoot, { recursive: true }),
+    mkdir(differentSkillPackagesRoot, { recursive: true }),
+  ]);
   await manager.execute({
     agentId: "main",
     code: "echo ready",
     executionId: "mount-one",
     kernelMode: "persistent",
     permissionEpoch: epoch(),
+    skillPackagesRoot,
     workspaceRoot,
   });
   await assert.rejects(manager.execute({
@@ -210,8 +217,22 @@ test("a Session-Agent identity rejects reuse with different workspace mounts", a
     executionId: "mount-two",
     kernelMode: "persistent",
     permissionEpoch: epoch(),
+    skillPackagesRoot,
     workspaceRoot: differentRoot,
   }), /cannot be reused with different workspace mounts/);
+  // A changed Skill selection restarts the shell on the new read-only mount and
+  // reports the lost environment, rather than failing the execution.
+  const restarted = await manager.execute({
+    agentId: "main",
+    code: "echo restarted",
+    executionId: "mount-three",
+    kernelMode: "persistent",
+    permissionEpoch: epoch(),
+    skillPackagesRoot: differentSkillPackagesRoot,
+    workspaceRoot,
+  });
+  assert.equal(restarted.stdout.trim(), "restarted");
+  assert.match(restarted.memoryStateLost ?? "", /Selected Skills changed/);
 });
 
 test("shell exports sediment into the session env profile and reach ephemeral python and shell", async (context) => {

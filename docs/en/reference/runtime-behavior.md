@@ -26,7 +26,7 @@ New Sessions inherit by default, but creation still requires a resolved task mod
 ```text
 my-skill/
   SKILL.md          # required YAML frontmatter and Markdown instructions
-  scripts/          # optional; retained but never auto-executed
+  scripts/          # optional; retained, never auto-executed or auto-copied
   references/       # optional text resources
   assets/           # optional package resources
 ```
@@ -35,7 +35,7 @@ my-skill/
 
 There is one global skill library. New/imported skills are immediately available in all mode; narrow them at Project or Session scope. Each managed edit creates an immutable revision, runs freeze selected revisions, and Prompt Manifest records IDs, revisions, versions, and package hashes. Only selected-mode references prevent deletion.
 
-Imports are untrusted. ZIP validation rejects traversal, symlinks, encryption, duplicates, and excess limits: 25 MiB upload, 50 MiB expanded, 500 files, 10 MiB per resource, and 512 KiB `SKILL.md`. Prompts initially list only name, description, and revision. The model calls `read_skill` with an exact catalog id and optionally uses bounded `read_skill_resource`. `scripts/` are preserved for portability but never installed, run, or copied to the Python workspace automatically.
+Imports are untrusted. ZIP validation rejects traversal, symlinks, encryption, duplicates, and excess limits: 25 MiB upload, 50 MiB expanded, 500 files, 10 MiB per resource, and 512 KiB `SKILL.md`. Prompts list name, description, revision, package path, and package hash rather than package content. Before the sandbox starts, the complete frozen package of every selected Skill is staged read-only at `$SCIENCEDISCOVERY_SKILLS_DIR/<skillId>`, so the model reads `SKILL.md`, supporting text, and bundled files as ordinary paths and executes a bundled script in place with explicit argv. Always address a package through that variable: it expands to the bind path `/skills` under bubblewrap and to the real host directory under macOS Seatbelt, so a hardcoded `/skills` is Linux-only. One selected Skill set is staged once per Session as a content-addressed directory, so runs that select the same frozen revisions share it. `read_skill` and bounded `read_skill_resource` remain available as compatibility channels. Staging is not installing: selecting a Skill never auto-runs `scripts/` or installs dependencies, and the default package tree rejects writes and deletes. `$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` is a writable area reserved for later self-evolution and starts empty. The model should neither search the filesystem for package resources — the prompt already carries the path — nor read a large bundled script back into context.
 
 ## Managed scientific environments
 

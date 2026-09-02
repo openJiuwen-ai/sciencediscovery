@@ -5,7 +5,7 @@ ScienceDiscovery is a one‑stop AI research workspace built specifically for sc
 English | [中文](README_zh.md)
 
 > [!WARNING]
-> ScienceDiscovery is not a multi-user production service. The API, runner, and gateway listen on loopback by default; the API uses one bearer token and does not terminate TLS. Exposing the API on another interface must be an explicit deployment choice on a trusted, secured network. Python, R, and shell commands run in a fail-closed bubblewrap sandbox; the control API, gateway, PDF worker, and outbound model/provider calls run outside that sandbox as trusted control-plane operations.
+> ScienceDiscovery is not a multi-user production service. The API, runner, and gateway listen on loopback by default; the API uses one bearer token and does not terminate TLS. Exposing the API on another interface must be an explicit deployment choice on a trusted, secured network. Python, R, and shell commands run in a fail-closed platform sandbox (Bubblewrap on Linux and Seatbelt in macOS source mode); the control API, gateway, PDF worker, and outbound model/provider calls run outside that sandbox as trusted control-plane operations.
 
 ## Project positioning
 
@@ -30,10 +30,10 @@ The prepackaged binary is the primary user path. Other deployment modes are docu
 | Path | Host requirements |
 |---|---|
 | Prepackaged binary | Linux x86_64/aarch64 and bubblewrap |
-| Local source mode | Linux x86_64/aarch64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, bubblewrap, and Git |
+| Local source mode | Linux x86_64/aarch64 or macOS x64/arm64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, and Git; Linux also needs Bubblewrap, while macOS uses the built-in Seatbelt sandbox |
 | Docker | Linux x86_64/aarch64, Docker Engine 24+, Compose v2, and host support for unprivileged user namespaces |
 
-The Gateway requires Python 3.12 in source mode; `uv` installs it into the service environment when needed. Managed scientific environments use the application's pinned micromamba and do not require system Python, R, or conda. All supported deployment paths require Linux and the user-namespace capabilities described in the deployment guide.
+The Gateway requires Python 3.12 in source mode; `uv` installs it into the service environment when needed. Managed scientific environments use the application's pinned micromamba and do not require system Python, R, or conda. Prepackaged binaries and Docker remain Linux-only; local source mode also supports macOS as described in the deployment guide.
 
 ## Installation
 

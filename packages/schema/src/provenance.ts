@@ -68,6 +68,8 @@ export interface ExecutionRun {
   stderr: CasObjectRef;
   stdout: CasObjectRef;
   tool: "run_python" | "run_r" | "run_shell";
+  /** Agent tool-call identifier that initiated this execution, when available. */
+  toolCallId?: string;
   toolVersion: string;
   turnId: string;
   /**

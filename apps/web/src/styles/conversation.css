@@ -62,7 +62,10 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .cursor { display: inline-block; width: 7px; height: 17px; margin-left: 4px; vertical-align: -3px; background: var(--accent); animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
-.composer { display: flex; flex-direction: column; max-height: min(26vh, 260px); margin: 0 max(28px, 5vw) 28px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); }
+/* No max-height here: the footer stacks into multiple rows on narrow screens
+   and a fixed cap clips it (the run button ended up outside the card). The
+   textarea's own max-height keeps the composer compact instead. */
+.composer { display: flex; flex-direction: column; margin: 0 max(28px, 5vw) 28px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); }
 .composer { position: relative; container-type: inline-size; }
 .composer-reference-menu { position: absolute; z-index: var(--z-panel); left: 12px; right: 12px; bottom: calc(100% + 8px); overflow: hidden; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-3); }
 .composer-reference-heading { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--surface-subtle); color: var(--text-secondary); font-size: 12px; }

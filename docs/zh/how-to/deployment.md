@@ -8,11 +8,11 @@
 |---|---|---|---|
 | [源码构建单文件二进制](#单文件二进制部署) | 每个架构**一个**可执行文件 | 构建时需源码工具链；运行时需 bubblewrap | 制作可搬运的内部发布产物 |
 | [Docker 镜像](#docker-部署) | 容器镜像 + Compose 文件 | Docker Engine 24+、Compose v2 | 已有容器平台，希望按容器方式运维 |
-| [本地模式](#本地模式宿主进程) | 源码仓库 | Node、pnpm、uv、Python、bubblewrap | 开发与调试 |
+| [本地模式](#本地模式宿主进程) | 源码仓库 | Node、pnpm、uv、Python；Linux 使用 Bubblewrap，macOS 使用系统内置 Seatbelt | 开发与调试 |
 
 **这三条路径互相独立，请选定一条，不要混用。** 二进制部署从构建到运行全程不涉及 Docker：可执行文件自带 Node、CPython、gateway 依赖、Web 静态资源与 micromamba。需要容器化部署时走镜像路径，不要把二进制包塞进镜像。
 
-三者都不打包 Neo4j。Science Memory 需要外部 Neo4j 服务器，未配置时该功能保持关闭，Web 与对话主路径不受影响。
+三者都不打包 Neo4j。ScienceMemory 需要外部 Neo4j 服务器，未配置时该功能保持关闭，Web 与对话主路径不受影响。
 
 ## 单文件二进制部署
 
@@ -128,22 +128,31 @@ ScienceDiscovery help                显示帮助
 
 ## 本地模式（宿主进程）
 
+源码模式支持 Linux x86_64/aarch64 与 macOS x64/arm64。两者使用相同的启动命令，均需 Node.js 22.19+、pnpm 11.1.2、Python 3、uv 0.9+、Git 和 curl。沙箱依赖按平台区分：
+
+- Linux 需要 Bubblewrap 0.6+（推荐 0.8+）及可用的无特权用户命名空间；
+- macOS 使用系统内置的 Seatbelt，启动脚本会自动调用 `/usr/bin/sandbox-exec`，不需要安装 Bubblewrap。
+
+从仓库根目录执行：
+
 ```bash
 ./scripts/start-stack.sh --mode local              # 安装 + 构建 + 启动全部服务
 ./scripts/start-stack.sh --mode local --no-build   # 仅启动（需已完成过构建）
 ```
 
-共用入口在本地模式下会读取仓库根目录 `.env`、校验 [环境要求](../../../README_zh.md#环境要求) 中列出的依赖、按需安装与构建，然后以宿主机普通进程启动各服务：
+共用入口在本地模式下会读取仓库根目录 `.env`、校验[环境要求](../../../README_zh.md#环境要求)中列出的依赖、按需安装与构建，然后以宿主机普通进程启动各服务。脚本在 Linux 自动选择 Bubblewrap，在 macOS 自动选择 Seatbelt，无需手动设置 `SCIENCE_AGENT_SANDBOX_PROVIDER`：
 
 | 服务 | 地址 | 作用 |
 |---|---|---|
 | `services/gateway` | 无端口 | 仅为随包 Python MCP server 提供解释器环境 |
-| `services/runner` | 127.0.0.1:4311 | 无 root 的 bubblewrap 执行器（后台） |
+| `services/runner` | 127.0.0.1:4311 | 无 root 的 Bubblewrap（Linux）或 Seatbelt（macOS）执行器（后台） |
 | `services/api` | 127.0.0.1:4310 | 控制 API + Web UI（前台） |
 
-停止脚本（Ctrl-C）会一并停止其启动的后台服务。原有 `./scripts/run-local.sh [--no-build]` 命令仍受支持，它只是转调本地模式的薄包装；`pnpm start` 与 `pnpm server` 继续使用这一兼容入口。无人值守部署时可把脚本交给进程管理器（如 systemd user unit 或 tmux），也可以改用 [Docker 部署](#docker-部署)；runner 设计上始终只监听回环。
+启动成功后，终端会打印 Web 地址与首次生成的访问 token。另开终端执行 `curl -fsS http://127.0.0.1:4310/health`，然后在浏览器打开 <http://127.0.0.1:4310>。停止脚本（Ctrl-C）会一并停止其启动的后台服务。原有 `./scripts/run-local.sh [--no-build]` 命令仍受支持，它只是转调本地模式的薄包装；`pnpm start` 与 `pnpm server` 继续使用这一兼容入口。无人值守部署时可把脚本交给进程管理器（如 Linux 的 systemd user unit，或 Linux/macOS 均可用的 tmux），也可以在 Linux 上改用 [Docker 部署](#docker-部署)；runner 设计上始终只监听回环。
 
-首次启动会在 `.sciencediscovery-data/envs/gateway` 下准备 Python 3.12 环境，它提供随包的 Python MCP server（biomed、UniProt）所用的解释器；本仓已无 submodule。
+首次启动会在 `.sciencediscovery-data/envs/gateway` 下准备 Python 3.12 环境，它提供随包的 Python MCP server（biomed、UniProt）所用的解释器；同时会按宿主平台和架构准备固定版本的 micromamba，因此首次启动需要访问依赖源。本仓已无 submodule。
+
+如果 macOS 启动时报 Seatbelt 不可用，先确认 `test -x /usr/bin/sandbox-exec` 成功，并检查当前终端或上层沙箱是否禁止应用 Seatbelt profile；启动过程不会在 Seatbelt 不可用时静默降级为无沙箱执行。macOS 支持仅适用于本地源码模式，Linux 单文件二进制和 Docker 路径不能直接在 macOS 上运行。
 
 需要在 Ascend 主机上运行宿主 NPU workload 时，启动方式仍是本地模式入口；管理员在 `.env` 中显式设置 `SCIENCE_AGENT_NPU_BROKER=1` 及对应 workload 入口后，Runner 才会向 Agent 暴露 `run_npu_job`。启用前应先创建并验证一个面向 Ascend 栈的托管 Python scientific environment revision；内置 NPU workload（包括 smoke test）会提交到该 revision，而不是读取 `SCIENCE_AGENT_NPU_PYTHON`。完整参数见[配置参考](../reference/configuration.md#环境变量本地模式)，设计边界见 [Ascend NPU 宿主 Broker](../explanation/ascend-npu-runner.md)。
 

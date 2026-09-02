@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import {
@@ -34,12 +34,15 @@ import type {
   KernelMode,
   PermissionEpoch,
   PythonExecutionResult,
+  ResolvedProxy,
   ScientificLanguage,
   ScientificArtifact,
   ScientificArtifactKind,
   ScientificArtifactVersion,
   ShellExecutionResult,
   SandboxKind,
+  WorkspaceFileRevision,
+  WorkspaceFileRevisionInput,
 } from "@sciencediscovery/schema";
 import {
   classifyScientificArtifact,
@@ -75,6 +78,14 @@ export interface ProvenanceStore {
     environments: Environment[],
     revisions: EnvironmentRevision[],
   ): Promise<void>;
+  recordWorkspaceFileRevision(
+    sessionId: string,
+    input: WorkspaceFileRevisionInput,
+  ): Promise<WorkspaceFileRevision>;
+  recordWorkspaceFileRevisions(
+    sessionId: string,
+    inputs: WorkspaceFileRevisionInput[],
+  ): Promise<WorkspaceFileRevision[]>;
   updateArtifactVersionReferences(
     sessionId: string,
     versionId: string,
@@ -113,9 +124,13 @@ export interface RecordExecutionOptions {
   maxWorkspaceBytes?: number;
   permissionEpoch: PermissionEpoch;
   readOnlyWorkspaceRoot?: string;
+  skillPackagesRoot?: string;
   runnerClient: RunnerClient;
+  /** Outbound route for allowlisted sandbox traffic; see the request field. */
+  sandboxEgressProxy?: ResolvedProxy;
   sessionId: string;
   signal?: AbortSignal;
+  toolCallId?: string;
   turnId: string;
   workspaceRoot: string;
   /** When set, this execution runs inside a subagent: products hang off the
@@ -174,6 +189,7 @@ export class ProvenanceRecorder {
     logicalName?: string;
     origin?: ArtifactOrigin;
     originMeta?: ArtifactOriginMeta;
+    parentSubagentId?: string;
     path: string;
     references?: ComposerReference[];
     sessionId: string;
@@ -197,6 +213,33 @@ export class ProvenanceRecorder {
       ...(options.title ? { title: options.title } : {}),
       turnId: options.turnId,
       workspaceRoot: options.workspaceRoot,
+    });
+    const fileStat = await stat(resolveWorkspaceFile(options.workspaceRoot, options.path));
+    const origin = options.origin ?? "user_upload";
+    const remoteJobId = typeof options.originMeta?.remoteJobId === "string"
+      ? options.originMeta.remoteJobId
+      : undefined;
+    const workspaceOrigin: WorkspaceFileRevisionInput["origin"] = origin === "user_upload"
+      ? "upload"
+      : origin === "mcp_download"
+        ? "mcp-download"
+        : remoteJobId
+          ? "remote-compute"
+          : origin === "llm_declared"
+            ? "agent"
+            : "unknown";
+    await this.store.recordWorkspaceFileRevision(options.sessionId, {
+      artifactVersionId: registered.version.id,
+      contentHash: registered.version.content.hash,
+      ...(options.executionRunIds?.at(-1) ? { executionRunId: options.executionRunIds.at(-1) } : {}),
+      mode: workspaceOrigin === "agent" || workspaceOrigin === "unknown" ? "link" : "write",
+      modifiedAt: fileStat.mtime.toISOString(),
+      origin: workspaceOrigin,
+      ...(options.originMeta ? { originMeta: structuredClone(options.originMeta) } : {}),
+      path: options.sourcePath ?? normalizeWorkspaceRelativePath(options.workspaceRoot, options.path),
+      ...(options.turnId ? { runId: options.turnId } : {}),
+      size: fileStat.size,
+      ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}),
     });
     return registered;
   }
@@ -264,6 +307,7 @@ export class ProvenanceRecorder {
       logicalName: options.name,
       origin: "llm_declared",
       originMeta: { declaredPath: options.sourcePath },
+      parentSubagentId: options.parentSubagentId,
       path: options.path,
       sessionId: options.sessionId,
       sourcePath: options.sourcePath,
@@ -357,14 +401,22 @@ export class ProvenanceRecorder {
     executionId: string;
     finishedAt: string;
     paths: string[];
+    parentSubagentId?: string;
     sessionId: string;
+    toolCallId?: string;
+    toolName: "run_python" | "run_r" | "run_shell";
     turnId: string;
     workspaceRoot: string;
   }): Promise<void> {
     const derivations: ArtifactDerivation[] = [];
+    const workspaceRevisions: WorkspaceFileRevisionInput[] = [];
     for (const path of options.paths) {
       const logicalPath = options.artifactPathPrefix ? `${options.artifactPathPrefix}/${path}` : path;
-      const content = await this.cas.put(await readFile(resolveWorkspaceFile(options.workspaceRoot, path)));
+      const target = resolveWorkspaceFile(options.workspaceRoot, path);
+      const [content, fileStat] = await Promise.all([
+        this.cas.put(await readFile(target)),
+        stat(target),
+      ]);
       derivations.push({
         content,
         createdAt: options.finishedAt,
@@ -375,8 +427,24 @@ export class ProvenanceRecorder {
         sourceType: "generated",
         turnId: options.turnId,
       });
+      workspaceRevisions.push({
+        contentHash: content.hash,
+        executionRunId: options.executionId,
+        mode: "write",
+        modifiedAt: fileStat.mtime.toISOString(),
+        origin: options.parentSubagentId ? "subagent" : "tool",
+        path: logicalPath,
+        runId: options.turnId,
+        size: fileStat.size,
+        ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}),
+        ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+        toolName: options.toolName,
+      });
     }
-    if (derivations.length) await this.store.appendArtifactDerivations(options.sessionId, derivations);
+    if (workspaceRevisions.length) {
+      await this.store.recordWorkspaceFileRevisions(options.sessionId, workspaceRevisions);
+      await this.store.appendArtifactDerivations(options.sessionId, derivations);
+    }
   }
 
   /** Fire-and-forget mirror of one execution to the memory graph. Never throws. */
@@ -408,6 +476,8 @@ export class ProvenanceRecorder {
         executionId,
         permissionEpoch: options.permissionEpoch,
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
+        ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {
@@ -436,6 +506,7 @@ export class ProvenanceRecorder {
         stderr: await this.cas.put(error instanceof Error ? error.message : "Runner shell execution failed"),
         stdout: await this.cas.put(""),
         tool: "run_shell",
+        ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
         toolVersion: "1.1.0",
         turnId: options.turnId,
         workingDirectory: "unavailable",
@@ -469,6 +540,7 @@ export class ProvenanceRecorder {
       stderr,
       stdout,
       tool: "run_shell",
+      ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
       toolVersion: "1.1.0",
       turnId: options.turnId,
       workingDirectory: result.workingDirectory,
@@ -481,7 +553,10 @@ export class ProvenanceRecorder {
       executionId,
       finishedAt: result.finishedAt,
       paths,
+      parentSubagentId: options.parentSubagentId,
       sessionId: options.sessionId,
+      toolCallId: options.toolCallId,
+      toolName: "run_shell",
       turnId: options.turnId,
       workspaceRoot: options.workspaceRoot,
     });
@@ -533,6 +608,8 @@ export class ProvenanceRecorder {
         language,
         permissionEpoch: options.permissionEpoch,
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
+        ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {
@@ -563,6 +640,7 @@ export class ProvenanceRecorder {
         stderr,
         stdout,
         tool: language === "python" ? "run_python" : "run_r",
+        ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
         toolVersion: "2.1.0",
         turnId: options.turnId,
         workingDirectory: "unavailable",
@@ -615,6 +693,7 @@ export class ProvenanceRecorder {
       stderr,
       stdout,
       tool: result.language === "python" ? "run_python" : "run_r",
+      ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
       toolVersion: "2.1.0",
       turnId: options.turnId,
       workingDirectory: result.workingDirectory,
@@ -627,7 +706,10 @@ export class ProvenanceRecorder {
       executionId,
       finishedAt: result.finishedAt,
       paths,
+      parentSubagentId: options.parentSubagentId,
       sessionId: options.sessionId,
+      toolCallId: options.toolCallId,
+      toolName: result.language === "python" ? "run_python" : "run_r",
       turnId: options.turnId,
       workspaceRoot: options.workspaceRoot,
     });

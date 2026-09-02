@@ -16,6 +16,7 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import {
   parseAllowedDomain,
+  type ProxySettingsDetails,
   type RuntimeStatus,
   type SandboxNetworkSettings,
   type SystemQuotaSettings,
@@ -23,6 +24,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
 
 const TIMEOUT_FIELDS: Array<{
   description: string;
@@ -298,9 +300,12 @@ export function QuotaSettingsEditor({
  */
 export function SandboxNetworkSettingsEditor({
   onChange,
+  proxySettings,
   settings,
 }: {
   onChange: (settings: SandboxNetworkSettings) => void;
+  /** Network proxies registry, so allowed traffic can reuse a configured server. */
+  proxySettings?: ProxySettingsDetails;
   settings: SandboxNetworkSettings;
 }) {
   const [draft, setDraft] = useState(settings.allowedDomains.join("\n"));
@@ -387,6 +392,24 @@ export function SandboxNetworkSettingsEditor({
           />
           <span>Allow private and loopback addresses</span>
         </label>
+      </fieldset>
+      <fieldset>
+        <legend>Outbound route</legend>
+        <p>
+          Applied only <em>after</em> a domain is allowed. The allowed request then leaves this deployment
+          the same way a model call does: follow the default configured under Network proxies, connect
+          directly, or pick one server registered there. A refused domain is answered here and never offered
+          onward, and sandbox code never sees the address or credentials of the server chosen.
+        </p>
+        {proxySettings
+          ? <ProxyPolicySelect
+            disabled={!allowlist}
+            label="Outbound route for allowed traffic"
+            onChange={(egressProxyPolicy) => onChange({ ...settings, egressProxyPolicy })}
+            settings={proxySettings}
+            value={settings.egressProxyPolicy}
+          />
+          : <p className="muted">Loading the registered servers…</p>}
       </fieldset>
     </div>
     <p className="muted">

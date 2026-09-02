@@ -27,4 +27,4 @@ export {
   type ProxyEnvironment,
   type ProxyEnvironmentSnapshot,
 } from "./env.js";
-export { proxyDispatcher } from "./dispatcher.js";
+export { proxyDispatcher, proxyFetch } from "./dispatcher.js";

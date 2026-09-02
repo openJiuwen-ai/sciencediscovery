@@ -13,8 +13,15 @@
 // limitations under the License.
 
 import { createHash } from "node:crypto";
+import type { Stats } from "node:fs";
+import { lstat } from "node:fs/promises";
+import { relative, resolve, sep } from "node:path";
 
-import { scanWorkspace } from "@sciencediscovery/workspace";
+import {
+  normalizeWorkspaceRelativePath,
+  resolveWorkspaceFile,
+  scanWorkspaceWithStatus,
+} from "@sciencediscovery/workspace";
 import { classifyScientificArtifact } from "@sciencediscovery/schema";
 import type {
   ArtifactVersionDiff,
@@ -24,21 +31,83 @@ import type {
   ExecutionRun,
   ScientificArtifactVersion,
   WorkspaceFile,
+  WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
 import { MemoryGraphClient, type ArtifactProvenanceGraphResult } from "@sciencediscovery/memory";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
-import { SessionStore } from "../store.js";
+import { SessionStore, SessionStoreHttpError } from "../store.js";
 
 export function classifyWorkspaceFilePreview(path: string): WorkspaceFile["previewKind"] {
   return classifyScientificArtifact(path);
 }
 
+async function workspaceFileMetadata(workspaceRoot: string, path: string): Promise<Stats | undefined> {
+  const root = resolve(workspaceRoot);
+  const target = resolveWorkspaceFile(root, path);
+  const segments = relative(root, target).split(sep).filter(Boolean);
+  let current = root;
+  let fileMetadata: Stats | undefined;
+  for (let index = 0; index < segments.length; index += 1) {
+    current = resolve(current, segments[index]!);
+    let metadata: Stats;
+    try {
+      metadata = await lstat(current);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+      throw error;
+    }
+    if (metadata.isSymbolicLink()) return undefined;
+    if (index < segments.length - 1) {
+      if (!metadata.isDirectory()) return undefined;
+    } else {
+      if (!metadata.isFile()) return undefined;
+      fileMetadata = metadata;
+    }
+  }
+  return fileMetadata;
+}
+
 export async function listWorkspaceFiles(store: SessionStore, sessionId: string): Promise<WorkspaceFile[]> {
-  return (await scanWorkspace(store.workspacePath(sessionId))).map((file) => {
+  const baseline = store.snapshotWorkspaceFileRevisions(sessionId);
+  const scan = await scanWorkspaceWithStatus(store.workspacePath(sessionId));
+  const provenance = await store.reconcileWorkspaceFiles(
+    sessionId,
+    scan.files,
+    baseline,
+    { scanComplete: !scan.truncated },
+  );
+  const files = scan.files;
+  return files.map((file) => {
     const previewKind = classifyWorkspaceFilePreview(file.path);
-    return { ...file, ...(previewKind ? { previewKind } : {}) };
+    const summary = provenance.get(file.path);
+    return {
+      ...file,
+      ...(previewKind ? { previewKind } : {}),
+      ...(summary ? { provenance: summary } : {}),
+    };
   });
+}
+
+export async function workspaceFileProvenance(
+  store: SessionStore,
+  sessionId: string,
+  pathInput: string,
+): Promise<WorkspaceFileProvenance> {
+  const workspaceRoot = store.workspacePath(sessionId);
+  const path = normalizeWorkspaceRelativePath(workspaceRoot, pathInput);
+  const baseline = store.snapshotWorkspaceFileRevisions(sessionId);
+  const metadata = await workspaceFileMetadata(workspaceRoot, path);
+  if (!metadata) throw new SessionStoreHttpError("Workspace file not found", 404);
+  await store.reconcileWorkspaceFiles(sessionId, [{
+    modifiedAt: metadata.mtime.toISOString(),
+    path,
+    size: metadata.size,
+  }], baseline, { scanComplete: false });
+  const provenance = store.getWorkspaceFileProvenance(sessionId, path);
+  if (!provenance) throw new SessionStoreHttpError("Workspace file provenance not found", 404);
+  return provenance;
 }
 
 async function readProcessEnvironment(
