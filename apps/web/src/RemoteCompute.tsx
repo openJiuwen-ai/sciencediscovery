@@ -17,6 +17,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type {
   PermissionDecision,
   Project,
+  SshConfigHostImport,
   RemoteHostTarget,
   RemoteJob,
   RemoteWorkspaceSyncRecord,
@@ -25,7 +26,8 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
-import { hostKeyFromError, type RemoteHostKeyInfo } from "./api/settings.js";
+import { hostKeyFromError, type GeneratedRemoteHostKey, type RemoteHostKeyInfo } from "./api/settings.js";
+import { CopyButton } from "./CopyButton.js";
 import { ChevronRightIcon } from "./icons.js";
 import { PermissionDecisionActions } from "./PermissionDecisionActions.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
@@ -120,11 +122,12 @@ export function RemoteHostManager({ client, onError }: {
   const [runnerCommand, setRunnerCommand] = useState("sciencediscovery-runner");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [privateKey, setPrivateKey] = useState("");
+  const [keyPath, setKeyPath] = useState("");
   const [keyPassphrase, setKeyPassphrase] = useState("");
-  const [importedKeyPath, setImportedKeyPath] = useState<string>();
+  const [generatedKey, setGeneratedKey] = useState<GeneratedRemoteHostKey>();
+  const [configHosts, setConfigHosts] = useState<SshConfigHostImport[]>();
+  const [configListOpen, setConfigListOpen] = useState(false);
   const [showCredentials, setShowCredentials] = useState(false);
-  const [showPrivateKey, setShowPrivateKey] = useState(false);
   const [importNote, setImportNote] = useState("");
   const [directLabel, setDirectLabel] = useState("");
   const [directAddress, setDirectAddress] = useState("");
@@ -135,9 +138,9 @@ export function RemoteHostManager({ client, onError }: {
   const [editingCredentials, setEditingCredentials] = useState<string>();
   const [credUsername, setCredUsername] = useState("");
   const [credPassword, setCredPassword] = useState("");
-  const [credPrivateKey, setCredPrivateKey] = useState("");
+  const [credKeyPath, setCredKeyPath] = useState("");
   const [credPassphrase, setCredPassphrase] = useState("");
-  const [credShowKey, setCredShowKey] = useState(false);
+  const [credGeneratedKey, setCredGeneratedKey] = useState<GeneratedRemoteHostKey>();
 
   async function refresh(): Promise<void> {
     setHosts(await client.listRemoteHosts());
@@ -151,11 +154,12 @@ export function RemoteHostManager({ client, onError }: {
     setSshPort("");
     setUsername("");
     setPassword("");
-    setPrivateKey("");
+    setKeyPath("");
     setKeyPassphrase("");
-    setImportedKeyPath(undefined);
+    setGeneratedKey(undefined);
+    setConfigHosts(undefined);
+    setConfigListOpen(false);
     setShowCredentials(false);
-    setShowPrivateKey(false);
     setImportNote("");
   }
 
@@ -208,10 +212,10 @@ export function RemoteHostManager({ client, onError }: {
         runnerCommand: runnerCommand.trim(),
         ...(username.trim() ? { username: username.trim() } : {}),
         ...(password ? { password } : {}),
-        ...(privateKey.trim() ? { privateKey: privateKey.trim() } : {}),
+        // A key file path — the API reads and encrypts the material; private
+        // keys are never pasted into this UI.
+        ...(keyPath.trim() ? { privateKeyPath: keyPath.trim() } : {}),
         ...(keyPassphrase ? { passphrase: keyPassphrase } : {}),
-        // The ssh_config import hands the API a key *path* to read; a pasted key wins.
-        ...(importedKeyPath && !privateKey.trim() ? { privateKeyPath: importedKeyPath } : {}),
         ...(trustHostKey ? { trustHostKey } : {}),
       });
       clearSshForm();
@@ -225,28 +229,73 @@ export function RemoteHostManager({ client, onError }: {
     }
   }
 
-  /** Prefill the form from an ssh_config Host entry; the user reviews and submits. */
-  async function importSshConfig(): Promise<void> {
-    const name = alias.trim();
-    if (!name) return;
+  /** Toggle the ssh_config Host list; entries are loaded once per dialog visit. */
+  async function toggleConfigList(): Promise<void> {
+    if (configListOpen) {
+      setConfigListOpen(false);
+      return;
+    }
+    setConfigListOpen(true);
+    if (configHosts !== undefined) return;
     setBusyId("import");
     try {
-      const resolved = await client.resolveSshConfig(name);
-      if (resolved.port) setSshPort(String(resolved.port));
-      if (resolved.username) setUsername(resolved.username);
-      if (resolved.identityFile) {
-        // A readable key file is copied by the API (privateKeyPath); otherwise
-        // the user pastes the key themselves.
-        if (resolved.identityKeyReadable) setImportedKeyPath(resolved.identityFile);
-        else setShowPrivateKey(true);
-      }
-      if (resolved.username || resolved.identityFile) setShowCredentials(true);
-      const keyNote = resolved.identityFile
-        ? resolved.identityKeyReadable ? `, key ${resolved.identityFile}` : " — the identity file is not readable here, paste the key yourself"
-        : "";
-      setImportNote(`Imported the ssh_config entry for ${name}${resolved.hostName ? ` (connects to ${resolved.hostName})` : ""}${keyNote} — review the prefilled values, then submit.`);
+      setConfigHosts(await client.listSshConfigHosts());
     } catch (error) {
-      onError(error instanceof Error ? error.message : `No ssh_config entry named ${name}`);
+      setConfigListOpen(false);
+      onError(error instanceof Error ? error.message : "Could not read ssh_config");
+    } finally {
+      setBusyId(undefined);
+    }
+  }
+
+  /** Resolve and import one selected entry; list responses intentionally omit key paths. */
+  async function importSshConfigHost(selected: SshConfigHostImport): Promise<void> {
+    setBusyId(`import:${selected.alias}`);
+    try {
+      const entry = await client.resolveSshConfigHost(selected.alias);
+      // The product's SSH client does not consult ssh_config after import, so
+      // copy the resolved destination into the shared alias/hostname field.
+      setAlias(entry.hostName ?? entry.alias);
+      setSshPort(entry.port ? String(entry.port) : "");
+      setUsername(entry.username ?? "");
+      setKeyPath(entry.identityFile ?? "");
+      setGeneratedKey(undefined);
+      if (entry.username || entry.identityFile) setShowCredentials(true);
+      setConfigListOpen(false);
+      const keyNote = entry.identityFile && !entry.identityKeyReadable
+        ? " — the identity file is not readable by this installation, pick another key file or generate one"
+        : "";
+      setImportNote(`Imported ${entry.alias} from ssh_config${entry.hostName ? ` (connects to ${entry.hostName})` : ""}${keyNote} — every field stays editable.`);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : `Could not import ${selected.alias} from ssh_config`);
+    } finally {
+      setBusyId(undefined);
+    }
+  }
+
+  /** Generate a product-held key pair; only the public key is shown. */
+  async function generateKey(): Promise<void> {
+    setBusyId("generate");
+    try {
+      const generated = await client.generateRemoteHostKey();
+      setGeneratedKey(generated);
+      setKeyPath(generated.privateKeyPath);
+      setShowCredentials(true);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not generate a key pair");
+    } finally {
+      setBusyId(undefined);
+    }
+  }
+
+  async function generateCredKey(): Promise<void> {
+    setBusyId("generate-credentials");
+    try {
+      const generated = await client.generateRemoteHostKey();
+      setCredGeneratedKey(generated);
+      setCredKeyPath(generated.privateKeyPath);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not generate a key pair");
     } finally {
       setBusyId(undefined);
     }
@@ -331,15 +380,15 @@ export function RemoteHostManager({ client, onError }: {
         ...(credUsername.trim() ? { username: credUsername.trim() } : {}),
         // Empty fields keep the stored value; there is no way to read them back.
         ...(credPassword ? { password: credPassword } : {}),
-        ...(credPrivateKey.trim() ? { privateKey: credPrivateKey.trim() } : {}),
+        ...(credKeyPath.trim() ? { privateKeyPath: credKeyPath.trim() } : {}),
         ...(credPassphrase ? { passphrase: credPassphrase } : {}),
       });
       setEditingCredentials(undefined);
       setCredUsername("");
       setCredPassword("");
-      setCredPrivateKey("");
+      setCredKeyPath("");
       setCredPassphrase("");
-      setCredShowKey(false);
+      setCredGeneratedKey(undefined);
       await refresh();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not update credentials");
@@ -361,16 +410,27 @@ export function RemoteHostManager({ client, onError }: {
     }
   }
 
+  /** The public half of a generated pair, with copy help; the private key is never shown. */
+  function renderGeneratedKey(generated: GeneratedRemoteHostKey, target: string, loginUser: string): ReactNode {
+    return <div className="remote-host-pubkey">
+      <strong>Public key generated</strong>
+      <p>Append this line to <code>~/.ssh/authorized_keys</code> for {loginUser || "the login user"} on {target || "the machine"}. The private key stays on this ScienceDiscovery installation and is never shown in the browser.</p>
+      <div className="remote-host-pubkey-row"><code>{generated.publicKey}</code><CopyButton getText={() => generated.publicKey} label="Copy public key" /></div>
+    </div>;
+  }
+
   const credentialsEditor = (host: RemoteHostTarget) => <form className="remote-host-credentials-form" onSubmit={(event) => void saveCredentials(event, host)}>
     <div className="remote-host-form-fields">
       <label><span>Username</span><input autoComplete="off" value={credUsername} onChange={(event) => setCredUsername(event.target.value)} placeholder="researcher" /></label>
       <label><span>Password</span><input autoComplete="new-password" type="password" value={credPassword} onChange={(event) => setCredPassword(event.target.value)} placeholder="Leave empty to keep the stored one" /></label>
+      <label><span>Private key file</span><input autoComplete="off" value={credKeyPath} onChange={(event) => setCredKeyPath(event.target.value)} placeholder="~/.ssh/id_ed25519" /></label>
+      <label><span>Key passphrase</span><input autoComplete="new-password" type="password" value={credPassphrase} onChange={(event) => setCredPassphrase(event.target.value)} placeholder="Only if the key is encrypted" /></label>
     </div>
-    {credShowKey ? <div className="remote-host-key-fields">
-      <label className="remote-host-key-field"><span>SSH private key</span><textarea autoComplete="off" rows={4} spellCheck={false} value={credPrivateKey} onChange={(event) => setCredPrivateKey(event.target.value)} placeholder="Leave empty to keep the stored one" /></label>
-      <label><span>Key passphrase (optional)</span><input autoComplete="new-password" type="password" value={credPassphrase} onChange={(event) => setCredPassphrase(event.target.value)} placeholder="Only if the key is encrypted" /></label>
+    <div className="remote-host-form-extras">
+      <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void generateCredKey()} type="button">Generate a key pair</button>
+      <small>Only the public key is ever shown.</small>
     </div>
-      : <button className="secondary-button remote-host-key-toggle" onClick={() => setCredShowKey(true)} type="button">Paste an SSH private key</button>}
+    {credGeneratedKey ? renderGeneratedKey(credGeneratedKey, host.alias, credUsername.trim()) : null}
     <div className="remote-host-form-actions">
       <button className="secondary-button" onClick={() => setEditingCredentials(undefined)} type="button">Cancel</button>
       <button className="primary-button" disabled={Boolean(busyId)} type="submit">Save credentials</button>
@@ -399,6 +459,7 @@ export function RemoteHostManager({ client, onError }: {
       const connected = host.runnerStatus?.state === "ready";
       const state = connected ? "ready" : host.runnerStatus?.state ?? host.status;
       const untrustedKey = host.hostKey?.trusted === false ? host.hostKey : undefined;
+      const publicKey = host.publicKey;
       return <article className={`remote-host-card ${host.status}`} key={host.id}>
         <div className="remote-host-card-main">
           <div className="remote-host-card-title"><strong>{host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? "connected" : state}</span></div>
@@ -407,6 +468,7 @@ export function RemoteHostManager({ client, onError }: {
           {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
           {host.runnerStatus?.error ? <small>{host.runnerStatus.error}</small> : null}
           {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
+          {publicKey ? <div className="remote-host-pubkey-line"><code title={publicKey}>{publicKey}</code><CopyButton getText={() => publicKey} label="Copy public key" /></div> : null}
         </div>
         <div className="remote-host-actions">
           <button className="secondary-button" disabled={Boolean(busyId) || (!connected && !runnerUsable(host))} onClick={() => void toggleRunnerConnection(host, connected)} type="button">{connected ? "Disconnect" : "Connect runner"}</button>
@@ -431,23 +493,33 @@ export function RemoteHostManager({ client, onError }: {
         <label><span>Runner executable</span><input required value={runnerCommand} onChange={(event) => setRunnerCommand(event.target.value)} placeholder="sciencediscovery-runner" /></label>
       </div>
       <div className="remote-host-form-extras">
-        <button className="secondary-button" disabled={Boolean(busyId) || !alias.trim()} onClick={() => void importSshConfig()} type="button">Import from ssh_config</button>
+        <button aria-expanded={configListOpen} className="secondary-button" disabled={Boolean(busyId)} onClick={() => void toggleConfigList()} type="button">Import from ssh_config</button>
         {importNote ? <small>{importNote}</small> : null}
       </div>
+      {configListOpen ? <div className="remote-host-import-list">
+        {configHosts === undefined ? <small>Loading ssh_config…</small>
+          : configHosts.length === 0 ? <small>No Host entries found in your ssh_config.</small>
+          : configHosts.map((entry) => <button className="remote-host-import-entry" disabled={Boolean(busyId)} key={entry.alias} onClick={() => void importSshConfigHost(entry)} type="button">
+            <strong>{entry.alias}</strong>
+            <small>{[entry.hostName, entry.port ? `port ${entry.port}` : "", entry.username].filter(Boolean).join(" · ")}</small>
+          </button>)}
+      </div> : null}
       <div className="remote-host-form-extras">
         <button aria-expanded={showCredentials} className="secondary-button" onClick={() => setShowCredentials(!showCredentials)} type="button">Credentials (optional)</button>
-        {!showCredentials ? <small>Username, password, or key — only when the machine needs them.</small> : null}
+        {!showCredentials ? <small>Username, password, or a key file — only when the machine needs them.</small> : null}
       </div>
       {showCredentials ? <div className="remote-host-form-credentials">
         <div className="remote-host-form-fields">
           <label><span>Username</span><input autoComplete="off" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="researcher" /></label>
           <label><span>Password (optional)</span><input autoComplete="new-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Stored encrypted, never shown again" /></label>
-        </div>
-        {showPrivateKey ? <div className="remote-host-key-fields">
-          <label className="remote-host-key-field"><span>SSH private key (optional)</span><textarea autoComplete="off" rows={4} spellCheck={false} value={privateKey} onChange={(event) => setPrivateKey(event.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" /></label>
+          <label><span>Private key file (optional)</span><input autoComplete="off" value={keyPath} onChange={(event) => setKeyPath(event.target.value)} placeholder="~/.ssh/id_ed25519" /></label>
           <label><span>Key passphrase (optional)</span><input autoComplete="new-password" type="password" value={keyPassphrase} onChange={(event) => setKeyPassphrase(event.target.value)} placeholder="Only if the key is encrypted" /></label>
         </div>
-          : <button className="secondary-button remote-host-key-toggle" onClick={() => setShowPrivateKey(true)} type="button">Paste an SSH private key</button>}
+        <div className="remote-host-form-extras">
+          <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void generateKey()} type="button">Generate a key pair</button>
+          <small>Only the public key is ever shown; the private key never leaves this installation.</small>
+        </div>
+        {generatedKey ? renderGeneratedKey(generatedKey, alias.trim(), username.trim()) : null}
       </div> : null}
       {renderHostKeyPrompt("add")}
       <div className="remote-host-form-actions">

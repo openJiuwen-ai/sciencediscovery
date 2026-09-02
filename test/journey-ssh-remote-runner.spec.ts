@@ -28,10 +28,10 @@ type SessionWithRemoteOverride = SessionDetail & { remoteRunnerHostIds?: string[
  * Steps:
  *   1. 打开远程计算设置：默认只有机器列表和两个添加按钮，没有常驻表单；SSH 表单接受别名或 IP/hostname，端口可省略。
  *   2. 主机卡片的 Connect/Refresh/Delete 在同一操作组、同一行、等宽。
- *   3. SSH 表单可填用户名 + 密码/私钥，可从 ssh_config 导入别名配置；提交即发送凭据且保存后清空。
- *   4. 未知主机密钥在设置对话框内展示指纹，点「信任并继续」重试成功；全程无对话区权限卡、无 known_hosts 文案。
- *   5. 在 Project 设置里勾选允许名单，复选框与机器名同一行；全局远程计算页没有允许名单或选机控件。
- *   6. 在 Session 设置里覆盖允许名单（收窄/禁用/恢复继承）；没有「Execution runner」互斥下拉。
+ *   3. SSH 凭据只接受本机密钥路径，不出现私钥粘贴框；生成密钥后只展示可复制公钥。
+ *   4. ssh_config 先展示 Host 列表，点选一项后把别名、端口、用户和密钥路径导入可编辑表单。
+ *   5. 登记请求只发送 privateKeyPath；未知主机密钥在设置对话框内确认后重试成功。
+ *   6. 在 Project 设置里勾选允许名单，Session 可收窄、禁用或恢复继承；没有互斥选机下拉。
  *   7. 会话栏徽章完整显示且文案只表示“远端可用”；连接 runner 后展示版本差异与部署来源。
  *   8. 远端 workspace 只读同步记录与删除入口在 Session 设置里，且没有任何路径输入或 Push/Pull 控件。
  * Environment: Isolated local stack at E2E_BASE_URL；Project/Session 真实创建，SSH 主机、自动部署、隧道和同步记录由浏览器本地路由确定性模拟。
@@ -41,7 +41,7 @@ type SessionWithRemoteOverride = SessionDetail & { remoteRunnerHostIds?: string[
  * PaperSources: none
  * MCP: none
  * OtherExternal: none — 非本地请求被拦截；不连接真实 SSH 主机或真实 runner。
- * Credentials: E2E_API_TOKEN（隔离实例）；无 SSH 密钥或远端凭证，登记用的 token 只是模拟值。
+ * Credentials: E2E_API_TOKEN（隔离实例）；SSH 路径、公钥、密码和 runner token 都是浏览器路由内的模拟值。
  * CostSideEffects: none；Project/Session 在 finally 中清理。
  */
 test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@mocked" }, async ({ journey, page }) => {
@@ -75,7 +75,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
   let connected = false;
   let directHost: RemoteHostTarget | undefined;
   let registeredSshHost: RemoteHostTarget | undefined;
-  let lastSshRegisterBody: { password?: string; privateKey?: string; trustHostKey?: unknown; username?: string } | undefined;
+  let lastSshRegisterBody: RegisterRemoteHostRequest | undefined;
+  const generatedKeyPath = "generated/remote-runner-ed25519";
+  const generatedPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE2ePublicKeyForBrowserOnly sciencediscovery";
   const savedCredentials: Record<string, unknown> = {};
   // The model transferred one file earlier in this Session; the Session
   // settings may show that it happened but must not offer a way to repeat it.
@@ -111,6 +113,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     connectionKind: "ssh",
     createdAt: new Date().toISOString(),
     id: hostId,
+    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExistingPublicKey institution-linux",
     runnerCommand: "sciencediscovery-runner",
     runnerStatus: connected ? {
       connectedAt: new Date().toISOString(),
@@ -132,12 +135,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       });
     }
     if (route.request().method() !== "POST") return route.continue();
-    const body = route.request().postDataJSON() as RegisterRemoteHostRequest & {
-      password?: string;
-      privateKey?: string;
-      trustHostKey?: { algorithm: string; fingerprint: string };
-      username?: string;
-    };
+    const body = route.request().postDataJSON() as RegisterRemoteHostRequest;
     if (body.connectionKind === "ssh") {
       lastSshRegisterBody = body;
       // Until the user trusts the fingerprint in the dialog, registration fails.
@@ -162,6 +160,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         createdAt: new Date().toISOString(),
         id: "e2e-added-ssh",
         port: typeof body.port === "number" ? body.port : undefined,
+        ...(body.privateKeyPath ? { publicKey: generatedPublicKey } : {}),
         runnerCommand: body.runnerCommand ?? "sciencediscovery-runner",
         runnerStatus: { hostId: "e2e-added-ssh", state: "disconnected" },
         status: "ready",
@@ -188,8 +187,29 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     };
     return route.fulfill({ json: directHost, status: 201 });
   });
-  await page.route("**/api/remote-hosts/ssh-config?alias=*", (route) => route.fulfill({
-    json: { hostName: "login.institution.edu", port: 2222, username: "researcher" },
+  await page.route("**/api/remote-hosts/ssh-config*", (route) => {
+    const alias = new URL(route.request().url()).searchParams.get("alias");
+    if (!alias) {
+      return route.fulfill({
+        json: [
+          { alias: "institution-linux", hostName: "login.institution.edu", identityKeyReadable: false, port: 2222, username: "researcher" },
+          { alias: "gpu-lab", hostName: "gpu.institution.edu", identityKeyReadable: false, port: 2200, username: "scientist" },
+        ],
+      });
+    }
+    return route.fulfill({
+      json: {
+        alias,
+        hostName: alias === "gpu-lab" ? "gpu.institution.edu" : "login.institution.edu",
+        identityFile: "~/.ssh/id_ed25519",
+        identityKeyReadable: true,
+        port: alias === "gpu-lab" ? 2200 : 2222,
+        username: alias === "gpu-lab" ? "scientist" : "researcher",
+      },
+    });
+  });
+  await page.route("**/api/remote-hosts/generate-key", (route) => route.fulfill({
+    json: { privateKeyPath: generatedKeyPath, publicKey: generatedPublicKey },
   }));
   await page.route("**/api/remote-hosts/*/credentials", async (route) => {
     Object.assign(savedCredentials, route.request().postDataJSON() as Record<string, unknown>);
@@ -285,75 +305,112 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
-      "SSH 表单：别名/IP、可选端口、凭据与 ssh_config 导入",
-      "点 Add SSH machine 才出现表单：别名字段同时接受 ssh_config 别名和 IP/hostname，端口可选；凭据默认收起，展开后可填用户名和密码，私钥再点一次才有输入框；Import from ssh_config 把别名配置预填进表单。",
+      "SSH 凭据只有本机密钥路径，没有私钥粘贴框",
+      "点 Add SSH machine 才出现表单；凭据默认收起，展开后可填用户名、密码和本机私钥路径，页面没有任何私钥文本粘贴入口。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.getByRole("button", { name: "Add SSH machine" }).click();
         await expect(dialog.getByLabel("SSH alias or IP/hostname")).toBeVisible();
         await expect(dialog.getByLabel("Port (optional)")).toBeVisible();
         await expect(dialog.getByText(/alias from your SSH config or a plain IP\/hostname/)).toBeVisible();
-        // Credentials stay tucked away until asked for.
         await expect(dialog.getByLabel("Password (optional)")).toHaveCount(0);
         await dialog.getByRole("button", { name: "Credentials (optional)" }).click();
-        await expect(dialog.getByLabel("Username")).toBeVisible();
-        await expect(dialog.getByLabel("Password (optional)")).toBeVisible();
-        await expect(dialog.getByLabel("SSH private key (optional)")).toHaveCount(0);
-        await dialog.getByRole("button", { name: "Paste an SSH private key" }).click();
-        await expect(dialog.getByLabel("SSH private key (optional)")).toBeVisible();
-        // Import an ssh_config entry: port and username are prefilled for review.
-        await dialog.getByLabel("SSH alias or IP/hostname").fill("institution-linux");
-        await dialog.getByRole("button", { name: "Import from ssh_config" }).click();
-        await expect(dialog.getByText(/Imported the ssh_config entry/)).toBeVisible();
-        await expect(dialog.getByLabel("Port (optional)")).toHaveValue("2222");
-        await expect(dialog.getByLabel("Username")).toHaveValue("researcher");
-        await dialog.getByRole("button", { name: "Cancel" }).click();
-        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveCount(0);
+        await expect(dialog.getByLabel("Private key file (optional)")).toBeVisible();
+        await expect(dialog.getByRole("textbox", { name: /private key/i })).toHaveCount(1);
+        await expect(dialog.locator("textarea")).toHaveCount(0);
+        await expect(dialog.getByText(/Paste an SSH private key/)).toHaveCount(0);
       },
     );
 
     await journey.step(
-      "凭据随登记提交，未知主机密钥在设置内信任",
-      "填写用户名+密码+私钥提交：先得到未信任指纹卡片（算法+指纹、信任并继续/取消），信任后重试成功入列表；全程对话区没有权限卡，文案不提系统 known_hosts。",
+      "ssh_config 先展示可导入的 Host 列表",
+      "点 Import from ssh_config 后出现已有 Host 列表，可先看别名、目标地址、端口和用户，再选择要导入的一台。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "Add SSH machine" }).click();
+        await dialog.getByRole("button", { name: "Import from ssh_config" }).click();
+        const list = dialog.locator(".remote-host-import-list");
+        await expect(list.getByRole("button", { name: /institution-linux/ })).toBeVisible();
+        await expect(list.getByRole("button", { name: /gpu-lab/ })).toContainText("gpu.institution.edu · port 2200 · scientist");
+      },
+    );
+
+    await journey.step(
+      "点选 ssh_config 条目后仍可编辑",
+      "选择 gpu-lab 后，单条配置的别名、端口、用户和密钥路径进入普通表单；用户可继续修改这些值。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.locator(".remote-host-import-list").getByRole("button", { name: /gpu-lab/ }).click();
+        await expect(dialog.getByText(/Imported gpu-lab from ssh_config/)).toBeVisible();
+        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveValue("gpu.institution.edu");
+        await expect(dialog.getByLabel("Private key file (optional)")).toHaveValue("~/.ssh/id_ed25519");
+        await dialog.getByLabel("SSH alias or IP/hostname").fill("gpu-lab-custom");
+        await dialog.getByLabel("Port (optional)").fill("2299");
+        await dialog.getByLabel("Username").fill("operator");
+        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveValue("gpu-lab-custom");
+        await expect(dialog.getByLabel("Port (optional)")).toHaveValue("2299");
+        await expect(dialog.getByLabel("Username")).toHaveValue("operator");
+      },
+    );
+
+    await journey.step(
+      "生成密钥后只展示可复制公钥",
+      "点 Generate a key pair 后，密钥路径自动填入；页面只展示一行可复制公钥，并明确提示把它加入远端 authorized_keys。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.getByRole("button", { name: "Generate a key pair" }).click();
+        await expect(dialog.getByLabel("Private key file (optional)")).toHaveValue(generatedKeyPath);
+        const generated = dialog.locator(".remote-host-pubkey");
+        await expect(generated).toContainText("Public key generated");
+        await expect(generated).toContainText("authorized_keys");
+        await expect(generated.locator("code").last()).toHaveText(generatedPublicKey);
+        await generated.getByRole("button", { name: "Copy public key" }).click();
+        await expect(generated.getByRole("button", { name: "Copied" })).toBeVisible();
+        await expect(dialog.locator("textarea")).toHaveCount(0);
+      },
+    );
+
+    await journey.step(
+      "密钥路径随登记提交，未知主机密钥在设置内信任",
+      "提交时只发送密钥路径而不发送私钥文本；未信任指纹在设置内确认后重试成功，机器卡片继续提供公钥复制入口。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.getByLabel("SSH alias or IP/hostname").fill("192.168.100.236");
-        await dialog.getByRole("button", { name: "Credentials (optional)" }).click();
         await dialog.getByLabel("Username").fill("researcher");
         await dialog.getByLabel("Password (optional)").fill("s3cret");
-        await dialog.getByRole("button", { name: "Paste an SSH private key" }).click();
-        await dialog.getByLabel("SSH private key (optional)").fill("-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----");
         await dialog.getByRole("button", { name: "Probe and add" }).click();
-        // The untrusted key is presented inside the settings dialog.
         await expect(dialog.getByRole("alert")).toContainText("Unknown host key");
         await expect(dialog.getByRole("alert")).toContainText("ssh-ed25519 · SHA256:e2e-fingerprint");
         await expect(dialog.getByText(/known_hosts/)).toHaveCount(0);
         await expect(page.locator(".permission-card")).toHaveCount(0);
         await dialog.getByRole("button", { name: "Trust and continue" }).click();
-        await expect(dialog.getByText("192.168.100.236", { exact: true })).toBeVisible();
-        // Credentials went out once, trust marker only on the retry.
+        const card = dialog.locator(".remote-host-card", { hasText: "192.168.100.236" });
+        await expect(card).toBeVisible();
         expect(lastSshRegisterBody?.username).toBe("researcher");
         expect(lastSshRegisterBody?.password).toBe("s3cret");
-        expect(lastSshRegisterBody?.privateKey).toContain("BEGIN OPENSSH PRIVATE KEY");
+        expect(lastSshRegisterBody?.privateKeyPath).toBe(generatedKeyPath);
+        expect("privateKey" in (lastSshRegisterBody as unknown as Record<string, unknown>)).toBe(false);
         expect(lastSshRegisterBody?.trustHostKey).toEqual({ algorithm: "ssh-ed25519", fingerprint: "SHA256:e2e-fingerprint" });
-        // Saved credentials are write-only: the form collapsed and cleared.
+        await expect(card.getByRole("button", { name: "Copy public key" })).toBeVisible();
         await expect(dialog.getByLabel("Password (optional)")).toHaveCount(0);
       },
     );
 
     await journey.step(
       "已登记机器可在卡片里更新凭据",
-      "SSH 卡片的 Credentials 按钮展开更新表单，保存后 PUT 到凭据接口并收起。",
+      "SSH 卡片的 Credentials 按钮展开更新表单，本机密钥路径随 PUT 保存且没有私钥粘贴框。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const card = dialog.locator(".remote-host-card", { hasText: "192.168.100.236" });
         await card.getByRole("button", { name: "Credentials" }).click();
         await card.getByLabel("Username").fill("operator");
         await card.getByLabel("Password", { exact: true }).fill("new-secret");
+        await card.getByLabel("Private key file", { exact: true }).fill("~/.ssh/updated_ed25519");
+        await expect(card.locator("textarea")).toHaveCount(0);
         await card.getByRole("button", { name: "Save credentials" }).click();
         await expect.poll(() => savedCredentials.username).toBe("operator");
         expect(savedCredentials.password).toBe("new-secret");
+        expect(savedCredentials.privateKeyPath).toBe("~/.ssh/updated_ed25519");
+        expect("privateKey" in savedCredentials).toBe(false);
         await expect(card.getByLabel("Username")).toHaveCount(0);
       },
     );
@@ -455,6 +512,28 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByText(
           /Remote 0\.0\.0-remote · local 0\.0\.0-local · version differs · deployed by ScienceDiscovery/,
         )).toBeVisible();
+      },
+    );
+
+    await journey.step(
+      "窄窗口下机器操作仍同行等宽",
+      "缩窄窗口后，机器卡片不产生横向溢出，Disconnect、Refresh、Credentials、Delete 仍在同一操作组中同行等宽。",
+      async () => {
+        await page.setViewportSize({ width: 900, height: 720 });
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        const actions = dialog.locator(".remote-host-card .remote-host-actions").first();
+        const boxes = await Promise.all(["Disconnect", "Refresh probe", "Credentials", "Delete"].map(async (name) => {
+          const button = actions.getByRole("button", { name });
+          await expect(button).toBeVisible();
+          return button.boundingBox();
+        }));
+        if (boxes.some((box) => !box)) throw new Error("Narrow action buttons have no layout box");
+        const [first, ...rest] = boxes as NonNullable<(typeof boxes)[number]>[];
+        for (const box of rest) {
+          expect(Math.abs(box.y - first!.y)).toBeLessThan(2);
+          expect(Math.abs(box.width - first!.width)).toBeLessThan(2);
+        }
+        expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
       },
     );
   } finally {

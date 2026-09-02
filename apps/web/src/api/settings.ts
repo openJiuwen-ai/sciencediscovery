@@ -68,10 +68,20 @@ import { ArtifactsApiClient } from "./artifacts.js";
  * token, never returned by the API, and cleared from the form on save.
  * Sending `null` forgets a stored value.
  */
-export type SshCredentialsRequest = Pick<RegisterRemoteHostRequest, "passphrase" | "password" | "privateKey" | "username">;
+export type SshCredentialsRequest = Pick<RegisterRemoteHostRequest, "passphrase" | "password" | "privateKeyPath" | "username">;
 
 /** A host key fingerprint the SSH server presented. */
 export type RemoteHostKeyInfo = Pick<TrustedRemoteHostKey, "algorithm" | "fingerprint">;
+
+/**
+ * A key pair the product generated for one machine: the private key stays in
+ * the API's data directory and is only referenced by path; the browser only
+ * ever receives the public key and that opaque path.
+ */
+export interface GeneratedRemoteHostKey {
+  privateKeyPath: string;
+  publicKey: string;
+}
 
 /** Host-key failures arrive as these error codes with `details.hostKey`. */
 export const SSH_HOST_KEY_UNTRUSTED_CODE = "SSH_HOST_KEY_UNTRUSTED";
@@ -157,9 +167,23 @@ export class SettingsApiClient extends ArtifactsApiClient {
     });
   }
 
-  /** Resolve an ssh_config Host entry to prefill the SSH form ("import alias"). */
-  resolveSshConfig(alias: string): Promise<SshConfigHostImport> {
+  /** List the ssh_config Host entries the settings page offers for import. */
+  listSshConfigHosts(): Promise<SshConfigHostImport[]> {
+    return this.request("/api/remote-hosts/ssh-config");
+  }
+
+  /** Resolve one selected ssh_config Host entry, including its identity-file path. */
+  resolveSshConfigHost(alias: string): Promise<SshConfigHostImport> {
     return this.request(`/api/remote-hosts/ssh-config?alias=${encodeURIComponent(alias)}`);
+  }
+
+  /**
+   * Generate an Ed25519 key pair for one machine. The private key never
+   * leaves the API; the response carries the public key to display and the
+   * key path to reference on registration.
+   */
+  generateRemoteHostKey(): Promise<GeneratedRemoteHostKey> {
+    return this.request("/api/remote-hosts/generate-key", { method: "POST" });
   }
 
   probeRemoteHost(hostId: string): Promise<RemoteHostTarget> {

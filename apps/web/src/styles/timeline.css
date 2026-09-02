@@ -135,13 +135,16 @@
 .remote-host-form-extras { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .remote-host-form-extras small { color: var(--muted); }
 .remote-host-form-credentials { display: grid; gap: 10px; }
-/* The private key stays tucked behind a toggle until the user asks for it. */
-.remote-host-key-field { display: grid; gap: 6px; }
-.remote-host-key-field textarea { border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 12px; resize: vertical; }
-.remote-host-key-toggle { justify-self: start; }
-.remote-host-key-fields { display: grid; gap: 10px; }
-.remote-host-key-fields label:not(.remote-host-key-field) { display: grid; gap: 6px; }
-.remote-host-key-fields input { min-height: 39px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 8px 10px; }
+.remote-host-import-list { display: grid; max-height: 220px; overflow: auto; gap: 6px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); padding: 7px; }
+.remote-host-import-entry { display: grid; gap: 3px; width: 100%; border: 1px solid transparent; border-radius: 7px; background: var(--surface); padding: 9px 10px; color: inherit; text-align: left; cursor: pointer; }
+.remote-host-import-entry:hover, .remote-host-import-entry:focus-visible { border-color: var(--accent-border); background: var(--accent-soft); }
+.remote-host-import-entry small { color: var(--muted); }
+.remote-host-pubkey { display: grid; gap: 8px; border: 1px solid var(--accent-border); border-radius: 9px; background: var(--accent-soft); padding: 10px; }
+.remote-host-pubkey p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.remote-host-pubkey-row, .remote-host-pubkey-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; min-width: 0; }
+.remote-host-pubkey-row code, .remote-host-pubkey-line code { min-width: 0; overflow-wrap: anywhere; color: var(--text-heading); font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
+.remote-host-pubkey .copy-button, .remote-host-pubkey-line .copy-button { opacity: 1; }
+.remote-host-pubkey-line { align-items: center; }
 .remote-host-credentials-form { display: grid; flex-basis: 100%; gap: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
 /* Host-key trust stays inside the settings dialog, never in the conversation. */
 .remote-host-key-prompt { display: grid; gap: 8px; border: 1px solid var(--warning-border); border-left: 3px solid var(--warning-accent); border-radius: 10px; background: var(--warning-soft); padding: 12px; }
