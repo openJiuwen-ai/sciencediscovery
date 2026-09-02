@@ -122,6 +122,13 @@ nested `${SHARE_PATH}/sciencediscovery` directory. Run
 `.ci/provision-runner.sh`, set writable `CI_RESULTS_DIR` / `CI_RUNTIME_DIR`
 paths, and call the repository-owned layer entry point.
 
+Every job in the debug parent workflow has a CodeArts job timeout expressed as
+`timeout` plus `timeout_unit: minute`. Give lightweight preparation,
+artifact-verification, and result-publication jobs five minutes. Give each UT,
+ST, binary-package, QEMU, and code-check job 20 minutes. A timeout must leave
+the job non-completed so the existing failure post path publishes a failed
+result; do not convert it to success or hide it with step-level continuation.
+
 `official_git_clone` may still download the configured `main` source for a
 PR-context run, so UT/ST must explicitly switch to the source commit from the
 MR event. Decide whether checkout is needed from the actual `${MERGE_ID}`
