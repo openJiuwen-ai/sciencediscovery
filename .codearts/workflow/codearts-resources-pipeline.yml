@@ -181,6 +181,75 @@ stages:
         - ubuntu-latest
         - x64
         - large
+      resource_qemu_runner:
+        select: selected_by_default
+        name: Build pre-provisioned QEMU Runner image
+        needs:
+        - resource_toolchains
+        - resource_qemu
+        timeout: 60
+        timeout_unit: minute
+        steps:
+        - name: Download the resource branch
+          uses: official_git_clone
+          identifier: 1788339000000cf34f086-818d-4e2b-a6b4-6732de7c55e8
+        - name: Build and verify the QEMU Runner image
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              BASE_DIR="$PWD/.codearts-resources/qemu-base"
+              OUTPUT_DIR="$PWD/.codearts-resources/qemu-runner"
+              mkdir -p "$BASE_DIR" "$OUTPUT_DIR"
+              CI_QEMU_IMAGE_CACHE_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu/v1" \
+                CI_QEMU_IMAGE_CACHE_ONLY=1 \
+                bash .ci/fetch-qemu-image.sh \
+                  --output "$BASE_DIR/noble-server-cloudimg-amd64.img"
+              RESOURCE_BUILD_COMMIT="${{ sources.sciencediscovery.commit_id }}" \
+                RESOURCE_BUILD_RUN_ID="${{ pipeline.run_id }}" \
+                bash .ci/build-qemu-runner-image.sh \
+                  --base-image "$BASE_DIR/noble-server-cloudimg-amd64.img" \
+                  --output-dir "$OUTPUT_DIR"
+              (cd "$OUTPUT_DIR" && sha256sum --check SHA256SUMS)
+              ls -lh "$OUTPUT_DIR/ScienceDiscovery-qemu-runner-noble-amd64.qcow2"
+          identifier: 17883390000017f2349b5-edfc-4995-a66d-c93558b1527e
+        - name: Upload the pre-provisioned QEMU Runner image
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/cache/qemu-runner/v1/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ScienceDiscovery-qemu-runner-noble-amd64.qcow2"
+            source_file: "${SHARE_PATH}/.codearts-resources/qemu-runner/ScienceDiscovery-qemu-runner-noble-amd64.qcow2"
+            self_folder: "false"
+          identifier: 1788339000002c0324e96-4825-4922-9500-29339cf5ea30
+        - name: Upload the QEMU Runner checksum
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/cache/qemu-runner/v1/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/SHA256SUMS"
+            source_file: "${SHARE_PATH}/.codearts-resources/qemu-runner/SHA256SUMS"
+            self_folder: "false"
+          identifier: 1788339000003b67898c8-7503-4c2d-935e-4fa40de09d5a
+        - name: Upload the QEMU Runner version manifest
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/cache/qemu-runner/v1/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/VERSION"
+            source_file: "${SHARE_PATH}/.codearts-resources/qemu-runner/VERSION"
+            self_folder: "false"
+          identifier: 1788339000004c48cc4ca-6e64-4481-8427-c8d12d625f17
+        if: "${{ default() }}"
+        runs-on:
+        - codearts-hosted
+        - ubuntu-latest
+        - x64
+        - large
     pre:
     - type: auto
     name: Prepare immutable resources
