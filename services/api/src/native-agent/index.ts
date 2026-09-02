@@ -420,7 +420,10 @@ class NativeAgent implements NativeAgentHandle {
         ?? (this.options.subagent?.name === "Reviewer Specialist"
           ? "reviewer"
           : this.options.subagent ? "subagent" : "main");
-      const contextBudget = resolveContextBudget(process.env, { outputReserveTokens: this.policy.maxTokens });
+      const contextBudget = resolveContextBudget(process.env, {
+        ...(this.options.config.contextWindow ? { modelContextTokens: this.options.config.contextWindow } : {}),
+        outputReserveTokens: this.policy.maxTokens,
+      });
       const traceWriter = createContextTraceWriter(this.options.config.dataDir);
       const writeTrace = async (turn: number, record: Record<string, unknown>) => {
         if (!traceWriter) return;
@@ -434,6 +437,7 @@ class NativeAgent implements NativeAgentHandle {
       };
       const contextAssembler = contextMode === "legacy"
         ? new DefaultContextAssembler<WireMessage>({
+          budget: contextBudget,
           compactor,
           onAssembled: async (assembly, turn) => writeTrace(turn, {
             contextConfig: { budget: contextBudget, mode: contextMode, scope: contextScope },
@@ -462,6 +466,11 @@ class NativeAgent implements NativeAgentHandle {
               turn: trace.turn,
               used: trace.used,
               ...(trace.rendered ? {
+                compactionAfterTokens: trace.rendered.compaction.afterTokens,
+                compactionBeforeTokens: trace.rendered.compaction.beforeTokens,
+                compactionReason: trace.rendered.compaction.reason,
+                prunedToolResults: trace.rendered.compaction.prunedToolResults,
+                summarizedMessages: trace.rendered.compaction.summarizedMessages,
                 estimatedInputTokens: trace.rendered.statistics.estimatedInputTokens,
                 outputMessages: trace.rendered.statistics.outputMessages,
               } : {}),
@@ -473,6 +482,7 @@ class NativeAgent implements NativeAgentHandle {
               ...(trace.error ? { error: trace.error } : {}),
               llmInput: trace.modelInput,
               renderedContext: trace.rendered,
+              ...(trace.recovery ? { recovery: trace.recovery } : {}),
               selectedPath: trace.used,
             });
           },
@@ -619,6 +629,7 @@ class NativeAgent implements NativeAgentHandle {
       case "completed":
         if (event.truncated) this.emit({ type: "turn_truncated" });
         break;
+      case "context_recovery":
       case "state_changed":
         break;
     }

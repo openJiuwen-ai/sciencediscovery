@@ -161,6 +161,50 @@ test("model failure produces one failed terminal state", async () => {
   assert.deepEqual(states, ["assembling_context", "calling_model", "failed"]);
 });
 
+test("provider input overflow forces one context rebuild and retries the same turn once", async () => {
+  const assemblies: Array<string | undefined> = [];
+  let calls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1,
+    contextAssembler: {
+      async assemble({ history, recovery }) {
+        assemblies.push(recovery?.reason);
+        const next = recovery ? [{ role: "summary", content: "compacted" }] : [...history];
+        return { history: next, modelInput: { history: next } };
+      },
+    },
+    modelClient: {
+      isInputTooLargeError(error) { return error instanceof Error && error.message === "context too large"; },
+      async invoke(input) {
+        calls += 1;
+        if (calls === 1) throw new Error("context too large");
+        assert.equal(input.history[0]?.role, "summary");
+        return { assistantMessage: { role: "assistant", content: "done" }, toolCalls: [] };
+      },
+    },
+    toolDispatcher: { async execute() { throw new Error("not called"); } },
+  });
+  const result = await loop.run([{ role: "user", content: "large" }], new AbortController().signal, () => undefined);
+  assert.equal(calls, 2);
+  assert.deepEqual(assemblies, [undefined, "model-input-overflow"]);
+  assert.deepEqual(result.history.map((message) => message.role), ["summary", "assistant"]);
+});
+
+test("a second provider input overflow is surfaced without an infinite recovery loop", async () => {
+  let calls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: {
+      isInputTooLargeError() { return true; },
+      async invoke() { calls += 1; throw new Error("still too large"); },
+    },
+    toolDispatcher: { async execute() { throw new Error("not called"); } },
+  });
+  await assert.rejects(() => loop.run([], new AbortController().signal, () => undefined), /still too large/u);
+  assert.equal(calls, 2);
+});
+
 test("builder validates required ports and freezes the run composition", async () => {
   assert.throws(() => new RuntimeBuilder<RuntimeMessage, Input, never>().build(), /contextAssembler.*modelClient.*toolDispatcher.*maxModelTurns/);
   const assembler = { async assemble({ history }: { history: readonly RuntimeMessage[] }) {

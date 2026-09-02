@@ -25,8 +25,8 @@ Browser ──SSE/REST──▶ services/api
                           │
       ┌───────────────────┴────────────────────────────────────────────┐
       │  for turn in 0..MAX_MODEL_TURNS:                               │
-      │    1. maybeCompact(history)          ← native-agent/compaction │
-      │    2. streamModelTurn(...)           ← native-agent/model-client│
+      │    1. assemble context + compact on token pressure ← packages/context │
+      │    2. streamModelTurn(...)                    ← packages/model│
       │         └─outbound HTTPS─▶ configured model endpoint            │
       │         └─onTextDelta / onThinkingDelta ─▶ AgentEvent ─▶ SSE   │
       │    3. no tool_calls → break                                    │
@@ -260,9 +260,9 @@ Three query forms:
 
 ## 7. `native-agent/compaction.ts` — history compaction
 
-**Trigger.** `planCompaction(history)` produces a plan once `history.length >= COMPACTION_TRIGGER_MESSAGES (50)`, keeping the last `COMPACTION_KEEP_MESSAGES (20)`.
+**Trigger.** The compatibility message-count trigger remains, but production assembly is model-aware: at 80% of the effective input limit it first projects old tool-result bodies out of model-visible history, then summarizes old closed LLM steps. The recent 16% token suffix remains verbatim. Both percentages are configurable; see `docs/architecture/context-assembly.md`.
 
-**Cut-point correction.** The preserved window **must not start with a tool result**: `cutoff` advances while `history[cutoff].role === "tool"`, so an assistant message and its tool results are always compacted together and no orphan tool result survives.
+**Atomicity.** Assistant tool calls and their following results are grouped as one LLM-step unit. Open calls are never summarized. Closed work from the current user request may be compacted; retaining the entire latest round caused long autonomous runs to exceed the model window.
 
 **Summarization.** One separate request to the same model endpoint (system prompt `You are compacting…`, no tools). `buildSummaryPrompt` renders the segment as a transcript (assistant lines carry `[tool calls: name(first 300 chars of args)]`, tool results are bounded to 600 chars), bounds the whole thing to `SUMMARY_INPUT_CHAR_BUDGET = 16_000`, HTML-escapes it, and wraps it in `<new_messages>`; a previous summary is wrapped in `<existing_summary>` with half that budget. **Escaping is a security requirement** — summarized content must not be able to close those tags and forge structure.
 
@@ -270,7 +270,7 @@ Three query forms:
 
 **Chaining.** The next compaction reads the previous summary back through `extractCheckpointSummary` and merges it, so the summary **rolls forward** rather than stacking. The format matches the previous engine, so **older histories still parse**.
 
-**Failure behaviour.** A failed summary request **skips compaction and lets the run continue** (unless the signal was aborted, which propagates). An empty summary produces no checkpoint.
+**Failure and recovery.** A failed summary request keeps deterministic tool pruning and lets the run continue (unless cancelled). A Provider-classified context overflow triggers one forced reassembly and one retry of the same LLM turn; a second overflow is returned normally.
 
 ## 8. MCP: `mcp/node-client.ts` and `mcp/extensions-config.ts`
 

@@ -91,6 +91,35 @@ export interface ModelClientPolicy {
   requestTimeoutMs: number;
 }
 
+export class ModelRequestError extends Error {
+  constructor(message: string, readonly statusCode: number, readonly responseDetail = "") {
+    super(message);
+    this.name = "ModelRequestError";
+  }
+}
+
+const CONTEXT_OVERFLOW_MARKERS = [
+  "context length",
+  "context_length_exceeded",
+  "maximum context",
+  "max context",
+  "input is too long",
+  "input too long",
+  "prompt is too long",
+  "request too large",
+  "too many input tokens",
+  "too many tokens",
+  "token limit",
+] as const;
+
+/** Normalize provider-specific 4xx prose without leaking it into Runtime Core. */
+export function isModelInputTooLargeError(error: unknown): boolean {
+  const status = error instanceof ModelRequestError ? error.statusCode : undefined;
+  if (status !== undefined && ![400, 413, 422].includes(status)) return false;
+  const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
+  return CONTEXT_OVERFLOW_MARKERS.some((marker) => message.includes(marker));
+}
+
 export const DEFAULT_MODEL_MAX_TOKENS = 16_384;
 
 export function resolveModelClientPolicy(env: NodeJS.ProcessEnv = process.env): ModelClientPolicy {
@@ -248,7 +277,11 @@ async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncI
     }
     if (statusCode >= 200 && statusCode < 300) return { body: responseBody };
     const detail = (await collectBounded(responseBody, 2_000)).trim();
-    const failure = new Error(`Model request failed with status ${statusCode}${detail ? `: ${detail}` : ""}`);
+    const failure = new ModelRequestError(
+      `Model request failed with status ${statusCode}${detail ? `: ${detail}` : ""}`,
+      statusCode,
+      detail,
+    );
     if ((statusCode === 429 || statusCode >= 500) && attempt < options.policy.maxRetries) {
       lastError = failure;
       await backoff(attempt, retryAfterMs, options.signal);

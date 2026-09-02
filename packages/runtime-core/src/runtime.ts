@@ -39,6 +39,8 @@ export interface ContextAssembly<TMessage extends RuntimeMessage, TModelInput> {
 export interface ContextAssembler<TMessage extends RuntimeMessage, TModelInput> {
   assemble(input: {
     history: readonly TMessage[];
+    /** Present only for the single forced rebuild after provider overflow. */
+    recovery?: { attempt: 1; reason: "model-input-overflow" };
     signal: AbortSignal;
     turn: number;
     onProgress: () => void;
@@ -61,6 +63,8 @@ export interface ModelTurn<TMessage extends RuntimeMessage, TUsage> {
 }
 
 export interface ModelClient<TMessage extends RuntimeMessage, TModelInput, TUsage> {
+  /** Provider adapter owns recognition of its wire-level overflow errors. */
+  isInputTooLargeError?(error: unknown): boolean;
   invoke(
     input: TModelInput,
     signal: AbortSignal,
@@ -106,7 +110,7 @@ const phaseSet = (...phases: AgentLoopPhase[]): ReadonlySet<AgentLoopPhase> => n
 const NEXT_PHASES: Readonly<Record<AgentLoopPhase, ReadonlySet<AgentLoopPhase>>> = Object.freeze({
   idle: phaseSet("assembling_context", "cancelled", "failed"),
   assembling_context: phaseSet("calling_model", "waiting_external", "cancelled", "failed"),
-  calling_model: phaseSet("executing_tools", "waiting_external", "completed", "cancelled", "failed"),
+  calling_model: phaseSet("assembling_context", "executing_tools", "waiting_external", "completed", "cancelled", "failed"),
   executing_tools: phaseSet("assembling_context", "waiting_external", "completed", "cancelled", "failed"),
   waiting_external: phaseSet("assembling_context", "calling_model", "executing_tools", "cancelled", "failed"),
   completed: phaseSet(),
@@ -132,6 +136,7 @@ export type RunEvent<TUsage> =
   | { delta: string; kind: "text" | "thinking"; type: "model_delta" }
   | { call: RuntimeToolCall; type: "tool_execution_start" }
   | { call: RuntimeToolCall; content: string; isError: boolean; type: "tool_execution_end" }
+  | { attempt: 1; reason: "model-input-overflow"; turn: number; type: "context_recovery" }
   | { type: "completed"; truncated?: boolean; usage?: TUsage };
 
 export type RunEventSink<TUsage> = (event: RunEvent<TUsage>) => void;
@@ -232,7 +237,7 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
       for (let turn = 0; turn < this.options.maxModelTurns; turn += 1) {
         this.raiseForAbort(signal);
         this.transition("assembling_context", turn);
-        const assembly = await this.options.contextAssembler.assemble({
+        let assembly = await this.options.contextAssembler.assemble({
           history: this.state.history,
           signal,
           turn,
@@ -243,11 +248,29 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
 
         this.transition("calling_model", turn);
         this.emit({ type: "turn_start", turn });
-        const modelTurn = await this.options.modelClient.invoke(assembly.modelInput, signal, {
+        const observer: ModelClientObserver = {
           onProgress,
           onTextDelta: (delta) => this.emit({ type: "model_delta", kind: "text", delta }),
           onThinkingDelta: (delta) => this.emit({ type: "model_delta", kind: "thinking", delta }),
-        });
+        };
+        let modelTurn: ModelTurn<TMessage, TUsage>;
+        try {
+          modelTurn = await this.options.modelClient.invoke(assembly.modelInput, signal, observer);
+        } catch (error) {
+          if (!this.options.modelClient.isInputTooLargeError?.(error) || signal.aborted) throw error;
+          this.transition("assembling_context", turn);
+          this.emit({ type: "context_recovery", attempt: 1, reason: "model-input-overflow", turn });
+          assembly = await this.options.contextAssembler.assemble({
+            history: this.state.history,
+            recovery: { attempt: 1, reason: "model-input-overflow" },
+            signal,
+            turn,
+            onProgress,
+          });
+          this.state.history = [...assembly.history];
+          this.transition("calling_model", turn);
+          modelTurn = await this.options.modelClient.invoke(assembly.modelInput, signal, observer);
+        }
         this.raiseForAbort(signal);
         onProgress();
         if (modelTurn.usage !== undefined) usage = modelTurn.usage;

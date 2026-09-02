@@ -8,6 +8,10 @@ import type { CollectedContext, ContextDiagnostic } from "./contributor.js";
 export interface ContextBudgetConfig {
   attachmentMaxCharacters: number;
   contributedMessageBudgetCharacters: number;
+  /** Assemble normally until the complete input reaches this percentage. */
+  compactionPressurePercent: number;
+  /** Recent canonical-history tail retained when old closed steps are summarized. */
+  compactionRetainPercent: number;
   dataBudgetCharacters: number;
   maxContributedMessages: number;
   /** Provider/model context window, including the reserved model output. */
@@ -24,6 +28,8 @@ export interface ContextBudgetConfig {
 const DEFAULTS: ContextBudgetConfig = Object.freeze({
   attachmentMaxCharacters: 200_000,
   contributedMessageBudgetCharacters: 100_000,
+  compactionPressurePercent: 80,
+  compactionRetainPercent: 16,
   dataBudgetCharacters: 500_000,
   maxContributedMessages: 50,
   modelContextTokens: 131_072,
@@ -40,14 +46,20 @@ function positiveInteger(env: NodeJS.ProcessEnv, name: string, fallback?: number
   return value;
 }
 
+function percentage(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const value = positiveInteger(env, name, fallback)!;
+  if (value > 100) throw new Error(`${name} must be between 1 and 100`);
+  return value;
+}
+
 export function resolveContextBudget(
   env: NodeJS.ProcessEnv = process.env,
-  defaults: { outputReserveTokens?: number } = {},
+  defaults: { modelContextTokens?: number; outputReserveTokens?: number } = {},
 ): ContextBudgetConfig {
   const modelContextTokens = positiveInteger(
     env,
     "SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS",
-    DEFAULTS.modelContextTokens,
+    defaults.modelContextTokens ?? DEFAULTS.modelContextTokens,
   )!;
   const outputReserveTokens = positiveInteger(
     env,
@@ -57,9 +69,24 @@ export function resolveContextBudget(
   if (outputReserveTokens >= modelContextTokens) {
     throw new Error("SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS must be smaller than SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS");
   }
+  const compactionPressurePercent = percentage(
+    env,
+    "SCIENCE_AGENT_CONTEXT_COMPACTION_PRESSURE_PERCENT",
+    DEFAULTS.compactionPressurePercent,
+  );
+  const compactionRetainPercent = percentage(
+    env,
+    "SCIENCE_AGENT_CONTEXT_COMPACTION_RETAIN_PERCENT",
+    DEFAULTS.compactionRetainPercent,
+  );
+  if (compactionRetainPercent >= compactionPressurePercent) {
+    throw new Error("SCIENCE_AGENT_CONTEXT_COMPACTION_RETAIN_PERCENT must be smaller than SCIENCE_AGENT_CONTEXT_COMPACTION_PRESSURE_PERCENT");
+  }
   return {
     attachmentMaxCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_ATTACHMENT_MAX_CHARS", DEFAULTS.attachmentMaxCharacters)!,
     contributedMessageBudgetCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_CONTRIBUTED_MESSAGE_BUDGET_CHARS", DEFAULTS.contributedMessageBudgetCharacters)!,
+    compactionPressurePercent,
+    compactionRetainPercent,
     dataBudgetCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_DATA_BUDGET_CHARS", DEFAULTS.dataBudgetCharacters)!,
     maxContributedMessages: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_MAX_CONTRIBUTED_MESSAGES", DEFAULTS.maxContributedMessages)!,
     modelContextTokens,

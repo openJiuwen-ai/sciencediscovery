@@ -25,8 +25,8 @@
                           │
       ┌───────────────────┴────────────────────────────────────────────┐
       │  for turn in 0..MAX_MODEL_TURNS:                               │
-      │    1. maybeCompact(history)          ← native-agent/compaction │
-      │    2. streamModelTurn(...)           ← native-agent/model-client│
+      │    1. 组装上下文并按 token 压力压缩          ← packages/context │
+      │    2. streamModelTurn(...)                  ← packages/model │
       │         └─出站 HTTPS─▶ 用户配置的模型 endpoint                  │
       │         └─onTextDelta / onThinkingDelta ─▶ AgentEvent ─▶ SSE   │
       │    3. 无 tool_calls → 跳出循环                                  │
@@ -263,9 +263,9 @@ streamModelTurn(endpoint, systemPrompt, history, tools, policy, signal, callback
 
 ## 7. `native-agent/compaction.ts` — 历史压缩
 
-**触发**：`planCompaction(history)` 在 `history.length >= COMPACTION_TRIGGER_MESSAGES(50)` 时给出计划，保留最后 `COMPACTION_KEEP_MESSAGES(20)` 条。
+**触发**：兼容用的消息数阈值仍保留；生产路径改为模型感知策略：完整输入达到有效输入窗口的 80% 时，先移除模型可见历史中的旧工具正文，再摘要较旧且已闭合的 LLM Step，并按 token 原样保留最近 16%。两个比例均可配置，详见 `docs/architecture/context-assembly.md`。
 
-**切点修正**：保留窗口**不能以 tool 结果开头**——`cutoff` 会向后推进直到不是 `role:"tool"`，保证 assistant 消息和它的 tool 结果总是被一起压缩，不会留下孤儿 tool 结果。
+**原子性**：assistant 的工具调用及其后续结果被视为一个 LLM Step；未闭合的调用绝不摘要。一个长任务中已经完成的旧步骤允许被压缩，不再把“最近一次用户请求的全部过程”永久保护起来。
 
 **摘要**：用本轮同一个模型 endpoint 发一次独立请求（system prompt 为 `You are compacting…`，不带工具）。`buildSummaryPrompt` 把待压缩片段渲染成 transcript（assistant 附 `[tool calls: name(args前300字符)]`，tool 结果按 600 字符截断），整体截到 `SUMMARY_INPUT_CHAR_BUDGET = 16_000`，并对内容做 HTML 转义后包进 `<new_messages>`；若存在上一份摘要则再包一个 `<existing_summary>`（预算减半）——**转义是安全要求**，被摘要的内容不得闭合这两个标签来伪造结构。
 
@@ -273,7 +273,7 @@ streamModelTurn(endpoint, systemPrompt, history, tools, policy, signal, callback
 
 **链式**：下一次压缩通过 `extractCheckpointSummary` 把上一份摘要读回来一起合并，所以摘要是**滚动更新**而不是层层叠加。格式与旧引擎一致，**旧会话历史仍能被识别**。
 
-**失败行为**：摘要请求失败时**跳过本次压缩、继续正常跑**（除非是取消信号，那要往上抛）。摘要为空字符串时也不生成 checkpoint。
+**失败与恢复**：摘要失败时保留已经完成的确定性工具正文清理并继续运行（取消信号除外）。如果 Provider 明确认定输入超过上下文窗口，Runtime 会强制重组一次并在同一 LLM turn 只重试一次；第二次仍溢出则正常抛错，不会无限重试。
 
 ## 8. MCP：`mcp/node-client.ts` 与 `mcp/extensions-config.ts`
 

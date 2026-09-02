@@ -113,3 +113,32 @@ test("dynamic mode enforces the model context window after reserving output toke
     turn: 1,
   }), /model-aware input budget/u);
 });
+
+test("parallel large tool results are reduced before the next model call", async () => {
+  const history: Message[] = [{ role: "user", content: "research several sources" }];
+  for (let index = 0; index < 3; index += 1) {
+    const id = `fetch-${index}`;
+    history.push({ role: "assistant", content: "", tool_calls: [{ id, function: { name: "web_fetch", arguments: "{}" } }] });
+    history.push({ role: "tool", tool_call_id: id, content: `source-${index}\n${"x".repeat(1_000)}` });
+  }
+  let trace: DynamicContextTrace<Message> | undefined;
+  const result = await assembler("dynamic", {
+    budget: {
+      SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS: "1000",
+      SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS: "200",
+    },
+    trace(value) { trace = value; },
+  }).assemble({
+    history,
+    onProgress() {},
+    signal: new AbortController().signal,
+    turn: 3,
+  });
+  assert.ok((trace?.rendered?.compaction.prunedToolResults ?? 0) >= 1);
+  assert.ok((trace?.rendered?.statistics.estimatedInputTokens ?? Infinity) <= 800);
+  const calls = new Set(result.modelInput.history.flatMap((message) =>
+    Array.isArray(message.tool_calls) ? message.tool_calls.map((call) => (call as { id: string }).id) : []));
+  for (const toolResult of result.modelInput.history.filter((message) => message.role === "tool")) {
+    assert.equal(calls.has(String(toolResult.tool_call_id)), true, "no orphan result reaches the model");
+  }
+});

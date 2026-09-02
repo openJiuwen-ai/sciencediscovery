@@ -33,13 +33,13 @@ export function classifyRunFailure(error: unknown): RunFailureCode {
   if (["timed out", "timeout", "stalled", "no gateway progress"].some((marker) => message.includes(marker))) {
     return "timeout";
   }
-  if (message.includes("401") || message.includes("403") || message.includes("unauthor") || message.includes("forbidden")) {
+  if (/\b(?:401|403)\b/u.test(message) || message.includes("unauthor") || message.includes("forbidden")) {
     return "unauthorized";
   }
-  if (message.includes("429") || message.includes("rate limit") || message.includes("too many requests")) {
+  if (/\b429\b/u.test(message) || message.includes("rate limit") || message.includes("too many requests")) {
     return "rate-limited";
   }
-  if (["500", "502", "503", "504", "server error", "service unavailable"].some((marker) => message.includes(marker))) {
+  if (/\b(?:500|502|503|504)\b/u.test(message) || ["server error", "service unavailable"].some((marker) => message.includes(marker))) {
     return "server-error";
   }
   if (["econnrefused", "econnreset", "enotfound", "socket hang up", "network", "transport", "is unavailable", "broken pipe"]

@@ -62,3 +62,19 @@ test("window recognizes the current ScienceDiscovery summary checkpoint key", ()
   assert.equal(result.history[0]?.name, "summary");
   assert.equal(result.history.at(-1)?.content, "latest");
 });
+
+test("token fallback can evict completed steps from the current user request", () => {
+  const history = [
+    { role: "user", content: "research task" },
+    { role: "assistant", content: "", tool_calls: [{ id: "old", function: { name: "search", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "old", content: "x".repeat(100) },
+    { role: "assistant", content: "latest reasoning" },
+  ];
+  const result = new AtomicHistoryWindowPolicy().select(history, {
+    maxTokens: 30,
+    reservedTokens: 0,
+  }, estimator);
+  assert.deepEqual(result.history.map((message) => message.role), ["user", "assistant"]);
+  assert.equal(result.history[0]?.content, "research task");
+  assert.equal(result.history[1]?.content, "latest reasoning");
+});

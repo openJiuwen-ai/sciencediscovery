@@ -31,14 +31,19 @@ export function createContextTraceWriter(
     async write(contextId, turn, record) {
       const contextDirectory = resolve(directory, safeContextId(contextId));
       await mkdir(contextDirectory, { recursive: true });
-      const filename = `turn-${String(turn).padStart(4, "0")}.json`;
+      const recovery = record.recovery;
+      const recoveryAttempt = typeof recovery === "object" && recovery !== null && !Array.isArray(recovery)
+        && (recovery as Record<string, unknown>).reason === "model-input-overflow"
+        && (recovery as Record<string, unknown>).attempt === 1
+        ? 1 : undefined;
+      const filename = `turn-${String(turn).padStart(4, "0")}${recoveryAttempt ? `-recovery-${recoveryAttempt}` : ""}.json`;
       const destination = resolve(contextDirectory, filename);
       const temporary = `${destination}.${process.pid}.tmp`;
       const payload = JSON.stringify({
         ...record,
         contextId,
         exportedAt: new Date().toISOString(),
-        schemaVersion: 2,
+        schemaVersion: 3,
         turn,
       }, null, 2);
       await writeFile(temporary, `${payload}\n`, { encoding: "utf8", mode: 0o600 });

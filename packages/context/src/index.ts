@@ -8,6 +8,7 @@ export * from "./contributor.js";
 export * from "./dynamic-assembler.js";
 export * from "./durable-state.js";
 export * from "./history-compactor.js";
+export * from "./history-units.js";
 export * from "./history-window.js";
 export * from "./message-composer.js";
 export * from "./mode.js";

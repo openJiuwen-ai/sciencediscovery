@@ -109,6 +109,7 @@ import {
   DEFAULT_MODEL_API_VARIANT,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
   lookupModelCatalog,
+  resolveModelFacts,
   SKILL_PACKAGES_PORTABLE_ROOT,
   THINKING_CONTROL_VARIANTS,
   THINKING_EFFORT_VARIANTS,
@@ -769,11 +770,18 @@ async function executeAgentRun(
     }
   };
 
+  const selectedProvider = store.getProvider(selectedModel.providerId);
+  const selectedCatalogEntry = lookupModelCatalog(selectedModel.model, selectedProvider?.presetId);
+  const modelFacts = resolveModelFacts({
+    ...(selectedCatalogEntry ? { catalog: selectedCatalogEntry } : {}),
+    ...(selectedModel.facts ? { user: selectedModel.facts } : {}),
+  });
   const agentConfig: AgentConfig = {
     apiToken,
     apiProtocol: selectedModel.apiProtocol,
     apiVariant: selectedModel.apiVariant,
     baseUrl: selectedModel.baseUrl,
+    ...(modelFacts.contextWindow ? { contextWindow: modelFacts.contextWindow } : {}),
     dataDir: store.dataDir,
     model: selectedModel.model,
     // Conversation-level thinking choices override the profile defaults; the

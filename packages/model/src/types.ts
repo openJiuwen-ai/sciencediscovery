@@ -14,6 +14,8 @@ export interface AgentConfig {
   apiProtocol?: ModelApiProtocol;
   apiVariant?: ModelApiVariant;
   baseUrl: string;
+  /** Resolved user/catalog fact used by model-aware context assembly. */
+  contextWindow?: number;
   dataDir: string;
   model: string;
   proxy?: ResolvedProxy;

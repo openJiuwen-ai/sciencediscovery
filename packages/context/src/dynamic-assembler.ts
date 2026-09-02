@@ -12,7 +12,7 @@ import {
   type ContextCollectionReport,
   type ContextContributorRegistry,
 } from "./contributor.js";
-import type { HistoryCompactor } from "./history-compactor.js";
+import type { HistoryCompactionStatistics, HistoryCompactor } from "./history-compactor.js";
 import {
   AtomicHistoryWindowPolicy,
   type HistoryWindowPolicy,
@@ -34,6 +34,7 @@ import {
 import { ContextValidator } from "./validator.js";
 
 export interface DynamicRenderedContext<TMessage extends RuntimeMessage = RuntimeMessage> {
+  compaction: HistoryCompactionStatistics;
   diagnostics: CollectedContext<TMessage>["diagnostics"];
   history: TMessage[];
   sectionIds: string[];
@@ -48,6 +49,7 @@ export interface DynamicContextTrace<TMessage extends RuntimeMessage = RuntimeMe
   error?: string;
   modelInput?: ModelInput<TMessage>;
   mode: ContextAssemblyMode;
+  recovery?: { attempt: 1; reason: "model-input-overflow" };
   rendered?: DynamicRenderedContext<TMessage>;
   turn: number;
   used: "dynamic" | "legacy";
@@ -90,12 +92,19 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
   async assemble(input: {
     history: readonly TMessage[];
     onProgress: () => void;
+    recovery?: { attempt: 1; reason: "model-input-overflow" };
     signal: AbortSignal;
     turn: number;
   }): Promise<ContextAssembly<TMessage, ModelInput<TMessage>>> {
-    const history = await this.options.compactor.compact(input.history, input.signal, input.onProgress);
     const tools = this.options.tools().map((tool) => structuredClone(tool));
-    const legacy: ContextAssembly<TMessage, ModelInput<TMessage>> = {
+    const preliminary = await this.options.compactor.compactDetailed(
+      input.history,
+      input.signal,
+      input.onProgress,
+      { estimator: this.tokenEstimator },
+    );
+    let history = preliminary.history;
+    let legacy: ContextAssembly<TMessage, ModelInput<TMessage>> = {
       history,
       modelInput: { history, systemPrompt: this.options.systemPrompt, tools },
     };
@@ -103,22 +112,30 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
     let admitted: CollectedContext<TMessage> | undefined;
     let rendered: DynamicRenderedContext<TMessage> | undefined;
     try {
-      collection = await this.options.registry.collectDetailed({
-        contextId: this.options.contextId,
-        history,
-        scope: this.options.scope,
-        signal: input.signal,
-        turn: input.turn,
+      const collect = async (visibleHistory: readonly TMessage[]) => {
+        collection = await this.options.registry.collectDetailed({
+          contextId: this.options.contextId,
+          history: visibleHistory,
+          scope: this.options.scope,
+          signal: input.signal,
+          turn: input.turn,
+        });
+        admitted = applyContextBudget(collection.collected, this.options.budget);
+        return { admitted, prompt: this.promptRenderer.render(admitted.sections) };
+      };
+      let collected = await collect(history);
+      let prompt = collected.prompt;
+      let invocationContext = this.messageComposer.compose({
+        attachments: collected.admitted.attachments,
+        history: [],
+        messages: collected.admitted.messages,
       });
-      admitted = applyContextBudget(collection.collected, this.options.budget);
-      const prompt = this.promptRenderer.render(admitted.sections);
-      const invocationHistory = this.messageComposer.compose({
-        attachments: admitted.attachments,
-        history,
-        messages: admitted.messages,
-      });
-      const reservedTokens = this.tokenEstimator.estimateSystemPrompt(prompt.systemPrompt)
+      let reservedTokens = this.tokenEstimator.estimateSystemPrompt(prompt.systemPrompt)
         + this.tokenEstimator.estimateTools(tools);
+      const invocationContextTokens = invocationContext.reduce(
+        (total, message) => total + this.tokenEstimator.estimateMessage(message),
+        0,
+      );
       const modelInputLimit = this.options.budget.modelContextTokens !== undefined
         ? this.options.budget.modelContextTokens - (this.options.budget.outputReserveTokens ?? 0)
         : undefined;
@@ -129,6 +146,53 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
       const maxTokens = configuredWindow === undefined
         ? modelInputLimit
         : modelInputLimit === undefined ? configuredWindow : Math.min(configuredWindow, modelInputLimit);
+      const pressureTokens = maxTokens === undefined ? undefined : Math.max(
+        1,
+        Math.floor(maxTokens * this.options.budget.compactionPressurePercent / 100)
+          - reservedTokens - invocationContextTokens,
+      );
+      const retainTokens = maxTokens === undefined ? undefined : Math.max(
+        1,
+        Math.floor(maxTokens * this.options.budget.compactionRetainPercent / 100),
+      );
+      const compacted = await this.options.compactor.compactDetailed(
+        history,
+        input.signal,
+        input.onProgress,
+        {
+          estimator: this.tokenEstimator,
+          ...(input.recovery ? { force: true } : {}),
+          ...(pressureTokens !== undefined ? { pressureTokens } : {}),
+          ...(retainTokens !== undefined ? { retainTokens } : {}),
+        },
+      );
+      history = compacted.history;
+      if (compacted.statistics.prunedToolResults > 0 || compacted.statistics.summarizedMessages > 0) {
+        // Contributor projections such as active Skill visibility depend on
+        // the final model-visible history, not the pre-compaction transcript.
+        collected = await collect(history);
+        prompt = collected.prompt;
+        invocationContext = this.messageComposer.compose({
+          attachments: collected.admitted.attachments,
+          history: [],
+          messages: collected.admitted.messages,
+        });
+        reservedTokens = this.tokenEstimator.estimateSystemPrompt(prompt.systemPrompt)
+          + this.tokenEstimator.estimateTools(tools);
+      }
+      const compaction: HistoryCompactionStatistics = {
+        afterTokens: compacted.statistics.afterTokens ?? preliminary.statistics.afterTokens,
+        beforeTokens: preliminary.statistics.beforeTokens,
+        prunedToolResults: preliminary.statistics.prunedToolResults + compacted.statistics.prunedToolResults,
+        reason: compacted.statistics.reason === "none" ? preliminary.statistics.reason : compacted.statistics.reason,
+        summarizedMessages: preliminary.statistics.summarizedMessages + compacted.statistics.summarizedMessages,
+      };
+      legacy = { history, modelInput: { history, systemPrompt: this.options.systemPrompt, tools } };
+      const invocationHistory = this.messageComposer.compose({
+        attachments: collected.admitted.attachments,
+        history,
+        messages: collected.admitted.messages,
+      });
       const window = this.windowPolicy.select(invocationHistory, {
         ...(this.options.budget.windowMessages !== undefined
           ? { maxMessages: this.options.budget.windowMessages }
@@ -153,10 +217,11 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
       };
       this.validator.validate(
         modelInput,
-        admitted.sections.filter((section) => section.protected),
+        collected.admitted.sections.filter((section) => section.protected),
         tools,
       );
       rendered = {
+        compaction,
         diagnostics: window.diagnostics.map((diagnostic) => ({
           ...diagnostic,
           contributorId: "context.window",
@@ -170,13 +235,13 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
       if (this.options.mode === "shadow") {
         await this.options.onTrace?.({
           admitted, collection, mode: "shadow", modelInput: legacy.modelInput,
-          rendered, turn: input.turn, used: "legacy",
+          recovery: input.recovery, rendered, turn: input.turn, used: "legacy",
         });
         return legacy;
       }
       await this.options.onTrace?.({
         admitted, collection, mode: "dynamic", modelInput,
-        rendered, turn: input.turn, used: "dynamic",
+        recovery: input.recovery, rendered, turn: input.turn, used: "dynamic",
       });
       return { history, modelInput };
     } catch (error) {
@@ -184,7 +249,8 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
       const message = error instanceof Error ? error.message : String(error);
       await this.options.onTrace?.({
         admitted, collection, error: message, mode: this.options.mode,
-        modelInput: legacy.modelInput, rendered, turn: input.turn, used: "legacy",
+        modelInput: legacy.modelInput, recovery: input.recovery, rendered, turn: input.turn,
+        used: this.options.mode === "shadow" ? "legacy" : "dynamic",
       });
       if (this.options.mode === "shadow") return legacy;
       throw error;

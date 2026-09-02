@@ -292,7 +292,7 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
     const mainTraces = await traceRecords(traceRoot, "main-example");
     assert.equal(mainTraces.length, 4);
     for (const record of mainTraces) {
-      assert.equal(record.schemaVersion, 2);
+      assert.equal(record.schemaVersion, 3);
       assert.ok(record.collection);
       assert.ok(record.admitted);
       assert.ok(record.renderedContext);

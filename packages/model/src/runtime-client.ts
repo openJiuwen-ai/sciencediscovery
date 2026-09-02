@@ -5,6 +5,7 @@ import type { ModelClient, ModelClientObserver, ModelTurn as RuntimeModelTurn, R
 
 import {
   streamModelTurn,
+  isModelInputTooLargeError,
   type ModelClientPolicy,
   type ModelEndpoint,
   type WireToolSpec,
@@ -27,6 +28,10 @@ implements ModelClient<TMessage, ModelInput<TMessage>, ModelUsage> {
     private readonly policy: ModelClientPolicy,
     private readonly transport: ModelTurnTransport = streamModelTurn,
   ) {}
+
+  isInputTooLargeError(error: unknown): boolean {
+    return isModelInputTooLargeError(error);
+  }
 
   async invoke(
     input: ModelInput<TMessage>,

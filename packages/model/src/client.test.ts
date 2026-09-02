@@ -27,6 +27,8 @@ import {
 import { installTestModelCatalog } from "./models-dev.fixture.js";
 
 import {
+  isModelInputTooLargeError,
+  ModelRequestError,
   normalizeUsage,
   proxyDispatcher,
   resolveModelClientPolicy,
@@ -34,6 +36,15 @@ import {
   toAnthropicMessages,
   type ModelClientPolicy,
 } from "./client.js";
+
+test("provider context overflow is normalized without treating arbitrary token errors as recoverable", () => {
+  assert.equal(isModelInputTooLargeError(new ModelRequestError(
+    "Model request failed with status 400: maximum context length exceeded",
+    400,
+  )), true);
+  assert.equal(isModelInputTooLargeError(new ModelRequestError("Model request failed with status 401: token invalid", 401)), false);
+  assert.equal(isModelInputTooLargeError(new Error("network request failed")), false);
+});
 
 const policy: ModelClientPolicy = { maxRetries: 1, maxTokens: 1_024, requestTimeoutMs: 5_000 };
 

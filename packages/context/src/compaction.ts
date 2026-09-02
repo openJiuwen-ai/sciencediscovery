@@ -27,6 +27,9 @@
 
 import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
 
+import { flattenHistoryUnits, historyUnits } from "./history-units.js";
+import type { TokenEstimator } from "./token-estimator.js";
+
 type AgentHistoryMessage = RuntimeMessage;
 
 export const COMPACTION_TRIGGER_MESSAGES = 50;
@@ -150,6 +153,12 @@ export interface CompactionPlan {
   toSummarize: AgentHistoryMessage[];
 }
 
+export interface TokenCompactionPlanOptions<TMessage extends AgentHistoryMessage> {
+  estimator: TokenEstimator<TMessage>;
+  /** Approximate token budget for the recent suffix left verbatim. */
+  retainTokens: number;
+}
+
 /**
  * Decide whether the history needs compaction and how to split it. Returns
  * undefined when under the trigger or when no message would be summarized.
@@ -175,6 +184,44 @@ export function planCompaction(
   if (!toSummarize.length) return undefined;
   return {
     preserved: history.slice(cutoff),
+    previousSummary: previousCheckpoint ? extractCheckpointSummary(previousCheckpoint) : "",
+    toSummarize,
+  };
+}
+
+/**
+ * Split at an atomic, closed LLM-step boundary and retain a token-sized recent
+ * suffix. Unlike the old message-count policy this may summarize work from the
+ * current user request after several autonomous tool steps have completed.
+ */
+export function planTokenCompaction<TMessage extends AgentHistoryMessage>(
+  history: readonly TMessage[],
+  options: TokenCompactionPlanOptions<TMessage>,
+): CompactionPlan | undefined {
+  const units = historyUnits(history);
+  if (units.length < 2) return undefined;
+
+  let suffixTokens = 0;
+  let cutoffUnit = units.length;
+  while (cutoffUnit > 0 && suffixTokens < Math.max(1, options.retainTokens)) {
+    cutoffUnit -= 1;
+    suffixTokens += units[cutoffUnit]!.messages.reduce(
+      (total, message) => total + options.estimator.estimateMessage(message),
+      0,
+    );
+  }
+  // Open tool calls are part of the current step contract and may never be
+  // summarized. Keep everything from the first open unit onward.
+  const firstOpen = units.findIndex((unit) => !unit.closed);
+  if (firstOpen >= 0) cutoffUnit = Math.min(cutoffUnit, firstOpen);
+  if (cutoffUnit <= 0) return undefined;
+
+  const previousCheckpoint = history.find(isSummaryCheckpointMessage);
+  const toSummarize = flattenHistoryUnits(units.slice(0, cutoffUnit))
+    .filter((message) => !isSummaryCheckpointMessage(message));
+  if (!toSummarize.length) return undefined;
+  return {
+    preserved: flattenHistoryUnits(units.slice(cutoffUnit)),
     previousSummary: previousCheckpoint ? extractCheckpointSummary(previousCheckpoint) : "",
     toSummarize,
   };

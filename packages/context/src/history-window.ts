@@ -5,6 +5,7 @@ import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
 
 import type { ContextDiagnostic } from "./contributor.js";
 import type { TokenEstimator } from "./token-estimator.js";
+import { flattenHistoryUnits, historyUnits } from "./history-units.js";
 
 export interface HistoryWindowConfig {
   maxMessages?: number;
@@ -63,33 +64,6 @@ function rounds<TMessage extends RuntimeMessage>(history: readonly TMessage[]): 
   return output.filter((round) => round.length > 0);
 }
 
-function toolCallIds(message: RuntimeMessage): string[] {
-  if (!Array.isArray(message.tool_calls)) return [];
-  return message.tool_calls.flatMap((call) => {
-    if (typeof call !== "object" || call === null || Array.isArray(call)) return [];
-    const id = (call as Record<string, unknown>).id;
-    return typeof id === "string" && id ? [id] : [];
-  });
-}
-
-function atomicUnits<TMessage extends RuntimeMessage>(messages: readonly TMessage[]): TMessage[][] {
-  const units: TMessage[][] = [];
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index]!;
-    const unit = [structuredClone(message)];
-    const calls = new Set(toolCallIds(message));
-    while (calls.size && index + 1 < messages.length) {
-      const next = messages[index + 1]!;
-      const resultId = typeof next.tool_call_id === "string" ? next.tool_call_id : undefined;
-      if (next.role !== "tool" || !resultId || !calls.has(resultId)) break;
-      unit.push(structuredClone(next));
-      index += 1;
-    }
-    units.push(unit);
-  }
-  return units;
-}
-
 function flatten<TMessage>(groups: readonly TMessage[][]): TMessage[] {
   return groups.flatMap((group) => group);
 }
@@ -128,21 +102,24 @@ implements HistoryWindowPolicy<TMessage> {
     if (checkpoint && !selected.some(isSummaryCheckpoint)) selected.unshift(structuredClone(checkpoint));
 
     if (config.maxTokens !== undefined) {
-      const units = atomicUnits(selected);
-      const minimumUnits = new Set<TMessage[]>();
-      const latestUserIndex = units.findLastIndex((unit) => unit.some((message) =>
+      const units = historyUnits(selected);
+      const minimumUnits = new Set<(typeof units)[number]>();
+      const latestUserIndex = units.findLastIndex((unit) => unit.messages.some((message) =>
         message.role === "user" && !isSummaryCheckpoint(message) && !isInvocationContext(message)));
-      if (latestUserIndex >= 0) {
-        for (const unit of units.slice(latestUserIndex)) minimumUnits.add(unit);
-      }
-      const checkpointUnit = units.find((unit) => unit.some(isSummaryCheckpoint));
+      // Keep the task anchor, the newest step, and any incomplete tool-call
+      // contract. Older completed steps from the same user request are
+      // removable; protecting the whole round was the source of #53.
+      if (latestUserIndex >= 0) minimumUnits.add(units[latestUserIndex]!);
+      if (units.length) minimumUnits.add(units.at(-1)!);
+      for (const unit of units.filter((item) => !item.closed)) minimumUnits.add(unit);
+      const checkpointUnit = units.find((unit) => unit.messages.some(isSummaryCheckpoint));
       if (checkpointUnit) minimumUnits.add(checkpointUnit);
-      while (config.reservedTokens + tokens(flatten(units), estimator) > config.maxTokens) {
+      while (config.reservedTokens + tokens(flattenHistoryUnits(units), estimator) > config.maxTokens) {
         const removable = units.findIndex((unit) => !minimumUnits.has(unit));
         if (removable < 0) break;
         units.splice(removable, 1);
       }
-      selected = flatten(units);
+      selected = flattenHistoryUnits(units);
       const estimated = config.reservedTokens + tokens(selected, estimator);
       if (estimated > config.maxTokens) {
         diagnostic.push({

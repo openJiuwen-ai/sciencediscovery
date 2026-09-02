@@ -49,3 +49,10 @@ test("non-Error failures still yield a message and a code", () => {
   assert.equal(runFailureMessage(new Error("")), "Agent run failed");
   assert.equal(classifyRunFailure(undefined), "semantic-error");
 });
+
+test("token estimates containing status-code digits are not misclassified", () => {
+  assert.equal(
+    classifyRunFailure(new Error("Required model input needs approximately 140366 tokens")),
+    "semantic-error",
+  );
+});

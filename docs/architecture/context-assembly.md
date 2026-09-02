@@ -36,11 +36,13 @@ Each model turn follows the same sequence:
 
 ```text
 canonical history
-  -> HistoryCompactor
-  -> DurableContextStore snapshot
+  -> compatibility message-count compaction
   -> ContextContributorRegistry.collectDetailed
   -> applyContextBudget
   -> DeterministicSystemPromptRenderer
+  -> token-pressure calculation
+  -> HistoryCompactor (old tool bodies, then old closed steps)
+  -> re-collect only if model-visible history changed
   -> DefaultContextMessageComposer
   -> AtomicHistoryWindowPolicy
   -> ContextValidator
@@ -56,6 +58,7 @@ history.
 | `ContextContributorRegistry` | Scope filtering, concurrent collection, stable ordering, validation, and required/optional failure policy |
 | `DurableContextStore` | Run-scoped structured goal, Plan, Skill, Delegation, Artifact, Review, and Memory state captured at the tool-result boundary |
 | `ContextBudgetPolicy` | Protected-section admission and deterministic section/data/message truncation |
+| `HistoryCompactor` | Model-aware pressure handling: prune old tool bodies, then summarize old closed LLM steps while retaining a recent token tail |
 | `SystemPromptRenderer` | Deterministic section ordering and prompt rendering |
 | `ContextMessageComposer` | Invocation-local contributed messages and trust-labelled attachment envelopes |
 | `HistoryWindowPolicy` | Recent round/message/token selection without splitting tool call/result pairs |
@@ -161,9 +164,11 @@ All configured values are positive integers:
 | `SCIENCE_AGENT_CONTEXT_ATTACHMENT_MAX_CHARS` | `200000` | Maximum characters for one attachment |
 | `SCIENCE_AGENT_CONTEXT_CONTRIBUTED_MESSAGE_BUDGET_CHARS` | `100000` | Total string content in contributed messages |
 | `SCIENCE_AGENT_CONTEXT_MAX_CONTRIBUTED_MESSAGES` | `50` | Maximum contributed messages |
-| `SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS` | `131072` | Model context capacity, including reserved output |
+| `SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS` | resolved model context; `131072` fallback | Optional override for model context capacity, including reserved output |
 | `SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS` | model policy `maxTokens` (`16384` by default) | Capacity kept free for the next model response |
-| `SCIENCE_AGENT_CONTEXT_WINDOW_MESSAGES` | unset | Maximum invocation messages; the newest complete user round is always retained |
+| `SCIENCE_AGENT_CONTEXT_COMPACTION_PRESSURE_PERCENT` | `80` | Start history pressure handling at this percentage of the effective model input limit |
+| `SCIENCE_AGENT_CONTEXT_COMPACTION_RETAIN_PERCENT` | `16` | Recent canonical-history suffix retained verbatim during summarization; must be below pressure percent |
+| `SCIENCE_AGENT_CONTEXT_WINDOW_MESSAGES` | unset | Maximum invocation messages; the task anchor, newest atomic step, checkpoints, and open tool calls are retained |
 | `SCIENCE_AGENT_CONTEXT_WINDOW_ROUNDS` | unset | Maximum recent user rounds; takes precedence over the message limit |
 | `SCIENCE_AGENT_CONTEXT_WINDOW_TOKENS` | unset | Approximate complete input limit, including Prompt, tools, and history |
 
@@ -176,11 +181,23 @@ The effective input limit is the smaller of
 `MODEL_MAX_TOKENS - OUTPUT_RESERVE_TOKENS`. System Prompt, Tool schemas,
 contributed data, and history all consume that same limit.
 
-History selection preserves the summary checkpoint and newest user round. An
-assistant tool call and its immediately following tool results form one atomic
-unit. If required recent context itself exceeds the effective input limit,
-assembly fails before contacting the Provider instead of sending a predictably
-oversized request.
+At the pressure threshold, deterministic projection removes old tool-result
+bodies first. A stored `read_tool_output` reference is retained when one
+exists; the complete Run event/audit record is never rewritten. If pressure
+remains, the model summarizes the oldest closed LLM steps into the standing
+checkpoint and retains a recent suffix by token cost. This boundary may fall
+inside one long user request: the former policy that protected the entire
+newest user round allowed autonomous scientific runs to grow without bound.
+
+An assistant tool call and its immediately following tool results remain one
+atomic unit. Open calls are never removed or summarized. The final window
+keeps the task anchor, checkpoint, newest step, and open calls; if even those
+cannot fit, assembly fails clearly before the Provider call.
+
+If a Provider nevertheless rejects the request as a context-window overflow,
+its adapter normalizes that error. Runtime Core asks the Assembler for one
+forced pressure pass and retries the same LLM turn exactly once. A second
+overflow is surfaced; it cannot create an unbounded retry loop.
 
 The built-in `ConservativeTokenEstimator` intentionally overestimates mixed
 Chinese/English scientific text. A Model Provider can inject an exact tokenizer
@@ -196,13 +213,15 @@ SCIENCE_AGENT_CONTEXT_TRACE=1
 SCIENCE_AGENT_CONTEXT_TRACE_DIR=/secure/local/context-traces
 ```
 
-One private JSON file is written per model turn:
+One private JSON file is written per model turn. A forced recovery is written
+beside the original attempt rather than overwriting it:
 
 ```text
 <trace-dir>/<context-id>/turn-0001.json
+<trace-dir>/<context-id>/turn-0001-recovery-1.json
 ```
 
-Trace schema v2 contains:
+Trace schema v3 contains:
 
 - mode, Agent scope, selected path, and resolved budgets;
 - each Contributor's raw output, duration, status, and error;
@@ -210,6 +229,8 @@ Trace schema v2 contains:
 - sections, attachments, messages, and diagnostics after admission;
 - rendered Prompt, section IDs, invocation history, tools, window statistics,
   and window diagnostics in `renderedContext`;
+- compaction reason, estimated tokens before/after, pruned tool-result count,
+  summarized-message count, and recovery reason/attempt;
 - the exact `llmInput` passed to `ProviderModelClient`.
 
 In `shadow`, `renderedContext` is the dynamic candidate while `llmInput` is the

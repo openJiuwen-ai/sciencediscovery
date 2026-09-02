@@ -22,6 +22,8 @@ function collected(): CollectedContext {
 test("budget preserves protected authority and deterministically truncates optional context", () => {
   const output = applyContextBudget(collected(), {
     attachmentMaxCharacters: 8,
+    compactionPressurePercent: 80,
+    compactionRetainPercent: 16,
     contributedMessageBudgetCharacters: 3,
     dataBudgetCharacters: 8,
     maxContributedMessages: 1,
@@ -40,6 +42,8 @@ test("budget rejects protected sections that cannot fit without weakening author
   const input = collected();
   assert.throws(() => applyContextBudget(input, {
     attachmentMaxCharacters: 10,
+    compactionPressurePercent: 80,
+    compactionRetainPercent: 16,
     contributedMessageBudgetCharacters: 10,
     dataBudgetCharacters: 10,
     maxContributedMessages: 1,
@@ -50,6 +54,8 @@ test("budget rejects protected sections that cannot fit without weakening author
 
 test("budget environment resolves native window settings", () => {
   const budget = resolveContextBudget({
+    SCIENCE_AGENT_CONTEXT_COMPACTION_PRESSURE_PERCENT: "75",
+    SCIENCE_AGENT_CONTEXT_COMPACTION_RETAIN_PERCENT: "20",
     SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS: "1234",
     SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS: "100000",
     SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS: "12000",
@@ -58,6 +64,8 @@ test("budget environment resolves native window settings", () => {
     SCIENCE_AGENT_CONTEXT_WINDOW_TOKENS: "64000",
   });
   assert.equal(budget.promptBudgetCharacters, 1234);
+  assert.equal(budget.compactionPressurePercent, 75);
+  assert.equal(budget.compactionRetainPercent, 20);
   assert.equal(budget.modelContextTokens, 100000);
   assert.equal(budget.outputReserveTokens, 12000);
   assert.equal(budget.windowMessages, 80);
@@ -74,4 +82,22 @@ test("budget environment resolves native window settings", () => {
     }),
     /must be smaller/u,
   );
+  assert.throws(
+    () => resolveContextBudget({ SCIENCE_AGENT_CONTEXT_COMPACTION_PRESSURE_PERCENT: "101" }),
+    /between 1 and 100/u,
+  );
+  assert.throws(
+    () => resolveContextBudget({
+      SCIENCE_AGENT_CONTEXT_COMPACTION_PRESSURE_PERCENT: "80",
+      SCIENCE_AGENT_CONTEXT_COMPACTION_RETAIN_PERCENT: "80",
+    }),
+    /must be smaller/u,
+  );
+});
+
+test("resolved model facts seed the window while explicit environment remains authoritative", () => {
+  assert.equal(resolveContextBudget({}, { modelContextTokens: 200_000 }).modelContextTokens, 200_000);
+  assert.equal(resolveContextBudget({ SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS: "300000" }, {
+    modelContextTokens: 200_000,
+  }).modelContextTokens, 300_000);
 });
