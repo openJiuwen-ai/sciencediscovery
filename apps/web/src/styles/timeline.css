@@ -139,6 +139,9 @@
 .remote-host-key-field { display: grid; gap: 6px; }
 .remote-host-key-field textarea { border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 12px; resize: vertical; }
 .remote-host-key-toggle { justify-self: start; }
+.remote-host-key-fields { display: grid; gap: 10px; }
+.remote-host-key-fields label:not(.remote-host-key-field) { display: grid; gap: 6px; }
+.remote-host-key-fields input { min-height: 39px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 8px 10px; }
 .remote-host-credentials-form { display: grid; flex-basis: 100%; gap: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
 /* Host-key trust stays inside the settings dialog, never in the conversation. */
 .remote-host-key-prompt { display: grid; gap: 8px; border: 1px solid var(--warning-border); border-left: 3px solid var(--warning-accent); border-radius: 10px; background: var(--warning-soft); padding: 12px; }

@@ -102,9 +102,6 @@ interface HostKeyPrompt {
   resume: () => Promise<void>;
 }
 
-/** A host record may carry the presented key while it is still untrusted. */
-type HostWithKeyState = RemoteHostTarget & { hostKey?: RemoteHostKeyInfo & { trusted?: boolean } };
-
 /**
  * The global machine catalog: register, connect, probe, and delete remote
  * machines — including SSH credentials and host-key trust, all inside this
@@ -124,6 +121,8 @@ export function RemoteHostManager({ client, onError }: {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [privateKey, setPrivateKey] = useState("");
+  const [keyPassphrase, setKeyPassphrase] = useState("");
+  const [importedKeyPath, setImportedKeyPath] = useState<string>();
   const [showCredentials, setShowCredentials] = useState(false);
   const [showPrivateKey, setShowPrivateKey] = useState(false);
   const [importNote, setImportNote] = useState("");
@@ -137,6 +136,7 @@ export function RemoteHostManager({ client, onError }: {
   const [credUsername, setCredUsername] = useState("");
   const [credPassword, setCredPassword] = useState("");
   const [credPrivateKey, setCredPrivateKey] = useState("");
+  const [credPassphrase, setCredPassphrase] = useState("");
   const [credShowKey, setCredShowKey] = useState(false);
 
   async function refresh(): Promise<void> {
@@ -152,6 +152,8 @@ export function RemoteHostManager({ client, onError }: {
     setUsername("");
     setPassword("");
     setPrivateKey("");
+    setKeyPassphrase("");
+    setImportedKeyPath(undefined);
     setShowCredentials(false);
     setShowPrivateKey(false);
     setImportNote("");
@@ -176,7 +178,7 @@ export function RemoteHostManager({ client, onError }: {
   }
 
   /** A probe can also fail softly with host.error; an untrusted key there opens the same trust card. */
-  function reportHostError(host: HostWithKeyState): void {
+  function reportHostError(host: RemoteHostTarget): void {
     if (host.hostKey && host.hostKey.trusted === false) {
       const hostKey = host.hostKey;
       setHostKeyPrompt({
@@ -207,6 +209,9 @@ export function RemoteHostManager({ client, onError }: {
         ...(username.trim() ? { username: username.trim() } : {}),
         ...(password ? { password } : {}),
         ...(privateKey.trim() ? { privateKey: privateKey.trim() } : {}),
+        ...(keyPassphrase ? { passphrase: keyPassphrase } : {}),
+        // The ssh_config import hands the API a key *path* to read; a pasted key wins.
+        ...(importedKeyPath && !privateKey.trim() ? { privateKeyPath: importedKeyPath } : {}),
         ...(trustHostKey ? { trustHostKey } : {}),
       });
       clearSshForm();
@@ -229,12 +234,17 @@ export function RemoteHostManager({ client, onError }: {
       const resolved = await client.resolveSshConfig(name);
       if (resolved.port) setSshPort(String(resolved.port));
       if (resolved.username) setUsername(resolved.username);
-      if (resolved.privateKey) {
-        setPrivateKey(resolved.privateKey);
-        setShowPrivateKey(true);
+      if (resolved.identityFile) {
+        // A readable key file is copied by the API (privateKeyPath); otherwise
+        // the user pastes the key themselves.
+        if (resolved.identityKeyReadable) setImportedKeyPath(resolved.identityFile);
+        else setShowPrivateKey(true);
       }
-      if (resolved.username || resolved.privateKey) setShowCredentials(true);
-      setImportNote(`Imported the ssh_config entry for ${name} — review the prefilled values, then submit.`);
+      if (resolved.username || resolved.identityFile) setShowCredentials(true);
+      const keyNote = resolved.identityFile
+        ? resolved.identityKeyReadable ? `, key ${resolved.identityFile}` : " — the identity file is not readable here, paste the key yourself"
+        : "";
+      setImportNote(`Imported the ssh_config entry for ${name}${resolved.hostName ? ` (connects to ${resolved.hostName})` : ""}${keyNote} — review the prefilled values, then submit.`);
     } catch (error) {
       onError(error instanceof Error ? error.message : `No ssh_config entry named ${name}`);
     } finally {
@@ -274,9 +284,23 @@ export function RemoteHostManager({ client, onError }: {
     setBusyId(`runner:${host.id}`);
     try {
       if (!connected && trust) await client.trustRemoteHostKey(host.id, trust);
-      if (connected) await client.disconnectRemoteRunner(host.id);
-      else await client.connectRemoteRunner(host.id);
+      const status = connected
+        ? await client.disconnectRemoteRunner(host.id)
+        : await client.connectRemoteRunner(host.id);
       await refresh();
+      if (!connected && status.hostKeyChallenge) {
+        const challenge = status.hostKeyChallenge;
+        setHostKeyPrompt({
+          changed: challenge.changed,
+          hostKey: challenge,
+          origin: host.id,
+          target: host.alias,
+          resume: async () => {
+            setHostKeyPrompt(undefined);
+            await toggleRunnerConnection(host, connected, challenge);
+          },
+        });
+      }
     } catch (error) {
       handleFailure(error, host.alias, host.id, (hostKey) => toggleRunnerConnection(host, connected, hostKey), "Runner connection failed");
       await refresh();
@@ -308,11 +332,13 @@ export function RemoteHostManager({ client, onError }: {
         // Empty fields keep the stored value; there is no way to read them back.
         ...(credPassword ? { password: credPassword } : {}),
         ...(credPrivateKey.trim() ? { privateKey: credPrivateKey.trim() } : {}),
+        ...(credPassphrase ? { passphrase: credPassphrase } : {}),
       });
       setEditingCredentials(undefined);
       setCredUsername("");
       setCredPassword("");
       setCredPrivateKey("");
+      setCredPassphrase("");
       setCredShowKey(false);
       await refresh();
     } catch (error) {
@@ -340,7 +366,10 @@ export function RemoteHostManager({ client, onError }: {
       <label><span>Username</span><input autoComplete="off" value={credUsername} onChange={(event) => setCredUsername(event.target.value)} placeholder="researcher" /></label>
       <label><span>Password</span><input autoComplete="new-password" type="password" value={credPassword} onChange={(event) => setCredPassword(event.target.value)} placeholder="Leave empty to keep the stored one" /></label>
     </div>
-    {credShowKey ? <label className="remote-host-key-field"><span>SSH private key</span><textarea autoComplete="off" rows={4} spellCheck={false} value={credPrivateKey} onChange={(event) => setCredPrivateKey(event.target.value)} placeholder="Leave empty to keep the stored one" /></label>
+    {credShowKey ? <div className="remote-host-key-fields">
+      <label className="remote-host-key-field"><span>SSH private key</span><textarea autoComplete="off" rows={4} spellCheck={false} value={credPrivateKey} onChange={(event) => setCredPrivateKey(event.target.value)} placeholder="Leave empty to keep the stored one" /></label>
+      <label><span>Key passphrase (optional)</span><input autoComplete="new-password" type="password" value={credPassphrase} onChange={(event) => setCredPassphrase(event.target.value)} placeholder="Only if the key is encrypted" /></label>
+    </div>
       : <button className="secondary-button remote-host-key-toggle" onClick={() => setCredShowKey(true)} type="button">Paste an SSH private key</button>}
     <div className="remote-host-form-actions">
       <button className="secondary-button" onClick={() => setEditingCredentials(undefined)} type="button">Cancel</button>
@@ -369,7 +398,7 @@ export function RemoteHostManager({ client, onError }: {
     {hosts.length ? <div className="remote-host-list">{hosts.map((host) => {
       const connected = host.runnerStatus?.state === "ready";
       const state = connected ? "ready" : host.runnerStatus?.state ?? host.status;
-      const untrustedKey = (host as HostWithKeyState).hostKey;
+      const untrustedKey = host.hostKey?.trusted === false ? host.hostKey : undefined;
       return <article className={`remote-host-card ${host.status}`} key={host.id}>
         <div className="remote-host-card-main">
           <div className="remote-host-card-title"><strong>{host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? "connected" : state}</span></div>
@@ -377,13 +406,13 @@ export function RemoteHostManager({ client, onError }: {
           <small>{host.connectionKind === "direct" ? host.capabilities?.platform ?? "OS unknown" : `${host.capabilities?.platform ?? "OS unknown"} · ${runnerSource(host)}`}</small>
           {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
           {host.runnerStatus?.error ? <small>{host.runnerStatus.error}</small> : null}
-          {untrustedKey && untrustedKey.trusted === false ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
+          {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
         </div>
         <div className="remote-host-actions">
           <button className="secondary-button" disabled={Boolean(busyId) || (!connected && !runnerUsable(host))} onClick={() => void toggleRunnerConnection(host, connected)} type="button">{connected ? "Disconnect" : "Connect runner"}</button>
           <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void probe(host)} type="button">Refresh probe</button>
           {host.connectionKind === "ssh" ? <button aria-expanded={editingCredentials === host.id} className="secondary-button" disabled={Boolean(busyId)} onClick={() => setEditingCredentials(editingCredentials === host.id ? undefined : host.id)} type="button">Credentials</button> : null}
-          {untrustedKey && untrustedKey.trusted === false ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => setHostKeyPrompt({ changed: false, hostKey: untrustedKey, origin: host.id, target: host.alias, resume: async () => { setHostKeyPrompt(undefined); await probe(host, untrustedKey); } })} type="button">Trust host key</button> : null}
+          {untrustedKey ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => setHostKeyPrompt({ changed: false, hostKey: untrustedKey, origin: host.id, target: host.alias, resume: async () => { setHostKeyPrompt(undefined); await probe(host, untrustedKey); } })} type="button">Trust host key</button> : null}
           <button className="danger-button" disabled={Boolean(busyId)} onClick={() => void removeHost(host)} type="button">Delete</button>
         </div>
         {renderHostKeyPrompt(host.id)}
@@ -414,7 +443,10 @@ export function RemoteHostManager({ client, onError }: {
           <label><span>Username</span><input autoComplete="off" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="researcher" /></label>
           <label><span>Password (optional)</span><input autoComplete="new-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Stored encrypted, never shown again" /></label>
         </div>
-        {showPrivateKey ? <label className="remote-host-key-field"><span>SSH private key (optional)</span><textarea autoComplete="off" rows={4} spellCheck={false} value={privateKey} onChange={(event) => setPrivateKey(event.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" /></label>
+        {showPrivateKey ? <div className="remote-host-key-fields">
+          <label className="remote-host-key-field"><span>SSH private key (optional)</span><textarea autoComplete="off" rows={4} spellCheck={false} value={privateKey} onChange={(event) => setPrivateKey(event.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" /></label>
+          <label><span>Key passphrase (optional)</span><input autoComplete="new-password" type="password" value={keyPassphrase} onChange={(event) => setKeyPassphrase(event.target.value)} placeholder="Only if the key is encrypted" /></label>
+        </div>
           : <button className="secondary-button remote-host-key-toggle" onClick={() => setShowPrivateKey(true)} type="button">Paste an SSH private key</button>}
       </div> : null}
       {renderHostKeyPrompt("add")}

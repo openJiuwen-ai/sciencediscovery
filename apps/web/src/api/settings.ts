@@ -40,6 +40,8 @@ import type {
   UninstallEnvironmentRequest,
   RegisterRemoteHostRequest,
   RemoteHostTarget,
+  SshConfigHostImport,
+  TrustedRemoteHostKey,
   RemoteRunnerStatus,
   ReviewerSpecialistSettings,
   RuntimeSettingsDetails,
@@ -62,34 +64,14 @@ import { ApiRequestError } from "./auth.js";
 import { ArtifactsApiClient } from "./artifacts.js";
 
 /**
- * SSH credentials and host-key trust contract, pending the API change (dev2).
- * Password and private key are write-only: stored encrypted like the direct
- * runner token, never returned by the API, and cleared from the form on save.
+ * SSH credentials are write-only: stored encrypted like the direct runner
+ * token, never returned by the API, and cleared from the form on save.
+ * Sending `null` forgets a stored value.
  */
-export interface SshCredentialsRequest {
-  username?: string;
-  password?: string;
-  privateKey?: string;
-}
+export type SshCredentialsRequest = Pick<RegisterRemoteHostRequest, "passphrase" | "password" | "privateKey" | "username">;
 
 /** A host key fingerprint the SSH server presented. */
-export interface RemoteHostKeyInfo {
-  algorithm: string;
-  fingerprint: string;
-}
-
-/** What "Import from ssh_config" prefills into the SSH form. */
-export interface ResolvedSshConfig {
-  hostName?: string;
-  port?: number;
-  username?: string;
-  privateKey?: string;
-}
-
-export type RegisterRemoteHostBody = RegisterRemoteHostRequest & SshCredentialsRequest & {
-  /** Present when the user just trusted this fingerprint in the settings UI. */
-  trustHostKey?: RemoteHostKeyInfo;
-};
+export type RemoteHostKeyInfo = Pick<TrustedRemoteHostKey, "algorithm" | "fingerprint">;
 
 /** Host-key failures arrive as these error codes with `details.hostKey`. */
 export const SSH_HOST_KEY_UNTRUSTED_CODE = "SSH_HOST_KEY_UNTRUSTED";
@@ -155,7 +137,7 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request("/api/remote-hosts");
   }
 
-  registerRemoteHost(body: RegisterRemoteHostBody): Promise<RemoteHostTarget> {
+  registerRemoteHost(body: RegisterRemoteHostRequest): Promise<RemoteHostTarget> {
     return this.request("/api/remote-hosts", { body: JSON.stringify(body), method: "POST" });
   }
 
@@ -176,7 +158,7 @@ export class SettingsApiClient extends ArtifactsApiClient {
   }
 
   /** Resolve an ssh_config Host entry to prefill the SSH form ("import alias"). */
-  resolveSshConfig(alias: string): Promise<ResolvedSshConfig> {
+  resolveSshConfig(alias: string): Promise<SshConfigHostImport> {
     return this.request(`/api/remote-hosts/ssh-config?alias=${encodeURIComponent(alias)}`);
   }
 
