@@ -68,15 +68,19 @@ openjiuwen-ci/
     |-- anti_poison/<mr-id>/anti_poison.json
     |-- sca/<mr-id>/sca.json
     `-- cache/
-        `-- toolchains/
+        |-- toolchains/
+        |   `-- v1/
+        |       `-- <immutable versioned toolchain object>
+        `-- qemu/
             `-- v1/
-                `-- <immutable versioned toolchain object>
+                `-- noble-server-cloudimg-amd64.img
 ```
 
 The parent pipeline owns the run-scoped `ci/` objects and consumes the four
 code-check JSON objects. The registered code-check child tasks own those JSON
 objects; do not make the parent overwrite them. The stable `cache/` prefix is
-shared across runs and contains only checksum-pinned toolchain archives.
+shared across runs and contains only checksum-pinned immutable artifacts:
+versioned toolchain archives and the date-pinned QEMU Ubuntu base image.
 
 The code-check paths are MR-scoped rather than run-scoped and can be replaced
 by a later child run for the same MR. Each JSON object supplies its own
@@ -196,6 +200,32 @@ Public runtime code exposes only the generic `BINARY_CACHE_URL` and
 scripts. Do not cache lockfile-driven dependency trees, mutable catalogs, or
 distro-specific package-manager downloads in this prefix.
 
+## Stable QEMU image cache
+
+The QEMU image has a separate cache namespace because it is much larger than
+the toolchain objects:
+
+```text
+sciencediscovery/cache/qemu/v1/noble-server-cloudimg-amd64.img
+```
+
+Its expected SHA256 is
+`d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30`.
+Both the seed job and Runner job call `.ci/fetch-qemu-image.sh`, which delegates
+to `.ci/fetch-verified-binary.sh` and therefore checks local bytes, public OBS,
+and the pinned TUNA source with the same digest. The fetcher's default
+five-minute per-download limit remains suitable for small toolchains; image
+calls raise it explicitly. The seed uses 1,800 seconds inside its 40-minute
+job, while the 20-minute Runner job uses 1,080 seconds so a cache failure leaves
+time to upload its diagnostic log.
+
+The seed job runs before Runner UT and uses `upload-obs` to write only the
+verified image to the stable key. It is deliberately excluded from the final
+test-result gate, and Runner UT uses `always()` after the dependency: an upload
+failure remains visible in the seed job but cannot replace the Runner's own
+exit status. Because seeding precedes the test, a later Runner failure does not
+prevent a verified source download from filling the cache.
+
 ## Failure signals
 
 | Symptom | Interpretation and action |
@@ -205,4 +235,5 @@ distro-specific package-manager downloads in this prefix.
 | ARM Build is green but a required aarch64 object is absent | Compare `OBS_DIRECTORY`, `ARTIFACT_PATH`, the package output directory, and the verifier's required names. Keep verification red. |
 | CPython exists in the Build log but its public URL returns `403` | Percent-encode `+` as `%2B` in the HTTP request. Do not rename the OBS key. |
 | A stable cache object has the wrong checksum | Treat it as a cache miss, download the pinned source, and refill only after successful verification. Never change the expected checksum to accept cached bytes. |
+| QEMU image lookup falls back to TUNA on every run | The stable image object is absent, failed upload, or does not match the pinned checksum. Read `qemu_image_seed`, then verify the exact `cache/qemu/v1` key before rerunning. |
 | A rerun shows artifacts from an earlier run | The object key omitted `pipeline.run_id`. Restore the `<commit>/<run-id>/` hierarchy. |

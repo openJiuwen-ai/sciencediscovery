@@ -184,18 +184,7 @@ fi
 
 image_name=noble-server-cloudimg-amd64.img
 image_path="$cache_dir/$image_name"
-image_url=https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/noble/20260826/noble-server-cloudimg-amd64.img
-image_sha256=d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30
-if [ -f "$image_path" ] && printf '%s  %s\n' "$image_sha256" "$image_path" | sha256sum --check --status; then
-  echo "Using the verified cached Ubuntu cloud image"
-else
-  rm -f -- "$image_path"
-  echo "Downloading the pinned Ubuntu cloud image from TUNA"
-  curl --fail --location --retry 3 --show-error \
-    "$image_url" --output "$image_path"
-  printf '%s  %s\n' "$image_sha256" "$image_path" | sha256sum --check --status \
-    || { echo "FATAL: Ubuntu cloud image checksum mismatch." >&2; exit 1; }
-fi
+bash "$repo_root/.ci/fetch-qemu-image.sh" --output "$image_path"
 
 # The published cloud image is deliberately compact. A disposable overlay
 # gives package installation and pnpm enough room while keeping the pinned base

@@ -55,6 +55,10 @@ inputs:
     type: string
     default: https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/toolchains/v1
     manual_override: false
+  CI_QEMU_IMAGE_CACHE_URL:
+    type: string
+    default: https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu/v1
+    manual_override: false
 stages:
   176464703972462e4780d-56ca-4c54-9c49-29291c471dfd:
     jobs:
@@ -273,10 +277,53 @@ stages:
         - ubuntu-latest
         - x64
         - large
+      qemu_image_seed:
+        select: always
+        name: Seed QEMU Ubuntu image cache
+        needs: []
+        timeout: 40
+        timeout_unit: minute
+        steps:
+        - name: Download the source commit
+          uses: official_git_clone
+          identifier: 1788325000000b672a148-54ad-4960-a3aa-11506f41884a
+        - name: Fetch and verify the QEMU Ubuntu image
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              export CI_QEMU_IMAGE_CACHE_URL="${{ env.CI_QEMU_IMAGE_CACHE_URL }}"
+              export CI_QEMU_IMAGE_DOWNLOAD_MAX_TIME=1800
+              IMAGE_DIR="$PWD/.ci-results/qemu-image-seed"
+              IMAGE_PATH="$IMAGE_DIR/noble-server-cloudimg-amd64.img"
+              mkdir -p "$IMAGE_DIR"
+              bash .ci/fetch-qemu-image.sh --output "$IMAGE_PATH"
+              printf '%s  %s\n' d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30 "$IMAGE_PATH" | sha256sum --check
+              echo "Verified QEMU Ubuntu image is ready for OBS cache upload"
+              ls -lh "$IMAGE_PATH"
+          identifier: 1788325000001b5f5c1bb-722f-416b-b797-c029ddf73576
+        - name: Cache the verified QEMU Ubuntu image in OBS
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/qemu/v1/noble-server-cloudimg-amd64.img
+            source_file: "${SHARE_PATH}/.ci-results/qemu-image-seed/noble-server-cloudimg-amd64.img"
+            self_folder: "false"
+          identifier: 17883250000027031ba97-32e7-41ba-81b6-b72e5b4a796a
+        if: "${{ default() }}"
+        runs-on:
+        - codearts-hosted
+        - ubuntu-latest
+        - x64
+        - large
       ut_runner_qemu:
         select: always
         name: Runner UT (QEMU TCG sandbox)
-        needs: []
+        needs:
+        - qemu_image_seed
         timeout: 20
         timeout_unit: minute
         steps:
@@ -371,6 +418,8 @@ stages:
               cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_BINARY_CACHE_URL="${{ env.CI_BINARY_CACHE_URL }}"
+              export CI_QEMU_IMAGE_CACHE_URL="${{ env.CI_QEMU_IMAGE_CACHE_URL }}"
+              export CI_QEMU_IMAGE_DOWNLOAD_MAX_TIME=1080
               export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
               export CI_PYPI_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               RESULT_DIR=.ci-results/ut-runner-qemu
@@ -406,7 +455,7 @@ stages:
               echo "QEMU Runner UT exited with status $TEST_RC"
               exit "$TEST_RC"
           identifier: 1788300000004eaf6d7c1-bc1c-4ec9-b513-42006793b50b
-        if: "${{ default() }}"
+        if: "${{ always() }}"
         runs-on:
         - codearts-hosted
         - ubuntu-latest

@@ -125,9 +125,11 @@ paths, and call the repository-owned layer entry point.
 Every job in the debug parent workflow has a CodeArts job timeout expressed as
 `timeout` plus `timeout_unit: minute`. Give lightweight preparation,
 artifact-verification, and result-publication jobs five minutes. Give each UT,
-ST, binary-package, QEMU, and code-check job 20 minutes. A timeout must leave
-the job non-completed so the existing failure post path publishes a failed
-result; do not convert it to success or hide it with step-level continuation.
+ST, binary-package, QEMU, and code-check job 20 minutes. The checksum-pinned
+QEMU image seed job is the sole 40-minute exception because a first source
+download can exceed 20 minutes. A timeout must leave the job non-completed so
+the existing failure post path publishes a failed result; do not convert it to
+success or hide it with step-level continuation.
 
 `official_git_clone` may still download the configured `main` source for a
 PR-context run, so UT/ST must explicitly switch to the source commit from the
@@ -175,18 +177,23 @@ the host kernel and its namespace restriction.
 
 The CI-branch experiment instead runs `pnpm ci:ut:runner` in a full Ubuntu
 guest under `qemu-system-x86_64 -accel tcg,thread=multi`. TCG is software-only,
-so `/dev/kvm` is neither requested nor required. The host script downloads a
-date-pinned TUNA Ubuntu cloud image and verifies its SHA256. When the host has
-no QEMU, the script verifies fixed `apk.static`, Alpine signing-key, and CA
-bundle package checksums. The CA bundle authenticates the mirror's HTTPS
-certificate, while the signing key independently authenticates Alpine indexes
-and packages. The script then assembles QEMU plus its musl runtime in the
-workspace. This user-space bootstrap is independent of the host package
-manager and glibc, requires no root access, and runs package scripts neither on
-the host nor in a chroot. The VM boots with a NoCloud seed over QEMU user
-networking. The guest clears its own Ubuntu AppArmor userns sysctl, passes the
-real bubblewrap probe as the unprivileged `ci` user, and invokes the unchanged
-layer entry point. Only the exact
+so `/dev/kvm` is neither requested nor required. A 40-minute seed job fetches
+the date-pinned Ubuntu cloud image through the verified local-cache, public
+cache, and TUNA-source chain, then uploads the verified bytes to the stable
+QEMU cache key. The dependent Runner job still has a 20-minute limit and
+downloads the same object through the same SHA256-pinned fetcher before
+booting. It uses `always()` so an upload failure remains visible without
+preventing its own cache/source attempt; the seed job is not part of the
+Runner result gate. When the host has no QEMU, the script verifies fixed
+`apk.static`, Alpine signing-key, and CA bundle package checksums. The CA bundle
+authenticates the mirror's HTTPS certificate, while the signing key
+independently authenticates Alpine indexes and packages. The script then
+assembles QEMU plus its musl runtime in the workspace. This user-space
+bootstrap is independent of the host package manager and glibc, requires no
+root access, and runs package scripts neither on the host nor in a chroot. The
+VM boots with a NoCloud seed over QEMU user networking. The guest clears its
+own Ubuntu AppArmor userns sysctl, passes the real bubblewrap probe as the
+unprivileged `ci` user, and invokes the unchanged layer entry point. Only the exact
 `QEMU_SANDBOX_TEST_RESULT=<exit-code>` serial marker can make the host job
 pass; the host removes serial CR characters before matching, and missing or
 malformed markers fail closed. The guest sets Node's test-file concurrency to
