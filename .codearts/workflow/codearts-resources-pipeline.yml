@@ -214,6 +214,21 @@ stages:
               (cd "$OUTPUT_DIR" && sha256sum --check SHA256SUMS)
               ls -lh "$OUTPUT_DIR/ScienceDiscovery-qemu-runner-noble-amd64.qcow2"
           identifier: 17883390000017f2349b5-edfc-4995-a66d-c93558b1527e
+        - name: Require the local QEMU Runner outputs
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              OUTPUT_DIR="$PWD/.codearts-resources/qemu-runner"
+              test -s "$OUTPUT_DIR/ScienceDiscovery-qemu-runner-noble-amd64.qcow2"
+              test -s "$OUTPUT_DIR/SHA256SUMS"
+              test -s "$OUTPUT_DIR/VERSION"
+              (cd "$OUTPUT_DIR" && sha256sum --check SHA256SUMS)
+              grep -Fx 'recipe=qemu-runner-v1' "$OUTPUT_DIR/VERSION"
+              grep -Fx 'resource_commit=${{ sources.sciencediscovery.commit_id }}' "$OUTPUT_DIR/VERSION"
+              grep -Fx 'resource_run_id=${{ pipeline.run_id }}' "$OUTPUT_DIR/VERSION"
+          identifier: 1788342000000b5065903-e34b-4dfb-ae0d-08c597d9332e
         - name: Upload the pre-provisioned QEMU Runner image
           uses: upload-obs
           with:
@@ -244,6 +259,48 @@ stages:
             source_file: "${SHARE_PATH}/.codearts-resources/qemu-runner/VERSION"
             self_folder: "false"
           identifier: 1788339000004c48cc4ca-6e64-4481-8427-c8d12d625f17
+        - name: Verify the published QEMU Runner artifacts
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              BASE_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu-runner/v1/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}"
+              VERIFY_DIR="$PWD/.codearts-resources/qemu-runner-published"
+              IMAGE_NAME=ScienceDiscovery-qemu-runner-noble-amd64.qcow2
+              mkdir -p "$VERIFY_DIR"
+              fetch_published() {
+                name="$1"
+                attempt=1
+                while [ "$attempt" -le 5 ]; do
+                  if curl --fail --location --retry 2 --connect-timeout 15 \
+                    --max-time 600 --silent --show-error \
+                    "$BASE_URL/$name" --output "$VERIFY_DIR/$name.part"; then
+                    mv "$VERIFY_DIR/$name.part" "$VERIFY_DIR/$name"
+                    echo "Downloaded published QEMU Runner object: $name"
+                    return 0
+                  fi
+                  rm -f "$VERIFY_DIR/$name.part"
+                  echo "Waiting for published QEMU Runner object: $name (attempt $attempt)"
+                  attempt=$((attempt + 1))
+                  sleep 2
+                done
+                echo "FATAL: published QEMU Runner object is unavailable: $name" >&2
+                return 1
+              }
+              fetch_published SHA256SUMS
+              fetch_published VERSION
+              fetch_published "$IMAGE_NAME"
+              test "$(wc -l < "$VERIFY_DIR/SHA256SUMS")" -eq 1
+              grep -Eq "^[0-9a-f]{64}  $IMAGE_NAME$" "$VERIFY_DIR/SHA256SUMS"
+              expected_sha256=$(awk '{print $1}' "$VERIFY_DIR/SHA256SUMS")
+              actual_sha256=$(sha256sum "$VERIFY_DIR/$IMAGE_NAME" | awk '{print $1}')
+              test "$actual_sha256" = "$expected_sha256"
+              grep -Fx 'recipe=qemu-runner-v1' "$VERIFY_DIR/VERSION"
+              grep -Fx 'resource_commit=${{ sources.sciencediscovery.commit_id }}' "$VERIFY_DIR/VERSION"
+              grep -Fx 'resource_run_id=${{ pipeline.run_id }}' "$VERIFY_DIR/VERSION"
+              echo "Verified published QEMU Runner image: $actual_sha256"
+          identifier: 17883420000013956977a-b91c-4668-ac74-b45993800807
         if: "${{ default() }}"
         runs-on:
         - codearts-hosted
