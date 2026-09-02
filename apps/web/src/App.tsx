@@ -1104,8 +1104,12 @@ export function App() {
   // button). The snapshot is shared via useMemorySubgraph so the explorer never
   // re-fetches what the card already polled.
   const [memoryExplorerOpen, setMemoryExplorerOpen] = useState(false);
-  // A graph node a report chip asked to open; MemoryGraphView selects it on
-  // change, then clears the pending state. Set by handleChipClick (paper chips).
+  // A graph node a report chip asked to open; MemoryGraphExplorer picks it
+  // up as `initialNodeId` on mount (and reacts to changes while open via an
+  // effect — see MemoryGraphExplorer). Set by handleChipClick (paper /
+  // sourcefile chips). The label is carried for symmetry / future callers
+  // that might want to scope the focus by label, but the explorer reads the
+  // id directly when focusing a node.
   const [pendingMemoryNode, setPendingMemoryNode] = useState<{ label: MemoryGraphNodeLabel; id: string } | undefined>();
   // An Evidence chip asked to open its detail modal (shows the evidence + its
   // source Paper). Set by handleChipClick (evidence chips).
@@ -2157,7 +2161,11 @@ export function App() {
   // Open a report chip's referenced graph node. Evidence chips open a dedicated
   // detail modal (evidence content + the Paper it was extracted from); artifact
   // chips open the ArtifactModal directly (so an [artifact1] chip shows the
-  // figure/data itself); paper/claim chips switch the memory view to the node.
+  // figure/data itself); sourcefile chips do the same — user-uploaded files
+  // show up in the artifacts list with origin=user_upload, so a [sourcefile1]
+  // chip resolves to that ArtifactModal just like clicking data.csv from the
+  // right rail. The final fallthrough opens the full-screen graph explorer
+  // for any future kind that has a graph label but no dedicated modal.
   async function handleChipClick(reference: ComposerReference): Promise<void> {
     // Evidence chips open a dedicated detail modal (evidence content + the
     // Paper it was extracted from), not the workspace memory panel.
@@ -2191,13 +2199,38 @@ export function App() {
         // fall through to the memory-panel path below.
       }
     }
+    // Source-file chips open the same ArtifactModal the right-rail artifacts
+    // card uses for user-uploaded files: clicking [sourcefile1] should land
+    // on data.csv's preview, not jump to a graph canvas. The chip's id is
+    // the graph SourceFile node id (``source_file:session:<sid>:<filename>``)
+    // — its trailing segment is the basename the ArtifactModal opens by.
+    // Reverse-resolve from the cached artifacts list (the workspace already
+    // polled it) so the click is synchronous and the right Session is pinned.
+    if (reference.kind === "sourcefile") {
+      const baseName = reference.id.includes(":")
+        ? reference.id.slice(reference.id.lastIndexOf(":") + 1)
+        : reference.id;
+      const hit = artifacts.find((item) => item.logicalName === baseName);
+      if (hit) {
+        setArtifactModalVersion(reference.version);
+        setArtifactModalSessionId(hit.createdInSessionId || undefined);
+        setArtifactModalName(hit.logicalName);
+        return;
+      }
+      console.warn("[chip] sourcefile chip did not resolve: id=", reference.id);
+      // fall through to the memory-panel path below.
+    }
     const label = KIND_TO_LABEL[reference.kind];
     if (!label) return; // session/skill chips have no graph node label.
     setPendingMemoryNode({ label, id: reference.id });
+    // Open the full-screen explorer and close the artifact modal so the chip
+    // jump lands on a graph canvas focused on the node, not on the inline card
+    // (which has no chip wiring). The explorer reads `pendingMemoryNode` as
+    // its `initialNodeId` and reacts to changes while open, so re-selecting
+    // a different node from a chained modal still focuses the new one.
+    setMemoryExplorerOpen(true);
     setArtifactModalName(undefined);
     setArtifactModalSessionId(undefined);
-    if (workspaceCollapsed) setWorkspaceCollapsed(false);
-    else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function handleMessagesScroll(): void {
@@ -4703,7 +4736,10 @@ export function App() {
               // Opened from the right-rail card, not a product modal: no initial
               // node and no autoChain (autoChain would jump straight into a
               // chain view; the default here is the full graph backbone, and
-              // removing autoChain entirely is a later commit).
+              // removing autoChain entirely is a later commit). When a chip
+              // jump sets pendingMemoryNode, the explorer reads it as the
+              // entry focus.
+              {...(pendingMemoryNode ? { initialNodeId: pendingMemoryNode.id } : {})}
               onClose={() => setMemoryExplorerOpen(false)}
               onError={reportError}
               sessionId={session.id}
@@ -4719,6 +4755,18 @@ export function App() {
           client={client}
           evidenceId={evidenceDetailId}
           onClose={() => setEvidenceDetailId(undefined)}
+          // SourceFile upstream of this Evidence → open the ArtifactModal on
+          // the same logicalName the right-rail card uses (mirrors the
+          // sourcefile chip click flow). Pin to the SourceFile's owning
+          // session so the modal reads its own artifact list, not the active
+          // Session's (artifacts are project-scoped but the chain walk
+          // already gave us the canonical session id from the node id).
+          onOpenSourceFile={(logicalName, sessionId) => {
+            setArtifactModalVersion(undefined);
+            setArtifactModalSessionId(sessionId);
+            setEvidenceDetailId(undefined);
+            setArtifactModalName(logicalName);
+          }}
           sessionId={activeSessionId}
         />
       ) : null}

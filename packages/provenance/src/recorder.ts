@@ -294,6 +294,7 @@ export class ProvenanceRecorder {
       : undefined;
     const code = run ? (await this.cas.read(run.code.hash)).toString("utf8") : "";
     const inputs = this.inferredArtifactInputs(options.sessionId, options.name, code, run?.id);
+    const sourceFileInputs = this.inferredSourceFileInputs(options.sessionId, options.name, code);
     const kind = this.artifactKind(options.path);
     const isReportKind = kind === "markdown" || kind === "latex" || kind === "report";
     // Register FIRST, drain AFTER. registerWorkspaceArtifact reads the file
@@ -367,6 +368,7 @@ export class ProvenanceRecorder {
         tool: run.tool,
         turnId: run.turnId,
         parentSubagentId: options.parentSubagentId,
+        inputSourceFiles: sourceFileInputs,
       });
     }
     return { artifact, version };
@@ -401,6 +403,61 @@ export class ProvenanceRecorder {
       compositeKeys.push({ artifactId: artifact.id, version: version.version });
     }
     return { versionIds, compositeKeys };
+  }
+
+  /** Infer the uploaded SourceFile inputs a piece of code read by scanning the
+   * code text for uploaded files' names. Symmetric to ``inferredArtifactInputs``
+   * but for SourceFile (uploaded files) instead of Artifact (produced files).
+   * Returns the deterministic ``file_id`` keys
+   * (``source_file:session:<sessionId>:<path>`` — the same key
+   * ``upsert_source_file`` uses, so re-runs merge into the same edge) for the
+   * ``input_source_files`` payload field. SourceFile has no version, so unlike
+   * ``inferredArtifactInputs`` there is no version/composite-key form.
+   *
+   * Why this is a separate path and not folded into ``inferredArtifactInputs``:
+   * uploaded files live in the catalog as ``ScientificArtifact`` with
+   * ``origin === "user_upload"``, but in the graph they are ``SourceFile`` nodes
+   * (block 1), NOT ``Artifact`` nodes — ``registerWorkspaceArtifact`` writes
+   * only the catalog, not the graph; the graph's Artifact nodes come solely from
+   * ``declareWorkspaceArtifact`` / ``observeExecution``. So
+   * ``inferredArtifactInputs``'s ``MATCH (inA:Artifact {artifact_id, version})``
+   * can never hit an uploaded file (no such Artifact node exists). This method
+   * scans the same catalog but emits ``file_id`` keys for the distinct
+   * ``SourceFile -[:input]-> Code`` edge path. Same grain as
+   * ``inferredArtifactInputs`` (``code.includes(name)``, no AST parsing — the
+   * "zero store reads" design, see the comment on
+   * ``inferredArtifactInputs`` line 329), by intent: the upload path/basename
+   * appearing in the code is the same heuristic artifact logical names use.
+   *
+   * The upload handler (``registerWorkspaceArtifact`` with ``origin:
+   * "user_upload"``) sets ``logicalName = path`` (the workspace-relative
+   * basename; uploads are sanitized to a single-segment basename, so
+   * ``logicalName`` IS the basename and also the full path). Both the basename
+   * and the full path are matched so ``pd.read_csv("data.csv")`` and
+   * ``pd.read_csv("uploads/data.csv")`` both hit (the latter only if a future
+   * caller relaxes the single-segment sanitizer; today the two are equal). */
+  private inferredSourceFileInputs(
+    sessionId: string,
+    outputPath: string | undefined,
+    code: string,
+  ): Array<{ fileId: string }> {
+    const out: Array<{ fileId: string }> = [];
+    for (const artifact of this.store.listArtifacts(sessionId)) {
+      if (artifact.origin !== "user_upload") continue;
+      // logicalName == the uploaded basename (== the full workspace-relative
+      // path today, since uploads are sanitized to a single segment). Match
+      // both the basename and the full path so either form the code wrote hits.
+      const path = artifact.logicalName;
+      if (!path) continue;
+      // Exclude self-output: if this uploaded file's name equals the artifact
+      // currently being declared (outputPath), it is not an input. Mirrors
+      // inferredArtifactInputs's ``artifact.logicalName === outputPath`` guard.
+      if (outputPath && path === outputPath) continue;
+      const base = path.includes("/") ? (path.split("/").pop() ?? path) : path;
+      if (!code.includes(base) && !code.includes(path)) continue;
+      out.push({ fileId: `source_file:session:${sessionId}:${path}` });
+    }
+    return out;
   }
 
   private async recordGeneratedFiles(options: {
@@ -576,6 +633,7 @@ export class ProvenanceRecorder {
         workspaceRoot: options.workspaceRoot,
       });
     }
+    const shellSourceFileInputs = this.inferredSourceFileInputs(options.sessionId, undefined, options.code);
     this.observeExecution({
       executionId,
       sessionId: options.sessionId,
@@ -592,6 +650,7 @@ export class ProvenanceRecorder {
       stderrHash: stderr.hash,
       envHash: null,
       parentSubagentId: options.parentSubagentId,
+      inputSourceFiles: shellSourceFileInputs,
     });
     return result;
   }
@@ -743,6 +802,7 @@ export class ProvenanceRecorder {
     const envRevision = result.environmentRevisionId
       ? this.store.listEnvironmentRevisions().find((candidate) => candidate.id === result.environmentRevisionId)
       : undefined;
+    const sourceFileInputs = this.inferredSourceFileInputs(options.sessionId, undefined, options.code);
     this.observeExecution({
       executionId,
       sessionId: options.sessionId,
@@ -759,6 +819,7 @@ export class ProvenanceRecorder {
       stderrHash: stderr.hash,
       envHash: envRevision?.snapshot.hash ?? null,
       parentSubagentId: options.parentSubagentId,
+      inputSourceFiles: sourceFileInputs,
     });
     if (environmentSyncError) throw environmentSyncError;
     return result;

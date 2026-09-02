@@ -26,15 +26,21 @@ import { Field, humanizeKey, LinkField, LongText, partitionEvidenceExtra, TimeFi
  *  "this node made that" claim and reads first; next is the temporal chain
  *  (a sibling produced later) and reads beneath it. Others follow the schema
  *  order; any unknown type lands last. */
-const EDGE_DISPLAY_ORDER: MemoryGraphEdgeType[] = ["produces", "next", "extracts", "supports", "stated_in", "supersedes", "input"];
+const EDGE_DISPLAY_ORDER: MemoryGraphEdgeType[] = ["produces", "next", "extracts", "supports", "stated_in", "supersedes", "input", "feeds"];
 
 export type ResolveState = "idle" | "loading" | "missing" | "resolved";
 
 /**
- * Map a graph Artifact node onto a real session artifact's logical name, so the
- * shared artifacts panel can load it. The graph node carries both the
+ * Map a graph Artifact (or SourceFile — uploaded file's catalog row, see
+ * block 1's upload pipeline) onto a real session artifact's logical name, so
+ * the shared artifacts panel can load it. The graph node carries both the
  * suffix-less workspace path and a precise artifact_id; we match on id first,
  * falling back to path/logicalName for legacy nodes that lack an id.
+ *
+ * For SourceFile the catalog entry has ``origin="user_upload"`` and no version;
+ * matching is on ``extra.path`` (== ``extra.name`` == logicalName for uploads)
+ * and constrained to the same session so a same-named upload in another
+ * session never wins.
  */
 export function useResolvedArtifactName(
   client: ApiClient,
@@ -48,10 +54,13 @@ export function useResolvedArtifactName(
   // actually decides the answer, not on the object reference — otherwise the
   // resolved name is dropped and the whole product column remounts every poll.
   const isArtifact = node?.label === "Artifact";
+  const isSourceFile = node?.label === "SourceFile";
   const extra = node?.extra ?? {};
   const lookupKey = isArtifact
     ? JSON.stringify([node.id, extra.path ?? null, extra.artifact_id ?? null])
-    : "";
+    : isSourceFile
+      ? JSON.stringify([extra.path ?? null, extra.name ?? null])
+      : "";
 
   useEffect(() => {
     if (!lookupKey) { setName(undefined); setState("idle"); return; }
@@ -66,9 +75,13 @@ export function useResolvedArtifactName(
         // logicalName is a fallback only: cross-session dedup rewrites the 2nd
         // same-named artifact to "name (s-<prefix>"), while extra.path carries
         // the suffix-less base name, so a name match can resolve to another
-        // session's artifact (P2).
-        const match = artifacts.find((candidate) => wanted.includes(candidate.id))
-          ?? artifacts.find((candidate) => wanted.some((value) =>
+        // session's artifact (P2). For SourceFile there's no artifact_id —
+        // match is name/path only, pinned to the same session.
+        const inSession = isSourceFile
+          ? artifacts.filter((candidate) => candidate.sessionId === sessionId)
+          : artifacts;
+        const match = inSession.find((candidate) => wanted.includes(candidate.id))
+          ?? inSession.find((candidate) => wanted.some((value) =>
             candidate.logicalName === value || candidate.logicalName.endsWith(`/${value}`)));
         // Only publish a change; re-resolving the same node must not churn the
         // name, or the embedded artifact panel unmounts and refetches.
@@ -77,7 +90,7 @@ export function useResolvedArtifactName(
       })
       .catch(() => { if (active) { setName(undefined); setState("missing"); } });
     return () => { active = false; };
-  }, [client, lookupKey, sessionId]);
+  }, [client, isSourceFile, lookupKey, sessionId]);
 
   return { name, state };
 }
@@ -113,6 +126,7 @@ function NodeProperties({ node, client, onOpenEvolveRun, sessionId, subgraph, sc
     case "Evidence": return <EvidenceDetail extra={extra} />;
     case "Claim": return <ClaimDetail extra={extra} />;
     case "Code": return <CodeDetail node={node} client={client} sessionId={sessionId} subgraph={subgraph} />;
+    case "SourceFile": return <SourceFileDetail extra={extra} />;
     default: return <RawNodeProperties extra={extra} />;
   }
 }
@@ -318,6 +332,28 @@ function PaperDetail({ extra }: { extra: Record<string, unknown> }) {
         <span>{retrievedCount} {t("node.unit.times")}</span>
       </Field> : null}
       {retrievedAt ? <Field label={t("node.field.last_retrieved")}><TimeField value={retrievedAt} /></Field> : null}
+      {createdAt ? <Field label={t("node.field.created_at")}><TimeField value={createdAt} /></Field> : null}
+    </dl>
+  </div>;
+}
+
+// --- SourceFile (an uploaded input file) -----------------------------------
+
+function SourceFileDetail({ extra }: { extra: Record<string, unknown> }) {
+  const { t } = useLocale();
+  // `content_hash` is deliberately not rendered — it is a routing key for the
+  // CAS, not something a reviewer reads off the card.
+  const name = typeof extra.name === "string" ? extra.name : undefined;
+  const path = typeof extra.path === "string" ? extra.path : undefined;
+  const mediaType = typeof extra.media_type === "string" ? extra.media_type : undefined;
+  const size = typeof extra.size === "number" ? extra.size : undefined;
+  const createdAt = extra.created_at;
+  return <div className="node-detail-body">
+    {name ? <h4 className="node-detail-title">{name}</h4> : null}
+    <dl className="node-detail-fields">
+      {path ? <Field label={t("node.field.path")} value={path} /> : null}
+      {mediaType ? <Field label={t("node.field.media_type")} value={mediaType} /> : null}
+      {typeof size === "number" ? <Field label={t("node.field.size")}><span>{size.toLocaleString()} {t("node.unit.bytes")}</span></Field> : null}
       {createdAt ? <Field label={t("node.field.created_at")}><TimeField value={createdAt} /></Field> : null}
     </dl>
   </div>;

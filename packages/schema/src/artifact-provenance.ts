@@ -159,7 +159,7 @@ export interface ArtifactExecutionLogProvenance {
 
 export interface ArtifactVersionProvenance {
   code: ArtifactCodeProvenance[];
-  dependencies: Array<{ artifact: ScientificArtifact; version: ScientificArtifactVersion }>;
+  dependencies: Array<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; kind?: "artifact" | "source_file" }>;
   environments: EnvironmentRevision[];
   executionLog: ArtifactExecutionLogProvenance[];
   messages: ChatMessage[];

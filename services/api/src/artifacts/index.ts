@@ -212,9 +212,15 @@ async function artifactVersionProvenanceFromGraph(
     : [];
   // dependencies: input-edge endpoints from the graph; fall back to the
   // store's inputArtifactVersionIds when derived-from has not landed input
-  // edges yet (dependencies empty).
+  // edges yet (dependencies empty). A ``source_file`` dependency (an uploaded
+  // file the run read) has no Artifact version in the store, so it is skipped
+  // here — the frontend's graph-overlay path (getMemoryArtifactProvenance)
+  // renders SourceFile dependencies directly from the sidecar payload, so
+  // skipping them here only drops them from the legacy store-shape row, which
+  // the overlay then re-adds with the right SourceFile rendering.
   const dependencies = (graph.dependencies && graph.dependencies.length)
     ? graph.dependencies.flatMap((dep) => {
+      if (dep.kind !== "artifact") return [];
       const dependencyVersion = store.listArtifactVersions(scopeSessionId, dep.artifactId).find((candidate) => candidate.version === dep.version);
       if (!dependencyVersion) return [];
       const artifact = store.getArtifact(scopeSessionId, dependencyVersion.artifactId);

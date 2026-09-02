@@ -15,7 +15,7 @@
 """Idempotent schema bootstrap for the node set.
 
 Covers Task (subagent scope) / ToolCall (execution/search) / Code / Artifact
-(MVP) plus Paper. Paper's business key is
+(MVP) plus Paper, and SourceFile (a user-uploaded input file). Paper's business key is
 the lowercased URL (link-based dedup), scoped per session, so the UNIQUE
 constraint is on ``(session_id, link)``. A legacy link-only uniqueness
 constraint (``link`` alone) is dropped at boot — it blocked cross-session
@@ -63,6 +63,10 @@ _SCHEMA = [
     # future dedup (declare_claim uses CREATE, not MERGE-on-hash, today).
     "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Evidence) REQUIRE n.evidence_id IS UNIQUE",
     "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Claim)    REQUIRE n.claim_id    IS UNIQUE",
+    # SourceFile = a user-uploaded input file (CSV/image/JSON/PDF/…), keyed on
+    # the deterministic file_id ("source_file:session:<sid>:<path>"), written
+    # fire-and-forget at upload time with a feeds edge to ResearchGoal.
+    "CREATE CONSTRAINT IF NOT EXISTS FOR (n:SourceFile) REQUIRE n.file_id IS UNIQUE",
     "CREATE INDEX IF NOT EXISTS FOR (n:Task)     ON (n.session_id)",
     "CREATE INDEX IF NOT EXISTS FOR (n:ToolCall) ON (n.session_id)",
     "CREATE INDEX IF NOT EXISTS FOR (n:Code)     ON (n.session_id)",
@@ -70,6 +74,7 @@ _SCHEMA = [
     "CREATE INDEX IF NOT EXISTS FOR (n:Paper)    ON (n.session_id)",
     "CREATE INDEX IF NOT EXISTS FOR (n:Paper)    ON (n.retrieved_at)",
     "CREATE INDEX IF NOT EXISTS FOR (n:ResearchGoal) ON (n.session_id)",
+    "CREATE INDEX IF NOT EXISTS FOR (n:SourceFile) ON (n.session_id)",
     "CREATE INDEX IF NOT EXISTS FOR (n:Task)         ON (n.status)",
     "CREATE INDEX IF NOT EXISTS FOR (n:Task)         ON (n.task_type)",
     "CREATE INDEX IF NOT EXISTS FOR (n:ToolCall)     ON (n.status)",

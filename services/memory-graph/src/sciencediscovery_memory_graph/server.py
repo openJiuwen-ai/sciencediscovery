@@ -23,6 +23,8 @@ Routes:
   a session's first user message (passive fallback, one goal per session)
 - ``POST /observe/session-plan`` (Bearer) → mirror a SessionPlan's steps into
   a SubTask skeleton + linear ``next`` chain, correcting the goal's scope/domain
+- ``POST /observe/upload-file`` (Bearer) → upsert a SourceFile node (an
+  uploaded input file) + a ``feeds`` edge to ResearchGoal (fire-and-forget)
 - ``GET /subgraph?session_id=...`` (Bearer) → ``{nodes, edges, total, truncated}``
 - ``POST /query/by-node-type`` (Bearer) → filter nodes by label(s)
 - ``POST /query/by-edge-type`` (Bearer) → filter edges by type(s) + endpoint nodes
@@ -64,6 +66,7 @@ from .persistence import (
     upsert_mcp_search,
     upsert_session_first_message,
     upsert_session_plan,
+    upsert_source_file,
     upsert_subagent,
 )
 from .search_graph import bind_subtask, get_search_graph, link_search_artifacts, upsert_search_progress
@@ -91,10 +94,12 @@ app = FastAPI(title="sciencediscovery-memory-graph")
 # compatibility name for the Task/ToolCall split) and the evolve search's
 # (SearchRun/SearchNode/SearchCell and the search-structure edges).
 # ``stated_in`` links a Claim to the report Artifact it is stated in.
+# ``feeds`` links an uploaded SourceFile to its ResearchGoal (SourceFile →
+# ResearchGoal).
 _NODE_LABELS = {"ResearchGoal", "SubTask", "Task", "ToolCall", "Paper", "Evidence", "Claim",
-                "Code", "Artifact", "SearchRun", "SearchNode", "SearchCell"}
+                "Code", "Artifact", "SearchRun", "SearchNode", "SearchCell", "SourceFile"}
 _EDGE_TYPES = {"next", "produces", "extracts", "supports", "stated_in", "supersedes", "input",
-               "contains", "searches", "root", "expands", "inspires", "elected", "occupies"}
+               "contains", "searches", "root", "expands", "inspires", "elected", "occupies", "feeds"}
 
 
 def _error(code: str, http: int, message: str, instruction: str | None = None) -> None:
@@ -184,6 +189,17 @@ class ObserveExecutionRequest(BaseModel):
     # extra="ignore" would otherwise silently drop it and the child branch
     # would never run, regressing products onto a per-execution SubTask).
     parent_subagent_id: str | None = None
+    # Uploaded SourceFile nodes (``{file_id}``) this Code run read — a distinct
+    # top-level input channel from ``produced_artifacts[].input_artifact_versions``
+    # (SourceFile has no version; endpoint key is ``file_id``). The recorder
+    # infers these by scanning the code text for uploaded-file paths (same grain
+    # as inferredArtifactInputs). Drives the ``SourceFile -[:input]-> Code``
+    # edge in upsert_execution. MUST be declared explicitly: Pydantic v2 defaults
+    # to extra="ignore", so an undeclared field is silently dropped at validation
+    # — model_dump() omits it and the edge never gets built (same gotcha as
+    # input_artifact_versions above). Declared as a list of dict to match the
+    # loose ``ref.get(...)`` consumption in persistence._link_source_file_inputs.
+    input_source_files: list[dict[str, Any]] | None = None
 
 
 @app.post("/observe/execution", dependencies=[Depends(require_internal_token)])
@@ -212,6 +228,7 @@ def observe_execution(req: ObserveExecutionRequest) -> dict[str, Any]:
             stderr_hash=req.stderr_hash,
             env_hash=req.env_hash,
             parent_subagent_id=req.parent_subagent_id,
+            input_source_files=req.input_source_files,
         )
         written = 1 + len(req.produced_artifacts)
         log.info("observe/execution done: execution=%s wrote %d node(s)", req.execution_id, written)
@@ -670,6 +687,37 @@ def _latest_artifact_version(artifact_id: str) -> int | None:
         return rec["v"] if rec and rec["v"] is not None else None
 
 
+def _get_source_file_media_type(file_id: str) -> str | None | bool:
+    """Return a SourceFile node's ``media_type``, distinguishing absence.
+
+    The declare_evidence / declare_claim cite gates (block 3) route a
+    SourceFile by media_type: a PDF may be an Evidence source (extracts →
+    Evidence → supports → Claim), a non-PDF data file may directly support a
+    Claim (SourceFile -[:supports]-> Claim). Returns:
+
+    - ``False`` — no SourceFile node with that file_id (the caller 422s with
+      ``source_file_not_found``);
+    - ``None`` — the node exists but ``media_type`` is unset. This happens for
+      uploads whose extension ``inferMediaType`` doesn't know (e.g. .npy,
+      .pkl). The node IS in the graph, so "not found" would mislead the LLM
+      into hunting for a different file_id — callers treat unset as
+      "not a PDF" (the non-PDF data-file route), never as missing;
+    - a media-type string — the node's actual ``media_type``.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        return False
+    with driver.session() as session:
+        result = session.run(
+            "MATCH (sf:SourceFile {file_id: $fid}) RETURN sf.media_type AS mt",
+            fid=file_id,
+        )
+        rec = result.single()
+    if not rec:
+        return False
+    return rec["mt"] if rec["mt"] is not None else None
+
+
 def _await_node(label: str, id_field: str, value: str, attempts: int = 10, delay_s: float = 0.3) -> bool:
     """Poll for a node's existence with short sleeps.
 
@@ -712,7 +760,12 @@ def _await_artifact_version(artifact_id: str, version: int, attempts: int = 10, 
 
 class DeclareEvidenceRequest(BaseModel):
     content: str
-    source_paper_link: str
+    # Source of the Evidence — exactly one of source_paper_link / source_file_id.
+    # Paper branch: an existing Paper's normalized link. SourceFile branch: an
+    # uploaded PDF's file_id (media_type=application/pdf); non-PDF data files
+    # cannot be Evidence sources (see source_file_not_pdf below).
+    source_paper_link: str | None = None
+    source_file_id: str | None = None
     locator: str
     evidence_type: str
     confidence: str
@@ -723,13 +776,64 @@ class DeclareEvidenceRequest(BaseModel):
 @app.post("/persist/evidence", dependencies=[Depends(require_internal_token)])
 def persist_evidence(req: DeclareEvidenceRequest) -> dict[str, Any]:
     driver = handle()
-    log.info("persist/evidence in: session=%s paper=%s", req.session_id, req.source_paper_link)
+    log.info("persist/evidence in: session=%s paper=%s source_file=%s",
+             req.session_id, req.source_paper_link or "-", req.source_file_id or "-")
     if not driver.is_reachable():
         return {"status": "degraded", "evidence_id": None, "reason": "memory_graph_unreachable"}
-    # Validate the source Paper exists before creating an orphan Evidence.
-    link = _normalize_link(req.source_paper_link)
-    if not link or not _node_exists("Paper", "link", link):
-        _error("source_paper_not_found", 422, "no Paper with that link")
+    # Source routing: exactly one of (source_paper_link, source_file_id). The
+    # two are mutually exclusive — passing both is ambiguous (which source?),
+    # passing neither creates an orphan Evidence with no provenance. 422 with a
+    # structured code so the LLM can self-correct rather than guess.
+    if not req.source_paper_link and not req.source_file_id:
+        _error(
+            "no_source", 422,
+            "an Evidence needs a source: pass exactly one of source_paper_link "
+            "(for a Paper already in the graph) or source_file_id (for an "
+            "uploaded PDF).",
+            "pass source_paper_link={\"<paper url/doi>\"} for a Paper, or "
+            "source_file_id={\"<file_id>\"} for an uploaded PDF.",
+        )
+    if req.source_paper_link and req.source_file_id:
+        _error(
+            "ambiguous_source", 422,
+            "pass exactly one of source_paper_link or source_file_id, not both.",
+            "remove one source: source_paper_link for a Paper, source_file_id "
+            "for an uploaded PDF — an Evidence has one source.",
+        )
+    source_file_id: str | None = None
+    link: str | None = None
+    if req.source_file_id:
+        # SourceFile-PDF branch. Gate media_type: only a PDF may be an Evidence
+        # source (evidence = an argument extracted from a document). A non-PDF
+        # data file (CSV/image/etc) is not extractable prose — it directly
+        # supports a Claim instead, via declare_claim's cites_source_file_refs.
+        media_type = _get_source_file_media_type(req.source_file_id)
+        if media_type is False:
+            _error(
+                "source_file_not_found", 422,
+                f"no SourceFile with file_id {req.source_file_id} in this session",
+                "the file_id is the SourceFile node's file_id (obtain via "
+                "query_graph or list_files); pass the correct file_id under "
+                "source_file_id.",
+            )
+        if media_type != "application/pdf":
+            _error(
+                "source_file_not_pdf", 422,
+                f"file_id {req.source_file_id} is a {media_type or 'unknown-type'} "
+                "file, not a PDF — only PDF files can be Evidence sources.",
+                "PDF 文件可以作为 Evidence 的来源（从文件抽取的论据）。数据文件"
+                "（CSV/图片等）不能作为 Evidence 来源——请用 declare_claim 的 "
+                "cites_source_file_aliases 直接支撑断言：先取该文件的 file_id（用 "
+                "query_graph 或 list_files），再传 cites_source_file_aliases="
+                "{\"sourcefileN\": \"<file_id>\"}。",
+            )
+        source_file_id = req.source_file_id
+    else:
+        # Paper branch: validate the Paper exists before creating an orphan
+        # Evidence (legacy behavior, unchanged).
+        link = _normalize_link(req.source_paper_link or "")
+        if not link or not _node_exists("Paper", "link", link):
+            _error("source_paper_not_found", 422, "no Paper with that link")
     evidence_id = str(uuid4())
     try:
         declare_evidence(
@@ -741,8 +845,10 @@ def persist_evidence(req: DeclareEvidenceRequest) -> dict[str, Any]:
             evidence_type=req.evidence_type,
             confidence=req.confidence,
             strength=req.strength,
+            source_file_id=source_file_id,
         )
-        log.info("persist/evidence done: evidence=%s session=%s", evidence_id, req.session_id)
+        log.info("persist/evidence done: evidence=%s session=%s paper=%s source_file=%s",
+                 evidence_id, req.session_id, link or "-", source_file_id or "-")
         return {"status": "ok", "evidence_id": evidence_id}
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("persist/evidence failed: session=%s: %s", req.session_id, exc)
@@ -773,6 +879,14 @@ class DeclareClaimRequest(BaseModel):
     # ``cites_artifact_aliases``. Filled in by the Node side (the LLM never sees
     # versions — the declare callback looks them up from the store).
     cites_artifact_versions: dict[str, int] = Field(default_factory=dict)
+    # alias → file_id, e.g. {"sourcefile1": "<file_id>"}; the alias is what the
+    # LLM writes into the report body, the file_id resolves it to an uploaded
+    # non-PDF SourceFile (CSV/image/etc) that directly supports the claim
+    # (SourceFile -[:supports]-> Claim). PDFs are NOT allowed here — a PDF must
+    # go via declare_evidence (extracts → Evidence) and be cited as Evidence
+    # via cites_evidence_aliases. SourceFile has no version (unlike Artifact), so
+    # there is no cites_source_file_versions companion.
+    cites_source_file_aliases: dict[str, str] = Field(default_factory=dict)
     # The report Artifact this claim is stated in; builds stated_in (Claim→Artifact).
     artifact_id: str | None = None
     # The report Artifact's version; pins the stated_in edge to the report's
@@ -789,24 +903,29 @@ class DeclareClaimRequest(BaseModel):
 @app.post("/persist/claim", dependencies=[Depends(require_internal_token)])
 def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
     driver = handle()
-    log.info("persist/claim in: session=%s ev_aliases=%d art_aliases=%d artifact=%s",
+    log.info("persist/claim in: session=%s ev_aliases=%d art_aliases=%d sf_aliases=%d artifact=%s",
              req.session_id,
              len(req.cites_evidence_aliases),
              len(req.cites_artifact_aliases),
+             len(req.cites_source_file_aliases),
              req.artifact_id or "-")
     # Business validation that needs no graph: a claim must cite something.
     # This surfaces to the LLM even when the graph is down (it's a logic error,
     # not an availability one), so it runs before the degraded branch. A Claim
     # no longer cites a Paper directly — to cite a paper the LLM declares an
     # Evidence extracted from it and cites the Evidence here. cites_evidence_
-    # aliases / cites_artifact_aliases are the ONLY cite fields; there is no
-    # separate node-id list anymore.
-    if not (req.cites_evidence_aliases or req.cites_artifact_aliases):
+    # aliases / cites_artifact_aliases / cites_source_file_aliases are the ONLY
+    # cite fields; there is no separate node-id list anymore.
+    if not (req.cites_evidence_aliases or req.cites_artifact_aliases
+            or req.cites_source_file_aliases):
         _error(
             "no_cites_target", 422,
-            "at least one cite is required — pass cites_evidence_aliases or cites_artifact_aliases",
+            "at least one cite is required — pass cites_evidence_aliases, "
+            "cites_artifact_aliases, or cites_source_file_aliases",
             "pass cites_evidence_aliases={\"evN\": \"<evidence_id>\"} for evidence, "
-            "or cites_artifact_aliases={\"aN\": \"<artifact_id>\"} for a produced artifact.",
+            "cites_artifact_aliases={\"aN\": \"<artifact_id>\"} for a produced artifact, "
+            "or cites_source_file_aliases={\"sourcefileN\": \"<file_id>\"} for an "
+            "uploaded non-PDF data file.",
         )
     if not driver.is_reachable():
         return {"status": "degraded", "claim_id": None, "chip_map": {}, "reason": "memory_graph_unreachable"}
@@ -855,12 +974,49 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
             )
         artifact_alias_map[alias] = aid
         cites_artifact_refs.append({"artifact_id": aid, "version": version})
+    # source_file alias → file_id; the cited SourceFile must already exist
+    # (block 1's upsert_source_file wrote it at upload time). Gate media_type:
+    # only a NON-PDF data file may directly support a Claim — a PDF must go via
+    # declare_evidence (extracts → Evidence → supports → Claim) so its
+    # arguments are recorded as Evidence first. file_id passes straight through
+    # (SourceFile has no version, so there is no version-resolution step like
+    # the artifact path's splitArtifactVersionSuffix).
+    source_file_alias_map: dict[str, str] = {}
+    cites_source_file_refs: list[dict[str, Any]] = []
+    for alias, fid in (req.cites_source_file_aliases or {}).items():
+        if not fid:
+            continue
+        media_type = _get_source_file_media_type(fid)
+        if media_type is False:
+            _error(
+                "source_file_not_found", 422,
+                f"no SourceFile with file_id {fid} in this session",
+                f"the file_id is the SourceFile node's file_id (obtain via "
+                f"query_graph or list_files); pass the correct file_id under "
+                f"alias {alias} in cites_source_file_aliases.",
+            )
+        if media_type == "application/pdf":
+            _error(
+                "source_file_is_pdf", 422,
+                f"file_id {fid} is a PDF — a PDF cannot directly support a Claim.",
+                "PDF 文件应先经 declare_evidence 抽取证据，再用返回的 "
+                "evidence_id 通过 cites_evidence_aliases 引用，不能直接支撑 Claim。"
+                "请先调用 declare_evidence(source_file_id=该文件) 抽取 Evidence，"
+                "再用返回的 evidence_id 通过 declare_claim 的 "
+                "cites_evidence_aliases 引用。",
+            )
+        source_file_alias_map[alias] = fid
+        cites_source_file_refs.append({"file_id": fid})
     # De-dup so a ref that appears under multiple aliases is matched once.
     cites_node_ids = list(dict.fromkeys(cites_node_ids))
     seen_refs: set[tuple[str, int]] = set()
     cites_artifact_refs = [r for r in cites_artifact_refs
                            if (r["artifact_id"], r["version"]) not in seen_refs
                            and not seen_refs.add((r["artifact_id"], r["version"]))]
+    seen_sf: set[str] = set()
+    cites_source_file_refs = [r for r in cites_source_file_refs
+                              if r["file_id"] not in seen_sf
+                              and not seen_sf.add(r["file_id"])]
     # NOTE: the report Artifact (stated_in target) is keyed on (artifact_id,
     # version) too, but it is NOT existence-checked here. declare_claim runs
     # in an EARLIER turn than the report write, so the report version node
@@ -881,6 +1037,7 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
             content_hash=content_hash,
             cites_node_ids=cites_node_ids,
             cites_artifact_refs=cites_artifact_refs,
+            cites_source_file_refs=cites_source_file_refs,
             artifact_id=req.artifact_id,
             artifact_version=req.artifact_version,
         )
@@ -912,6 +1069,15 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
             if target.get("version") is not None:
                 entry["version"] = target["version"]
             chip_map[alias] = entry
+    # sourcefile chip: id is the SourceFile's file_id (the SourceFile node's
+    # identity in the frontend is its file_id — _node_identity keys SourceFile
+    # on file_id — so a chip click matches node.id === reference.id directly,
+    # like the Evidence path). SourceFile has no version, so unlike the
+    # artifact chip nothing is carried alongside.
+    file_by_id = {t.get("file_id"): t for t in cited_targets if t.get("file_id")}
+    for alias, fid in source_file_alias_map.items():
+        if fid in file_by_id:
+            chip_map[alias] = {"kind": "sourcefile", "id": fid, "label": alias}
     log.info("persist/claim done: claim=%s session=%s chip_map=%d cited=%d",
              claim_id, req.session_id, len(chip_map), len(cited_targets))
     return {"status": "ok", "claim_id": claim_id, "chip_map": chip_map,
@@ -1044,6 +1210,46 @@ def observe_session_first_message(req: ObserveSessionFirstMessageRequest) -> dic
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("observe/session-first-message failed: session=%s goal=%s: %s",
                       req.session_id, req.goal_id, exc)
+        raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
+
+
+# --- Write: observeUploadFile (SourceFile + feeds) ---------------------------
+
+class ObserveUploadFileRequest(BaseModel):
+    session_id: str
+    file_id: str
+    name: str
+    path: str
+    media_type: str | None = None
+    size: int | None = None
+    content_hash: str | None = None
+    created_at: str
+
+
+@app.post("/observe/upload-file", dependencies=[Depends(require_internal_token)])
+def observe_upload_file(req: ObserveUploadFileRequest) -> dict[str, Any]:
+    driver = handle()
+    log.info("observe/upload-file in: session=%s file=%s name=%s",
+             req.session_id, req.file_id, req.name)
+    if not driver.is_reachable():
+        log.warning("observe/upload-file skipped: Neo4j not reachable, this file will not be mirrored")
+        return {"status": "degraded", "written": 0}
+    try:
+        upsert_source_file(
+            file_id=req.file_id,
+            session_id=req.session_id,
+            name=req.name,
+            path=req.path,
+            media_type=req.media_type,
+            size=req.size,
+            content_hash=req.content_hash,
+            created_at=req.created_at,
+        )
+        log.info("observe/upload-file done: session=%s file=%s", req.session_id, req.file_id)
+        return {"status": "healthy", "written": 1}
+    except Exception as exc:  # pragma: no cover - belt-and-suspenders
+        log.exception("observe/upload-file failed: session=%s file=%s: %s",
+                      req.session_id, req.file_id, exc)
         raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
 
 

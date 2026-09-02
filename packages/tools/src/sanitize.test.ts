@@ -81,6 +81,10 @@ const NON_AUTHORITY_TAGS = new Map([
   // shown to the model, never emitted as a structural block.
   ["artifact_id", "citation-alias placeholder in prompt prose"],
   ["evidence_id", "citation-alias placeholder in prompt prose"],
+  // Same notation for uploaded-file citations: {"sourcefileN": "<file_id>"}
+  // in the cite-alias teaching (block 4). A SourceFile node id placeholder,
+  // not a structural block.
+  ["file_id", "citation-alias placeholder in prompt prose"],
   // Structural tags of the summarization sub-request. Everything embedded in
   // them is HTML-escaped by buildSummaryPrompt first, so the wrapped content
   // cannot close them; that request also binds no tools.

@@ -33,12 +33,129 @@ import { useLocale } from "./i18n/index.js";
 // the artifact panel that re-exports it. Matches ScientificArtifacts.tsx.
 const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
 
+/** Inline preview of a SourceFile's content, shown inside the Evidence modal's
+ * Provenance tab. Mirrors ArtifactModal's Preview tab for the media types a
+ * user-uploaded file can take (PDF/text/image) by loading the matching
+ * artifact version and rendering the blob via the same approach
+ * ArtifactModal uses (object URL + iframe/pre/img). Other media types fall
+ * back to a download hint — the goal is "this is the file content", not
+ * "this is a row of metadata about the file". */
+function SourceFilePreview({
+  client,
+  fileNode,
+  sessionId,
+}: {
+  client: ApiClient;
+  fileNode: MemoryGraphNode;
+  /** Session the SourceFile was uploaded in (parsed from its id). Used so
+   * `listArtifacts(sessionId)` finds the user_upload artifact for the file. */
+  sessionId: string;
+}) {
+  const [contentUrl, setContentUrl] = useState<string | undefined>();
+  const [mediaType, setMediaType] = useState<string | undefined>();
+  const [error, setError] = useState<string | undefined>();
+  const [loading, setLoading] = useState(true);
+  /** SourceFile `path` from the node's extra fields, when the node carries
+   * one. Used as the fallback read route: paper uploads are mirrored as
+   * SourceFile nodes but never register a catalog artifact, so the preview
+   * reads the workspace file directly (`GET /api/sessions/:id/file`). */
+  const filePath = typeof sourceFileExtra(fileNode).path === "string"
+    ? sourceFileExtra(fileNode).path as string
+    : undefined;
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | undefined;
+    setContentUrl(undefined);
+    setMediaType(undefined);
+    setError(undefined);
+    setLoading(true);
+    // SourceFile node id: `source_file:session:<sid>:<filename>`. The
+    // trailing segment is the logicalName the artifact list keys on
+    // (matches the chip → ArtifactModal reverse-lookup at App.tsx:2091).
+    const baseName = fileNode.id.includes(":")
+      ? fileNode.id.slice(fileNode.id.lastIndexOf(":") + 1)
+      : fileNode.id;
+    (async () => {
+      try {
+        // Route 1: the artifact catalog (workspace uploads register a
+        // user_upload artifact whose logicalName is the file's path).
+        let blob: Blob | undefined;
+        let media: string | undefined;
+        const artifacts = await client.listArtifacts(sessionId);
+        if (!active) return;
+        const artifact = artifacts.find((item) => item.logicalName === baseName);
+        if (artifact) {
+          const versions = await client.listArtifactVersions(sessionId, artifact.id);
+          if (!active) return;
+          const latest = versions.at(-1);
+          if (latest) {
+            blob = await client.readArtifactVersion(sessionId, latest.id);
+            media = latest.mediaType || artifact.kind;
+          }
+        }
+        // Route 2 (fallback): read the workspace file directly by the
+        // SourceFile node's `path` property. Paper uploads (papers/<id>/
+        // source.pdf) are mirrored as SourceFile nodes but never register a
+        // catalog artifact, so route 1 misses for them; the workspace file
+        // read covers every SourceFile regardless of how it was registered.
+        if (!blob && filePath) {
+          blob = await client.readFile(sessionId, filePath);
+          media = blob.type || undefined;
+        }
+        if (!active) return;
+        if (!blob) {
+          setError(`File "${baseName}" is no longer in this session's artifacts.`);
+          setLoading(false);
+          return;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        setContentUrl(objectUrl);
+        setMediaType(media || "application/octet-stream");
+        setLoading(false);
+      } catch (err) {
+        if (active) {
+          setError(err instanceof Error ? err.message : "Could not load file content.");
+          setLoading(false);
+        }
+      }
+    })();
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [client, fileNode.id, sessionId, filePath]);
+
+  if (loading) return <p className="artifact-empty compact">Loading file preview…</p>;
+  if (error) return <p className="artifact-empty compact">{error}</p>;
+  if (!contentUrl || !mediaType) return null;
+
+  if (mediaType === "application/pdf") {
+    return <iframe className="report-frame evidence-source-frame" src={contentUrl} title={fileNode.id} />;
+  }
+  if (mediaType.startsWith("image/")) {
+    return <img alt={fileNode.id} className="evidence-source-image" src={contentUrl} />;
+  }
+  // Text-ish content: download via <a download>; rendering inline could be
+  // tens of MB for a CSV, so a link + size hint is the right surface. The
+  // file's logical name is already in the section heading above.
+  return (
+    <p className="evidence-source-paper-abstract">
+      <a className="evidence-source-paper-link" href={contentUrl} download={fileNode.id.split(":").pop()}>Download {fileNode.id.split(":").pop()}</a>
+      <span> ({mediaType})</span>
+    </p>
+  );
+}
+
 export interface EvidenceModalProps {
   client: ApiClient;
   evidenceId: string;
   onClose: () => void;
   /** Open the evolve panel for a run a graph node points at. */
   onOpenEvolveRun?: (runId: string) => void;
+  /** Open the ArtifactModal on a SourceFile-derived artifact (uploaded PDF
+   * or data file). The chain walk surfaces the SourceFile upstream of the
+   * Evidence as a memory-graph node; clicking its name should mirror the
+   * right-rail artifact card click — open the same ArtifactModal so the
+   * reader sees the file content / PDF preview, not the empty-Paper state. */
+  onOpenSourceFile?: (logicalName: string, sessionId?: string) => void;
   sessionId: string;
 }
 
@@ -50,9 +167,24 @@ function paperExtra(paper: MemoryGraphNode): Record<string, unknown> {
   return (paper.extra as Record<string, unknown> | undefined) ?? {};
 }
 
-export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, sessionId }: EvidenceModalProps) {
+// SourceFile `extra` fields shown in the provenance tab when the Evidence
+// was extracted from an uploaded PDF (SourceFile -[:extracts]-> Evidence).
+// The chain walk surfaces the SourceFile node directly; we render it like a
+// Paper card but with file-shaped fields (path, media_type, size) instead
+// of literature-shaped ones (title, abstract, link).
+function sourceFileExtra(node: MemoryGraphNode): Record<string, unknown> {
+  return (node.extra as Record<string, unknown> | undefined) ?? {};
+}
+
+export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, onOpenSourceFile, sessionId }: EvidenceModalProps) {
   const [evidence, setEvidence] = useState<MemoryGraphNode | null>(null);
   const [papers, setPapers] = useState<MemoryGraphNode[]>([]);
+  // SourceFile nodes upstream of this Evidence (`SourceFile -[:extracts]->
+  // Evidence`). Block 3 added PDF SourceFile as a valid Evidence source, so
+  // the chain may surface a SourceFile in addition to (or instead of) a
+  // Paper; the UI renders each kind in its own card so the user sees what
+  // the evidence was actually drawn from.
+  const [sourceFiles, setSourceFiles] = useState<MemoryGraphNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>();
   // Chain overlay: when set, MemoryGraphExplorer renders full-screen on top
@@ -84,10 +216,17 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, se
     void client.getMemoryChain(evidenceId, sessionId, undefined, "viewSourcePaper").then((chain) => {
       if (!active) return;
       const chainResult = chain as MemoryGraphChainResult;
-      setEvidence((chainResult?.nodes ?? []).find((node) => node.id === evidenceId) ?? null);
-      // The Paper upstream of this Evidence (extracts, walked in) surfaces in the
-      // chain nodes; collect any Paper nodes that appear.
-      setPapers((chainResult?.nodes ?? []).filter((node) => node.label === "Paper"));
+      const nodes = chainResult?.nodes ?? [];
+      setEvidence(nodes.find((node) => node.id === evidenceId) ?? null);
+      // The Paper upstream of this Evidence (extracts, walked in) surfaces in
+      // the chain nodes; collect any Paper nodes that appear. Block 3 also
+      // lets a SourceFile-PDF be the upstream (block 4 prompt teaching):
+      // `SourceFile -[:extracts]-> Evidence` is the same edge, walked the
+      // same direction, so the chain node list carries the SourceFile in
+      // addition to (or instead of) the Paper. Treat them as two surfaces
+      // of the same concept — the provenance tab renders both.
+      setPapers(nodes.filter((node) => node.label === "Paper"));
+      setSourceFiles(nodes.filter((node) => node.label === "SourceFile"));
     }).catch((err: Error) => {
       if (active) setError(err.message);
     }).finally(() => {
@@ -196,7 +335,29 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, se
                     </div>
                   </article>
                 );
-              }) : <p className="artifact-empty">No source paper recorded for this evidence.</p>}
+              }) : null}
+              {sourceFiles.length ? sourceFiles.map((sourceFile) => {
+                const extra = sourceFileExtra(sourceFile);
+                const fileName = String(extra.name ?? extra.path ?? sourceFile.id);
+                // SourceFile node ids are `source_file:session:<sid>:<filename>`
+                // — the second segment is the Session the file was uploaded
+                // in; that's where the matching artifact version lives (the
+                // artifact list is session-scoped even though the SourceFile
+                // node itself is graph-scoped).
+                const sourceSessionId = sourceFile.id.split(":")[2] ?? sessionId;
+                return (
+                  <article className="evidence-source-paper expanded" key={sourceFile.id}>
+                    <h4 className="evidence-source-paper-label">Source file</h4>
+                    <h5 className="evidence-source-paper-title">{fileName}</h5>
+                    <div className="evidence-source-paper-detail">
+                      <SourceFilePreview client={client} fileNode={sourceFile} sessionId={sourceSessionId} />
+                    </div>
+                  </article>
+                );
+              }) : null}
+              {!papers.length && !sourceFiles.length ? (
+                <p className="artifact-empty">No source recorded for this evidence.</p>
+              ) : null}
             </div>
           )}
         </div>

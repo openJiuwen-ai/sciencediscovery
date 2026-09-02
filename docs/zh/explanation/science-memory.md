@@ -29,7 +29,7 @@
 
 写图全部由 Node API 发起（执行镜像 + declare），浏览器只读、gateway 与 runner 不参与；Python 侧车只被 Node API 访问，是闭环单客户端。
 
-### 1.1 节点类型（8 类）
+### 1.1 节点类型（9 类）
 
 | 节点 label | 代表 | 唯一键 / 来源 |
 |------------|------|---------------|
@@ -41,8 +41,9 @@
 | `Paper` | 文献记录 | 复合 `(session_id, link)`，`link` 经 `_normalize_link` 归一化 |
 | `Evidence` | 从 Paper 抽取的一条证据 | `evidence_id` |
 | `Claim` | 报告里一条带引用的断言 | `claim_id` |
+| `SourceFile` | 用户上传的输入文件（CSV/图片/JSON/PDF……） | `file_id`（确定性 `source_file:session:<sid>:<path>`，重传幂等） |
 
-### 1.2 边类型（8 类）
+### 1.2 边类型（9 类）
 
 | 边类型 | 方向 | 含义 | 属于 | 写入方 |
 |--------|------|------|------|--------|
@@ -52,8 +53,9 @@
 | `supports` | Evidence/Artifact→Claim | 断言的支撑来自什么 | 引用链 | `declare_claim` |
 | `stated_in` | Claim→报告 Artifact | 这条 claim 记录在哪份报告 Artifact 里 | 引用链（任务链↔引用链交汇） | `declare_claim`（传 artifact_id 时）/ `link_claims_to_report` |
 | `supersedes` | Artifact(新)→Artifact(旧) | 该版本取代其前驱 | 版本谱系（任务链） | `upsert_execution` |
-| `input` | Artifact(读取版本)→Code | 这次代码执行把该 artifact 版本作为输入读了 | 数据依赖（任务链） | `upsert_execution` |
+| `input` | Artifact(读取版本)/SourceFile→Code | 这次代码执行把该 artifact 版本或上传文件作为输入读了 | 数据依赖（任务链） | `upsert_execution` |
 | `contains` | Task(scope)→首个子 ToolCall | subagent 的 scope 把它的子任务步归组 | 任务链（subagent 作用域） | `_link_subtasks_by_finish_time` |
+| `feeds` | SourceFile→ResearchGoal | 该上传文件为本研究提供输入 | 上传镜像（任务链前置） | `upsert_source_file`（上传完成即 fire-and-forget） |
 
 ## 2. 主要流程
 
@@ -61,14 +63,15 @@
 
 任务链不需要 LLM 显式声明，由 Node API 在执行事件发生时 fire-and-forget 镜像到图：
 
-1. **首条用户消息** → `MemoryGraphSink.observeSessionFirstMessage` → sidecar `POST /observe/session-first-message` → 写 `Session` + `ResearchGoal` + `has_goal`。
-2. **提出 plan** → `observeSessionPlan` → `POST /observe/session-plan` → 用 `plan.scope` **修正** `ResearchGoal` 的 `core_objective`/`domain`（不镜像 plan steps 成 ToolCall，避免 PENDING 骨架污染）。
-3. **每次代码执行完成** → `observeExecution` → `POST /observe/execution` → `upsert_execution`：
+1. **上传文件** → `MemoryGraphSink.observeUploadFile` → sidecar `POST /observe/upload-file` → `upsert_source_file`：MERGE `SourceFile`（`file_id` 确定性）+ 建 `SourceFile -[:feeds]-> ResearchGoal`。上传完成即镜像，fire-and-forget（图谱不可达 = no-op，上传本身不受影响）。`ResearchGoal` 可能尚未存在（上传可能早于首条消息），此时**不建占位 goal 节点**——文件先悬空（有节点、无 `feeds` 边），等首条消息时由 `upsert_session_first_message` MERGE 真实 goal 后统一补挂本会话所有悬空 SourceFile。重传同名文件 MERGE 命中同一 `file_id`，不造重复节点。
+2. **首条用户消息** → `MemoryGraphSink.observeSessionFirstMessage` → sidecar `POST /observe/session-first-message` → 写 `Session` + `ResearchGoal` + `has_goal`。
+3. **提出 plan** → `observeSessionPlan` → `POST /observe/session-plan` → 用 `plan.scope` **修正** `ResearchGoal` 的 `core_objective`/`domain`（不镜像 plan steps 成 ToolCall，避免 PENDING 骨架污染）。
+4. **每次代码执行完成** → `observeExecution` → `POST /observe/execution` → `upsert_execution`：
    - MERGE 一个 `ToolCall`（`task_type='code_execution'`）+ `Code`，建 `ToolCall -[:produces]-> Code`；
    - 执行 diff 只记录 Derivation 与 CAS，不把尚未声明的文件作为 `produced_artifacts` 写图；
    - 调 `_link_subtasks_by_finish_time` 重建本会话 `next` 时序链（先删本会话旧 `temporal_chain` 边再重连，`ResearchGoal → head → … → last`）。
-4. **每次文献检索（MCP）完成** → `observeMcpInvocation` → `POST /observe/mcp-search` → `upsert_mcp_search`：MERGE `ToolCall`（`task_id="subtask:mcp:<invocation_id>"`）+ 批量 MERGE `Paper`（按 `(session_id, normalized_link)` 去重，命中则 `retrieval_count+1`），建 `ToolCall -[:produces]-> Paper`。
-5. **subagent 运行** → `observeSubagent` → `POST /observe/subagent` → MERGE 一个 scope `Task`（`task_type='subagent'`）；subagent 内部的代码执行/文献检索镜像成子 `ToolCall` 节点，通过 `contains` + `next` 挂到 scope 下，`produces` 边走 `scope → 子的 Code/Artifact`（scope 拥有其子的产品，自身不产）。
+5. **每次文献检索（MCP）完成** → `observeMcpInvocation` → `POST /observe/mcp-search` → `upsert_mcp_search`：MERGE `ToolCall`（`task_id="subtask:mcp:<invocation_id>"`）+ 批量 MERGE `Paper`（按 `(session_id, normalized_link)` 去重，命中则 `retrieval_count+1`），建 `ToolCall -[:produces]-> Paper`。
+6. **subagent 运行** → `observeSubagent` → `POST /observe/subagent` → MERGE 一个 scope `Task`（`task_type='subagent'`）；subagent 内部的代码执行/文献检索镜像成子 `ToolCall` 节点，通过 `contains` + `next` 挂到 scope 下，`produces` 边走 `scope → 子的 Code/Artifact`（scope 拥有其子的产品，自身不产）。
 
 任务链成型后，从前端"工作区面板"即可看到一张随执行增长的有向图：研究目标在顶，`ToolCall` 沿 `next` 排成时间线（subagent 的 scope 通过 `contains` 归组其子 `ToolCall`），每个 `ToolCall` 向下 `produces` 它的代码、文件、文献。
 

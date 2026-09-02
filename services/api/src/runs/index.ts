@@ -904,7 +904,7 @@ async function executeAgentRun(
         try {
           const bodyPath = join(workspaceRoot, input.path);
           const body = await readFile(bodyPath, "utf8");
-          bodyLabels = new Set(Array.from(body.matchAll(/\[(evidence|artifact)\d+\]/g)).map((match) => match[0].slice(1, -1)));
+          bodyLabels = new Set(Array.from(body.matchAll(/\[(evidence|artifact|sourcefile)\d+\]/g)).map((match) => match[0].slice(1, -1)));
         } catch {
           // Body unreadable (path moved/deleted/non-text) — skip reconciliation;
           // never block the declare on a read failure.
@@ -913,7 +913,7 @@ async function executeAgentRun(
           const orphan = Array.from(bodyLabels).filter((label) => !refLabels.has(label));
           if (orphan.length) {
             result.instruction =
-              `The report body contains ${orphan.map((label) => `[${label}]`).join(", ")} tokens that have no matching entry in any declare_claim's cites_evidence_aliases/cites_artifact_aliases, so they will render as plain text instead of clickable chips. To fix: for each missing artifact alias, call list_artifacts to resolve its artifact_id (or reuse the id an earlier declare_artifact returned), then call declare_claim again passing cites_artifact_aliases={"artifactN": "<artifact_id>"} for each; for a missing evidence alias, pass cites_evidence_aliases={"evidenceN": "<evidence_id>"}. Then call declare_artifact(output) again so the new chip references drain onto a fresh version. Never write a [alias] token in the body without a matching key in the same declare_claim's alias params.`;
+              `The report body contains ${orphan.map((label) => `[${label}]`).join(", ")} tokens that have no matching entry in any declare_claim's cites_evidence_aliases/cites_artifact_aliases/cites_source_file_aliases, so they will render as plain text instead of clickable chips. To fix: for each missing artifact alias, call list_artifacts to resolve its artifact_id (or reuse the id an earlier declare_artifact returned), then call declare_claim again passing cites_artifact_aliases={"artifactN": "<artifact_id>"} for each; for a missing evidence alias, pass cites_evidence_aliases={"evidenceN": "<evidence_id>"}; for a missing sourcefile alias, the file_id is the SourceFile node's file_id (obtain via query_graph or list_files), pass cites_source_file_aliases={"sourcefileN": "<file_id>"} — only for non-PDF data files (a PDF must go via declare_evidence → cites_evidence_aliases). Then call declare_artifact(output) again so the new chip references drain onto a fresh version. Never write a [alias] token in the body without a matching key in the same declare_claim's alias params.`;
           }
         }
       }

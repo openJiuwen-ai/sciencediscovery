@@ -3167,3 +3167,263 @@ def test_schema_enum_has_contains_and_server_whitelist_has_contains() -> None:
     assert any(h[0] == "contains" and h[1] == "out" for h in query_mod._CHAIN_HOPS["Task"]), \
         "Task chain hops must include a contains out-hop to drill into children"
 
+
+# --- observeUploadFile (SourceFile + feeds) ----------------------------------
+
+def _upload_payload(sid: str, *, media_type: str | None, path: str = "data.csv",
+                    name: str = "data.csv", size: int | None = 100,
+                    content_hash: str | None = "hash-a") -> dict:
+    """A minimal /observe/upload-file body for session ``sid``."""
+    return {
+        "session_id": sid,
+        "file_id": f"source_file:session:{sid}:{path}",
+        "name": name,
+        "path": path,
+        "media_type": media_type,
+        "size": size,
+        "content_hash": content_hash,
+        "created_at": "2026-09-08T00:00:00Z",
+    }
+
+
+def test_observe_upload_file_degrades_without_neo4j(client: TestClient) -> None:
+    response = client.post(
+        "/observe/upload-file",
+        json=_upload_payload("sess-up-degraded", media_type="text/csv"),
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["written"] == 0
+
+
+def test_observe_upload_file_rejects_missing_token(client: TestClient) -> None:
+    response = client.post(
+        "/observe/upload-file",
+        json=_upload_payload("sess-up-token", media_type="text/csv"),
+        # no auth header
+    )
+    assert response.status_code == 401
+
+
+def test_persist_evidence_rejects_unknown_source_file(client: TestClient) -> None:
+    """Degraded graph or genuinely absent node: an evidence declare against a
+    SourceFile that does not exist 422s with source_file_not_found (the gate
+    needs a reachable graph to distinguish, so this asserts the degraded
+    branch first — the live counterpart asserts the real absence case)."""
+    # With no Neo4j the endpoint degrades before the gate runs, so the
+    # not-found path is only meaningful live; here we pin the degraded shape.
+    response = client.post(
+        "/persist/evidence",
+        json={
+            "content": "x",
+            "source_file_id": "source_file:session:s:none.pdf",
+            "locator": "p1",
+            "evidence_type": "statistic",
+            "confidence": "medium",
+            "strength": "moderate",
+            "session_id": "sess-sf-degraded",
+        },
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+
+
+@needs_neo4j
+def test_upload_before_first_message_dangles_then_feeds(live_client: TestClient) -> None:
+    """The block-1 core scenario: a file uploaded BEFORE the first message
+    creates a SourceFile node with NO feeds edge and NO placeholder
+    ResearchGoal; the first message then MERGEs the real goal and attaches
+    every still-dangling SourceFile of the session."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sf-early"
+    _wipe_session(sid)
+    # 1. Upload first — no ResearchGoal exists yet.
+    r = live_client.post("/observe/upload-file",
+                         json=_upload_payload(sid, media_type="text/csv"),
+                         headers=headers)
+    assert r.status_code == 200 and r.json()["status"] == "healthy"
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    # No placeholder goal was created, and no feeds edge exists yet.
+    assert [n for n in sub["nodes"] if n["label"] == "ResearchGoal"] == []
+    assert [e for e in sub["edges"] if e["type"] == "feeds"] == []
+    assert len([n for n in sub["nodes"] if n["label"] == "SourceFile"]) == 1
+    # 2. First message lands — the goal appears and the dangling file attaches.
+    live_client.post("/observe/session-first-message", json={
+        "session_id": sid,
+        "goal_id": f"goal:session:{sid}",
+        "core_objective": "analyze uploaded data",
+        "domain": "DataAnalysis",
+        "topic_scope": [],
+        "created_at": "2026-09-08T00:00:01Z",
+    }, headers=headers)
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    goals = [n for n in sub["nodes"] if n["label"] == "ResearchGoal"]
+    assert len(goals) == 1
+    # The goal carries the first message's fields (no empty placeholder shell).
+    assert goals[0]["extra"]["core_objective"] == "analyze uploaded data"
+    feeds = [e for e in sub["edges"] if e["type"] == "feeds"]
+    assert len(feeds) == 1
+    assert feeds[0]["source"] == f"source_file:session:{sid}:data.csv"
+    assert feeds[0]["target"] == f"goal:session:{sid}"
+
+
+@needs_neo4j
+def test_upload_reupsert_refreshes_metadata(live_client: TestClient) -> None:
+    """An overwrite re-upload of the same path must refresh size/content_hash
+    (ON MATCH SET) instead of leaving the graph stale — the graph is the
+    catalog, the CAS is the warehouse; a stale catalog entry lies about which
+    content the file_id names. The FIRST upload must also write size/
+    content_hash (ON CREATE — a regression once moved them to ON MATCH only,
+    leaving the very first upload hashless). media_type only fills forward
+    (coalesce): a re-upload that cannot infer a type must not erase one an
+    earlier upload set."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sf-reup"
+    _wipe_session(sid)
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type="text/csv",
+                                          size=100, content_hash="hash-a"),
+                     headers=headers)
+    # First upload: ON CREATE must write size/content_hash (regression guard —
+    # the catalog must point at the right CAS blob from the very first write).
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    first = [n for n in sub["nodes"] if n["label"] == "SourceFile"]
+    assert len(first) == 1
+    assert first[0]["extra"]["size"] == 100
+    assert first[0]["extra"]["content_hash"] == "hash-a"
+    assert first[0]["extra"]["media_type"] == "text/csv"
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type=None,  # unknown ext re-upload
+                                          size=250, content_hash="hash-b"),
+                     headers=headers)
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    files = [n for n in sub["nodes"] if n["label"] == "SourceFile"]
+    assert len(files) == 1  # MERGE on file_id: no duplicate
+    extra = files[0]["extra"]
+    assert extra["size"] == 250
+    assert extra["content_hash"] == "hash-b"
+    assert extra["media_type"] == "text/csv"  # coalesce kept the earlier type
+
+
+@needs_neo4j
+def test_media_type_gates_evidence_and_claim_routes(live_client: TestClient) -> None:
+    """The block-3 cite gates, all four corners plus the unknown-type case:
+    PDF → Evidence source OK / non-PDF → source_file_not_pdf; non-PDF →
+    Claim cite OK / PDF → source_file_is_pdf; and a node whose media_type is
+    unset (inferMediaType returned undefined) must NOT be misreported as
+    source_file_not_found — it exists, it is just not a PDF, so the evidence
+    gate says not_pdf and the claim gate lets it through."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sf-gates"
+    _wipe_session(sid)
+    pdf_fid = f"source_file:session:{sid}:paper.pdf"
+    csv_fid = f"source_file:session:{sid}:data.csv"
+    npy_fid = f"source_file:session:{sid}:weights.npy"
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type="application/pdf",
+                                          path="paper.pdf", name="paper.pdf"),
+                     headers=headers)
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type="text/csv",
+                                          path="data.csv", name="data.csv"),
+                     headers=headers)
+    # Unknown extension: media_type stays null (the pre-fix bug treated this
+    # node as "not found" on both gates).
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type=None,
+                                          path="weights.npy", name="weights.npy"),
+                     headers=headers)
+    evidence_body = {
+        "locator": "p1", "evidence_type": "statistic",
+        "confidence": "medium", "strength": "moderate", "session_id": sid,
+    }
+    # PDF → valid Evidence source.
+    ok = live_client.post("/persist/evidence", json={
+        "content": "from the pdf", "source_file_id": pdf_fid, **evidence_body,
+    }, headers=headers)
+    assert ok.status_code == 200 and ok.json()["status"] == "ok"
+    # CSV → not a PDF.
+    r = live_client.post("/persist/evidence", json={
+        "content": "x", "source_file_id": csv_fid, **evidence_body,
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_not_pdf"
+    # Unknown-type node exists → not_pdf (NOT not_found).
+    r = live_client.post("/persist/evidence", json={
+        "content": "x", "source_file_id": npy_fid, **evidence_body,
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_not_pdf"
+    # Genuinely absent file_id → not_found.
+    r = live_client.post("/persist/evidence", json={
+        "content": "x", "source_file_id": f"source_file:session:{sid}:ghost.csv",
+        **evidence_body,
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_not_found"
+
+    claim_body = {
+        "content": "the data supports this", "claim_type": "finding",
+        "confidence": "high", "locator": "s1", "session_id": sid,
+    }
+    # Non-PDF (incl. unknown type) → valid direct Claim support.
+    for fid in (csv_fid, npy_fid):
+        ok = live_client.post("/persist/claim", json={
+            **claim_body, "cites_source_file_aliases": {"sourcefile1": fid},
+        }, headers=headers)
+        assert ok.status_code == 200, f"claim cite failed for {fid}: {ok.text}"
+    # PDF → rejected with guidance to declare_evidence first.
+    r = live_client.post("/persist/claim", json={
+        **claim_body, "cites_source_file_aliases": {"sourcefile1": pdf_fid},
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_is_pdf"
+    # Absent file_id → not_found.
+    r = live_client.post("/persist/claim", json={
+        **claim_body,
+        "cites_source_file_aliases": {"sourcefile1": f"source_file:session:{sid}:ghost.csv"},
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_not_found"
+
+    # The claim cites built SourceFile -[:supports]-> Claim edges (and the
+    # PDF-source evidence built SourceFile -[:extracts]-> Evidence).
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    supports = [e for e in sub["edges"] if e["type"] == "supports"
+                and e["source"] in {csv_fid, npy_fid}]
+    assert len(supports) == 2
+    extracts = [e for e in sub["edges"] if e["type"] == "extracts"
+                and e["source"] == pdf_fid]
+    assert len(extracts) == 1
+
+
+@needs_neo4j
+def test_execution_input_source_file_builds_input_edge(live_client: TestClient) -> None:
+    """Code-read traceability: an execution whose code reads an uploaded file
+    builds ``SourceFile -[:input]-> Code`` (via input_source_files, the
+    recorder's inference payload), anchored on the Code node."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sf-input"
+    _wipe_session(sid)
+    fid = f"source_file:session:{sid}:data.csv"
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type="text/csv"),
+                     headers=headers)
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-sf-read",
+        "session_id": sid,
+        "turn_id": "turn-sf-read",
+        "tool": "run_python",
+        "language": "python",
+        "code_hash": "hash-sf-read",
+        "exit_code": 0,
+        "status": "succeeded",
+        "started_at": "2026-09-08T00:00:00Z",
+        "finished_at": "2026-09-08T00:00:01Z",
+        "produced_artifacts": [],
+        "input_source_files": [{"file_id": fid}],
+    }, headers=headers)
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    inputs = [e for e in sub["edges"] if e["type"] == "input"]
+    assert len(inputs) == 1
+    assert inputs[0]["source"] == fid
+    assert inputs[0]["target"] == "exec-sf-read"
+

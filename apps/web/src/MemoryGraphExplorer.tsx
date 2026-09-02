@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ArtifactAnnotation, ComposerReference, MemoryGraphEdgeType, MemoryGraphNode, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
@@ -92,7 +92,7 @@ const CHAIN_BUTTONS: Partial<Record<MemoryGraphNodeLabel, ChainButton[]>> = {
   ],
 };
 
-const NODE_LABELS: MemoryGraphNodeLabel[] = ["ResearchGoal", "Task", "ToolCall", "Paper", "Evidence", "Claim", "Code", "Artifact"];
+const NODE_LABELS: MemoryGraphNodeLabel[] = ["ResearchGoal", "Task", "ToolCall", "Paper", "Evidence", "Claim", "Code", "Artifact", "SourceFile"];
 // Edge types shown as Relationship filter chips. MUST stay in sync with
 // MemoryGraphEdgeType (packages/schema) + EDGE_COLORS (MemoryGraphCanvas) —
 // a type listed here but missing from EDGE_COLORS renders a grey chip, and a
@@ -101,10 +101,12 @@ const NODE_LABELS: MemoryGraphNodeLabel[] = ["ResearchGoal", "Task", "ToolCall",
 // the order aligned with EDGE_COLORS so chip colors read top-to-bottom.
 // ``contains`` is the subagent scope→child spine (PR1); it surfaces as a
 // chip so the user can isolate the scope subtree when a scope is expanded.
+// ``feeds`` links an uploaded SourceFile to its ResearchGoal (upload mirror);
+// it surfaces as a chip so the user can isolate the uploaded-files subtree.
 // ``supersedes`` (Artifact version→previous version) is intentionally
 // omitted — version history is out of scope for the canvas/chain view, and
 // the Canvas drops those edges before layout anyway.
-const EDGE_TYPES: MemoryGraphEdgeType[] = ["produces", "next", "extracts", "supports", "stated_in", "input", "contains"];
+const EDGE_TYPES: MemoryGraphEdgeType[] = ["produces", "next", "extracts", "supports", "stated_in", "input", "contains", "feeds"];
 // Module-level so the embedded artifact panel keeps a stable prop identity
 // across the explorer's poll-driven re-renders.
 const NOOP = () => undefined;
@@ -150,6 +152,32 @@ export function findArtifactNodeInGraph(
     (typeof right.extra?.version === "number" ? right.extra.version : -1) -
     (typeof left.extra?.version === "number" ? left.extra.version : -1),
   )[0];
+}
+
+/**
+ * Resolve an uploaded-file `name` (the SourceFile node's ``extra.path`` /
+ * ``extra.name``) onto its graph SourceFile node. Used by the embedded
+ * provenance panel's "← derived from" link when the dependency is a
+ * ``source_file`` (an uploaded file the run read) — those have no version and
+ * no Artifact node, so ``findArtifactNodeInGraph`` cannot match them. The
+ * SourceFile node is keyed by ``file_id`` and carries the uploaded name/path
+ * in ``extra``; match by ``path`` first (the workspace-relative basename) and
+ * fall back to ``name`` (``originalName`` may differ from ``path`` on a rename
+ * conflict). Accepts a path-tail match, mirroring the artifact helper.
+ */
+export function findSourceFileNodeInGraph(
+  nodes: readonly MemoryGraphNode[],
+  name: string,
+): MemoryGraphNode | undefined {
+  return nodes.find((node) => {
+    if (node.label !== "SourceFile") return false;
+    const path = typeof node.extra?.path === "string" ? node.extra.path : "";
+    const labelName = typeof node.extra?.name === "string" ? node.extra.name : "";
+    if (!path && !labelName) return false;
+    return path === name || labelName === name
+      || (path && name.endsWith(`/${path}`))
+      || (labelName && name.endsWith(`/${labelName}`));
+  });
 }
 
 /**
@@ -678,6 +706,33 @@ export function MemoryGraphExplorer({
   subgraph: MemorySubgraph;
 }) {
   const [selectedId, setSelectedId] = useState<string | undefined>(initialNodeId);
+  // React to a chip-jump re-focus while the explorer is already open: a second
+  // [sourcefile2] chip clicked from a chained modal shouldn't land back on
+  // [sourcefile1]'s selection. useState only honors the initial value, so an
+  // effect catches subsequent prop changes. Tracking the previous prop via
+  // ref skips the mount-time fire (the useState initializer already picked
+  // it up — re-setting would be a no-op but is wasted work and would race
+  // with the auto-chain effect above).
+  const previousInitialNodeIdRef = useRef<string | undefined>(initialNodeId);
+  useEffect(() => {
+    const previous = previousInitialNodeIdRef.current;
+    previousInitialNodeIdRef.current = initialNodeId;
+    if (previous === initialNodeId) return;
+    if (!initialNodeId) return; // parent cleared the focus; explorer keeps current selection
+    setSelectedId(initialNodeId);
+    // A chip jump is a fresh navigation: drop any active search or chain
+    // overlay so the new focus is unambiguous (chain in particular is "focus
+    // on this node's neighbourhood" — two focuses don't compose). Clear the
+    // entry focus too — it would otherwise pin the previous Artifact /
+    // Evidence node, defeating the new selection.
+    setQuery("");
+    setMatchIds(undefined);
+    setSearchNote(undefined);
+    setChain(undefined);
+    setChainSlice(undefined);
+    setAutoChainDone(false);
+    setFocusNodeId(undefined);
+  }, [initialNodeId]);
   const [activeLabels, setActiveLabels] = useState<ReadonlySet<MemoryGraphNodeLabel>>(new Set());
   const [activeEdges, setActiveEdges] = useState<ReadonlySet<MemoryGraphEdgeType>>(new Set());
   // Search narrows the graph to matching nodes; chain replaces it with one
@@ -1059,12 +1114,23 @@ export function MemoryGraphExplorer({
   const navigateArtifactInGraph = useCallback((logicalName: string, version?: number) => {
     const target = findArtifactNodeInGraph(graph.nodes, logicalName, version);
     if (target) { setSelectedId(target.id); return; }
+    // version undefined = a source_file (uploaded file) dependency, or an
+    // unpinned artifact. SourceFile nodes are keyed by file_id and carry the
+    // uploaded name/path in extra; match by those so a click on an uploaded
+    // input file selects its SourceFile node. Artifact nodes are handled by
+    // findArtifactNodeInGraph above (and the subgraph fallback below), so this
+    // only fires when no Artifact node matched.
+    if (version == null) {
+      const sourceTarget = findSourceFileNodeInGraph(graph.nodes, logicalName);
+      if (sourceTarget) { setSelectedId(sourceTarget.id); return; }
+    }
     if (!chain) return;
     const fullTarget = findArtifactNodeInGraph(subgraph.nodes, logicalName, version);
-    if (!fullTarget) return;
-    setChain(undefined);
-    clearSearch();
-    setSelectedId(fullTarget.id);
+    if (fullTarget) { setChain(undefined); clearSearch(); setSelectedId(fullTarget.id); return; }
+    if (version == null) {
+      const fullSourceTarget = findSourceFileNodeInGraph(subgraph.nodes, logicalName);
+      if (fullSourceTarget) { setChain(undefined); clearSearch(); setSelectedId(fullSourceTarget.id); }
+    }
   }, [chain, graph.nodes, subgraph.nodes]);
 
   // A code-header click in the embedded provenance panel selects the Code
@@ -1086,21 +1152,25 @@ export function MemoryGraphExplorer({
   }, [chain, graph.nodes, subgraph.nodes]);
 
   // A citation chip click in the embedded artifact panel (the report's
-  // [artifactN]/[evidenceN] tokens) selects the cited node in the canvas.
-  // Artifact chips carry the catalog artifact_id + version as the reference;
-  // resolve it to a graph Artifact node by matching ``extra.artifact_id``
-  // (composite-keyed on version when the chip pins one). Without this the
-  // MarkdownRenderer renders the chips as disabled buttons — the reference
-  // resolves, so they are not plain text, but ArtifactModal's onChipClick is
-  // undefined in the chain view so the button stays disabled and unclickable.
-  // Evidence/Artifact chips reference those labels directly by id.
+  // [artifactN]/[evidenceN]/[sourcefileN] tokens) selects the cited node in
+  // the canvas. Artifact chips carry the catalog artifact_id + version as the
+  // reference; resolve it to a graph Artifact node by matching
+  // ``extra.artifact_id`` (composite-keyed on version when the chip pins one).
+  // Without this the MarkdownRenderer renders the chips as disabled buttons —
+  // the reference resolves, so they are not plain text, but ArtifactModal's
+  // onChipClick is undefined in the chain view so the button stays disabled and
+  // unclickable. Evidence/SourceFile chips reference those labels directly by
+  // id: Evidence's node identity is its evidence_id, SourceFile's is its
+  // file_id (what the sourcefile chip carries as ``reference.id``), so both
+  // match on ``node.id === reference.id``.
   const navigateChipInGraph = useCallback((reference: ComposerReference) => {
     // ComposerReferenceKind is lowercase ("artifact"); MemoryGraphNodeLabel is
     // PascalCase ("Artifact"). Map the chip kind to its graph label so the
     // label comparison is meaningful; "session"/"skill" are composer-context
     // references, not chips, so they never reach this handler.
     const label = reference.kind === "artifact" ? "Artifact"
-      : reference.kind === "evidence" ? "Evidence" : null;
+      : reference.kind === "evidence" ? "Evidence"
+      : reference.kind === "sourcefile" ? "SourceFile" : null;
     if (!label) return;
     const matchNode = (nodes: readonly MemoryGraphNode[]) => nodes.find((node) => {
       if (node.label !== label) return false;
@@ -1110,6 +1180,8 @@ export function MemoryGraphExplorer({
         return reference.version == null
           || node.extra?.version === reference.version;
       }
+      // Evidence (id=evidence_id) and SourceFile (id=file_id) both key their
+      // node identity on the chip's reference.id directly.
       return node.id === reference.id;
     });
     const target = matchNode(graph.nodes);
@@ -1492,7 +1564,10 @@ export function MemoryGraphExplorer({
 
       <div className="memory-explorer-body">
         <div className="memory-explorer-product">
-          {selected && selected.label === "Artifact" && artifactName ? <ArtifactModal
+          {/* SourceFile nodes also resolve to a catalog entry (origin="user_upload",
+              see block 1) so the shared artifact panel can preview the uploaded
+              file with the same surface as a declared Artifact. */}
+          {selected && (selected.label === "Artifact" || selected.label === "SourceFile") && artifactName ? <ArtifactModal
             client={client}
             embedded
             // Key on (logicalName, version) so clicking v1 vs v2 remounts the

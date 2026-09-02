@@ -130,6 +130,7 @@ def upsert_execution(
     stderr_hash: str | None = None,
     env_hash: str | None = None,
     parent_subagent_id: str | None = None,
+    input_source_files: list[dict[str, Any]] | None = None,
 ) -> None:
     """Upsert one execution's worth of nodes (SubTask → Code → Artifacts).
 
@@ -162,6 +163,20 @@ def upsert_execution(
     ``child → Code`` / ``child → Artifact`` (the scope never carries
     products). The child does not join the session temporal chain — only
     session-main SubTasks do.
+
+    ``input_source_files`` is a distinct top-level input channel from the
+    per-artifact ``input_artifact_versions`` above: it carries the SourceFile
+    nodes (uploaded files) this Code run read, as ``{file_id}`` keys (SourceFile
+    has no version, unlike Artifact). The recorder infers them by scanning the
+    code text for uploaded-file paths (same grain as
+    ``inferredArtifactInputs``). The ``input`` edge (SourceFile → Code) is built
+    AFTER the produced_artifacts loop, anchored on the Code node — input is a
+    property of the Code run ("what this run read"), not of any one produced
+    artifact. MERGE on (file_id, code_id) keeps re-runs idempotent. Built only
+    when the SourceFile node already exists (block 1's ``upsert_source_file``
+    writes it fire-and-forget at upload time); a missing SourceFile MATCHes
+    nothing and the edge is silently skipped — the same fire-and-forget
+    degradation as the rest of the mirror.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -194,6 +209,7 @@ def upsert_execution(
             stderr_hash=stderr_hash,
             env_hash=env_hash,
             parent_subagent_id=parent_subagent_id,
+            input_source_files=input_source_files,
         )
         return
 
@@ -350,6 +366,19 @@ def upsert_execution(
             # only adding edges between consecutive orphans. Idempotent.
             _link_subtasks_by_finish_time(session, session_id)
 
+            # SourceFile inputs — uploaded files this Code run read. Built
+            # AFTER the produced_artifacts loop, anchored on the Code node:
+            # input is a property of the Code run ("what this run read"), not
+            # of any one produced artifact, so it is a distinct top-level
+            # channel from the per-artifact ``input_artifact_versions`` above
+            # (SourceFile has no version; its endpoint key is ``file_id``).
+            # The Code node was MERGEd above (code_id=execution_id); the
+            # SourceFile nodes are written fire-and-forget at upload time
+            # (block 1's upsert_source_file) — a missing SourceFile MATCHes
+            # nothing and the edge is silently skipped (fire-and-forget
+            # degradation). MERGE on (file_id, code_id) keeps re-runs idempotent.
+            _link_source_file_inputs(session, execution_id, input_source_files)
+
         log.info("upsert done: execution=%s session=%s wrote %d nodes and %d produces edges",
                  execution_id, session_id,
                  1 + 1 + len(produced_artifacts), 1 + len(produced_artifacts))
@@ -376,6 +405,7 @@ def _upsert_execution_child(
     stderr_hash: str | None,
     env_hash: str | None,
     parent_subagent_id: str,
+    input_source_files: list[dict[str, Any]] | None = None,
 ) -> None:
     """Build a subagent child ToolCall for one execution.
 
@@ -533,11 +563,49 @@ def _upsert_execution_child(
                         prev_version=version - 1,
                     ).consume()
 
+            # SourceFile inputs for the subagent-child path: the child's Code
+            # node (code_id=execution_id) was MERGEd above. Same input-is-Code-
+            # property rationale + fire-and-forget degradation as the main path.
+            _link_source_file_inputs(session, execution_id, input_source_files)
+
         log.info("upsert (child) done: execution=%s session=%s scope=%s wrote child + Code + %d Artifact(s)",
                  execution_id, session_id, scope_task_id, len(produced_artifacts))
     except Exception as exc:
         log.exception("upsert (child) failed: execution=%s session=%s: %s", execution_id, session_id, exc)
         raise
+
+
+def _link_source_file_inputs(
+    session: Any, execution_id: str, refs: list[dict[str, Any]] | None,
+) -> None:
+    """MERGE ``SourceFile -[:input]-> Code`` edges for one execution.
+
+    Distinct from the per-artifact ``input_artifact_versions`` loop: SourceFile
+    is a user-uploaded file (block 1's ``upsert_source_file`` writes it at
+    upload time), has no version, and its endpoint key is ``file_id``. The
+    edge is anchored on the Code node (``code_id = execution_id``), not on any
+    produced artifact, because input is a property of the Code run ("what this
+    run read"), not of a product. Built from the payload's ``input_source_files``
+    list (the recorder infers it by scanning the code text for uploaded-file
+    paths, same grain as ``inferredArtifactInputs``). The SourceFile node must
+    already exist; a missing one MATCHes nothing and the edge is silently
+    skipped — the same fire-and-forget degradation as the rest of the mirror.
+    MERGE on (file_id, code_id) keeps re-runs idempotent. Runs inside the
+    caller's open session/tx.
+    """
+    for ref in refs or []:
+        file_id = ref.get("file_id")
+        if not file_id:
+            continue
+        session.run(
+            """
+            MATCH (sf:SourceFile {file_id: $fid})
+            MATCH (c:Code {code_id: $code_id})
+            MERGE (sf)-[:input]->(c)
+            """,
+            fid=file_id,
+            code_id=execution_id,
+        ).consume()
 
 
 def upsert_mcp_search(
@@ -1161,7 +1229,11 @@ def upsert_session_first_message(
     so re-sending the first message of a session hits the existing goal and
     creates no duplicate — one ResearchGoal per session. ``domain`` is
     inferred by the Node hook from the message keywords, not read from any
-    project. Returns ``goal_id`` on success, ``None`` when skipped.
+    project. After MERGEing the goal it attaches every still-dangling
+    SourceFile of the session with a ``feeds`` edge — files uploaded before
+    the first message have a node but no goal to feed yet (the upload path
+    must not create a placeholder goal). Returns ``goal_id`` on success,
+    ``None`` when skipped.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -1181,6 +1253,9 @@ def upsert_session_first_message(
                                 g.domain         = $domain,
                                 g.topic_scope     = $topic_scope,
                                 g.created_at      = datetime()
+                WITH g
+                MATCH (f:SourceFile {session_id: $sid})
+                MERGE (f)-[:feeds]->(g)
                 RETURN g.goal_id AS goal_id
                 """,
                 sid=session_id,
@@ -1194,6 +1269,92 @@ def upsert_session_first_message(
     except Exception as exc:
         log.exception("upsert_session_first_message failed: session=%s goal=%s: %s",
                       session_id, goal_id, exc)
+        raise
+
+
+def upsert_source_file(
+    *,
+    file_id: str,
+    session_id: str,
+    name: str,
+    path: str,
+    media_type: str | None,
+    size: int | None,
+    content_hash: str | None,
+    created_at: str,
+) -> str | None:
+    """Idempotent: MERGE a SourceFile node + a ``feeds`` edge when the goal exists.
+
+    ``file_id`` is the deterministic business key
+    (``"source_file:session:" + session_id + ":" + path``), so re-uploading the
+    same file hits the existing node and creates no duplicate — one SourceFile
+    per uploaded file per session. ON CREATE writes every field; ON MATCH
+    refreshes the mutable ones (``name``/``path``/``size``/``content_hash``)
+    so an overwrite re-upload keeps the graph in sync with the CAS, while
+    ``media_type`` only fills forward (``coalesce``): a re-upload whose type
+    can't be inferred (``inferMediaType`` returns undefined for unknown
+    extensions) must not erase the type an earlier upload did set.
+    The ``feeds`` edge links the file to the
+    session's ResearchGoal (``goal_id = "goal:session:" + session_id``), but a
+    file uploaded before the first message must NOT create a placeholder goal:
+    the edge is attached only when the goal already exists (upload after the
+    first message); otherwise the file stays dangling and is linked later by
+    ``upsert_session_first_message``, which MERGEs the goal from the real
+    first message and then attaches every still-dangling SourceFile of the
+    session. Idempotent MERGE on both sides. Written fire-and-forget by the
+    upload handler; returns ``file_id`` on success, ``None`` when skipped.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        log.warning("upsert_source_file skipped: Neo4j not reachable (session=%s file=%s)",
+                    session_id, file_id)
+        return None
+
+    goal_id = "goal:session:" + session_id
+    log.debug("upsert_source_file starting: session=%s file=%s name=%s",
+              session_id, file_id, name)
+    try:
+        with driver.session() as session:
+            session.run(
+                """
+                MERGE (f:SourceFile {file_id: $file_id})
+                  ON CREATE SET f.session_id    = $sid,
+                                f.name          = $name,
+                                f.path          = $path,
+                                f.media_type    = $media_type,
+                                f.size          = $size,
+                                f.content_hash  = $content_hash,
+                                f.origin        = 'user_upload',
+                                f.created_at    = datetime($created_at)
+                  ON MATCH  SET f.size          = $size,
+                                f.content_hash  = $content_hash,
+                                f.name          = $name,
+                                f.path          = $path,
+                                f.media_type    = coalesce($media_type, f.media_type)
+                WITH f
+                CALL (f) {
+                  OPTIONAL MATCH (g:ResearchGoal {goal_id: $goal_id})
+                  WITH f, g
+                  WHERE g IS NOT NULL
+                  MERGE (f)-[:feeds]->(g)
+                }
+                RETURN f.file_id AS file_id
+                """,
+                sid=session_id,
+                goal_id=goal_id,
+                file_id=file_id,
+                name=name,
+                path=path,
+                media_type=media_type,
+                size=size,
+                content_hash=content_hash,
+                created_at=created_at,
+            ).consume()
+        log.info("upsert_source_file done: session=%s file=%s", session_id, file_id)
+        return file_id
+    except Exception as exc:
+        log.exception("upsert_source_file failed: session=%s file=%s: %s",
+                      session_id, file_id, exc)
         raise
 
 
@@ -1273,19 +1434,44 @@ def declare_evidence(
     evidence_id: str,
     session_id: str,
     content: str,
-    source_paper_link: str,
+    source_paper_link: str | None,
     locator: str,
     evidence_type: str,
     confidence: str,
     strength: str,
+    source_file_id: str | None = None,
 ) -> str | None:
-    """CREATE one Evidence + ``extracts`` (Paper → Evidence).
+    """CREATE one Evidence + ``extracts`` (Paper/PDF-SourceFile → Evidence).
 
-    The caller already verified the Paper exists (by normalized link); this
-    MATCHes it directly. Evidence is not deduped — each declaration gets its
-    own fresh ``evidence_id`` (Evidence has no content-based dedup rule).
-    Returns the evidence_id, or ``None`` when skipped (graph
-    disabled/unreachable).
+    Two source branches, mutually exclusive:
+
+    - ``source_paper_link`` set → the Paper branch (legacy): MATCH the Paper
+      by normalized link and store ``source_paper_link`` on the Evidence
+      node. ``source_file_id`` is left null.
+    - ``source_file_id`` set → the SourceFile-PDF branch (block 3): MATCH the
+      SourceFile by ``file_id`` and store ``source_file_id`` on the Evidence
+      node (NOT ``source_paper_link`` — see omission-1 note below).
+      ``source_paper_link`` is left null.
+
+    The caller (server.py /persist/evidence) validates the source exists AND
+    enforces that a SourceFile used here is a PDF (``media_type=
+    application/pdf``): a non-PDF data file is rejected at the server layer
+    with ``source_file_not_pdf`` because data files are not "arguments
+    extracted from a document" and must instead directly support a Claim via
+    ``declare_claim``'s ``cites_source_file_refs``. This function assumes the
+    caller already did that media_type gate.
+
+    Omission-1 note: ``source_file_id`` is stored in its own field, never in
+    ``source_paper_link``. ``_normalize_link`` would mangle a file_id
+    (``source_file:session:abc:upload.pdf`` → ``https://source_file:...`` —
+    urlsplit treats a scheme-less string as a path and prepends ``https``),
+    and the frontend's EvidenceDetail renders ``source_paper_link`` as a
+    clickable URL — a file_id is not a valid URL. A dedicated
+    ``source_file_id`` field bypasses both.
+
+    Evidence is not deduped — each declaration gets its own fresh
+    ``evidence_id`` (Evidence has no content-based dedup rule). Returns the
+    evidence_id, or ``None`` when skipped (graph disabled/unreachable).
     """
     driver = handle()
     if not driver.is_reachable():
@@ -1293,40 +1479,81 @@ def declare_evidence(
                      evidence_id, session_id)
         return None
 
-    link = _normalize_link(source_paper_link)
-    log.debug("declare_evidence starting: evidence=%s session=%s paper=%s",
-              evidence_id, session_id, link)
+    link = _normalize_link(source_paper_link) if source_paper_link else None
+    log.debug("declare_evidence starting: evidence=%s session=%s paper=%s source_file=%s",
+              evidence_id, session_id, link, source_file_id or "-")
     try:
         with driver.session() as session:
-            session.run(
-                """
-                MATCH (p:Paper { session_id: $session_id, link: $link })
-                CREATE (e:Evidence {
-                  evidence_id:      $evidence_id,
-                  content:           $content,
-                  source_paper_link: $link,
-                  locator:           $locator,
-                  evidence_type:     $evidence_type,
-                  confidence:        $confidence,
-                  strength:          $strength,
-                  session_id:        $session_id,
-                  created_at:        datetime()
-                })
-                WITH e, p
-                MERGE (p)-[:extracts]->(e)
-                RETURN e.evidence_id AS evidence_id
-                """,
-                evidence_id=evidence_id,
-                session_id=session_id,
-                content=content,
-                link=link,
-                locator=locator,
-                evidence_type=evidence_type,
-                confidence=confidence,
-                strength=strength,
-            ).consume()
-        log.info("declare_evidence done: evidence=%s session=%s paper=%s",
-                 evidence_id, session_id, link)
+            # Branch in Python, not Cypher: the caller (server.py) already
+            # 422'd on both-empty / both-set, so exactly one of (link,
+            # source_file_id) is set here. The two branches CREATE the same
+            # Evidence shape — only source_paper_link / source_file_id differ
+            # and which source the extracts edge points from — so keeping them
+            # as two focused Cypher strings is clearer than a parameter-routed
+            # single query and avoids the subquery-variable-shadowing that a
+            # UNION/CALL approach would need.
+            if source_file_id:
+                # SourceFile-PDF branch: MATCH by file_id, store source_file_id
+                # (NOT source_paper_link — see omission-1 note in the docstring).
+                session.run(
+                    """
+                    MATCH (sf:SourceFile { file_id: $source_file_id })
+                    CREATE (e:Evidence {
+                      evidence_id:       $evidence_id,
+                      content:           $content,
+                      source_paper_link:  null,
+                      source_file_id:     $source_file_id,
+                      locator:            $locator,
+                      evidence_type:      $evidence_type,
+                      confidence:        $confidence,
+                      strength:           $strength,
+                      session_id:         $session_id,
+                      created_at:         datetime()
+                    })
+                    MERGE (sf)-[:extracts]->(e)
+                    RETURN e.evidence_id AS evidence_id
+                    """,
+                    evidence_id=evidence_id,
+                    session_id=session_id,
+                    content=content,
+                    locator=locator,
+                    evidence_type=evidence_type,
+                    confidence=confidence,
+                    strength=strength,
+                    source_file_id=source_file_id,
+                ).consume()
+            else:
+                # Paper branch: MATCH by (session_id, link), store the
+                # normalized link (legacy behavior, unchanged).
+                session.run(
+                    """
+                    MATCH (p:Paper { session_id: $session_id, link: $link })
+                    CREATE (e:Evidence {
+                      evidence_id:       $evidence_id,
+                      content:           $content,
+                      source_paper_link:  $link,
+                      source_file_id:     null,
+                      locator:            $locator,
+                      evidence_type:      $evidence_type,
+                      confidence:        $confidence,
+                      strength:           $strength,
+                      session_id:         $session_id,
+                      created_at:         datetime()
+                    })
+                    MERGE (p)-[:extracts]->(e)
+                    RETURN e.evidence_id AS evidence_id
+                    """,
+                    evidence_id=evidence_id,
+                    session_id=session_id,
+                    content=content,
+                    link=link,
+                    locator=locator,
+                    evidence_type=evidence_type,
+                    confidence=confidence,
+                    strength=strength,
+                ).consume()
+        log.info("declare_evidence done: evidence=%s session=%s paper=%s source_file=%s",
+                 evidence_id, session_id, link or "-", source_file_id or "-")
         return evidence_id
     except Exception as exc:
         log.exception("declare_evidence failed: evidence=%s session=%s: %s",
@@ -1345,11 +1572,12 @@ def declare_claim(
     content_hash: str,
     cites_node_ids: list[str],
     cites_artifact_refs: list[dict[str, Any]],
+    cites_source_file_refs: list[dict[str, Any]],
     artifact_id: str | None,
     artifact_version: int | None,
 ) -> list[dict[str, Any]]:
-    """CREATE one Claim + ``supports`` edges (Evidence/Artifact → Claim) +
-    optional ``stated_in`` (Claim → report Artifact).
+    """CREATE one Claim + ``supports`` edges (Evidence/Artifact/SourceFile →
+    Claim) + optional ``stated_in`` (Claim → report Artifact).
 
     Claim is not deduped — each declaration gets a fresh ``claim_id`` (the
     canonical pattern uses ``CREATE``, and content_hash is stored only for
@@ -1361,17 +1589,23 @@ def declare_claim(
     ``{artifact_id, version}`` dicts — Artifact is keyed on the composite
     ``(artifact_id, version)`` (one node per version), so a cited figure/dataset
     is pinned to the exact version the LLM declared against (not the latest,
-    which would drift as the product is regenerated). ``artifact_id`` +
-    ``artifact_version`` (the report Artifact + its version) build the
-    ``stated_in`` edge (Claim → report Artifact) so the graph can navigate
-    "which claim is stated in which report"; the caller verified the Artifact
-    exists.
+    which would drift as the product is regenerated). ``cites_source_file_refs``
+    is a list of ``{file_id}`` dicts for uploaded non-PDF data files
+    (CSV/image/etc) that directly support the claim — ``SourceFile -[:supports]->
+    Claim`` — mirroring the Artifact path (data files are not "arguments
+    extracted from a document", so they skip the Evidence layer). The caller
+    (server.py) enforces that only non-PDF SourceFiles take this path (a PDF
+    must go via declare_evidence first); this function assumes that gate ran.
+    ``artifact_id`` + ``artifact_version`` (the report Artifact + its version)
+    build the ``stated_in`` edge (Claim → report Artifact) so the graph can
+    navigate "which claim is stated in which report"; the caller verified the
+    Artifact exists.
 
     Returns the cited targets ``[{evidence_id?, artifact_id?, version?,
-    labels?}]`` so the caller can assemble the chip_map (alias → node) returned
-    to the LLM. The chip_map itself is not persisted here — it lives on the
-    report Artifact version's ``references`` (Node side). Empty list when
-    skipped.
+    file_id?, labels?}]`` so the caller can assemble the chip_map (alias →
+    node) returned to the LLM. The chip_map itself is not persisted here —
+    it lives on the report Artifact version's ``references`` (Node side).
+    Empty list when skipped.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -1379,9 +1613,9 @@ def declare_claim(
                      claim_id, session_id)
         return []
 
-    log.debug("declare_claim starting: claim=%s session=%s cites=%d art_refs=%d artifact=%s",
+    log.debug("declare_claim starting: claim=%s session=%s cites=%d art_refs=%d sf_refs=%d artifact=%s",
               claim_id, session_id, len(cites_node_ids),
-              len(cites_artifact_refs), artifact_id or "-")
+              len(cites_artifact_refs), len(cites_source_file_refs), artifact_id or "-")
     try:
         with driver.session() as session:
             # MERGE on claim_id (not CREATE) so a retry is idempotent: the
@@ -1427,6 +1661,20 @@ def declare_claim(
                   MERGE (target)-[:supports]->(cl)
                 }
                 WITH cl
+                // cites_source_file_refs: uploaded non-PDF data files (CSV/image/
+                // etc) that directly support the claim — SourceFile → Claim
+                // (supports), so it points target → cl. Mirrors the artifact
+                // batch; an empty list is a no-op (guarded subquery). The caller
+                // (server.py) already gated media_type: only non-PDF SourceFiles
+                // reach here — a PDF must go via declare_evidence (extracts →
+                // Evidence → supports → Claim), not this direct edge.
+                CALL {
+                  WITH cl
+                  UNWIND $cites_source_file_refs AS ref
+                  MATCH (target:SourceFile { file_id: ref.file_id })
+                  MERGE (target)-[:supports]->(cl)
+                }
+                WITH cl
                 // optional stated_in from the Claim to the report Artifact
                 // (Claim → report Artifact: this claim is stated in this report),
                 // pinned to the report's version. The caller verified the
@@ -1442,6 +1690,7 @@ def declare_claim(
                          evidence_id: cited.evidence_id,
                          artifact_id: cited.artifact_id,
                          version: cited.version,
+                         file_id: cited.file_id,
                          labels: labels(cited)
                        }) AS cited_targets
                 """,
@@ -1454,6 +1703,7 @@ def declare_claim(
                 content_hash=content_hash,
                 cites_node_ids=cites_node_ids,
                 cites_artifact_refs=cites_artifact_refs,
+                cites_source_file_refs=cites_source_file_refs,
                 artifact_id=artifact_id,
                 artifact_version=artifact_version,
             ).single())

@@ -31,7 +31,7 @@ import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "
 
 /**
  * One colour per node label, drawn from a vivid, high-saturation palette
- * (each hue is pushed bright so the eight categories read at a glance even
+ * (each hue is pushed bright so the nine categories read at a glance even
  * on a dense graph). Kept in a plain map (not CSS variables) because SVG
  * paints inline and we want the same predictable palette across renders.
  * The palette is purely visual: it does not change any data semantics,
@@ -51,6 +51,7 @@ export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
   SearchRun: "#c0a98a",    // muted ochre
   SearchNode: "#bfb08f",   // pale straw
   SearchCell: "#ab9c7e",   // dusty gold
+  SourceFile: "#6366F1",   // indigo (a user-uploaded input file)
 };
 
 /**
@@ -76,6 +77,7 @@ export const EDGE_COLORS: Record<MemoryGraphEdgeType, string> = {
   inspires: "#818790",
   elected: "#818790",
   occupies: "#818790",
+  feeds: "#818790",
 };
 
 /**
@@ -141,6 +143,7 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
     })()
     : node.label === "SearchNode" ? `#${String(extra.node_index ?? "?")}`
     : node.label === "SearchCell" ? `i${String(extra.island ?? "?")} (${String(extra.complexity_bin ?? "?")},${String(extra.diversity_bin ?? "?")})`
+    : node.label === "SourceFile" ? pick("name") ?? pick("path")
     : pick("title") ?? pick("name");
   const resolved = name ?? node.id;
   // Long paths/URLs read better from the tail (basename) than the head.

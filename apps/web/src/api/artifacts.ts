@@ -257,25 +257,68 @@ export class ArtifactsApiClient extends RunsApiClient {
     artifactId: string,
     version: number,
     sessionId?: string,
-  ): Promise<{ dependencies: Array<{ artifact: ScientificArtifact; version: ScientificArtifactVersion }>; reason?: string }> {
+  ): Promise<{ dependencies: Array<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; kind?: "artifact" | "source_file" }>; reason?: string }> {
     const params = new URLSearchParams({ artifact_id: artifactId, version: String(version) });
     if (sessionId) params.set("session_id", sessionId);
     const body = await this.request<{
       dependencies?: Array<{
+        kind?: string | null;
         artifact_id?: string;
         version?: number;
         logical_name?: string | null;
         media_type?: string | null;
         path?: string | null;
+        // source_file deps: fileId/name instead of artifact_id/version.
+        file_id?: string;
+        name?: string | null;
       }>;
       reason?: string;
     }>(`/api/memory/query/artifact-provenance?${params}`);
     const dependencies = (body.dependencies ?? []).map((dependency) => {
-      const logicalName = dependency.logical_name ?? dependency.path ?? dependency.artifact_id ?? "";
       const mediaType = dependency.media_type ?? "application/octet-stream";
+      // A source_file dependency (an uploaded file the run read) has no
+      // version and links to a SourceFile node, not an Artifact version. Map
+      // it onto the {artifact, version} shape the provenance panel renders,
+      // tagged with kind:"source_file" + origin:"user_upload" so the panel
+      // shows the bare name (no "v0") and navigates to the SourceFile node.
+      if (dependency.kind === "source_file") {
+        const fileId = dependency.file_id ?? "";
+        const sourceName = dependency.name ?? dependency.path ?? fileId;
+        return {
+          kind: "source_file" as const,
+          artifact: {
+            createdAt: "",
+            createdInSessionId: sessionId ?? "",
+            createdInSessionTitle: "",
+            currentVersion: 0,
+            id: fileId,
+            kind: "dataset" as const,
+            logicalName: sourceName,
+            name: sourceName,
+            origin: "user_upload" as const,
+            projectId: "",
+            sessionId: sessionId ?? "",
+            updatedAt: "",
+          },
+          version: {
+            artifactId: fileId,
+            content: { hash: "", size: 0 },
+            createdAt: "",
+            executionRunIds: [],
+            id: `${fileId}#v0`,
+            inputArtifactVersionIds: [],
+            mediaType,
+            projectId: "",
+            sessionId: sessionId ?? "",
+            version: 0,
+          },
+        };
+      }
+      const logicalName = dependency.logical_name ?? dependency.path ?? dependency.artifact_id ?? "";
       const dependencyArtifactId = dependency.artifact_id ?? "";
       const dependencyVersion = dependency.version ?? 0;
       return {
+        kind: "artifact" as const,
         artifact: {
           createdAt: "",
           createdInSessionId: sessionId ?? "",

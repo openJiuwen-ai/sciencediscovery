@@ -1073,7 +1073,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (options.queryGraph) {
     const queryGraphParameters = Type.Object({ query: Type.String({ minLength: 1 }) });
     const queryGraph: AgentTool<typeof queryGraphParameters> = {
-      description: "Browse this session's memory-graph nodes (ResearchGoal/Task/ToolCall/Paper/Evidence/Claim/Code/Artifact) by keyword. Returns {hits, total, truncated}. Matching is term-OR: the query is split into words and a node matches if its text contains ANY word; nodes matching more words rank higher. Use it to see what has already been searched (Papers) or produced (Artifacts/Evidence) in this session. This is an exploratory read, not an id lookup — to cite a node, use the id returned by declare_evidence/declare_artifact, or list_artifacts for an existing Artifact. Give concrete entity terms that appear in the graph (e.g. 'TP53 NSCLC'), not meta-words like 'paper' or 'evidence'.",
+      description: "Browse this session's memory-graph nodes (ResearchGoal/Task/ToolCall/Paper/Evidence/Claim/Code/Artifact/SourceFile) by keyword. Returns {hits, total, truncated}. Matching is term-OR: the query is split into words and a node matches if its text contains ANY word; nodes matching more words rank higher. Use it to see what has already been searched (Papers), produced (Artifacts/Evidence), or uploaded (SourceFile) in this session. This is an exploratory read, not an id lookup — to cite a node, use the id returned by declare_evidence/declare_artifact, or list_artifacts for an existing Artifact. Give concrete entity terms that appear in the graph (e.g. 'TP53 NSCLC'), not meta-words like 'paper' or 'evidence'.",
       execute: async (_toolCallId, params) => {
         const result = await options.queryGraph!(params.query);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
@@ -1088,18 +1088,25 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (options.declareEvidence) {
     const declareEvidenceParameters = Type.Object({
       content: Type.String({ minLength: 1 }),
-      source_paper_link: Type.String({ minLength: 1 }),
+      // Source routing: exactly one of source_paper_link / source_file_id.
+      // source_paper_link for a Paper already in the graph; source_file_id for
+      // an uploaded PDF (media_type=application/pdf). Non-PDF data files
+      // (CSV/image/etc) cannot be Evidence sources — use declare_claim's
+      // cites_source_file_aliases instead.
+      source_paper_link: Type.Optional(Type.String({ minLength: 1 })),
+      source_file_id: Type.Optional(Type.String({ minLength: 1 })),
       locator: Type.String({ minLength: 1 }),
       evidence_type: Type.String(),
       confidence: Type.String(),
       strength: Type.String(),
     });
     const declareEvidence: AgentTool<typeof declareEvidenceParameters> = {
-      description: "Record a piece of Evidence extracted from a Paper that already exists in this session's memory graph. Creates an Evidence node + an extracts edge from the source Paper (Paper → Evidence). Returns {status:'ok', evidence_id} or a structured error (source_paper_not_found when the Paper link is unknown). Use the returned evidence_id as the chip alias target in declare_claim's cites_evidence_aliases and write [evidenceN] in your report body.",
+      description: "Record a piece of Evidence extracted from a Paper OR an uploaded PDF SourceFile that already exists in this session's memory graph. Creates an Evidence node + an extracts edge from the source (Paper/PDF-SourceFile → Evidence). Pass source_paper_link for a Paper already in the graph, or source_file_id for an uploaded PDF (media_type=application/pdf) — exactly one. Non-PDF data files (CSV/image/etc) cannot be Evidence sources — use declare_claim's cites_source_file_aliases instead. Returns {status:'ok', evidence_id} or a structured error (source_paper_not_found / source_file_not_found / source_file_not_pdf / no_source / ambiguous_source). Use the returned evidence_id as the chip alias target in declare_claim's cites_evidence_aliases and write [evidenceN] in your report body.",
       execute: async (_toolCallId, params) => {
         const result = await options.declareEvidence!({
           content: params.content,
-          sourcePaperLink: params.source_paper_link,
+          ...(params.source_paper_link ? { sourcePaperLink: params.source_paper_link } : {}),
+          ...(params.source_file_id ? { sourceFileId: params.source_file_id } : {}),
           locator: params.locator,
           evidenceType: params.evidence_type,
           confidence: params.confidence,
@@ -1121,10 +1128,15 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       locator: Type.String(),
       cites_evidence_aliases: Type.Record(Type.String(), Type.String()),
       cites_artifact_aliases: Type.Record(Type.String(), Type.String()),
+      // alias → file_id for an uploaded non-PDF data file (CSV/image/etc) that
+      // directly supports the claim (SourceFile -[:supports]-> Claim). A PDF
+      // must NOT go here — it goes via declare_evidence → cites_evidence_
+      // aliases (the sidecar rejects a PDF with source_file_is_pdf).
+      cites_source_file_aliases: Type.Optional(Type.Record(Type.String(), Type.String())),
       artifact_id: Type.Optional(Type.String({ minLength: 1 })),
     });
     const declareClaim: AgentTool<typeof declareClaimParameters> = {
-      description: "Record a Claim (a cited assertion) and link it to its supporting nodes. Creates a Claim node + supports edges from the cited Evidence/Artifact (Evidence/Artifact → Claim). At least one citation target is required. A Claim is backed by Evidence/Artifact via supports — it does NOT reach a Paper directly: to cite a paper, call declare_evidence first and cite the returned evidence_id here. Choose aliases of the form evidence+number for Evidence (e.g. [evidence1]) or artifact+number for Artifact (e.g. [artifact1]) — no other format. Write each chosen alias token inline in the output body where the claim is asserted; a chip renders only when a [alias] token in the body matches this claim's chip_map.",
+      description: "Record a Claim (a cited assertion) and link it to its supporting nodes. Creates a Claim node + supports edges from the cited Evidence/Artifact/SourceFile (Evidence/Artifact/SourceFile → Claim). At least one citation target is required. A Claim is backed by Evidence/Artifact/SourceFile via supports — it does NOT reach a Paper directly: to cite a paper, call declare_evidence first and cite the returned evidence_id here. Uploaded non-PDF data files (CSV/image/etc) are cited directly via cites_source_file_aliases (alias format sourcefile+number, e.g. [sourcefile1]) — a PDF must NOT go this route; declare_evidence it first. Choose aliases of the form evidence+number for Evidence (e.g. [evidence1]) or artifact+number for Artifact (e.g. [artifact1]) or sourcefile+number for uploaded data files (e.g. [sourcefile1]) — no other format. Write each chosen alias token inline in the output body where the claim is asserted; a chip renders only when a [alias] token in the body matches this claim's chip_map.",
       execute: async (_toolCallId, params) => {
         const result = await options.declareClaim!({
           content: params.content,
@@ -1133,6 +1145,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           locator: params.locator,
           citesEvidenceAliases: params.cites_evidence_aliases,
           citesArtifactAliases: params.cites_artifact_aliases,
+          ...(params.cites_source_file_aliases ? { citesSourceFileAliases: params.cites_source_file_aliases } : {}),
           ...(params.artifact_id ? { artifactId: params.artifact_id } : {}),
         });
         // Surface a reminder to write the alias tokens into the output body
@@ -1140,7 +1153,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         // token in the body matches this claim's chip_map. On error, forward
         // the sidecar's actionable instruction so the LLM can self-correct.
         const instruction = result.status === "ok" && Object.keys(result.chipMap).length
-          ? `Write these alias tokens inline in the output body now, where each claim is asserted: ${Object.keys(result.chipMap).map((alias) => `[${alias}]`).join(", ")}. Aliases must be evidence+number for evidence (e.g. [evidence1]) or artifact+number for artifacts (e.g. [artifact1]) — no other format.`
+          ? `Write these alias tokens inline in the output body now, where each claim is asserted: ${Object.keys(result.chipMap).map((alias) => `[${alias}]`).join(", ")}. Aliases must be evidence+number for evidence (e.g. [evidence1]) or artifact+number for artifacts (e.g. [artifact1]) or sourcefile+number for uploaded data files (e.g. [sourcefile1]) — no other format.`
           : result.status === "error" ? result.instruction : undefined;
         const text = JSON.stringify(instruction ? { ...result, instruction } : result);
         return { content: [{ type: "text", text }], details: result };

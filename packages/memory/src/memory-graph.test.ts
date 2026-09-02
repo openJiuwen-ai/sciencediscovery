@@ -587,7 +587,8 @@ test("getArtifactProvenance issues GET with query params and shapes the full res
     assert.equal(result!.turnId, "t1");
     assert.equal(result!.codeHash, "ch");
     assert.equal(result!.messagesTurnId, "t1");
-    assert.equal(result!.dependencies![0]!.artifactId, "art-0");
+    assert.equal(result!.dependencies![0]!.kind, "artifact");
+    assert.equal(result!.dependencies![0]!.kind === "artifact" ? result!.dependencies![0]!.artifactId : "", "art-0");
     assert.equal(result!.dependencies![0]!.mediaType, "text/csv");
     assert.equal(result!.dependencies![0]!.path, "input.csv");
     assert.equal(result!.reason, undefined);
@@ -607,6 +608,37 @@ test("getArtifactProvenance returns empty dependencies (no reason) when no input
     const result = await client.getArtifactProvenance("art-2", 1, "s1");
     assert.deepEqual(result!.dependencies, []);
     assert.equal(result!.reason, undefined);
+  } finally {
+    await close(server);
+  }
+});
+
+test("getArtifactProvenance shapes a source_file dependency (uploaded input, no version)", async () => {
+  // A Code run that read an uploaded file produces a SourceFile -[:input]-> Code
+  // edge; the provenance endpoint surfaces it as a dependency with kind
+  // "source_file" (fileId/name instead of artifactId/version). The shaper must
+  // route it onto the source_file arm of the discriminated union.
+  const server = await startFakeMemoryGraph(() => ({
+    status: 200,
+    json: {
+      artifact_id: "art-3", version: 1, logical_name: "plot.svg",
+      dependencies: [
+        { kind: "source_file", file_id: "source_file:session:s1:data.csv",
+          name: "data.csv", path: "data.csv", media_type: "text/csv" },
+      ],
+    },
+  }));
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    const result = await client.getArtifactProvenance("art-3", 1, "s1");
+    assert.equal(result!.dependencies!.length, 1);
+    const dep = result!.dependencies![0]!;
+    assert.equal(dep.kind, "source_file");
+    if (dep.kind !== "source_file") throw new Error("narrow");
+    assert.equal(dep.fileId, "source_file:session:s1:data.csv");
+    assert.equal(dep.name, "data.csv");
+    assert.equal(dep.mediaType, "text/csv");
+    assert.equal(dep.path, "data.csv");
   } finally {
     await close(server);
   }

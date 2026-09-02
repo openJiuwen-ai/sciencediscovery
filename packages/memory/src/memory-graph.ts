@@ -96,8 +96,16 @@ export interface ArtifactProvenanceGraphResult {
   messagesTurnId?: string | null;
   /** Derived-from inputs (input-edge endpoints); empty when the run read no
    * inputs or the input edges are absent — the handler falls back to the
-   * store's inputArtifactVersionIds in that case. */
-  dependencies?: Array<{ artifactId: string; version: number; logicalName: string | null; mediaType: string | null; path: string | null }>;
+   * store's inputArtifactVersionIds in that case. Each dependency carries a
+   * ``kind`` so the two endpoint shapes (Artifact version vs uploaded
+   * SourceFile, which has no version) are distinguishable: a ``source_file``
+   * dependency has ``fileId``/``name`` and links to a SourceFile node, while
+   * an ``artifact`` dependency has ``artifactId``/``version`` and links to an
+   * Artifact version. */
+  dependencies?: Array<
+    | { kind: "artifact"; artifactId: string; version: number; logicalName: string | null; mediaType: string | null; path: string | null }
+    | { kind: "source_file"; fileId: string; name: string | null; mediaType: string | null; path: string | null }
+  >;
 }
 
 export interface MemoryGraphProducedArtifact {
@@ -148,6 +156,13 @@ export interface ObserveExecutionPayload {
    * subagent's child SubTask instead of a per-execution SubTask. Absent
    * (undefined) in main-agent context — behavior unchanged. */
   parentSubagentId?: string;
+  /** Uploaded SourceFile nodes this Code run read — a distinct top-level
+   * input channel from ``producedArtifacts[].inputArtifactVersions`` (SourceFile
+   * has no version; endpoint key is ``fileId``). The recorder infers these by
+   * scanning the code text for uploaded-file paths (same grain as
+   * ``inferredArtifactInputs``). Drives the ``SourceFile -[:input]-> Code``
+   * edge in ``upsert_execution``. Absent when the run read no uploaded files. */
+  inputSourceFiles?: Array<{ fileId: string }>;
 }
 
 // MemorySubgraph / MemoryGraphNode / MemoryGraphEdge live in @sciencediscovery/schema
@@ -227,6 +242,21 @@ export interface ObserveSessionPlanPayload {
   /** inferDomain(plan.scope) — re-inferred on plan correction. */
   domain: string;
   steps: PlanStepMirror[];
+}
+
+// Uploaded file → SourceFile node + feeds edge to ResearchGoal. The file_id is
+// a deterministic ``source_file:session:<sid>:<path>`` so re-uploads merge into
+// the same node. media_type/size/content_hash may be absent on partial uploads.
+export interface ObserveUploadFilePayload {
+  sessionId: string;
+  /** Deterministic ``source_file:session:<sessionId>:<path>`` → re-uploads merge. */
+  fileId: string;
+  name: string;
+  path: string;
+  mediaType?: string;
+  size?: number;
+  contentHash?: string;
+  createdAt: string;
 }
 
 /**
@@ -339,6 +369,7 @@ export class MemoryGraphClient {
         stderr_hash: payload.stderrHash ?? null,
         env_hash: payload.envHash ?? null,
         parent_subagent_id: payload.parentSubagentId ?? null,
+        input_source_files: (payload.inputSourceFiles ?? []).map((f) => ({ file_id: f.fileId })),
       });
       mgLog.info("observeExecution done: execution=%s delivered", payload.executionId);
     } catch (error) {
@@ -422,6 +453,28 @@ export class MemoryGraphClient {
     } catch (error) {
       mgLog.warn("observeSessionFirstMessage failed: session=%s goal=%s, error %s",
         payload.sessionId, payload.goalId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
+  async observeUploadFile(payload: ObserveUploadFilePayload): Promise<void> {
+    mgLog.info("observeUploadFile in: session=%s file=%s name=%s",
+      payload.sessionId, payload.fileId, payload.name);
+    try {
+      await this.post("/observe/upload-file", {
+        session_id: payload.sessionId,
+        file_id: payload.fileId,
+        name: payload.name,
+        path: payload.path,
+        media_type: payload.mediaType ?? null,
+        size: payload.size ?? null,
+        content_hash: payload.contentHash ?? null,
+        created_at: payload.createdAt,
+      });
+      mgLog.info("observeUploadFile done: session=%s file=%s", payload.sessionId, payload.fileId);
+    } catch (error) {
+      mgLog.warn("observeUploadFile failed: session=%s file=%s, error %s",
+        payload.sessionId, payload.fileId, error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
@@ -768,7 +821,10 @@ export class MemoryGraphClient {
   }
 
   /** Shape the sidecar's aggregate row into the typed result. Each field is a
-   * hash or routing key — never content. */
+   * hash or routing key — never content. Dependencies are split by ``kind``:
+   * an ``artifact`` input has ``artifactId``/``version`` (links to an Artifact
+   * version node); a ``source_file`` input has ``fileId``/``name`` (links to a
+   * SourceFile node — uploaded files have no version). */
   private toArtifactProvenance(raw: Record<string, unknown>): ArtifactProvenanceGraphResult {
     const dependencies = (raw.dependencies as Array<Record<string, unknown>> | undefined) ?? [];
     return {
@@ -790,13 +846,24 @@ export class MemoryGraphClient {
       language: (raw.language as string | null) ?? null,
       tool: (raw.tool as string | null) ?? null,
       messagesTurnId: (raw.messages_turn_id as string | null) ?? null,
-      dependencies: dependencies.map((dep) => ({
-        artifactId: dep.artifact_id as string,
-        version: dep.version as number,
-        logicalName: (dep.logical_name as string | null) ?? null,
-        mediaType: (dep.media_type as string | null) ?? null,
-        path: (dep.path as string | null) ?? null,
-      })),
+      dependencies: dependencies.map((dep) =>
+        dep.kind === "source_file"
+          ? {
+              kind: "source_file" as const,
+              fileId: (dep.file_id as string | null) ?? "",
+              name: (dep.name as string | null) ?? null,
+              mediaType: (dep.media_type as string | null) ?? null,
+              path: (dep.path as string | null) ?? null,
+            }
+          : {
+              kind: "artifact" as const,
+              artifactId: (dep.artifact_id as string | null) ?? "",
+              version: (dep.version as number | null) ?? 0,
+              logicalName: (dep.logical_name as string | null) ?? null,
+              mediaType: (dep.media_type as string | null) ?? null,
+              path: (dep.path as string | null) ?? null,
+            },
+      ),
     };
   }
 
@@ -812,7 +879,12 @@ export class MemoryGraphClient {
     try {
       const body = await this.postJsonWithBody("/persist/evidence", {
         content: input.content,
-        source_paper_link: input.sourcePaperLink,
+        // Source routing: exactly one of source_paper_link / source_file_id
+        // (the sidecar 422's on both-empty / both-set). source_paper_link is
+        // optional now (a PDF SourceFile uses source_file_id instead); pass it
+        // only when set so an undefined never shadows a real source_file_id.
+        ...(input.sourcePaperLink ? { source_paper_link: input.sourcePaperLink } : {}),
+        ...(input.sourceFileId ? { source_file_id: input.sourceFileId } : {}),
         locator: input.locator,
         evidence_type: input.evidenceType,
         confidence: input.confidence,
@@ -841,6 +913,11 @@ export class MemoryGraphClient {
         // The Node-side declare callback fills this from the store; the LLM
         // never sees versions. Absent → sidecar falls back to latest.
         ...(input.citesArtifactVersions ? { cites_artifact_versions: input.citesArtifactVersions } : {}),
+        // sourcefile cites: alias → file_id for uploaded non-PDF data files
+        // that directly support the claim (SourceFile -[:supports]-> Claim).
+        // No version companion (SourceFile has no version). Absent → no
+        // sourcefile cite.
+        ...(input.citesSourceFileAliases ? { cites_source_file_aliases: input.citesSourceFileAliases } : {}),
         ...(input.artifactId ? { artifact_id: input.artifactId } : {}),
         // The report version pins stated_in to the report's exact version; may
         // be absent at declare time (report not landed), re-linked by
@@ -1199,6 +1276,28 @@ export class MemoryGraphSink {
       .catch((error: unknown) => {
         mgLog.warn("mirror failed: plan=%s session=%s, error %s",
           payload.planId, payload.sessionId,
+          error instanceof Error ? error.message : String(error));
+      });
+  }
+
+  /** Mirror an uploaded file into a SourceFile node + ``feeds`` edge to
+   * ResearchGoal. Never throws; an upload must never fail because the graph is
+   * degraded or disabled. Idempotent (MERGE on deterministic file_id) so
+   * re-uploading the same file creates no duplicate. */
+  observeUploadFile(payload: ObserveUploadFilePayload): void {
+    if (!this.enabled || !this.client) {
+      mgLog.debug("mirror skipped: memory graph not enabled (upload session=%s file=%s)",
+        payload.sessionId, payload.fileId);
+      return;
+    }
+    mgLog.info("file uploaded, mirroring SourceFile to memory graph: session=%s file=%s",
+      payload.sessionId, payload.fileId);
+    void this.client
+      .observeUploadFile(payload)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        mgLog.warn("mirror failed: upload session=%s file=%s, error %s",
+          payload.sessionId, payload.fileId,
           error instanceof Error ? error.message : String(error));
       });
   }

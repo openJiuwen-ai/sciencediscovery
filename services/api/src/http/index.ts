@@ -153,6 +153,7 @@ import {
 } from "../store/ssh-config.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import {
+  inferMediaType,
   parseConflictPolicy,
   readMultipartUploads,
   uploadWorkspaceParts,
@@ -163,7 +164,7 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { inferDomain, mgLog } from "@sciencediscovery/memory";
+import { inferDomain, mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
@@ -1892,11 +1893,25 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (request.headers["content-type"]?.split(";", 1)[0]?.trim() !== "application/pdf") {
           return sendError(response, 415, "Paper upload requires application/pdf");
         }
-        sendJson(response, 201, await paperService.upload({
+        const acquisition = await paperService.upload({
           bytes: await readBytes(request, MAX_PAPER_PDF_BYTES, "PDF"),
           sessionId: paperUploadMatch[1]!,
           title: url.searchParams.get("title") ?? undefined,
-        }));
+        });
+        // Mirror the uploaded PDF as a SourceFile node + feeds edge (same path
+        // as a workspace upload). Fire-and-forget; sink swallows on a degraded
+        // graph. mediaType is fixed application/pdf (handler already enforced it).
+        memoryGraphSink.observeUploadFile({
+          sessionId: acquisition.sessionId,
+          fileId: `source_file:session:${acquisition.sessionId}:${acquisition.pdfPath}`,
+          name: acquisition.title || "source.pdf",
+          path: acquisition.pdfPath,
+          mediaType: "application/pdf",
+          size: acquisition.pdf.size,
+          contentHash: acquisition.pdf.hash,
+          createdAt: acquisition.createdAt,
+        });
+        sendJson(response, 201, acquisition);
         return;
       }
 
@@ -2109,6 +2124,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           },
           workspaceRoot: store.workspacePath(sessionId),
         });
+        // Mirror each uploaded file into a SourceFile node + feeds edge to the
+        // session's ResearchGoal. Fire-and-forget: a degraded/unreachable graph
+        // never fails the upload (the sink swallows). Only non-failed entries
+        // with a path + hash carry enough to be useful.
+        for (const item of result.uploaded) {
+          if (item.status === "failed" || !item.path || !item.hash) continue;
+          const payload: ObserveUploadFilePayload = {
+            sessionId,
+            fileId: `source_file:session:${sessionId}:${item.path}`,
+            name: item.originalName,
+            path: item.path,
+            mediaType: inferMediaType(item.originalName),
+            size: item.size,
+            contentHash: item.hash,
+            createdAt: new Date().toISOString(),
+          };
+          memoryGraphSink.observeUploadFile(payload);
+        }
         sendJson(response, 201, result);
         return;
       }

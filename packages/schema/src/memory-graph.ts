@@ -31,7 +31,9 @@ export type MemoryGraphNodeLabel =
    * hundreds of them would crowd out the nodes a session is actually about. */
   | "SearchNode"
   /** One MAP-Elites cell (openevolve only); bounded by islands x bins^2. */
-  | "SearchCell";
+  | "SearchCell"
+  /** An uploaded file's existence/origin record (auto-built at upload). */
+  | "SourceFile";
 
 /**
  * Memory-graph edge types. `produces` is persisted by the MVP/SubTask mirror;
@@ -51,7 +53,9 @@ export type MemoryGraphNodeLabel =
  * other by `next` in seq order (first → second → …), so a scope's internal
  * run reads as an ordered chain rather than a star. Not written by the MVP
  * mirror; lands with the subagent write chain (PR1) and is surfaced read-side
- * in PR2.
+ * in PR2. `feeds` links an uploaded SourceFile to the ResearchGoal it feeds
+ * into (SourceFile → ResearchGoal), written fire-and-forget at upload time
+ * to express "this user-uploaded file provides input to this research".
  */
 
 export type MemoryGraphEdgeType =
@@ -77,13 +81,15 @@ export type MemoryGraphEdgeType =
   | "elected"
   /** SearchNode -> SearchCell: openevolve grid occupancy, carrying `current`
    * and `via` so an eviction is history rather than a deletion. */
-  | "occupies";
+  | "occupies"
+  /** SourceFile -> ResearchGoal: an uploaded file feeds into the session goal. */
+  | "feeds";
 
 export interface MemoryGraphNode {
   label: MemoryGraphNodeLabel;
   id: string;
   sessionId?: string;
-  /** Label-specific fields. Paper: { link, title, identifier, identifier_type, year?, authors?, abstract?, source, retrieved_at, retrieval_count, created_at }. Task (subagent scope): { task_id, session_id, status, task_type:"subagent", subagent_type?, objective?, summary?, failure_reason?, seq, created_at, finished_at?, turn_id? }. ToolCall (code_execution/literature_search/etc.): { task_id, session_id, status, task_type, parent_subtask_id?, source?, tool_type?, result_count?, finished_at, created_at, turn_id?, seq }. Code/Artifact: as persisted by their upsert path. ResearchGoal: { goal_id, core_objective, domain, topic_scope?, created_at }. */
+  /** Label-specific fields. Paper: { link, title, identifier, identifier_type, year?, authors?, abstract?, source, retrieved_at, retrieval_count, created_at }. Task (subagent scope): { task_id, session_id, status, task_type:"subagent", subagent_type?, objective?, summary?, failure_reason?, seq, created_at, finished_at?, turn_id? }. ToolCall (code_execution/literature_search/etc.): { task_id, session_id, status, task_type, parent_subtask_id?, source?, tool_type?, result_count?, finished_at, created_at, turn_id?, seq }. Code/Artifact: as persisted by their upsert path. ResearchGoal: { goal_id, core_objective, domain, topic_scope?, created_at }. SourceFile: { file_id, session_id, name, path, media_type?, size?, content_hash?, origin:"user_upload", created_at }. */
   extra?: Record<string, unknown>;
   createdAt?: string;
 }
@@ -211,8 +217,16 @@ export interface MemoryGraphTraceResult {
 
 export interface DeclareEvidenceInput {
   content: string;
-  /** The source Paper's link (URL/DOI); resolved against existing Paper nodes. */
-  sourcePaperLink: string;
+  /** The source Paper's link (URL/DOI); resolved against existing Paper nodes.
+   * Mutually exclusive with sourceFileId — exactly one must be set (the sidecar
+   * 422's on both-empty / both-set with no_source / ambiguous_source). */
+  sourcePaperLink?: string;
+  /** An uploaded PDF SourceFile's file_id (media_type=application/pdf). The
+   * sidecar gates media_type: a non-PDF data file is rejected with
+   * source_file_not_pdf (data files are not extractable prose — use
+   * declare_claim's citesSourceFileAliases instead). PDFs are an Evidence
+   * source here, mirroring the Paper path (SourceFile -[:extracts]-> Evidence). */
+  sourceFileId?: string;
   locator: string;
   evidenceType: string;
   confidence: string;
@@ -237,6 +251,13 @@ export interface DeclareClaimInput {
   /** alias → version, e.g. {"artifact1": 1}; pins each cited artifact alias to the
    * exact version it cites. Filled by the Node-side declare callback. */
   citesArtifactVersions?: Record<string, number>;
+  /** alias → file_id, e.g. {"sourcefile1": "<file_id>"}; the alias is what the
+   * LLM writes into the report body, the file_id resolves it to an uploaded
+   * non-PDF SourceFile (CSV/image/etc) that directly supports the claim
+   * (SourceFile -[:supports]-> Claim). A PDF is NOT allowed here — a PDF must
+   * go via declare_evidence (extracts → Evidence) and be cited as Evidence via
+   * citesEvidenceAliases (the sidecar rejects a PDF with source_file_is_pdf). */
+  citesSourceFileAliases?: Record<string, string>;
   /** The report Artifact this claim is stated in; builds the stated_in edge
    * (Claim → Artifact) so the graph can navigate claim → its report. */
   artifactId?: string;
@@ -246,7 +267,8 @@ export interface DeclareClaimInput {
 }
 
 /** One cited node surfaced back for chip rendering. Artifact chips carry the
- * cited version so opening them does not drift to the latest version. */
+ * cited version so opening them does not drift to the latest version.
+ * SourceFile chips carry no version (SourceFile has no version concept). */
 export interface DeclareChipEntry {
   kind: ComposerReferenceKind;
   id: string;
@@ -257,8 +279,10 @@ export interface DeclareChipEntry {
 export interface DeclareError {
   status: "error";
   /** Business code from the sidecar (no_cites_target, source_paper_not_found,
-   * evidence_not_found, artifact_version_not_found) or
-   * memory_graph_disabled / internal_error for availability failures. */
+   * source_file_not_found, source_file_not_pdf, source_file_is_pdf,
+   * no_source, ambiguous_source, evidence_not_found,
+   * artifact_version_not_found) or memory_graph_disabled / internal_error for
+   * availability failures. */
   code: string;
   message: string;
   /** Actionable next step surfaced to the LLM (e.g. re-call declare_evidence

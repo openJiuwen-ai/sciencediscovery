@@ -46,6 +46,8 @@ export interface WorkspaceUploadItemResult {
   hash?: string;
   originalName: string;
   path?: string;
+  /** Byte size of the uploaded content; absent on failed entries. */
+  size?: number;
   status: "created" | "overwritten" | "renamed" | "failed";
 }
 
@@ -339,6 +341,7 @@ export async function uploadWorkspaceParts(options: {
         hash: written.hash,
         originalName: written.originalName,
         path: written.path,
+        size: written.bytesWritten,
         status: written.status,
       });
     } catch (error) {
@@ -364,4 +367,97 @@ export async function uploadWorkspaceParts(options: {
 
 export async function readFileSha256(path: string): Promise<string> {
   return await sha256File(path);
+}
+
+/** Map an upload filename to a media type by extension, for the memory graph's
+ * SourceFile node. Returns ``undefined`` for unknown extensions so the graph
+ * stores an absent (not a wrong) media_type. Case-insensitive on the suffix. */
+export function inferMediaType(filename: string): string | undefined {
+  const ext = extname(filename).toLowerCase();
+  switch (ext) {
+    case ".csv":
+      return "text/csv";
+    case ".tsv":
+      return "text/tab-separated-values";
+    case ".json":
+      return "application/json";
+    case ".jsonl":
+      return "application/jsonl+json";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".svg":
+      return "image/svg+xml";
+    case ".pdf":
+      return "application/pdf";
+    case ".md":
+      return "text/markdown";
+    case ".txt":
+      return "text/plain";
+    case ".parquet":
+      return "application/vnd.apache.parquet";
+    case ".xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case ".h5":
+    case ".hdf5":
+      return "application/x-hdf5";
+    // Common research formats beyond the basics. None of these are PDFs —
+    // what matters for the graph's cite gates is only that a known non-PDF
+    // type is recorded, so the claim route (cites_source_file_aliases) can
+    // proceed; the specific string is informational.
+    case ".npy":
+      return "application/x-npy";
+    case ".npz":
+      return "application/x-npz";
+    case ".pkl":
+    case ".pickle":
+      return "application/x-pickle";
+    case ".fasta":
+    case ".fa":
+    case ".fna":
+    case ".faa":
+      return "text/x-fasta";
+    case ".fastq":
+    case ".fq":
+      return "text/x-fastq";
+    case ".vcf":
+      return "text/x-vcf";
+    case ".hypo":
+      return "application/octet-stream";
+    case ".zip":
+      return "application/zip";
+    case ".tar":
+      return "application/x-tar";
+    case ".gz":
+    case ".tgz":
+      return "application/gzip";
+    case ".xml":
+      return "application/xml";
+    case ".yaml":
+    case ".yml":
+      return "application/yaml";
+    case ".toml":
+      return "application/toml";
+    case ".rds":
+      return "application/x-rds";
+    case ".dta":
+      return "application/x-stata";
+    case ".sav":
+      return "application/x-spss-sav";
+    case ".mat":
+      return "application/x-matlab-data";
+    case ".tif":
+    case ".tiff":
+      return "image/tiff";
+    case ".bmp":
+      return "image/bmp";
+    case ".webp":
+      return "image/webp";
+    default:
+      return undefined;
+  }
 }

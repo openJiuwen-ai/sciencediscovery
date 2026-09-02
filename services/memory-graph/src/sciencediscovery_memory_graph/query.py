@@ -113,7 +113,8 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
               // occupies) are not — same reason `supersedes` is filtered in the
               // frontend, and their endpoints are excluded above anyway.
               // `contains` is upstream's scope→child edge; both sides union.
-              AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input', 'contains', 'searches']
+              // `feeds` is the upload→goal edge (SourceFile → ResearchGoal).
+              AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input', 'contains', 'searches', 'feeds']
             RETURN a AS src, b AS dst, labels(a)[0] AS src_label,
                    labels(b)[0] AS dst_label, type(r) AS edge_type, r AS rel
             """,
@@ -354,6 +355,7 @@ def query_match(
                    + coalesce(toString(n.subagent_type), '') + ' '
                    + coalesce(toString(n.task_type), '') + ' '
                    + coalesce(toString(n.path), '') + ' '
+                   + coalesce(toString(n.name), '') + ' '
                    + coalesce(toString(n.tool), '')) AS haystack
             UNWIND $tokens AS t
             WITH n, label, haystack, collect(CASE WHEN haystack CONTAINS t THEN 1 ELSE 0 END) AS hits
@@ -497,8 +499,12 @@ def get_artifact_provenance(
     all five fields' addressing info, or an empty-dependencies shape with a
     ``reason`` when Neo4j is down or the version is not in the graph (the Node
     reverse-proxy degrades on both). Dependencies are ordered by
-    ``logical_name`` so the frontend's `` · ``-joined multi-input line is
-    stable.
+    ``logical_name`` (Artifact) / ``name`` / ``file_id`` (SourceFile) so the
+    frontend's `` · ``-joined multi-input line is stable. Each dependency
+    carries a ``kind`` (``"artifact"`` or ``"source_file"``) so the frontend
+    can render a SourceFile input distinctly (SourceFile has no version, and
+    its endpoint key is ``file_id``) and link to the SourceFile node instead
+    of an Artifact version.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -516,10 +522,10 @@ def get_artifact_provenance(
             WHERE $sid IS NULL OR out.session_id = $sid
             OPTIONAL MATCH (out)<-[:produces]-(c:Code)
             OPTIONAL MATCH (st:ToolCall)-[:produces]->(c)
-            OPTIONAL MATCH (c)<-[:input]-(inA:Artifact)
+            OPTIONAL MATCH (c)<-[:input]-(inA)
             WHERE $sid IS NULL OR inA.session_id = $sid
             WITH out, c, st, inA
-            ORDER BY inA.logical_name
+            ORDER BY coalesce(inA.logical_name, inA.name, inA.file_id)
             RETURN out.turn_id        AS turn_id,
                    out.content_hash   AS content_hash,
                    out.logical_name   AS logical_name,
@@ -539,7 +545,15 @@ def get_artifact_provenance(
                    c.tool             AS tool,
                    st.turn_id         AS subtask_turn_id,
                    collect(DISTINCT CASE WHEN inA IS NULL THEN null
+                       WHEN 'SourceFile' IN labels(inA) THEN {
+                         kind:        'source_file',
+                         file_id:      inA.file_id,
+                         name:         inA.name,
+                         path:         inA.path,
+                         media_type:   inA.media_type
+                       }
                        ELSE {
+                         kind:         'artifact',
                          artifact_id:  inA.artifact_id,
                          version:      inA.version,
                          logical_name: inA.logical_name,
@@ -562,7 +576,13 @@ def get_artifact_provenance(
         return {"artifact_id": artifact_id, "version": version, "logical_name": None,
                 "dependencies": [], "reason": "node_not_found"}
 
-    deps = [d for d in (rec["dependencies"] or []) if d and d.get("artifact_id")]
+    # Keep both dependency shapes: Artifact inputs (carry artifact_id) and
+    # SourceFile inputs (carry file_id, no version). Dropping by ``artifact_id``
+    # alone would filter out every SourceFile input the run read.
+    deps = [
+        d for d in (rec["dependencies"] or [])
+        if d and (d.get("artifact_id") or d.get("file_id"))
+    ]
     return {
         "artifact_id": rec["artifact_id"],
         "version": rec["version"],
@@ -2153,6 +2173,7 @@ _ID_FIELDS: dict[str, str] = {
     "SearchRun": "search_id",
     "SearchNode": "search_id",
     "SearchCell": "search_id",
+    "SourceFile": "file_id",
 }
 
 # Per-label field holding the node's body-content CAS hash, so the trace can
@@ -2163,6 +2184,7 @@ _ID_FIELDS: dict[str, str] = {
 _CONTENT_HASH_FIELDS: dict[str, str] = {
     "Artifact": "content_hash",
     "Code": "code_hash",
+    "SourceFile": "content_hash",
 }
 
 
