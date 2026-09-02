@@ -1,57 +1,30 @@
-# ScienceDiscovery
+# CodeArts Resources
 
-ScienceDiscovery is a one‑stop AI research workspace built specifically for scientific research. Leveraging this platform, researchers can efficiently complete the highly cumbersome research exploration workflow of "literature review, hypothesis formulation, code development, experimental trial‑and‑error, and parameter tuning" in a single unified environment.
+`ci/codearts-resources` 是 CodeArts 构建资源的独立维护分支，用于预取、校验并上传稳定的大文件资源。该分支不包含 ScienceDiscovery 业务代码，也不应合入 `main`。
 
-English | [中文](README_zh.md)
+向本分支推送提交后，`.codearts/workflow/codearts-resources-pipeline.yml` 会自动并行准备工具链资源和 QEMU Ubuntu 云镜像：先检查 OBS 中的现有对象，未命中时才从固定源站下载；每个对象都必须通过固定 SHA256 校验，之后才由 CodeArts 上传到 OBS。
 
-> [!WARNING]
-> ScienceDiscovery is not a multi-user production service. The API, runner, and gateway listen on loopback by default; the API uses one bearer token and does not terminate TLS. Exposing the API on another interface must be an explicit deployment choice on a trusted, secured network. Python, R, and shell commands run in a fail-closed platform sandbox (Bubblewrap on Linux and Seatbelt in macOS source mode); the control API, gateway, PDF worker, and outbound model/provider calls run outside that sandbox as trusted control-plane operations.
+## 文件
 
-## Project positioning
+- `.codearts/workflow/codearts-resources-pipeline.yml`：push 触发、并行任务和 OBS 上传步骤。
+- `.ci/prepare-codearts-resources.sh`：声明资源文件名、源站 URL 与 SHA256，并准备上传目录。
+- `.ci/fetch-verified-binary.sh`：实现“本地文件 → OBS → 源站”的校验下载机制。
+- `.ci/fetch-qemu-image.sh`：固定 QEMU Ubuntu 云镜像版本及其 SHA256。
 
-A browser UI communicates with a Node control API. Each agent run is driven by a Python Gateway, while workspace tools, sandbox execution, scientific connectors, PDF extraction, permissions, provenance, and review checks are enforced by the Node control plane. The product is intended for trusted local or workstation use, not hosted multi-tenant use.
+## OBS 对象结构
 
-## Features
-
-- **One‑click configuration and high‑efficiency access to massive resources**: The platform’s built‑in research‑database Connector enables one‑click rapid setup of literature and data repositories, granting quick access to vast volumes of cutting‑edge papers and core experimental datasets.
-- **Autonomous code exploration within a secure sandbox**: Agents are empowered to independently write, debug and run Python, R or Shell code inside a securely isolated sandbox, delivering a stable runtime for complex scientific data processing.
-- **Automatic decomposition and dynamic execution of sophisticated research tasks**: Powered by robust task‑planning and multi‑agent collaboration capabilities, the system automatically breaks down complex research assignments, and dynamically orchestrates and invokes over 300 cross‑domain Skills.
-- **Full‑chain traceability for research workflows**: The platform visualizes the complete end‑to‑end workflow and provides traceability of all deliverables including codes, environments and logs, ensuring high credibility across the entire research lifecycle.
-
-## Related documents
-
-- [Documentation](docs/README.md) — complete English and Chinese Tutorial / How-to / Reference / Explanation indexes.
-- [Contributing](CONTRIBUTING.md) — development setup and test commands.
-
-## Requirements
-
-The prepackaged binary is the primary user path. Other deployment modes are documented separately.
-
-| Path | Host requirements |
-|---|---|
-| Prepackaged binary | Linux x86_64/aarch64 and bubblewrap |
-| Local source mode | Linux x86_64/aarch64 or macOS x64/arm64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, and Git; Linux also needs Bubblewrap, while macOS uses the built-in Seatbelt sandbox |
-| Docker | Linux x86_64/aarch64, Docker Engine 24+, Compose v2, and host support for unprivileged user namespaces |
-
-The Gateway requires Python 3.12 in source mode; `uv` installs it into the service environment when needed. Managed scientific environments use the application's pinned micromamba and do not require system Python, R, or conda. Prepackaged binaries and Docker remain Linux-only; local source mode also supports macOS as described in the deployment guide.
-
-## Installation
-
-Prepare a ScienceDiscovery executable for the host architecture. Binary packaging, source mode, and Docker procedures are documented in the [deployment guide](docs/en/how-to/deployment.md).
-
-## Quick start
-
-From the directory containing the `ScienceDiscovery` executable, start the stack:
-
-```bash
-chmod +x ./ScienceDiscovery
-./ScienceDiscovery serve
+```text
+obs://openjiuwen-ci/
+└── sciencediscovery/cache/
+    ├── toolchains/v1/<immutable-filename>
+    └── qemu/v1/noble-server-cloudimg-amd64.img
 ```
 
-In another terminal, run `curl -fsS http://127.0.0.1:4310/health`. Then open <http://127.0.0.1:4310>, log in with the access token the server printed on startup, and configure a task model under **System configuration → Global defaults**. See the [Quick Start tutorial](docs/en/tutorial/01-quick-start.md) for the first task; see the [deployment guide](docs/en/how-to/deployment.md) for binary packaging, source mode, and Docker.
+公网读取地址分别为：
 
-## License
+- `https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/toolchains/v1/`
+- `https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu/v1/`
 
-[Apache License 2.0](LICENSE).
+## 更新资源
 
-This product serves solely as a workflow orchestration tool and does not embed any AI model capabilities. When users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance obligations under the EU AI Act and other relevant regulatory frameworks.
+新增或升级资源时，应同时更新资源文件名、权威源站 URL、SHA256 和流水线中的 OBS key / 上传文件路径。对象名必须体现不可变版本；不要用不同内容覆盖已有 key。提交并推送本分支后，使用流水线日志确认校验和上传结果。

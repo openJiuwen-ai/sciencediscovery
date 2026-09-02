@@ -6,21 +6,183 @@ concurrency:
     events:
     - mr_id
   exceed-action: IGNORE
+sources:
+  sciencediscovery:
+    type: gitcode
+    name: sciencediscovery
+    branch: ci/codearts-resources
+    git_url: https://gitcode.com/openJiuwen/sciencediscovery.git
+    ssh_git_url: git@gitcode.com:openJiuwen/sciencediscovery.git
+    endpoint_id: c4451a2a11af48baacd6b2af5eee3075
+    repo_id: 10597680
 on:
-  sources: {}
+  sources:
+    sciencediscovery:
+      push:
+        branches:
+        - ci/codearts-resources
+        paths: []
+        branches-ignore: []
+        paths-ignore: []
 stages:
   1788331666501d867d3e2-fed6-4ab8-83fe-34886f33f885:
     jobs:
-      JOB_XzeHQ:
+      resource_toolchains:
         select: selected_by_default
-        name: 新建任务
+        name: Prepare toolchain resources
         needs: []
-        steps: []
+        timeout: 20
+        timeout_unit: minute
+        steps:
+        - name: Download the resource branch
+          uses: official_git_clone
+          identifier: 1788333000000b5322962-5b09-4837-9697-31028b7fb4f3
+        - name: Fetch and verify toolchain resources
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              bash .ci/prepare-codearts-resources.sh \
+                --group toolchains \
+                --output-dir "$PWD/.codearts-resources"
+              find .codearts-resources/toolchains -maxdepth 1 -type f -printf '%f\n' | sort
+          identifier: 1788333000001b5f5c1bb-722f-416b-b797-c029ddf73576
+        - name: Upload x86_64 Node.js
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/toolchains/v1/node-v22.19.0-linux-x64.tar.xz
+            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/node-v22.19.0-linux-x64.tar.xz"
+            self_folder: "false"
+          identifier: 1788333000002a58a6648-d281-4941-ac5b-bd85716ba4e2
+        - name: Upload aarch64 Node.js
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/toolchains/v1/node-v22.19.0-linux-arm64.tar.xz
+            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/node-v22.19.0-linux-arm64.tar.xz"
+            self_folder: "false"
+          identifier: 1788333000003e21ee40c-8670-4cb4-a521-87980930316f
+        - name: Upload x86_64 CPython
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/cache/toolchains/v1/cpython-3.12.13+20260805-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/cpython-3.12.13+20260805-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+            self_folder: "false"
+          identifier: 1788333000004e6f9cc90-214d-4875-9f10-b251953f4ad0
+        - name: Upload aarch64 CPython
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/cache/toolchains/v1/cpython-3.12.13+20260805-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/cpython-3.12.13+20260805-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+            self_folder: "false"
+          identifier: 178833300000505fcd078-d252-4f94-b2e1-69315d69a8a0
+        - name: Upload x86_64 micromamba
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/toolchains/v1/micromamba-2.8.1-0-linux-64.tar.bz2
+            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/micromamba-2.8.1-0-linux-64.tar.bz2"
+            self_folder: "false"
+          identifier: 17883330000068a226fcb-ff83-4f42-894f-978afcdd36cb
+        - name: Upload aarch64 micromamba
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/toolchains/v1/micromamba-2.8.1-0-linux-aarch64.tar.bz2
+            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/micromamba-2.8.1-0-linux-aarch64.tar.bz2"
+            self_folder: "false"
+          identifier: 1788333000007ef03859e-cd09-4e58-a330-a5d47267ba91
+        - name: Upload pnpm
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/toolchains/v1/pnpm-11.1.2.tgz
+            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/pnpm-11.1.2.tgz"
+            self_folder: "false"
+          identifier: 178833300000822609640-e8a7-44e8-9523-4b724bf2ed72
+        - name: Upload x86_64 uv
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/toolchains/v1/uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+            self_folder: "false"
+          identifier: 178833300000900697488-2090-49b7-b315-e10d72d40ac9
+        - name: Upload aarch64 uv
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/toolchains/v1/uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
+            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl"
+            self_folder: "false"
+          identifier: 1788333000010f03582dd-01cf-43a8-a16b-21d045507281
         if: "${{ default() }}"
         runs-on:
-        - default
+        - codearts-hosted
+        - ubuntu-latest
+        - x64
+        - large
+      resource_qemu:
+        select: selected_by_default
+        name: Prepare QEMU Ubuntu image
+        needs: []
+        timeout: 40
+        timeout_unit: minute
+        steps:
+        - name: Download the resource branch
+          uses: official_git_clone
+          identifier: 1788333000011c5892c74-b0a2-4566-827c-a90eb779e428
+        - name: Fetch and verify the QEMU image
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              bash .ci/prepare-codearts-resources.sh \
+                --group qemu \
+                --output-dir "$PWD/.codearts-resources"
+              ls -lh .codearts-resources/qemu/noble-server-cloudimg-amd64.img
+          identifier: 1788333000012c5948720-6c76-4b9f-8e5f-1f58c95bbe40
+        - name: Upload the QEMU Ubuntu image
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/qemu/v1/noble-server-cloudimg-amd64.img
+            source_file: "${SHARE_PATH}/.codearts-resources/qemu/noble-server-cloudimg-amd64.img"
+            self_folder: "false"
+          identifier: 1788333000013ada5e1eb-cefa-4408-8963-9cb5162b07f4
+        if: "${{ default() }}"
+        runs-on:
+        - codearts-hosted
+        - ubuntu-latest
+        - x64
+        - large
     pre:
     - type: auto
-    name: 阶段_1
+    name: Prepare immutable resources
     select: selected_by_default
     fail-fast: false

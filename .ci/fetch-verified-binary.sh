@@ -102,7 +102,9 @@ download() {
 }
 
 if [[ -n "$cache_base_url" ]]; then
-  cache_url="${cache_base_url%/}/$filename"
+  # OBS public URLs must escape '+' in immutable object names such as CPython builds.
+  cache_filename="${filename//+/%2B}"
+  cache_url="${cache_base_url%/}/$cache_filename"
   echo "Checking OBS cache: $cache_url"
   if download "$cache_url" && verify "$temporary"; then
     mv -- "$temporary" "$output"
