@@ -727,7 +727,9 @@
 .config-panel .dialog-actions .primary-button,
 .config-panel .specialist-actions .primary-button,
 .config-panel .environment-create .primary-button,
-.config-panel .remote-host-form .primary-button { width: auto; }
+.config-panel .remote-host-form .primary-button,
+.config-panel .remote-host-credentials-form .primary-button,
+.config-panel .remote-host-key-actions .primary-button { width: auto; }
 /* Remote-compute sections inside the Project/Session settings dialogs. */
 .scoped-remote-settings { display: grid; gap: 12px; margin-top: 18px; border-top: 1px solid var(--border); padding-top: 18px; }
 .scoped-remote-settings .settings-field { margin: 0; }

@@ -56,7 +56,7 @@ test("mixed action rows assign semantic button classes", () => {
 test("container-styled button groups retain their dedicated skeleton", () => {
   const settings = source("styles/settings.css");
   assert.match(settings, /\.skill-manager-toolbar > button, \.skill-toolbar-menu > summary \{ min-height: 40px;/);
-  assert.match(settings, /\.config-panel \.specialist-actions \.primary-button,[\s\S]*?\.config-panel \.remote-host-form \.primary-button \{ width: auto; \}/);
+  assert.match(settings, /\.config-panel \.specialist-actions \.primary-button,[\s\S]*?\.config-panel \.remote-host-form \.primary-button,[\s\S]*?\.config-panel \.remote-host-key-actions \.primary-button \{ width: auto; \}/);
   assert.match(source("styles/workspace.css"), /\.paper-actions button \{ min-height: 34px;/);
   assert.match(source("styles/memory-graph.css"), /\.memory-explorer-search button \{ border:/);
 });

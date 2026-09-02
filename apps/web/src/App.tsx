@@ -4814,8 +4814,6 @@ export function App() {
               {systemSettingsGroup === "remote" ? <RemoteHostManager
                 client={client}
                 onError={reportSystemSettingsError}
-                onPermissionRequest={(request) => setPermissionRequests((current) => [...current.filter((item) => item.id !== request.id), request])}
-                session={session}
               /> : null}
               {systemSettingsGroup === "environments" ? <EnvironmentManager client={client} onError={reportSystemSettingsError} /> : null}
               {systemSettingsGroup === "connection" ? <>

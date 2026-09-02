@@ -20,17 +20,33 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ApiClient } from "../src/api.js";
+import { ApiRequestError } from "../src/api/auth.js";
+import { hostKeyFromError } from "../src/api/settings.js";
 import { RemoteHostManager, RemoteJobsPanel } from "../src/RemoteCompute.js";
 import { activityCardId } from "../src/session/run-activity.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
 const noopToggle = () => undefined;
 
+test("host-key failures surface only as structured trust prompts", () => {
+  const untrusted = new ApiRequestError("Host key verification failed", 409, "SSH_HOST_KEY_UNTRUSTED", {
+    hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:abc" },
+  });
+  assert.deepEqual(hostKeyFromError(untrusted), {
+    changed: false,
+    hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:abc" },
+  });
+  assert.equal(hostKeyFromError(new ApiRequestError("changed", 409, "SSH_HOST_KEY_CHANGED", {
+    hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:def" },
+  }))?.changed, true);
+  assert.equal(hostKeyFromError(new ApiRequestError("boom", 500)), undefined);
+  assert.equal(hostKeyFromError(new Error("network")), undefined);
+});
+
 test("the machine catalog shows the list first and keeps add forms behind buttons", () => {
   const html = renderToStaticMarkup(createElement(RemoteHostManager, {
     client: {} as ApiClient,
     onError: () => undefined,
-    onPermissionRequest: () => undefined,
   }));
 
   assert.match(html, /No remote machines registered yet/);

@@ -58,7 +58,50 @@ import type {
   UpdateSpecialistRequest,
 } from "@sciencediscovery/schema";
 
+import { ApiRequestError } from "./auth.js";
 import { ArtifactsApiClient } from "./artifacts.js";
+
+/**
+ * SSH credentials and host-key trust contract, pending the API change (dev2).
+ * Password and private key are write-only: stored encrypted like the direct
+ * runner token, never returned by the API, and cleared from the form on save.
+ */
+export interface SshCredentialsRequest {
+  username?: string;
+  password?: string;
+  privateKey?: string;
+}
+
+/** A host key fingerprint the SSH server presented. */
+export interface RemoteHostKeyInfo {
+  algorithm: string;
+  fingerprint: string;
+}
+
+/** What "Import from ssh_config" prefills into the SSH form. */
+export interface ResolvedSshConfig {
+  hostName?: string;
+  port?: number;
+  username?: string;
+  privateKey?: string;
+}
+
+export type RegisterRemoteHostBody = RegisterRemoteHostRequest & SshCredentialsRequest & {
+  /** Present when the user just trusted this fingerprint in the settings UI. */
+  trustHostKey?: RemoteHostKeyInfo;
+};
+
+/** Host-key failures arrive as these error codes with `details.hostKey`. */
+export const SSH_HOST_KEY_UNTRUSTED_CODE = "SSH_HOST_KEY_UNTRUSTED";
+export const SSH_HOST_KEY_CHANGED_CODE = "SSH_HOST_KEY_CHANGED";
+
+/** Extract a structured host-key failure from an API error, if it is one. */
+export function hostKeyFromError(reason: unknown): { changed: boolean; hostKey: RemoteHostKeyInfo } | undefined {
+  if (!(reason instanceof ApiRequestError)) return undefined;
+  if (reason.code !== SSH_HOST_KEY_UNTRUSTED_CODE && reason.code !== SSH_HOST_KEY_CHANGED_CODE) return undefined;
+  const hostKey = reason.details?.hostKey as RemoteHostKeyInfo | undefined;
+  return hostKey?.fingerprint ? { changed: reason.code === SSH_HOST_KEY_CHANGED_CODE, hostKey } : undefined;
+}
 
 export class SettingsApiClient extends ArtifactsApiClient {
   getProxySettings(): Promise<ProxySettingsDetails> {
@@ -112,8 +155,29 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request("/api/remote-hosts");
   }
 
-  registerRemoteHost(body: RegisterRemoteHostRequest): Promise<RemoteHostTarget> {
+  registerRemoteHost(body: RegisterRemoteHostBody): Promise<RemoteHostTarget> {
     return this.request("/api/remote-hosts", { body: JSON.stringify(body), method: "POST" });
+  }
+
+  /** Replace the stored SSH credentials of an already-registered host. */
+  updateRemoteHostCredentials(hostId: string, body: SshCredentialsRequest): Promise<RemoteHostTarget> {
+    return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/credentials`, {
+      body: JSON.stringify(body),
+      method: "PUT",
+    });
+  }
+
+  /** Record a host key the user just trusted in the settings UI. */
+  trustRemoteHostKey(hostId: string, hostKey: RemoteHostKeyInfo): Promise<RemoteHostTarget> {
+    return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/trust-host-key`, {
+      body: JSON.stringify(hostKey),
+      method: "POST",
+    });
+  }
+
+  /** Resolve an ssh_config Host entry to prefill the SSH form ("import alias"). */
+  resolveSshConfig(alias: string): Promise<ResolvedSshConfig> {
+    return this.request(`/api/remote-hosts/ssh-config?alias=${encodeURIComponent(alias)}`);
   }
 
   probeRemoteHost(hostId: string): Promise<RemoteHostTarget> {
