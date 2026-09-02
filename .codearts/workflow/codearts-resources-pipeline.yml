@@ -201,13 +201,17 @@ stages:
               cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
               BASE_DIR="$PWD/.codearts-resources/qemu-base"
               OUTPUT_DIR="$PWD/.codearts-resources/qemu-runner"
+              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
+              RESOURCE_RUN_ID="${{ pipeline.run_id }}"
+              printf '%s\n' "$CHECKED_OUT_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
+              printf '%s\n' "$RESOURCE_RUN_ID" | grep -Eq '^[0-9A-Za-z_-]+$'
               mkdir -p "$BASE_DIR" "$OUTPUT_DIR"
               CI_QEMU_IMAGE_CACHE_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu/v1" \
                 CI_QEMU_IMAGE_CACHE_ONLY=1 \
                 bash .ci/fetch-qemu-image.sh \
                   --output "$BASE_DIR/noble-server-cloudimg-amd64.img"
-              RESOURCE_BUILD_COMMIT="${{ sources.sciencediscovery.commit_id }}" \
-                RESOURCE_BUILD_RUN_ID="${{ pipeline.run_id }}" \
+              RESOURCE_BUILD_COMMIT="$CHECKED_OUT_COMMIT" \
+                RESOURCE_BUILD_RUN_ID="$RESOURCE_RUN_ID" \
                 bash .ci/build-qemu-runner-image.sh \
                   --base-image "$BASE_DIR/noble-server-cloudimg-amd64.img" \
                   --output-dir "$OUTPUT_DIR"
@@ -225,9 +229,12 @@ stages:
               test -s "$OUTPUT_DIR/SHA256SUMS"
               test -s "$OUTPUT_DIR/VERSION"
               (cd "$OUTPUT_DIR" && sha256sum --check SHA256SUMS)
+              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
+              RESOURCE_RUN_ID="${{ pipeline.run_id }}"
+              cat "$OUTPUT_DIR/VERSION"
               grep -Fx 'recipe=qemu-runner-v1' "$OUTPUT_DIR/VERSION"
-              grep -Fx 'resource_commit=${{ sources.sciencediscovery.commit_id }}' "$OUTPUT_DIR/VERSION"
-              grep -Fx 'resource_run_id=${{ pipeline.run_id }}' "$OUTPUT_DIR/VERSION"
+              grep -Fx "resource_commit=$CHECKED_OUT_COMMIT" "$OUTPUT_DIR/VERSION"
+              grep -Fx "resource_run_id=$RESOURCE_RUN_ID" "$OUTPUT_DIR/VERSION"
           identifier: 1788342000000b5065903-e34b-4dfb-ae0d-08c597d9332e
         - name: Upload the pre-provisioned QEMU Runner image
           uses: upload-obs
@@ -296,9 +303,12 @@ stages:
               expected_sha256=$(awk '{print $1}' "$VERIFY_DIR/SHA256SUMS")
               actual_sha256=$(sha256sum "$VERIFY_DIR/$IMAGE_NAME" | awk '{print $1}')
               test "$actual_sha256" = "$expected_sha256"
+              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
+              RESOURCE_RUN_ID="${{ pipeline.run_id }}"
+              cat "$VERIFY_DIR/VERSION"
               grep -Fx 'recipe=qemu-runner-v1' "$VERIFY_DIR/VERSION"
-              grep -Fx 'resource_commit=${{ sources.sciencediscovery.commit_id }}' "$VERIFY_DIR/VERSION"
-              grep -Fx 'resource_run_id=${{ pipeline.run_id }}' "$VERIFY_DIR/VERSION"
+              grep -Fx "resource_commit=$CHECKED_OUT_COMMIT" "$VERIFY_DIR/VERSION"
+              grep -Fx "resource_run_id=$RESOURCE_RUN_ID" "$VERIFY_DIR/VERSION"
               echo "Verified published QEMU Runner image: $actual_sha256"
           identifier: 17883420000013956977a-b91c-4668-ac74-b45993800807
         if: "${{ default() }}"
