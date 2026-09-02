@@ -25,9 +25,9 @@
 .session-bar-project { max-width: min(220px, 30vw); overflow: hidden; flex: 0 1 auto; border: 0; background: transparent; padding: 0; color: var(--muted); cursor: text; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 button.session-bar-project:hover { color: var(--accent-strong); }
 .session-bar-sep { flex: 0 0 auto; color: var(--text-faint); }
-.session-bar-session { min-width: 0; margin: 0; color: var(--text-strong); font-size: 14px; font-weight: 700; letter-spacing: 0; }
+.session-bar-session { min-width: 0; flex: 1 1 0; margin: 0; color: var(--text-strong); font-size: 14px; font-weight: 700; letter-spacing: 0; }
 .session-bar-session > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-bar-session-title { min-width: 0; display: flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 0; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.session-bar-session-title { min-width: 0; width: 100%; max-width: 100%; display: flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 0; color: inherit; cursor: pointer; font: inherit; text-align: left; }
 .session-bar-session-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-bar-session-title svg { flex: 0 0 auto; color: var(--text-faint); opacity: 0; transition: opacity .12s ease; }
 .session-bar-session-title:hover svg, .session-bar-session-title:focus-visible svg { opacity: 1; }

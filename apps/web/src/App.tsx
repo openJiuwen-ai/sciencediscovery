@@ -4184,7 +4184,7 @@ export function App() {
                 /> : activeProject ? <button
                   className="session-bar-project"
                   onDoubleClick={() => beginInlineRename({ id: activeProject.id, kind: "project", label: activeProject.name }, "main")}
-                  title="Double-click to rename Project"
+                  title={`${activeProjectLabel} · Double-click to rename Project`}
                   type="button"
                 >{activeProjectLabel}</button> : <span className="session-bar-project">{activeProjectLabel}</span>}
                 {session ? <span aria-hidden="true" className="session-bar-sep">›</span> : null}
@@ -4203,7 +4203,7 @@ export function App() {
                       onClick={() => {
                         beginInlineRename({ id: session.id, kind: "session", label: session.title }, "main");
                       }}
-                      title="Rename session"
+                      title={`${activeSessionLabel} · Rename session`}
                       type="button"
                     ><span>{activeSessionLabel}</span><EditIcon size={13} /></button>
                   ) : <span>{activeSessionLabel}</span>}</h1>

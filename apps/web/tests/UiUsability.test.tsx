@@ -117,6 +117,16 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
   assert.doesNotMatch(app, /ModelDraftFields/);
 });
 
+test("the session bar constrains long names and preserves their full hover text", () => {
+  const app = source("App.tsx");
+  const conversation = source("styles/conversation.css");
+
+  assert.match(conversation, /\.session-bar-session \{[^}]*min-width: 0;[^}]*flex: 1 1 0;/);
+  assert.match(conversation, /\.session-bar-session-title \{[^}]*width: 100%;[^}]*max-width: 100%;/);
+  assert.match(app, /title=\{`\$\{activeProjectLabel\} · Double-click to rename Project`\}/);
+  assert.match(app, /title=\{`\$\{activeSessionLabel\} · Rename session`\}/);
+});
+
 test("historical run labels use their recorded model instead of the Composer selection", () => {
   const app = source("App.tsx");
 
