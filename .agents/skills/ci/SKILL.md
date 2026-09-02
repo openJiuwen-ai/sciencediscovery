@@ -30,7 +30,7 @@ Two pipelines exist and neither runs everything.
 
 | Pipeline | Trigger | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- | --- |
-| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, merge, reopen) or a `rerun` comment on it | `ci:ut:core` + experimental `ci:ut:runner` in QEMU TCG | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, reopen) or a `rerun` comment on it | `ci:ut:core` + experimental `ci:ut:runner` in QEMU TCG | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
 | GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
 CodeArts's default pool cannot create user namespaces, so it cannot run Runner
