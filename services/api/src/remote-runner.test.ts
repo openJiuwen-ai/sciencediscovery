@@ -40,7 +40,7 @@ test("explicit remote workspace push and pull preserve independent files and rec
     project.id,
     "Remote Session",
     {},
-    { remoteRunnerHostId: host.id },
+    { remoteRunnerHostIds: [host.id] },
     { allowUnconfiguredModel: true },
   );
   const workspaceRoot = store.workspacePath(session.id);

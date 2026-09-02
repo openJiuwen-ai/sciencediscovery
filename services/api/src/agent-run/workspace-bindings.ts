@@ -31,6 +31,19 @@ type ExecutionBindings = Pick<
   "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker"
 >;
 
+/**
+ * A remote machine this Session is allowed to use. Resolution happens per call
+ * rather than per run so a machine removed from the allowlist stops working
+ * immediately, and so a run that never names one never touches SSH at all.
+ */
+export interface RemoteExecutionTarget {
+  hostAlias: string;
+  /** Throws with an actionable message when the machine is no longer allowed or not connected. */
+  runnerClient: () => RunnerClient;
+  /** Logical workspace on that machine; keeps its files out of local provenance. */
+  workspaceKey: string;
+}
+
 export interface WorkspaceExecutionBindingOptions {
   agentId: string;
   artifactPathPrefix?: string;
@@ -45,8 +58,9 @@ export interface WorkspaceExecutionBindingOptions {
   provenanceRecorder: ProvenanceRecorder;
   readOnlyWorkspaceRoot?: string;
   skillPackagesRoot?: string;
+  /** The local runner: always available, and the default for every execution. */
   runnerClient: RunnerClient;
-  runnerWorkspaceKey?: string;
+  remoteTargets?: RemoteExecutionTarget[];
   scientificEnvironments?: Environment[];
   sessionId: string;
   store: SessionStore;
@@ -83,6 +97,39 @@ export function createWorkspaceExecutionBindings(
   const sandboxEgressProxy = (): { sandboxEgressProxy?: ResolvedProxy } => {
     const resolved = options.store.resolveSandboxEgressProxy(options.permission.getEpoch());
     return resolved ? { sandboxEgressProxy: resolved } : {};
+  };
+  /**
+   * Where one execution runs. Anything but the local machine has to be named
+   * explicitly, and only names on this Session's allowlist resolve: being
+   * allowed to use a remote machine never moves the default off this one.
+   */
+  const resolveExecutionTarget = (machine: string | undefined): {
+    remoteHostAlias?: string;
+    runnerClient: RunnerClient;
+    runnerWorkspaceKey?: string;
+    skillPackagesRoot?: string;
+  } => {
+    const requested = machine?.trim();
+    if (!requested || requested === "local") {
+      return {
+        runnerClient: options.runnerClient,
+        ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
+      };
+    }
+    const target = options.remoteTargets?.find((candidate) => candidate.hostAlias === requested);
+    if (!target) {
+      const allowed = options.remoteTargets?.map((candidate) => candidate.hostAlias) ?? [];
+      throw new Error(allowed.length
+        ? `This Session may not run on ${requested}; allowed machines: local, ${allowed.join(", ")}`
+        : `This Session may only run on the local machine`);
+    }
+    // Skill packages are staged on this machine, so a remote execution reads
+    // its Skill resources through the tool instead of a mounted package.
+    return {
+      remoteHostAlias: target.hostAlias,
+      runnerClient: target.runnerClient(),
+      runnerWorkspaceKey: target.workspaceKey,
+    };
   };
   const readSessionNpuJob = async (jobId: string) => {
     const job = await options.runnerClient.getNpuJob(jobId, options.sessionId);
@@ -131,15 +178,16 @@ export function createWorkspaceExecutionBindings(
         });
       },
     } } : {}),
-    executePython: async (code: string, signal?: AbortSignal, toolCallId?: string) => {
+    executePython: async (code: string, signal?: AbortSignal, toolCallId?: string, machine?: string) => {
       options.store.assertSessionWritable(options.sessionId);
+      const target = resolveExecutionTarget(machine);
       await options.permission.requirePrivilege({
         action: "code",
         executionId: options.executionId,
         resource: "workspace-code",
         signal,
         ...(toolCallId ? { toolCallId } : {}),
-        summary: `Run Python code ${options.permissionScopeLabel}`,
+        summary: `Run Python code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
       return options.provenanceRecorder.executePython({
         agentId: options.agentId,
@@ -151,9 +199,10 @@ export function createWorkspaceExecutionBindings(
         maxWorkspaceBytes: options.maxWorkspaceBytes,
         permissionEpoch: options.permission.getEpoch(),
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
-        ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
-        runnerClient: options.runnerClient,
-        ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
+        ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
+        runnerClient: target.runnerClient,
+        ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
+        ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
         ...sandboxEgressProxy(),
         sessionId: options.sessionId,
         signal,
@@ -163,15 +212,22 @@ export function createWorkspaceExecutionBindings(
         parentSubagentId: options.parentSubagentId,
       });
     },
-    executeShell: async (code: string, kernelMode: KernelMode, signal?: AbortSignal, toolCallId?: string) => {
+    executeShell: async (
+      code: string,
+      kernelMode: KernelMode,
+      signal?: AbortSignal,
+      toolCallId?: string,
+      machine?: string,
+    ) => {
       options.store.assertSessionWritable(options.sessionId);
+      const target = resolveExecutionTarget(machine);
       await options.permission.requirePrivilege({
         action: "code",
         executionId: options.executionId,
         resource: "workspace-code",
         signal,
         ...(toolCallId ? { toolCallId } : {}),
-        summary: `Run a shell script ${options.permissionScopeLabel}`,
+        summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
       return options.provenanceRecorder.executeShell({
         agentId: options.agentId,
@@ -184,9 +240,10 @@ export function createWorkspaceExecutionBindings(
         maxWorkspaceBytes: options.maxWorkspaceBytes,
         permissionEpoch: options.permission.getEpoch(),
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
-        ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
-        runnerClient: options.runnerClient,
-        ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
+        ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
+        runnerClient: target.runnerClient,
+        ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
+        ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
         ...sandboxEgressProxy(),
         sessionId: options.sessionId,
         signal,
@@ -252,15 +309,17 @@ export function createWorkspaceExecutionBindings(
         kernelMode: Parameters<NonNullable<WorkspaceAgentOptions["executeScientific"]>>[3],
         signal?: AbortSignal,
         toolCallId?: string,
+        machine?: string,
       ) => {
         options.store.assertSessionWritable(options.sessionId);
+        const target = resolveExecutionTarget(machine);
         await options.permission.requirePrivilege({
           action: "code",
           executionId: options.executionId,
           resource: "workspace-code",
           signal,
           ...(toolCallId ? { toolCallId } : {}),
-          summary: `Run ${language} code ${options.permissionScopeLabel}`,
+          summary: `Run ${language} code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
         });
         return options.provenanceRecorder.executeScientific({
           agentId: options.agentId,
@@ -275,9 +334,10 @@ export function createWorkspaceExecutionBindings(
           language,
           permissionEpoch: options.permission.getEpoch(),
           ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
-          ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
-          runnerClient: options.runnerClient,
-          ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
+          ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
+          runnerClient: target.runnerClient,
+          ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
+          ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
           ...sandboxEgressProxy(),
           sessionId: options.sessionId,
           signal,

@@ -125,6 +125,8 @@ export interface RecordExecutionOptions {
   permissionEpoch: PermissionEpoch;
   readOnlyWorkspaceRoot?: string;
   skillPackagesRoot?: string;
+  /** Alias of the remote machine this execution runs on; absent means the local machine. */
+  remoteHostAlias?: string;
   /** Logical runner-local workspace. When set, generated files remain remote until explicit pull. */
   runnerWorkspaceKey?: string;
   runnerClient: RunnerClient;
@@ -501,6 +503,8 @@ export class ProvenanceRecorder {
         networkAccessRevision: epochSandboxNetworkAccess(options.permissionEpoch).revision,
         networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
+        ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
+      ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
         runnerVersion: "unavailable",
         sandbox,
         sessionId: options.sessionId,
@@ -535,6 +539,7 @@ export class ProvenanceRecorder {
       ...(result.networkAccessRevision ? { networkAccessRevision: result.networkAccessRevision } : {}),
       networkPolicy: result.networkPolicy,
       permissionEpochId: options.permissionEpoch.id,
+      ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
       runnerVersion: result.runnerVersion,
       sandbox: result.sandbox,
       sessionId: options.sessionId,
@@ -639,6 +644,8 @@ export class ProvenanceRecorder {
         networkAccessRevision: epochSandboxNetworkAccess(options.permissionEpoch).revision,
         networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
+        ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
+      ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
         runnerVersion: "unavailable",
         sandbox,
         sessionId: options.sessionId,
@@ -692,6 +699,7 @@ export class ProvenanceRecorder {
       ...(result.networkAccessRevision ? { networkAccessRevision: result.networkAccessRevision } : {}),
       networkPolicy: result.networkPolicy,
       permissionEpochId: options.permissionEpoch.id,
+      ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
       runnerVersion: result.runnerVersion,
       sandbox: result.sandbox,
       sessionId: options.sessionId,

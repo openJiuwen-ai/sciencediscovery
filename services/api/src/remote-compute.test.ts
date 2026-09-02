@@ -30,12 +30,12 @@ import {
 } from "@sciencediscovery/executor";
 
 class FakeTransport implements RemoteTransport {
-  readonly calls: Array<{ alias: string; script: string; timeoutMs: number }> = [];
+  readonly calls: Array<{ alias: string; port?: number; script: string; timeoutMs: number }> = [];
 
   constructor(private readonly results: RemoteCommandResult[]) {}
 
-  async run(alias: string, script: string, timeoutMs: number): Promise<RemoteCommandResult> {
-    this.calls.push({ alias, script, timeoutMs });
+  async run(alias: string, script: string, timeoutMs: number, port?: number): Promise<RemoteCommandResult> {
+    this.calls.push({ alias, port, script, timeoutMs });
     const result = this.results.shift();
     if (!result) throw new Error("Unexpected remote command");
     return result;
@@ -182,7 +182,6 @@ test("SSH config aliases gate a read-only capability probe", async (context) => 
   }]);
   const client = new RemoteComputeClient(configPath, transport);
 
-  assert.deepEqual(await client.configuredAliases(), ["cluster"]);
   const capabilities = await client.probe("cluster");
   assert.equal(capabilities.cpuCores, 32);
   assert.equal(capabilities.memoryBytes, 64 * 1024 * 1024);
@@ -191,7 +190,33 @@ test("SSH config aliases gate a read-only capability probe", async (context) => 
   assert.equal(capabilities.runnerCommandAvailable, true);
   assert.deepEqual(capabilities.scratchPaths, ["/scratch", "/tmp"]);
   assert.doesNotMatch(transport.calls[0]!.script, /\b(?:mkdir|rm|touch)\b|\bsbatch\s+--/);
-  await assert.rejects(client.probe("unlisted-host"), /not explicitly present/);
+});
+
+test("an SSH machine is an alias, a hostname or an IP address, and its port is optional", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `remote-destination-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const probeOutput = { exitCode: 0, stderr: "", stdout: "platform=Linux\nrunner=1\nnode=v22.19.0\n" };
+  const ssh = await writeFakeSsh(root, "destination-ssh", 0);
+  const transport = new OpenSshTransport(resolve(root, "config"), ssh.executablePath);
+
+  // A name that appears in no SSH config is accepted: `ssh` resolves it, and
+  // host identity is still checked against known_hosts.
+  await transport.run("192.168.1.20", "true\n", 2_000);
+  const withoutPort = await capturedSshArguments(ssh.capturePath);
+  assert.equal(withoutPort.includes("-p"), false);
+  assert.equal(withoutPort.at(-3), "192.168.1.20");
+  assertStrictHostKeyChecking(withoutPort);
+
+  await transport.run("build.lab.example", "true\n", 2_000, 2222);
+  const withPort = await capturedSshArguments(ssh.capturePath);
+  assert.equal(withPort[withPort.indexOf("-p") + 1], "2222");
+  assert.equal(withPort.at(-3), "build.lab.example");
+
+  const client = new RemoteComputeClient(resolve(root, "config"), new FakeTransport([probeOutput, probeOutput]));
+  assert.equal((await client.probe("10.0.0.8")).platform, "Linux");
+  assert.equal((await client.probe("institution-hpc", "sciencediscovery-runner", 2222)).platform, "Linux");
+  await assert.rejects(client.probe("not a host"), /alias, hostname, or IP address/);
 });
 
 test("direct SSH jobs pull only small requested outputs and leave large data remote", async (context) => {

@@ -17,6 +17,19 @@ import { isIP } from "node:net";
 import type { RemoteHostEndpoint, RemoteHostTarget } from "@sciencediscovery/schema";
 
 /**
+ * The SSH port a machine was registered with. `null`/absent means the user left
+ * it blank, which is how they ask for the destination to be resolved by their
+ * SSH configuration instead.
+ */
+export function normalizeSshPort(value: number | null | undefined): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
+    throw new Error("The SSH port must be a whole number between 1 and 65535");
+  }
+  return value;
+}
+
+/**
  * Where a self-deployed runner listens. Only an address and a port are
  * accepted: a full URL would let a path or credentials ride along into every
  * later request, and the runner's HTTP contract is rooted at `/`.
@@ -84,8 +97,26 @@ export function normalizePersistedRemoteHost(saved: RemoteHostTarget): RemoteHos
       : { capabilities: undefined }),
     connectionKind,
     ...(endpoint ? { endpoint } : {}),
+    ...(connectionKind === "ssh" && Number.isInteger(saved.port) ? { port: saved.port } : {}),
     runnerCommand: typeof saved.runnerCommand === "string" && saved.runnerCommand.trim()
       ? saved.runnerCommand.trim()
       : "sciencediscovery-runner",
   };
+}
+
+/**
+ * A persisted Session's allowed remote machines. Sessions saved under the
+ * earlier model carried one `remoteRunnerHostId` that pinned every execution to
+ * that machine; the machine stays allowed, but the Session is no longer locked
+ * out of local execution.
+ */
+export function normalizePersistedSessionRemoteRunners(
+  saved: { remoteRunnerHostId?: unknown; remoteRunnerHostIds?: unknown },
+): { remoteRunnerHostIds?: string[] } {
+  if (Array.isArray(saved.remoteRunnerHostIds)) {
+    return { remoteRunnerHostIds: saved.remoteRunnerHostIds.filter((id): id is string => typeof id === "string") };
+  }
+  return typeof saved.remoteRunnerHostId === "string" && saved.remoteRunnerHostId
+    ? { remoteRunnerHostIds: [saved.remoteRunnerHostId] }
+    : {};
 }

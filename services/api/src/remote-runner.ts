@@ -105,7 +105,7 @@ export async function syncRemoteWorkspace(options: {
   store: SessionStore;
 }): Promise<{ files: string[]; record: RemoteWorkspaceSyncRecord }> {
   const session = options.store.assertSessionWritable(options.sessionId);
-  if (session.remoteRunnerHostId !== options.hostId) throw new Error("Remote runner is not selected by this Session");
+  options.store.assertSessionAllowsRemoteRunner(options.sessionId, options.hostId);
   const conflict = options.input.conflict ?? "reject";
   if (conflict !== "reject" && conflict !== "overwrite") throw new Error("Invalid sync conflict policy");
   if (options.input.direction !== "push" && options.input.direction !== "pull") {

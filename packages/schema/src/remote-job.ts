@@ -54,7 +54,12 @@ export interface RemoteHostEndpoint {
 }
 
 export interface RemoteHostTarget {
-  /** SSH config alias for `ssh` hosts; the user's label for `direct` hosts. */
+  /**
+   * For `ssh` hosts this is what the user typed: an SSH config alias, a
+   * hostname, or an IP address — the product does not distinguish them and
+   * hands the value to `ssh` as the destination. For `direct` hosts it is the
+   * user's label.
+   */
   alias: string;
   capabilities?: RemoteHostCapabilities;
   connectionKind: RemoteHostConnectionKind;
@@ -65,6 +70,11 @@ export interface RemoteHostTarget {
   /** Whether a connection token is stored for this host; the token itself never leaves the API. */
   hasToken?: boolean;
   id: string;
+  /**
+   * SSH port. Absent means the destination is resolved by the user's SSH
+   * configuration, so an alias keeps whatever `HostName`/`Port` it declares.
+   */
+  port?: number;
   /** Pre-installed executable or absolute executable path; never a shell expression. */
   runnerCommand: string;
   /** Ephemeral connection state supplied by the API; never persisted. */
@@ -101,6 +111,8 @@ export interface RemoteJobCard {
   resources: RemoteJobResources;
   targetAlias: string;
   targetId: string;
+  /** SSH port of the target host, when it was registered with an explicit one. */
+  targetPort?: number;
 }
 
 export interface RemoteJob {
@@ -125,11 +137,13 @@ export interface RemoteJob {
 }
 
 export interface RegisterRemoteHostRequest {
-  /** SSH config alias, or the display label of a self-deployed runner. */
+  /** SSH alias, hostname or IP address; or the display label of a self-deployed runner. */
   alias: string;
   connectionKind?: RemoteHostConnectionKind;
   /** Required for `direct`: where the self-deployed runner listens. */
   endpoint?: Partial<RemoteHostEndpoint>;
+  /** Optional SSH port; omit to let the user's SSH configuration resolve the destination. */
+  port?: number | null;
   runnerCommand?: string;
   /** Required for `direct`: the runner's `SCIENCE_AGENT_RUNNER_TOKEN`. Stored encrypted, never returned. */
   token?: string;

@@ -73,8 +73,12 @@ export interface Session {
   reviewCriteria: string[];
   /** @deprecated Legacy Semantic Review catalog compatibility. */
   reviewMode: "auto" | "manual";
-  /** Fixed execution target. Undefined means the local runner. */
-  remoteRunnerHostId?: string;
+  /**
+   * Session override of the Project's allowed remote machines. Absent means the
+   * Session inherits the Project list; an empty array means this Session may not
+   * use any remote machine. Local execution is always available either way.
+   */
+  remoteRunnerHostIds?: string[];
   /** @deprecated Legacy Semantic Review catalog compatibility; no runtime reviewer consumes it. */
   semanticReviewEnabled: boolean;
   settingsOverrides: RuntimeSettingsOverrides;
@@ -408,7 +412,7 @@ export interface CreateSessionRequest {
   approvalMode?: ApprovalMode;
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";
-  remoteRunnerHostId?: string;
+  remoteRunnerHostIds?: string[];
   settingsOverrides?: RuntimeSettingsOverrides;
   specialistId?: string;
   title?: string;
@@ -422,8 +426,8 @@ export interface UpdateSessionRequest {
   modelId?: string;
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";
-  /** Set to null to return to the local runner. */
-  remoteRunnerHostId?: string | null;
+  /** Set to null to drop the override and inherit the Project's allowed machines. */
+  remoteRunnerHostIds?: string[] | null;
   reviewModelId?: string;
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;

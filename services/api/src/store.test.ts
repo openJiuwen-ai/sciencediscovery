@@ -2843,7 +2843,7 @@ test("one-time preflight authorizations are consumed once without creating a gra
   assert.equal(store.listPermissionGrants().length, 0);
 });
 
-test("Project allowlists gate a Session's fixed Linux remote runner", async (context) => {
+test("Project allowlists set which remote machines a Session may use, and Session overrides only narrow", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-remote-runner-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -2864,10 +2864,11 @@ test("Project allowlists gate a Session's fixed Linux remote runner", async (con
     scratchPaths: ["/tmp"],
     slurm: false,
   } });
+  const second = await store.registerRemoteHost({ alias: "linux-runner-2", capabilities: host.capabilities! });
   const project = await store.createProject("Remote runner project");
   await assert.rejects(
-    store.createSession(project.id, "Blocked", {}, { remoteRunnerHostId: host.id }, { allowUnconfiguredModel: true }),
-    /not allowed by this Project/,
+    store.createSession(project.id, "Blocked", {}, { remoteRunnerHostIds: [host.id] }, { allowUnconfiguredModel: true }),
+    /is not allowed by this Project/,
   );
   const missingRunner = await store.registerRemoteHost({ alias: "linux-without-runner", capabilities: {
     ...host.capabilities!,
@@ -2877,19 +2878,40 @@ test("Project allowlists gate a Session's fixed Linux remote runner", async (con
     store.updateProject(project.id, { remoteRunnerHostIds: [missingRunner.id] }),
     /no runner can be deployed there/,
   );
-  const allowed = await store.updateProject(project.id, { remoteRunnerHostIds: [host.id] });
-  assert.deepEqual(allowed.remoteRunnerHostIds, [host.id]);
-  const session = await store.createSession(
-    project.id,
-    "Remote",
-    {},
-    { remoteRunnerHostId: host.id },
-    { allowUnconfiguredModel: true },
+  const allowed = await store.updateProject(project.id, { remoteRunnerHostIds: [host.id, second.id] });
+  assert.deepEqual(allowed.remoteRunnerHostIds, [host.id, second.id]);
+
+  // No Session override: the Session inherits everything the Project allows.
+  const inheriting = await store.createSession(project.id, "Inherits", {}, {}, { allowUnconfiguredModel: true });
+  assert.equal(inheriting.remoteRunnerHostIds, undefined);
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [host.id, second.id]);
+
+  // An override narrows, and may not reach outside the Project list.
+  const narrowed = await store.updateSession(inheriting.id, { remoteRunnerHostIds: [second.id] });
+  assert.deepEqual(narrowed.remoteRunnerHostIds, [second.id]);
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [second.id]);
+  assert.throws(() => store.assertSessionAllowsRemoteRunner(inheriting.id, host.id), /is not allowed by this Session/);
+  await assert.rejects(
+    store.updateSession(inheriting.id, { remoteRunnerHostIds: [missingRunner.id] }),
+    /is not allowed by this Project/,
   );
-  assert.equal(session.remoteRunnerHostId, host.id);
-  await assert.rejects(store.updateProject(project.id, { remoteRunnerHostIds: [] }), /Move Sessions/);
-  assert.equal((await store.updateSession(session.id, { remoteRunnerHostId: null })).remoteRunnerHostId, undefined);
+
+  // An empty override is a real answer: this Session gets no remote machine.
+  const none = await store.updateSession(inheriting.id, { remoteRunnerHostIds: [] });
+  assert.deepEqual(none.remoteRunnerHostIds, []);
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id), []);
+
+  // null drops the override and follows the Project again.
+  const restored = await store.updateSession(inheriting.id, { remoteRunnerHostIds: null });
+  assert.equal(restored.remoteRunnerHostIds, undefined);
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [host.id, second.id]);
+
+  // Narrowing the Project narrows every Session in it without editing them.
+  await store.updateSession(inheriting.id, { remoteRunnerHostIds: [host.id, second.id] });
+  await store.updateProject(project.id, { remoteRunnerHostIds: [host.id] });
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [host.id]);
   assert.deepEqual((await store.updateProject(project.id, { remoteRunnerHostIds: [] })).remoteRunnerHostIds, []);
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id), []);
 });
 
 test("SessionStore auto-submits remote jobs and keeps manual jobs independently approval-gated", async (context) => {
@@ -3878,4 +3900,46 @@ test("hosts saved before self-deployed runners existed load as SSH targets", asy
   const reloaded = new SessionStore(tempRoot);
   await reloaded.load();
   assert.equal(reloaded.listRemoteHosts()[0]?.connectionKind, "ssh");
+});
+
+test("an SSH machine keeps its optional port, and a Session pinned under the old model keeps that machine allowed", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-ssh-port-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const capabilities = {
+    conda: false, containerRuntimes: [], cpuCores: 4, cuda: null, gpu: null, memoryBytes: null,
+    modules: false, nodeVersion: "v22.19.0", platform: "Linux", probedAt: new Date().toISOString(),
+    runnerCommandAvailable: true, scratchPaths: [], slurm: false,
+  };
+
+  // No port means "resolve this name through the user's SSH configuration".
+  const byAlias = await store.registerRemoteHost({ alias: "institution-hpc", capabilities });
+  assert.equal(byAlias.port, undefined);
+  const byAddress = await store.registerRemoteHost({ alias: "10.0.0.8", capabilities, port: 2222 });
+  assert.equal(byAddress.port, 2222);
+  assert.equal((await store.registerRemoteHost({ alias: "10.0.0.8", capabilities, port: null })).port, undefined);
+  await assert.rejects(
+    store.registerRemoteHost({ alias: "10.0.0.9", capabilities, port: 70_000 }),
+    /between 1 and 65535/,
+  );
+
+  const project = await store.createProject("Legacy project", undefined, [byAlias.id]);
+  const session = await store.createSession(project.id, "Legacy", {}, {}, { allowUnconfiguredModel: true });
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  const saved = JSON.parse((database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string }).json) as {
+    sessions: Array<Record<string, unknown>>;
+  };
+  for (const entry of saved.sessions) {
+    if (entry.id === session.id) entry.remoteRunnerHostId = byAlias.id;
+  }
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(saved));
+  database.close();
+
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  // The machine it was pinned to stays allowed; nothing is pinned any more.
+  assert.deepEqual(reloaded.getSession(session.id)?.remoteRunnerHostIds, [byAlias.id]);
+  assert.deepEqual(reloaded.effectiveRemoteRunnerHosts(session.id).map((host) => host.id), [byAlias.id]);
 });

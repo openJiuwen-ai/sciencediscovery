@@ -22,11 +22,12 @@ import type { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
-test("execution bindings apply stable Agent identity, trusted Skill package root, and remote workspace path", async () => {
+test("execution bindings stay local by default and only go remote for a named allowed machine", async () => {
   const executed: Array<{
     agentId: string;
     executionTimeoutMs?: number;
     kernelIdleTimeoutMs?: number;
+    remoteHostAlias?: string;
     runnerWorkspaceKey?: string;
     skillPackagesRoot?: string;
     turnId: string;
@@ -43,6 +44,7 @@ test("execution bindings apply stable Agent identity, trusted Skill package root
         agentId: string;
         executionTimeoutMs?: number;
         kernelIdleTimeoutMs?: number;
+        remoteHostAlias?: string;
         runnerWorkspaceKey?: string;
         skillPackagesRoot?: string;
         turnId: string;
@@ -51,6 +53,7 @@ test("execution bindings apply stable Agent identity, trusted Skill package root
           agentId: options.agentId,
           ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),
           ...(options.kernelIdleTimeoutMs !== undefined ? { kernelIdleTimeoutMs: options.kernelIdleTimeoutMs } : {}),
+          ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
           ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
           ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
           turnId: options.turnId,
@@ -74,7 +77,11 @@ test("execution bindings apply stable Agent identity, trusted Skill package root
     executionId: "main-execution",
     executionTimeoutMs: 45_000,
     kernelIdleTimeoutMs: 60_000,
-    runnerWorkspaceKey: "project-1/session-1",
+    remoteTargets: [{
+      hostAlias: "institution-linux",
+      runnerClient: () => ({} as RunnerClient),
+      workspaceKey: "project-1/session-1",
+    }],
   });
   const subagent = createWorkspaceExecutionBindings({
     ...common,
@@ -82,13 +89,20 @@ test("execution bindings apply stable Agent identity, trusted Skill package root
     executionId: "subagent-execution",
   });
 
+  // Being allowed a remote machine does not move the default off this one.
   await main.executePython("print('main')");
+  await main.executePython("print('remote')", undefined, undefined, "institution-linux");
   await subagent.executePython("print('subagent')");
   assert.deepEqual(executed, [
     {
       agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
-      runnerWorkspaceKey: "project-1/session-1",
       skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1", turnId: "main-execution",
+    },
+    {
+      agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
+      remoteHostAlias: "institution-linux",
+      runnerWorkspaceKey: "project-1/session-1",
+      turnId: "main-execution",
     },
     {
       agentId: "subagent:subagent-1",
@@ -96,6 +110,16 @@ test("execution bindings apply stable Agent identity, trusted Skill package root
       turnId: "subagent-execution",
     },
   ]);
+  // A machine outside the allowlist is refused, and a Session with none can
+  // only ever be told about the local machine.
+  await assert.rejects(
+    main.executePython("print('nope')", undefined, undefined, "someone-elses-box"),
+    /may not run on someone-elses-box/,
+  );
+  await assert.rejects(
+    subagent.executePython("print('nope')", undefined, undefined, "institution-linux"),
+    /may only run on the local machine/,
+  );
 });
 
 test("scientific executions forward the current outbound route and omit it for no-network epochs", async () => {

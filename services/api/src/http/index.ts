@@ -1435,7 +1435,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             approvalMode: body.approvalMode,
             reviewCriteria: body.reviewCriteria,
             reviewMode: body.reviewMode,
-            remoteRunnerHostId: body.remoteRunnerHostId,
+            remoteRunnerHostIds: body.remoteRunnerHostIds,
             specialistId: body.specialistId,
           },
           {
@@ -1580,15 +1580,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const sessionId = remoteWorkspaceMatch[1]!;
         const session = store.getSession(sessionId);
         if (!session) return sendError(response, 404, "Session not found");
-        if (!session.remoteRunnerHostId) return sendError(response, 409, "Session uses the local runner");
-        const host = store.getRemoteHost(session.remoteRunnerHostId);
-        const project = store.getProject(session.projectId);
-        if (!host || !project?.remoteRunnerHostIds.includes(host.id)) {
-          return sendError(response, 409, "Selected remote runner is not allowed by the Project");
-        }
         if (remoteWorkspaceMatch[2] === "sync-records" && request.method === "GET") {
           sendJson(response, 200, store.listRemoteWorkspaceSyncs(sessionId));
           return;
+        }
+        // A Session may be allowed several machines, each with its own remote
+        // workspace, so a destructive call has to say which one it means.
+        let host: RemoteHostTarget;
+        try {
+          host = store.assertSessionAllowsRemoteRunner(sessionId, url.searchParams.get("hostId") ?? "");
+        } catch (error) {
+          return sendError(response, 409, error instanceof Error ? error.message : "Remote runner is not allowed by this Session");
         }
         let selectedRunner: RunnerClient;
         try {
@@ -1651,9 +1653,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (sessionMatch && request.method === "PATCH") {
         const body = await readJson<UpdateSessionRequest>(request);
         const sessionId = sessionMatch[1]!;
-        if (body.remoteRunnerHostId !== undefined && await sessionHasActiveRun(store, sessionId)) {
-          return sendError(response, 409, "Cannot change the Session runner during an active run");
-        }
         const requestedApprovalMode = body.approvalMode;
         const { approvalMode: _approvalMode, ...remaining } = body;
         const hasRemainingChanges = Object.values(remaining).some((value) => value !== undefined);

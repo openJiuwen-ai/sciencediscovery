@@ -73,7 +73,7 @@ import type {
   UninstallEnvironmentRequest,
   WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
-import { Type, type TSchema } from "typebox";
+import { Type, type TOptional, type TSchema, type TString } from "typebox";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -216,8 +216,15 @@ export interface WorkspaceToolOptions {
     path: string;
   }) => Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; instruction?: string }>;
   enabledConnectorIds: ConnectorId[];
-  executePython: (code: string, signal?: AbortSignal, toolCallId?: string) => Promise<PythonExecutionResult>;
-  executeShell?: (code: string, kernelMode: KernelMode, signal?: AbortSignal, toolCallId?: string) => Promise<ShellExecutionResult>;
+  /** `machine` names one of `remoteRunners`; omitted or "local" runs on this machine. */
+  executePython: (code: string, signal?: AbortSignal, toolCallId?: string, machine?: string) => Promise<PythonExecutionResult>;
+  executeShell?: (
+    code: string,
+    kernelMode: KernelMode,
+    signal?: AbortSignal,
+    toolCallId?: string,
+    machine?: string,
+  ) => Promise<ShellExecutionResult>;
   executeScientific?: (
     language: ScientificLanguage,
     code: string,
@@ -225,6 +232,7 @@ export interface WorkspaceToolOptions {
     kernelMode: KernelMode,
     signal?: AbortSignal,
     toolCallId?: string,
+    machine?: string,
   ) => Promise<ScientificExecutionResult>;
   environments?: Environment[];
   environmentManagement?: {
@@ -277,7 +285,12 @@ export interface WorkspaceToolOptions {
   runSubagent?: (input: SubagentInput, signal?: AbortSignal) => Promise<Subagent>;
   remoteHosts?: RemoteHostTarget[];
   proposeRemoteJob?: (input: CreateRemoteJobRequest) => Promise<RemoteJob>;
-  remoteWorkspace?: {
+  /**
+   * Remote machines this Session is allowed to use. Being allowed is not being
+   * pinned: every execution tool still defaults to this machine, and each of
+   * these entries is an additional place the model may choose to run.
+   */
+  remoteRunners?: Array<{
     hostAlias: string;
     list: (signal?: AbortSignal) => Promise<RemoteWorkspaceFile[]>;
     sync: (input: {
@@ -285,7 +298,7 @@ export interface WorkspaceToolOptions {
       direction: "pull" | "push";
       paths: string[];
     }, signal?: AbortSignal) => Promise<{ files: string[]; record: RemoteWorkspaceSyncRecord }>;
-  };
+  }>;
   /** Cross-session memory-graph substring search (the `query_graph` LLM tool). */
   queryGraph?: (query: string) => Promise<MemoryGraphMatchResponse>;
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
@@ -567,10 +580,28 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   const skillExtensionsRoot = resolve(workspaceRoot, SKILL_EXTENSIONS_WORKSPACE_PATH);
   const loadedSkillIds = new Set<string>();
 
+  /**
+   * The machines this Session may run on. Local is always one of them, so this
+   * parameter only appears once a remote machine is allowed: a Session with no
+   * remote machine sees the same tool surface it always had, and no machine name
+   * it is not allowed to use ever reaches the model.
+   */
+  const remoteRunnerAliases = (options.remoteRunners ?? []).map((runner) => runner.hostAlias);
+  // The property is declared to the type system either way so `params.machine`
+  // stays `string | undefined`; when no remote machine is allowed the key is
+  // simply absent from the emitted schema, so the model is never offered one.
+  const machineParameter = (remoteRunnerAliases.length
+    ? {
+      machine: Type.Optional(Type.String({
+        description: `Where to run this: "local" (default, the machine running ScienceDiscovery) or one of ${remoteRunnerAliases.join(", ")}. A remote machine has its own persistent workspace, so local files are only there after sync_remote_workspace pushed them.`,
+      })),
+    }
+    : {}) as { machine: TOptional<TString> };
   const pythonParameters = Type.Object({
     code: Type.String({ minLength: 1 }),
     environmentRevisionId: Type.Optional(Type.String({ minLength: 1 })),
     kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
+    ...machineParameter,
   });
   const listFiles: AgentTool<typeof emptyParameters> = {
     description: "List files in the current session workspace",
@@ -816,8 +847,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           params.kernelMode ?? "ephemeral",
           signal,
           toolCallId,
+          params.machine,
         )
-        : await options.executePython(params.code, signal, toolCallId);
+        : await options.executePython(params.code, signal, toolCallId, params.machine);
       if (result.exitCode !== 0) {
         throw new Error(`Python exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
       }
@@ -834,9 +866,16 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   };
 
   const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...provenanceTools, ...artifactTools, runPythonTool];
-  if (options.remoteWorkspace) {
+  if (options.remoteRunners?.length) {
+    const runners = options.remoteRunners;
     const remoteWorkspaceParameters = Type.Object({
       conflict: Type.Optional(Type.Union([Type.Literal("reject"), Type.Literal("overwrite")])),
+      // One Session can be allowed to use several machines, and each has its own
+      // workspace, so the transfer always names which one it means.
+      machine: Type.String({
+        description: `Remote machine to exchange files with: one of ${remoteRunnerAliases.join(", ")}.`,
+        minLength: 1,
+      }),
       operation: Type.Union([Type.Literal("list"), Type.Literal("pull"), Type.Literal("push")]),
       paths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), {
         maxItems: 50,
@@ -845,17 +884,19 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     });
     const remoteWorkspace: AgentTool<typeof remoteWorkspaceParameters> = {
       description: [
-        `Explicitly exchange selected paths between the local Session workspace and the independent persistent workspace on ${options.remoteWorkspace.hostAlias}.`,
+        `Explicitly exchange selected paths between the local Session workspace and the independent persistent workspace of an allowed remote machine (${remoteRunnerAliases.join(", ")}).`,
         "Use list to inspect remote files. Use push only when remote execution needs local inputs; use pull only for outputs the user should receive locally.",
         "Nothing is mirrored automatically. Unpulled intermediate files remain remote. The default conflict policy rejects existing destination files; choose overwrite explicitly when intended.",
       ].join(" "),
       execute: async (_toolCallId, params, signal) => {
+        const runner = runners.find((candidate) => candidate.hostAlias === params.machine);
+        if (!runner) throw new Error(`This Session may not use ${params.machine}; allowed machines: ${remoteRunnerAliases.join(", ")}`);
         if (params.operation === "list") {
-          const files = await options.remoteWorkspace!.list(signal);
+          const files = await runner.list(signal);
           return { content: [{ type: "text", text: JSON.stringify({ files }) }], details: { files } };
         }
         if (!params.paths?.length) throw new Error("paths are required for push and pull");
-        const result = await options.remoteWorkspace!.sync({
+        const result = await runner.sync({
           conflict: params.conflict ?? "reject",
           direction: params.operation,
           paths: params.paths,
@@ -1369,6 +1410,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       command: Type.Optional(Type.String({ maxLength: 20_000, minLength: 1 })),
       kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
       scriptPath: Type.Optional(Type.String({ maxLength: 1_000, minLength: 1 })),
+      ...machineParameter,
     });
     const runShell: AgentTool<typeof shellParameters> = {
       description: "Run a bounded shell command or an existing shell script from the authorized Session workspace or the read-only $SCIENCEDISCOVERY_SKILLS_DIR Skill package mount. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or redirect the output to a workspace file and page through it with read_file.",
@@ -1389,7 +1431,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             : shellQuote(script.path);
           code = ["/usr/bin/bash", scriptWord, ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
-        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal, toolCallId);
+        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal, toolCallId, params.machine);
         if (result.exitCode !== 0) throw new Error(`Shell exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
         return {
           content: [{ type: "text", text: [
@@ -1413,6 +1455,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       code: Type.String({ minLength: 1 }),
       environmentRevisionId: Type.Optional(Type.String({ minLength: 1 })),
       kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
+      ...machineParameter,
     });
     const runR: AgentTool<typeof rParameters> = {
       description: "Run R in the current session workspace using a managed R Environment Revision. Prefer R for R-native statistical or Bioconductor workflows. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output.",
@@ -1424,6 +1467,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           params.kernelMode ?? "ephemeral",
           signal,
           toolCallId,
+          params.machine,
         );
         if (result.exitCode !== 0) throw new Error(`R exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
         return {

@@ -204,7 +204,8 @@ ${skillItems}
 export interface WorkspacePromptGovernance {
   approvalMode?: "always_allow" | "ask_for_dangerous";
   memoryGraphEnabled?: boolean;
-  remoteRunner?: { hostAlias: string };
+  /** Remote machines this Session may use; local execution is always available too. */
+  remoteRunners?: string[];
   remoteHosts?: RemoteHostTarget[];
   specialist?: { description: string; instructions: string; name: string };
   builtinSpecialists?: Array<{ description: string; name: string }>;
@@ -255,8 +256,8 @@ function buildWorkspacePromptValues(
     governance?.remoteHosts?.length
       ? `\nRemote compute is available through these user-controlled SSH targets: ${governance.remoteHosts.map((host) => `${host.id} (${host.alias}, SLURM=${host.capabilities?.slurm ?? false})`).join("; ")}. Remote datasets should stay at their existing absolute paths. Calling propose_remote_job creates an immutable job card.${governance.approvalMode === "always_allow" ? " The current approval policy submits it without a prompt." : " Dangerous remote jobs pause until the user reviews their independent permission card."}`
       : "",
-    governance?.remoteRunner
-      ? `\nThis Session is fixed to the SSH remote runner ${escapePromptTagText(governance.remoteRunner.hostAlias)}. Python, R, shell, persistent kernels, and their sandbox run in that runner's independent persistent workspace. Local workspace file tools do not see remote-only files. Use sync_remote_workspace explicitly to list, push inputs, or pull selected outputs. Never assume files are mirrored; only pulled files can be declared as local Project artifacts.`
+    governance?.remoteRunners?.length
+      ? `\nThis Session may also run on these remote machines: ${governance.remoteRunners.map(escapePromptTagText).join(", ")}. This machine remains the default: run code here unless the work needs the remote machine's data, scale, or hardware, and keep ordinary workspace file reads and writes local. To use one, pass its name as the machine parameter of run_python, run_r or run_shell. Each remote machine has its own independent persistent workspace, so local workspace file tools do not see remote-only files. Use sync_remote_workspace explicitly to list, push inputs, or pull selected outputs. Never assume files are mirrored; only pulled files can be declared as local Project artifacts.`
       : "",
     buildSkillSystemSection(skills),
     ...(governance?.memoryGraphEnabled
@@ -304,8 +305,20 @@ export interface WorkspaceAgentOptions {
   environments?: Environment[];
   environmentManagement?: WorkspaceToolOptions["environmentManagement"];
   runSubagent?: (input: SubagentInput, signal?: AbortSignal) => Promise<Subagent>;
-  executePython: (code: string, signal?: AbortSignal, toolCallId?: string) => Promise<import("@sciencediscovery/schema").PythonExecutionResult>;
-  executeShell: (code: string, kernelMode: KernelMode, signal?: AbortSignal, toolCallId?: string) => Promise<ShellExecutionResult>;
+  /** `machine` names an allowed remote machine; omitted or "local" runs here. */
+  executePython: (
+    code: string,
+    signal?: AbortSignal,
+    toolCallId?: string,
+    machine?: string,
+  ) => Promise<import("@sciencediscovery/schema").PythonExecutionResult>;
+  executeShell: (
+    code: string,
+    kernelMode: KernelMode,
+    signal?: AbortSignal,
+    toolCallId?: string,
+    machine?: string,
+  ) => Promise<ShellExecutionResult>;
   executeScientific?: (
     language: ScientificLanguage,
     code: string,
@@ -313,6 +326,7 @@ export interface WorkspaceAgentOptions {
     kernelMode: KernelMode,
     signal?: AbortSignal,
     toolCallId?: string,
+    machine?: string,
   ) => Promise<ScientificExecutionResult>;
   npuBroker?: WorkspaceToolOptions["npuBroker"];
   history?: AgentHistoryMessage[];

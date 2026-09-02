@@ -468,26 +468,21 @@ async function executeAgentRun(
   }
   const project = store.getProject(session.projectId);
   if (!project) throw new ApiStatusError(404, "Project not found");
-  const allowedRemoteHosts = store.listRemoteHosts().filter((host) =>
-    project.remoteRunnerHostIds.includes(host.id) && host.status === "ready");
-  const selectedRemoteHost = session.remoteRunnerHostId
-    ? allowedRemoteHosts.find((host) => host.id === session.remoteRunnerHostId)
-    : undefined;
-  if (session.remoteRunnerHostId && !selectedRemoteHost) {
-    throw new ApiStatusError(409, "The Session's remote runner is no longer allowed or ready");
-  }
-  const remoteHosts = selectedRemoteHost ? [selectedRemoteHost] : [];
-  let executionRunnerClient = runnerClient;
-  if (selectedRemoteHost) {
-    try {
-      executionRunnerClient = remoteCompute.runnerClient(selectedRemoteHost.id);
-    } catch (error) {
-      throw new ApiStatusError(503, error instanceof Error ? error.message : "Remote runner is unavailable");
-    }
-  }
+  // Remote machines are an addition, not a replacement: this run always has the
+  // local runner, and each allowed machine is one more place the model may ask
+  // to run. A machine that is not connected only fails the calls that name it.
+  const allowedRemoteHosts = store.effectiveRemoteRunnerHosts(sessionId);
+  const remoteTargets = allowedRemoteHosts.map((host) => ({
+    hostAlias: host.alias,
+    runnerClient: () => {
+      store.assertSessionAllowsRemoteRunner(sessionId, host.id);
+      return remoteCompute.runnerClient(host.id);
+    },
+    workspaceKey: remoteWorkspaceKey(session.projectId, session.id),
+  }));
   let runnerHealth: RunnerHealth;
   try {
-    runnerHealth = await executionRunnerClient.health();
+    runnerHealth = await runnerClient.health();
   } catch (error) {
     throw new ApiStatusError(503, error instanceof Error ? error.message : "Runner is unavailable");
   }
@@ -543,11 +538,7 @@ async function executeAgentRun(
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "The selected skills are not available");
   }
-  // Skill packages are staged on the machine that owns the sandbox. A Session
-  // bound to a remote runner has no such directory there, so it keeps the
-  // instructions and reads resources through read_skill_resource instead of a
-  // mounted read-only package.
-  const skillPackagesRoot = activeSkills.length && !selectedRemoteHost
+  const skillPackagesRoot = activeSkills.length
     ? store.skillPackagesPath(sessionId, skillPackageSetHash(activeSkills))
     : undefined;
   if (skillPackagesRoot) {
@@ -566,7 +557,7 @@ async function executeAgentRun(
   }));
   let scientificEnvironments: Environment[] | undefined;
   if (runnerHealth.scientificEnvs?.available) {
-    await syncScientificEnvironmentCatalog(store, executionRunnerClient, provenanceRecorder);
+    await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
     scientificEnvironments = store.listEnvironments();
   }
   const systemPrompt = buildWorkspaceSystemPrompt(
@@ -575,8 +566,8 @@ async function executeAgentRun(
     {
       approvalMode: session.approvalMode,
       memoryGraphEnabled: memoryGraphSink.enabled,
-      remoteHosts,
-      ...(selectedRemoteHost ? { remoteRunner: { hostAlias: selectedRemoteHost.alias } } : {}),
+      remoteHosts: allowedRemoteHosts,
+      ...(allowedRemoteHosts.length ? { remoteRunners: allowedRemoteHosts.map((host) => host.alias) } : {}),
       ...(sessionSpecialist ? { specialist: { description: sessionSpecialist.description, instructions: sessionSpecialist.instructions, name: sessionSpecialist.name } } : {}),
       ...(enabledBuiltinSpecialists.length
         ? { builtinSpecialists: enabledBuiltinSpecialists.map((specialist) => ({ description: specialist.description, name: specialist.name })) }
@@ -936,9 +927,9 @@ async function executeAgentRun(
       permission: requestExecution.permission,
       permissionScopeLabel: "in the Session workspace",
       provenanceRecorder,
-      runnerClient: executionRunnerClient,
+      runnerClient,
+      ...(remoteTargets.length ? { remoteTargets } : {}),
       ...(skillPackagesRoot ? { skillPackagesRoot } : {}),
-      ...(selectedRemoteHost ? { runnerWorkspaceKey: remoteWorkspaceKey(session.projectId, session.id) } : {}),
       ...(scientificEnvironments ? { scientificEnvironments } : {}),
       sessionId,
       store,
@@ -975,28 +966,33 @@ async function executeAgentRun(
       permission: requestExecution.permission,
     }),
     approvalMode: session.approvalMode,
-    ...(selectedRemoteHost ? {
-      remoteWorkspace: {
-        hostAlias: selectedRemoteHost.alias,
-        list: async () => await executionRunnerClient.listRemoteWorkspaceFiles(
-          remoteWorkspaceKey(session.projectId, session.id),
-        ),
+    ...(allowedRemoteHosts.length ? {
+      remoteRunners: allowedRemoteHosts.map((host) => ({
+        hostAlias: host.alias,
+        list: async (signal?: AbortSignal) => {
+          store.assertSessionAllowsRemoteRunner(sessionId, host.id);
+          void signal;
+          return await remoteCompute.runnerClient(host.id).listRemoteWorkspaceFiles(
+            remoteWorkspaceKey(session.projectId, session.id),
+          );
+        },
         sync: async (input: {
           conflict: "overwrite" | "reject";
           direction: "pull" | "push";
           paths: string[];
         }, signal?: AbortSignal) => {
+          store.assertSessionAllowsRemoteRunner(sessionId, host.id);
           await requestExecution.permission.requirePrivilege({
             action: "host",
             executionId: runId,
-            resource: selectedRemoteHost.alias,
+            resource: host.alias,
             signal,
-            summary: `${input.direction === "push" ? "Push to" : "Pull from"} remote runner ${selectedRemoteHost.alias}: ${input.paths.join(", ")}`,
+            summary: `${input.direction === "push" ? "Push to" : "Pull from"} remote runner ${host.alias}: ${input.paths.join(", ")}`,
           });
           const result = await syncRemoteWorkspace({
-            hostId: selectedRemoteHost.id,
+            hostId: host.id,
             input,
-            runnerClient: executionRunnerClient,
+            runnerClient: remoteCompute.runnerClient(host.id),
             sessionId,
             store,
           });
@@ -1005,7 +1001,7 @@ async function executeAgentRun(
               await provenanceRecorder.registerWorkspaceArtifact({
                 logicalName: path,
                 origin: "user_upload",
-                originMeta: { hostId: selectedRemoteHost.id, source: "remote_runner_pull" },
+                originMeta: { hostId: host.id, source: "remote_runner_pull" },
                 path,
                 sessionId,
                 sourcePath: path,
@@ -1017,9 +1013,9 @@ async function executeAgentRun(
           }
           return result;
         },
-      },
+      })),
     } : {}),
-    remoteHosts,
+    remoteHosts: allowedRemoteHosts,
     proposeSkillLibraryUpdate: async (input, _signal, toolCallId) => {
       const library = skillLibraryCatalog.get(input.libraryId);
       const sourceRefs = [
@@ -1236,7 +1232,7 @@ async function executeAgentRun(
       });
       return runtime ? { evolve: runtime } : {};
     })(),
-    ...(remoteHosts.length ? {
+    ...(allowedRemoteHosts.length ? {
       proposeRemoteJob: async (input: CreateRemoteJobRequest) => {
         let job = await store.createRemoteJob(sessionId, input, { executionId: runId });
         job = await startApprovedRemoteJob(job, store, remoteCompute, provenanceRecorder);
@@ -1354,7 +1350,7 @@ async function executeAgentRun(
           const subagentConnectorIds = [...new Set([...settingsSnapshot.enabledConnectorIds, ...(specialist?.connectorIds ?? [])])];
           const subagentWorkspaceRoot = resolveWorkspaceFile(store.workspacePath(sessionId), handoff.privateWorkspacePath);
           const subagentSnapshots = skillCatalog.resolve(subagentSkillIds);
-          const subagentSkillPackagesRoot = subagentSnapshots.length && !selectedRemoteHost
+          const subagentSkillPackagesRoot = subagentSnapshots.length
             ? store.skillPackagesPath(sessionId, skillPackageSetHash(subagentSnapshots))
             : undefined;
           if (subagentSkillPackagesRoot) {
@@ -1412,9 +1408,9 @@ async function executeAgentRun(
               artifactPathPrefix: handoff.privateWorkspacePath,
               provenanceRecorder,
               readOnlyWorkspaceRoot: store.workspacePath(sessionId),
-              runnerClient: executionRunnerClient,
+              runnerClient,
+              ...(remoteTargets.length ? { remoteTargets } : {}),
               ...(subagentSkillPackagesRoot ? { skillPackagesRoot: subagentSkillPackagesRoot } : {}),
-              ...(selectedRemoteHost ? { runnerWorkspaceKey: remoteWorkspaceKey(session.projectId, session.id) } : {}),
               ...(scientificEnvironments ? { scientificEnvironments } : {}),
               sessionId,
               store,

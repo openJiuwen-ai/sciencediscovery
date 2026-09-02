@@ -1594,10 +1594,10 @@ test("sync_remote_workspace exposes only explicit list, push, and pull operation
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
-    remoteWorkspace: {
+    remoteRunners: [{
       hostAlias: "linux-runner",
       list: async () => [{ modifiedAt: "2026-08-31T00:00:00.000Z", path: "results/report.md", size: 12 }],
-      sync: async (input) => {
+      sync: async (input: { conflict: "overwrite" | "reject"; direction: "pull" | "push"; paths: string[] }) => {
         calls.push(`${input.direction}:${input.conflict}:${input.paths.join(",")}`);
         return {
           files: input.paths,
@@ -1614,16 +1614,21 @@ test("sync_remote_workspace exposes only explicit list, push, and pull operation
           },
         };
       },
-    },
+    }],
   });
   const tool = tools.find((candidate) => candidate.name === "sync_remote_workspace");
   assert.ok(tool);
   assert.match(tool.description, /Nothing is mirrored automatically/);
-  const listed = await tool.execute("list-call", { operation: "list" });
+  const listed = await tool.execute("list-call", { machine: "linux-runner", operation: "list" });
   assert.match((listed.content[0] as { text: string }).text, /results\/report\.md/);
-  await tool.execute("push-call", { operation: "push", paths: ["inputs/data.csv"] });
-  await tool.execute("pull-call", { conflict: "overwrite", operation: "pull", paths: ["results"] });
+  await tool.execute("push-call", { machine: "linux-runner", operation: "push", paths: ["inputs/data.csv"] });
+  await tool.execute("pull-call", { conflict: "overwrite", machine: "linux-runner", operation: "pull", paths: ["results"] });
   assert.deepEqual(calls, ["push:reject:inputs/data.csv", "pull:overwrite:results"]);
+  // A machine this Session may not use is refused rather than silently routed.
+  await assert.rejects(
+    tool.execute("other-call", { machine: "someone-elses-box", operation: "list" }),
+    /may not use someone-elses-box/,
+  );
 });
 
 test("query_graph tool forwards the query and returns the memory-graph match", async () => {

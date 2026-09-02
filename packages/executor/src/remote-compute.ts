@@ -14,9 +14,8 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { glob, mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 import { createServer } from "node:net";
 
 import type {
@@ -41,12 +40,23 @@ export interface RemoteCommandResult {
 }
 
 export interface RemoteTransport {
-  run(alias: string, script: string, timeoutMs: number): Promise<RemoteCommandResult>;
+  /** `port` is omitted when the destination should resolve through SSH configuration. */
+  run(destination: string, script: string, timeoutMs: number, port?: number): Promise<RemoteCommandResult>;
 }
 
-function sshConnectionArguments(configPath: string): string[] {
+/**
+ * Arguments shared by every SSH invocation: the probe, the deployment and the
+ * runner tunnel. Host identity is always verified on the command line so a
+ * looser setting in the user's own config cannot weaken it.
+ *
+ * The port is only passed when the user gave one. Leaving it off is what lets a
+ * plain name resolve through the user's SSH configuration, so an alias keeps
+ * the `HostName` and `Port` it declares there.
+ */
+function sshConnectionArguments(configPath: string, port?: number): string[] {
   return [
     "-F", configPath,
+    ...(port === undefined ? [] : ["-p", String(validateSshPort(port))]),
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=yes",
     "-o", "ConnectTimeout=10",
@@ -66,12 +76,24 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-function validateAlias(alias: string): string {
-  const normalized = alias.trim();
+/**
+ * The SSH destination the user typed. An SSH config alias, a hostname and an
+ * IPv4 address are all the same thing here — `ssh` resolves whichever it is —
+ * so this only rejects values that would not be a single safe argument.
+ */
+export function validateSshDestination(value: string): string {
+  const normalized = value.trim();
   if (!/^[A-Za-z0-9._-]{1,255}$/.test(normalized)) {
-    throw new Error("SSH host alias must contain only letters, numbers, dots, underscores, and hyphens");
+    throw new Error("An SSH machine must be an alias, hostname, or IP address using only letters, numbers, dots, underscores, and hyphens");
   }
   return normalized;
+}
+
+export function validateSshPort(port: number): number {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("The SSH port must be a whole number between 1 and 65535");
+  }
+  return port;
 }
 
 export function validateRunnerCommand(value: string): string {
@@ -90,47 +112,17 @@ function validateRemotePath(path: string, label: string): string {
   return normalized;
 }
 
-async function collectConfigAliases(configPath: string, visited = new Set<string>()): Promise<Set<string>> {
-  const canonical = resolve(configPath);
-  if (visited.has(canonical)) return new Set();
-  visited.add(canonical);
-  const content = await readFile(canonical, "utf8");
-  const aliases = new Set<string>();
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const [keyword, ...parts] = line.split(/\s+/);
-    if (keyword?.toLocaleLowerCase() === "host") {
-      for (const value of parts) {
-        if (!value.startsWith("!") && !/[?*]/.test(value) && /^[A-Za-z0-9._-]+$/.test(value)) aliases.add(value);
-      }
-      continue;
-    }
-    if (keyword?.toLocaleLowerCase() !== "include") continue;
-    for (const include of parts) {
-      const expanded = include.startsWith("~/")
-        ? resolve(homedir(), include.slice(2))
-        : isAbsolute(include) ? include : resolve(dirname(canonical), include);
-      for await (const includedPath of glob(expanded)) {
-        const nested = await collectConfigAliases(includedPath, visited);
-        for (const alias of nested) aliases.add(alias);
-      }
-    }
-  }
-  return aliases;
-}
-
 export class OpenSshTransport implements RemoteTransport {
   constructor(
     private readonly configPath: string,
     private readonly sshPath = "/usr/bin/ssh",
   ) {}
 
-  run(alias: string, script: string, timeoutMs: number): Promise<RemoteCommandResult> {
+  run(destination: string, script: string, timeoutMs: number, port?: number): Promise<RemoteCommandResult> {
     return new Promise((resolveRun, reject) => {
       const child = spawn(this.sshPath, [
-        ...sshConnectionArguments(this.configPath),
-        "--", validateAlias(alias), "sh", "-s",
+        ...sshConnectionArguments(this.configPath, port),
+        "--", validateSshDestination(destination), "sh", "-s",
       ], { stdio: ["pipe", "pipe", "pipe"] });
       let stdout = Buffer.alloc(0);
       let stderr = Buffer.alloc(0);
@@ -292,16 +284,20 @@ export class RemoteComputeClient {
     this.transport = transport ?? new OpenSshTransport(sshConfigPath, sshPath);
   }
 
-  async configuredAliases(): Promise<string[]> {
-    return [...await collectConfigAliases(this.sshConfigPath)].toSorted();
-  }
-
-  async probe(aliasValue: string, runnerCommandValue = "sciencediscovery-runner"): Promise<RemoteHostCapabilities> {
-    const alias = validateAlias(aliasValue);
+  /**
+   * Read a machine's capabilities over SSH. The destination is whatever the user
+   * typed — alias, hostname or IP — and is not required to appear in the SSH
+   * config: host identity is still verified against `known_hosts`, so an unknown
+   * machine fails closed rather than being silently trusted.
+   */
+  async probe(
+    destinationValue: string,
+    runnerCommandValue = "sciencediscovery-runner",
+    port?: number,
+  ): Promise<RemoteHostCapabilities> {
+    const destination = validateSshDestination(destinationValue);
     const runnerCommand = validateRunnerCommand(runnerCommandValue);
-    const aliases = await this.configuredAliases();
-    if (!aliases.includes(alias)) throw new Error(`SSH host alias ${alias} is not explicitly present in the configured SSH config`);
-    const result = await this.transport.run(alias, probeScript(runnerCommand), 20_000);
+    const result = await this.transport.run(destination, probeScript(runnerCommand), 20_000, port);
     if (result.exitCode !== 0) {
       throw new Error(`SSH probe failed (${result.exitCode}): ${describeSshFailure(result.stderr, "authentication or connection failed")}`);
     }
@@ -385,7 +381,7 @@ export class RemoteComputeClient {
       "printf 'data_dir=%s\\n' \"$data_dir\"",
       "",
     ].join("\n");
-    const result = await this.transport.run(validateAlias(host.alias), script, 180_000);
+    const result = await this.transport.run(validateSshDestination(host.alias), script, 180_000);
     if (result.exitCode !== 0) {
       throw new Error(`Remote runner deployment failed (${result.exitCode}): ${describeSshFailure(result.stderr, "the SSH command failed")}`);
     }
@@ -490,7 +486,7 @@ export class RemoteComputeClient {
       // runner keeps running on the host after a disconnect or an API crash,
       // which is exactly the process this product must not leave behind.
       "-tt",
-      "--", validateAlias(host.alias), "sh", "-s",
+      "--", validateSshDestination(host.alias), "sh", "-s",
     ], { stdio: ["pipe", "ignore", "pipe"] });
     const client = new RunnerClient(`http://127.0.0.1:${localPort}`, token);
     const status: RemoteRunnerStatus = { hostId: host.id, ...(localVersion ? { localVersion } : {}), state: "connecting" };
@@ -590,7 +586,7 @@ export class RemoteComputeClient {
         "chmod 700 \"$job_script\"",
         "sbatch --parsable \"$job_script\"",
         "",
-      ].join("\n"), 30_000);
+      ].join("\n"), 30_000, job.card.targetPort);
       if (submit.exitCode !== 0) throw new Error(`SLURM submission failed (${submit.exitCode}): ${submit.stderr.trim() || submit.stdout.trim()}`);
       const remoteJobId = submit.stdout.trim().split(/[;\s]/)[0];
       if (!remoteJobId || !/^\d+(?:_\d+)?$/.test(remoteJobId)) throw new Error("SLURM did not return a valid job id");
@@ -610,7 +606,12 @@ export class RemoteComputeClient {
       };
     }
 
-    const run = await this.transport.run(job.card.targetAlias, `set -eu\ncd -- ${shellQuote(workingDirectory)}\n${job.card.command}\n`, Math.min(job.card.resources.walltimeMinutes * 60_000, 24 * 60 * 60_000));
+    const run = await this.transport.run(
+      job.card.targetAlias,
+      `set -eu\ncd -- ${shellQuote(workingDirectory)}\n${job.card.command}\n`,
+      Math.min(job.card.resources.walltimeMinutes * 60_000, 24 * 60 * 60_000),
+      job.card.targetPort,
+    );
     const outputRecords = await this.collectOutputs(job, workspaceRoot);
     return {
       ...job,
@@ -635,7 +636,7 @@ export class RemoteComputeClient {
       "if [ -z \"$state\" ]; then state=$(squeue -h -j \"$job_id\" -o '%T' 2>/dev/null | head -n 1); fi",
       "printf '%s\\n' \"$state\"",
       "",
-    ].join("\n"), 20_000);
+    ].join("\n"), 20_000, job.card.targetPort);
     if (status.exitCode !== 0) throw new Error(`Could not refresh SLURM job: ${status.stderr.trim()}`);
     const remoteState = status.stdout.trim().split(/[+\s]/)[0]?.toLocaleUpperCase();
     if (remoteState === "COMPLETED") {
@@ -671,7 +672,7 @@ export class RemoteComputeClient {
         "base64 < \"$path\" | tr -d '\\n'",
         "printf '\\n'",
         "",
-      ].join("\n"), 20_000);
+      ].join("\n"), 20_000, job.card.targetPort);
       if (result.exitCode !== 0) throw new Error(`Could not inspect remote output ${path}: ${result.stderr.trim()}`);
       const [kind, rawSize, encoded] = result.stdout.trim().split("|", 3);
       const size = Number(rawSize);

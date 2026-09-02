@@ -52,7 +52,7 @@ EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D", "-e"]
 `;
 
-async function startContainer(root: string): Promise<string> {
+async function startContainer(root: string): Promise<{ configPath: string; port: number }> {
   await run("ssh-keygen", ["-t", "ed25519", "-N", "", "-f", resolve(root, "id_ed25519"), "-C", "sciencediscovery-test"]);
   await run("cp", [resolve(root, "id_ed25519.pub"), resolve(root, "authorized_keys")]);
   await writeFile(resolve(root, "Dockerfile"), DOCKERFILE);
@@ -73,19 +73,24 @@ async function startContainer(root: string): Promise<string> {
     }
     await new Promise((wait) => setTimeout(wait, 500));
   }
+  // Credentials sit under `Host *` so the same machine can be reached both ways:
+  // by the alias, which carries its own HostName/Port, and by address with an
+  // explicit port and no config entry at all.
   const configPath = resolve(root, "ssh_config");
   await writeFile(configPath, [
-    `Host ${ALIAS}`,
-    "  HostName 127.0.0.1",
-    `  Port ${port}`,
+    "Host *",
     "  User scientist",
     `  IdentityFile ${resolve(root, "id_ed25519")}`,
     "  IdentitiesOnly yes",
     `  UserKnownHostsFile ${knownHosts}`,
     "",
+    `Host ${ALIAS}`,
+    "  HostName 127.0.0.1",
+    `  Port ${port}`,
+    "",
   ].join("\n"));
   await chmod(resolve(root, "id_ed25519"), 0o600);
-  return configPath;
+  return { configPath, port: Number(port) };
 }
 
 test("a real SSH machine without a runner is deployed to, connected, and used", { skip: !OPT_IN }, async (context) => {
@@ -95,15 +100,20 @@ test("a real SSH machine without a runner is deployed to, connected, and used", 
     await rm(root, { force: true, recursive: true });
   });
   await mkdir(root, { recursive: true });
-  const configPath = await startContainer(root);
+  const { configPath, port } = await startContainer(root);
   const client = new RemoteComputeClient(configPath);
   context.after(() => client.close());
 
-  assert.deepEqual(await client.configuredAliases(), [ALIAS]);
   const capabilities = await client.probe(ALIAS);
   assert.equal(capabilities.platform, "Linux");
   assert.equal(capabilities.runnerCommandAvailable, false, "the container must start without a runner installed");
   assert.match(capabilities.nodeVersion ?? "", /^v2[2-9]\./);
+
+  // The same machine by address and explicit port, with no config entry: an
+  // alias is not a different kind of destination, just one ssh resolves itself.
+  const byAddress = await client.probe("127.0.0.1", "sciencediscovery-runner", port);
+  assert.equal(byAddress.platform, "Linux");
+  assert.equal(byAddress.nodeVersion, capabilities.nodeVersion);
 
   const host: RemoteHostTarget = {
     alias: ALIAS,

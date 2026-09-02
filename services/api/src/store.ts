@@ -202,7 +202,13 @@ import {
   normalizeModelFactOverrides,
   validateLiveModel,
 } from "./store/secrets.js";
-import { normalizePersistedRemoteHost, normalizeRemoteHostEndpoint, remoteRunnerUnusableReason } from "./store/remote-hosts.js";
+import {
+  normalizePersistedRemoteHost,
+  normalizePersistedSessionRemoteRunners,
+  normalizeRemoteHostEndpoint,
+  normalizeSshPort,
+  remoteRunnerUnusableReason,
+} from "./store/remote-hosts.js";
 import { planStandaloneProfileMigration, providerSecretKey, validateLiveProvider } from "./store/providers.js";
 import {
   knownConnectorIdSet,
@@ -855,7 +861,7 @@ export class SessionStore {
         reviewModelId,
         reviewCriteria,
         reviewMode,
-        ...(typeof session.remoteRunnerHostId === "string" ? { remoteRunnerHostId: session.remoteRunnerHostId } : {}),
+        ...normalizePersistedSessionRemoteRunners(session),
         semanticReviewEnabled,
         settingsOverrides,
         ...(session.specialistId && specialistIds.has(session.specialistId) ? { specialistId: session.specialistId } : { specialistId: undefined }),
@@ -2302,12 +2308,10 @@ export class SessionStore {
     if (!project) throw new Error("Project not found");
     if (changes.name !== undefined) project.name = requiredLabel(changes.name, "Project name");
     if (changes.remoteRunnerHostIds !== undefined) {
-      const allowedHosts = this.validateProjectRemoteRunnerHosts(changes.remoteRunnerHostIds);
-      const removed = project.remoteRunnerHostIds.filter((hostId) => !allowedHosts.includes(hostId));
-      const selected = this.catalog.sessions.find((session) => session.projectId === projectId
-        && session.remoteRunnerHostId && removed.includes(session.remoteRunnerHostId));
-      if (selected) throw new Error("Move Sessions using a removed remote runner back to local before changing the Project allowlist");
-      project.remoteRunnerHostIds = allowedHosts;
+      // Narrowing the Project list narrows every Session in it: a Session
+      // override is only ever read through this list, so a machine removed here
+      // stops being usable immediately without editing each Session.
+      project.remoteRunnerHostIds = this.validateProjectRemoteRunnerHosts(changes.remoteRunnerHostIds);
     }
     await this.saveCatalog();
     return project;
@@ -2325,16 +2329,54 @@ export class SessionStore {
     return normalized;
   }
 
-  private assertProjectAllowsRemoteRunner(projectId: string, hostId: string): RemoteHostTarget {
+  /**
+   * Validate a Session's override of the Project allowlist. An override may only
+   * narrow: naming a machine the Project does not allow is rejected rather than
+   * silently dropped, so the Session setting never claims more than it has.
+   */
+  private validateSessionRemoteRunnerHosts(projectId: string, hostIds: string[]): string[] {
+    if (!Array.isArray(hostIds)) throw new Error("Session remote runner allowlist must be an array");
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
-    if (!project.remoteRunnerHostIds.includes(hostId)) throw new Error("Remote runner host is not allowed by this Project");
-    const host = this.getRemoteHost(hostId);
-    const unusable = host ? remoteRunnerUnusableReason(host) : "it no longer exists";
-    if (!host || unusable) {
-      throw new Error(`Remote runner host cannot run this Session: ${unusable}`);
+    const normalized = [...new Set(hostIds.map((id) => id.trim()).filter(Boolean))];
+    for (const hostId of normalized) {
+      if (!project.remoteRunnerHostIds.includes(hostId)) {
+        const host = this.getRemoteHost(hostId);
+        throw new Error(`Remote runner host ${host?.alias ?? hostId} is not allowed by this Project`);
+      }
     }
-    return host;
+    return normalized;
+  }
+
+  /**
+   * The machines this Session may use right now: its own override when it has
+   * one, otherwise the Project list, always intersected with what the Project
+   * still allows and with what is currently usable. Local execution is not part
+   * of this list because it is always available.
+   */
+  effectiveRemoteRunnerHosts(sessionId: string): RemoteHostTarget[] {
+    const session = this.getSession(sessionId);
+    if (!session) return [];
+    const project = this.getProject(session.projectId);
+    if (!project) return [];
+    const selected = session.remoteRunnerHostIds ?? project.remoteRunnerHostIds;
+    return selected
+      .filter((hostId) => project.remoteRunnerHostIds.includes(hostId))
+      .flatMap((hostId) => {
+        const host = this.getRemoteHost(hostId);
+        return host && !remoteRunnerUnusableReason(host) ? [host] : [];
+      });
+  }
+
+  /** The host, when this Session is allowed to use it; throws with the reason otherwise. */
+  assertSessionAllowsRemoteRunner(sessionId: string, hostId: string): RemoteHostTarget {
+    const host = this.effectiveRemoteRunnerHosts(sessionId).find((candidate) => candidate.id === hostId);
+    if (host) return host;
+    const known = this.getRemoteHost(hostId);
+    const unusable = known ? remoteRunnerUnusableReason(known) : undefined;
+    throw new Error(unusable
+      ? `Remote runner host ${known!.alias} cannot run this Session: ${unusable}`
+      : `Remote runner host ${known?.alias ?? hostId} is not allowed by this Session`);
   }
 
   getProject(projectId: string): Project | undefined {
@@ -2356,7 +2398,7 @@ export class SessionStore {
       approvalMode?: "always_allow" | "ask_for_dangerous";
       reviewCriteria?: string[];
       reviewMode?: "auto" | "manual";
-      remoteRunnerHostId?: string;
+      remoteRunnerHostIds?: string[];
       specialistId?: string;
     } = {},
     options: {
@@ -2382,9 +2424,9 @@ export class SessionStore {
     if (governance.specialistId && !this.getSpecialist(governance.specialistId)) {
       throw new Error("Specialist not found");
     }
-    if (governance.remoteRunnerHostId) {
-      this.assertProjectAllowsRemoteRunner(projectId, governance.remoteRunnerHostId);
-    }
+    const remoteRunnerHostIds = governance.remoteRunnerHostIds === undefined
+      ? undefined
+      : this.validateSessionRemoteRunnerHosts(projectId, governance.remoteRunnerHostIds);
     const sessionId = randomUUID();
     const permissionEpoch = createPermissionEpoch(
       sessionId,
@@ -2405,7 +2447,7 @@ export class SessionStore {
       reviewModelId: resolved.effective.reviewModelId,
       reviewCriteria: this.normalizeReviewCriteria(governance.reviewCriteria),
       reviewMode: governance.reviewMode === "manual" ? "manual" : "auto",
-      ...(governance.remoteRunnerHostId ? { remoteRunnerHostId: governance.remoteRunnerHostId } : {}),
+      ...(remoteRunnerHostIds ? { remoteRunnerHostIds } : {}),
       semanticReviewEnabled: resolved.effective.semanticReviewEnabled,
       settingsOverrides,
       ...(governance.specialistId ? { specialistId: governance.specialistId } : {}),
@@ -3313,12 +3355,17 @@ export class SessionStore {
     connectionKind?: RemoteHostConnectionKind;
     endpoint?: RemoteHostEndpoint;
     error?: string;
+    /** SSH port; omit to resolve the destination through the user's SSH configuration. */
+    port?: number | null;
     runnerCommand?: string;
     /** Connection token of a self-deployed runner; `undefined` keeps the stored one. */
     token?: string;
   }): Promise<RemoteHostTarget> {
     const alias = input.alias.trim();
-    if (!/^[A-Za-z0-9._-]{1,255}$/.test(alias)) throw new Error("Invalid SSH host alias");
+    if (!/^[A-Za-z0-9._-]{1,255}$/.test(alias)) {
+      throw new Error("A machine name must be an alias, hostname, or IP address using only letters, numbers, dots, underscores, and hyphens");
+    }
+    const port = input.connectionKind === "direct" ? undefined : normalizeSshPort(input.port);
     const runnerCommand = (input.runnerCommand ?? "sciencediscovery-runner").trim();
     if (!/^(?:[A-Za-z0-9._-]+|\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+)$/.test(runnerCommand)) {
       throw new Error("Invalid remote runner executable");
@@ -3342,6 +3389,8 @@ export class SessionStore {
     host.updatedAt = now;
     host.runnerCommand = runnerCommand;
     if (endpoint) host.endpoint = endpoint;
+    if (port === undefined) delete host.port;
+    else host.port = port;
     if (input.capabilities) {
       host.capabilities = structuredClone(input.capabilities);
       host.status = "ready";
@@ -3403,7 +3452,8 @@ export class SessionStore {
   }
 
   async appendRemoteWorkspaceSync(record: RemoteWorkspaceSyncRecord): Promise<void> {
-    this.assertProjectAllowsRemoteRunner(this.assertSessionWritable(record.sessionId).projectId, record.hostId);
+    this.assertSessionWritable(record.sessionId);
+    this.assertSessionAllowsRemoteRunner(record.sessionId, record.hostId);
     this.catalog.remoteWorkspaceSyncs.push(structuredClone(record));
     await this.saveCatalog();
   }
@@ -3472,6 +3522,7 @@ export class SessionStore {
         resources: structuredClone(resources),
         targetAlias: host.alias,
         targetId: host.id,
+        ...(host.port === undefined ? {} : { targetPort: host.port }),
       },
       createdAt: now,
       id,
@@ -3731,7 +3782,7 @@ export class SessionStore {
     changes: UpdateSessionRequest,
   ): Promise<Session> {
     const session = this.assertSessionWritable(sessionId);
-    const { approvalMode, remoteRunnerHostId, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
+    const { approvalMode, remoteRunnerHostIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
     const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
     const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
     const nextModel = this.getModel(nextSettings.modelId);
@@ -3748,15 +3799,19 @@ export class SessionStore {
     if (approvalMode !== undefined) throw new Error("Use setApprovalMode to change approval policy");
     if (reviewMode !== undefined && reviewMode !== "auto" && reviewMode !== "manual") throw new Error("Invalid review mode");
     if (specialistId && !this.getSpecialist(specialistId)) throw new Error("Specialist not found");
-    if (remoteRunnerHostId) this.assertProjectAllowsRemoteRunner(session.projectId, remoteRunnerHostId);
+    const nextRemoteRunnerHostIds = remoteRunnerHostIds === undefined || remoteRunnerHostIds === null
+      ? undefined
+      : this.validateSessionRemoteRunnerHosts(session.projectId, remoteRunnerHostIds);
     session.settingsOverrides = nextSettings;
     session.title = nextTitle;
     if (reviewMode) session.reviewMode = reviewMode;
     if (reviewCriteria !== undefined) session.reviewCriteria = this.normalizeReviewCriteria(reviewCriteria);
     if (specialistId === null) delete session.specialistId;
     else if (specialistId !== undefined) session.specialistId = specialistId;
-    if (remoteRunnerHostId === null) delete session.remoteRunnerHostId;
-    else if (remoteRunnerHostId !== undefined) session.remoteRunnerHostId = remoteRunnerHostId;
+    // `null` drops the override so the Session follows the Project again; an
+    // empty array is a real answer meaning "no remote machine for this Session".
+    if (remoteRunnerHostIds === null) delete session.remoteRunnerHostIds;
+    else if (nextRemoteRunnerHostIds !== undefined) session.remoteRunnerHostIds = nextRemoteRunnerHostIds;
     session.updatedAt = new Date().toISOString();
     this.syncSessionCompatibility(session);
     await this.saveCatalog();

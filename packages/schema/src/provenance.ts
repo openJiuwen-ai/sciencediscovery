@@ -47,6 +47,12 @@ export interface ExecutionRun {
   networkAccessRevision?: string;
   permissionEpochId: string;
   /**
+   * Alias of the remote machine this execution ran on. Absent means it ran on
+   * the machine hosting ScienceDiscovery, which stays the default even for a
+   * Session that is allowed to use remote machines.
+   */
+  remoteHostAlias?: string;
+  /**
    * CAS reference to the canonical JSON snapshot (sorted keys) of the effective
    * process environment the runner reported for this execution. `null` when the
    * runner failed before reporting one; absent on historical runs recorded
