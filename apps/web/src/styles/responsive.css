@@ -139,7 +139,8 @@
   .environment-source-settings { grid-template-areas: "intro" "pip" "conda" "save"; grid-template-columns: minmax(0, 1fr); }
   .environment-source-save { justify-self: stretch; width: 100%; }
   .specialist-layout { grid-template-columns: minmax(0, 1fr); }
-  .remote-host-form, .remote-host-card { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .remote-host-form-fields { grid-template-columns: minmax(0, 1fr); }
+  .remote-host-actions { flex-basis: 100%; }
   .permission-card { grid-template-columns: minmax(0, 1fr); }
   .permission-card .plan-actions { grid-column: auto; }
   .permission-decision-actions > button { flex: 1 1 130px; }

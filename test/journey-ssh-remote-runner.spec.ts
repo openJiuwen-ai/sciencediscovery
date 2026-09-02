@@ -19,19 +19,23 @@ import { cleanupJourney, createProjectAndSession, openProjectSession } from "./h
 
 test.use({ locale: "zh-CN" });
 
+/** Session contract for remote runners: the fixed-target field is replaced by an allowlist override. */
+type SessionWithRemoteOverride = SessionDetail & { remoteRunnerHostIds?: string[] | null };
+
 /**
  * E2E-META
- * Purpose: 用户可以用两种方式接入远程 runner（SSH 添加机器由产品自动部署，或自行在另一台机器启动 runner 后按 IP、端口和 token 连接），为 Session 固定选机，并确认设置页不提供任何文件同步入口。
+ * Purpose: 远程计算全局页只做机器目录（列表优先、点添加才出表单、卡片操作同组等宽）；Project 在自己的设置里维护允许名单，Session 在自己的设置里覆盖（收窄或禁用），允许远端不锁死本机执行；会话栏徽章完整可读且不暗示互斥选机。
  * Steps:
- *   1. 打开远程计算设置，确认 SSH 自动部署说明、自行部署表单和一次性 SSH/SLURM 作业边界。
- *   2. 用 IP、端口和 token 登记一台自行部署的 runner，确认列表显示它已通过 token 认证。
- *   3. 将 SSH 机器加入 Project 允许名单，再把当前 Session 从本地固定到该机器；机器不能由 Agent 自动选择。
- *   4. 连接 runner，确认它是产品自动部署的，并展示本地/远端版本及差异提示。
- *   5. 确认设置页没有路径输入、Push 或 Pull 控件；模型完成的同步记录只读展示，删除远端 workspace 仍需用户显式确认。
- *   6. 断开 runner 后，Session 仍固定到该机器，同步记录保持不变。
+ *   1. 打开远程计算设置：默认只有机器列表和两个添加按钮，没有常驻表单；SSH 表单接受别名或 IP/hostname，端口可省略。
+ *   2. 主机卡片的 Connect/Refresh/Delete 在同一操作组、同一行、等宽。
+ *   3. 用 IP、端口和 token 登记一台自行部署的 runner，提交后表单收起、列表更新。
+ *   4. 在 Project 设置里勾选允许名单，复选框与机器名同一行；全局远程计算页没有允许名单或选机控件。
+ *   5. 在 Session 设置里覆盖允许名单（收窄/禁用/恢复继承）；没有「Execution runner」互斥下拉。
+ *   6. 会话栏徽章完整显示且文案只表示“远端可用”；连接 runner 后展示版本差异与部署来源。
+ *   7. 远端 workspace 只读同步记录与删除入口在 Session 设置里，且没有任何路径输入或 Push/Pull 控件。
  * Environment: Isolated local stack at E2E_BASE_URL；Project/Session 真实创建，SSH 主机、自动部署、隧道和同步记录由浏览器本地路由确定性模拟。
  * Type: mocked
- * LLM: none — 验证设置、状态和选机用户流程，不发起模型调用。
+ * LLM: none — 验证设置、状态和徽章用户流程，不发起模型调用。
  * WebSearch: none
  * PaperSources: none
  * MCP: none
@@ -39,10 +43,10 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN（隔离实例）；无 SSH 密钥或远端凭证，登记用的 token 只是模拟值。
  * CostSideEffects: none；Project/Session 在 finally 中清理。
  */
-test("F1 远程 Runner 两种接入方式与固定选机", { tag: "@mocked" }, async ({ journey, page }) => {
+test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@mocked" }, async ({ journey, page }) => {
   test.setTimeout(120_000);
   journey.scenario({
-    goal: "一位用户要把当前 Session 固定到一台远程 Linux runner：既可以用 SSH 让产品自动部署，也可以连接自己启动的 runner；文件同步只由模型完成。",
+    goal: "一位用户把一台远程 Linux runner 登记进机器目录，在 Project 里允许它，并在一个 Session 里收窄或恢复继承；允许远端不等于锁死本机执行。",
     preconditions: [
       "隔离栈已启动且浏览器持有本地访问 token",
       "本旅程不连接真实 SSH 主机，也不真的部署 runner",
@@ -58,7 +62,7 @@ test("F1 远程 Runner 两种接入方式与固定选机", { tag: "@mocked" }, a
     `${apiBaseUrl()}/api/sessions/${encodeURIComponent(fixture.session.id)}`,
     { headers: authorizationHeader() },
   );
-  let session = await sessionResponse.json() as SessionDetail;
+  let session = await sessionResponse.json() as SessionWithRemoteOverride;
   let project: Project = {
     createdAt: new Date().toISOString(),
     id: fixture.project.id,
@@ -69,8 +73,8 @@ test("F1 远程 Runner 两种接入方式与固定选机", { tag: "@mocked" }, a
   const hostId = "e2e-linux-runner";
   let connected = false;
   let directHost: RemoteHostTarget | undefined;
-  // The model transferred one file earlier in this Session; the settings page
-  // may show that it happened but must not offer a way to repeat it.
+  // The model transferred one file earlier in this Session; the Session
+  // settings may show that it happened but must not offer a way to repeat it.
   const syncRecords: RemoteWorkspaceSyncRecord[] = [{
     bytes: 64,
     createdAt: new Date().toISOString(),
@@ -146,6 +150,12 @@ test("F1 远程 Runner 两种接入方式与固定选机", { tag: "@mocked" }, a
     connected = route.request().url().endsWith("/connect");
     return route.fulfill({ json: sshHost().runnerStatus });
   });
+  // URL navigation reloads the app, so the Project list must reflect PATCHes
+  // made through the scoped-settings dialogs.
+  await page.route("**/api/projects", (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({ json: [project] });
+  });
   await page.route(`**/api/projects/${fixture.project.id}`, async (route) => {
     if (route.request().method() !== "PATCH") return route.continue();
     project = { ...project, ...(route.request().postDataJSON() as Partial<Project>) };
@@ -153,74 +163,177 @@ test("F1 远程 Runner 两种接入方式与固定选机", { tag: "@mocked" }, a
   });
   await page.route(`**/api/sessions/${fixture.session.id}`, async (route) => {
     if (route.request().method() !== "PATCH") return route.continue();
-    const body = route.request().postDataJSON() as { remoteRunnerHostId?: string | null };
-    session = { ...session, ...(body.remoteRunnerHostId ? { remoteRunnerHostId: body.remoteRunnerHostId } : {}) };
-    if (body.remoteRunnerHostId === null) delete session.remoteRunnerHostId;
+    const body = route.request().postDataJSON() as { remoteRunnerHostIds?: string[] | null };
+    if ("remoteRunnerHostIds" in body) {
+      if (body.remoteRunnerHostIds === null) delete session.remoteRunnerHostIds;
+      else session = { ...session, remoteRunnerHostIds: body.remoteRunnerHostIds };
+    }
     return route.fulfill({ json: session });
   });
   await page.route(`**/api/sessions/${fixture.session.id}/remote-workspace/sync-records`, (route) =>
     route.fulfill({ json: syncRecords }));
 
+  /** The global Remote compute group inside the system settings dialog. */
+  const openRemoteSettings = async () => {
+    const dialog = page.getByRole("dialog", { name: "系统设置" });
+    if (!await dialog.isVisible()) await page.getByRole("button", { name: /^系统设置/ }).click();
+    await dialog.getByRole("navigation", { name: "设置分组" })
+      .getByRole("button", { name: /^远程计算/ })
+      .click();
+    return dialog;
+  };
+  const openProjectSettings = async () => {
+    await page.goto(`/projects/${encodeURIComponent(fixture.project.id)}/settings`);
+    return page.getByRole("dialog", { name: "project settings" });
+  };
+  const openSessionSettings = async () => {
+    await page.goto(`/projects/${encodeURIComponent(fixture.project.id)}/sessions/${encodeURIComponent(fixture.session.id)}/settings`);
+    return page.getByRole("dialog", { name: "session settings" });
+  };
+
   try {
     await openProjectSession(page, fixture);
-    const openRemoteSettings = async () => {
-      const dialog = page.getByRole("dialog", { name: "系统设置" });
-      if (!await dialog.isVisible()) await page.getByRole("button", { name: /^系统设置/ }).click();
-      await dialog.getByRole("navigation", { name: "设置分组" })
-        .getByRole("button", { name: /^远程计算/ })
-        .click();
-      return dialog;
-    };
 
     await journey.step(
-      "核对两种接入方式与独立作业边界",
-      "页面说明 SSH 添加的机器由产品自动部署 runner，也可以连接用户自行启动的 runner；一次性 SSH/SLURM 作业仍是独立流程。",
+      "全局页默认只有机器列表与添加入口",
+      "远程计算页只管理机器目录：默认显示已配置列表，SSH 与自行接入的表单都藏在添加按钮后面；页面上没有 Project 允许名单，也没有 Session 选机。",
       async () => {
         const dialog = await openRemoteSettings();
-        await expect(dialog.getByRole("heading", { name: "SSH machines" })).toBeVisible();
-        await expect(dialog.getByText(/deploys and starts its own runner over the same SSH connection/)).toBeVisible();
-        await expect(dialog.getByRole("heading", { name: "Runner on another machine" })).toBeVisible();
-        await expect(dialog.getByText(/connect to it by IP address and port/)).toBeVisible();
+        await expect(dialog.getByRole("heading", { name: "Remote machines" })).toBeVisible();
+        await expect(dialog.getByText("institution-linux", { exact: true })).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "Add SSH machine" })).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "Add self-deployed runner" })).toBeVisible();
+        // No blank form competes with the list, and no scoped controls live here.
+        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveCount(0);
+        await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
+        await expect(dialog.getByRole("checkbox", { name: /institution-linux/ })).toHaveCount(0);
+        await expect(dialog.getByRole("combobox", { exact: true, name: "Runner" })).toHaveCount(0);
+        await expect(dialog.getByRole("combobox", { name: "Allowed remote runners" })).toHaveCount(0);
         await expect(dialog.getByText(/one-shot job card remains a separate feature/)).toBeVisible();
-        await expect(dialog.getByText(/deployed automatically over SSH \(Node v22\.19\.0\)/)).toBeVisible();
+      },
+    );
+
+    await journey.step(
+      "主机卡片操作同组同行且等宽",
+      "Connect runner、Refresh probe、Delete 在同一操作组、同一行，宽度一致；Delete 不单独占一行。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        const actions = dialog.locator(".remote-host-card .remote-host-actions").first();
+        const names = ["Connect runner", "Refresh probe", "Delete"];
+        const boxes = [];
+        for (const name of names) {
+          const button = actions.getByRole("button", { name });
+          await expect(button).toBeVisible();
+          boxes.push(await button.boundingBox());
+        }
+        const [connect, refresh, remove] = boxes;
+        if (!connect || !refresh || !remove) throw new Error("Action buttons have no layout box");
+        expect(Math.abs(connect.y - refresh.y)).toBeLessThan(2);
+        expect(Math.abs(refresh.y - remove.y)).toBeLessThan(2);
+        expect(Math.abs(connect.width - refresh.width)).toBeLessThan(2);
+        expect(Math.abs(refresh.width - remove.width)).toBeLessThan(2);
+      },
+    );
+
+    await journey.step(
+      "SSH 表单接受别名或 IP，端口可省略",
+      "点 Add SSH machine 才出现表单：别名字段同时接受 ssh_config 别名和 IP/hostname，端口标为可选；取消后表单收起。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.getByRole("button", { name: "Add SSH machine" }).click();
+        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toBeVisible();
+        await expect(dialog.getByLabel("Port (optional)")).toBeVisible();
+        await expect(dialog.getByText(/alias from your SSH config or a plain IP\/hostname/)).toBeVisible();
+        await expect(dialog.getByText(/deploys and starts its own runner over the same SSH connection/)).toBeVisible();
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveCount(0);
       },
     );
 
     await journey.step(
       "登记一台自行部署的 runner",
-      "填写名称、IP、端口和 token 后，列表出现该 runner 并标注 self-deployed 与 token authenticated。",
+      "点 Add self-deployed runner 才出现表单；填写名称、IP、端口和 token 并提交后，表单收起，列表出现该 runner 并标注 self-deployed 与 token authenticated。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.getByRole("button", { name: "Add self-deployed runner" }).click();
         await dialog.getByLabel("Name", { exact: true }).fill("lab-workstation");
         await dialog.getByLabel("IP address or hostname").fill("192.168.1.20");
-        await dialog.getByLabel("Port", { exact: true }).fill("4311");
+        await dialog.getByLabel(/^Port$/).fill("4311");
         await dialog.getByLabel("Token", { exact: true }).fill("e2e-mock-token");
         await dialog.getByRole("button", { name: "Connect and add" }).click();
         await expect(dialog.getByText(/self-deployed · http:\/\/192\.168\.1\.20:4311 · token authenticated/)).toBeVisible();
-        await expect(dialog.getByLabel("Token", { exact: true })).toHaveValue("");
+        await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
+        // Close the system dialog before moving to the scoped settings.
+        await dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
       },
     );
 
     await journey.step(
-      "Project 允许后为 Session 固定选机",
-      "机器先进入 Project 允许名单，才出现在 Session Runner 下拉框；Session 从 Local runner 明确切到 institution-linux。",
+      "Project 设置里维护允许名单",
+      "允许名单在 Project 自己的设置里：复选框与机器名在同一阅读行；勾选后该 Project 允许这台机器。",
       async () => {
-        const dialog = page.getByRole("dialog", { name: "系统设置" });
-        const allowedHost = dialog.getByRole("checkbox", { name: "institution-linux" });
+        const dialog = await openProjectSettings();
+        await expect(dialog.getByText("Remote compute", { exact: true })).toBeVisible();
+        const allowedHost = dialog.getByRole("checkbox", { name: /institution-linux/ });
         await allowedHost.click();
         await expect.poll(() => project.remoteRunnerHostIds).toEqual([hostId]);
         await expect(allowedHost).toBeChecked();
-        const runnerSelector = dialog.getByRole("combobox", { name: "Runner" });
-        await runnerSelector.evaluate((element, value) => {
-          const select = element as HTMLSelectElement;
-          const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-          if (!setter) throw new Error("HTMLSelectElement value setter is unavailable");
-          setter.call(select, value);
-          select.dispatchEvent(new Event("change", { bubbles: true }));
-        }, hostId);
-        await expect.poll(() => session.remoteRunnerHostId).toBe(hostId);
-        await expect(runnerSelector).toHaveValue(hostId);
-        await expect(page.getByText("Remote runner · institution-linux", { exact: true })).toBeVisible();
+        // Checkbox and machine name share one reading line.
+        const label = dialog.locator(".settings-choices label", { hasText: "institution-linux" });
+        const box = await allowedHost.boundingBox();
+        const textBox = await label.locator("span").first().boundingBox();
+        if (!box || !textBox) throw new Error("Allowlist row has no layout box");
+        expect(Math.abs((box.y + box.height / 2) - (textBox.y + textBox.height / 2))).toBeLessThan(6);
+        await dialog.getByRole("button", { name: "Close scoped settings" }).click();
+      },
+    );
+
+    await journey.step(
+      "Session 设置里覆盖允许名单",
+      "Session 继承 Project 名单，可收窄到子集或全部禁用，也可恢复继承；没有互斥的 Execution runner 下拉。",
+      async () => {
+        const dialog = await openSessionSettings();
+        const mode = dialog.getByRole("combobox", { name: "Allowed remote runners" });
+        await expect(mode).toHaveValue("inherit");
+        await expect(dialog.getByRole("combobox", { exact: true, name: "Runner" })).toHaveCount(0);
+        await mode.selectOption("override");
+        await expect.poll(() => session.remoteRunnerHostIds).toEqual([hostId]);
+        const hostToggle = dialog.getByRole("checkbox", { name: /institution-linux/ });
+        await expect(hostToggle).toBeChecked();
+        // Narrow to nothing: this Session forbids every remote machine.
+        await hostToggle.click();
+        await expect.poll(() => session.remoteRunnerHostIds).toEqual([]);
+        // Back to inheriting the Project allowlist.
+        await mode.selectOption("inherit");
+        await expect.poll(() => session.remoteRunnerHostIds ?? null).toBeNull();
+      },
+    );
+
+    await journey.step(
+      "远端 workspace 只读记录在 Session 设置里",
+      "同步记录只读展示，没有路径输入、Push 或 Pull 控件；删除远端 workspace 仍需用户显式确认。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "session settings" });
+        await expect(dialog.getByText("Remote workspace", { exact: true })).toBeVisible();
+        await expect(dialog.getByText(/Only the model transfers files/)).toBeVisible();
+        await expect(dialog.getByText(/pull · completed · 1 files · 64 bytes · results\/report\.md/)).toBeVisible();
+        await expect(dialog.getByLabel(/Paths/)).toHaveCount(0);
+        await expect(dialog.getByRole("button", { name: /Push|Pull/ })).toHaveCount(0);
+        await expect(dialog.getByRole("button", { name: "Delete remote workspace" })).toBeVisible();
+        await dialog.getByRole("button", { name: "Close scoped settings" }).click();
+      },
+    );
+
+    await journey.step(
+      "会话栏徽章完整显示「远端可用」",
+      "徽章完整可读、不被截断，文案表示这个 Session 可以使用远端机，而不是固定在某一台上。",
+      async () => {
+        const badge = page.locator(".session-runner-target");
+        await expect(badge).toHaveText("Remote available");
+        await expect(badge).toHaveAttribute("title", /Local runner stays available/);
+        await expect(page.locator('[title="Fixed Session execution target"]')).toHaveCount(0);
+        const clipped = await badge.evaluate((element) => element.scrollWidth > element.clientWidth + 1);
+        expect(clipped).toBe(false);
       },
     );
 
@@ -228,38 +341,12 @@ test("F1 远程 Runner 两种接入方式与固定选机", { tag: "@mocked" }, a
       "连接后说明是自动部署并提示版本差异",
       "状态变为 connected，页面同时展示本地和远端版本、version differs 以及 deployed by ScienceDiscovery。",
       async () => {
-        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        const dialog = await openRemoteSettings();
         await dialog.getByRole("button", { name: "Connect runner" }).first().click();
         await expect(dialog.getByText("connected", { exact: true })).toBeVisible();
         await expect(dialog.getByText(
           /Remote 0\.0\.0-remote · local 0\.0\.0-local · version differs · deployed by ScienceDiscovery/,
         )).toBeVisible();
-      },
-    );
-
-    await journey.step(
-      "设置页没有文件同步入口",
-      "远端 workspace 区域没有路径输入、Push 或 Pull 控件；模型已完成的同步记录只读展示，删除远端 workspace 仍是显式操作。",
-      async () => {
-        const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await expect(dialog.getByRole("heading", { name: "Remote workspace" })).toBeVisible();
-        await expect(dialog.getByText(/Only the model transfers files/)).toBeVisible();
-        await expect(dialog.getByText(/pull · completed · 1 files · 64 bytes · results\/report\.md/)).toBeVisible();
-        await expect(dialog.getByLabel(/Paths/)).toHaveCount(0);
-        await expect(dialog.getByRole("button", { name: /Push|Pull/ })).toHaveCount(0);
-        await expect(dialog.getByRole("button", { name: "Delete remote workspace" })).toBeVisible();
-      },
-    );
-
-    await journey.step(
-      "断开不切换目标也不隐式同步",
-      "断开后状态为 disconnected；Session 下拉仍固定 institution-linux，同步记录保持不变且没有新增。",
-      async () => {
-        const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "Disconnect" }).click();
-        await expect(dialog.getByText("disconnected", { exact: true }).first()).toBeVisible();
-        await expect(dialog.getByRole("combobox", { name: "Runner" })).toHaveValue(hostId);
-        await expect(syncRecords).toHaveLength(1);
       },
     );
   } finally {

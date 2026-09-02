@@ -79,8 +79,10 @@ export class SessionsApiClient extends ProjectsApiClient {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/remote-jobs/${encodeURIComponent(jobId)}/refresh`, { method: "POST" });
   }
 
-  deleteRemoteWorkspace(sessionId: string): Promise<{ deleted: boolean }> {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/remote-workspace/delete`, { method: "DELETE" });
+  /** A Session may allow several machines; each one owns a separate remote workspace. */
+  deleteRemoteWorkspace(sessionId: string, hostId?: string): Promise<{ deleted: boolean }> {
+    const query = hostId ? `?hostId=${encodeURIComponent(hostId)}` : "";
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/remote-workspace/delete${query}`, { method: "DELETE" });
   }
 
   listRemoteWorkspaceSyncs(sessionId: string): Promise<RemoteWorkspaceSyncRecord[]> {

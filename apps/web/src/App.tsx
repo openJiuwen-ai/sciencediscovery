@@ -192,7 +192,7 @@ import {
   SandboxNetworkSettingsEditor,
   TimeoutSettingsEditor,
 } from "./RuntimeControls.js";
-import { RemoteHostManager, RemoteJobsPanel } from "./RemoteCompute.js";
+import { effectiveRemoteRunnerHostIds, ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
 import { RunUsageInline, UsagePage } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
@@ -1310,8 +1310,10 @@ export function App() {
     load();
     return () => { live = false; if (timer) clearTimeout(timer); };
   }, [activeSessionId, client, evolveRefreshKey]);
+  // The session-bar badge needs the catalog whenever a Session is open, not
+  // only when one is pinned to a remote host.
   useEffect(() => {
-    if (!session?.remoteRunnerHostId) {
+    if (!activeProjectId) {
       setRemoteHosts([]);
       return;
     }
@@ -1320,7 +1322,7 @@ export function App() {
       .then((hosts) => { if (!cancelled) setRemoteHosts(hosts); })
       .catch(() => { if (!cancelled) setRemoteHosts([]); });
     return () => { cancelled = true; };
-  }, [client, session?.remoteRunnerHostId]);
+  }, [client, activeProjectId]);
   const loadMarkdownImage = useCallback(async (path: string, signal: AbortSignal): Promise<Blob> => {
     const sessionId = session?.id;
     if (!sessionId) throw new Error("No active Session is available for this image");
@@ -3606,6 +3608,22 @@ export function App() {
   }
 
   const activeProject = projects.find((project) => project.id === activeProjectId);
+  // Remote machines the open Session may use (its own override, else the
+  // Project allowlist); drives the session-bar badge. Allowing remote machines
+  // never disables local file access or local execution.
+  const allowedRemoteHosts = session
+    ? remoteHosts.filter((host) => effectiveRemoteRunnerHostIds(activeProject, session).includes(host.id))
+    : [];
+  // The Project/Session behind the scoped settings dialog, for the remote-compute sections.
+  const scopedSettingsProject = settingsTarget?.kind === "project"
+    ? projects.find((project) => project.id === settingsTarget.id)
+    : undefined;
+  const scopedSettingsSession = settingsTarget?.kind === "session"
+    ? (session?.id === settingsTarget.id ? session : sessions.find((item) => item.id === settingsTarget.id))
+    : undefined;
+  const scopedSettingsSessionProject = scopedSettingsSession
+    ? projects.find((project) => project.id === scopedSettingsSession.projectId)
+    : undefined;
   const activeModel = models.find((item) => item.id === session?.modelId);
   const activeThinkingControls = modelThinkingControls(activeModel, modelProviders);
   const requestedThinkingMode = session?.thinkingMode ?? activeModel?.thinkingMode ?? "auto";
@@ -4143,10 +4161,10 @@ export function App() {
                 ) : null}
               </div>
               <div className="session-bar-meta">
-                {session ? <span className="session-runner-target" title="Fixed Session execution target">
-                  {session.remoteRunnerHostId
-                    ? `Remote runner · ${remoteHosts.find((host) => host.id === session.remoteRunnerHostId)?.alias ?? session.remoteRunnerHostId}`
-                    : "Local runner"}
+                {session ? <span className="session-runner-target" title={allowedRemoteHosts.length
+                  ? `Local runner stays available; this Session may also use: ${allowedRemoteHosts.map((host) => host.alias).join(", ")}`
+                  : "This Session runs on the local runner"}>
+                  {allowedRemoteHosts.length ? "Remote available" : "Local runner"}
                 </span> : null}
                 {session ? (
                   <SessionUsageChip
@@ -4797,9 +4815,6 @@ export function App() {
                 client={client}
                 onError={reportSystemSettingsError}
                 onPermissionRequest={(request) => setPermissionRequests((current) => [...current.filter((item) => item.id !== request.id), request])}
-                onProjectChange={(updated) => setProjects((current) => current.map((item) => item.id === updated.id ? updated : item))}
-                onSessionChange={syncSessionSummary}
-                project={activeProject}
                 session={session}
               /> : null}
               {systemSettingsGroup === "environments" ? <EnvironmentManager client={client} onError={reportSystemSettingsError} /> : null}
@@ -4861,6 +4876,20 @@ export function App() {
               skillScope={settingsTarget.kind === "project" ? "project" : "session"}
               skills={skills}
             /> : <p className="muted">Loading effective settings and sources…</p>}
+            {scopedSettingsProject ? <ProjectRemoteSettings
+              client={client}
+              onError={reportScopedSettingsError}
+              onProjectChange={(updated) => setProjects((current) => current.map((item) => item.id === updated.id ? updated : item))}
+              project={scopedSettingsProject}
+            /> : null}
+            {scopedSettingsSession && scopedSettingsSessionProject ? <SessionRemoteSettings
+              client={client}
+              disabled={session?.id === settingsTarget.id && sessionArchived}
+              onError={reportScopedSettingsError}
+              onSessionChange={syncSessionSummary}
+              project={scopedSettingsSessionProject}
+              session={scopedSettingsSession}
+            /> : null}
           </section>
         </div>
       ) : null}

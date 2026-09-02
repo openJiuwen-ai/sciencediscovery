@@ -26,15 +26,19 @@ import { activityCardId } from "../src/session/run-activity.js";
 const timestamp = "2026-07-15T00:00:00.000Z";
 const noopToggle = () => undefined;
 
-test("remote host creation uses the primary action button skeleton", () => {
+test("the machine catalog shows the list first and keeps add forms behind buttons", () => {
   const html = renderToStaticMarkup(createElement(RemoteHostManager, {
     client: {} as ApiClient,
     onError: () => undefined,
     onPermissionRequest: () => undefined,
-    sessionId: "session-1",
   }));
 
-  assert.match(html, /class="primary-button"[^>]*>Probe and add</);
+  assert.match(html, /No remote machines registered yet/);
+  assert.match(html, /class="secondary-button"[^>]*>Add SSH machine</);
+  assert.match(html, /class="secondary-button"[^>]*>Add self-deployed runner</);
+  // No blank form competes with the list until the user asks for one.
+  assert.doesNotMatch(html, /Probe and add/);
+  assert.doesNotMatch(html, /Connect and add/);
 });
 
 function buildJob(overrides: Partial<RemoteJob> = {}): RemoteJob {

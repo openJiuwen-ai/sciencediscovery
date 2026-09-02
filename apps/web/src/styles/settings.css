@@ -717,7 +717,10 @@
 .timeout-value { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; color: var(--text-secondary); font-size: 12px; }
 .timeout-value input { min-width: 0; min-height: 38px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); padding: 7px 9px; }
 .timeout-value input:disabled { background: var(--surface-hover); color: var(--text-faint); }
-.timeout-unlimited { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
+/* The dialog-wide `.config-panel label` block display would stack the checkbox
+   above its text; scope the flex row so control and label share one line. */
+.config-panel .timeout-unlimited { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
+.config-panel .timeout-unlimited > span { display: inline; margin-bottom: 0; font-size: 12px; font-weight: 500; }
 .config-panel .timeout-unlimited input { flex: 0 0 24px; width: 24px; min-width: 24px; min-height: 24px; height: 24px; margin: 0; border: 0; padding: 0; accent-color: var(--accent); }
 .settings-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .config-panel .settings-actions .primary-button,
@@ -725,6 +728,17 @@
 .config-panel .specialist-actions .primary-button,
 .config-panel .environment-create .primary-button,
 .config-panel .remote-host-form .primary-button { width: auto; }
+/* Remote-compute sections inside the Project/Session settings dialogs. */
+.scoped-remote-settings { display: grid; gap: 12px; margin-top: 18px; border-top: 1px solid var(--border); padding-top: 18px; }
+.scoped-remote-settings .settings-field { margin: 0; }
+.remote-workspace-panel { display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 9px; padding: 12px; }
+.remote-workspace-host { display: grid; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
+.remote-workspace-host:first-of-type { border-top: 0; padding-top: 0; }
+.remote-workspace-host > strong { color: var(--text-heading); font-size: 13px; }
+.remote-workspace-records { display: grid; gap: 4px; }
+.remote-workspace-records small { color: var(--muted); }
+.remote-workspace-actions { display: flex; justify-content: flex-end; }
+.config-panel .remote-workspace-actions .danger-button { width: auto; }
 .runtime-status { display: grid; gap: 18px; }
 .runtime-status-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .runtime-status-summary article { border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); padding: 14px; }

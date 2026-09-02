@@ -124,15 +124,28 @@
 .specialist-layout fieldset input[type="checkbox"] { flex: 0 0 24px; width: 24px; min-width: 24px; min-height: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
 .specialist-actions { display: flex; justify-content: space-between; }
 .remote-host-manager, .remote-jobs-panel { display: grid; gap: 14px; }
-.remote-host-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.remote-host-empty { margin: 0; color: var(--muted); font-size: 13px; }
+.remote-host-add-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.remote-host-form { display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.remote-host-form-help { margin: 0; color: var(--muted); font-size: 12px; }
+.remote-host-form-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .remote-host-form label { display: grid; gap: 6px; }
 .remote-host-form input { min-height: 39px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 8px 10px; }
+.remote-host-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .remote-host-list { display: grid; gap: 10px; }
-.remote-host-card { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
-.remote-host-card > div { display: grid; gap: 4px; }
+.remote-host-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.remote-host-card-main { display: grid; flex: 1 1 300px; gap: 4px; min-width: 0; }
+.remote-host-card-title { display: flex; align-items: center; gap: 8px; }
 .remote-host-card small { color: var(--muted); }
-.remote-host-card > span { border-radius: 999px; padding: 3px 8px; background: var(--success-soft); color: var(--success); font-size: 10px; text-transform: uppercase; }
-.remote-host-card.error > span { background: var(--danger-soft); color: var(--danger); }
+.remote-host-status { border-radius: 999px; padding: 3px 8px; background: var(--surface-soft); color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.remote-host-status.ready { background: var(--success-soft); color: var(--success); }
+.remote-host-status.error { background: var(--danger-soft); color: var(--danger); }
+/* One operation group per machine: connect, refresh, and delete share a row
+   and split the group's width evenly, so no button — especially Delete — gets
+   its own row or a different size. Padding is normalized because the global
+   danger/secondary buttons otherwise differ by a few pixels. */
+.remote-host-actions { display: flex; flex: 1 1 400px; gap: 8px; }
+.remote-host-actions > button { box-sizing: border-box; flex: 1 1 0; justify-content: center; min-width: 0; padding: 8px 10px; }
 .remote-job-card { display: grid; gap: 10px; border: 1px solid var(--border); border-inline-start: 4px solid var(--warning-accent); border-radius: var(--radius-l); padding: 14px; background: var(--surface); }
 .remote-job-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .remote-job-heading span { display: grid; gap: 3px; }
