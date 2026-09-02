@@ -1,0 +1,26 @@
+concurrency:
+  max: 5
+  enable: false
+  preemption:
+    enable: false
+    events:
+    - mr_id
+  exceed-action: IGNORE
+on:
+  sources: {}
+stages:
+  1788331666501d867d3e2-fed6-4ab8-83fe-34886f33f885:
+    jobs:
+      JOB_XzeHQ:
+        select: selected_by_default
+        name: 新建任务
+        needs: []
+        steps: []
+        if: "${{ default() }}"
+        runs-on:
+        - default
+    pre:
+    - type: auto
+    name: 阶段_1
+    select: selected_by_default
+    fail-fast: false
