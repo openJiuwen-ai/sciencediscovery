@@ -292,7 +292,14 @@ function resolveSubagentSpecialist(store: SessionStore, sessionSpecialistId: str
 }
 
 export class ApiStatusError extends Error {
-  constructor(readonly statusCode: number, message: string) {
+  constructor(
+    readonly statusCode: number,
+    message: string,
+    /** Machine-readable reason, so a client can act on it instead of matching prose. */
+    readonly code?: string,
+    /** Structured payload the client needs to offer a next step. */
+    readonly details?: Record<string, unknown>,
+  ) {
     super(message);
   }
 }

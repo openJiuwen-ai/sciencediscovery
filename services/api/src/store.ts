@@ -208,6 +208,7 @@ import {
   normalizeRemoteHostEndpoint,
   normalizeSshPort,
   remoteRunnerUnusableReason,
+  type RemoteHostSecretKind,
 } from "./store/remote-hosts.js";
 import { planStandaloneProfileMigration, providerSecretKey, validateLiveProvider } from "./store/providers.js";
 import {
@@ -493,6 +494,12 @@ export class SessionStore {
         host_id TEXT PRIMARY KEY,
         encrypted_token TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS remote_host_credentials (
+        host_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        encrypted_value TEXT NOT NULL,
+        PRIMARY KEY (host_id, kind)
+      );
       CREATE TABLE IF NOT EXISTS permission_authorizations (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -507,6 +514,7 @@ export class SessionStore {
         ON permission_authorizations(execution_id, created_at DESC);
     `);
     this.secretKey = await this.loadOrCreateSecretKey();
+    this.migrateRemoteHostTokens();
     const modelIdsWithSecrets = new Set((this.database.prepare("SELECT model_id FROM model_secrets").all() as Array<{ model_id: string }>).map((row) => row.model_id));
     const row = this.database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string } | undefined;
     let saved: Partial<Catalog> & { delegationTracks?: Subagent[] } = {};
@@ -3338,15 +3346,82 @@ export class SessionStore {
     return structuredClone(annotations as ArtifactAnnotation[]);
   }
 
+  /** Which secrets exist for a machine; the values themselves never leave the API. */
+  private describeRemoteHostSecrets(host: RemoteHostTarget): RemoteHostTarget {
+    return {
+      ...host,
+      hasPassword: this.remoteHostSecret(host.id, "password") !== undefined,
+      hasPrivateKey: this.remoteHostSecret(host.id, "privateKey") !== undefined,
+      hasToken: this.remoteHostSecret(host.id, "token") !== undefined,
+      ...(host.trustedHostKey
+        ? {
+          hostKey: {
+            algorithm: host.trustedHostKey.algorithm,
+            fingerprint: host.trustedHostKey.fingerprint,
+            trusted: true,
+          },
+        }
+        : {}),
+    };
+  }
+
   listRemoteHosts(): RemoteHostTarget[] {
     return structuredClone(this.catalog.remoteHosts)
-      .map((host) => ({ ...host, hasToken: this.remoteHostToken(host.id) !== undefined }))
+      .map((host) => this.describeRemoteHostSecrets(host))
       .toSorted((left, right) => left.alias.localeCompare(right.alias));
   }
 
   getRemoteHost(hostId: string): RemoteHostTarget | undefined {
     const host = this.catalog.remoteHosts.find((candidate) => candidate.id === hostId);
-    return host ? { ...structuredClone(host), hasToken: this.remoteHostToken(hostId) !== undefined } : undefined;
+    return host ? this.describeRemoteHostSecrets(structuredClone(host)) : undefined;
+  }
+
+  /**
+   * Everything needed to reach an SSH machine: where it is, who to log in as,
+   * the secret that proves it, and the key the user accepted. Assembled here so
+   * probing, deployment and the runner tunnel cannot drift apart.
+   */
+  remoteHostSshAccess(hostId: string): {
+    credentials: { passphrase?: string; password?: string; privateKey?: string; username: string };
+    destination: string;
+    port?: number;
+    trustedHostKey?: { algorithm: string; fingerprint: string };
+  } {
+    const host = this.getRemoteHost(hostId);
+    if (!host) throw new Error("Remote host not found");
+    if (host.connectionKind !== "ssh") throw new Error(`${host.alias} is a self-deployed runner, not an SSH machine`);
+    const passphrase = this.remoteHostSecret(hostId, "passphrase");
+    const password = this.remoteHostSecret(hostId, "password");
+    const privateKey = this.remoteHostSecret(hostId, "privateKey");
+    return {
+      credentials: {
+        ...(passphrase ? { passphrase } : {}),
+        ...(password ? { password } : {}),
+        ...(privateKey ? { privateKey } : {}),
+        username: host.username ?? "",
+      },
+      // The name the user typed is the record's identity; what it resolves to
+      // is only different when an `ssh_config` entry named a different HostName.
+      destination: host.hostName ?? host.alias,
+      ...(host.port === undefined ? {} : { port: host.port }),
+      ...(host.trustedHostKey
+        ? { trustedHostKey: { algorithm: host.trustedHostKey.algorithm, fingerprint: host.trustedHostKey.fingerprint } }
+        : {}),
+    };
+  }
+
+  /** Record the key a user accepted for a machine, replacing any earlier one. */
+  async trustRemoteHostKey(hostId: string, key: { algorithm: string; fingerprint: string }): Promise<RemoteHostTarget> {
+    const host = this.catalog.remoteHosts.find((candidate) => candidate.id === hostId);
+    if (!host) throw new Error("Remote host not found");
+    const algorithm = key.algorithm?.trim();
+    const fingerprint = key.fingerprint?.trim();
+    if (!algorithm || !/^[A-Za-z0-9@.-]{1,80}$/.test(algorithm)) throw new Error("The host key algorithm is invalid");
+    if (!fingerprint || !/^SHA256:[A-Za-z0-9+/]{43}$/.test(fingerprint)) throw new Error("The host key fingerprint is invalid");
+    host.trustedHostKey = { algorithm, fingerprint, trustedAt: new Date().toISOString() };
+    host.updatedAt = new Date().toISOString();
+    await this.saveCatalog();
+    return this.describeRemoteHostSecrets(structuredClone(host));
   }
 
   async registerRemoteHost(input: {
@@ -3360,6 +3435,15 @@ export class SessionStore {
     runnerCommand?: string;
     /** Connection token of a self-deployed runner; `undefined` keeps the stored one. */
     token?: string;
+    /** SSH login user; `undefined` keeps the stored one. */
+    username?: string;
+    /** Address to connect to when it differs from the name the user typed. */
+    hostName?: string;
+    /** SSH secrets; `undefined` keeps what is stored, `null` forgets it. */
+    password?: string | null;
+    privateKey?: string | null;
+    passphrase?: string | null;
+    trustHostKey?: { algorithm: string; fingerprint: string };
   }): Promise<RemoteHostTarget> {
     const alias = input.alias.trim();
     if (!/^[A-Za-z0-9._-]{1,255}$/.test(alias)) {
@@ -3399,37 +3483,93 @@ export class SessionStore {
       host.status = "error";
       host.error = input.error?.slice(0, 2_000) || "SSH probe failed";
     }
+    if (connectionKind === "ssh" && input.hostName !== undefined) {
+      const hostName = input.hostName.trim();
+      if (hostName) host.hostName = hostName;
+      else delete host.hostName;
+    }
+    if (connectionKind === "ssh" && input.username !== undefined) {
+      const username = input.username.trim();
+      if (username && !/^[A-Za-z0-9._@-]{1,64}$/.test(username)) throw new Error("The SSH user name contains unsupported characters");
+      if (username) host.username = username;
+      else delete host.username;
+    }
     if (!existing) this.catalog.remoteHosts.push(host);
-    if (input.token !== undefined) this.setRemoteHostToken(host.id, input.token);
-    host.hasToken = this.remoteHostToken(host.id) !== undefined;
+    if (input.token !== undefined) this.setRemoteHostSecret(host.id, "token", input.token);
+    if (input.password !== undefined) this.setRemoteHostSecret(host.id, "password", input.password);
+    if (input.privateKey !== undefined) this.setRemoteHostSecret(host.id, "privateKey", input.privateKey);
+    if (input.passphrase !== undefined) this.setRemoteHostSecret(host.id, "passphrase", input.passphrase);
+    if (input.trustHostKey) {
+      host.trustedHostKey = {
+        algorithm: input.trustHostKey.algorithm,
+        fingerprint: input.trustHostKey.fingerprint,
+        trustedAt: now,
+      };
+    }
     await this.saveCatalog();
-    return structuredClone(host);
+    return this.describeRemoteHostSecrets(structuredClone(host));
   }
 
   /**
-   * The connection token of a self-deployed runner. It stays encrypted beside
-   * the model credentials and is never written to the catalog JSON or returned
-   * over HTTP; only the outbound runner connection reads it back.
+   * A stored secret of a remote machine: the runner token of a self-deployed
+   * runner, or the password, private key or passphrase used to log into an SSH
+   * machine. They stay encrypted beside the model credentials and are never
+   * written to the catalog JSON or returned over HTTP; only the outbound
+   * connection reads them back.
    */
-  remoteHostToken(hostId: string): string | undefined {
+  remoteHostSecret(hostId: string, kind: RemoteHostSecretKind): string | undefined {
     if (!this.database || !this.secretKey) return undefined;
-    const row = this.database.prepare("SELECT encrypted_token FROM remote_host_secrets WHERE host_id = ?")
-      .get(hostId) as { encrypted_token: string } | undefined;
-    return row ? decryptSecretValue(this.secretKey, `remote-host:${hostId}`, row.encrypted_token) : undefined;
+    const row = this.database.prepare("SELECT encrypted_value FROM remote_host_credentials WHERE host_id = ? AND kind = ?")
+      .get(hostId, kind) as { encrypted_value: string } | undefined;
+    if (!row) return undefined;
+    try {
+      return decryptSecretValue(this.secretKey, `remote-host:${hostId}:${kind}`, row.encrypted_value);
+    } catch {
+      // A row this key cannot open is unusable; reporting it as absent lets the
+      // user re-enter the secret instead of breaking every host listing.
+      return undefined;
+    }
   }
 
-  private setRemoteHostToken(hostId: string, token: string): void {
+  /** Back-compatible name for the self-deployed runner's connection token. */
+  remoteHostToken(hostId: string): string | undefined {
+    return this.remoteHostSecret(hostId, "token");
+  }
+
+  /**
+   * Runner tokens lived one-per-host before SSH passwords and keys needed rows
+   * of their own. Each is re-encrypted under its new context so a machine's
+   * secrets all live in one table under one rule, rather than leaving a row
+   * that would fail to decrypt.
+   */
+  private migrateRemoteHostTokens(): void {
+    if (!this.database || !this.secretKey) return;
+    const rows = this.database.prepare("SELECT host_id, encrypted_token FROM remote_host_secrets")
+      .all() as Array<{ encrypted_token: string; host_id: string }>;
+    for (const row of rows) {
+      try {
+        const token = decryptSecretValue(this.secretKey, `remote-host:${row.host_id}`, row.encrypted_token);
+        this.setRemoteHostSecret(row.host_id, "token", token);
+      } catch {
+        // An unreadable row cannot be used anyway; dropping it lets the user
+        // re-enter the token instead of failing every later host read.
+      }
+    }
+    if (rows.length) this.database.exec("DELETE FROM remote_host_secrets");
+  }
+
+  private setRemoteHostSecret(hostId: string, kind: RemoteHostSecretKind, value: string | null): void {
     if (!this.database || !this.secretKey) throw new Error("Remote host credential storage is not initialized");
-    const normalized = token.trim();
+    const normalized = value === null ? "" : value.trim();
     if (!normalized) {
-      this.database.prepare("DELETE FROM remote_host_secrets WHERE host_id = ?").run(hostId);
+      this.database.prepare("DELETE FROM remote_host_credentials WHERE host_id = ? AND kind = ?").run(hostId, kind);
       return;
     }
-    if (normalized.length > 4_096) throw new Error("The runner connection token is too long");
+    if (normalized.length > 32_768) throw new Error(`The stored ${kind} is too long`);
     this.database.prepare(
-      "INSERT INTO remote_host_secrets (host_id, encrypted_token) VALUES (?, ?)"
-      + " ON CONFLICT(host_id) DO UPDATE SET encrypted_token = excluded.encrypted_token",
-    ).run(hostId, encryptSecretValue(this.secretKey, `remote-host:${hostId}`, normalized));
+      "INSERT INTO remote_host_credentials (host_id, kind, encrypted_value) VALUES (?, ?, ?)"
+      + " ON CONFLICT(host_id, kind) DO UPDATE SET encrypted_value = excluded.encrypted_value",
+    ).run(hostId, kind, encryptSecretValue(this.secretKey, `remote-host:${hostId}:${kind}`, normalized));
   }
 
   async deleteRemoteHost(hostId: string): Promise<void> {
@@ -3441,7 +3581,7 @@ export class SessionStore {
       throw new Error("Remote host is allowed by a Project and cannot be deleted");
     }
     this.catalog.remoteHosts = this.catalog.remoteHosts.filter((host) => host.id !== hostId);
-    this.database?.prepare("DELETE FROM remote_host_secrets WHERE host_id = ?").run(hostId);
+    this.database?.prepare("DELETE FROM remote_host_credentials WHERE host_id = ?").run(hostId);
     await this.saveCatalog();
   }
 
@@ -3522,7 +3662,6 @@ export class SessionStore {
         resources: structuredClone(resources),
         targetAlias: host.alias,
         targetId: host.id,
-        ...(host.port === undefined ? {} : { targetPort: host.port }),
       },
       createdAt: now,
       id,

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -21,80 +21,76 @@ import { test } from "node:test";
 import type { RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
 
 import {
-  OpenSshTransport,
   packRunnerBundle,
   RemoteComputeClient,
+  SshHostKeyUntrustedError,
   validateRunnerCommand,
   type RemoteCommandResult,
+  type RemoteSshAccess,
   type RemoteTransport,
+  type SshCommandResult,
+  type SshSession,
 } from "@sciencediscovery/executor";
 
+/**
+ * Stands in for the SSH protocol. Probe, deployment and tunnel all go through
+ * the transport, so recording the targets here shows which credentials and
+ * which trusted key each of them used.
+ */
 class FakeTransport implements RemoteTransport {
-  readonly calls: Array<{ alias: string; port?: number; script: string; timeoutMs: number }> = [];
+  readonly calls: Array<{ script: string; target: RemoteSshAccess; timeoutMs: number }> = [];
+  readonly opened: RemoteSshAccess[] = [];
+  session?: SshSession;
 
   constructor(private readonly results: RemoteCommandResult[]) {}
 
-  async run(alias: string, script: string, timeoutMs: number, port?: number): Promise<RemoteCommandResult> {
-    this.calls.push({ alias, port, script, timeoutMs });
+  async open(target: RemoteSshAccess): Promise<SshSession> {
+    this.opened.push(structuredClone(target));
+    if (!this.session) throw new Error("Unexpected SSH connection");
+    return this.session;
+  }
+
+  async run(target: RemoteSshAccess, script: string, timeoutMs: number): Promise<RemoteCommandResult> {
+    this.calls.push({ script, target: structuredClone(target), timeoutMs });
     const result = this.results.shift();
     if (!result) throw new Error("Unexpected remote command");
     return result;
   }
 }
 
-/**
- * A stand-in for `ssh` that records what it was called with. One connection can
- * spawn it more than once — a deployment and then the tunnel — so every
- * invocation is appended, and `capturePath` keeps the most recent one.
- */
-async function writeFakeSsh(
-  root: string,
-  name: string,
-  exitCode: number,
-  stderr = "",
-  stdout = "",
-): Promise<{ capturePath: string; executablePath: string; invocationsPath: string; scriptPath: string }> {
-  const capturePath = resolve(root, `${name}-args.json`);
-  const invocationsPath = resolve(root, `${name}-invocations.jsonl`);
-  const scriptPath = resolve(root, `${name}-stdin.txt`);
-  const executablePath = resolve(root, `${name}.mjs`);
-  await writeFile(executablePath, [
-    `#!${process.execPath}`,
-    'import { appendFileSync, writeFileSync } from "node:fs";',
-    "const argv = JSON.stringify(process.argv.slice(2));",
-    `writeFileSync(${JSON.stringify(capturePath)}, argv);`,
-    `appendFileSync(${JSON.stringify(invocationsPath)}, argv + "\\n");`,
-    `process.stdout.write(${JSON.stringify(stdout)});`,
-    `process.stderr.write(${JSON.stringify(stderr)});`,
-    'const chunks = [];',
-    'process.stdin.on("data", (chunk) => chunks.push(chunk));',
-    `process.stdin.once("end", () => {`,
-    `  writeFileSync(${JSON.stringify(scriptPath)}, Buffer.concat(chunks));`,
-    `  process.exit(${exitCode});`,
-    "});",
-    "",
-  ].join("\n"), { mode: 0o700 });
-  return { capturePath, executablePath, invocationsPath, scriptPath };
+const TRUSTED_KEY = { algorithm: "ssh-ed25519", fingerprint: `SHA256:${"a".repeat(43)}` };
+
+/** Credentials the product holds itself; no ssh config, agent or known_hosts. */
+function access(overrides: Partial<RemoteSshAccess> = {}): RemoteSshAccess {
+  return {
+    credentials: { password: "hunter2", username: "scientist" },
+    destination: "10.0.0.8",
+    trustedHostKey: TRUSTED_KEY,
+    ...overrides,
+  };
 }
 
-async function capturedSshInvocations(invocationsPath: string): Promise<string[][]> {
-  const content = await readFile(invocationsPath, "utf8");
-  return content.split("\n").filter(Boolean).map((line) => JSON.parse(line) as string[]);
-}
+const PROBE_OUTPUT = {
+  exitCode: 0,
+  stderr: "",
+  stdout: "platform=Linux\ncpu=32\nmemory_kib=65536\ngpu=NVIDIA A100\ncuda=12.4\nconda=1\nmodules=1\ncontainers=apptainer\nscratch=/scratch,/tmp\nsbatch=1\nrunner=1\nnode=v22.19.0\n",
+};
 
-async function capturedSshArguments(capturePath: string): Promise<string[]> {
-  return JSON.parse(await readFile(capturePath, "utf8")) as string[];
-}
-
-function assertStrictHostKeyChecking(arguments_: string[]): void {
-  assert.equal(arguments_.some((value, index) => value === "StrictHostKeyChecking=yes" && arguments_[index - 1] === "-o"), true);
-  assert.equal(arguments_.some((value) => value.startsWith("UserKnownHostsFile=")), false);
+/** A session that answers nothing: enough to observe how the tunnel was opened. */
+function fakeSession(): SshSession {
+  return {
+    close: () => undefined,
+    forwardToRemoteSocket: async () => { throw new Error("no forwarding in this test"); },
+    onClose: () => undefined,
+    run: async (): Promise<SshCommandResult> => ({ exitCode: 0, stderr: "", stdout: "" }),
+    start: async () => undefined,
+  };
 }
 
 function readyRemoteHost(): RemoteHostTarget {
   const timestamp = "2026-08-31T00:00:00.000Z";
   return {
-    alias: "cluster",
+    alias: "10.0.0.8",
     capabilities: {
       conda: true,
       containerRuntimes: [],
@@ -103,7 +99,7 @@ function readyRemoteHost(): RemoteHostTarget {
       gpu: null,
       memoryBytes: 16 * 1024 * 1024 * 1024,
       modules: false,
-      nodeVersion: null,
+      nodeVersion: "v22.19.0",
       platform: "Linux",
       probedAt: timestamp,
       runnerCommandAvailable: true,
@@ -116,6 +112,7 @@ function readyRemoteHost(): RemoteHostTarget {
     runnerCommand: "sciencediscovery-runner",
     status: "ready",
     updatedAt: timestamp,
+    username: "scientist",
   };
 }
 
@@ -126,34 +123,95 @@ test("remote runner executable accepts only one safe executable token", () => {
   assert.throws(() => validateRunnerCommand("/opt/runner; reboot"), /without arguments/);
 });
 
-test("both SSH command and runner tunnel force strict host key checking", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `remote-ssh-arguments-${Date.now()}-${process.pid}`);
-  await mkdir(root, { recursive: true });
-  context.after(() => rm(root, { force: true, recursive: true }));
+test("the capability probe is read-only and carries the machine's own credentials", async () => {
+  const transport = new FakeTransport([PROBE_OUTPUT]);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
 
-  const commandSsh = await writeFakeSsh(root, "command-ssh", 0);
-  const command = await new OpenSshTransport(resolve(root, "config"), commandSsh.executablePath).run("cluster", "true\n", 2_000);
-  assert.equal(command.exitCode, 0);
-  assertStrictHostKeyChecking(await capturedSshArguments(commandSsh.capturePath));
-
-  const runnerSsh = await writeFakeSsh(root, "runner-ssh", 255, "Host key verification failed.\n");
-  const runner = new RemoteComputeClient(resolve(root, "config"), undefined, runnerSsh.executablePath);
-  const status = await runner.connectRunner(readyRemoteHost(), { localVersion: "1.0.0" });
-  assert.equal(status.state, "error");
-  assert.match(status.error ?? "", /SSH config alias[\s\S]*default known_hosts/);
-  assertStrictHostKeyChecking(await capturedSshArguments(runnerSsh.capturePath));
+  const capabilities = await client.probe(access());
+  assert.equal(capabilities.cpuCores, 32);
+  assert.equal(capabilities.memoryBytes, 64 * 1024 * 1024);
+  assert.equal(capabilities.platform, "Linux");
+  assert.equal(capabilities.runnerCommandAvailable, true);
+  assert.deepEqual(capabilities.scratchPaths, ["/scratch", "/tmp"]);
+  assert.doesNotMatch(transport.calls[0]!.script, /\b(?:mkdir|rm|touch)\b|\bsbatch\s+--/);
+  assert.equal(transport.calls[0]!.target.credentials.username, "scientist");
+  assert.deepEqual(transport.calls[0]!.target.trustedHostKey, TRUSTED_KEY);
 });
 
-test("host key failures direct the user to SSH config and default known_hosts", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `remote-host-key-error-${Date.now()}-${process.pid}`);
-  await mkdir(root, { recursive: true });
-  context.after(() => rm(root, { force: true, recursive: true }));
-  const configPath = resolve(root, "config");
-  await writeFile(configPath, "Host cluster\n  HostName hpc.example.test\n");
-  const ssh = await writeFakeSsh(root, "host-key-failure", 255, "Host key verification failed.\n");
-  const client = new RemoteComputeClient(configPath, undefined, ssh.executablePath);
+test("the probe, the deployment and the tunnel all use the same credentials and trusted key", async () => {
+  const bundle = await packRunnerBundle();
+  const transport = new FakeTransport([
+    PROBE_OUTPUT,
+    { exitCode: 0, stderr: "", stdout: "deploy=installed\ndata_dir=/home/scientist/.local/share/sciencediscovery/remote-runner\n" },
+  ]);
+  transport.session = fakeSession();
+  const target = access({ port: 2222 });
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => target, transport);
+  const host = readyRemoteHost();
 
-  await assert.rejects(client.probe("cluster"), /SSH config alias[\s\S]*default known_hosts/);
+  await client.probe(target);
+  const status = await client.connectRunner(
+    { ...host, capabilities: { ...host.capabilities!, runnerCommandAvailable: false } },
+    { bundle, localVersion: "local-build" },
+  );
+  // The fake session never answers health, so the connection cannot go ready;
+  // what matters here is how each step addressed the machine.
+  assert.equal(status.state, "error");
+  assert.equal(transport.calls.length, 2, "one probe and one deployment");
+  for (const call of transport.calls) {
+    assert.equal(call.target.port, 2222);
+    assert.equal(call.target.credentials.password, "hunter2");
+    assert.deepEqual(call.target.trustedHostKey, TRUSTED_KEY);
+  }
+  assert.match(transport.calls[1]!.script, /tar -xzf/);
+  assert.equal(transport.opened.length, 1, "the tunnel opens its own connection");
+  assert.equal(transport.opened[0]!.port, 2222);
+  assert.deepEqual(transport.opened[0]!.trustedHostKey, TRUSTED_KEY);
+});
+
+test("a machine whose key is not trusted is refused with the fingerprint to trust", async () => {
+  const untrusted = new SshHostKeyUntrustedError(
+    { algorithm: "ssh-ed25519", changed: false, fingerprint: `SHA256:${"b".repeat(43)}` },
+    "192.168.100.236",
+  );
+  const refusing: RemoteTransport = {
+    open: async () => { throw untrusted; },
+    run: async () => { throw untrusted; },
+  };
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access({ trustedHostKey: undefined }), refusing);
+
+  await assert.rejects(client.probe(access({ trustedHostKey: undefined })), (error: Error) => {
+    assert.equal(error.name, "SshHostKeyUntrustedError");
+    assert.match(error.message, /untrusted ssh-ed25519 host key/);
+    // The old advice was to go edit the system known_hosts; the answer is now
+    // inside the product, so the message must not send the user back there.
+    assert.doesNotMatch(error.message, /known_hosts/);
+    return true;
+  });
+
+  const status = await client.connectRunner(readyRemoteHost(), {});
+  assert.equal(status.state, "error");
+  assert.deepEqual(status.hostKeyChallenge, {
+    algorithm: "ssh-ed25519",
+    changed: false,
+    fingerprint: `SHA256:${"b".repeat(43)}`,
+  });
+});
+
+test("a machine whose key changed says so, so it is not read as a first connection", async () => {
+  const changed = new SshHostKeyUntrustedError(
+    { algorithm: "ssh-rsa", changed: true, fingerprint: `SHA256:${"c".repeat(43)}` },
+    "10.0.0.8",
+  );
+  const refusing: RemoteTransport = {
+    open: async () => { throw changed; },
+    run: async () => { throw changed; },
+  };
+  const status = await new RemoteComputeClient("/unused/ssh_config", async () => access(), refusing)
+    .connectRunner(readyRemoteHost(), {});
+
+  assert.equal(status.hostKeyChallenge?.changed, true);
+  assert.match(status.error ?? "", /host key of 10\.0\.0\.8 changed/);
 });
 
 function job(mode: "slurm" | "ssh"): RemoteJob {
@@ -184,56 +242,6 @@ function job(mode: "slurm" | "ssh"): RemoteJob {
   };
 }
 
-test("the capability probe is read-only and reports what the machine offers", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `remote-probe-${Date.now()}-${process.pid}`);
-  await mkdir(root, { recursive: true });
-  context.after(() => rm(root, { force: true, recursive: true }));
-  const configPath = resolve(root, "config");
-  await writeFile(configPath, "Host cluster\n  HostName hpc.example.test\nHost *\n  BatchMode yes\n");
-  const transport = new FakeTransport([{
-    exitCode: 0,
-    stderr: "",
-    stdout: "platform=Linux\ncpu=32\nmemory_kib=65536\ngpu=NVIDIA A100\ncuda=12.4\nconda=1\nmodules=1\ncontainers=apptainer\nscratch=/scratch,/tmp\nsbatch=1\nrunner=1\n",
-  }]);
-  const client = new RemoteComputeClient(configPath, transport);
-
-  const capabilities = await client.probe("cluster");
-  assert.equal(capabilities.cpuCores, 32);
-  assert.equal(capabilities.memoryBytes, 64 * 1024 * 1024);
-  assert.equal(capabilities.slurm, true);
-  assert.equal(capabilities.platform, "Linux");
-  assert.equal(capabilities.runnerCommandAvailable, true);
-  assert.deepEqual(capabilities.scratchPaths, ["/scratch", "/tmp"]);
-  assert.doesNotMatch(transport.calls[0]!.script, /\b(?:mkdir|rm|touch)\b|\bsbatch\s+--/);
-});
-
-test("an SSH machine is an alias, a hostname or an IP address, and its port is optional", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `remote-destination-${Date.now()}-${process.pid}`);
-  await mkdir(root, { recursive: true });
-  context.after(() => rm(root, { force: true, recursive: true }));
-  const probeOutput = { exitCode: 0, stderr: "", stdout: "platform=Linux\nrunner=1\nnode=v22.19.0\n" };
-  const ssh = await writeFakeSsh(root, "destination-ssh", 0);
-  const transport = new OpenSshTransport(resolve(root, "config"), ssh.executablePath);
-
-  // A name that appears in no SSH config is accepted: `ssh` resolves it, and
-  // host identity is still checked against known_hosts.
-  await transport.run("192.168.1.20", "true\n", 2_000);
-  const withoutPort = await capturedSshArguments(ssh.capturePath);
-  assert.equal(withoutPort.includes("-p"), false);
-  assert.equal(withoutPort.at(-3), "192.168.1.20");
-  assertStrictHostKeyChecking(withoutPort);
-
-  await transport.run("build.lab.example", "true\n", 2_000, 2222);
-  const withPort = await capturedSshArguments(ssh.capturePath);
-  assert.equal(withPort[withPort.indexOf("-p") + 1], "2222");
-  assert.equal(withPort.at(-3), "build.lab.example");
-
-  const client = new RemoteComputeClient(resolve(root, "config"), new FakeTransport([probeOutput, probeOutput]));
-  assert.equal((await client.probe("10.0.0.8")).platform, "Linux");
-  assert.equal((await client.probe("institution-hpc", "sciencediscovery-runner", 2222)).platform, "Linux");
-  await assert.rejects(client.probe("not a host"), /alias, hostname, or IP address/);
-});
-
 test("direct SSH jobs pull only small requested outputs and leave large data remote", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `remote-run-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
@@ -242,7 +250,7 @@ test("direct SSH jobs pull only small requested outputs and leave large data rem
     { exitCode: 0, stderr: "warning", stdout: "analysis complete\n" },
     { exitCode: 0, stderr: "", stdout: "file|4|ZGF0YQ==\n" },
   ]);
-  const completed = await new RemoteComputeClient(resolve(root, "config"), transport).start(job("ssh"), root);
+  const completed = await new RemoteComputeClient("/unused/ssh_config", async () => access(), transport).start(job("ssh"), root);
 
   assert.equal(completed.state, "completed");
   assert.deepEqual(completed.outputRecords.map((output) => output.status), ["available", "remote"]);
@@ -253,7 +261,7 @@ test("direct SSH jobs pull only small requested outputs and leave large data rem
 
 test("SLURM submission records the scheduler id and remote script without waiting for bulk outputs", async () => {
   const transport = new FakeTransport([{ exitCode: 0, stderr: "", stdout: "8421;cluster\n" }]);
-  const submitted = await new RemoteComputeClient("/unused/config", transport).start(job("slurm"), "/unused/workspace");
+  const submitted = await new RemoteComputeClient("/unused/ssh_config", async () => access(), transport).start(job("slurm"), "/unused/workspace");
 
   assert.equal(submitted.state, "submitted");
   assert.equal(submitted.remoteJobId, "8421");
@@ -311,7 +319,7 @@ function directRemoteHost(port: number): RemoteHostTarget {
 test("a self-deployed runner is reachable by address only with the token it was started with", async (context) => {
   const runner = await startFakeRunner({ platform: "linux", token: "correct-token", version: "runner-v1" });
   context.after(() => runner.close());
-  const client = new RemoteComputeClient("/unused/config", new FakeTransport([]));
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), new FakeTransport([]));
 
   const refused = await client.connectRunner(directRemoteHost(runner.port), { token: "wrong-token" });
   assert.equal(refused.state, "error");
@@ -336,7 +344,7 @@ test("a self-deployed runner is reachable by address only with the token it was 
 test("a self-deployed runner that is not on Linux is refused", async (context) => {
   const runner = await startFakeRunner({ platform: "darwin", token: "correct-token", version: "runner-v1" });
   context.after(() => runner.close());
-  const status = await new RemoteComputeClient("/unused/config", new FakeTransport([]))
+  const status = await new RemoteComputeClient("/unused/ssh_config", async () => access(), new FakeTransport([]))
     .connectRunner(directRemoteHost(runner.port), { token: "correct-token" });
 
   assert.equal(status.state, "error");
@@ -351,41 +359,9 @@ function sshHostWithoutRunner(nodeVersion: string | null): RemoteHostTarget {
   };
 }
 
-test("an SSH host without a runner receives the deployed bundle and starts it with node", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `remote-deploy-${Date.now()}-${process.pid}`);
-  await mkdir(root, { recursive: true });
-  context.after(() => rm(root, { force: true, recursive: true }));
-  const bundle = await packRunnerBundle();
-  const transport = new FakeTransport([{
-    exitCode: 0,
-    stderr: "",
-    stdout: "deploy=installed\ndata_dir=/home/scientist/.local/share/sciencediscovery/remote-runner\n",
-  }]);
-  // The tunnel exits immediately: this asserts what is sent to the host, and a
-  // real runner handshake is covered by the Docker verification instead.
-  const ssh = await writeFakeSsh(root, "deploy-ssh", 255, "closed\n");
-  const client = new RemoteComputeClient(resolve(root, "config"), transport, ssh.executablePath);
-
-  const status = await client.connectRunner(sshHostWithoutRunner("v22.19.0"), { bundle, localVersion: "runner-v1" });
-  assert.equal(status.state, "error");
-
-  const prepare = transport.calls[0]!.script;
-  assert.match(prepare, new RegExp(bundle.id));
-  assert.match(prepare, /base64 -d > "\$stage\/bundle\.tar\.gz" <<'SCIENCEDISCOVERY_RUNNER_BUNDLE'/);
-  assert.match(prepare, /tar -xzf/);
-  const startScript = await readFile(ssh.scriptPath, "utf8");
-  assert.match(startScript, /exec env SCIENCE_AGENT_RUNNER_SOCKET='\/home\/scientist\/\.local\/share\/sciencediscovery\/remote-runner\/run\/[a-f0-9]{16}\.sock'/);
-  assert.match(startScript, /node '\/home\/scientist\/\.local\/share\/sciencediscovery\/remote-runner\/app\/services\/runner\/dist\/server\.js'/);
-  // No port is opened on the remote host: the forward targets the socket.
-  const forward = (await capturedSshArguments(ssh.capturePath))[
-    (await capturedSshArguments(ssh.capturePath)).indexOf("-L") + 1
-  ];
-  assert.match(forward ?? "", /^127\.0\.0\.1:\d+:\/home\/scientist\/.*\.sock$/);
-});
-
 test("automatic deployment is refused when the host has neither a runner nor a usable Node", async () => {
   const transport = new FakeTransport([]);
-  const client = new RemoteComputeClient("/unused/config", transport);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
   const bundle = await packRunnerBundle();
 
   const withoutNode = await client.connectRunner(sshHostWithoutRunner(null), { bundle });
@@ -400,56 +376,3 @@ test("automatic deployment is refused when the host has neither a runner nor a u
   assert.equal(transport.calls.length, 0);
 });
 
-/**
- * Connect once against a fake `ssh` and return the argv of every spawn it made.
- * The fake reports a remote data directory so the deployment step succeeds and
- * the tunnel is reached; the tunnel then closes immediately, which is enough to
- * observe how it was invoked.
- */
-async function sshInvocationsForConnect(
-  root: string,
-  name: string,
-  host: RemoteHostTarget,
-  bundle: Awaited<ReturnType<typeof packRunnerBundle>>,
-): Promise<string[][]> {
-  const ssh = await writeFakeSsh(
-    root,
-    name,
-    0,
-    "",
-    "deploy=installed\ndata_dir=/home/scientist/.local/share/sciencediscovery/remote-runner\n",
-  );
-  const client = new RemoteComputeClient(resolve(root, "config"), undefined, ssh.executablePath);
-  const status = await client.connectRunner(host, { bundle, localVersion: "local-build" });
-  assert.equal(status.state, "error", "the fake tunnel closes, so the connection cannot become ready");
-  return await capturedSshInvocations(ssh.invocationsPath);
-}
-
-test("an explicit SSH port reaches the deployment and the tunnel, not only the probe", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `remote-connect-port-${Date.now()}-${process.pid}`);
-  await mkdir(root, { recursive: true });
-  context.after(() => rm(root, { force: true, recursive: true }));
-  const bundle = await packRunnerBundle();
-  const host = sshHostWithoutRunner("v22.19.0");
-
-  // A machine registered by address and port has no SSH config entry to fall
-  // back on, so every step of the connection has to carry that port.
-  const withPort = await sshInvocationsForConnect(root, "with-port", { ...host, alias: "10.0.0.8", port: 2222 }, bundle);
-  assert.equal(withPort.length, 2, "connecting spawns ssh once to deploy and once for the tunnel");
-  for (const argv of withPort) {
-    assert.equal(argv[argv.indexOf("-p") + 1], "2222");
-    assert.equal(argv.at(-3), "10.0.0.8");
-    assertStrictHostKeyChecking(argv);
-  }
-  assert.equal(withPort[1]!.includes("-L"), true, "the second spawn is the runner tunnel");
-
-  // Without a port the destination is left for the user's SSH configuration to
-  // resolve, so no port may be forced onto the command line.
-  const withoutPort = await sshInvocationsForConnect(root, "without-port", { ...host, alias: "institution-hpc" }, bundle);
-  assert.equal(withoutPort.length, 2);
-  for (const argv of withoutPort) {
-    assert.equal(argv.includes("-p"), false);
-    assert.equal(argv.at(-3), "institution-hpc");
-    assertStrictHostKeyChecking(argv);
-  }
-});

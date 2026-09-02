@@ -24,7 +24,7 @@ import {
 } from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
 import type { RunnerBundle, RunnerClient } from "@sciencediscovery/executor";
-import { packRunnerBundle } from "@sciencediscovery/executor";
+import { packRunnerBundle, SshHostKeyUntrustedError } from "@sciencediscovery/executor";
 import {
   listProviderModels,
   ModelCatalogFetchError,
@@ -126,6 +126,7 @@ import type {
   WorkspaceUploadResult,
   RegisterRemoteHostRequest,
   RemoteHostTarget,
+  RemoteRunnerStatus,
   RemoteWorkspaceSyncRequest,
   PromptManifest,
   ProposePlanRequest,
@@ -142,6 +143,7 @@ import {
 import { SessionStoreHttpError } from "../store.js";
 import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
 import { normalizeRemoteHostEndpoint } from "../store/remote-hosts.js";
+import { readSshConfigHost, readablePrivateKey } from "../store/ssh-config.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import {
   parseConflictPolicy,
@@ -348,6 +350,18 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
    * still stores the host, so the settings page can show why it is unusable
    * instead of losing what the user typed.
    */
+  /**
+   * An untrusted or changed host key is a question for the user, not a generic
+   * failure, so it leaves the API with a code and the fingerprint the settings
+   * page needs to ask it.
+   */
+  const hostKeyError = (error: SshHostKeyUntrustedError): ApiStatusError => new ApiStatusError(
+    409,
+    error.message,
+    error.challenge.changed ? "SSH_HOST_KEY_CHANGED" : "SSH_HOST_KEY_UNTRUSTED",
+    { hostKey: { algorithm: error.challenge.algorithm, fingerprint: error.challenge.fingerprint } },
+  );
+
   const registerRemoteHost = async (body: RegisterRemoteHostRequest): Promise<RemoteHostTarget> => {
     const alias = body.alias?.trim() ?? "";
     const runnerCommand = body.runnerCommand?.trim() || "sciencediscovery-runner";
@@ -367,14 +381,84 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         });
       }
     }
-    const common = { alias, connectionKind: "ssh" as const, runnerCommand };
+    // The machine record is written before it is probed: the credentials and the
+    // key the user is about to trust have to be stored somewhere for the probe
+    // to use, and a failed probe should show why rather than lose what they typed.
+    let privateKey = body.privateKey;
+    if (body.privateKeyPath) {
+      privateKey = await readablePrivateKey(body.privateKeyPath);
+      if (!privateKey) throw new ApiStatusError(400, `Could not read the private key at ${body.privateKeyPath}. Paste the key instead.`);
+    }
+    // Typing a name that already exists in the user's ssh_config imports that
+    // entry rather than making them retype it. The key material is read here and
+    // stored encrypted; it never travels to the browser, and the path is not kept.
+    const imported = body.username || body.password || privateKey
+      ? undefined
+      : await readSshConfigHost(config.sshConfigPath, alias).catch(() => undefined);
+    if (imported) {
+      if (imported.identityFile && !imported.identityKeyReadable) {
+        throw new ApiStatusError(
+          400,
+          `Imported ${alias} from the SSH configuration, but its identity file ${imported.identityFile} is not readable by ScienceDiscovery. Paste the private key or enter a password.`,
+        );
+      }
+      if (imported.identityFile) privateKey = await readablePrivateKey(imported.identityFile);
+    }
+    const importedPort = imported?.port;
+    const stored = await store.registerRemoteHost({
+      alias,
+      connectionKind: "ssh",
+      error: "Not probed yet",
+      ...(body.passphrase !== undefined ? { passphrase: body.passphrase } : {}),
+      ...(body.password !== undefined ? { password: body.password } : {}),
+      ...(imported?.hostName ? { hostName: imported.hostName } : {}),
+      ...(body.port !== undefined ? { port: body.port } : importedPort !== undefined ? { port: importedPort } : {}),
+      ...(privateKey !== undefined ? { privateKey } : {}),
+      runnerCommand,
+      ...(body.trustHostKey ? { trustHostKey: body.trustHostKey } : {}),
+      ...(body.username !== undefined
+        ? { username: body.username }
+        : imported?.username ? { username: imported.username } : {}),
+    });
+    return await probeRegisteredSshHost(stored.id, runnerCommand, { throwOnUntrustedKey: true });
+  };
+
+
+
+  /**
+   * Probe a machine that is already registered, and turn an untrusted host key
+   * into something the settings page can act on instead of an opaque failure.
+   */
+  const probeRegisteredSshHost = async (
+    hostId: string,
+    runnerCommand: string,
+    options: { throwOnUntrustedKey?: boolean } = {},
+  ): Promise<RemoteHostTarget> => {
+    const host = store.getRemoteHost(hostId)!;
+    const access = store.remoteHostSshAccess(hostId);
     try {
-      return await store.registerRemoteHost({ ...common, capabilities: await remoteCompute.probe(alias, runnerCommand) });
-    } catch (error) {
+      const capabilities = await remoteCompute.probe(access, runnerCommand);
       return await store.registerRemoteHost({
-        ...common,
-        error: error instanceof Error ? error.message : "SSH probe failed",
+        alias: host.alias,
+        capabilities,
+        connectionKind: "ssh",
+        runnerCommand,
       });
+    } catch (error) {
+      if (error instanceof SshHostKeyUntrustedError && options.throwOnUntrustedKey) {
+        throw hostKeyError(error);
+      }
+      const failed = await store.registerRemoteHost({
+        alias: host.alias,
+        connectionKind: "ssh",
+        error: error instanceof Error ? error.message : "SSH probe failed",
+        runnerCommand,
+      });
+      // The presented key travels back with the record so the settings page can
+      // show it and offer to trust it without a second round trip.
+      return error instanceof SshHostKeyUntrustedError
+        ? { ...failed, hostKey: { ...error.challenge, trusted: false } }
+        : failed;
     }
   };
 
@@ -840,12 +924,57 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (remoteHostProbeMatch && request.method === "POST") {
         const host = store.getRemoteHost(remoteHostProbeMatch[1]!);
         if (!host) return sendError(response, 404, "Remote host not found");
-        sendJson(response, 200, await registerRemoteHost({
+        sendJson(response, 200, host.connectionKind === "direct"
+          ? await registerRemoteHost({
+            alias: host.alias,
+            connectionKind: "direct",
+            ...(host.endpoint ? { endpoint: host.endpoint } : {}),
+            runnerCommand: host.runnerCommand,
+          })
+          : await probeRegisteredSshHost(host.id, host.runnerCommand));
+        return;
+      }
+      // Accepting a machine's key and replacing its credentials are settings
+      // actions on the machine record; neither becomes a conversation card.
+      const remoteHostTrustMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/trust-host-key$/);
+      if (remoteHostTrustMatch && request.method === "POST") {
+        const host = store.getRemoteHost(remoteHostTrustMatch[1]!);
+        if (!host) return sendError(response, 404, "Remote host not found");
+        if (host.connectionKind !== "ssh") return sendError(response, 409, "Only SSH machines have a host key");
+        const body = await readJson<{ algorithm?: string; fingerprint?: string }>(request);
+        const trusted = await store.trustRemoteHostKey(host.id, {
+          algorithm: body.algorithm ?? "",
+          fingerprint: body.fingerprint ?? "",
+        });
+        sendJson(response, 200, await probeRegisteredSshHost(trusted.id, trusted.runnerCommand));
+        return;
+      }
+      const remoteHostCredentialsMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/credentials$/);
+      if (remoteHostCredentialsMatch && request.method === "PUT") {
+        const host = store.getRemoteHost(remoteHostCredentialsMatch[1]!);
+        if (!host) return sendError(response, 404, "Remote host not found");
+        if (host.connectionKind !== "ssh") return sendError(response, 409, "Only SSH machines have login credentials");
+        const body = await readJson<{ passphrase?: string | null; password?: string | null; privateKey?: string | null; username?: string }>(request);
+        sendJson(response, 200, await store.registerRemoteHost({
           alias: host.alias,
-          connectionKind: host.connectionKind,
-          ...(host.endpoint ? { endpoint: host.endpoint } : {}),
+          connectionKind: "ssh",
+          ...(host.capabilities ? { capabilities: host.capabilities } : { error: host.error ?? "Not probed yet" }),
+          ...(body.passphrase !== undefined ? { passphrase: body.passphrase } : {}),
+          ...(body.password !== undefined ? { password: body.password } : {}),
+          ...(body.privateKey !== undefined ? { privateKey: body.privateKey } : {}),
           runnerCommand: host.runnerCommand,
+          ...(body.username !== undefined ? { username: body.username } : {}),
         }));
+        return;
+      }
+      // Prefill from an existing `ssh_config` entry. The product copies the
+      // values into its own record; it does not connect through that file.
+      if (request.method === "GET" && url.pathname === "/api/remote-hosts/ssh-config") {
+        try {
+          sendJson(response, 200, await readSshConfigHost(config.sshConfigPath, url.searchParams.get("alias") ?? ""));
+        } catch (error) {
+          return sendError(response, 400, error instanceof Error ? error.message : "Could not import that SSH config host");
+        }
         return;
       }
       const remoteHostMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)$/);
@@ -864,7 +993,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return;
         }
         const localVersion = (await runnerClient.health().catch(() => undefined))?.runnerVersion;
-        const status = await remoteCompute.connectRunner(host, {
+        const status: RemoteRunnerStatus = await remoteCompute.connectRunner(host, {
           ...(host.connectionKind === "ssh" && !host.capabilities?.runnerCommandAvailable
             ? { bundle: await deployableRunnerBundle() }
             : {}),
@@ -2640,7 +2769,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       const message = error instanceof Error ? error.message : "Request failed";
-      if (error instanceof ApiStatusError || error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message);
+      if (error instanceof ApiStatusError) sendError(response, error.statusCode, message, error.code, error.details);
+      else if (error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message);
       else if (code === "ENOENT") sendError(response, 404, "File not found");
       else if (code === "PAYLOAD_TOO_LARGE" || code === "QUOTA_EXCEEDED") {
         sendError(response, 413, error instanceof Error ? error.message : "Payload too large");

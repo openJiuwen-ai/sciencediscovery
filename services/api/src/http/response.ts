@@ -35,6 +35,16 @@ export function sendJson(response: ServerResponse, statusCode: number, value: un
   send(response, statusCode, "application/json; charset=utf-8", `${JSON.stringify(value)}\n`);
 }
 
-export function sendError(response: ServerResponse, statusCode: number, error: string): void {
-  sendJson(response, statusCode, { error } satisfies ApiError);
+export function sendError(
+  response: ServerResponse,
+  statusCode: number,
+  error: string,
+  code?: string,
+  details?: Record<string, unknown>,
+): void {
+  sendJson(response, statusCode, {
+    ...(code ? { code } : {}),
+    ...(details ? { details } : {}),
+    error,
+  } satisfies ApiError);
 }

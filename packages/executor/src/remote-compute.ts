@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
-import { createServer } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 
 import type {
   RemoteHostCapabilities,
@@ -28,10 +27,15 @@ import type {
 } from "@sciencediscovery/schema";
 import { RUNNER_BUNDLE_ENTRY, type RunnerBundle } from "./runner-bundle.js";
 import { RunnerClient } from "./runner-client.js";
+import {
+  SshConnection,
+  SshHostKeyUntrustedError,
+  type SshHostKeyChallenge,
+  type SshSession,
+  type SshTarget,
+} from "./ssh-connection.js";
 
-const MAX_SSH_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_PULLED_OUTPUT_BYTES = 1024 * 1024;
-const SSH_HOST_KEY_GUIDANCE = "Verify the SSH config alias and update the host key in the user's default known_hosts file before retrying.";
 
 export interface RemoteCommandResult {
   exitCode: number;
@@ -39,37 +43,22 @@ export interface RemoteCommandResult {
   stdout: string;
 }
 
-export interface RemoteTransport {
-  /** `port` is omitted when the destination should resolve through SSH configuration. */
-  run(destination: string, script: string, timeoutMs: number, port?: number): Promise<RemoteCommandResult>;
-}
+/**
+ * Everything one SSH machine needs to be reached: where it is, who to log in
+ * as, what secret proves it, and which host key the user already accepted.
+ * Probing, deployment and the runner tunnel all take the same value, so they
+ * cannot end up using different credentials or a different trusted key.
+ */
+export interface RemoteSshAccess extends SshTarget {}
 
 /**
- * Arguments shared by every SSH invocation: the probe, the deployment and the
- * runner tunnel. Host identity is always verified on the command line so a
- * looser setting in the user's own config cannot weaken it.
- *
- * The port is only passed when the user gave one. Leaving it off is what lets a
- * plain name resolve through the user's SSH configuration, so an alias keeps
- * the `HostName` and `Port` it declares there.
+ * The single seam for talking SSH. Probing, deployment and the runner tunnel all
+ * go through it, so a test can stand in for the whole protocol and none of the
+ * three can quietly reach a machine a different way.
  */
-function sshConnectionArguments(configPath: string, port?: number): string[] {
-  return [
-    "-F", configPath,
-    ...(port === undefined ? [] : ["-p", String(validateSshPort(port))]),
-    "-o", "BatchMode=yes",
-    "-o", "StrictHostKeyChecking=yes",
-    "-o", "ConnectTimeout=10",
-    "-o", "ServerAliveInterval=5",
-  ];
-}
-
-function describeSshFailure(detail: string, fallback: string): string {
-  const message = detail.trim() || fallback;
-  if (message.includes(SSH_HOST_KEY_GUIDANCE)) return message;
-  return /host key|known_hosts|remote host identification has changed/i.test(message)
-    ? `${message}\n${SSH_HOST_KEY_GUIDANCE}`
-    : message;
+export interface RemoteTransport {
+  open(target: RemoteSshAccess): Promise<SshSession>;
+  run(target: RemoteSshAccess, script: string, timeoutMs: number): Promise<RemoteCommandResult>;
 }
 
 function shellQuote(value: string): string {
@@ -78,8 +67,8 @@ function shellQuote(value: string): string {
 
 /**
  * The SSH destination the user typed. An SSH config alias, a hostname and an
- * IPv4 address are all the same thing here — `ssh` resolves whichever it is —
- * so this only rejects values that would not be a single safe argument.
+ * IPv4 address are all the same thing here, so this only rejects values that
+ * would not be a single safe destination.
  */
 export function validateSshDestination(value: string): string {
   const normalized = value.trim();
@@ -112,59 +101,19 @@ function validateRemotePath(path: string, label: string): string {
   return normalized;
 }
 
-export class OpenSshTransport implements RemoteTransport {
-  constructor(
-    private readonly configPath: string,
-    private readonly sshPath = "/usr/bin/ssh",
-  ) {}
+/** One connection per command: the product owns the client, so there is no agent or config to inherit. */
+export class NativeSshTransport implements RemoteTransport {
+  async open(target: RemoteSshAccess): Promise<SshSession> {
+    return await SshConnection.open({ ...target, destination: validateSshDestination(target.destination) });
+  }
 
-  run(destination: string, script: string, timeoutMs: number, port?: number): Promise<RemoteCommandResult> {
-    return new Promise((resolveRun, reject) => {
-      const child = spawn(this.sshPath, [
-        ...sshConnectionArguments(this.configPath, port),
-        "--", validateSshDestination(destination), "sh", "-s",
-      ], { stdio: ["pipe", "pipe", "pipe"] });
-      let stdout = Buffer.alloc(0);
-      let stderr = Buffer.alloc(0);
-      let settled = false;
-      const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        if (!settled) reject(new Error(`SSH command timed out after ${timeoutMs} ms`));
-        settled = true;
-      }, timeoutMs);
-      const append = (current: Buffer, chunk: Buffer) => {
-        const next = Buffer.concat([current, chunk]);
-        if (next.length > MAX_SSH_OUTPUT_BYTES) {
-          child.kill("SIGKILL");
-          throw new Error("SSH command output exceeded 2 MB");
-        }
-        return next;
-      };
-      child.stdout.on("data", (chunk: Buffer) => {
-        try { stdout = append(stdout, chunk); } catch (error) { if (!settled) reject(error); settled = true; }
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        try { stderr = append(stderr, chunk); } catch (error) { if (!settled) reject(error); settled = true; }
-      });
-      child.once("error", (error) => {
-        clearTimeout(timer);
-        if (!settled) reject(error);
-        settled = true;
-      });
-      child.once("close", (code) => {
-        clearTimeout(timer);
-        if (settled) return;
-        settled = true;
-        const exitCode = code ?? 255;
-        const stderrText = stderr.toString("utf8");
-        resolveRun({
-          exitCode,
-          stderr: exitCode === 0 ? stderrText : describeSshFailure(stderrText, "SSH command failed"),
-          stdout: stdout.toString("utf8"),
-        });
-      });
-      child.stdin.end(script);
-    });
+  async run(target: RemoteSshAccess, script: string, timeoutMs: number): Promise<RemoteCommandResult> {
+    const connection = await this.open(target);
+    try {
+      return await connection.run(script, timeoutMs);
+    } finally {
+      connection.close();
+    }
   }
 }
 
@@ -267,41 +216,47 @@ function directBaseUrl(endpoint: RemoteHostEndpoint): string {
   return `${endpoint.protocol}://${authority}:${endpoint.port}`;
 }
 
+/** Resolves the credentials and trusted key a registered machine is reached with. */
+export type RemoteSshAccessResolver = (hostId: string) => Promise<RemoteSshAccess>;
+
 export class RemoteComputeClient {
   readonly transport: RemoteTransport;
   private readonly runnerConnections = new Map<string, {
-    child?: ReturnType<typeof spawn>;
     client: RunnerClient;
     status: RemoteRunnerStatus;
+    stop?: () => void;
   }>();
   private readonly runnerStatuses = new Map<string, RemoteRunnerStatus>();
 
   constructor(
+    /** Only used to import an existing `ssh_config` entry; never to reach a machine. */
     readonly sshConfigPath: string,
+    private readonly resolveAccess: RemoteSshAccessResolver = async () => {
+      throw new Error("This machine has no stored SSH credentials");
+    },
     transport?: RemoteTransport,
-    private readonly sshPath = "/usr/bin/ssh",
   ) {
-    this.transport = transport ?? new OpenSshTransport(sshConfigPath, sshPath);
+    this.transport = transport ?? new NativeSshTransport();
   }
 
   /**
    * Read a machine's capabilities over SSH. The destination is whatever the user
-   * typed — alias, hostname or IP — and is not required to appear in the SSH
-   * config: host identity is still verified against `known_hosts`, so an unknown
-   * machine fails closed rather than being silently trusted.
+   * typed — alias, hostname or IP. Host identity is checked against the key the
+   * user accepted in this product, so an unknown or changed key fails closed
+   * with a challenge the settings page can act on.
    */
-  async probe(
-    destinationValue: string,
-    runnerCommandValue = "sciencediscovery-runner",
-    port?: number,
-  ): Promise<RemoteHostCapabilities> {
-    const destination = validateSshDestination(destinationValue);
+  async probe(access: RemoteSshAccess, runnerCommandValue = "sciencediscovery-runner"): Promise<RemoteHostCapabilities> {
     const runnerCommand = validateRunnerCommand(runnerCommandValue);
-    const result = await this.transport.run(destination, probeScript(runnerCommand), 20_000, port);
+    const result = await this.transport.run(access, probeScript(runnerCommand), 20_000);
     if (result.exitCode !== 0) {
-      throw new Error(`SSH probe failed (${result.exitCode}): ${describeSshFailure(result.stderr, "authentication or connection failed")}`);
+      throw new Error(`SSH probe failed (${result.exitCode}): ${result.stderr.trim() || "authentication or connection failed"}`);
     }
     return parseProbe(result.stdout);
+  }
+
+  /** The key a machine currently presents, for the settings page to offer for trust. */
+  async readHostKey(access: RemoteSshAccess): Promise<SshHostKeyChallenge> {
+    return await SshConnection.readHostKey({ ...access, destination: validateSshDestination(access.destination) });
   }
 
   /**
@@ -350,7 +305,7 @@ export class RemoteComputeClient {
    * runner it ships with, keyed by the bundle's content hash, so reconnecting to
    * an already-deployed host transfers nothing.
    */
-  private async prepareSshRunner(host: RemoteHostTarget, bundle?: RunnerBundle): Promise<{
+  private async prepareSshRunner(host: RemoteHostTarget, access: RemoteSshAccess, bundle?: RunnerBundle): Promise<{
     dataDir: string;
     deployed: boolean;
     startCommand: string;
@@ -381,9 +336,9 @@ export class RemoteComputeClient {
       "printf 'data_dir=%s\\n' \"$data_dir\"",
       "",
     ].join("\n");
-    const result = await this.transport.run(validateSshDestination(host.alias), script, 180_000, host.port);
+    const result = await this.transport.run(access, script, 180_000);
     if (result.exitCode !== 0) {
-      throw new Error(`Remote runner deployment failed (${result.exitCode}): ${describeSshFailure(result.stderr, "the SSH command failed")}`);
+      throw new Error(`Remote runner deployment failed (${result.exitCode}): ${result.stderr.trim() || "the SSH command failed"}`);
     }
     const dataDir = /^data_dir=(.+)$/m.exec(result.stdout)?.[1]?.trim();
     if (!dataDir?.startsWith("/")) throw new Error("The remote host did not report its ScienceDiscovery data directory");
@@ -409,6 +364,9 @@ export class RemoteComputeClient {
       const failed: RemoteRunnerStatus = {
         error: error instanceof Error ? error.message : "Remote runner connection failed",
         hostId: host.id,
+        // An untrusted key travels with the status so the settings page can
+        // offer to trust it rather than only showing a failure.
+        ...(error instanceof SshHostKeyUntrustedError ? { hostKeyChallenge: error.challenge } : {}),
         ...(localVersion ? { localVersion } : {}),
         state: "error",
       };
@@ -453,16 +411,8 @@ export class RemoteComputeClient {
   private async connectSshRunner(host: RemoteHostTarget, options: RemoteRunnerConnectOptions): Promise<RemoteRunnerStatus> {
     const { localVersion } = options;
     if (host.capabilities!.platform !== "Linux") throw new Error("SSH remote runner supports Linux hosts only");
-    const prepared = await this.prepareSshRunner(host, options.bundle);
-    const localPort = await new Promise<number>((resolvePort, reject) => {
-      const reservation = createServer();
-      reservation.once("error", reject);
-      reservation.listen(0, "127.0.0.1", () => {
-        const address = reservation.address();
-        const port = typeof address === "object" && address ? address.port : 0;
-        reservation.close((error) => error ? reject(error) : resolvePort(port));
-      });
-    });
+    const access = await this.resolveAccess(host.id);
+    const prepared = await this.prepareSshRunner(host, access, options.bundle);
     const token = randomBytes(32).toString("base64url");
     // The runner listens on a per-connection Unix socket instead of a port, so
     // the remote host exposes nothing to its network and two connections never
@@ -477,45 +427,61 @@ export class RemoteComputeClient {
       `exec env SCIENCE_AGENT_RUNNER_SOCKET=${shellQuote(socketPath)} SCIENCE_AGENT_RUNNER_TOKEN=${shellQuote(token)} SCIENCE_AGENT_DATA_DIR=${shellQuote(prepared.dataDir)} ${prepared.startCommand}`,
       "",
     ].join("\n");
-    const child = spawn(this.sshPath, [
-      ...sshConnectionArguments(this.sshConfigPath, host.port),
-      "-o", "ExitOnForwardFailure=yes",
-      "-L", `127.0.0.1:${localPort}:${socketPath}`,
-      // Force a pseudo-terminal so the remote runner is hung up when this
-      // connection ends. Without one, sshd only closes the channel and the
-      // runner keeps running on the host after a disconnect or an API crash,
-      // which is exactly the process this product must not leave behind.
-      "-tt",
-      "--", validateSshDestination(host.alias), "sh", "-s",
-    ], { stdio: ["pipe", "ignore", "pipe"] });
-    const client = new RunnerClient(`http://127.0.0.1:${localPort}`, token);
-    const status: RemoteRunnerStatus = { hostId: host.id, ...(localVersion ? { localVersion } : {}), state: "connecting" };
-    const connection = { child, client, status };
-    this.runnerConnections.set(host.id, connection);
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString("utf8")}`.slice(-8_000);
+
+    const connection = await this.transport.open(access);
+    let remoteFailure = "";
+    let stopped = false;
+    const record: { client: RunnerClient; status: RemoteRunnerStatus; stop?: () => void } = {
+      client: undefined as unknown as RunnerClient,
+      status: { hostId: host.id, ...(localVersion ? { localVersion } : {}), state: "connecting" },
+    };
+    // Every local request opens its own forwarded stream to the remote socket,
+    // which is what lets the ordinary HTTP client talk to a runner that listens
+    // on no port at all.
+    const bridge: Server = createServer((socket: Socket) => {
+      connection.forwardToRemoteSocket(socketPath).then((stream) => {
+        socket.pipe(stream).pipe(socket);
+        stream.once("error", () => socket.destroy());
+        socket.once("error", () => stream.destroy());
+      }).catch(() => socket.destroy());
     });
-    child.once("error", (error) => {
-      stderr = error.message;
-    });
-    child.once("close", (code) => {
-      if (this.runnerConnections.get(host.id)?.child !== child) return;
+    const stop = (): void => {
+      if (stopped) return;
+      stopped = true;
+      bridge.close();
+      // A pseudo-terminal was requested for the runner, so ending the
+      // connection hangs it up instead of leaving it on the user's machine.
+      connection.close();
+    };
+    record.stop = stop;
+    // A runner that exits, or a connection that drops, must move the machine to
+    // an error state rather than leaving a client pointing at a dead bridge.
+    const fail = (message: string): void => {
+      if (this.runnerConnections.get(host.id)?.stop !== stop) return;
       this.runnerConnections.delete(host.id);
-      this.runnerStatuses.set(host.id, {
-        ...connection.status,
-        error: describeSshFailure(stderr, `SSH tunnel closed (${code ?? "unknown"})`),
-        state: "error",
-      });
+      this.runnerStatuses.set(host.id, { ...record.status, error: message, state: "error" });
+      stop();
+    };
+    connection.onClose(() => fail(remoteFailure.trim() || "The SSH connection to this machine closed"));
+    await connection.start(script, (code, stderr) => {
+      remoteFailure = stderr;
+      fail(stderr.trim() || `The remote runner exited (${code ?? "unknown"})`);
     });
-    child.stdin?.end(script);
-    const deadline = Date.now() + 30_000;
+
     try {
+      const localPort = await new Promise<number>((resolveListen, reject) => {
+        bridge.once("error", reject);
+        bridge.listen(0, "127.0.0.1", () => {
+          const address = bridge.address();
+          resolveListen(typeof address === "object" && address ? address.port : 0);
+        });
+      });
+      const client = new RunnerClient(`http://127.0.0.1:${localPort}`, token);
+      record.client = client;
+      this.runnerConnections.set(host.id, record);
+      const deadline = Date.now() + 30_000;
       let health;
-      while (Date.now() < deadline) {
-        if (child.exitCode !== null) {
-          throw new Error(describeSshFailure(stderr, `SSH tunnel closed (${child.exitCode})`));
-        }
+      while (Date.now() < deadline && !stopped) {
         try {
           health = await client.health();
           break;
@@ -523,8 +489,10 @@ export class RemoteComputeClient {
           await new Promise((resolveWait) => setTimeout(resolveWait, 150));
         }
       }
-      if (!health) throw new Error(stderr.trim() || "Remote runner did not become ready within 30 seconds");
-      connection.status = {
+      if (!health) {
+        throw new Error(remoteFailure.trim() || "Remote runner did not become ready within 30 seconds");
+      }
+      record.status = {
         connectedAt: new Date().toISOString(),
         ...(prepared.deployed ? { deployed: true } : {}),
         hostId: host.id,
@@ -533,11 +501,11 @@ export class RemoteComputeClient {
         state: "ready",
         ...(localVersion ? { versionMismatch: localVersion !== health.runnerVersion } : {}),
       };
-      this.runnerStatuses.set(host.id, connection.status);
-      return structuredClone(connection.status);
+      this.runnerStatuses.set(host.id, record.status);
+      return structuredClone(record.status);
     } catch (error) {
-      child.kill("SIGTERM");
       this.runnerConnections.delete(host.id);
+      stop();
       throw error;
     }
   }
@@ -546,7 +514,7 @@ export class RemoteComputeClient {
     const connection = this.runnerConnections.get(hostId);
     if (connection) {
       this.runnerConnections.delete(hostId);
-      connection.child?.kill("SIGTERM");
+      connection.stop?.();
     }
     const status: RemoteRunnerStatus = { hostId, state: "disconnected" };
     this.runnerStatuses.set(hostId, status);
@@ -554,11 +522,12 @@ export class RemoteComputeClient {
   }
 
   close(): void {
-    for (const connection of this.runnerConnections.values()) connection.child?.kill("SIGTERM");
+    for (const connection of this.runnerConnections.values()) connection.stop?.();
     this.runnerConnections.clear();
   }
 
   async start(job: RemoteJob, workspaceRoot: string): Promise<RemoteJob> {
+    const access = await this.resolveAccess(job.card.targetId);
     const workingDirectory = validateRemotePath(job.card.remoteWorkingDirectory, "Remote working directory");
     const now = new Date().toISOString();
     if (job.card.mode === "slurm") {
@@ -578,7 +547,7 @@ export class RemoteComputeClient {
       ].join("\n");
       const scriptReference = `${workingDirectory}/.sciencediscovery/jobs/${job.id}.sh`;
       const encoded = Buffer.from(batch).toString("base64");
-      const submit = await this.transport.run(job.card.targetAlias, [
+      const submit = await this.transport.run(access, [
         "set -eu",
         `job_script=${shellQuote(scriptReference)}`,
         `mkdir -p -- ${shellQuote(dirname(scriptReference))}`,
@@ -586,7 +555,7 @@ export class RemoteComputeClient {
         "chmod 700 \"$job_script\"",
         "sbatch --parsable \"$job_script\"",
         "",
-      ].join("\n"), 30_000, job.card.targetPort);
+      ].join("\n"), 30_000);
       if (submit.exitCode !== 0) throw new Error(`SLURM submission failed (${submit.exitCode}): ${submit.stderr.trim() || submit.stdout.trim()}`);
       const remoteJobId = submit.stdout.trim().split(/[;\s]/)[0];
       if (!remoteJobId || !/^\d+(?:_\d+)?$/.test(remoteJobId)) throw new Error("SLURM did not return a valid job id");
@@ -607,12 +576,11 @@ export class RemoteComputeClient {
     }
 
     const run = await this.transport.run(
-      job.card.targetAlias,
+      access,
       `set -eu\ncd -- ${shellQuote(workingDirectory)}\n${job.card.command}\n`,
       Math.min(job.card.resources.walltimeMinutes * 60_000, 24 * 60 * 60_000),
-      job.card.targetPort,
     );
-    const outputRecords = await this.collectOutputs(job, workspaceRoot);
+    const outputRecords = await this.collectOutputs(job, access, workspaceRoot);
     return {
       ...job,
       error: run.exitCode === 0 ? undefined : `Remote SSH command exited with ${run.exitCode}`,
@@ -629,21 +597,22 @@ export class RemoteComputeClient {
 
   async refresh(job: RemoteJob, workspaceRoot: string): Promise<RemoteJob> {
     if (job.card.mode !== "slurm" || !job.remoteJobId || !["submitted", "running"].includes(job.state)) return job;
-    const status = await this.transport.run(job.card.targetAlias, [
+    const access = await this.resolveAccess(job.card.targetId);
+    const status = await this.transport.run(access, [
       "set +e",
       `job_id=${shellQuote(job.remoteJobId)}`,
       "state=$(sacct -j \"$job_id\" --noheader --parsable2 --format=State 2>/dev/null | awk -F'|' 'NF {print $1; exit}')",
       "if [ -z \"$state\" ]; then state=$(squeue -h -j \"$job_id\" -o '%T' 2>/dev/null | head -n 1); fi",
       "printf '%s\\n' \"$state\"",
       "",
-    ].join("\n"), 20_000, job.card.targetPort);
+    ].join("\n"), 20_000);
     if (status.exitCode !== 0) throw new Error(`Could not refresh SLURM job: ${status.stderr.trim()}`);
     const remoteState = status.stdout.trim().split(/[+\s]/)[0]?.toLocaleUpperCase();
     if (remoteState === "COMPLETED") {
       return {
         ...job,
         finishedAt: new Date().toISOString(),
-        outputRecords: await this.collectOutputs(job, workspaceRoot),
+        outputRecords: await this.collectOutputs(job, access, workspaceRoot),
         state: "completed",
         updatedAt: new Date().toISOString(),
       };
@@ -654,7 +623,7 @@ export class RemoteComputeClient {
     return { ...job, state: remoteState === "RUNNING" ? "running" : "submitted", updatedAt: new Date().toISOString() };
   }
 
-  private async collectOutputs(job: RemoteJob, workspaceRoot: string): Promise<RemoteJobOutputRecord[]> {
+  private async collectOutputs(job: RemoteJob, access: RemoteSshAccess, workspaceRoot: string): Promise<RemoteJobOutputRecord[]> {
     const records: RemoteJobOutputRecord[] = [];
     for (const [index, output] of job.card.outputs.entries()) {
       const path = validateRemotePath(output.path, "Remote output path");
@@ -662,7 +631,7 @@ export class RemoteComputeClient {
         records.push({ ...output, status: "remote" });
         continue;
       }
-      const result = await this.transport.run(job.card.targetAlias, [
+      const result = await this.transport.run(access, [
         "set -eu",
         `path=${shellQuote(path)}`,
         "if [ ! -f \"$path\" ]; then printf 'missing\\n'; exit 0; fi",
@@ -672,7 +641,7 @@ export class RemoteComputeClient {
         "base64 < \"$path\" | tr -d '\\n'",
         "printf '\\n'",
         "",
-      ].join("\n"), 20_000, job.card.targetPort);
+      ].join("\n"), 20_000);
       if (result.exitCode !== 0) throw new Error(`Could not inspect remote output ${path}: ${result.stderr.trim()}`);
       const [kind, rawSize, encoded] = result.stdout.trim().split("|", 3);
       const size = Number(rawSize);

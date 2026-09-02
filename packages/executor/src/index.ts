@@ -5,3 +5,4 @@ export * from "./environment.js";
 export * from "./remote-compute.js";
 export * from "./runner-bundle.js";
 export * from "./runner-client.js";
+export * from "./ssh-connection.js";

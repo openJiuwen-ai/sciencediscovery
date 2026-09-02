@@ -46,6 +46,33 @@ export interface RemoteHostCapabilities {
  */
 export type RemoteHostConnectionKind = "direct" | "ssh";
 
+/** A host key the user accepted, in the form OpenSSH prints. */
+export interface TrustedRemoteHostKey {
+  /** Key type as announced on the wire, for example `ssh-ed25519`. */
+  algorithm: string;
+  /** `SHA256:<base64>` over the public key blob. */
+  fingerprint: string;
+  trustedAt: string;
+}
+
+/**
+ * A host key as the settings page sees it: the one currently trusted, or the
+ * one a machine just presented while it is not trusted yet.
+ */
+export interface RemoteHostKeyState {
+  algorithm: string;
+  fingerprint: string;
+  trusted?: boolean;
+}
+
+/** What the settings page needs to offer "trust this machine and continue". */
+export interface RemoteHostKeyChallenge {
+  algorithm: string;
+  /** True when this machine was already trusted under a different key. */
+  changed: boolean;
+  fingerprint: string;
+}
+
 export interface RemoteHostEndpoint {
   /** IP address or hostname of a self-deployed runner. */
   host: string;
@@ -71,10 +98,28 @@ export interface RemoteHostTarget {
   hasToken?: boolean;
   id: string;
   /**
-   * SSH port. Absent means the destination is resolved by the user's SSH
-   * configuration, so an alias keeps whatever `HostName`/`Port` it declares.
+   * Address actually connected to, when it differs from the name the user typed.
+   * Set by importing an `ssh_config` entry whose `HostName` is not the Host name.
    */
+  hostName?: string;
+  /** SSH port; absent means the default 22. */
   port?: number;
+  /** Whether a login password is stored for this machine; the value never leaves the API. */
+  hasPassword?: boolean;
+  /** Whether a private key is stored for this machine; the key never leaves the API. */
+  hasPrivateKey?: boolean;
+  /**
+   * Host key the user accepted for this machine, kept in the product's own data
+   * rather than the user's `known_hosts`. Without it no connection is made.
+   */
+  trustedHostKey?: TrustedRemoteHostKey;
+  /**
+   * Response-only view of this machine's key: the trusted one, or the key it
+   * just presented with `trusted: false` when it is not accepted yet.
+   */
+  hostKey?: RemoteHostKeyState;
+  /** Login user for `ssh` machines. */
+  username?: string;
   /** Pre-installed executable or absolute executable path; never a shell expression. */
   runnerCommand: string;
   /** Ephemeral connection state supplied by the API; never persisted. */
@@ -111,8 +156,6 @@ export interface RemoteJobCard {
   resources: RemoteJobResources;
   targetAlias: string;
   targetId: string;
-  /** SSH port of the target host, when it was registered with an explicit one. */
-  targetPort?: number;
 }
 
 export interface RemoteJob {
@@ -142,17 +185,46 @@ export interface RegisterRemoteHostRequest {
   connectionKind?: RemoteHostConnectionKind;
   /** Required for `direct`: where the self-deployed runner listens. */
   endpoint?: Partial<RemoteHostEndpoint>;
-  /** Optional SSH port; omit to let the user's SSH configuration resolve the destination. */
+  /** Optional SSH port; omit for the default 22. */
   port?: number | null;
   runnerCommand?: string;
   /** Required for `direct`: the runner's `SCIENCE_AGENT_RUNNER_TOKEN`. Stored encrypted, never returned. */
   token?: string;
+  /** Login user for `ssh` machines. */
+  username?: string;
+  /** Login password; stored encrypted and never returned. Send `null` to forget it. */
+  password?: string | null;
+  /** OpenSSH private key material; stored encrypted and never returned. Send `null` to forget it. */
+  privateKey?: string | null;
+  /** Passphrase for an encrypted private key; stored encrypted and never returned. */
+  passphrase?: string | null;
+  /**
+   * Read this private key file on the API host and store its contents. Used by
+   * the `ssh_config` import so the user does not have to paste a key; the path
+   * itself is not kept, only the material.
+   */
+  privateKeyPath?: string;
+  /** Accept this host key as part of the same call, so "trust and continue" is one retry. */
+  trustHostKey?: { algorithm: string; fingerprint: string };
+}
+
+/** What an `ssh_config` `Host` entry offers to prefill a registration with. */
+export interface SshConfigHostImport {
+  alias: string;
+  hostName?: string;
+  identityFile?: string;
+  /** Whether the API could read `identityFile`; when false the user must paste a key. */
+  identityKeyReadable: boolean;
+  port?: number;
+  username?: string;
 }
 
 export type RemoteRunnerConnectionState = "connecting" | "disconnected" | "error" | "ready";
 
 export interface RemoteRunnerStatus {
   connectedAt?: string;
+  /** Set when the connection failed because the machine's key is not trusted yet. */
+  hostKeyChallenge?: RemoteHostKeyChallenge;
   /** True when this connection deployed the runner bundle to the remote host. */
   deployed?: boolean;
   error?: string;

@@ -3,12 +3,23 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { "types": "./src/index.ts", "default": "./dist/index.js" },
+  "exports": {
+    "types": "./src/index.ts",
+    "default": "./dist/index.js"
+  },
   "types": "./src/index.ts",
-  "scripts": { "build": "tsc -p tsconfig.json", "test": "node --test dist/*.test.js", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
   "dependencies": {
     "@sciencediscovery/runner": "workspace:*",
-    "@sciencediscovery/schema": "workspace:*"
+    "@sciencediscovery/schema": "workspace:*",
+    "ssh2": "1.17.0"
   },
-  "devDependencies": { "@types/node": "26.1.1" }
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "@types/ssh2": "^1.15.5"
+  }
 }

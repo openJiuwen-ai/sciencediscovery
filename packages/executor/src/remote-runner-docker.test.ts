@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -36,7 +36,6 @@ import { packRunnerBundle } from "./runner-bundle.js";
 const OPT_IN = process.env.SCIENCE_AGENT_DOCKER_SSH_TEST?.trim() === "1";
 const IMAGE = "sciencediscovery-ssh-test";
 const CONTAINER = `sciencediscovery-ssh-test-${process.pid}`;
-const ALIAS = "sd-remote-runner-test";
 const run = promisify(execFile);
 
 // A plain Linux machine: an SSH server, a Node runtime, and the sandbox the
@@ -52,45 +51,27 @@ EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D", "-e"]
 `;
 
-async function startContainer(root: string): Promise<{ configPath: string; port: number }> {
-  await run("ssh-keygen", ["-t", "ed25519", "-N", "", "-f", resolve(root, "id_ed25519"), "-C", "sciencediscovery-test"]);
-  await run("cp", [resolve(root, "id_ed25519.pub"), resolve(root, "authorized_keys")]);
+async function startContainer(root: string): Promise<{ keyPath: string; port: number }> {
+  const keyPath = resolve(root, "id_ed25519");
+  await run("ssh-keygen", ["-t", "ed25519", "-N", "", "-f", keyPath, "-C", "sciencediscovery-test"]);
+  await run("cp", [`${keyPath}.pub`, resolve(root, "authorized_keys")]);
   await writeFile(resolve(root, "Dockerfile"), DOCKERFILE);
   await run("docker", ["build", "-t", IMAGE, root], { maxBuffer: 32 * 1024 * 1024 });
   await run("docker", ["run", "-d", "--name", CONTAINER, "-p", "127.0.0.1:0:22", IMAGE]);
   const { stdout: published } = await run("docker", ["port", CONTAINER, "22"]);
   const port = published.split("\n")[0]?.split(":").pop()?.trim();
   assert.ok(port, "the container did not publish its SSH port");
-
-  // The product forces StrictHostKeyChecking and never rewrites the known
-  // hosts file, so the test trusts this throwaway host key in its own file.
-  const knownHosts = resolve(root, "known_hosts");
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const { stdout } = await run("ssh-keyscan", ["-p", port, "-t", "ed25519", "127.0.0.1"]).catch(() => ({ stdout: "" }));
-    if (stdout.trim()) {
-      await writeFile(knownHosts, stdout);
-      break;
-    }
+  // Wait for sshd rather than for a keyscan: nothing in this test reads the
+  // user's known_hosts, so the only thing worth waiting for is a live port.
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const ready = await run("docker", ["exec", CONTAINER, "sh", "-c", "pgrep sshd >/dev/null && echo up"])
+      .then(({ stdout }) => stdout.includes("up"))
+      .catch(() => false);
+    if (ready) break;
     await new Promise((wait) => setTimeout(wait, 500));
   }
-  // Credentials sit under `Host *` so the same machine can be reached both ways:
-  // by the alias, which carries its own HostName/Port, and by address with an
-  // explicit port and no config entry at all.
-  const configPath = resolve(root, "ssh_config");
-  await writeFile(configPath, [
-    "Host *",
-    "  User scientist",
-    `  IdentityFile ${resolve(root, "id_ed25519")}`,
-    "  IdentitiesOnly yes",
-    `  UserKnownHostsFile ${knownHosts}`,
-    "",
-    `Host ${ALIAS}`,
-    "  HostName 127.0.0.1",
-    `  Port ${port}`,
-    "",
-  ].join("\n"));
-  await chmod(resolve(root, "id_ed25519"), 0o600);
-  return { configPath, port: Number(port) };
+  await chmod(keyPath, 0o600);
+  return { keyPath, port: Number(port) };
 }
 
 test("a real SSH machine without a runner is deployed to, connected, and used", { skip: !OPT_IN }, async (context) => {
@@ -100,30 +81,41 @@ test("a real SSH machine without a runner is deployed to, connected, and used", 
     await rm(root, { force: true, recursive: true });
   });
   await mkdir(root, { recursive: true });
-  const { configPath, port } = await startContainer(root);
-  const client = new RemoteComputeClient(configPath);
+  const { keyPath, port } = await startContainer(root);
+  // The product logs in with credentials it holds itself and only trusts the
+  // key it was told to trust: no ssh_config, no agent, no user known_hosts.
+  const credentials = { privateKey: await readFile(keyPath, "utf8"), username: "scientist" };
+  const untrusted = { credentials, destination: "127.0.0.1", port };
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access);
   context.after(() => client.close());
 
-  const capabilities = await client.probe(ALIAS);
+  // An unknown key is refused, and comes back as something the settings page
+  // can offer to trust.
+  await assert.rejects(client.probe(untrusted), (error: Error) => {
+    assert.equal(error.name, "SshHostKeyUntrustedError");
+    return true;
+  });
+  const challenge = await client.readHostKey(untrusted);
+  assert.match(challenge.fingerprint, /^SHA256:[A-Za-z0-9+/]{43}$/);
+  assert.equal(challenge.changed, false);
+  const access = { ...untrusted, trustedHostKey: { algorithm: challenge.algorithm, fingerprint: challenge.fingerprint } };
+
+  const capabilities = await client.probe(access);
   assert.equal(capabilities.platform, "Linux");
   assert.equal(capabilities.runnerCommandAvailable, false, "the container must start without a runner installed");
   assert.match(capabilities.nodeVersion ?? "", /^v2[2-9]\./);
 
-  // The same machine by address and explicit port, with no config entry: an
-  // alias is not a different kind of destination, just one ssh resolves itself.
-  const byAddress = await client.probe("127.0.0.1", "sciencediscovery-runner", port);
-  assert.equal(byAddress.platform, "Linux");
-  assert.equal(byAddress.nodeVersion, capabilities.nodeVersion);
-
   const host: RemoteHostTarget = {
-    alias: ALIAS,
+    alias: "127.0.0.1",
     capabilities,
     connectionKind: "ssh",
     createdAt: new Date().toISOString(),
     id: "docker-host",
+    port,
     runnerCommand: "sciencediscovery-runner",
     status: "ready",
     updatedAt: new Date().toISOString(),
+    username: "scientist",
   };
   const bundle = await packRunnerBundle();
   const connected = await client.connectRunner(host, { bundle, localVersion: "local-build" });
@@ -152,21 +144,13 @@ test("a real SSH machine without a runner is deployed to, connected, and used", 
     "a,b\n1,2\n",
   );
 
-  // The same machine registered by address and explicit port, with no Host
-  // entry in the config to fall back on: the deployment and the tunnel have to
-  // carry that port too, not only the probe. Two connections to one machine
-  // also confirm the per-connection socket leaves them no address to collide on.
-  const byAddressHost: RemoteHostTarget = {
-    ...host,
-    alias: "127.0.0.1",
-    capabilities: byAddress,
-    id: "docker-host-by-address",
-    port,
-  };
-  const connectedByAddress = await client.connectRunner(byAddressHost, { bundle, localVersion: "local-build" });
-  assert.equal(connectedByAddress.state, "ready", connectedByAddress.error ?? "the runner did not become ready by address");
-  assert.equal((await client.runnerClient(byAddressHost.id).status()).status, "ok");
-  await client.disconnectRunner(byAddressHost.id);
+  // A second connection to the same machine: two per-connection sockets leave
+  // them no address to collide on.
+  const second: RemoteHostTarget = { ...host, id: "docker-host-second" };
+  const connectedTwice = await client.connectRunner(second, { bundle, localVersion: "local-build" });
+  assert.equal(connectedTwice.state, "ready", connectedTwice.error ?? "the second connection did not become ready");
+  assert.equal((await client.runnerClient(second.id).status()).status, "ok");
+  await client.disconnectRunner(second.id);
 
   // Disconnecting must leave no runner process behind on the machine.
   await client.disconnectRunner(host.id);

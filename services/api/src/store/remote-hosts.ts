@@ -16,6 +16,9 @@ import { isIP } from "node:net";
 
 import type { RemoteHostEndpoint, RemoteHostTarget } from "@sciencediscovery/schema";
 
+/** The secrets a remote machine can have, each stored under its own row. */
+export type RemoteHostSecretKind = "passphrase" | "password" | "privateKey" | "token";
+
 /**
  * The SSH port a machine was registered with. `null`/absent means the user left
  * it blank, which is how they ask for the destination to be resolved by their
@@ -98,6 +101,15 @@ export function normalizePersistedRemoteHost(saved: RemoteHostTarget): RemoteHos
     connectionKind,
     ...(endpoint ? { endpoint } : {}),
     ...(connectionKind === "ssh" && Number.isInteger(saved.port) ? { port: saved.port } : {}),
+    ...(connectionKind === "ssh" && typeof saved.hostName === "string" && saved.hostName.trim()
+      ? { hostName: saved.hostName.trim() }
+      : {}),
+    ...(connectionKind === "ssh" && typeof saved.username === "string" && saved.username.trim()
+      ? { username: saved.username.trim() }
+      : {}),
+    ...(saved.trustedHostKey?.algorithm && saved.trustedHostKey.fingerprint
+      ? { trustedHostKey: saved.trustedHostKey }
+      : {}),
     runnerCommand: typeof saved.runnerCommand === "string" && saved.runnerCommand.trim()
       ? saved.runnerCommand.trim()
       : "sciencediscovery-runner",

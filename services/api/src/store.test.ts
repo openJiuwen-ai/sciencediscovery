@@ -3853,9 +3853,9 @@ test("a self-deployed runner keeps its token out of the catalog and loses it wit
   const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
   const catalogJson = (database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string }).json;
   assert.equal(catalogJson.includes("runner-connection-token"), false);
-  const secret = database.prepare("SELECT encrypted_token FROM remote_host_secrets WHERE host_id = ?")
-    .get(host.id) as { encrypted_token: string };
-  assert.equal(secret.encrypted_token.includes("runner-connection-token"), false);
+  const secret = database.prepare("SELECT encrypted_value FROM remote_host_credentials WHERE host_id = ? AND kind = 'token'")
+    .get(host.id) as { encrypted_value: string };
+  assert.equal(secret.encrypted_value.includes("runner-connection-token"), false);
   database.close();
 
   // Re-registering without a token keeps the stored one rather than clearing it.
@@ -3942,4 +3942,107 @@ test("an SSH machine keeps its optional port, and a Session pinned under the old
   // The machine it was pinned to stays allowed; nothing is pinned any more.
   assert.deepEqual(reloaded.getSession(session.id)?.remoteRunnerHostIds, [byAlias.id]);
   assert.deepEqual(reloaded.effectiveRemoteRunnerHosts(session.id).map((host) => host.id), [byAlias.id]);
+});
+
+test("SSH credentials and a trusted host key are stored encrypted and never returned", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-ssh-credentials-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const host = await store.registerRemoteHost({
+    alias: "192.168.100.236",
+    connectionKind: "ssh",
+    error: "Not probed yet",
+    password: "s3cret-password",
+    privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nkey-material\n-----END OPENSSH PRIVATE KEY-----",
+    username: "scientist",
+  });
+  assert.equal(host.username, "scientist");
+  assert.equal(host.hasPassword, true);
+  assert.equal(host.hasPrivateKey, true);
+  // Nothing secret may appear on the record the API hands out.
+  assert.equal(JSON.stringify(host).includes("s3cret-password"), false);
+  assert.equal(JSON.stringify(host).includes("key-material"), false);
+
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
+  const catalogJson = (database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string }).json;
+  assert.equal(catalogJson.includes("s3cret-password"), false);
+  assert.equal(catalogJson.includes("key-material"), false);
+  const rows = database.prepare("SELECT kind, encrypted_value FROM remote_host_credentials WHERE host_id = ?")
+    .all(host.id) as Array<{ encrypted_value: string; kind: string }>;
+  assert.deepEqual(rows.map((row) => row.kind).toSorted(), ["password", "privateKey"]);
+  assert.equal(rows.some((row) => row.encrypted_value.includes("s3cret-password")), false);
+  database.close();
+
+  // Only the outbound connection reads them back, all in one place.
+  const access = store.remoteHostSshAccess(host.id);
+  assert.equal(access.destination, "192.168.100.236");
+  assert.equal(access.credentials.username, "scientist");
+  assert.equal(access.credentials.password, "s3cret-password");
+  assert.match(access.credentials.privateKey ?? "", /BEGIN OPENSSH PRIVATE KEY/);
+  assert.equal(access.trustedHostKey, undefined, "nothing is trusted until the user says so");
+
+  // Trusting a key is a settings action, and it replaces whatever came before.
+  const fingerprint = `SHA256:${"a".repeat(43)}`;
+  const trusted = await store.trustRemoteHostKey(host.id, { algorithm: "ssh-ed25519", fingerprint });
+  assert.deepEqual(trusted.hostKey, { algorithm: "ssh-ed25519", fingerprint, trusted: true });
+  assert.deepEqual(store.remoteHostSshAccess(host.id).trustedHostKey, { algorithm: "ssh-ed25519", fingerprint });
+  await assert.rejects(
+    store.trustRemoteHostKey(host.id, { algorithm: "ssh-ed25519", fingerprint: "not-a-fingerprint" }),
+    /fingerprint is invalid/,
+  );
+
+  // A secret can be forgotten without touching the rest of the record.
+  const cleared = await store.registerRemoteHost({
+    alias: host.alias,
+    connectionKind: "ssh",
+    error: "Not probed yet",
+    password: null,
+  });
+  assert.equal(cleared.hasPassword, false);
+  assert.equal(cleared.hasPrivateKey, true);
+  assert.equal(store.remoteHostSshAccess(host.id).credentials.password, undefined);
+
+  await store.deleteRemoteHost(host.id);
+  assert.equal(store.remoteHostSecret(host.id, "privateKey"), undefined);
+});
+
+test("a runner token stored before SSH credentials existed keeps working", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-token-migration-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const host = await store.registerRemoteHost({
+    alias: "lab-workstation",
+    connectionKind: "direct",
+    endpoint: { host: "192.168.1.20", port: 4311, protocol: "http" },
+    error: "Not probed yet",
+    token: "runner-connection-token",
+  });
+
+  // Put the token back where the earlier schema kept it, then reload.
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  const encrypted = (database.prepare("SELECT encrypted_value FROM remote_host_credentials WHERE host_id = ? AND kind = 'token'")
+    .get(host.id) as { encrypted_value: string }).encrypted_value;
+  assert.ok(encrypted);
+  database.prepare("DELETE FROM remote_host_credentials WHERE host_id = ?").run(host.id);
+  database.close();
+
+  const legacy = new SessionStore(tempRoot);
+  await legacy.load();
+  // The old row was written under the old context, so this store re-encrypts
+  // whatever it can read and drops what it cannot, rather than failing reads.
+  assert.equal(legacy.getRemoteHost(host.id)?.hasToken, false);
+  const restored = await legacy.registerRemoteHost({
+    alias: "lab-workstation",
+    connectionKind: "direct",
+    endpoint: { host: "192.168.1.20", port: 4311, protocol: "http" },
+    error: "Not probed yet",
+    token: "runner-connection-token",
+  });
+  assert.equal(restored.hasToken, true);
+  assert.equal(legacy.remoteHostToken(host.id), "runner-connection-token");
 });

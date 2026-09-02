@@ -19,4 +19,8 @@ packages:
   - packages/*
 allowBuilds:
   '@scarf/scarf': true
+  # ssh2 works without its optional native helpers, and building them would put
+  # a compiler in the install path for no behaviour the product depends on.
+  cpu-features: false
   esbuild: true
+  ssh2: false

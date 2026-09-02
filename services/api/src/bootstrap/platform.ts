@@ -367,7 +367,13 @@ export function createPlatformServices(
     paperService,
     permissionDecisions: new PermissionDecisionQueue(),
     provenanceRecorder,
-    remoteCompute: new RemoteComputeClient(config.sshConfigPath),
+    // Credentials and trusted host keys live in the store, so the compute
+    // client asks for them per machine instead of inheriting an ambient SSH
+    // agent or the user's known_hosts.
+    remoteCompute: new RemoteComputeClient(
+      config.sshConfigPath,
+      async (hostId) => store.remoteHostSshAccess(hostId),
+    ),
     runnerClient,
     skillCatalog,
     store,
