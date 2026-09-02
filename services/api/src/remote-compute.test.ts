@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
+import { connect, type Socket } from "node:net";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
@@ -84,6 +85,27 @@ function fakeSession(): SshSession {
     onClose: () => undefined,
     run: async (): Promise<SshCommandResult> => ({ exitCode: 0, stderr: "", stdout: "" }),
     start: async () => undefined,
+  };
+}
+
+/**
+ * A session whose forwarded stream lands on a stand-in runner, so a connection
+ * can actually go ready without any port being open on the remote machine.
+ * Records every socket path it was asked to reach.
+ */
+function tunnelledSession(runnerPort: number, forwarded: string[], started: string[]): SshSession {
+  const sockets: Socket[] = [];
+  return {
+    close: () => { for (const socket of sockets) socket.destroy(); },
+    forwardToRemoteSocket: async (socketPath: string) => {
+      forwarded.push(socketPath);
+      const socket = connect(runnerPort, "127.0.0.1");
+      sockets.push(socket);
+      return socket;
+    },
+    onClose: () => undefined,
+    run: async (): Promise<SshCommandResult> => ({ exitCode: 0, stderr: "", stdout: "" }),
+    start: async (script: string) => { started.push(script); },
   };
 }
 
@@ -376,3 +398,49 @@ test("automatic deployment is refused when the host has neither a runner nor a u
   assert.equal(transport.calls.length, 0);
 });
 
+
+test("an SSH machine's runner is reached only through the tunnel, never over a port", async (context) => {
+  // A stand-in runner on loopback, reachable in this test only because the
+  // fake session forwards to it — the product is given no address for it.
+  const runner = await startFakeRunner({ platform: "linux", token: "ignored", version: "runner-v1" });
+  context.after(() => runner.close());
+  const forwarded: string[] = [];
+  const started: string[] = [];
+  const transport = new FakeTransport([
+    { exitCode: 0, stderr: "", stdout: "data_dir=/home/scientist/.local/share/sciencediscovery/remote-runner\n" },
+  ]);
+  transport.session = tunnelledSession(runner.port, forwarded, started);
+  const target = access({ port: 2222 });
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => target, transport);
+  context.after(() => client.close());
+
+  const status = await client.connectRunner(readyRemoteHost(), { localVersion: "runner-v1" });
+  assert.equal(status.state, "ready", status.error ?? "the tunnelled runner did not become ready");
+
+  // Reaching it went through a per-connection Unix socket under the machine's
+  // data directory. Nothing addressed the machine's own network interface.
+  assert.equal(forwarded.length > 0, true, "the runner must be reached through a forwarded socket");
+  for (const path of forwarded) {
+    assert.match(path, /^\/home\/scientist\/\.local\/share\/sciencediscovery\/remote-runner\/run\/[a-f0-9]{16}\.sock$/);
+  }
+  // The command that starts the runner tells it to listen on that socket, and
+  // gives it no address or port: an SSH machine opens no runner port at all.
+  assert.equal(started.length, 1, "the runner is started once, over the same connection");
+  assert.match(started[0]!, /SCIENCE_AGENT_RUNNER_SOCKET='\/home\/scientist\/[^']*\.sock'/);
+  assert.doesNotMatch(started[0]!, /SCIENCE_AGENT_RUNNER_PORT/);
+  assert.doesNotMatch(started[0]!, /SCIENCE_AGENT_RUNNER_HOST/);
+});
+
+test("a self-deployed runner keeps using its own address and port", async (context) => {
+  const runner = await startFakeRunner({ platform: "linux", token: "correct-token", version: "runner-v1" });
+  context.after(() => runner.close());
+  // No SSH session is available at all, so a connection can only succeed by
+  // addressing the runner directly.
+  const transport = new FakeTransport([]);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+  context.after(() => client.close());
+
+  const status = await client.connectRunner(directRemoteHost(runner.port), { token: "correct-token" });
+  assert.equal(status.state, "ready", status.error ?? "the self-deployed runner did not become ready");
+  assert.equal(transport.opened.length, 0, "a self-deployed runner needs no SSH connection");
+});

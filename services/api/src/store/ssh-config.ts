@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 
@@ -69,9 +70,82 @@ export async function readSshConfigHost(configPath: string, aliasValue: string):
 }
 
 /**
+ * Every `Host` entry the user could import, so the settings page can offer a
+ * list instead of asking them to recall a name. Pattern blocks such as `Host *`
+ * are left out because they describe no particular machine, and no key material
+ * is read here — only where each entry points.
+ */
+export async function listSshConfigHosts(configPath: string): Promise<SshConfigHostImport[]> {
+  let content: string;
+  try {
+    content = await readFile(configPath, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // No SSH configuration at all is an ordinary state, not a failure.
+    if (code === "ENOENT") return [];
+    throw new Error(`Could not read the SSH configuration at ${configPath}: ${code ?? "unreadable"}`);
+  }
+  const entries: SshConfigHostImport[] = [];
+  let current: SshConfigHostImport | undefined;
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const [keyword, ...parts] = line.split(/\s+/);
+    const directive = keyword?.toLocaleLowerCase();
+    if (directive === "host") {
+      for (const name of parts) {
+        if (/^[A-Za-z0-9._-]{1,255}$/.test(name)) {
+          current = { alias: name, identityKeyReadable: false };
+          entries.push(current);
+          break;
+        }
+      }
+      if (!parts.some((name) => /^[A-Za-z0-9._-]{1,255}$/.test(name))) current = undefined;
+      continue;
+    }
+    if (!current || !parts.length) continue;
+    if (directive === "hostname") current.hostName = parts[0];
+    else if (directive === "user") current.username = parts[0];
+    else if (directive === "port") {
+      const port = Number(parts[0]);
+      if (Number.isInteger(port) && port > 0 && port <= 65_535) current.port = port;
+    }
+  }
+  return entries;
+}
+
+/**
+ * Where a freshly generated key waits between "generate" and "register".
+ *
+ * The pair is made before the machine record exists, so the material has to live
+ * somewhere the next call can name. It is written owner-only inside the product
+ * data directory and deleted as soon as it has been stored encrypted, so the
+ * loose copy is short-lived and the browser only ever sees the path.
+ */
+export function generatedKeyDirectory(dataDir: string): string {
+  return resolve(dataDir, "ssh-keys");
+}
+
+export async function stageGeneratedKey(dataDir: string, privateKey: string): Promise<string> {
+  const directory = generatedKeyDirectory(dataDir);
+  await mkdir(directory, { mode: 0o700, recursive: true });
+  const path = resolve(directory, `${randomUUID()}.key`);
+  await writeFile(path, privateKey, { mode: 0o600 });
+  return path;
+}
+
+/** Remove a staged key once it is stored encrypted; other paths are left alone. */
+export async function consumeStagedKey(dataDir: string, path: string): Promise<void> {
+  if (resolve(path).startsWith(`${generatedKeyDirectory(dataDir)}/`)) {
+    await rm(path, { force: true });
+  }
+}
+
+/**
  * The key material at `path`, when this process can read it. A key the user's
- * agent holds but the product cannot open is reported as unreadable so the
- * settings page can ask them to paste one instead of failing at connect time.
+ * agent holds but this process cannot open is reported as unreadable, so the
+ * settings page can offer a password or a generated key instead of failing at
+ * connect time.
  */
 export async function readablePrivateKey(path: string): Promise<string | undefined> {
   try {

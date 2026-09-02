@@ -24,7 +24,7 @@ import {
 } from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
 import type { RunnerBundle, RunnerClient } from "@sciencediscovery/executor";
-import { packRunnerBundle, SshHostKeyUntrustedError } from "@sciencediscovery/executor";
+import { generateSshKeyPair, packRunnerBundle, SshHostKeyUntrustedError } from "@sciencediscovery/executor";
 import {
   listProviderModels,
   ModelCatalogFetchError,
@@ -143,7 +143,13 @@ import {
 import { SessionStoreHttpError } from "../store.js";
 import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
 import { normalizeRemoteHostEndpoint } from "../store/remote-hosts.js";
-import { readSshConfigHost, readablePrivateKey } from "../store/ssh-config.js";
+import {
+  consumeStagedKey,
+  listSshConfigHosts,
+  readSshConfigHost,
+  readablePrivateKey,
+  stageGeneratedKey,
+} from "../store/ssh-config.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import {
   parseConflictPolicy,
@@ -384,22 +390,31 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     // The machine record is written before it is probed: the credentials and the
     // key the user is about to trust have to be stored somewhere for the probe
     // to use, and a failed probe should show why rather than lose what they typed.
-    let privateKey = body.privateKey;
-    if (body.privateKeyPath) {
+    // Key material never arrives from the browser: the user points at a key file
+    // this host can read, or asks the product to generate a pair afterwards.
+    let privateKey: string | null | undefined;
+    if (body.privateKeyPath === null) privateKey = null;
+    else if (body.privateKeyPath) {
       privateKey = await readablePrivateKey(body.privateKeyPath);
-      if (!privateKey) throw new ApiStatusError(400, `Could not read the private key at ${body.privateKeyPath}. Paste the key instead.`);
+      if (!privateKey) {
+        throw new ApiStatusError(
+          400,
+          `Could not read a private key at ${body.privateKeyPath}. Check the path and that ScienceDiscovery may read it, use a password, or have ScienceDiscovery generate a key for this machine.`,
+        );
+      }
+      await consumeStagedKey(config.dataDir, body.privateKeyPath);
     }
     // Typing a name that already exists in the user's ssh_config imports that
     // entry rather than making them retype it. The key material is read here and
     // stored encrypted; it never travels to the browser, and the path is not kept.
-    const imported = body.username || body.password || privateKey
+    const imported = body.username || body.password || privateKey !== undefined
       ? undefined
       : await readSshConfigHost(config.sshConfigPath, alias).catch(() => undefined);
     if (imported) {
       if (imported.identityFile && !imported.identityKeyReadable) {
         throw new ApiStatusError(
           400,
-          `Imported ${alias} from the SSH configuration, but its identity file ${imported.identityFile} is not readable by ScienceDiscovery. Paste the private key or enter a password.`,
+          `Imported ${alias} from the SSH configuration, but its identity file ${imported.identityFile} is not readable by ScienceDiscovery. Use a password, point at a readable key file, or have ScienceDiscovery generate a key for this machine.`,
         );
       }
       if (imported.identityFile) privateKey = await readablePrivateKey(imported.identityFile);
@@ -954,26 +969,58 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const host = store.getRemoteHost(remoteHostCredentialsMatch[1]!);
         if (!host) return sendError(response, 404, "Remote host not found");
         if (host.connectionKind !== "ssh") return sendError(response, 409, "Only SSH machines have login credentials");
-        const body = await readJson<{ passphrase?: string | null; password?: string | null; privateKey?: string | null; username?: string }>(request);
+        const body = await readJson<{
+          passphrase?: string | null;
+          password?: string | null;
+          privateKeyPath?: string | null;
+          username?: string;
+        }>(request);
+        let privateKey: string | null | undefined;
+        if (body.privateKeyPath === null) privateKey = null;
+        else if (body.privateKeyPath) {
+          privateKey = await readablePrivateKey(body.privateKeyPath);
+          if (!privateKey) {
+            return sendError(response, 400, `Could not read a private key at ${body.privateKeyPath}. Check the path and that ScienceDiscovery may read it, or generate a key for this machine.`);
+          }
+          await consumeStagedKey(config.dataDir, body.privateKeyPath);
+        }
         sendJson(response, 200, await store.registerRemoteHost({
           alias: host.alias,
           connectionKind: "ssh",
           ...(host.capabilities ? { capabilities: host.capabilities } : { error: host.error ?? "Not probed yet" }),
           ...(body.passphrase !== undefined ? { passphrase: body.passphrase } : {}),
           ...(body.password !== undefined ? { password: body.password } : {}),
-          ...(body.privateKey !== undefined ? { privateKey: body.privateKey } : {}),
+          ...(privateKey !== undefined ? { privateKey } : {}),
           runnerCommand: host.runnerCommand,
           ...(body.username !== undefined ? { username: body.username } : {}),
         }));
         return;
       }
+      // Generate a key pair for a machine that may not be registered yet. The
+      // response carries the public line the user installs on that machine and
+      // a path to the private half; the material itself never reaches the
+      // browser, and the staged file is removed once it is stored encrypted.
+      if (request.method === "POST" && url.pathname === "/api/remote-hosts/generate-key") {
+        const pair = generateSshKeyPair("sciencediscovery");
+        sendJson(response, 200, {
+          privateKeyPath: await stageGeneratedKey(config.dataDir, pair.privateKey),
+          publicKey: pair.publicKey,
+        });
+        return;
+      }
       // Prefill from an existing `ssh_config` entry. The product copies the
       // values into its own record; it does not connect through that file.
       if (request.method === "GET" && url.pathname === "/api/remote-hosts/ssh-config") {
+        const alias = url.searchParams.get("alias");
         try {
-          sendJson(response, 200, await readSshConfigHost(config.sshConfigPath, url.searchParams.get("alias") ?? ""));
+          // Without an alias this lists what the user could import, so the
+          // settings page can offer a choice instead of asking them to recall a
+          // name. Neither form returns key material.
+          sendJson(response, 200, alias
+            ? await readSshConfigHost(config.sshConfigPath, alias)
+            : await listSshConfigHosts(config.sshConfigPath));
         } catch (error) {
-          return sendError(response, 400, error instanceof Error ? error.message : "Could not import that SSH config host");
+          return sendError(response, 400, error instanceof Error ? error.message : "Could not read the SSH configuration");
         }
         return;
       }

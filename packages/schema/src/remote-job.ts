@@ -109,6 +109,11 @@ export interface RemoteHostTarget {
   /** Whether a private key is stored for this machine; the key never leaves the API. */
   hasPrivateKey?: boolean;
   /**
+   * One-line OpenSSH public key of the stored private key, for the user to
+   * install on the remote machine. Only ever the public half.
+   */
+  publicKey?: string;
+  /**
    * Host key the user accepted for this machine, kept in the product's own data
    * rather than the user's `known_hosts`. Without it no connection is made.
    */
@@ -194,16 +199,16 @@ export interface RegisterRemoteHostRequest {
   username?: string;
   /** Login password; stored encrypted and never returned. Send `null` to forget it. */
   password?: string | null;
-  /** OpenSSH private key material; stored encrypted and never returned. Send `null` to forget it. */
-  privateKey?: string | null;
   /** Passphrase for an encrypted private key; stored encrypted and never returned. */
   passphrase?: string | null;
   /**
-   * Read this private key file on the API host and store its contents. Used by
-   * the `ssh_config` import so the user does not have to paste a key; the path
-   * itself is not kept, only the material.
+   * Read this private key file on the API host and store its contents.
+   *
+   * Key material is never submitted through the browser: either the user points
+   * at a key file this host can read, or the product generates a pair for the
+   * machine. Send `null` to forget the stored key.
    */
-  privateKeyPath?: string;
+  privateKeyPath?: string | null;
   /** Accept this host key as part of the same call, so "trust and continue" is one retry. */
   trustHostKey?: { algorithm: string; fingerprint: string };
 }

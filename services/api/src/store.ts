@@ -210,6 +210,7 @@ import {
   remoteRunnerUnusableReason,
   type RemoteHostSecretKind,
 } from "./store/remote-hosts.js";
+import { openSshPublicKey } from "@sciencediscovery/executor";
 import { planStandaloneProfileMigration, providerSecretKey, validateLiveProvider } from "./store/providers.js";
 import {
   knownConnectorIdSet,
@@ -3348,11 +3349,16 @@ export class SessionStore {
 
   /** Which secrets exist for a machine; the values themselves never leave the API. */
   private describeRemoteHostSecrets(host: RemoteHostTarget): RemoteHostTarget {
+    const privateKey = this.remoteHostSecret(host.id, "privateKey");
+    // Only the public half is ever described: it is what the user has to install
+    // on the remote machine, and it is safe to show.
+    const publicKey = privateKey ? openSshPublicKey(privateKey, `sciencediscovery@${host.alias}`) : undefined;
     return {
       ...host,
       hasPassword: this.remoteHostSecret(host.id, "password") !== undefined,
-      hasPrivateKey: this.remoteHostSecret(host.id, "privateKey") !== undefined,
+      hasPrivateKey: privateKey !== undefined,
       hasToken: this.remoteHostSecret(host.id, "token") !== undefined,
+      ...(publicKey ? { publicKey } : {}),
       ...(host.trustedHostKey
         ? {
           hostKey: {
@@ -3408,6 +3414,20 @@ export class SessionStore {
         ? { trustedHostKey: { algorithm: host.trustedHostKey.algorithm, fingerprint: host.trustedHostKey.fingerprint } }
         : {}),
     };
+  }
+
+  /**
+   * Store key material for a machine: either a key file this host could read or
+   * a pair the product generated. The material only ever arrives from the API
+   * process itself — it is never accepted from a browser.
+   */
+  async setRemoteHostPrivateKey(hostId: string, privateKey: string | null): Promise<RemoteHostTarget> {
+    const host = this.catalog.remoteHosts.find((candidate) => candidate.id === hostId);
+    if (!host) throw new Error("Remote host not found");
+    this.setRemoteHostSecret(hostId, "privateKey", privateKey);
+    host.updatedAt = new Date().toISOString();
+    await this.saveCatalog();
+    return this.describeRemoteHostSecrets(structuredClone(host));
   }
 
   /** Record the key a user accepted for a machine, replacing any earlier one. */
@@ -3560,7 +3580,9 @@ export class SessionStore {
 
   private setRemoteHostSecret(hostId: string, kind: RemoteHostSecretKind, value: string | null): void {
     if (!this.database || !this.secretKey) throw new Error("Remote host credential storage is not initialized");
-    const normalized = value === null ? "" : value.trim();
+    // Key material is stored byte for byte: an OpenSSH key ends in a newline
+    // and trimming it would hand the SSH client something it may not parse.
+    const normalized = value === null ? "" : kind === "privateKey" ? (value.trim() ? value : "") : value.trim();
     if (!normalized) {
       this.database.prepare("DELETE FROM remote_host_credentials WHERE host_id = ? AND kind = ?").run(hostId, kind);
       return;

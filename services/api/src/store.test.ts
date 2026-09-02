@@ -37,6 +37,7 @@ import {
 } from "./store.js";
 import { listWorkspaceFiles, workspaceFileProvenance } from "./artifacts/index.js";
 import { API_TEST_CATALOG_RECORDS, installApiTestModelCatalog } from "./model-catalog.fixture.js";
+import { generateSshKeyPair } from "@sciencediscovery/executor";
 import { encryptModelApiToken } from "./store/secrets.js";
 import { normalizeMemoryGraphSettings } from "./store/settings.js";
 
@@ -3951,20 +3952,23 @@ test("SSH credentials and a trusted host key are stored encrypted and never retu
   const store = new SessionStore(tempRoot);
   await store.load();
 
+  const generated = generateSshKeyPair("sciencediscovery@192.168.100.236");
   const host = await store.registerRemoteHost({
     alias: "192.168.100.236",
     connectionKind: "ssh",
     error: "Not probed yet",
     password: "s3cret-password",
-    privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nkey-material\n-----END OPENSSH PRIVATE KEY-----",
+    privateKey: generated.privateKey,
     username: "scientist",
   });
   assert.equal(host.username, "scientist");
   assert.equal(host.hasPassword, true);
   assert.equal(host.hasPrivateKey, true);
-  // Nothing secret may appear on the record the API hands out.
+  // The public half is described so the user can install it on the machine;
+  // the private half never appears on the record the API hands out.
+  assert.equal(host.publicKey, generated.publicKey);
   assert.equal(JSON.stringify(host).includes("s3cret-password"), false);
-  assert.equal(JSON.stringify(host).includes("key-material"), false);
+  assert.equal(JSON.stringify(host).includes("PRIVATE KEY"), false);
 
   const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
   const catalogJson = (database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string }).json;
@@ -3974,14 +3978,22 @@ test("SSH credentials and a trusted host key are stored encrypted and never retu
     .all(host.id) as Array<{ encrypted_value: string; kind: string }>;
   assert.deepEqual(rows.map((row) => row.kind).toSorted(), ["password", "privateKey"]);
   assert.equal(rows.some((row) => row.encrypted_value.includes("s3cret-password")), false);
+  assert.equal(catalogJson.includes("PRIVATE KEY"), false);
   database.close();
+
+  // Replacing the key replaces the public half that is shown with it.
+  const replaced = generateSshKeyPair("sciencediscovery@192.168.100.236");
+  const rekeyed = await store.setRemoteHostPrivateKey(host.id, replaced.privateKey);
+  assert.equal(rekeyed.publicKey, replaced.publicKey);
+  assert.notEqual(rekeyed.publicKey, generated.publicKey);
+  assert.equal(store.remoteHostSshAccess(host.id).credentials.privateKey, replaced.privateKey);
 
   // Only the outbound connection reads them back, all in one place.
   const access = store.remoteHostSshAccess(host.id);
   assert.equal(access.destination, "192.168.100.236");
   assert.equal(access.credentials.username, "scientist");
   assert.equal(access.credentials.password, "s3cret-password");
-  assert.match(access.credentials.privateKey ?? "", /BEGIN OPENSSH PRIVATE KEY/);
+  assert.equal(access.credentials.privateKey, replaced.privateKey);
   assert.equal(access.trustedHostKey, undefined, "nothing is trusted until the user says so");
 
   // Trusting a key is a settings action, and it replaces whatever came before.
