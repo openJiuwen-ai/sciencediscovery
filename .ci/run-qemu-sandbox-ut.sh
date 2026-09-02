@@ -56,7 +56,7 @@ record_exit() {
 }
 trap record_exit EXIT
 
-for command in apt-get curl dpkg-deb git python3 sha256sum tar timeout; do
+for command in curl git python3 sha256sum tar timeout; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "FATAL: required host command '$command' is unavailable." >&2
     exit 1
@@ -73,61 +73,103 @@ echo "kvm    : $([ -e /dev/kvm ] && echo present-but-unused || echo absent-and-n
 echo "mode   : full-system emulation with a guest kernel"
 
 qemu_root="$cache_dir/qemu-root"
-qemu_binary=
-qemu_img=
-qemu_env=()
+qemu_command=()
+qemu_img_command=()
 qemu_firmware=()
 if command -v qemu-system-x86_64 >/dev/null 2>&1 \
   && command -v qemu-img >/dev/null 2>&1; then
-  qemu_binary="$(command -v qemu-system-x86_64)"
-  qemu_img="$(command -v qemu-img)"
+  qemu_command=("$(command -v qemu-system-x86_64)")
+  qemu_img_command=("$(command -v qemu-img)")
+  echo "Using QEMU provided by the host"
 else
-  package_dir="$cache_dir/qemu-packages"
-  mkdir -p "$package_dir" "$qemu_root"
-  packages=(
-    ipxe-qemu
-    libdaxctl1
-    libfdt1
-    libkmod2
-    libndctl6
-    libpmem1
-    qemu-system-common
-    qemu-system-data
-    qemu-system-x86
-    qemu-utils
-    seabios
-  )
-  if ! compgen -G "$package_dir/qemu-system-x86_*.deb" >/dev/null; then
-    echo "Downloading QEMU packages without installing them on the host"
-    (
-      cd "$package_dir"
-      apt-get download "${packages[@]}"
-    )
-  fi
-  rm -rf -- "$qemu_root"
-  mkdir -p "$qemu_root"
-  for package_file in "$package_dir"/*.deb; do
-    dpkg-deb --extract "$package_file" "$qemu_root"
-  done
+  alpine_release=v3.22
+  alpine_bootstrap_release=v3.23
+  alpine_mirror=https://mirrors.tuna.tsinghua.edu.cn/alpine
+  bootstrap_dir="$cache_dir/alpine-bootstrap"
+  apk_tools_file="$cache_dir/apk-tools-static-3.0.8-r0.apk"
+  apk_tools_url="$alpine_mirror/$alpine_bootstrap_release/main/x86_64/apk-tools-static-3.0.8-r0.apk"
+  apk_tools_sha256=2edccd3267ce540f8d2371a0f394e84b40d8348ecc28425309e6d07079ed1259
+  alpine_keys_file="$cache_dir/alpine-keys-2.5-r0.apk"
+  alpine_keys_url="$alpine_mirror/$alpine_release/main/x86_64/alpine-keys-2.5-r0.apk"
+  alpine_keys_sha256=1069fa68769607690e46b0d689f1ad9b5e346be2752ece313685b4f29ec70e25
+  alpine_signing_key=alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
+
+  download_verified() {
+    local url=$1
+    local destination=$2
+    local expected_sha256=$3
+    if [ -f "$destination" ] \
+      && printf '%s  %s\n' "$expected_sha256" "$destination" | sha256sum --check --status; then
+      return
+    fi
+    rm -f -- "$destination" "$destination.part"
+    curl --fail --location --retry 3 --show-error \
+      "$url" --output "$destination.part"
+    printf '%s  %s\n' "$expected_sha256" "$destination.part" \
+      | sha256sum --check --status \
+      || { echo "FATAL: checksum mismatch for $url" >&2; exit 1; }
+    mv -- "$destination.part" "$destination"
+  }
+
+  extract_archive_member() {
+    local archive=$1
+    shift
+    local extract_log="$cache_dir/archive-extract.log"
+    if ! tar -xzf "$archive" -C "$bootstrap_dir" "$@" 2> "$extract_log"; then
+      cat "$extract_log" >&2
+      echo "FATAL: could not extract the portable QEMU bootstrap." >&2
+      exit 1
+    fi
+  }
+
   qemu_binary="$qemu_root/usr/bin/qemu-system-x86_64"
   qemu_img="$qemu_root/usr/bin/qemu-img"
-  qemu_env=(
-    "LD_LIBRARY_PATH=$qemu_root/usr/lib/x86_64-linux-gnu"
-    "QEMU_MODULE_DIR=$qemu_root/usr/lib/x86_64-linux-gnu/qemu"
+  qemu_loader="$qemu_root/lib/ld-musl-x86_64.so.1"
+  if [ ! -x "$qemu_binary" ] || [ ! -x "$qemu_img" ] || [ ! -x "$qemu_loader" ]; then
+    echo "Preparing signed Alpine QEMU packages without installing host packages"
+    download_verified "$apk_tools_url" "$apk_tools_file" "$apk_tools_sha256"
+    download_verified "$alpine_keys_url" "$alpine_keys_file" "$alpine_keys_sha256"
+    rm -rf -- "$bootstrap_dir" "$qemu_root"
+    mkdir -p "$bootstrap_dir" "$qemu_root"
+    extract_archive_member "$apk_tools_file" sbin/apk.static
+    extract_archive_member \
+      "$alpine_keys_file" "usr/share/apk/keys/$alpine_signing_key"
+    "$bootstrap_dir/sbin/apk.static" \
+      --root "$qemu_root" \
+      --arch x86_64 \
+      --keys-dir "$bootstrap_dir/usr/share/apk/keys" \
+      --repository "$alpine_mirror/$alpine_release/main" \
+      --repository "$alpine_mirror/$alpine_release/community" \
+      --initdb \
+      --no-cache \
+      --no-scripts \
+      --no-chown \
+      add qemu-system-x86_64 qemu-img
+  else
+    echo "Using the cached portable QEMU payload"
+  fi
+  qemu_command=(
+    env "QEMU_MODULE_DIR=$qemu_root/usr/lib/qemu"
+    "$qemu_loader"
+    --library-path "$qemu_root/lib:$qemu_root/usr/lib"
+    "$qemu_binary"
+  )
+  qemu_img_command=(
+    env "QEMU_MODULE_DIR=$qemu_root/usr/lib/qemu"
+    "$qemu_loader"
+    --library-path "$qemu_root/lib:$qemu_root/usr/lib"
+    "$qemu_img"
   )
   qemu_firmware=(
     -L "$qemu_root/usr/share/qemu"
-    -bios "$qemu_root/usr/share/seabios/bios-256k.bin"
+    -bios "$qemu_root/usr/share/qemu/bios-256k.bin"
   )
 fi
-if ! env "${qemu_env[@]}" "$qemu_binary" --version; then
+if ! "${qemu_command[@]}" --version; then
   echo "FATAL: the user-space QEMU bootstrap is not runnable on this host." >&2
-  if command -v ldd >/dev/null 2>&1; then
-    ldd "$qemu_binary" || true
-  fi
   exit 1
 fi
-env "${qemu_env[@]}" "$qemu_img" --version
+"${qemu_img_command[@]}" --version
 
 image_name=noble-server-cloudimg-amd64.img
 image_path="$cache_dir/$image_name"
@@ -148,7 +190,7 @@ fi
 # gives package installation and pnpm enough room while keeping the pinned base
 # immutable; Ubuntu cloud-init grows its root partition and filesystem at boot.
 rm -f -- "$guest_disk"
-env "${qemu_env[@]}" "$qemu_img" create \
+"${qemu_img_command[@]}" create \
   -f qcow2 -F qcow2 -b "$image_path" "$guest_disk" 16G
 
 git -C "$repo_root" archive --format=tar HEAD > "$seed_dir/source.tar"
@@ -191,12 +233,12 @@ echo "accelerator : tcg (KVM is not requested)"
 echo "resources   : 4 vCPU, 4096 MiB"
 echo "timeout     : ${QEMU_TIMEOUT_SECONDS:-7200} seconds"
 set +e
-env "${qemu_env[@]}" \
+env \
   CI_BINARY_CACHE_URL="${CI_BINARY_CACHE_URL:-}" \
   CI_NPM_REGISTRY="${CI_NPM_REGISTRY:-}" \
   CI_PYPI_INDEX="${CI_PYPI_INDEX:-}" \
   timeout --signal=TERM "${QEMU_TIMEOUT_SECONDS:-7200}" \
-  "$qemu_binary" \
+  "${qemu_command[@]}" \
   "${qemu_firmware[@]}" \
   -machine q35 \
   -accel tcg,thread=multi \
