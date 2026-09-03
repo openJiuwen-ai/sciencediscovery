@@ -289,6 +289,13 @@ function cancelRun(api: TestApi, sessionId: string): Promise<Response> {
   });
 }
 
+function cancelReviewer(api: TestApi, sessionId: string): Promise<Response> {
+  return fetch(`${api.origin}/api/sessions/${sessionId}/reviewer-specialist/cancel`, {
+    headers: authorization,
+    method: "POST",
+  });
+}
+
 function cancelRunById(api: TestApi, sessionId: string, runId: string): Promise<Response> {
   return fetch(`${api.origin}/api/sessions/${sessionId}/runs/${runId}/cancel`, {
     headers: authorization,
@@ -452,6 +459,22 @@ test("stopping a stuck run ends the stream as cancelled and frees the Session", 
   assert.equal(queuedCancel.status, 200, "the queued follow-up becomes the current run and can be stopped");
   assert.ok((await queuedStream).includes("run.cancelled"));
   assert.equal((await cancelRun(api, sessionId)).status, 200, "a repeated Stop after the queue drains is a safe no-op");
+});
+
+test("Reviewer stop has its own route and does not cancel an Agent run", async (context) => {
+  const api = await startApi(context, "reviewer-stop-isolation");
+  const sessionId = await createSession(api, "Reviewer isolation");
+  const run = await startRun(api, sessionId, "Analyze the dataset");
+  const streamed = readUntilTerminal(run);
+  await waitForGatewayTurn(api, 1);
+
+  const reviewerCancel = await cancelReviewer(api, sessionId);
+  assert.equal(reviewerCancel.status, 409, "the dedicated route is registered and only acts on reviews");
+  assert.match((await reviewerCancel.json() as { error: string }).error, /No Reviewer Specialist review is active/);
+  assert.equal((await listRuns(api, sessionId))[0]?.status, "running", "Reviewer Stop leaves the Agent run alone");
+
+  assert.equal((await cancelRun(api, sessionId)).status, 200);
+  assert.ok((await streamed).includes("run.cancelled"));
 });
 
 test("a stuck Session does not block runs in another Session", async (context) => {

@@ -26,7 +26,6 @@ const baseInput = {
   hasModel: true,
   message: "Summarize the dataset",
   modelsAvailable: true,
-  reviewerCheckpointRunning: false,
   runningSessionIds: new Set<string>(),
   sessionArchived: false,
   stoppingSessionIds: new Set<string>(),
@@ -46,10 +45,10 @@ test("the current Session offers Stop and keeps submit available for queueing", 
   );
 });
 
-test("a running manual Reviewer exposes Stop without pretending an Agent run is queued", () => {
+test("a running Reviewer does not expose the main Agent Stop control", () => {
   assert.deepEqual(
-    resolveComposerRunAction({ ...baseInput, reviewerCheckpointRunning: true }),
-    { noModelReason: null, runDisabled: false, runLabel: "Run analysis", stopDisabled: false, stopVisible: true },
+    resolveComposerRunAction(baseInput),
+    { noModelReason: null, runDisabled: false, runLabel: "Run analysis", stopDisabled: false, stopVisible: false },
   );
 });
 

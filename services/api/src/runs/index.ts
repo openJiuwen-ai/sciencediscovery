@@ -2147,19 +2147,11 @@ export async function cancelCurrentSessionRun(
     sendError(response, 404, "Session not found");
     return;
   }
-  // The generic run cancellation remains backward-compatible: it still stops
-  // both Reviewer work and the main Agent. The Reviewer-only endpoint above is
-  // used by the dedicated side-card Stop review button.
-  const reviewerCancelled = await cancelReviewerSpecialistForSession(store, sessionId);
   const active = await findCurrentCancelableRun(store, sessionId);
   if (!active) {
-    if (reviewerCancelled) {
-      sendJson(response, legacyResponse ? 202 : 200, legacyResponse
-        ? { cancelled: true, sessionId }
-        : { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);
-      return;
-    }
-    sendJson(response, legacyResponse ? 202 : 200, { cancelled: true, sessionId } satisfies CancelRunResult);
+    // Reviewer checkpoints use their own cancellation endpoint. A main Agent
+    // stop must not terminate an independent review.
+    sendError(response, 409, "No run is active for this session");
     return;
   }
   cancelledRuns.add(active.id);

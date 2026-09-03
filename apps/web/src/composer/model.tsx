@@ -35,7 +35,6 @@ export interface ComposerRunActionInput {
   hasModel: boolean;
   message: string;
   modelsAvailable: boolean;
-  reviewerCheckpointRunning: boolean;
   runningSessionIds: ReadonlySet<string>;
   sessionArchived: boolean;
   stoppingSessionIds: ReadonlySet<string>;
@@ -61,7 +60,9 @@ const COMPOSER_NO_MODEL_NOTICE_ID = "composer-no-model-notice";
 export function resolveComposerRunAction(input: ComposerRunActionInput): ComposerRunAction {
   const sessionId = input.activeSessionId;
   const agentRunActive = Boolean(sessionId && input.runningSessionIds.has(sessionId));
-  const stopVisible = Boolean(sessionId && (agentRunActive || input.reviewerCheckpointRunning));
+  // The composer Stop controls only the main Agent's SessionRun. Reviewer
+  // checkpoints have their own Stop review control in the workspace rail.
+  const stopVisible = agentRunActive;
   const noModelReason = sessionId && !input.sessionArchived && !input.hasModel
     ? input.modelsAvailable ? "no-session-model" : "no-system-models"
     : null;

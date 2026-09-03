@@ -3402,26 +3402,15 @@ export function App() {
 
   async function stopRun(sessionId = activeSessionId): Promise<void> {
     const hasAgentRun = Boolean(sessionId && runningSessionIds.has(sessionId));
-    const hasReviewerCheckpoint = Boolean(sessionId === activeSessionId && reviewerCheckpointRunning);
-    if (!sessionId || (!hasAgentRun && !hasReviewerCheckpoint) || stoppingSessionIds.has(sessionId)) return;
+    if (!sessionId || !hasAgentRun || stoppingSessionIds.has(sessionId)) return;
     setStoppingSessionIds((current) => new Set(current).add(sessionId));
-    try {
-      await requestRunStop({
-        cancelRun: (target) => client.cancelCurrentRun(target),
-        controllers: runAbortControllers.current,
-        sessionId,
-      });
-    } finally {
-      // A manual Reviewer has no Agent stream to clear this state. Its persisted
-      // checkpoint is refreshed separately and will render the cancellation.
-      if (!hasAgentRun) {
-        setStoppingSessionIds((current) => {
-          const next = new Set(current);
-          next.delete(sessionId);
-          return next;
-        });
-      }
-    }
+    // The main run stream clears this state on its terminal event. Reviewer
+    // cancellation is deliberately handled by its own independent state.
+    await requestRunStop({
+      cancelRun: (target) => client.cancelCurrentRun(target),
+      controllers: runAbortControllers.current,
+      sessionId,
+    });
   }
 
   async function openWorkspaceFile(file: WorkspaceFile): Promise<void> {
@@ -3878,7 +3867,6 @@ export function App() {
     hasModel: Boolean(activeModel),
     message,
     modelsAvailable: models.length > 0,
-    reviewerCheckpointRunning,
     runningSessionIds,
     sessionArchived,
     stoppingSessionIds,
