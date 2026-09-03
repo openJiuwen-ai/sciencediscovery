@@ -394,7 +394,7 @@ export function BuiltInReviewerSpecialist({
           role="switch"
           title={enabled ? "Reviewer Specialist is On. Click to turn it Off." : "Reviewer Specialist is Off. Click to turn it On."}
           type="button"
-        ><i aria-hidden="true">{enabled ? "On" : "Off"}</i></button>
+        ><i aria-hidden="true" /></button>
       </div>
     </div>
   </section>;

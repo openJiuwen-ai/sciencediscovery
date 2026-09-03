@@ -840,10 +840,10 @@
 .builtin-research-actions { display: flex; gap: 6px; flex: 0 0 auto; }
 .builtin-research-action { border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); cursor: pointer; font-size: 11px; font-weight: 700; padding: 4px 10px; }
 .builtin-research-action:disabled { cursor: wait; opacity: .5; }
-.reviewer-specialist-settings { display: flex; align-items: center; gap: 10px; }
+.reviewer-specialist-settings { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; min-width: 0; }
 .reviewer-specialist-settings select { min-width: 84px; height: 32px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 4px 28px 4px 10px; color: var(--text-heading); cursor: pointer; font-size: 12px; font-weight: 700; }
 .reviewer-specialist-settings select:disabled { cursor: wait; opacity: .6; }
-.specialist-switch { position: relative; width: 60px; height: 28px; border: 0; border-radius: 999px; background: var(--surface-track); padding: 2px; cursor: pointer; transition: background var(--motion-fast); }
+.specialist-switch { position: relative; flex: 0 0 60px; width: 60px; height: 28px; overflow: hidden; border: 0; border-radius: 999px; background: var(--surface-track); padding: 2px; cursor: pointer; transition: background var(--motion-fast); }
 .specialist-switch i { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .2); color: var(--muted); font-size: 9px; font-style: normal; font-weight: 800; line-height: 1; transition: transform var(--motion-fast), color var(--motion-fast); }
 .specialist-switch.on { background: linear-gradient(90deg, #286de0, #53cfe0); }
 .specialist-switch.on i { transform: translateX(32px); color: #1f66bb; }
