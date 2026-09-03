@@ -1081,6 +1081,8 @@ export function App() {
   const [reviewerSpecialistSettings, setReviewerSpecialistSettings] = useState<ReviewerSpecialistSettings>();
   /** Manual Reviewer activity is isolated per Session, matching the API queue. */
   const [manualReviewerBusyBySession, setManualReviewerBusyBySession] = useState<Record<string, true>>({});
+  /** Cancelling a review is independent from stopping the main Agent run. */
+  const [stoppingReviewerSessionIds, setStoppingReviewerSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [plans, setPlans] = useState<SessionPlan[]>([]);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [openSubagentId, setOpenSubagentId] = useState<string>();
@@ -2709,6 +2711,10 @@ export function App() {
         });
       }
       setError(undefined);
+      // The stop endpoint marks this checkpoint terminal before the original
+      // manual-review request unwinds. Treat that expected result as a user
+      // cancellation rather than surfacing a second, misleading failure toast.
+      if (result.message.reviewerCheckpoint?.error === "Review cancelled by user") return;
       if (result.error) {
         pushToast("error", "Review failed", result.error);
         return;
@@ -2736,6 +2742,28 @@ export function App() {
       setManualReviewerBusyBySession((current) => {
         const { [targetSessionId]: _completed, ...remaining } = current;
         return remaining;
+      });
+    }
+  }
+
+  async function stopReviewerSpecialist(): Promise<void> {
+    const targetSessionId = activeSessionId;
+    if (!targetSessionId
+      || !reviewerCheckpointRunning
+      || stoppingReviewerSessionIds.has(targetSessionId)) return;
+    setStoppingReviewerSessionIds((current) => new Set(current).add(targetSessionId));
+    try {
+      await client.cancelReviewerSpecialist(targetSessionId);
+      setError(undefined);
+      pushToast("info", "Review stopped", "Reviewer Specialist review was stopped.");
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : "Could not stop Reviewer Specialist";
+      pushToast("error", "Could not stop review", detail);
+    } finally {
+      setStoppingReviewerSessionIds((current) => {
+        const next = new Set(current);
+        next.delete(targetSessionId);
+        return next;
       });
     }
   }
@@ -4585,7 +4613,9 @@ export function App() {
               busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning}
               disabled={sessionArchived}
               onRun={() => void runManualReviewerSpecialist()}
+              onStop={() => void stopReviewerSpecialist()}
               settings={reviewerSpecialistSettings}
+              stopping={stoppingReviewerSessionIds.has(session.id)}
             /> : null}
 
             {session ? (

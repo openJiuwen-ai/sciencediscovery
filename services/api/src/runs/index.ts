@@ -2089,20 +2089,16 @@ export async function cancelQueuedRunBeforeExecution(
   return cancelled;
 }
 
-export async function cancelCurrentSessionRun(
-  response: ServerResponse,
+/**
+ * Reviewer checkpoints are not SessionRuns: a manual review is a request-scoped
+ * operation, while an Agent-triggered review is nested inside an Agent run.
+ * Keep their cancellation isolated so a user can stop review work without
+ * stopping the main Agent.
+ */
+async function cancelReviewerSpecialistForSession(
   store: SessionStore,
   sessionId: string,
-  legacyResponse = false,
-): Promise<void> {
-  if (!store.getSession(sessionId)) {
-    sendError(response, 404, "Session not found");
-    return;
-  }
-  // This gate persists independently of the foreground request or Runner process.
-  store.notifications.stop(sessionId);
-  // Manual Reviewer runs do not create a SessionRun, so Stop must cancel its
-  // own per-Session controller as well as the main Agent run when one exists.
+): Promise<boolean> {
   const reviewerCancelled = cancelReviewerCheckpoints(sessionId);
   // The controller map is intentionally in-process. If an API process was
   // restarted (or a request was routed to a sibling process), there can still
@@ -2121,9 +2117,43 @@ export async function cancelCurrentSessionRun(
       });
     }
   }
+  return reviewerCancelled || runningReviewerMessages.length > 0;
+}
+
+/** Stop only the active Reviewer Specialist work for a Session. */
+export async function cancelReviewerSpecialist(
+  response: ServerResponse,
+  store: SessionStore,
+  sessionId: string,
+): Promise<void> {
+  if (!store.getSession(sessionId)) {
+    sendError(response, 404, "Session not found");
+    return;
+  }
+  if (!await cancelReviewerSpecialistForSession(store, sessionId)) {
+    sendError(response, 409, "No Reviewer Specialist review is active for this session");
+    return;
+  }
+  sendJson(response, 200, { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);
+}
+
+export async function cancelCurrentSessionRun(
+  response: ServerResponse,
+  store: SessionStore,
+  sessionId: string,
+  legacyResponse = false,
+): Promise<void> {
+  if (!store.getSession(sessionId)) {
+    sendError(response, 404, "Session not found");
+    return;
+  }
+  // The generic run cancellation remains backward-compatible: it still stops
+  // both Reviewer work and the main Agent. The Reviewer-only endpoint above is
+  // used by the dedicated side-card Stop review button.
+  const reviewerCancelled = await cancelReviewerSpecialistForSession(store, sessionId);
   const active = await findCurrentCancelableRun(store, sessionId);
   if (!active) {
-    if (reviewerCancelled || runningReviewerMessages.length) {
+    if (reviewerCancelled) {
       sendJson(response, legacyResponse ? 202 : 200, legacyResponse
         ? { cancelled: true, sessionId }
         : { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);

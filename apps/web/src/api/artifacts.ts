@@ -14,6 +14,7 @@
 
 import type {
   AnalyzePaperVisionRequest,
+  CancelRunResult,
   Claim,
   ArtifactDerivation,
   ArtifactJob,
@@ -357,6 +358,12 @@ export class ArtifactsApiClient extends RunsApiClient {
   runReviewerSpecialist(sessionId: string, messageId: string): Promise<ManualReviewerSpecialistResult> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/reviewer-specialist/review`, {
       body: JSON.stringify({ messageId }),
+      method: "POST",
+    });
+  }
+
+  cancelReviewerSpecialist(sessionId: string): Promise<CancelRunResult> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/reviewer-specialist/cancel`, {
       method: "POST",
     });
   }

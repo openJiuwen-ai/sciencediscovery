@@ -234,6 +234,7 @@ import { contentTypeForPath, serveStatic } from "./static.js";
 import {
   ApiStatusError,
   cancelCurrentSessionRun,
+  cancelReviewerSpecialist,
   cancelSessionRun,
   stopSessionSubagent,
   createSkillEvolutionRun,
@@ -2336,6 +2337,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const sessionId = artifactReviewsMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
         sendJson(response, 200, await store.listArtifactReviews(sessionId));
+        return;
+      }
+      const cancelReviewerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/cancel$/);
+      if (cancelReviewerMatch && request.method === "POST") {
+        await cancelReviewerSpecialist(response, store, cancelReviewerMatch[1]!);
         return;
       }
       const manualReviewerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/review$/);

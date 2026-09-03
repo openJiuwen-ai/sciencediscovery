@@ -24,6 +24,7 @@ test("Reviewer control card shows read-only settings and the manual action", () 
   const html = renderToStaticMarkup(createElement(ReviewerControlCard, {
     busy: false,
     onRun: () => undefined,
+    onStop: () => undefined,
     settings: { enabled: true, level: "deep" },
   }));
 
@@ -37,22 +38,38 @@ test("Reviewer control card shows read-only settings and the manual action", () 
   assert.doesNotMatch(html, /role="switch"/);
 });
 
-test("Reviewer control card exposes Reviewing while a review is running", () => {
+test("Reviewer control card exposes a dedicated stop action while a review is running", () => {
   const html = renderToStaticMarkup(createElement(ReviewerControlCard, {
     busy: true,
     onRun: () => undefined,
+    onStop: () => undefined,
     settings: { enabled: true, level: "quick" },
   }));
 
-  assert.match(html, /Reviewing…/);
-  assert.match(html, /disabled=""/);
+  assert.match(html, />Stop review</);
+  assert.match(html, /danger-button/);
+  assert.doesNotMatch(html, /disabled=""/);
   assert.doesNotMatch(html, />Run review</);
+});
+
+test("Reviewer control card disables its stop action only while cancellation is pending", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerControlCard, {
+    busy: true,
+    onRun: () => undefined,
+    onStop: () => undefined,
+    settings: { enabled: true, level: "quick" },
+    stopping: true,
+  }));
+
+  assert.match(html, />Stopping review…</);
+  assert.match(html, /disabled=""/);
 });
 
 test("Reviewer control card is absent when settings are off", () => {
   const html = renderToStaticMarkup(createElement(ReviewerControlCard, {
     busy: false,
     onRun: () => undefined,
+    onStop: () => undefined,
     settings: { enabled: false, level: "deep" },
   }));
 

@@ -21,12 +21,16 @@ export function ReviewerControlCard({
   busy,
   disabled = false,
   onRun,
+  onStop,
   settings,
+  stopping = false,
 }: {
   busy: boolean;
   disabled?: boolean;
   onRun: () => void;
+  onStop: () => void;
   settings?: ReviewerSpecialistSettings;
+  stopping?: boolean;
 }) {
   const enabled = settings?.enabled ?? false;
   const level = settings?.level ?? "quick";
@@ -52,11 +56,11 @@ export function ReviewerControlCard({
         <strong>{levelLabel}</strong>
       </div>
       <button
-        className="primary-button"
-        disabled={busy || disabled || !settings}
-        onClick={onRun}
+        className={busy ? "danger-button" : "primary-button"}
+        disabled={busy ? stopping : disabled || !settings}
+        onClick={busy ? onStop : onRun}
         type="button"
-      >{busy ? "Reviewing…" : "Run review"}</button>
+      >{busy ? (stopping ? "Stopping review…" : "Stop review") : "Run review"}</button>
     </section>
   );
 }
