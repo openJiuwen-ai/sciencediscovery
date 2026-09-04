@@ -26,15 +26,28 @@ comment the bot posts on it are in
 
 ## What runs where
 
-Two pipelines exist and neither runs everything.
+Three pipelines exist and none runs everything.
 
-| Pipeline | Trigger | UT | ST | E2E | Binary packages |
+| Pipeline | Trigger | UT | ST | E2E | Binary/resource output |
 | --- | --- | --- | --- | --- | --- |
-| CodeArts — `.codearts/workflow/codearts-pipeline.yml` | merge request to `main` on gitcode.com (open, update, merge, reopen) or a `rerun` comment on it | `ci:ut:core` | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts — `.codearts/workflow/codearts-pipeline.yml` | merge request to `main` on gitcode.com (open, update, reopen); comment `rerun` or update and push the PR source branch to start a fresh run | `ci:ut:core` + `ci:ut:runner` in QEMU TCG | `ci:st` | — | x86_64 + aarch64 validation packages; smoke is host-dependent |
+| CodeArts resources — `.codearts/workflow/codearts-resources-pipeline.yml` on `ci/codearts-resources` | push to `ci/codearts-resources` | — | — | — | checksum-pinned toolchains and QEMU image uploaded to stable OBS keys |
 | GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
-CodeArts's default pool cannot create user namespaces, so Runner UT and E2E
-run only on GitHub or on a self-hosted pool that passes a bubblewrap probe.
+CodeArts's default pool cannot create user namespaces, so it cannot run Runner
+UT or E2E directly. The CodeArts pipeline runs the unchanged
+`ci:ut:runner` layer in a checksum-pinned, pre-provisioned Ubuntu guest under
+software-only QEMU TCG. The resource branch builds that guest once; the formal
+job downloads it from its immutable resource-commit/run path, adds only the
+current checkout, and runs the layer without apt or toolchain provisioning. A
+self-hosted pool that passes a bubblewrap probe remains preferable, and E2E is
+still excluded.
+The CodeArts workflow is a cache consumer, not a cache seeder. Its UT,
+ST, binary, and QEMU jobs require the checksum-pinned OBS objects and fail
+closed on a missing or invalid object instead of contacting external source
+sites. The isolated `ci/codearts-resources` branch owns source fallback,
+verification, and stable-key uploads; it is operational infrastructure and is
+not intended to merge into `main`.
 The CodeArts parent workflow also invokes the externally registered code-check
 child (SCA, anti-poison, static analysis, blacklist), reads each task's public
 result JSON independently, and renders one result comment with those four
@@ -67,6 +80,10 @@ GitCode Actions unless the user changes that policy.
    documented in the CodeArts reference pass, and every other value fails
    closed. Validate its detail link separately so a missing link does not
    overwrite a valid status.
+7. For a CodeArts merge-request run, test the integration result rather than
+   the source branch snapshot: pin the downloaded target SHA and event source
+   SHA, then use `.ci/rebase-codearts-pr.sh` to create a disposable rebased
+   checkout. Never push that rewritten commit. A conflict is a failed check.
 
 ## Platform routing
 
@@ -87,6 +104,9 @@ GitCode Actions unless the user changes that policy.
 | Symptom | Meaning |
 | --- | --- |
 | `bwrap: No permissions to create new namespace` | The host forbids user namespaces. Use only the repository's sandbox-free layer there; do not weaken Runner tests. |
+| QEMU reports `could not load module for type tcg-accel-ops` | A workspace-extracted QEMU cannot find its modules. Point `QEMU_MODULE_DIR` at the extracted architecture-specific QEMU module directory. |
+| `apk.static` reports `TLS: server certificate not trusted`, followed by QEMU packages being unavailable | The static bootstrap has no X.509 trust store, so its package indexes are empty. Supply the checksum-pinned CA bundle through `SSL_CERT_FILE`; keep HTTPS and Alpine package-signature verification enabled. |
+| QEMU boots but the guest emits no `QEMU_SANDBOX_TEST_RESULT` marker | The VM timed out, failed before the guest harness ran, or could not shut down cleanly. Keep the job failed and read `ut-runner-qemu/run.log`. |
 | API test expects `runner_exec`, gets `undefined` | An execution never ran; check sandbox availability first. |
 | `BLOCKED: isolated E2E stack did not become healthy` | The Runner refused to serve; inspect the sandbox probe before application logs. |
 | `ERR_PNPM_OUTDATED_LOCKFILE` | `pnpm-lock.yaml` is behind a `package.json`; regenerate it with `pnpm install --lockfile-only`. |
@@ -95,3 +115,4 @@ GitCode Actions unless the user changes that policy.
 | The PR result table says `COMPLETED` | A CodeArts lifecycle state leaked into user-facing output. Normalize each task to `PASSED` or `FAILED` in the parent workflow. |
 | One code-check JSON says `FIALED`, is missing, or contains an unknown status | It is not a success alias. Fail that child closed to `FAILED`; do not reuse the parent or another child's status. |
 | A UT/ST public OBS link returns `403` after an early job failure | The job failed before the upload step, so the object was never created. Probe the object and fall back to the GitCode Checks page. |
+| A formal CodeArts job reports a stable OBS cache miss | Do not add source fallback to the test/build job. Push or rerun `ci/codearts-resources`, verify its checksum-pinned upload, update the formal prebuilt-image pin when needed, then rerun the formal workflow. |

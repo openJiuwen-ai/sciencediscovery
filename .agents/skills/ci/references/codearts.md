@@ -9,14 +9,25 @@ repository intentionally does not use GitCode Actions.
 ## Pipeline inventory
 
 `.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
-runs the repository's `ci:ut:core` and hermetic `ci:st` entry points, invokes
-the reusable code-check pipeline, builds the x86_64 binary on a hosted
+runs the repository's `ci:ut:core`, experimental QEMU-hosted
+`ci:ut:runner`, and hermetic `ci:st` entry points, invokes
+the reusable code-check pipeline, builds the x86_64 validation binary on a hosted
 runner, invokes an ARM CodeArts Build task for aarch64, and renders the final
 PR result. The code check is an externally registered CodeArts pipeline containing the SCA,
 anti-poison, static-analysis, and blacklist CloudBuild tasks. Its former local
 definition `.codearts/workflow/codearts-pipeline-code-check.yml` was migrated
 out of this repository and intentionally deleted. Do not recreate it or remove
 the parent caller merely because the local file is absent.
+
+`.codearts/workflow/codearts-resources-pipeline.yml` lives only on the
+operational `ci/codearts-resources` branch and is triggered by pushes to that
+branch. It prefetches checksum-pinned toolchains and the QEMU Ubuntu image,
+falls back to the declared mainland source only on a public OBS miss, verifies
+the bytes, and uploads them to stable OBS keys. The branch intentionally
+contains only the resource workflow, resource scripts, `README.md`, and the
+license; do not merge it into `main`. The formal parent workflow only consumes
+these resources and must fail closed when a stable object is missing or has an
+invalid checksum.
 
 `.codearts/workflow/codearts-auto-merge-pipeline.yml` is the auto-merge
 pipeline, triggered by a `/merge` comment on a merge request targeting
@@ -88,14 +99,19 @@ parent before verification, and keep the final publisher in `post` with
 `select: always` so failed checks can still report their status.
 
 Interpret results in the parent workflow, not in the PR bot. The parent
-includes both `binary_aarch64` and its OBS verification job in the
-`completed(...)` gate that selects mutually exclusive success and failure post
-jobs. It renders a complete result
+includes `ut_runner_qemu`, both `binary_aarch64` and its OBS verification job
+in the `completed(...)` gate that selects mutually exclusive success and
+failure post jobs. It renders a complete result
 HTML file from the UT/ST/binary job statuses and each code-check child's own
 public result JSON, uploads that file to OBS, and passes its OBS key plus the
 already chosen `final_label` to the bot. The bot downloads and posts the HTML
 unchanged; it must not read other result artifacts or derive a result
 independently, because stale artifacts can disagree with the current run.
+
+Do not use a `rerun` comment to validate changes made only on
+`ci/verify-pr-ci`: CodeArts can restart the pipeline definition registered for
+`main`. Update and push the PR source branch instead so the CI-branch pipeline
+copy is selected again from that target branch.
 
 ## PaC syntax and source checkout
 
@@ -121,60 +137,111 @@ nested `${SHARE_PATH}/sciencediscovery` directory. Run
 `.ci/provision-runner.sh`, set writable `CI_RESULTS_DIR` / `CI_RUNTIME_DIR`
 paths, and call the repository-owned layer entry point.
 
-`official_git_clone` may still download the configured `main` source for a
-PR-context run, so UT/ST must explicitly switch to the source commit from the
-MR event. Decide whether checkout is needed from the actual `${MERGE_ID}`
-value, not `pipeline.trigger_type`; comment-triggered `Node` runs must follow
-the same checkout path as initial MR runs. Initial PR webhooks store metadata
-under `payload.object_attributes`, but a comment webhook has `event_type: note`,
-comment metadata under `payload.object_attributes`, and PR metadata
-under `payload.merge_request`. Accept both layouts, require a PR note's
-`noteable_type` to be `MergeRequest`, and validate its `iid` against
+Every job in the debug parent workflow has a CodeArts job timeout expressed as
+`timeout` plus `timeout_unit: minute`. Give lightweight preparation,
+artifact-verification, and result-publication jobs five minutes. Give each UT,
+ST, binary-package, QEMU, and code-check job 20 minutes. The formal workflow
+has no resource-seed job. The separate `ci/codearts-resources` workflow gives
+its QEMU preparation job 40 minutes because the first TUNA download can exceed
+20 minutes; its smaller toolchain job remains 20 minutes. A timeout must leave
+the job non-completed; do not convert it to success or hide it with step-level
+continuation.
+
+`official_git_clone` downloads the configured target branch. For a PR-context
+run, preserve that downloaded `HEAD` as the target SHA, validate the event's
+source SHA, and create a disposable checkout by rebasing the PR-only commits
+onto that target. This matches the repository's `merge_method=rebase` landing
+policy and prevents an old PR base from replacing newer target-side CI
+scripts. Decide whether integration checkout is needed from the actual
+`${MERGE_ID}` value, not `pipeline.trigger_type`; comment-triggered `Node` runs
+must follow the same checkout path as initial MR runs. Initial PR webhooks
+store metadata under `payload.object_attributes`, but a comment webhook has
+`event_type: note`, comment metadata under `payload.object_attributes`, and PR
+metadata under `payload.merge_request`. Accept both layouts, require a PR
+note's `noteable_type` to be `MergeRequest`, and validate its `iid` against
 `${MERGE_ID}` when present.
 
 Validate all payload data first: `source_branch` must be a non-empty valid Git
 branch without CR/LF, system `${COMMIT_ID}` must be a 40-hex SHA, and
 `${MERGE_ID}` must be a positive integer. Use `${COMMIT_ID}` as the
 authoritative source head for both initial PR and PR-note runs; do not depend
-on a webhook-specific `last_commit` location. Then fetch the upstream MR ref
-and detach at that execution SHA:
+on a webhook-specific `last_commit` location. Then fetch the upstream MR ref,
+verify that it contains the event SHA, and call the repository helper while
+`HEAD` still identifies the downloaded target commit:
 
 ```sh
 FETCH_REF=refs/remotes/origin/codearts-pr-source
 git fetch --no-tags --force origin \
   "+refs/merge-requests/$MR_NUMBER/head:$FETCH_REF"
 git merge-base --is-ancestor "$SOURCE_SHA" "$FETCH_REF"
-git checkout --detach "$SOURCE_SHA"
-test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+bash .ci/rebase-codearts-pr.sh "$SOURCE_BRANCH" "$SOURCE_SHA"
 ```
 
 Use `refs/merge-requests/<number>/head`, not
 `refs/heads/<source_branch>`. The MR ref is exposed by the upstream repository
 for both same-repository and fork PRs, whereas a fork-only source branch does
 not exist under upstream `refs/heads/`. If the execution SHA is not already
-present, fetch that exact SHA before verifying ancestry. Detaching at that SHA
-also prevents a later source update from changing the code covered by the
-current run. Fail rather than testing another commit if the recorded SHA is no
-longer reachable from the MR ref.
+present, fetch that exact SHA before verifying ancestry. Pinning both SHAs
+prevents later branch updates from changing the code covered by the current
+run. `.ci/rebase-codearts-pr.sh` uses their merge base, fails on a rebase
+conflict, disables repository hooks and commit signing, and never pushes the
+rewritten commit. It records `target-sha`, `source-sha`, and `integration-sha`
+under `.ci-results/codearts-checkout/`; jobs continue to use the original
+source SHA for PR-scoped OBS paths and artifact names. Fail rather than testing
+another commit if the recorded source SHA is no longer reachable from the MR
+ref.
 
 ## Default runner constraints
 
 The default CCE pool is an unprivileged EulerOS 2.0 SP10 pod even when YAML
 requests `ubuntu-latest`. It runs as `octopus`, has no usable root, and cannot
-create user namespaces. Runner UT and E2E therefore remain excluded. A
-sandboxed layer requires a self-hosted resource pool that passes an actual
-bubblewrap probe.
+create user namespaces. Runner UT and E2E therefore cannot run directly in
+that pod. Do not use QEMU user-mode emulation as a workaround: it still shares
+the host kernel and its namespace restriction.
 
-The x86_64 binary job keeps the repository's proven hosted labels
+The parent pipeline runs `pnpm ci:ut:runner` in a full Ubuntu
+guest under `qemu-system-x86_64 -accel tcg,thread=multi`. TCG is software-only,
+so `/dev/kvm` is neither requested nor required. The 20-minute Runner job
+downloads a pre-provisioned qcow2 from its immutable resource-commit/run path
+and verifies the repository-pinned SHA256 before booting. A miss or checksum
+mismatch fails before the VM starts; formal CI never rebuilds the image or
+falls back to a source mirror. The `ci/codearts-resources` workflow owns the
+date-pinned Ubuntu download, one-time guest provisioning, checksum generation,
+three-object upload, and public read-back verification. The formal guest then
+receives only the current source archive, verifies the baked Node, pnpm, uv,
+and bubblewrap versions, configures the package registry, and invokes the
+unchanged Runner layer without apt or toolchain provisioning. When the host
+has no QEMU, the host script still verifies fixed
+`apk.static`, Alpine signing-key, and CA bundle package checksums. The CA bundle
+authenticates the mirror's HTTPS certificate, while the signing key
+independently authenticates Alpine indexes and packages. The script then
+assembles QEMU plus its musl runtime in the workspace. This user-space
+bootstrap is independent of the host package manager and glibc, requires no
+root access, and runs package scripts neither on the host nor in a chroot. The
+VM boots with a NoCloud seed over QEMU user networking. The guest clears its
+own Ubuntu AppArmor userns sysctl, passes the real bubblewrap probe as the
+unprivileged `ci` user, and invokes the unchanged layer entry point. Only the exact
+`QEMU_SANDBOX_TEST_RESULT=<exit-code>` serial marker can make the host job
+pass; the host removes serial CR characters before matching, and missing or
+malformed markers fail closed. The guest sets Node's test-file concurrency to
+one to avoid emulator-induced disconnect timing races without skipping or
+changing assertions. This is slower than a native
+worker and currently covers Runner UT only. A self-hosted Linux resource pool
+that passes the real bubblewrap probe remains the preferred long-term route.
+
+The debug x86_64 binary job keeps the repository's proven hosted labels
 `[codearts-hosted, ubuntu-latest, x64, large]`. The aarch64 parent job runs on
 `default` only to invoke ARM Build task `b6e9c483743d470d9725a1b23c6d1d91`;
 the Build task, not the parent job's `runs-on`, owns the ARM executor. Its
-console shell is a reusable bootstrap: it fetches `GIT_REPO_URL` at `GIT_REF`,
-requires the requested commit to equal or remain reachable from that ref,
-detaches at the Build system's `COMMIT_ID` (accepting a console-provided
-`GIT_COMMIT` alias only as a fallback), then invokes the repository's
-`.ci/codearts-build-dispatch.sh`. Do not add a duplicate custom commit
-parameter when the Build task already provides `COMMIT_ID`.
+console shell is a reusable bootstrap: it fetches the target branch from
+`GIT_TARGET_REF` and the merge-request source from `GIT_REF`, requires the
+Build system's `COMMIT_ID` (or the console-provided `GIT_COMMIT` alias) to be
+reachable from the latter, then calls `.ci/rebase-codearts-pr.sh` before
+invoking `.ci/codearts-build-dispatch.sh`. The dispatcher receives the
+generated integration SHA as `EXPECTED_COMMIT` and the original event SHA as
+`ARTIFACT_COMMIT`, so packaging verifies the rebased checkout while preserving
+source-scoped artifact names and OBS paths. Do not add a duplicate custom
+commit parameter when the Build task already provides `COMMIT_ID`.
 
 The graphical Build shell action embeds its command in a Groovy
 `WorkflowScript` before Bash sees it. A literal backslash in the pasted command
@@ -189,7 +256,7 @@ status in `exit-code`, and returns success only so the following OBS action can
 preserve those diagnostics. The parent OBS verification job remains the final
 failure authority and rejects any nonzero `exit-code`.
 
-Runtime parameters from the parent are `GIT_REPO_URL`, `GIT_REF`,
+Runtime parameters from the parent are `GIT_REPO_URL`, `GIT_REF`, `GIT_TARGET_REF`,
 `SH_FILE_PATH`, `ARTIFACT_PATH`, `OBS_BUCKET`, `OBS_DIRECTORY`,
 `OBS_ENDPOINT`, `ENVS`, and `ARGS`. `SH_FILE_PATH` and `ARTIFACT_PATH` are
 repository-relative. `ENVS` contains one `NAME=VALUE` record per line, and
@@ -200,6 +267,13 @@ and `LD_PRELOAD`, then uses `exec bash` so the child exit status becomes the
 Build result. Keep long build commands in the referenced script rather than in
 the pipeline parameter, whose custom value is limited by CodeArts.
 
+Set `GIT_TARGET_REF` from CodeArts's source-specific system parameter as
+`refs/heads/${sciencediscovery_TARGET_BRANCH}`. CodeArts resolves that value to
+the merge request's actual target branch, so the same parent definition passes
+`refs/heads/main` for the formal workflow and `refs/heads/ci/verify-pr-ci` for
+the validation copy. Do not hard-code either target branch in the ARM
+Build call.
+
 The Build task's following OBS action uploads
 `.codearts-build/repository/${ARTIFACT_PATH}/*` with an empty destination file
 name, folder upload disabled, and failure continuation disabled. The parent
@@ -207,9 +281,7 @@ does not treat `artifactIdentifier` as evidence for this OBS upload. A
 dependent job probes the commit-qualified aarch64 binary, `SHA256SUMS`,
 `VERSION`, `run.log`, and `exit-code` at the exact run-specific OBS prefix,
 requires the exit code to be zero, and validates the checksum file format.
-It checks `exit-code` before optional cache-transfer objects so a failed build
-is reported as such rather than being masked by a missing cache file. Missing
-objects therefore fail closed.
+Missing objects therefore fail closed.
 
 The aarch64 package script asserts both the pipeline's expected commit and
 `uname -m` before packaging. It calls the repository-owned package entry
@@ -220,20 +292,22 @@ the job may use the script's explicit `--skip-smoke` downgrade, but the log
 and PR documentation must say the artifact is packaging-only rather than
 release-smoke verified.
 
-CodeArts binary artifacts use the source context's eight-character
+CodeArts validation binaries use the source context's eight-character
 `commit_id_short` and are named
 `ScienceDiscovery-<commit_id_short>-linux-<architecture>`. Keep the local
 rename, OBS key, verifier, checksum regex, and PR result link synchronized when
 this convention changes. `VERSION` continues to record the full commit.
 
 Raw GitHub Release downloads can time out repeatedly from mainland CodeArts
-runners. The binary jobs therefore set `MICROMAMBA_CONDA_MIRROR` to the
+runners. The CodeArts binary jobs therefore set `MICROMAMBA_CONDA_MIRROR` to the
 Tsinghua TUNA conda-forge mirror. `fetch-managed-micromamba.mjs` downloads the
 architecture-specific pinned `.tar.bz2`, verifies the archive SHA256, extracts
 `bin/micromamba`, and still verifies the executable against the upstream raw
 binary SHA256. Do not replace this with an untrusted GitHub proxy or disable
-either checksum. Without the environment variable, runtime provisioning keeps
-the upstream GitHub Release URL.
+either checksum. In the formal CodeArts workflow, `BINARY_CACHE_ONLY=1` makes
+the stable OBS object mandatory, so this source URL is not contacted. The
+mirror remains the verified fallback used by the dedicated resource workflow
+and by non-cache-only local invocations.
 
 The OBS layout and verified toolchain cache contract are defined in
 [codearts-obs.md](codearts-obs.md). Keep public runtime scripts on the generic
@@ -264,7 +338,7 @@ https://gitcode.com/openJiuwen/sciencediscovery/pull/<MR_NUMBER>/check
 ```
 
 List all four code-check subtasks (SCA, anti-poison, CodeCheck, and blacklist),
-plus UT, ST, and both binary architectures. User-facing status cells contain
+plus core UT, QEMU Runner UT, ST, and both binary architectures. User-facing status cells contain
 only `PASSED` or `FAILED`. CodeArts may report successful jobs as lifecycle
 state `completed`; normalize `completed`, `passed`, `success`, `successful`,
 and `succeeded` to `PASSED`, and every other value to `FAILED`. Do not print
@@ -326,6 +400,8 @@ workflow again before pushing. Never overwrite a new UI commit blindly.
 | `download task did not create the expected source directory` while files are listed directly under `share` | The shell expected a nested repository directory; use `${SHARE_PATH}` itself. |
 | `target path should be absolutely path which start with:[.../share]` | An `upload-obs` source is relative or outside `${SHARE_PATH}`. |
 | `sudo: /bin/sudo must be owned by uid 0 and have the setuid bit set` | The default pool has no usable root; install user-space tools under `$HOME` or the workspace. |
+| QEMU reports `could not load module for type tcg-accel-ops` | A workspace-extracted QEMU needs `QEMU_MODULE_DIR=<root>/usr/lib/x86_64-linux-gnu/qemu`; also pass its data directory with `-L` and its SeaBIOS path explicitly. |
+| QEMU exits without `QEMU_SANDBOX_TEST_RESULT=<code>` | Guest provisioning, cloud-init, or the test harness did not finish. Keep the job red and inspect the run-scoped `ut-runner-qemu/run.log`; do not infer success from QEMU's process status alone. |
 | YAML requests `ubuntu-latest`, but logs show `octopus_container` and EulerOS | The default CCE execution mode ignored or overrode the OS label; use a dedicated pool for an actual Ubuntu rootfs. |
 | A child CloudBuild command ends with bare `--pr_id` | The child read `${MERGE_ID}`, which is not inherited from the parent. Pass the parent's MR ID as `PR_ID` and consume `${PR_ID}` inside every child task. |
 | `fatal: couldn't find remote ref refs/heads/<source>` on a fork PR | The checkout tried to fetch a fork-only branch from upstream. Fetch `refs/merge-requests/<MERGE_ID>/head` and detach at the validated event SHA. |
@@ -333,10 +409,10 @@ workflow again before pushing. Never overwrite a new UI commit blindly.
 | All four code-check rows show one shared status | The parent job status was reused. Read and normalize the four public child result JSON files independently. |
 | A child result says `FIALED` or another unknown value | It is outside the success allowlist and must render as `FAILED`; fail closed rather than correcting arbitrary provider strings. |
 | An `arm64` binary job runs on `x86_64` | Runner labels or scheduling are wrong. Fail the architecture preflight before packaging; do not call a cross-build a native ARM64 runner result. |
-| Managed micromamba times out on `github.com/mamba-org/micromamba-releases` | Mainland egress cannot reach the raw GitHub Release reliably. For the binary jobs, use the pinned TUNA conda package through `MICROMAMBA_CONDA_MIRROR`; keep both archive and extracted-binary SHA256 checks. |
-| A stable OBS toolchain object is missing or has the wrong checksum | Treat it as a cache miss, fetch the pinned source, and refill OBS only from a successful binary job. Never weaken the repository checksum to accept the cache. |
+| Managed micromamba times out on `github.com/mamba-org/micromamba-releases` | Mainland egress cannot reach the raw GitHub Release reliably. For the CodeArts binary jobs, use the pinned TUNA conda package through `MICROMAMBA_CONDA_MIRROR`; keep both archive and extracted-binary SHA256 checks. |
+| A stable OBS toolchain, QEMU base, or prebuilt Runner image is missing or has the wrong checksum | Keep the formal job failed; it is cache-only by design. Run the `ci/codearts-resources` workflow to rebuild and verify resources, update the formal image commit/run/SHA pin when advancing the image, then rerun formal CI. Never weaken the repository checksum. |
 | ARM provisioning says no matching `uv` version even though the mirror index lists it | pip's compatibility filter rejected the wheel. Read the logged Python and pip versions before deciding whether the cause is the Python requirement or platform-tag support. Provisioning avoids both variables by fetching the architecture-specific pinned TUNA wheel (or `CI_UV_WHEEL_URL`) with the repository SHA256, then extracting its verified `uv` and `uvx` scripts directly. |
-| ARM Build logs a staged CPython cache file, but the verifier gets `403` for its raw `+` URL | OBS has the object; the unescaped path is wrong. Percent-encode the basename (`+` becomes `%2B`) before probing or downloading, then verify SHA256 as usual. |
+| A CPython stable-cache request gets `403` for its raw `+` URL | OBS may have the object but the HTTP path is unescaped. Percent-encode the basename (`+` becomes `%2B`) before probing or downloading, then verify SHA256 as usual. |
 | ARM Build fails with Groovy `unexpected char: '\'` before any shell output | The graphical shell action compiled a literal backslash as Groovy source. Replace the pasted content with the zero-backslash bootstrap, or double every backslash before saving. |
 | ARM Build prints an apparently blank command and exits 127 with `command not found` | Rich-text copy inserted an invisible `U+200B` character. Paste the ASCII-only bootstrap as plain text; its published form contains no empty lines where the editor can add that character. |
 | The ARM Build task is green but an aarch64 OBS object is missing | The bootstrap or OBS action is missing/misconfigured, or the parent and child prefixes differ. Keep the parent OBS-verification job red; compare `OBS_DIRECTORY`, `ARTIFACT_PATH`, and the five expected object names. |

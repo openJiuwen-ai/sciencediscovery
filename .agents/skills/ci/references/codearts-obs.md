@@ -3,8 +3,10 @@
 Read this reference when changing or diagnosing CodeArts OBS uploads, public
 artifact links, code-check result JSON, ARM Build artifact transfer, or the
 verified toolchain cache. The workflow source of truth is
-`.codearts/workflow/codearts-pipeline.yml`; keep this reference synchronized
-when its bucket, endpoint, prefixes, or required object set changes.
+`.codearts/workflow/codearts-pipeline.yml` on the formal CI branch plus
+`.codearts/workflow/codearts-resources-pipeline.yml` on
+`ci/codearts-resources`; keep this reference synchronized when either
+workflow's bucket, endpoint, prefixes, or required object set changes.
 
 ## Address forms
 
@@ -44,6 +46,8 @@ openjiuwen-ci/
     |       `-- <run-id>/
     |           |-- ut/
     |           |   `-- run.log
+    |           |-- ut-runner-qemu/
+    |           |   `-- run.log
     |           |-- st/
     |           |   `-- run.log
     |           |-- binary/
@@ -57,8 +61,7 @@ openjiuwen-ci/
     |           |       |-- SHA256SUMS
     |           |       |-- VERSION
     |           |       |-- run.log
-    |           |       |-- exit-code
-    |           |       `-- <verified toolchain staging objects>
+    |           |       `-- exit-code
     |           `-- pr/
     |               `-- result.html
     |-- codecheck/<mr-id>/codecheck.json
@@ -66,15 +69,26 @@ openjiuwen-ci/
     |-- anti_poison/<mr-id>/anti_poison.json
     |-- sca/<mr-id>/sca.json
     `-- cache/
-        `-- toolchains/
+        |-- toolchains/
+        |   `-- v1/
+        |       `-- <immutable versioned toolchain object>
+        |-- qemu/
+        |   `-- v1/
+        |       `-- noble-server-cloudimg-amd64.img
+        `-- qemu-runner/
             `-- v1/
-                `-- <immutable versioned toolchain object>
+                `-- <resource-commit>/
+                    `-- <resource-run-id>/
+                        |-- ScienceDiscovery-qemu-runner-noble-amd64.qcow2
+                        |-- SHA256SUMS
+                        `-- VERSION
 ```
 
 The parent pipeline owns the run-scoped `ci/` objects and consumes the four
 code-check JSON objects. The registered code-check child tasks own those JSON
 objects; do not make the parent overwrite them. The stable `cache/` prefix is
-shared across runs and contains only checksum-pinned toolchain archives.
+shared across runs and contains only checksum-pinned immutable artifacts:
+versioned toolchain archives and the date-pinned QEMU Ubuntu base image.
 
 The code-check paths are MR-scoped rather than run-scoped and can be replaced
 by a later child run for the same MR. Each JSON object supplies its own
@@ -82,11 +96,10 @@ by a later child run for the same MR. Each JSON object supplies its own
 the current run's `pr/result.html`; downstream publishers must consume that
 run-scoped HTML instead of rereading possibly newer JSON.
 
-The aarch64 run directory temporarily carries the verified Node, CPython,
-micromamba, pnpm, and uv objects because the graphical ARM Build upload action
-can publish only its configured artifact directory. The dependent verifier
-downloads and verifies those objects, then copies them to the stable cache
-prefix with `upload-obs`. They are staging copies, not additional cache keys.
+Stable resources are not staged below a run-scoped aarch64 directory. The
+dedicated `ci/codearts-resources` workflow writes them directly to their
+stable keys after checksum verification; the formal x86_64 and aarch64 jobs
+are read-only cache consumers.
 
 ## Upload contracts
 
@@ -142,7 +155,7 @@ Existence is not integrity. After downloading a binary or toolchain object,
 verify its pinned SHA256 before using or republishing it. The aarch64 verifier
 requires the binary, `SHA256SUMS`, `VERSION`, `run.log`, and `exit-code`, checks
 that `exit-code` is exactly zero, and validates the checksum record before it
-handles cache staging objects. Missing or malformed objects fail closed.
+reports the aarch64 build result. Missing or malformed objects fail closed.
 
 The four code-check JSON files are independent inputs. Read and normalize each
 one separately as documented in [codearts.md](codearts.md); a valid result from
@@ -173,26 +186,93 @@ sciencediscovery/cache/toolchains/v1/
 `-- uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
 ```
 
-When a pinned version or filename changes, update the workflow keys, fetcher
-manifest, expected SHA256, staging name, and this inventory together.
+When a pinned version or filename changes, update the resource branch's
+manifest, expected SHA256, upload key, formal consumer configuration, and this
+inventory together.
 
-Fetchers use this order:
+The dedicated `ci/codearts-resources` workflow uses this order:
 
 1. Reuse a local object only if its pinned SHA256 matches.
 2. Try the public OBS cache and accept it only if the same checksum matches.
 3. On a missing or invalid cache object, fetch the configured mirror or
    authoritative source and verify it.
-4. Refill OBS only from a successful job and only with the verified bytes.
+4. Upload only the verified bytes to the stable key.
 
-Upload run-scoped binaries, `SHA256SUMS`, and `VERSION` before refilling the
-shared cache. A cache upload failure may keep the job red, but it must not
-prevent the primary build artifacts from being published for diagnosis.
+The formal CodeArts workflow sets `CI_BINARY_CACHE_ONLY=1` or
+`BINARY_CACHE_ONLY=1` for UT, ST, QEMU guest provisioning, and both binary
+architectures. These consumers use local verified bytes or public OBS only;
+on a miss or checksum mismatch they fail without contacting a source mirror
+and without uploading to the stable prefix. Seed the resource branch first,
+then rerun the formal workflow.
 
 Public runtime code exposes only the generic `BINARY_CACHE_URL` and
 `BINARY_CACHE_DIR` interface. Translate CodeArts variables in `.ci/` or
 `.codearts/`; do not introduce OBS-specific behavior into public runtime
 scripts. Do not cache lockfile-driven dependency trees, mutable catalogs, or
 distro-specific package-manager downloads in this prefix.
+
+## Stable QEMU image cache
+
+The QEMU image has a separate cache namespace because it is much larger than
+the toolchain objects:
+
+```text
+sciencediscovery/cache/qemu/v1/noble-server-cloudimg-amd64.img
+```
+
+Its expected SHA256 is
+`d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30`.
+The resource branch's 40-minute `resource_qemu` job calls
+`.ci/prepare-codearts-resources.sh --group qemu`, which delegates through
+`.ci/fetch-qemu-image.sh` to `.ci/fetch-verified-binary.sh`. It checks local
+bytes, public OBS, then the pinned TUNA source with the same digest and a
+1,800-second per-download limit. Its `upload-obs` step writes only the verified
+image to the stable key. A push to `ci/codearts-resources` triggers this
+workflow; the branch is operational infrastructure and is not merged into
+`main`.
+
+The QEMU base is consumed only by the resource workflow. Formal Runner UT uses
+the pre-provisioned image described below, so it does not repeat cloud-image
+package and toolchain provisioning.
+
+## Pre-provisioned QEMU Runner image
+
+The resource workflow boots the verified Ubuntu base once, installs and tests
+Node, pnpm, uv, bubblewrap, and the stable system packages, compacts the qcow2,
+then uploads and reads back three objects. The current immutable set is:
+
+```text
+sciencediscovery/cache/qemu-runner/v1/
+`-- 7365ff8e9bfb6aa2414c1dc09bf79b3f3e6bc4c8/
+    `-- f8d5a313663c418a8c54eec630ebe881/
+        |-- ScienceDiscovery-qemu-runner-noble-amd64.qcow2
+        |   SHA256: `.ci/qemu-runner-image.sha256`
+        |-- SHA256SUMS
+        `-- VERSION
+```
+
+For a push-triggered resource workflow, derive the resource commit from the
+checked-out repository with `git rev-parse HEAD`, validate it as a 40-character
+hex SHA, and publish it as a job output. Downstream jobs must consume that
+output and verify their own checkout has the same commit before constructing
+OBS keys. Do not use `sources.sciencediscovery.commit_id` for this purpose: it
+can be empty for a branch-push trigger and would produce a path with a missing
+commit component.
+
+`.ci/fetch-qemu-runner-image.sh` pins the resource commit and resource run;
+`.ci/qemu-runner-image.sha256` is the single source of truth for the image name
+and digest. Together they form one release unit. The formal 20-minute Runner
+job accepts only that exact object and has no source fallback. It creates a
+disposable overlay, injects the current repository archive, verifies the baked
+toolchain and sandbox, and immediately invokes `pnpm ci:ut:runner`; boot no
+longer runs apt or `.ci/provision-runner.sh`.
+
+Advancing the image is deliberate: push or rerun `ci/codearts-resources`, wait
+for `Verified published QEMU Runner image: <sha256>`, then update the resource
+commit and run in `.ci/fetch-qemu-runner-image.sh` together with the standard
+checksum record in `.ci/qemu-runner-image.sha256`. Never reuse a resource path
+with different bytes and never update only the expected checksum to accept an
+unverified object.
 
 ## Failure signals
 
@@ -202,5 +282,6 @@ distro-specific package-manager downloads in this prefix.
 | A run-scoped public URL returns `403` after an early failure | The upload probably never ran. Use the CodeArts/GitCode job log and do not present the URL as an artifact. |
 | ARM Build is green but a required aarch64 object is absent | Compare `OBS_DIRECTORY`, `ARTIFACT_PATH`, the package output directory, and the verifier's required names. Keep verification red. |
 | CPython exists in the Build log but its public URL returns `403` | Percent-encode `+` as `%2B` in the HTTP request. Do not rename the OBS key. |
-| A stable cache object has the wrong checksum | Treat it as a cache miss, download the pinned source, and refill only after successful verification. Never change the expected checksum to accept cached bytes. |
+| A formal job reports a stable cache miss or checksum mismatch | Keep it failed. Run the `ci/codearts-resources` workflow, verify its checksum-pinned upload, update the prebuilt-image pins when advancing that image, then rerun the formal job. Do not add source fallback to formal CI. |
+| The resource QEMU job falls back to TUNA on every run | The stable image object is absent, the prior upload failed, or its checksum is wrong. Read `resource_qemu`, then verify the exact `cache/qemu/v1` key before rerunning formal CI. |
 | A rerun shows artifacts from an earlier run | The object key omitted `pipeline.run_id`. Restore the `<commit>/<run-id>/` hierarchy. |

@@ -161,6 +161,12 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function binaryCacheOnlyFromEnvironment() {
+  const value = process.env.BINARY_CACHE_ONLY?.trim() ?? "0";
+  if (!/^[01]$/.test(value)) throw new Error("BINARY_CACHE_ONLY must be 0 or 1");
+  return value === "1";
+}
+
 class RetryableDownloadError extends Error {}
 
 function retryableError(error) {
@@ -223,6 +229,7 @@ async function extractMicromambaFromCondaPackage(archiveBytes, temporaryParent) 
 export async function acquireManagedMicromambaBytes(release, source, {
   binaryCacheBaseUrl,
   binaryCacheDirectory,
+  binaryCacheOnly = false,
   condaMirrorBaseUrl,
   downloadImplementation = downloadBytesWithRetry,
   extractImplementation = extractMicromambaFromCondaPackage,
@@ -270,6 +277,10 @@ export async function acquireManagedMicromambaBytes(release, source, {
     }
   }
 
+  if (!archiveBytes && binaryCacheOnly) {
+    throw new Error(`Required binary cache object is missing or invalid: ${release.condaPackage.cacheFilename}`);
+  }
+
   if (!archiveBytes && condaMirrorBaseUrl) {
     const mirrorUrl = condaPackageUrl(release, condaMirrorBaseUrl);
     process.stderr.write(`Downloading managed micromamba from conda mirror: ${mirrorUrl}\n`);
@@ -295,6 +306,7 @@ export async function fetchManagedMicromamba({
   architecture,
   binaryCacheBaseUrl = process.env.BINARY_CACHE_URL,
   binaryCacheDirectory = process.env.BINARY_CACHE_DIR,
+  binaryCacheOnly = binaryCacheOnlyFromEnvironment(),
   condaMirrorBaseUrl = process.env.MICROMAMBA_CONDA_MIRROR,
   manifestPath,
   output,
@@ -305,6 +317,7 @@ export async function fetchManagedMicromamba({
   const bytes = await acquireManagedMicromambaBytes(release, source, {
     binaryCacheBaseUrl,
     binaryCacheDirectory: binaryCacheDirectory ? resolve(binaryCacheDirectory) : undefined,
+    binaryCacheOnly,
     condaMirrorBaseUrl,
     temporaryParent: dirname(output),
   });

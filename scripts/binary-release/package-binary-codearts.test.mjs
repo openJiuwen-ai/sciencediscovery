@@ -58,8 +58,11 @@ test("preserves a provisioning failure through the build log pipeline", async ()
     const binDirectory = join(directory, "bin");
     await mkdir(binDirectory);
     await writeFile(join(binDirectory, "git"), `#!/bin/sh
-test "$1" = rev-parse || exit 99
-printf '%s\n' 0000000000000000000000000000000000000000
+case "$1" in
+  rev-parse) printf '%s\n' 0000000000000000000000000000000000000000 ;;
+  cat-file) exit 0 ;;
+  *) exit 99 ;;
+esac
 `, "utf8");
     await writeFile(join(binDirectory, "bash"), `#!/bin/sh
 test "$1" = .ci/provision-runner.sh || exit 99
@@ -79,6 +82,7 @@ exit 37
       encoding: "utf8",
       env: {
         ...process.env,
+        ARTIFACT_COMMIT: "1111111111111111111111111111111111111111",
         HOME: join(directory, "home"),
         PATH: `${binDirectory}:${process.env.PATH}`,
       },
@@ -86,6 +90,7 @@ exit 37
 
     assert.equal(result.status, 37, result.stderr);
     assert.equal(await readFile(join(directory, output, "exit-code"), "utf8"), "37\n");
+    assert.match(result.stdout, /Naming artifacts for source commit: 1111111111111111111111111111111111111111/);
     assert.match(result.stdout, /packaging exited with status 37/);
   } finally {
     await rm(directory, { force: true, recursive: true });

@@ -22,6 +22,8 @@ import test from "node:test";
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const dispatcher = join(repositoryRoot, ".ci", "codearts-build-dispatch.sh");
 const binaryFetcher = join(repositoryRoot, ".ci", "fetch-verified-binary.sh");
+const qemuRunnerImageFetcher = join(repositoryRoot, ".ci", "fetch-qemu-runner-image.sh");
+const qemuRunnerImageChecksum = join(repositoryRoot, ".ci", "qemu-runner-image.sha256");
 const testRoot = join(repositoryRoot, ".tmp", "codearts-build-dispatch-tests");
 
 async function workspace(name) {
@@ -150,6 +152,79 @@ test("verified binary fetcher reports a cache-only miss without using a source",
   } finally {
     await rm(directory, { force: true, recursive: true });
   }
+});
+
+test("verified binary fetcher applies a configurable download time limit", async () => {
+  const directory = await workspace("binary-download-timeout");
+  try {
+    const binDirectory = join(directory, "bin");
+    const curlArguments = join(directory, "curl-arguments.txt");
+    const output = join(directory, "large.img");
+    const payload = Buffer.from("verified large cache object");
+    const sha256 = createHash("sha256").update(payload).digest("hex");
+    const fakeCurl = join(binDirectory, "curl");
+    await mkdir(binDirectory);
+    await writeFile(fakeCurl, `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$FAKE_CURL_ARGUMENTS"
+output=
+while (($#)); do
+  case "$1" in
+    -o) output="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf 'verified large cache object' > "$output"
+`, "utf8");
+    await chmod(fakeCurl, 0o755);
+
+    const result = spawnSync("bash", [
+      binaryFetcher,
+      "--cache-base-url", "https://cache.example.test/qemu/v1",
+      "--download-max-time", "1800",
+      "--filename", "large+build.img",
+      "--output", output,
+      "--sha256", sha256,
+      "--source-url", "https://example.test/large.img",
+    ], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAKE_CURL_ARGUMENTS: curlArguments,
+        PATH: `${binDirectory}:${process.env.PATH}`,
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /OBS cache hit: large\+build\.img/);
+    assert.doesNotMatch(result.stdout, /source download verified/);
+    assert.deepEqual(await readFile(output), payload);
+    const argumentsList = (await readFile(curlArguments, "utf8")).trimEnd().split("\n");
+    assert.equal(argumentsList[argumentsList.indexOf("--max-time") + 1], "1800");
+    assert.ok(argumentsList.includes("https://cache.example.test/qemu/v1/large%2Bbuild.img"));
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("prebuilt QEMU Runner image and workflow share the immutable cache contract", async () => {
+  const fetcherSource = await readFile(qemuRunnerImageFetcher, "utf8");
+  const checksumRecord = (await readFile(qemuRunnerImageChecksum, "utf8")).trim();
+  const workflow = await readFile(
+    join(repositoryRoot, ".codearts", "workflow", "codearts-pipeline.yml"),
+    "utf8",
+  );
+  const checksumMatch = checksumRecord.match(/^([a-f0-9]{64})  ([0-9A-Za-z._+-]+)$/);
+
+  assert.ok(checksumMatch, "QEMU Runner checksum manifest must use sha256sum format");
+  assert.match(fetcherSource, /checksum_file="\$script_dir\/qemu-runner-image\.sha256"/);
+  assert.match(fetcherSource, /read -r image_sha256 image_name < "\$checksum_file"/);
+  assert.doesNotMatch(fetcherSource, /image_sha256=[a-f0-9]{64}/);
+  assert.match(fetcherSource, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME:-300/);
+  assert.match(fetcherSource, /--cache-only/);
+  assert.match(fetcherSource, /sciencediscovery\/cache\/qemu-runner\/v1/);
+  assert.match(workflow, /ut_runner_qemu:[\s\S]*?needs: \[\][\s\S]*?timeout: 20/);
+  assert.match(workflow, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME=300/);
 });
 
 test.after(async () => {

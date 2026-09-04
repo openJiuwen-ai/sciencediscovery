@@ -39,6 +39,7 @@ Environment:
                             filename and SHA256 remain pinned by runtimes.json.
   BINARY_CACHE_URL          Remote cache base URL checked before the source URL.
   BINARY_CACHE_DIR          Local verified-archive staging directory.
+  BINARY_CACHE_ONLY         Set to 1 to fail instead of using the source URL.
 `;
 
 function parseArguments(argv) {
@@ -126,6 +127,7 @@ async function downloadVerifiedBytes(entry, url, fetchImplementation) {
 /** Fetch to a cache directory, reusing an archive that already verifies. */
 export async function downloadRuntimeArchive(entry, cacheDirectory, {
   binaryCacheBaseUrl = "",
+  binaryCacheOnly = false,
   fetchImplementation = fetch,
 } = {}) {
   await mkdir(cacheDirectory, { recursive: true });
@@ -148,6 +150,10 @@ export async function downloadRuntimeArchive(entry, cacheDirectory, {
     } catch (error) {
       process.stderr.write(`Binary remote cache miss or invalid entry for ${entry.filename}: ${error.message}\n`);
     }
+  }
+
+  if (!bytes && binaryCacheOnly) {
+    throw new Error(`Required binary cache object is missing or invalid: ${entry.filename}`);
   }
 
   if (!bytes) {
@@ -197,9 +203,12 @@ async function main() {
   }
   if (!options.output) throw new Error("--output is required unless --print-json is used");
   const configuredCache = process.env.BINARY_CACHE_DIR?.trim();
+  const cacheOnlyValue = process.env.BINARY_CACHE_ONLY?.trim() ?? "0";
+  if (!/^[01]$/.test(cacheOnlyValue)) throw new Error("BINARY_CACHE_ONLY must be 0 or 1");
   const cache = options.cache ?? (configuredCache ? resolve(configuredCache) : join(dirname(options.output), ".downloads"));
   const archivePath = await downloadRuntimeArchive(entry, cache, {
     binaryCacheBaseUrl: process.env.BINARY_CACHE_URL?.trim() ?? "",
+    binaryCacheOnly: cacheOnlyValue === "1",
   });
   await unpackSingleRoot(archivePath, options.output);
   process.stderr.write(`Unpacked ${options.runtime} ${entry.version} (${options.architecture}) into ${options.output}\n`);

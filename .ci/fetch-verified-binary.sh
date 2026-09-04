@@ -13,14 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Fetch one immutable CI toolchain binary. A verified local copy wins, then a
-# public OBS cache is tried, and only a cache miss falls back to the source URL.
-# The same SHA256 pin protects every route.
+# Fetch one immutable CI artifact. A verified local copy wins, then a public
+# cache is tried, and only a cache miss falls back to the source URL. The same
+# SHA256 pin protects every route.
 
 set -euo pipefail
 
 cache_base_url=""
 cache_only=0
+download_max_time=300
 filename=""
 output=""
 sha256=""
@@ -33,6 +34,7 @@ Usage: .ci/fetch-verified-binary.sh [options]
 Options:
   --cache-base-url <url>  Optional public OBS cache base URL
   --cache-only            Return status 3 instead of using a source URL on miss
+  --download-max-time <s> Per-download time limit in seconds (default: 300)
   --filename <name>       Stable cache object filename
   --output <path>         Local archive destination
   --sha256 <digest>       Expected lowercase SHA256
@@ -44,6 +46,7 @@ while (($#)); do
   case "$1" in
     --cache-base-url) cache_base_url="${2:?--cache-base-url requires a value}"; shift 2 ;;
     --cache-only) cache_only=1; shift ;;
+    --download-max-time) download_max_time="${2:?--download-max-time requires a value}"; shift 2 ;;
     --filename) filename="${2:?--filename requires a value}"; shift 2 ;;
     --output) output="${2:?--output requires a value}"; shift 2 ;;
     --sha256) sha256="${2:?--sha256 requires a value}"; shift 2 ;;
@@ -55,6 +58,8 @@ done
 
 [[ "$filename" =~ ^[0-9A-Za-z._+-]+$ ]] \
   || { echo "--filename contains unsafe characters." >&2; exit 2; }
+[[ "$download_max_time" =~ ^[1-9][0-9]*$ ]] \
+  || { echo "--download-max-time must be a positive integer." >&2; exit 2; }
 [[ "$sha256" =~ ^[0-9a-f]{64}$ ]] \
   || { echo "--sha256 must be a lowercase 64-hex digest." >&2; exit 2; }
 [[ "$cache_only" -eq 1 || "$source_url" == https://* ]] \
@@ -86,9 +91,10 @@ download() {
   local url="$1"
   rm -f -- "$temporary"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 2 --connect-timeout 15 --max-time 300 "$url" -o "$temporary"
+    curl -fsSL --retry 2 --connect-timeout 15 \
+      --max-time "$download_max_time" "$url" -o "$temporary"
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$temporary" "$url"
+    wget --timeout="$download_max_time" --tries=3 -qO "$temporary" "$url"
   else
     echo "FATAL: neither curl nor wget is available to fetch $filename." >&2
     return 1
@@ -96,7 +102,9 @@ download() {
 }
 
 if [[ -n "$cache_base_url" ]]; then
-  cache_url="${cache_base_url%/}/$filename"
+  # OBS public URLs must escape '+' in immutable object names such as CPython builds.
+  cache_filename="${filename//+/%2B}"
+  cache_url="${cache_base_url%/}/$cache_filename"
   echo "Checking OBS cache: $cache_url"
   if download "$cache_url" && verify "$temporary"; then
     mv -- "$temporary" "$output"

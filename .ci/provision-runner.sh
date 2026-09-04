@@ -28,7 +28,7 @@
 #                    downloaded bytes must still match the repository SHA256.
 #   CI_BINARY_CACHE_URL  Public OBS base URL for immutable toolchain archives.
 #   CI_BINARY_CACHE_DIR  Local verified-archive staging directory.
-#   CI_BINARY_CACHE_PUBLISH  Set to 1 in the jobs that refill OBS cache objects.
+#   CI_BINARY_CACHE_ONLY Set to 1 to fail instead of using external fallbacks.
 #
 # PATH is not exported to the caller: a CI step is its own shell. Callers add
 #   export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
@@ -54,6 +54,9 @@ require_sandbox=0
 export PNPM_HOME="$HOME/.local/share/pnpm"
 export PATH="$HOME/.local/node/bin:$PNPM_HOME:$HOME/.local/bin:$PATH"
 binary_cache_dir="${CI_BINARY_CACHE_DIR:-$PWD/.ci-results/toolchain-cache}"
+binary_cache_only="${CI_BINARY_CACHE_ONLY:-0}"
+[[ "$binary_cache_only" =~ ^[01]$ ]] \
+  || { echo "CI_BINARY_CACHE_ONLY must be 0 or 1." >&2; exit 2; }
 
 # package.json requires >=22.19.0. Provisioning Node here rather than through a
 # setup action keeps the workflow dependent on one platform action (checkout)
@@ -86,7 +89,7 @@ echo "node    : $(node --version 2>/dev/null || echo 'missing')"
 
 echo
 echo "=== node (need >= $NODE_REQUIRED) ==="
-if ! node_too_old && [[ "${CI_BINARY_CACHE_PUBLISH:-0}" != 1 ]]; then
+if ! node_too_old; then
   echo "present: $(node --version)"
 else
   echo "installing v$NODE_REQUIRED into ~/.local/node"
@@ -103,13 +106,17 @@ else
   if [[ -n "${CI_BINARY_CACHE_URL:-}" ]]; then
     cache_arguments+=(--cache-base-url "$CI_BINARY_CACHE_URL")
   fi
+  if [[ "$binary_cache_only" == 1 ]]; then
+    cache_arguments+=(--cache-only)
+  fi
   mkdir -p "$HOME/.local/node"
   bash "$script_dir/fetch-verified-binary.sh" \
     "${cache_arguments[@]}" \
     --filename "$node_tar" \
     --output "$node_archive" \
     --sha256 "$node_sha256" \
-    --source-url "$node_url"
+    --source-url "$node_url" \
+    || { echo "FATAL: could not fetch the pinned Node archive." >&2; exit 1; }
   tar -xJf "$node_archive" -C "$HOME/.local/node" --strip-components=1 \
     || { echo "FATAL: could not unpack $node_tar." >&2; exit 1; }
   hash -r
@@ -160,6 +167,9 @@ install_pnpm_from_registry() {
   if [[ -n "${CI_BINARY_CACHE_URL:-}" ]]; then
     cache_arguments+=(--cache-base-url "$CI_BINARY_CACHE_URL")
   fi
+  if [[ "$binary_cache_only" == 1 ]]; then
+    cache_arguments+=(--cache-only)
+  fi
   bash "$script_dir/fetch-verified-binary.sh" \
     "${cache_arguments[@]}" \
     --filename "pnpm-$version.tgz" \
@@ -181,10 +191,13 @@ install_pnpm_from_registry() {
 
 echo
 echo "=== pnpm ($pnpm_spec) ==="
-if have pnpm && [[ "${CI_BINARY_CACHE_PUBLISH:-0}" != 1 ]]; then
+if have pnpm; then
   echo "already present"
 elif [ -n "${npm_registry:-}" ] && install_pnpm_from_registry "$npm_registry"; then
   echo "installed from configured registry"
+elif [[ "$binary_cache_only" == 1 ]]; then
+  echo "FATAL: the pinned pnpm archive is absent or invalid in the required cache." >&2
+  exit 1
 elif have corepack && corepack enable >/dev/null 2>&1 && corepack prepare --activate >/dev/null 2>&1; then
   echo "installed via corepack"
 elif have corepack && as_root corepack enable >/dev/null 2>&1 && corepack prepare --activate >/dev/null 2>&1; then
@@ -229,6 +242,9 @@ install_uv_from_mirror() {
   if [[ -n "${CI_BINARY_CACHE_URL:-}" ]]; then
     cache_arguments+=(--cache-base-url "$CI_BINARY_CACHE_URL")
   fi
+  if [[ "$binary_cache_only" == 1 ]]; then
+    cache_arguments+=(--cache-only)
+  fi
   bash "$script_dir/fetch-verified-binary.sh" \
     "${cache_arguments[@]}" \
     --filename "$uv_wheel" \
@@ -258,10 +274,13 @@ echo
 echo "=== uv (uv@$UV_REQUIRED) ==="
 echo "python  : $(python3 --version 2>&1 || echo 'missing')"
 echo "pip     : $(python3 -m pip --version 2>&1 || echo 'missing')"
-if have uv && [[ "${CI_BINARY_CACHE_PUBLISH:-0}" != 1 ]]; then
+if have uv; then
   echo "already present"
 elif install_uv_from_mirror; then
   echo "installed from pinned TUNA wheel"
+elif [[ "$binary_cache_only" == 1 ]]; then
+  echo "FATAL: the pinned uv wheel is absent or invalid in the required cache." >&2
+  exit 1
 elif have curl && curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; then
   echo "installed via curl"
 elif have wget && wget -qO- https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; then

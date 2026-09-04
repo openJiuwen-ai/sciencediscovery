@@ -136,24 +136,25 @@ Two test-layer pipelines run, and **neither runs everything**. GitCode
 merge-request CI is CodeArts-only; this repository intentionally has no
 `.gitcode/workflows/` Actions pipeline.
 
-| Pipeline | UT | ST | E2E | Binary packages |
+| Pipeline | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
-| CodeArts — `.codearts/workflow/` targeting `main` | `ci:ut:core` | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts — `.codearts/workflow/` targeting `main` | `ci:ut:core` + `ci:ut:runner` in QEMU TCG | yes | — | x86_64 + aarch64 validation packages; smoke is host-dependent |
 
-The CodeArts pipeline validates merge requests targeting `main`. Its x86_64
-and aarch64 jobs each call
+The CodeArts row above is the GitCode merge-request validation pipeline. It is
+not a release gate: its x86_64 and aarch64 jobs each call
 `scripts/package-binary-release.sh` and verify `SHA256SUMS`. The x86_64 job
 runs directly on the hosted x64 runner and uploads its files to a run-specific
-OBS path. These CI artifacts do not replace the smoke-gated release binaries
-from GitHub Actions. The aarch64 job invokes the separately configured ARM
-CodeArts Build task: the pipeline passes only
-`.ci/package-binary-codearts.sh`, line-oriented environment records, and
-line-oriented arguments, while
-the Build task's reusable bootstrap fetches the MR ref, locks the checkout to
-its system `COMMIT_ID`, and calls `.ci/codearts-build-dispatch.sh`. The pasted
-bootstrap deliberately contains no backslashes because the graphical Build
-shell action compiles its command as Groovy before invoking Bash. It records
+OBS path. The aarch64 job invokes the separately configured ARM CodeArts Build
+task: the pipeline passes only `.ci/package-binary-codearts.sh`, line-oriented
+environment records, and line-oriented arguments, while
+the Build task's reusable bootstrap fetches both the target branch and MR ref,
+rebases its system `COMMIT_ID` onto the current target, and calls
+`.ci/codearts-build-dispatch.sh`. The integration SHA verifies the code being
+built, while the original source SHA keeps artifact names and OBS paths
+stable. The pasted bootstrap deliberately contains no backslashes because the
+graphical Build shell action compiles its command as Groovy before invoking
+Bash. It records
 the real command status and full output even on failure so the following Build
 step can upload available artifacts plus `run.log` and `exit-code` to the
 run-specific aarch64 OBS path. A dependent pipeline job probes the binary,
@@ -166,27 +167,34 @@ claiming that the release smoke gate passed. Both Linux packaging paths fetch
 the pinned micromamba conda package from the Tsinghua TUNA conda-forge mirror,
 verify the package SHA256, extract `bin/micromamba`, and then verify the
 executable against the existing release-binary SHA256. The mirror is limited
-to the CodeArts packaging jobs; normal runtime provisioning keeps its upstream
-URL.
+to this CodeArts pipeline; normal runtime provisioning keeps its upstream URL.
 
 CodeArts's `default` pool has the same shape. The job is a pod on a CCE
 Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
 the unprivileged user `octopus` with Docker's default capability bounding set
 and an active seccomp filter, so `unshare` and bubblewrap are refused outright;
 `sudo` is not setuid, so nothing can be installed with `dnf` either. The
-checked-in workflow therefore runs `ci:ut:core` and the hermetic `ci:st` layer.
-A sandboxed layer needs a self-hosted resource pool
-(`runs-on: [self-hosted, <pool-id>]`) on a machine that allows user namespaces.
+checked-in workflow runs `ci:ut:core` and the hermetic `ci:st` layer directly.
+In CodeArts, a separate hosted x64 job runs the
+existing `ci:ut:runner` entry point inside an Ubuntu VM under QEMU's
+software-only TCG accelerator. The VM supplies an independent kernel whose
+user namespaces work even though the outer CodeArts container denies them;
+`/dev/kvm` is not requested. Its checksum-pinned qcow2 is pre-provisioned by
+the separate `ci/codearts-resources` workflow, so a formal run injects the
+current checkout and starts Runner UT without repeating apt, Node, pnpm, uv,
+or bubblewrap installation. This is much slower than a native worker and does
+not add E2E coverage. A self-hosted Linux resource pool that passes the real
+bubblewrap probe remains the preferred long-term sandbox runner.
 
 The parent CodeArts workflow also invokes the externally registered reusable
 code-check child. That child runs SCA, anti-poison, static-analysis, and
 blacklist CloudBuild tasks whose complete commands remain in CodeArts; it does
 not write PR labels or comments. On merge-request runs, the parent reads each
 child task's result JSON and renders its own `PASSED` or `FAILED` status and
-detail link, alongside UT, ST, and both binary jobs, before publishing
-the final PR label. Manual runs always execute UT/ST and both binary jobs
-without modifying a PR; they run the PR-oriented child only when a `PR_ID` is
-supplied.
+detail link, alongside UT, ST, and both validation binary jobs, before
+publishing the final PR label. Manual runs always execute UT/ST and both
+validation binary jobs without modifying a PR; they run the PR-oriented child
+only when a `PR_ID` is supplied.
 
 ## Repositories
 
@@ -225,7 +233,8 @@ bwrap --ro-bind / / --dev /dev true && echo sandbox ok
 On Ubuntu 24.04 a failure here is usually the AppArmor restriction on
 unprivileged user namespaces, cleared with
 `sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0`. Inside a
-container it is normally unfixable.
+container it is normally unfixable for a process using that same host kernel;
+a full-system VM can instead provide an independent guest kernel.
 
 Then branch from an up-to-date `main`, push the branch, and open the merge
 request on GitCode. Never push to `main`; rebase rather than merge when it

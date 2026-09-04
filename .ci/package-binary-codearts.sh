@@ -37,7 +37,8 @@ Options:
   -h, --help               Show this help
 
 Environment:
-  EXPECTED_COMMIT                 Optional 40-hex checkout assertion
+  EXPECTED_COMMIT                 Optional 40-hex integration checkout assertion
+  ARTIFACT_COMMIT                 Optional 40-hex source commit for output naming
   CI_NPM_REGISTRY                 npm mirror passed to runner provisioning
   CI_PYPI_INDEX                   Python package index embedded in the runtime
   CI_UV_WHEEL_URL                 Optional exact uv wheel source override
@@ -46,7 +47,7 @@ Environment:
   MICROMAMBA_CONDA_MIRROR         Optional conda-forge mirror base URL
   CI_BINARY_CACHE_URL             Optional public OBS toolchain cache base URL
   CI_BINARY_CACHE_DIR             Repository-local cache staging directory
-  CI_BINARY_CACHE_PUBLISH         Populate every pinned cache object when set to 1
+  CI_BINARY_CACHE_ONLY            Set to 1 to require the configured cache
 EOF
 }
 
@@ -85,7 +86,6 @@ esac
 
 cd -- "$repository_root"
 current_commit="$(git rev-parse HEAD)"
-short_commit="${current_commit:0:8}"
 if [[ -n "${EXPECTED_COMMIT:-}" ]]; then
   [[ "$EXPECTED_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]] \
     || { echo "EXPECTED_COMMIT must be a 40-hex commit SHA." >&2; exit 2; }
@@ -95,7 +95,15 @@ if [[ -n "${EXPECTED_COMMIT:-}" ]]; then
   }
 fi
 
-version="${version:-${EXPECTED_COMMIT:-$current_commit}}"
+artifact_commit="${ARTIFACT_COMMIT:-$current_commit}"
+[[ "$artifact_commit" =~ ^[0-9a-fA-F]{40}$ ]] \
+  || { echo "ARTIFACT_COMMIT must be a 40-hex commit SHA." >&2; exit 2; }
+artifact_commit="${artifact_commit,,}"
+git cat-file -e "$artifact_commit^{commit}" 2>/dev/null \
+  || { echo "ARTIFACT_COMMIT is not available in this checkout." >&2; exit 2; }
+short_commit="${artifact_commit:0:8}"
+
+version="${version:-$artifact_commit}"
 [[ "$version" =~ ^[0-9A-Za-z._+-]+$ ]] \
   || { echo "--version contains characters that are unsafe in an artifact name." >&2; exit 2; }
 
@@ -127,6 +135,7 @@ if [[ -n "${CI_BINARY_CACHE_DIR:-}" ]]; then
   export BINARY_CACHE_DIR="$binary_cache_dir"
 fi
 export BINARY_CACHE_URL="${CI_BINARY_CACHE_URL:-}"
+export BINARY_CACHE_ONLY="${CI_BINARY_CACHE_ONLY:-0}"
 
 run_build() (
   set -euo pipefail
@@ -141,7 +150,8 @@ run_build() (
     return 1
   }
   echo "Verified native CodeArts Build runner: $actual_arch"
-  echo "Building source commit: $current_commit"
+  echo "Building integration commit: $current_commit"
+  echo "Naming artifacts for source commit: $artifact_commit"
 
   export CI_NPM_REGISTRY="${CI_NPM_REGISTRY:-}"
   export CI_PYPI_INDEX="${CI_PYPI_INDEX:-}"
@@ -210,52 +220,6 @@ run_build() (
     ls -lh "ScienceDiscovery-$short_commit-linux-$architecture" VERSION SHA256SUMS
   )
 
-  if [[ "${CI_BINARY_CACHE_PUBLISH:-0}" == 1 ]]; then
-    case "$architecture" in
-      aarch64)
-        node_cache=node-v22.19.0-linux-arm64.tar.xz
-        node_sha=0b2d9f564b6594222a62c82e1df2efe119dd4a4aff29644f4dd325bf360b6bcc
-        python_cache=cpython-3.12.13+20260805-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz
-        python_sha=f3510827b61e7a2aa89a1bb7bac73d45521939c489cf43f4699618efaead0611
-        micromamba_cache=micromamba-2.8.1-0-linux-aarch64.tar.bz2
-        micromamba_sha=70c60a36609ee8bcc07a3a1a66b2c3a65cff7c1053466963437f1bda72e5210f
-        uv_cache=uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
-        uv_sha=ea296b700d7c4c27acdfd23ffaef2b0ecdd0aa1b58d942c62ee87df3b30f06ac
-        ;;
-      x86_64)
-        node_cache=node-v22.19.0-linux-x64.tar.xz
-        node_sha=c0649af18e6a24f6fe5535a3e86b341dd49a8e71117c8b68bde973ef834f16f2
-        python_cache=cpython-3.12.13+20260805-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz
-        python_sha=f04a55ae95e8bd352cdff8da11c344fe609ec84795d106fa91b6620366d786fe
-        micromamba_cache=micromamba-2.8.1-0-linux-64.tar.bz2
-        micromamba_sha=a934c3709c997feae403a27fd1e321c106d26ffa4f294800ffb11cbc9a3e8515
-        uv_cache=uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-        uv_sha=b7e89798bd3df7dcc4b2b4ac4e2fc11d6b3ff4fe7d764aa3012d664c635e2922
-        ;;
-    esac
-    stage_cache_object() {
-      local source_name="$1" expected_sha="$2" source_path
-      source_path="${CI_BINARY_CACHE_DIR:?CI_BINARY_CACHE_DIR is required when publishing cache objects}/$source_name"
-      [[ -f "$source_path" ]] || {
-        echo "FATAL: verified cache object was not staged: $source_name" >&2
-        return 1
-      }
-      printf '%s  %s\n' "$expected_sha" "$source_path" | sha256sum --check || return 1
-      cp -f -- "$source_path" "$output_dir/$source_name" || return 1
-    }
-    stage_cache_object "$node_cache" "$node_sha" || return 1
-    stage_cache_object "$python_cache" "$python_sha" || return 1
-    stage_cache_object "$micromamba_cache" "$micromamba_sha" || return 1
-    stage_cache_object pnpm-11.1.2.tgz bfe4d2b2c7a3210565bba62929f9efe493eb5f24627201a102ea4514eae8cf80 || return 1
-    stage_cache_object "$uv_cache" "$uv_sha" || return 1
-    echo "Staged verified cache objects with versioned names:"
-    ls -lh \
-      "$output_dir/$node_cache" \
-      "$output_dir/$python_cache" \
-      "$output_dir/$micromamba_cache" \
-      "$output_dir/pnpm-11.1.2.tgz" \
-      "$output_dir/$uv_cache" || return 1
-  fi
 )
 
 set +e

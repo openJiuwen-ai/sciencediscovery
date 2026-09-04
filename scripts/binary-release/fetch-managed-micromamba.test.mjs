@@ -151,6 +151,25 @@ test("managed micromamba falls back to the conda mirror after a remote cache mis
   ]);
 });
 
+test("managed micromamba cache-only mode does not contact a mirror after a miss", async () => {
+  const requested = [];
+  await assert.rejects(
+    acquireManagedMicromambaBytes(mirrorRelease, undefined, {
+      binaryCacheBaseUrl: "https://cache.example/toolchains/v1",
+      binaryCacheOnly: true,
+      condaMirrorBaseUrl: "https://mirrors.example/conda-forge",
+      downloadImplementation: async (url) => {
+        requested.push(url);
+        throw new Error("missing");
+      },
+    }),
+    /Required binary cache object is missing or invalid/,
+  );
+  assert.deepEqual(requested, [
+    "https://cache.example/toolchains/v1/micromamba-2.8.1-0-linux-aarch64.tar.bz2",
+  ]);
+});
+
 test("managed micromamba download rejects a changed conda mirror package before extraction", async () => {
   let extracted = false;
   await assert.rejects(
