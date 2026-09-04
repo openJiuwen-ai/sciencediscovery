@@ -120,16 +120,16 @@ test("anchors overlapping SubAgents as one parallel timeline group and updates e
 
   const html = renderToStaticMarkup(createElement(RunTimeline, {
     entries,
-    expandedActivityCards: { "subagent:lane-a": true, "subagent:lane-b": true },
     isRunning: false,
+    onOpenSubagent: () => undefined,
     onToggle: () => undefined,
-    onToggleActivityCard: () => undefined,
   }));
   assert.match(html, /Subagents/);
   assert.match(html, /class="subagent-list timeline-subagents"/);
   assert.doesNotMatch(html, /timeline-subagents parallel/);
-  assert.match(html, /A final result/);
+  assert.doesNotMatch(html, /A final result/);
   assert.match(html, /B result/);
+  assert.doesNotMatch(html, /aria-expanded=/);
 });
 
 test("places non-overlapping SubAgents in separate timeline groups", () => {

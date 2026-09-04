@@ -183,6 +183,7 @@ import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./Artifact
 import { SkillManager } from "./SkillManager.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
+import { SubagentConversation } from "./SubagentConversation.js";
 import {
   QuotaSettingsEditor,
   RuntimeStatusPanel,
@@ -328,6 +329,15 @@ function subagentsByRootRun(runs: readonly SessionRun[], subagents: readonly Sub
     grouped.set(parentId, [...(grouped.get(parentId) ?? []), subagent]);
   }
   return grouped;
+}
+
+function findTimelineSubagent(entries: readonly RunTimelineEntry[], subagentId: string): Subagent | undefined {
+  for (const entry of entries) {
+    if (entry.type !== "subagents") continue;
+    const subagent = entry.subagents.find((candidate) => candidate.id === subagentId);
+    if (subagent) return subagent;
+  }
+  return undefined;
 }
 
 export function canSummarizeRunAsSkill(run: SessionRun | undefined): run is SessionRun {
@@ -1058,6 +1068,7 @@ export function App() {
   const [manualReviewerBusyBySession, setManualReviewerBusyBySession] = useState<Record<string, true>>({});
   const [plans, setPlans] = useState<SessionPlan[]>([]);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
+  const [openSubagentId, setOpenSubagentId] = useState<string>();
   const [remoteJobs, setRemoteJobs] = useState<RemoteJob[]>([]);
   const [specialists, setSpecialists] = useState<Specialist[]>([]);
   const [mcpInvocations, setMcpInvocations] = useState<McpInvocation[]>([]);
@@ -1341,6 +1352,10 @@ export function App() {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  useEffect(() => {
+    setOpenSubagentId(undefined);
+  }, [activeProjectId, activeSessionId, workspaceView]);
 
   useEffect(() => {
     if (!session || focusComposerSessionId.current !== session.id) return;
@@ -3627,6 +3642,17 @@ export function App() {
   }, [runUsageByRunId, sessionRuns]);
   const displayedMessages = session?.messages.filter((item) => item.id !== timelineMessageId) ?? [];
   const sessionReplayTimelines = (session?.id ? replayTimelines[session.id] : undefined) ?? {};
+  const openSubagent = openSubagentId
+    ? findTimelineSubagent(runTimeline, openSubagentId)
+      ?? Object.values(sessionReplayTimelines)
+        .map((timeline) => findTimelineSubagent(timeline.entries, openSubagentId))
+        .find((candidate) => candidate !== undefined)
+      ?? subagents.find((candidate) => candidate.id === openSubagentId)
+    : undefined;
+  const openSubagentSpecialistId = openSubagent?.specialistId ?? openSubagent?.input.specialistId;
+  const openSubagentSpecialistName = openSubagentSpecialistId
+    ? specialists.find((specialist) => specialist.id === openSubagentSpecialistId)?.name ?? openSubagentSpecialistId
+    : undefined;
   const activeTimelineRunId = activeRunTimeline?.runId;
   const activeTimelineSubagentIds = collectTimelineSubagentIds(runTimeline);
   const replayTimelineSubagentIds = new Map(Object.entries(sessionReplayTimelines).map(([runId, timeline]) =>
@@ -3811,7 +3837,7 @@ export function App() {
     return (
       <div className="run-activity-group" key={group.runId ?? "unattributed"}>
         <OrchestrationPanel expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} plans={group.plans} />
-        <SubagentCards expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} specialists={specialists} subagents={footerSubagents} />
+        <SubagentCards onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />
         <GovernedDownloadCards
@@ -3872,6 +3898,7 @@ export function App() {
                   </div> : <button
                     className={project.id === activeProjectId ? "nav-item active" : "nav-item"}
                     onClick={() => {
+                      setOpenSubagentId(undefined);
                       setActiveProjectId(project.id);
                       setOpenProjectMenuId(undefined);
                       setOpenSessionMenuId(undefined);
@@ -3959,7 +3986,7 @@ export function App() {
                       />
                     </div> : <button
                       className={item.id === activeSessionId ? "nav-item active" : "nav-item"}
-                      onClick={() => { setWorkspaceView("session"); setActiveSessionId(item.id); setOpenSessionMenuId(undefined); }}
+                      onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setOpenSessionMenuId(undefined); }}
                       onDoubleClick={() => { if (!item.archivedAt) beginInlineRename(target, "sidebar"); }}
                       title={`${item.title}${item.archivedAt ? " · Archived" : " · Double-click to rename Session"}`}
                       type="button"
@@ -3994,7 +4021,7 @@ export function App() {
         <div className="sidebar-quick-actions" aria-label="Workbench navigation">
           <button type="button" onClick={() => void openGlobalSearch()}><span><SearchIcon size={16} /></span><span>{t("app.search")}</span><kbd>Ctrl K</kbd></button>
           <button type="button" className={workspaceView === "usage" ? "active" : undefined} onClick={() => void openUsageView()}><span><SparkleIcon size={16} /></span><span>{t("app.usage")}</span></button>
-          <button type="button" disabled={!activeProjectId} onClick={() => { setWorkspaceView("session"); if (workspaceCollapsed) setWorkspaceCollapsed(false); else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
+          <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); if (workspaceCollapsed) setWorkspaceCollapsed(false); else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
         </div>
         <button className="settings-button" onClick={() => { if (showConfig) cancelSystemSettings(); else openSystemSettings(); }}>
           <span><SettingsIcon size={17} /></span><span>{t("app.systemConfiguration")}</span><span className="mode-chip">{models.length}</span>
@@ -4004,6 +4031,23 @@ export function App() {
       <main className="main-area">
         {workspaceView === "usage" ? (
           <UsagePage summary={globalUsage} onOpenSession={(sessionId) => void openSessionFromUsage(sessionId)} />
+        ) : openSubagent && session && openSubagent.sessionId === session.id ? (
+          <SubagentConversation
+            key={openSubagent.id}
+            loadWorkspaceImage={loadMarkdownImage}
+            onBack={() => setOpenSubagentId(undefined)}
+            onChipClick={handleChipClick}
+            onOpenArtifacts={() => {
+              setOpenSubagentId(undefined);
+              openMarkdownImageArtifacts();
+            }}
+            projectName={activeProjectLabel}
+            references={reportReferences}
+            sessionTitle={activeSessionLabel}
+            specialistName={openSubagentSpecialistName}
+            subagent={openSubagent}
+            workspaceSessionId={session.id}
+          />
         ) : (
           <>
         {sessionArchived ? <div className="archived-banner"><strong>Archived Session</strong><span>Historical messages, files, and audit records remain available. Restore this Session to make changes or start a run.</span></div> : null}
@@ -4117,7 +4161,6 @@ export function App() {
                       <RunTimeline
                         artifactReviews={artifactReviews}
                         entries={sessionReplayTimelines[block.runId]?.entries ?? EMPTY_TIMELINE}
-                        expandedActivityCards={activityCardExpansion}
                         footer={<>
                           <RunUsageInline run={runUsageByRunId.get(block.runId)} />
                           {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) =>
@@ -4130,7 +4173,7 @@ export function App() {
                         onLoadToolOutput={(trace) => loadToolOutput(session.id, block.runId, trace)}
                         onOpenArtifacts={openMarkdownImageArtifacts}
                         onOpenSkillReviews={openGeneratedSkillDraftExplorer}
-                        onToggleActivityCard={toggleActivityCard}
+                        onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)}
                         references={reportReferences}
                         onToggle={(id, expanded) => setReplayTimelines((current) => {
                           const forSession = current[session.id] ?? {};
@@ -4145,7 +4188,6 @@ export function App() {
                           };
                         })}
                         reviewerLevel={reviewerSpecialistSettings?.level}
-                        specialists={specialists}
                         workspaceSessionId={session.id}
                       />
                       {renderSkillEvolutionCard(sessionRuns.find((run) => run.id === block.runId))}
@@ -4154,7 +4196,6 @@ export function App() {
                   <RunTimeline
                     artifactReviews={artifactReviews}
                     entries={runTimeline}
-                    expandedActivityCards={activityCardExpansion}
                     footer={<>
                       <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
                       {tailActivityGroups.map((group) => renderRunActivityGroup(group, activeTimelineSubagentIds))}
@@ -4167,7 +4208,7 @@ export function App() {
                     onOpenArtifacts={openMarkdownImageArtifacts}
                     onOpenSkillReviews={openGeneratedSkillDraftExplorer}
                     onPermissionDecision={decidePermission}
-                    onToggleActivityCard={toggleActivityCard}
+                    onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)}
                     references={reportReferences}
                     onToggle={(id, expanded) => setRunTimelines((current) => {
                       const timeline = current[session.id];
@@ -4186,7 +4227,6 @@ export function App() {
                       };
                     })}
                     reviewerLevel={reviewerSpecialistSettings?.level}
-                    specialists={specialists}
                     workspaceSessionId={session.id}
                   />
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />

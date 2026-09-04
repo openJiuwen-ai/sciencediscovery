@@ -25,18 +25,9 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
-import {
-  ChevronRightIcon,
-  CodeFileIcon,
-  InfoIcon,
-  SessionIcon,
-  SparkleIcon,
-  SpinnerIcon,
-  WarningIcon,
-} from "./icons.js";
+import { ChevronRightIcon } from "./icons.js";
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
-import { ToolIoSections } from "./timeline/ToolIoSections.js";
 
 type VisibleReviewerLevel = ReviewerSpecialistLevel;
 
@@ -106,11 +97,6 @@ function subagentSummary(subagent: Subagent): string {
   return parts.join(" · ");
 }
 
-function specialistLabel(specialists: Specialist[], specialistId: string | undefined): string | undefined {
-  if (!specialistId) return undefined;
-  return specialists.find((specialist) => specialist.id === specialistId)?.name ?? specialistId;
-}
-
 function subagentStepLabel(step: SubagentStep): string {
   if (step.kind === "tool") return step.toolName ?? "Tool";
   if (step.kind === "thinking") return "Reasoning";
@@ -127,52 +113,15 @@ function subagentStepPreview(step: SubagentStep): string {
   return compact;
 }
 
-function subagentStepIcon(step: SubagentStep) {
-  if (step.status === "running") return <SpinnerIcon className="spin" size={15} />;
-  if (step.status === "failed") return <WarningIcon size={15} />;
-  if (step.kind === "tool") return <CodeFileIcon size={15} />;
-  if (step.kind === "thinking") return <SparkleIcon size={15} />;
-  if (step.kind === "assistant") return <SessionIcon size={15} />;
-  return <InfoIcon size={15} />;
-}
-
-function SubagentStepActivity({ step, subagentId }: { step: SubagentStep; subagentId: string }) {
-  const label = subagentStepLabel(step);
-  const preview = subagentStepPreview(step);
-  const status = step.status ?? "completed";
-  return <details className="subagent-step-activity" data-kind={step.kind} data-status={status}>
-    <summary aria-label={`${label}, ${status}: ${preview}`} title={`${label} · ${status}\n${preview}`}>
-      <span className="subagent-step-icon">{subagentStepIcon(step)}</span>
-      <span className="subagent-step-summary"><strong>{label}</strong><small>{status} · {preview}</small></span>
-      <ChevronRightIcon className="subagent-step-chevron" size={13} />
-    </summary>
-    <div className="subagent-step-body">
-      {step.kind === "tool"
-        ? <ToolIoSections
-          outputText={step.status === "running" ? undefined : step.content}
-          trace={{
-            id: `${subagentId}:${step.id}`,
-            ...(step.input !== undefined ? { input: step.input } : {}),
-            name: step.toolName ?? "tool",
-            status,
-          }}
-        />
-        : <pre>{step.content}</pre>}
-    </div>
-  </details>;
-}
-
 export function SubagentCards({
   className,
-  expandedCards,
   heading = "Subagents",
-  onToggleCard,
-  specialists = [],
+  onOpenSubagent,
   subagents,
-}: ActivityCardDisclosure & {
+}: {
   className?: string;
   heading?: string;
-  specialists?: Specialist[];
+  onOpenSubagent: (subagent: Subagent) => void;
   subagents: Subagent[];
 }) {
   if (!subagents.length) return null;
@@ -180,24 +129,9 @@ export function SubagentCards({
   return <section className={`subagent-list${className ? ` ${className}` : ""}`} aria-label="Subagent activity">
     <div className="subagent-list-heading"><strong>{heading}</strong><span>{subagents.filter((subagent) => subagent.status === "running").length} running · {subagents.length} total</span></div>
     {subagents.map((subagent) => {
-      const cardId = activityCardId("subagent", subagent.id);
-      const expanded = Boolean(expandedCards[cardId]);
-      const specialist = specialistLabel(specialists, subagent.specialistId ?? subagent.input.specialistId);
       const summary = subagentSummary(subagent);
       return <article className={`subagent-card ${subagent.status}`} key={subagent.id}>
-        <button type="button" aria-expanded={expanded} onClick={() => onToggleCard(cardId, !expanded)} title={`${subagent.input.description} · ${subagent.status}\n${summary}`}><i /><span><strong>{subagent.input.description}</strong><small>{summary}</small></span><em>{subagent.status}</em></button>
-        {expanded ? <div className="subagent-details">
-          <div className="subagent-metadata">
-            <span>{subagent.model?.name ?? subagent.model?.model ?? "Model unavailable"}</span>
-            {specialist ? <span>Specialist: {specialist}</span> : null}
-            <span>{subagent.turnCount}/{subagent.maxTurns} turns</span>
-            <span>{subagent.usage ? `${subagent.usage.totalTokens.toLocaleString()} tokens · ${subagent.usage.inputTokens.toLocaleString()} in / ${subagent.usage.outputTokens.toLocaleString()} out` : "Usage unavailable"}</span>
-          </div>
-          <p className="subagent-prompt" title={subagent.input.prompt}><strong>Prompt</strong><span>{subagent.input.prompt}</span></p>
-          <div className="subagent-steps" aria-label="Subagent steps">{subagent.steps.map((step) =>
-            <SubagentStepActivity key={step.id} step={step} subagentId={subagent.id} />)}</div>
-          {subagent.error ? <p className="environment-error">{subagent.error}</p> : null}
-        </div> : null}
+        <button aria-label={`Open SubAgent: ${subagent.input.description}`} type="button" onClick={() => onOpenSubagent(subagent)} title={`${subagent.input.description} · ${subagent.status}\n${summary}`}><i /><span><strong>{subagent.input.description}</strong><small>{summary}</small></span><em>{subagent.status}</em><ChevronRightIcon className="subagent-open-icon" size={15} /></button>
       </article>;
     })}
   </section>;

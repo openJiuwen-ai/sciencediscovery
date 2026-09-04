@@ -19,7 +19,6 @@ import type {
   PermissionDecision,
   PermissionRequest,
   RunStreamEvent,
-  Specialist,
   Subagent,
   SubagentStep,
   SubagentUsage,
@@ -33,7 +32,6 @@ import { SubagentCards } from "../Orchestration.js";
 import { PermissionDecisionActions, permissionMatchingKey } from "../PermissionDecisionActions.js";
 import { mergePermissionRequestSnapshot } from "../permission-state.js";
 import { ReviewerPanel } from "../ReviewerPanel.js";
-import type { ActivityCardExpansion } from "../session/run-activity.js";
 import { ToolIoSections } from "./ToolIoSections.js";
 import { useLocale } from "../i18n/index.js";
 import { formatRunFailure } from "../run-failure.js";
@@ -552,9 +550,9 @@ export function skillDraftNameFromTrace(trace: ToolTrace): string | undefined {
 }
 
 export function RunTimeline({
+  agentLabel = "ScienceDiscovery",
   artifactReviews = [],
   entries,
-  expandedActivityCards = {},
   footer,
   isRunning,
   modelName,
@@ -563,17 +561,16 @@ export function RunTimeline({
   onOpenArtifacts,
   onOpenSkillReviews,
   onPermissionDecision,
-  onToggleActivityCard,
+  onOpenSubagent,
   onToggle,
   references,
   onChipClick,
   reviewerLevel,
-  specialists = [],
   workspaceSessionId,
 }: {
+  agentLabel?: string;
   artifactReviews?: ArtifactReviewRun[];
   entries: RunTimelineEntry[];
-  expandedActivityCards?: ActivityCardExpansion;
   /** Content that belongs to the completed run, rendered before its final action. */
   footer?: ReactNode;
   isRunning: boolean;
@@ -584,7 +581,7 @@ export function RunTimeline({
   onOpenArtifacts?: () => void;
   onOpenSkillReviews?: (skillId?: string) => void;
   onPermissionDecision?: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
-  onToggleActivityCard?: (id: string, expanded: boolean) => void;
+  onOpenSubagent?: (subagent: Subagent) => void;
   onToggle: (id: string, expanded: boolean) => void;
   /** Chip references (alias → graph node) for the session's latest report
    * artifact version, so [evidence1]/[artifact1] tokens in assistant report messages
@@ -592,7 +589,6 @@ export function RunTimeline({
   references?: ComposerReference[];
   onChipClick?: (reference: ComposerReference) => void;
   reviewerLevel?: "quick" | "smart" | "deep";
-  specialists?: Specialist[];
   workspaceSessionId?: string;
 }) {
   const { locale, t } = useLocale();
@@ -700,11 +696,9 @@ export function RunTimeline({
           return (
             <SubagentCards
               className="timeline-subagents"
-              expandedCards={expandedActivityCards}
               heading={entry.subagents.length > 1 ? "Subagents" : "Subagent"}
               key={entry.id}
-              onToggleCard={onToggleActivityCard ?? (() => undefined)}
-              specialists={specialists}
+              onOpenSubagent={onOpenSubagent ?? (() => undefined)}
               subagents={entry.subagents}
             />
           );
@@ -715,7 +709,7 @@ export function RunTimeline({
             <article className="message assistant streaming" key={entry.id}>
               <div className="avatar"><BrandIcon size={19} /></div>
               <div>
-                <span className="message-role">ScienceDiscovery{modelName ? ` · ${modelName}` : ""}</span>
+                <span className="message-role">{agentLabel}{modelName ? ` · ${modelName}` : ""}</span>
                 <MarkdownRenderer
                   className="message-content"
                   content={entry.content}

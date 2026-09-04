@@ -18,10 +18,13 @@ import test from "node:test";
 import type { SessionPlan, Subagent } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { ApiClient } from "../src/api.js";
 import { BuiltInReviewerSpecialist, OrchestrationPanel, SpecialistManager, SubagentCards } from "../src/Orchestration.js";
 import { activityCardId } from "../src/session/run-activity.js";
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const timestamp = "2026-07-15T00:00:00.000Z";
 const noopToggle = () => undefined;
@@ -152,35 +155,22 @@ test("expanded plan card shows the live scope and step states", () => {
   assert.match(html, /data-status="pending"/);
 });
 
-test("subagent cards default to collapsed summaries with status, turns, and usage", () => {
+test("subagent cards link to a page-level view without embedding their process", () => {
   const html = renderToStaticMarkup(createElement(SubagentCards, {
-    expandedCards: {},
-    onToggleCard: noopToggle,
+    onOpenSubagent: () => undefined,
     subagents: [buildSubagent()],
   }));
 
   assert.match(html, /Method A/);
   assert.match(html, /completed/);
   assert.match(html, /general-purpose · 2\/300 turns · 150 tokens/);
-  assert.match(html, /aria-expanded="false"/);
-  // Steps and prompt stay folded away until the card is expanded.
+  assert.match(html, /class="subagent-open-icon"/);
+  assert.doesNotMatch(html, /aria-expanded=/);
   assert.doesNotMatch(html, /Created method-a\.json/);
+  assert.doesNotMatch(html, /Run method A and return a JSON result/);
 });
 
-test("running subagents start collapsed as well", () => {
-  const running = buildSubagent({ id: "subagent-running", status: "running", steps: [] });
-  const html = renderToStaticMarkup(createElement(SubagentCards, {
-    expandedCards: {},
-    onToggleCard: noopToggle,
-    subagents: [running],
-  }));
-
-  assert.match(html, /aria-expanded="false"/);
-  assert.match(html, /1 running · 1 total/);
-  assert.match(html, /Starting…/);
-});
-
-test("a collapsed running subagent shows its current step", () => {
+test("a running subagent card shows the current streamed step", () => {
   const running = buildSubagent({
     id: "subagent-running",
     status: "running",
@@ -195,130 +185,40 @@ test("a collapsed running subagent shows its current step", () => {
     }],
   });
   const html = renderToStaticMarkup(createElement(SubagentCards, {
-    expandedCards: {},
-    onToggleCard: noopToggle,
+    onOpenSubagent: () => undefined,
     subagents: [running],
   }));
 
-  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /1 running · 1 total/);
   assert.match(html, /Current: search_papers · vitamin C randomized trials/);
   assert.doesNotMatch(html, /Subagent steps/);
 });
 
-test("expanded subagent card renders compact step activities and token usage from lifted state", () => {
+test("a running subagent without a step reports that it is starting", () => {
+  const running = buildSubagent({ id: "subagent-running", status: "running", steps: [] });
+  const html = renderToStaticMarkup(createElement(SubagentCards, {
+    onOpenSubagent: () => undefined,
+    subagents: [running],
+  }));
+
+  assert.match(html, /1 running · 1 total/);
+  assert.match(html, /Starting…/);
+});
+
+test("clicking a subagent card selects that SubAgent for navigation", async () => {
   const subagent = buildSubagent();
-  const html = renderToStaticMarkup(createElement(SubagentCards, {
-    expandedCards: { [activityCardId("subagent", subagent.id)]: true },
-    onToggleCard: noopToggle,
-    subagents: [subagent],
-  }));
-
-  assert.match(html, /aria-expanded="true"/);
-  assert.match(html, /class="subagent-step-activity"/);
-  assert.match(html, /aria-label="run_python, completed: print/);
-  assert.match(html, /<strong>run_python<\/strong><small>completed · print/);
-  assert.match(html, /Created method-a\.json/);
-  assert.match(html, /150 tokens/);
-  assert.match(html, /120 in \/ 30 out/);
-});
-
-test("expanded subagent card shows mounted specialist name or id", () => {
-  const subagent = buildSubagent({
-    input: {
-      description: "Code work",
-      prompt: "Implement the change.",
-      specialistId: "specialist-code",
-      subagentType: "code-engineer",
-    },
-    specialistId: "specialist-code",
+  let selected: Subagent | undefined;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(SubagentCards, {
+      onOpenSubagent: (candidate) => { selected = candidate; },
+      subagents: [subagent],
+    }));
   });
-  const html = renderToStaticMarkup(createElement(SubagentCards, {
-    expandedCards: { [activityCardId("subagent", subagent.id)]: true },
-    onToggleCard: noopToggle,
-    specialists: [{
-      connectorIds: [],
-      createdAt: timestamp,
-      description: "Builds and debugs analysis code.",
-      enabledSkillIds: [],
-      id: "specialist-code",
-      instructions: "Implement and verify code changes.",
-      name: "code-engineer",
-      updatedAt: timestamp,
-    }],
-    subagents: [subagent],
-  }));
-  const fallbackHtml = renderToStaticMarkup(createElement(SubagentCards, {
-    expandedCards: { [activityCardId("subagent", subagent.id)]: true },
-    onToggleCard: noopToggle,
-    subagents: [subagent],
-  }));
 
-  assert.match(html, /Specialist: code-engineer/);
-  assert.match(fallbackHtml, /Specialist: specialist-code/);
-});
-
-test("subagent tool steps reuse raw sectioned I/O with per-section copy controls", () => {
-  const subagent = buildSubagent();
-  const html = renderToStaticMarkup(createElement(SubagentCards, {
-    expandedCards: { [activityCardId("subagent", subagent.id)]: true },
-    onToggleCard: noopToggle,
-    subagents: [subagent],
-  }));
-
-  assert.equal((html.match(/<details class="tool-io-section" open="">/g) ?? []).length, 3);
-  for (const label of ["Input", "stdout", "Created files"]) {
-    assert.match(html, new RegExp(`<span class="tool-io-label">${label}</span>`));
-    assert.match(html, new RegExp(`aria-label="Copy ${label}"`));
-  }
-  assert.match(html, /print\(&#x27;Created method-a\.json&#x27;\)/);
-  assert.doesNotMatch(html, /<span class="tool-io-label">stderr<\/span>/);
-});
-
-test("failed subagent tool steps keep raw input separate from the error", () => {
-  const subagent = buildSubagent({
-    steps: [{
-      content: '{"error":"ZeroDivisionError: division by zero"}',
-      createdAt: timestamp,
-      id: "failed-tool",
-      input: "1 / 0",
-      kind: "tool",
-      status: "failed",
-      toolName: "run_python",
-    }],
-  });
-  const html = renderToStaticMarkup(createElement(SubagentCards, {
-    expandedCards: { [activityCardId("subagent", subagent.id)]: true },
-    onToggleCard: noopToggle,
-    subagents: [subagent],
-  }));
-
-  assert.match(html, /<span class="tool-io-label">Input<\/span>/);
-  assert.match(html, /<span class="tool-io-label">Error<\/span>/);
-  assert.match(html, /1 \/ 0/);
-  assert.match(html, /ZeroDivisionError: division by zero/);
-  assert.match(html, /aria-label="Copy Error"/);
-});
-
-test("subagent tool sections render content beyond the former 400-character summary", () => {
-  const longOutput = "x".repeat(650);
-  const subagent = buildSubagent({
-    steps: [{
-      content: `stdout:\n${longOutput}\nstderr: (empty)`,
-      createdAt: timestamp,
-      id: "long-tool",
-      input: "print('x' * 650)",
-      kind: "tool",
-      status: "completed",
-      toolName: "run_python",
-    }],
-  });
-  const html = renderToStaticMarkup(createElement(SubagentCards, {
-    expandedCards: { [activityCardId("subagent", subagent.id)]: true },
-    onToggleCard: noopToggle,
-    subagents: [subagent],
-  }));
-
-  assert.match(html, new RegExp(`x{${longOutput.length}}`));
+  await act(async () => renderer!.root.findByType("button").props.onClick());
+  assert.equal(selected, subagent);
+  await act(async () => renderer!.unmount());
 });
 
 test("specialist form uses the primary action button skeleton", () => {
