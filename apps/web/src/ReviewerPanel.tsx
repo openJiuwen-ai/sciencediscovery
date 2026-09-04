@@ -227,6 +227,9 @@ export function ReviewerPanel({
     else setExpanded(false);
   }, [checkpointStatus, toolCallId]);
   if (!scopedReviews.length && !checkpointStatus) return null;
+  // Automatic work is non-intrusive. A stale/deleted Artifact from an older
+  // task must never leave a red failure card in the research conversation.
+  if (!scopedReviews.length && toolCallId.startsWith("automatic-review:") && checkpointStatus !== "running") return null;
   // Older versions could create checkpoints for code/data Artifacts. The API
   // now omits those records; suppress their empty completed shell as well so a
   // researcher only sees report-quality review activity.

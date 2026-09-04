@@ -203,6 +203,17 @@ test("ReviewerPanel retains a failed manual review with its error", () => {
   assert.doesNotMatch(html, /class="reviewer-specialist-panel" open/);
 });
 
+test("ReviewerPanel hides a failed automatic checkpoint with no Artifact results", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    checkpointError: "Artifact version not found in this Session",
+    checkpointStatus: "failed",
+    reviews: [],
+    toolCallId: "automatic-review:stale-task",
+  }));
+
+  assert.equal(html, "");
+});
+
 test("ReviewerPanel hides an empty completed checkpoint from legacy non-report reviews", () => {
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
     checkpointStatus: "completed",

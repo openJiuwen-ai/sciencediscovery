@@ -303,9 +303,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         .map((versionId) => store.getArtifactVersion(task.sessionId, versionId))
         .filter((version): version is NonNullable<typeof version> => {
           const artifact = version ? store.getArtifact(task.sessionId, version.artifactId) : undefined;
-          return Boolean(version && artifact && isReviewerReportCandidate(artifact, version));
+          return Boolean(version && artifact && artifact.createdInSessionId === task.sessionId
+            && version.sessionId === task.sessionId && isReviewerReportCandidate(artifact, version));
         });
+      // An automatic task may outlive a superseded/deleted Artifact. It is a
+      // normal race in an asynchronous workspace, not a Reviewer failure.
+      if (!versions.length && task.origin === "artifact_registered") return { skipped: true };
       if (!versions.length) throw new Error("No report artifacts to review");
+      const runnableTask = { ...task, artifactVersionIds: versions.map((version) => version.id) };
       let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
       if (task.reviewLevel === "deep") {
         const runtimeSettings = store.resolveRuntimeSettings(task.sessionId).effective;
@@ -371,7 +376,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       try {
         const result = await runReviewerCheckpoint({
-          artifactVersionIds: versions.map((version) => version.id),
+          artifactVersionIds: runnableTask.artifactVersionIds,
           cas: provenanceRecorder.cas,
           parentRunId: task.toolCallId,
           reason: task.origin === "manual" ? "Manual Reviewer Specialist request" : "Automatic Artifact evidence audit",
@@ -397,6 +402,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           },
           ...(semanticReview ? { semanticReview } : {}),
         });
+        if (task.origin === "artifact_registered" && !result.reviews.length) return { skipped: true };
         await store.updateReviewerCheckpointMessage(task.sessionId, task.checkpointMessageId, {
           content: reviewerCheckpointPromptContent(result.reviews), status: "completed",
         });
@@ -410,6 +416,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         throw error;
       }
     },
+  }, {
+    isMainAgentBusy: async (sessionId) => (await store.listSessionRuns(sessionId))
+      .some((run) => run.status === "queued" || run.status === "running"),
   });
   provenanceRecorder.setArtifactRegisteredHandler(async ({ mediaType, sessionId, version }) => {
     await reviewerAuditCoordinator.enqueueArtifactVersion({

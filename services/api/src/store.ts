@@ -5300,6 +5300,19 @@ export class SessionStore {
     return structuredClone(message);
   }
 
+  /** Remove a transient automatic-audit shell before it reaches the lead Agent. */
+  async deleteReviewerCheckpointMessage(sessionId: string, messageId: string): Promise<void> {
+    this.assertSessionWritable(sessionId);
+    const messages = await this.readMessages(sessionId);
+    const index = messages.findIndex((message) => message.id === messageId);
+    if (index < 0) return;
+    if (messages[index]!.kind !== "reviewer_checkpoint") {
+      throw new Error("Reviewer checkpoint message id is already in use");
+    }
+    messages.splice(index, 1);
+    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+  }
+
   async appendTimeoutMessage(
     sessionId: string,
     content: string,

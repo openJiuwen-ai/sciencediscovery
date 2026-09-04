@@ -241,6 +241,100 @@ test("Stop review cancels a quiet-window batch before it starts", async (context
   assert.equal(executions, 0);
 });
 
+test("an automatic audit with no current report is silently superseded without checkpoint or feedback", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-skip-stale-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer stale automatic task");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  const report = await store.createArtifactVersion({
+    content: { hash: "c".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
+  });
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => ({ skipped: true }) }, { quickBatchQuietMs: 0 });
+  const task = await coordinator.enqueueArtifactVersion({
+    artifactVersionId: report.version.id, contentHash: report.version.content.hash, mediaType: report.version.mediaType, sessionId: session.id,
+  });
+  assert.ok(task);
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id))[0]?.status === "superseded");
+  assert.deepEqual(await store.readMessages(session.id), []);
+  assert.deepEqual(await store.listReviewFeedback(session.id), []);
+});
+
+test("automatic audits wait for the lead Agent to be idle", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-yield-main-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer yields to lead");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  const report = await store.createArtifactVersion({
+    content: { hash: "d".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
+  });
+  let mainBusy = true;
+  let executions = 0;
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => { executions += 1; return []; } }, {
+    isMainAgentBusy: () => mainBusy,
+    mainAgentBusyRetryMs: 10,
+    quickBatchQuietMs: 0,
+  });
+  const task = await coordinator.enqueueArtifactVersion({
+    artifactVersionId: report.version.id, contentHash: report.version.content.hash, mediaType: report.version.mediaType, sessionId: session.id,
+  });
+  assert.ok(task);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 30));
+  assert.equal(executions, 0);
+  assert.deepEqual(await store.readMessages(session.id), []);
+  mainBusy = false;
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id))[0]?.status === "completed");
+  assert.equal(executions, 1);
+});
+
+test("automatic audits share one process-wide background lane", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-global-lane-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer global lane");
+  const firstSession = await store.createSession(project.id, "First", {}, {}, { allowUnconfiguredModel: true });
+  const secondSession = await store.createSession(project.id, "Second", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  const first = await store.createArtifactVersion({
+    content: { hash: "e".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: firstSession.id, sourcePath: "first.md",
+  });
+  const second = await store.createArtifactVersion({
+    content: { hash: "f".repeat(64), size: 1 }, kind: "markdown", logicalName: "second.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: secondSession.id, sourcePath: "second.md",
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  let executions = 0;
+  const coordinator = new ReviewerAuditCoordinator(store, {
+    run: async () => {
+      executions += 1;
+      if (executions === 1) await gate;
+      return [];
+    },
+  }, { mainAgentBusyRetryMs: 10, quickBatchQuietMs: 0 });
+  await coordinator.enqueueArtifactVersion({ artifactVersionId: first.version.id, contentHash: first.version.content.hash, mediaType: first.version.mediaType, sessionId: firstSession.id });
+  await coordinator.enqueueArtifactVersion({ artifactVersionId: second.version.id, contentHash: second.version.content.hash, mediaType: second.version.mediaType, sessionId: secondSession.id });
+  await waitFor(async () => (await store.listReviewerAuditTasks(firstSession.id))[0]?.status === "running");
+  await new Promise((resolveWait) => setTimeout(resolveWait, 30));
+  assert.equal(executions, 1);
+  release();
+  await waitFor(async () => (await store.listReviewerAuditTasks(firstSession.id))[0]?.status === "completed"
+    && (await store.listReviewerAuditTasks(secondSession.id))[0]?.status === "completed");
+  assert.equal(executions, 2);
+});
+
 test("the Deep cooldown is applied once to the next automatic batch", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `reviewer-deep-cooldown-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });

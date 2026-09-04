@@ -17,17 +17,23 @@ import { cancelReviewerCheckpoints, isReviewerReportCandidate } from "@sciencedi
 import { SessionStore } from "../store.js";
 
 const DEEP_AUTOMATIC_COOLDOWN_MS = 5 * 60_000;
-const DEEP_BATCH_QUIET_MS = 60_000;
-const QUICK_BATCH_QUIET_MS = 30_000;
+const DEEP_BATCH_QUIET_MS = 2 * 60_000;
+const QUICK_BATCH_QUIET_MS = 60_000;
+const AUTOMATIC_RETRY_WHILE_MAIN_BUSY_MS = 15_000;
 const TERMINAL = new Set<ReviewerAuditTask["status"]>(["cancelled", "completed", "failed", "superseded"]);
 
+export type ReviewerAuditExecutionResult = ArtifactReviewRun[] | { skipped: true };
+
 export interface ReviewerAuditExecution {
-  run(task: ReviewerAuditTask, signal: AbortSignal): Promise<ArtifactReviewRun[]>;
+  run(task: ReviewerAuditTask, signal: AbortSignal): Promise<ReviewerAuditExecutionResult>;
 }
 
 export interface ReviewerAuditScheduling {
   deepAutomaticCooldownMs?: number;
   deepBatchQuietMs?: number;
+  /** Automatic audits are background work and must yield to a live lead Agent. */
+  isMainAgentBusy?: (sessionId: string) => boolean | Promise<boolean>;
+  mainAgentBusyRetryMs?: number;
   quickBatchQuietMs?: number;
 }
 
@@ -47,6 +53,8 @@ function taskToolCallId(origin: ReviewerAuditTask["origin"], taskId: string, che
  */
 export class ReviewerAuditCoordinator {
   private readonly active = new Map<string, AbortController>();
+  /** One automatic audit for the whole API process; manual review is not throttled here. */
+  private automaticTaskId: string | undefined;
   private readonly draining = new Set<string>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -138,6 +146,9 @@ export class ReviewerAuditCoordinator {
   }
 
   async cancelSession(sessionId: string): Promise<boolean> {
+    const scheduled = this.timers.get(sessionId);
+    if (scheduled) clearTimeout(scheduled);
+    this.timers.delete(sessionId);
     const tasks = await this.store.listReviewerAuditTasks(sessionId);
     const now = new Date().toISOString();
     for (const task of tasks.filter((item) => item.status === "queued" || item.status === "running")) {
@@ -279,7 +290,11 @@ export class ReviewerAuditCoordinator {
         if (!queued) return;
         const ready = (await this.store.listReviewerAuditTasks(sessionId))
           .filter((item) => item.status === "queued" && (!item.notBefore || new Date(item.notBefore).getTime() <= Date.now()))
-          .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
+          // A user-requested audit should never wait behind an automatic one
+          // that is deliberately yielding to the main Agent.
+          .toSorted((left, right) => (left.origin === right.origin
+            ? left.createdAt.localeCompare(right.createdAt)
+            : left.origin === "manual" ? -1 : 1))[0];
         if (!ready) {
           delayedUntil = new Date(queued.notBefore ?? Date.now()).getTime();
           return;
@@ -311,17 +326,53 @@ export class ReviewerAuditCoordinator {
           });
           continue;
         }
+        if (task.origin === "artifact_registered") {
+          // Automatic review is intentionally low priority: it never starts
+          // while its Session's lead Agent has queued/running work, and the
+          // one process-wide lane prevents separate Sessions from piling up
+          // concurrent Deep model calls.
+          if (this.automaticTaskId) {
+            delayedUntil = Date.now() + (this.scheduling.mainAgentBusyRetryMs ?? AUTOMATIC_RETRY_WHILE_MAIN_BUSY_MS);
+            return;
+          }
+          if (await this.scheduling.isMainAgentBusy?.(sessionId)) {
+            delayedUntil = Date.now() + (this.scheduling.mainAgentBusyRetryMs ?? AUTOMATIC_RETRY_WHILE_MAIN_BUSY_MS);
+            return;
+          }
+          // The await above lets another Session's drain run, so check the
+          // shared lane again before admitting this background task.
+          if (this.automaticTaskId) {
+            delayedUntil = Date.now() + (this.scheduling.mainAgentBusyRetryMs ?? AUTOMATIC_RETRY_WHILE_MAIN_BUSY_MS);
+            return;
+          }
+          this.automaticTaskId = task.id;
+        }
         const published = await this.publishCheckpoint(task);
         const running = await this.store.updateReviewerAuditTask(sessionId, task.id, {
           startedAt: new Date().toISOString(), status: "running",
         });
-        if (running.status !== "running") continue;
+        if (running.status !== "running") {
+          if (this.automaticTaskId === task.id) this.automaticTaskId = undefined;
+          continue;
+        }
         const controller = new AbortController();
         this.active.set(task.id, controller);
         try {
-          const reviews = await this.execution.run({ ...running, checkpointPublishedAt: published.checkpointPublishedAt }, controller.signal);
+          const outcome = await this.execution.run({ ...running, checkpointPublishedAt: published.checkpointPublishedAt }, controller.signal);
           const settled = await this.store.listReviewerAuditTasks(sessionId);
           if (settled.find((item) => item.id === task.id)?.status === "cancelled") continue;
+          if (!Array.isArray(outcome)) {
+            // A queued automatic Artifact can be replaced/deleted between
+            // debounce and admission. This is normal lifecycle churn, not a
+            // failed review, so remove the transient card and do not create
+            // lead-Agent feedback.
+            await this.store.updateReviewerAuditTask(sessionId, task.id, {
+              finishedAt: new Date().toISOString(), status: "superseded",
+            });
+            await this.store.deleteReviewerCheckpointMessage(sessionId, task.checkpointMessageId);
+            continue;
+          }
+          const reviews = outcome;
           const reviewIds = reviews.map((review) => review.id);
           await this.store.updateReviewerAuditTask(sessionId, task.id, {
             finishedAt: new Date().toISOString(), reviewIds, status: "completed",
@@ -338,6 +389,7 @@ export class ReviewerAuditCoordinator {
           });
         } finally {
           this.active.delete(task.id);
+          if (this.automaticTaskId === task.id) this.automaticTaskId = undefined;
         }
       }
     } finally {
