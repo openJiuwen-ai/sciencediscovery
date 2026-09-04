@@ -15,9 +15,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { RemoteJob } from "@sciencediscovery/schema";
+import type { RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { ApiClient } from "../src/api.js";
 import { ApiRequestError } from "../src/api/auth.js";
@@ -27,6 +28,7 @@ import { activityCardId } from "../src/session/run-activity.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
 const noopToggle = () => undefined;
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 test("host-key failures surface only as structured trust prompts", () => {
   const untrusted = new ApiRequestError("Host key verification failed", 409, "SSH_HOST_KEY_UNTRUSTED", {
@@ -55,6 +57,66 @@ test("the machine catalog shows the list first and keeps add forms behind button
   // No blank form competes with the list until the user asks for one.
   assert.doesNotMatch(html, /Probe and add/);
   assert.doesNotMatch(html, /Connect and add/);
+});
+
+function buildHost(overrides: Partial<RemoteHostTarget> = {}): RemoteHostTarget {
+  return {
+    alias: "research-node",
+    connectionKind: "ssh",
+    createdAt: timestamp,
+    id: "host-1",
+    runnerCommand: "sciencediscovery-runner",
+    status: "ready",
+    updatedAt: timestamp,
+    ...overrides,
+  };
+}
+
+async function renderHost(host: RemoteHostTarget): Promise<{ output: string; renderer: ReactTestRenderer }> {
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(RemoteHostManager, {
+      client: { listRemoteHosts: async () => [host] } as ApiClient,
+      onError: () => undefined,
+    }));
+  });
+  return { output: JSON.stringify(renderer!.toJSON()), renderer: renderer! };
+}
+
+test("an SSH authentication failure does not invent missing runner or Node capabilities", async () => {
+  const { output, renderer } = await renderHost(buildHost({
+    capabilities: undefined,
+    error: "All configured authentication methods failed",
+    status: "error",
+  }));
+
+  assert.match(output, /All configured authentication methods failed/);
+  assert.doesNotMatch(output, /cannot deploy: no runner and no Node\.js 22\+ found/);
+  assert.doesNotMatch(output, /OS unknown/);
+  await act(async () => renderer.unmount());
+});
+
+test("a successfully probed Linux host without a runner or Node keeps the deployment warning", async () => {
+  const { output, renderer } = await renderHost(buildHost({
+    capabilities: {
+      conda: false,
+      containerRuntimes: [],
+      cpuCores: 8,
+      cuda: null,
+      gpu: null,
+      memoryBytes: 16 * 1024 ** 3,
+      modules: false,
+      nodeVersion: null,
+      platform: "Linux",
+      probedAt: timestamp,
+      runnerCommandAvailable: false,
+      scratchPaths: [],
+      slurm: false,
+    },
+  }));
+
+  assert.match(output, /Linux · cannot deploy: no runner and no Node\.js 22\+ found/);
+  await act(async () => renderer.unmount());
 });
 
 function buildJob(overrides: Partial<RemoteJob> = {}): RemoteJob {

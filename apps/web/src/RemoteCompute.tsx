@@ -43,7 +43,8 @@ export function effectiveRemoteRunnerHostIds(project: Project | undefined, sessi
 
 function capacity(host: RemoteHostTarget): string {
   const capabilities = host.capabilities;
-  if (!capabilities) return host.error ?? "Probe unavailable";
+  if (host.error) return host.error;
+  if (!capabilities) return "Probe unavailable";
   if (host.connectionKind === "direct") {
     return `${host.endpoint?.protocol ?? "http"}://${host.endpoint?.host ?? "?"}:${host.endpoint?.port ?? "?"} · token authenticated`;
   }
@@ -56,12 +57,15 @@ function capacity(host: RemoteHostTarget): string {
   ].join(" · ");
 }
 
-/** How this host will get a runner, so the card says it before the user connects. */
-function runnerSource(host: RemoteHostTarget): string {
+/** How a successfully probed Linux host will get a runner. */
+function runnerSource(host: RemoteHostTarget): string | undefined {
   if (host.connectionKind === "direct") return "started by you on that machine";
-  if (host.capabilities?.runnerCommandAvailable) return `runner ${host.runnerCommand} already installed`;
-  return host.capabilities?.nodeVersion
-    ? `deployed automatically over SSH (Node ${host.capabilities.nodeVersion})`
+  if (host.status !== "ready" || host.error) return undefined;
+  const capabilities = host.capabilities;
+  if (capabilities?.platform !== "Linux") return undefined;
+  if (capabilities.runnerCommandAvailable) return `runner ${host.runnerCommand} already installed`;
+  return capabilities.nodeVersion
+    ? `deployed automatically over SSH (Node ${capabilities.nodeVersion})`
     : "cannot deploy: no runner and no Node.js 22+ found";
 }
 
@@ -460,11 +464,16 @@ export function RemoteHostManager({ client, onError }: {
       const state = connected ? "ready" : host.runnerStatus?.state ?? host.status;
       const untrustedKey = host.hostKey?.trusted === false ? host.hostKey : undefined;
       const publicKey = host.publicKey;
+      const source = runnerSource(host);
       return <article className={`remote-host-card ${host.status}`} key={host.id}>
         <div className="remote-host-card-main">
           <div className="remote-host-card-title"><strong>{host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? "connected" : state}</span></div>
           <small>{hostKindLabel(host)} · {capacity(host)}</small>
-          <small>{host.connectionKind === "direct" ? host.capabilities?.platform ?? "OS unknown" : `${host.capabilities?.platform ?? "OS unknown"} · ${runnerSource(host)}`}</small>
+          {host.connectionKind === "direct"
+            ? <small>{host.capabilities?.platform ?? "OS unknown"}</small>
+            : host.capabilities
+              ? <small>{[host.capabilities.platform ?? "OS unknown", source].filter(Boolean).join(" · ")}</small>
+              : null}
           {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
           {host.runnerStatus?.error ? <small>{host.runnerStatus.error}</small> : null}
           {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
