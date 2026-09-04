@@ -159,6 +159,11 @@ export class ProvenanceRecorder {
   private readonly versions: VersionStore;
   private readonly dataCas: CasStore;
   private readonly artifactRegistry: ArtifactRegistry;
+  private artifactRegisteredHandler?: (registered: {
+    mediaType: string;
+    sessionId: string;
+    version: ScientificArtifactVersion;
+  }) => Promise<void>;
   private readonly memoryGraphSink: MemoryGraphSink | null;
 
   constructor(
@@ -177,6 +182,32 @@ export class ProvenanceRecorder {
       },
       { createVersion: async (input) => await this.store.createArtifactVersion(input) },
     );
+  }
+
+  /**
+   * Optional post-registration observer. It runs only after the version and
+   * workspace revision are durable; its failure is intentionally non-fatal so
+   * an optional audit can never make an Artifact upload or delivery fail.
+   */
+  setArtifactRegisteredHandler(handler: (registered: {
+    mediaType: string;
+    sessionId: string;
+    version: ScientificArtifactVersion;
+  }) => Promise<void>): void {
+    this.artifactRegisteredHandler = handler;
+  }
+
+  notifyArtifactRegistered(registered: {
+    mediaType: string;
+    sessionId: string;
+    version: ScientificArtifactVersion;
+  }): void {
+    // The handler persists its own task, but its I/O must never sit on the
+    // Artifact delivery path. A completed Artifact is useful even when the
+    // optional Reviewer worker is restarting or its storage is unavailable.
+    void this.artifactRegisteredHandler?.(registered).catch((error) => {
+      console.warn("[reviewer-specialist] could not schedule automatic audit", error);
+    });
   }
 
   /**
@@ -257,6 +288,11 @@ export class ProvenanceRecorder {
       ...(options.turnId ? { runId: options.turnId } : {}),
       size: fileStat.size,
       ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}),
+    });
+    this.notifyArtifactRegistered({
+      mediaType: registered.version.mediaType,
+      sessionId: options.sessionId,
+      version: registered.version,
     });
     return registered;
   }

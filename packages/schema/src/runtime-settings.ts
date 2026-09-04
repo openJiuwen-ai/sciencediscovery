@@ -102,6 +102,14 @@ export type ReviewerSpecialistLevel = typeof REVIEWER_SPECIALIST_LEVELS[number];
 
 export const DEFAULT_REVIEWER_SPECIALIST_LEVEL: ReviewerSpecialistLevel = "quick";
 
+/** What the lead Agent may do with a completed background review. */
+export const REVIEWER_FEEDBACK_POLICIES = ["record", "explain", "suggest", "repair"] as const;
+
+export type ReviewerFeedbackPolicy = typeof REVIEWER_FEEDBACK_POLICIES[number];
+
+/** A review is evidence, not an instruction. Keep the default completely passive. */
+export const DEFAULT_REVIEWER_FEEDBACK_POLICY: ReviewerFeedbackPolicy = "record";
+
 const REVIEWER_SPECIALIST_LEVEL_RANK: Record<ReviewerSpecialistLevel, number> = {
   quick: 0,
   deep: 1,
@@ -117,6 +125,8 @@ export function reviewerSpecialistSupportsLevel(
 
 export interface ReviewerSpecialistSettings {
   enabled: boolean;
+  /** Safe lead-Agent handoff policy for completed audit feedback. */
+  feedbackPolicy: ReviewerFeedbackPolicy;
   level: ReviewerSpecialistLevel;
 }
 

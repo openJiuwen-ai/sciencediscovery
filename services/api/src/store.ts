@@ -24,6 +24,8 @@ import { WorkspaceTransfers } from "./workspace-transfers.js";
 import type {
   ChatMessage,
   ArtifactReviewRun,
+  ReviewerAuditTask,
+  ReviewFeedback,
   ArtifactAnnotation,
   ArtifactDerivation,
   ArtifactOrigin,
@@ -143,10 +145,12 @@ import {
   DEFAULT_SKILL_SELECTION_MODE,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
   DEFAULT_REVIEWER_SPECIALIST_LEVEL,
+  DEFAULT_REVIEWER_FEEDBACK_POLICY,
   DEFAULT_SYSTEM_TIMEOUT_SETTINGS,
   DEFAULT_MEMORY_GRAPH_SETTINGS,
   DEFAULT_WEB_SETTINGS,
   REVIEWER_SPECIALIST_LEVELS,
+  REVIEWER_FEEDBACK_POLICIES,
   SKILL_SELECTION_FIELDS,
   epochSandboxNetworkAccess,
   UNTITLED_SESSION_TITLE,
@@ -306,6 +310,11 @@ function remotePath(value: unknown, field: string): string {
 function isReviewerSpecialistLevel(value: unknown): value is ReviewerSpecialistLevel {
   return typeof value === "string"
     && (REVIEWER_SPECIALIST_LEVELS as readonly string[]).includes(value);
+}
+
+function isReviewerFeedbackPolicy(value: unknown): value is import("@sciencediscovery/schema").ReviewerFeedbackPolicy {
+  return typeof value === "string"
+    && (REVIEWER_FEEDBACK_POLICIES as readonly string[]).includes(value);
 }
 
 const WORKSPACE_FILE_ORIGINS = new Set<WorkspaceFileRevision["origin"]>([
@@ -1006,6 +1015,11 @@ export class SessionStore {
         ? savedReviewerSpecialistLevel
         : DEFAULT_REVIEWER_SPECIALIST_LEVEL;
     const migratedReviewerSpecialistLevel = saved.reviewerSpecialistLevel !== reviewerSpecialistLevel;
+    const savedReviewerFeedbackPolicy: unknown = saved.reviewerSpecialistFeedbackPolicy;
+    const reviewerSpecialistFeedbackPolicy = isReviewerFeedbackPolicy(savedReviewerFeedbackPolicy)
+      ? savedReviewerFeedbackPolicy
+      : DEFAULT_REVIEWER_FEEDBACK_POLICY;
+    const migratedReviewerFeedbackPolicy = saved.reviewerSpecialistFeedbackPolicy !== reviewerSpecialistFeedbackPolicy;
     this.catalog = {
       artifactAnnotations,
       artifactVersions,
@@ -1028,6 +1042,7 @@ export class SessionStore {
       quotaSettings,
       sandboxNetworkSettings,
       reviewerSpecialistEnabled: saved.reviewerSpecialistEnabled === true,
+      reviewerSpecialistFeedbackPolicy,
       reviewerSpecialistLevel,
       remoteHosts,
       remoteJobs,
@@ -1078,6 +1093,7 @@ export class SessionStore {
       || migratedSessionPlans
       || migratedPermissionGrants
       || migratedReviewerSpecialistLevel
+      || migratedReviewerFeedbackPolicy
       || migratedSpecialists
       || migratedArtifactCatalog
       || migratedWorkspaceFileProvenance
@@ -1251,6 +1267,14 @@ export class SessionStore {
     return resolve(this.dataDir, "artifact-reviews", `${sessionId}.json`);
   }
 
+  private reviewerAuditTasksPath(sessionId: string): string {
+    return resolve(this.dataDir, "reviewer-audit-tasks", `${sessionId}.json`);
+  }
+
+  private reviewFeedbackPath(sessionId: string): string {
+    return resolve(this.dataDir, "review-feedback", `${sessionId}.json`);
+  }
+
   private paperAcquisitionsPath(sessionId: string): string {
     return resolve(this.dataDir, "paper-acquisitions", `${sessionId}.json`);
   }
@@ -1289,6 +1313,8 @@ export class SessionStore {
       this.modelUsagePath(session.id),
       this.reviewsPath(session.id),
       this.artifactReviewsPath(session.id),
+      this.reviewerAuditTasksPath(session.id),
+      this.reviewFeedbackPath(session.id),
       this.paperAcquisitionsPath(session.id),
       this.paperVisionRunsPath(session.id),
       this.claimsPath(session.id),
@@ -1675,6 +1701,7 @@ export class SessionStore {
   getReviewerSpecialistSettings(): ReviewerSpecialistSettings {
     return {
       enabled: this.catalog.reviewerSpecialistEnabled,
+      feedbackPolicy: this.catalog.reviewerSpecialistFeedbackPolicy,
       level: this.catalog.reviewerSpecialistLevel,
     };
   }
@@ -1686,8 +1713,12 @@ export class SessionStore {
     if (value.level !== undefined && !isReviewerSpecialistLevel(value.level)) {
       throw new Error("Reviewer Specialist level must be quick or deep");
     }
+    if (value.feedbackPolicy !== undefined && !isReviewerFeedbackPolicy(value.feedbackPolicy)) {
+      throw new Error("Reviewer Specialist feedback policy must be record, explain, suggest, or repair");
+    }
     this.catalog.reviewerSpecialistEnabled = value.enabled;
     if (value.level !== undefined) this.catalog.reviewerSpecialistLevel = value.level;
+    if (value.feedbackPolicy !== undefined) this.catalog.reviewerSpecialistFeedbackPolicy = value.feedbackPolicy;
     await this.saveCatalog();
     return this.getReviewerSpecialistSettings();
   }
@@ -4992,6 +5023,76 @@ export class SessionStore {
         throw new Error(`Artifact review already exists: ${review.id}`);
       }
       reviews.push(structuredClone(review));
+    });
+  }
+
+  async listReviewerAuditTasks(sessionId: string): Promise<ReviewerAuditTask[]> {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    return await this.readArray<ReviewerAuditTask>(this.reviewerAuditTasksPath(sessionId));
+  }
+
+  async createReviewerAuditTask(task: ReviewerAuditTask): Promise<ReviewerAuditTask> {
+    this.assertSessionWritable(task.sessionId);
+    return await this.mutateArray<ReviewerAuditTask, ReviewerAuditTask>(
+      this.reviewerAuditTasksPath(task.sessionId),
+      (tasks) => {
+        this.assertSessionWritable(task.sessionId);
+        const existing = tasks.find((candidate) => candidate.id === task.id
+          || (candidate.inputFingerprint === task.inputFingerprint
+            && candidate.origin === task.origin
+            && candidate.status !== "cancelled"
+            && candidate.status !== "superseded"));
+        if (existing) return structuredClone(existing);
+        tasks.push(structuredClone(task));
+        return structuredClone(task);
+      },
+    );
+  }
+
+  async updateReviewerAuditTask(
+    sessionId: string,
+    taskId: string,
+    update: Partial<Pick<ReviewerAuditTask,
+      "errorSummary" | "finishedAt" | "notBefore" | "reviewIds" | "startedAt" | "status" | "supersededBy">>,
+  ): Promise<ReviewerAuditTask> {
+    this.assertSessionWritable(sessionId);
+    return await this.mutateArray<ReviewerAuditTask, ReviewerAuditTask>(
+      this.reviewerAuditTasksPath(sessionId),
+      (tasks) => {
+        const task = tasks.find((candidate) => candidate.id === taskId);
+        if (!task) throw new Error("Reviewer audit task not found");
+        // A terminal task cannot be revived by a late completion callback.
+        if (["cancelled", "completed", "failed", "superseded"].includes(task.status)
+          && update.status === "running") return structuredClone(task);
+        Object.assign(task, structuredClone(update));
+        return structuredClone(task);
+      },
+    );
+  }
+
+  async listReviewFeedback(sessionId: string): Promise<ReviewFeedback[]> {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    return await this.readArray<ReviewFeedback>(this.reviewFeedbackPath(sessionId));
+  }
+
+  async appendReviewFeedback(feedback: ReviewFeedback): Promise<ReviewFeedback> {
+    this.assertSessionWritable(feedback.sessionId);
+    return await this.mutateArray<ReviewFeedback, ReviewFeedback>(this.reviewFeedbackPath(feedback.sessionId), (items) => {
+      const existing = items.find((candidate) => candidate.feedbackFingerprint === feedback.feedbackFingerprint);
+      if (existing) return structuredClone(existing);
+      items.push(structuredClone(feedback));
+      return structuredClone(feedback);
+    });
+  }
+
+  async consumeReviewFeedback(sessionId: string, feedbackId: string): Promise<ReviewFeedback | undefined> {
+    this.assertSessionWritable(sessionId);
+    return await this.mutateArray<ReviewFeedback, ReviewFeedback | undefined>(this.reviewFeedbackPath(sessionId), (items) => {
+      const feedback = items.find((candidate) => candidate.id === feedbackId && candidate.status === "ready");
+      if (!feedback) return undefined;
+      feedback.status = "consumed";
+      feedback.consumedAt = new Date().toISOString();
+      return structuredClone(feedback);
     });
   }
 

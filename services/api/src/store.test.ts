@@ -50,6 +50,7 @@ interface PersistedCatalog {
   projects: Array<{ id: string; name: string; settingsOverrides: Record<string, unknown> }>;
   providers?: Array<Record<string, unknown>>;
   reviewerSpecialistEnabled?: boolean;
+  reviewerSpecialistFeedbackPolicy?: string;
   reviewerSpecialistLevel?: string;
   sessions: Array<{
     approvalMode: "always_allow" | "ask_for_dangerous";
@@ -413,18 +414,19 @@ test("SessionStore persists the Reviewer Specialist switch and cumulative review
 
   const store = new SessionStore(tempRoot);
   await store.load();
-  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: false, level: "quick" });
+  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "record", level: "quick" });
 
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "deep" });
-  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, level: "deep" });
+  await store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "suggest", level: "deep" });
+  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest", level: "deep" });
   assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistEnabled, true);
+  assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistFeedbackPolicy, "suggest");
   assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistLevel, "deep");
 
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
-  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: true, level: "deep" });
+  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest", level: "deep" });
   await reopened.updateReviewerSpecialistSettings({ enabled: false });
-  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: false, level: "deep" });
+  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "suggest", level: "deep" });
   await assert.rejects(
     store.updateReviewerSpecialistSettings({ enabled: "yes" }),
     /enabled must be a boolean/,
@@ -432,6 +434,10 @@ test("SessionStore persists the Reviewer Specialist switch and cumulative review
   await assert.rejects(
     store.updateReviewerSpecialistSettings({ enabled: true, level: "extreme" }),
     /level must be quick or deep/,
+  );
+  await assert.rejects(
+    store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "unsafe" }),
+    /feedback policy must be record, explain, suggest, or repair/,
   );
 });
 

@@ -80,6 +80,7 @@ export interface Catalog {
   quotaSettings: SystemQuotaSettings;
   sandboxNetworkSettings: SandboxNetworkSettings;
   reviewerSpecialistEnabled: boolean;
+  reviewerSpecialistFeedbackPolicy: import("@sciencediscovery/schema").ReviewerFeedbackPolicy;
   reviewerSpecialistLevel: ReviewerSpecialistLevel;
   remoteHosts: RemoteHostTarget[];
   remoteJobs: RemoteJob[];
@@ -123,6 +124,7 @@ export function emptyCatalog(
     quotaSettings: structuredClone(initialQuotaSettings),
     sandboxNetworkSettings: structuredClone(DEFAULT_SANDBOX_NETWORK_SETTINGS),
     reviewerSpecialistEnabled: false,
+    reviewerSpecialistFeedbackPolicy: "record",
     reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
     remoteHosts: [],
     remoteJobs: [],

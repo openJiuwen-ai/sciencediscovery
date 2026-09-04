@@ -16,6 +16,7 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type {
   ConnectorManifest,
+  ReviewerFeedbackPolicy,
   ReviewerSpecialistLevel,
   Subagent,
   SubagentStep,
@@ -160,6 +161,7 @@ export function SpecialistManager({
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [reviewerEnabled, setReviewerEnabled] = useState(false);
+  const [reviewerFeedbackPolicy, setReviewerFeedbackPolicy] = useState<ReviewerFeedbackPolicy>("record");
   const [reviewerLevel, setReviewerLevel] = useState<VisibleReviewerLevel>("quick");
   const [reviewerBusy, setReviewerBusy] = useState(true);
   const [builtinBusy, setBuiltinBusy] = useState(false);
@@ -208,6 +210,7 @@ export function SpecialistManager({
     void client.getReviewerSpecialistSettings()
       .then((settings) => {
         setReviewerEnabled(settings.enabled);
+        setReviewerFeedbackPolicy(settings.feedbackPolicy);
         setReviewerLevel(visibleReviewerLevel(settings.level));
       })
       .catch((error: Error) => onError(error.message))
@@ -219,9 +222,11 @@ export function SpecialistManager({
     try {
       const settings = await client.updateReviewerSpecialistSettings({
         enabled: !reviewerEnabled,
+        feedbackPolicy: reviewerFeedbackPolicy,
         level: reviewerLevel,
       });
       setReviewerEnabled(settings.enabled);
+      setReviewerFeedbackPolicy(settings.feedbackPolicy);
       setReviewerLevel(visibleReviewerLevel(settings.level));
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not update Reviewer Specialist");
@@ -235,9 +240,24 @@ export function SpecialistManager({
     try {
       const settings = await client.updateReviewerSpecialistSettings({ enabled: reviewerEnabled, level });
       setReviewerEnabled(settings.enabled);
+      setReviewerFeedbackPolicy(settings.feedbackPolicy);
       setReviewerLevel(visibleReviewerLevel(settings.level));
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not update Reviewer Specialist level");
+    } finally {
+      setReviewerBusy(false);
+    }
+  }
+
+  async function changeReviewerFeedbackPolicy(feedbackPolicy: ReviewerFeedbackPolicy): Promise<void> {
+    setReviewerBusy(true);
+    try {
+      const settings = await client.updateReviewerSpecialistSettings({ enabled: reviewerEnabled, feedbackPolicy, level: reviewerLevel });
+      setReviewerEnabled(settings.enabled);
+      setReviewerFeedbackPolicy(settings.feedbackPolicy);
+      setReviewerLevel(visibleReviewerLevel(settings.level));
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not update Reviewer Specialist feedback policy");
     } finally {
       setReviewerBusy(false);
     }
@@ -301,7 +321,9 @@ export function SpecialistManager({
     <BuiltInReviewerSpecialist
       busy={reviewerBusy}
       enabled={reviewerEnabled}
+      feedbackPolicy={reviewerFeedbackPolicy}
       level={reviewerLevel}
+      onFeedbackPolicyChange={(policy) => void changeReviewerFeedbackPolicy(policy)}
       onLevelChange={(level) => void changeReviewerLevel(level)}
       onToggle={() => void toggleReviewer()}
     />
@@ -357,13 +379,17 @@ export function SpecialistManager({
 export function BuiltInReviewerSpecialist({
   busy,
   enabled,
+  feedbackPolicy,
   level,
+  onFeedbackPolicyChange,
   onLevelChange,
   onToggle,
 }: {
   busy: boolean;
   enabled: boolean;
+  feedbackPolicy: ReviewerFeedbackPolicy;
   level: VisibleReviewerLevel;
+  onFeedbackPolicyChange: (policy: ReviewerFeedbackPolicy) => void;
   onLevelChange: (level: VisibleReviewerLevel) => void;
   onToggle: () => void;
 }) {
@@ -397,5 +423,17 @@ export function BuiltInReviewerSpecialist({
         ><i aria-hidden="true" /></button>
       </div>
     </div>
+    <label className="reviewer-feedback-policy"><span>Completed-review handoff</span><select
+      aria-label="Reviewer Specialist feedback policy"
+      disabled={busy}
+      onChange={(event) => onFeedbackPolicyChange(event.target.value as ReviewerFeedbackPolicy)}
+      title="Record keeps evidence only; other policies hand it to the lead Agent at the next user-request boundary"
+      value={feedbackPolicy}
+    >
+      <option value="record">Record only</option>
+      <option value="explain">Explain</option>
+      <option value="suggest">Suggest</option>
+      <option value="repair">Repair</option>
+    </select></label>
   </section>;
 }

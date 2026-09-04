@@ -245,6 +245,16 @@ export function createPlatformServices(
           originMeta: { evolveRunId: run.id, role: "winner" },
           sessionId: run.sessionId,
         });
+        provenanceRecorder.notifyArtifactRegistered({
+          mediaType: "text/plain; charset=utf-8",
+          sessionId: run.sessionId,
+          version: seed.version,
+        });
+        provenanceRecorder.notifyArtifactRegistered({
+          mediaType: "text/plain; charset=utf-8",
+          sessionId: run.sessionId,
+          version: winnerVersion.version,
+        });
         // Mirror both versions onto the graph's evolve SubTask. Without this
         // the run's node carried a `searches` edge and nothing else — the one
         // thing the search existed to produce was in SessionStore but invisible

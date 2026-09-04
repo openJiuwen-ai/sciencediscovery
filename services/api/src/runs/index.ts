@@ -2455,7 +2455,7 @@ export async function createQueuedRun(
   if (session.archivedAt) throw new ApiStatusError(409, "Session is archived and read-only");
   const submittedPrompt = body.content?.trim();
   const slashRefresh = submittedPrompt?.startsWith("/web-refresh ");
-  const prompt = slashRefresh ? submittedPrompt.slice("/web-refresh ".length).trim() : submittedPrompt;
+  let prompt = slashRefresh ? submittedPrompt.slice("/web-refresh ".length).trim() : submittedPrompt;
   if (!prompt) throw new ApiStatusError(400, "Message content is required");
   let references: ComposerReference[];
   try {
@@ -2471,6 +2471,25 @@ export async function createQueuedRun(
     skillLibraryRefs = mergeSkillLibraryRefs(configuredRefs, declaredRefs);
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Skill library references are invalid");
+  }
+  // Audit feedback is a bounded, structured handoff. Consume it only after
+  // client input has been validated, at the new user-request boundary—not in
+  // an in-flight model call—so a rejected submission never loses feedback.
+  const readyFeedback = (await store.listReviewFeedback(sessionId))
+    .filter((feedback) => feedback.status === "ready" && feedback.policy !== "record");
+  const acceptedFeedback = [] as typeof readyFeedback;
+  for (const feedback of readyFeedback) {
+    if (await store.consumeReviewFeedback(sessionId, feedback.id)) acceptedFeedback.push(feedback);
+  }
+  if (acceptedFeedback.length) {
+    const summary = acceptedFeedback.slice(0, 4).map((feedback) => {
+      const counts = `${feedback.policy}: ${feedback.summary.critical} critical, ${feedback.summary.warning} warning, ${feedback.summary.inconclusive} inconclusive`;
+      const findings = feedback.findings.slice(0, 6).map((finding) =>
+        `- ${finding.severity} ${finding.code}: ${finding.message} [${finding.evidenceRefs.join(", ")}]`,
+      ).join("\n");
+      return `${counts}${findings ? `\n${findings}` : ""}`;
+    }).join("\n");
+    prompt = `${prompt}\n\n[Reviewer audit handoff]\n${summary}\nUse this as evidence-bound guidance. Explain or suggest only what the review supports. A repair policy is limited to this Session's current Artifacts; do not perform external side effects from this handoff alone.`;
   }
   if (skillAuthoringCommandPrompt(prompt)) {
     settingsSnapshot.enabledSkillIds = [...new Set([...settingsSnapshot.enabledSkillIds, "skill-creator"])];

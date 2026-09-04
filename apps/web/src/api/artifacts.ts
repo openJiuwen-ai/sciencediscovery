@@ -22,8 +22,8 @@ import type {
   ArtifactCandidate,
   ArtifactAnnotation,
   ArtifactReviewRun,
-  ChatMessage,
-  ReviewCheckpoint,
+  ReviewerAuditTask,
+  ReviewFeedback,
   ArtifactVersionProvenance,
   MemoryGraphByEdgeResult,
   MemoryGraphChainResult,
@@ -53,12 +53,7 @@ import type { ArtifactDashboard, ArtifactPreviewPayload } from "../artifact-dash
 
 import { RunsApiClient } from "./runs.js";
 
-export interface ManualReviewerSpecialistResult {
-  checkpoint?: ReviewCheckpoint;
-  error?: string;
-  message: ChatMessage;
-  reviews: ArtifactReviewRun[];
-}
+export interface ManualReviewerSpecialistResult { task: ReviewerAuditTask; }
 
 export class ArtifactsApiClient extends RunsApiClient {
   listArtifactDerivations(sessionId: string): Promise<ArtifactDerivation[]> {
@@ -353,6 +348,14 @@ export class ArtifactsApiClient extends RunsApiClient {
 
   listArtifactReviews(sessionId: string): Promise<ArtifactReviewRun[]> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/artifact-reviews`);
+  }
+
+  listReviewerAuditTasks(sessionId: string): Promise<ReviewerAuditTask[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/reviewer-audit-tasks`);
+  }
+
+  listReviewFeedback(sessionId: string): Promise<ReviewFeedback[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/review-feedback`);
   }
 
   runReviewerSpecialist(sessionId: string, messageId: string): Promise<ManualReviewerSpecialistResult> {

@@ -225,7 +225,9 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request("/api/reviewer-specialist/settings");
   }
 
-  updateReviewerSpecialistSettings(settings: ReviewerSpecialistSettings): Promise<ReviewerSpecialistSettings> {
+  updateReviewerSpecialistSettings(
+    settings: Pick<ReviewerSpecialistSettings, "enabled"> & Partial<Omit<ReviewerSpecialistSettings, "enabled">>,
+  ): Promise<ReviewerSpecialistSettings> {
     return this.request("/api/reviewer-specialist/settings", {
       body: JSON.stringify(settings),
       method: "PUT",

@@ -15,7 +15,7 @@
 import type { EvidenceIdentifierType } from "./connectors.js";
 import type { ExecutionLanguage, KernelMode, SandboxKind } from "./environment.js";
 import type { ModelUsageStatus } from "./model-usage.js";
-import type { EffectiveRuntimeSettings } from "./runtime-settings.js";
+import type { EffectiveRuntimeSettings, ReviewerFeedbackPolicy, ReviewerSpecialistLevel } from "./runtime-settings.js";
 import type { SandboxNetworkMode } from "./sandbox-network.js";
 
 export interface CasObjectRef {
@@ -238,6 +238,50 @@ export interface ReviewCheckpointRequest {
 export interface ReviewCheckpointResult {
   checkpoint: ReviewCheckpoint;
   reviews: ArtifactReviewRun[];
+}
+
+/** A durable, independently cancellable Reviewer Specialist work item. */
+export interface ReviewerAuditTask {
+  artifactVersionIds: string[];
+  /** The visible checkpoint card associated with this work item. */
+  checkpointMessageId: string;
+  createdAt: string;
+  errorSummary?: string;
+  feedbackPolicy: ReviewerFeedbackPolicy;
+  finishedAt?: string;
+  id: string;
+  inputFingerprint: string;
+  /** A cooldown can delay Deep automatic audits without blocking artifact delivery. */
+  notBefore?: string;
+  origin: "artifact_registered" | "manual";
+  reviewIds?: string[];
+  reviewLevel: ReviewerSpecialistLevel;
+  sessionId: string;
+  startedAt?: string;
+  status: "cancelled" | "completed" | "failed" | "queued" | "running" | "superseded";
+  supersededBy?: string;
+  toolCallId: string;
+}
+
+/** Bounded, structured review output that can be safely handed to the lead Agent. */
+export interface ReviewFeedback {
+  artifactVersionIds: string[];
+  consumedAt?: string;
+  createdAt: string;
+  feedbackFingerprint: string;
+  id: string;
+  policy: ReviewerFeedbackPolicy;
+  reviewIds: string[];
+  /** Capped, location-preserving findings safe to hand to the lead Agent. */
+  findings: Array<Pick<ArtifactReviewFinding, "code" | "evidenceRefs" | "message" | "severity">>;
+  sessionId: string;
+  status: "consumed" | "dismissed" | "ready";
+  summary: {
+    critical: number;
+    inconclusive: number;
+    warning: number;
+  };
+  taskId: string;
 }
 
 export interface Claim {

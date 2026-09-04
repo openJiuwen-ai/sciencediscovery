@@ -65,6 +65,7 @@ import type {
   ProxySettingsDetails,
   RemoteHostTarget,
   RemoteJob,
+  ReviewerAuditTask,
   ReviewerSpecialistSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,
@@ -1075,6 +1076,7 @@ export function App() {
   const [derivations, setDerivations] = useState<ArtifactDerivation[]>([]);
   const [promptManifests, setPromptManifests] = useState<PromptManifest[]>([]);
   const [artifactReviews, setArtifactReviews] = useState<ArtifactReviewRun[]>([]);
+  const [reviewerAuditTasks, setReviewerAuditTasks] = useState<ReviewerAuditTask[]>([]);
   const [downloadCandidates, setDownloadCandidates] = useState<GovernedDownloadCandidate[]>([]);
   const [downloadJobs, setDownloadJobs] = useState<ArtifactJob[]>([]);
   const [downloadPlans, setDownloadPlans] = useState<ArtifactPlan[]>([]);
@@ -1377,6 +1379,7 @@ export function App() {
   /** Persisted Reviewer checkpoints survive a browser refresh; do not rely only on local request state. */
   const reviewerCheckpointRunning = Boolean(session?.messages.some((message) =>
     message.kind === "reviewer_checkpoint" && message.reviewerCheckpoint?.status === "running"));
+  const reviewerAuditRunning = reviewerAuditTasks.some((task) => task.status === "queued" || task.status === "running");
   /**
    * The timeline and folded-in message of the Session whose messages are on
    * screen, so the two always describe the same Session.
@@ -1926,6 +1929,7 @@ export function App() {
       setDerivations([]);
       setPromptManifests([]);
       setArtifactReviews([]);
+      setReviewerAuditTasks([]);
       setPlans([]);
       setSubagents([]);
       setRemoteJobs([]);
@@ -1938,7 +1942,7 @@ export function App() {
       return;
     }
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
-    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, invocations, claimItems, linkItems, paperItems, visionItems, environmentItems, revisionItems, planItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
+    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, paperItems, visionItems, environmentItems, revisionItems, planItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
       client.getSession(sessionId),
       client.listFiles(sessionId),
       client.getPermissionEpoch(sessionId),
@@ -1950,6 +1954,7 @@ export function App() {
       client.listArtifactDerivations(sessionId),
       client.listPromptManifests(sessionId),
       client.listArtifactReviews(sessionId),
+      client.listReviewerAuditTasks(sessionId),
       client.listMcpInvocations(sessionId),
       client.listClaims(sessionId),
       client.listEvidenceLinks(sessionId),
@@ -2010,6 +2015,7 @@ export function App() {
     setDerivations(artifactDerivations);
     setPromptManifests(manifests);
     setArtifactReviews(artifactReviewRuns);
+    setReviewerAuditTasks(reviewerTasks);
     setPlans(planItems);
     setSubagents(subagentItems);
     setRemoteJobs(remoteJobItems);
@@ -2065,16 +2071,15 @@ export function App() {
     if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) setArtifactOutputs(outputs);
   }
 
-  // A manual review keeps running on the server after a browser refresh. Poll
-  // only its small persisted state until it reaches a terminal result, without
-  // replacing active main-agent messages or timelines.
+  // Reviewer tasks persist independently from Agent runs. Poll only their
+  // small state until terminal, so background audits never block the chat.
   useEffect(() => {
     const sessionId = session?.id;
-    if (!sessionId || !reviewerCheckpointRunning) return;
+    if (!sessionId || (!reviewerCheckpointRunning && !reviewerAuditRunning)) return;
     let active = true;
     const refreshReviewerCheckpoint = () => {
-      void Promise.all([client.getSession(sessionId), client.listArtifactReviews(sessionId)])
-        .then(([detail, reviews]) => {
+      void Promise.all([client.getSession(sessionId), client.listArtifactReviews(sessionId), client.listReviewerAuditTasks(sessionId)])
+        .then(([detail, reviews, tasks]) => {
           if (!active || !shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
           const remoteById = new Map(detail.messages.map((message) => [message.id, message]));
           setSession((current) => current?.id === sessionId ? {
@@ -2084,6 +2089,7 @@ export function App() {
               : message),
           } : current);
           setArtifactReviews(reviews);
+          setReviewerAuditTasks(tasks);
         })
         .catch(() => undefined);
     };
@@ -2093,7 +2099,7 @@ export function App() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [client, reviewerCheckpointRunning, session?.id]);
+  }, [client, reviewerAuditRunning, reviewerCheckpointRunning, session?.id]);
 
   useEffect(() => {
     const visibleSessionId = activeSessionId;
@@ -2701,29 +2707,10 @@ export function App() {
     try {
       const result = await client.runReviewerSpecialist(targetSessionId, messageId);
       if (shouldApplySessionScopedUpdate(targetSessionId, activeSessionIdRef.current)) {
-        setSession((current) => current?.id === targetSessionId ? {
-          ...current,
-          messages: current.messages.map((item) => item.id === messageId ? result.message : item),
-        } : current);
-        setArtifactReviews((current) => {
-          const returnedIds = new Set(result.reviews.map((review) => review.id));
-          return [...current.filter((review) => !returnedIds.has(review.id)), ...result.reviews];
-        });
+        setReviewerAuditTasks((current) => [...current.filter((task) => task.id !== result.task.id), result.task]);
       }
       setError(undefined);
-      // The stop endpoint marks this checkpoint terminal before the original
-      // manual-review request unwinds. Treat that expected result as a user
-      // cancellation rather than surfacing a second, misleading failure toast.
-      if (result.message.reviewerCheckpoint?.error === "Review cancelled by user") return;
-      if (result.error) {
-        pushToast("error", "Review failed", result.error);
-        return;
-      }
-      pushToast(
-        "success",
-        "Review finished",
-        `${result.reviews.length} Artifact${result.reviews.length === 1 ? "" : "s"} reviewed`,
-      );
+      pushToast("info", "Review started", "Reviewer Specialist is auditing in the background.");
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : "Could not run Reviewer Specialist";
       if (shouldApplySessionScopedUpdate(targetSessionId, activeSessionIdRef.current)) {
@@ -2749,7 +2736,7 @@ export function App() {
   async function stopReviewerSpecialist(): Promise<void> {
     const targetSessionId = activeSessionId;
     if (!targetSessionId
-      || !reviewerCheckpointRunning
+      || (!reviewerCheckpointRunning && !reviewerAuditRunning)
       || stoppingReviewerSessionIds.has(targetSessionId)) return;
     setStoppingReviewerSessionIds((current) => new Set(current).add(targetSessionId));
     try {
@@ -4598,7 +4585,7 @@ export function App() {
             {session ? <EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /> : null}
 
             {session ? <ReviewerControlCard
-              busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning}
+              busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning || reviewerAuditRunning}
               disabled={sessionArchived}
               onRun={() => void runManualReviewerSpecialist()}
               onStop={() => void stopReviewerSpecialist()}

@@ -186,6 +186,7 @@ import {
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
+import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
@@ -293,6 +294,124 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   } = platform;
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
+  const reviewerAuditCoordinator = new ReviewerAuditCoordinator(store, {
+    run: async (task, signal) => {
+      const session = store.getSession(task.sessionId);
+      if (!session) throw new Error("Session not found");
+      const versions = task.artifactVersionIds
+        .map((versionId) => store.getArtifactVersion(task.sessionId, versionId))
+        .filter((version): version is NonNullable<typeof version> => Boolean(version));
+      if (!versions.length) throw new Error("No Artifacts to review");
+      let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
+      if (task.reviewLevel === "deep") {
+        const runtimeSettings = store.resolveRuntimeSettings(task.sessionId).effective;
+        const selectedModel = store.getModel(runtimeSettings.modelId);
+        const apiToken = selectedModel ? store.getModelApiToken(selectedModel.id) : undefined;
+        if (!selectedModel || !apiToken) throw new Error("The selected Reviewer model is unavailable");
+        const permission = {
+          getEpoch: () => store.getSessionPermissionEpoch(task.sessionId)!,
+          requirePrivilege: async (privilege: {
+            action: "code" | "connector" | "host";
+            executionId?: string;
+            resource: string;
+            signal?: AbortSignal;
+            summary: string;
+            toolCallId?: string;
+          }) => {
+            const check = await store.requestPermission(task.sessionId, privilege.action, privilege.resource, privilege.summary, {
+              ...(privilege.executionId ? { executionId: privilege.executionId } : {}),
+              ...(privilege.toolCallId ? { toolCallId: privilege.toolCallId } : {}),
+            });
+            if (!check.allowed) throw new Error("Reviewer connector access requires an existing permission grant");
+            return check.authorization;
+          },
+        };
+        const reviewerSkills = skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]);
+        const reviewerWorkspace: WorkspaceAgentOptions = {
+          config: {
+            apiToken,
+            apiProtocol: selectedModel.apiProtocol,
+            apiVariant: selectedModel.apiVariant,
+            baseUrl: selectedModel.baseUrl,
+            dataDir: store.dataDir,
+            model: selectedModel.model,
+            proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
+            thinkingEffort: selectedModel.thinkingEffort,
+            thinkingMode: selectedModel.thinkingMode,
+          },
+          enabledConnectorIds: runtimeSettings.enabledConnectorIds,
+          executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
+          executeShell: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
+          ...createMcpWorkspaceTools({
+            artifactManager, broker: mcpBroker, catalog: mcpCatalog,
+            enabledSourceIds: runtimeSettings.enabledConnectorIds,
+            emitPermissionRequest: () => undefined, paperService, pauseExternalWait: () => () => undefined,
+            permission, projectId: session.projectId, registry: mcpRegistry, sessionId: task.sessionId, store,
+            suppressMemoryGraphMirror: true, turnId: task.toolCallId,
+          }),
+          ...createWebWorkspaceTools({
+            broker: webBroker,
+            context: { forceRefresh: false, projectId: session.projectId, sessionId: task.sessionId, turnId: task.toolCallId },
+            permission,
+          }),
+          approvalMode: session.approvalMode,
+          skills: reviewerSkills,
+          workspaceRoot: store.workspacePath(task.sessionId),
+        };
+        semanticReview = createReviewAgentOptions({
+          modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
+          runIdleTimeoutMs: config.gatewayIdleTimeoutMs,
+          skills: reviewerSkills,
+          workspace: reviewerWorkspace,
+        });
+      }
+      try {
+        const result = await runReviewerCheckpoint({
+          artifactVersionIds: versions.map((version) => version.id),
+          cas: provenanceRecorder.cas,
+          parentRunId: task.toolCallId,
+          reason: task.origin === "manual" ? "Manual Reviewer Specialist request" : "Automatic Artifact evidence audit",
+          reviewLevel: task.reviewLevel,
+          sessionId: task.sessionId,
+          signal,
+          store,
+          toolCallId: task.toolCallId,
+          ...(memoryGraphEnabled() ? {
+            traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, task.sessionId, memoryGraphEnabled),
+            traceArtifactProvenance: async (reference, traceSignal) => {
+              if (traceSignal?.aborted) throw new DOMException("Review cancelled", "AbortError");
+              return memoryGraphClient.traceProvenance({ nodeId: reference.artifactId }, task.sessionId);
+            },
+          } : {}),
+          onProgress: async (progress) => {
+            await store.updateReviewerCheckpointProgress(task.sessionId, task.checkpointMessageId, progress);
+          },
+          onArtifactCompleted: async (completedReviews) => {
+            await store.updateReviewerCheckpointMessage(task.sessionId, task.checkpointMessageId, {
+              content: reviewerCheckpointPromptContent(completedReviews, undefined, true), status: "running",
+            });
+          },
+          ...(semanticReview ? { semanticReview } : {}),
+        });
+        await store.updateReviewerCheckpointMessage(task.sessionId, task.checkpointMessageId, {
+          content: reviewerCheckpointPromptContent(result.reviews), status: "completed",
+        });
+        return result.reviews;
+      } catch (error) {
+        const cancelled = signal.aborted || (error instanceof DOMException && error.name === "AbortError");
+        const detail = cancelled ? "Review cancelled by user" : error instanceof Error ? error.message : "Reviewer Specialist failed";
+        await store.updateReviewerCheckpointMessage(task.sessionId, task.checkpointMessageId, {
+          content: reviewerCheckpointPromptContent([], detail), error: detail, status: "failed",
+        });
+        throw error;
+      }
+    },
+  });
+  provenanceRecorder.setArtifactRegisteredHandler(async ({ mediaType, sessionId, version }) => {
+    await reviewerAuditCoordinator.enqueueArtifactVersion({
+      artifactVersionId: version.id, contentHash: version.content.hash, mediaType, sessionId,
+    });
+  });
   const modelCatalog = new ModelCatalogStore({
     bundledPath: config.modelCatalogPath,
     dataDir: config.dataDir,
@@ -355,6 +474,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     .then(() => skillLibraryCatalog.load())
     .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
     .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
+    .then(() => reviewerAuditCoordinator.resume())
     .then(() => undefined);
 
   /**
@@ -2339,8 +2459,23 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, await store.listArtifactReviews(sessionId));
         return;
       }
+      const reviewerAuditTasksMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-audit-tasks$/);
+      if (reviewerAuditTasksMatch && request.method === "GET") {
+        const sessionId = reviewerAuditTasksMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        sendJson(response, 200, await store.listReviewerAuditTasks(sessionId));
+        return;
+      }
+      const reviewFeedbackMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/review-feedback$/);
+      if (reviewFeedbackMatch && request.method === "GET") {
+        const sessionId = reviewFeedbackMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        sendJson(response, 200, await store.listReviewFeedback(sessionId));
+        return;
+      }
       const cancelReviewerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/cancel$/);
       if (cancelReviewerMatch && request.method === "POST") {
+        await reviewerAuditCoordinator.cancelSession(cancelReviewerMatch[1]!);
         await cancelReviewerSpecialist(response, store, cancelReviewerMatch[1]!);
         return;
       }
@@ -2348,132 +2483,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (manualReviewerMatch && request.method === "POST") {
         const sessionId = manualReviewerMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        const reviewerSettings = store.getReviewerSpecialistSettings();
-        if (!reviewerSettings.enabled) return sendError(response, 409, "Reviewer Specialist is off");
         const body = await readJson<{ messageId?: string }>(request);
         const messageId = body.messageId?.trim() ?? "";
         if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(messageId)) {
           return sendError(response, 400, "A valid reviewer message id is required");
         }
-        const toolCallId = `manual-review:${messageId}`;
-        await store.appendReviewerCheckpointMessage(sessionId, messageId, toolCallId);
         try {
-          const versions = store.listArtifacts(sessionId)
-            .filter((artifact) => artifact.createdInSessionId === sessionId)
-            .flatMap((artifact) => store.listArtifactVersions(sessionId, artifact.id)
-              .filter((version) => version.sessionId === sessionId)
-              .at(-1) ?? [])
-            .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
-          if (!versions.length) throw new Error("No Artifacts to review");
-          let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
-          if (reviewerSettings.level === "deep") {
-            const session = store.getSession(sessionId)!;
-            const runtimeSettings = store.resolveRuntimeSettings(sessionId).effective;
-            const selectedModel = store.getModel(runtimeSettings.modelId);
-            const apiToken = selectedModel ? store.getModelApiToken(selectedModel.id) : undefined;
-            if (!selectedModel || !apiToken) throw new Error("The selected Reviewer model is unavailable");
-            const permission = {
-              getEpoch: () => store.getSessionPermissionEpoch(sessionId)!,
-              requirePrivilege: async (privilege: {
-                action: "code" | "connector" | "host";
-                executionId?: string;
-                resource: string;
-                signal?: AbortSignal;
-                summary: string;
-                toolCallId?: string;
-              }) => {
-                const check = await store.requestPermission(sessionId, privilege.action, privilege.resource, privilege.summary, {
-                  ...(privilege.executionId ? { executionId: privilege.executionId } : {}),
-                  ...(privilege.toolCallId ? { toolCallId: privilege.toolCallId } : {}),
-                });
-                if (!check.allowed) throw new Error("Reviewer connector access requires an existing permission grant");
-                return check.authorization;
-              },
-            };
-            const reviewerSkills = skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]);
-            const reviewerWorkspace: WorkspaceAgentOptions = {
-              config: {
-                apiToken,
-                apiProtocol: selectedModel.apiProtocol,
-                apiVariant: selectedModel.apiVariant,
-                baseUrl: selectedModel.baseUrl,
-                dataDir: store.dataDir,
-                model: selectedModel.model,
-                // Deep review creates its own AgentRun rather than reusing the
-                // main-run options. Keep the model profile's resolved proxy on
-                // that path as well; without it, a sandbox that can only reach
-                // the provider through a configured proxy fails as `Failed to fetch`.
-                proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
-                thinkingEffort: selectedModel.thinkingEffort,
-                thinkingMode: selectedModel.thinkingMode,
-              },
-              enabledConnectorIds: runtimeSettings.enabledConnectorIds,
-              executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
-              executeShell: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
-              ...createMcpWorkspaceTools({
-                artifactManager, broker: mcpBroker, catalog: mcpCatalog,
-                enabledSourceIds: runtimeSettings.enabledConnectorIds,
-                emitPermissionRequest: () => undefined, paperService, pauseExternalWait: () => () => undefined,
-                permission, projectId: session.projectId, registry: mcpRegistry, sessionId, store,
-                suppressMemoryGraphMirror: true, turnId: toolCallId,
-              }),
-              ...createWebWorkspaceTools({
-                broker: webBroker,
-                context: { forceRefresh: false, projectId: session.projectId, sessionId, turnId: toolCallId },
-                permission,
-              }),
-              approvalMode: session.approvalMode,
-              skills: reviewerSkills,
-              workspaceRoot: store.workspacePath(sessionId),
-            };
-            semanticReview = createReviewAgentOptions({
-              modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
-              runIdleTimeoutMs: config.gatewayIdleTimeoutMs,
-              skills: reviewerSkills,
-              workspace: reviewerWorkspace,
-            });
-          }
-          const result = await runReviewerCheckpoint({
-            artifactVersionIds: versions.map((version) => version.id),
-            cas: provenanceRecorder.cas,
-            parentRunId: toolCallId,
-            reason: "Manual Reviewer Specialist request",
-            reviewLevel: reviewerSettings.level,
-            sessionId,
-            store,
-            toolCallId,
-            ...(memoryGraphEnabled() ? {
-              traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, sessionId, memoryGraphEnabled),
-              traceArtifactProvenance: async (reference, signal) => {
-                if (signal?.aborted) throw new DOMException("Review cancelled", "AbortError");
-                return memoryGraphClient.traceProvenance({ nodeId: reference.artifactId }, sessionId);
-              },
-            } : {}),
-            onProgress: async (progress) => {
-              await store.updateReviewerCheckpointProgress(sessionId, messageId, progress);
-            },
-            onArtifactCompleted: async (completedReviews) => {
-              await store.updateReviewerCheckpointMessage(sessionId, messageId, {
-                content: reviewerCheckpointPromptContent(completedReviews, undefined, true), status: "running",
-              });
-            },
-            ...(semanticReview ? { semanticReview } : {}),
-          });
-          const message = await store.updateReviewerCheckpointMessage(sessionId, messageId, {
-            content: reviewerCheckpointPromptContent(result.reviews),
-            status: "completed",
-          });
-          sendJson(response, 200, { ...result, message });
+          const task = await reviewerAuditCoordinator.enqueueManual(sessionId, messageId);
+          sendJson(response, 202, { task });
         } catch (error) {
-          const detail = error instanceof Error ? error.message : "Reviewer Specialist failed";
-          const message = await store.updateReviewerCheckpointMessage(sessionId, messageId, {
-            content: reviewerCheckpointPromptContent([], detail),
-            error: detail,
-            status: "failed",
-          });
-          const reviews = (await store.listArtifactReviews(sessionId))
-            .filter((review) => review.toolCallId === toolCallId);
-          sendJson(response, 200, { error: detail, message, reviews });
+          const detail = error instanceof Error ? error.message : "Could not schedule Reviewer Specialist";
+          sendError(response, detail === "Reviewer Specialist is off" ? 409 : 400, detail);
         }
         return;
       }
