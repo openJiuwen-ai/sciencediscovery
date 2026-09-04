@@ -25,7 +25,6 @@ on:
         types:
         - open
         - update
-        - merge
         - reopen
         branches-ignore: []
         paths-ignore: []
