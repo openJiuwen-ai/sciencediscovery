@@ -747,6 +747,7 @@ stages:
           with:
             GIT_REPO_URL: https://gitcode.com/openJiuwen/sciencediscovery.git
             GIT_REF: "refs/merge-requests/${MERGE_ID}/head"
+            GIT_TARGET_REF: refs/heads/main
             SH_FILE_PATH: .ci/package-binary-codearts.sh
             ARTIFACT_PATH: .ci-results/binary-release-aarch64
             OBS_BUCKET: openjiuwen-ci
