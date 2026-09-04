@@ -168,7 +168,7 @@ merge-request CI is CodeArts-only; this repository intentionally has no
 | Pipeline | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
-| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | `ci:ut:host` + experimental `ci:ut:guest` in QEMU TCG | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
 
 The CodeArts row above is a temporary `ci/verify-pr-ci`-only debug pipeline,
 not a release gate for `main`. Its x86_64 and aarch64 jobs each call
@@ -203,17 +203,21 @@ Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
 the unprivileged user `octopus` with Docker's default capability bounding set
 and an active seccomp filter, so `unshare` and bubblewrap are refused outright;
 `sudo` is not setuid, so nothing can be installed with `dnf` either. The
-checked-in workflow runs `ci:ut:host` and the hermetic `ci:st` layer directly.
-On this debug branch, a separate hosted x64 job experimentally runs the
-existing `ci:ut:guest` entry point inside an Ubuntu VM under QEMU's
-software-only TCG accelerator. The VM supplies an independent kernel whose
-user namespaces work even though the outer CodeArts container denies them;
-`/dev/kvm` is not requested. Its checksum-pinned qcow2 is pre-provisioned by
-the separate `ci/codearts-resources` workflow, so a formal run injects the
-current checkout and starts Runner UT without repeating apt, Node, pnpm, uv,
-or bubblewrap installation. This is much slower than a native worker and does
-not add E2E coverage. A self-hosted Linux resource pool that passes the real
-bubblewrap probe remains the preferred long-term sandbox runner.
+checked-in workflow runs the `ci:ut:host` tier and the hermetic `ci:st` layer
+directly. A second hosted x64 job runs the `ci:ut:guest` tier inside an Ubuntu
+VM under QEMU's software-only TCG accelerator. The VM supplies an independent
+kernel whose user namespaces work even though the outer CodeArts container
+denies them; `/dev/kvm` is not requested. Its checksum-pinned qcow2 is
+pre-provisioned by the separate `ci/codearts-resources` workflow, so a run
+never repeats apt, Node, pnpm, uv, or bubblewrap installation.
+
+That job installs and builds on its own CodeArts host and hands the guest a
+packed workspace, so the guest runs tests and nothing else. Emulated CPU is
+far slower than native: before the split, one run spent 476 s on `pnpm build`
+and 92 s on `pnpm install` inside the VM to reach 142 s of tests, while
+downloading the pinned image took 17 s. A self-hosted Linux resource pool that
+passes the real bubblewrap probe remains the preferred long-term sandbox
+runner.
 
 The parent CodeArts workflow also invokes the externally registered reusable
 code-check child. That child runs SCA, anti-poison, static-analysis, and

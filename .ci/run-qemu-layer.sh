@@ -14,20 +14,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Runs `pnpm ci:ut:runner` in a pre-provisioned Ubuntu guest under QEMU's
+# Runs one repository test layer in a pre-provisioned Ubuntu guest under QEMU's
 # software-only TCG accelerator. A full guest kernel supplies the user/mount
 # namespaces denied by containerized CodeArts hosts; /dev/kvm is deliberately
 # not required.
+#
+# This host installs and builds; the guest only runs tests. Emulated CPU is
+# far slower than native, so every second spent compiling inside the guest is
+# wasted: the prepared workspace is packed here and handed over ready to test.
 
 set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+layer="${1:-}"
+case "$layer" in
+  ut-guest) layer_prerequisites=(node_modules services/runner/dist) ;;
+  "") echo "Usage: .ci/run-qemu-layer.sh ut-guest" >&2; exit 2 ;;
+  *) echo "FATAL: '$layer' is not a layer this guest runs." >&2; exit 2 ;;
+esac
+
 results_root="${CI_RESULTS_DIR:-$repo_root/.ci-results}"
 case "$results_root" in
   /*) ;;
   *) results_root="$repo_root/$results_root" ;;
 esac
-result_dir="$results_root/ut-runner-qemu"
+result_dir="$results_root/$layer"
 cache_dir="$results_root/qemu-cache"
 seed_dir="$result_dir/seed"
 serial_log="$result_dir/serial.log"
@@ -57,7 +68,7 @@ record_exit() {
 }
 trap record_exit EXIT
 
-for command in curl git python3 sha256sum tar timeout; do
+for command in curl git gzip python3 sha256sum tar timeout; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "FATAL: required host command '$command' is unavailable." >&2
     exit 1
@@ -67,8 +78,16 @@ if [ "$(uname -m)" != x86_64 ]; then
   echo "FATAL: this experiment currently supports only an x86_64 QEMU host." >&2
   exit 1
 fi
+# Fail before spending minutes on emulation when the handover is incomplete.
+for prerequisite in "${layer_prerequisites[@]}"; do
+  if [ ! -e "$repo_root/$prerequisite" ]; then
+    echo "FATAL: $prerequisite is missing; install and build on this host before running the $layer guest." >&2
+    exit 1
+  fi
+done
 
 echo "=== QEMU TCG host ==="
+echo "layer  : $layer"
 echo "kernel : $(uname -srm)"
 echo "kvm    : $([ -e /dev/kvm ] && echo present-but-unused || echo absent-and-not-required)"
 echo "mode   : full-system emulation with a guest kernel"
@@ -193,14 +212,28 @@ rm -f -- "$guest_disk"
 "${qemu_img_command[@]}" create \
   -f qcow2 -F qcow2 -b "$image_path" "$guest_disk" 16G
 
-git -C "$repo_root" archive --format=tar HEAD > "$seed_dir/source.tar"
-cp "$repo_root/.ci/qemu-sandbox-guest.sh" "$seed_dir/guest.sh"
+# The guest receives the commit under test plus the dependency tree and build
+# output this host produced, and installs or compiles nothing itself.
+bash "$repo_root/.ci/pack-workspace.sh" --output "$seed_dir/workspace.tar.gz"
+cp "$repo_root/.ci/qemu-guest-layer.sh" "$seed_dir/guest.sh"
+printf '%s\n' "$layer" > "$seed_dir/layer"
+# Only mirror and behaviour settings cross into the guest; nothing here may
+# carry a credential.
+: > "$seed_dir/layer-env"
+for name in CI_NPM_REGISTRY UV_DEFAULT_INDEX UV_PYTHON_INSTALL_MIRROR E2E_SCIENTIFIC_ENVS; do
+  value="$(printenv "$name" || true)"
+  case "$value" in
+    "") ;;
+    *[!-+_.,:/=[:alnum:]]*) echo "FATAL: $name holds characters the guest environment file cannot carry." >&2; exit 1 ;;
+    *) printf '%s=%s\n' "$name" "$value" >> "$seed_dir/layer-env" ;;
+  esac
+done
 printf 'instance-id: sciencediscovery-qemu-sandbox\nlocal-hostname: sandbox-ut\n' > "$seed_dir/meta-data"
 : > "$seed_dir/vendor-data"
 cat > "$seed_dir/user-data" <<'CLOUD_CONFIG'
 #cloud-config
 runcmd:
-  - [bash, -c, "curl --fail --location --retry 3 --silent --show-error http://10.0.2.2:QEMU_HTTP_PORT/guest.sh --output /usr/local/sbin/qemu-sandbox-guest && chmod 0755 /usr/local/sbin/qemu-sandbox-guest && /usr/local/sbin/qemu-sandbox-guest http://10.0.2.2:QEMU_HTTP_PORT"]
+  - [bash, -c, "curl --fail --location --retry 3 --silent --show-error http://10.0.2.2:QEMU_HTTP_PORT/guest.sh --output /usr/local/sbin/qemu-guest-layer && chmod 0755 /usr/local/sbin/qemu-guest-layer && /usr/local/sbin/qemu-guest-layer http://10.0.2.2:QEMU_HTTP_PORT"]
 CLOUD_CONFIG
 
 http_port=$((18080 + ($$ % 1000)))
@@ -241,12 +274,12 @@ marker="$(tr -d '\r' < "$serial_log" \
   | sed -n 's/^QEMU_SANDBOX_TEST_RESULT=\([0-9][0-9]*\)$/\1/p' \
   | tail -n 1)"
 if [ -z "$marker" ]; then
-  echo "FATAL: the guest exited without a Runner UT result marker (QEMU status $qemu_rc)." >&2
+  echo "FATAL: the guest exited without a $layer result marker (QEMU status $qemu_rc)." >&2
   exit 1
 fi
 if [ "$marker" -gt 255 ]; then
-  echo "FATAL: the guest returned invalid Runner UT status '$marker'." >&2
+  echo "FATAL: the guest returned invalid $layer status '$marker'." >&2
   exit 1
 fi
-echo "Runner UT guest result: $marker (QEMU status $qemu_rc)"
+echo "$layer guest result: $marker (QEMU status $qemu_rc)"
 exit "$marker"

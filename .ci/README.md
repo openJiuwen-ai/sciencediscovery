@@ -91,6 +91,20 @@ requirements. A host-tier test may not depend on a guest capability, and a
 guest-tier assertion may not be weakened so the test can move to the host tier;
 see [.agents/skills/ci/SKILL.md](../.agents/skills/ci/SKILL.md).
 
+A host that cannot create user namespaces runs the guest tier in a VM:
+
+```bash
+pnpm install --frozen-lockfile && pnpm build   # on the host, native CPU
+bash .ci/run-qemu-layer.sh ut-guest
+```
+
+`.ci/pack-workspace.sh` packs `git archive HEAD` together with the dependency
+tree and every `dist/` the host just produced, and `.ci/run-qemu-layer.sh`
+serves that payload to the guest, which streams it into place and runs
+`pnpm ci:ut:guest`. Nothing is installed or compiled inside the guest: both
+`run-qemu-layer.sh` and the `ut-guest` layer fail closed when the host did not
+prepare the workspace.
+
 `pnpm ci:catalog:check` is the guard. It fails when a case has an unknown tag
 or the wrong number of values for a dimension, when a UT case has no tier or
 two, when a `layer:ut` case's tier disagrees with its `sandbox:*` tag, when a

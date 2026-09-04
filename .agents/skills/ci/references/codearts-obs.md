@@ -44,9 +44,9 @@ openjiuwen-ci/
     |-- ci/
     |   `-- <commit>/
     |       `-- <run-id>/
-    |           |-- ut/
+    |           |-- ut-host/
     |           |   `-- run.log
-    |           |-- ut-runner-qemu/
+    |           |-- ut-guest/
     |           |   `-- run.log
     |           |-- st/
     |           |   `-- run.log
@@ -261,11 +261,12 @@ commit component.
 
 `.ci/fetch-qemu-runner-image.sh` pins the resource commit and resource run;
 `.ci/qemu-runner-image.sha256` is the single source of truth for the image name
-and digest. Together they form one release unit. The formal 20-minute Runner
-job accepts only that exact object and has no source fallback. It creates a
-disposable overlay, injects the current repository archive, verifies the baked
-toolchain and sandbox, and immediately invokes `pnpm ci:ut:guest`; boot no
-longer runs apt or `.ci/provision-runner.sh`.
+and digest. Together they form one release unit. The UT guest-tier job accepts
+only that exact object and has no source fallback. It creates a disposable
+overlay, streams in the workspace its host already installed and built,
+verifies the baked toolchain and sandbox, and immediately invokes
+`pnpm ci:ut:guest`; boot runs neither apt, nor `.ci/provision-runner.sh`, nor
+any install or build.
 
 Advancing the image is deliberate: push or rerun `ci/codearts-resources`, wait
 for `Verified published QEMU Runner image: <sha256>`, then update the resource

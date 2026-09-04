@@ -14,9 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Runs the existing Runner unit-test layer inside the full Linux guest started
-# by run-qemu-sandbox-ut.sh. This must run as root so it can hand the checkout
-# to the pre-provisioned, unprivileged `ci` user.
+# Runs one repository test layer inside the full Linux guest started by
+# run-qemu-layer.sh. The host has already installed dependencies and built the
+# workspace and hands both over in the payload, so this script only unpacks and
+# tests. It must run as root so it can give the checkout to the
+# pre-provisioned, unprivileged `ci` user.
 
 set -Eeuo pipefail
 
@@ -32,9 +34,9 @@ if [ "${QEMU_NODE_SHIM:-0}" = 1 ]; then
   exec "$real_node" "$@"
 fi
 
-seed_url="${1:?usage: qemu-sandbox-guest.sh <seed-url>}"
+seed_url="${1:?usage: qemu-guest-layer.sh <seed-url>}"
 source_dir=/home/ci/sciencediscovery
-archive=/home/ci/source.tar
+env_file=/home/ci/layer-env
 test_rc=125
 
 power_off() {
@@ -53,17 +55,41 @@ power_off() {
 }
 trap power_off EXIT
 
+fetch() {
+  curl --fail --location --retry 3 --silent --show-error "$seed_url/$1" "${@:2}"
+}
+
+layer="$(fetch layer)"
+case "$layer" in
+  ut-guest) layer_script=ci:ut:guest ;;
+  *) echo "FATAL: the host asked for an unknown layer '$layer'." >&2; exit 2 ;;
+esac
+
 echo "=== QEMU sandbox guest ==="
+echo "layer   : $layer ($layer_script)"
 echo "kernel  : $(uname -srm)"
 echo "machine : $(uname -m)"
 echo "kvm     : irrelevant (the host selected TCG before boot)"
 
-curl --fail --location --retry 3 --silent --show-error \
-  "$seed_url/source.tar" --output "$archive"
+# Stream the payload straight into place: writing a multi-hundred-megabyte
+# archive to the emulated disk first would double the slowest step here.
 rm -rf -- "$source_dir"
 mkdir -p "$source_dir"
-tar -xf "$archive" -C "$source_dir"
+fetch workspace.tar.gz | tar -xzf - -C "$source_dir"
 chown -R ci:ci "$source_dir"
+fetch layer-env --output "$env_file"
+
+# Only the mirror and behaviour settings the host allow-listed cross over.
+guest_env=(HOME=/home/ci)
+while IFS='=' read -r name value; do
+  case "$name" in
+    CI_NPM_REGISTRY|UV_DEFAULT_INDEX|UV_PYTHON_INSTALL_MIRROR|E2E_SCIENTIFIC_ENVS)
+      guest_env+=("$name=$value")
+      ;;
+    "") ;;
+    *) echo "ignoring unexpected guest environment entry: $name" >&2 ;;
+  esac
+done < "$env_file"
 
 # Keep the image's persisted guest-only userns policy defensive against a
 # boot that did not apply every sysctl.d entry before cloud-init runcmd.
@@ -71,8 +97,8 @@ sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
 
 set +e
 runuser --user ci -- env \
-  CI_NPM_REGISTRY="${CI_NPM_REGISTRY:-https://repo.huaweicloud.com/repository/npm/}" \
-  HOME=/home/ci \
+  "${guest_env[@]}" \
+  "QEMU_LAYER_SCRIPT=$layer_script" \
   bash -c '
     set -Eeuo pipefail
     cd /home/ci/sciencediscovery
@@ -83,24 +109,30 @@ runuser --user ci -- env \
     test "$(pnpm --version)" = 11.1.2
     test "$(uv --version)" = "uv 0.9.26"
     grep -Fx "recipe=qemu-runner-v1" /etc/sciencediscovery-qemu-runner-image
-    npm config set registry "${CI_NPM_REGISTRY%/}/" --location=user
+    registry="${CI_NPM_REGISTRY:-https://repo.huaweicloud.com/repository/npm/}"
+    npm config set registry "${registry%/}/" --location=user
+    # The workspace arrived installed and built. pnpm 11 otherwise re-verifies
+    # the dependency tree before running a script and can reinstall it, which
+    # is exactly the emulated work this handover exists to remove.
+    export npm_config_verify_deps_before_run=false
     # Pure TCG can stretch concurrent timing enough to turn disconnect cleanup
     # into an unrelated EPIPE race. Serialize test files without skipping or
-    # changing any Runner assertion.
+    # changing any assertion.
     export QEMU_REAL_NODE="$(command -v node)"
     export QEMU_NODE_SHIM=1
     mkdir -p "$HOME/.local/qemu-node-shim"
-    ln -sfn /usr/local/sbin/qemu-sandbox-guest "$HOME/.local/qemu-node-shim/node"
+    ln -sfn /usr/local/sbin/qemu-guest-layer "$HOME/.local/qemu-node-shim/node"
     export PATH="$HOME/.local/qemu-node-shim:$PATH"
     echo "=== sandbox preflight as ci ==="
     bwrap --ro-bind / / --dev /dev true
-    pnpm ci:ut:runner
+    pnpm "$QEMU_LAYER_SCRIPT"
   '
 test_rc=$?
 set -e
 
-if [ -f /home/ci/ci-results/ut-runner/summary.json ]; then
-  echo "=== Runner UT summary ==="
-  cat /home/ci/ci-results/ut-runner/summary.json
+summary="/home/ci/ci-results/$layer/summary.json"
+if [ -f "$summary" ]; then
+  echo "=== $layer summary ==="
+  cat "$summary"
 fi
 exit "$test_rc"

@@ -9,8 +9,8 @@ repository intentionally does not use GitCode Actions.
 ## Pipeline inventory
 
 `.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
-runs the repository's `ci:ut:host`, experimental QEMU-hosted
-`ci:ut:guest`, and hermetic `ci:st` entry points, invokes
+runs the repository's two UT tiers — `ci:ut:host` on the runner and
+`ci:ut:guest` in a QEMU guest — and the hermetic `ci:st` entry point, invokes
 the reusable code-check pipeline, builds the x86_64 debug binary on a hosted
 runner, invokes an ARM CodeArts Build task for aarch64, and renders the final
 PR result. The code check is an externally registered CodeArts pipeline containing the SCA,
@@ -199,18 +199,27 @@ create user namespaces. Runner UT and E2E therefore cannot run directly in
 that pod. Do not use QEMU user-mode emulation as a workaround: it still shares
 the host kernel and its namespace restriction.
 
-The CI-branch experiment instead runs `pnpm ci:ut:guest` in a full Ubuntu
-guest under `qemu-system-x86_64 -accel tcg,thread=multi`. TCG is software-only,
-so `/dev/kvm` is neither requested nor required. The 20-minute Runner job
-downloads a pre-provisioned qcow2 from its immutable resource-commit/run path
-and verifies the repository-pinned SHA256 before booting. A miss or checksum
-mismatch fails before the VM starts; formal CI never rebuilds the image or
-falls back to a source mirror. The `ci/codearts-resources` workflow owns the
-date-pinned Ubuntu download, one-time guest provisioning, checksum generation,
-three-object upload, and public read-back verification. The formal guest then
-receives only the current source archive, verifies the baked Node, pnpm, uv,
-and bubblewrap versions, configures the package registry, and invokes the
-unchanged Runner layer without apt or toolchain provisioning. When the host
+The UT guest tier instead runs `pnpm ci:ut:guest` in a full Ubuntu guest
+under `qemu-system-x86_64 -accel tcg,thread=multi`. TCG is software-only, so
+`/dev/kvm` is neither requested nor required. The job downloads a
+pre-provisioned qcow2 from its immutable resource-commit/run path and verifies
+the repository-pinned SHA256 before booting. A miss or checksum mismatch fails
+before the VM starts; formal CI never rebuilds the image or falls back to a
+source mirror. The `ci/codearts-resources` workflow owns the date-pinned
+Ubuntu download, one-time guest provisioning, checksum generation,
+three-object upload, and public read-back verification.
+
+The guest compiles nothing. Before booting, the job provisions the runner and
+runs `pnpm install --frozen-lockfile` and `pnpm build` on native CPU, then
+`.ci/pack-workspace.sh` packs `git archive HEAD` together with the dependency
+tree and every `dist/` into one payload. `.ci/run-qemu-layer.sh <layer>` serves
+that payload over the existing cloud-init seed server; the guest streams it
+into place, verifies the baked Node, pnpm, uv, and bubblewrap versions,
+configures the package registry, and invokes the layer entry point, whose step
+list for `ut-guest` contains no install and no build. Measured on the run
+before the split, the guest spent 476 s in `pnpm build` and 92 s in
+`pnpm install` against 142 s of actual tests; the pinned image download was
+17 s, so the image cache was never the cost. When the host
 has no QEMU, the host script still verifies fixed
 `apk.static`, Alpine signing-key, and CA bundle package checksums. The CA bundle
 authenticates the mirror's HTTPS certificate, while the signing key
@@ -401,7 +410,9 @@ workflow again before pushing. Never overwrite a new UI commit blindly.
 | `target path should be absolutely path which start with:[.../share]` | An `upload-obs` source is relative or outside `${SHARE_PATH}`. |
 | `sudo: /bin/sudo must be owned by uid 0 and have the setuid bit set` | The default pool has no usable root; install user-space tools under `$HOME` or the workspace. |
 | QEMU reports `could not load module for type tcg-accel-ops` | A workspace-extracted QEMU needs `QEMU_MODULE_DIR=<root>/usr/lib/x86_64-linux-gnu/qemu`; also pass its data directory with `-L` and its SeaBIOS path explicitly. |
-| QEMU exits without `QEMU_SANDBOX_TEST_RESULT=<code>` | Guest provisioning, cloud-init, or the test harness did not finish. Keep the job red and inspect the run-scoped `ut-runner-qemu/run.log`; do not infer success from QEMU's process status alone. |
+| QEMU exits without `QEMU_SANDBOX_TEST_RESULT=<code>` | Guest provisioning, cloud-init, or the test harness did not finish. Keep the job red and inspect the run-scoped `ut-guest/run.log`; do not infer success from QEMU's process status alone. |
+| The guest layer reports `BLOCKED: ... expects a workspace its host already installed and built` | The job reached the guest without running install and build on the host. Fix the host steps; do not add an install or build to the guest, which is what the split exists to remove. |
+| A guest log shows `pnpm install` or `vite build` again | Either the payload was incomplete or pnpm re-verified the dependency tree. Compare the payload contents and keep `npm_config_verify_deps_before_run=false` in the guest environment. |
 | YAML requests `ubuntu-latest`, but logs show `octopus_container` and EulerOS | The default CCE execution mode ignored or overrode the OS label; use a dedicated pool for an actual Ubuntu rootfs. |
 | A child CloudBuild command ends with bare `--pr_id` | The child read `${MERGE_ID}`, which is not inherited from the parent. Pass the parent's MR ID as `PR_ID` and consume `${PR_ID}` inside every child task. |
 | `fatal: couldn't find remote ref refs/heads/<source>` on a fork PR | The checkout tried to fetch a fork-only branch from upstream. Fetch `refs/merge-requests/<MERGE_ID>/head` and detach at the validated event SHA. |

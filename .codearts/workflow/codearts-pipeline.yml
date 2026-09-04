@@ -88,7 +88,7 @@ stages:
     jobs:
       ut:
         select: always
-        name: UT
+        name: UT (host tier)
         needs: []
         timeout: 20
         timeout_unit: minute
@@ -215,7 +215,7 @@ stages:
                 fi
               done
           identifier: 2
-        - name: Run and stage UT log
+        - name: Run and stage the host tier log
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
@@ -227,38 +227,38 @@ stages:
               export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
               echo "dependency mirrors: npm=$(npm config get registry), pypi=$UV_DEFAULT_INDEX, python=$UV_PYTHON_INSTALL_MIRROR"
-              RESULT_DIR=.ci-results/ut-core
+              RESULT_DIR=.ci-results/ut-host
               RESULT_LOG="$RESULT_DIR/run.log"
               mkdir -p "$RESULT_DIR"
               set +e
-              pnpm ci:ut:core
+              pnpm ci:ut:host
               TEST_RC=$?
               set -e
               printf '%s\n' "$TEST_RC" > "$RESULT_DIR/exit-code"
               if [ ! -f "$RESULT_LOG" ]; then
-                printf 'pnpm ci:ut:core exited with status %s before run.log was created.\n' "$TEST_RC" > "$RESULT_LOG"
+                printf 'pnpm ci:ut:host exited with status %s before run.log was created.\n' "$TEST_RC" > "$RESULT_LOG"
               fi
-              echo "=== UT run.log (last 80 lines) ==="
+              echo "=== UT host tier run.log (last 80 lines) ==="
               tail -n 80 "$RESULT_LOG"
           identifier: 3
-        - name: Upload UT log to OBS
+        - name: Upload the host tier log to OBS
           uses: upload-obs
           with:
             endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
             endpoint: obs.cn-north-4.myhuaweicloud.com
             bucket: openjiuwen-ci
-            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
-            source_file: "${SHARE_PATH}/.ci-results/ut-core/run.log"
+            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-host/run.log"
+            source_file: "${SHARE_PATH}/.ci-results/ut-host/run.log"
             self_folder: "false"
           identifier: 4
-        - name: Report UT result
+        - name: Report the host tier result
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
               set -eu
               cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              TEST_RC=$(cat .ci-results/ut-core/exit-code)
-              echo "UT exited with status $TEST_RC"
+              TEST_RC=$(cat .ci-results/ut-host/exit-code)
+              echo "UT host tier exited with status $TEST_RC"
               exit "$TEST_RC"
           identifier: 5
         if: "${{ default() }}"
@@ -267,11 +267,11 @@ stages:
         - ubuntu-latest
         - x64
         - large
-      ut_runner_qemu:
+      ut_guest:
         select: always
-        name: Runner UT (QEMU TCG sandbox)
+        name: UT (guest tier, QEMU)
         needs: []
-        timeout: 20
+        timeout: 30
         timeout_unit: minute
         steps:
         - name: Download the source commit
@@ -350,45 +350,74 @@ stages:
               fi
               bash .ci/rebase-codearts-pr.sh "$SOURCE_BRANCH" "$SOURCE_SHA"
           identifier: 1788300000001c4819271-08bd-45b0-9d43-280631015c8e
-        - name: Run Runner UT in a software-emulated guest
+        - name: Provision the runner
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              cd "$SOURCE_DIR"
+              export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
+              export CI_PYPI_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              export CI_BINARY_CACHE_URL="${{ env.CI_BINARY_CACHE_URL }}"
+              export CI_BINARY_CACHE_ONLY=1
+              export CI_BINARY_CACHE_DIR="$PWD/.ci-results/toolchain-cache"
+              bash .ci/provision-runner.sh
+          identifier: 1788300000005a1b2c3d4-6f21-42aa-9c31-5e0a7b9d2f10
+        - name: Install and build on the host
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
               set -eu
               cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
+              # The guest runs the tests and nothing else. Compiling under TCG
+              # cost this job about eight minutes per run; doing it here on
+              # native CPU is the point of the split.
+              pnpm install --frozen-lockfile
+              pnpm build
+          identifier: 1788300000006b2c3d4e5-7a32-4bb1-8d42-6f1b8cae3021
+        - name: Run the UT guest tier in a software-emulated guest
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
               export CI_RESULTS_DIR="$PWD/.ci-results"
+              export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
               export CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME=300
-              RESULT_DIR=.ci-results/ut-runner-qemu
+              RESULT_DIR=.ci-results/ut-guest
               mkdir -p "$RESULT_DIR"
               set +e
-              bash .ci/run-qemu-sandbox-ut.sh
+              bash .ci/run-qemu-layer.sh ut-guest
               TEST_RC=$?
               set -e
               printf '%s\n' "$TEST_RC" > "$RESULT_DIR/exit-code"
               if [ ! -f "$RESULT_DIR/run.log" ]; then
-                printf 'QEMU Runner UT exited with status %s before run.log was created.\n' "$TEST_RC" > "$RESULT_DIR/run.log"
+                printf 'The UT guest tier exited with status %s before run.log was created.\n' "$TEST_RC" > "$RESULT_DIR/run.log"
               fi
-              echo "=== QEMU Runner UT run.log (last 120 lines) ==="
+              echo "=== UT guest tier run.log (last 120 lines) ==="
               tail -n 120 "$RESULT_DIR/run.log"
           identifier: 1788300000002bda376c8-15c7-4f38-9ea2-947fe0684cb1
-        - name: Upload QEMU Runner UT log to OBS
+        - name: Upload the UT guest tier log to OBS
           uses: upload-obs
           with:
             endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
             endpoint: obs.cn-north-4.myhuaweicloud.com
             bucket: openjiuwen-ci
-            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-runner-qemu/run.log"
-            source_file: "${SHARE_PATH}/.ci-results/ut-runner-qemu/run.log"
+            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-guest/run.log"
+            source_file: "${SHARE_PATH}/.ci-results/ut-guest/run.log"
             self_folder: "false"
           identifier: 1788300000003f1234bcc-0e34-49aa-ae6f-b60de513f4b2
-        - name: Report QEMU Runner UT result
+        - name: Report the UT guest tier result
           uses: official_shell_plugin
           with:
             OFFICIAL_SHELL_SCRIPT_INPUT: |
               set -eu
               cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              TEST_RC=$(cat .ci-results/ut-runner-qemu/exit-code)
-              echo "QEMU Runner UT exited with status $TEST_RC"
+              TEST_RC=$(cat .ci-results/ut-guest/exit-code)
+              echo "The UT guest tier exited with status $TEST_RC"
               exit "$TEST_RC"
           identifier: 1788300000004eaf6d7c1-bc1c-4ec9-b513-42006793b50b
         if: "${{ always() }}"
@@ -962,8 +991,8 @@ post:
             mkdir -p "$RESULT_DIR"
             PR_CHECK_URL="https://gitcode.com/openJiuwen/sciencediscovery/pull/${MERGE_ID}/check"
             CODECHECK_RESULT_BASE="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery"
-            UT_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
-            QEMU_RUNNER_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-runner-qemu/run.log"
+            UT_HOST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-host/run.log"
+            UT_GUEST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-guest/run.log"
             ST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
             BINARY_X86_64_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/x86_64/ScienceDiscovery-${{ sources.sciencediscovery.commit_id_short }}-linux-x86_64"
             BINARY_X86_64_SUMS_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/x86_64/SHA256SUMS"
@@ -1042,8 +1071,8 @@ post:
             ANTI_POISON_LINK_CELL=$(printf '%s\n' "$ANTI_POISON_FIELDS" | sed -n '2p')
             SCA_RESULT=$(printf '%s\n' "$SCA_FIELDS" | sed -n '1p')
             SCA_LINK_CELL=$(printf '%s\n' "$SCA_FIELDS" | sed -n '2p')
-            UT_LOG_CELL=$(public_log_cell "$UT_LOG_URL")
-            QEMU_RUNNER_LOG_CELL=$(public_log_cell "$QEMU_RUNNER_LOG_URL")
+            UT_HOST_LOG_CELL=$(public_log_cell "$UT_HOST_LOG_URL")
+            UT_GUEST_LOG_CELL=$(public_log_cell "$UT_GUEST_LOG_URL")
             ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")
             cat > "$RESULT_FILE" <<RESULT_HTML
             <p>&#9989; 流水线 <a href="$PR_CHECK_URL">${{ pipeline.run_id }}</a> 执行成功。</p>
@@ -1055,8 +1084,8 @@ post:
               <tr><td>Anti-poison（防投毒）</td><td>$ANTI_POISON_RESULT</td><td>$ANTI_POISON_LINK_CELL</td></tr>
               <tr><td>CodeCheck（静态检查）</td><td>$CODECHECK_RESULT</td><td>$CODECHECK_LINK_CELL</td></tr>
               <tr><td>Blacklist（禁用词）</td><td>$BLACKLIST_RESULT</td><td>$BLACKLIST_LINK_CELL</td></tr>
-              <tr><td>UT</td><td>-</td><td>PASSED</td><td>$UT_LOG_CELL</td></tr>
-              <tr><td>Runner UT</td><td>QEMU TCG sandbox</td><td>PASSED</td><td>$QEMU_RUNNER_LOG_CELL</td></tr>
+              <tr><td rowspan="2">UT</td><td>host tier</td><td>PASSED</td><td>$UT_HOST_LOG_CELL</td></tr>
+              <tr><td>guest tier (QEMU TCG sandbox)</td><td>PASSED</td><td>$UT_GUEST_LOG_CELL</td></tr>
               <tr><td>ST</td><td>-</td><td>PASSED</td><td>$ST_LOG_CELL</td></tr>
               <tr><td rowspan="2">Binary</td><td>x86_64 debug package</td><td>PASSED</td><td><a href="$BINARY_X86_64_URL">binary</a> · <a href="$BINARY_X86_64_SUMS_URL">SHA256SUMS</a></td></tr>
               <tr><td>aarch64 debug package</td><td>PASSED</td><td><a href="$BINARY_AARCH64_URL">binary</a> · <a href="$BINARY_AARCH64_SUMS_URL">SHA256SUMS</a></td></tr>
@@ -1075,7 +1104,7 @@ post:
           source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
           self_folder: "false"
         identifier: 1790000000002ca71171-679f-4414-948c-ff6497de4ab7
-      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_runner_qemu', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_guest', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
       runs-on:
       - default
     publish_pr_success:
@@ -1098,7 +1127,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 17646737830615fa277f2-7774-46a9-9222-bdd6236e9912
-      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_runner_qemu', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_guest', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
       runs-on:
       - default
     prepare_pr_failure:
@@ -1118,8 +1147,8 @@ post:
             mkdir -p "$RESULT_DIR"
             PR_CHECK_URL="https://gitcode.com/openJiuwen/sciencediscovery/pull/${MERGE_ID}/check"
             CODECHECK_RESULT_BASE="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery"
-            UT_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut/run.log"
-            QEMU_RUNNER_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-runner-qemu/run.log"
+            UT_HOST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-host/run.log"
+            UT_GUEST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-guest/run.log"
             ST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
             BINARY_X86_64_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/x86_64/run.log"
             BINARY_AARCH64_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/aarch64/run.log"
@@ -1202,13 +1231,13 @@ post:
             ANTI_POISON_LINK_CELL=$(printf '%s\n' "$ANTI_POISON_FIELDS" | sed -n '2p')
             SCA_RESULT=$(printf '%s\n' "$SCA_FIELDS" | sed -n '1p')
             SCA_LINK_CELL=$(printf '%s\n' "$SCA_FIELDS" | sed -n '2p')
-            UT_RESULT=$(job_result "${{ jobs.ut.status }}")
-            QEMU_RUNNER_RESULT=$(job_result "${{ jobs.ut_runner_qemu.status }}")
+            UT_HOST_RESULT=$(job_result "${{ jobs.ut.status }}")
+            UT_GUEST_RESULT=$(job_result "${{ jobs.ut_guest.status }}")
             ST_RESULT=$(job_result "${{ jobs.st.status }}")
             BINARY_X86_64_RESULT=$(job_result "${{ jobs.binary.status }}")
             BINARY_AARCH64_RESULT=$(job_result "${{ jobs.verify_binary_aarch64.status }}")
-            UT_LOG_CELL=$(public_log_cell "$UT_LOG_URL")
-            QEMU_RUNNER_LOG_CELL=$(public_log_cell "$QEMU_RUNNER_LOG_URL")
+            UT_HOST_LOG_CELL=$(public_log_cell "$UT_HOST_LOG_URL")
+            UT_GUEST_LOG_CELL=$(public_log_cell "$UT_GUEST_LOG_URL")
             ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")
             BINARY_X86_64_LOG_CELL=$(public_log_cell "$BINARY_X86_64_LOG_URL")
             BINARY_AARCH64_LOG_CELL=$(public_log_cell "$BINARY_AARCH64_LOG_URL")
@@ -1222,8 +1251,8 @@ post:
               <tr><td>Anti-poison（防投毒）</td><td>$ANTI_POISON_RESULT</td><td>$ANTI_POISON_LINK_CELL</td></tr>
               <tr><td>CodeCheck（静态检查）</td><td>$CODECHECK_RESULT</td><td>$CODECHECK_LINK_CELL</td></tr>
               <tr><td>Blacklist（禁用词）</td><td>$BLACKLIST_RESULT</td><td>$BLACKLIST_LINK_CELL</td></tr>
-              <tr><td>UT</td><td>-</td><td>$UT_RESULT</td><td>$UT_LOG_CELL</td></tr>
-              <tr><td>Runner UT</td><td>QEMU TCG sandbox</td><td>$QEMU_RUNNER_RESULT</td><td>$QEMU_RUNNER_LOG_CELL</td></tr>
+              <tr><td rowspan="2">UT</td><td>host tier</td><td>$UT_HOST_RESULT</td><td>$UT_HOST_LOG_CELL</td></tr>
+              <tr><td>guest tier (QEMU TCG sandbox)</td><td>$UT_GUEST_RESULT</td><td>$UT_GUEST_LOG_CELL</td></tr>
               <tr><td>ST</td><td>-</td><td>$ST_RESULT</td><td>$ST_LOG_CELL</td></tr>
               <tr><td rowspan="2">Binary</td><td>x86_64 debug package</td><td>$BINARY_X86_64_RESULT</td><td>$BINARY_X86_64_LOG_CELL</td></tr>
               <tr><td>aarch64 debug package</td><td>$BINARY_AARCH64_RESULT</td><td>$BINARY_AARCH64_LOG_CELL</td></tr>
@@ -1242,7 +1271,7 @@ post:
           source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
           self_folder: "false"
         identifier: 1790000000004756cae3-f5a6-4a02-a0e8-ab67c922ed75
-      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_runner_qemu', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_guest', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
       runs-on:
       - default
     publish_pr_failure:
@@ -1265,7 +1294,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 1790000000000b7abf11-329f-448a-bdc4-f1db550865d3
-      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_runner_qemu', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_guest', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
       runs-on:
       - default
   pre:

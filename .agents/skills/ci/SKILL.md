@@ -30,18 +30,25 @@ Three pipelines exist and none runs everything.
 
 | Pipeline | Trigger | UT | ST | E2E | Binary/resource output |
 | --- | --- | --- | --- | --- | --- |
-| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh debug run | `ci:ut:host` + experimental `ci:ut:guest` in QEMU TCG | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh debug run | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
 | CodeArts resources — `.codearts/workflow/codearts-resources-pipeline.yml` on `ci/codearts-resources` | push to `ci/codearts-resources` | — | — | — | checksum-pinned toolchains and QEMU image uploaded to stable OBS keys |
 | GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
-CodeArts's default pool cannot create user namespaces, so it cannot run Runner
-UT or E2E directly. The debug pipeline experimentally runs the unchanged
-`ci:ut:guest` layer in a checksum-pinned, pre-provisioned Ubuntu guest under
-software-only QEMU TCG. The resource branch builds that guest once; the formal
-job downloads it from its immutable resource-commit/run path, adds only the
-current checkout, and runs the layer without apt or toolchain provisioning. A
-self-hosted pool that passes a bubblewrap probe remains preferable, and E2E is
-still excluded.
+CodeArts's default pool cannot create user namespaces, so the UT guest tier
+cannot run directly there. The debug pipeline runs the unchanged `ci:ut:guest`
+layer in a checksum-pinned, pre-provisioned Ubuntu guest under software-only
+QEMU TCG. That guest is not a separate test project: it is where the guest UT
+tier executes, and the PR result table shows both tiers as UT.
+
+The host does the compiling. The job provisions the runner, runs
+`pnpm install --frozen-lockfile` and `pnpm build` on native CPU, and
+`.ci/pack-workspace.sh` hands the guest `git archive HEAD` plus the dependency
+tree and build output as one payload. The guest streams it in and runs the
+layer entry point, which for `ut-guest` has no install and no build step.
+Emulated CPU is roughly an order of magnitude slower than native: the run
+before this split spent 476 s building and 92 s installing inside the guest to
+reach 142 s of tests. A self-hosted pool that passes a bubblewrap probe
+remains preferable.
 The CodeArts debug workflow is a cache consumer, not a cache seeder. Its UT,
 ST, binary, and QEMU jobs require the checksum-pinned OBS objects and fail
 closed on a missing or invalid object instead of contacting external source
@@ -118,9 +125,11 @@ GitCode Actions unless the user changes that policy.
 | `bwrap: No permissions to create new namespace` | The host forbids user namespaces. Use only the repository's sandbox-free layer there; do not weaken Runner tests. |
 | QEMU reports `could not load module for type tcg-accel-ops` | A workspace-extracted QEMU cannot find its modules. Point `QEMU_MODULE_DIR` at the extracted architecture-specific QEMU module directory. |
 | `apk.static` reports `TLS: server certificate not trusted`, followed by QEMU packages being unavailable | The static bootstrap has no X.509 trust store, so its package indexes are empty. Supply the checksum-pinned CA bundle through `SSL_CERT_FILE`; keep HTTPS and Alpine package-signature verification enabled. |
-| QEMU boots but the guest emits no `QEMU_SANDBOX_TEST_RESULT` marker | The VM timed out, failed before the guest harness ran, or could not shut down cleanly. Keep the job failed and read `ut-runner-qemu/run.log`. |
+| QEMU boots but the guest emits no `QEMU_SANDBOX_TEST_RESULT` marker | The VM timed out, failed before the guest harness ran, or could not shut down cleanly. Keep the job failed and read `ut-guest/run.log`. |
 | API test expects `runner_exec`, gets `undefined` | An execution never ran; check sandbox availability first. |
 | `BLOCKED: isolated E2E stack did not become healthy` | The Runner refused to serve; inspect the sandbox probe before application logs. |
+| The guest reports `BLOCKED: ... expects a workspace its host already installed and built` | The host steps did not install and build before the guest started. Fix the host, never the guest: adding an install or build there is exactly what the split removed. |
+| A guest log shows `pnpm install` or `vite build` again | The payload was incomplete, or pnpm re-verified the dependency tree. Compare the payload contents and keep `npm_config_verify_deps_before_run=false` in the guest environment. |
 | `ERR_PNPM_OUTDATED_LOCKFILE` | `pnpm-lock.yaml` is behind a `package.json`; regenerate it with `pnpm install --lockfile-only`. |
 | Playwright is green with fewer tests than expected | A skip is not a pass. Check counts and not-passed titles; a BLOCKED precondition is reported as skipped. |
 | `fatal: couldn't find remote ref refs/heads/<source>` on a fork PR | The job fetched a fork-only branch from the upstream repository. Fetch GitCode's upstream merge-request ref instead; see the CodeArts reference. |
