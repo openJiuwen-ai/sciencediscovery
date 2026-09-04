@@ -223,7 +223,7 @@ test("prebuilt QEMU Runner image and workflow share the immutable cache contract
   assert.match(fetcherSource, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME:-300/);
   assert.match(fetcherSource, /--cache-only/);
   assert.match(fetcherSource, /sciencediscovery\/cache\/qemu-runner\/v1/);
-  assert.match(workflow, /ut_runner_qemu:[\s\S]*?needs: \[\][\s\S]*?timeout: 20/);
+  assert.match(workflow, /ut_guest:[\s\S]*?needs: \[\][\s\S]*?timeout: 30/);
   assert.match(workflow, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME=300/);
 });
 

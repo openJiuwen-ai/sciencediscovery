@@ -124,10 +124,17 @@ runuser --user ci -- env \
     grep -Fx "recipe=qemu-runner-v1" /etc/sciencediscovery-qemu-runner-image
     registry="${CI_NPM_REGISTRY:-https://repo.huaweicloud.com/repository/npm/}"
     npm config set registry "${registry%/}/" --location=user
-    # The workspace arrived installed and built. pnpm 11 otherwise re-verifies
-    # the dependency tree before running a script and can reinstall it, which
-    # is exactly the emulated work this handover exists to remove.
-    export npm_config_verify_deps_before_run=false
+    # The workspace arrived installed and built, and pnpm 11 defaults
+    # verify-deps-before-run to "install". Its check reads
+    # node_modules/.pnpm-workspace-state-v1.json, whose project keys are the
+    # absolute directories of the machine that installed, so a workspace moved
+    # from the CodeArts host to this guest always looks like "the workspace
+    # structure has changed" and pnpm reinstalls -- here it aborts first,
+    # because the modules directory came from another store and purging it
+    # needs a TTY. Two details matter: pnpm reads this setting from
+    # `pnpm_config_`, not `npm_config_`, and it only skips the check when the
+    # value is falsy, so the value must be empty rather than "false".
+    export pnpm_config_verify_deps_before_run=
     # Pure TCG can stretch concurrent timing enough to turn disconnect cleanup
     # into an unrelated EPIPE race. Serialize test files without skipping or
     # changing any assertion.
