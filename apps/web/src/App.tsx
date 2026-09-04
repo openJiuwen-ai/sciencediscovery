@@ -170,7 +170,9 @@ import {
   SidebarSectionHeader,
 } from "./session/ManagementControls.js";
 import {
+  collectTimelineSubagentIds,
   reduceRunTimeline,
+  reduceSubagentSnapshots,
   RunTimeline,
   setTimelineEntryExpanded,
   type RunTimelineEntry,
@@ -297,6 +299,7 @@ import {
   collectTimelinePermissionRequestIds,
   EMPTY_TIMELINE,
   hydrateSessionRunTimeline,
+  hydrateTimelineSubagents,
   hydrateTerminalRunTimelines,
   reconcilePermissionTimeline,
   reconcileSessionTimelinePermissions,
@@ -309,6 +312,23 @@ import {
 const SELF_EVOLUTION_LIBRARY_ID = "project-skills";
 const BUILT_IN_SKILL_LIBRARY_ID = "built-in-skills";
 const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
+
+function subagentsByRootRun(runs: readonly SessionRun[], subagents: readonly Subagent[]): Map<string, Subagent[]> {
+  const runIds = new Set(runs.map((run) => run.id));
+  const subagentsById = new Map(subagents.map((subagent) => [subagent.id, subagent]));
+  const grouped = new Map<string, Subagent[]>();
+  for (const subagent of subagents) {
+    const visited = new Set<string>();
+    let parentId: string | undefined = subagent.parentTurnId;
+    while (parentId && !runIds.has(parentId) && !visited.has(parentId)) {
+      visited.add(parentId);
+      parentId = subagentsById.get(parentId)?.parentTurnId;
+    }
+    if (!parentId || !runIds.has(parentId)) continue;
+    grouped.set(parentId, [...(grouped.get(parentId) ?? []), subagent]);
+  }
+  return grouped;
+}
 
 export function canSummarizeRunAsSkill(run: SessionRun | undefined): run is SessionRun {
   if (!run) return false;
@@ -1897,8 +1917,22 @@ export function App() {
         return [run.id, []] as const; // legacy runs recorded before event persistence
       }
     }));
+    const subagentsByRun = subagentsByRootRun(sessionRunItems, subagentItems);
+    const childStreamEvents = await Promise.all([...subagentsByRun].flatMap(([runId, runSubagents]) =>
+      runSubagents.map(async (subagent) => {
+        try {
+          const records = await client.listRunStreamEvents(sessionId, runId, `subagent-${subagent.id}`);
+          return [runId, records] as const;
+        } catch {
+          return [runId, []] as const; // subagents recorded before child streams existed
+        }
+      })));
     const projectArtifacts = await client.listProjectArtifacts(detail.projectId);
     const eventsByRun = Object.fromEntries(terminalEvents);
+    const childEventsByRun: Record<string, SessionRunEvent[]> = {};
+    for (const [runId, records] of childStreamEvents) {
+      childEventsByRun[runId] = [...(childEventsByRun[runId] ?? []), ...records];
+    }
     if (!shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
     const refreshedDetail = mergeRefreshedSessionDetail(
       detail,
@@ -1928,10 +1962,17 @@ export function App() {
     setEvidenceLinks(linkItems);
     setPapers(paperItems);
     setPaperVisionRuns(visionItems);
-    setReplayTimelines((current) => ({
-      ...current,
-      [sessionId]: hydrateTerminalRunTimelines(current[sessionId] ?? {}, terminalRuns, eventsByRun),
-    }));
+    setReplayTimelines((current) => {
+      const hydrated = hydrateTerminalRunTimelines(current[sessionId] ?? {}, terminalRuns, eventsByRun);
+      for (const [runId, timeline] of Object.entries(hydrated)) {
+        hydrated[runId] = hydrateTimelineSubagents(
+          timeline,
+          childEventsByRun[runId] ?? [],
+          subagentsByRun.get(runId) ?? [],
+        );
+      }
+      return { ...current, [sessionId]: hydrated };
+    });
     const changedPathsByRun: Record<string, string[]> = {};
     for (const [runId, events] of terminalEvents) {
       changedPathsByRun[runId] = collectRunChangedPaths(events.map((record) => record.event));
@@ -1939,7 +1980,19 @@ export function App() {
     if (activeRun) changedPathsByRun[activeRun.id] = collectRunChangedPaths(replayEvents.map((record) => record.event));
     setRunChangedPaths((current) => ({ ...current, [sessionId]: changedPathsByRun }));
     if (activeRun) {
-      setRunTimelines((current) => hydrateSessionRunTimeline(current, sessionId, activeRun, replayEvents));
+      setRunTimelines((current) => {
+        const hydrated = hydrateSessionRunTimeline(current, sessionId, activeRun, replayEvents);
+        const timeline = hydrated[sessionId];
+        if (!timeline) return hydrated;
+        return {
+          ...hydrated,
+          [sessionId]: hydrateTimelineSubagents(
+            timeline,
+            childEventsByRun[activeRun.id] ?? [],
+            subagentsByRun.get(activeRun.id) ?? [],
+          ),
+        };
+      });
       if (sessionActivity.current.streamCount(sessionId) === 0) {
         resumeSessionRun(sessionId, refreshedDetail.title, activeRun, replayEvents.at(-1)?.sequence ?? 0);
       }
@@ -2892,7 +2945,7 @@ export function App() {
     sessionTitle: string | undefined,
     runId: string | undefined,
     streamEvent: RunStreamEvent,
-    sequence: number,
+    sequence?: number,
   ): void {
     setRunTimelines((current) => recordSessionTimelineEvent(
       current,
@@ -2949,9 +3002,10 @@ export function App() {
     if (streamEvent.type === "plan.proposed") {
       setPlans((current) => [...current.filter((item) => item.id !== streamEvent.plan.id), streamEvent.plan]);
     }
-    if (streamEvent.type === "subagent.updated") {
-      setSubagents((current) => [...current.filter((item) => item.id !== streamEvent.subagent.id), streamEvent.subagent]
-        .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)));
+    if (streamEvent.type === "subagent.updated"
+      || streamEvent.type === "subagent.step"
+      || streamEvent.type === "subagent.usage") {
+      setSubagents((current) => reduceSubagentSnapshots(current, streamEvent));
     }
     if (streamEvent.type === "evolve_run.created") {
       // Into the same list the workspace card reads, so a search the agent
@@ -3116,7 +3170,7 @@ export function App() {
         annotationIds: annotations.map((annotation) => annotation.id),
         content,
         ...(references.length ? { references } : {}),
-      }, (streamEvent: RunStreamEvent, sequence: number) => {
+      }, (streamEvent: RunStreamEvent, sequence?: number) => {
         if (streamEvent.type === "run.queued" || streamEvent.type === "run.status") {
           streamRunId = streamEvent.run.id;
         }
@@ -3574,6 +3628,9 @@ export function App() {
   const displayedMessages = session?.messages.filter((item) => item.id !== timelineMessageId) ?? [];
   const sessionReplayTimelines = (session?.id ? replayTimelines[session.id] : undefined) ?? {};
   const activeTimelineRunId = activeRunTimeline?.runId;
+  const activeTimelineSubagentIds = collectTimelineSubagentIds(runTimeline);
+  const replayTimelineSubagentIds = new Map(Object.entries(sessionReplayTimelines).map(([runId, timeline]) =>
+    [runId, collectTimelineSubagentIds(timeline.entries)]));
   const replayedRunIds = new Set(Object.keys(sessionReplayTimelines).filter((runId) => runId !== activeTimelineRunId));
   const conversationBlocks = buildConversationBlocks(displayedMessages, sessionRuns, replayedRunIds);
   const timelinePermissionRequestIds = collectTimelinePermissionRequestIds([
@@ -3747,13 +3804,14 @@ export function App() {
     </section>;
   }
 
-  function renderRunActivityGroup(group: RunActivityGroup) {
+  function renderRunActivityGroup(group: RunActivityGroup, timelineSubagentIds: ReadonlySet<string> = new Set()) {
     if (!session) return null;
     const artifactCardId = activityCardId("artifacts", group.runId ?? "unattributed");
+    const footerSubagents = group.subagents.filter((subagent) => !timelineSubagentIds.has(subagent.id));
     return (
       <div className="run-activity-group" key={group.runId ?? "unattributed"}>
         <OrchestrationPanel expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} plans={group.plans} />
-        <SubagentCards expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} specialists={specialists} subagents={group.subagents} />
+        <SubagentCards expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} specialists={specialists} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />
         <GovernedDownloadCards
@@ -4059,9 +4117,11 @@ export function App() {
                       <RunTimeline
                         artifactReviews={artifactReviews}
                         entries={sessionReplayTimelines[block.runId]?.entries ?? EMPTY_TIMELINE}
+                        expandedActivityCards={activityCardExpansion}
                         footer={<>
                           <RunUsageInline run={runUsageByRunId.get(block.runId)} />
-                          {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) => renderRunActivityGroup(group))}
+                          {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) =>
+                            renderRunActivityGroup(group, replayTimelineSubagentIds.get(block.runId)))}
                         </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
@@ -4070,6 +4130,7 @@ export function App() {
                         onLoadToolOutput={(trace) => loadToolOutput(session.id, block.runId, trace)}
                         onOpenArtifacts={openMarkdownImageArtifacts}
                         onOpenSkillReviews={openGeneratedSkillDraftExplorer}
+                        onToggleActivityCard={toggleActivityCard}
                         references={reportReferences}
                         onToggle={(id, expanded) => setReplayTimelines((current) => {
                           const forSession = current[session.id] ?? {};
@@ -4084,6 +4145,7 @@ export function App() {
                           };
                         })}
                         reviewerLevel={reviewerSpecialistSettings?.level}
+                        specialists={specialists}
                         workspaceSessionId={session.id}
                       />
                       {renderSkillEvolutionCard(sessionRuns.find((run) => run.id === block.runId))}
@@ -4092,9 +4154,10 @@ export function App() {
                   <RunTimeline
                     artifactReviews={artifactReviews}
                     entries={runTimeline}
+                    expandedActivityCards={activityCardExpansion}
                     footer={<>
                       <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
-                      {tailActivityGroups.map((group) => renderRunActivityGroup(group))}
+                      {tailActivityGroups.map((group) => renderRunActivityGroup(group, activeTimelineSubagentIds))}
                     </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}
@@ -4104,6 +4167,7 @@ export function App() {
                     onOpenArtifacts={openMarkdownImageArtifacts}
                     onOpenSkillReviews={openGeneratedSkillDraftExplorer}
                     onPermissionDecision={decidePermission}
+                    onToggleActivityCard={toggleActivityCard}
                     references={reportReferences}
                     onToggle={(id, expanded) => setRunTimelines((current) => {
                       const timeline = current[session.id];
@@ -4122,6 +4186,7 @@ export function App() {
                       };
                     })}
                     reviewerLevel={reviewerSpecialistSettings?.level}
+                    specialists={specialists}
                     workspaceSessionId={session.id}
                   />
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
@@ -4718,10 +4783,12 @@ export {
   forgetSession,
   getVisibleProjects,
   hydrateSessionRunTimeline,
+  hydrateTimelineSubagents,
   hydrateTerminalRunTimelines,
   isSessionRunning,
   messageForSessionTitle,
   queuedCancelToast,
+  reduceRunTimeline,
   reconcilePermissionTimeline,
   reconcileSessionTimelinePermissions,
   recordSessionTimelineEvent,

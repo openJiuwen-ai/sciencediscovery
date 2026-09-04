@@ -177,9 +177,35 @@ test("running subagents start collapsed as well", () => {
 
   assert.match(html, /aria-expanded="false"/);
   assert.match(html, /1 running · 1 total/);
+  assert.match(html, /Starting…/);
 });
 
-test("expanded subagent card renders nested steps and token usage from lifted state", () => {
+test("a collapsed running subagent shows its current step", () => {
+  const running = buildSubagent({
+    id: "subagent-running",
+    status: "running",
+    steps: [{
+      content: "Searching the evidence catalog",
+      createdAt: timestamp,
+      id: "step-running",
+      input: "vitamin C randomized trials",
+      kind: "tool",
+      status: "running",
+      toolName: "search_papers",
+    }],
+  });
+  const html = renderToStaticMarkup(createElement(SubagentCards, {
+    expandedCards: {},
+    onToggleCard: noopToggle,
+    subagents: [running],
+  }));
+
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /Current: search_papers · vitamin C randomized trials/);
+  assert.doesNotMatch(html, /Subagent steps/);
+});
+
+test("expanded subagent card renders compact step activities and token usage from lifted state", () => {
   const subagent = buildSubagent();
   const html = renderToStaticMarkup(createElement(SubagentCards, {
     expandedCards: { [activityCardId("subagent", subagent.id)]: true },
@@ -188,6 +214,9 @@ test("expanded subagent card renders nested steps and token usage from lifted st
   }));
 
   assert.match(html, /aria-expanded="true"/);
+  assert.match(html, /class="subagent-step-activity"/);
+  assert.match(html, /aria-label="run_python, completed: print/);
+  assert.match(html, /<strong>run_python<\/strong><small>completed · print/);
   assert.match(html, /Created method-a\.json/);
   assert.match(html, /150 tokens/);
   assert.match(html, /120 in \/ 30 out/);

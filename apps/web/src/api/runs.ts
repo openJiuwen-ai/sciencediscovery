@@ -101,7 +101,7 @@ export class RunsApiClient extends SessionsApiClient {
     sessionId: string,
     runId: string,
     after: number,
-    onEvent: (event: RunStreamEvent, sequence: number) => void,
+    onEvent: (event: RunStreamEvent, sequence?: number) => void,
     signal?: AbortSignal,
   ): Promise<void> {
     const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events?after=${after}`, {
@@ -139,8 +139,11 @@ export class RunsApiClient extends SessionsApiClient {
           .join("\n");
         if (payload) {
           const parsedSequence = eventId ? Number(eventId) : Number.NaN;
-          sequence = Number.isFinite(parsedSequence) && parsedSequence > sequence ? parsedSequence : sequence + 1;
-          onEvent(JSON.parse(payload) as RunStreamEvent, sequence);
+          if (Number.isFinite(parsedSequence)) sequence = Math.max(sequence, parsedSequence);
+          // Child-stream payloads are multiplexed onto the live response but
+          // deliberately have no main-stream id. Do not invent one: doing so
+          // advances the replay cursor past main events that have not arrived.
+          onEvent(JSON.parse(payload) as RunStreamEvent, Number.isFinite(parsedSequence) ? parsedSequence : undefined);
         }
       }
       if (done) break;
@@ -156,7 +159,7 @@ export class RunsApiClient extends SessionsApiClient {
   async streamMessage(
     sessionId: string,
     body: SendMessageRequest,
-    onEvent: (event: RunStreamEvent, sequence: number) => void,
+    onEvent: (event: RunStreamEvent, sequence?: number) => void,
     signal?: AbortSignal,
   ): Promise<void> {
     const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
@@ -194,8 +197,8 @@ export class RunsApiClient extends SessionsApiClient {
             .join("\n");
           if (!payload) continue;
           const parsed = Number(id);
-          sequence = Number.isFinite(parsed) && parsed > sequence ? parsed : sequence + 1;
-          onEvent(JSON.parse(payload) as RunStreamEvent, sequence);
+          if (Number.isFinite(parsed)) sequence = Math.max(sequence, parsed);
+          onEvent(JSON.parse(payload) as RunStreamEvent, Number.isFinite(parsed) ? parsed : undefined);
         }
         if (done) break;
       }

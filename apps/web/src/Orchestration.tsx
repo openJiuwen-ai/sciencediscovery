@@ -18,13 +18,22 @@ import type {
   ConnectorManifest,
   ReviewerSpecialistLevel,
   Subagent,
+  SubagentStep,
   SessionPlan,
   SkillDescriptor,
   Specialist,
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
-import { ChevronRightIcon } from "./icons.js";
+import {
+  ChevronRightIcon,
+  CodeFileIcon,
+  InfoIcon,
+  SessionIcon,
+  SparkleIcon,
+  SpinnerIcon,
+  WarningIcon,
+} from "./icons.js";
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
 import { ToolIoSections } from "./timeline/ToolIoSections.js";
@@ -88,6 +97,10 @@ export function OrchestrationPanel({
 }
 
 function subagentSummary(subagent: Subagent): string {
+  if (subagent.status === "running") {
+    const step = subagent.steps.findLast((candidate) => candidate.status === "running") ?? subagent.steps.at(-1);
+    return step ? `Current: ${subagentStepLabel(step)} · ${subagentStepPreview(step)}` : "Starting…";
+  }
   const parts = [subagent.input.subagentType ?? "general-purpose", `${subagent.turnCount}/${subagent.maxTurns} turns`];
   parts.push(subagent.usage ? `${subagent.usage.totalTokens.toLocaleString()} tokens` : "usage unavailable");
   return parts.join(" · ");
@@ -98,25 +111,81 @@ function specialistLabel(specialists: Specialist[], specialistId: string | undef
   return specialists.find((specialist) => specialist.id === specialistId)?.name ?? specialistId;
 }
 
+function subagentStepLabel(step: SubagentStep): string {
+  if (step.kind === "tool") return step.toolName ?? "Tool";
+  if (step.kind === "thinking") return "Reasoning";
+  if (step.kind === "assistant") return "Response";
+  const turn = /^Turn (\d+) started$/i.exec(step.content.trim());
+  return turn ? `Turn ${turn[1]}` : "Setup";
+}
+
+function subagentStepPreview(step: SubagentStep): string {
+  const source = step.kind === "tool" ? step.input ?? step.content : step.content;
+  const compact = source.replace(/\s+/g, " ").trim();
+  if (!compact) return "No details";
+  if (step.kind === "system" && /^Turn \d+ started$/i.test(compact)) return "Started";
+  return compact;
+}
+
+function subagentStepIcon(step: SubagentStep) {
+  if (step.status === "running") return <SpinnerIcon className="spin" size={15} />;
+  if (step.status === "failed") return <WarningIcon size={15} />;
+  if (step.kind === "tool") return <CodeFileIcon size={15} />;
+  if (step.kind === "thinking") return <SparkleIcon size={15} />;
+  if (step.kind === "assistant") return <SessionIcon size={15} />;
+  return <InfoIcon size={15} />;
+}
+
+function SubagentStepActivity({ step, subagentId }: { step: SubagentStep; subagentId: string }) {
+  const label = subagentStepLabel(step);
+  const preview = subagentStepPreview(step);
+  const status = step.status ?? "completed";
+  return <details className="subagent-step-activity" data-kind={step.kind} data-status={status}>
+    <summary aria-label={`${label}, ${status}: ${preview}`} title={`${label} · ${status}\n${preview}`}>
+      <span className="subagent-step-icon">{subagentStepIcon(step)}</span>
+      <span className="subagent-step-summary"><strong>{label}</strong><small>{status} · {preview}</small></span>
+      <ChevronRightIcon className="subagent-step-chevron" size={13} />
+    </summary>
+    <div className="subagent-step-body">
+      {step.kind === "tool"
+        ? <ToolIoSections
+          outputText={step.status === "running" ? undefined : step.content}
+          trace={{
+            id: `${subagentId}:${step.id}`,
+            ...(step.input !== undefined ? { input: step.input } : {}),
+            name: step.toolName ?? "tool",
+            status,
+          }}
+        />
+        : <pre>{step.content}</pre>}
+    </div>
+  </details>;
+}
+
 export function SubagentCards({
+  className,
   expandedCards,
+  heading = "Subagents",
   onToggleCard,
   specialists = [],
   subagents,
 }: ActivityCardDisclosure & {
+  className?: string;
+  heading?: string;
   specialists?: Specialist[];
   subagents: Subagent[];
 }) {
   if (!subagents.length) return null;
 
-  return <section className="subagent-list" aria-label="Subagent activity">
-    <div className="subagent-list-heading"><strong>Subagents</strong><span>{subagents.filter((subagent) => subagent.status === "running").length} running · {subagents.length} total</span></div>
+  return <section className={`subagent-list${className ? ` ${className}` : ""}`} aria-label="Subagent activity">
+    <div className="subagent-list-heading"><strong>{heading}</strong><span>{subagents.filter((subagent) => subagent.status === "running").length} running · {subagents.length} total</span></div>
     {subagents.map((subagent) => {
       const cardId = activityCardId("subagent", subagent.id);
       const expanded = Boolean(expandedCards[cardId]);
       const specialist = specialistLabel(specialists, subagent.specialistId ?? subagent.input.specialistId);
+      const summary = subagentSummary(subagent);
       return <article className={`subagent-card ${subagent.status}`} key={subagent.id}>
-        <button type="button" aria-expanded={expanded} onClick={() => onToggleCard(cardId, !expanded)} title={`${subagent.input.description} · ${subagent.status}`}><i /><span><strong>{subagent.input.description}</strong><small>{subagentSummary(subagent)}</small></span><em>{subagent.status}</em></button>
+        <button type="button" aria-expanded={expanded} onClick={() => onToggleCard(cardId, !expanded)} title={`${subagent.input.description} · ${subagent.status}\n${summary}`}><i /><span><strong>{subagent.input.description}</strong><small>{summary}</small></span><em>{subagent.status}</em></button>
         {expanded ? <div className="subagent-details">
           <div className="subagent-metadata">
             <span>{subagent.model?.name ?? subagent.model?.model ?? "Model unavailable"}</span>
@@ -124,21 +193,9 @@ export function SubagentCards({
             <span>{subagent.turnCount}/{subagent.maxTurns} turns</span>
             <span>{subagent.usage ? `${subagent.usage.totalTokens.toLocaleString()} tokens · ${subagent.usage.inputTokens.toLocaleString()} in / ${subagent.usage.outputTokens.toLocaleString()} out` : "Usage unavailable"}</span>
           </div>
-          <p><strong>Prompt</strong>{subagent.input.prompt}</p>
-          <div className="subagent-steps">{subagent.steps.map((step) => <div key={step.id} data-kind={step.kind} data-status={step.status}>
-            <span>{step.toolName ?? step.kind}{step.status ? ` · ${step.status}` : ""}</span>
-            {step.kind === "tool"
-              ? <ToolIoSections
-                outputText={step.status === "running" ? undefined : step.content}
-                trace={{
-                  id: `${subagent.id}:${step.id}`,
-                  ...(step.input !== undefined ? { input: step.input } : {}),
-                  name: step.toolName ?? "tool",
-                  status: step.status ?? "completed",
-                }}
-              />
-              : <pre>{step.content}</pre>}
-          </div>)}</div>
+          <p className="subagent-prompt" title={subagent.input.prompt}><strong>Prompt</strong><span>{subagent.input.prompt}</span></p>
+          <div className="subagent-steps" aria-label="Subagent steps">{subagent.steps.map((step) =>
+            <SubagentStepActivity key={step.id} step={step} subagentId={subagent.id} />)}</div>
           {subagent.error ? <p className="environment-error">{subagent.error}</p> : null}
         </div> : null}
       </article>;

@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ChatMessage, RunStreamEvent, SessionRun, SessionRunEvent } from "@sciencediscovery/schema";
+import type { ChatMessage, RunStreamEvent, SessionRun, SessionRunEvent, Subagent } from "@sciencediscovery/schema";
 import { ApiRequestError } from "../src/api.js";
 import { mergePermissionRequestSnapshot } from "../src/permission-state.js";
 
@@ -25,12 +25,14 @@ import {
   clearSessionTimeline,
   collectTimelinePermissionRequestIds,
   hydrateTerminalRunTimelines,
+  hydrateTimelineSubagents,
   forgetSession,
   hydrateSessionRunTimeline,
   permissionRequestFromConflict,
   reconcilePermissionTimeline,
   reconcileSessionTimelinePermissions,
   recordSessionTimelineEvent,
+  reduceRunTimeline,
   routeRunStreamEvent,
   selectSessionReplayRun,
   type SessionRunTimeline,
@@ -65,6 +67,22 @@ function dispatch(
 
 function toolEntry(timeline: SessionRunTimeline | undefined) {
   return timeline?.entries.find((entry) => entry.type === "tool");
+}
+
+function replaySubagent(overrides: Partial<Subagent> = {}): Subagent {
+  return {
+    createdAt: "2026-01-01T00:00:01.000Z",
+    id: "subagent-a",
+    input: { description: "Check evidence", prompt: "Inspect the evidence" },
+    maxTurns: 12,
+    parentTurnId: "run-active",
+    sessionId: "session-a",
+    status: "running",
+    steps: [],
+    timeoutSeconds: 300,
+    turnCount: 0,
+    ...overrides,
+  };
 }
 
 // When Session A keeps running while the user starts a run in Session B,
@@ -656,4 +674,71 @@ test("a reopened Session replays the approval switch recorded during its run", (
   const entries = replayed[finished.id]?.entries ?? [];
   assert.deepEqual(entries.map((entry) => entry.type), ["tool", "approval-mode"]);
   assert.equal(entries[1]?.type === "approval-mode" && entries[1].previousApprovalMode, "ask_for_dangerous");
+});
+
+test("id-less SubAgent events update their lane without advancing the main replay cursor", () => {
+  const subagent = replaySubagent();
+  let timelines = recordSessionTimelineEvent(
+    {},
+    subagent.sessionId,
+    { subagent, type: "subagent.updated" },
+    { runId: subagent.parentTurnId, sequence: 7 },
+  );
+  timelines = recordSessionTimelineEvent(
+    timelines,
+    subagent.sessionId,
+    {
+      step: {
+        content: "streamed child result",
+        createdAt: "2026-01-01T00:00:02.000Z",
+        id: "child-step",
+        kind: "assistant",
+      },
+      subagentId: subagent.id,
+      type: "subagent.step",
+    },
+    { runId: subagent.parentTurnId },
+  );
+
+  assert.equal(timelines[subagent.sessionId]?.lastSequence, 7);
+  const group = timelines[subagent.sessionId]?.entries.find((entry) => entry.type === "subagents");
+  assert.equal(group?.type === "subagents" && group.subagents[0]?.steps[0]?.content, "streamed child result");
+
+  timelines = recordSessionTimelineEvent(
+    timelines,
+    subagent.sessionId,
+    { content: "main stream continues", type: "assistant.snapshot" },
+    { runId: subagent.parentTurnId, sequence: 8 },
+  );
+  assert.equal(timelines[subagent.sessionId]?.entries.at(-1)?.type, "assistant");
+});
+
+test("refresh hydration rebuilds SubAgent steps from its child stream", () => {
+  const subagent = replaySubagent({ status: "completed", finishedAt: "2026-01-01T00:00:04.000Z" });
+  const mainTimeline: SessionRunTimeline = {
+    entries: reduceRunTimeline([], { subagent: { ...subagent, steps: [] }, type: "subagent.updated" }),
+    lastSequence: 5,
+    runId: subagent.parentTurnId,
+  };
+  const childRecords: SessionRunEvent[] = [{
+    createdAt: "2026-01-01T00:00:03.000Z",
+    event: {
+      step: {
+        content: "persisted child result",
+        createdAt: "2026-01-01T00:00:03.000Z",
+        id: "child-step",
+        kind: "assistant",
+      },
+      subagentId: subagent.id,
+      type: "subagent.step",
+    },
+    runId: subagent.parentTurnId,
+    sequence: 1,
+    sessionId: subagent.sessionId,
+  }];
+
+  const hydrated = hydrateTimelineSubagents(mainTimeline, childRecords, [subagent]);
+  const group = hydrated.entries[0];
+  assert.equal(group?.type === "subagents" && group.subagents[0]?.steps[0]?.content, "persisted child result");
+  assert.equal(hydrated.lastSequence, 5, "a child cursor never replaces the main cursor");
 });

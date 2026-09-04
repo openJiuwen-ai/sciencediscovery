@@ -19,15 +19,21 @@ import type {
   PermissionDecision,
   PermissionRequest,
   RunStreamEvent,
+  Specialist,
+  Subagent,
+  SubagentStep,
+  SubagentUsage,
   ToolTrace,
 } from "@sciencediscovery/schema";
 import React, { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { BrandIcon, CheckIcon, ChevronRightIcon, SpinnerIcon, WarningIcon } from "../icons.js";
 import { MarkdownRenderer } from "../Markdown.js";
+import { SubagentCards } from "../Orchestration.js";
 import { PermissionDecisionActions, permissionMatchingKey } from "../PermissionDecisionActions.js";
 import { mergePermissionRequestSnapshot } from "../permission-state.js";
 import { ReviewerPanel } from "../ReviewerPanel.js";
+import type { ActivityCardExpansion } from "../session/run-activity.js";
 import { ToolIoSections } from "./ToolIoSections.js";
 import { useLocale } from "../i18n/index.js";
 import { formatRunFailure } from "../run-failure.js";
@@ -86,7 +92,129 @@ export type RunTimelineEntry =
       id: string;
       previousApprovalMode: ApprovalMode;
       type: "approval-mode";
+    }
+  | {
+      id: string;
+      subagents: Subagent[];
+      type: "subagents";
     };
+
+const TERMINAL_SUBAGENT_STATUSES = new Set<Subagent["status"]>([
+  "cancelled",
+  "completed",
+  "failed",
+  "timed_out",
+]);
+
+function sameSubagentStep(left: SubagentStep, right: SubagentStep): boolean {
+  return left.id === right.id
+    && left.content === right.content
+    && left.createdAt === right.createdAt
+    && left.input === right.input
+    && left.kind === right.kind
+    && left.status === right.status
+    && left.toolCallId === right.toolCallId
+    && left.toolName === right.toolName;
+}
+
+function mergeSubagentSteps(current: SubagentStep[], incoming: SubagentStep[]): SubagentStep[] {
+  if (!incoming.length) return current;
+  const merged = [...current];
+  let changed = false;
+  for (const step of incoming) {
+    const index = merged.findIndex((candidate) => candidate.id === step.id);
+    if (index < 0) {
+      merged.push(step);
+      changed = true;
+    } else if (!sameSubagentStep(merged[index]!, step)) {
+      merged[index] = step;
+      changed = true;
+    }
+  }
+  return changed ? merged : current;
+}
+
+function sameSubagentUsage(left: SubagentUsage | undefined, right: SubagentUsage | undefined): boolean {
+  return left === right || Boolean(left && right
+    && left.cacheReadTokens === right.cacheReadTokens
+    && left.cacheWriteTokens === right.cacheWriteTokens
+    && left.inputTokens === right.inputTokens
+    && left.outputTokens === right.outputTokens
+    && left.totalTokens === right.totalTokens);
+}
+
+/** Merge snapshots without allowing a delayed running event to undo a terminal state. */
+export function mergeSubagentSnapshot(current: Subagent, incoming: Subagent): Subagent {
+  const steps = mergeSubagentSteps(current.steps, incoming.steps);
+  const keepTerminalState = TERMINAL_SUBAGENT_STATUSES.has(current.status) && incoming.status === "running";
+  const usage = incoming.usage ?? current.usage;
+  const merged: Subagent = {
+    ...current,
+    ...incoming,
+    status: keepTerminalState ? current.status : incoming.status,
+    steps,
+    turnCount: Math.max(current.turnCount, incoming.turnCount),
+    ...(usage ? { usage } : {}),
+    ...(keepTerminalState && current.finishedAt ? { finishedAt: current.finishedAt } : {}),
+    ...(keepTerminalState && current.error ? { error: current.error } : {}),
+  };
+  return merged;
+}
+
+function updateSubagent(
+  subagent: Subagent,
+  event: Extract<RunStreamEvent, { type: "subagent.step" | "subagent.updated" | "subagent.usage" }>,
+): Subagent {
+  if (event.type === "subagent.updated") return mergeSubagentSnapshot(subagent, event.subagent);
+  if (event.type === "subagent.step") {
+    const steps = mergeSubagentSteps(subagent.steps, [event.step]);
+    return steps === subagent.steps ? subagent : { ...subagent, steps };
+  }
+  if (sameSubagentUsage(subagent.usage, event.usage)) return subagent;
+  return { ...subagent, usage: event.usage };
+}
+
+/** Fold one SubAgent event into the catalog projection used outside the timeline. */
+export function reduceSubagentSnapshots(subagents: Subagent[], event: RunStreamEvent): Subagent[] {
+  if (event.type !== "subagent.updated" && event.type !== "subagent.step" && event.type !== "subagent.usage") {
+    return subagents;
+  }
+  const subagentId = event.type === "subagent.updated" ? event.subagent.id : event.subagentId;
+  const index = subagents.findIndex((subagent) => subagent.id === subagentId);
+  if (index < 0) return event.type === "subagent.updated"
+    ? [...subagents, event.subagent].toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+    : subagents;
+  const updated = updateSubagent(subagents[index]!, event);
+  if (updated === subagents[index]) return subagents;
+  return subagents.map((subagent, candidateIndex) => candidateIndex === index ? updated : subagent);
+}
+
+function subagentsOverlap(left: Subagent, right: Subagent): boolean {
+  return (!left.finishedAt || left.finishedAt >= right.createdAt)
+    && (!right.finishedAt || right.finishedAt >= left.createdAt);
+}
+
+function updateTimelineSubagent(
+  entries: RunTimelineEntry[],
+  subagentId: string,
+  event: Extract<RunStreamEvent, { type: "subagent.step" | "subagent.updated" | "subagent.usage" }>,
+): RunTimelineEntry[] {
+  const groupIndex = entries.findIndex((entry) =>
+    entry.type === "subagents" && entry.subagents.some((subagent) => subagent.id === subagentId));
+  if (groupIndex < 0) return entries;
+  const group = entries[groupIndex]!;
+  if (group.type !== "subagents") return entries;
+  const subagentIndex = group.subagents.findIndex((subagent) => subagent.id === subagentId);
+  const updated = updateSubagent(group.subagents[subagentIndex]!, event);
+  if (updated === group.subagents[subagentIndex]) return entries;
+  return entries.map((entry, index) => index === groupIndex && entry.type === "subagents"
+    ? {
+        ...entry,
+        subagents: entry.subagents.map((subagent, candidateIndex) =>
+          candidateIndex === subagentIndex ? updated : subagent),
+      }
+    : entry);
+}
 
 function approvalModeLabelKey(mode: ApprovalMode): "timeline.approvalModeAlwaysAllow" | "timeline.approvalModeAsk" {
   return mode === "always_allow" ? "timeline.approvalModeAlwaysAllow" : "timeline.approvalModeAsk";
@@ -118,6 +246,35 @@ export function reduceRunTimeline(
   entries: RunTimelineEntry[],
   event: RunStreamEvent,
 ): RunTimelineEntry[] {
+  if (event.type === "subagent.updated") {
+    const subagentId = event.subagent.id;
+    const updated = updateTimelineSubagent(entries, subagentId, event);
+    if (updated !== entries) return updated;
+
+    const finished = finishThinking(entries);
+    const overlappingGroupIndex = finished.findLastIndex((entry) =>
+      entry.type === "subagents"
+      && entry.subagents.some((subagent) => subagentsOverlap(subagent, event.subagent)));
+    if (overlappingGroupIndex >= 0) {
+      return finished.map((entry, index) => index === overlappingGroupIndex && entry.type === "subagents"
+        ? {
+            ...entry,
+            subagents: [...entry.subagents, event.subagent]
+              .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
+          }
+        : entry);
+    }
+    return [...finished, {
+      id: `subagents-${subagentId}`,
+      subagents: [event.subagent],
+      type: "subagents",
+    }];
+  }
+
+  if (event.type === "subagent.step" || event.type === "subagent.usage") {
+    return updateTimelineSubagent(entries, event.subagentId, event);
+  }
+
   if (event.type === "agent.phase") {
     const finished = finishThinking(entries);
     const last = finished.at(-1);
@@ -370,6 +527,12 @@ export function setTimelineEntryExpanded(
     : entry);
 }
 
+export function collectTimelineSubagentIds(entries: RunTimelineEntry[]): Set<string> {
+  return new Set(entries.flatMap((entry) => entry.type === "subagents"
+    ? entry.subagents.map((subagent) => subagent.id)
+    : []));
+}
+
 function statusIcon(status: ToolTrace["status"] | "completed" | "running") {
   if (status === "running") return <SpinnerIcon size={14} />;
   if (status === "failed") return <WarningIcon size={14} />;
@@ -391,6 +554,7 @@ export function skillDraftNameFromTrace(trace: ToolTrace): string | undefined {
 export function RunTimeline({
   artifactReviews = [],
   entries,
+  expandedActivityCards = {},
   footer,
   isRunning,
   modelName,
@@ -399,14 +563,17 @@ export function RunTimeline({
   onOpenArtifacts,
   onOpenSkillReviews,
   onPermissionDecision,
+  onToggleActivityCard,
   onToggle,
   references,
   onChipClick,
   reviewerLevel,
+  specialists = [],
   workspaceSessionId,
 }: {
   artifactReviews?: ArtifactReviewRun[];
   entries: RunTimelineEntry[];
+  expandedActivityCards?: ActivityCardExpansion;
   /** Content that belongs to the completed run, rendered before its final action. */
   footer?: ReactNode;
   isRunning: boolean;
@@ -417,6 +584,7 @@ export function RunTimeline({
   onOpenArtifacts?: () => void;
   onOpenSkillReviews?: (skillId?: string) => void;
   onPermissionDecision?: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
+  onToggleActivityCard?: (id: string, expanded: boolean) => void;
   onToggle: (id: string, expanded: boolean) => void;
   /** Chip references (alias → graph node) for the session's latest report
    * artifact version, so [evidence1]/[artifact1] tokens in assistant report messages
@@ -424,6 +592,7 @@ export function RunTimeline({
   references?: ComposerReference[];
   onChipClick?: (reference: ComposerReference) => void;
   reviewerLevel?: "quick" | "smart" | "deep";
+  specialists?: Specialist[];
   workspaceSessionId?: string;
 }) {
   const { locale, t } = useLocale();
@@ -524,6 +693,20 @@ export function RunTimeline({
                 />
               ) : null}
             </article>
+          );
+        }
+
+        if (entry.type === "subagents") {
+          return (
+            <SubagentCards
+              className="timeline-subagents"
+              expandedCards={expandedActivityCards}
+              heading={entry.subagents.length > 1 ? "Subagents" : "Subagent"}
+              key={entry.id}
+              onToggleCard={onToggleActivityCard ?? (() => undefined)}
+              specialists={specialists}
+              subagents={entry.subagents}
+            />
           );
         }
 

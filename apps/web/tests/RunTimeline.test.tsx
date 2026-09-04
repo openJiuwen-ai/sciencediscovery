@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ArtifactReviewRun, RunStreamEvent } from "@sciencediscovery/schema";
+import type { ArtifactReviewRun, RunStreamEvent, Subagent } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -23,6 +23,22 @@ import { reduceRunTimeline, RunTimeline, skillDraftNameFromTrace, type RunTimeli
 
 function apply(events: RunStreamEvent[]): RunTimelineEntry[] {
   return events.reduce(reduceRunTimeline, [] as RunTimelineEntry[]);
+}
+
+function timelineSubagent(id: string, createdAt: string, overrides: Partial<Subagent> = {}): Subagent {
+  return {
+    createdAt,
+    id,
+    input: { description: `Research lane ${id}`, prompt: `Investigate ${id}` },
+    maxTurns: 12,
+    parentTurnId: "run-1",
+    sessionId: "session-1",
+    status: "running",
+    steps: [],
+    timeoutSeconds: 300,
+    turnCount: 0,
+    ...overrides,
+  };
 }
 
 test("keeps reasoning, tools, and answers in start order", () => {
@@ -50,6 +66,120 @@ test("keeps reasoning, tools, and answers in start order", () => {
   assert.equal(entries[1]?.type === "tool" && entries[1].trace.summary, "3 rows");
   assert.equal(entries[2]?.type === "thinking" && entries[2].expanded, false);
   assert.equal(entries[3]?.type === "assistant" && entries[3].content, "The result is three rows.");
+});
+
+test("anchors overlapping SubAgents as one parallel timeline group and updates each lane independently", () => {
+  const laneA = timelineSubagent("lane-a", "2026-01-01T00:00:01.000Z");
+  const laneB = timelineSubagent("lane-b", "2026-01-01T00:00:02.000Z");
+  const entries = apply([
+    { phase: "thinking", turn: 1, type: "agent.phase" },
+    { delta: "Delegate the evidence checks.", turn: 1, type: "assistant.thinking.delta" },
+    { subagent: laneA, type: "subagent.updated" },
+    { subagent: laneB, type: "subagent.updated" },
+    {
+      step: { content: "A started", createdAt: "2026-01-01T00:00:03.000Z", id: "step-a", kind: "assistant" },
+      subagentId: laneA.id,
+      type: "subagent.step",
+    },
+    {
+      step: { content: "B result", createdAt: "2026-01-01T00:00:03.500Z", id: "step-b", kind: "assistant" },
+      subagentId: laneB.id,
+      type: "subagent.step",
+    },
+    {
+      step: { content: "A final result", createdAt: "2026-01-01T00:00:03.000Z", id: "step-a", kind: "assistant" },
+      subagentId: laneA.id,
+      type: "subagent.step",
+    },
+    {
+      subagentId: laneB.id,
+      type: "subagent.usage",
+      usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+    },
+    {
+      subagent: {
+        ...laneA,
+        finishedAt: "2026-01-01T00:00:04.000Z",
+        status: "completed",
+        turnCount: 2,
+      },
+      type: "subagent.updated",
+    },
+    { delta: "Both checks are complete.", type: "assistant.delta" },
+  ]);
+
+  assert.deepEqual(entries.map((entry) => entry.type), ["thinking", "subagents", "assistant"]);
+  const group = entries[1];
+  assert.equal(group?.type, "subagents");
+  if (group?.type !== "subagents") return;
+  assert.deepEqual(group.subagents.map((subagent) => subagent.id), [laneA.id, laneB.id]);
+  assert.equal(group.subagents[0]?.steps[0]?.content, "A final result");
+  assert.equal(group.subagents[1]?.steps[0]?.content, "B result", "lane A updates do not overwrite lane B");
+  assert.equal(group.subagents[0]?.status, "completed");
+  assert.equal(group.subagents[1]?.usage?.totalTokens, 50);
+
+  const html = renderToStaticMarkup(createElement(RunTimeline, {
+    entries,
+    expandedActivityCards: { "subagent:lane-a": true, "subagent:lane-b": true },
+    isRunning: false,
+    onToggle: () => undefined,
+    onToggleActivityCard: () => undefined,
+  }));
+  assert.match(html, /Subagents/);
+  assert.match(html, /class="subagent-list timeline-subagents"/);
+  assert.doesNotMatch(html, /timeline-subagents parallel/);
+  assert.match(html, /A final result/);
+  assert.match(html, /B result/);
+});
+
+test("places non-overlapping SubAgents in separate timeline groups", () => {
+  const laneA = timelineSubagent("lane-a", "2026-01-01T00:00:01.000Z");
+  const completedA = {
+    ...laneA,
+    finishedAt: "2026-01-01T00:00:02.000Z",
+    status: "completed" as const,
+  };
+  const laneB = timelineSubagent("lane-b", "2026-01-01T00:00:03.000Z");
+  const entries = apply([
+    { subagent: laneA, type: "subagent.updated" },
+    { subagent: completedA, type: "subagent.updated" },
+    { content: "Between delegated tasks", type: "assistant.snapshot" },
+    { subagent: laneB, type: "subagent.updated" },
+  ]);
+
+  assert.deepEqual(entries.map((entry) => entry.type), ["subagents", "assistant", "subagents"]);
+});
+
+test("keeps streamed SubAgent steps when a terminal snapshot omits its process", () => {
+  const lane = timelineSubagent("lane-a", "2026-01-01T00:00:01.000Z");
+  const entries = apply([
+    { subagent: lane, type: "subagent.updated" },
+    {
+      step: {
+        content: "Evidence search completed",
+        createdAt: "2026-01-01T00:00:02.000Z",
+        id: "search-step",
+        kind: "tool",
+        status: "completed",
+        toolName: "search_papers",
+      },
+      subagentId: lane.id,
+      type: "subagent.step",
+    },
+    {
+      subagent: {
+        ...lane,
+        finishedAt: "2026-01-01T00:00:03.000Z",
+        status: "completed",
+        steps: [],
+      },
+      type: "subagent.updated",
+    },
+  ]);
+
+  const group = entries[0];
+  assert.equal(group?.type === "subagents" && group.subagents[0]?.status, "completed");
+  assert.equal(group?.type === "subagents" && group.subagents[0]?.steps[0]?.content, "Evidence search completed");
 });
 
 test("renders completed activity as collapsible disclosures", () => {

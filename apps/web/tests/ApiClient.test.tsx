@@ -17,7 +17,7 @@ import test from "node:test";
 
 import { ApiClient } from "../src/api.js";
 
-test("subscribeRunEvents uses SSE id as the replay sequence", async () => {
+test("subscribeRunEvents uses main SSE ids without inventing cursors for child events", async () => {
   const previousFetch = globalThis.fetch;
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -25,6 +25,8 @@ test("subscribeRunEvents uses SSE id as the replay sequence", async () => {
       controller.enqueue(encoder.encode([
         'id: 7',
         'data: {"type":"run.cancelled","reason":"first"}',
+        '',
+        'data: {"type":"subagent.step","subagentId":"child-a","step":{"id":"step-a","kind":"assistant","content":"working","createdAt":"2026-01-01T00:00:00.000Z"}}',
         '',
         'id: 9',
         'data: {"type":"run.failed","error":"second"}',
@@ -36,11 +38,11 @@ test("subscribeRunEvents uses SSE id as the replay sequence", async () => {
   });
   globalThis.fetch = async () => new Response(body, { status: 200 });
   try {
-    const sequences: number[] = [];
+    const sequences: Array<number | undefined> = [];
     await new ApiClient("test-token").subscribeRunEvents("session-a", "run-a", 4, (_event, sequence) => {
       sequences.push(sequence);
     });
-    assert.deepEqual(sequences, [7, 9]);
+    assert.deepEqual(sequences, [7, undefined, 9]);
   } finally {
     globalThis.fetch = previousFetch;
   }

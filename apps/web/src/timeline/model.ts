@@ -17,10 +17,11 @@ import type {
   RunStreamEvent,
   SessionRun,
   SessionRunEvent,
+  Subagent,
 } from "@sciencediscovery/schema";
 
 import { mergePermissionRequestSnapshot } from "../permission-state.js";
-import { reduceRunTimeline, type RunTimelineEntry } from "./RunTimeline.js";
+import { mergeSubagentSnapshot, reduceRunTimeline, type RunTimelineEntry } from "./RunTimeline.js";
 
 /** Timelines of Sessions that have never streamed anything share this instance. */
 export const EMPTY_TIMELINE: RunTimelineEntry[] = [];
@@ -64,6 +65,9 @@ function startsRunTimeline(event: RunStreamEvent): boolean {
     || event.type === "assistant.snapshot"
     || event.type === "tool.started"
     || event.type === "tool.completed"
+    || event.type === "subagent.updated"
+    || event.type === "subagent.step"
+    || event.type === "subagent.usage"
     || event.type === "permission.required"
     || event.type === "permission.resolved";
 }
@@ -148,6 +152,37 @@ export function hydrateSessionRunTimeline(
       runId: run.id,
     }), { entries: [], lastSequence: 0, runId: run.id });
   return { ...timelines, [sessionId]: replay };
+}
+
+/**
+ * Rebuild the independently persisted SubAgent lanes after the main stream has
+ * established their chronological anchor. Catalog snapshots fill fields such
+ * as the handoff step that predate child-stream event persistence.
+ */
+export function hydrateTimelineSubagents(
+  timeline: SessionRunTimeline,
+  records: readonly SessionRunEvent[],
+  snapshots: readonly Subagent[],
+): SessionRunTimeline {
+  const snapshotsById = new Map(snapshots.map((subagent) => [subagent.id, subagent]));
+  let reconciled = false;
+  let entries = timeline.entries.map((entry) => {
+    if (entry.type !== "subagents") return entry;
+    let changed = false;
+    const subagents = entry.subagents.map((subagent) => {
+      const snapshot = snapshotsById.get(subagent.id);
+      if (!snapshot) return subagent;
+      changed = true;
+      return mergeSubagentSnapshot(subagent, snapshot);
+    });
+    if (changed) reconciled = true;
+    return changed ? { ...entry, subagents } : entry;
+  });
+  if (!reconciled) entries = timeline.entries;
+  entries = records
+    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt) || left.sequence - right.sequence)
+    .reduce<RunTimelineEntry[]>((current, record) => reduceRunTimeline(current, record.event), entries);
+  return entries === timeline.entries ? timeline : { ...timeline, entries };
 }
 
 /**
