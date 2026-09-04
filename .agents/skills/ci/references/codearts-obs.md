@@ -233,9 +233,35 @@ image to the stable key. A push to `ci/codearts-resources` triggers this
 workflow; the branch is operational infrastructure and is not merged into
 `main`.
 
-The QEMU base is consumed only by the resource workflow. Formal Runner UT uses
+The QEMU base is consumed only by the resource workflow. The UT guest tier uses
 the pre-provisioned image described below, so it does not repeat cloud-image
 package and toolchain provisioning.
+
+## Stable QEMU emulator cache
+
+The emulator the guest jobs boot with has its own stable namespace:
+
+```text
+sciencediscovery/cache/qemu-emulator/v1/
+|-- ScienceDiscovery-qemu-emulator-alpine-x86_64.tar
+|   SHA256: `.ci/qemu-emulator.sha256`
+|-- SHA256SUMS
+`-- VERSION
+```
+
+The resource branch's `resource_qemu_emulator` job runs
+`.ci/build-qemu-emulator.sh`, which performs the checksum-pinned Alpine
+bootstrap, proves the assembled QEMU runs from an arbitrary directory, and
+packs the tree with fixed member order, timestamps and ownership, without
+compression and without apk's install log. The tree that comes out is
+reproducible: a build of commit `f37e60a` on another machine unpacked to
+byte-identical contents. The archive's own bytes are not — they depend on the
+packing host's tar — so `.ci/qemu-emulator.sha256` records the digest the
+publishing run reported. Advancing it is deliberate, exactly like the Runner
+image: push or rerun `ci/codearts-resources`, read
+`Verified published QEMU emulator: <sha256>` from that job, and commit it.
+`.ci/fetch-qemu-emulator.sh` downloads the object cache-only. A test job that
+reassembles QEMU itself has reintroduced about 166 seconds per guest job.
 
 ## Pre-provisioned QEMU Runner image
 

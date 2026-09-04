@@ -135,7 +135,8 @@ GitCode Actions unless the user changes that policy.
 | --- | --- |
 | `bwrap: No permissions to create new namespace` | The host forbids user namespaces. Use only the repository's sandbox-free layer there; do not weaken Runner tests. |
 | QEMU reports `could not load module for type tcg-accel-ops` | A workspace-extracted QEMU cannot find its modules. Point `QEMU_MODULE_DIR` at the extracted architecture-specific QEMU module directory. |
-| `apk.static` reports `TLS: server certificate not trusted`, followed by QEMU packages being unavailable | The static bootstrap has no X.509 trust store, so its package indexes are empty. Supply the checksum-pinned CA bundle through `SSL_CERT_FILE`; keep HTTPS and Alpine package-signature verification enabled. |
+| A guest job reports a cache miss for `ScienceDiscovery-qemu-emulator-alpine-x86_64.tar` | The portable emulator was never published, or its checksum moved. Do not reassemble it in the test job — that is the 166 seconds this cache removed. Push or rerun `ci/codearts-resources`, read `Verified published QEMU emulator: <sha256>`, and update `.ci/qemu-emulator.sha256` if the pinned Alpine packages changed. |
+| `apk.static` reports `TLS: server certificate not trusted` on the resource branch | The static bootstrap has no X.509 trust store, so its package indexes are empty. Supply the checksum-pinned CA bundle through `SSL_CERT_FILE`; keep HTTPS and Alpine package-signature verification enabled. |
 | QEMU boots but the guest emits no `QEMU_SANDBOX_TEST_RESULT` marker | The VM timed out, failed before the guest harness ran, or could not shut down cleanly. Keep the job failed and read `ut-guest/run.log`. |
 | API test expects `runner_exec`, gets `undefined` | An execution never ran; check sandbox availability first. |
 | `BLOCKED: isolated E2E stack did not become healthy` | The Runner refused to serve; inspect the sandbox probe before application logs. |

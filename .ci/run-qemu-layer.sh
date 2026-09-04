@@ -112,80 +112,24 @@ if command -v qemu-system-x86_64 >/dev/null 2>&1 \
   qemu_img_command=("$(command -v qemu-img)")
   echo "Using QEMU provided by the host"
 else
-  alpine_release=v3.22
-  alpine_bootstrap_release=v3.23
-  alpine_mirror=https://mirrors.tuna.tsinghua.edu.cn/alpine
-  bootstrap_dir="$cache_dir/alpine-bootstrap"
-  apk_tools_file="$cache_dir/apk-tools-static-3.0.8-r0.apk"
-  apk_tools_url="$alpine_mirror/$alpine_bootstrap_release/main/x86_64/apk-tools-static-3.0.8-r0.apk"
-  apk_tools_sha256=2edccd3267ce540f8d2371a0f394e84b40d8348ecc28425309e6d07079ed1259
-  alpine_keys_file="$cache_dir/alpine-keys-2.5-r0.apk"
-  alpine_keys_url="$alpine_mirror/$alpine_release/main/x86_64/alpine-keys-2.5-r0.apk"
-  alpine_keys_sha256=1069fa68769607690e46b0d689f1ad9b5e346be2752ece313685b4f29ec70e25
-  alpine_signing_key=alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
-  ca_bundle_file="$cache_dir/ca-certificates-bundle-20260611-r0.apk"
-  ca_bundle_url="$alpine_mirror/$alpine_release/main/x86_64/ca-certificates-bundle-20260611-r0.apk"
-  ca_bundle_sha256=a18fd1bd8bea03966ee5719aa61e44d9a810db2c8b6641b45f92b30e860f0927
-
-  download_verified() {
-    local url=$1
-    local destination=$2
-    local expected_sha256=$3
-    if [ -f "$destination" ] \
-      && printf '%s  %s\n' "$expected_sha256" "$destination" | sha256sum --check --status; then
-      return
-    fi
-    rm -f -- "$destination" "$destination.part"
-    curl --fail --location --retry 3 --show-error \
-      "$url" --output "$destination.part"
-    printf '%s  %s\n' "$expected_sha256" "$destination.part" \
-      | sha256sum --check --status \
-      || { echo "FATAL: checksum mismatch for $url" >&2; exit 1; }
-    mv -- "$destination.part" "$destination"
-  }
-
-  extract_archive_member() {
-    local archive=$1
-    shift
-    local extract_log="$cache_dir/archive-extract.log"
-    if ! tar -xzf "$archive" -C "$bootstrap_dir" "$@" 2> "$extract_log"; then
-      cat "$extract_log" >&2
-      echo "FATAL: could not extract the portable QEMU bootstrap." >&2
-      exit 1
-    fi
-  }
-
+  # The portable emulator is assembled once on ci/codearts-resources and
+  # published at a stable, checksum-pinned key. Assembling it here cost about
+  # 166 seconds of Alpine package downloads and unpacking on every guest job.
+  payload="$cache_dir/ScienceDiscovery-qemu-emulator-alpine-x86_64.tar"
   qemu_binary="$qemu_root/usr/bin/qemu-system-x86_64"
   qemu_img="$qemu_root/usr/bin/qemu-img"
   qemu_loader="$qemu_root/lib/ld-musl-x86_64.so.1"
   if [ ! -x "$qemu_binary" ] || [ ! -x "$qemu_img" ] || [ ! -x "$qemu_loader" ]; then
-    echo "Preparing signed Alpine QEMU packages without installing host packages"
-    download_verified "$apk_tools_url" "$apk_tools_file" "$apk_tools_sha256"
-    download_verified "$alpine_keys_url" "$alpine_keys_file" "$alpine_keys_sha256"
-    download_verified "$ca_bundle_url" "$ca_bundle_file" "$ca_bundle_sha256"
-    rm -rf -- "$bootstrap_dir" "$qemu_root"
-    mkdir -p "$bootstrap_dir" "$qemu_root"
-    extract_archive_member "$apk_tools_file" sbin/apk.static
-    extract_archive_member \
-      "$alpine_keys_file" "usr/share/apk/keys/$alpine_signing_key"
-    extract_archive_member \
-      "$ca_bundle_file" etc/ssl/certs/ca-certificates.crt
-    ca_bundle="$bootstrap_dir/etc/ssl/certs/ca-certificates.crt"
-    if [ ! -s "$ca_bundle" ]; then
-      echo "FATAL: the verified TLS CA bundle is empty or missing." >&2
-      exit 1
-    fi
-    SSL_CERT_FILE="$ca_bundle" "$bootstrap_dir/sbin/apk.static" \
-      --root "$qemu_root" \
-      --arch x86_64 \
-      --keys-dir "$bootstrap_dir/usr/share/apk/keys" \
-      --repository "$alpine_mirror/$alpine_release/main" \
-      --repository "$alpine_mirror/$alpine_release/community" \
-      --initdb \
-      --no-cache \
-      --no-scripts \
-      --no-chown \
-      add qemu-system-x86_64 qemu-img
+    bash "$repo_root/.ci/fetch-qemu-emulator.sh" --output "$payload"
+    rm -rf -- "$qemu_root"
+    mkdir -p -- "$qemu_root"
+    tar -xf "$payload" -C "$qemu_root"
+    for required in "$qemu_binary" "$qemu_img" "$qemu_loader"; do
+      if [ ! -x "$required" ]; then
+        echo "FATAL: the published QEMU emulator is missing $required." >&2
+        exit 1
+      fi
+    done
   else
     echo "Using the cached portable QEMU payload"
   fi

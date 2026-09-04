@@ -229,15 +229,20 @@ checkout so `.ci/pack-workspace.sh --include .e2e` carries them, and the guest
 runs it with `CI_E2E_PREPARED=1`, a longer stack-health budget, and the
 Huawei PyPI mirror it needs to provision the Python services. Driving Chromium
 and provisioning those environments under TCG is far slower than the UT guest
-tier; its job budget is correspondingly larger. When the host
-has no QEMU, the host script still verifies fixed
-`apk.static`, Alpine signing-key, and CA bundle package checksums. The CA bundle
-authenticates the mirror's HTTPS certificate, while the signing key
-independently authenticates Alpine indexes and packages. The script then
-assembles QEMU plus its musl runtime in the workspace. This user-space
-bootstrap is independent of the host package manager and glibc, requires no
-root access, and runs package scripts neither on the host nor in a chroot. The
-VM boots with a NoCloud seed over QEMU user networking. The guest clears its
+tier; its job budget is correspondingly larger.
+
+When the host has no QEMU, `.ci/run-qemu-layer.sh` downloads the portable
+emulator the resource branch publishes, verifies it against
+`.ci/qemu-emulator.sha256`, and unpacks it into the workspace. Assembling it
+from signed Alpine packages inside the test job cost about 166 seconds per
+run and would now be paid twice, once per guest job, so
+`.ci/build-qemu-emulator.sh` on `ci/codearts-resources` owns that work: it
+runs the same checksum-pinned bootstrap, proves the binaries execute from an
+arbitrary directory, and packs the tree deterministically, so a rerun that
+resolves the same Alpine packages republishes the same contents. The payload is still a
+user-space tree of a musl loader, the QEMU binaries, their libraries and
+firmware, independent of the host package manager and glibc, needing no root
+and running no package scripts. The VM boots with a NoCloud seed over QEMU user networking. The guest clears its
 own Ubuntu AppArmor userns sysctl, passes the real bubblewrap probe as the
 unprivileged `ci` user, and invokes the unchanged layer entry point. Only the exact
 `QEMU_SANDBOX_TEST_RESULT=<exit-code>` serial marker can make the host job

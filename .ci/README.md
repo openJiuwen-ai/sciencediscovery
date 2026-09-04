@@ -105,6 +105,10 @@ serves that payload to the guest, which streams it into place and runs
 `run-qemu-layer.sh` and the `ut-guest` layer fail closed when the host did not
 prepare the workspace.
 
+A host without QEMU downloads the portable emulator the
+`ci/codearts-resources` branch publishes, pinned by `.ci/qemu-emulator.sha256`,
+instead of assembling one from Alpine packages per run.
+
 The mocked E2E group reuses that guest through the same split, without a
 second E2E definition:
 

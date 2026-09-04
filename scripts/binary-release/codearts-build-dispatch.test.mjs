@@ -24,6 +24,9 @@ const dispatcher = join(repositoryRoot, ".ci", "codearts-build-dispatch.sh");
 const binaryFetcher = join(repositoryRoot, ".ci", "fetch-verified-binary.sh");
 const qemuRunnerImageFetcher = join(repositoryRoot, ".ci", "fetch-qemu-runner-image.sh");
 const qemuRunnerImageChecksum = join(repositoryRoot, ".ci", "qemu-runner-image.sha256");
+const qemuEmulatorFetcher = join(repositoryRoot, ".ci", "fetch-qemu-emulator.sh");
+const qemuEmulatorChecksum = join(repositoryRoot, ".ci", "qemu-emulator.sha256");
+const qemuLayerRunner = join(repositoryRoot, ".ci", "run-qemu-layer.sh");
 const testRoot = join(repositoryRoot, ".tmp", "codearts-build-dispatch-tests");
 
 async function workspace(name) {
@@ -225,6 +228,23 @@ test("prebuilt QEMU Runner image and workflow share the immutable cache contract
   assert.match(fetcherSource, /sciencediscovery\/cache\/qemu-runner\/v1/);
   assert.match(workflow, /ut_guest:[\s\S]*?needs: \[\][\s\S]*?timeout: 30/);
   assert.match(workflow, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME=300/);
+});
+
+test("the portable QEMU emulator is downloaded, never reassembled", async () => {
+  const fetcherSource = await readFile(qemuEmulatorFetcher, "utf8");
+  const checksumRecord = (await readFile(qemuEmulatorChecksum, "utf8")).trim();
+  const runner = await readFile(qemuLayerRunner, "utf8");
+
+  assert.match(checksumRecord, /^[a-f0-9]{64}  [0-9A-Za-z._+-]+$/, "the manifest must use sha256sum format");
+  assert.match(fetcherSource, /checksum_file="\$script_dir\/qemu-emulator\.sha256"/);
+  assert.doesNotMatch(fetcherSource, /payload_sha256=[a-f0-9]{64}/);
+  assert.match(fetcherSource, /--cache-only/);
+  assert.match(fetcherSource, /sciencediscovery\/cache\/qemu-emulator\/v1/);
+  assert.match(runner, /\.ci\/fetch-qemu-emulator\.sh/);
+  // Assembling QEMU from Alpine packages cost about 166 seconds on every guest
+  // job. The resource branch owns that now; a test job only downloads.
+  assert.doesNotMatch(runner, /apk\.static/);
+  assert.doesNotMatch(runner, /alpine_mirror/);
 });
 
 test.after(async () => {
