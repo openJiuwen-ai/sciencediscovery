@@ -43,7 +43,7 @@ export function createContextTraceWriter(
         ...record,
         contextId,
         exportedAt: new Date().toISOString(),
-        schemaVersion: 3,
+        schemaVersion: 4,
         turn,
       }, null, 2);
       await writeFile(temporary, `${payload}\n`, { encoding: "utf8", mode: 0o600 });

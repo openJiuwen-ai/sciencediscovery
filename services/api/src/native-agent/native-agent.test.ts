@@ -895,7 +895,7 @@ test("evolve tools appear on the first model step only when a runtime is registe
   }
 });
 
-test("an oversized execution result enters history as a tail preview the model can page back", async () => {
+test("an oversized execution result enters history as a head/tail preview the model can page back", async () => {
   const options = workspace();
   const stdout = Array.from({ length: 200_000 }, (_, index) => `metric-${index + 1}`).join("\n");
   let refInHistory = "";
@@ -937,8 +937,8 @@ test("an oversized execution result enters history as a tail preview the model c
       `the result entering history is ${Buffer.byteLength(executionResult, "utf8")} bytes`,
     );
     assert.match(executionResult, /^\[bounded tool output] run_python produced 200003 lines/);
-    assert.match(executionResult, /shows the last /, "execution output keeps the tail that carries the outcome");
-    assert.equal(executionResult.includes("metric-1\n"), false, "the omitted head is not in the current result");
+    assert.match(executionResult, /head\/tail preview/, "both initial context and the trailing outcome survive");
+    assert.equal(executionResult.includes("metric-1\n"), true, "the head survives in the current result");
     assert.equal(executionResult.includes("created files: none"), true, "the trailing summary survives");
     assert.ok(refInHistory, "the bounded result carries a re-read ref");
 

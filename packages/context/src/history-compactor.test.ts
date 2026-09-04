@@ -26,13 +26,19 @@ test("token pressure prunes tool bodies before spending a summary model call", a
   const history = [
     { role: "user", content: "task" },
     { role: "assistant", content: "", tool_calls: [{ id: "call-1" }] },
-    { role: "tool", tool_call_id: "call-1", content: `The full output is stored as ref "tool-output-abcdef12".\n${"x".repeat(100)}` },
+    {
+      role: "tool",
+      tool_call_id: "call-1",
+      content: `The full output is stored as ref "tool-output-abcdef12".\n${"x".repeat(10_000)}`,
+      additional_kwargs: { tool_output: { ref: "tool-output-abcdef12" } },
+    },
     { role: "assistant", content: "continue" },
   ];
   const result = await compactor.compactDetailed(history, new AbortController().signal, () => undefined, {
     estimator,
-    pressureTokens: 170,
+    pressureTokens: 500,
     retainTokens: 10,
+    toolPreviewBytes: 256,
   });
   assert.equal(result.statistics.reason, "token-pressure");
   assert.equal(result.statistics.prunedToolResults, 1);
@@ -46,8 +52,8 @@ test("compaction summarizes old closed work inside one user request and keeps th
   const compactor = new HistoryCompactor<RuntimeMessage>(async () => "goal and completed work");
   const result = await compactor.compactDetailed([
     { role: "user", content: "one long autonomous research task" },
-    { role: "assistant", content: "first finding ".repeat(8) },
-    { role: "assistant", content: "second finding ".repeat(8) },
+    { role: "assistant", content: "first finding ".repeat(200) },
+    { role: "assistant", content: "second finding ".repeat(200) },
     { role: "assistant", content: "current reasoning" },
   ], new AbortController().signal, () => undefined, {
     estimator,
@@ -57,6 +63,46 @@ test("compaction summarizes old closed work inside one user request and keeps th
   assert.equal(result.history[0]?.name, "summary");
   assert.equal(result.history.at(-1)?.content, "current reasoning");
   assert.ok(result.statistics.summarizedMessages >= 1);
+  assert.match(String(result.history[0]?.content), /## Pending requirements\n\(none\)/u);
+  assert.equal((result.statistics.summaryValidationWarnings?.length ?? 0) > 0, true);
+});
+
+test("compaction preserves a structured checkpoint and reports semantic-shape warnings without blocking", async () => {
+  const compactor = new HistoryCompactor<RuntimeMessage>(async () => [
+    "## Primary request and intent",
+    "- Research AI4S.",
+    "## Completed work and verified findings",
+    "- Relevant output is tool-output-abcdef12.",
+    "## Evidence, artifacts, and references",
+    "- tool-output-abcdef12",
+    "## Decisions and constraints",
+    "- Prefer primary sources.",
+    "## Failed or abandoned leads",
+    "- A 404 source is terminal.",
+    "## Pending requirements",
+    "- Write the requested report.",
+    "## Optional leads",
+    "- Search one more benchmark.",
+    "## Next step",
+    "- Write the report.",
+  ].join("\n"));
+  const result = await compactor.compactDetailed([
+    { role: "user", content: "Research AI4S and write a report. ".repeat(20) },
+    {
+      role: "tool",
+      name: "web_fetch",
+      tool_call_id: "call-source",
+      content: "Stored as tool-output-abcdef12. ".repeat(20),
+      additional_kwargs: { tool_output: { ref: "tool-output-abcdef12" } },
+    },
+    { role: "assistant", content: "latest reasoning" },
+  ], new AbortController().signal, () => undefined, {
+    estimator,
+    pressureTokens: 100,
+    retainTokens: 10,
+  });
+  assert.equal(result.history[0]?.name, "summary");
+  assert.deepEqual(result.statistics.summaryValidationWarnings, []);
 });
 
 test("forced recovery never summarizes an incomplete tool-call contract", async () => {
@@ -73,4 +119,53 @@ test("forced recovery never summarizes an incomplete tool-call contract", async 
   });
   assert.equal(result.history.at(-1)?.tool_calls instanceof Array, true);
   assert.equal((result.history.at(-1)?.tool_calls as Array<{ id: string }>)[0]?.id, "pending");
+});
+
+test("a non-shrinking checkpoint is retried and only a convergent replacement is accepted", async () => {
+  let attempts = 0;
+  const compactor = new HistoryCompactor<RuntimeMessage>(async () => {
+    attempts += 1;
+    return attempts === 1 ? "x".repeat(10_000) : "concise checkpoint";
+  });
+  const result = await compactor.compactDetailed([
+    { role: "user", content: "research objective ".repeat(100) },
+    { role: "assistant", content: "completed observation ".repeat(100) },
+    { role: "assistant", content: "latest decision" },
+  ], new AbortController().signal, () => undefined, {
+    estimator,
+    pressureTokens: 100,
+    retainTokens: 10,
+    summaryRetries: 1,
+  });
+  assert.equal(attempts, 2);
+  assert.equal(result.statistics.summaryAttempts, 2);
+  assert.equal(result.statistics.summaryRejected, 1);
+  assert.equal(result.history[0]?.name, "summary");
+});
+
+test("the latest complete LLM step keeps its call/result contract under pressure", async () => {
+  const compactor = new HistoryCompactor<RuntimeMessage>(async () => "older work");
+  const result = await compactor.compactDetailed([
+    { role: "user", content: "task ".repeat(1_000) },
+    { role: "assistant", content: "old finding ".repeat(1_000) },
+    { role: "assistant", content: "", tool_calls: [{ id: "latest-call" }] },
+    {
+      role: "tool",
+      tool_call_id: "latest-call",
+      content: "latest result ".repeat(1_000),
+      additional_kwargs: { tool_output: { ref: "tool-output-abcdef1234567890" } },
+    },
+  ], new AbortController().signal, () => undefined, {
+    estimator,
+    pressureTokens: 100,
+    retainTokens: 1,
+    toolPreviewBytes: 256,
+  });
+  const call = result.history.find((message) => Array.isArray(message.tool_calls));
+  const tool = result.history.find((message) => message.tool_call_id === "latest-call");
+  assert.ok(call);
+  assert.ok(tool);
+  assert.match(String(tool.content), /\[head preview\]/u);
+  assert.match(String(tool.content), /\[tail preview\]/u);
+  assert.match(String(tool.content), /tool-output-abcdef1234567890/u);
 });

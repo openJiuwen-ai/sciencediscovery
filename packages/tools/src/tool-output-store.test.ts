@@ -18,9 +18,29 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 import { ToolOutputGuard } from "./bounded-output.js";
-import { createToolOutputTools, ToolOutputStore, toolOutputStoreRoot } from "./tool-output-store.js";
+import {
+  createToolOutputTools,
+  ToolOutputReadTracker,
+  ToolOutputStore,
+  toolOutputStoreRoot,
+  resolveToolOutputSettings,
+} from "./tool-output-store.js";
 
 const numbered = (count: number) => Array.from({ length: count }, (_, index) => `line-${index + 1}`).join("\n");
+
+test("tool-output settings validate cumulative read thresholds", () => {
+  const settings = resolveToolOutputSettings({
+    SCIENCE_AGENT_TOOL_OUTPUT_RETENTION_BYTES: "4096",
+    SCIENCE_AGENT_TOOL_OUTPUT_READ_ADVISORY_BYTES: "100",
+    SCIENCE_AGENT_TOOL_OUTPUT_READ_STRONG_ADVISORY_BYTES: "200",
+  });
+  assert.equal(settings.retentionBytes, 4096);
+  assert.deepEqual(settings.readPolicy, { advisoryBytes: 100, strongAdvisoryBytes: 200 });
+  assert.throws(() => resolveToolOutputSettings({
+    SCIENCE_AGENT_TOOL_OUTPUT_READ_ADVISORY_BYTES: "200",
+    SCIENCE_AGENT_TOOL_OUTPUT_READ_STRONG_ADVISORY_BYTES: "100",
+  }), /must be at least/u);
+});
 
 let rootSequence = 0;
 
@@ -154,7 +174,7 @@ test("read_tool_output returns a self-bounded page with a continue hint", async 
   const text = result.content[0]?.text ?? "";
   assert.equal(result.bounded, true);
   assert.match(text, /\[tool output page] run_python ref tool-output-[0-9a-f]{16}: lines 1-50 of 300/);
-  assert.match(text, new RegExp(`Continue with read_tool_output\\(ref="${saved.ref}", offset=51\\)`));
+  assert.match(text, /More content is available at offset=51/);
   assert.equal(text.includes("line-50\n"), true);
   assert.equal(text.includes("line-51"), false);
 
@@ -169,7 +189,7 @@ test("an oversized result is stored whole and its omitted head is recoverable", 
   const full = numbered(60_000);
 
   const bounded = await guard.apply("run_python", full);
-  assert.equal(bounded.includes("line-1\n"), false, "the head is not in the current tool result");
+  assert.equal(bounded.includes("line-1\n"), true, "the bounded result now preserves both head and tail context");
 
   const ref = /ref "(tool-output-[0-9a-f]{16})"/.exec(bounded)?.[1];
   assert.ok(ref, "the bounded result carries a ref");
@@ -211,5 +231,73 @@ test("a line wider than one page is flagged instead of being reported as the end
   assert.equal(mixedPage.nextOffset, 2);
   const mixedText = (await readToolOutput.execute("call-mixed", { ref: mixed.ref })).content[0]?.text ?? "";
   assert.match(mixedText, /Line 1 is wider than one page/);
-  assert.match(mixedText, new RegExp(`Continue with read_tool_output\\(ref="${mixed.ref}", offset=2\\)`));
+  assert.match(mixedText, /More content is available at offset=2/);
+});
+
+test("a single oversized line is recoverable by Unicode character range", async () => {
+  const store = new ToolOutputStore();
+  const content = `${"甲".repeat(30_000)}TARGET${"乙".repeat(30_000)}`;
+  const saved = await store.save("web_fetch", content);
+
+  const first = await store.readCharacters(saved.ref, { charLimit: 20_000 });
+  assert.equal(first.startChar, 0);
+  assert.equal(first.endChar, 13_653, "the shared 40 KB byte cap still bounds multibyte text");
+  assert.equal(first.nextCharOffset, first.endChar);
+  assert.equal(first.hasMore, true);
+  assert.ok(first.bytes <= 40 * 1_024);
+
+  const middle = await store.readCharacters(saved.ref, { charLimit: 20, charOffset: 29_995 });
+  assert.equal(middle.text, "甲甲甲甲甲TARGET乙乙乙乙乙乙乙乙乙");
+  assert.equal(middle.nextCharOffset, 30_015);
+});
+
+test("a stored single-line result supports bounded literal search", async () => {
+  const store = new ToolOutputStore();
+  const content = `${"x".repeat(100_000)}BioNeMo framework supports model deployment${"y".repeat(100_000)}`;
+  const saved = await store.save("web_fetch", content);
+  const result = await store.search(saved.ref, "bionemo", { contextChars: 50, maxMatches: 3 });
+  assert.equal(result.totalMatches, 1);
+  assert.equal(result.matches.length, 1);
+  assert.match(result.matches[0]?.text ?? "", /BioNeMo framework supports model deployment/u);
+  assert.ok(result.bytes <= 40 * 1_024);
+
+  const [tool] = createToolOutputTools(store);
+  assert.ok(tool);
+  const response = await tool.execute("call-search", {
+    contextChars: 50,
+    query: "BioNeMo",
+    ref: saved.ref,
+  });
+  assert.match(response.content[0]?.text ?? "", /\[tool output search\]/u);
+  assert.match(response.content[0]?.text ?? "", /model deployment/u);
+});
+
+test("read_tool_output modes are mutually exclusive", async () => {
+  const store = new ToolOutputStore();
+  const saved = await store.save("web_fetch", "one long line");
+  const [tool] = createToolOutputTools(store);
+  assert.ok(tool);
+  await assert.rejects(
+    tool.execute("call-invalid", { charOffset: 0, offset: 1, ref: saved.ref }),
+    /exactly one mode/u,
+  );
+  await assert.rejects(
+    tool.execute("call-query-option-without-query", { contextChars: 10, ref: saved.ref }),
+    /search options require query/u,
+  );
+});
+
+test("read_tool_output warns on repeated and excessive reads without blocking them", async () => {
+  const store = new ToolOutputStore();
+  const saved = await store.save("web_search", numbered(300));
+  const [tool] = createToolOutputTools(store, {
+    tracker: new ToolOutputReadTracker({ advisoryBytes: 1, strongAdvisoryBytes: 2 }),
+  });
+  assert.ok(tool);
+  const first = (await tool.execute("call-1", { limit: 10, ref: saved.ref })).content[0]?.text ?? "";
+  assert.match(first, /tool output read advisory/u);
+  assert.match(first, /Continue only for a specific missing fact/u);
+  const repeated = (await tool.execute("call-2", { limit: 10, ref: saved.ref })).content[0]?.text ?? "";
+  assert.match(repeated, /duplicate_read=true/u);
+  assert.match(repeated, /exact range or query was already read/u);
 });

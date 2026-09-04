@@ -64,13 +64,12 @@ import {
   type PlanRepository,
 } from "@sciencediscovery/plan-mode";
 import { createEvolveTools, type EvolveToolRuntime } from "@sciencediscovery/evolve";
-import {
-  ExternalWaitController,
-  type RunEvent,
-} from "@sciencediscovery/runtime-core";
+import { ExternalWaitController, type RunEvent } from "@sciencediscovery/runtime-core";
 import {
   createToolOutputTools,
+  resolveToolOutputSettings,
   ToolOutputGuard,
+  ToolOutputReadTracker,
   toolOutputStoreRoot,
   ToolOutputStore,
   ToolRegistry,
@@ -225,12 +224,16 @@ class NativeAgent implements NativeAgentHandle {
     const toolOutputStore = new ToolOutputStore({
       root: toolOutputStoreRoot(options.config.dataDir, options.sessionId),
     });
+    const toolOutputSettings = resolveToolOutputSettings();
     this.toolRegistry = new ToolRegistry([
       ...executionTools, ...planTools, ...evolveTools,
-      ...createToolOutputTools(toolOutputStore),
+      ...createToolOutputTools(toolOutputStore, {
+        tracker: new ToolOutputReadTracker(toolOutputSettings.readPolicy),
+      }),
     ], {
-      createResultMessage: (call, content) => ({
+      createResultMessage: (call, content, output) => ({
         role: "tool", tool_call_id: call.id, name: call.name, content,
+        ...(output ? { additional_kwargs: { tool_output: output } } : {}),
       }),
       onResult: ({ call, content, isError, sequence }) => {
         this.durableContext.observe(call, { content, isError }, sequence);
@@ -244,7 +247,12 @@ class NativeAgent implements NativeAgentHandle {
           version: skill.version,
         });
       },
-      outputGuard: new ToolOutputGuard({ sink: toolOutputStore }),
+      outputGuard: new ToolOutputGuard({
+        maxBytes: toolOutputSettings.maxBytes,
+        maxLines: toolOutputSettings.maxLines,
+        retentionBytes: toolOutputSettings.retentionBytes,
+        sink: toolOutputStore,
+      }),
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
     this.promptSkills = toolNames.has("read_skill")
@@ -471,6 +479,12 @@ class NativeAgent implements NativeAgentHandle {
                 compactionReason: trace.rendered.compaction.reason,
                 prunedToolResults: trace.rendered.compaction.prunedToolResults,
                 summarizedMessages: trace.rendered.compaction.summarizedMessages,
+                summaryAttempts: trace.rendered.compaction.summaryAttempts,
+                summaryCheckpointTokens: trace.rendered.compaction.summaryCheckpointTokens,
+                summaryRejected: trace.rendered.compaction.summaryRejected,
+                summarySourceTokens: trace.rendered.compaction.summarySourceTokens,
+                summaryValidationWarningCount: trace.rendered.compaction.summaryValidationWarnings?.length ?? 0,
+                toolOutputRefCount: trace.rendered.compaction.toolOutputRefs?.length ?? 0,
                 estimatedInputTokens: trace.rendered.statistics.estimatedInputTokens,
                 outputMessages: trace.rendered.statistics.outputMessages,
               } : {}),

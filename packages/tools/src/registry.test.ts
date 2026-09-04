@@ -9,7 +9,10 @@ import { ToolOutputGuard } from "./bounded-output.js";
 import { ToolRegistry } from "./registry.js";
 import { ToolOutputStore } from "./tool-output-store.js";
 
-const resultMessage = (call: { id: string; name: string }, content: string) => ({ role: "tool", name: call.name, tool_call_id: call.id, content });
+const resultMessage = (call: { id: string; name: string }, content: string, output?: { ref: string }) => ({
+  role: "tool", name: call.name, tool_call_id: call.id, content,
+  ...(output ? { additional_kwargs: { tool_output: output } } : {}),
+});
 
 test("rejects duplicate tool names when freezing the run registry", () => {
   const tool = { name: "same", label: "same", description: "same", parameters: Type.Object({}), async execute() { return { content: [], details: {} }; } };
@@ -95,6 +98,7 @@ test("every result crosses the output bound before it becomes a history message"
   assert.ok(Buffer.byteLength(oversized.content, "utf8") < 60 * 1_024, "the result entering history is bounded");
   assert.match(oversized.content, /\[bounded tool output] mcp__pubmed__search produced 200000 lines/);
   assert.equal(oversized.message.content, oversized.content, "the history message carries the bounded text");
+  assert.match(String(oversized.message.additional_kwargs?.tool_output?.ref), /^tool-output-/u);
   assert.deepEqual(observed, [oversized.content], "observers see the bounded text, not the original");
 
   const ref = /ref "(tool-output-[0-9a-f]{16})"/.exec(oversized.content)?.[1];

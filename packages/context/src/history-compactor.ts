@@ -9,6 +9,7 @@ import {
   planCompaction,
   planTokenCompaction,
   summaryCheckpointMessage,
+  validateSummaryCheckpoint,
 } from "./compaction.js";
 import { flattenHistoryUnits, historyUnits } from "./history-units.js";
 import type { TokenEstimator } from "./token-estimator.js";
@@ -25,6 +26,10 @@ export interface HistoryCompactionOptions<TMessage extends RuntimeMessage> {
   retainTokens?: number;
   /** Start deterministic pruning/summary when history exceeds this size. */
   pressureTokens?: number;
+  /** Additional attempts after a non-shrinking summary. Defaults to one. */
+  summaryRetries?: number;
+  /** Bytes retained across the head and tail of a compacted stored tool result. */
+  toolPreviewBytes?: number;
 }
 
 export interface HistoryCompactionStatistics {
@@ -33,6 +38,14 @@ export interface HistoryCompactionStatistics {
   prunedToolResults: number;
   reason: CompactionReason;
   summarizedMessages: number;
+  summaryAttempts?: number;
+  summaryCheckpointTokens?: number;
+  summaryInputCharacters?: number;
+  summaryOutputCharacters?: number;
+  summaryRejected?: number;
+  summarySourceTokens?: number;
+  summaryValidationWarnings?: string[];
+  toolOutputRefs?: string[];
 }
 
 export interface HistoryCompactionResult<TMessage extends RuntimeMessage> {
@@ -40,15 +53,52 @@ export interface HistoryCompactionResult<TMessage extends RuntimeMessage> {
   statistics: HistoryCompactionStatistics;
 }
 
-const PRUNED_TOOL_RESULT = "[tool result compacted; original retained in run record]";
+const PRUNED_TOOL_RESULT = "[tool result compacted; original retained in the session tool-output store]";
 
 function tokenCount<TMessage extends RuntimeMessage>(history: readonly TMessage[], estimator: TokenEstimator<TMessage>): number {
   return history.reduce((total, message) => total + estimator.estimateMessage(message), 0);
 }
 
-function toolReference(content: unknown): string | undefined {
-  if (typeof content !== "string") return undefined;
-  return /\bref "(tool-output-[0-9a-f]+)"/u.exec(content)?.[1];
+function toolReference(message: RuntimeMessage): string | undefined {
+  const additional = message.additional_kwargs;
+  if (typeof additional === "object" && additional !== null && !Array.isArray(additional)) {
+    const output = (additional as Record<string, unknown>).tool_output;
+    if (typeof output === "object" && output !== null && !Array.isArray(output)) {
+      const ref = (output as Record<string, unknown>).ref;
+      if (typeof ref === "string" && /^tool-output-[0-9a-f]+$/u.test(ref)) return ref;
+    }
+  }
+  if (typeof message.content !== "string") return undefined;
+  return /\bref "(tool-output-[0-9a-f]+)"/u.exec(message.content)?.[1];
+}
+
+function compactToolResult(content: unknown, reference: string, previewBytes: number): string {
+  const instruction = `ref=${reference}; use read_tool_output only for a specific missing fact.`;
+  if (typeof content !== "string" || !content) return `${PRUNED_TOOL_RESULT}\n${instruction}`;
+  const budget = Math.max(256, previewBytes);
+  const slice = (value: string, maxBytes: number, fromEnd: boolean): string => {
+    const characters = [...value];
+    if (fromEnd) characters.reverse();
+    const picked: string[] = [];
+    let bytes = 0;
+    for (const character of characters) {
+      const size = Buffer.byteLength(character, "utf8");
+      if (bytes + size > maxBytes) break;
+      picked.push(character);
+      bytes += size;
+    }
+    if (fromEnd) picked.reverse();
+    return picked.join("");
+  };
+  const headBytes = Math.floor(budget * 0.65);
+  return [
+    PRUNED_TOOL_RESULT,
+    instruction,
+    "[head preview]",
+    slice(content, headBytes, false),
+    "[tail preview]",
+    slice(content, budget - headBytes, true),
+  ].join("\n");
 }
 
 function pruneOldToolResults<TMessage extends RuntimeMessage>(
@@ -57,7 +107,8 @@ function pruneOldToolResults<TMessage extends RuntimeMessage>(
   retainTokens: number,
   targetTokens: number,
   force: boolean,
-): { history: TMessage[]; pruned: number } {
+  previewBytes: number,
+): { history: TMessage[]; pruned: number; refs: string[] } {
   const units = historyUnits(history);
   const protectedUnits = new Set<number>();
   let recentTokens = 0;
@@ -70,9 +121,10 @@ function pruneOldToolResults<TMessage extends RuntimeMessage>(
   });
 
   let pruned = 0;
+  const refs: string[] = [];
   const outputUnits = units.map((unit) => ({ ...unit, messages: unit.messages.map((message) => structuredClone(message)) }));
   const candidates = outputUnits.flatMap((unit, unitIndex) => unit.messages.flatMap((message, messageIndex) => {
-    if (!unit.closed || message.role !== "tool") return [];
+    if (!unit.closed || message.role !== "tool" || !toolReference(message)) return [];
     return [{ messageIndex, protected: protectedUnits.has(unitIndex), unitIndex }];
   })).sort((left, right) => {
     // Normal pressure consumes old results before touching the recent tail.
@@ -83,18 +135,17 @@ function pruneOldToolResults<TMessage extends RuntimeMessage>(
   for (const candidate of candidates) {
     if (tokenCount(flattenHistoryUnits(outputUnits), estimator) <= targetTokens) break;
     const message = outputUnits[candidate.unitIndex]!.messages[candidate.messageIndex]!;
-    const reference = toolReference(message.content);
-    const marker = reference
-      ? `${PRUNED_TOOL_RESULT}\nref=${reference}; use read_tool_output for details.`
-      : PRUNED_TOOL_RESULT;
+    const reference = toolReference(message)!;
+    const marker = compactToolResult(message.content, reference, previewBytes);
     if (typeof message.content === "string" && message.content === marker) continue;
     pruned += 1;
+    refs.push(reference);
     outputUnits[candidate.unitIndex]!.messages[candidate.messageIndex] = {
       ...message,
       content: marker,
     } as TMessage;
   }
-  return { history: flattenHistoryUnits(outputUnits), pruned };
+  return { history: flattenHistoryUnits(outputUnits), pruned, refs };
 }
 
 /** Context policy adapter; summary failures are non-fatal, cancellation is not. */
@@ -125,10 +176,14 @@ export class HistoryCompactor<TMessage extends RuntimeMessage> {
       : tokenPressure ? "token-pressure"
         : messagePressure ? "message-count" : "none";
     if (reason === "none") {
-      return { history: copy, statistics: { beforeTokens, afterTokens: beforeTokens, prunedToolResults: 0, reason, summarizedMessages: 0 } };
+      return { history: copy, statistics: {
+        beforeTokens, afterTokens: beforeTokens, prunedToolResults: 0, reason,
+        summarizedMessages: 0, summaryAttempts: 0, summaryRejected: 0, toolOutputRefs: [],
+      } };
     }
 
     let prunedToolResults = 0;
+    let toolOutputRefs: string[] = [];
     if (options.estimator && options.retainTokens !== undefined) {
       const pruningTarget = options.force
         ? options.retainTokens
@@ -139,14 +194,17 @@ export class HistoryCompactor<TMessage extends RuntimeMessage> {
         options.retainTokens,
         pruningTarget,
         options.force === true,
+        options.toolPreviewBytes ?? 2 * 1_024,
       );
       copy = pruned.history;
       prunedToolResults = pruned.pruned;
+      toolOutputRefs = pruned.refs;
       const prunedTokens = tokenCount(copy, options.estimator);
       if (!options.force && tokenPressure && !messagePressure && options.pressureTokens !== undefined
         && prunedTokens <= options.pressureTokens) {
         return { history: copy, statistics: {
           afterTokens: prunedTokens, beforeTokens, prunedToolResults, reason, summarizedMessages: 0,
+          summaryAttempts: 0, summaryRejected: 0, toolOutputRefs,
         } };
       }
     }
@@ -156,17 +214,60 @@ export class HistoryCompactor<TMessage extends RuntimeMessage> {
       : planCompaction(copy);
     if (!plan) {
       const afterTokens = options.estimator ? tokenCount(copy, options.estimator) : undefined;
-      return { history: copy, statistics: { afterTokens, beforeTokens, prunedToolResults, reason, summarizedMessages: 0 } };
+      return { history: copy, statistics: {
+        afterTokens, beforeTokens, prunedToolResults, reason, summarizedMessages: 0,
+        summaryAttempts: 0, summaryRejected: 0, toolOutputRefs,
+      } };
     }
-    let summaryText: string;
-    try {
-      summaryText = await this.summarize(buildSummaryPrompt(plan), signal, onProgress);
-    } catch (error) {
-      if (signal.aborted) throw error;
-      const afterTokens = options.estimator ? tokenCount(copy, options.estimator) : undefined;
-      return { history: copy, statistics: { afterTokens, beforeTokens, prunedToolResults, reason, summarizedMessages: 0 } };
+    let checkpoint: RuntimeMessage | undefined;
+    let summaryAttempts = 0;
+    let summaryRejected = 0;
+    let summaryCheckpointTokens: number | undefined;
+    let summaryOutputCharacters: number | undefined;
+    let summaryValidationWarnings: string[] = [];
+    const summaryPrompt = buildSummaryPrompt(plan);
+    const summaryInputCharacters = summaryPrompt.length;
+    const previousCheckpoint = summaryCheckpointMessage(plan.previousSummary);
+    const sourceCost = options.estimator
+      ? tokenCount([
+        ...(previousCheckpoint ? [previousCheckpoint as TMessage] : []),
+        ...plan.toSummarize as TMessage[],
+      ], options.estimator)
+      : JSON.stringify(plan.toSummarize).length + String(previousCheckpoint?.content ?? "").length;
+    const summarySourceTokens = options.estimator ? sourceCost : undefined;
+    const knownToolOutputRefs = new Set(
+      `${plan.previousSummary}\n${JSON.stringify(plan.toSummarize)}`.match(/tool-output-[0-9a-f]+/gu) ?? [],
+    );
+    const retries = Math.max(0, Math.trunc(options.summaryRetries ?? 1));
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        summaryAttempts += 1;
+        const correction = attempt === 0 ? ""
+          : "\n\nYour previous checkpoint did not reduce the context. Be substantially more concise while retaining all required fields.";
+        const summaryText = await this.summarize(`${summaryPrompt}${correction}`, signal, onProgress);
+        summaryOutputCharacters = summaryText.length;
+        const validation = validateSummaryCheckpoint(summaryText, knownToolOutputRefs);
+        summaryValidationWarnings = validation.warnings;
+        const candidate = summaryCheckpointMessage(validation.normalized);
+        if (!candidate) {
+          summaryRejected += 1;
+          continue;
+        }
+        const candidateCost = options.estimator
+          ? tokenCount([candidate as TMessage], options.estimator)
+          : String(candidate.content ?? "").length;
+        if (candidateCost >= sourceCost) {
+          summaryRejected += 1;
+          continue;
+        }
+        checkpoint = candidate;
+        summaryCheckpointTokens = options.estimator ? candidateCost : undefined;
+        break;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        break;
+      }
     }
-    const checkpoint = summaryCheckpointMessage(summaryText);
     const compacted = checkpoint
       ? [checkpoint as TMessage, ...plan.preserved as TMessage[]]
       : copy;
@@ -179,6 +280,14 @@ export class HistoryCompactor<TMessage extends RuntimeMessage> {
       prunedToolResults,
       reason,
       summarizedMessages: checkpoint ? plan.toSummarize.length : 0,
+      summaryAttempts,
+      summaryCheckpointTokens,
+      summaryInputCharacters,
+      summaryOutputCharacters,
+      summaryRejected,
+      summarySourceTokens,
+      summaryValidationWarnings,
+      toolOutputRefs,
     } };
   }
 }

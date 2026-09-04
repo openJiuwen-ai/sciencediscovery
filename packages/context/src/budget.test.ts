@@ -56,6 +56,8 @@ test("budget environment resolves native window settings", () => {
   const budget = resolveContextBudget({
     SCIENCE_AGENT_CONTEXT_COMPACTION_PRESSURE_PERCENT: "75",
     SCIENCE_AGENT_CONTEXT_COMPACTION_RETAIN_PERCENT: "20",
+    SCIENCE_AGENT_CONTEXT_COMPACTION_SUMMARY_RETRIES: "2",
+    SCIENCE_AGENT_CONTEXT_COMPACTION_TOOL_PREVIEW_BYTES: "512",
     SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS: "1234",
     SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS: "100000",
     SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS: "12000",
@@ -66,6 +68,8 @@ test("budget environment resolves native window settings", () => {
   assert.equal(budget.promptBudgetCharacters, 1234);
   assert.equal(budget.compactionPressurePercent, 75);
   assert.equal(budget.compactionRetainPercent, 20);
+  assert.equal(budget.compactionSummaryRetries, 2);
+  assert.equal(budget.compactionToolPreviewBytes, 512);
   assert.equal(budget.modelContextTokens, 100000);
   assert.equal(budget.outputReserveTokens, 12000);
   assert.equal(budget.windowMessages, 80);

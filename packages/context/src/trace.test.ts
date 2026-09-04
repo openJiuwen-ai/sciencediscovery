@@ -20,7 +20,7 @@ test("context trace exports one private JSON record per model turn", async () =>
   await writer.write("session:run", 2, { llmInput: { systemPrompt: "prompt" }, selectedPath: "dynamic" });
   const path = resolve(root, "context-traces", "session_run", "turn-0002.json");
   const record = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-  assert.equal(record.schemaVersion, 3);
+  assert.equal(record.schemaVersion, 4);
   assert.equal(record.selectedPath, "dynamic");
   assert.equal((await stat(path)).mode & 0o777, 0o600);
 });

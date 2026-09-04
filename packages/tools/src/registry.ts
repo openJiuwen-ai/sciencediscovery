@@ -3,9 +3,14 @@
 
 import { randomUUID } from "node:crypto";
 
-import type { RuntimeMessage, RuntimeToolCall, ToolDispatchResult, ToolDispatcher } from "@sciencediscovery/runtime-core";
+import type {
+  RuntimeMessage,
+  RuntimeToolCall,
+  ToolDispatchResult,
+  ToolDispatcher,
+} from "@sciencediscovery/runtime-core";
 
-import type { ToolOutputGuard } from "./bounded-output.js";
+import type { ToolOutputGuard, ToolOutputRecord } from "./bounded-output.js";
 import {
   autoPromoteFromRouting,
   blockedDeferredToolResult,
@@ -29,7 +34,7 @@ export interface ToolSpec {
 }
 
 export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
-  createResultMessage(call: RuntimeToolCall, content: string): TMessage;
+  createResultMessage(call: RuntimeToolCall, content: string, output?: ToolOutputRecord): TMessage;
   /** Optional run-scoped capability policy supplied by the application composition. */
   isAvailable?(tool: AgentTool): boolean;
   loopGuard?: ToolLoopGuard;
@@ -112,6 +117,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     let content: string;
     let isError: boolean;
     let selfBounded = false;
+    let outputRecord: ToolOutputRecord | undefined;
     if (call.argsParseError) {
       content = JSON.stringify({ ok: false, error: { attempts: 1, code: "INVALID_TOOL_ARGUMENTS", retryable: true,
         message: `Invalid tool arguments: ${call.argsParseError}`.slice(0, 1_000) } });
@@ -129,10 +135,12 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       ({ content, isError, selfBounded } = await this.executeRegistered(call, signal));
     }
     if (this.options.outputGuard) {
-      content = await this.options.outputGuard.apply(call.name, content, selfBounded);
+      const guarded = await this.options.outputGuard.applyDetailed(call.name, content, selfBounded);
+      content = guarded.content;
+      outputRecord = guarded.record;
     }
     try { this.options.onResult?.({ call, content, isError, sequence }); } catch { /* observer isolation */ }
-    return { content, isError, message: this.options.createResultMessage(call, content) };
+    return { content, isError, message: this.options.createResultMessage(call, content, outputRecord) };
   }
 
   private availableTools(): readonly AgentTool[] {

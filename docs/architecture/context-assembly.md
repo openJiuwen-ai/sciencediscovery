@@ -168,6 +168,8 @@ All configured values are positive integers:
 | `SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS` | model policy `maxTokens` (`16384` by default) | Capacity kept free for the next model response |
 | `SCIENCE_AGENT_CONTEXT_COMPACTION_PRESSURE_PERCENT` | `80` | Start history pressure handling at this percentage of the effective model input limit |
 | `SCIENCE_AGENT_CONTEXT_COMPACTION_RETAIN_PERCENT` | `16` | Recent canonical-history suffix retained verbatim during summarization; must be below pressure percent |
+| `SCIENCE_AGENT_CONTEXT_COMPACTION_TOOL_PREVIEW_BYTES` | `2048` | Total head/tail bytes retained when a stored tool result is compacted |
+| `SCIENCE_AGENT_CONTEXT_COMPACTION_SUMMARY_RETRIES` | `1` | Additional attempts after a summary fails to shrink its source segment |
 | `SCIENCE_AGENT_CONTEXT_WINDOW_MESSAGES` | unset | Maximum invocation messages; the task anchor, newest atomic step, checkpoints, and open tool calls are retained |
 | `SCIENCE_AGENT_CONTEXT_WINDOW_ROUNDS` | unset | Maximum recent user rounds; takes precedence over the message limit |
 | `SCIENCE_AGENT_CONTEXT_WINDOW_TOKENS` | unset | Approximate complete input limit, including Prompt, tools, and history |
@@ -181,18 +183,35 @@ The effective input limit is the smaller of
 `MODEL_MAX_TOKENS - OUTPUT_RESERVE_TOKENS`. System Prompt, Tool schemas,
 contributed data, and history all consume that same limit.
 
-At the pressure threshold, deterministic projection removes old tool-result
-bodies first. A stored `read_tool_output` reference is retained when one
-exists; the complete Run event/audit record is never rewritten. If pressure
+At the pressure threshold, deterministic projection replaces old stored
+tool-result bodies with a small head/tail preview plus their structured
+`read_tool_output` reference. Results without a retrievable reference are not
+blindly erased; they remain available to the summarizer. If pressure
 remains, the model summarizes the oldest closed LLM steps into the standing
 checkpoint and retains a recent suffix by token cost. This boundary may fall
 inside one long user request: the former policy that protected the entire
 newest user round allowed autonomous scientific runs to grow without bound.
+Stored results remain recoverable through one bounded interface: literal
+`query` search first, ordinary line ranges second, and Unicode character
+ranges for minified JSON or another over-wide single line. The model chooses
+the query or range; the runtime does not automatically search on its behalf.
 
 An assistant tool call and its immediately following tool results remain one
-atomic unit. Open calls are never removed or summarized. The final window
-keeps the task anchor, checkpoint, newest step, and open calls; if even those
+atomic unit. Open calls are never removed or summarized, and the latest LLM
+step always retains its call/result structure (a large result body may become
+head/tail + ref). The final window keeps the task anchor, checkpoint, newest step, and open calls; if even those
 cannot fit, assembly fails clearly before the Provider call.
+
+The summary request receives the full already-bounded source transcript rather
+than a second 16,000-character/600-character-tool clipping layer. It must emit
+a scientific checkpoint that separates completed work, evidence, decisions,
+failed/abandoned leads, explicit pending requirements, optional leads, and one
+next step. A lightweight structural validator normalizes missing/duplicate
+sections and reports invalid shape or unknown stored-output refs; it does not
+judge evidence sufficiency or force task convergence. A checkpoint that is
+not smaller than the source segment is rejected and retried within the
+configured bound; failure leaves deterministic pruning in place but does not
+replace history with a larger summary.
 
 If a Provider nevertheless rejects the request as a context-window overflow,
 its adapter normalizes that error. Runtime Core asks the Assembler for one
@@ -221,7 +240,7 @@ beside the original attempt rather than overwriting it:
 <trace-dir>/<context-id>/turn-0001-recovery-1.json
 ```
 
-Trace schema v3 contains:
+Trace schema v4 contains:
 
 - mode, Agent scope, selected path, and resolved budgets;
 - each Contributor's raw output, duration, status, and error;
@@ -229,8 +248,9 @@ Trace schema v3 contains:
 - sections, attachments, messages, and diagnostics after admission;
 - rendered Prompt, section IDs, invocation history, tools, window statistics,
   and window diagnostics in `renderedContext`;
-- compaction reason, estimated tokens before/after, pruned tool-result count,
-  summarized-message count, and recovery reason/attempt;
+- compaction reason, estimated tokens before/after, compacted tool-output refs,
+  summary source/checkpoint cost, attempt/rejection counts, summarized-message
+  count, and recovery reason/attempt;
 - the exact `llmInput` passed to `ProviderModelClient`.
 
 In `shadow`, `renderedContext` is the dynamic candidate while `llmInput` is the

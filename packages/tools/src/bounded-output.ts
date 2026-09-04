@@ -28,6 +28,8 @@
 
 export const DEFAULT_TOOL_OUTPUT_MAX_LINES = 2_000;
 export const DEFAULT_TOOL_OUTPUT_MAX_BYTES = 50 * 1_024;
+/** Store moderately large results before compaction needs to replace them. */
+export const DEFAULT_TOOL_OUTPUT_RETENTION_BYTES = 8 * 1_024;
 
 /**
  * Page bound for tools that paginate themselves. It stays below
@@ -95,18 +97,16 @@ export function splitKeepingLineEndings(text: string): string[] {
 
 /** Cut on a character boundary so a byte cap never emits a broken code point. */
 function sliceToBytes(text: string, maxBytes: number, keep: BoundedKeep): string {
-  const characters = [...text];
-  if (keep === "tail") characters.reverse();
-  const picked: string[] = [];
-  let bytes = 0;
-  for (const character of characters) {
-    const size = Buffer.byteLength(character, "utf8");
-    if (bytes + size > maxBytes) break;
-    picked.push(character);
-    bytes += size;
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maxBytes) return text;
+  if (keep === "head") {
+    let end = maxBytes;
+    while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+    return bytes.subarray(0, end).toString("utf8");
   }
-  if (keep === "tail") picked.reverse();
-  return picked.join("");
+  let start = bytes.length - maxBytes;
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start += 1;
+  return bytes.subarray(start).toString("utf8");
 }
 
 /** Keep at most `maxLines` lines and `maxBytes` bytes from one end of `text`. */
@@ -160,6 +160,20 @@ export function formatByteSize(bytes: number): string {
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
 }
 
+/** Build a two-sided preview so both the result header and final status survive. */
+function headTailPreview(text: string, maxBytes: number, maxLines: number, preferred: BoundedKeep): string {
+  const primaryShare = Math.max(1, Math.floor(maxBytes * 0.65));
+  const secondaryShare = Math.max(1, maxBytes - primaryShare);
+  const primaryLines = Math.max(1, Math.floor(maxLines * 0.65));
+  const secondaryLines = Math.max(1, maxLines - primaryLines);
+  const lines = splitKeepingLineEndings(text);
+  const head = sliceToBytes(lines.slice(0, preferred === "head" ? primaryLines : secondaryLines).join(""),
+    preferred === "head" ? primaryShare : secondaryShare, "head");
+  const tail = sliceToBytes(lines.slice(-(preferred === "tail" ? primaryLines : secondaryLines)).join(""),
+    preferred === "tail" ? primaryShare : secondaryShare, "tail");
+  return `${head}\n[... middle omitted; full result available by ref ...]\n${tail}`;
+}
+
 /**
  * Tools whose answer lives at the end of the stream: exit status, final
  * metrics, and the traceback of a failed experiment.
@@ -175,7 +189,15 @@ export interface ToolOutputGuardOptions {
   keepTailTools?: Iterable<string>;
   maxBytes?: number;
   maxLines?: number;
+  /** Results above this size receive a durable ref even when shown in full. */
+  retentionBytes?: number;
   sink: ToolOutputSink;
+}
+
+export interface ToolOutputGuardResult {
+  content: string;
+  record?: ToolOutputRecord;
+  truncated: boolean;
 }
 
 /**
@@ -188,14 +210,20 @@ export class ToolOutputGuard {
   private readonly keepTailTools: ReadonlySet<string>;
   private readonly maxBytes: number;
   private readonly maxLines: number;
+  private readonly retentionBytes: number;
 
   constructor(private readonly options: ToolOutputGuardOptions) {
     this.keepTailTools = new Set(options.keepTailTools ?? DEFAULT_TAIL_PREVIEW_TOOLS);
     this.maxBytes = options.maxBytes ?? DEFAULT_TOOL_OUTPUT_MAX_BYTES;
     this.maxLines = options.maxLines ?? DEFAULT_TOOL_OUTPUT_MAX_LINES;
+    this.retentionBytes = options.retentionBytes ?? DEFAULT_TOOL_OUTPUT_RETENTION_BYTES;
   }
 
   async apply(toolName: string, content: string, selfBounded = false): Promise<string> {
+    return (await this.applyDetailed(toolName, content, selfBounded)).content;
+  }
+
+  async applyDetailed(toolName: string, content: string, selfBounded = false): Promise<ToolOutputGuardResult> {
     const tolerance = selfBounded ? SELF_BOUNDED_TOLERANCE : 1;
     const keep = this.keepTailTools.has(toolName) ? "tail" : "head";
     const bounded = boundText(content, {
@@ -203,27 +231,31 @@ export class ToolOutputGuard {
       maxBytes: this.maxBytes * tolerance,
       maxLines: this.maxLines * tolerance,
     });
-    if (!bounded.truncated) return content;
-
     let record: ToolOutputRecord | undefined;
-    try {
-      record = await this.options.sink.save(toolName, content);
-    } catch {
-      // Storage is best effort: a bounded result without a reference is still
-      // far better than an oversized one that fails the whole request.
-      record = undefined;
+    if (bounded.truncated || (!selfBounded && Buffer.byteLength(content, "utf8") > this.retentionBytes)) {
+      try {
+        record = await this.options.sink.save(toolName, content);
+      } catch {
+        // Storage is best effort: a bounded result without a reference is still
+        // far better than an oversized one that fails the whole request.
+        record = undefined;
+      }
     }
-    return [describeBound(toolName, bounded, record), bounded.text].join("\n");
+    if (!bounded.truncated) return { content, ...(record ? { record } : {}), truncated: false };
+    const preview = headTailPreview(content, this.maxBytes * tolerance, this.maxLines * tolerance, keep);
+    return {
+      content: [describeBound(toolName, bounded, preview, record), preview].join("\n"),
+      ...(record ? { record } : {}),
+      truncated: true,
+    };
   }
 }
 
-function describeBound(toolName: string, bounded: BoundedText, record: ToolOutputRecord | undefined): string {
-  const shown = Buffer.byteLength(bounded.text, "utf8");
-  const position = bounded.keep === "head" ? "first" : "last";
+function describeBound(toolName: string, bounded: BoundedText, preview: string, record: ToolOutputRecord | undefined): string {
+  const shown = Buffer.byteLength(preview, "utf8");
   const lines = [
     `[bounded tool output] ${toolName} produced ${bounded.totalLines} lines (${formatByteSize(bounded.totalBytes)}).`
-    + ` This result shows the ${position} ${bounded.totalLines - bounded.omittedLines} lines (${formatByteSize(shown)});`
-    + ` ${bounded.omittedLines} lines (${formatByteSize(bounded.omittedBytes)}) are omitted here.`,
+    + ` This result shows a bounded head/tail preview (${formatByteSize(shown)}); the middle is omitted here.`,
   ];
   if (record) {
     lines.push(

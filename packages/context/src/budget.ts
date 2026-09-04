@@ -12,6 +12,10 @@ export interface ContextBudgetConfig {
   compactionPressurePercent: number;
   /** Recent canonical-history tail retained when old closed steps are summarized. */
   compactionRetainPercent: number;
+  /** Additional model attempts after a non-shrinking checkpoint. */
+  compactionSummaryRetries?: number;
+  /** Head/tail preview retained when compacting a stored tool result. */
+  compactionToolPreviewBytes?: number;
   dataBudgetCharacters: number;
   maxContributedMessages: number;
   /** Provider/model context window, including the reserved model output. */
@@ -30,6 +34,8 @@ const DEFAULTS: ContextBudgetConfig = Object.freeze({
   contributedMessageBudgetCharacters: 100_000,
   compactionPressurePercent: 80,
   compactionRetainPercent: 16,
+  compactionSummaryRetries: 1,
+  compactionToolPreviewBytes: 2 * 1_024,
   dataBudgetCharacters: 500_000,
   maxContributedMessages: 50,
   modelContextTokens: 131_072,
@@ -49,6 +55,14 @@ function positiveInteger(env: NodeJS.ProcessEnv, name: string, fallback?: number
 function percentage(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
   const value = positiveInteger(env, name, fallback)!;
   if (value > 100) throw new Error(`${name} must be between 1 and 100`);
+  return value;
+}
+
+function nonNegativeInteger(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer`);
   return value;
 }
 
@@ -87,6 +101,16 @@ export function resolveContextBudget(
     contributedMessageBudgetCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_CONTRIBUTED_MESSAGE_BUDGET_CHARS", DEFAULTS.contributedMessageBudgetCharacters)!,
     compactionPressurePercent,
     compactionRetainPercent,
+    compactionSummaryRetries: nonNegativeInteger(
+      env,
+      "SCIENCE_AGENT_CONTEXT_COMPACTION_SUMMARY_RETRIES",
+      DEFAULTS.compactionSummaryRetries!,
+    ),
+    compactionToolPreviewBytes: positiveInteger(
+      env,
+      "SCIENCE_AGENT_CONTEXT_COMPACTION_TOOL_PREVIEW_BYTES",
+      DEFAULTS.compactionToolPreviewBytes,
+    )!,
     dataBudgetCharacters: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_DATA_BUDGET_CHARS", DEFAULTS.dataBudgetCharacters)!,
     maxContributedMessages: positiveInteger(env, "SCIENCE_AGENT_CONTEXT_MAX_CONTRIBUTED_MESSAGES", DEFAULTS.maxContributedMessages)!,
     modelContextTokens,

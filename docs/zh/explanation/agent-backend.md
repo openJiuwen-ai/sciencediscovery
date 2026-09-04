@@ -267,13 +267,13 @@ streamModelTurn(endpoint, systemPrompt, history, tools, policy, signal, callback
 
 **原子性**：assistant 的工具调用及其后续结果被视为一个 LLM Step；未闭合的调用绝不摘要。一个长任务中已经完成的旧步骤允许被压缩，不再把“最近一次用户请求的全部过程”永久保护起来。
 
-**摘要**：用本轮同一个模型 endpoint 发一次独立请求（system prompt 为 `You are compacting…`，不带工具）。`buildSummaryPrompt` 把待压缩片段渲染成 transcript（assistant 附 `[tool calls: name(args前300字符)]`，tool 结果按 600 字符截断），整体截到 `SUMMARY_INPUT_CHAR_BUDGET = 16_000`，并对内容做 HTML 转义后包进 `<new_messages>`；若存在上一份摘要则再包一个 `<existing_summary>`（预算减半）——**转义是安全要求**，被摘要的内容不得闭合这两个标签来伪造结构。
+**摘要**：用本轮同一个模型 endpoint 发一次独立请求（system prompt 为 `You are compacting…`，不带工具）。`buildSummaryPrompt` 接收已经过统一限界的完整待压缩 transcript，保留 tool call id、工具名、参数、结果预览与存储 ref，不再额外做“tool 600 字符/整体 16000 字符”的二次裁剪。内容经 HTML 转义后放入 `<new_messages>` / `<existing_summary>`。科研 checkpoint 分开记录已完成工作、证据、决策、终态失败/放弃线索、用户明确要求的待办、可选线索和唯一下一步；终态失败不能被悄悄提升为必做项，但是否继续调研仍由模型判断。
 
-**checkpoint**：`summaryCheckpointMessage` 生成一条 `role:"user"`、`name:"summary"` 的消息，正文以 `[ScienceDiscovery summary checkpoint]` 开头并包在 `<durable_context_data>` 里，`additional_kwargs` 带 `hide_from_ui: true` 与 `sciencediscovery_summary_checkpoint: true`。渲染预算 `SUMMARY_RENDER_CHAR_BUDGET = 6_000`，超出用 `boundText` 保头保尾（2/3 头 + 尾，中间 `\n...\n`）。
+**checkpoint**：`summaryCheckpointMessage` 生成一条 `role:"user"`、`name:"summary"` 的消息，正文以 `[ScienceDiscovery summary checkpoint]` 开头并包在 `<durable_context_data>` 里，`additional_kwargs` 带 `hide_from_ui: true` 与 `sciencediscovery_summary_checkpoint: true`。轻量 verifier 会合并重复章节、补齐缺失章节，并报告多个下一步、未知 tool-output ref 及超过 6000 字符预算等问题，但不判断科研证据是否充分。若 checkpoint 不比来源片段更小，会拒绝并默认再试一次；尝试次数、校验警告与前后估算均写入 context trace。
 
 **链式**：下一次压缩通过 `extractCheckpointSummary` 把上一份摘要读回来一起合并，所以摘要是**滚动更新**而不是层层叠加。格式与旧引擎一致，**旧会话历史仍能被识别**。
 
-**失败与恢复**：摘要失败时保留已经完成的确定性工具正文清理并继续运行（取消信号除外）。如果 Provider 明确认定输入超过上下文窗口，Runtime 会强制重组一次并在同一 LLM turn 只重试一次；第二次仍溢出则正常抛错，不会无限重试。
+**失败与恢复**：有存储 ref 的工具正文先变成 head/tail 预览 + 结构化 ref；最新 LLM Step 始终保留完整的 call/result 关系。摘要失败或不收敛时保留确定性裁剪并继续运行（取消信号除外）。如果 Provider 明确认定输入超过上下文窗口，Runtime 会强制重组一次并在同一 LLM turn 只重试一次；第二次仍溢出则正常抛错，不会无限重试。
 
 ## 8. MCP：`mcp/node-client.ts` 与 `mcp/extensions-config.ts`
 

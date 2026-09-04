@@ -119,13 +119,19 @@ test("parallel large tool results are reduced before the next model call", async
   for (let index = 0; index < 3; index += 1) {
     const id = `fetch-${index}`;
     history.push({ role: "assistant", content: "", tool_calls: [{ id, function: { name: "web_fetch", arguments: "{}" } }] });
-    history.push({ role: "tool", tool_call_id: id, content: `source-${index}\n${"x".repeat(1_000)}` });
+    history.push({
+      role: "tool",
+      tool_call_id: id,
+      content: `source-${index}\n${"x".repeat(10_000)}`,
+      additional_kwargs: { tool_output: { ref: `tool-output-000000000000000${index}` } },
+    });
   }
   let trace: DynamicContextTrace<Message> | undefined;
   const result = await assembler("dynamic", {
     budget: {
-      SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS: "1000",
+      SCIENCE_AGENT_CONTEXT_MODEL_MAX_TOKENS: "1200",
       SCIENCE_AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS: "200",
+      SCIENCE_AGENT_CONTEXT_COMPACTION_TOOL_PREVIEW_BYTES: "256",
     },
     trace(value) { trace = value; },
   }).assemble({
@@ -135,7 +141,7 @@ test("parallel large tool results are reduced before the next model call", async
     turn: 3,
   });
   assert.ok((trace?.rendered?.compaction.prunedToolResults ?? 0) >= 1);
-  assert.ok((trace?.rendered?.statistics.estimatedInputTokens ?? Infinity) <= 800);
+  assert.ok((trace?.rendered?.statistics.estimatedInputTokens ?? Infinity) <= 1000);
   const calls = new Set(result.modelInput.history.flatMap((message) =>
     Array.isArray(message.tool_calls) ? message.tool_calls.map((call) => (call as { id: string }).id) : []));
   for (const toolResult of result.modelInput.history.filter((message) => message.role === "tool")) {

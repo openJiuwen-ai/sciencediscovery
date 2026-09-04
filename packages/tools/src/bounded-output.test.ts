@@ -90,6 +90,19 @@ test("the guard leaves a small result untouched and stores nothing", async () =>
   assert.deepEqual(saved, []);
 });
 
+test("the guard stores a moderate result for later compaction without changing its first rendering", async () => {
+  const saved: string[] = [];
+  const guard = new ToolOutputGuard({
+    retentionBytes: 8,
+    sink: { async save(_toolName, text) { saved.push(text); return record({ bytes: text.length }); } },
+  });
+  const result = await guard.applyDetailed("web_search", "moderate result");
+  assert.equal(result.content, "moderate result");
+  assert.equal(result.truncated, false);
+  assert.equal(result.record?.ref, "tool-output-00112233445566aa");
+  assert.deepEqual(saved, ["moderate result"]);
+});
+
 test("the guard replaces an oversized result with a preview plus a re-read ref", async () => {
   const guard = new ToolOutputGuard({
     sink: { async save() { return record({ lines: 60_000, ref: "tool-output-0123456789abcdef" }); } },
@@ -100,7 +113,8 @@ test("the guard replaces an oversized result with a preview plus a re-read ref",
   assert.ok(Buffer.byteLength(result, "utf8") < DEFAULT_TOOL_OUTPUT_MAX_BYTES * 1.1, "result fits the model-facing bound");
   assert.match(result, /^\[bounded tool output] mcp__pubmed__search produced 60000 lines \(11\.5 MB\)\./);
   assert.match(result, /read_tool_output\(ref="tool-output-0123456789abcdef", offset=<1-based line>, limit=<lines>\)/);
-  assert.equal(result.includes("first"), true, "an MCP result keeps its head");
+  assert.equal(result.includes("head/tail preview"), true);
+  assert.equal(result.includes("middle omitted"), true);
 });
 
 test("execution output keeps its tail, where the failure is reported", async () => {
@@ -108,14 +122,16 @@ test("execution output keeps its tail, where the failure is reported", async () 
   const text = `${"noise\n".repeat(100_000)}Traceback: boom`;
   const result = await guard.apply("run_python", text);
 
-  assert.match(result, /shows the last /);
+  assert.match(result, /head\/tail preview/);
   assert.equal(result.endsWith("Traceback: boom"), true);
 });
 
 test("a bounded result is trusted up to the hard bound, then re-truncated anyway", async () => {
-  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } } });
+  let saves = 0;
+  const guard = new ToolOutputGuard({ sink: { async save() { saves += 1; return record(); } } });
   const modest = `${"y".repeat(100)}\n`.repeat(1_000);
   assert.equal(await guard.apply("read_file", modest, true), modest, "a self-bounded page is left alone");
+  assert.equal(saves, 0, "a paginated tool is not copied into a second output store");
 
   const runaway = `${"y".repeat(100)}\n`.repeat(100_000);
   const result = await guard.apply("read_file", runaway, true);

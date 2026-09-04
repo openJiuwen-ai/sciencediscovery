@@ -14,9 +14,9 @@
 | `declare_artifact` | `path` 或 `paths`（1–50 项），可选 `name`、`description` | 将当前 Agent 可写工作区内的文件显式声明为 Project 产物。单 `path` 保留原返回，`name` 默认等于规范化后的工作区相对 `path`，可显式覆盖为其它安全逻辑路径；`paths` 优先且逐项返回 `ok/error`，成功项不回滚，每项使用自身完整相对 path 并忽略顶层 `name/description`；name 中的 `/` 在产物侧边栏显示为虚拟目录，不创建或移动物理文件；预览 kind 由服务端内部推断，最终报告也必须声明 |
 | `run_python` | `code`，可选 `environmentRevisionId`、`kernelMode: ephemeral\|persistent` | 在 bubblewrap 沙箱执行 Python；默认一次性进程，可选托管环境与持久内核；非零退出即工具错误 |
 | `run_shell` | `command` 或 `scriptPath` 二选一，可选 `arguments`、`kernelMode` | 有界 shell：默认复用 Session 持久 shell 会话（`cd`/`export`/`source` 跨调用生效，白名单变量也注入后续 `run_python`/`run_r`；见 [sandbox-execution.md §8](../explanation/sandbox-execution.md#8-持久-shell-会话与-session-env-profile)）；`kernelMode=ephemeral` 为一次性干净 shell；只见工作区，网络按沙箱网络访问策略（默认无网络） |
-| `read_tool_output` | `ref`，可选 `offset`、`limit` | 回读因过大而未完整返回的工具结果；`ref` 来自被截断结果的提示行 |
+| `read_tool_output` | `ref`；可选且互斥的行范围（`offset`、`limit`）、字符范围（`charOffset`、`charLimit`）或文本搜索（`query`、`contextChars`、`maxMatches`、`caseSensitive`） | 从已存工具结果中恢复一个明确缺失的事实；重复或累计读取过多会提示收敛，但不会阻止合理读取 |
 
-所有工具结果在进入模型输入前都会被限界：超过 2000 行或 50 KiB 的结果只保留预览（读取类保留头部，执行类保留尾部，因为退出状态和报错在末尾），并附带一个 `ref`，模型用 `read_tool_output` 按页取回被省略的部分；完整文本原样按 Session 保存在 `<dataDir>/tool-outputs/<sessionId>/`（不设大小上限），生命周期与 Session 一致：没有单独的过期时间，随 Session 或 Project 删除时和消息、执行记录一起清理。该限界发生在工具结果进入 canonical history 的统一边界上，因此同样覆盖 MCP 工具结果和后续新增的工具。
+所有工具结果在进入模型输入前经过同一个边界：普通的非自限界结果超过 8 KiB 时原样落盘并在消息元数据中附结构化 ref，保证后续压缩可恢复；超过 2000 行或 50 KiB 时，首次展示即改为 head/tail 预览 + ref。完整正文按 Session 保存在 `<dataDir>/tool-outputs/<sessionId>/`。`read_tool_output` 应优先用 `query` 做普通文本搜索，常规文本使用行范围，只有单行过宽时才使用字符范围；三种模式的返回都限制在约 40 KiB。工具在单次 AgentRun 内按 ref 统计读取，重复范围/查询或累计约 64/96 KiB 时会提醒模型只为明确缺失信息继续读取，但不会阻断合理操作。阈值可通过 `.env.example` 中的 `SCIENCE_AGENT_TOOL_OUTPUT_*` 环境变量调整。
 
 `run_python` / `run_shell` 首次执行会触发 `code` 类权限卡片（见[运行时行为参考](runtime-behavior.md#权限与评审器)）。执行产生的文件仍保留 diff 与 derivation 审计，但不会仅因出现在工作区就进入产物目录；Agent 必须调用 `declare_artifact`，用户上传、MCP 下载与拉回的远程任务输出则由控制面在入口处注册。
 

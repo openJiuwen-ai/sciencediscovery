@@ -164,6 +164,8 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
           ...(input.recovery ? { force: true } : {}),
           ...(pressureTokens !== undefined ? { pressureTokens } : {}),
           ...(retainTokens !== undefined ? { retainTokens } : {}),
+          summaryRetries: this.options.budget.compactionSummaryRetries,
+          toolPreviewBytes: this.options.budget.compactionToolPreviewBytes,
         },
       );
       history = compacted.history;
@@ -186,6 +188,24 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
         prunedToolResults: preliminary.statistics.prunedToolResults + compacted.statistics.prunedToolResults,
         reason: compacted.statistics.reason === "none" ? preliminary.statistics.reason : compacted.statistics.reason,
         summarizedMessages: preliminary.statistics.summarizedMessages + compacted.statistics.summarizedMessages,
+        summaryAttempts: (preliminary.statistics.summaryAttempts ?? 0) + (compacted.statistics.summaryAttempts ?? 0),
+        summaryCheckpointTokens: compacted.statistics.summaryCheckpointTokens
+          ?? preliminary.statistics.summaryCheckpointTokens,
+        summaryInputCharacters: compacted.statistics.summaryInputCharacters
+          ?? preliminary.statistics.summaryInputCharacters,
+        summaryOutputCharacters: compacted.statistics.summaryOutputCharacters
+          ?? preliminary.statistics.summaryOutputCharacters,
+        summaryRejected: (preliminary.statistics.summaryRejected ?? 0) + (compacted.statistics.summaryRejected ?? 0),
+        summarySourceTokens: compacted.statistics.summarySourceTokens
+          ?? preliminary.statistics.summarySourceTokens,
+        summaryValidationWarnings: [
+          ...(preliminary.statistics.summaryValidationWarnings ?? []),
+          ...(compacted.statistics.summaryValidationWarnings ?? []),
+        ],
+        toolOutputRefs: [
+          ...(preliminary.statistics.toolOutputRefs ?? []),
+          ...(compacted.statistics.toolOutputRefs ?? []),
+        ],
       };
       legacy = { history, modelInput: { history, systemPrompt: this.options.systemPrompt, tools } };
       const invocationHistory = this.messageComposer.compose({
