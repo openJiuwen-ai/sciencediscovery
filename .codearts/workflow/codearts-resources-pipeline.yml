@@ -185,6 +185,115 @@ stages:
         - ubuntu-latest
         - x64
         - large
+      resource_qemu_emulator:
+        select: selected_by_default
+        name: Build portable QEMU emulator
+        needs: []
+        timeout: 20
+        timeout_unit: minute
+        steps:
+        - name: Download the resource branch
+          uses: official_git_clone
+          identifier: 1788520000000a1c4e7f2-3b61-4d82-9a05-6c1e4f7b2d93
+        - name: Build and verify the portable QEMU emulator
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              OUTPUT_DIR="$PWD/.codearts-resources/qemu-emulator"
+              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
+              RESOURCE_RUN_ID="${{ pipeline.run_id }}"
+              printf '%s\n' "$CHECKED_OUT_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
+              printf '%s\n' "$RESOURCE_RUN_ID" | grep -Eq '^[0-9A-Za-z_-]+$'
+              RESOURCE_BUILD_COMMIT="$CHECKED_OUT_COMMIT" \
+                RESOURCE_BUILD_RUN_ID="$RESOURCE_RUN_ID" \
+                bash .ci/build-qemu-emulator.sh --output-dir "$OUTPUT_DIR"
+              (cd "$OUTPUT_DIR" && sha256sum --check SHA256SUMS)
+              cat "$OUTPUT_DIR/VERSION"
+              ls -lh "$OUTPUT_DIR/ScienceDiscovery-qemu-emulator-alpine-x86_64.tar"
+          identifier: 1788520000001b2d5f8a3-4c72-4e93-8b16-7d2f5a8c3e04
+        - name: Upload the portable QEMU emulator
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/qemu-emulator/v1/ScienceDiscovery-qemu-emulator-alpine-x86_64.tar
+            source_file: "${SHARE_PATH}/.codearts-resources/qemu-emulator/ScienceDiscovery-qemu-emulator-alpine-x86_64.tar"
+            self_folder: "false"
+          identifier: 1788520000002c3e609b4-5d83-4fa4-9c27-8e3a6b9d4f15
+        - name: Upload the QEMU emulator checksum
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/qemu-emulator/v1/SHA256SUMS
+            source_file: "${SHARE_PATH}/.codearts-resources/qemu-emulator/SHA256SUMS"
+            self_folder: "false"
+          identifier: 1788520000003d4f710c5-6e94-40b5-8d38-9f4b7c0e5a26
+        - name: Upload the QEMU emulator version manifest
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: sciencediscovery/cache/qemu-emulator/v1/VERSION
+            source_file: "${SHARE_PATH}/.codearts-resources/qemu-emulator/VERSION"
+            self_folder: "false"
+          identifier: 1788520000004e5a821d6-7f05-41c6-9e49-0a5c8d1f6b37
+        - name: Verify the published QEMU emulator
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              BASE_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu-emulator/v1"
+              VERIFY_DIR="$PWD/.codearts-resources/qemu-emulator-published"
+              PAYLOAD_NAME=ScienceDiscovery-qemu-emulator-alpine-x86_64.tar
+              mkdir -p "$VERIFY_DIR"
+              fetch_published() {
+                name="$1"
+                attempt=1
+                while [ "$attempt" -le 5 ]; do
+                  if curl --fail --location --retry 2 --connect-timeout 15 \
+                    --max-time 600 --silent --show-error \
+                    "$BASE_URL/$name" --output "$VERIFY_DIR/$name.part"; then
+                    mv "$VERIFY_DIR/$name.part" "$VERIFY_DIR/$name"
+                    echo "Downloaded published QEMU emulator object: $name"
+                    return 0
+                  fi
+                  rm -f "$VERIFY_DIR/$name.part"
+                  echo "Waiting for published QEMU emulator object: $name (attempt $attempt)"
+                  attempt=$((attempt + 1))
+                  sleep 2
+                done
+                echo "FATAL: published QEMU emulator object is unavailable: $name" >&2
+                return 1
+              }
+              fetch_published SHA256SUMS
+              fetch_published VERSION
+              fetch_published "$PAYLOAD_NAME"
+              test "$(wc -l < "$VERIFY_DIR/SHA256SUMS")" -eq 1
+              grep -Eq "^[0-9a-f]{64}  $PAYLOAD_NAME$" "$VERIFY_DIR/SHA256SUMS"
+              expected_sha256=$(awk '{print $1}' "$VERIFY_DIR/SHA256SUMS")
+              actual_sha256=$(sha256sum "$VERIFY_DIR/$PAYLOAD_NAME" | awk '{print $1}')
+              test "$actual_sha256" = "$expected_sha256"
+              # The payload is packed reproducibly, so the consumer branch can
+              # commit this checksum before the first publish. Print it: a
+              # mismatch there is read from this line, not guessed.
+              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
+              grep -Fx 'recipe=qemu-emulator-v1' "$VERIFY_DIR/VERSION"
+              grep -Fx "resource_commit=$CHECKED_OUT_COMMIT" "$VERIFY_DIR/VERSION"
+              echo "Verified published QEMU emulator: $actual_sha256"
+          identifier: 1788520000005f6b932e7-8a16-42d7-8f5a-1b6d9e2a7c48
+        if: "${{ default() }}"
+        runs-on:
+        - codearts-hosted
+        - ubuntu-latest
+        - x64
+        - large
       resource_qemu_runner:
         select: selected_by_default
         name: Build pre-provisioned QEMU Runner image
