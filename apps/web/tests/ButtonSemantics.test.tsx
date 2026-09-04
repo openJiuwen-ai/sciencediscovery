@@ -23,7 +23,7 @@ function source(relativePath: string): string {
 }
 
 test("mixed action rows assign semantic button classes", () => {
-  assert.match(source("ReviewerControlCard.tsx"), /className="primary-button"/);
+  assert.match(source("ReviewerControlCard.tsx"), /className=\{busy \? "danger-button" : "primary-button"\}/);
 
   const skillManager = source("SkillManager.tsx");
   // Workflow description and Session distillation now reuse the chat composer,

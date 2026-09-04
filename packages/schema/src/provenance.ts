@@ -243,8 +243,10 @@ export interface ReviewCheckpointResult {
 /** A durable, independently cancellable Reviewer Specialist work item. */
 export interface ReviewerAuditTask {
   artifactVersionIds: string[];
-  /** The visible checkpoint card associated with this work item. */
+  /** The visible checkpoint card associated with this work item. Automatic
+   * batches publish it only when the quiet window closes. */
   checkpointMessageId: string;
+  checkpointPublishedAt?: string;
   createdAt: string;
   errorSummary?: string;
   feedbackPolicy: ReviewerFeedbackPolicy;

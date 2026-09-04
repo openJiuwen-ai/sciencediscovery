@@ -48,7 +48,7 @@ test("ReviewerPanel shows the built-in Quick review identity", () => {
   }));
 
   assert.match(html, /Reviewer Specialist/);
-  assert.match(html, /Built-in Specialist/);
+  assert.match(html, /1 artifact/);
   assert.match(html, /Version version- · Quick/);
   assert.match(html, /Quick review passed/);
   assert.match(html, /Artifact provenance checks passed/);
@@ -162,6 +162,7 @@ test("ReviewerPanel shows persisted stage and queue progress while Deep review r
 
   assert.match(html, /Deep Citation queue · 2\/5 references processed/);
   assert.match(html, /1\/3 Artifacts reviewed/);
+  assert.match(html, /Reviewing 3 artifacts/);
   assert.match(html, /PMCID: PMC13210248/);
   assert.match(html, /Reviewing/);
 });
@@ -185,6 +186,7 @@ test("ReviewerPanel collapses a completed multi-Artifact group by default", () =
   assert.doesNotMatch(html, /class="reviewer-specialist-panel" open/);
   assert.match(html, /report\.md/);
   assert.match(html, /chart\.png/);
+  assert.match(html, /2 artifacts · 2 passed/);
 });
 
 test("ReviewerPanel retains a failed manual review with its error", () => {
@@ -201,15 +203,14 @@ test("ReviewerPanel retains a failed manual review with its error", () => {
   assert.doesNotMatch(html, /class="reviewer-specialist-panel" open/);
 });
 
-test("ReviewerPanel retains a completed manual review without findings", () => {
+test("ReviewerPanel hides an empty completed checkpoint from legacy non-report reviews", () => {
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
     checkpointStatus: "completed",
     reviews: [],
     toolCallId: "manual-review:1",
   }));
 
-  assert.match(html, /Reviewer Specialist/);
-  assert.match(html, /No applicable checks/);
+  assert.equal(html, "");
 });
 
 test("ReviewerPanel keeps a checkpoint failure beside partial Artifact results", () => {

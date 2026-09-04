@@ -36,6 +36,7 @@ import { DEFAULT_READ_PAGE_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from "@sci
 const SNIFF_BYTES = 8_192;
 
 const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
+  ".adoc": "text/plain",
   ".bin": "application/octet-stream",
   ".bz2": "application/x-bzip2",
   ".cif": "chemical/x-cif",
@@ -51,6 +52,8 @@ const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".json": "application/json",
   ".log": "text/plain",
   ".md": "text/markdown",
+  ".markdown": "text/markdown",
+  ".mdx": "text/markdown",
   ".mol": "chemical/x-mdl-molfile",
   ".mrc": "application/octet-stream",
   ".nc": "application/x-netcdf",
@@ -61,10 +64,13 @@ const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".pdf": "application/pdf",
   ".pkl": "application/octet-stream",
   ".png": "image/png",
+  ".org": "text/plain",
   ".pt": "application/octet-stream",
+  ".qmd": "text/markdown",
   ".py": "text/x-python",
   ".r": "text/x-r",
   ".sdf": "chemical/x-mdl-sdfile",
+  ".rst": "text/plain",
   ".tar": "application/x-tar",
   ".tif": "image/tiff",
   ".tiff": "image/tiff",

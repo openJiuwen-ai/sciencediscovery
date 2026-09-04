@@ -549,7 +549,7 @@ test("Reviewer Specialist renders at its review_checkpoint timeline position", (
   const after = html.indexOf("After reviewer.");
   assert.ok(before >= 0 && specialist > before && after > specialist);
   assert.match(html, /report\.md/);
-  assert.match(html, />Built-in Specialist</);
+  assert.match(html, />1 artifact · 1 passed</);
 });
 
 test("tool cards replay their input and full result", () => {

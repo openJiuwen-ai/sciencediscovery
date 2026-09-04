@@ -58,12 +58,14 @@ export interface RegisterWorkspaceArtifactInput {
 }
 
 const MEDIA_TYPES: Readonly<Record<string, string>> = {
+  ".adoc": "text/plain",
   ".cif": "chemical/x-cif", ".csv": "text/csv", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   ".feather": "application/vnd.apache.arrow.file", ".htm": "text/html", ".html": "text/html",
   ".ipynb": "application/x-ipynb+json", ".jpeg": "image/jpeg", ".jpg": "image/jpeg", ".json": "application/json",
-  ".md": "text/markdown", ".markdown": "text/markdown", ".mmcif": "chemical/x-mmcif", ".mol2": "chemical/x-mol2",
+  ".md": "text/markdown", ".markdown": "text/markdown", ".mdx": "text/markdown", ".mmcif": "chemical/x-mmcif", ".mol2": "chemical/x-mol2",
+  ".org": "text/plain",
   ".parquet": "application/vnd.apache.parquet", ".pdb": "chemical/x-pdb", ".pdf": "application/pdf", ".png": "image/png",
-  ".sdf": "chemical/x-mdl-sdfile", ".svg": "image/svg+xml", ".tex": "application/x-tex", ".tsv": "text/tab-separated-values",
+  ".qmd": "text/markdown", ".rst": "text/plain", ".sdf": "chemical/x-mdl-sdfile", ".svg": "image/svg+xml", ".tex": "application/x-tex", ".tsv": "text/tab-separated-values", ".txt": "text/plain",
   ".webp": "image/webp", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xyz": "chemical/x-xyz",
 };
 

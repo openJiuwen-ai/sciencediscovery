@@ -12,15 +12,23 @@ import type {
   ReviewerSpecialistLevel,
   ReviewFeedback,
 } from "@sciencediscovery/schema";
-import { cancelReviewerCheckpoints } from "@sciencediscovery/provenance";
+import { cancelReviewerCheckpoints, isReviewerReportCandidate } from "@sciencediscovery/provenance";
 
 import { SessionStore } from "../store.js";
 
 const DEEP_AUTOMATIC_COOLDOWN_MS = 5 * 60_000;
+const DEEP_BATCH_QUIET_MS = 60_000;
+const QUICK_BATCH_QUIET_MS = 30_000;
 const TERMINAL = new Set<ReviewerAuditTask["status"]>(["cancelled", "completed", "failed", "superseded"]);
 
 export interface ReviewerAuditExecution {
   run(task: ReviewerAuditTask, signal: AbortSignal): Promise<ArtifactReviewRun[]>;
+}
+
+export interface ReviewerAuditScheduling {
+  deepAutomaticCooldownMs?: number;
+  deepBatchQuietMs?: number;
+  quickBatchQuietMs?: number;
 }
 
 function fingerprint(value: unknown): string {
@@ -45,19 +53,20 @@ export class ReviewerAuditCoordinator {
   constructor(
     private readonly store: SessionStore,
     private readonly execution: ReviewerAuditExecution,
+    private readonly scheduling: ReviewerAuditScheduling = {},
   ) {}
 
   async enqueueManual(sessionId: string, messageId: string): Promise<ReviewerAuditTask> {
     const settings = this.store.getReviewerSpecialistSettings();
     if (!settings.enabled) throw new Error("Reviewer Specialist is off");
-    return await this.enqueue({
-      artifactVersionIds: this.latestArtifactVersionIds(sessionId),
+    return await this.createTask({
+      artifactVersionIds: this.latestReportArtifactVersionIds(sessionId),
       checkpointMessageId: messageId,
       feedbackPolicy: settings.feedbackPolicy,
       origin: "manual",
       reviewLevel: settings.level,
       sessionId,
-    });
+    }, true);
   }
 
   async enqueueArtifactVersion(input: {
@@ -66,6 +75,12 @@ export class ReviewerAuditCoordinator {
     mediaType: string;
     sessionId: string;
   }): Promise<ReviewerAuditTask | undefined> {
+    const version = this.store.getArtifactVersion(input.sessionId, input.artifactVersionId);
+    const artifact = version ? this.store.getArtifact(input.sessionId, version.artifactId) : undefined;
+    // An upload is valuable provenance and graph input, but it is not a
+    // platform-produced scientific conclusion. Reviewer Specialist is scoped
+    // to readable report deliverables, never code or data intermediates.
+    if (!version || !artifact || artifact.origin !== "llm_declared" || !isReviewerReportCandidate(artifact, version)) return undefined;
     const settings = this.store.getReviewerSpecialistSettings();
     if (!settings.enabled) return undefined;
     // Structured data is always checked deterministically. It must not spend a
@@ -73,15 +88,34 @@ export class ReviewerAuditCoordinator {
     const reviewLevel: ReviewerSpecialistLevel = /(?:^|\/)json(?:;|$)/i.test(input.mediaType)
       ? "quick"
       : settings.level;
-    const taskId = randomUUID();
-    return await this.enqueue({
-      artifactVersionIds: [input.artifactVersionId],
-      checkpointMessageId: taskId,
+    const tasks = await this.store.listReviewerAuditTasks(input.sessionId);
+    const pending = tasks.find((task) => task.origin === "artifact_registered"
+      && task.status === "queued" && !task.checkpointPublishedAt);
+    if (pending) {
+      const artifactVersionIds = this.mergeLatestArtifactVersions(input.sessionId, [
+        ...pending.artifactVersionIds,
+        input.artifactVersionId,
+      ]);
+      const notBefore = this.automaticNotBefore(input.sessionId, pending.reviewLevel, tasks);
+      const updated = await this.store.updateReviewerAuditTask(input.sessionId, pending.id, {
+        artifactVersionIds,
+        inputFingerprint: this.automaticFingerprint(artifactVersionIds, pending.feedbackPolicy, pending.reviewLevel),
+        notBefore,
+      });
+      this.scheduleAt(input.sessionId, new Date(notBefore).getTime());
+      return updated;
+    }
+    const checkpointMessageId = randomUUID();
+    const artifactVersionIds = [input.artifactVersionId];
+    const task = await this.createTask({
+      artifactVersionIds,
+      checkpointMessageId,
       feedbackPolicy: settings.feedbackPolicy,
       origin: "artifact_registered",
       reviewLevel,
       sessionId: input.sessionId,
-    });
+    }, false, this.automaticNotBefore(input.sessionId, reviewLevel, tasks));
+    return task;
   }
 
   async resume(): Promise<void> {
@@ -94,12 +128,16 @@ export class ReviewerAuditCoordinator {
             status: "queued",
           });
         }
-        if (tasks.some((item) => item.status === "queued" || item.status === "running")) this.schedule(session.id);
+        if (tasks.some((item) => item.status === "queued" || item.status === "running")) {
+          // `drain` will respect the persisted notBefore timestamp, so restart
+          // recovery never accidentally skips an automatic batch's quiet window.
+          this.scheduleAt(session.id, Date.now());
+        }
       }
     }
   }
 
-  async cancelSession(sessionId: string): Promise<void> {
+  async cancelSession(sessionId: string): Promise<boolean> {
     const tasks = await this.store.listReviewerAuditTasks(sessionId);
     const now = new Date().toISOString();
     for (const task of tasks.filter((item) => item.status === "queued" || item.status === "running")) {
@@ -113,46 +151,41 @@ export class ReviewerAuditCoordinator {
     // Retains compatibility with explicit checkpoint calls issued by the main
     // Agent while remaining fully independent from the main Agent Stop path.
     cancelReviewerCheckpoints(sessionId);
+    return tasks.some((task) => task.status === "queued" || task.status === "running");
   }
 
-  private latestArtifactVersionIds(sessionId: string): string[] {
+  private latestReportArtifactVersionIds(sessionId: string): string[] {
     return this.store.listArtifacts(sessionId)
       .filter((artifact) => artifact.createdInSessionId === sessionId)
-      .flatMap((artifact) => this.store.listArtifactVersions(sessionId, artifact.id).at(-1) ?? [])
+      .flatMap((artifact) => {
+        const version = this.store.listArtifactVersions(sessionId, artifact.id).at(-1);
+        return version && isReviewerReportCandidate(artifact, version) ? [version] : [];
+      })
       .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
       .map((version) => version.id);
   }
 
-  private async enqueue(input: {
+  private async createTask(input: {
     artifactVersionIds: string[];
     checkpointMessageId: string;
     feedbackPolicy: ReviewerFeedbackPolicy;
     origin: ReviewerAuditTask["origin"];
     reviewLevel: ReviewerSpecialistLevel;
     sessionId: string;
-  }): Promise<ReviewerAuditTask> {
-    if (!input.artifactVersionIds.length) throw new Error("No Artifacts to review");
+  }, publishCheckpoint: boolean, notBefore?: string): Promise<ReviewerAuditTask> {
+    if (!input.artifactVersionIds.length) throw new Error("No report artifacts to review");
     const now = new Date().toISOString();
     const taskId = randomUUID();
-    const inputFingerprint = fingerprint({
-      artifactVersionIds: input.artifactVersionIds,
-      feedbackPolicy: input.feedbackPolicy,
-      ...(input.origin === "manual" ? { manualRequest: input.checkpointMessageId } : {}),
-      origin: input.origin,
-      reviewLevel: input.reviewLevel,
-      version: 1,
-    });
-    const existing = await this.store.listReviewerAuditTasks(input.sessionId);
-    let notBefore: string | undefined;
-    if (input.origin === "artifact_registered" && input.reviewLevel === "deep") {
-      const latestDeep = existing.filter((task) => task.origin === "artifact_registered" && task.reviewLevel === "deep"
-        && task.status === "completed" && task.finishedAt)
-        .toSorted((left, right) => (right.finishedAt ?? "").localeCompare(left.finishedAt ?? ""))[0];
-      if (latestDeep?.finishedAt) {
-        const earliest = new Date(new Date(latestDeep.finishedAt).getTime() + DEEP_AUTOMATIC_COOLDOWN_MS);
-        if (earliest.getTime() > Date.now()) notBefore = earliest.toISOString();
-      }
-    }
+    const inputFingerprint = input.origin === "artifact_registered"
+      ? this.automaticFingerprint(input.artifactVersionIds, input.feedbackPolicy, input.reviewLevel)
+      : fingerprint({
+        artifactVersionIds: input.artifactVersionIds,
+        feedbackPolicy: input.feedbackPolicy,
+        manualRequest: input.checkpointMessageId,
+        origin: input.origin,
+        reviewLevel: input.reviewLevel,
+        version: 1,
+      });
     const task: ReviewerAuditTask = {
       artifactVersionIds: [...input.artifactVersionIds],
       checkpointMessageId: input.checkpointMessageId,
@@ -169,31 +202,68 @@ export class ReviewerAuditCoordinator {
     };
     const persisted = await this.store.createReviewerAuditTask(task);
     if (persisted.id !== task.id) return persisted;
-
-    // A newly registered version makes an older automatic version stale. It
-    // cannot keep consuming a model slot after a newer result exists.
-    if (input.origin === "artifact_registered") {
-      for (const old of existing.filter((candidate) => candidate.origin === "artifact_registered"
-        && !TERMINAL.has(candidate.status) && candidate.id !== task.id)) {
-        this.active.get(old.id)?.abort();
-        await this.store.updateReviewerAuditTask(input.sessionId, old.id, {
-          finishedAt: now,
-          status: "superseded",
-          supersededBy: task.id,
-        });
-      }
-    }
-    await this.store.appendReviewerCheckpointMessage(input.sessionId, input.checkpointMessageId, task.toolCallId);
-    this.schedule(input.sessionId);
+    if (publishCheckpoint) await this.publishCheckpoint(task);
+    this.scheduleAt(input.sessionId, notBefore ? new Date(notBefore).getTime() : Date.now());
     return task;
   }
 
-  private schedule(sessionId: string, delayMs = 0): void {
-    if (this.draining.has(sessionId) || this.timers.has(sessionId)) return;
+  private automaticFingerprint(
+    artifactVersionIds: string[],
+    feedbackPolicy: ReviewerFeedbackPolicy,
+    reviewLevel: ReviewerSpecialistLevel,
+  ): string {
+    return fingerprint({ artifactVersionIds, feedbackPolicy, origin: "artifact_registered", reviewLevel, version: 2 });
+  }
+
+  private automaticNotBefore(
+    sessionId: string,
+    reviewLevel: ReviewerSpecialistLevel,
+    tasks: ReviewerAuditTask[],
+  ): string {
+    const quietMs = reviewLevel === "deep"
+      ? this.scheduling.deepBatchQuietMs ?? DEEP_BATCH_QUIET_MS
+      : this.scheduling.quickBatchQuietMs ?? QUICK_BATCH_QUIET_MS;
+    let earliest = Date.now() + quietMs;
+    if (reviewLevel === "deep") {
+      const latestDeep = tasks.filter((task) => task.origin === "artifact_registered" && task.reviewLevel === "deep"
+        && task.status === "completed" && task.finishedAt)
+        .toSorted((left, right) => (right.finishedAt ?? "").localeCompare(left.finishedAt ?? ""))[0];
+      if (latestDeep?.finishedAt) {
+        earliest = Math.max(earliest, new Date(latestDeep.finishedAt).getTime()
+          + (this.scheduling.deepAutomaticCooldownMs ?? DEEP_AUTOMATIC_COOLDOWN_MS));
+      }
+    }
+    return new Date(earliest).toISOString();
+  }
+
+  private mergeLatestArtifactVersions(sessionId: string, versionIds: string[]): string[] {
+    const latestByArtifactId = new Map<string, string>();
+    for (const versionId of versionIds) {
+      const version = this.store.getArtifactVersion(sessionId, versionId);
+      const artifact = version ? this.store.getArtifact(sessionId, version.artifactId) : undefined;
+      if (version && artifact && isReviewerReportCandidate(artifact, version)) latestByArtifactId.set(version.artifactId, version.id);
+    }
+    return [...latestByArtifactId.values()].toSorted((left, right) =>
+      (this.store.getArtifactVersion(sessionId, left)?.createdAt ?? "")
+        .localeCompare(this.store.getArtifactVersion(sessionId, right)?.createdAt ?? ""));
+  }
+
+  private async publishCheckpoint(task: ReviewerAuditTask): Promise<ReviewerAuditTask> {
+    if (task.checkpointPublishedAt) return task;
+    await this.store.appendReviewerCheckpointMessage(task.sessionId, task.checkpointMessageId, task.toolCallId);
+    return await this.store.updateReviewerAuditTask(task.sessionId, task.id, {
+      checkpointPublishedAt: new Date().toISOString(),
+    });
+  }
+
+  private scheduleAt(sessionId: string, dueAt: number): void {
+    const existing = this.timers.get(sessionId);
+    if (existing) clearTimeout(existing);
+    if (this.draining.has(sessionId)) return;
     const timer = setTimeout(() => {
       this.timers.delete(sessionId);
       void this.drain(sessionId);
-    }, Math.max(0, delayMs));
+    }, Math.max(0, dueAt - Date.now()));
     this.timers.set(sessionId, timer);
   }
 
@@ -203,13 +273,37 @@ export class ReviewerAuditCoordinator {
     let delayedUntil: number | undefined;
     try {
       while (true) {
-        const task = (await this.store.listReviewerAuditTasks(sessionId))
+        const queued = (await this.store.listReviewerAuditTasks(sessionId))
           .filter((item) => item.status === "queued")
           .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
-        if (!task) return;
-        if (task.notBefore && new Date(task.notBefore).getTime() > Date.now()) {
-          delayedUntil = new Date(task.notBefore).getTime();
+        if (!queued) return;
+        const ready = (await this.store.listReviewerAuditTasks(sessionId))
+          .filter((item) => item.status === "queued" && (!item.notBefore || new Date(item.notBefore).getTime() <= Date.now()))
+          .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
+        if (!ready) {
+          delayedUntil = new Date(queued.notBefore ?? Date.now()).getTime();
           return;
+        }
+        let task = ready;
+        const reportVersionIds = this.mergeLatestArtifactVersions(sessionId, task.artifactVersionIds);
+        if (!reportVersionIds.length) {
+          await this.store.updateReviewerAuditTask(sessionId, task.id, {
+            errorSummary: "No report artifacts were eligible for Reviewer Specialist",
+            finishedAt: new Date().toISOString(),
+            status: "superseded",
+          });
+          if (task.checkpointPublishedAt) {
+            await this.store.updateReviewerCheckpointMessage(sessionId, task.checkpointMessageId, {
+              content: "No report artifacts were eligible for review.", status: "completed",
+            });
+          }
+          continue;
+        }
+        if (reportVersionIds.length !== task.artifactVersionIds.length
+          || reportVersionIds.some((versionId, index) => versionId !== task.artifactVersionIds[index])) {
+          task = await this.store.updateReviewerAuditTask(sessionId, task.id, {
+            artifactVersionIds: reportVersionIds,
+          });
         }
         if (task.origin === "artifact_registered" && !this.isCurrentVersion(sessionId, task.artifactVersionIds)) {
           await this.store.updateReviewerAuditTask(sessionId, task.id, {
@@ -217,6 +311,7 @@ export class ReviewerAuditCoordinator {
           });
           continue;
         }
+        const published = await this.publishCheckpoint(task);
         const running = await this.store.updateReviewerAuditTask(sessionId, task.id, {
           startedAt: new Date().toISOString(), status: "running",
         });
@@ -224,7 +319,7 @@ export class ReviewerAuditCoordinator {
         const controller = new AbortController();
         this.active.set(task.id, controller);
         try {
-          const reviews = await this.execution.run(running, controller.signal);
+          const reviews = await this.execution.run({ ...running, checkpointPublishedAt: published.checkpointPublishedAt }, controller.signal);
           const settled = await this.store.listReviewerAuditTasks(sessionId);
           if (settled.find((item) => item.id === task.id)?.status === "cancelled") continue;
           const reviewIds = reviews.map((review) => review.id);
@@ -247,7 +342,7 @@ export class ReviewerAuditCoordinator {
       }
     } finally {
       this.draining.delete(sessionId);
-      if (delayedUntil !== undefined) this.schedule(sessionId, delayedUntil - Date.now());
+      if (delayedUntil !== undefined) this.scheduleAt(sessionId, delayedUntil);
     }
   }
 

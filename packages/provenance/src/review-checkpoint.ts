@@ -111,6 +111,48 @@ const NARRATIVE_MEDIA_TYPES = new Set([
 
 const STRUCTURED_JSON_MEDIA_TYPES = new Set(["application/json"]);
 
+const REPORT_MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, readonly string[]>> = {
+  ".adoc": ["text/plain"],
+  ".htm": ["text/html"],
+  ".html": ["text/html"],
+  ".markdown": ["text/markdown"],
+  ".md": ["text/markdown"],
+  ".mdx": ["text/markdown"],
+  ".org": ["text/plain"],
+  ".qmd": ["text/markdown"],
+  ".rst": ["text/plain"],
+  ".tex": ["application/x-tex"],
+  ".txt": ["text/plain"],
+};
+
+function normalizedMediaType(mediaType: string): string {
+  return mediaType.split(";", 1)[0]?.trim().toLocaleLowerCase() ?? "";
+}
+
+function extensionOf(path: string): string {
+  const name = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot).toLocaleLowerCase() : "";
+}
+
+/**
+ * Reviewer Specialist is a report-quality control, not a generic Artifact
+ * linter. In particular, executable code, tables, raw datasets, and
+ * computational intermediates must never turn a platform-provenance gap into
+ * an apparent revision request for a research report.
+ *
+ * PDF and Office documents stay excluded until a trusted text-extraction path
+ * is supplied to the checkpoint; handing their binary bytes to citation
+ * parsing would be misleading.
+ */
+export function isReviewerReportCandidate(
+  artifact: ScientificArtifact,
+  version: ScientificArtifactVersion,
+): boolean {
+  const allowedMediaTypes = REPORT_MEDIA_TYPES_BY_EXTENSION[extensionOf(version.sourcePath ?? artifact.logicalName)];
+  return Boolean(allowedMediaTypes?.includes(normalizedMediaType(version.mediaType)));
+}
+
 /** A transient gateway failure should not discard this reference's review. */
 const DEEP_CITATION_MAX_ATTEMPTS = 2;
 
@@ -144,19 +186,19 @@ export interface RunReviewerCheckpointOptions {
 function selectVersions(options: RunReviewerCheckpointOptions): ScientificArtifactVersion[] {
   const requested = [...new Set(options.artifactVersionIds?.map((id) => id.trim()).filter(Boolean) ?? [])];
   if (requested.length) {
-    return requested.map((id) => {
+    return requested.flatMap((id) => {
       const version = options.store.getArtifactVersion(options.sessionId, id);
       const artifact = version ? options.store.getArtifact(options.sessionId, version.artifactId) : undefined;
       if (!version || !artifact || artifact.createdInSessionId !== options.sessionId || version.sessionId !== options.sessionId) {
         throw new Error(`Artifact version not found in this Session: ${id}`);
       }
-      return version;
+      return isReviewerReportCandidate(artifact, version) ? [version] : [];
     });
   }
   return options.store.listArtifacts(options.sessionId)
     .filter((artifact) => artifact.createdInSessionId === options.sessionId)
     .flatMap((artifact) => options.store.listArtifactVersions(options.sessionId, artifact.id)
-      .filter((version) => version.sessionId === options.sessionId))
+      .filter((version) => version.sessionId === options.sessionId && isReviewerReportCandidate(artifact, version)))
     .filter((version) => version.turnId === options.parentRunId)
     .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
 }

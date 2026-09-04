@@ -131,12 +131,16 @@ function CheckpointOnlyReview({
 }) {
   const failed = status === "failed";
   const completed = status === "completed";
+  const artifactCount = progress?.artifactTotal;
+  const runningTitle = artifactCount
+    ? `Reviewing ${artifactCount} artifact${artifactCount === 1 ? "" : "s"}`
+    : "Reviewing Artifacts";
   return (
     <details className={`reviewer-specialist-card ${failed ? "failed" : completed ? "skipped" : "running"}`}>
       <summary className="reviewer-specialist-card-heading">
         <span aria-hidden="true" className="reviewer-specialist-card-chevron">›</span>
         <span className="reviewer-specialist-card-title">
-          <strong>{failed ? "Review incomplete" : completed ? "Review completed" : "Reviewing Artifacts"}</strong>
+          <strong>{failed ? "Review incomplete" : completed ? "Review completed" : runningTitle}</strong>
           <small>{configuredLevelLabel(reviewLevel)} · {failed ? "Failed" : completed ? "Completed" : "Running"}</small>
         </span>
         <i>{status === "running" ? <><span className="reviewer-live-dot" />Running</> : failed ? "Review failed" : "No applicable checks"}</i>
@@ -180,6 +184,26 @@ function ReviewProgress({ progress }: { progress: ReviewerProgress }) {
   );
 }
 
+function batchSummary(
+  reviews: ArtifactReviewRun[],
+  status: "completed" | "failed" | "running" | undefined,
+  progress: ReviewerProgress | undefined,
+): string {
+  const artifactCount = progress?.artifactTotal ?? reviews.length;
+  if (status === "running") return `Reviewing ${artifactCount || "…"} artifact${artifactCount === 1 ? "" : "s"}`;
+  if (!reviews.length) return "Built-in Specialist";
+  const passed = reviews.filter((review) => review.status !== "failed" && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length).length;
+  const warning = reviews.filter((review) => review.status !== "failed" && review.findings.some((finding) => finding.severity === "warning")).length;
+  const revision = reviews.filter((review) => review.status === "failed" || review.findings.some((finding) => finding.severity === "critical")).length;
+  const parts = [
+    `${reviews.length} artifact${reviews.length === 1 ? "" : "s"}`,
+    passed ? `${passed} passed` : undefined,
+    warning ? `${warning} warning${warning === 1 ? "" : "s"}` : undefined,
+    revision ? `${revision} revision required` : undefined,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 export function ReviewerPanel({
   checkpointError,
   checkpointProgress,
@@ -196,12 +220,17 @@ export function ReviewerPanel({
   toolCallId: string;
 }) {
   const scopedReviews = reviews.filter((review) => review.toolCallId === toolCallId);
+  const summary = batchSummary(scopedReviews, checkpointStatus, checkpointProgress);
   const [expanded, setExpanded] = useState(checkpointStatus === "running");
   useEffect(() => {
     if (checkpointStatus === "running") setExpanded(true);
     else setExpanded(false);
   }, [checkpointStatus, toolCallId]);
   if (!scopedReviews.length && !checkpointStatus) return null;
+  // Older versions could create checkpoints for code/data Artifacts. The API
+  // now omits those records; suppress their empty completed shell as well so a
+  // researcher only sees report-quality review activity.
+  if (!scopedReviews.length && checkpointStatus === "completed") return null;
   return (
     <details
       aria-label="Reviewer Specialist activity"
@@ -214,7 +243,7 @@ export function ReviewerPanel({
         <ReviewerSpecialistAvatar />
         <span>
           <strong>Reviewer Specialist</strong>
-          <small>Built-in Specialist</small>
+          <small>{summary}</small>
         </span>
         {checkpointStatus === "running" ? <span className="reviewer-panel-live-status"><span className="reviewer-rainbow-dot" />Reviewing</span> : null}
         <em>READ ONLY</em>

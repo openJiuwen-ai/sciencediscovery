@@ -30,6 +30,7 @@ function extensionOf(path: string): string {
 }
 
 const EXTENSION_KIND: Record<string, ScientificArtifactKind> = {
+  ".adoc": "report",
   ".csv": "dataset",
   ".cif": "structure",
   ".docx": "report",
@@ -41,6 +42,7 @@ const EXTENSION_KIND: Record<string, ScientificArtifactKind> = {
   ".jpg": "figure",
   ".json": "json",
   ".markdown": "markdown",
+  ".mdx": "markdown",
   ".md": "markdown",
   ".mmcif": "structure",
   ".mol2": "structure",
@@ -48,10 +50,14 @@ const EXTENSION_KIND: Record<string, ScientificArtifactKind> = {
   ".pdf": "report",
   ".pdb": "structure",
   ".png": "figure",
+  ".org": "report",
+  ".qmd": "markdown",
+  ".rst": "report",
   ".sdf": "structure",
   ".svg": "figure",
   ".tex": "latex",
   ".tsv": "dataset",
+  ".txt": "report",
   ".webp": "figure",
   ".xlsx": "dataset",
   ".xyz": "structure",

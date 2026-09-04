@@ -62,7 +62,7 @@ test("automatic audit is durable, non-blocking, and creates bounded feedback", a
         toolCallId: task.toolCallId,
       }];
     },
-  });
+  }, { quickBatchQuietMs: 0 });
 
   const task = await coordinator.enqueueArtifactVersion({
     artifactVersionId: registered.version.id,
@@ -80,13 +80,13 @@ test("automatic audit is durable, non-blocking, and creates bounded feedback", a
   assert.equal(feedback[0]?.status, "ready");
 });
 
-test("a newer automatic version supersedes a queued predecessor", async (context) => {
-  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-supersede-${Date.now()}-${process.pid}`);
+test("automatic audit batches artifacts and retains only each Artifact's newest queued version", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-batch-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });
   context.after(() => rm(dataDir, { force: true, recursive: true }));
   const store = new SessionStore(dataDir);
   await store.load();
-  const project = await store.createProject("Reviewer supersede");
+  const project = await store.createProject("Reviewer batch");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
   await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
   const first = await store.createArtifactVersion({
@@ -97,13 +97,176 @@ test("a newer automatic version supersedes a queued predecessor", async (context
     content: { hash: "c".repeat(64), size: 2 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
   });
+  const summary = await store.createArtifactVersion({
+    content: { hash: "d".repeat(64), size: 2 }, kind: "other", logicalName: "summary.txt", mediaType: "text/plain",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "summary.txt",
+  });
+  let executed: ReviewerAuditTask | undefined;
+  const coordinator = new ReviewerAuditCoordinator(store, {
+    run: async (task) => { executed = task; return []; },
+  }, { quickBatchQuietMs: 100 });
+  const firstTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: first.version.id, contentHash: first.version.content.hash, mediaType: first.version.mediaType, sessionId: session.id });
+  const updatedTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: second.version.id, contentHash: second.version.content.hash, mediaType: second.version.mediaType, sessionId: session.id });
+  const batchedTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: summary.version.id, contentHash: summary.version.content.hash, mediaType: summary.version.mediaType, sessionId: session.id });
+  assert.ok(firstTask && updatedTask && batchedTask);
+  assert.equal(firstTask.id, updatedTask.id);
+  assert.equal(firstTask.id, batchedTask.id);
+  assert.deepEqual(batchedTask.artifactVersionIds, [second.version.id, summary.version.id]);
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id))[0]?.status === "completed");
+  assert.deepEqual(executed?.artifactVersionIds, [second.version.id, summary.version.id]);
+});
+
+test("a generated Artifact registered during a running audit waits for the next batch", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-next-batch-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer next batch");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  const first = await store.createArtifactVersion({
+    content: { hash: "e".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "first.md",
+  });
+  const second = await store.createArtifactVersion({
+    content: { hash: "f".repeat(64), size: 1 }, kind: "markdown", logicalName: "second.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "second.md",
+  });
   let release!: () => void;
   const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
-  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => { await gate; return []; } });
-  const oldTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: first.version.id, contentHash: first.version.content.hash, mediaType: first.version.mediaType, sessionId: session.id });
-  const newTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: second.version.id, contentHash: second.version.content.hash, mediaType: second.version.mediaType, sessionId: session.id });
-  assert.ok(oldTask && newTask);
-  await waitFor(async () => (await store.listReviewerAuditTasks(session.id)).some((task) => task.id === oldTask.id && task.status === "superseded"));
+  const executions: string[][] = [];
+  const coordinator = new ReviewerAuditCoordinator(store, {
+    run: async (task) => {
+      executions.push(task.artifactVersionIds);
+      if (executions.length === 1) await gate;
+      return [];
+    },
+  }, { quickBatchQuietMs: 0 });
+  const active = await coordinator.enqueueArtifactVersion({ artifactVersionId: first.version.id, contentHash: first.version.content.hash, mediaType: first.version.mediaType, sessionId: session.id });
+  assert.ok(active);
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id)).some((task) => task.id === active.id && task.status === "running"));
+  const following = await coordinator.enqueueArtifactVersion({ artifactVersionId: second.version.id, contentHash: second.version.content.hash, mediaType: second.version.mediaType, sessionId: session.id });
+  assert.ok(following);
+  assert.notEqual(following.id, active.id);
+  assert.equal((await store.listReviewerAuditTasks(session.id)).find((task) => task.id === active.id)?.status, "running");
   release();
-  await waitFor(async () => (await store.listReviewerAuditTasks(session.id)).some((task) => task.id === newTask.id && task.status === "completed"));
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id)).every((task) => task.status === "completed"));
+  assert.deepEqual(executions, [[first.version.id], [second.version.id]]);
+});
+
+test("uploads and Agent code/data outputs remain Artifacts but are not automatically audited", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-upload-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer uploads");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  const upload = await store.createArtifactVersion({
+    content: { hash: "9".repeat(64), size: 1 }, kind: "markdown", logicalName: "input.md", mediaType: "text/markdown",
+    origin: "user_upload", sessionId: session.id, sourcePath: "input.md",
+  });
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => [] }, { quickBatchQuietMs: 0 });
+  const task = await coordinator.enqueueArtifactVersion({ artifactVersionId: upload.version.id, contentHash: upload.version.content.hash, mediaType: upload.version.mediaType, sessionId: session.id });
+  assert.equal(task, undefined);
+  for (const [hash, kind, logicalName, mediaType] of [
+    ["4".repeat(64), "other", "g2m_enrichment_analysis.py", "text/x-python"],
+    ["5".repeat(64), "other", "GSEA_gmt.gmt", "text/plain"],
+    ["6".repeat(64), "dataset", "enrichment_results.csv", "text/csv"],
+    ["7".repeat(64), "dataset", "TS7.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    ["b".repeat(64), "other", "execution.log", "text/plain"],
+  ] as const) {
+    const generated = await store.createArtifactVersion({
+      content: { hash, size: 1 }, kind, logicalName, mediaType,
+      origin: "llm_declared", sessionId: session.id, sourcePath: logicalName,
+    });
+    assert.equal(await coordinator.enqueueArtifactVersion({
+      artifactVersionId: generated.version.id,
+      contentHash: generated.version.content.hash,
+      mediaType: generated.version.mediaType,
+      sessionId: session.id,
+    }), undefined, `${logicalName} is not a report candidate`);
+  }
+  assert.deepEqual(await store.listReviewerAuditTasks(session.id), []);
+});
+
+test("manual review selects report deliverables and ignores code/data Artifacts", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-manual-reports-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer manual reports");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  const report = await store.createArtifactVersion({
+    content: { hash: "8".repeat(64), size: 1 }, kind: "markdown", logicalName: "analysis_summary.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "analysis_summary.md",
+  });
+  const data = await store.createArtifactVersion({
+    content: { hash: "a".repeat(64), size: 1 }, kind: "dataset", logicalName: "enrichment_results.csv", mediaType: "text/csv",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "enrichment_results.csv",
+  });
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => [] }, { quickBatchQuietMs: 500 });
+  const task = await coordinator.enqueueManual(session.id, "manual-report-only");
+  assert.deepEqual(task.artifactVersionIds, [report.version.id]);
+  assert.ok(!task.artifactVersionIds.includes(data.version.id));
+  await coordinator.cancelSession(session.id);
+});
+
+test("Stop review cancels a quiet-window batch before it starts", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-stop-batch-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer stop batch");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  const generated = await store.createArtifactVersion({
+    content: { hash: "1".repeat(64), size: 1 }, kind: "markdown", logicalName: "result.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "result.md",
+  });
+  let executions = 0;
+  const coordinator = new ReviewerAuditCoordinator(store, {
+    run: async () => { executions += 1; return []; },
+  }, { quickBatchQuietMs: 500 });
+  const task = await coordinator.enqueueArtifactVersion({ artifactVersionId: generated.version.id, contentHash: generated.version.content.hash, mediaType: generated.version.mediaType, sessionId: session.id });
+  assert.ok(task);
+  assert.equal(await coordinator.cancelSession(session.id), true);
+  assert.equal((await store.listReviewerAuditTasks(session.id))[0]?.status, "cancelled");
+  await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  assert.equal(executions, 0);
+});
+
+test("the Deep cooldown is applied once to the next automatic batch", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-deep-cooldown-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer Deep cooldown");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "deep" });
+  const first = await store.createArtifactVersion({
+    content: { hash: "2".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "first.md",
+  });
+  const second = await store.createArtifactVersion({
+    content: { hash: "3".repeat(64), size: 1 }, kind: "markdown", logicalName: "second.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "second.md",
+  });
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => [] }, {
+    deepAutomaticCooldownMs: 200,
+    deepBatchQuietMs: 0,
+  });
+  const firstTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: first.version.id, contentHash: first.version.content.hash, mediaType: first.version.mediaType, sessionId: session.id });
+  assert.ok(firstTask);
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id)).find((task) => task.id === firstTask.id)?.status === "completed");
+  const nextTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: second.version.id, contentHash: second.version.content.hash, mediaType: second.version.mediaType, sessionId: session.id });
+  assert.ok(nextTask?.notBefore);
+  assert.ok(new Date(nextTask.notBefore).getTime() - Date.now() >= 150, "cooldown belongs to the whole next Deep batch");
+  await coordinator.cancelSession(session.id);
 });

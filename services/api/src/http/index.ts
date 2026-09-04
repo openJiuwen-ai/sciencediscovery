@@ -46,7 +46,6 @@ import {
   type UpdateModelProviderRequest,
 } from "@sciencediscovery/schema";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
-import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { handleEvolveCompletion } from "../evolution/llm-proxy.js";
 import {
@@ -182,6 +181,8 @@ import { SkillLibraryCatalog, SkillLibraryCatalogError } from "../skill-library-
 import { ModelCatalogStore } from "../model-catalog.js";
 import { handleSkillLibraryRequest } from "./skill-libraries.js";
 import {
+  createEvidenceReferenceTracer,
+  isReviewerReportCandidate,
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
@@ -300,8 +301,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (!session) throw new Error("Session not found");
       const versions = task.artifactVersionIds
         .map((versionId) => store.getArtifactVersion(task.sessionId, versionId))
-        .filter((version): version is NonNullable<typeof version> => Boolean(version));
-      if (!versions.length) throw new Error("No Artifacts to review");
+        .filter((version): version is NonNullable<typeof version> => {
+          const artifact = version ? store.getArtifact(task.sessionId, version.artifactId) : undefined;
+          return Boolean(version && artifact && isReviewerReportCandidate(artifact, version));
+        });
+      if (!versions.length) throw new Error("No report artifacts to review");
       let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
       if (task.reviewLevel === "deep") {
         const runtimeSettings = store.resolveRuntimeSettings(task.sessionId).effective;
@@ -2456,7 +2460,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (artifactReviewsMatch && request.method === "GET") {
         const sessionId = artifactReviewsMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        sendJson(response, 200, await store.listArtifactReviews(sessionId));
+        const reviews = await store.listArtifactReviews(sessionId);
+        sendJson(response, 200, reviews.filter((review) => {
+          const version = store.getArtifactVersion(sessionId, review.artifactVersionId);
+          const artifact = version ? store.getArtifact(sessionId, version.artifactId) : undefined;
+          return Boolean(version && artifact && isReviewerReportCandidate(artifact, version));
+        }));
         return;
       }
       const reviewerAuditTasksMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-audit-tasks$/);
@@ -2475,8 +2484,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const cancelReviewerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/cancel$/);
       if (cancelReviewerMatch && request.method === "POST") {
-        await reviewerAuditCoordinator.cancelSession(cancelReviewerMatch[1]!);
-        await cancelReviewerSpecialist(response, store, cancelReviewerMatch[1]!);
+        const sessionId = cancelReviewerMatch[1]!;
+        // Automatic batches intentionally have no visible checkpoint during
+        // their quiet window. They are nevertheless cancellable; falling
+        // through to the legacy checkpoint-only path would incorrectly return
+        // 404/409 and leave the queued batch alive.
+        if (await reviewerAuditCoordinator.cancelSession(sessionId)) {
+          sendJson(response, 200, { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);
+          return;
+        }
+        await cancelReviewerSpecialist(response, store, sessionId);
         return;
       }
       const manualReviewerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/review$/);

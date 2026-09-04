@@ -5053,7 +5053,8 @@ export class SessionStore {
     sessionId: string,
     taskId: string,
     update: Partial<Pick<ReviewerAuditTask,
-      "errorSummary" | "finishedAt" | "notBefore" | "reviewIds" | "startedAt" | "status" | "supersededBy">>,
+      "artifactVersionIds" | "checkpointPublishedAt" | "errorSummary" | "finishedAt" | "inputFingerprint"
+      | "notBefore" | "reviewIds" | "startedAt" | "status" | "supersededBy">>,
   ): Promise<ReviewerAuditTask> {
     this.assertSessionWritable(sessionId);
     return await this.mutateArray<ReviewerAuditTask, ReviewerAuditTask>(
