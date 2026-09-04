@@ -10,7 +10,7 @@ workflow's bucket, endpoint, prefixes, or required object set changes.
 
 ## Address forms
 
-The CodeArts pipeline uses one bucket and endpoint:
+The debug pipeline uses one bucket and endpoint:
 
 | Field | Value |
 | --- | --- |

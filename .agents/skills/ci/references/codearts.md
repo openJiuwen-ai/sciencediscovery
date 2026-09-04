@@ -11,7 +11,7 @@ repository intentionally does not use GitCode Actions.
 `.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
 runs the repository's `ci:ut:core`, experimental QEMU-hosted
 `ci:ut:runner`, and hermetic `ci:st` entry points, invokes
-the reusable code-check pipeline, builds the x86_64 validation binary on a hosted
+the reusable code-check pipeline, builds the x86_64 debug binary on a hosted
 runner, invokes an ARM CodeArts Build task for aarch64, and renders the final
 PR result. The code check is an externally registered CodeArts pipeline containing the SCA,
 anti-poison, static-analysis, and blacklist CloudBuild tasks. Its former local
@@ -110,8 +110,8 @@ independently, because stale artifacts can disagree with the current run.
 
 Do not use a `rerun` comment to validate changes made only on
 `ci/verify-pr-ci`: CodeArts can restart the pipeline definition registered for
-`main`. Update and push the PR source branch instead so the CI-branch pipeline
-copy is selected again from that target branch.
+`main`. Update and push the PR source branch instead so the debug pipeline is
+selected again from the CI target branch.
 
 ## PaC syntax and source checkout
 
@@ -199,7 +199,7 @@ create user namespaces. Runner UT and E2E therefore cannot run directly in
 that pod. Do not use QEMU user-mode emulation as a workaround: it still shares
 the host kernel and its namespace restriction.
 
-The parent pipeline runs `pnpm ci:ut:runner` in a full Ubuntu
+The CI-branch experiment instead runs `pnpm ci:ut:runner` in a full Ubuntu
 guest under `qemu-system-x86_64 -accel tcg,thread=multi`. TCG is software-only,
 so `/dev/kvm` is neither requested nor required. The 20-minute Runner job
 downloads a pre-provisioned qcow2 from its immutable resource-commit/run path
@@ -270,8 +270,8 @@ the pipeline parameter, whose custom value is limited by CodeArts.
 Set `GIT_TARGET_REF` from CodeArts's source-specific system parameter as
 `refs/heads/${sciencediscovery_TARGET_BRANCH}`. CodeArts resolves that value to
 the merge request's actual target branch, so the same parent definition passes
-`refs/heads/main` for the formal workflow and `refs/heads/ci/verify-pr-ci` for
-the validation copy. Do not hard-code either target branch in the ARM
+`refs/heads/ci/verify-pr-ci` for the debug workflow and `refs/heads/main` after
+the workflow is promoted. Do not hard-code either target branch in the ARM
 Build call.
 
 The Build task's following OBS action uploads
@@ -292,14 +292,14 @@ the job may use the script's explicit `--skip-smoke` downgrade, but the log
 and PR documentation must say the artifact is packaging-only rather than
 release-smoke verified.
 
-CodeArts validation binaries use the source context's eight-character
+Debug binaries use the CodeArts source context's eight-character
 `commit_id_short` and are named
 `ScienceDiscovery-<commit_id_short>-linux-<architecture>`. Keep the local
 rename, OBS key, verifier, checksum regex, and PR result link synchronized when
 this convention changes. `VERSION` continues to record the full commit.
 
 Raw GitHub Release downloads can time out repeatedly from mainland CodeArts
-runners. The CodeArts binary jobs therefore set `MICROMAMBA_CONDA_MIRROR` to the
+runners. The debug binary jobs therefore set `MICROMAMBA_CONDA_MIRROR` to the
 Tsinghua TUNA conda-forge mirror. `fetch-managed-micromamba.mjs` downloads the
 architecture-specific pinned `.tar.bz2`, verifies the archive SHA256, extracts
 `bin/micromamba`, and still verifies the executable against the upstream raw
@@ -409,7 +409,7 @@ workflow again before pushing. Never overwrite a new UI commit blindly.
 | All four code-check rows show one shared status | The parent job status was reused. Read and normalize the four public child result JSON files independently. |
 | A child result says `FIALED` or another unknown value | It is outside the success allowlist and must render as `FAILED`; fail closed rather than correcting arbitrary provider strings. |
 | An `arm64` binary job runs on `x86_64` | Runner labels or scheduling are wrong. Fail the architecture preflight before packaging; do not call a cross-build a native ARM64 runner result. |
-| Managed micromamba times out on `github.com/mamba-org/micromamba-releases` | Mainland egress cannot reach the raw GitHub Release reliably. For the CodeArts binary jobs, use the pinned TUNA conda package through `MICROMAMBA_CONDA_MIRROR`; keep both archive and extracted-binary SHA256 checks. |
+| Managed micromamba times out on `github.com/mamba-org/micromamba-releases` | Mainland egress cannot reach the raw GitHub Release reliably. For the debug binary jobs, use the pinned TUNA conda package through `MICROMAMBA_CONDA_MIRROR`; keep both archive and extracted-binary SHA256 checks. |
 | A stable OBS toolchain, QEMU base, or prebuilt Runner image is missing or has the wrong checksum | Keep the formal job failed; it is cache-only by design. Run the `ci/codearts-resources` workflow to rebuild and verify resources, update the formal image commit/run/SHA pin when advancing the image, then rerun formal CI. Never weaken the repository checksum. |
 | ARM provisioning says no matching `uv` version even though the mirror index lists it | pip's compatibility filter rejected the wheel. Read the logged Python and pip versions before deciding whether the cause is the Python requirement or platform-tag support. Provisioning avoids both variables by fetching the architecture-specific pinned TUNA wheel (or `CI_UV_WHEEL_URL`) with the repository SHA256, then extracting its verified `uv` and `uvx` scripts directly. |
 | A CPython stable-cache request gets `403` for its raw `+` URL | OBS may have the object but the HTTP path is unescaped. Percent-encode the basename (`+` becomes `%2B`) before probing or downloading, then verify SHA256 as usual. |

@@ -139,11 +139,11 @@ merge-request CI is CodeArts-only; this repository intentionally has no
 | Pipeline | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
-| CodeArts — `.codearts/workflow/` targeting `main` | `ci:ut:core` + `ci:ut:runner` in QEMU TCG | yes | — | x86_64 + aarch64 validation packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | `ci:ut:core` + experimental `ci:ut:runner` in QEMU TCG | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
 
-The CodeArts row above is the GitCode merge-request validation pipeline. It is
-not a release gate: its x86_64 and aarch64 jobs each call
-`scripts/package-binary-release.sh` and verify `SHA256SUMS`. The x86_64 job
+The CodeArts row above is a temporary `ci/verify-pr-ci`-only debug pipeline,
+not a release gate for `main`. Its x86_64 and aarch64 jobs each call
+`scripts/package-binary-release.sh` and verifies `SHA256SUMS`. The x86_64 job
 runs directly on the hosted x64 runner and uploads its files to a run-specific
 OBS path. The aarch64 job invokes the separately configured ARM CodeArts Build
 task: the pipeline passes only `.ci/package-binary-codearts.sh`, line-oriented
@@ -167,7 +167,7 @@ claiming that the release smoke gate passed. Both Linux packaging paths fetch
 the pinned micromamba conda package from the Tsinghua TUNA conda-forge mirror,
 verify the package SHA256, extract `bin/micromamba`, and then verify the
 executable against the existing release-binary SHA256. The mirror is limited
-to this CodeArts pipeline; normal runtime provisioning keeps its upstream URL.
+to this debug pipeline; normal runtime provisioning keeps its upstream URL.
 
 CodeArts's `default` pool has the same shape. The job is a pod on a CCE
 Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
@@ -175,7 +175,7 @@ the unprivileged user `octopus` with Docker's default capability bounding set
 and an active seccomp filter, so `unshare` and bubblewrap are refused outright;
 `sudo` is not setuid, so nothing can be installed with `dnf` either. The
 checked-in workflow runs `ci:ut:core` and the hermetic `ci:st` layer directly.
-In CodeArts, a separate hosted x64 job runs the
+On this debug branch, a separate hosted x64 job experimentally runs the
 existing `ci:ut:runner` entry point inside an Ubuntu VM under QEMU's
 software-only TCG accelerator. The VM supplies an independent kernel whose
 user namespaces work even though the outer CodeArts container denies them;
@@ -191,10 +191,10 @@ code-check child. That child runs SCA, anti-poison, static-analysis, and
 blacklist CloudBuild tasks whose complete commands remain in CodeArts; it does
 not write PR labels or comments. On merge-request runs, the parent reads each
 child task's result JSON and renders its own `PASSED` or `FAILED` status and
-detail link, alongside UT, ST, and both validation binary jobs, before
-publishing the final PR label. Manual runs always execute UT/ST and both
-validation binary jobs without modifying a PR; they run the PR-oriented child
-only when a `PR_ID` is supplied.
+detail link, alongside UT, ST, and both debug binary jobs, before publishing
+the final PR label. Manual runs always execute UT/ST and both debug binary jobs
+without modifying a PR; they run the PR-oriented child only when a `PR_ID` is
+supplied.
 
 ## Repositories
 

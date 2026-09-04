@@ -30,19 +30,19 @@ Three pipelines exist and none runs everything.
 
 | Pipeline | Trigger | UT | ST | E2E | Binary/resource output |
 | --- | --- | --- | --- | --- | --- |
-| CodeArts — `.codearts/workflow/codearts-pipeline.yml` | merge request to `main` on gitcode.com (open, update, reopen); comment `rerun` or update and push the PR source branch to start a fresh run | `ci:ut:core` + `ci:ut:runner` in QEMU TCG | `ci:st` | — | x86_64 + aarch64 validation packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh debug run | `ci:ut:core` + experimental `ci:ut:runner` in QEMU TCG | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
 | CodeArts resources — `.codearts/workflow/codearts-resources-pipeline.yml` on `ci/codearts-resources` | push to `ci/codearts-resources` | — | — | — | checksum-pinned toolchains and QEMU image uploaded to stable OBS keys |
 | GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
 CodeArts's default pool cannot create user namespaces, so it cannot run Runner
-UT or E2E directly. The CodeArts pipeline runs the unchanged
+UT or E2E directly. The debug pipeline experimentally runs the unchanged
 `ci:ut:runner` layer in a checksum-pinned, pre-provisioned Ubuntu guest under
 software-only QEMU TCG. The resource branch builds that guest once; the formal
 job downloads it from its immutable resource-commit/run path, adds only the
 current checkout, and runs the layer without apt or toolchain provisioning. A
 self-hosted pool that passes a bubblewrap probe remains preferable, and E2E is
 still excluded.
-The CodeArts workflow is a cache consumer, not a cache seeder. Its UT,
+The CodeArts debug workflow is a cache consumer, not a cache seeder. Its UT,
 ST, binary, and QEMU jobs require the checksum-pinned OBS objects and fail
 closed on a missing or invalid object instead of contacting external source
 sites. The isolated `ci/codearts-resources` branch owns source fallback,
@@ -51,7 +51,7 @@ not intended to merge into `main`.
 The CodeArts parent workflow also invokes the externally registered code-check
 child (SCA, anti-poison, static analysis, blacklist), reads each task's public
 result JSON independently, and renders one result comment with those four
-statuses, UT, ST, and both binary jobs. A second CodeArts
+statuses, UT, ST, and both debug binary jobs. A second CodeArts
 pipeline, `codearts-auto-merge-pipeline.yml`, lands a merge request when a
 `CODEOWNERS` member comments `/merge` on it, through GitCode's merge API with
 `merge_method=rebase` (see the CodeArts reference). This repository

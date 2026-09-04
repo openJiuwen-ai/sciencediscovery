@@ -113,7 +113,7 @@ The result comment is rendered by the parent workflow, and the bot posts it
 unchanged: `✅ 流水线 <run_id> 执行成功` or `❌ … 执行失败`, the
 `/pull/<n>/check` link, then one table — 代码检查 (SCA / Anti-poison /
 CodeCheck / Blacklist, each with its own status), `UT`, `ST`, and the x86_64 /
-aarch64 validation binary jobs, each `PASSED` or `FAILED` — and the `rerun` hint.
+aarch64 debug binary jobs, each `PASSED` or `FAILED` — and the `rerun` hint.
 The `UT` and `ST` rows are the workflow's `ut` and `st` jobs, the same
 `ci:ut:core` and `ci:st` entry points run locally. Judge each code-check child
 from its own row; do not treat one successful sibling or the parent summary as
