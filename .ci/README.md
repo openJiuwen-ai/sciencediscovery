@@ -31,8 +31,13 @@ the tag. Each case has tags for all required environment dimensions:
 - `arch:amd64|arm64`
 - `llm:none|stub|real|unreviewed`
 - `npu:none|required|unreviewed`
-- `sandbox:none|bubblewrap|host|unreviewed`
+- `sandbox:none|bubblewrap|seatbelt|host|unreviewed`
+- `ut:host|guest` on every `layer:ut` case and on no other case
 - `layer:ut|st|e2e`, `container:*`, and runtime `network:*`
+
+No case carries `sandbox:seatbelt` today: the macOS Seatbelt tests live in
+`services/runner/src/macos-seatbelt.test.ts`, inside the guest tier's package
+command, and skip themselves off macOS.
 
 List the vocabulary or cases without executing tests:
 
@@ -62,14 +67,38 @@ of them. Live cases additionally require `CI_ALLOW_REAL=1` and their documented
 credential variables. Legacy E2E requires `CI_ALLOW_LEGACY=1`. The NPU smoke
 requires `CI_ALLOW_NPU=1` and an explicit `SCIENCE_AGENT_NPU_PYTHON` from the
 dedicated NPU environment; it fails closed in this generic image. Its catalog
-entry explains the host requirement. `pnpm ci:catalog:check`
-validates that every case has exactly one value for each single-valued tag
-dimension and only known tags.
+entry explains the host requirement.
 
-The selector exposes UT as `ut.core` and `ut.runner`: the former contains
-static checks and tests that do not need a real sandbox, while the latter owns
-Runner tests that execute bubblewrap. The unchanged `pnpm ci:ut` command is the
-convenient aggregate for workers that can run both.
+## The two UT tiers
+
+UT has exactly two tiers and no third bucket. Every UT case belongs to one of
+them, and their union is all of UT:
+
+| Tier | Tag | Entry point | Where it runs |
+|---|---|---|---|
+| Host | `ut:host` | `pnpm ci:ut:host` | any ordinary CI host; no bubblewrap, no user namespaces |
+| Guest | `ut:guest` | `pnpm ci:ut:guest` | a Linux guest whose kernel grants the user namespaces bubblewrap needs |
+
+`pnpm ci:ut` is the aggregate for a worker that can run both. It is not a third
+definition: `.ci/test-catalog.mjs` derives it as the host tier's steps followed
+by the guest tier's, from one list of workloads that each declare their tier.
+The guest tier is the sandbox packages listed in `utGuestPackages`; the host
+tier is `--recursive` over everything else, so a new package joins the host
+tier automatically and a package that needs the sandbox has to be named.
+
+When adding a UT test, put it in the package or suite that already matches its
+requirements. A host-tier test may not depend on a guest capability, and a
+guest-tier assertion may not be weakened so the test can move to the host tier;
+see [.agents/skills/ci/SKILL.md](../.agents/skills/ci/SKILL.md).
+
+`pnpm ci:catalog:check` is the guard. It fails when a case has an unknown tag
+or the wrong number of values for a dimension, when a UT case has no tier or
+two, when a `layer:ut` case's tier disagrees with its `sandbox:*` tag, when a
+workspace package with tests is claimed by both tiers or by neither, when
+`ci:ut` stops being exactly the two tiers, when the guest tier grows an install
+or build step, or when a `ci:ut:*` entry point appears outside the two tiers.
+`pnpm ci:selftest` runs the regression tests for that guard, and the host tier
+runs it.
 
 ## Build
 
@@ -247,7 +276,7 @@ outside the generic default command.
 The host directory mounted at `/ci-results` receives:
 
 ```text
-ut/
+ut/                               # the aggregate; ut-host/ and ut-guest/ for the tiers
   run.log
   summary.json
 st/

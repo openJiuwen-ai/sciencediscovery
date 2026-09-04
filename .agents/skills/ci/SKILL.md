@@ -14,8 +14,8 @@ description: >
 Project-local skill for **ScienceDiscovery**.
 
 [CONTRIBUTING.md](../../../CONTRIBUTING.md) owns the layer entry points
-(`pnpm ci:ut`, `ci:st`, `ci:e2e`, and the sandbox-free split `ci:ut:core` /
-`ci:ut:runner`), the writable `CI_RESULTS_DIR` / `CI_RUNTIME_DIR` overrides,
+(`pnpm ci:ut`, `ci:st`, `ci:e2e`, and the two UT tiers `ci:ut:host` /
+`ci:ut:guest`), the writable `CI_RESULTS_DIR` / `CI_RUNTIME_DIR` overrides,
 and the GitCode/GitHub repository split. [.ci/README.md](../../../.ci/README.md)
 documents the toolchain image and the tag catalog. This skill covers what the
 pipelines do with those entry points: which platform runs which layer, how to
@@ -30,13 +30,13 @@ Three pipelines exist and none runs everything.
 
 | Pipeline | Trigger | UT | ST | E2E | Binary/resource output |
 | --- | --- | --- | --- | --- | --- |
-| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh debug run | `ci:ut:core` + experimental `ci:ut:runner` in QEMU TCG | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh debug run | `ci:ut:host` + experimental `ci:ut:guest` in QEMU TCG | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
 | CodeArts resources — `.codearts/workflow/codearts-resources-pipeline.yml` on `ci/codearts-resources` | push to `ci/codearts-resources` | — | — | — | checksum-pinned toolchains and QEMU image uploaded to stable OBS keys |
 | GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
 CodeArts's default pool cannot create user namespaces, so it cannot run Runner
 UT or E2E directly. The debug pipeline experimentally runs the unchanged
-`ci:ut:runner` layer in a checksum-pinned, pre-provisioned Ubuntu guest under
+`ci:ut:guest` layer in a checksum-pinned, pre-provisioned Ubuntu guest under
 software-only QEMU TCG. The resource branch builds that guest once; the formal
 job downloads it from its immutable resource-commit/run path, adds only the
 current checkout, and runs the layer without apt or toolchain provisioning. A
@@ -65,22 +65,34 @@ GitCode Actions unless the user changes that policy.
    bubblewrap can create namespaces.
 2. Call the `pnpm ci:*` entry points, never their underlying commands. Do not
    create a second platform-specific test definition.
-3. Read the failing job log before theorising. If the platform log is not
+3. UT has exactly two tiers and no third bucket. Every UT case belongs to
+   `ut:host` (runs on an ordinary CI host, no sandbox) or to `ut:guest` (needs
+   a Linux guest kernel that grants user namespaces, so bubblewrap works), and
+   their union is all of UT. A new UT test joins the tier of the package it
+   lives in: a host-tier test may not depend on a guest capability, and a
+   guest-tier assertion may not be weakened so the test can move to the host
+   tier. Do not add a `ci:ut:*` entry point beside them; extend a tier
+   instead. `pnpm ci:catalog:check` fails closed on a UT case with no tier or
+   two, on a workspace package with tests that lands in both tiers or in
+   neither, on `ci:ut` no longer equalling the two tiers, and on a guest tier
+   that installs or builds. `pnpm ci:selftest` is that guard's regression
+   suite.
+4. Read the failing job log before theorising. If the platform log is not
    accessible with the available credentials, ask for the log instead of
    inferring the failure from a status badge.
-4. Preserve the real test exit code when adding artifact upload steps. Stage
+5. Preserve the real test exit code when adding artifact upload steps. Stage
    the result, upload diagnostics, then restore that exit code.
-5. Reproduce a pipeline failure with the layer entry point that job ran
-   (`pnpm ci:ut:core` for the CodeArts UT job, `pnpm ci:ut` for the GitHub
+6. Reproduce a pipeline failure with the layer entry point that job ran
+   (`pnpm ci:ut:host` for the CodeArts UT job, `pnpm ci:ut` for the GitHub
    one), on a checkout of the commit the run tested, with `CI_RESULTS_DIR` /
    `CI_RUNTIME_DIR` pointed somewhere writable. Each layer leaves `run.log`
    and a summary under `CI_RESULTS_DIR/<layer>/`.
-6. Do not copy the parent `code_check` job status into all four child rows.
+7. Do not copy the parent `code_check` job status into all four child rows.
    Normalize each child JSON independently; only the explicit success aliases
    documented in the CodeArts reference pass, and every other value fails
    closed. Validate its detail link separately so a missing link does not
    overwrite a valid status.
-7. For a CodeArts merge-request run, test the integration result rather than
+8. For a CodeArts merge-request run, test the integration result rather than
    the source branch snapshot: pin the downloaded target SHA and event source
    SHA, then use `.ci/rebase-codearts-pr.sh` to create a disposable rebased
    checkout. Never push that rewritten commit. A conflict is a failed check.

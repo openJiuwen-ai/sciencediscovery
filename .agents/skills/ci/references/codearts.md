@@ -9,8 +9,8 @@ repository intentionally does not use GitCode Actions.
 ## Pipeline inventory
 
 `.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
-runs the repository's `ci:ut:core`, experimental QEMU-hosted
-`ci:ut:runner`, and hermetic `ci:st` entry points, invokes
+runs the repository's `ci:ut:host`, experimental QEMU-hosted
+`ci:ut:guest`, and hermetic `ci:st` entry points, invokes
 the reusable code-check pipeline, builds the x86_64 debug binary on a hosted
 runner, invokes an ARM CodeArts Build task for aarch64, and renders the final
 PR result. The code check is an externally registered CodeArts pipeline containing the SCA,
@@ -199,7 +199,7 @@ create user namespaces. Runner UT and E2E therefore cannot run directly in
 that pod. Do not use QEMU user-mode emulation as a workaround: it still shares
 the host kernel and its namespace restriction.
 
-The CI-branch experiment instead runs `pnpm ci:ut:runner` in a full Ubuntu
+The CI-branch experiment instead runs `pnpm ci:ut:guest` in a full Ubuntu
 guest under `qemu-system-x86_64 -accel tcg,thread=multi`. TCG is software-only,
 so `/dev/kvm` is neither requested nor required. The 20-minute Runner job
 downloads a pre-provisioned qcow2 from its immutable resource-commit/run path

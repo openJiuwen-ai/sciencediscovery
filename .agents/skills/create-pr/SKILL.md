@@ -34,13 +34,13 @@ attribution: [.agents/skills/ci/SKILL.md](../ci/SKILL.md).
 
 ## Run the layers first
 
-No pipeline runs the full set — CodeArts runs `ci:ut:core` and `ci:st` on the
+No pipeline runs the full set — CodeArts runs `ci:ut:host` and `ci:st` on the
 merge request, GitHub runs the rest on the mirror (see the ci skill) — so the
 local run is the only complete check a reviewer gets.
 
 ```bash
 bwrap --ro-bind / / --dev /dev true && echo sandbox ok      # ci:ut and ci:e2e need it
-CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:ut   # not ci:ut:core
+CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:ut   # not ci:ut:host
 CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:st
 CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:e2e
 ```
@@ -63,7 +63,7 @@ CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:e2e
   failure only on your commit is yours: fix it and rerun that layer on the new
   commit.
 - Never weaken an assertion or skip a layer to get green. If a layer cannot
-  run on this host (no sandbox), say which and why in the body; `ci:ut:core`
+  run on this host (no sandbox), say which and why in the body; `ci:ut:host`
   is not a substitute for `ci:ut`.
 
 ## The process
@@ -115,7 +115,7 @@ unchanged: `✅ 流水线 <run_id> 执行成功` or `❌ … 执行失败`, the
 CodeCheck / Blacklist, each with its own status), `UT`, `ST`, and the x86_64 /
 aarch64 debug binary jobs, each `PASSED` or `FAILED` — and the `rerun` hint.
 The `UT` and `ST` rows are the workflow's `ut` and `st` jobs, the same
-`ci:ut:core` and `ci:st` entry points run locally. Judge each code-check child
+`ci:ut:host` and `ci:st` entry points run locally. Judge each code-check child
 from its own row; do not treat one successful sibling or the parent summary as
 evidence that every child passed.
 

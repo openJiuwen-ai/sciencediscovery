@@ -106,7 +106,7 @@ CI groups the commands above into three layer entry points. Reproducing a
 pipeline failure locally means running the same one:
 
 ```bash
-pnpm ci:ut    # pnpm check, then the memory-graph pytest suite
+pnpm ci:ut    # both UT tiers: static checks, package tests, Python suites
 pnpm ci:st    # build, then the hermetic agent-loop smoke
 pnpm ci:e2e   # starts its own isolated stack and runs the @mocked journeys
 ```
@@ -126,9 +126,38 @@ part of a default command. See [.ci/README.md](.ci/README.md) for the toolchain
 image, the per-layer Docker commands, and the tag catalog used to select cases
 (`pnpm ci:tags`, `pnpm ci:list`, `pnpm ci:run`).
 
-Two split layers exist for hosts without a working sandbox: `ci:ut:core` is
-`ci:ut` minus the `@sciencediscovery/runner` package, and `ci:ut:runner` is only
-that package.
+### The two UT tiers
+
+UT is split into exactly two tiers, and every UT case belongs to one of them:
+
+```bash
+pnpm ci:ut:host    # no sandbox: static checks, the Python suites, and every
+                   # workspace package except the sandbox ones
+pnpm ci:ut:guest   # the sandbox packages, which execute a real bubblewrap
+```
+
+`pnpm ci:ut` is the aggregate for a host that can run both, and is derived as
+the host tier followed by the guest tier — it is not a third definition.
+
+When you add a unit test, it inherits the tier of the package or suite it lives
+in. Two rules keep the split honest:
+
+- A host-tier test may not depend on a guest capability. If it needs
+  bubblewrap or user namespaces, it belongs to a guest-tier package.
+- A guest-tier assertion may not be weakened so the test can move to the host
+  tier. Isolation and the sandbox's `/workspace` view are the point of those
+  tests.
+
+`.ci/test-catalog.mjs` lists the guest-tier packages; everything else is the
+host tier by construction. `pnpm ci:catalog:check` fails when a package with
+tests ends up in both tiers or in neither, when the aggregate stops equalling
+the two tiers, when the guest tier grows an install or build step, or when a
+`ci:ut:*` entry point appears outside the two tiers. `pnpm ci:selftest` runs
+that guard's own regression tests, and the host tier runs it.
+
+On macOS there is no guest tier: `services/runner/src/macos-seatbelt.test.ts`
+lives in the guest tier's package and skips itself off macOS, so run
+`pnpm --filter @sciencediscovery/runner test` natively to exercise Seatbelt.
 
 ### What each pipeline covers
 
@@ -139,7 +168,7 @@ merge-request CI is CodeArts-only; this repository intentionally has no
 | Pipeline | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
-| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | `ci:ut:core` + experimental `ci:ut:runner` in QEMU TCG | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | `ci:ut:host` + experimental `ci:ut:guest` in QEMU TCG | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
 
 The CodeArts row above is a temporary `ci/verify-pr-ci`-only debug pipeline,
 not a release gate for `main`. Its x86_64 and aarch64 jobs each call
@@ -174,9 +203,9 @@ Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
 the unprivileged user `octopus` with Docker's default capability bounding set
 and an active seccomp filter, so `unshare` and bubblewrap are refused outright;
 `sudo` is not setuid, so nothing can be installed with `dnf` either. The
-checked-in workflow runs `ci:ut:core` and the hermetic `ci:st` layer directly.
+checked-in workflow runs `ci:ut:host` and the hermetic `ci:st` layer directly.
 On this debug branch, a separate hosted x64 job experimentally runs the
-existing `ci:ut:runner` entry point inside an Ubuntu VM under QEMU's
+existing `ci:ut:guest` entry point inside an Ubuntu VM under QEMU's
 software-only TCG accelerator. The VM supplies an independent kernel whose
 user namespaces work even though the outer CodeArts container denies them;
 `/dev/kvm` is not requested. Its checksum-pinned qcow2 is pre-provisioned by
@@ -219,7 +248,7 @@ remote can look diverged when the trees are identical, so compare trees
 otherwise starts from a change nothing has exercised:
 
 ```bash
-pnpm ci:ut     # not ci:ut:core — the sandbox tests run only here and on GitHub
+pnpm ci:ut     # not ci:ut:host — the sandbox tests run only here and on GitHub
 pnpm ci:st
 pnpm ci:e2e
 ```

@@ -16,6 +16,11 @@
  * The catalog classifies existing repository entry points; it does not define
  * a second test suite. Keep every environment fact explicit so a CI scheduler
  * can select work without inspecting implementation-specific runner syntax.
+ *
+ * UT is split into exactly two tiers and nothing else: `ut:host` runs on an
+ * ordinary CI host, `ut:guest` needs a Linux guest kernel that grants the user
+ * namespaces bubblewrap requires. `.ci/ci-contract.mjs` fails the build when a
+ * UT case, workload, or workspace package escapes that partition.
  */
 export const tagDimensions = {
   arch: {
@@ -78,37 +83,89 @@ export const tagDimensions = {
       unreviewed: "Legacy coverage whose sandbox dependency is not audited",
     },
   },
+  ut: {
+    description: "UT execution tier; required on layer:ut cases and forbidden elsewhere",
+    scope: "layer:ut",
+    values: {
+      guest: "Needs a Linux guest kernel that grants the user namespaces bubblewrap requires",
+      host: "Runs on an ordinary CI host with no execution sandbox",
+    },
+  },
+};
+
+/**
+ * The packages whose tests belong to the guest tier. Everything else in the
+ * workspace is the host tier: the two commands below are generated from this
+ * one list, so no package can land in both tiers or in neither.
+ */
+export const utGuestPackages = [
+  {
+    name: "@sciencediscovery/runner",
+    directory: "services/runner",
+    reason: "its tests execute a real bubblewrap sandbox and assert the remapped /workspace view",
+  },
+];
+
+const guestPackageFilters = utGuestPackages.flatMap(({ name }) => ["--filter", name]);
+const hostPackageFilters = utGuestPackages.flatMap(({ name }) => ["--filter", `!${name}`]);
+
+/** Every UT workload, each carrying exactly one tier. */
+export const utWorkloads = [
+  { command: ["pnpm", "architecture:check"], id: "architecture", tier: "host" },
+  { command: ["pnpm", "typecheck"], id: "typecheck", tier: "host" },
+  { command: ["pnpm", "ci:selftest"], id: "ci-contract", tier: "host" },
+  { command: ["pnpm", "binary:test"], id: "binary-scripts", tier: "host" },
+  { command: ["pnpm", "--recursive", ...hostPackageFilters, "test"], id: "workspace-packages", tier: "host" },
+  { command: ["pnpm", "paper:test"], id: "paper", tier: "host" },
+  { command: ["pnpm", "gateway:test"], id: "gateway", tier: "host" },
+  { command: ["pnpm", "memory-graph:test"], id: "memory-graph", tier: "host" },
+  { command: ["pnpm", "evolve:test"], id: "evolve", tier: "host" },
+  { command: ["pnpm", ...guestPackageFilters, "test"], id: "sandbox-packages", tier: "guest" },
+];
+
+const installStep = ["pnpm", ["install", "--frozen-lockfile"]];
+const gatewaySyncStep = ["uv", ["sync", "--project", "services/gateway"]];
+const buildStep = ["pnpm", ["build"]];
+const workloadSteps = (tier) =>
+  utWorkloads.filter((workload) => workload.tier === tier).map(({ command }) => [command[0], command.slice(1)]);
+
+/**
+ * The ordered commands each layer entry point runs. `ut` is exactly
+ * `ut-host` followed by `ut-guest`, so the aggregate cannot drift from the sum
+ * of the tiers. `ut-guest` deliberately has no install or build step: its host
+ * hands it an installed, built workspace and it spends emulated CPU on tests
+ * only.
+ */
+export const layers = {
+  st: [installStep, buildStep, ["bash", ["test/api/run_m1_smoke.sh"]]],
+  "st-npu": [
+    [process.env.SCIENCE_AGENT_NPU_PYTHON?.trim() || "python3", ["services/runner/workloads/npu-smoke-test.py"]],
+  ],
+  "st-real": [installStep, buildStep, ["bash", ["test/api/run_real_smoke.sh"]]],
+  ut: [installStep, gatewaySyncStep, buildStep, ...workloadSteps("host"), ...workloadSteps("guest")],
+  "ut-guest": [...workloadSteps("guest")],
+  "ut-host": [installStep, gatewaySyncStep, buildStep, ...workloadSteps("host")],
 };
 
 export const testCases = [
   {
-    id: "ut.core",
-    description: "Static checks and non-Runner Node/Python unit tests",
-    command: ["pnpm", "ci:ut:core"],
-    resultPath: "ut-core",
+    id: "ut.host",
+    description: "The UT tier that needs no execution sandbox: static checks, Node package tests outside the sandbox packages, and the Python suites",
+    command: ["pnpm", "ci:ut:host"],
+    resultPath: "ut-host",
     tags: [
       "arch:amd64", "arch:arm64", "container:supported", "layer:ut",
-      "llm:none", "network:none", "npu:none", "sandbox:none",
+      "llm:none", "network:none", "npu:none", "sandbox:none", "ut:host",
     ],
   },
   {
-    id: "ut.runner",
-    description: "Runner unit tests including real bubblewrap execution",
-    command: ["pnpm", "ci:ut:runner"],
-    resultPath: "ut-runner",
+    id: "ut.guest",
+    description: "The UT tier that needs a real bubblewrap sandbox; its host installs and builds the workspace and the guest runs only the tests",
+    command: ["pnpm", "ci:ut:guest"],
+    resultPath: "ut-guest",
     tags: [
       "arch:amd64", "arch:arm64", "container:conditional", "layer:ut",
-      "llm:none", "network:none", "npu:none", "sandbox:bubblewrap",
-    ],
-  },
-  {
-    id: "ut.runner-macos",
-    description: "Native Apple Silicon Runner tests including real Seatbelt execution",
-    command: ["pnpm", "ci:ut:macos"],
-    resultPath: "ut-runner-macos",
-    tags: [
-      "arch:arm64", "container:unsupported", "layer:ut",
-      "llm:none", "network:local", "npu:none", "sandbox:seatbelt",
+      "llm:none", "network:none", "npu:none", "sandbox:bubblewrap", "ut:guest",
     ],
   },
   {

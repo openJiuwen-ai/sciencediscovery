@@ -264,7 +264,7 @@ commit component.
 and digest. Together they form one release unit. The formal 20-minute Runner
 job accepts only that exact object and has no source fallback. It creates a
 disposable overlay, injects the current repository archive, verifies the baked
-toolchain and sandbox, and immediately invokes `pnpm ci:ut:runner`; boot no
+toolchain and sandbox, and immediately invokes `pnpm ci:ut:guest`; boot no
 longer runs apt or `.ci/provision-runner.sh`.
 
 Advancing the image is deliberate: push or rerun `ci/codearts-resources`, wait

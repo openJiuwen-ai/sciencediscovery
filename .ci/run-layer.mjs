@@ -18,53 +18,12 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { isAbsolute, join, resolve } from "node:path";
 
+import { layers, utGuestPackages } from "./test-catalog.mjs";
+
 const layer = process.argv[2];
-const layers = {
-  st: [
-    ["pnpm", ["install", "--frozen-lockfile"]],
-    ["pnpm", ["build"]],
-    ["bash", ["test/api/run_m1_smoke.sh"]],
-  ],
-  "st-real": [
-    ["pnpm", ["install", "--frozen-lockfile"]],
-    ["pnpm", ["build"]],
-    ["bash", ["test/api/run_real_smoke.sh"]],
-  ],
-  "st-npu": [
-    [process.env.SCIENCE_AGENT_NPU_PYTHON?.trim() || "python3", ["services/runner/workloads/npu-smoke-test.py"]],
-  ],
-  ut: [
-    ["pnpm", ["install", "--frozen-lockfile"]],
-    ["uv", ["sync", "--project", "services/gateway"]],
-    ["pnpm", ["check"]],
-    ["pnpm", ["memory-graph:test"]],
-    ["pnpm", ["evolve:test"]],
-  ],
-  // `ut` minus the sandbox: everything `pnpm check` runs, except the
-  // @sciencediscovery/runner package, whose tests assert isolation and the
-  // sandbox's path remapping and so need a real bubblewrap.
-  "ut-core": [
-    ["pnpm", ["install", "--frozen-lockfile"]],
-    ["uv", ["sync", "--project", "services/gateway"]],
-    ["pnpm", ["architecture:check"]],
-    ["pnpm", ["typecheck"]],
-    ["pnpm", ["paper:test"]],
-    ["pnpm", ["gateway:test"]],
-    ["pnpm", ["build"]],
-    ["pnpm", ["binary:test"]],
-    ["pnpm", ["--recursive", "--filter", "!@sciencediscovery/runner", "test"]],
-    ["pnpm", ["memory-graph:test"]],
-    ["pnpm", ["evolve:test"]],
-  ],
-  "ut-runner": [
-    ["pnpm", ["install", "--frozen-lockfile"]],
-    ["pnpm", ["build"]],
-    ["pnpm", ["--filter", "@sciencediscovery/runner", "test"]],
-  ],
-};
 
 if (!(layer in layers)) {
-  console.error("Usage: node .ci/run-layer.mjs ut|ut-core|ut-runner|st|st-real|st-npu");
+  console.error(`Usage: node .ci/run-layer.mjs ${Object.keys(layers).sort().join("|")}`);
   process.exit(2);
 }
 
@@ -143,6 +102,19 @@ try {
     }
     if (!process.env.SCIENCE_AGENT_NPU_PYTHON?.trim()) {
       throw new Error("missing SCIENCE_AGENT_NPU_PYTHON");
+    }
+  } else if (layer === "ut-guest") {
+    // The guest tier only runs tests. Its host installs and builds the
+    // workspace and hands the result over, so a missing dependency tree or
+    // build output is a broken handover, not something to rebuild here under
+    // software emulation.
+    const required = ["node_modules", ...utGuestPackages.map(({ directory }) => join(directory, "dist"))];
+    for (const relativePath of required) {
+      try {
+        await stat(join(repositoryRoot, relativePath));
+      } catch {
+        throw new Error(`${relativePath} is missing; the guest tier expects a workspace its host already installed and built`);
+      }
     }
   }
   const configuredRuntimeRoot = process.env.CI_RUNTIME_DIR?.trim() || "/ci-cache/sciencediscovery-tests";

@@ -18,7 +18,8 @@ import { createWriteStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
-import { tagDimensions, testCases } from "./test-catalog.mjs";
+import { assertCiContract, catalogProblems, knownTags } from "./ci-contract.mjs";
+import { tagDimensions, testCases, utWorkloads } from "./test-catalog.mjs";
 
 const actions = new Set(["check", "list", "run", "tags"]);
 const action = process.argv[2];
@@ -57,46 +58,9 @@ function parseOptions(values) {
   return options;
 }
 
-function knownTags() {
-  return new Set(Object.entries(tagDimensions).flatMap(([dimension, definition]) =>
-    Object.keys(definition.values).map((value) => `${dimension}:${value}`)));
-}
-
 function validateCatalog() {
-  const errors = [];
-  const ids = new Set();
-  const resultPaths = new Set();
-  const allowedTags = knownTags();
-  const dimensions = Object.keys(tagDimensions);
-  for (const testCase of testCases) {
-    if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(testCase.id)) errors.push(`${testCase.id}: invalid id`);
-    if (ids.has(testCase.id)) errors.push(`${testCase.id}: duplicate id`);
-    ids.add(testCase.id);
-    if (!testCase.description?.trim()) errors.push(`${testCase.id}: missing description`);
-    if (!testCase.resultPath?.trim()) errors.push(`${testCase.id}: missing resultPath`);
-    if (resultPaths.has(testCase.resultPath)) errors.push(`${testCase.id}: duplicate resultPath ${testCase.resultPath}`);
-    resultPaths.add(testCase.resultPath);
-    if (testCase.runnable === false) {
-      if (!testCase.unsupportedReason?.trim()) errors.push(`${testCase.id}: unsupported case needs a reason`);
-    } else if (!Array.isArray(testCase.command) || testCase.command.length === 0 || testCase.command.some((part) => typeof part !== "string" || !part)) {
-      errors.push(`${testCase.id}: runnable case needs a non-empty argv command`);
-    }
-    if (!Array.isArray(testCase.tags)) {
-      errors.push(`${testCase.id}: tags must be an array`);
-      continue;
-    }
-    const tags = new Set(testCase.tags);
-    if (tags.size !== testCase.tags.length) errors.push(`${testCase.id}: duplicate tags`);
-    for (const tag of tags) if (!allowedTags.has(tag)) errors.push(`${testCase.id}: unknown tag ${tag}`);
-    for (const dimension of dimensions) {
-      const count = [...tags].filter((tag) => tag.startsWith(`${dimension}:`)).length;
-      const multiple = tagDimensions[dimension].multiple === true;
-      if (count === 0 || (!multiple && count !== 1)) {
-        errors.push(`${testCase.id}: expected ${multiple ? "at least one" : "exactly one"} ${dimension}:* tag, found ${count}`);
-      }
-    }
-  }
-  if (errors.length > 0) throw new Error(`Invalid CI test catalog:\n- ${errors.join("\n- ")}`);
+  const problems = catalogProblems();
+  if (problems.length > 0) throw new Error(`Invalid CI test catalog:\n- ${problems.join("\n- ")}`);
 }
 
 function splitClauses(clauses, allowedTags) {
@@ -265,7 +229,11 @@ try {
     const options = parseOptions(args);
     if (action === "check") {
       if (args.length > 0) throw new Error("check takes no options");
-      console.log(`CI test catalog OK: ${testCases.length} cases, ${knownTags().size} tags`);
+      await assertCiContract();
+      const tiers = ["host", "guest"]
+        .map((tier) => `${tier}=${utWorkloads.filter((workload) => workload.tier === tier).length}`)
+        .join(", ");
+      console.log(`CI test catalog OK: ${testCases.length} cases, ${knownTags().size} tags, UT workloads ${tiers}`);
     } else if (action === "tags") {
       if (options.cases.length || options.excludes.length || options.tags.length) throw new Error("tags only accepts --json");
       printTags(options.json);
