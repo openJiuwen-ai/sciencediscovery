@@ -10,7 +10,8 @@ repository intentionally does not use GitCode Actions.
 
 `.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
 runs the repository's two UT tiers — `ci:ut:host` on the runner and
-`ci:ut:guest` in a QEMU guest — and the hermetic `ci:st` entry point, invokes
+`ci:ut:guest` in a QEMU guest — the hermetic `ci:st` entry point, and the
+mocked `ci:e2e` group in that same guest, invokes
 the reusable code-check pipeline, builds the x86_64 debug binary on a hosted
 runner, invokes an ARM CodeArts Build task for aarch64, and renders the final
 PR result. The code check is an externally registered CodeArts pipeline containing the SCA,
@@ -219,7 +220,16 @@ configures the package registry, and invokes the layer entry point, whose step
 list for `ut-guest` contains no install and no build. Measured on the run
 before the split, the guest spent 476 s in `pnpm build` and 92 s in
 `pnpm install` against 142 s of actual tests; the pinned image download was
-17 s, so the image cache was never the cost. When the host
+17 s, so the image cache was never the cost.
+
+The mocked E2E group runs in the same guest through the same `ci:e2e` entry
+point: the host prepares it with `CI_E2E_PREPARE_ONLY=1`, which installs
+`.e2e` and the pinned Chromium under `CI_E2E_BROWSERS_DIR` inside the
+checkout so `.ci/pack-workspace.sh --include .e2e` carries them, and the guest
+runs it with `CI_E2E_PREPARED=1`, a longer stack-health budget, and the
+Huawei PyPI mirror it needs to provision the Python services. Driving Chromium
+and provisioning those environments under TCG is far slower than the UT guest
+tier; its job budget is correspondingly larger. When the host
 has no QEMU, the host script still verifies fixed
 `apk.static`, Alpine signing-key, and CA bundle package checksums. The CA bundle
 authenticates the mirror's HTTPS certificate, while the signing key

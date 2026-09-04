@@ -60,8 +60,18 @@ fetch() {
 }
 
 layer="$(fetch layer)"
+layer_env=()
 case "$layer" in
-  ut-guest) layer_script=ci:ut:guest ;;
+  ut-guest)
+    layer_script=ci:ut:guest
+    ;;
+  e2e)
+    layer_script=ci:e2e
+    # The stack is started here, but nothing is installed here: the host ran
+    # the same entry point with CI_E2E_PREPARE_ONLY=1. Emulated services need
+    # far longer than the native health budget to answer.
+    layer_env+=(CI_E2E_PREPARED=1 CI_E2E_BROWSERS_DIR=.e2e/browsers CI_E2E_STACK_TIMEOUT_SECONDS=1800)
+    ;;
   *) echo "FATAL: the host asked for an unknown layer '$layer'." >&2; exit 2 ;;
 esac
 
@@ -83,7 +93,7 @@ fetch layer-env --output "$env_file"
 guest_env=(HOME=/home/ci)
 while IFS='=' read -r name value; do
   case "$name" in
-    CI_NPM_REGISTRY|UV_DEFAULT_INDEX|UV_PYTHON_INSTALL_MIRROR|E2E_SCIENTIFIC_ENVS)
+    CI_NPM_REGISTRY|UV_DEFAULT_INDEX|UV_PYTHON_INSTALL_MIRROR|E2E_SCIENTIFIC_ENVS|CI_E2E_STACK_TIMEOUT_SECONDS)
       guest_env+=("$name=$value")
       ;;
     "") ;;
@@ -96,7 +106,10 @@ done < "$env_file"
 sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
 
 set +e
+# The layer defaults come first so an allow-listed value from the host, which
+# `env` applies afterwards, wins.
 runuser --user ci -- env \
+  ${layer_env[@]+"${layer_env[@]}"} \
   "${guest_env[@]}" \
   "QEMU_LAYER_SCRIPT=$layer_script" \
   bash -c '
@@ -130,9 +143,11 @@ runuser --user ci -- env \
 test_rc=$?
 set -e
 
-summary="/home/ci/ci-results/$layer/summary.json"
-if [ -f "$summary" ]; then
-  echo "=== $layer summary ==="
-  cat "$summary"
-fi
+# run-layer.mjs writes summary.json; the E2E entry point writes summary.txt.
+for summary in "/home/ci/ci-results/$layer/summary.json" "/home/ci/ci-results/$layer/summary.txt"; do
+  if [ -f "$summary" ]; then
+    echo "=== $layer summary ==="
+    cat "$summary"
+  fi
+done
 exit "$test_rc"

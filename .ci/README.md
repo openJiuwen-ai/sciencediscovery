@@ -105,6 +105,20 @@ serves that payload to the guest, which streams it into place and runs
 `run-qemu-layer.sh` and the `ut-guest` layer fail closed when the host did not
 prepare the workspace.
 
+The mocked E2E group reuses that guest through the same split, without a
+second E2E definition:
+
+```bash
+CI_E2E_PREPARE_ONLY=1 CI_E2E_BROWSERS_DIR=.e2e/browsers pnpm ci:e2e
+bash .ci/run-qemu-layer.sh e2e
+```
+
+The first command installs `.e2e` and the pinned Chromium into the checkout
+and stops before starting the stack, so the payload can carry them; the guest
+then runs `pnpm ci:e2e` with `CI_E2E_PREPARED=1` and owns the stack and the
+journeys. `CI_E2E_STACK_TIMEOUT_SECONDS` raises the 180-second health wait,
+which emulated services routinely exceed.
+
 `pnpm ci:catalog:check` is the guard. It fails when a case has an unknown tag
 or the wrong number of values for a dimension, when a UT case has no tier or
 two, when a `layer:ut` case's tier disagrees with its `sandbox:*` tag, when a

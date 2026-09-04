@@ -27,9 +27,19 @@ set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 layer="${1:-}"
+pack_arguments=()
 case "$layer" in
-  ut-guest) layer_prerequisites=(node_modules services/runner/dist) ;;
-  "") echo "Usage: .ci/run-qemu-layer.sh ut-guest" >&2; exit 2 ;;
+  ut-guest)
+    layer_prerequisites=(node_modules services/runner/dist)
+    ;;
+  e2e)
+    # The browser journeys additionally need the built UI and the .e2e
+    # environment, whose Playwright install and pinned Chromium the host
+    # produced with `CI_E2E_PREPARE_ONLY=1 pnpm ci:e2e`.
+    layer_prerequisites=(node_modules apps/web/dist .e2e/node_modules .e2e/browsers)
+    pack_arguments=(--include .e2e)
+    ;;
+  "") echo "Usage: .ci/run-qemu-layer.sh ut-guest|e2e" >&2; exit 2 ;;
   *) echo "FATAL: '$layer' is not a layer this guest runs." >&2; exit 2 ;;
 esac
 
@@ -214,13 +224,14 @@ rm -f -- "$guest_disk"
 
 # The guest receives the commit under test plus the dependency tree and build
 # output this host produced, and installs or compiles nothing itself.
-bash "$repo_root/.ci/pack-workspace.sh" --output "$seed_dir/workspace.tar.gz"
+bash "$repo_root/.ci/pack-workspace.sh" --output "$seed_dir/workspace.tar.gz" \
+  ${pack_arguments[@]+"${pack_arguments[@]}"}
 cp "$repo_root/.ci/qemu-guest-layer.sh" "$seed_dir/guest.sh"
 printf '%s\n' "$layer" > "$seed_dir/layer"
 # Only mirror and behaviour settings cross into the guest; nothing here may
 # carry a credential.
 : > "$seed_dir/layer-env"
-for name in CI_NPM_REGISTRY UV_DEFAULT_INDEX UV_PYTHON_INSTALL_MIRROR E2E_SCIENTIFIC_ENVS; do
+for name in CI_NPM_REGISTRY UV_DEFAULT_INDEX UV_PYTHON_INSTALL_MIRROR E2E_SCIENTIFIC_ENVS CI_E2E_STACK_TIMEOUT_SECONDS; do
   value="$(printenv "$name" || true)"
   case "$value" in
     "") ;;

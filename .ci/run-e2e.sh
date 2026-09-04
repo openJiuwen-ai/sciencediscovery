@@ -28,6 +28,19 @@ case "$group" in
     ;;
 esac
 
+# A host that cannot start the stack itself still installs everything the run
+# needs, so a guest can be handed a prepared workspace and only run the
+# browser journeys. Both halves use this one entry point; there is no second
+# E2E definition.
+prepare_only=0
+if [[ "${CI_E2E_PREPARE_ONLY:-}" == "1" ]]; then prepare_only=1; fi
+prepared=0
+if [[ "${CI_E2E_PREPARED:-}" == "1" ]]; then prepared=1; fi
+if [[ "$prepare_only" -eq 1 && "$prepared" -eq 1 ]]; then
+  printf 'BLOCKED: CI_E2E_PREPARE_ONLY and CI_E2E_PREPARED are mutually exclusive.\n' >&2
+  exit 2
+fi
+
 results_suffix="e2e"
 if [[ "$group" != "mocked" ]]; then results_suffix="e2e-$group"; fi
 results_root="${CI_RESULTS_DIR:-/ci-results}/$results_suffix"
@@ -65,6 +78,9 @@ finish() {
   fi
   if [[ "$status" -eq 0 ]]; then
     result_status="passed"
+    # A preparation run installed dependencies and ran no journey; calling that
+    # "passed" would report coverage nothing produced.
+    if [[ "$prepare_only" -eq 1 ]]; then result_status="prepared"; fi
   elif [[ "$status" -eq 2 ]]; then
     result_status="blocked"
   fi
@@ -98,13 +114,42 @@ fi
 
 cd "$repository_root"
 
-pnpm install --frozen-lockfile 2>&1 | tee -a "$test_log" || exit $?
-node test/sync-e2e.mjs --write 2>&1 | tee -a "$test_log" || exit $?
-npm install --prefix .e2e 2>&1 | tee -a "$test_log" || exit $?
+# Keeping the pinned browser inside the repository lets a prepared workspace
+# carry it to a guest instead of downloading it again over emulated network.
+if [[ -n "${CI_E2E_BROWSERS_DIR:-}" ]]; then
+  case "${CI_E2E_BROWSERS_DIR}" in
+    /*) PLAYWRIGHT_BROWSERS_PATH="$CI_E2E_BROWSERS_DIR" ;;
+    *) PLAYWRIGHT_BROWSERS_PATH="$repository_root/$CI_E2E_BROWSERS_DIR" ;;
+  esac
+  export PLAYWRIGHT_BROWSERS_PATH
+  mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+fi
+
+if [[ "$prepared" -eq 1 ]]; then
+  for required in .e2e/node_modules .e2e/package.json; do
+    if [[ ! -e "$required" ]]; then
+      printf 'BLOCKED: CI_E2E_PREPARED is set but %s is missing; its host did not prepare this workspace.\n' "$required" \
+        | tee -a "$test_log" >&2
+      exit 2
+    fi
+  done
+  printf 'Using the workspace its host prepared: dependencies and the pinned Chromium are already installed.\n' \
+    | tee -a "$test_log"
+else
+  pnpm install --frozen-lockfile 2>&1 | tee -a "$test_log" || exit $?
+  node test/sync-e2e.mjs --write 2>&1 | tee -a "$test_log" || exit $?
+  npm install --prefix .e2e 2>&1 | tee -a "$test_log" || exit $?
+  .e2e/node_modules/.bin/playwright install chromium 2>&1 | tee -a "$test_log" || exit $?
+fi
 # The upstream postinstall uses $PWD and therefore creates a container-absolute
-# link. Normalize it so the bind-mounted checkout remains usable on the host.
+# link. Normalize it so the bind-mounted checkout — or an unpacked payload —
+# remains usable wherever it landed.
 ln -sfn ../.e2e/node_modules "$repository_root/test/node_modules"
-.e2e/node_modules/.bin/playwright install chromium 2>&1 | tee -a "$test_log" || exit $?
+
+if [[ "$prepare_only" -eq 1 ]]; then
+  printf 'E2E preparation complete; the stack is deliberately not started here.\n' | tee -a "$test_log"
+  exit 0
+fi
 
 auth_token_path="$runtime_root/auth-token"
 node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))" > "$auth_token_path"
@@ -132,8 +177,11 @@ export E2E_JOURNEY_REPORTS="$results_root/journey-reports"
 setsid ./scripts/start-stack.sh --mode local > "$stack_log" 2>&1 &
 stack_pid=$!
 
+# Under software emulation the services take far longer to provision their
+# Python environments and listen, so the wait is a knob rather than a constant.
+health_timeout="${CI_E2E_STACK_TIMEOUT_SECONDS:-180}"
 healthy=0
-for _ in $(seq 1 180); do
+for _ in $(seq 1 "$health_timeout"); do
   if curl --silent --fail "$E2E_BASE_URL/health" >/dev/null; then
     healthy=1
     break

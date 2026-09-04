@@ -168,7 +168,7 @@ merge-request CI is CodeArts-only; this repository intentionally has no
 | Pipeline | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
-| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | mocked `ci:e2e` in the same QEMU guest | x86_64 + aarch64 packages; smoke is host-dependent |
 
 The CodeArts row above is a temporary `ci/verify-pr-ci`-only debug pipeline,
 not a release gate for `main`. Its x86_64 and aarch64 jobs each call
@@ -212,7 +212,11 @@ pre-provisioned by the separate `ci/codearts-resources` workflow, so a run
 never repeats apt, Node, pnpm, uv, or bubblewrap installation.
 
 That job installs and builds on its own CodeArts host and hands the guest a
-packed workspace, so the guest runs tests and nothing else. Emulated CPU is
+packed workspace, so the guest runs tests and nothing else. A third job reuses
+the same guest for the mocked E2E group: its host runs `pnpm ci:e2e` with
+`CI_E2E_PREPARE_ONLY=1` to install `.e2e` and the pinned Chromium, and the
+guest runs the same entry point with `CI_E2E_PREPARED=1` to start the stack and
+drive the journeys. Emulated CPU is
 far slower than native: before the split, one run spent 476 s on `pnpm build`
 and 92 s on `pnpm install` inside the VM to reach 142 s of tests, while
 downloading the pinned image took 17 s. A self-hosted Linux resource pool that

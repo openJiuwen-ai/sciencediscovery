@@ -426,6 +426,175 @@ stages:
         - ubuntu-latest
         - x64
         - large
+      e2e:
+        select: always
+        name: E2E (mocked, QEMU guest)
+        needs: []
+        timeout: 120
+        timeout_unit: minute
+        steps:
+        - name: Download the source commit
+          uses: official_git_clone
+          identifier: 1788300000010d4e5f6a7-8b43-4cc2-9e53-7a2c9dbf4132
+        - name: Rebase the PR source onto the target commit
+          uses: official_shell_plugin
+          env:
+            CODEARTS_COMMIT_ID: "${COMMIT_ID}"
+            CODEARTS_MERGE_ID: "${MERGE_ID}"
+            CODEARTS_WEBHOOK_PAYLOAD: "${WEBHOOK_PAYLOAD}"
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              if [ -z "${CODEARTS_MERGE_ID:-}" ]; then
+                echo "MERGE_ID is empty; keeping the downloaded source commit"
+                exit 0
+              fi
+
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              SOURCE_METADATA=$(node <<'NODE'
+              const payloadText = process.env.CODEARTS_WEBHOOK_PAYLOAD;
+              if (!payloadText) throw new Error("CODEARTS_WEBHOOK_PAYLOAD is empty");
+              const payload = JSON.parse(payloadText);
+              const mergeId = process.env.CODEARTS_MERGE_ID;
+              let attributes;
+              if (payload.event_type === "merge_request") {
+                attributes = payload.object_attributes;
+              } else if (
+                payload.event_type === "note" &&
+                payload.object_attributes?.noteable_type === "MergeRequest"
+              ) {
+                attributes = payload.merge_request;
+              } else {
+                throw new Error(`expected a merge_request or PR note payload, received ${String(payload.event_type)}`);
+              }
+              const sourceBranch = attributes?.source_branch;
+              const sourceSha = process.env.CODEARTS_COMMIT_ID;
+              const payloadMergeId = attributes?.iid;
+              if (!attributes) {
+                throw new Error("the webhook payload has no merge_request metadata");
+              }
+              const hasLineBreak = typeof sourceBranch === "string" && (
+                sourceBranch.includes(String.fromCharCode(10)) || sourceBranch.includes(String.fromCharCode(13))
+              );
+              if (typeof sourceBranch !== "string" || sourceBranch.length === 0 || hasLineBreak) {
+                throw new Error("the MR payload has no valid source branch");
+              }
+              if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/i.test(sourceSha)) {
+                throw new Error("the MR payload has no valid source commit SHA");
+              }
+              if (typeof mergeId !== "string" || !/^[1-9][0-9]*$/.test(mergeId)) {
+                throw new Error("CodeArts did not provide a valid merge request number");
+              }
+              if (payloadMergeId !== undefined && String(payloadMergeId) !== mergeId) {
+                throw new Error(`payload merge request ${String(payloadMergeId)} does not match ${mergeId}`);
+              }
+              console.log(sourceBranch);
+              console.log(sourceSha.toLowerCase());
+              console.log(mergeId);
+              NODE
+              )
+              SOURCE_BRANCH=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '1p')
+              SOURCE_SHA=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '2p')
+              MR_NUMBER=$(printf '%s\n' "$SOURCE_METADATA" | sed -n '3p')
+              git check-ref-format --branch "$SOURCE_BRANCH" >/dev/null
+
+              FETCH_REF=refs/remotes/origin/codearts-pr-source
+              git fetch --no-tags --force origin "+refs/merge-requests/$MR_NUMBER/head:$FETCH_REF"
+              if ! git cat-file -e "$SOURCE_SHA^{commit}" 2>/dev/null; then
+                git fetch --no-tags origin "$SOURCE_SHA"
+              fi
+              if ! git merge-base --is-ancestor "$SOURCE_SHA" "$FETCH_REF"; then
+                echo "FATAL: trigger commit $SOURCE_SHA is not reachable from source branch $SOURCE_BRANCH" >&2
+                exit 1
+              fi
+              bash .ci/rebase-codearts-pr.sh "$SOURCE_BRANCH" "$SOURCE_SHA"
+          identifier: 1788300000011e5f6a7b8-9c54-4dd3-8f64-8b3daecf5243
+        - name: Provision the runner
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              SOURCE_DIR="${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              cd "$SOURCE_DIR"
+              export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
+              export CI_PYPI_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              export CI_BINARY_CACHE_URL="${{ env.CI_BINARY_CACHE_URL }}"
+              export CI_BINARY_CACHE_ONLY=1
+              export CI_BINARY_CACHE_DIR="$PWD/.ci-results/toolchain-cache"
+              bash .ci/provision-runner.sh
+          identifier: 1788300000012f6a7b8c9-ad65-4ee4-9075-9c4ebfda6354
+        - name: Install, build and prepare E2E on the host
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
+              # Preparation keeps its own result directory so its log does not
+              # sit where the guest run writes the one this job publishes.
+              export CI_RESULTS_DIR="$PWD/.ci-results/prepare"
+              export CI_RUNTIME_DIR="$HOME/ci-runtime-e2e"
+              # The same ci:e2e entry point, stopped after installation: the
+              # guest owns the stack and the journeys, this host owns every
+              # download and compile. The browser lands inside the checkout so
+              # the payload carries it.
+              export CI_E2E_PREPARE_ONLY=1
+              export CI_E2E_BROWSERS_DIR=.e2e/browsers
+              pnpm install --frozen-lockfile
+              pnpm build
+              pnpm ci:e2e
+          identifier: 1788300000013a7b8c9d0-be76-4ff5-8186-ad5fcaeb7465
+        - name: Run the mocked journeys in a software-emulated guest
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
+              export CI_RESULTS_DIR="$PWD/.ci-results"
+              export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
+              export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
+              export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
+              export CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME=300
+              RESULT_DIR=.ci-results/e2e
+              mkdir -p "$RESULT_DIR"
+              set +e
+              bash .ci/run-qemu-layer.sh e2e
+              TEST_RC=$?
+              set -e
+              printf '%s\n' "$TEST_RC" > "$RESULT_DIR/exit-code"
+              if [ ! -f "$RESULT_DIR/run.log" ]; then
+                printf 'The E2E guest exited with status %s before run.log was created.\n' "$TEST_RC" > "$RESULT_DIR/run.log"
+              fi
+              echo "=== E2E guest run.log (last 120 lines) ==="
+              tail -n 120 "$RESULT_DIR/run.log"
+          identifier: 1788300000014b8c9d0e1-cf87-4006-9297-be60dbfc8576
+        - name: Upload the E2E log to OBS
+          uses: upload-obs
+          with:
+            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
+            endpoint: obs.cn-north-4.myhuaweicloud.com
+            bucket: openjiuwen-ci
+            key: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/e2e/run.log"
+            source_file: "${SHARE_PATH}/.ci-results/e2e/run.log"
+            self_folder: "false"
+          identifier: 1788300000015c9d0e1f2-d098-4117-83a8-cf71ecad9687
+        - name: Report the E2E result
+          uses: official_shell_plugin
+          with:
+            OFFICIAL_SHELL_SCRIPT_INPUT: |
+              set -eu
+              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
+              TEST_RC=$(cat .ci-results/e2e/exit-code)
+              echo "The E2E guest exited with status $TEST_RC"
+              exit "$TEST_RC"
+          identifier: 1788300000016d0e1f2a3-e109-4228-94b9-d082fdbea798
+        if: "${{ always() }}"
+        runs-on:
+        - codearts-hosted
+        - ubuntu-latest
+        - x64
+        - large
       st:
         select: always
         name: ST
@@ -994,6 +1163,7 @@ post:
             UT_HOST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-host/run.log"
             UT_GUEST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-guest/run.log"
             ST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
+            E2E_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/e2e/run.log"
             BINARY_X86_64_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/x86_64/ScienceDiscovery-${{ sources.sciencediscovery.commit_id_short }}-linux-x86_64"
             BINARY_X86_64_SUMS_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/x86_64/SHA256SUMS"
             BINARY_AARCH64_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/aarch64/ScienceDiscovery-${{ sources.sciencediscovery.commit_id_short }}-linux-aarch64"
@@ -1074,6 +1244,7 @@ post:
             UT_HOST_LOG_CELL=$(public_log_cell "$UT_HOST_LOG_URL")
             UT_GUEST_LOG_CELL=$(public_log_cell "$UT_GUEST_LOG_URL")
             ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")
+            E2E_LOG_CELL=$(public_log_cell "$E2E_LOG_URL")
             cat > "$RESULT_FILE" <<RESULT_HTML
             <p>&#9989; 流水线 <a href="$PR_CHECK_URL">${{ pipeline.run_id }}</a> 执行成功。</p>
             <p>可在 <a href="$PR_CHECK_URL">$PR_CHECK_URL</a> 查看完整构建日志。</p>
@@ -1087,6 +1258,7 @@ post:
               <tr><td rowspan="2">UT</td><td>host tier</td><td>PASSED</td><td>$UT_HOST_LOG_CELL</td></tr>
               <tr><td>guest tier (QEMU TCG sandbox)</td><td>PASSED</td><td>$UT_GUEST_LOG_CELL</td></tr>
               <tr><td>ST</td><td>-</td><td>PASSED</td><td>$ST_LOG_CELL</td></tr>
+              <tr><td>E2E</td><td>mocked journeys (QEMU guest)</td><td>PASSED</td><td>$E2E_LOG_CELL</td></tr>
               <tr><td rowspan="2">Binary</td><td>x86_64 debug package</td><td>PASSED</td><td><a href="$BINARY_X86_64_URL">binary</a> · <a href="$BINARY_X86_64_SUMS_URL">SHA256SUMS</a></td></tr>
               <tr><td>aarch64 debug package</td><td>PASSED</td><td><a href="$BINARY_AARCH64_URL">binary</a> · <a href="$BINARY_AARCH64_SUMS_URL">SHA256SUMS</a></td></tr>
             </table>
@@ -1104,7 +1276,7 @@ post:
           source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
           self_folder: "false"
         identifier: 1790000000002ca71171-679f-4414-948c-ff6497de4ab7
-      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_guest', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_guest', 'st', 'e2e', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
       runs-on:
       - default
     publish_pr_success:
@@ -1127,7 +1299,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 17646737830615fa277f2-7774-46a9-9222-bdd6236e9912
-      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_guest', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_guest', 'st', 'e2e', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
       runs-on:
       - default
     prepare_pr_failure:
@@ -1150,6 +1322,7 @@ post:
             UT_HOST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-host/run.log"
             UT_GUEST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/ut-guest/run.log"
             ST_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/st/run.log"
+            E2E_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/e2e/run.log"
             BINARY_X86_64_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/x86_64/run.log"
             BINARY_AARCH64_LOG_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/aarch64/run.log"
             codecheck_result_fields() {
@@ -1234,11 +1407,13 @@ post:
             UT_HOST_RESULT=$(job_result "${{ jobs.ut.status }}")
             UT_GUEST_RESULT=$(job_result "${{ jobs.ut_guest.status }}")
             ST_RESULT=$(job_result "${{ jobs.st.status }}")
+            E2E_RESULT=$(job_result "${{ jobs.e2e.status }}")
             BINARY_X86_64_RESULT=$(job_result "${{ jobs.binary.status }}")
             BINARY_AARCH64_RESULT=$(job_result "${{ jobs.verify_binary_aarch64.status }}")
             UT_HOST_LOG_CELL=$(public_log_cell "$UT_HOST_LOG_URL")
             UT_GUEST_LOG_CELL=$(public_log_cell "$UT_GUEST_LOG_URL")
             ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")
+            E2E_LOG_CELL=$(public_log_cell "$E2E_LOG_URL")
             BINARY_X86_64_LOG_CELL=$(public_log_cell "$BINARY_X86_64_LOG_URL")
             BINARY_AARCH64_LOG_CELL=$(public_log_cell "$BINARY_AARCH64_LOG_URL")
             cat > "$RESULT_FILE" <<RESULT_HTML
@@ -1254,6 +1429,7 @@ post:
               <tr><td rowspan="2">UT</td><td>host tier</td><td>$UT_HOST_RESULT</td><td>$UT_HOST_LOG_CELL</td></tr>
               <tr><td>guest tier (QEMU TCG sandbox)</td><td>$UT_GUEST_RESULT</td><td>$UT_GUEST_LOG_CELL</td></tr>
               <tr><td>ST</td><td>-</td><td>$ST_RESULT</td><td>$ST_LOG_CELL</td></tr>
+              <tr><td>E2E</td><td>mocked journeys (QEMU guest)</td><td>$E2E_RESULT</td><td>$E2E_LOG_CELL</td></tr>
               <tr><td rowspan="2">Binary</td><td>x86_64 debug package</td><td>$BINARY_X86_64_RESULT</td><td>$BINARY_X86_64_LOG_CELL</td></tr>
               <tr><td>aarch64 debug package</td><td>$BINARY_AARCH64_RESULT</td><td>$BINARY_AARCH64_LOG_CELL</td></tr>
             </table>
@@ -1271,7 +1447,7 @@ post:
           source_file: "${SHARE_PATH}/.ci-results/pr-result/result.html"
           self_folder: "false"
         identifier: 1790000000004756cae3-f5a6-4a02-a0e8-ab67c922ed75
-      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_guest', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_guest', 'st', 'e2e', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
       runs-on:
       - default
     publish_pr_failure:
@@ -1294,7 +1470,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 1790000000000b7abf11-329f-448a-bdc4-f1db550865d3
-      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_guest', 'st', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_guest', 'st', 'e2e', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
       runs-on:
       - default
   pre:

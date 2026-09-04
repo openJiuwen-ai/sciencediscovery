@@ -50,6 +50,8 @@ openjiuwen-ci/
     |           |   `-- run.log
     |           |-- st/
     |           |   `-- run.log
+    |           |-- e2e/
+    |           |   `-- run.log
     |           |-- binary/
     |           |   |-- x86_64/
     |           |   |   |-- ScienceDiscovery-<short-commit>-linux-x86_64

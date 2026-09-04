@@ -30,7 +30,7 @@ Three pipelines exist and none runs everything.
 
 | Pipeline | Trigger | UT | ST | E2E | Binary/resource output |
 | --- | --- | --- | --- | --- | --- |
-| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh debug run | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | `ci:st` | — | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh debug run | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | `ci:st` | mocked `ci:e2e` in the same QEMU guest | x86_64 + aarch64 packages; smoke is host-dependent |
 | CodeArts resources — `.codearts/workflow/codearts-resources-pipeline.yml` on `ci/codearts-resources` | push to `ci/codearts-resources` | — | — | — | checksum-pinned toolchains and QEMU image uploaded to stable OBS keys |
 | GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
@@ -49,6 +49,17 @@ Emulated CPU is roughly an order of magnitude slower than native: the run
 before this split spent 476 s building and 92 s installing inside the guest to
 reach 142 s of tests. A self-hosted pool that passes a bubblewrap probe
 remains preferable.
+
+The mocked E2E group reuses that guest rather than a second E2E definition.
+Its host runs the same `pnpm ci:e2e` entry point with
+`CI_E2E_PREPARE_ONLY=1`, which installs `.e2e` and the pinned Chromium into
+the checkout and stops before the stack; the guest runs `pnpm ci:e2e` with
+`CI_E2E_PREPARED=1` and owns the stack and the journeys. The CodeArts host
+still never runs a journey itself: the browser and the Runner both need the
+namespaces that pool denies. Expect this job to be slow — Chromium and the
+Python service environments are provisioned and driven under TCG — and treat a
+timeout as evidence for a self-hosted runner, not as a reason to weaken the
+group.
 The CodeArts debug workflow is a cache consumer, not a cache seeder. Its UT,
 ST, binary, and QEMU jobs require the checksum-pinned OBS objects and fail
 closed on a missing or invalid object instead of contacting external source

@@ -14,8 +14,8 @@
 
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import {
@@ -25,6 +25,10 @@ import {
   workspaceProjects,
 } from "./ci-contract.mjs";
 import * as catalog from "./test-catalog.mjs";
+
+// Repository-local, like the other script tests, so a fixture never lands
+// outside the checkout CI cleans up.
+const testRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".tmp", "ci-script-tests");
 
 /** A structured clone of the real catalog that a test can then break. */
 function mutableCatalog() {
@@ -158,7 +162,8 @@ test("the guest tier neither installs nor builds", async () => {
 });
 
 test("a third UT entry point outside the two tiers is rejected", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "ci-contract-"));
+  await mkdir(testRoot, { recursive: true });
+  const root = await mkdtemp(join(testRoot, "ci-contract-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   await mkdir(join(root, "services", "runner"), { recursive: true });
   await writeFile(join(root, "pnpm-workspace.yaml"), "packages:\n  - services/*\n");
