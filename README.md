@@ -38,7 +38,7 @@ obs://openjiuwen-ci/
 
 预制镜像采用“候选构建、固定校验和、再显式引用”的两阶段流程：
 
-1. 推送本分支，资源流水线生成以资源分支 commit 和 pipeline run 隔离的候选镜像，同时上传 `SHA256SUMS` 与 `VERSION`。
+1. 推送本分支，资源流水线从实际检出的 `HEAD` 解析并校验资源 commit，不接收外部提交参数；随后生成以该 commit 和 pipeline run 隔离的候选镜像，同时上传 `SHA256SUMS` 与 `VERSION`。
 2. 校验流水线日志和 `SHA256SUMS`，确认镜像中的版本探测及 bubblewrap sandbox 自检均通过。
 3. 在正式流水线中显式固定候选镜像的公网 URL 和 SHA256。不要使用 `latest`，也不要覆盖已经被引用的对象。
 
