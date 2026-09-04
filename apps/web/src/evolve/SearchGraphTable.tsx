@@ -1,28 +1,25 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
+// you may not use this file or in this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// http://www.apache.org/licenses from this software is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
 
 /**
- * The same search, as a table.
+ * The search, as a table.
  *
- * Not a fallback and not a debug view: a canvas is unreachable to a keyboard and
- * invisible to a screen reader, so without this there is simply no way for some
- * users to read a search at all. It carries every channel the picture encodes —
- * rank, visits, depth, validity, refusal — because "you can get at the data, just
- * not the meaning" is not equivalence.
+ * PUCT: tree-oriented — parent, depth, rank, visits, outcome.
+ * OpenEvolve: evolution timeline — iteration, island, parent, score, cell, via, outcome.
+ *
+ * Three views do not repeat:
+ * - Graph = spatial layout
+ * - Grid = archive snapshot
+ * - Table = chronological timeline
  */
 
-import type { EvolveRunView } from "./model.js";
+import type { EvolveCandidateView, EvolveRunView } from "./model.js";
 
 import { useLocale } from "../i18n/LocaleProvider.js";
 
@@ -37,6 +34,7 @@ export interface SearchGraphTableProps {
 export function SearchGraphTable({ onSelect, selectedIndex, view }: SearchGraphTableProps) {
   const { t } = useLocale();
   const ranks = rankScores(view.candidates);
+  const isOpenEvolve = view.algorithm === "openevolve";
 
   return <table className="evolve-table">
     <caption className="visually-hidden">{t("evolve.table.caption")}</caption>
@@ -44,20 +42,45 @@ export function SearchGraphTable({ onSelect, selectedIndex, view }: SearchGraphT
       <tr>
         <th scope="col">#</th>
         <th scope="col">{t("evolve.table.parent")}</th>
-        <th scope="col">{t("evolve.table.depth")}</th>
-        <th scope="col">{t("evolve.table.score")}</th>
-        <th scope="col">{t("evolve.table.rank")}</th>
-        <th scope="col">{t("evolve.table.visits")}</th>
-        <th scope="col">{t("evolve.table.outcome")}</th>
+        {isOpenEvolve ? (
+          <>
+            <th scope="col">{t("evolve.table.island")}</th>
+            <th scope="col">{t("evolve.table.score")}</th>
+            <th scope="col">{t("evolve.table.cell")}</th>
+            <th scope="col">{t("evolve.table.via")}</th>
+            <th scope="col">{t("evolve.table.outcome")}</th>
+          </>
+        ) : (
+          <>
+            <th scope="col">{t("evolve.table.depth")}</th>
+            <th scope="col">{t("evolve.table.score")}</th>
+            <th scope="col">{t("evolve.table.rank")}</th>
+            <th scope="col">{t("evolve.table.visits")}</th>
+            <th scope="col">{t("evolve.table.outcome")}</th>
+          </>
+        )}
       </tr>
     </thead>
     <tbody>
       {view.candidates.map((candidate) => {
         const rank = ranks.get(candidate.nodeIndex);
         const best = view.bestNodeIndex === candidate.nodeIndex;
+        const parentLabel = candidate.parentIndex === null ? "—" : `#${candidate.parentIndex}`;
+        const scoreLabel = candidate.score === null
+          ? (candidate.error ? candidate.error.slice(0, 40) : t("evolve.candidate.failed"))
+          : candidate.score.toFixed(4);
+        const outcomeLabel = best
+          ? `★ ${t("evolve.table.accepted")}`
+          : candidate.accepted === false
+            ? (candidate.rejectedBy ?? candidate.category ?? t("evolve.table.rejected"))
+            : candidate.valid ? "—" : (candidate.error ? candidate.error.slice(0, 40) : t("evolve.candidate.failed"));
         return <tr
           aria-selected={selectedIndex === candidate.nodeIndex}
-          className={candidate.valid ? undefined : "evolve-table-invalid"}
+          className={[
+            candidate.valid ? undefined : "evolve-table-invalid",
+            best ? "evolve-table-best" : undefined,
+            candidate.cellVia === "migration" ? "evolve-table-migrated" : undefined,
+          ].filter(Boolean).join(" ")}
           key={candidate.nodeIndex}
         >
           <th scope="row">
@@ -69,26 +92,33 @@ export function SearchGraphTable({ onSelect, selectedIndex, view }: SearchGraphT
               {best ? "★ " : ""}#{candidate.nodeIndex}
             </button>
           </th>
-          <td>{candidate.parentIndex === null ? "—" : `#${candidate.parentIndex}`}</td>
-          <td>{candidate.depth}</td>
-          <td>{candidate.score === null ? t("evolve.candidate.failed") : candidate.score.toFixed(4)}</td>
-          <td>{rank === undefined ? "—" : `${Math.round(rank * 100)}%`}</td>
-          <td>{candidate.visits}</td>
-          <td>{outcome(candidate, t)}</td>
+          <td>{parentLabel}</td>
+          {isOpenEvolve ? (
+            <>
+              <td className="evolve-table-island">
+                <span className="evolve-table-island-dot" data-island={candidate.island ?? 0} />
+                {candidate.island ?? 0}
+              </td>
+              <td>{scoreLabel}</td>
+              <td className="evolve-table-cell">
+                {candidate.complexityBin !== undefined && candidate.diversityBin !== undefined
+                  ? `(${candidate.complexityBin},${candidate.diversityBin})`
+                  : "—"}
+              </td>
+              <td>{candidate.cellVia ?? "—"}</td>
+              <td>{outcomeLabel}</td>
+            </>
+          ) : (
+            <>
+              <td>{candidate.depth}</td>
+              <td>{scoreLabel}</td>
+              <td>{rank === undefined ? "—" : `${Math.round(rank * 100)}%`}</td>
+              <td>{candidate.visits}</td>
+              <td>{outcomeLabel}</td>
+            </>
+          )}
         </tr>;
       })}
     </tbody>
   </table>;
-}
-
-/** The three outcomes a reader has to be able to tell apart: it merged, a
- *  constraint refused it, or the gate did not find the gain significant. */
-function outcome(
-  candidate: EvolveRunView["candidates"][number],
-  t: ReturnType<typeof useLocale>["t"],
-): string {
-  if (!candidate.valid) return t("evolve.candidate.failed");
-  if (candidate.accepted === undefined) return "—";
-  if (candidate.accepted) return t("evolve.table.accepted");
-  return candidate.rejectedBy ?? t(`evolve.refusal.${candidate.category ?? "below-threshold"}`);
 }

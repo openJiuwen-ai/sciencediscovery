@@ -49,6 +49,7 @@ from .auth import require_internal_token
 from .engine import Engine, RunSpec
 from .events import HEARTBEAT, EventStream, encode_ndjson
 from .logging_config import get_logger
+from .openevolve_engine import OpenEvolveEngine
 from .puct_engine import PuctEngine
 from .stub_engine import StubEngine
 from .vendor.puct.sandbox import SandboxCapability, detect_local_capability
@@ -68,7 +69,12 @@ app = FastAPI(title="sciencediscovery-evolve")
 #: alias because the control plane sends whatever a stored goal recorded and a
 #: run created back then recorded the old one. Unknown engine names are a 400,
 #: so dropping it would turn an old run into a refusal rather than a fallback.
-ENGINES: dict[str, Engine] = {"puct": PuctEngine(), "era": PuctEngine(), "stub": StubEngine()}
+ENGINES: dict[str, Engine] = {
+    "puct": PuctEngine(),
+    "era": PuctEngine(),
+    "openevolve": OpenEvolveEngine(),
+    "stub": StubEngine(),
+}
 
 _ALGORITHMS = {"puct", "era", "openevolve"}
 

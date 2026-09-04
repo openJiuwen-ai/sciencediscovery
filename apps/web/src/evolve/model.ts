@@ -69,6 +69,12 @@ export interface EvolveCandidateView {
   selectedPuct?: number;
   valid: boolean;
   visits: number;
+  complexityBin?: number;
+  diversityBin?: number;
+  cellVia?: "insert" | "migration";
+  migratedToIsland?: number;
+  inspirationIndex?: number;
+  programId?: string;
 }
 
 export interface EvolveRunView {
@@ -173,8 +179,12 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
         island: event.island,
         parentIndex: event.parentIndex,
         promise: event.promise,
+        ...(event.programId === undefined ? {} : { programId: event.programId }),
         score: event.score,
         valid: event.valid,
+        ...(event.inspirationIndexes === undefined || event.inspirationIndexes.length === 0
+          ? {}
+          : { inspirationIndex: event.inspirationIndexes[0] }),
       }));
       return {
         ...next,
@@ -202,7 +212,19 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
       }));
 
     case "inserted":
-      return withCandidate(state, event.nodeIndex, (candidate) => ({ ...candidate, island: event.island }));
+      return withCandidate(state, event.nodeIndex, (candidate) => ({
+        ...candidate,
+        complexityBin: event.complexityBin,
+        diversityBin: event.diversityBin,
+        island: event.island,
+        cellVia: event.via,
+      }));
+
+    case "migrated":
+      return withCandidate(state, event.nodeIndex, (candidate) => ({
+        ...candidate,
+        migratedToIsland: event.toIsland,
+      }));
 
     case "cost":
       return { ...state, costCents: event.cents, tokens: event.tokens };

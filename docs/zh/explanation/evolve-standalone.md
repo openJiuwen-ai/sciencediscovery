@@ -1,8 +1,68 @@
-# 把演进侧车拆成独立后端
+# 演进侧车：架构、引擎与独立部署
 
-`services/evolve` 是一个 Python FastAPI 进程，跑 PUCT 树搜索。本文回答一个问题：把它从这个仓库里拿出去、当作独立后端运行，要做什么，会碰到什么。
+`services/evolve` 是一个 Python FastAPI 进程，跑演进搜索。它支持两种搜索引擎：
+
+- **PUCT**（`puct_engine.py`）：flat-PUCT 树搜索，通过访问次数和排名引导探索。适合在一个起点上持续精炼。
+- **OpenEvolve**（`openevolve_engine.py`）：MAP-Elites 多岛搜索 + 环形迁移，按代码复杂度和多样性分箱归档。适合解空间宽、容易早熟收敛的任务。
+
+两个引擎共用 Domain 接缝（四种评分模式）、事件流、沙箱、模型代理和探针——只换算法核心（`PuctTree` ↔ `OpenEvolveArchive`）。`algorithm` 字段选择引擎，`/evolve-design` 命令让用户在发送前选择。
+
+本文回答两个问题：引擎之间有何差异，以及把侧车从仓库里拿出去当独立后端运行要做什么。
 
 结论先说：**代码层面它已经是独立的**，真正的工作在四个耦合点上，其中一个（共享文件系统）是硬的，其余三个是约定层面的。
+
+---
+
+## 0. 两个引擎的差异
+
+PUCT 和 OpenEvolve 共用同一套骨架（Domain 接缝、事件流、沙箱、模型代理、探针），只换算法核心。差异在三个维度：
+
+### 0.1 状态管理
+
+**PUCT** 维护一棵树（`PuctTree`）。每个候选是树的一个节点，有 `parent_index` 指向父节点。树是追加式的——所有候选永久保留在树里，`num_visits` 决定下次选择时的探索权重。`c_puct` 和 `prior_exponent` 控制探索-利用平衡。
+
+**OpenEvolve** 维护多岛 MAP-Elites 网格（`OpenEvolveArchive`）。`num_islands` 个岛各拥有一个 `feature_bins × feature_bins` 的网格，按（代码复杂度 × 代码多样性）分箱。一格一席——新候选如果分数高于当前占据者就替换，旧的被逐出。每 `migration_interval` 代，各岛最优候选通过环形迁移复制到下一个岛。
+
+### 0.2 父选择
+
+**PUCT** 用 flat-PUCT 公式：遍历所有叶子节点，计算 `rank_score + c_puct · prior · √总访问数 / (1 + 访问数)`，选最高值。访问次数少的节点有更高的探索分。
+
+**OpenEvolve** 用 ε-greedy + 轮转岛：按迭代号轮转选岛（iteration 1→岛0, 2→岛1, ...），从该岛的网格里 70% 选最优、30% 随机。额外选一个与父代码差异最大的 inspiration 程序放入变异 prompt（对应图谱的 `inspires` 边），鼓励跳变。
+
+### 0.3 变异 prompt
+
+**PUCT**：`domain.prompt(parent.program)`——只传父程序。
+
+**OpenEvolve**：`domain.prompt(parent)` + archive 上下文（全局最优的指标 + 多样化 inspiration 的代码）。模型同时看到"当前最好的"和"和父完全不同的"，从两个方向获得启发。
+
+### 0.4 参数差异
+
+| 参数 | PUCT | OpenEvolve | 依据 |
+|---|---|---|---|
+| `blast_radius` | 1.0 | 0.6 | 上游 agentdescent OpenEvolve 用 0.6 |
+| `solved_threshold` | 2.0（永不跳过） | 1.0（找到最优跳过） | OpenEvolve 的 shard 是同一目标的多个种子 |
+| `staleness` | full（从 options 读） | full（从 options 读） | 两者都 append-only |
+| `c_puct` / `prior_exponent` | 从 options 读 | 不用 | PUCT 特有 |
+| `islands` / `archive_size` / `feature_bins` / `exploitation_ratio` / `migration_interval` | 不用 | 从 options 读 | OpenEvolve 特有 |
+| `model_retries` / `retry_backoff` | 不用 | 默认 2 / 1.0 | OpenEvolve 有 model call retry |
+
+### 0.5 事件流差异
+
+| 事件 | PUCT | OpenEvolve |
+|---|---|---|
+| `expanded` | depth/parentIndex/score | + island + programId + inspirationIndexes |
+| `inserted` | 无 | complexityBin/diversityBin/island/via（insert/migration） |
+| `migrated` | 无 | fromIsland/toIsland |
+| `selected` | ancestorVisits + puct | ancestorVisits=[] |
+
+### 0.6 前端差异
+
+| 视图 | PUCT | OpenEvolve |
+|---|---|---|
+| 图视图 | 树（x=depth） | 时间线森林（x=iteration，island 水平带 + inspires 虚线边） |
+| 网格视图 | 无 | 岛列视图（每岛一列，best ★ 高亮，迁移 ↔ 徽章） |
+| 表格列 | depth/rank/visits/outcome | island/cell/via/outcome + 失败原因 |
+| 算法选择器 | 无 | popover（标签 + 特性 + 适用场景） |
 
 ---
 
@@ -125,7 +185,7 @@ manifest.json
 
 ### 4.3 vendored 的上游代码要有人跟
 
-`vendor/puct/` 是从 [agentdescent](https://github.com/Birfy/agentdescent) 的 `examples/era` 抄进来的——**因为 wheel 不打包 `examples/`**，只能抄不能依赖。主包（`FlatPuct`、`Ledger`、verifier、policies）是正常依赖。
+`vendor/puct/` 和 `vendor/openevolve/` 都是从 [agentdescent](https://github.com/Birfy/agentdescent) 的 `examples/` 抄进来的——**因为 wheel 不打包 `examples/`**，只能抄不能依赖。主包（`FlatPuct`、`Ledger`、verifier、policies、`async_evolve`）是正常依赖。
 
 这意味着独立出去的后端会带着一份上游代码的副本，需要有人负责同步。这不是理论风险：最近一次对齐发现我们落后了
 
@@ -133,7 +193,7 @@ manifest.json
 - 先验机制（`Candidate.prior` / `prior_exponent`）
 - 修复循环的位置（上游已从合并线程移到工作线程）
 
-建议在独立仓库里把"上游 commit 指纹 + 差异清单"写进 `vendor/puct/__init__.py`（现在已经有了）并加一个 CI 任务定期比对。
+建议在独立仓库里把"上游 commit 指纹 + 差异清单"写进各 `vendor/*/` 的 `__init__.py`（现在已经有了）并加一个 CI 任务定期比对。
 
 ---
 
@@ -186,7 +246,7 @@ manifest.json
 
 拆分前值得先处理，否则会变成新接口的一部分：
 
-- **`options` 是一个无类型的 dict。** `c_puct`、`prior_exponent`、`mode`、`async_ratio`、`staleness`、`completion_timeout` 都塞在这里，未知的键被忽略。跨仓库之后"传了一个拼错的键，搜索照常跑完并报成功"会更难发现。
+- **`options` 是一个无类型的 dict。** `c_puct`、`prior_exponent`、`mode`、`async_ratio`、`staleness`、`completion_timeout`、`islands`、`archive_size`、`feature_bins`、`exploitation_ratio`、`migration_interval`、`model_retries`、`retry_backoff` 都塞在这里，未知的键被忽略。跨仓库之后"传了一个拼错的键，搜索照常跑完并报成功"会更难发现。
 - **`algorithm` 保留了 `era` 别名。** 更名为 `puct` 之后旧值仍被接受，因为控制面发的是存档目标里记着的那个名字。独立后端要决定这个别名保留多久。
 - **模式默认由 `workers` 推断**（`workers > 1` 走 `async_evolve`，否则 `serial`）。这是个隐式规则，接口文档里要写明。
 - **`staleness_policy` 默认 `"full"`**，注释说"没什么好过期的"，但线上实测确实丢过提案（20 次选择只落地 18 个）。拆分前值得查清，否则新调用方会继承一个没人解释得清的行为。

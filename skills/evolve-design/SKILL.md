@@ -1,6 +1,6 @@
 ---
 name: evolve-design
-description: Use when the user wants to improve something by repeated search rather than one edit — a program, a prompt, a document, a pipeline, a configuration, an experimental protocol. Triggers on `/evolve`, "把这个做得更好", "搜索一个更好的方案", or any request to optimise against a measurable target. Runs a short checkpointed design conversation, verifies the scoring can rank candidates, then calls `create_evolve_run`. Not for a single fix, a refactor, or a question about existing code.
+description: Use when the user wants to improve something by repeated search rather than one edit — a program, a prompt, a document, a pipeline, a configuration, an experimental protocol. Triggers on `/evolve-design`, "把这个做得更好", "搜索一个更好的方案", or any request to optimise against a measurable target. Runs a short checkpointed design conversation, verifies the scoring can rank candidates, then calls `create_evolve_run`. Not for a single fix, a refactor, or a question about existing code.
 metadata:
   version: 1.0.0
 ---
@@ -13,6 +13,21 @@ protocol. It succeeds or fails on whether the scoring can tell a good candidate 
 scoring that cannot shows up as a flat run, not as an error.
 
 ## How to run this
+
+**First: which algorithm?** The user's `/evolve-design` command may carry
+`--algorithm puct` or `--algorithm openevolve`. If unset,
+ask which they want.
+
+- **PUCT** (flat-PUCT tree) — ranks candidates by a PUCT score over a tree.
+- **OpenEvolve** (MAP-Elites islands + ring migration) — ranks candidates by
+  fitness in a multi-island archive with diversity-based cells.
+
+Both algorithms use the **same four-step design flow** below and the **same four
+scoring modes** (dataset_metric / test_gate / custom_script / llm_judge). The
+only difference is how candidates are ranked and selected — PUCT uses a tree,
+OpenEvolve uses islands. Design the scorecard, the split, and the starting point
+exactly the same way regardless of algorithm; just set `algorithm` in
+`create_evolve_run` to `"puct"` or `"openevolve"`.
 
 Four checkpoints. **Do the work for a step, show the result, wait for the user, then go on.**
 
@@ -230,6 +245,8 @@ Upstream measured ratings arriving on 25 replies out of 30.
 ## Step 4 — Start it, then report
 
 Call `create_evolve_run`.
+
+Set `algorithm` to what the user chose (`"puct"` or `"openevolve"`).
 
 `howScored` is **one sentence** for the user: what it measures, how much is held out.
 `risks`: at most two, only ones that change a decision. Empty is fine.

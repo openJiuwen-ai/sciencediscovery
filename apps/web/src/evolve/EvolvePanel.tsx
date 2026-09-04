@@ -40,6 +40,7 @@ import { BudgetBar } from "./BudgetBar.js";
 import { CandidateDetail } from "./CandidateDetail.js";
 import { CandidateStream } from "./CandidateStream.js";
 import { ScoreChart } from "./ScoreChart.js";
+import { SearchCellGrid } from "./SearchCellGrid.js";
 import { SearchGraphCanvas } from "./SearchGraphCanvas.js";
 import { SearchGraphTable } from "./SearchGraphTable.js";
 import { layoutSearchGraph } from "./search-graph-layout.js";
@@ -62,8 +63,10 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
   // The canvas is the default and the table is a peer, not a fallback: a canvas
   // is unreachable to a keyboard and invisible to a screen reader, so the two
   // carry the same information and either one alone is a complete view.
-  const [mode, setMode] = useState<"graph" | "table">("graph");
+  const [mode, setMode] = useState<"graph" | "table" | "grid">("graph");
   const [selectedIndex, setSelectedIndex] = useState<number>();
+  const [fullscreen, setFullscreen] = useState(false);
+  const [autoFollow, setAutoFollow] = useState(true);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -95,7 +98,7 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
   const active = isEvolveRunActive(view.status);
 
   return <div className="evolve-panel-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section aria-label={t("evolve.panel.title")} aria-modal="true" className="evolve-panel" role="dialog">
+    <section aria-label={t("evolve.panel.title")} aria-modal="true" className={`evolve-panel ${fullscreen ? "evolve-panel-fullscreen" : ""}`} role="dialog">
       <header className="evolve-panel-header">
         <div>
           <span className="eyebrow">{t("evolve.panel.eyebrow")}</span>
@@ -103,6 +106,12 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
         </div>
         <div className="evolve-panel-controls">
           <span className={`evolve-status evolve-status-${view.status}`}>{t(`evolve.status.${view.status}`)}</span>
+          {active ? <button
+            className={`evolve-follow ${autoFollow ? "active" : ""}`}
+            onClick={() => setAutoFollow((v) => !v)}
+            title={t("evolve.panel.follow")}
+            type="button"
+          >{t("evolve.panel.follow")}</button> : null}
           {active ? <button
             className="evolve-stop"
             disabled={stopping}
@@ -114,6 +123,12 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
             }}
             type="button"
           >{t(stopping ? "evolve.panel.stopping" : "evolve.panel.stop")}</button> : null}
+          <button
+            className={fullscreen ? "evolve-fullscreen active" : "evolve-fullscreen"}
+            onClick={() => setFullscreen((v) => !v)}
+            title={t("evolve.panel.fullscreen")}
+            type="button"
+          >{fullscreen ? t("evolve.panel.exitFullscreen") : t("evolve.panel.fullscreen")}</button>
           <button aria-label={t("evolve.panel.close")} className="icon-button" onClick={onClose} type="button">
             <CloseIcon size={20} />
           </button>
@@ -140,6 +155,14 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
           <button aria-pressed={mode === "table"} onClick={() => setMode("table")} type="button">
             {t("evolve.view.table")}
           </button>
+          {view.algorithm === "openevolve" ? (
+            <button aria-pressed={mode === "grid"} onClick={() => setMode("grid")} type="button">
+              {t("evolve.view.grid")}
+            </button>
+          ) : null}
+          <span className="evolve-view-info">
+            {view.candidates.length} candidates · {view.expansions}/{run.goal.budget.expansions} expansions
+          </span>
         </div>
         <div className="evolve-dashboard">
           {/* ① what happened to the score, ② what the search explored, ③ every
@@ -150,8 +173,10 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
           </section>
           <section className="evolve-block evolve-block-structure">
             {mode === "graph"
-              ? <SearchGraphCanvas onSelect={setSelectedIndex} selectedIndex={selectedIndex} view={view} />
-              : <SearchGraphTable onSelect={setSelectedIndex} selectedIndex={selectedIndex} view={view} />}
+              ? <SearchGraphCanvas autoFollow={autoFollow} onSelect={setSelectedIndex} selectedIndex={selectedIndex} view={view} />
+              : mode === "grid"
+                ? <SearchCellGrid onSelectNode={setSelectedIndex} selectedNodeIndex={selectedIndex} view={view} />
+                : <SearchGraphTable onSelect={setSelectedIndex} selectedIndex={selectedIndex} view={view} />}
           </section>
           <section className="evolve-block evolve-block-stream">
             <CandidateStream

@@ -41,20 +41,23 @@ import {
   nodeId,
   SEARCH_COLORS,
   type PositionedEdge,
+  type PositionedLabel,
   type PositionedNode,
   type SearchGraphLayout,
 } from "./search-graph-layout.js";
 
 export interface SearchGraphCanvasProps {
+  autoFollow?: boolean;
   onSelect?: (nodeIndex: number) => void;
   selectedIndex?: number;
   view: EvolveRunView;
 }
 
-export function SearchGraphCanvas({ onSelect, selectedIndex, view }: SearchGraphCanvasProps) {
+export function SearchGraphCanvas({ autoFollow = true, onSelect, selectedIndex, view }: SearchGraphCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | undefined>(undefined);
   const layoutRef = useRef<SearchGraphLayout | undefined>(undefined);
+  const userMovedRef = useRef(false);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
 
@@ -66,6 +69,10 @@ export function SearchGraphCanvas({ onSelect, selectedIndex, view }: SearchGraph
       container: hostRef.current,
       elements: [],
       layout: { name: "preset" },
+      maxZoom: 2.5,
+      minZoom: 0.15,
+      wheelSensitivity: 0.3,
+      zoomingEnabled: true,
       style: [
         {
           selector: "node",
@@ -100,6 +107,22 @@ export function SearchGraphCanvas({ onSelect, selectedIndex, view }: SearchGraph
         },
         { selector: "node.selected-node", style: { "border-color": "#1d4ed8", "border-width": 4 } },
         {
+          selector: 'node[type = "label"]',
+          style: {
+            "background-color": "transparent",
+            "background-opacity": 0,
+            "border-width": 0,
+            color: "data(color)",
+            "font-size": 12,
+            "font-weight": "bold",
+            height: 20,
+            label: "data(label)",
+            "text-halign": "right",
+            "text-valign": "center",
+            width: 50,
+          },
+        },
+        {
           selector: "edge",
           style: {
             "curve-style": "bezier",
@@ -119,6 +142,13 @@ export function SearchGraphCanvas({ onSelect, selectedIndex, view }: SearchGraph
       const index = Number(event.target.data("nodeIndex"));
       if (Number.isFinite(index)) onSelectRef.current?.(index);
     });
+    // Track user viewport interaction so auto-fit stops fighting them.
+    cy.on("viewport", () => {
+      userMovedRef.current = true;
+    });
+    cy.on("dragfree", () => {
+      userMovedRef.current = true;
+    });
     cyRef.current = cy;
     layoutRef.current = undefined;
     return () => {
@@ -134,14 +164,20 @@ export function SearchGraphCanvas({ onSelect, selectedIndex, view }: SearchGraph
     const diff = diffGraph(layoutRef.current, next);
 
     if (diff.rebuild) {
-      // Only the scale cap can get here: the drawn set changed, so positions
-      // were computed for different candidates and the canvas starts over.
       cy.elements().remove();
       cy.add(toElements(next.nodes, next.edges));
+      cy.add(toLabelElements(next.labels));
       fit(cy);
     } else {
       if (diff.added.nodes.length || diff.added.edges.length) {
         cy.add(toElements(diff.added.nodes, diff.added.edges));
+      }
+      // Add/update labels (OpenEvolve island headers)
+      const existingLabels = new Set(cy.nodes('[type = "label"]').map((n) => n.id()));
+      const newLabels = next.labels.filter((l) => !existingLabels.has(l.id));
+      if (newLabels.length) cy.add(toLabelElements(newLabels));
+      for (const label of next.labels) {
+        cy.$id(label.id).data({ color: label.color, label: label.text });
       }
       for (const node of diff.patched) {
         // A data patch, not a layout: the styling reads these fields, so the
@@ -156,9 +192,23 @@ export function SearchGraphCanvas({ onSelect, selectedIndex, view }: SearchGraph
           title: node.title,
         });
       }
-      // Only fit while the picture is still small enough that fitting is not
-      // itself a jump; after that the user owns the viewport.
-      if (diff.added.nodes.length && next.nodes.length <= 12) fit(cy);
+      // Auto-fit while the user hasn't interacted with the viewport. After
+      // they pan or zoom manually, respect their viewport — but add a "Fit"
+      // button so they can always get back to seeing everything.
+      // Auto-fit: if autoFollow is on and the user hasn't interacted,
+      // follow the latest node by panning to it (not full fit, which would
+      // jump too much). If autoFollow is off, only fit when no user interaction.
+      if (diff.added.nodes.length) {
+        if (autoFollow && !userMovedRef.current) {
+          // Pan to the latest node so the user sees new candidates appear.
+          const latest = diff.added.nodes[diff.added.nodes.length - 1];
+          if (latest) {
+            cy.animate({ center: { eles: cy.$id(latest.id) }, duration: 150 });
+          }
+        } else if (!autoFollow && !userMovedRef.current) {
+          fit(cy);
+        }
+      }
     }
     layoutRef.current = next;
   }, [view]);
@@ -170,7 +220,22 @@ export function SearchGraphCanvas({ onSelect, selectedIndex, view }: SearchGraph
     if (selectedIndex !== undefined) cy.$id(nodeId(selectedIndex)).addClass("selected-node");
   }, [selectedIndex, view]);
 
-  return <div className="evolve-canvas" ref={hostRef} />;
+  const handleFit = () => {
+    userMovedRef.current = false;
+    const cy = cyRef.current;
+    if (cy) fit(cy);
+  };
+
+  return (
+    <div className="evolve-canvas-wrap">
+      <div className="evolve-canvas" ref={hostRef} />
+      <div className="evolve-canvas-toolbar">
+        <button type="button" className="evolve-canvas-btn" onClick={handleFit} title="Fit all nodes in view">
+          {"⤢ Fit"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function toElements(nodes: PositionedNode[], edges: PositionedEdge[]): ElementDefinition[] {
@@ -195,11 +260,35 @@ function toElements(nodes: PositionedNode[], edges: PositionedEdge[]): ElementDe
   ];
 }
 
+function toLabelElements(labels: PositionedLabel[]): ElementDefinition[] {
+  return labels.map((label) => ({
+    data: {
+      color: label.color,
+      id: label.id,
+      label: label.text,
+      type: "label",
+    },
+    position: { x: label.x, y: label.y },
+    selectable: false,
+  }));
+}
+
 function fit(cy: Core): void {
   cy.resize();
-  cy.fit(undefined, 30);
-  if (cy.zoom() > 1.4) {
-    cy.zoom(1.4);
+  cy.fit(undefined, 20);
+  // Allow zoom up to 2.0 so small runs don't look like dots.
+  // Below 1.0 means the canvas shows more than the nodes need; above
+  // means it zooms in. For a 12-candidate run the fit naturally lands
+  // around 0.5–0.8, which is fine. For a 3-candidate run it would be
+  // ~2.0, which makes nodes comfortably large.
+  const zoom = cy.zoom();
+  if (zoom > 2.0) {
+    cy.zoom(2.0);
+    cy.center();
+  } else if (zoom < 0.3) {
+    // Don't force a zoom-in on large runs — the user can pan. But set
+    // a floor so nodes are at least ~10px (size 34 * 0.3 ≈ 10).
+    cy.zoom(0.3);
     cy.center();
   }
 }

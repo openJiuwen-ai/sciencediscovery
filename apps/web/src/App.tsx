@@ -219,6 +219,7 @@ import { EvidenceModal } from "./EvidenceModal.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
 import { MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
+import { EvolveAlgorithmPicker } from "./evolve/EvolveAlgorithmPicker.js";
 import { EvolvePanel } from "./evolve/EvolvePanel.js";
 import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 // The full-screen explorer is heavy (d3-force + the artifacts panel) and only
@@ -1084,6 +1085,16 @@ export function App() {
   const [timelineMessageIds, setTimelineMessageIds] = useState<Readonly<Record<string, string>>>({});
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
+  const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
+  const showEvolveAlgorithmPicker =
+    /^\/evolve-design(?:\s|$)/.test(message) && !message.includes("--algorithm") && !evolvePickerDismissed;
+
+  function selectEvolveAlgorithm(algorithm: "puct" | "openevolve"): void {
+    const afterCommand = message.replace(/^\/evolve-design\s*/, "");
+    setMessage(`/evolve-design --algorithm ${algorithm} ${afterCommand}`.trimEnd());
+    setEvolvePickerDismissed(false);
+    requestAnimationFrame(() => composerTextarea.current?.focus());
+  }
   const [composerReferences, setComposerReferences] = useState<ComposerReference[]>([]);
   const [pendingAnnotations, setPendingAnnotations] = useState<ArtifactAnnotation[]>([]);
   const [workbenchIndex, setWorkbenchIndex] = useState<WorkbenchSearchResult[]>([]);
@@ -4118,10 +4129,15 @@ export function App() {
                 </div>
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
+                  {showEvolveAlgorithmPicker ? <EvolveAlgorithmPicker onSelect={selectEvolveAlgorithm} onDismiss={() => setEvolvePickerDismissed(true)} /> : null}
                   <ComposerCommandChips commands={selectedComposerCommands} onRemove={removeComposerCommand} />
                   <ComposerReferenceChips references={composerReferences} onRemove={removeComposerReference} />
                   {pendingAnnotations.length ? <div className="annotation-chips">{pendingAnnotations.map((annotation) => <button key={annotation.id} onClick={() => setPendingAnnotations((current) => current.filter((item) => item.id !== annotation.id))} title={`Remove annotation: ${annotation.artifactLogicalName}: ${annotation.note}`} type="button"><TargetIcon size={12} /> {annotation.artifactLogicalName}: {annotation.note} <CloseIcon size={12} /></button>)}</div> : null}
-                  <textarea ref={composerTextarea} disabled={sessionArchived} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => {
+                  <textarea ref={composerTextarea} disabled={sessionArchived} value={message} onChange={(event) => {
+                    const value = event.target.value;
+                    setMessage(value);
+                    if (!value.startsWith("/evolve-design")) setEvolvePickerDismissed(false);
+                  }} onKeyDown={(event) => {
                     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
                     if (composerTrigger) return;
                     event.preventDefault();
@@ -4446,7 +4462,7 @@ export function App() {
             // "better" means is the one question only they can answer.
             setArtifactModalName(undefined);
             setArtifactModalVersion(undefined);
-            setMessage(`/evolve make the artifact ${seed.label} better: `);
+            setMessage(`/evolve-design make the artifact ${seed.label} better: `);
           }}
           onMissing={closeMissingArtifact}
           onNavigateArtifact={(name) => {

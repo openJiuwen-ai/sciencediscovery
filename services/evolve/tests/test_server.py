@@ -75,9 +75,9 @@ def test_an_unknown_algorithm_is_refused(client: TestClient) -> None:
 
 def test_an_unknown_engine_is_refused(client: TestClient) -> None:
     response = client.post("/runs", json={
-        # `era` used to stand in for "an engine that does not exist yet"; it
-        # exists now, so this needs a name that still does not.
-        "search_id": "run-bad", "scorecard_hash": "sha256:card", "engine": "openevolve",
+        # `era` and `openevolve` used to stand in for "an engine that does
+        # not exist yet"; both exist now, so this needs a name that still does not.
+        "search_id": "run-bad", "scorecard_hash": "sha256:card", "engine": "nonexistent-engine",
     })
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "unknown_engine"

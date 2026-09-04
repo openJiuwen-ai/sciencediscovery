@@ -74,18 +74,29 @@ export interface PositionedEdge {
   type: "expands" | "inspires";
 }
 
+/** A label rendered as a Cytoscape node, used for island band headers. */
+export interface PositionedLabel {
+  color: string;
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+}
+
 export interface SearchGraphLayout {
   edges: PositionedEdge[];
   /** How many candidates were left out by the scale cap; 0 when all are drawn. */
   hidden: number;
+  /** OpenEvolve only: one label per island band, placed at the left edge. */
+  labels: PositionedLabel[];
   nodes: PositionedNode[];
 }
 
 /** Beyond this the picture stops being readable and starts being expensive. */
 export const MAX_DRAWN_NODES = 200;
 
-const COLUMN = 150;
-const ROW = 64;
+const COLUMN = 80;
+const ROW = 48;
 const BASE_SIZE = 34;
 
 export function nodeId(nodeIndex: number): string {
@@ -118,10 +129,16 @@ export function rankScores(candidates: readonly EvolveCandidateView[]): Map<numb
 /**
  * Position every candidate.
  *
- * PUCT: `x` is depth, `y` is the candidate's order among the nodes at that depth.
- * OpenEvolve: `x` is still depth, but each island gets its own horizontal band,
- * because lineage there is a forest and interleaving the islands would draw
- * crossings that mean nothing.
+ * PUCT: `x` is depth (tree level), `y` is the candidate's order among the
+ * nodes at that depth. The picture is a tree growing left-to-right.
+ *
+ * OpenEvolve: `x` is the iteration number (search timeline), so candidates
+ * appear from left to right in the order the search produced them. Each island
+ * gets its own horizontal band — candidates on island 0 are in the top band,
+ * island 1 in the middle, island 2 at the bottom. Parent-child edges that
+ * cross bands are migrations or cross-island mutations, which is exactly what
+ * the user wants to see: within-island edges are short and horizontal;
+ * cross-island edges are diagonal and show diversity flow.
  */
 export function layoutSearchGraph(view: EvolveRunView, maxNodes = MAX_DRAWN_NODES): SearchGraphLayout {
   const drawn = selectDrawable(view, maxNodes);
@@ -133,7 +150,9 @@ export function layoutSearchGraph(view: EvolveRunView, maxNodes = MAX_DRAWN_NODE
   const nodes = drawn.map((candidate) => {
     const island = candidate.island ?? 0;
     const band = byIsland ? islands.indexOf(island) : 0;
-    const key = `${band}:${candidate.depth}`;
+    // OpenEvolve: x = iteration (timeline); PUCT: x = depth (tree level)
+    const xValue = byIsland ? candidate.nodeIndex : candidate.depth;
+    const key = `${band}:${xValue}`;
     const row = rowCursor.get(key) ?? 0;
     rowCursor.set(key, row + 1);
     const rank = ranks.get(candidate.nodeIndex) ?? 0;
@@ -145,12 +164,10 @@ export function layoutSearchGraph(view: EvolveRunView, maxNodes = MAX_DRAWN_NODE
       nodeIndex: candidate.nodeIndex,
       rank,
       refused: candidate.accepted === false && candidate.category === "constraint-violated",
-      // Size carries how often the search came back to a node. It is the one
-      // channel that shows where the budget actually went.
       size: BASE_SIZE + Math.min(candidate.visits, 8) * 3,
-      title: nodeTitle(candidate, rank),
+      title: nodeTitle(candidate, rank, byIsland),
       valid: candidate.valid,
-      x: candidate.depth * COLUMN,
+      x: xValue * COLUMN,
       y: band * (ROW * 6) + row * ROW,
     };
   });
@@ -167,7 +184,34 @@ export function layoutSearchGraph(view: EvolveRunView, maxNodes = MAX_DRAWN_NODE
     });
   }
 
-  return { edges, hidden: view.candidates.length - drawn.length, nodes };
+  // OpenEvolve: add inspiration edges (dotted) from the inspiration program
+  // to the candidate it inspired.
+  if (byIsland) {
+    for (const candidate of drawn) {
+      if (candidate.inspirationIndex === undefined || candidate.inspirationIndex === null) continue;
+      if (!present.has(candidate.inspirationIndex)) continue;
+      edges.push({
+        id: `i${candidate.inspirationIndex}-${candidate.nodeIndex}`,
+        source: nodeId(candidate.inspirationIndex),
+        target: nodeId(candidate.nodeIndex),
+        type: "inspires",
+      });
+    }
+  }
+
+  // OpenEvolve: one label per island band, placed at the left edge so the
+  // user sees "Island 0", "Island 1", "Island 2" as row headers.
+  const labels: PositionedLabel[] = byIsland
+    ? islands.map((island) => ({
+        color: SEARCH_COLORS.island[island % SEARCH_COLORS.island.length]!,
+        id: `label-island-${island}`,
+        text: `Island ${island}`,
+        x: -60,
+        y: (islands.indexOf(island) ?? 0) * (ROW * 6),
+      }))
+    : [];
+
+  return { edges, hidden: view.candidates.length - drawn.length, labels, nodes };
 }
 
 /**
@@ -267,14 +311,21 @@ function nodeLabel(candidate: EvolveCandidateView): string {
   return `#${candidate.nodeIndex}\n${score}`;
 }
 
-function nodeTitle(candidate: EvolveCandidateView, rank: number): string {
+function nodeTitle(candidate: EvolveCandidateView, rank: number, byIsland: boolean = false): string {
   const parts = [
     `#${candidate.nodeIndex}`,
     candidate.score === null ? "failed" : `score ${candidate.score.toFixed(4)}`,
     `rank ${(rank * 100).toFixed(0)}%`,
     `visits ${candidate.visits}`,
-    `depth ${candidate.depth}`,
   ];
+  if (byIsland) {
+    parts.push(`island ${candidate.island ?? 0}`);
+    if (candidate.migratedToIsland !== undefined) parts.push(`migrated→${candidate.migratedToIsland}`);
+    if (candidate.inspirationIndex !== undefined) parts.push(`inspired by #${candidate.inspirationIndex}`);
+    if (candidate.cellVia === "migration") parts.push("via migration");
+  } else {
+    parts.push(`depth ${candidate.depth}`);
+  }
   if (candidate.accepted === false) parts.push(candidate.rejectedBy ?? candidate.category ?? "refused");
   return parts.join(" · ");
 }

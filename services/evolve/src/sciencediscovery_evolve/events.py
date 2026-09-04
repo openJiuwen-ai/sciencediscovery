@@ -183,6 +183,9 @@ def expanded(
     iteration: int | None = None,
     promise: float | None = None,
     worker: int | None = None,
+    island: int | None = None,
+    program_id: str | None = None,
+    inspiration_indexes: list[int] | None = None,
 ) -> dict[str, Any]:
     event: dict[str, Any] = {
         "depth": depth,
@@ -200,6 +203,9 @@ def expanded(
         ("iteration", iteration),
         ("promise", None if promise is None else round(float(promise), 4)),
         ("worker", worker),
+        ("island", island),
+        ("programId", program_id),
+        ("inspirationIndexes", inspiration_indexes),
     ):
         if value is not None:
             event[key] = value
@@ -246,6 +252,38 @@ def merged(
     if rejected_by is not None:
         event["rejectedBy"] = rejected_by
     return event
+
+
+def inserted(
+    node_index: int,
+    complexity_bin: int,
+    diversity_bin: int,
+    island: int,
+    via: str,
+) -> dict[str, Any]:
+    """A candidate entered a MAP-Elites cell (openevolve only)."""
+    return {
+        "complexityBin": complexity_bin,
+        "diversityBin": diversity_bin,
+        "island": island,
+        "nodeIndex": node_index,
+        "type": "inserted",
+        "via": via,
+    }
+
+
+def migrated(
+    node_index: int,
+    from_island: int,
+    to_island: int,
+) -> dict[str, Any]:
+    """An elite was copied from one island to its neighbour (openevolve only)."""
+    return {
+        "fromIsland": from_island,
+        "nodeIndex": node_index,
+        "toIsland": to_island,
+        "type": "migrated",
+    }
 
 
 def cost(tokens: int, cents: int) -> dict[str, Any]:

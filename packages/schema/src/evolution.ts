@@ -319,6 +319,10 @@ export interface EvolveBudget {
  * what a run *is*.
  */
 export interface EvolveRunProposal {
+  /** Which search algorithm runs the loop. The user's `/evolve-design` command
+   *  may carry `--algorithm openevolve`; the agent reads that and puts it here.
+   *  Unset defaults to `"puct"`. */
+  algorithm?: EvolveAlgorithm;
   /** What the search is for, in the user's terms. Shown on the run card. */
   statement: string;
   /** How a candidate gets its number, in plain words — the one line a person

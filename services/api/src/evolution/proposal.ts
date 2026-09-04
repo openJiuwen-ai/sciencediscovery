@@ -353,7 +353,7 @@ async function assembleGoal(
   };
 
   return {
-    algorithm: "puct",
+    algorithm: proposal.algorithm ?? "puct",
     baselineProgramCas: startCas,
     budget: {
       candidateTimeoutSeconds: 180,
