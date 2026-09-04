@@ -421,8 +421,10 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(card.getByLabel("Password", { exact: true })).toHaveValue("");
         await expect(card.getByLabel("Password", { exact: true })).toHaveAttribute("placeholder", /keep the stored one/);
         await dialog.locator(".system-config-footer").getByRole("button", { name: "保存", exact: true }).click();
-        await expect(dialog.getByRole("alert")).toContainText("Save credentials");
+        const blockedSaveAlert = dialog.getByRole("alert").filter({ hasText: "Save credentials" });
+        await expect(blockedSaveAlert).toBeVisible();
         await expect(card.getByRole("button", { name: "Save credentials" })).toBeVisible();
+        await blockedSaveAlert.getByRole("button").click();
         await card.getByLabel("Username").fill("operator");
         await card.getByLabel("Password", { exact: true }).fill("new-secret");
         await card.getByLabel("Private key file", { exact: true }).fill("~/.ssh/updated_ed25519");
@@ -436,6 +438,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(card).toContainText("All configured authentication methods failed");
         await expect(card).toContainText("user operator · password stored · key stored");
         await expect(card).not.toContainText("cannot deploy: no runner and no Node.js 22+ found");
+        await card.scrollIntoViewIfNeeded();
       },
     );
 
