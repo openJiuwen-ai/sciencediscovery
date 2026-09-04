@@ -31,9 +31,10 @@ type SessionWithRemoteOverride = SessionDetail & { remoteRunnerHostIds?: string[
  *   3. SSH 凭据只接受本机密钥路径，不出现私钥粘贴框；生成密钥后只展示可复制公钥。
  *   4. ssh_config 先展示 Host 列表，点选一项后把别名、端口、用户和密钥路径导入可编辑表单。
  *   5. 登记请求只发送 privateKeyPath；未知主机密钥在设置对话框内确认后重试成功。
- *   6. 在 Project 设置里勾选允许名单，Session 可收窄、禁用或恢复继承；没有互斥选机下拉。
- *   7. 会话栏徽章完整显示且文案只表示“远端可用”；连接 runner 后展示版本差异与部署来源。
- *   8. 远端 workspace 只读同步记录与删除入口在 Session 设置里，且没有任何路径输入或 Push/Pull 控件。
+ *   6. 更新凭据时用户名回填、秘密不回显；外层保存不会丢弃子表单，提交后卡片展示安全的已保存标记和最新探测错误。
+ *   7. 在 Project 设置里勾选允许名单，Session 可收窄、禁用或恢复继承；没有互斥选机下拉。
+ *   8. 会话栏徽章完整显示且文案只表示“远端可用”；连接 runner 后展示版本差异与部署来源。
+ *   9. 远端 workspace 只读同步记录与删除入口在 Session 设置里，且没有任何路径输入或 Push/Pull 控件。
  * Environment: Isolated local stack at E2E_BASE_URL；Project/Session 真实创建，SSH 主机、自动部署、隧道和同步记录由浏览器本地路由确定性模拟。
  * Type: mocked
  * LLM: none — 验证设置、状态和徽章用户流程，不发起模型调用。
@@ -159,12 +160,15 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         connectionKind: "ssh",
         createdAt: new Date().toISOString(),
         id: "e2e-added-ssh",
+        hasPassword: Boolean(body.password),
+        hasPrivateKey: Boolean(body.privateKeyPath),
         port: typeof body.port === "number" ? body.port : undefined,
         ...(body.privateKeyPath ? { publicKey: generatedPublicKey } : {}),
         runnerCommand: body.runnerCommand ?? "sciencediscovery-runner",
         runnerStatus: { hostId: "e2e-added-ssh", state: "disconnected" },
         status: "ready",
         updatedAt: new Date().toISOString(),
+        ...(body.username ? { username: body.username } : {}),
       };
       return route.fulfill({ json: registeredSshHost, status: 201 });
     }
@@ -212,7 +216,18 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     json: { privateKeyPath: generatedKeyPath, publicKey: generatedPublicKey },
   }));
   await page.route("**/api/remote-hosts/*/credentials", async (route) => {
-    Object.assign(savedCredentials, route.request().postDataJSON() as Record<string, unknown>);
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    Object.assign(savedCredentials, body);
+    registeredSshHost = {
+      ...registeredSshHost!,
+      capabilities: undefined,
+      error: "All configured authentication methods failed",
+      hasPassword: true,
+      hasPrivateKey: true,
+      status: "error",
+      updatedAt: new Date().toISOString(),
+      username: String(body.username),
+    };
     return route.fulfill({ json: registeredSshHost });
   });
   await page.route(`**/api/remote-hosts/${hostId}/runner/*`, async (route) => {
@@ -397,11 +412,17 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
 
     await journey.step(
       "已登记机器可在卡片里更新凭据",
-      "SSH 卡片的 Credentials 按钮展开更新表单，本机密钥路径随 PUT 保存且没有私钥粘贴框。",
+      "SSH 卡片的 Credentials 表单回填用户名但不回显秘密；外层保存会提示先处理该表单。提交后卡片展示用户名、密码/密钥已保存标记，以及立即重探测得到的真实认证错误。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const card = dialog.locator(".remote-host-card", { hasText: "192.168.100.236" });
         await card.getByRole("button", { name: "Credentials" }).click();
+        await expect(card.getByLabel("Username")).toHaveValue("researcher");
+        await expect(card.getByLabel("Password", { exact: true })).toHaveValue("");
+        await expect(card.getByLabel("Password", { exact: true })).toHaveAttribute("placeholder", /keep the stored one/);
+        await dialog.locator(".system-config-footer").getByRole("button", { name: "保存", exact: true }).click();
+        await expect(dialog.getByRole("alert")).toContainText("Save credentials");
+        await expect(card.getByRole("button", { name: "Save credentials" })).toBeVisible();
         await card.getByLabel("Username").fill("operator");
         await card.getByLabel("Password", { exact: true }).fill("new-secret");
         await card.getByLabel("Private key file", { exact: true }).fill("~/.ssh/updated_ed25519");
@@ -412,6 +433,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         expect(savedCredentials.privateKeyPath).toBe("~/.ssh/updated_ed25519");
         expect("privateKey" in savedCredentials).toBe(false);
         await expect(card.getByLabel("Username")).toHaveCount(0);
+        await expect(card).toContainText("All configured authentication methods failed");
+        await expect(card).toContainText("user operator · password stored · key stored");
+        await expect(card).not.toContainText("cannot deploy: no runner and no Node.js 22+ found");
       },
     );
 

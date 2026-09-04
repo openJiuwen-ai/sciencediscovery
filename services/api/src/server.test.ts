@@ -24,6 +24,7 @@ import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 
 import { createRunnerServer, type RunnerConfig } from "@sciencediscovery/runner";
+import { RemoteComputeClient, type RemoteSshAccess, type RemoteTransport } from "@sciencediscovery/executor";
 import { ModelCatalogFetchError } from "@sciencediscovery/model";
 import { resolveModelFacts } from "@sciencediscovery/schema";
 import type {
@@ -60,6 +61,7 @@ import type {
   Project,
   RuntimeSettingsDetails,
   RuntimeStatus,
+  RemoteHostTarget,
   Session,
   SessionArtifactOutput,
   SessionDetail,
@@ -478,6 +480,79 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<{ body: 
   const response = await fetch(url, init);
   return { body: (await response.json()) as T, response };
 }
+
+test("updating SSH credentials immediately probes with the newly stored username and password", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `remote-credentials-probe-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  const probedTargets: RemoteSshAccess[] = [];
+  const transport: RemoteTransport = {
+    open: async () => { throw new Error("Unexpected SSH tunnel"); },
+    run: async (target) => {
+      probedTargets.push(structuredClone(target));
+      if (probedTargets.length === 1) throw new Error("All configured authentication methods failed");
+      return {
+        exitCode: 0,
+        stderr: "",
+        stdout: "platform=Linux\ncpu=8\nmemory_kib=16777216\ngpu=\ncuda=\nconda=0\nmodules=0\ncontainers=\nscratch=\nsbatch=0\nrunner=0\nnode=v22.19.0\n",
+      };
+    },
+  };
+  const remoteCompute = new RemoteComputeClient(
+    resolve(tempRoot, "ssh-config"),
+    async () => { throw new Error("The HTTP layer passes explicit SSH access"); },
+    transport,
+  );
+  const emptyMcpCatalog: McpCatalog = {
+    loadedAt: new Date().toISOString(),
+    revision: "remote-credentials-test",
+    servers: [],
+  };
+  const mcpTransport: McpTransportClient = {
+    catalog: async () => emptyMcpCatalog,
+    invoke: async () => { throw new Error("Credential updates do not invoke MCP"); },
+    reload: async () => emptyMcpCatalog,
+  };
+  const server = createApiServer(testConfig(tempRoot), { mcpTransport, remoteCompute });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(async () => {
+    await new Promise<void>((resolveClose) => {
+      server.close(() => resolveClose());
+      server.closeAllConnections();
+    });
+    await rm(tempRoot, { force: true, recursive: true });
+  });
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  const registered = await jsonRequest<RemoteHostTarget>(`${origin}/api/remote-hosts`, {
+    body: JSON.stringify({
+      alias: "credential-test",
+      connectionKind: "ssh",
+      password: "wrong-password",
+      username: "old-user",
+    }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(registered.response.status, 201);
+  assert.equal(registered.body.error, "All configured authentication methods failed");
+
+  const updated = await jsonRequest<RemoteHostTarget>(`${origin}/api/remote-hosts/${registered.body.id}/credentials`, {
+    body: JSON.stringify({ password: "correct-password", username: "new-user" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+
+  assert.equal(updated.response.status, 200);
+  assert.equal(probedTargets.length, 2, "registration and credential update each probe once");
+  assert.equal(probedTargets[1]!.credentials.username, "new-user");
+  assert.equal(probedTargets[1]!.credentials.password, "correct-password");
+  assert.equal(updated.body.username, "new-user");
+  assert.equal(updated.body.hasPassword, true);
+  assert.equal(updated.body.status, "ready");
+  assert.equal(updated.body.capabilities?.platform, "Linux");
+  assert.equal(updated.body.error, undefined);
+  assert.equal("password" in updated.body, false);
+});
 
 async function createTestModel(
   origin: string,

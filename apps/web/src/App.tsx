@@ -750,6 +750,12 @@ export function SystemSettingsFooter({
   </div>;
 }
 
+export function remoteCredentialDraftSaveError(editing: boolean): string | undefined {
+  return editing
+    ? "Remote machine credentials use the Save credentials button on their machine card. Save or cancel that form before saving System settings."
+    : undefined;
+}
+
 function measureWorkspaceMaxWidth(): number {
   if (typeof window === "undefined") return DEFAULT_WORKSPACE_WIDTH;
   const sidebarWidth = typeof document === "undefined"
@@ -1169,6 +1175,7 @@ export function App() {
   // say why it opened instead of looking like an ordinary settings visit.
   const [tokenRejected, setTokenRejected] = useState(false);
   const [systemSettingsSaving, setSystemSettingsSaving] = useState(false);
+  const [remoteCredentialDraftOpen, setRemoteCredentialDraftOpen] = useState(false);
   const [providerDraftDirty, setProviderDraftDirty] = useState(false);
   const [projectSettings, setProjectSettings] = useState<RuntimeSettingsDetails>();
   const [settingsTarget, setSettingsTarget] = useState<ResourceTarget>();
@@ -2480,6 +2487,11 @@ export function App() {
 
   async function saveSystemSettings(closeAfterSave: boolean): Promise<void> {
     if (systemSettingsSaving) return;
+    const remoteDraftError = remoteCredentialDraftSaveError(remoteCredentialDraftOpen);
+    if (remoteDraftError) {
+      reportSystemSettingsError(remoteDraftError);
+      return;
+    }
     reportSystemSettingsError();
     setSystemSettingsSaving(true);
     try {
@@ -4813,6 +4825,7 @@ export function App() {
               {systemSettingsGroup === "permissions" ? <PermissionGrantManager grants={permissionGrants.filter((grant) => grant.scope !== "once")} onRevoke={(grant) => void revokePermission(grant)} /> : null}
               {systemSettingsGroup === "remote" ? <RemoteHostManager
                 client={client}
+                onCredentialEditStateChange={setRemoteCredentialDraftOpen}
                 onError={reportSystemSettingsError}
               /> : null}
               {systemSettingsGroup === "environments" ? <EnvironmentManager client={client} onError={reportSystemSettingsError} /> : null}

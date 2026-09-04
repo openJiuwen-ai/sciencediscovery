@@ -115,8 +115,9 @@ interface HostKeyPrompt {
  * raises a permission card in the conversation; Project/Session allowlists
  * deliberately live on those objects' own settings.
  */
-export function RemoteHostManager({ client, onError }: {
+export function RemoteHostManager({ client, onCredentialEditStateChange, onError }: {
   client: ApiClient;
+  onCredentialEditStateChange?: (editing: boolean) => void;
   onError: (message: string) => void;
 }) {
   const [hosts, setHosts] = useState<RemoteHostTarget[]>([]);
@@ -151,6 +152,31 @@ export function RemoteHostManager({ client, onError }: {
   }
 
   useEffect(() => { void refresh().catch((error: Error) => onError(error.message)); }, [client]);
+  useEffect(() => () => onCredentialEditStateChange?.(false), [onCredentialEditStateChange]);
+
+  function clearCredentialDraft(): void {
+    setCredUsername("");
+    setCredPassword("");
+    setCredKeyPath("");
+    setCredPassphrase("");
+    setCredGeneratedKey(undefined);
+  }
+
+  function toggleCredentialsEditor(host: RemoteHostTarget): void {
+    if (editingCredentials === host.id) {
+      setEditingCredentials(undefined);
+      clearCredentialDraft();
+      onCredentialEditStateChange?.(false);
+      return;
+    }
+    setEditingCredentials(host.id);
+    setCredUsername(host.username ?? "");
+    setCredPassword("");
+    setCredKeyPath("");
+    setCredPassphrase("");
+    setCredGeneratedKey(undefined);
+    onCredentialEditStateChange?.(true);
+  }
 
   /** Password and key are write-only: clear them as soon as they are sent. */
   function clearSshForm(): void {
@@ -380,7 +406,7 @@ export function RemoteHostManager({ client, onError }: {
     event.preventDefault();
     setBusyId(`credentials:${host.id}`);
     try {
-      await client.updateRemoteHostCredentials(host.id, {
+      const updated = await client.updateRemoteHostCredentials(host.id, {
         ...(credUsername.trim() ? { username: credUsername.trim() } : {}),
         // Empty fields keep the stored value; there is no way to read them back.
         ...(credPassword ? { password: credPassword } : {}),
@@ -388,12 +414,13 @@ export function RemoteHostManager({ client, onError }: {
         ...(credPassphrase ? { passphrase: credPassphrase } : {}),
       });
       setEditingCredentials(undefined);
-      setCredUsername("");
-      setCredPassword("");
-      setCredKeyPath("");
-      setCredPassphrase("");
-      setCredGeneratedKey(undefined);
-      await refresh();
+      clearCredentialDraft();
+      onCredentialEditStateChange?.(false);
+      setHosts((current) => current.map((candidate) => candidate.id === updated.id
+        ? { ...updated, ...(candidate.runnerStatus ? { runnerStatus: candidate.runnerStatus } : {}) }
+        : candidate));
+      await refresh().catch((error: Error) => onError(`Credentials were saved, but the machine list could not refresh: ${error.message}`));
+      if (updated.error) reportHostError(updated);
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not update credentials");
     } finally {
@@ -424,11 +451,12 @@ export function RemoteHostManager({ client, onError }: {
   }
 
   const credentialsEditor = (host: RemoteHostTarget) => <form className="remote-host-credentials-form" onSubmit={(event) => void saveCredentials(event, host)}>
+    <small>Saved values stay hidden. Leave password and key fields empty to keep the stored values.</small>
     <div className="remote-host-form-fields">
       <label><span>Username</span><input autoComplete="off" value={credUsername} onChange={(event) => setCredUsername(event.target.value)} placeholder="researcher" /></label>
       <label><span>Password</span><input autoComplete="new-password" type="password" value={credPassword} onChange={(event) => setCredPassword(event.target.value)} placeholder="Leave empty to keep the stored one" /></label>
-      <label><span>Private key file</span><input autoComplete="off" value={credKeyPath} onChange={(event) => setCredKeyPath(event.target.value)} placeholder="~/.ssh/id_ed25519" /></label>
-      <label><span>Key passphrase</span><input autoComplete="new-password" type="password" value={credPassphrase} onChange={(event) => setCredPassphrase(event.target.value)} placeholder="Only if the key is encrypted" /></label>
+      <label><span>Private key file</span><input autoComplete="off" value={credKeyPath} onChange={(event) => setCredKeyPath(event.target.value)} placeholder={host.hasPrivateKey ? "Leave empty to keep the stored key" : "~/.ssh/id_ed25519"} /></label>
+      <label><span>Key passphrase</span><input autoComplete="new-password" type="password" value={credPassphrase} onChange={(event) => setCredPassphrase(event.target.value)} placeholder={host.hasPrivateKey ? "Leave empty to keep the stored passphrase" : "Only if the key is encrypted"} /></label>
     </div>
     <div className="remote-host-form-extras">
       <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void generateCredKey()} type="button">Generate a key pair</button>
@@ -436,7 +464,7 @@ export function RemoteHostManager({ client, onError }: {
     </div>
     {credGeneratedKey ? renderGeneratedKey(credGeneratedKey, host.alias, credUsername.trim()) : null}
     <div className="remote-host-form-actions">
-      <button className="secondary-button" onClick={() => setEditingCredentials(undefined)} type="button">Cancel</button>
+      <button className="secondary-button" onClick={() => toggleCredentialsEditor(host)} type="button">Cancel</button>
       <button className="primary-button" disabled={Boolean(busyId)} type="submit">Save credentials</button>
     </div>
   </form>;
@@ -465,6 +493,11 @@ export function RemoteHostManager({ client, onError }: {
       const untrustedKey = host.hostKey?.trusted === false ? host.hostKey : undefined;
       const publicKey = host.publicKey;
       const source = runnerSource(host);
+      const storedCredentials = [
+        host.username ? `user ${host.username}` : undefined,
+        host.hasPassword ? "password stored" : undefined,
+        host.hasPrivateKey ? "key stored" : undefined,
+      ].filter(Boolean).join(" · ");
       return <article className={`remote-host-card ${host.status}`} key={host.id}>
         <div className="remote-host-card-main">
           <div className="remote-host-card-title"><strong>{host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? "connected" : state}</span></div>
@@ -476,13 +509,14 @@ export function RemoteHostManager({ client, onError }: {
               : null}
           {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
           {host.runnerStatus?.error ? <small>{host.runnerStatus.error}</small> : null}
+          {storedCredentials ? <small>{storedCredentials}</small> : null}
           {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
           {publicKey ? <div className="remote-host-pubkey-line"><code title={publicKey}>{publicKey}</code><CopyButton getText={() => publicKey} label="Copy public key" /></div> : null}
         </div>
         <div className="remote-host-actions">
           <button className="secondary-button" disabled={Boolean(busyId) || (!connected && !runnerUsable(host))} onClick={() => void toggleRunnerConnection(host, connected)} type="button">{connected ? "Disconnect" : "Connect runner"}</button>
           <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void probe(host)} type="button">Refresh probe</button>
-          {host.connectionKind === "ssh" ? <button aria-expanded={editingCredentials === host.id} className="secondary-button" disabled={Boolean(busyId)} onClick={() => setEditingCredentials(editingCredentials === host.id ? undefined : host.id)} type="button">Credentials</button> : null}
+          {host.connectionKind === "ssh" ? <button aria-expanded={editingCredentials === host.id} className="secondary-button" disabled={Boolean(busyId)} onClick={() => toggleCredentialsEditor(host)} type="button">Credentials</button> : null}
           {untrustedKey ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => setHostKeyPrompt({ changed: false, hostKey: untrustedKey, origin: host.id, target: host.alias, resume: async () => { setHostKeyPrompt(undefined); await probe(host, untrustedKey); } })} type="button">Trust host key</button> : null}
           <button className="danger-button" disabled={Boolean(busyId)} onClick={() => void removeHost(host)} type="button">Delete</button>
         </div>

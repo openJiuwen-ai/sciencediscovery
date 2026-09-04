@@ -55,6 +55,8 @@ export interface ApiServerDependencies {
   fetchModelCatalog?: (options: { proxy?: ResolvedProxy; url: string }) => Promise<ModelsDevPayload>;
   /** Test seam: drive MCP through a stub transport instead of live servers. */
   mcpTransport?: McpTransportClient;
+  /** Test seam: exercise remote-host HTTP flows without connecting to a real SSH machine. */
+  remoteCompute?: RemoteComputeClient;
 }
 
 /**
@@ -370,7 +372,7 @@ export function createPlatformServices(
     // Credentials and trusted host keys live in the store, so the compute
     // client asks for them per machine instead of inheriting an ambient SSH
     // agent or the user's known_hosts.
-    remoteCompute: new RemoteComputeClient(
+    remoteCompute: dependencies.remoteCompute ?? new RemoteComputeClient(
       config.sshConfigPath,
       async (hostId) => store.remoteHostSshAccess(hostId),
     ),

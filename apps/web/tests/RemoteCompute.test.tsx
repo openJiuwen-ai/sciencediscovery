@@ -72,11 +72,15 @@ function buildHost(overrides: Partial<RemoteHostTarget> = {}): RemoteHostTarget 
   };
 }
 
-async function renderHost(host: RemoteHostTarget): Promise<{ output: string; renderer: ReactTestRenderer }> {
+async function renderHost(
+  host: RemoteHostTarget,
+  onCredentialEditStateChange?: (editing: boolean) => void,
+): Promise<{ output: string; renderer: ReactTestRenderer }> {
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
     renderer = create(createElement(RemoteHostManager, {
       client: { listRemoteHosts: async () => [host] } as ApiClient,
+      onCredentialEditStateChange,
       onError: () => undefined,
     }));
   });
@@ -84,16 +88,35 @@ async function renderHost(host: RemoteHostTarget): Promise<{ output: string; ren
 }
 
 test("an SSH authentication failure does not invent missing runner or Node capabilities", async () => {
+  const editStates: boolean[] = [];
   const { output, renderer } = await renderHost(buildHost({
     capabilities: undefined,
     error: "All configured authentication methods failed",
+    hasPassword: true,
+    hasPrivateKey: true,
     status: "error",
-  }));
+    username: "scientist",
+  }), (editing) => editStates.push(editing));
 
   assert.match(output, /All configured authentication methods failed/);
+  assert.match(output, /user scientist · password stored · key stored/);
   assert.doesNotMatch(output, /cannot deploy: no runner and no Node\.js 22\+ found/);
   assert.doesNotMatch(output, /OS unknown/);
+
+  const credentials = renderer.root.findAllByType("button")
+    .find((button) => button.children.join("") === "Credentials");
+  assert.ok(credentials);
+  await act(async () => credentials.props.onClick());
+  const inputs = renderer.root.findAllByType("input");
+  assert.equal(inputs[0]!.props.value, "scientist");
+  assert.equal(inputs[1]!.props.value, "");
+  assert.equal(inputs[1]!.props.placeholder, "Leave empty to keep the stored one");
+  assert.equal(inputs[2]!.props.value, "");
+  assert.equal(inputs[2]!.props.placeholder, "Leave empty to keep the stored key");
+  assert.match(JSON.stringify(renderer.toJSON()), /Saved values stay hidden/);
+  assert.deepEqual(editStates, [true]);
   await act(async () => renderer.unmount());
+  assert.deepEqual(editStates, [true, false]);
 });
 
 test("a successfully probed Linux host without a runner or Node keeps the deployment warning", async () => {

@@ -984,7 +984,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           }
           await consumeStagedKey(config.dataDir, body.privateKeyPath);
         }
-        sendJson(response, 200, await store.registerRemoteHost({
+        await store.registerRemoteHost({
           alias: host.alias,
           connectionKind: "ssh",
           ...(host.capabilities ? { capabilities: host.capabilities } : { error: host.error ?? "Not probed yet" }),
@@ -993,7 +993,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           ...(privateKey !== undefined ? { privateKey } : {}),
           runnerCommand: host.runnerCommand,
           ...(body.username !== undefined ? { username: body.username } : {}),
-        }));
+        });
+        // The response is the result of a fresh probe with the credentials
+        // just stored above. Returning the old error would make a successful
+        // save look ineffective until the user manually refreshed the host.
+        sendJson(response, 200, await probeRegisteredSshHost(host.id, host.runnerCommand));
         return;
       }
       // Generate a key pair for a machine that may not be registered yet. The

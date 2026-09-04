@@ -26,6 +26,7 @@ import {
   mergeRefreshedSessionDetail,
   mergeSessionDetailWithSummary,
   messageForSessionTitle,
+  remoteCredentialDraftSaveError,
   resourceLabelWithDraft,
   runSessionCreationOnce,
   SystemSettingsFooter,
@@ -263,4 +264,9 @@ test("renders the shared System settings commit and discard actions", () => {
   assert.match(html, />Save</);
   assert.match(html, />Save and close</);
   assert.equal((html.match(/type="button"/g) ?? []).length, 3);
+});
+
+test("System settings save tells users to submit an open machine credentials form", () => {
+  assert.match(remoteCredentialDraftSaveError(true) ?? "", /Save credentials/);
+  assert.equal(remoteCredentialDraftSaveError(false), undefined);
 });
