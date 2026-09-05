@@ -470,8 +470,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByText("Self-deployed CPU sandbox", { exact: true })).toBeVisible();
         await expect(dialog.getByText(/self-deployed · http:\/\/192\.168\.1\.20:4311 · token authenticated/)).toBeVisible();
         await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
-        // Close the system dialog before moving to the scoped settings.
-        await dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
+        await dialog.locator(".remote-host-card", { hasText: "e2e-direct-runner" }).scrollIntoViewIfNeeded();
       },
     );
 
@@ -479,6 +478,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "Project 设置里维护允许名单",
       "允许名单在 Project 自己的设置里：复选框与机器名在同一阅读行；勾选后该 Project 允许这台机器。",
       async () => {
+        await page.getByRole("dialog", { name: "系统设置" }).locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
         const dialog = await openProjectSettings();
         await expect(dialog.getByText("Remote compute", { exact: true })).toBeVisible();
         const allowedHost = dialog.getByRole("checkbox", { name: /institution-linux/ });
