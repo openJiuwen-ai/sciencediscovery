@@ -41,7 +41,7 @@ stages:
             GIT_REF: refs/heads/ci/codearts-resources
             GIT_TARGET_REF: refs/heads/ci/codearts-resources
             SH_FILE_PATH: .ci/codearts-resource.sh
-            ARTIFACT_PATH: .codearts-resources/publish
+            ARTIFACT_PATH: .ci-results/publish
             OBS_BUCKET: openjiuwen-ci
             OBS_DIRECTORY: sciencediscovery/cache/toolchains/v1/
             OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
@@ -72,7 +72,7 @@ stages:
             GIT_REF: refs/heads/ci/codearts-resources
             GIT_TARGET_REF: refs/heads/ci/codearts-resources
             SH_FILE_PATH: .ci/codearts-resource.sh
-            ARTIFACT_PATH: .codearts-resources/publish
+            ARTIFACT_PATH: .ci-results/publish
             OBS_BUCKET: openjiuwen-ci
             OBS_DIRECTORY: sciencediscovery/cache/qemu/v1/
             OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
@@ -103,7 +103,7 @@ stages:
             GIT_REF: refs/heads/ci/codearts-resources
             GIT_TARGET_REF: refs/heads/ci/codearts-resources
             SH_FILE_PATH: .ci/codearts-resource.sh
-            ARTIFACT_PATH: .codearts-resources/publish
+            ARTIFACT_PATH: .ci-results/publish
             OBS_BUCKET: openjiuwen-ci
             OBS_DIRECTORY: sciencediscovery/cache/qemu-emulator/v1/
             OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
@@ -136,7 +136,7 @@ stages:
             GIT_REF: refs/heads/ci/codearts-resources
             GIT_TARGET_REF: refs/heads/ci/codearts-resources
             SH_FILE_PATH: .ci/codearts-resource.sh
-            ARTIFACT_PATH: .codearts-resources/publish
+            ARTIFACT_PATH: .ci-results/publish
             OBS_BUCKET: openjiuwen-ci
             OBS_DIRECTORY: "sciencediscovery/cache/qemu-runner/v2/${{ pipeline.run_id }}/"
             OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
@@ -169,7 +169,7 @@ stages:
             GIT_REF: refs/heads/ci/codearts-resources
             GIT_TARGET_REF: refs/heads/ci/codearts-resources
             SH_FILE_PATH: .ci/codearts-resource.sh
-            ARTIFACT_PATH: .codearts-resources/publish
+            ARTIFACT_PATH: .ci-results/publish
             OBS_BUCKET: openjiuwen-ci
             OBS_DIRECTORY: "sciencediscovery/cache/qemu-runner/v2/${{ pipeline.run_id }}/verify/"
             OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com

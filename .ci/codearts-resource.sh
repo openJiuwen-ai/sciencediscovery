@@ -36,7 +36,7 @@
 # Inputs supplied through the build task's ENVS records:
 #   RESOURCE_BUILD_COMMIT   the resources-branch commit the pipeline resolved
 #   RESOURCE_BUILD_RUN_ID   the pipeline run id, part of the QEMU Runner key
-#   CI_PUBLISH_DIR          staging directory, default .codearts-resources/publish
+#   CI_PUBLISH_DIR          staging directory, default .ci-results/publish
 
 set -Eeuo pipefail
 
@@ -56,7 +56,10 @@ esac
 
 cd "$repo_root"
 work_dir="$repo_root/.codearts-resources"
-publish_dir="${CI_PUBLISH_DIR:-$work_dir/publish}"
+# The CI layers stage into .ci-results/publish and their uploads land, so
+# this uses the same path rather than a second one whose handling in the
+# build task's OBS action cannot be read from here.
+publish_dir="${CI_PUBLISH_DIR:-$repo_root/.ci-results/publish}"
 case "$publish_dir" in
   /*) ;;
   *) publish_dir="$repo_root/$publish_dir" ;;
