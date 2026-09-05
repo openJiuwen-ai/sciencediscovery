@@ -127,6 +127,27 @@ test("no workflow step spends the pipeline quota", async () => {
   }
 });
 
+test("the emulated stack gets a health budget its services can meet", async () => {
+  const stack = await readFile(resolve(ciDirectory, "..", "scripts", "start-stack.sh"), "utf8");
+  // wait_healthy polls every 0.2s, and its per-mode defaults (50 and 300
+  // attempts) are 10s and 60s -- native-speed figures. The failure is not
+  // confined to the one sidecar that misses it: wait_healthy returning 1 trips
+  // set -e, cleanup kills every started process, and the caller sees only
+  // "the stack never became healthy".
+  assert.match(stack, /SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS \* 5/);
+  const guest = await readFile(join(ciDirectory, "qemu-guest-layer.sh"), "utf8");
+  const perService = Number(/SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS=(\d+)/.exec(guest)?.[1]);
+  const wholeStack = Number(/CI_E2E_STACK_TIMEOUT_SECONDS=(\d+)/.exec(guest)?.[1]);
+  assert.ok(Number.isFinite(perService), "the guest does not widen the per-service health budget");
+  assert.ok(Number.isFinite(wholeStack), "the guest does not bound the whole stack");
+  // runner, memory-graph, evolve and the API are waited on in turn, so the
+  // budget only means anything if every one of them can spend it in full.
+  assert.ok(
+    perService * 4 < wholeStack,
+    `${perService}s per service does not fit four services inside ${wholeStack}s`,
+  );
+});
+
 test("the guest reports why an unhealthy stack never came up", async () => {
   const guest = await readFile(join(ciDirectory, "qemu-guest-layer.sh"), "utf8");
   // run-e2e.sh starts the stack in the background and only reports that it

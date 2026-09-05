@@ -79,6 +79,12 @@ case "$layer" in
     # the same entry point with CI_E2E_PREPARE_ONLY=1. Emulated services need
     # far longer than the native health budget to answer.
     layer_env+=(CI_E2E_PREPARED=1 CI_E2E_BROWSERS_DIR=.e2e/browsers CI_E2E_STACK_TIMEOUT_SECONDS=1800)
+    # start-stack.sh gives each service 10 seconds to answer /health, which is a
+    # native-speed figure: here the memory-graph sidecar was still importing
+    # uvicorn when the budget ran out, and that one failure tore the whole stack
+    # down 139s in, long before the 1800s above was ever in play. Four services
+    # at this budget still fit inside it with room to spare.
+    layer_env+=(SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS=300)
     # The evolve environment's candidate extra pulls about 200 MB of
     # numpy/scipy/pandas/sklearn wheels, which only a candidate execution
     # needs. No mocked journey runs one, and provisioning them is where this

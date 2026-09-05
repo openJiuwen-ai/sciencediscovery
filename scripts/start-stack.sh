@@ -29,6 +29,12 @@ Usage: ./scripts/start-stack.sh --mode local|docker [--no-build] [--no-node-buil
   --no-node-build skip only the Node install/build; still provision the Python
                   service environments, whose editable installs record absolute
                   paths and cannot be prepared elsewhere
+
+Environment:
+  SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS
+                  seconds to wait for each service's health endpoint, replacing
+                  the mode's default (10s local, 60s docker). Raise it on a slow
+                  or emulated host.
 EOF
 }
 
@@ -108,12 +114,21 @@ cleanup() {
 }
 
 wait_healthy() { # <name> <url>
+  # The poll interval is 0.2s, so the built-in budgets are 10s locally and 60s
+  # under Docker -- both sized for a machine that runs at native speed. A cold
+  # uvicorn import on an emulated CPU needs far more than that, and giving up
+  # here does not just skip one sidecar: the failure trips `set -e` and cleanup
+  # takes the whole stack down, so the caller only ever sees "never healthy".
+  local attempts="$health_attempts"
+  if [[ -n "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}" ]]; then
+    attempts=$((SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS * 5))
+  fi
   local attempt
-  for ((attempt = 1; attempt <= health_attempts; attempt++)); do
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
     if curl --silent --fail "$2" >/dev/null 2>&1; then return 0; fi
     sleep 0.2
   done
-  echo "$1 did not become healthy at $2." >&2
+  echo "$1 did not become healthy at $2 after $((attempts / 5))s." >&2
   return 1
 }
 
