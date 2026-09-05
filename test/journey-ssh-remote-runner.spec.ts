@@ -96,6 +96,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
   /** An SSH machine with no runner installed, so connecting has to deploy one. */
   const sshHost = (): RemoteHostTarget => ({
     alias: "institution-linux",
+    runnerName: "GPU analysis",
+    description: "Python and R analysis on the lab GPU",
     capabilities: {
       conda: true,
       containerRuntimes: ["apptainer"],
@@ -109,7 +111,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       probedAt: new Date().toISOString(),
       runnerCommandAvailable: false,
       scratchPaths: ["/scratch"],
-      slurm: true,
+      slurm: false,
     },
     connectionKind: "ssh",
     createdAt: new Date().toISOString(),
@@ -152,6 +154,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       }
       registeredSshHost = {
         alias: body.alias,
+        runnerName: body.runnerName,
+        description: body.description,
         capabilities: {
           conda: false, containerRuntimes: [], cpuCores: 4, cuda: null, gpu: null, memoryBytes: 16 * 1024 ** 3,
           modules: false, nodeVersion: "v22.19.0", platform: "Linux", probedAt: new Date().toISOString(),
@@ -173,6 +177,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       return route.fulfill({ json: registeredSshHost, status: 201 });
     }
     directHost = {
+      runnerName: body.runnerName,
+      description: body.description,
       alias: body.alias,
       capabilities: {
         conda: false, containerRuntimes: [], cpuCores: null, cuda: null, gpu: null, memoryBytes: null,
@@ -283,17 +289,21 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "远程计算页只管理机器目录：默认显示已配置列表，SSH 与自行接入的表单都藏在添加按钮后面；页面上没有 Project 允许名单，也没有 Session 选机。",
       async () => {
         const dialog = await openRemoteSettings();
-        await expect(dialog.getByRole("heading", { name: "Remote machines" })).toBeVisible();
-        await expect(dialog.getByText("institution-linux", { exact: true })).toBeVisible();
+        await expect(dialog.getByRole("heading", { name: "Runners" })).toBeVisible();
+        await expect(dialog.getByText("GPU analysis", { exact: true })).toBeVisible();
         await expect(dialog.getByRole("button", { name: "Add SSH machine" })).toBeVisible();
         await expect(dialog.getByRole("button", { name: "Add self-deployed runner" })).toBeVisible();
+        await expect(dialog.getByText("Runner ID: local", { exact: true })).toBeVisible();
+        await expect(dialog.getByText(`Runner ID: ${hostId}`, { exact: true })).toBeVisible();
+        await expect(dialog.getByText("Python and R analysis on the lab GPU", { exact: true })).toBeVisible();
         // No blank form competes with the list, and no scoped controls live here.
         await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveCount(0);
         await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
         await expect(dialog.getByRole("checkbox", { name: /institution-linux/ })).toHaveCount(0);
         await expect(dialog.getByRole("combobox", { exact: true, name: "Runner" })).toHaveCount(0);
         await expect(dialog.getByRole("combobox", { name: "Allowed remote runners" })).toHaveCount(0);
-        await expect(dialog.getByText(/one-shot job card remains a separate feature/)).toBeVisible();
+        await expect(dialog.getByText(/one-shot job card remains a separate feature/)).toHaveCount(0);
+        await expect(dialog.getByText(/All Shell\/Python\/R commands execute through sandboxed Runners/)).toBeVisible();
       },
     );
 
@@ -389,6 +399,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "提交时只发送密钥路径而不发送私钥文本；未信任指纹在设置内确认后重试成功，机器卡片继续提供公钥复制入口。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.getByLabel("Runner name", { exact: true }).fill("CPU sandbox");
+        await dialog.getByLabel("Description", { exact: true }).fill("CPU preprocessing");
         await dialog.getByLabel("SSH alias or IP/hostname").fill("192.168.100.236");
         await dialog.getByLabel("Username").fill("researcher");
         await dialog.getByLabel("Password (optional)").fill("s3cret");
@@ -449,10 +461,13 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.getByRole("button", { name: "Add self-deployed runner" }).click();
         await dialog.getByLabel("Name", { exact: true }).fill("lab-workstation");
+        await dialog.getByLabel("Description", { exact: true }).fill("Self-deployed CPU sandbox");
         await dialog.getByLabel("IP address or hostname").fill("192.168.1.20");
         await dialog.getByLabel(/^Port$/).fill("4311");
         await dialog.getByLabel("Token", { exact: true }).fill("e2e-mock-token");
         await dialog.getByRole("button", { name: "Connect and add" }).click();
+        await expect(dialog.getByText("Runner ID: e2e-direct-runner", { exact: true })).toBeVisible();
+        await expect(dialog.getByText("Self-deployed CPU sandbox", { exact: true })).toBeVisible();
         await expect(dialog.getByText(/self-deployed · http:\/\/192\.168\.1\.20:4311 · token authenticated/)).toBeVisible();
         await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
         // Close the system dialog before moving to the scoped settings.

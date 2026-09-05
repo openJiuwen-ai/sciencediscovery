@@ -251,19 +251,10 @@ function renderPanel(job: RemoteJob, expandedCards: Record<string, boolean> = {}
   }));
 }
 
-test("a job awaiting approval starts expanded so its decision buttons are visible", () => {
+test("historical jobs cannot be approved or submitted again", () => {
   const html = renderPanel(buildJob());
-
-  assert.match(html, /SLURM · institution-hpc/);
-  assert.match(html, /awaiting approval/);
-  assert.match(html, /aria-expanded="true"/);
-  // The approval entry point must not be folded away while the run is blocked.
-  assert.match(html, /Allow once/);
-  assert.match(html, /Allow same type/);
-  assert.match(html, />Deny</);
-  assert.equal(html.match(/class="secondary-button"/g)?.length, 2);
-  assert.match(html, /class="danger-button"[^>]*>Deny</);
-  assert.match(html, /python analysis\.py/);
+  assert.match(html, /Historical job/);
+  assert.doesNotMatch(html, /Allow once|Allow same type|>Deny</);
 });
 
 test("an explicit collapse wins over the awaiting-approval default", () => {
@@ -295,9 +286,9 @@ test("an explicitly expanded finished job shows its details", () => {
   assert.doesNotMatch(html, /Allow once/);
 });
 
-test("running SLURM jobs use the secondary refresh action skeleton", () => {
+test("historical SLURM jobs have no active refresh action", () => {
   const job = buildJob({ state: "running" });
   const html = renderPanel(job, { [activityCardId("remote-job", job.id)]: true });
 
-  assert.match(html, /class="secondary-button"[^>]*>Refresh SLURM status</);
+  assert.doesNotMatch(html, /Refresh SLURM status/);
 });

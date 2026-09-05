@@ -54,7 +54,7 @@ function capacity(host: RemoteHostTarget): string {
     capabilities.cpuCores ? `${capabilities.cpuCores} CPU` : "CPU unknown",
     memoryGiB ? `${memoryGiB} GiB` : "memory unknown",
     capabilities.gpu ?? "no GPU detected",
-    capabilities.slurm ? "SLURM" : "direct SSH",
+    "sandboxed Runner",
   ].join(" · ");
 }
 
@@ -124,6 +124,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   const [hosts, setHosts] = useState<RemoteHostTarget[]>([]);
   const [adding, setAdding] = useState<"direct" | "ssh">();
   const [alias, setAlias] = useState("");
+  const [runnerName, setRunnerName] = useState("");
+  const [description, setDescription] = useState("");
   const [sshPort, setSshPort] = useState("");
   const [runnerCommand, setRunnerCommand] = useState("sciencediscovery-runner");
   const [username, setUsername] = useState("");
@@ -182,6 +184,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   /** Password and key are write-only: clear them as soon as they are sent. */
   function clearSshForm(): void {
     setAlias("");
+    setRunnerName("");
+    setDescription("");
     setSshPort("");
     setUsername("");
     setPassword("");
@@ -239,6 +243,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         ? await client.trustRemoteHostKey(registeredHostId, trustHostKey)
         : await client.registerRemoteHost({
         alias: alias.trim(),
+        runnerName: runnerName.trim() || alias.trim(),
+        description: description.trim(),
         connectionKind: "ssh",
         // Omitting the port lets the user's SSH config resolve the destination.
         ...(port ? { port: Number(port) } : {}),
@@ -346,11 +352,14 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
     try {
       const host = await client.registerRemoteHost({
         alias: directLabel.trim(),
+        runnerName: directLabel.trim(),
+        description: description.trim(),
         connectionKind: "direct",
         endpoint: { host: directAddress.trim(), port: Number(directPort), protocol: "http" },
         token: directToken,
       });
       setDirectLabel("");
+      setDescription("");
       setDirectAddress("");
       setDirectToken("");
       setAdding(undefined);
@@ -490,7 +499,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   }
 
   return <div className="remote-host-manager">
-    <div className="settings-detail-header"><span className="eyebrow">Institution-controlled compute</span><h3>Remote machines</h3><p>Register the machines ScienceDiscovery may connect to: an SSH machine it deploys a runner onto itself, or a runner you started on another machine. Which machines a Project or Session may actually use is configured in that Project's or Session's own settings, not here.</p></div>
+    <div className="settings-detail-header"><span className="eyebrow">Institution-controlled compute</span><h3>Runners</h3><p>Configure parallel sandboxed execution environments: SSH-managed Runners or self-deployed Runners on this or another machine. Each has a stable ID and description that main and child Agents can select. Which machines a Project or Session may actually use is configured in that Project's or Session's own settings, not here.</p></div>
+    <article className="remote-host-card ready"><div className="remote-host-card-main"><strong>Local Runner</strong><small>Runner ID: local</small><small>Default local sandbox · current Agent workspace and installed local environments</small></div></article>
     {hosts.length ? <div className="remote-host-list">{hosts.map((host) => {
       const connected = host.runnerStatus?.state === "ready";
       const state = connected ? "ready" : host.runnerStatus?.state ?? host.status;
@@ -504,7 +514,10 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       ].filter(Boolean).join(" · ");
       return <article className={`remote-host-card ${host.status}`} key={host.id}>
         <div className="remote-host-card-main">
-          <div className="remote-host-card-title"><strong>{host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? "connected" : state}</span></div>
+          <div className="remote-host-card-title"><strong>{host.runnerName ?? host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? "connected" : state}</span></div>
+          <small>Runner ID: {host.id}</small>
+          {host.connectionKind !== "direct" ? <small>SSH target: {host.alias}</small> : null}
+          <small>{host.description || host.runnerName || host.alias}</small>
           <small>{hostKindLabel(host)} · {capacity(host)}</small>
           {host.connectionKind === "direct"
             ? <small>{host.capabilities?.platform ?? "OS unknown"}</small>
@@ -535,6 +548,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
     {adding === "ssh" ? <form className="remote-host-form" onSubmit={(event) => { event.preventDefault(); void submitSshForm(); }}>
       <p className="remote-host-form-help">An alias from your SSH config or a plain IP/hostname — one field for both; leave the port empty to let the SSH configuration resolve it. Add a username and a password or key when the machine needs them; credentials are stored encrypted and never shown again. ScienceDiscovery probes the machine and, when no runner is installed, deploys and starts its own runner over the same SSH connection — no manual install. Versions are shown and differences are flagged.</p>
       <div className="remote-host-form-fields">
+        <label><span>Runner name</span><input value={runnerName} onChange={(event) => setRunnerName(event.target.value)} placeholder="e.g. GPU analysis environment" /></label>
+        <label><span>Description</span><input maxLength={2000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose, hardware and installed software" /></label>
         <label><span>SSH alias or IP/hostname</span><input required value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="institution-hpc or 192.168.1.20" /></label>
         <label><span>Port (optional)</span><input inputMode="numeric" value={sshPort} onChange={(event) => setSshPort(event.target.value)} placeholder="From SSH config" /></label>
         <label><span>Runner executable</span><input required value={runnerCommand} onChange={(event) => setRunnerCommand(event.target.value)} placeholder="sciencediscovery-runner" /></label>
@@ -575,8 +590,9 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       </div>
     </form> : null}
     {adding === "direct" ? <form className="remote-host-form" onSubmit={(event) => void addDirectHost(event)}>
-      <p className="remote-host-form-help">Start a runner yourself on the other machine with a listening address and <code>SCIENCE_AGENT_RUNNER_TOKEN</code>, then connect to it by IP address and port. The token is stored encrypted and never shown again; without it the connection is refused. Use this only over a network you trust, or put the runner behind your own TLS endpoint.</p>
+      <p className="remote-host-form-help">Start a runner yourself on this or another machine with a listening address and <code>SCIENCE_AGENT_RUNNER_TOKEN</code>, then connect to it by IP address and port. The token is stored encrypted and never shown again; without it the connection is refused. Use this only over a network you trust, or put the runner behind your own TLS endpoint.</p>
       <div className="remote-host-form-fields">
+        <label><span>Description</span><input maxLength={2000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose, hardware and installed software" /></label>
         <label><span>Name</span><input required pattern="[A-Za-z0-9._-]+" value={directLabel} onChange={(event) => setDirectLabel(event.target.value)} placeholder="lab-workstation" /></label>
         <label><span>IP address or hostname</span><input required value={directAddress} onChange={(event) => setDirectAddress(event.target.value)} placeholder="192.168.1.20" /></label>
         <label><span>Port</span><input required inputMode="numeric" value={directPort} onChange={(event) => setDirectPort(event.target.value)} placeholder="4311" /></label>
@@ -587,7 +603,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         <button className="primary-button" disabled={busyId === "new-direct" || !directLabel.trim() || !directAddress.trim() || !directToken.trim()} type="submit">Connect and add</button>
       </div>
     </form> : null}
-    <div className="config-note">The SSH/SLURM one-shot job card remains a separate feature and approval flow. Connecting or allowing a runner does not turn those jobs into runner executions.</div>
+    <div className="config-note">All Shell/Python/R commands execute through sandboxed Runners with provenance and artifact version tracking. SSH/SLURM one-shot jobs are not supported.</div>
   </div>;
 }
 
@@ -621,7 +637,7 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
     {!hosts ? <p className="muted">Loading remote machines…</p>
       : usable.length ? <div className="settings-choices">{usable.map((host) => <label key={host.id}>
         <input checked={project.remoteRunnerHostIds.includes(host.id)} disabled={Boolean(busyId)} onChange={() => void toggle(host)} type="checkbox" />
-        <span>{host.alias}<small>{hostKindLabel(host)}</small></span>
+        <span>{host.runnerName ?? host.alias}<small>{host.id} · {host.alias} · {hostKindLabel(host)}</small></span>
       </label>)}</div>
       : <p className="settings-choice-empty">No usable remote machines yet. Add one in system settings → Remote compute.</p>}
   </section>;
@@ -689,7 +705,7 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
   // Each allowed machine owns a separate remote workspace; records and the
   // destructive delete are grouped under the machine they belong to.
   const workspaceHosts: Array<{ alias: string; id: string }> = [];
-  for (const host of effectiveHosts) workspaceHosts.push({ alias: host.alias, id: host.id });
+  for (const host of effectiveHosts) workspaceHosts.push({ alias: host.runnerName ?? host.alias, id: host.id });
   for (const record of syncRecords) {
     if (!workspaceHosts.some((host) => host.id === record.hostId)) {
       workspaceHosts.push({ alias: hosts?.find((host) => host.id === record.hostId)?.alias ?? record.hostId, id: record.hostId });
@@ -721,7 +737,7 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
       !hosts ? <p className="muted">Loading remote machines…</p>
         : projectHosts.length ? <div className="settings-choices">{projectHosts.map((host) => <label key={host.id}>
           <input checked={(override ?? []).includes(host.id)} disabled={disabled || Boolean(busyId)} onChange={() => void toggle(host)} type="checkbox" />
-          <span>{host.alias}<small>{hostKindLabel(host)}</small></span>
+          <span>{host.runnerName ?? host.alias}<small>{host.id} · {host.alias} · {hostKindLabel(host)}</small></span>
         </label>)}</div>
         : <p className="settings-choice-empty">This Project allows no remote machines yet; widen it in the Project settings.</p>
     ) : null}
@@ -730,9 +746,9 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
       {workspaceHosts.map((host) => {
         const records = syncRecords.filter((record) => record.hostId === host.id);
         return <div className="remote-workspace-host" key={host.id}>
-          <strong>{host.alias}</strong>
+          <strong>{host.alias}</strong><small>Runner ID: {host.id}</small>
           <div className="remote-workspace-records">
-            {records.length ? records.slice(0, 10).map((record) => <small key={record.id}>{record.direction} · {record.status} · {record.fileCount} files · {record.bytes} bytes · {record.paths.join(", ")}{record.error ? ` · ${record.error}` : ""}</small>) : <small>No transfers yet.</small>}
+            {records.length ? records.slice(0, 10).map((record) => <small key={record.id}>{record.agentId ? `Agent ${record.agentId}` : "Main Agent"} · {record.direction} · {record.status} · {record.fileCount} files · {record.bytes} bytes · {record.paths.join(", ")}{record.error ? ` · ${record.error}` : ""}</small>) : <small>No transfers yet.</small>}
           </div>
           <div className="remote-workspace-actions"><button className="danger-button" disabled={disabled || Boolean(busyId)} onClick={() => void deleteWorkspace(host)} type="button">Delete remote workspace</button></div>
         </div>;
@@ -755,7 +771,7 @@ export function RemoteJobsPanel({
   onRefresh: (job: RemoteJob) => void;
 }) {
   if (!jobs.length) return null;
-  return <section aria-label="Remote job approval cards" className="remote-jobs-panel"><div className="track-list-heading"><strong>Remote jobs</strong><span>{jobs.length} cards · separate approval required</span></div>{jobs.map((job) => {
+  return <section aria-label="Remote job approval cards" className="remote-jobs-panel"><div className="track-list-heading"><strong>Remote jobs</strong><span>{jobs.length} historical records · read-only</span></div>{jobs.map((job) => {
     const cardId = activityCardId("remote-job", job.id);
     // A job waiting for approval is the only place to grant it, so it starts
     // expanded; an explicit toggle always wins, letting the user fold it away.
@@ -771,8 +787,8 @@ export function RemoteJobsPanel({
         <p><strong>Working directory</strong>{job.card.remoteWorkingDirectory}</p>
         {job.card.inputPaths.length ? <p><strong>In-place inputs</strong>{job.card.inputPaths.join(" · ")}</p> : null}
         {job.card.outputs.length ? <ul>{job.card.outputs.map((output) => <li key={`${output.path}:${output.disposition}`}>{output.path} <em>{output.disposition === "pull" ? "pull if ≤1 MiB" : "leave remote"}</em></li>)}</ul> : null}
-        {job.state === "awaiting_approval" ? <PermissionDecisionActions busy={busy} onDecision={(decision) => onDecision(job, decision)} /> : null}
-        {job.card.mode === "slurm" && ["submitted", "running"].includes(job.state) ? <button className="secondary-button" disabled={busy} onClick={() => onRefresh(job)} type="button">Refresh SLURM status</button> : null}
+        <p>Historical job — independent SSH/SLURM execution is no longer supported. Use a Runner.</p>
+
         {job.remoteJobId ? <p><strong>Scheduler job</strong>{job.remoteJobId} · {job.scriptReference}</p> : null}
         {job.outputRecords.length ? <ul className="remote-output-list">{job.outputRecords.map((output) => <li key={output.path}>{output.localPath ?? output.path} <em>{output.status}</em></li>)}</ul> : null}
         {job.error ? <p className="environment-error">{job.error}</p> : null}
