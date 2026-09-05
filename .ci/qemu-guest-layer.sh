@@ -79,6 +79,12 @@ case "$layer" in
     # the same entry point with CI_E2E_PREPARE_ONLY=1. Emulated services need
     # far longer than the native health budget to answer.
     layer_env+=(CI_E2E_PREPARED=1 CI_E2E_BROWSERS_DIR=.e2e/browsers CI_E2E_STACK_TIMEOUT_SECONDS=1800)
+    # The evolve environment's candidate extra pulls about 200 MB of
+    # numpy/scipy/pandas/sklearn wheels, which only a candidate execution
+    # needs. No mocked journey runs one, and provisioning them is where this
+    # stack died: the log ends mid-download of scipy. start-stack.sh documents
+    # this switch for exactly that case.
+    layer_env+=(SCIENCE_AGENT_EVOLVE_STUB_ONLY=1)
     ;;
   *) echo "FATAL: the host asked for an unknown layer '$layer'." >&2; exit 2 ;;
 esac
@@ -162,8 +168,8 @@ set -e
 # never became healthy; without this the reason stays inside the guest, which
 # is discarded when it powers off.
 if [ -f "/home/ci/ci-results/$layer/stack.log" ]; then
-  echo "=== $layer stack.log (last 80 lines) ==="
-  tail -n 80 "/home/ci/ci-results/$layer/stack.log"
+  echo "=== $layer stack.log (last 200 lines) ==="
+  tail -n 200 "/home/ci/ci-results/$layer/stack.log"
 fi
 
 # run-layer.mjs writes summary.json; the E2E entry point writes summary.txt.

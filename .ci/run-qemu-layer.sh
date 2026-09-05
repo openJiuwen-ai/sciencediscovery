@@ -181,7 +181,7 @@ printf '%s\n' "$layer" > "$seed_dir/layer"
 # Only mirror and behaviour settings cross into the guest; nothing here may
 # carry a credential.
 : > "$seed_dir/layer-env"
-for name in CI_NPM_REGISTRY SCIENCE_AGENT_PYPI_INDEX UV_DEFAULT_INDEX UV_PYTHON_INSTALL_MIRROR E2E_SCIENTIFIC_ENVS CI_E2E_STACK_TIMEOUT_SECONDS; do
+for name in CI_NPM_REGISTRY SCIENCE_AGENT_PYPI_INDEX UV_DEFAULT_INDEX UV_PYTHON_INSTALL_MIRROR E2E_SCIENTIFIC_ENVS SCIENCE_AGENT_EVOLVE_STUB_ONLY CI_E2E_STACK_TIMEOUT_SECONDS; do
   value="$(printenv "$name" || true)"
   case "$value" in
     "") ;;
