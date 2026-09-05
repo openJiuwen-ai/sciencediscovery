@@ -29,6 +29,7 @@ import type { ApiClient } from "./api.js";
 import { supportsRemoteRunnerNode } from "@sciencediscovery/schema";
 import { hostKeyFromError, type GeneratedRemoteHostKey, type RemoteHostKeyInfo } from "./api/settings.js";
 import { CopyButton } from "./CopyButton.js";
+import { SshKeyFileField } from "./SshKeyFileField.js";
 import { ChevronRightIcon } from "./icons.js";
 import { PermissionDecisionActions } from "./PermissionDecisionActions.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
@@ -468,7 +469,9 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
     <div className="remote-host-form-fields">
       <label><span>Username</span><input autoComplete="off" value={credUsername} onChange={(event) => setCredUsername(event.target.value)} placeholder="researcher" /></label>
       <label><span>Password</span><input autoComplete="new-password" type="password" value={credPassword} onChange={(event) => setCredPassword(event.target.value)} placeholder="Leave empty to keep the stored one" /></label>
-      <label><span>Private key file</span><input autoComplete="off" value={credKeyPath} onChange={(event) => setCredKeyPath(event.target.value)} placeholder={host.hasPrivateKey ? "Leave empty to keep the stored key" : "~/.ssh/id_ed25519"} /></label>
+      <SshKeyFileField client={client} label="Private key file" value={credKeyPath} disabled={Boolean(busyId)}
+        onChange={(path) => { setCredKeyPath(path); setCredGeneratedKey(undefined); }}
+        placeholder={host.hasPrivateKey ? "Leave empty to keep the stored key" : "~/.ssh/id_ed25519"} />
       <label><span>Key passphrase</span><input autoComplete="new-password" type="password" value={credPassphrase} onChange={(event) => setCredPassphrase(event.target.value)} placeholder={host.hasPrivateKey ? "Leave empty to keep the stored passphrase" : "Only if the key is encrypted"} /></label>
     </div>
     <div className="remote-host-form-extras">
@@ -575,7 +578,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         <div className="remote-host-form-fields">
           <label><span>Username</span><input autoComplete="off" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="researcher" /></label>
           <label><span>Password (optional)</span><input autoComplete="new-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Stored encrypted, never shown again" /></label>
-          <label><span>Private key file (optional)</span><input autoComplete="off" value={keyPath} onChange={(event) => setKeyPath(event.target.value)} placeholder="~/.ssh/id_ed25519" /></label>
+          <SshKeyFileField client={client} label="Private key file (optional)" value={keyPath} disabled={Boolean(busyId)}
+            onChange={(path) => { setKeyPath(path); setGeneratedKey(undefined); }} placeholder="~/.ssh/id_ed25519" />
           <label><span>Key passphrase (optional)</span><input autoComplete="new-password" type="password" value={keyPassphrase} onChange={(event) => setKeyPassphrase(event.target.value)} placeholder="Only if the key is encrypted" /></label>
         </div>
         <div className="remote-host-form-extras">

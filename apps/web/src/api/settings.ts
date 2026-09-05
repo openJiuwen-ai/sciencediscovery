@@ -41,6 +41,7 @@ import type {
   RegisterRemoteHostRequest,
   RemoteHostTarget,
   SshConfigHostImport,
+  SshKeyFileListing,
   TrustedRemoteHostKey,
   RemoteRunnerStatus,
   ReviewerSpecialistSettings,
@@ -149,6 +150,12 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   listRemoteHosts(): Promise<RemoteHostTarget[]> {
     return this.request("/api/remote-hosts");
+  }
+
+  listSshKeyFiles(path?: string, offset = 0): Promise<SshKeyFileListing> {
+    const query = new URLSearchParams({ offset: String(offset) });
+    if (path) query.set("path", path);
+    return this.request(`/api/remote-hosts/key-files?${query}`);
   }
 
   registerRemoteHost(body: RegisterRemoteHostRequest): Promise<RemoteHostTarget> {

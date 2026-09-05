@@ -51,6 +51,24 @@ test("SSH settings preserve credentials and destination through persistence and 
     await rm(root, { force: true, recursive: true });
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  await context.test("key file browser is authenticated, metadata-only and reports invalid locations", async () => {
+    const path = resolve(root, "picker");
+    await mkdir(path);
+    const contents = randomBytes(32).toString("hex");
+    await writeFile(resolve(path, "selected-key"), contents);
+    const url = origin + "/api/remote-hosts/key-files?path=" + encodeURIComponent(path);
+    assert.equal((await fetch(url)).status, 401);
+    const response = await fetch(url, { headers: { authorization: "Bearer test-token" } });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const listing = await response.json() as { entries: Array<{ path: string }> };
+    assert.equal(listing.entries[0]?.path, resolve(path, "selected-key"));
+    assert.ok(!JSON.stringify(listing).includes(contents));
+    const missing = await fetch(url + encodeURIComponent("/missing"), { headers: { authorization: "Bearer test-token" } });
+    assert.equal(missing.status, 400);
+    assert.match(await missing.text(), /does not exist/);
+    assert.equal(targets.length, 0, "browsing cannot initiate SSH");
+  });
   async function request<T>(path: string, body: unknown, method = "POST"): Promise<{ status: number; body: T }> {
     const response = await fetch(origin + path, { method, headers: { authorization: "Bearer test-token", "content-type": "application/json" }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() as T };

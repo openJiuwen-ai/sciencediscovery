@@ -160,6 +160,18 @@
 .remote-host-card-title { display: flex; align-items: center; gap: 8px; }
 .remote-host-card small { color: var(--muted); }
 .remote-host-error { flex-basis: 100%; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--danger, #b42318); }
+.ssh-key-file-field { display: grid; gap: 6px; min-width: 0; grid-column: 1 / -1; }
+.ssh-key-file-path { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ssh-key-file-path > input { flex: 1; min-width: 0; width: 0; }
+.ssh-key-file-path > button { flex: 0 0 auto; }
+.ssh-key-file-browser { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); min-width: 0; }
+.ssh-key-file-browser p { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.ssh-key-file-browser ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 240px; overflow-y: auto; }
+.ssh-key-file-browser li > button { display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: start; }
+.ssh-key-file-browser li span { min-width: 0; overflow-wrap: anywhere; }
+.ssh-key-file-browser li small { flex-shrink: 0; }
+.ssh-key-file-navigation { display: flex; flex-wrap: wrap; gap: 8px; }
+.ssh-key-file-navigation > button { flex: 1 1 auto; }
 .remote-host-status { border-radius: 999px; padding: 3px 8px; background: var(--surface-soft); color: var(--muted); font-size: 10px; text-transform: uppercase; }
 .remote-host-status.ready { background: var(--success-soft); color: var(--success); }
 .remote-host-status.error { background: var(--danger-soft); color: var(--danger); }

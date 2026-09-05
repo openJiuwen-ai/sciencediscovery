@@ -222,6 +222,16 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
   await page.route("**/api/remote-hosts/generate-key", (route) => route.fulfill({
     json: { privateKeyPath: generatedKeyPath, publicKey: generatedPublicKey },
   }));
+  await page.route("**/api/remote-hosts/key-files?*", (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path");
+    const directory = path?.includes("science keys") ? "/fixture-keys/science keys" : "/fixture-keys";
+    return route.fulfill({ json: {
+      directory, parentDirectory: "/fixture-keys", nextOffset: null,
+      entries: directory.endsWith("science keys")
+        ? [{ name: "id_ed25519", path: directory + "/id_ed25519", kind: "file" }]
+        : [{ name: "science keys", path: directory + "/science keys", kind: "directory" }],
+    } });
+  });
   await page.route("**/api/remote-hosts/*/credentials", async (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
     Object.assign(savedCredentials, body);
@@ -349,6 +359,50 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
+      "在主程序运行机器上浏览密钥文件",
+      "点击 Browse 后能看到运行机器的文件列表及位置说明，进入文件夹后可以选择私钥文件；不会弹出浏览器上传窗口。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.getByRole("button", { name: "Browse", exact: true }).click();
+        const picker = dialog.getByRole("region", { name: "Files on application machine" });
+        await expect(picker).toContainText("machine running ScienceDiscovery");
+        await picker.getByRole("button", { name: "science keys Folder" }).click();
+        await expect(picker.getByRole("button", { name: "id_ed25519 Select file" })).toBeVisible();
+        await expect(dialog.locator('input[type="file"]')).toHaveCount(0);
+        await picker.scrollIntoViewIfNeeded();
+      },
+    );
+
+    await journey.step(
+      "窄窗口仍能浏览和选择文件",
+      "文件列表、目录位置及返回/取消操作在窄对话框内完整显示，不产生横向溢出。",
+      async () => {
+        await page.setViewportSize({ width: 640, height: 960 });
+        const picker = page.getByRole("region", { name: "Files on application machine" });
+        await picker.scrollIntoViewIfNeeded();
+        expect(await picker.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+        await expect(picker.getByRole("button", { name: "id_ed25519 Select file" })).toBeVisible();
+      },
+    );
+
+    await journey.step(
+      "选择文件后回填路径，取消不会改动已选值",
+      "选中运行机器上的文件后选择器收起，Private key file 显示完整路径；再次打开并取消仍保留该路径，用户还能手动编辑。",
+      async () => {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.getByRole("button", { name: "id_ed25519 Select file" }).click();
+        await expect(dialog.getByLabel("Private key file (optional)")).toHaveValue("/fixture-keys/science keys/id_ed25519");
+        await expect(dialog.getByRole("region", { name: "Files on application machine" })).toHaveCount(0);
+        await dialog.getByRole("button", { name: "Browse", exact: true }).click();
+        await dialog.getByRole("button", { name: "Cancel selection" }).click();
+        await expect(dialog.getByLabel("Private key file (optional)")).toHaveValue("/fixture-keys/science keys/id_ed25519");
+        await expect(dialog.getByLabel("Private key file (optional)")).toBeEditable();
+        await dialog.getByLabel("Private key file (optional)").scrollIntoViewIfNeeded();
+      },
+    );
+
+    await journey.step(
       "ssh_config 先展示可导入的 Host 列表",
       "点 Import from ssh_config 后出现已有 Host 列表，可先看别名、目标地址、端口和用户，再选择要导入的一台。",
       async () => {
@@ -440,12 +494,15 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await blockedSaveAlert.getByRole("button").click();
         await card.getByLabel("Username").fill("operator");
         await card.getByLabel("Password", { exact: true }).fill("new-secret");
-        await card.getByLabel("Private key file", { exact: true }).fill("~/.ssh/updated_ed25519");
+        await card.getByRole("button", { name: "Browse", exact: true }).click();
+        await card.getByRole("button", { name: "science keys Folder" }).click();
+        await card.getByRole("button", { name: "id_ed25519 Select file" }).click();
+        await expect(card.getByLabel("Private key file", { exact: true })).toHaveValue("/fixture-keys/science keys/id_ed25519");
         await expect(card.locator("textarea")).toHaveCount(0);
         await card.getByRole("button", { name: "Save credentials" }).click();
         await expect.poll(() => savedCredentials.username).toBe("operator");
         expect(savedCredentials.password).toBe("new-secret");
-        expect(savedCredentials.privateKeyPath).toBe("~/.ssh/updated_ed25519");
+        expect(savedCredentials.privateKeyPath).toBe("/fixture-keys/science keys/id_ed25519");
         expect("privateKey" in savedCredentials).toBe(false);
         await expect(card.getByLabel("Username")).toHaveCount(0);
         await expect(card.getByRole("alert")).toHaveText(authenticationError);

@@ -233,10 +233,18 @@ export interface SshConfigHostImport {
   alias: string;
   hostName?: string;
   identityFile?: string;
-  /** Whether the API could read `identityFile`; when false the user must paste a key. */
+  /** Whether the API could read `identityFile`; otherwise choose another key file. */
   identityKeyReadable: boolean;
   port?: number;
   username?: string;
+}
+
+/** Metadata only: browsing never returns or validates private key contents. */
+export interface SshKeyFileListing {
+  directory: string;
+  parentDirectory: string | null;
+  entries: Array<{ name: string; path: string; kind: "directory" | "file" | "unavailable" }>;
+  nextOffset: number | null;
 }
 
 export type RemoteRunnerConnectionState = "connecting" | "disconnected" | "error" | "ready";

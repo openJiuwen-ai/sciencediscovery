@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { listSshKeyFiles } from "../ssh-key-files.js";
 
 import {
   buildWorkspaceSystemPrompt,
@@ -1006,6 +1007,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // just stored above. Returning the old error would make a successful
         // save look ineffective until the user manually refreshed the host.
         sendJson(response, 200, await probeRegisteredSshHost(host.id, host.runnerCommand));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/remote-hosts/key-files") {
+        response.setHeader("Cache-Control", "no-store");
+        try {
+          sendJson(response, 200, await listSshKeyFiles(
+            url.searchParams.get("path") || undefined, Number(url.searchParams.get("offset") ?? "0"),
+          ));
+        } catch (error) {
+          sendError(response, 400, error instanceof Error ? error.message : "Could not browse key files");
+        }
         return;
       }
       // Generate a key pair for a machine that may not be registered yet. The
