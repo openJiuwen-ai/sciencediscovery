@@ -91,6 +91,10 @@ test("the guest disables pnpm's dependency check with the setting pnpm actually 
   // only for a falsy value, so "false" would still run it. Getting either
   // detail wrong makes the guest reinstall the workspace it was handed.
   assert.match(guest, /^\s*export pnpm_config_verify_deps_before_run=$/m);
+  // Node has no default per-test timeout and only names a subtest once it
+  // finishes, so a stuck test stops the log with nothing attached and drains
+  // the guest's whole budget.
+  assert.match(guest, /--test-timeout=/);
   assert.doesNotMatch(guest, /(?<![a-z])npm_config_verify_deps_before_run/);
 });
 

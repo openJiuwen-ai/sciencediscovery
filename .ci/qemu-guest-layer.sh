@@ -24,12 +24,20 @@ set -Eeuo pipefail
 
 # The guest installs this same file as a narrow `node` shim for the test step.
 # All non-test invocations are byte-for-byte argument forwards; only Node's
-# test runner receives serialized file scheduling under slow TCG emulation.
+# test runner receives serialized file scheduling and a per-test deadline.
+#
+# Node's test runner has no default timeout, and its TAP output only names a
+# subtest once it finishes. A test that waits on something that never arrives
+# therefore stops the log dead with no name attached, and the whole guest
+# budget drains before anything is reported. The deadline turns that into a
+# named failure. It is set far above the slowest observed test, which runs in
+# a few seconds, so it cannot fail a merely slow one.
 if [ "${QEMU_NODE_SHIM:-0}" = 1 ]; then
   real_node="${QEMU_REAL_NODE:?QEMU_REAL_NODE is required by the node shim}"
   if [ "${1:-}" = --test ]; then
     shift
-    exec "$real_node" --test --test-concurrency=1 "$@"
+    exec "$real_node" --test --test-concurrency=1 \
+      --test-timeout="${QEMU_NODE_TEST_TIMEOUT_MS:-300000}" "$@"
   fi
   exec "$real_node" "$@"
 fi
