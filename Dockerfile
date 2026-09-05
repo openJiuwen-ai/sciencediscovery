@@ -124,7 +124,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY . .
 
-RUN pnpm build
+RUN pnpm build && pnpm runner:binary
 
 # Install the local projects from the complete source tree.
 RUN --mount=type=cache,target=/root/.cache/uv \

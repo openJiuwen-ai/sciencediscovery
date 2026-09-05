@@ -156,6 +156,10 @@ ScienceDiscovery help                显示帮助
 ./scripts/start-stack.sh --mode local --no-build   # 仅启动（需已完成过构建）
 ```
 
+SSH 自动部署使用自带 Node runtime 的 Runner SEA 单文件，不要求目标机预装 Node。Linux 本地完整启动、Docker 构建和二进制发布会准备 Linux x64/arm64 两份 Runner；只做分包构建的开发者可在构建 Runner/Executor 后运行 `pnpm runner:binary`。生成文件位于 `services/runner/dist/sea/`，随产品发布，不提交到源码。
+
+连接时按远端 `uname -m` 选择对应文件，经已鉴权、已校验主机指纹的 SSH SFTP 通道流式上传，校验 SHA-256 后发布并直接启动；同一构建已存在则复用。Runner 的 HTTP 通信仍只经 SSH 隧道。SEA 包含 Node 与 Runner 代码，不包含完整 Linux 用户态：目标机仍需可运行该 Node ELF 的系统库、Bubblewrap 和可用沙箱能力；科学环境按原有托管环境机制准备。缺少部署或沙箱条件时明确报错，不降级为裸 SSH 执行。
+
 共用入口在本地模式下会读取仓库根目录 `.env`、校验[环境要求](../../../README_zh.md#环境要求)中列出的依赖、按需安装与构建，然后以宿主机普通进程启动各服务。脚本在 Linux 自动选择 Bubblewrap，在 macOS 自动选择 Seatbelt，无需手动设置 `SCIENCE_AGENT_SANDBOX_PROVIDER`：
 
 | 服务 | 地址 | 作用 |

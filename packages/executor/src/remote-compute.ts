@@ -21,8 +21,7 @@ import type {
   RemoteHostTarget,
   RemoteRunnerStatus,
 } from "@sciencediscovery/schema";
-import { RUNNER_BUNDLE_ENTRY, type RunnerBundle } from "./runner-bundle.js";
-import { supportsRemoteRunnerNode } from "@sciencediscovery/schema";
+import { loadRunnerExecutable, type RunnerExecutable } from "./runner-executable.js";
 import { RunnerClient } from "./runner-client.js";
 import {
   SshConnection,
@@ -107,6 +106,7 @@ export class NativeSshTransport implements RemoteTransport {
 function probeScript(runnerCommand: string): string {
   return `set +e
 printf 'platform='; uname -s 2>/dev/null || true
+printf 'architecture='; uname -m 2>/dev/null || true
 printf 'cpu='; getconf _NPROCESSORS_ONLN 2>/dev/null || true
 printf 'memory_kib='; awk '/MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true
 printf 'gpu='; if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1; else printf '\n'; fi
@@ -129,6 +129,7 @@ function parseProbe(stdout: string): RemoteHostCapabilities {
   const memoryKib = Number(values.get("memory_kib"));
   return {
     conda: values.get("conda") === "1",
+    architecture: values.get("architecture")?.trim() || null,
     containerRuntimes: values.get("containers")?.split(",").filter(Boolean) ?? [],
     cpuCores: Number.isSafeInteger(cpu) && cpu > 0 ? cpu : null,
     cuda: values.get("cuda")?.trim() || null,
@@ -145,11 +146,8 @@ function parseProbe(stdout: string): RemoteHostCapabilities {
 }
 
 export interface RemoteRunnerConnectOptions {
-  /**
-   * Deployable runner tree used when the SSH host has no pre-installed runner.
-   * Omitting it keeps the pre-installed-only behaviour.
-   */
-  bundle?: RunnerBundle;
+  /** Resolve the shipped SEA for the actual remote architecture; injectable in tests. */
+  executable?: (architecture: string) => Promise<RunnerExecutable>;
   /** Local runner version, reported beside the remote one so differences show. */
   localVersion?: string;
   /** Connection token of a self-deployed runner; required for `direct` hosts. */
@@ -159,42 +157,6 @@ export interface RemoteRunnerConnectOptions {
 /** Where the product keeps its own files on a remote host. */
 function remoteDataDirScript(): string {
   return "data_dir=\"${XDG_DATA_HOME:-$HOME/.local/share}/sciencediscovery/remote-runner\"";
-}
-
-/**
- * Install the runner bundle under the remote data directory.
- *
- * The archive travels inside the shell script as a quoted here-document, which
- * keeps every line short — a single multi-megabyte argument is what a remote
- * `sh` is least likely to accept. The extracted tree is swapped into place only
- * after it is complete, so an interrupted transfer cannot leave a half-written
- * runner behind, and a host that already carries this bundle id is skipped.
- */
-function deployScript(bundle: RunnerBundle): string[] {
-  const payload = bundle.archive.toString("base64").replaceAll(/(.{76})/g, "$1\n");
-  return [
-    "app_dir=\"$data_dir/app\"",
-    `if [ -f "$app_dir/.deployment-id" ] && [ "$(cat "$app_dir/.deployment-id")" = ${shellQuote(bundle.id)} ]; then`,
-    "  printf 'deploy=reused\\n'",
-    "else",
-    "  command -v tar >/dev/null 2>&1 || { echo 'tar is required to deploy the ScienceDiscovery runner' >&2; exit 1; }",
-    "  command -v base64 >/dev/null 2>&1 || { echo 'base64 is required to deploy the ScienceDiscovery runner' >&2; exit 1; }",
-    "  stage=\"$data_dir/.stage\"",
-    "  rm -rf -- \"$stage\"",
-    "  mkdir -p -- \"$stage\"",
-    "  base64 -d > \"$stage/bundle.tar.gz\" <<'SCIENCEDISCOVERY_RUNNER_BUNDLE'",
-    payload,
-    "SCIENCEDISCOVERY_RUNNER_BUNDLE",
-    "  tar -xzf \"$stage/bundle.tar.gz\" -C \"$stage\"",
-    "  rm -f -- \"$stage/bundle.tar.gz\"",
-    `  printf '%s' ${shellQuote(bundle.id)} > "$stage/.deployment-id"`,
-    "  rm -rf -- \"$data_dir/.previous\"",
-    "  if [ -d \"$app_dir\" ]; then mv -- \"$app_dir\" \"$data_dir/.previous\"; fi",
-    "  mv -- \"$stage\" \"$app_dir\"",
-    "  rm -rf -- \"$data_dir/.previous\"",
-    "  printf 'deploy=installed\\n'",
-    "fi",
-  ];
 }
 
 function directBaseUrl(endpoint: RemoteHostEndpoint): string {
@@ -291,7 +253,7 @@ export class RemoteComputeClient {
    * runner it ships with, keyed by the bundle's content hash, so reconnecting to
    * an already-deployed host transfers nothing.
    */
-  private async prepareSshRunner(host: RemoteHostTarget, access: RemoteSshAccess, bundle?: RunnerBundle): Promise<{
+  private async prepareSshRunner(host: RemoteHostTarget, access: RemoteSshAccess, executable = loadRunnerExecutable): Promise<{
     dataDir: string;
     deployed: boolean;
     startCommand: string;
@@ -299,15 +261,6 @@ export class RemoteComputeClient {
     const capabilities = host.capabilities!;
     const runnerCommand = validateRunnerCommand(host.runnerCommand);
     const deploy = !capabilities.runnerCommandAvailable;
-    if (deploy) {
-      if (!bundle) throw new Error(`Pre-installed remote runner executable was not found: ${host.runnerCommand}`);
-      if (!supportsRemoteRunnerNode(capabilities.nodeVersion)) {
-        throw new Error(
-          `Automatic deployment needs Node.js 22 or newer on ${host.alias} (found ${capabilities.nodeVersion ?? "none"}).`
-          + ` Install Node.js there, install ${host.runnerCommand}, or register the machine as a self-deployed runner instead.`,
-        );
-      }
-    }
     const script = [
       "set -eu",
       "test \"$(uname -s)\" = Linux",
@@ -316,7 +269,7 @@ export class RemoteComputeClient {
       "chmod 700 -- \"$data_dir\" \"$data_dir/run\"",
       // Each runner owns and removes its socket on exit. Age alone does not
       // distinguish an orphan from another connection's long-running runner.
-      ...(deploy ? deployScript(bundle!) : []),
+      "printf 'architecture='; uname -m",
       "printf 'data_dir=%s\\n' \"$data_dir\"",
       "",
     ].join("\n");
@@ -326,12 +279,43 @@ export class RemoteComputeClient {
     }
     const dataDir = /^data_dir=(.+)$/m.exec(result.stdout)?.[1]?.trim();
     if (!dataDir?.startsWith("/")) throw new Error("The remote host did not report its ScienceDiscovery data directory");
+    let startCommand = shellQuote(runnerCommand);
+    if (deploy) {
+      const architecture = /^architecture=(.+)$/m.exec(result.stdout)?.[1]?.trim() ?? "";
+      const binary = await executable(architecture);
+      const expectedArch = architecture === "x86_64" ? "x64" : architecture === "aarch64" ? "arm64" : undefined;
+      if (!expectedArch || binary.architecture !== expectedArch || !/^[a-f0-9]{64}$/.test(binary.id)) throw new Error("Runner SEA artifact does not match the remote Linux architecture");
+      const destination = `${dataDir}/bin/${binary.id}`;
+      const stage = `${dataDir}/bin/.upload-${randomBytes(12).toString("hex")}`;
+      const connection = await this.transport.open(access);
+      try {
+        const check = await connection.run([
+          "set -eu", `mkdir -p -- ${shellQuote(`${dataDir}/bin`)}`, `chmod 700 -- ${shellQuote(`${dataDir}/bin`)}`,
+          "command -v sha256sum >/dev/null 2>&1 || { echo 'sha256sum is required to verify the Runner binary' >&2; exit 1; }",
+          `if [ -x ${shellQuote(destination)} ] && [ "$(sha256sum ${shellQuote(destination)} | cut -d ' ' -f 1)" = ${shellQuote(binary.id)} ]; then printf 'reused\\n'; fi`,
+        ].join("\n"), 20_000);
+        if (check.exitCode) throw new Error(`Runner deployment check failed: ${check.stderr.trim()}`);
+        if (check.stdout.trim() !== "reused") {
+          await connection.upload(binary.path, stage);
+          const installed = await connection.run([
+            "set -eu",
+            `test "$(sha256sum ${shellQuote(stage)} | cut -d ' ' -f 1)" = ${shellQuote(binary.id)} || { echo 'Runner binary checksum mismatch' >&2; exit 1; }`,
+            `chmod 700 -- ${shellQuote(stage)}`, `mv -f -- ${shellQuote(stage)} ${shellQuote(destination)}`,
+          ].join("\n"), 30_000);
+          if (installed.exitCode) throw new Error(`Runner deployment failed: ${installed.stderr.trim()}`);
+        }
+      } finally {
+        // Only this transfer's staging file is removed; live versions and all
+        // remote workspaces remain untouched, including on cancellation.
+        await connection.run(`rm -f -- ${shellQuote(stage)}`, 5_000).catch(() => undefined);
+        connection.close();
+      }
+      startCommand = shellQuote(destination);
+    }
     return {
       dataDir,
       deployed: deploy,
-      startCommand: deploy
-        ? `node ${shellQuote(`${dataDir}/app/${RUNNER_BUNDLE_ENTRY}`)}`
-        : shellQuote(runnerCommand),
+      startCommand,
     };
   }
 
@@ -396,7 +380,7 @@ export class RemoteComputeClient {
     const { localVersion } = options;
     if (host.capabilities!.platform !== "Linux") throw new Error("SSH remote runner supports Linux hosts only");
     const access = await this.resolveAccess(host.id);
-    const prepared = await this.prepareSshRunner(host, access, options.bundle);
+    const prepared = await this.prepareSshRunner(host, access, options.executable);
     const token = randomBytes(32).toString("base64url");
     // The runner listens on a per-connection Unix socket instead of a port, so
     // the remote host exposes nothing to its network and two connections never

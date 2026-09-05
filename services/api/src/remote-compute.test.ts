@@ -22,7 +22,6 @@ import { test } from "node:test";
 import type { RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
 
 import {
-  packRunnerBundle,
   RemoteComputeClient,
   SshHostKeyUntrustedError,
   validateRunnerCommand,
@@ -80,6 +79,7 @@ const PROBE_OUTPUT = {
 /** A session that answers nothing: enough to observe how the tunnel was opened. */
 function fakeSession(): SshSession {
   return {
+    upload: async () => undefined,
     close: () => undefined,
     forwardToRemoteSocket: async () => { throw new Error("no forwarding in this test"); },
     onClose: () => undefined,
@@ -96,6 +96,7 @@ function fakeSession(): SshSession {
 function tunnelledSession(runnerPort: number, forwarded: string[], started: string[]): SshSession {
   const sockets: Socket[] = [];
   return {
+    upload: async () => undefined,
     close: () => { for (const socket of sockets) socket.destroy(); },
     forwardToRemoteSocket: async (socketPath: string) => {
       forwarded.push(socketPath);
@@ -160,11 +161,12 @@ test("the capability probe is read-only and carries the machine's own credential
   assert.deepEqual(transport.calls[0]!.target.trustedHostKey, TRUSTED_KEY);
 });
 
+const executable = async () => ({ path: "fixture-runner", id: "a".repeat(64), architecture: "x64" as const, size: 1 });
+
 test("the probe, the deployment and the tunnel all use the same credentials and trusted key", async () => {
-  const bundle = await packRunnerBundle();
   const transport = new FakeTransport([
     PROBE_OUTPUT,
-    { exitCode: 0, stderr: "", stdout: "deploy=installed\ndata_dir=/home/scientist/.local/share/sciencediscovery/remote-runner\n" },
+    { exitCode: 0, stderr: "", stdout: "architecture=x86_64\ndata_dir=/home/scientist/.local/share/sciencediscovery/remote-runner\n" },
   ]);
   transport.session = fakeSession();
   const target = access({ port: 2222 });
@@ -174,7 +176,7 @@ test("the probe, the deployment and the tunnel all use the same credentials and 
   await client.probe(target);
   const status = await client.connectRunner(
     { ...host, capabilities: { ...host.capabilities!, runnerCommandAvailable: false } },
-    { bundle, localVersion: "local-build" },
+    { executable, localVersion: "local-build" },
   );
   // The fake session never answers health, so the connection cannot go ready;
   // what matters here is how each step addressed the machine.
@@ -185,9 +187,9 @@ test("the probe, the deployment and the tunnel all use the same credentials and 
     assert.equal(call.target.credentials.password, "hunter2");
     assert.deepEqual(call.target.trustedHostKey, TRUSTED_KEY);
   }
-  assert.match(transport.calls[1]!.script, /tar -xzf/);
+  assert.doesNotMatch(transport.calls[1]!.script, /tar -xzf|base64/);
   assert.doesNotMatch(transport.calls[1]!.script, /-mmin|-mtime|-type s.*-delete/, "preparation must not delete another live runner's socket based on age");
-  assert.equal(transport.opened.length, 1, "the tunnel opens its own connection");
+  assert.equal(transport.opened.length, 2, "transfer and tunnel each use a trusted SSH connection");
   assert.equal(transport.opened[0]!.port, 2222);
   assert.deepEqual(transport.opened[0]!.trustedHostKey, TRUSTED_KEY);
 });
@@ -331,21 +333,36 @@ function sshHostWithoutRunner(nodeVersion: string | null): RemoteHostTarget {
   };
 }
 
-test("automatic deployment is refused when the host has neither a runner nor a usable Node", async () => {
-  const transport = new FakeTransport([]);
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
-  const bundle = await packRunnerBundle();
-
-  const withoutNode = await client.connectRunner(sshHostWithoutRunner(null), { bundle });
-  assert.equal(withoutNode.state, "error");
-  assert.match(withoutNode.error ?? "", /needs Node\.js 22 or newer/);
-
-  const oldNode = await client.connectRunner(sshHostWithoutRunner("v20.11.0"), { bundle });
-  assert.match(oldNode.error ?? "", /found v20\.11\.0/);
-
-  const withoutBundle = await client.connectRunner(sshHostWithoutRunner("v22.19.0"), {});
-  assert.match(withoutBundle.error ?? "", /Pre-installed remote runner executable was not found/);
-  assert.equal(transport.calls.length, 0);
+test("SEA deploys without remote Node, reuses complete binaries and never starts an interrupted upload", async (context) => {
+  const runner = await startFakeRunner({ platform: "linux", token: "ignored", version: "runner-v1" });
+  context.after(() => runner.close());
+  for (const mode of ["install", "reuse", "interrupted", "checksum failure"] as const) {
+    await context.test(mode, async (t) => {
+      const transport = new FakeTransport([{ exitCode: 0, stderr: "", stdout: "architecture=x86_64\ndata_dir=/fixture/remote\n" }]);
+      const started: string[] = [];
+      const session = tunnelledSession(runner.port, [], started);
+      const commands: string[] = [];
+      let uploads = 0;
+      session.run = async (script) => {
+        commands.push(script);
+        if (mode === "checksum failure" && script.includes("mv -f")) return { exitCode: 1, stderr: "Runner binary checksum mismatch", stdout: "" };
+        return { exitCode: 0, stderr: "", stdout: mode === "reuse" && script.includes("printf 'reused") ? "reused\n" : "" };
+      };
+      session.upload = async () => { uploads++; if (mode === "interrupted") throw new Error("transfer interrupted"); };
+      transport.session = session;
+      const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+      t.after(() => client.close());
+      const status = await client.connectRunner(sshHostWithoutRunner(null), { executable });
+      assert.equal(uploads, mode === "reuse" ? 0 : 1);
+      assert.match(commands.at(-1)!, /^rm -f -- '\/fixture\/remote\/bin\/\.upload-/);
+      if (mode === "install" || mode === "reuse") {
+        assert.equal(status.state, "ready", status.error ?? "SEA tunnel must become ready");
+        assert.match(started[0]!, /'\/fixture\/remote\/bin\/[a-f0-9]{64}'/);
+        assert.doesNotMatch(started[0]!, /\bnode\b|server\.js/);
+      } else { assert.equal(status.state, "error"); assert.equal(started.length, 0); }
+      if (mode === "interrupted") assert.equal(commands.some(command => command.includes("mv -f")), false);
+    });
+  }
 });
 
 

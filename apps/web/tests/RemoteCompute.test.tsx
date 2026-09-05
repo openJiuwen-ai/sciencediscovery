@@ -123,7 +123,7 @@ test("an SSH authentication failure does not invent missing runner or Node capab
   assert.deepEqual(editStates, [true, false]);
 });
 
-test("a successfully probed Linux host without a runner or Node keeps the deployment warning", async () => {
+test("a successfully probed Linux host without Node offers automatic SEA deployment", async () => {
   const { output, renderer } = await renderHost(buildHost({
     capabilities: {
       conda: false,
@@ -142,18 +142,18 @@ test("a successfully probed Linux host without a runner or Node keeps the deploy
     },
   }));
 
-  assert.match(output, /Linux · cannot deploy: no runner and no Node\.js 22\+ found/);
+  assert.match(output, /SEA runner deployed automatically over SSH; remote Node.js is not required/);
   await act(async () => renderer.unmount());
 });
 
-test("only Node 22+ is presented as deployable after a successful probe", async () => {
-  for (const [nodeVersion, deployable] of [["v20.19.0", false], ["invalid", false], ["v22.19.0", true]] as const) {
+test("remote Node version does not gate SEA deployment after a successful probe", async () => {
+  for (const nodeVersion of [null, "v20.19.0", "invalid", "v22.19.0"]) {
     const { output, renderer } = await renderHost(buildHost({ capabilities: {
       platform: "Linux", nodeVersion, runnerCommandAvailable: false, conda: false, containerRuntimes: [],
       cpuCores: 1, cuda: null, gpu: null, memoryBytes: null, modules: false, probedAt: timestamp, scratchPaths: [], slurm: false,
     } }));
-    assert.equal(output.includes("deployed automatically over SSH"), deployable);
-    assert.equal(output.includes("cannot deploy"), !deployable);
+    assert.equal(output.includes("deployed automatically over SSH"), true);
+    assert.equal(output.includes("cannot deploy"), false);
     await act(async () => renderer.unmount());
   }
 });

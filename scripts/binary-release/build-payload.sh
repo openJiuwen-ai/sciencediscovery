@@ -165,6 +165,7 @@ prepare_shared() {
   echo "Building the workspace..." >&2
   pnpm install --frozen-lockfile --ignore-scripts
   pnpm build
+  pnpm runner:binary
 
   # `pnpm deploy` writes a self-contained tree whose node_modules symlinks stay
   # inside the deployed directory. Placing each service at its repository path

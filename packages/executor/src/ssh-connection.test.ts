@@ -3,11 +3,38 @@
 
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import ssh2 from "ssh2";
 
 import { hostKeyFingerprint, SshConnection, SshHostKeyUntrustedError, type SshCredentials } from "./ssh-connection.js";
+
+test("Runner file transfer uses the authenticated SFTP session and fails on disconnect", async (context) => {
+  let client: ssh2.Client;
+  context.mock.method(ssh2.Client.prototype, "connect", function (this: ssh2.Client) {
+    client = this; queueMicrotask(() => this.emit("ready")); return this;
+  });
+  context.mock.method(ssh2.Client.prototype, "end", function (this: ssh2.Client) { return this; });
+  let complete: (error?: Error) => void = () => undefined;
+  let ended = 0;
+  const transfer = Object.assign(new EventEmitter(), {
+    end: () => { ended++; },
+    fastPut: (source: string, destination: string, options: { mode: number }, done: (error?: Error) => void) => {
+      assert.equal(source, "product-runner"); assert.equal(destination, "/fixture/.upload-runner");
+      assert.equal(options.mode, 0o700); complete = done;
+    },
+  });
+  context.mock.method(ssh2.Client.prototype, "sftp", (done: (error: undefined, sftp: unknown) => void) => done(undefined, transfer));
+  const connection = await SshConnection.open({ destination: "fixture", credentials: { username: "operator", password: randomBytes(16).toString("hex") } });
+  const first = connection.upload("product-runner", "/fixture/.upload-runner");
+  complete(); await first;
+  assert.equal(ended, 1);
+  const failed = assert.rejects(connection.upload("product-runner", "/fixture/.upload-runner"), /connection closed during Runner binary transfer/);
+  client!.emit("close"); await failed;
+  complete(new Error("late failure"));
+  assert.equal(ended, 2);
+});
 
 test("authentication diagnostics reflect actual SSH protocol exchanges without exposing credentials", async (context) => {
   const hostKeys = ssh2.utils.generateKeyPairSync("ed25519");

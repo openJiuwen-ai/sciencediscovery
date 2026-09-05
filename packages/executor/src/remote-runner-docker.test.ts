@@ -23,7 +23,6 @@ import { promisify } from "node:util";
 import type { RemoteHostTarget } from "@sciencediscovery/schema";
 
 import { RemoteComputeClient } from "./remote-compute.js";
-import { packRunnerBundle } from "./runner-bundle.js";
 
 /**
  * End-to-end proof of the SSH path against a real OpenSSH server: the product
@@ -117,8 +116,7 @@ test("a real SSH machine without a runner is deployed to, connected, and used", 
     updatedAt: new Date().toISOString(),
     username: "scientist",
   };
-  const bundle = await packRunnerBundle();
-  const connected = await client.connectRunner(host, { bundle, localVersion: "local-build" });
+  const connected = await client.connectRunner(host, { localVersion: "local-build" });
   assert.equal(connected.state, "ready", connected.error ?? "the runner did not become ready");
   assert.equal(connected.deployed, true);
   assert.ok(connected.remoteVersion);
@@ -137,7 +135,7 @@ test("a real SSH machine without a runner is deployed to, connected, and used", 
   );
 
   // Reconnecting finds the deployment already installed, so nothing is sent.
-  const reconnected = await client.connectRunner(host, { bundle, localVersion: "local-build" });
+  const reconnected = await client.connectRunner(host, { localVersion: "local-build" });
   assert.equal(reconnected.state, "ready", reconnected.error ?? "the runner did not reconnect");
   assert.equal(
     (await client.runnerClient(host.id).readRemoteWorkspaceFile(workspaceKey, "inputs/data.csv")).toString("utf8"),
@@ -147,7 +145,7 @@ test("a real SSH machine without a runner is deployed to, connected, and used", 
   // A second connection to the same machine: two per-connection sockets leave
   // them no address to collide on.
   const second: RemoteHostTarget = { ...host, id: "docker-host-second" };
-  const connectedTwice = await client.connectRunner(second, { bundle, localVersion: "local-build" });
+  const connectedTwice = await client.connectRunner(second, { localVersion: "local-build" });
   assert.equal(connectedTwice.state, "ready", connectedTwice.error ?? "the second connection did not become ready");
   assert.equal((await client.runnerClient(second.id).status()).status, "ok");
   await client.disconnectRunner(second.id);

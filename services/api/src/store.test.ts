@@ -3926,16 +3926,12 @@ test("an SSH machine keeps its optional port, and a Session pinned under the old
     store.registerRemoteHost({ alias: "10.0.0.9", capabilities, port: 70_000 }),
     /between 1 and 65535/,
   );
-  for (const [nodeVersion, supported] of [[null, false], ["v20.19.0", false], ["invalid", false], ["v22.19.0", true]] as const) {
+  for (const nodeVersion of [null, "v20.19.0", "invalid", "v22.19.0"]) {
     const candidate = await store.registerRemoteHost({ alias: "node-check", capabilities: {
       ...capabilities, nodeVersion, runnerCommandAvailable: false,
     } });
-    if (supported) {
-      const accepted = await store.createProject("Usable Node", {}, [candidate.id]);
-      assert.deepEqual(accepted.remoteRunnerHostIds, [candidate.id]);
-    } else {
-      await assert.rejects(store.createProject("Unusable Node", {}, [candidate.id]), /Node.js 22/);
-    }
+    const accepted = await store.createProject("SEA does not require remote Node", {}, [candidate.id]);
+    assert.deepEqual(accepted.remoteRunnerHostIds, [candidate.id]);
   }
 
   const project = await store.createProject("Legacy project", undefined, [byAlias.id]);

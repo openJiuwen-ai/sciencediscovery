@@ -24,8 +24,8 @@ import {
   WORKSPACE_SYSTEM_PROMPT_VERSION,
 } from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
-import type { RunnerBundle, RunnerClient } from "@sciencediscovery/executor";
-import { generateSshKeyPair, packRunnerBundle, SshHostKeyUntrustedError } from "@sciencediscovery/executor";
+import type { RunnerClient } from "@sciencediscovery/executor";
+import { generateSshKeyPair, SshHostKeyUntrustedError } from "@sciencediscovery/executor";
 import {
   listProviderModels,
   ModelCatalogFetchError,
@@ -482,17 +482,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         ? { ...failed, hostKey: { ...error.challenge, trusted: false } }
         : failed;
     }
-  };
-
-  /**
-   * The runner tree deployed to SSH hosts that have none. Packing it reads the
-   * product's own installation, so it is done once and reused: the bundle only
-   * changes when the product itself is replaced.
-   */
-  let runnerBundle: Promise<RunnerBundle> | undefined;
-  const deployableRunnerBundle = async (): Promise<RunnerBundle | undefined> => {
-    runnerBundle ??= packRunnerBundle();
-    return await runnerBundle.catch(() => undefined);
   };
 
   const server = createServer(async (request, response) => {
@@ -1065,9 +1054,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         const localVersion = (await runnerClient.health().catch(() => undefined))?.runnerVersion;
         const status: RemoteRunnerStatus = await remoteCompute.connectRunner(host, {
-          ...(host.connectionKind === "ssh" && !host.capabilities?.runnerCommandAvailable
-            ? { bundle: await deployableRunnerBundle() }
-            : {}),
           ...(localVersion ? { localVersion } : {}),
           ...(host.connectionKind === "direct" ? { token: store.remoteHostToken(host.id) ?? "" } : {}),
         });

@@ -168,6 +168,8 @@ class AuthenticationDiagnostics {
  */
 export interface SshSession {
   close(): void;
+  /** Stream a product artifact over the authenticated SSH file-transfer channel. */
+  upload(localPath: string, remotePath: string): Promise<void>;
   forwardToRemoteSocket(socketPath: string): Promise<Duplex>;
   onClose(listener: (error?: Error) => void): void;
   run(script: string, timeoutMs: number, options?: { pty?: boolean }): Promise<SshCommandResult>;
@@ -181,6 +183,35 @@ export interface SshSession {
  */
 export class SshConnection implements SshSession {
   private failure?: Error;
+
+  upload(localPath: string, remotePath: string): Promise<void> {
+    return new Promise((resolveUpload, reject) => {
+      let settled = false;
+      let endTransfer: (() => void) | undefined;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.client.off("close", onClose);
+        endTransfer?.();
+        if (error) reject(error); else resolveUpload();
+      };
+      const onClose = (): void => finish(new Error("SSH connection closed during Runner binary transfer"));
+      const timer = setTimeout(() => {
+        finish(new Error("Runner binary transfer timed out after 5 minutes"));
+        this.close();
+      }, 300_000);
+      this.client.once("close", onClose);
+      this.client.sftp((error, sftp) => {
+        if (error) { finish(new Error("Could not open SSH SFTP channel for Runner deployment")); return; }
+        if (settled) { sftp.end(); return; }
+        endTransfer = () => sftp.end();
+        sftp.on("error", () => finish(new Error("SSH SFTP channel failed during Runner deployment")));
+        sftp.fastPut(localPath, remotePath, { mode: 0o700 }, (failure) => finish(failure
+          ? new Error("Could not transfer Runner binary; check SSH SFTP support, destination permissions and free disk space") : undefined));
+      });
+    });
+  }
 
   private constructor(
     private readonly client: InstanceType<typeof Client>,

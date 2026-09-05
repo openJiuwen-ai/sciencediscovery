@@ -28,11 +28,9 @@ export interface RemoteHostCapabilities {
   gpu: string | null;
   memoryBytes: number | null;
   modules: boolean;
-  /**
-   * Remote `node --version`, used to decide whether the product can deploy its
-   * own runner bundle to this host. `null` means no usable Node was found.
-   */
+  /** Informational only: automatic SEA deployment brings its own Node runtime. */
   nodeVersion: string | null;
+  architecture?: string | null;
   /** Remote operating system reported by `uname -s`. F1 accepts Linux only. */
   platform: string | null;
   probedAt: string;

@@ -157,7 +157,7 @@ export async function verifyNodeVersion(nodeExecutable, expectedVersion, run = e
   return actualVersion;
 }
 
-async function injectBlob(binaryPath, blobPath) {
+export async function injectBlob(binaryPath, blobPath) {
   await execFileAsync(
     process.execPath,
     [require.resolve("postject/dist/cli.js"), binaryPath, "NODE_SEA_BLOB", blobPath, "--sentinel-fuse", SEA_FUSE],
@@ -190,7 +190,7 @@ async function compressPayload(payloadDirectory, workDirectory) {
   return archivePath;
 }
 
-async function fetchNodeBinary(architecture, workDirectory) {
+export async function fetchNodeBinary(architecture, workDirectory) {
   const runtimeDirectory = join(workDirectory, `node-runtime-${architecture}`);
   await execFileAsync(process.execPath, [
     join(scriptDirectory, "fetch-runtime.mjs"),

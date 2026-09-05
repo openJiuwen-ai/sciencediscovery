@@ -36,6 +36,7 @@
     "memory-graph:test": "uv run --project services/memory-graph --extra test pytest services/memory-graph/tests",
     "evolve:test": "uv run --project services/evolve --extra test --extra candidates pytest services/evolve/tests",
     "runner": "pnpm --filter @sciencediscovery/runner start",
+    "runner:binary": "node scripts/binary-release/build-runner.mjs",
     "server": "bash scripts/run-local.sh --no-build",
     "start": "bash scripts/run-local.sh",
     "smoke": "pnpm build && pnpm --filter @sciencediscovery/api test",

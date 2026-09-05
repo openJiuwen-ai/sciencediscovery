@@ -136,6 +136,8 @@ async function collectFiles(root: string, subdirectory: string, prefix: string):
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     const absolute = join(entry.parentPath, entry.name);
+    // SEA artifacts contain this tree themselves; never recursively embed them.
+    if (relative(join(root, subdirectory), absolute).split(sep)[0] === "sea") continue;
     // Types, source maps and the runner's own test files are never loaded by a
     // running runner; leaving them out keeps the SSH transfer small.
     if (/\.(?:d\.ts|map)$/.test(entry.name) || /\.test\.js$/.test(entry.name)) continue;

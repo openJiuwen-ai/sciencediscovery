@@ -281,6 +281,7 @@ prepare_local() {
     uv_sync_project services/gateway "$envs_dir/gateway" 0
     if [[ "$no_node_build" -eq 0 ]]; then
       pnpm build
+      if [[ "$(uname -s)" == Linux ]]; then pnpm runner:binary; fi
     fi
   fi
 

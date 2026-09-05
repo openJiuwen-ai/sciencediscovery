@@ -26,7 +26,6 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
-import { supportsRemoteRunnerNode } from "@sciencediscovery/schema";
 import { hostKeyFromError, type GeneratedRemoteHostKey, type RemoteHostKeyInfo } from "./api/settings.js";
 import { CopyButton } from "./CopyButton.js";
 import { SshKeyFileField } from "./SshKeyFileField.js";
@@ -66,9 +65,7 @@ function runnerSource(host: RemoteHostTarget): string | undefined {
   const capabilities = host.capabilities;
   if (capabilities?.platform !== "Linux") return undefined;
   if (capabilities.runnerCommandAvailable) return `runner ${host.runnerCommand} already installed`;
-  return supportsRemoteRunnerNode(capabilities.nodeVersion)
-    ? `deployed automatically over SSH (Node ${capabilities.nodeVersion})`
-    : `cannot deploy: no runner and no Node.js 22+ found${capabilities.nodeVersion ? ` (found ${capabilities.nodeVersion})` : ""}`;
+  return "SEA runner deployed automatically over SSH; remote Node.js is not required";
 }
 
 /**
@@ -78,8 +75,7 @@ function runnerSource(host: RemoteHostTarget): string | undefined {
 function runnerUsable(host: RemoteHostTarget): boolean {
   if (host.status !== "ready") return false;
   if (host.connectionKind === "direct") return Boolean(host.endpoint && host.hasToken);
-  return host.capabilities?.platform === "Linux"
-    && (host.capabilities.runnerCommandAvailable || supportsRemoteRunnerNode(host.capabilities.nodeVersion));
+  return host.capabilities?.platform === "Linux";
 }
 
 /** Fresh host catalog for the scoped settings sections, fetched on mount. */
