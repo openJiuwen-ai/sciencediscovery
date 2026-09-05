@@ -13,7 +13,14 @@ no shell of its own. CodeArts bills pipelines and build tasks separately; the
 pipeline quota is exhausted, so every step is an
 `official_devcloud_cloudBuild` invocation of the generic `run-shell` task
 (`x64-run-shell-sciencediscovery`, `b358513ca1e54d1b8d2500b94c870806`, and its
-aarch64 sibling), parameterised with `SH_FILE_PATH`, `ARGS` and `ENVS`. The
+aarch64 sibling), parameterised with `SH_FILE_PATH`, `ARGS` and `ENVS`. That
+task's console shell returns success whatever the script did, so its OBS action
+can still upload the log. A second task,
+`d84e08c4eee04564a45ecf3e00579b88`, takes the same parameters but propagates
+the exit code and uploads nothing; any job that has to be able to fail — today
+only `verify_results` — must use it. A judge running on the masking task
+cannot be red, which is how a run with two failed layers was once published as
+successful. The
 layers themselves live in `.ci/codearts-layer.sh`: the two UT tiers —
 `ci:ut:host` on the build host and `ci:ut:guest` in a QEMU guest — the
 hermetic `ci:st` entry point, the mocked `ci:e2e` group in that same guest,

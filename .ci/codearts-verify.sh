@@ -37,9 +37,9 @@ case "$publish_dir" in
   *) publish_dir="$repo_root/$publish_dir" ;;
 esac
 mkdir -p -- "$publish_dir"
-# Record the verdict as an object of its own. The console shell around this
-# script returns success whatever happens, so `verify/exit-code` is the one
-# place a reader can see what this job decided.
+# Record the verdict as an object of its own. This job's build task returns
+# the real exit code, so the CodeArts status is authoritative; the object just
+# lets a reader with only the public bucket see the same answer.
 record_verdict() {
   printf '%s\n' "$1" > "$publish_dir/exit-code"
 }

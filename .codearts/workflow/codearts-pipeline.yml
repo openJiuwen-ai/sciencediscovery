@@ -334,7 +334,7 @@ stages:
               CI_RUN_ID=${{ pipeline.run_id }}
             __sameProject__: "true"
             __projectId__: ""
-            jobId: b358513ca1e54d1b8d2500b94c870806
+            jobId: d84e08c4eee04564a45ecf3e00579b88
             __repository__: sciencediscovery
             artifactIdentifier: ""
           identifier: 1788590000005f6a7b8c9-6666-4fff-8006-5f6a7b8c9d06

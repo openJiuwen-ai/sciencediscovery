@@ -145,6 +145,19 @@ test("only the verification job can turn the run red", async () => {
     assert.match(verify, new RegExp(`\\n        - ${layer}\\n`), `verify_results must wait for ${layer}`);
   }
   assert.match(workflow, /completed\('verify_results', 'code_check'\)/);
+  // The layer jobs run on a build task whose shell returns success so the OBS
+  // action can still upload; a judge sharing that task can never be red, which
+  // is how a run with two failed layers was published as successful.
+  const jobIdOf = (body) => /jobId: (\S+)/.exec(body)?.[1];
+  const verifyJobId = jobIdOf(verify);
+  assert.ok(verifyJobId, "verify_results has no build task");
+  for (const layer of ["ut", "ut_guest", "st", "e2e", "binary"]) {
+    assert.notEqual(
+      jobIdOf(workflowJob(workflow, layer)),
+      verifyJobId,
+      `verify_results must not share ${layer}'s build task, which cannot fail`,
+    );
+  }
   assert.doesNotMatch(workflow, /CI_STATUS_/);
   const result = await readFile(join(ciDirectory, "codearts-pr-result.sh"), "utf8");
   assert.match(result, /codearts_layer_status/);
