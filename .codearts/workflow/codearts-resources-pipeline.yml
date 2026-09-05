@@ -31,410 +31,166 @@ stages:
         select: selected_by_default
         name: Prepare toolchain resources
         needs: []
-        timeout: 20
+        timeout: 30
         timeout_unit: minute
         steps:
-        - name: Download the resource branch
-          uses: official_git_clone
-          identifier: 1788333000000b5322962-5b09-4837-9697-31028b7fb4f3
-        - name: Fetch and verify toolchain resources
-          uses: official_shell_plugin
+        - name: Fetch and publish the verified toolchains
+          uses: official_devcloud_cloudBuild
           with:
-            OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -eu
-              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              bash .ci/prepare-codearts-resources.sh \
-                --group toolchains \
-                --output-dir "$PWD/.codearts-resources"
-              find .codearts-resources/toolchains -maxdepth 1 -type f -printf '%f\n' | sort
-          identifier: 1788333000001b5f5c1bb-722f-416b-b797-c029ddf73576
-        - name: Upload x86_64 Node.js
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/toolchains/v1/node-v22.19.0-linux-x64.tar.xz
-            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/node-v22.19.0-linux-x64.tar.xz"
-            self_folder: "false"
-          identifier: 1788333000002a58a6648-d281-4941-ac5b-bd85716ba4e2
-        - name: Upload aarch64 Node.js
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/toolchains/v1/node-v22.19.0-linux-arm64.tar.xz
-            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/node-v22.19.0-linux-arm64.tar.xz"
-            self_folder: "false"
-          identifier: 1788333000003e21ee40c-8670-4cb4-a521-87980930316f
-        - name: Upload x86_64 CPython
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: "sciencediscovery/cache/toolchains/v1/cpython-3.12.13+20260805-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
-            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/cpython-3.12.13+20260805-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
-            self_folder: "false"
-          identifier: 1788333000004e6f9cc90-214d-4875-9f10-b251953f4ad0
-        - name: Upload aarch64 CPython
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: "sciencediscovery/cache/toolchains/v1/cpython-3.12.13+20260805-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
-            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/cpython-3.12.13+20260805-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
-            self_folder: "false"
-          identifier: 178833300000505fcd078-d252-4f94-b2e1-69315d69a8a0
-        - name: Upload x86_64 micromamba
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/toolchains/v1/micromamba-2.8.1-0-linux-64.tar.bz2
-            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/micromamba-2.8.1-0-linux-64.tar.bz2"
-            self_folder: "false"
-          identifier: 17883330000068a226fcb-ff83-4f42-894f-978afcdd36cb
-        - name: Upload aarch64 micromamba
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/toolchains/v1/micromamba-2.8.1-0-linux-aarch64.tar.bz2
-            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/micromamba-2.8.1-0-linux-aarch64.tar.bz2"
-            self_folder: "false"
-          identifier: 1788333000007ef03859e-cd09-4e58-a330-a5d47267ba91
-        - name: Upload pnpm
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/toolchains/v1/pnpm-11.1.2.tgz
-            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/pnpm-11.1.2.tgz"
-            self_folder: "false"
-          identifier: 178833300000822609640-e8a7-44e8-9523-4b724bf2ed72
-        - name: Upload x86_64 uv
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/toolchains/v1/uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-            self_folder: "false"
-          identifier: 178833300000900697488-2090-49b7-b315-e10d72d40ac9
-        - name: Upload aarch64 uv
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/toolchains/v1/uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
-            source_file: "${SHARE_PATH}/.codearts-resources/toolchains/uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl"
-            self_folder: "false"
-          identifier: 1788333000010f03582dd-01cf-43a8-a16b-21d045507281
+            GIT_REPO_URL: https://gitcode.com/openJiuwen/sciencediscovery.git
+            GIT_REF: refs/heads/ci/codearts-resources
+            GIT_TARGET_REF: refs/heads/ci/codearts-resources
+            SH_FILE_PATH: .ci/codearts-resource.sh
+            ARTIFACT_PATH: .codearts-resources/publish
+            OBS_BUCKET: openjiuwen-ci
+            OBS_DIRECTORY: sciencediscovery/cache/toolchains/v1/
+            OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
+            ENVS: |-
+              RESOURCE_BUILD_COMMIT=${{ sources.sciencediscovery.commit_id }}
+              RESOURCE_BUILD_RUN_ID=${{ pipeline.run_id }}
+            ARGS: |-
+              toolchains
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: d84e08c4eee04564a45ecf3e00579b88
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 1788620000000a1b2c3d4-2001-4aaa-9001-0a1b2c3d4e11
         if: "${{ default() }}"
         runs-on:
-        - codearts-hosted
-        - ubuntu-latest
-        - x64
-        - large
+        - default
       resource_qemu:
         select: selected_by_default
         name: Prepare QEMU Ubuntu image
         needs: []
-        timeout: 40
+        timeout: 30
         timeout_unit: minute
         steps:
-        - name: Download the resource branch
-          uses: official_git_clone
-          identifier: 1788333000011c5892c74-b0a2-4566-827c-a90eb779e428
-        - name: Fetch and verify the QEMU image
-          uses: official_shell_plugin
+        - name: Fetch and publish the verified base image
+          uses: official_devcloud_cloudBuild
           with:
-            OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -eu
-              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              RESOURCE_COMMIT=$(git rev-parse HEAD)
-              printf '%s\n' "$RESOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-              echo "Resolved resource checkout commit: $RESOURCE_COMMIT"
-              echo "::set-output var=resource_commit:$RESOURCE_COMMIT"
-              bash .ci/prepare-codearts-resources.sh \
-                --group qemu \
-                --output-dir "$PWD/.codearts-resources"
-              ls -lh .codearts-resources/qemu/noble-server-cloudimg-amd64.img
-          identifier: 1788333000012c5948720-6c76-4b9f-8e5f-1f58c95bbe40
-        - name: Upload the QEMU Ubuntu image
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/qemu/v1/noble-server-cloudimg-amd64.img
-            source_file: "${SHARE_PATH}/.codearts-resources/qemu/noble-server-cloudimg-amd64.img"
-            self_folder: "false"
-          identifier: 1788333000013ada5e1eb-cefa-4408-8963-9cb5162b07f4
+            GIT_REPO_URL: https://gitcode.com/openJiuwen/sciencediscovery.git
+            GIT_REF: refs/heads/ci/codearts-resources
+            GIT_TARGET_REF: refs/heads/ci/codearts-resources
+            SH_FILE_PATH: .ci/codearts-resource.sh
+            ARTIFACT_PATH: .codearts-resources/publish
+            OBS_BUCKET: openjiuwen-ci
+            OBS_DIRECTORY: sciencediscovery/cache/qemu/v1/
+            OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
+            ENVS: |-
+              RESOURCE_BUILD_COMMIT=${{ sources.sciencediscovery.commit_id }}
+              RESOURCE_BUILD_RUN_ID=${{ pipeline.run_id }}
+            ARGS: |-
+              qemu-base
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: d84e08c4eee04564a45ecf3e00579b88
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 1788620000001b2c3d4e5-2002-4aaa-9002-1b2c3d4e5f12
         if: "${{ default() }}"
         runs-on:
-        - codearts-hosted
-        - ubuntu-latest
-        - x64
-        - large
+        - default
       resource_qemu_emulator:
         select: selected_by_default
         name: Build portable QEMU emulator
         needs: []
-        timeout: 20
+        timeout: 30
         timeout_unit: minute
         steps:
-        - name: Download the resource branch
-          uses: official_git_clone
-          identifier: 1788520000000a1c4e7f2-3b61-4d82-9a05-6c1e4f7b2d93
-        - name: Build and verify the portable QEMU emulator
-          uses: official_shell_plugin
+        - name: Build and publish the portable emulator
+          uses: official_devcloud_cloudBuild
           with:
-            OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -eu
-              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              OUTPUT_DIR="$PWD/.codearts-resources/qemu-emulator"
-              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
-              RESOURCE_RUN_ID="${{ pipeline.run_id }}"
-              printf '%s\n' "$CHECKED_OUT_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-              printf '%s\n' "$RESOURCE_RUN_ID" | grep -Eq '^[0-9A-Za-z_-]+$'
-              RESOURCE_BUILD_COMMIT="$CHECKED_OUT_COMMIT" \
-                RESOURCE_BUILD_RUN_ID="$RESOURCE_RUN_ID" \
-                bash .ci/build-qemu-emulator.sh --output-dir "$OUTPUT_DIR"
-              (cd "$OUTPUT_DIR" && sha256sum --check SHA256SUMS)
-              cat "$OUTPUT_DIR/VERSION"
-              ls -lh "$OUTPUT_DIR/ScienceDiscovery-qemu-emulator-alpine-x86_64.tar"
-          identifier: 1788520000001b2d5f8a3-4c72-4e93-8b16-7d2f5a8c3e04
-        - name: Upload the portable QEMU emulator
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/qemu-emulator/v1/ScienceDiscovery-qemu-emulator-alpine-x86_64.tar
-            source_file: "${SHARE_PATH}/.codearts-resources/qemu-emulator/ScienceDiscovery-qemu-emulator-alpine-x86_64.tar"
-            self_folder: "false"
-          identifier: 1788520000002c3e609b4-5d83-4fa4-9c27-8e3a6b9d4f15
-        - name: Upload the QEMU emulator checksum
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/qemu-emulator/v1/SHA256SUMS
-            source_file: "${SHARE_PATH}/.codearts-resources/qemu-emulator/SHA256SUMS"
-            self_folder: "false"
-          identifier: 1788520000003d4f710c5-6e94-40b5-8d38-9f4b7c0e5a26
-        - name: Upload the QEMU emulator version manifest
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: sciencediscovery/cache/qemu-emulator/v1/VERSION
-            source_file: "${SHARE_PATH}/.codearts-resources/qemu-emulator/VERSION"
-            self_folder: "false"
-          identifier: 1788520000004e5a821d6-7f05-41c6-9e49-0a5c8d1f6b37
-        - name: Verify the published QEMU emulator
-          uses: official_shell_plugin
-          with:
-            OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -eu
-              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              BASE_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu-emulator/v1"
-              VERIFY_DIR="$PWD/.codearts-resources/qemu-emulator-published"
-              PAYLOAD_NAME=ScienceDiscovery-qemu-emulator-alpine-x86_64.tar
-              mkdir -p "$VERIFY_DIR"
-              fetch_published() {
-                name="$1"
-                attempt=1
-                while [ "$attempt" -le 5 ]; do
-                  if curl --fail --location --retry 2 --connect-timeout 15 \
-                    --max-time 600 --silent --show-error \
-                    "$BASE_URL/$name" --output "$VERIFY_DIR/$name.part"; then
-                    mv "$VERIFY_DIR/$name.part" "$VERIFY_DIR/$name"
-                    echo "Downloaded published QEMU emulator object: $name"
-                    return 0
-                  fi
-                  rm -f "$VERIFY_DIR/$name.part"
-                  echo "Waiting for published QEMU emulator object: $name (attempt $attempt)"
-                  attempt=$((attempt + 1))
-                  sleep 2
-                done
-                echo "FATAL: published QEMU emulator object is unavailable: $name" >&2
-                return 1
-              }
-              fetch_published SHA256SUMS
-              fetch_published VERSION
-              fetch_published "$PAYLOAD_NAME"
-              test "$(wc -l < "$VERIFY_DIR/SHA256SUMS")" -eq 1
-              grep -Eq "^[0-9a-f]{64}  $PAYLOAD_NAME$" "$VERIFY_DIR/SHA256SUMS"
-              expected_sha256=$(awk '{print $1}' "$VERIFY_DIR/SHA256SUMS")
-              actual_sha256=$(sha256sum "$VERIFY_DIR/$PAYLOAD_NAME" | awk '{print $1}')
-              test "$actual_sha256" = "$expected_sha256"
-              # The payload is packed reproducibly, so the consumer branch can
-              # commit this checksum before the first publish. Print it: a
-              # mismatch there is read from this line, not guessed.
-              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
-              grep -Fx 'recipe=qemu-emulator-v1' "$VERIFY_DIR/VERSION"
-              grep -Fx "resource_commit=$CHECKED_OUT_COMMIT" "$VERIFY_DIR/VERSION"
-              echo "Verified published QEMU emulator: $actual_sha256"
-          identifier: 1788520000005f6b932e7-8a16-42d7-8f5a-1b6d9e2a7c48
+            GIT_REPO_URL: https://gitcode.com/openJiuwen/sciencediscovery.git
+            GIT_REF: refs/heads/ci/codearts-resources
+            GIT_TARGET_REF: refs/heads/ci/codearts-resources
+            SH_FILE_PATH: .ci/codearts-resource.sh
+            ARTIFACT_PATH: .codearts-resources/publish
+            OBS_BUCKET: openjiuwen-ci
+            OBS_DIRECTORY: sciencediscovery/cache/qemu-emulator/v1/
+            OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
+            ENVS: |-
+              RESOURCE_BUILD_COMMIT=${{ sources.sciencediscovery.commit_id }}
+              RESOURCE_BUILD_RUN_ID=${{ pipeline.run_id }}
+            ARGS: |-
+              qemu-emulator
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: d84e08c4eee04564a45ecf3e00579b88
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 1788620000002c3d4e5f6-2003-4aaa-9003-2c3d4e5f6a13
         if: "${{ default() }}"
         runs-on:
-        - codearts-hosted
-        - ubuntu-latest
-        - x64
-        - large
+        - default
       resource_qemu_runner:
         select: selected_by_default
         name: Build pre-provisioned QEMU Runner image
         needs:
         - resource_toolchains
         - resource_qemu
-        timeout: 60
+        timeout: 90
         timeout_unit: minute
         steps:
-        - name: Download the resource branch
-          uses: official_git_clone
-          identifier: 1788339000000cf34f086-818d-4e2b-a6b4-6732de7c55e8
-        - name: Build and verify the QEMU Runner image
-          uses: official_shell_plugin
+        - name: Build and publish the Runner image
+          uses: official_devcloud_cloudBuild
           with:
-            OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -eu
-              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              BASE_DIR="$PWD/.codearts-resources/qemu-base"
-              OUTPUT_DIR="$PWD/.codearts-resources/qemu-runner"
-              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
-              RESOURCE_COMMIT="${{ jobs.resource_qemu.outputs.resource_commit }}"
-              RESOURCE_RUN_ID="${{ pipeline.run_id }}"
-              printf '%s\n' "$CHECKED_OUT_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-              printf '%s\n' "$RESOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-              printf '%s\n' "$RESOURCE_RUN_ID" | grep -Eq '^[0-9A-Za-z_-]+$'
-              test "$CHECKED_OUT_COMMIT" = "$RESOURCE_COMMIT"
-              mkdir -p "$BASE_DIR" "$OUTPUT_DIR"
-              CI_QEMU_IMAGE_CACHE_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu/v1" \
-                CI_QEMU_IMAGE_CACHE_ONLY=1 \
-                bash .ci/fetch-qemu-image.sh \
-                  --output "$BASE_DIR/noble-server-cloudimg-amd64.img"
-              RESOURCE_BUILD_COMMIT="$CHECKED_OUT_COMMIT" \
-                RESOURCE_BUILD_RUN_ID="$RESOURCE_RUN_ID" \
-                bash .ci/build-qemu-runner-image.sh \
-                  --base-image "$BASE_DIR/noble-server-cloudimg-amd64.img" \
-                  --output-dir "$OUTPUT_DIR"
-              (cd "$OUTPUT_DIR" && sha256sum --check SHA256SUMS)
-              ls -lh "$OUTPUT_DIR/ScienceDiscovery-qemu-runner-noble-amd64.qcow2"
-          identifier: 17883390000017f2349b5-edfc-4995-a66d-c93558b1527e
-        - name: Require the local QEMU Runner outputs
-          uses: official_shell_plugin
-          with:
-            OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -eu
-              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              OUTPUT_DIR="$PWD/.codearts-resources/qemu-runner"
-              test -s "$OUTPUT_DIR/ScienceDiscovery-qemu-runner-noble-amd64.qcow2"
-              test -s "$OUTPUT_DIR/SHA256SUMS"
-              test -s "$OUTPUT_DIR/VERSION"
-              (cd "$OUTPUT_DIR" && sha256sum --check SHA256SUMS)
-              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
-              RESOURCE_RUN_ID="${{ pipeline.run_id }}"
-              cat "$OUTPUT_DIR/VERSION"
-              grep -Fx 'recipe=qemu-runner-v1' "$OUTPUT_DIR/VERSION"
-              grep -Fx "resource_commit=$CHECKED_OUT_COMMIT" "$OUTPUT_DIR/VERSION"
-              grep -Fx "resource_run_id=$RESOURCE_RUN_ID" "$OUTPUT_DIR/VERSION"
-          identifier: 1788342000000b5065903-e34b-4dfb-ae0d-08c597d9332e
-        - name: Upload the pre-provisioned QEMU Runner image
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: "sciencediscovery/cache/qemu-runner/v1/${{ jobs.resource_qemu.outputs.resource_commit }}/${{ pipeline.run_id }}/ScienceDiscovery-qemu-runner-noble-amd64.qcow2"
-            source_file: "${SHARE_PATH}/.codearts-resources/qemu-runner/ScienceDiscovery-qemu-runner-noble-amd64.qcow2"
-            self_folder: "false"
-          identifier: 1788339000002c0324e96-4825-4922-9500-29339cf5ea30
-        - name: Upload the QEMU Runner checksum
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: "sciencediscovery/cache/qemu-runner/v1/${{ jobs.resource_qemu.outputs.resource_commit }}/${{ pipeline.run_id }}/SHA256SUMS"
-            source_file: "${SHARE_PATH}/.codearts-resources/qemu-runner/SHA256SUMS"
-            self_folder: "false"
-          identifier: 1788339000003b67898c8-7503-4c2d-935e-4fa40de09d5a
-        - name: Upload the QEMU Runner version manifest
-          uses: upload-obs
-          with:
-            endpoint_select: f4cb5fdf6d5d498eaa28721bc30beb0c
-            endpoint: obs.cn-north-4.myhuaweicloud.com
-            bucket: openjiuwen-ci
-            key: "sciencediscovery/cache/qemu-runner/v1/${{ jobs.resource_qemu.outputs.resource_commit }}/${{ pipeline.run_id }}/VERSION"
-            source_file: "${SHARE_PATH}/.codearts-resources/qemu-runner/VERSION"
-            self_folder: "false"
-          identifier: 1788339000004c48cc4ca-6e64-4481-8427-c8d12d625f17
-        - name: Verify the published QEMU Runner artifacts
-          uses: official_shell_plugin
-          with:
-            OFFICIAL_SHELL_SCRIPT_INPUT: |
-              set -eu
-              cd "${SHARE_PATH:?CodeArts did not set SHARE_PATH}"
-              RESOURCE_COMMIT="${{ jobs.resource_qemu.outputs.resource_commit }}"
-              printf '%s\n' "$RESOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-              BASE_URL="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu-runner/v1/$RESOURCE_COMMIT/${{ pipeline.run_id }}"
-              VERIFY_DIR="$PWD/.codearts-resources/qemu-runner-published"
-              IMAGE_NAME=ScienceDiscovery-qemu-runner-noble-amd64.qcow2
-              mkdir -p "$VERIFY_DIR"
-              fetch_published() {
-                name="$1"
-                attempt=1
-                while [ "$attempt" -le 5 ]; do
-                  if curl --fail --location --retry 2 --connect-timeout 15 \
-                    --max-time 600 --silent --show-error \
-                    "$BASE_URL/$name" --output "$VERIFY_DIR/$name.part"; then
-                    mv "$VERIFY_DIR/$name.part" "$VERIFY_DIR/$name"
-                    echo "Downloaded published QEMU Runner object: $name"
-                    return 0
-                  fi
-                  rm -f "$VERIFY_DIR/$name.part"
-                  echo "Waiting for published QEMU Runner object: $name (attempt $attempt)"
-                  attempt=$((attempt + 1))
-                  sleep 2
-                done
-                echo "FATAL: published QEMU Runner object is unavailable: $name" >&2
-                return 1
-              }
-              fetch_published SHA256SUMS
-              fetch_published VERSION
-              fetch_published "$IMAGE_NAME"
-              test "$(wc -l < "$VERIFY_DIR/SHA256SUMS")" -eq 1
-              grep -Eq "^[0-9a-f]{64}  $IMAGE_NAME$" "$VERIFY_DIR/SHA256SUMS"
-              expected_sha256=$(awk '{print $1}' "$VERIFY_DIR/SHA256SUMS")
-              actual_sha256=$(sha256sum "$VERIFY_DIR/$IMAGE_NAME" | awk '{print $1}')
-              test "$actual_sha256" = "$expected_sha256"
-              CHECKED_OUT_COMMIT=$(git rev-parse HEAD)
-              RESOURCE_RUN_ID="${{ pipeline.run_id }}"
-              cat "$VERIFY_DIR/VERSION"
-              grep -Fx 'recipe=qemu-runner-v1' "$VERIFY_DIR/VERSION"
-              grep -Fx "resource_commit=$CHECKED_OUT_COMMIT" "$VERIFY_DIR/VERSION"
-              grep -Fx "resource_run_id=$RESOURCE_RUN_ID" "$VERIFY_DIR/VERSION"
-              echo "Verified published QEMU Runner image: $actual_sha256"
-          identifier: 17883420000013956977a-b91c-4668-ac74-b45993800807
+            GIT_REPO_URL: https://gitcode.com/openJiuwen/sciencediscovery.git
+            GIT_REF: refs/heads/ci/codearts-resources
+            GIT_TARGET_REF: refs/heads/ci/codearts-resources
+            SH_FILE_PATH: .ci/codearts-resource.sh
+            ARTIFACT_PATH: .codearts-resources/publish
+            OBS_BUCKET: openjiuwen-ci
+            OBS_DIRECTORY: "sciencediscovery/cache/qemu-runner/v1/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/"
+            OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
+            ENVS: |-
+              RESOURCE_BUILD_COMMIT=${{ sources.sciencediscovery.commit_id }}
+              RESOURCE_BUILD_RUN_ID=${{ pipeline.run_id }}
+            ARGS: |-
+              qemu-runner
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: d84e08c4eee04564a45ecf3e00579b88
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 1788620000003d4e5f6a7-2004-4aaa-9004-3d4e5f6a7b14
         if: "${{ default() }}"
         runs-on:
-        - codearts-hosted
-        - ubuntu-latest
-        - x64
-        - large
+        - default
+      resource_verify:
+        select: selected_by_default
+        name: Verify the published resources
+        needs:
+        - resource_qemu_emulator
+        - resource_qemu_runner
+        timeout: 40
+        timeout_unit: minute
+        steps:
+        - name: Read the published artifacts back out of OBS
+          uses: official_devcloud_cloudBuild
+          with:
+            GIT_REPO_URL: https://gitcode.com/openJiuwen/sciencediscovery.git
+            GIT_REF: refs/heads/ci/codearts-resources
+            GIT_TARGET_REF: refs/heads/ci/codearts-resources
+            SH_FILE_PATH: .ci/codearts-resource.sh
+            ARTIFACT_PATH: .codearts-resources/publish
+            OBS_BUCKET: openjiuwen-ci
+            OBS_DIRECTORY: "sciencediscovery/cache/qemu-runner/v1/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/verify/"
+            OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
+            ENVS: |-
+              RESOURCE_BUILD_COMMIT=${{ sources.sciencediscovery.commit_id }}
+              RESOURCE_BUILD_RUN_ID=${{ pipeline.run_id }}
+            ARGS: |-
+              verify
+            __sameProject__: "true"
+            __projectId__: ""
+            jobId: d84e08c4eee04564a45ecf3e00579b88
+            __repository__: sciencediscovery
+            artifactIdentifier: ""
+          identifier: 1788620000004e5f6a7b8-2005-4aaa-9005-4e5f6a7b8c15
+        if: "${{ default() }}"
+        runs-on:
+        - default
     pre:
     - type: auto
     name: Prepare immutable resources
