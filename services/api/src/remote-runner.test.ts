@@ -101,4 +101,26 @@ test("explicit remote workspace push and pull preserve independent files and rec
     ["pull", "failed"],
     ["push", "completed"],
   ]);
+
+  // A local execution creates this file after preflight, while download waits.
+  // reject must arbitrate at the final write, not just at the initial check.
+  remote.set("race.txt", Buffer.from("remote"));
+  const raceDestination = resolve(workspaceRoot, "race.txt");
+  const racingRunner = {
+    ...runnerClient,
+    readRemoteWorkspaceFile: async () => {
+      await writeFile(raceDestination, "local result");
+      return Buffer.from("remote");
+    },
+  } as unknown as RunnerClient;
+  await assert.rejects(syncRemoteWorkspace({
+    hostId: host.id, input: { direction: "pull", paths: ["race.txt"], conflict: "reject" },
+    runnerClient: racingRunner, sessionId: session.id, store,
+  }), { code: "CONFLICT" });
+  assert.equal(await readFile(raceDestination, "utf8"), "local result");
+  await syncRemoteWorkspace({
+    hostId: host.id, input: { direction: "pull", paths: ["race.txt"], conflict: "overwrite" },
+    runnerClient, sessionId: session.id, store,
+  });
+  assert.equal(await readFile(raceDestination, "utf8"), "remote");
 });

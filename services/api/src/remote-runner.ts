@@ -7,7 +7,7 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
 import type {
@@ -155,7 +155,18 @@ export async function syncRemoteWorkspace(options: {
             flag: "wx",
             mode: 0o600,
           });
-          await rename(temporary, destination);
+          if (conflict === "reject") {
+            // Both paths are in the same directory/filesystem. Creating the
+            // hard link atomically fails if another writer won during download.
+            try { await link(temporary, destination); } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+                throw syncConflict(`Local workspace file already exists: ${file.path}`);
+              }
+              throw error;
+            }
+          } else {
+            await rename(temporary, destination);
+          }
         } finally {
           await rm(temporary, { force: true }).catch(() => undefined);
         }
