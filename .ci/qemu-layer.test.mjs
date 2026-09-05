@@ -186,6 +186,18 @@ test("both guest layers install and build before handing the workspace over", as
   }
 });
 
+test("the UT guest payload leaves the external dependency tree behind", async () => {
+  const runner = await readFile(script, "utf8");
+  const utGuest = /ut-guest\)([\s\S]*?);;/.exec(runner);
+  assert.ok(utGuest, "the ut-guest branch is missing");
+  assert.match(utGuest[1], /--dependencies workspace/);
+  const e2e = /\n  e2e\)([\s\S]*?);;/.exec(runner);
+  assert.ok(e2e, "the e2e branch is missing");
+  // The stack that guest starts runs the real services, which do have
+  // external dependencies.
+  assert.match(e2e[1], /--dependencies full/);
+});
+
 test("each guest layer stops its guest before CodeArts stops the job", async () => {
   const layer = await readFile(join(ciDirectory, "codearts-layer.sh"), "utf8");
   const workflow = await workflowText();

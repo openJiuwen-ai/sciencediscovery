@@ -108,7 +108,14 @@ try {
     // workspace and hands the result over, so a missing dependency tree or
     // build output is a broken handover, not something to rebuild here under
     // software emulation.
-    const required = ["node_modules", ...utGuestPackages.map(({ directory }) => join(directory, "dist"))];
+    // Check what this tier actually consumes. The root install tree is not
+    // shipped: pnpm links workspace dependencies straight at their package
+    // directories, so the guest needs those links and the build output, and
+    // nothing from the store.
+    const required = utGuestPackages.flatMap(({ directory }) => [
+      join(directory, "dist"),
+      join(directory, "node_modules"),
+    ]);
     for (const relativePath of required) {
       try {
         await stat(join(repositoryRoot, relativePath));

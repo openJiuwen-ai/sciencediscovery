@@ -25,21 +25,29 @@ set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 output=""
+dependencies=full
 extra_includes=()
 
 usage() {
   cat <<'EOF'
-Usage: .ci/pack-workspace.sh --output <path ending in .tar.gz> [--include <path>]...
+Usage: .ci/pack-workspace.sh --output <path ending in .tar.gz>
+                            [--dependencies full|workspace] [--include <path>]...
 
-  --include  An additional working-tree path to append, relative to the
-             repository root. Repeatable. Dependency trees and build output
-             are appended automatically.
+  --dependencies  full      append the whole installed tree, including the
+                            external packages under node_modules (default)
+                  workspace append only the workspace's own links and build
+                            output. Enough for a layer whose packages have no
+                            external runtime dependency, and about a tenth the
+                            entries, which is what a guest actually pays for.
+  --include       An additional working-tree path to append, relative to the
+                  repository root. Repeatable.
 EOF
 }
 
 while (($#)); do
   case "$1" in
     --output) output="${2:?--output requires a value}"; shift 2 ;;
+    --dependencies) dependencies="${2:?--dependencies requires a value}"; shift 2 ;;
     --include) extra_includes+=("${2:?--include requires a value}"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -47,6 +55,10 @@ while (($#)); do
 done
 
 [[ -n "$output" ]] || { echo "--output is required." >&2; exit 2; }
+case "$dependencies" in
+  full|workspace) ;;
+  *) echo "--dependencies must be full or workspace." >&2; exit 2 ;;
+esac
 [[ "$output" == *.tar.gz ]] || { echo "--output must end in .tar.gz." >&2; exit 2; }
 case "$output" in
   /*) ;;
@@ -60,7 +72,13 @@ if [[ ! -d node_modules ]]; then
   exit 1
 fi
 
-includes=(node_modules)
+# A guest pays for entries, not megabytes: the installed tree is around
+# 26,000 of them and unpacking each one costs an emulated syscall. pnpm links
+# workspace dependencies straight at their package directory rather than
+# through the store, so a layer whose packages have no external runtime
+# dependency needs none of that tree.
+includes=()
+if [[ "$dependencies" == full ]]; then includes+=(node_modules); fi
 for project in config apps/* packages/* services/*; do
   if [[ -d "$project/node_modules" ]]; then includes+=("$project/node_modules"); fi
   if [[ -d "$project/dist" ]]; then includes+=("$project/dist"); fi
@@ -92,4 +110,4 @@ gzip -1 -- "$staging"
 
 echo "workspace payload: $output ($(du -h -- "$output" | cut -f1))"
 echo "  commit  : $(git -C "$repo_root" rev-parse HEAD)"
-echo "  appended: ${#includes[@]} dependency and build paths"
+echo "  appended: ${#includes[@]} dependency and build paths ($dependencies)"

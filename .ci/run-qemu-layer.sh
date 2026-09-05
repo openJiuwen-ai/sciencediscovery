@@ -31,13 +31,19 @@ pack_arguments=()
 case "$layer" in
   ut-guest)
     layer_prerequisites=(node_modules services/runner/dist)
+    # The sandbox packages have no external runtime dependency: pnpm links
+    # their workspace dependencies straight at the package directories, so the
+    # installed tree's ~26,000 entries would be unpacked and never read.
+    pack_arguments=(--dependencies workspace)
     ;;
   e2e)
     # The browser journeys additionally need the built UI and the .e2e
     # environment, whose Playwright install and pinned Chromium the host
     # produced with `CI_E2E_PREPARE_ONLY=1 pnpm ci:e2e`.
     layer_prerequisites=(node_modules apps/web/dist .e2e/node_modules .e2e/browsers)
-    pack_arguments=(--include .e2e)
+    # The stack this guest starts runs the real services, which do have
+    # external dependencies, so this layer keeps the installed tree.
+    pack_arguments=(--dependencies full --include .e2e)
     ;;
   "") echo "Usage: .ci/run-qemu-layer.sh ut-guest|e2e" >&2; exit 2 ;;
   *) echo "FATAL: '$layer' is not a layer this guest runs." >&2; exit 2 ;;
