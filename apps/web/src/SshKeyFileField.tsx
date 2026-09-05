@@ -93,12 +93,12 @@ export function SshKeyFileField({ client, label, value, placeholder, disabled, o
             <span>{entry.name}</span><small>{entry.kind === "directory" ? "Folder" : entry.kind === "file" ? "Select file" : "Unavailable"}</small>
           </button>
         </li>)}</ul> : <p>No files in this directory.</p>}
-        <div className="ssh-key-file-navigation">
+        {offset > 0 || listing.nextOffset !== null ? <div className="ssh-key-file-navigation">
           <button className="secondary-button" type="button" disabled={disabled || offset === 0}
             onClick={() => void browse(listing.directory, Math.max(0, offset - 100))}>Previous page</button>
           <button className="secondary-button" type="button" disabled={disabled || listing.nextOffset === null}
             onClick={() => void browse(listing.directory, listing.nextOffset!)}>Next page</button>
-        </div>
+        </div> : null}
       </> : null}
     </section> : null}
   </div>;

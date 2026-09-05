@@ -161,6 +161,7 @@
 .remote-host-card small { color: var(--muted); }
 .remote-host-error { flex-basis: 100%; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--danger, #b42318); }
 .ssh-key-file-field { display: grid; gap: 6px; min-width: 0; grid-column: 1 / -1; }
+.config-panel .ssh-key-file-field label { display: block; margin: 0; color: var(--text-secondary); font-size: 13px; font-weight: 700; }
 .ssh-key-file-path { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ssh-key-file-path > input { flex: 1; min-width: 0; width: 0; }
 .ssh-key-file-path > button { flex: 0 0 auto; }
