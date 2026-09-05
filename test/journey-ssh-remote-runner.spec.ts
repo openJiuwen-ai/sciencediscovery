@@ -459,9 +459,23 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
+      "窄屏仍完整显示 SSH 方法级错误",
+      "机器卡片的独立告警保留换行，身份、服务器方法、已尝试方法和凭据状态不被省略或横向裁切。",
+      async () => {
+        await page.setViewportSize({ width: 640, height: 960 });
+        const card = page.getByRole("dialog", { name: "系统设置" }).locator(".remote-host-card", { hasText: "192.168.100.236" });
+        const alert = card.getByRole("alert");
+        await alert.scrollIntoViewIfNeeded();
+        await expect(alert).toHaveText(authenticationError);
+        expect(await alert.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      },
+    );
+
+    await journey.step(
       "登记一台自行部署的 runner",
       "点 Add self-deployed runner 才出现表单；填写名称、IP、端口和 token 并提交后，表单收起，列表出现该 runner 并标注 self-deployed 与 token authenticated。",
       async () => {
+        await page.setViewportSize({ width: 1440, height: 900 });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         // Dismiss the acknowledged error from the preceding SSH scenario.
         const priorError = dialog.getByRole("alert").filter({ hasText: "SSH authentication failed" }).filter({ has: page.getByRole("button") });
