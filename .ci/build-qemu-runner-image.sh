@@ -188,6 +188,39 @@ packages:
   - git
   - python3
   - xz-utils
+  - fonts-freefont-ttf
+  - fonts-ipafont-gothic
+  - fonts-liberation
+  - fonts-noto-color-emoji
+  - fonts-tlwg-loma-otf
+  - fonts-unifont
+  - fonts-wqy-zenhei
+  - libasound2t64
+  - libatk-bridge2.0-0t64
+  - libatk1.0-0t64
+  - libatspi2.0-0t64
+  - libcairo2
+  - libcups2t64
+  - libdbus-1-3
+  - libdrm2
+  - libfontconfig1
+  - libfreetype6
+  - libgbm1
+  - libglib2.0-0t64
+  - libnspr4
+  - libnss3
+  - libpango-1.0-0
+  - libx11-6
+  - libxcb1
+  - libxcomposite1
+  - libxdamage1
+  - libxext6
+  - libxfixes3
+  - libxkbcommon0
+  - libxrandr2
+  - xfonts-cyrillic
+  - xfonts-scalable
+  - xvfb
 runcmd:
   - [bash, -c, "curl --fail --location --retry 3 --silent --show-error http://10.0.2.2:QEMU_HTTP_PORT/provision.sh --output /usr/local/sbin/provision-qemu-runner-image && chmod 0755 /usr/local/sbin/provision-qemu-runner-image && /usr/local/sbin/provision-qemu-runner-image"]
 CLOUD_CONFIG
@@ -245,13 +278,13 @@ mv -- "$compacted_image" "$image_path"
   sha256sum "$image_name" > SHA256SUMS
 )
 cat > "$output_dir/VERSION" <<EOF
-recipe=qemu-runner-v1
+recipe=qemu-runner-v2
 base_image=noble-server-cloudimg-amd64.img
 base_sha256=d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30
 node=22.19.0
 pnpm=11.1.2
 uv=0.9.26
-system_packages=bubblewrap,ca-certificates,curl,git,python3,xz-utils
+system_packages=bubblewrap,ca-certificates,curl,git,python3,xz-utils,fonts-freefont-ttf,fonts-ipafont-gothic,fonts-liberation,fonts-noto-color-emoji,fonts-tlwg-loma-otf,fonts-unifont,fonts-wqy-zenhei,libasound2t64,libatk-bridge2.0-0t64,libatk1.0-0t64,libatspi2.0-0t64,libcairo2,libcups2t64,libdbus-1-3,libdrm2,libfontconfig1,libfreetype6,libgbm1,libglib2.0-0t64,libnspr4,libnss3,libpango-1.0-0,libx11-6,libxcb1,libxcomposite1,libxdamage1,libxext6,libxfixes3,libxkbcommon0,libxrandr2,xfonts-cyrillic,xfonts-scalable,xvfb
 resource_commit=${RESOURCE_BUILD_COMMIT:-unknown}
 resource_run_id=${RESOURCE_BUILD_RUN_ID:-unknown}
 EOF
