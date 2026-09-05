@@ -123,6 +123,16 @@ test("no workflow step spends the pipeline quota", async () => {
   }
 });
 
+test("the guest reports why an unhealthy stack never came up", async () => {
+  const guest = await readFile(join(ciDirectory, "qemu-guest-layer.sh"), "utf8");
+  // run-e2e.sh starts the stack in the background and only reports that it
+  // never became healthy. stack.log holds the reason and lives inside a guest
+  // that is discarded on power off, so it has to reach the serial log.
+  assert.match(guest, /stack\.log/);
+  const verify = await readFile(join(ciDirectory, "codearts-verify.sh"), "utf8");
+  assert.match(verify, /record_verdict 0/);
+});
+
 test("only the verification job can turn the run red", async () => {
   const workflow = await workflowText();
   const verify = workflowJob(workflow, "verify_results");

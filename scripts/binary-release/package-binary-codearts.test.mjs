@@ -30,6 +30,19 @@ async function fakeRepository(name) {
   return directory;
 }
 
+// CodeArts Build exports the run's own commit variables into every step, and
+// this script reads them. Inheriting them makes a fixture assert the real
+// pipeline's integration SHA against its fake checkout, so the case fails for
+// a reason that has nothing to do with what it tests. Blank them, then let the
+// case set back exactly what it means to exercise.
+const CODEARTS_BUILD_VARIABLES = ["ARTIFACT_COMMIT", "COMMIT_ID", "EXPECTED_COMMIT", "GIT_COMMIT"];
+
+function isolatedEnvironment(overrides = {}) {
+  const environment = { ...process.env };
+  for (const name of CODEARTS_BUILD_VARIABLES) environment[name] = "";
+  return { ...environment, ...overrides };
+}
+
 test("rejects direct and traversing output paths outside the dedicated CI results tree", async () => {
   const directory = await fakeRepository("output-guard");
   try {
@@ -41,7 +54,7 @@ test("rejects direct and traversing output paths outside the dedicated CI result
       const result = spawnSync("/bin/bash", [
         join(directory, ".ci", "package-binary-codearts.sh"),
         "--output", output,
-      ], { cwd: directory, encoding: "utf8" });
+      ], { cwd: directory, encoding: "utf8", env: isolatedEnvironment() });
 
       assert.equal(result.status, 2, `unexpected exit status for ${output}`);
       assert.match(result.stderr, /dedicated subdirectory below \.ci-results|must resolve below/);
@@ -80,12 +93,11 @@ exit 37
     ], {
       cwd: directory,
       encoding: "utf8",
-      env: {
-        ...process.env,
+      env: isolatedEnvironment({
         ARTIFACT_COMMIT: "1111111111111111111111111111111111111111",
         HOME: join(directory, "home"),
         PATH: `${binDirectory}:${process.env.PATH}`,
-      },
+      }),
     });
 
     assert.equal(result.status, 37, result.stderr);

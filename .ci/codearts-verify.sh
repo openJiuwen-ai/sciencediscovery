@@ -31,6 +31,20 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=.ci/codearts-ci-layers.sh
 . "$repo_root/.ci/codearts-ci-layers.sh"
 
+publish_dir="${CI_PUBLISH_DIR:-$repo_root/.ci-results/publish}"
+case "$publish_dir" in
+  /*) ;;
+  *) publish_dir="$repo_root/$publish_dir" ;;
+esac
+mkdir -p -- "$publish_dir"
+# Record the verdict as an object of its own. The console shell around this
+# script returns success whatever happens, so `verify/exit-code` is the one
+# place a reader can see what this job decided.
+record_verdict() {
+  printf '%s\n' "$1" > "$publish_dir/exit-code"
+}
+record_verdict 1
+
 base_url="$(codearts_run_base_url)"
 echo "Verifying published results under $base_url"
 
@@ -94,4 +108,5 @@ if [ "$failed" -ne 0 ]; then
   echo "FATAL: at least one CI layer did not publish a successful result." >&2
   exit 1
 fi
+record_verdict 0
 echo "All CI layers published a successful result."

@@ -150,6 +150,14 @@ runuser --user ci -- env \
 test_rc=$?
 set -e
 
+# The E2E entry point starts the stack in the background and only says that it
+# never became healthy; without this the reason stays inside the guest, which
+# is discarded when it powers off.
+if [ -f "/home/ci/ci-results/$layer/stack.log" ]; then
+  echo "=== $layer stack.log (last 80 lines) ==="
+  tail -n 80 "/home/ci/ci-results/$layer/stack.log"
+fi
+
 # run-layer.mjs writes summary.json; the E2E entry point writes summary.txt.
 for summary in "/home/ci/ci-results/$layer/summary.json" "/home/ci/ci-results/$layer/summary.txt"; do
   if [ -f "$summary" ]; then
