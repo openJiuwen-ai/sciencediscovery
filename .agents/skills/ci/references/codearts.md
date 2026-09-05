@@ -17,9 +17,16 @@ aarch64 sibling), parameterised with `SH_FILE_PATH`, `ARGS` and `ENVS`. The
 layers themselves live in `.ci/codearts-layer.sh`: the two UT tiers —
 `ci:ut:host` on the build host and `ci:ut:guest` in a QEMU guest — the
 hermetic `ci:st` entry point, the mocked `ci:e2e` group in that same guest,
-and the x86_64 package. `.ci/codearts-verify-aarch64.sh` and
-`.ci/codearts-pr-result.sh` carry the aarch64 verification and the result
-table. The parent still owns PR labels, invokes
+and the x86_64 package. Because that console shell returns success even when
+the layer failed — so its OBS action can still upload the log — every CodeArts
+job is green by construction. `.ci/codearts-verify.sh` is therefore the run's
+only failure authority: it waits for every layer, reads each recorded
+`exit-code` back out of OBS, additionally requires a complete artifact set for
+the two packaging layers, and fails closed on a missing object. The result
+gate is `completed('verify_results', 'code_check')`, and
+`.ci/codearts-pr-result.sh` fills the table's status column from the same
+recorded exit codes rather than from job statuses. The parent still owns PR
+labels, invokes
 the reusable code-check pipeline, builds the x86_64 debug binary on a hosted
 runner, invokes an ARM CodeArts Build task for aarch64, and renders the final
 PR result. The code check is an externally registered CodeArts pipeline containing the SCA,

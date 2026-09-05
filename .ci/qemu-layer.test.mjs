@@ -123,6 +123,24 @@ test("no workflow step spends the pipeline quota", async () => {
   }
 });
 
+test("only the verification job can turn the run red", async () => {
+  const workflow = await workflowText();
+  const verify = workflowJob(workflow, "verify_results");
+  assert.match(verify, /SH_FILE_PATH: \.ci\/codearts-verify\.sh/);
+  // Every layer's build task returns success so its OBS action can upload the
+  // log, so the layer jobs are green whatever happened. The gate must key on
+  // the job that reads the recorded exit codes back, and the result table must
+  // read them too rather than trusting a job status.
+  for (const layer of ["ut", "ut_guest", "st", "e2e", "binary", "binary_aarch64"]) {
+    assert.match(verify, new RegExp(`\\n        - ${layer}\\n`), `verify_results must wait for ${layer}`);
+  }
+  assert.match(workflow, /completed\('verify_results', 'code_check'\)/);
+  assert.doesNotMatch(workflow, /CI_STATUS_/);
+  const result = await readFile(join(ciDirectory, "codearts-pr-result.sh"), "utf8");
+  assert.match(result, /codearts_layer_status/);
+  assert.doesNotMatch(result, /jobs\./);
+});
+
 test("both guest layers install and build before handing the workspace over", async () => {
   const layer = await readFile(join(ciDirectory, "codearts-layer.sh"), "utf8");
   for (const [fn, guest] of [["run_ut_guest", "ut-guest"], ["run_e2e", "e2e"]]) {

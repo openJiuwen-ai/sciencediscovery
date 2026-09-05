@@ -90,8 +90,14 @@ GitCode Actions unless the user changes that policy.
    which checks the merge request out, rebases it, and calls a repository
    script through `.ci/codearts-build-dispatch.sh`. Adding a CI layer means
    adding a case to `.ci/codearts-layer.sh`, not editing a build task in the
-   console — build tasks cannot be changed from code. `pnpm ci:selftest` fails
-   the build when a workflow step reaches for the pipeline quota again.
+   console — build tasks cannot be changed from code. A build task's console
+   shell returns success even when the layer failed, so its OBS action can
+   upload the log: the CodeArts job status is green by construction and must
+   never be read as a result. `.ci/codearts-verify.sh` reads the recorded
+   `exit-code` objects back and is the only job that can turn a run red.
+   `pnpm ci:selftest` fails the build when a workflow step reaches for the
+   pipeline quota again, or when the result gate stops keying on that
+   verification.
 4. UT has exactly two tiers and no third bucket. Every UT case belongs to
    `ut:host` (runs on an ordinary CI host, no sandbox) or to `ut:guest` (needs
    a Linux guest kernel that grants user namespaces, so bubblewrap works), and

@@ -305,24 +305,29 @@ stages:
         if: "${{ default() }}"
         runs-on:
         - default
-      verify_binary_aarch64:
+      verify_results:
         select: always
-        name: Verify aarch64 OBS artifacts
+        name: Verify published results
         needs:
+        - ut
+        - ut_guest
+        - st
+        - e2e
+        - binary
         - binary_aarch64
-        timeout: 10
+        timeout: 15
         timeout_unit: minute
         steps:
-        - name: Run this layer on the x64 build task
+        - name: Read every published result back
           uses: official_devcloud_cloudBuild
           with:
             GIT_REPO_URL: https://gitcode.com/openJiuwen/sciencediscovery.git
             GIT_REF: "refs/merge-requests/${MERGE_ID}/head"
             GIT_TARGET_REF: "refs/heads/${sciencediscovery_TARGET_BRANCH}"
-            SH_FILE_PATH: .ci/codearts-verify-aarch64.sh
+            SH_FILE_PATH: .ci/codearts-verify.sh
             ARTIFACT_PATH: .ci-results/publish
             OBS_BUCKET: openjiuwen-ci
-            OBS_DIRECTORY: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/binary/aarch64-verify/"
+            OBS_DIRECTORY: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/verify/"
             OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
             ENVS: |-
               CI_COMMIT=${{ sources.sciencediscovery.commit_id }}
@@ -401,7 +406,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 1788590000006a7b8c9d0-7777-4111-8007-6a7b8c9d0e07
-      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_guest', 'st', 'e2e', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('verify_results', 'code_check') }}"
       runs-on:
       - default
     publish_pr_success:
@@ -424,7 +429,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 17646737830615fa277f2-7774-46a9-9222-bdd6236e9912
-      if: "${{ sources.sciencediscovery.merge_id != '' && completed('ut', 'ut_guest', 'st', 'e2e', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && completed('verify_results', 'code_check') }}"
       runs-on:
       - default
     prepare_pr_failure:
@@ -449,12 +454,6 @@ post:
             MERGE_ID=${MERGE_ID}
             CI_COMMIT=${{ sources.sciencediscovery.commit_id }}
             CI_RUN_ID=${{ pipeline.run_id }}
-            CI_STATUS_UT_HOST=${{ jobs.ut.status }}
-            CI_STATUS_UT_GUEST=${{ jobs.ut_guest.status }}
-            CI_STATUS_ST=${{ jobs.st.status }}
-            CI_STATUS_E2E=${{ jobs.e2e.status }}
-            CI_STATUS_BINARY_X86_64=${{ jobs.binary.status }}
-            CI_STATUS_BINARY_AARCH64=${{ jobs.verify_binary_aarch64.status }}
           ARGS: |-
             failure
           __sameProject__: "true"
@@ -463,7 +462,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 1788590000007b8c9d0e1-8888-4222-8008-7b8c9d0e1f08
-      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_guest', 'st', 'e2e', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('verify_results', 'code_check') }}"
       runs-on:
       - default
     publish_pr_failure:
@@ -486,7 +485,7 @@ post:
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 1790000000000b7abf11-329f-448a-bdc4-f1db550865d3
-      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('ut', 'ut_guest', 'st', 'e2e', 'binary', 'binary_aarch64', 'verify_binary_aarch64', 'code_check') }}"
+      if: "${{ sources.sciencediscovery.merge_id != '' && !completed('verify_results', 'code_check') }}"
       runs-on:
       - default
   pre:

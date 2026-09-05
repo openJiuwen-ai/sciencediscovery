@@ -18,15 +18,13 @@
 #
 # This used to be a shell step inside the workflow, which spends the pipeline
 # quota; it now runs in the generic build task like every other CI step. The
-# pipeline passes the run's identity and each job's status through ENVS,
-# because a build task cannot read the pipeline's job context itself.
+# status column comes from each layer's recorded exit code in OBS rather than
+# from CodeArts job statuses, which are green by construction: the build
+# task's shell returns success so its OBS action can still upload the log.
 #
 # Inputs supplied through the build task's ENVS records:
 #   MERGE_ID                 merge request number
 #   CI_COMMIT, CI_RUN_ID     the run this result belongs to
-#   CI_STATUS_*              one CodeArts job status per reported row; only the
-#                            failure result reads them, and any value outside
-#                            the success aliases renders as FAILED
 #   CI_PUBLISH_DIR           staging directory, default .ci-results/publish
 
 set -euo pipefail
@@ -48,6 +46,8 @@ case "$publish_dir" in
   *) publish_dir="$repo_root/$publish_dir" ;;
 esac
 mkdir -p -- "$publish_dir"
+# shellcheck source=.ci/codearts-ci-layers.sh
+. "$repo_root/.ci/codearts-ci-layers.sh"
 RESULT_DIR="$publish_dir"
 RESULT_FILE="$RESULT_DIR/result.html"
 PR_CHECK_URL="https://gitcode.com/openJiuwen/sciencediscovery/pull/${MERGE_ID}/check"
@@ -125,12 +125,6 @@ except Exception as error:
     )
 PY
 }
-job_result() {
-  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-    completed|passed|success|successful|succeeded) printf 'PASSED' ;;
-    *) printf 'FAILED' ;;
-  esac
-}
 CODECHECK_FIELDS=$(codecheck_result_fields "$CODECHECK_RESULT_BASE/codecheck/${MERGE_ID}/codecheck.json")
 BLACKLIST_FIELDS=$(codecheck_result_fields "$CODECHECK_RESULT_BASE/blacklist/${MERGE_ID}/blacklist.json")
 ANTI_POISON_FIELDS=$(codecheck_result_fields "$CODECHECK_RESULT_BASE/anti_poison/${MERGE_ID}/anti_poison.json")
@@ -144,21 +138,15 @@ ANTI_POISON_LINK_CELL=$(printf '%s\n' "$ANTI_POISON_FIELDS" | sed -n '2p')
 SCA_RESULT=$(printf '%s\n' "$SCA_FIELDS" | sed -n '1p')
 SCA_LINK_CELL=$(printf '%s\n' "$SCA_FIELDS" | sed -n '2p')
 
-if [ "$kind" = success ]; then
-  UT_HOST_RESULT=PASSED
-  UT_GUEST_RESULT=PASSED
-  ST_RESULT=PASSED
-  E2E_RESULT=PASSED
-  BINARY_X86_64_RESULT=PASSED
-  BINARY_AARCH64_RESULT=PASSED
-else
-  UT_HOST_RESULT=$(job_result "${CI_STATUS_UT_HOST:-}")
-  UT_GUEST_RESULT=$(job_result "${CI_STATUS_UT_GUEST:-}")
-  ST_RESULT=$(job_result "${CI_STATUS_ST:-}")
-  E2E_RESULT=$(job_result "${CI_STATUS_E2E:-}")
-  BINARY_X86_64_RESULT=$(job_result "${CI_STATUS_BINARY_X86_64:-}")
-  BINARY_AARCH64_RESULT=$(job_result "${CI_STATUS_BINARY_AARCH64:-}")
-fi
+# Every CodeArts job is green by construction, because the build task's shell
+# returns success so its OBS action can upload the log. Read each layer's
+# recorded exit code instead, exactly as the verification job does.
+UT_HOST_RESULT=$(codearts_layer_status ut-host)
+UT_GUEST_RESULT=$(codearts_layer_status ut-guest)
+ST_RESULT=$(codearts_layer_status st)
+E2E_RESULT=$(codearts_layer_status e2e)
+BINARY_X86_64_RESULT=$(codearts_layer_status binary/x86_64)
+BINARY_AARCH64_RESULT=$(codearts_layer_status binary/aarch64)
 UT_HOST_LOG_CELL=$(public_log_cell "$UT_HOST_LOG_URL")
 UT_GUEST_LOG_CELL=$(public_log_cell "$UT_GUEST_LOG_URL")
 ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")

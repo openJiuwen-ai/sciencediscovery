@@ -135,7 +135,7 @@ test("the formal workflow consumes caches without owning stable cache uploads", 
   const pnpmVersion = packageJson.packageManager.replace(/^pnpm@/, "");
   // Every CI step moved into a repository script so it runs on the build
   // quota; the workflow only passes parameters now.
-  const armVerifier = await readFile(resolve(".ci/codearts-verify-aarch64.sh"), "utf8");
+  const armVerifier = await readFile(resolve(".ci/codearts-verify.sh"), "utf8");
   const layer = await readFile(resolve(".ci/codearts-layer.sh"), "utf8");
   assert.match(layer, /short_sha="\$\{source_sha:0:8\}"/);
   assert.match(armPackager, /short_commit="\$\{artifact_commit:0:8\}"/);
