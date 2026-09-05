@@ -100,9 +100,11 @@ parent before verification, and keep the final publisher in `post` with
 `select: always` so failed checks can still report their status.
 
 Interpret results in the parent workflow, not in the PR bot. The parent
-includes `ut_runner_qemu`, both `binary_aarch64` and its OBS verification job
-in the `completed(...)` gate that selects mutually exclusive success and
-failure post jobs. It renders a complete result
+includes both UT tiers, the E2E guest, `binary_aarch64` and its OBS
+verification job in the `completed(...)` gate that selects mutually exclusive
+success and failure post jobs. Every job in that gate must be able to fail on
+its own: a job killed by its CodeArts timeout satisfies neither condition, and
+the merge request then keeps the running label with no result comment. It renders a complete result
 HTML file from the UT/ST/binary job statuses and each code-check child's own
 public result JSON, uploads that file to OBS, and passes its OBS key plus the
 already chosen `final_label` to the bot. The bot downloads and posts the HTML
