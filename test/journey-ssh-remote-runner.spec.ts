@@ -459,6 +459,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "点 Add self-deployed runner 才出现表单；填写名称、IP、端口和 token 并提交后，表单收起，列表出现该 runner 并标注 self-deployed 与 token authenticated。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
+        // Dismiss the acknowledged error from the preceding SSH scenario.
+        const priorError = dialog.getByRole("alert").filter({ hasText: "All configured authentication methods failed" });
+        if (await priorError.count()) await priorError.getByRole("button").click();
         await dialog.getByRole("button", { name: "Add self-deployed runner" }).click();
         await dialog.getByLabel("Name", { exact: true }).fill("lab-workstation");
         await dialog.getByLabel("Description", { exact: true }).fill("Self-deployed CPU sandbox");
