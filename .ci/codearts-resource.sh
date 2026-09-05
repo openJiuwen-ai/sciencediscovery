@@ -25,13 +25,17 @@
 # name. Adding a resource means adding a case here, not editing a build task
 # in the console.
 #
-# A resource differs from a CI layer in one way that shapes this file. A layer
-# runs on the build task whose console shell returns success so its OBS action
-# still uploads the log; the recorded exit code is the truth. A resource has no
-# such luxury: the consumer branch pins these artifacts by checksum, so a
-# half-built image that reaches OBS is worse than no image at all. Resources
-# run on the strict build task, which propagates the exit code, and this script
-# stages nothing into the published directory until every check has passed.
+# The consumer branch pins these artifacts by checksum, so a half-built image
+# that reaches OBS is worse than no image at all. Two things keep that from
+# happening, and neither is the build task's exit code.
+#
+# The build cases stage nothing into the published directory until every check
+# has passed, so a failure leaves the OBS action with an empty directory. And
+# `verify` reads the published objects back and refuses any whose VERSION does
+# not name this run, which is what catches a build that quietly produced
+# nothing. That job is the run's failure authority; only it needs a build task
+# whose console shell propagates the exit code, and it publishes nothing, so it
+# does not need one that uploads.
 #
 # Inputs supplied through the build task's ENVS records:
 #   RESOURCE_BUILD_COMMIT   the resources-branch commit the pipeline resolved
