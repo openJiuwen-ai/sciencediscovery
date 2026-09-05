@@ -94,42 +94,69 @@ test("the guest disables pnpm's dependency check with the setting pnpm actually 
   assert.doesNotMatch(guest, /(?<![a-z])npm_config_verify_deps_before_run/);
 });
 
-test("both guest jobs install and build on their CodeArts host first", async () => {
-  const workflow = await readFile(
-    resolve(ciDirectory, "..", ".codearts", "workflow", "codearts-pipeline.yml"),
-    "utf8",
-  );
-  const job = (name) => {
-    const match = new RegExp(`\\n      ${name}:\\n([\\s\\S]*?)(?=\\n      [a-z_]+:\\n|$)`).exec(workflow);
-    assert.ok(match, `job ${name} is missing from the workflow`);
-    return match[1];
-  };
-  const utGuest = job("ut_guest");
-  assert.match(utGuest, /pnpm install --frozen-lockfile\n\s+pnpm build/);
-  assert.match(utGuest, /bash \.ci\/run-qemu-layer\.sh ut-guest/);
-  const e2e = job("e2e");
-  assert.match(e2e, /CI_E2E_PREPARE_ONLY=1/);
-  assert.match(e2e, /bash \.ci\/run-qemu-layer\.sh e2e/);
+const workflowText = () => readFile(
+  resolve(ciDirectory, "..", ".codearts", "workflow", "codearts-pipeline.yml"),
+  "utf8",
+);
+
+function workflowJob(workflow, name) {
+  const match = new RegExp(`\\n      ${name}:\\n([\\s\\S]*?)(?=\\n      [a-z0-9_]+:\\n|\\n    pre:\\n)`).exec(workflow);
+  assert.ok(match, `job ${name} is missing from the workflow`);
+  return match[1];
+}
+
+test("no workflow step spends the pipeline quota", async () => {
+  const workflow = await workflowText();
+  // CodeArts bills pipelines and build tasks separately, and the pipeline's
+  // quota is the one that ran out. A step that runs shell, clones, or uploads
+  // on a pipeline executor puts the whole run back on that quota.
+  for (const forbidden of ["official_shell_plugin", "official_git_clone", "upload-obs"]) {
+    assert.doesNotMatch(workflow, new RegExp(`uses: ${forbidden}`), `${forbidden} spends the pipeline quota`);
+  }
+  const uses = [...workflow.matchAll(/uses: (\S+)/g)].map((match) => match[1]);
+  assert.ok(uses.length > 0);
+  for (const value of uses) {
+    assert.ok(
+      ["official_devcloud_cloudBuild", "official_devcloud_subPipeline"].includes(value),
+      `unexpected step kind ${value}`,
+    );
+  }
 });
 
-test("each guest job stops its guest before CodeArts stops the job", async () => {
-  const workflow = await readFile(
-    resolve(ciDirectory, "..", ".codearts", "workflow", "codearts-pipeline.yml"),
-    "utf8",
-  );
-  for (const name of ["ut_guest", "e2e"]) {
-    const match = new RegExp(`\\n      ${name}:\\n([\\s\\S]*?)(?=\\n      [a-z_]+:\\n|$)`).exec(workflow);
-    assert.ok(match, `job ${name} is missing from the workflow`);
-    const jobTimeoutMinutes = Number(/\n\s+timeout: (\d+)\n/.exec(match[1])?.[1]);
-    const guestTimeoutSeconds = Number(/QEMU_TIMEOUT_SECONDS=(\d+)/.exec(match[1])?.[1]);
-    assert.ok(Number.isFinite(jobTimeoutMinutes), `${name} has no job timeout`);
-    assert.ok(Number.isFinite(guestTimeoutSeconds), `${name} does not bound its guest`);
+test("both guest layers install and build before handing the workspace over", async () => {
+  const layer = await readFile(join(ciDirectory, "codearts-layer.sh"), "utf8");
+  for (const [fn, guest] of [["run_ut_guest", "ut-guest"], ["run_e2e", "e2e"]]) {
+    const body = new RegExp(`${fn}\\(\\) \\{([\\s\\S]*?)\\n\\}`).exec(layer);
+    assert.ok(body, `${fn} is missing from the layer entry point`);
+    const install = body[1].indexOf("pnpm install --frozen-lockfile");
+    const build = body[1].indexOf("pnpm build");
+    const run = body[1].indexOf(`run-qemu-layer.sh ${guest}`);
+    assert.ok(install >= 0 && build > install && run > build, `${fn} must install and build before the guest`);
+  }
+  const workflow = await workflowText();
+  for (const [job, argument] of [["ut_guest", "ut-guest"], ["e2e", "e2e"]]) {
+    const body = workflowJob(workflow, job);
+    assert.match(body, /SH_FILE_PATH: \.ci\/codearts-layer\.sh/);
+    assert.match(body, new RegExp(`ARGS: \\|-\\n\\s+${argument}\\n`));
+  }
+});
+
+test("each guest layer stops its guest before CodeArts stops the job", async () => {
+  const layer = await readFile(join(ciDirectory, "codearts-layer.sh"), "utf8");
+  const workflow = await workflowText();
+  for (const [fn, job] of [["run_ut_guest", "ut_guest"], ["run_e2e", "e2e"]]) {
+    const body = new RegExp(`${fn}\\(\\) \\{([\\s\\S]*?)\\n\\}`).exec(layer);
+    assert.ok(body, `${fn} is missing from the layer entry point`);
+    const guestSeconds = Number(/QEMU_TIMEOUT_SECONDS:-(\d+)/.exec(body[1])?.[1]);
+    const jobMinutes = Number(/\n\s+timeout: (\d+)\n/.exec(workflowJob(workflow, job))?.[1]);
+    assert.ok(Number.isFinite(guestSeconds), `${fn} does not bound its guest`);
+    assert.ok(Number.isFinite(jobMinutes), `${job} has no job timeout`);
     // A guest that CodeArts kills records no exit code, uploads no log and
     // never reaches its result step, which leaves the merge request reporting
     // a pipeline that is still running.
     assert.ok(
-      guestTimeoutSeconds < jobTimeoutMinutes * 60,
-      `${name} gives its guest ${guestTimeoutSeconds}s inside a ${jobTimeoutMinutes}-minute job`,
+      guestSeconds < jobMinutes * 60,
+      `${fn} gives its guest ${guestSeconds}s inside a ${jobMinutes}-minute job`,
     );
   }
 });

@@ -133,10 +133,11 @@ test("the formal workflow consumes caches without owning stable cache uploads", 
   }
   assert.ok(Object.values(micromamba.releases).every((release) => release.condaPackage));
   const pnpmVersion = packageJson.packageManager.replace(/^pnpm@/, "");
-  const verifierStart = workflow.indexOf("- name: Require the published aarch64 artifacts");
-  const verifierEnd = workflow.indexOf("\n        if:", verifierStart);
-  const armVerifier = workflow.slice(verifierStart, verifierEnd);
-  assert.match(workflow, /SHORT_SHA=\$\{SOURCE_SHA:0:8\}/);
+  // Every CI step moved into a repository script so it runs on the build
+  // quota; the workflow only passes parameters now.
+  const armVerifier = await readFile(resolve(".ci/codearts-verify-aarch64.sh"), "utf8");
+  const layer = await readFile(resolve(".ci/codearts-layer.sh"), "utf8");
+  assert.match(layer, /short_sha="\$\{source_sha:0:8\}"/);
   assert.match(armPackager, /short_commit="\$\{artifact_commit:0:8\}"/);
   assert.match(armPackager, /ARTIFACT_COMMIT/);
   assert.match(armPackager, /ScienceDiscovery-\$short_commit-linux-\$architecture/);
@@ -147,7 +148,7 @@ test("the formal workflow consumes caches without owning stable cache uploads", 
   assert.match(provisioner, /bfe4d2b2c7a3210565bba62929f9efe493eb5f24627201a102ea4514eae8cf80/);
   assert.equal(pnpmVersion, "11.1.2");
   assert.match(workflow, /CI_BINARY_CACHE_URL:[\s\S]*?sciencediscovery\/cache\/toolchains\/v1/);
-  assert.match(workflow, /CI_BINARY_CACHE_ONLY=1/);
+  assert.match(layer, /CI_BINARY_CACHE_ONLY=1/);
   assert.match(
     workflow,
     /GIT_TARGET_REF: "refs\/heads\/\$\{sciencediscovery_TARGET_BRANCH\}"/,

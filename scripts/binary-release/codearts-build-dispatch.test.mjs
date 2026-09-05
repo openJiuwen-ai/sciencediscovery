@@ -226,8 +226,9 @@ test("prebuilt QEMU Runner image and workflow share the immutable cache contract
   assert.match(fetcherSource, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME:-300/);
   assert.match(fetcherSource, /--cache-only/);
   assert.match(fetcherSource, /sciencediscovery\/cache\/qemu-runner\/v1/);
-  assert.match(workflow, /ut_guest:[\s\S]*?needs: \[\][\s\S]*?timeout: 30/);
-  assert.match(workflow, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME=300/);
+  assert.match(workflow, /ut_guest:[\s\S]*?needs: \[\][\s\S]*?SH_FILE_PATH: \.ci\/codearts-layer\.sh/);
+  const layer = await readFile(join(repositoryRoot, ".ci", "codearts-layer.sh"), "utf8");
+  assert.match(layer, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME:-300/);
 });
 
 test("the portable QEMU emulator is downloaded, never reassembled", async () => {

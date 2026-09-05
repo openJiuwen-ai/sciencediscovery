@@ -8,10 +8,18 @@ repository intentionally does not use GitCode Actions.
 
 ## Pipeline inventory
 
-`.codearts/workflow/codearts-pipeline.yml` is the parent: it owns PR labels,
-runs the repository's two UT tiers — `ci:ut:host` on the runner and
-`ci:ut:guest` in a QEMU guest — the hermetic `ci:st` entry point, and the
-mocked `ci:e2e` group in that same guest, invokes
+`.codearts/workflow/codearts-pipeline.yml` is the parent, and it now contains
+no shell of its own. CodeArts bills pipelines and build tasks separately; the
+pipeline quota is exhausted, so every step is an
+`official_devcloud_cloudBuild` invocation of the generic `run-shell` task
+(`x64-run-shell-sciencediscovery`, `b358513ca1e54d1b8d2500b94c870806`, and its
+aarch64 sibling), parameterised with `SH_FILE_PATH`, `ARGS` and `ENVS`. The
+layers themselves live in `.ci/codearts-layer.sh`: the two UT tiers —
+`ci:ut:host` on the build host and `ci:ut:guest` in a QEMU guest — the
+hermetic `ci:st` entry point, the mocked `ci:e2e` group in that same guest,
+and the x86_64 package. `.ci/codearts-verify-aarch64.sh` and
+`.ci/codearts-pr-result.sh` carry the aarch64 verification and the result
+table. The parent still owns PR labels, invokes
 the reusable code-check pipeline, builds the x86_64 debug binary on a hosted
 runner, invokes an ARM CodeArts Build task for aarch64, and renders the final
 PR result. The code check is an externally registered CodeArts pipeline containing the SCA,

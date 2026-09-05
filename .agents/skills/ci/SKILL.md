@@ -83,7 +83,16 @@ GitCode Actions unless the user changes that policy.
    bubblewrap can create namespaces.
 2. Call the `pnpm ci:*` entry points, never their underlying commands. Do not
    create a second platform-specific test definition.
-3. UT has exactly two tiers and no third bucket. Every UT case belongs to
+3. CodeArts bills pipelines and build tasks against separate quotas, and the
+   pipeline's is the one that runs out. No workflow step may run shell, clone,
+   or upload on a pipeline executor: every step is
+   `uses: official_devcloud_cloudBuild` against the generic `run-shell` task,
+   which checks the merge request out, rebases it, and calls a repository
+   script through `.ci/codearts-build-dispatch.sh`. Adding a CI layer means
+   adding a case to `.ci/codearts-layer.sh`, not editing a build task in the
+   console — build tasks cannot be changed from code. `pnpm ci:selftest` fails
+   the build when a workflow step reaches for the pipeline quota again.
+4. UT has exactly two tiers and no third bucket. Every UT case belongs to
    `ut:host` (runs on an ordinary CI host, no sandbox) or to `ut:guest` (needs
    a Linux guest kernel that grants user namespaces, so bubblewrap works), and
    their union is all of UT. A new UT test joins the tier of the package it
@@ -95,22 +104,22 @@ GitCode Actions unless the user changes that policy.
    neither, on `ci:ut` no longer equalling the two tiers, and on a guest tier
    that installs or builds. `pnpm ci:selftest` is that guard's regression
    suite.
-4. Read the failing job log before theorising. If the platform log is not
+5. Read the failing job log before theorising. If the platform log is not
    accessible with the available credentials, ask for the log instead of
    inferring the failure from a status badge.
-5. Preserve the real test exit code when adding artifact upload steps. Stage
+6. Preserve the real test exit code when adding artifact upload steps. Stage
    the result, upload diagnostics, then restore that exit code.
-6. Reproduce a pipeline failure with the layer entry point that job ran
+7. Reproduce a pipeline failure with the layer entry point that job ran
    (`pnpm ci:ut:host` for the CodeArts UT job, `pnpm ci:ut` for the GitHub
    one), on a checkout of the commit the run tested, with `CI_RESULTS_DIR` /
    `CI_RUNTIME_DIR` pointed somewhere writable. Each layer leaves `run.log`
    and a summary under `CI_RESULTS_DIR/<layer>/`.
-7. Do not copy the parent `code_check` job status into all four child rows.
+8. Do not copy the parent `code_check` job status into all four child rows.
    Normalize each child JSON independently; only the explicit success aliases
    documented in the CodeArts reference pass, and every other value fails
    closed. Validate its detail link separately so a missing link does not
    overwrite a valid status.
-8. For a CodeArts merge-request run, test the integration result rather than
+9. For a CodeArts merge-request run, test the integration result rather than
    the source branch snapshot: pin the downloaded target SHA and event source
    SHA, then use `.ci/rebase-codearts-pr.sh` to create a disposable rebased
    checkout. Never push that rewritten commit. A conflict is a failed check.
