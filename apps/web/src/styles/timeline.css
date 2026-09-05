@@ -166,6 +166,9 @@
 .ssh-key-file-path > input { flex: 1; min-width: 0; width: 0; }
 .ssh-key-file-path > button { flex: 0 0 auto; }
 .ssh-key-file-browser { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); min-width: 0; }
+.ssh-key-file-dialog { width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 0; border: 1px solid var(--border); border-radius: 12px; color: var(--text); background: var(--surface-soft); overflow: auto; }
+.ssh-key-file-dialog::backdrop { background: rgb(15 23 42 / 45%); }
+.ssh-key-file-dialog .ssh-key-file-browser { border: 0; padding: 20px; }
 .ssh-key-file-browser p { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .ssh-key-file-browser ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 240px; overflow-y: auto; }
 .ssh-key-file-browser li > button { display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: start; }

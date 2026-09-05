@@ -359,12 +359,14 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
-      "在主程序运行机器上浏览密钥文件",
-      "点击 Browse 后能看到运行机器的文件列表及位置说明，进入文件夹后可以选择私钥文件；不会弹出浏览器上传窗口。",
+      "在独立弹窗里浏览运行机器的密钥文件",
+      "点击 Browse 打开独立模态选择框，目录不再挤进设置表单；不会弹出浏览器上传窗口。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.getByRole("button", { name: "Browse", exact: true }).click();
-        const picker = dialog.getByRole("region", { name: "Files on application machine" });
+        const picker = page.getByRole("dialog", { name: "Select a key on the application machine" });
+        await expect(picker).toBeVisible();
+        expect(await picker.evaluate((element) => element.matches(":modal"))).toBe(true);
         await expect(picker).toContainText("machine running ScienceDiscovery");
         await picker.getByRole("button", { name: "science keys Folder" }).click();
         await expect(picker.getByRole("button", { name: "id_ed25519 Select file" })).toBeVisible();
@@ -396,6 +398,11 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByRole("region", { name: "Files on application machine" })).toHaveCount(0);
         await dialog.getByRole("button", { name: "Browse", exact: true }).click();
         await dialog.getByRole("button", { name: "Cancel selection" }).click();
+        await dialog.getByRole("button", { name: "Browse", exact: true }).click();
+        await page.getByRole("dialog", { name: "Select a key on the application machine" }).press("Escape");
+        await expect(page.getByRole("dialog", { name: "Select a key on the application machine" })).toHaveCount(0);
+        await expect(dialog).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "Browse", exact: true })).toBeFocused();
         await expect(dialog.getByLabel("Private key file (optional)")).toHaveValue("/fixture-keys/science keys/id_ed25519");
         await expect(dialog.getByLabel("Private key file (optional)")).toBeEditable();
         await dialog.getByLabel("Private key file (optional)").scrollIntoViewIfNeeded();

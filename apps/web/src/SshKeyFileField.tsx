@@ -15,6 +15,7 @@ export function SshKeyFileField({ client, label, value, placeholder, disabled, o
   onChange: (path: string) => void;
 }) {
   const id = useId();
+  const dialog = useRef<HTMLDialogElement>(null);
   const generation = useRef(0);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -23,8 +24,12 @@ export function SshKeyFileField({ client, label, value, placeholder, disabled, o
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState("");
   useEffect(() => () => { generation.current++; }, []);
+  useEffect(() => {
+    if (open) dialog.current?.showModal();
+  }, [open]);
 
   function close(): void {
+    dialog.current?.close();
     generation.current++;
     setOpen(false);
     setLoading(false);
@@ -56,14 +61,17 @@ export function SshKeyFileField({ client, label, value, placeholder, disabled, o
     <div className="ssh-key-file-path">
       <input id={id} autoComplete="off" value={value} disabled={disabled}
         onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
-      <button className="secondary-button" type="button" disabled={disabled} aria-expanded={open}
+      <button className="secondary-button" type="button" disabled={disabled} aria-expanded={open} aria-haspopup="dialog"
         onClick={() => {
           if (open) close();
           else { setOpen(true); setLocation(value); void browse(value || undefined); }
         }}>Browse</button>
     </div>
-    {open ? <section className="ssh-key-file-browser" aria-label="Files on application machine" aria-busy={loading}>
-      <strong>Select a key on the application machine</strong>
+    {open ? <dialog ref={dialog} className="ssh-key-file-dialog" aria-labelledby={id + "-title"}
+      onCancel={(event) => { event.preventDefault(); event.stopPropagation(); close(); }}
+      onKeyDown={(event) => event.stopPropagation()}>
+      <section className="ssh-key-file-browser" aria-label="Files on application machine" aria-busy={loading}>
+      <strong id={id + "-title"}>Select a key on the application machine</strong>
       <p>Files belong to the machine running ScienceDiscovery, not this browser or the remote SSH target. Only the selected path is filled in; file contents are never displayed.</p>
       <label htmlFor={id + "-location"}>Directory or file path</label>
       <div className="ssh-key-file-path">
@@ -100,6 +108,6 @@ export function SshKeyFileField({ client, label, value, placeholder, disabled, o
             onClick={() => void browse(listing.directory, listing.nextOffset!)}>Next page</button>
         </div> : null}
       </> : null}
-    </section> : null}
+    </section></dialog> : null}
   </div>;
 }
