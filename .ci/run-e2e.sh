@@ -174,7 +174,13 @@ export E2E_BASE_URL="http://127.0.0.1:${SCIENCE_AGENT_PORT}"
 export E2E_API_URL="$E2E_BASE_URL"
 export E2E_JOURNEY_REPORTS="$results_root/journey-reports"
 
-setsid ./scripts/start-stack.sh --mode local > "$stack_log" 2>&1 &
+stack_arguments=(--mode local)
+# A prepared workspace already carries the installed dependencies and the
+# build. Letting the stack redo them inside a guest makes pnpm try to purge a
+# modules directory that came from another store, which it refuses to do
+# without a TTY, and the stack dies before it can listen.
+if [[ "$prepared" -eq 1 ]]; then stack_arguments+=(--no-node-build); fi
+setsid ./scripts/start-stack.sh "${stack_arguments[@]}" > "$stack_log" 2>&1 &
 stack_pid=$!
 
 # Under software emulation the services take far longer to provision their

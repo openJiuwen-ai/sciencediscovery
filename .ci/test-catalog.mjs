@@ -124,7 +124,11 @@ export const utWorkloads = [
 ];
 
 const installStep = ["pnpm", ["install", "--frozen-lockfile"]];
+// Both project virtualenvs are prerequisites, not test steps: the API package
+// spawns services/paper/.venv/bin/python and the gateway interpreter, so the
+// package tests fail with ENOENT unless these exist before they run.
 const gatewaySyncStep = ["uv", ["sync", "--project", "services/gateway"]];
+const paperSyncStep = ["uv", ["sync", "--project", "services/paper"]];
 const buildStep = ["pnpm", ["build"]];
 const workloadSteps = (tier) =>
   utWorkloads.filter((workload) => workload.tier === tier).map(({ command }) => [command[0], command.slice(1)]);
@@ -142,9 +146,9 @@ export const layers = {
     [process.env.SCIENCE_AGENT_NPU_PYTHON?.trim() || "python3", ["services/runner/workloads/npu-smoke-test.py"]],
   ],
   "st-real": [installStep, buildStep, ["bash", ["test/api/run_real_smoke.sh"]]],
-  ut: [installStep, gatewaySyncStep, buildStep, ...workloadSteps("host"), ...workloadSteps("guest")],
+  ut: [installStep, gatewaySyncStep, paperSyncStep, buildStep, ...workloadSteps("host"), ...workloadSteps("guest")],
   "ut-guest": [...workloadSteps("guest")],
-  "ut-host": [installStep, gatewaySyncStep, buildStep, ...workloadSteps("host")],
+  "ut-host": [installStep, gatewaySyncStep, paperSyncStep, buildStep, ...workloadSteps("host")],
 };
 
 export const testCases = [

@@ -21,17 +21,21 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/start-stack.sh --mode local|docker [--no-build]
+Usage: ./scripts/start-stack.sh --mode local|docker [--no-build] [--no-node-build]
 
   --mode local    read .env, optionally install/build, and use data/envs
   --mode docker   use the prebuilt image environments and container checks
   --no-build      skip install/build work (implicit in docker mode)
+  --no-node-build skip only the Node install/build; still provision the Python
+                  service environments, whose editable installs record absolute
+                  paths and cannot be prepared elsewhere
 EOF
 }
 
 mode=""
 mode_seen=0
 no_build=0
+no_node_build=0
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --mode)
@@ -54,6 +58,10 @@ while [[ "$#" -gt 0 ]]; do
       fi
       mode="${1#--mode=}"
       mode_seen=1
+      shift
+      ;;
+    --no-node-build)
+      no_node_build=1
       shift
       ;;
     --no-build)
@@ -246,15 +254,19 @@ prepare_local() {
     # can add a workspace dependency while leaving an old node_modules folder
     # in place; checking only for the directory would then fail later at build
     # or API startup with ERR_MODULE_NOT_FOUND.
-    if [[ "${#pnpm_registry_args[@]}" -gt 0 ]]; then
-      pnpm install --frozen-lockfile --ignore-scripts "${pnpm_registry_args[@]}"
-    else
-      pnpm install --frozen-lockfile --ignore-scripts
+    if [[ "$no_node_build" -eq 0 ]]; then
+      if [[ "${#pnpm_registry_args[@]}" -gt 0 ]]; then
+        pnpm install --frozen-lockfile --ignore-scripts "${pnpm_registry_args[@]}"
+      else
+        pnpm install --frozen-lockfile --ignore-scripts
+      fi
     fi
     uv_sync_project services/paper "$envs_dir/paper" 1
     # Pinned to Python 3.12 via services/gateway/.python-version.
     uv_sync_project services/gateway "$envs_dir/gateway" 0
-    pnpm build
+    if [[ "$no_node_build" -eq 0 ]]; then
+      pnpm build
+    fi
   fi
 
   # Same two locations `resolveMcpPython()` knows about, in the same order, so
