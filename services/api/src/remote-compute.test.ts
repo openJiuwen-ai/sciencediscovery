@@ -186,6 +186,7 @@ test("the probe, the deployment and the tunnel all use the same credentials and 
     assert.deepEqual(call.target.trustedHostKey, TRUSTED_KEY);
   }
   assert.match(transport.calls[1]!.script, /tar -xzf/);
+  assert.doesNotMatch(transport.calls[1]!.script, /-mmin|-mtime|-type s.*-delete/, "preparation must not delete another live runner's socket based on age");
   assert.equal(transport.opened.length, 1, "the tunnel opens its own connection");
   assert.equal(transport.opened[0]!.port, 2222);
   assert.deepEqual(transport.opened[0]!.trustedHostKey, TRUSTED_KEY);

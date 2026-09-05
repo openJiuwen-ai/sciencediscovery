@@ -115,7 +115,7 @@ function validateCredentials(credentials: SshCredentials): void {
 export interface SshSession {
   close(): void;
   forwardToRemoteSocket(socketPath: string): Promise<Duplex>;
-  onClose(listener: () => void): void;
+  onClose(listener: (error?: Error) => void): void;
   run(script: string, timeoutMs: number, options?: { pty?: boolean }): Promise<SshCommandResult>;
   start(script: string, onExit: (code: number | null, stderr: string) => void): Promise<void>;
 }
@@ -126,10 +126,19 @@ export interface SshSession {
  * or which trusted key were used.
  */
 export class SshConnection implements SshSession {
+  private failure?: Error;
+
   private constructor(
     private readonly client: InstanceType<typeof Client>,
     private readonly target: SshTarget,
-  ) {}
+  ) {
+    // Keep a listener after authentication: an unhandled Client error would
+    // otherwise terminate the control API, not just this SSH connection.
+    client.on("error", (error: Error) => {
+      this.failure ??= error;
+      client.destroy();
+    });
+  }
 
   static async open(target: SshTarget): Promise<SshConnection> {
     validateCredentials(target.credentials);
@@ -144,8 +153,9 @@ export class SshConnection implements SshSession {
       };
       client.once("error", fail);
       client.once("ready", () => {
+        const connection = new SshConnection(client, target);
         client.removeListener("error", fail);
-        resolveOpen(new SshConnection(client, target));
+        resolveOpen(connection);
       });
       client.connect({
         host: target.destination,
@@ -164,6 +174,8 @@ export class SshConnection implements SshSession {
           return false;
         },
         readyTimeout: 20_000,
+        keepaliveInterval: 15_000,
+        keepaliveCountMax: 3,
       });
     });
   }
@@ -211,19 +223,27 @@ export class SshConnection implements SshSession {
   run(script: string, timeoutMs: number, options: { pty?: boolean } = {}): Promise<SshCommandResult> {
     return new Promise<SshCommandResult>((resolveRun, reject) => {
       let settled = false;
-      const timer = setTimeout(() => {
+      const fail = (error: Error): void => {
+        clearTimeout(timer);
+        this.client.removeListener("close", onClose);
         if (settled) return;
         settled = true;
+        reject(error);
+      };
+      const onClose = (): void => fail(this.failure ?? new Error("The SSH connection closed during the command"));
+      const timer = setTimeout(() => {
+        if (settled) return;
+        fail(new Error(`SSH command timed out after ${timeoutMs} ms`));
         this.close();
-        reject(new Error(`SSH command timed out after ${timeoutMs} ms`));
       }, timeoutMs);
+      this.client.once("close", onClose);
       this.client.exec("sh -s", { pty: options.pty === true }, (error, stream) => {
         if (error) {
-          clearTimeout(timer);
-          if (!settled) reject(error);
-          settled = true;
+          fail(error);
           return;
         }
+        stream.on("error", fail);
+        stream.stderr.on("error", fail);
         let stdout: Buffer = Buffer.alloc(0);
         let stderr: Buffer = Buffer.alloc(0);
         const append = (current: Buffer, chunk: Buffer): Buffer => {
@@ -233,21 +253,21 @@ export class SshConnection implements SshSession {
         };
         stream.on("data", (chunk: Buffer) => {
           try { stdout = append(stdout, chunk); } catch (overflow) {
-            if (!settled) reject(overflow as Error);
-            settled = true;
+            fail(overflow as Error);
             stream.close();
           }
         });
         stream.stderr.on("data", (chunk: Buffer) => {
           try { stderr = append(stderr, chunk); } catch (overflow) {
-            if (!settled) reject(overflow as Error);
-            settled = true;
+            fail(overflow as Error);
             stream.close();
           }
         });
         stream.once("close", (code: number | null) => {
           clearTimeout(timer);
+          this.client.removeListener("close", onClose);
           if (settled) return;
+          if (this.failure) { fail(this.failure); return; }
           settled = true;
           resolveRun({ exitCode: code ?? 255, stderr: stderr.toString("utf8"), stdout: stdout.toString("utf8") });
         });
@@ -262,19 +282,34 @@ export class SshConnection implements SshSession {
    */
   start(script: string, onExit: (code: number | null, stderr: string) => void): Promise<void> {
     return new Promise<void>((resolveStart, reject) => {
+      const onClose = (): void => reject(this.failure ?? new Error("The SSH connection closed while starting the command"));
+      this.client.once("close", onClose);
       this.client.exec("sh -s", { pty: true }, (error, stream) => {
+        this.client.removeListener("close", onClose);
         if (error) {
           reject(error);
           return;
         }
         let stderr = "";
+        let exited = false;
+        const finish = (code: number | null, message: string): void => {
+          if (exited) return;
+          exited = true;
+          onExit(code, message);
+        };
+        const fail = (error: Error): void => {
+          finish(null, error.message);
+          stream.close();
+        };
+        stream.on("error", fail);
+        stream.stderr.on("error", fail);
         stream.stderr.on("data", (chunk: Buffer) => {
           stderr = `${stderr}${chunk.toString("utf8")}`.slice(-8_000);
         });
         // The runner's own stdout is not read by anyone; draining it keeps the
         // channel window from filling and stalling the process.
         stream.on("data", () => undefined);
-        stream.once("close", (code: number | null) => onExit(code, stderr));
+        stream.once("close", (code: number | null) => finish(code, this.failure?.message ?? stderr));
         stream.end(script);
         resolveStart();
       });
@@ -291,8 +326,8 @@ export class SshConnection implements SshSession {
     });
   }
 
-  onClose(listener: () => void): void {
-    this.client.once("close", listener);
+  onClose(listener: (error?: Error) => void): void {
+    this.client.once("close", () => listener(this.failure));
   }
 
   close(): void {

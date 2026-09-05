@@ -329,9 +329,8 @@ export class RemoteComputeClient {
       remoteDataDirScript(),
       "mkdir -p -- \"$data_dir/run\"",
       "chmod 700 -- \"$data_dir\" \"$data_dir/run\"",
-      // Sockets of runners whose SSH session died days ago are the only files
-      // this ever removes; a live connection keeps its socket mtime fresh.
-      "find \"$data_dir/run\" -maxdepth 1 -type s -mmin +1440 -delete 2>/dev/null || true",
+      // Each runner owns and removes its socket on exit. Age alone does not
+      // distinguish an orphan from another connection's long-running runner.
       ...(deploy ? deployScript(bundle!) : []),
       "printf 'data_dir=%s\\n' \"$data_dir\"",
       "",
@@ -462,13 +461,12 @@ export class RemoteComputeClient {
       this.runnerStatuses.set(host.id, { ...record.status, error: message, state: "error" });
       stop();
     };
-    connection.onClose(() => fail(remoteFailure.trim() || "The SSH connection to this machine closed"));
-    await connection.start(script, (code, stderr) => {
-      remoteFailure = stderr;
-      fail(stderr.trim() || `The remote runner exited (${code ?? "unknown"})`);
-    });
-
+    connection.onClose((error) => fail(error?.message || remoteFailure.trim() || "The SSH connection to this machine closed"));
     try {
+      await connection.start(script, (code, stderr) => {
+        remoteFailure = stderr;
+        fail(stderr.trim() || `The remote runner exited (${code ?? "unknown"})`);
+      });
       const localPort = await new Promise<number>((resolveListen, reject) => {
         bridge.once("error", reject);
         bridge.listen(0, "127.0.0.1", () => {
