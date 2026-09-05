@@ -32,7 +32,7 @@ import {
  * Steps:
  *   1. Prepare a local scripted model whose main request delegates one general-purpose subtask.
  *   2. Let the subagent create and declare review notes while retaining a private file; let the main Agent create and declare the final report.
- *   3. Inspect the subagent card's identity, terminal state, tool/text steps, and usage feedback.
+ *   3. Inspect the subagent card's identity and terminal state, then open its dedicated conversation for the tool/text steps and usage feedback.
  *   4. Verify the main answer and both declared Artifacts, while private files stay out of the Artifact catalog and @ suggestions.
  *   5. Open the separate physical-file tree and reload the Session to verify persisted subagent state.
  * Environment: Isolated local stack at E2E_BASE_URL with shell sandbox and a journey-owned Project/Session.
@@ -132,19 +132,29 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
     );
 
     await journey.step(
-      "展开卡片核对助手到底做了什么",
-      "卡片展开后能看到助手自己的工具步骤、它的回复和用量信息，过程是可核对的而不是黑箱。",
+      "点开卡片核对助手到底做了什么",
+      "卡片打开助手自己的会话页，里面有助手的工具步骤、它的回复和用量信息，过程是可核对的而不是黑箱。",
       async () => {
         const card = page.locator("section[aria-label='Subagent activity'] article.subagent-card").first();
-        const toggle = card.locator("> button");
-        if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
-        const details = card.locator(".subagent-details");
-        await expect(details).toContainText(childMarker);
-        await expect(details).toContainText(/tokens|Usage unavailable/);
+        await card.getByRole("button", { name: /^Open SubAgent: / }).click();
+        const conversation = page.locator("section.subagent-conversation");
+        await expect(conversation).toBeVisible();
+        await expect(conversation.locator(".subagent-page-meta")).toContainText(/tokens|Usage unavailable/);
         // The subagent executes the two journey tools without a mode-selection round trip.
-        await expect(details.locator(".subagent-steps [data-kind='tool']")).toHaveCount(2);
-        await expect(details.locator(".subagent-steps [data-kind='assistant']"))
-          .toContainText("review notes are ready");
+        await expect(conversation.locator(".run-timeline details.timeline-disclosure.tool")).toHaveCount(2);
+        const reply = conversation.locator(".run-timeline .message.assistant").last();
+        await expect(reply).toContainText("review notes are ready");
+        await expect(reply).toContainText(childMarker);
+      },
+    );
+
+    await journey.step(
+      "从助手页回到主对话",
+      "返回后助手页让位给主对话，主 Agent 的过程和答复重新可见。",
+      async () => {
+        await page.getByRole("button", { name: "Back to main Agent" }).click();
+        await expect(page.locator("section.subagent-conversation")).toHaveCount(0);
+        await expect(page.getByRole("region", { name: /^(Agent activity|Agent 活动)$/ })).toBeVisible();
       },
     );
 
