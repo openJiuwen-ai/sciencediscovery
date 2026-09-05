@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
@@ -123,4 +123,14 @@ test("explicit remote workspace push and pull preserve independent files and rec
     runnerClient, sessionId: session.id, store,
   });
   assert.equal(await readFile(raceDestination, "utf8"), "remote");
+  remote.set("parallel.txt", Buffer.from("parallel-result"));
+  const pull = () => syncRemoteWorkspace({
+    hostId: host.id, input: { direction: "pull" as const, paths: ["parallel.txt"], conflict: "reject" as const },
+    runnerClient, sessionId: session.id, store,
+  });
+  const competing = await Promise.allSettled([pull(), pull()]);
+  assert.equal(competing.filter((result) => result.status === "fulfilled").length, 1);
+  const loser = competing.find((result) => result.status === "rejected");
+  assert.equal(loser?.status === "rejected" && loser.reason.code, "CONFLICT");
+  assert.equal((await readdir(workspaceRoot)).some((name) => name.includes(".remote-sync-")), false);
 });

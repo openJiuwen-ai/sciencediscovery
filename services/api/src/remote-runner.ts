@@ -149,7 +149,7 @@ export async function syncRemoteWorkspace(options: {
       }
       for (const file of files) {
         const destination = await writableLocalWorkspaceFile(workspaceRoot, file.path);
-        const temporary = `${destination}.remote-sync-${process.pid}-${Date.now()}`;
+        const temporary = `${destination}.remote-sync-${randomUUID()}`;
         try {
           await writeFile(temporary, await options.runnerClient.readRemoteWorkspaceFile(workspaceKey, file.path), {
             flag: "wx",
