@@ -26,6 +26,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { supportsRemoteRunnerNode } from "@sciencediscovery/schema";
 import { hostKeyFromError, type GeneratedRemoteHostKey, type RemoteHostKeyInfo } from "./api/settings.js";
 import { CopyButton } from "./CopyButton.js";
 import { ChevronRightIcon } from "./icons.js";
@@ -64,9 +65,9 @@ function runnerSource(host: RemoteHostTarget): string | undefined {
   const capabilities = host.capabilities;
   if (capabilities?.platform !== "Linux") return undefined;
   if (capabilities.runnerCommandAvailable) return `runner ${host.runnerCommand} already installed`;
-  return capabilities.nodeVersion
+  return supportsRemoteRunnerNode(capabilities.nodeVersion)
     ? `deployed automatically over SSH (Node ${capabilities.nodeVersion})`
-    : "cannot deploy: no runner and no Node.js 22+ found";
+    : `cannot deploy: no runner and no Node.js 22+ found${capabilities.nodeVersion ? ` (found ${capabilities.nodeVersion})` : ""}`;
 }
 
 /**
@@ -77,7 +78,7 @@ function runnerUsable(host: RemoteHostTarget): boolean {
   if (host.status !== "ready") return false;
   if (host.connectionKind === "direct") return Boolean(host.endpoint && host.hasToken);
   return host.capabilities?.platform === "Linux"
-    && (host.capabilities.runnerCommandAvailable || Boolean(host.capabilities.nodeVersion));
+    && (host.capabilities.runnerCommandAvailable || supportsRemoteRunnerNode(host.capabilities.nodeVersion));
 }
 
 /** Fresh host catalog for the scoped settings sections, fetched on mount. */
@@ -230,11 +231,13 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
     if (host.error) onError(host.error);
   }
 
-  async function submitSshForm(trustHostKey?: RemoteHostKeyInfo): Promise<void> {
+  async function submitSshForm(trustHostKey?: RemoteHostKeyInfo, registeredHostId?: string): Promise<void> {
     setBusyId("new");
     try {
       const port = sshPort.trim();
-      const host = await client.registerRemoteHost({
+      const host = registeredHostId && trustHostKey
+        ? await client.trustRemoteHostKey(registeredHostId, trustHostKey)
+        : await client.registerRemoteHost({
         alias: alias.trim(),
         connectionKind: "ssh",
         // Omitting the port lets the user's SSH config resolve the destination.
@@ -253,7 +256,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       await refresh();
       if (host.error) reportHostError(host);
     } catch (error) {
-      handleFailure(error, alias.trim(), "add", (hostKey) => submitSshForm(hostKey), "Could not register SSH host");
+      const hostId = hostKeyFromError(error)?.hostId ?? registeredHostId;
+      handleFailure(error, alias.trim(), "add", (hostKey) => submitSshForm(hostKey, hostId), "Could not register SSH host");
     } finally {
       setBusyId(undefined);
     }

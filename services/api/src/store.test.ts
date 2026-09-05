@@ -3920,11 +3920,23 @@ test("an SSH machine keeps its optional port, and a Session pinned under the old
   assert.equal(byAlias.port, undefined);
   const byAddress = await store.registerRemoteHost({ alias: "10.0.0.8", capabilities, port: 2222 });
   assert.equal(byAddress.port, 2222);
+  assert.equal((await store.registerRemoteHost({ alias: "10.0.0.8", capabilities })).port, 2222);
   assert.equal((await store.registerRemoteHost({ alias: "10.0.0.8", capabilities, port: null })).port, undefined);
   await assert.rejects(
     store.registerRemoteHost({ alias: "10.0.0.9", capabilities, port: 70_000 }),
     /between 1 and 65535/,
   );
+  for (const [nodeVersion, supported] of [[null, false], ["v20.19.0", false], ["invalid", false], ["v22.19.0", true]] as const) {
+    const candidate = await store.registerRemoteHost({ alias: "node-check", capabilities: {
+      ...capabilities, nodeVersion, runnerCommandAvailable: false,
+    } });
+    if (supported) {
+      const accepted = await store.createProject("Usable Node", {}, [candidate.id]);
+      assert.deepEqual(accepted.remoteRunnerHostIds, [candidate.id]);
+    } else {
+      await assert.rejects(store.createProject("Unusable Node", {}, [candidate.id]), /Node.js 22/);
+    }
+  }
 
   const project = await store.createProject("Legacy project", undefined, [byAlias.id]);
   const session = await store.createSession(project.id, "Legacy", {}, {}, { allowUnconfiguredModel: true });

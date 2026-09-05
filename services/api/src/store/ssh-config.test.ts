@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import os from "node:os";
 import { test } from "node:test";
 
 import {
@@ -100,7 +101,8 @@ test("the importable ssh_config hosts are listed without touching key material",
 
   const listed = await listSshConfigHosts(configPath);
   // Pattern blocks describe no particular machine, so they are not offered.
-  assert.deepEqual(listed.map((entry) => entry.alias), ["institution-hpc", "build-box"]);
+  assert.deepEqual(listed.map((entry) => entry.alias), ["institution-hpc", "build-box", "lab-box"]);
+  assert.equal(listed[2]?.hostName, "build.example.test");
   assert.deepEqual(listed[0], {
     alias: "institution-hpc",
     hostName: "hpc.example.test",
@@ -135,4 +137,8 @@ test("a generated key waits in the product data directory and is removed once st
   await writeFile(ownKey, material);
   await consumeStagedKey(root, ownKey);
   assert.equal(await readablePrivateKey(ownKey), material);
+  context.mock.method(os, "homedir", () => root);
+  assert.equal(await readablePrivateKey("~/their-own-key"), material, "direct form paths expand ~ just like config imports");
+  await consumeStagedKey(root, "~/their-own-key");
+  assert.equal(await readablePrivateKey(ownKey), material, "tilde expansion must not consume a user-owned key");
 });

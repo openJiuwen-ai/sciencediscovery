@@ -14,6 +14,12 @@
 
 import type { PermissionDecision } from "./permission.js";
 
+/** Shared by capability presentation, authorization and SSH deployment. */
+export function supportsRemoteRunnerNode(version: string | null | undefined): boolean {
+  const major = Number(/^v(\d+)\./.exec(version ?? "")?.[1]);
+  return Number.isSafeInteger(major) && major >= 22;
+}
+
 export interface RemoteHostCapabilities {
   conda: boolean;
   containerRuntimes: string[];

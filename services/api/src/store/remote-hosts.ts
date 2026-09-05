@@ -15,6 +15,7 @@
 import { isIP } from "node:net";
 
 import type { RemoteHostEndpoint, RemoteHostTarget } from "@sciencediscovery/schema";
+import { supportsRemoteRunnerNode } from "@sciencediscovery/schema";
 
 /** The secrets a remote machine can have, each stored under its own row. */
 export type RemoteHostSecretKind = "passphrase" | "password" | "privateKey" | "token";
@@ -65,7 +66,7 @@ export function remoteRunnerUnusableReason(host: RemoteHostTarget): string | und
     if (!host.endpoint) return "it has no address";
     return host.hasToken ? undefined : "no connection token is stored for it";
   }
-  if (!host.capabilities.runnerCommandAvailable && !host.capabilities.nodeVersion) {
+  if (!host.capabilities.runnerCommandAvailable && !supportsRemoteRunnerNode(host.capabilities.nodeVersion)) {
     return `neither ${host.runnerCommand} nor Node.js 22 or newer was found, so no runner can be deployed there`;
   }
   return undefined;

@@ -361,11 +361,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
    * failure, so it leaves the API with a code and the fingerprint the settings
    * page needs to ask it.
    */
-  const hostKeyError = (error: SshHostKeyUntrustedError): ApiStatusError => new ApiStatusError(
+  const hostKeyError = (error: SshHostKeyUntrustedError, hostId?: string): ApiStatusError => new ApiStatusError(
     409,
     error.message,
     error.challenge.changed ? "SSH_HOST_KEY_CHANGED" : "SSH_HOST_KEY_UNTRUSTED",
-    { hostKey: { algorithm: error.challenge.algorithm, fingerprint: error.challenge.fingerprint } },
+    { hostKey: { algorithm: error.challenge.algorithm, fingerprint: error.challenge.fingerprint }, ...(hostId ? { hostId } : {}) },
   );
 
   const registerRemoteHost = async (body: RegisterRemoteHostRequest): Promise<RemoteHostTarget> => {
@@ -402,15 +402,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           `Could not read a private key at ${body.privateKeyPath}. Check the path and that ScienceDiscovery may read it, use a password, or have ScienceDiscovery generate a key for this machine.`,
         );
       }
-      await consumeStagedKey(config.dataDir, body.privateKeyPath);
     }
     // Typing a name that already exists in the user's ssh_config imports that
     // entry rather than making them retype it. The key material is read here and
     // stored encrypted; it never travels to the browser, and the path is not kept.
-    const imported = body.username || body.password || privateKey !== undefined
-      ? undefined
-      : await readSshConfigHost(config.sshConfigPath, alias).catch(() => undefined);
-    if (imported) {
+    // Destination defaults are independent of explicit login credentials.
+    const imported = await readSshConfigHost(config.sshConfigPath, alias).catch(() => undefined);
+    if (imported && body.password === undefined && privateKey === undefined) {
       if (imported.identityFile && !imported.identityKeyReadable) {
         throw new ApiStatusError(
           400,
@@ -435,6 +433,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         ? { username: body.username }
         : imported?.username ? { username: imported.username } : {}),
     });
+    // Consume only after durable storage. Trust retries address this host id,
+    // not the one-shot staged path that is now safely encrypted in the store.
+    if (body.privateKeyPath) await consumeStagedKey(config.dataDir, body.privateKeyPath);
     return await probeRegisteredSshHost(stored.id, runnerCommand, { throwOnUntrustedKey: true });
   };
 
@@ -461,7 +462,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       });
     } catch (error) {
       if (error instanceof SshHostKeyUntrustedError && options.throwOnUntrustedKey) {
-        throw hostKeyError(error);
+        throw hostKeyError(error, hostId);
       }
       const failed = await store.registerRemoteHost({
         alias: host.alias,
@@ -982,7 +983,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           if (!privateKey) {
             return sendError(response, 400, `Could not read a private key at ${body.privateKeyPath}. Check the path and that ScienceDiscovery may read it, or generate a key for this machine.`);
           }
-          await consumeStagedKey(config.dataDir, body.privateKeyPath);
         }
         await store.registerRemoteHost({
           alias: host.alias,
@@ -994,6 +994,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           runnerCommand: host.runnerCommand,
           ...(body.username !== undefined ? { username: body.username } : {}),
         });
+        if (body.privateKeyPath) await consumeStagedKey(config.dataDir, body.privateKeyPath);
         // The response is the result of a fresh probe with the credentials
         // just stored above. Returning the old error would make a successful
         // save look ineffective until the user manually refreshed the host.
@@ -1051,6 +1052,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           ...(localVersion ? { localVersion } : {}),
           ...(host.connectionKind === "direct" ? { token: store.remoteHostToken(host.id) ?? "" } : {}),
         });
+        if (status.hostKeyChallenge) {
+          throw hostKeyError(new SshHostKeyUntrustedError(status.hostKeyChallenge, host.alias), host.id);
+        }
         sendJson(response, status.state === "ready" ? 200 : 503, status);
         return;
       }

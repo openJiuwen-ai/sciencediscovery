@@ -88,11 +88,15 @@ export const SSH_HOST_KEY_UNTRUSTED_CODE = "SSH_HOST_KEY_UNTRUSTED";
 export const SSH_HOST_KEY_CHANGED_CODE = "SSH_HOST_KEY_CHANGED";
 
 /** Extract a structured host-key failure from an API error, if it is one. */
-export function hostKeyFromError(reason: unknown): { changed: boolean; hostKey: RemoteHostKeyInfo } | undefined {
+export function hostKeyFromError(reason: unknown): { changed: boolean; hostKey: RemoteHostKeyInfo; hostId?: string } | undefined {
   if (!(reason instanceof ApiRequestError)) return undefined;
   if (reason.code !== SSH_HOST_KEY_UNTRUSTED_CODE && reason.code !== SSH_HOST_KEY_CHANGED_CODE) return undefined;
   const hostKey = reason.details?.hostKey as RemoteHostKeyInfo | undefined;
-  return hostKey?.fingerprint ? { changed: reason.code === SSH_HOST_KEY_CHANGED_CODE, hostKey } : undefined;
+  return hostKey?.fingerprint ? {
+    changed: reason.code === SSH_HOST_KEY_CHANGED_CODE,
+    hostKey,
+    ...(typeof reason.details?.hostId === "string" ? { hostId: reason.details.hostId } : {}),
+  } : undefined;
 }
 
 export class SettingsApiClient extends ArtifactsApiClient {

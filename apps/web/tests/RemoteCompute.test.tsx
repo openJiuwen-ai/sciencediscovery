@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
+import type { RemoteHostTarget, RemoteJob, RegisterRemoteHostRequest } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -140,6 +140,80 @@ test("a successfully probed Linux host without a runner or Node keeps the deploy
 
   assert.match(output, /Linux · cannot deploy: no runner and no Node\.js 22\+ found/);
   await act(async () => renderer.unmount());
+});
+
+test("only Node 22+ is presented as deployable after a successful probe", async () => {
+  for (const [nodeVersion, deployable] of [["v20.19.0", false], ["invalid", false], ["v22.19.0", true]] as const) {
+    const { output, renderer } = await renderHost(buildHost({ capabilities: {
+      platform: "Linux", nodeVersion, runnerCommandAvailable: false, conda: false, containerRuntimes: [],
+      cpuCores: 1, cuda: null, gpu: null, memoryBytes: null, modules: false, probedAt: timestamp, scratchPaths: [], slurm: false,
+    } }));
+    assert.equal(output.includes("deployed automatically over SSH"), deployable);
+    assert.equal(output.includes("cannot deploy"), !deployable);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("generated-key registration resumes trust by host id without resubmitting the consumed path", async () => {
+  const errors: string[] = [];
+  const registered: RegisterRemoteHostRequest[] = [];
+  const trusted: string[] = [];
+  const key = { algorithm: "ssh-ed25519", fingerprint: "SHA256:test" };
+  let renderer: ReactTestRenderer;
+  const client = {
+    listRemoteHosts: async () => [],
+    generateRemoteHostKey: async () => ({ privateKeyPath: "generated-once.key", publicKey: "ssh-ed25519 public-fixture" }),
+    registerRemoteHost: async (body: RegisterRemoteHostRequest) => {
+      registered.push(body);
+      throw new ApiRequestError("Unknown host key", 409, "SSH_HOST_KEY_UNTRUSTED", { hostId: "saved-host", hostKey: key });
+    },
+    trustRemoteHostKey: async (id: string) => { trusted.push(id); return buildHost({ id, hasPrivateKey: true }); },
+  } as unknown as ApiClient;
+  await act(async () => { renderer = create(createElement(RemoteHostManager, { client, onError: (error) => errors.push(error) })); });
+  const click = async (label: string) => {
+    const button = renderer!.root.findAllByType("button").find((candidate) => candidate.children.join("") === label);
+    assert.ok(button, label);
+    await act(async () => button.props.onClick());
+  };
+  await click("Add SSH machine");
+  await click("Credentials (optional)");
+  await click("Generate a key pair");
+  assert.match(JSON.stringify(renderer!.toJSON()), /public-fixture/);
+  await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(registered[0]?.privateKeyPath, "generated-once.key");
+  await click("Trust and continue");
+  assert.deepEqual(trusted, ["saved-host"]);
+  assert.equal(registered.length, 1);
+  assert.deepEqual(errors, []);
+  await act(async () => renderer!.unmount());
+});
+
+test("connect runner presents a changed host key and resumes from the settings trust action", async () => {
+  const errors: string[] = [];
+  let connects = 0;
+  let trusts = 0;
+  const host = buildHost();
+  let renderer: ReactTestRenderer;
+  const client = {
+    listRemoteHosts: async () => [host],
+    connectRemoteRunner: async () => {
+      if (++connects === 1) throw new ApiRequestError("Host key changed", 409, "SSH_HOST_KEY_CHANGED", {
+        hostId: host.id, hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:new" },
+      });
+      return { hostId: host.id, state: "ready" };
+    },
+    trustRemoteHostKey: async () => { trusts++; return host; },
+  } as unknown as ApiClient;
+  await act(async () => { renderer = create(createElement(RemoteHostManager, { client, onError: (error) => errors.push(error) })); });
+  const button = (label: string) => renderer!.root.findAllByType("button").find((candidate) => candidate.children.join("") === label)!;
+  await act(async () => button("Connect runner").props.onClick());
+  assert.match(JSON.stringify(renderer!.toJSON()), /Host key changed/);
+  assert.match(JSON.stringify(renderer!.toJSON()), /SHA256:new/);
+  await act(async () => button("Trust and continue").props.onClick());
+  assert.equal(trusts, 1);
+  assert.equal(connects, 2);
+  assert.deepEqual(errors, []);
+  await act(async () => renderer!.unmount());
 });
 
 function buildJob(overrides: Partial<RemoteJob> = {}): RemoteJob {

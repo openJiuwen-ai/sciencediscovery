@@ -26,6 +26,7 @@ import type {
   RemoteRunnerStatus,
 } from "@sciencediscovery/schema";
 import { RUNNER_BUNDLE_ENTRY, type RunnerBundle } from "./runner-bundle.js";
+import { supportsRemoteRunnerNode } from "@sciencediscovery/schema";
 import { RunnerClient } from "./runner-client.js";
 import {
   SshConnection,
@@ -315,8 +316,7 @@ export class RemoteComputeClient {
     const deploy = !capabilities.runnerCommandAvailable;
     if (deploy) {
       if (!bundle) throw new Error(`Pre-installed remote runner executable was not found: ${host.runnerCommand}`);
-      const major = Number(/^v(\d+)\./.exec(capabilities.nodeVersion ?? "")?.[1]);
-      if (!Number.isSafeInteger(major) || major < 22) {
+      if (!supportsRemoteRunnerNode(capabilities.nodeVersion)) {
         throw new Error(
           `Automatic deployment needs Node.js 22 or newer on ${host.alias} (found ${capabilities.nodeVersion ?? "none"}).`
           + ` Install Node.js there, install ${host.runnerCommand}, or register the machine as a self-deployed runner instead.`,

@@ -14,7 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import os from "node:os";
 import { isAbsolute, resolve } from "node:path";
 
 import type { SshConfigHostImport } from "@sciencediscovery/schema";
@@ -58,7 +58,7 @@ export async function readSshConfigHost(configPath: string, aliasValue: string):
       if (Number.isInteger(port) && port > 0 && port <= 65_535) entry.port = port;
     } else if (directive === "identityfile" && !entry.identityFile) {
       entry.identityFile = parts[0]?.startsWith("~/")
-        ? resolve(homedir(), parts[0].slice(2))
+        ? expandPrivateKeyPath(parts[0])
         : parts[0] && isAbsolute(parts[0]) ? parts[0] : resolve(configPath, "..", parts[0] ?? "");
     }
   }
@@ -86,29 +86,31 @@ export async function listSshConfigHosts(configPath: string): Promise<SshConfigH
     throw new Error(`Could not read the SSH configuration at ${configPath}: ${code ?? "unreadable"}`);
   }
   const entries: SshConfigHostImport[] = [];
-  let current: SshConfigHostImport | undefined;
+  let current: SshConfigHostImport[] = [];
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
     const [keyword, ...parts] = line.split(/\s+/);
     const directive = keyword?.toLocaleLowerCase();
     if (directive === "host") {
+      current = [];
       for (const name of parts) {
         if (/^[A-Za-z0-9._-]{1,255}$/.test(name)) {
-          current = { alias: name, identityKeyReadable: false };
-          entries.push(current);
-          break;
+          const entry = { alias: name, identityKeyReadable: false };
+          current.push(entry);
+          entries.push(entry);
         }
       }
-      if (!parts.some((name) => /^[A-Za-z0-9._-]{1,255}$/.test(name))) current = undefined;
       continue;
     }
-    if (!current || !parts.length) continue;
-    if (directive === "hostname") current.hostName = parts[0];
-    else if (directive === "user") current.username = parts[0];
-    else if (directive === "port") {
-      const port = Number(parts[0]);
-      if (Number.isInteger(port) && port > 0 && port <= 65_535) current.port = port;
+    if (!parts.length) continue;
+    for (const entry of current) {
+      if (directive === "hostname") entry.hostName = parts[0];
+      else if (directive === "user") entry.username = parts[0];
+      else if (directive === "port") {
+        const port = Number(parts[0]);
+        if (Number.isInteger(port) && port > 0 && port <= 65_535) entry.port = port;
+      }
     }
   }
   return entries;
@@ -136,8 +138,9 @@ export async function stageGeneratedKey(dataDir: string, privateKey: string): Pr
 
 /** Remove a staged key once it is stored encrypted; other paths are left alone. */
 export async function consumeStagedKey(dataDir: string, path: string): Promise<void> {
-  if (resolve(path).startsWith(`${generatedKeyDirectory(dataDir)}/`)) {
-    await rm(path, { force: true });
+  const expanded = expandPrivateKeyPath(path);
+  if (resolve(expanded).startsWith(`${generatedKeyDirectory(dataDir)}/`)) {
+    await rm(expanded, { force: true });
   }
 }
 
@@ -149,9 +152,14 @@ export async function consumeStagedKey(dataDir: string, path: string): Promise<v
  */
 export async function readablePrivateKey(path: string): Promise<string | undefined> {
   try {
-    const key = await readFile(path, "utf8");
+    const key = await readFile(expandPrivateKeyPath(path), "utf8");
     return /BEGIN [A-Z ]*PRIVATE KEY/.test(key) ? key : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** A leading ~ always refers to the API installation's user, not the browser. */
+function expandPrivateKeyPath(path: string): string {
+  return path === "~" ? os.homedir() : path.startsWith("~/") ? resolve(os.homedir(), path.slice(2)) : path;
 }

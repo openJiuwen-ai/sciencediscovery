@@ -3450,7 +3450,7 @@ export class SessionStore {
     connectionKind?: RemoteHostConnectionKind;
     endpoint?: RemoteHostEndpoint;
     error?: string;
-    /** SSH port; omit to resolve the destination through the user's SSH configuration. */
+    /** SSH port; undefined preserves an existing value, null clears it. */
     port?: number | null;
     runnerCommand?: string;
     /** Connection token of a self-deployed runner; `undefined` keeps the stored one. */
@@ -3493,8 +3493,10 @@ export class SessionStore {
     host.updatedAt = now;
     host.runnerCommand = runnerCommand;
     if (endpoint) host.endpoint = endpoint;
-    if (port === undefined) delete host.port;
-    else host.port = port;
+    if (input.port !== undefined || connectionKind === "direct") {
+      if (port === undefined) delete host.port;
+      else host.port = port;
+    }
     if (input.capabilities) {
       host.capabilities = structuredClone(input.capabilities);
       host.status = "ready";
@@ -3582,7 +3584,9 @@ export class SessionStore {
     if (!this.database || !this.secretKey) throw new Error("Remote host credential storage is not initialized");
     // Key material is stored byte for byte: an OpenSSH key ends in a newline
     // and trimming it would hand the SSH client something it may not parse.
-    const normalized = value === null ? "" : kind === "privateKey" ? (value.trim() ? value : "") : value.trim();
+    const normalized = value === null ? ""
+      : kind === "privateKey" ? (value.trim() ? value : "")
+      : kind === "token" ? value.trim() : value;
     if (!normalized) {
       this.database.prepare("DELETE FROM remote_host_credentials WHERE host_id = ? AND kind = ?").run(hostId, kind);
       return;
