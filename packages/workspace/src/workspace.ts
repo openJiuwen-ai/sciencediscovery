@@ -62,6 +62,7 @@ import type {
   ScientificArtifact,
   ScientificArtifactVersion,
   ScientificExecutionResult,
+  ScientificEnvironmentSetup,
   ScientificLanguage,
   SkillResource,
   SkillResourceContent,
@@ -233,11 +234,12 @@ export interface WorkspaceToolOptions {
   ) => Promise<ScientificExecutionResult>;
   environments?: Environment[];
   environmentManagement?: {
-    create: (input: CreateEnvironmentRequest, signal?: AbortSignal) => Promise<Environment>;
-    delete: (environmentId: string, signal?: AbortSignal) => Promise<void>;
-    install: (environmentId: string, input: InstallEnvironmentRequest, signal?: AbortSignal) => Promise<EnvironmentRevision>;
+    create: (input: CreateEnvironmentRequest, signal?: AbortSignal, runnerId?: string) => Promise<Environment>;
+    delete: (environmentId: string, signal?: AbortSignal, runnerId?: string) => Promise<void>;
+    install: (environmentId: string, input: InstallEnvironmentRequest, signal?: AbortSignal, runnerId?: string) => Promise<EnvironmentRevision>;
     list: (signal?: AbortSignal, runnerId?: string) => Promise<Environment[]>;
-    uninstall: (environmentId: string, input: UninstallEnvironmentRequest, signal?: AbortSignal) => Promise<EnvironmentRevision>;
+    setup?: (retry: boolean, signal?: AbortSignal, runnerId?: string) => Promise<ScientificEnvironmentSetup>;
+    uninstall: (environmentId: string, input: UninstallEnvironmentRequest, signal?: AbortSignal, runnerId?: string) => Promise<EnvironmentRevision>;
   };
   artifactDownload?: (input: {
     candidateId: string;
@@ -1451,7 +1453,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
 
     const environmentListParameters = Type.Object({ ...machineParameter });
     const environmentList: AgentTool<typeof environmentListParameters> = {
-      description: "List the shared read-only base and named scientific environments with their current immutable revision IDs.",
+      description: "List the selected Runner's shared read-only base and named scientific environments with immutable revision IDs. If setup is unavailable, use environment_setup to inspect its cause or explicitly retry after resolving it.",
       execute: async (_toolCallId, _params, signal) => {
         const environments = options.environmentManagement
           ? await options.environmentManagement.list(signal, _params.runner_id)
@@ -1468,15 +1470,33 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     tools.push(environmentList);
 
     if (options.environmentManagement) {
+      if (options.environmentManagement.setup) {
+        const setupParameters = Type.Object({
+          ...machineParameter,
+          retry: Type.Optional(Type.Boolean({ description: "False/omitted reads setup progress and errors. True explicitly starts or retries managed Python base setup; package downloads may take time." })),
+        });
+        tools.push({
+          description: "Read scientific environment setup status on the selected Runner, including micromamba/Conda failure details and recovery actions, or explicitly retry setup. No workspace files are deleted.",
+          execute: async (_toolCallId, params, signal) => {
+            const setup = await options.environmentManagement!.setup!(params.retry === true, signal, params.runner_id);
+            return { content: [{ type: "text", text: JSON.stringify(setup, null, 2) }], details: { setup } };
+          },
+          label: "Scientific environment setup",
+          name: "environment_setup",
+          parameters: setupParameters,
+        } satisfies AgentTool<typeof setupParameters>);
+      }
       const createParameters = Type.Object({
+        ...machineParameter,
         baseEnvironmentId: Type.Optional(Type.String({ minLength: 1 })),
         language: Type.Union([Type.Literal("python"), Type.Literal("r")]),
         name: Type.String({ maxLength: 80, minLength: 1 }),
       });
       const createEnvironment: AgentTool<typeof createParameters> = {
-        description: "Create a globally shared named environment by cloning the matching read-only base or an explicitly selected base environment.",
+        description: "Create a named environment on the selected Runner by cloning its matching read-only base or an explicitly selected base environment. Environment IDs and revisions belong to that Runner.",
         execute: async (_toolCallId, params, signal) => {
-          const environment = await options.environmentManagement!.create(params, signal);
+          const { runner_id, ...input } = params;
+          const environment = await options.environmentManagement!.create(input, signal, runner_id);
           return {
             content: [{ type: "text", text: JSON.stringify(environment, null, 2) }],
             details: { environment },
@@ -1488,11 +1508,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       };
       tools.push(createEnvironment);
 
-      const deleteParameters = Type.Object({ environmentId: Type.String({ minLength: 1 }) });
+      const deleteParameters = Type.Object({ ...machineParameter, environmentId: Type.String({ minLength: 1 }) });
       const deleteEnvironment: AgentTool<typeof deleteParameters> = {
         description: "Delete a named environment. Read-only base environments cannot be deleted.",
         execute: async (_toolCallId, params, signal) => {
-          await options.environmentManagement!.delete(params.environmentId, signal);
+          await options.environmentManagement!.delete(params.environmentId, signal, params.runner_id);
           const result = { deleted: params.environmentId };
           return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
         },
@@ -1503,6 +1523,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       tools.push(deleteEnvironment);
 
       const installParameters = Type.Object({
+        ...machineParameter,
         channels: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
           description: "Conda channels only; every channel must be allowed by system policy. Omit for pip.",
           maxItems: 16,
@@ -1523,14 +1544,14 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         }),
       });
       const installEnvironment: AgentTool<typeof installParameters> = {
-        description: "Install conda specs or, in Python environments, pip PyPI specs/current-workspace relative .whl files. For pip, indexUrl safely provides a one-time HTTPS package index that overrides the global pip source. Local wheels are retained by SHA-256 for revision audit. Success creates a new immutable revision; base environments are read-only.",
+        description: "Install packages on the selected Runner: conda specs or, in Python environments, pip PyPI specs/current-workspace relative .whl files. Remote wheels must first be explicitly pushed to that Runner's workspace. For pip, indexUrl overrides the global pip source. Wheels are retained by SHA-256 for revision audit. Success creates an immutable revision; base environments are read-only.",
         execute: async (_toolCallId, params, signal) => {
           const revision = await options.environmentManagement!.install(params.environmentId, {
             ...(params.channels ? { channels: params.channels } : {}),
             ...(params.indexUrl ? { indexUrl: params.indexUrl } : {}),
             manager: params.manager ?? "conda",
             packages: params.packages,
-          }, signal);
+          }, signal, params.runner_id);
           return {
             content: [{ type: "text", text: JSON.stringify(revision, null, 2) }],
             details: { revision },
@@ -1543,13 +1564,14 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       tools.push(installEnvironment);
 
       const uninstallParameters = Type.Object({
+        ...machineParameter,
         environmentId: Type.String({ minLength: 1 }),
         packages: Type.Array(Type.String({ maxLength: 160, minLength: 1 }), { maxItems: 128, minItems: 1 }),
       });
       const uninstallEnvironment: AgentTool<typeof uninstallParameters> = {
         description: "Remove conda package specifications from a named environment. Success creates a new immutable revision; base environments are read-only.",
         execute: async (_toolCallId, params, signal) => {
-          const revision = await options.environmentManagement!.uninstall(params.environmentId, { packages: params.packages }, signal);
+          const revision = await options.environmentManagement!.uninstall(params.environmentId, { packages: params.packages }, signal, params.runner_id);
           return {
             content: [{ type: "text", text: JSON.stringify(revision, null, 2) }],
             details: { revision },

@@ -76,14 +76,14 @@ export interface WorkspaceExecutionBindingOptions {
 export function createWorkspaceExecutionBindings(
   options: WorkspaceExecutionBindingOptions,
 ): ExecutionBindings {
-  const requireEnvironmentMutation = async (summary: string, signal?: AbortSignal): Promise<void> => {
+  const requireEnvironmentMutation = async (summary: string, signal?: AbortSignal, runnerId?: string): Promise<void> => {
     options.store.assertSessionWritable(options.sessionId);
     await options.permission.requirePrivilege({
       action: "code",
       executionId: options.executionId,
       resource: "scientific-environments",
       signal,
-      summary,
+      summary: runnerId && runnerId !== "local" ? `${summary} on Runner ${runnerId}` : summary,
     });
   };
   const refreshEnvironmentCatalog = async () => {
@@ -264,33 +264,39 @@ export function createWorkspaceExecutionBindings(
         create: async (
           input: Parameters<NonNullable<WorkspaceAgentOptions["environmentManagement"]>["create"]>[0],
           signal?: AbortSignal,
+          runnerId?: string,
         ) => {
-          await requireEnvironmentMutation(`Create named ${input.language} environment ${input.name}`, signal);
-          const environment = await options.runnerClient.createEnvironment(input);
-          await refreshEnvironmentCatalog();
+          resolveExecutionTarget(runnerId);
+          await requireEnvironmentMutation(`Create named ${input.language} environment ${input.name}`, signal, runnerId);
+          const target = resolveExecutionTarget(runnerId);
+          const environment = await target.runnerClient.createEnvironment(input);
+          if (!target.runnerWorkspaceKey) await refreshEnvironmentCatalog();
           return environment;
         },
-        delete: async (environmentId: string, signal?: AbortSignal) => {
-          await requireEnvironmentMutation(`Delete named environment ${environmentId}`, signal);
-          await options.runnerClient.deleteEnvironment(environmentId);
-          await refreshEnvironmentCatalog();
+        delete: async (environmentId: string, signal?: AbortSignal, runnerId?: string) => {
+          resolveExecutionTarget(runnerId);
+          await requireEnvironmentMutation(`Delete named environment ${environmentId}`, signal, runnerId);
+          const target = resolveExecutionTarget(runnerId);
+          await target.runnerClient.deleteEnvironment(environmentId);
+          if (!target.runnerWorkspaceKey) await refreshEnvironmentCatalog();
         },
         install: async (
           environmentId: string,
           input: Parameters<NonNullable<WorkspaceAgentOptions["environmentManagement"]>["install"]>[1],
           signal?: AbortSignal,
+          runnerId?: string,
         ) => {
+          resolveExecutionTarget(runnerId);
           const manager = input.manager ?? "conda";
-          await requireEnvironmentMutation(`Install ${manager} packages in named environment ${environmentId}`, signal);
-          const revision = await options.runnerClient.installEnvironment(
+          await requireEnvironmentMutation(`Install ${manager} packages in named environment ${environmentId}`, signal, runnerId);
+          const target = resolveExecutionTarget(runnerId);
+          const resolved = resolveEnvironmentInstallRequest(input, options.store.getEnvironmentSourceSettings(),
+            target.runnerWorkspaceKey ? undefined : options.workspaceRoot);
+          const revision = await target.runnerClient.installEnvironment(
             environmentId,
-            resolveEnvironmentInstallRequest(
-              input,
-              options.store.getEnvironmentSourceSettings(),
-              options.workspaceRoot,
-            ),
+            { ...resolved, ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}) },
           );
-          await refreshEnvironmentCatalog();
+          if (!target.runnerWorkspaceKey) await refreshEnvironmentCatalog();
           return revision;
         },
         list: async (_signal?: AbortSignal, runnerId?: string) => {
@@ -299,14 +305,23 @@ export function createWorkspaceExecutionBindings(
           await refreshEnvironmentCatalog();
           return options.store.listEnvironments();
         },
+        setup: async (retry: boolean, signal?: AbortSignal, runnerId?: string) => {
+          resolveExecutionTarget(runnerId);
+          if (retry) await requireEnvironmentMutation("Set up scientific environments on the selected Runner", signal, runnerId);
+          const target = resolveExecutionTarget(runnerId);
+          return retry ? target.runnerClient.setupScientificEnvironments() : target.runnerClient.getEnvironmentSetup();
+        },
         uninstall: async (
           environmentId: string,
           input: Parameters<NonNullable<WorkspaceAgentOptions["environmentManagement"]>["uninstall"]>[1],
           signal?: AbortSignal,
+          runnerId?: string,
         ) => {
-          await requireEnvironmentMutation(`Uninstall packages from named environment ${environmentId}`, signal);
-          const revision = await options.runnerClient.uninstallEnvironment(environmentId, input);
-          await refreshEnvironmentCatalog();
+          resolveExecutionTarget(runnerId);
+          await requireEnvironmentMutation(`Uninstall packages from named environment ${environmentId}`, signal, runnerId);
+          const target = resolveExecutionTarget(runnerId);
+          const revision = await target.runnerClient.uninstallEnvironment(environmentId, input);
+          if (!target.runnerWorkspaceKey) await refreshEnvironmentCatalog();
           return revision;
         },
       },

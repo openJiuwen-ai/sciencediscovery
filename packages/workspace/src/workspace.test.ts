@@ -804,6 +804,40 @@ test("MCP tools retain deferred discovery and routing metadata", async () => {
   assert.match(result.content[0]?.text ?? "", /\"sourceId\":\"uniprot\"/);
 });
 
+test("all scientific environment tools forward runner_id and setup retries are explicit", async () => {
+  const calls: Array<{ operation: string; runnerId?: string; input?: unknown }> = [];
+  const environments: Environment[] = [];
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], environments,
+    executePython: async () => { throw new Error("not used"); },
+    executeScientific: async () => { throw new Error("not used"); },
+    environmentManagement: {
+      list: async (_signal, runnerId) => { calls.push({ operation: "list", runnerId }); return []; },
+      create: async (input, _signal, runnerId) => { calls.push({ operation: "create", runnerId, input }); return {} as Environment; },
+      delete: async (_id, _signal, runnerId) => { calls.push({ operation: "delete", runnerId }); },
+      install: async (_id, input, _signal, runnerId) => { calls.push({ operation: "install", runnerId, input }); return {} as never; },
+      uninstall: async (_id, input, _signal, runnerId) => { calls.push({ operation: "uninstall", runnerId, input }); return {} as never; },
+      setup: async (retry, _signal, runnerId) => { calls.push({ operation: "setup", runnerId, input: retry }); return {} as never; },
+    },
+  });
+  const execute = async (name: string, input: Record<string, unknown>) => {
+    const tool = tools.find(t => t.name === name)!;
+    assert.match(JSON.stringify(tool.parameters), /runner_id/);
+    return tool.execute("call", { runner_id: "runner-1", ...input });
+  };
+  await execute("environment_list", {});
+  await execute("environment_create", { name: "task", language: "r" });
+  await execute("environment_install", { environmentId: "task-1", packages: ["numpy"], manager: "conda" });
+  await execute("environment_uninstall", { environmentId: "task-1", packages: ["numpy"] });
+  await execute("environment_delete", { environmentId: "task-1" });
+  await execute("environment_setup", {});
+  await execute("environment_setup", { retry: true });
+  assert.equal(calls.length, 7);
+  assert.ok(calls.every(call => call.runnerId === "runner-1"));
+  assert.deepEqual(calls[1]?.input, { name: "task", language: "r" });
+  assert.deepEqual(calls.slice(-2).map(call => call.input), [false, true]);
+});
+
 test("managed environments expose governed create, delete, install, and uninstall tools", async () => {
   const environments: Environment[] = [{
     createdAt: new Date().toISOString(),

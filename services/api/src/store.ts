@@ -4468,8 +4468,11 @@ export class SessionStore {
   async replaceScientificEnvironmentCatalog(
     environments: Environment[],
     revisions: EnvironmentRevision[],
+    runnerId = "local",
   ): Promise<void> {
-    this.catalog.environments = structuredClone(environments);
+    // Remote execution imports immutable audit revisions, not the local
+    // environment picker. Refreshing either Runner must retain past run refs.
+    if (runnerId === "local") this.catalog.environments = structuredClone(environments);
     const systemRevisions = this.catalog.environmentRevisions
       .filter((revision) => isSystemEnvironmentRevisionId(revision.id));
     if (!systemRevisions.some((revision) => revision.id === DEFAULT_ENVIRONMENT_REVISION_ID)) {
@@ -4478,8 +4481,9 @@ export class SessionStore {
     if (!systemRevisions.some((revision) => revision.id === defaultShellEnvironmentRevision().id)) {
       systemRevisions.push(defaultShellEnvironmentRevision());
     }
-    this.catalog.environmentRevisions = [...systemRevisions, ...structuredClone(revisions)
-      .filter((revision) => !isSystemEnvironmentRevisionId(revision.id))];
+    const retained = new Map(this.catalog.environmentRevisions.map((revision) => [revision.id, revision]));
+    for (const revision of [...systemRevisions, ...structuredClone(revisions)]) retained.set(revision.id, revision);
+    this.catalog.environmentRevisions = [...retained.values()];
     await this.saveCatalog();
   }
 

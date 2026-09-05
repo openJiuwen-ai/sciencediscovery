@@ -77,6 +77,7 @@ export interface ProvenanceStore {
   replaceScientificEnvironmentCatalog(
     environments: Environment[],
     revisions: EnvironmentRevision[],
+    runnerId?: string,
   ): Promise<void>;
   recordWorkspaceFileRevision(
     sessionId: string,
@@ -680,7 +681,7 @@ export class ProvenanceRecorder {
         if (reference.hash !== revision.snapshot.hash || reference.size !== revision.snapshot.size) {
           throw new Error(`Environment Revision snapshot mismatch: ${revision.id}`);
         }
-        await this.store.replaceScientificEnvironmentCatalog(environments, revisions);
+        await this.store.replaceScientificEnvironmentCatalog(environments, revisions, options.runnerId);
       }
     } catch (error) {
       environmentSyncError = error instanceof Error ? error : new Error("Environment Revision sync failed");

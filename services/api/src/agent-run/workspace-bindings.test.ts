@@ -131,6 +131,54 @@ test("main and child execution bindings route by Runner ID and record isolated w
   );
 });
 
+test("main and child scientific environment operations use the selected Runner and recheck authorization", async () => {
+  const calls: Array<{ method: string; args: unknown[] }> = [];
+  let allowed = true;
+  let revokeOnApproval = false;
+  let approvals = 0;
+  const remote = Object.fromEntries(["createEnvironment", "deleteEnvironment", "installEnvironment", "uninstallEnvironment",
+    "listEnvironments", "getEnvironmentSetup", "setupScientificEnvironments"].map((method) => [method, async (...args: unknown[]) => {
+    calls.push({ method, args });
+    return method === "listEnvironments" ? [] : {};
+  }])) as unknown as RunnerClient;
+  for (const agentId of ["main", "subagent:child"]) {
+    const workspaceKey = agentId === "main" ? "project/session" : "project/session/agents/child";
+    const binding = createWorkspaceExecutionBindings({
+      agentId, executionId: "test", sessionId: "session", permissionScopeLabel: "test", workspaceRoot: "/local/workspace",
+      permission: { requirePrivilege: async () => { approvals++; if (revokeOnApproval) allowed = false; } } as unknown as AgentPermissionRuntime,
+      store: { assertSessionWritable() {}, getEnvironmentSourceSettings: () => ({ condaSource: "upstream", pipSource: "upstream" }),
+        replaceScientificEnvironmentCatalog: async () => { throw new Error("remote catalog must not replace local catalog"); },
+      } as unknown as SessionStore,
+      runnerClient: new Proxy({} as RunnerClient, { get() { throw new Error("must not call local Runner"); } }),
+      provenanceRecorder: {} as ProvenanceRecorder,
+      remoteTargets: [{ runnerId: "runner-1", hostAlias: "remote", workspaceKey,
+        runnerClient: () => { if (!allowed) throw new Error("authorization revoked"); return remote; } }],
+    }).environmentManagement!;
+    await binding.list(undefined, "runner-1");
+    await binding.create({ name: "science", language: "python" }, undefined, "runner-1");
+    await binding.install("task-test", { manager: "pip", packages: ["wheels/science-1-py3-none-any.whl"] }, undefined, "runner-1");
+    assert.deepEqual(calls.at(-1)?.args, ["task-test", {
+      manager: "pip", packages: ["wheels/science-1-py3-none-any.whl"],
+      indexUrl: "https://pypi.org/simple", runnerWorkspaceKey: workspaceKey,
+    }]);
+    await binding.uninstall("task-test", { packages: ["numpy"] }, undefined, "runner-1");
+    await binding.delete("task-test", undefined, "runner-1");
+    const beforeStatus = approvals;
+    await binding.setup!(false, undefined, "runner-1");
+    assert.equal(approvals, beforeStatus);
+    await binding.setup!(true, undefined, "runner-1");
+    assert.equal(approvals, beforeStatus + 1);
+    await assert.rejects(binding.create({ name: "no", language: "r" }, undefined, "not-allowed"), /may not run/);
+    const beforeRevocation = calls.length;
+    revokeOnApproval = true;
+    await assert.rejects(binding.delete("task-test", undefined, "runner-1"), /revoked/);
+    assert.equal(calls.length, beforeRevocation);
+    revokeOnApproval = false;
+    allowed = true;
+  }
+  assert.equal(calls.length, 14);
+});
+
 test("scientific executions forward the current outbound route and omit it for no-network epochs", async () => {
   const executed: Array<Record<string, unknown>> = [];
   const epoch = { id: "epoch-1" };

@@ -138,6 +138,16 @@ test("multi-step persistent R executions create separate runs and an artifact de
   assert.equal(derivations[0]?.path, "r-summary.csv");
   assert.deepEqual(derivations[0]?.executionRunIds, [runs[1]!.id]);
   assert.equal(await recorder.cas.verify(revision.snapshot.hash), true);
+  const localEnvironment = { ...environment, name: "Local R", currentRevisionId: "rev-local-r" };
+  await store.replaceScientificEnvironmentCatalog([localEnvironment], []);
+  await recorder.executeScientific({
+    agentId: "subagent:remote", code: "print(42)", language: "r", environmentRevisionId: revision.id,
+    kernelMode: "persistent", permissionEpoch, runnerClient, runnerId: "remote-one",
+    runnerWorkspaceKey: "project/session/agents/remote", sessionId: session.id, turnId: "turn-remote", workspaceRoot,
+  });
+  assert.deepEqual(store.listEnvironments(), [localEnvironment]);
+  assert.ok(store.listEnvironmentRevisions().some((candidate) => candidate.id === revision.id));
+  assert.equal((await store.listExecutionRuns(session.id)).at(-1)?.runnerId, "remote-one");
 });
 
 test("shell execution records authoritative code, logs, environment, and generated files", async (context) => {

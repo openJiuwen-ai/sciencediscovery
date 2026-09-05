@@ -131,6 +131,10 @@ test("workspace prompt exposes protected identity and governance parts", () => {
   const parts = buildWorkspacePromptParts([], true, { memoryGraphEnabled: true });
   assert.equal(parts.find((part) => part.id === "workspace.identity")?.protected, true);
   assert.equal(parts.find((part) => part.id === "environment.capabilities")?.protected, false);
+  assert.match(parts.find((part) => part.id === "environment.capabilities")?.content ?? "", /Managed scientific environments/);
+  const remoteParts = buildWorkspacePromptParts([], false, { remoteRunners: ["runner-1: remote"] });
+  assert.match(remoteParts.find((part) => part.id === "remote-environment.capabilities")?.content ?? "", /environment_setup/);
+  assert.match(remoteParts.find((part) => part.id === "remote-runner.capabilities")?.content ?? "", /runner-1/);
   assert.equal(parts.find((part) => part.id === "citation.governance")?.protected, true);
 });
 

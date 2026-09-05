@@ -19,7 +19,7 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
-import type { ArtifactJob, ComposerReference, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
+import type { ArtifactJob, ComposerReference, Environment, EnvironmentRevision, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
 import {
   lookupModelCatalog,
   resolveModelFacts,
@@ -60,6 +60,24 @@ interface PersistedCatalog {
     title: string;
   }>;
 }
+
+test("remote environment audit revisions never replace the local catalog or disappear on refresh", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `remote-env-catalog-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const local = { id: "starter-python", currentRevisionId: "rev-local" } as Environment;
+  const remote = { id: "starter-python", currentRevisionId: "rev-remote" } as Environment;
+  const revision = (id: string) => ({ id, environmentId: "starter-python" }) as EnvironmentRevision;
+  await store.replaceScientificEnvironmentCatalog([local], [revision("rev-local")]);
+  await store.replaceScientificEnvironmentCatalog([remote], [revision("rev-remote")], "runner-remote");
+  assert.deepEqual(store.listEnvironments(), [local]);
+  assert.ok(store.listEnvironmentRevisions().some((entry) => entry.id === "rev-remote"));
+  await store.replaceScientificEnvironmentCatalog([local], [revision("rev-local-next")]);
+  for (const id of ["rev-local", "rev-local-next", "rev-remote"]) {
+    assert.ok(store.listEnvironmentRevisions().some((entry) => entry.id === id));
+  }
+});
 
 test("SessionStore persists global package sources and migrates old catalogs to upstream", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `environment-sources-${Date.now()}-${process.pid}`);

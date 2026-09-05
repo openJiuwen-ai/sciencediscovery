@@ -231,7 +231,10 @@ function buildWorkspacePromptValues(
     'Runner local: default local sandbox and this Agent workspace. Execute Shell/Python/R only through Runner tools. Independent SSH/SLURM jobs are not supported.',
     scientificEnvsAvailable
       ? "\nManaged scientific environments are available. Use environment_list/environment_create/environment_delete/environment_install/environment_uninstall for governed environment changes; environment_install supports conda specs and, for Python, pip PyPI specs or current-workspace relative wheel files. Its optional pip indexUrl is the safe equivalent of --index-url for a one-time source override; otherwise the configured global conda or pip source is used. Never run conda, mamba, micromamba, or pip directly to mutate managed prefixes. The shared base is read-only, so clone a named environment before changing packages. R is installed on demand when an R environment is explicitly created. Persistent kernels retain variables only within the same Session, Permission Epoch, language, and Environment Revision."
-      : "\nManaged scientific environments are unavailable. Use only ephemeral run_python without an environment selection.",
+      : "\nLocal managed scientific environments are unavailable. For local execution use ephemeral run_python without an environment selection; this does not determine any remote Runner's environment readiness.",
+    governance?.remoteRunners?.length
+      ? "\nScientific environments belong to their Runner. Use the same runner_id for environment_list/create/install/uninstall/delete and code execution. environment_setup reads that Runner's setup status; retry=true requests governed initialization/retry. Do not infer remote readiness from local readiness or change managed environments via raw shell. For remote wheel installation explicitly push the wheel first."
+      : "",
     governance?.specialist
       ? `\nApplied user specialist ${governance.specialist.name}:\nDescription: ${governance.specialist.description}\nInstructions:\n${governance.specialist.instructions}`
       : "",
@@ -269,12 +272,13 @@ export function buildWorkspacePromptParts(
 ): WorkspacePromptPart[] {
   const descriptors: Array<Omit<WorkspacePromptPart, "content">> = [
     { id: "workspace.identity", kind: "identity", protected: true },
+    { id: "local-runner.capabilities", kind: "capabilities", protected: false },
     { id: "environment.capabilities", kind: "capabilities", protected: false },
+    { id: "remote-environment.capabilities", kind: "capabilities", protected: false },
     { id: "specialist.identity", kind: "identity", protected: true },
     { id: "specialists.capabilities", kind: "capabilities", protected: false },
     { id: "subagent.identity", kind: "identity", protected: true },
     { id: "subagent.governance", kind: "governance", protected: true },
-    { id: "remote-compute.capabilities", kind: "capabilities", protected: false },
     { id: "remote-runner.capabilities", kind: "capabilities", protected: false },
     { id: "skills.catalog", kind: "skills", protected: false },
     { id: "citation.governance", kind: "governance", protected: true },
