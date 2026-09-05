@@ -22,11 +22,12 @@ import type { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
-test("execution bindings stay local by default and only go remote for a named allowed machine", async () => {
+test("main and child execution bindings route by Runner ID and record isolated workspace ownership", async () => {
   const executed: Array<{
     agentId: string;
     executionTimeoutMs?: number;
     kernelIdleTimeoutMs?: number;
+    runnerId?: string;
     remoteHostAlias?: string;
     runnerWorkspaceKey?: string;
     skillPackagesRoot?: string;
@@ -44,13 +45,15 @@ test("execution bindings stay local by default and only go remote for a named al
         agentId: string;
         executionTimeoutMs?: number;
         kernelIdleTimeoutMs?: number;
-        remoteHostAlias?: string;
+        runnerId?: string;
+    remoteHostAlias?: string;
         runnerWorkspaceKey?: string;
         skillPackagesRoot?: string;
         turnId: string;
       }) => {
         executed.push({
           agentId: options.agentId,
+          runnerId: options.runnerId,
           ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),
           ...(options.kernelIdleTimeoutMs !== undefined ? { kernelIdleTimeoutMs: options.kernelIdleTimeoutMs } : {}),
           ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
@@ -78,6 +81,7 @@ test("execution bindings stay local by default and only go remote for a named al
     executionTimeoutMs: 45_000,
     kernelIdleTimeoutMs: 60_000,
     remoteTargets: [{
+      runnerId: "runner-1",
       hostAlias: "institution-linux",
       runnerClient: () => ({} as RunnerClient),
       workspaceKey: "project-1/session-1",
@@ -87,28 +91,33 @@ test("execution bindings stay local by default and only go remote for a named al
     ...common,
     agentId: "subagent:subagent-1",
     executionId: "subagent-execution",
+    remoteTargets: [{ runnerId: "runner-1", hostAlias: "institution-linux",
+      runnerClient: () => ({} as RunnerClient), workspaceKey: "project-1/session-1/agents/subagent-1" }],
   });
 
   // Being allowed a remote machine does not move the default off this one.
   await main.executePython("print('main')");
-  await main.executePython("print('remote')", undefined, undefined, "institution-linux");
+  await main.executePython("print('remote')", undefined, undefined, "runner-1");
   await subagent.executePython("print('subagent')");
+  await subagent.executePython("print('remote child')", undefined, undefined, "runner-1");
   assert.deepEqual(executed, [
     {
-      agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
+      agentId: "main", runnerId: "local", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
       skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1", turnId: "main-execution",
     },
     {
       agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
-      remoteHostAlias: "institution-linux",
+      runnerId: "runner-1", remoteHostAlias: "institution-linux",
       runnerWorkspaceKey: "project-1/session-1",
       turnId: "main-execution",
     },
     {
-      agentId: "subagent:subagent-1",
+      agentId: "subagent:subagent-1", runnerId: "local",
       skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1",
       turnId: "subagent-execution",
     },
+    { agentId: "subagent:subagent-1", runnerId: "runner-1", remoteHostAlias: "institution-linux",
+      runnerWorkspaceKey: "project-1/session-1/agents/subagent-1", turnId: "subagent-execution" },
   ]);
   // A machine outside the allowlist is refused, and a Session with none can
   // only ever be told about the local machine.
@@ -118,7 +127,7 @@ test("execution bindings stay local by default and only go remote for a named al
   );
   await assert.rejects(
     subagent.executePython("print('nope')", undefined, undefined, "institution-linux"),
-    /may only run on the local machine/,
+    /may not run on institution-linux/,
   );
 });
 

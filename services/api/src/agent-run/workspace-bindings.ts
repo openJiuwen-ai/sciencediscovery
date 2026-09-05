@@ -37,6 +37,7 @@ type ExecutionBindings = Pick<
  * immediately, and so a run that never names one never touches SSH at all.
  */
 export interface RemoteExecutionTarget {
+  runnerId: string;
   hostAlias: string;
   /** Throws with an actionable message when the machine is no longer allowed or not connected. */
   runnerClient: () => RunnerClient;
@@ -105,6 +106,7 @@ export function createWorkspaceExecutionBindings(
    */
   const resolveExecutionTarget = (machine: string | undefined): {
     remoteHostAlias?: string;
+    runnerId: string;
     runnerClient: RunnerClient;
     runnerWorkspaceKey?: string;
     skillPackagesRoot?: string;
@@ -112,13 +114,14 @@ export function createWorkspaceExecutionBindings(
     const requested = machine?.trim();
     if (!requested || requested === "local") {
       return {
+        runnerId: "local",
         runnerClient: options.runnerClient,
         ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
       };
     }
-    const target = options.remoteTargets?.find((candidate) => candidate.hostAlias === requested);
+    const target = options.remoteTargets?.find((candidate) => candidate.runnerId === requested);
     if (!target) {
-      const allowed = options.remoteTargets?.map((candidate) => candidate.hostAlias) ?? [];
+      const allowed = options.remoteTargets?.map((candidate) => candidate.runnerId) ?? [];
       throw new Error(allowed.length
         ? `This Session may not run on ${requested}; allowed machines: local, ${allowed.join(", ")}`
         : `This Session may only run on the local machine`);
@@ -126,6 +129,7 @@ export function createWorkspaceExecutionBindings(
     // Skill packages are staged on this machine, so a remote execution reads
     // its Skill resources through the tool instead of a mounted package.
     return {
+      runnerId: target.runnerId,
       remoteHostAlias: target.hostAlias,
       runnerClient: target.runnerClient(),
       runnerWorkspaceKey: target.workspaceKey,
@@ -200,6 +204,7 @@ export function createWorkspaceExecutionBindings(
         permissionEpoch: options.permission.getEpoch(),
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
+        runnerId: target.runnerId,
         runnerClient: target.runnerClient,
         ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
         ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
@@ -241,6 +246,7 @@ export function createWorkspaceExecutionBindings(
         permissionEpoch: options.permission.getEpoch(),
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
+        runnerId: target.runnerId,
         runnerClient: target.runnerClient,
         ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
         ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
@@ -253,7 +259,7 @@ export function createWorkspaceExecutionBindings(
         parentSubagentId: options.parentSubagentId,
       });
     },
-    ...(options.scientificEnvironments ? {
+    ...(options.scientificEnvironments || options.remoteTargets?.length ? {
       environmentManagement: {
         create: async (
           input: Parameters<NonNullable<WorkspaceAgentOptions["environmentManagement"]>["create"]>[0],
@@ -287,7 +293,9 @@ export function createWorkspaceExecutionBindings(
           await refreshEnvironmentCatalog();
           return revision;
         },
-        list: async () => {
+        list: async (_signal?: AbortSignal, runnerId?: string) => {
+          const target = resolveExecutionTarget(runnerId);
+          if (target.runnerWorkspaceKey) return target.runnerClient.listEnvironments();
           await refreshEnvironmentCatalog();
           return options.store.listEnvironments();
         },
@@ -335,6 +343,7 @@ export function createWorkspaceExecutionBindings(
           permissionEpoch: options.permission.getEpoch(),
           ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
           ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
+          runnerId: target.runnerId,
           runnerClient: target.runnerClient,
           ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
           ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),

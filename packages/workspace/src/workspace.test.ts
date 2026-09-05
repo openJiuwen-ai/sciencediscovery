@@ -921,7 +921,6 @@ test("built-in workspace tool names use the strict provider-safe alphabet", () =
     paperExtractPdf: unavailable,
     queryGraph: unavailable,
     readArtifact: unavailable,
-    remoteHosts: [],
     reviewCheckpoint: unavailable,
     runSubagent: unavailable,
     traceProvenance: unavailable,
@@ -1530,63 +1529,13 @@ test("filterTools denylist wins when a tool also appears in the allowlist", () =
   );
 });
 
-test("propose_remote_job creates an approval card without executing remote commands", async () => {
-  const timestamp = new Date().toISOString();
-  let proposedCommand = "";
+test("independent SSH/SLURM jobs are not offered to the model", () => {
   const tools = createWorkspaceTools(process.cwd(), {
-    enabledConnectorIds: [],
-    executePython: async () => { throw new Error("not used"); },
-    proposeRemoteJob: async (input): Promise<RemoteJob> => {
-      proposedCommand = input.command;
-      return {
-        card: {
-          command: input.command,
-          inputPaths: input.inputPaths ?? [],
-          mode: input.mode,
-          outputs: input.outputs ?? [],
-          remoteWorkingDirectory: input.remoteWorkingDirectory,
-          resources: input.resources,
-          targetAlias: "cluster",
-          targetId: input.hostId,
-        },
-        createdAt: timestamp,
-        id: "remote-job-1",
-        outputRecords: [],
-        scriptReference: "pending:remote-job-1",
-        sessionId: "session-1",
-        state: "awaiting_approval",
-        updatedAt: timestamp,
-        version: 1,
-      };
-    },
-    remoteHosts: [{
-      alias: "cluster",
-      capabilities: {
-        conda: true, containerRuntimes: ["apptainer"], cpuCores: 32, cuda: null, gpu: null,
-        memoryBytes: 128 * 1024 ** 3, modules: true, nodeVersion: null, platform: "Linux", probedAt: timestamp,
-        runnerCommandAvailable: true, scratchPaths: ["/scratch"], slurm: true,
-      },
-      connectionKind: "ssh",
-      createdAt: timestamp,
-      id: "host-1",
-      runnerCommand: "sciencediscovery-runner",
-      status: "ready",
-      updatedAt: timestamp,
-    }],
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
   });
-  const tool = tools.find((candidate) => candidate.name === "propose_remote_job");
-  assert.ok(tool);
-  const result = await tool.execute("remote-call", {
-    command: "python analysis.py",
-    hostId: "host-1",
-    inputPaths: ["/scratch/raw.parquet"],
-    mode: "slurm",
-    outputs: [{ disposition: "remote", path: "/scratch/model.bin" }],
-    remoteWorkingDirectory: "/scratch/project",
-    resources: { cpus: 4, gpus: 0, memoryMb: 8192, walltimeMinutes: 30 },
-  });
-  assert.equal(proposedCommand, "python analysis.py");
-  assert.equal((result.details as RemoteJob).state, "awaiting_approval");
+  assert.equal(tools.some((tool) => tool.name === "propose_remote_job"), false);
+  const python = tools.find((tool) => tool.name === "run_python")!;
+  assert.match(JSON.stringify(python.parameters), /runner_id.*local/);
 });
 
 test("sync_remote_workspace exposes only explicit list, push, and pull operations", async () => {
@@ -1595,6 +1544,8 @@ test("sync_remote_workspace exposes only explicit list, push, and pull operation
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
     remoteRunners: [{
+      runnerId: "runner-1",
+      description: "GPU analysis",
       hostAlias: "linux-runner",
       list: async () => [{ modifiedAt: "2026-08-31T00:00:00.000Z", path: "results/report.md", size: 12 }],
       sync: async (input: { conflict: "overwrite" | "reject"; direction: "pull" | "push"; paths: string[] }) => {
@@ -1619,14 +1570,14 @@ test("sync_remote_workspace exposes only explicit list, push, and pull operation
   const tool = tools.find((candidate) => candidate.name === "sync_remote_workspace");
   assert.ok(tool);
   assert.match(tool.description, /Nothing is mirrored automatically/);
-  const listed = await tool.execute("list-call", { machine: "linux-runner", operation: "list" });
+  const listed = await tool.execute("list-call", { runner_id: "runner-1", operation: "list" });
   assert.match((listed.content[0] as { text: string }).text, /results\/report\.md/);
-  await tool.execute("push-call", { machine: "linux-runner", operation: "push", paths: ["inputs/data.csv"] });
-  await tool.execute("pull-call", { conflict: "overwrite", machine: "linux-runner", operation: "pull", paths: ["results"] });
+  await tool.execute("push-call", { runner_id: "runner-1", operation: "push", paths: ["inputs/data.csv"] });
+  await tool.execute("pull-call", { conflict: "overwrite", runner_id: "runner-1", operation: "pull", paths: ["results"] });
   assert.deepEqual(calls, ["push:reject:inputs/data.csv", "pull:overwrite:results"]);
   // A machine this Session may not use is refused rather than silently routed.
   await assert.rejects(
-    tool.execute("other-call", { machine: "someone-elses-box", operation: "list" }),
+    tool.execute("other-call", { runner_id: "someone-elses-box", operation: "list" }),
     /may not use someone-elses-box/,
   );
 });

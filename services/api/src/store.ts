@@ -3445,6 +3445,9 @@ export class SessionStore {
   }
 
   async registerRemoteHost(input: {
+    id?: string;
+    runnerName?: string;
+    description?: string;
     alias: string;
     capabilities?: RemoteHostCapabilities;
     connectionKind?: RemoteHostConnectionKind;
@@ -3477,7 +3480,13 @@ export class SessionStore {
     const connectionKind = input.connectionKind ?? "ssh";
     const endpoint = connectionKind === "direct" ? normalizeRemoteHostEndpoint(input.endpoint) : undefined;
     const now = new Date().toISOString();
-    const existing = this.catalog.remoteHosts.find((host) => host.alias === alias);
+    const existing = input.id
+      ? this.catalog.remoteHosts.find((host) => host.id === input.id)
+      : input.runnerName === undefined ? this.catalog.remoteHosts.find((host) => host.alias === alias) : undefined;
+    if (input.id && !existing) throw new Error("Runner not found");
+    const runnerName = input.runnerName?.trim();
+    if (runnerName !== undefined && (!runnerName || runnerName.length > 120)) throw new Error("Runner name must contain 1-120 characters");
+    if (input.description !== undefined && (typeof input.description !== "string" || input.description.length > 2000)) throw new Error("Runner description must contain at most 2000 characters");
     if (existing && existing.connectionKind !== connectionKind) {
       throw new Error(`A ${existing.connectionKind === "ssh" ? "SSH" : "self-deployed"} runner named ${alias} already exists`);
     }
@@ -3491,6 +3500,9 @@ export class SessionStore {
       updatedAt: now,
     };
     host.updatedAt = now;
+    if (!existing && runnerName) host.workspaceNamespace = host.id;
+    if (runnerName !== undefined) host.runnerName = runnerName;
+    if (input.description !== undefined) host.description = input.description.trim();
     host.runnerCommand = runnerCommand;
     if (endpoint) host.endpoint = endpoint;
     if (input.port !== undefined || connectionKind === "direct") {

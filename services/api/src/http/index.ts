@@ -373,10 +373,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     const runnerCommand = body.runnerCommand?.trim() || "sciencediscovery-runner";
     if (body.connectionKind === "direct") {
       const endpoint = normalizeRemoteHostEndpoint(body.endpoint);
-      const existing = store.listRemoteHosts().find((host) => host.alias === alias);
+      const existing = body.id ? store.getRemoteHost(body.id) : body.runnerName === undefined ? store.listRemoteHosts().find((host) => host.alias === alias) : undefined;
       const token = body.token?.trim() || (existing ? store.remoteHostToken(existing.id) : undefined);
       if (!token) throw new ApiStatusError(400, "A self-deployed runner needs the token it was started with");
-      const common = { alias, connectionKind: "direct" as const, endpoint, runnerCommand, token };
+      const common = { id: body.id, runnerName: body.runnerName, description: body.description, alias, connectionKind: "direct" as const, endpoint, runnerCommand, token };
       try {
         return await store.registerRemoteHost({ ...common, capabilities: await remoteCompute.probeDirect(endpoint, token) });
       } catch (error) {
@@ -419,6 +419,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     }
     const importedPort = imported?.port;
     const stored = await store.registerRemoteHost({
+      id: body.id,
+      runnerName: body.runnerName,
+      description: body.description,
       alias,
       connectionKind: "ssh",
       error: "Not probed yet",
@@ -455,6 +458,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     try {
       const capabilities = await remoteCompute.probe(access, runnerCommand);
       return await store.registerRemoteHost({
+        id: host.id,
         alias: host.alias,
         capabilities,
         connectionKind: "ssh",
@@ -465,6 +469,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         throw hostKeyError(error, hostId);
       }
       const failed = await store.registerRemoteHost({
+        id: host.id,
         alias: host.alias,
         connectionKind: "ssh",
         error: error instanceof Error ? error.message : "SSH probe failed",
@@ -942,6 +947,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!host) return sendError(response, 404, "Remote host not found");
         sendJson(response, 200, host.connectionKind === "direct"
           ? await registerRemoteHost({
+            id: host.id,
             alias: host.alias,
             connectionKind: "direct",
             ...(host.endpoint ? { endpoint: host.endpoint } : {}),
@@ -985,6 +991,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           }
         }
         await store.registerRemoteHost({
+          id: host.id,
           alias: host.alias,
           connectionKind: "ssh",
           ...(host.capabilities ? { capabilities: host.capabilities } : { error: host.error ?? "Not probed yet" }),
@@ -1702,58 +1709,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listRemoteJobs(sessionRemoteJobsMatch[1]!));
         return;
       }
-      if (sessionRemoteJobsMatch && request.method === "POST") {
-        const job = await store.createRemoteJob(
-          sessionRemoteJobsMatch[1]!,
-          await readJson<CreateRemoteJobRequest>(request),
-        );
-        sendJson(response, 201, await startApprovedRemoteJob(job, store, remoteCompute, provenanceRecorder));
-        return;
-      }
-      const remoteJobDecisionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/remote-jobs\/([^/]+)\/decision$/);
-      if (remoteJobDecisionMatch && request.method === "POST") {
-        const sessionId = remoteJobDecisionMatch[1]!;
-        const body = await readJson<DecideRemoteJobRequest>(request);
-        const existingJob = store.getRemoteJob(sessionId, remoteJobDecisionMatch[2]!);
-        if (!existingJob) return sendError(response, 404, "Remote job not found");
-        if (existingJob.state !== "awaiting_approval") {
-          return sendError(response, 400, "Remote job is not awaiting approval");
-        }
-        if (existingJob.version !== body.expectedVersion) {
-          return sendError(response, 409, "Remote job version changed; refresh before deciding");
-        }
-        if (!existingJob.permissionRequestId) {
-          return sendError(response, 409, "Remote job has no pending permission request");
-        }
-        const teardown = (await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available
-          ? await runnerClient.teardownKernels(sessionId, "Remote job permission changed; persistent memory was lost")
-          : undefined;
-        const permissionDecision = await store.decidePermissionRequest(
-          existingJob.permissionRequestId,
-          body.decision,
-          teardown?.count ? teardown.reason : undefined,
-        );
-        const advanced = await advanceResolvedPermissionRequests(
-          permissionDecision.resolvedRequests,
-          store,
-          artifactManager,
-          remoteCompute,
-          provenanceRecorder,
-        );
-        const job = advanced.remoteJobs.find((candidate) => candidate.id === existingJob.id)
-          ?? store.getRemoteJob(sessionId, existingJob.id);
-        if (!job) return sendError(response, 404, "Remote job not found after permission decision");
-        sendJson(response, 200, job);
-        return;
-      }
-      const remoteJobRefreshMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/remote-jobs\/([^/]+)\/refresh$/);
-      if (remoteJobRefreshMatch && request.method === "POST") {
-        const sessionId = remoteJobRefreshMatch[1]!;
-        const job = store.getRemoteJob(sessionId, remoteJobRefreshMatch[2]!);
-        if (!job) return sendError(response, 404, "Remote job not found");
-        sendJson(response, 200, await store.updateRemoteJob(
-          await remoteCompute.refresh(job, store.workspacePath(sessionId)),
-        ));
+      if (/^\/api\/sessions\/[^/]+\/remote-jobs(?:\/.*)?$/.test(url.pathname) && request.method !== "GET") {
+        sendError(response, 410, "Independent SSH/SLURM jobs are no longer supported. Execute through a sandboxed Runner.");
         return;
       }
 
@@ -1786,7 +1743,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           if (await sessionHasActiveRun(store, sessionId)) {
             return sendError(response, 409, "Cannot delete a remote workspace during an active run");
           }
-          await selectedRunner.deleteRemoteWorkspace(remoteWorkspaceKey(session.projectId, session.id));
+          await selectedRunner.deleteRemoteWorkspace(remoteWorkspaceKey(session.projectId, session.id, host.workspaceNamespace));
           sendJson(response, 200, { deleted: true });
           return;
         }

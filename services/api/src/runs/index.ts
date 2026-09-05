@@ -54,7 +54,6 @@ import type {
   CreateModelProfileRequest,
   CreateProjectRequest,
   CreatePermissionRequest,
-  CreateRemoteJobRequest,
   CreateSessionRequest,
   CreateSpecialistRequest,
   DecidePermissionRequest,
@@ -179,7 +178,6 @@ import {
 } from "../artifacts/index.js";
 import {
   advanceResolvedPermissionRequests,
-  startApprovedRemoteJob,
   waitForPermissionDecision,
 } from "../permissions/index.js";
 import {
@@ -480,12 +478,56 @@ async function executeAgentRun(
   // to run. A machine that is not connected only fails the calls that name it.
   const allowedRemoteHosts = store.effectiveRemoteRunnerHosts(sessionId);
   const remoteTargets = allowedRemoteHosts.map((host) => ({
-    hostAlias: host.alias,
+    runnerId: host.id,
+    hostAlias: host.runnerName ?? host.alias,
     runnerClient: () => {
       store.assertSessionAllowsRemoteRunner(sessionId, host.id);
       return remoteCompute.runnerClient(host.id);
     },
-    workspaceKey: remoteWorkspaceKey(session.projectId, session.id),
+    workspaceKey: remoteWorkspaceKey(session.projectId, session.id, host.workspaceNamespace),
+  }));
+  // Both main and child Agents use the same catalog, permission checks and
+  // transfer/Artifact pipeline; only their workspace ownership differs.
+  const workspaceRunners = (
+    workspaceRoot: string,
+    executionId: string,
+    permission: Parameters<typeof createWorkspaceExecutionBindings>[0]["permission"],
+    agentId?: string,
+    artifactPathPrefix?: string,
+  ): NonNullable<WorkspaceAgentOptions["remoteRunners"]> => allowedRemoteHosts.map((host) => ({
+    runnerId: host.id,
+    hostAlias: host.runnerName ?? host.alias,
+    description: host.description || host.runnerName || host.alias,
+    list: async () => {
+      store.assertSessionAllowsRemoteRunner(sessionId, host.id);
+      return remoteCompute.runnerClient(host.id).listRemoteWorkspaceFiles(
+        remoteWorkspaceKey(session.projectId, session.id, host.workspaceNamespace, agentId),
+      );
+    },
+    sync: async (input, signal) => {
+      store.assertSessionAllowsRemoteRunner(sessionId, host.id);
+      await permission.requirePrivilege({
+        action: "host", executionId, resource: host.id, signal,
+        summary: `${input.direction} Runner ${host.id}: ${input.paths.join(", ")}`,
+      });
+      const result = await syncRemoteWorkspace({
+        hostId: host.id, input, runnerClient: remoteCompute.runnerClient(host.id),
+        sessionId, store, workspaceRoot, ...(agentId ? { agentId } : {}),
+      });
+      if (input.direction === "pull") {
+        for (const path of result.files) {
+          const logicalPath = artifactPathPrefix ? `${artifactPathPrefix}/${path}` : path;
+          await provenanceRecorder.registerWorkspaceArtifact({
+            logicalName: logicalPath, origin: "user_upload",
+            originMeta: { runnerId: host.id, agentId: agentId ?? "main", source: "runner_pull" },
+            path, sourcePath: logicalPath, sessionId, title: path,
+            ...(agentId ? { parentSubagentId: agentId } : {}),
+            turnId: executionId, workspaceRoot,
+          });
+        }
+      }
+      return result;
+    },
   }));
   let runnerHealth: RunnerHealth;
   try {
@@ -573,8 +615,7 @@ async function executeAgentRun(
     {
       approvalMode: session.approvalMode,
       memoryGraphEnabled: memoryGraphSink.enabled,
-      remoteHosts: allowedRemoteHosts,
-      ...(allowedRemoteHosts.length ? { remoteRunners: allowedRemoteHosts.map((host) => host.alias) } : {}),
+      ...(allowedRemoteHosts.length ? { remoteRunners: allowedRemoteHosts.map((host) => `${host.id}: ${host.description || host.runnerName || host.alias}`) } : {}),
       ...(sessionSpecialist ? { specialist: { description: sessionSpecialist.description, instructions: sessionSpecialist.instructions, name: sessionSpecialist.name } } : {}),
       ...(enabledBuiltinSpecialists.length
         ? { builtinSpecialists: enabledBuiltinSpecialists.map((specialist) => ({ description: specialist.description, name: specialist.name })) }
@@ -973,56 +1014,7 @@ async function executeAgentRun(
       permission: requestExecution.permission,
     }),
     approvalMode: session.approvalMode,
-    ...(allowedRemoteHosts.length ? {
-      remoteRunners: allowedRemoteHosts.map((host) => ({
-        hostAlias: host.alias,
-        list: async (signal?: AbortSignal) => {
-          store.assertSessionAllowsRemoteRunner(sessionId, host.id);
-          void signal;
-          return await remoteCompute.runnerClient(host.id).listRemoteWorkspaceFiles(
-            remoteWorkspaceKey(session.projectId, session.id),
-          );
-        },
-        sync: async (input: {
-          conflict: "overwrite" | "reject";
-          direction: "pull" | "push";
-          paths: string[];
-        }, signal?: AbortSignal) => {
-          store.assertSessionAllowsRemoteRunner(sessionId, host.id);
-          await requestExecution.permission.requirePrivilege({
-            action: "host",
-            executionId: runId,
-            resource: host.alias,
-            signal,
-            summary: `${input.direction === "push" ? "Push to" : "Pull from"} remote runner ${host.alias}: ${input.paths.join(", ")}`,
-          });
-          const result = await syncRemoteWorkspace({
-            hostId: host.id,
-            input,
-            runnerClient: remoteCompute.runnerClient(host.id),
-            sessionId,
-            store,
-          });
-          if (input.direction === "pull") {
-            for (const path of result.files) {
-              await provenanceRecorder.registerWorkspaceArtifact({
-                logicalName: path,
-                origin: "user_upload",
-                originMeta: { hostId: host.id, source: "remote_runner_pull" },
-                path,
-                sessionId,
-                sourcePath: path,
-                title: path,
-                turnId: runId,
-                workspaceRoot: store.workspacePath(sessionId),
-              });
-            }
-          }
-          return result;
-        },
-      })),
-    } : {}),
-    remoteHosts: allowedRemoteHosts,
+    remoteRunners: workspaceRunners(store.workspacePath(sessionId), runId, requestExecution.permission),
     proposeSkillLibraryUpdate: async (input, _signal, toolCallId) => {
       const library = skillLibraryCatalog.get(input.libraryId);
       const sourceRefs = [
@@ -1239,14 +1231,6 @@ async function executeAgentRun(
       });
       return runtime ? { evolve: runtime } : {};
     })(),
-    ...(allowedRemoteHosts.length ? {
-      proposeRemoteJob: async (input: CreateRemoteJobRequest) => {
-        let job = await store.createRemoteJob(sessionId, input, { executionId: runId });
-        job = await startApprovedRemoteJob(job, store, remoteCompute, provenanceRecorder);
-        await emit({ job, type: "remote_job.proposed" });
-        return job;
-      },
-    } : {}),
     runSubagent: async (input: SubagentInput, signal?: AbortSignal): Promise<Subagent> => {
       store.assertSessionWritable(sessionId);
       const subagentConfig = resolveSubagentConfig(input);
@@ -1416,7 +1400,9 @@ async function executeAgentRun(
               provenanceRecorder,
               readOnlyWorkspaceRoot: store.workspacePath(sessionId),
               runnerClient,
-              ...(remoteTargets.length ? { remoteTargets } : {}),
+              ...(remoteTargets.length ? { remoteTargets: remoteTargets.map((target) => ({
+                ...target, workspaceKey: `${target.workspaceKey}/agents/${subagent.id}`,
+              })) } : {}),
               ...(subagentSkillPackagesRoot ? { skillPackagesRoot: subagentSkillPackagesRoot } : {}),
               ...(scientificEnvironments ? { scientificEnvironments } : {}),
               sessionId,
@@ -1558,7 +1544,7 @@ async function executeAgentRun(
               });
               return await skillLibraryCatalog.publishProposals(input.proposalIds);
             },
-            remoteHosts: [],
+            remoteRunners: workspaceRunners(subagentWorkspaceRoot, childExecution.identity.executionId, childExecution.permission, subagent.id, handoff.privateWorkspacePath),
             runSubagent: async () => {
               throw new Error("Nested subagents are disabled");
             },

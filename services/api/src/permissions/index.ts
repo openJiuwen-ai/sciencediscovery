@@ -86,29 +86,16 @@ export async function startApprovedRemoteJob(
   remoteCompute: RemoteComputeClient,
   provenanceRecorder: ProvenanceRecorder,
 ): Promise<RemoteJob> {
+  // Old pending permission cards may survive an upgrade. Resolving one must
+  // never revive the removed bare-SSH execution path.
   if (job.state !== "approved") return job;
-  try {
-    const started = await remoteCompute.start(job, store.workspacePath(job.sessionId));
-    for (const output of started.outputRecords) {
-      if (!output.localPath) continue;
-      await provenanceRecorder.registerWorkspaceArtifact({
-        origin: "llm_declared",
-        originMeta: { remoteJobId: job.id },
-        path: output.localPath,
-        sessionId: job.sessionId,
-        workspaceRoot: store.workspacePath(job.sessionId),
-      });
-    }
-    return await store.updateRemoteJob(started);
-  } catch (error) {
-    return await store.updateRemoteJob({
-      ...job,
-      error: error instanceof Error ? error.message : "Remote job failed to start",
-      finishedAt: new Date().toISOString(),
-      state: "failed",
-      updatedAt: new Date().toISOString(),
-    });
-  }
+  return await store.updateRemoteJob({
+    ...job,
+    state: "failed",
+    error: "Independent SSH/SLURM jobs were retired; use a sandboxed Runner.",
+    finishedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export async function advanceResolvedPermissionRequests(

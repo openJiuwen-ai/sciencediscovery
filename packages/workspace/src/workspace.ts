@@ -34,7 +34,6 @@ import type {
   CreateSkillPackageRequest,
   CreateEnvironmentRequest,
   CreateNpuJobRequest,
-  CreateRemoteJobRequest,
   DeclareClaimInput,
   DeclareClaimResult,
   DeclareEvidenceInput,
@@ -56,8 +55,6 @@ import type {
   PublishSkillLibraryUpdateProposalsResult,
   PythonExecutionResult,
   SkillLibraryUpdateProposal,
-  RemoteHostTarget,
-  RemoteJob,
   RemoteWorkspaceFile,
   RemoteWorkspaceSyncRecord,
   ReviewCheckpointRequest,
@@ -73,7 +70,7 @@ import type {
   UninstallEnvironmentRequest,
   WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
-import { Type, type TOptional, type TSchema, type TString } from "typebox";
+import { Type, type TSchema } from "typebox";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -239,7 +236,7 @@ export interface WorkspaceToolOptions {
     create: (input: CreateEnvironmentRequest, signal?: AbortSignal) => Promise<Environment>;
     delete: (environmentId: string, signal?: AbortSignal) => Promise<void>;
     install: (environmentId: string, input: InstallEnvironmentRequest, signal?: AbortSignal) => Promise<EnvironmentRevision>;
-    list: (signal?: AbortSignal) => Promise<Environment[]>;
+    list: (signal?: AbortSignal, runnerId?: string) => Promise<Environment[]>;
     uninstall: (environmentId: string, input: UninstallEnvironmentRequest, signal?: AbortSignal) => Promise<EnvironmentRevision>;
   };
   artifactDownload?: (input: {
@@ -283,14 +280,14 @@ export interface WorkspaceToolOptions {
   webSearch?: (toolCallId: string, query: string, signal?: AbortSignal) => Promise<unknown>;
   approvalMode?: "always_allow" | "ask_for_dangerous";
   runSubagent?: (input: SubagentInput, signal?: AbortSignal) => Promise<Subagent>;
-  remoteHosts?: RemoteHostTarget[];
-  proposeRemoteJob?: (input: CreateRemoteJobRequest) => Promise<RemoteJob>;
   /**
    * Remote machines this Session is allowed to use. Being allowed is not being
    * pinned: every execution tool still defaults to this machine, and each of
    * these entries is an additional place the model may choose to run.
    */
   remoteRunners?: Array<{
+    runnerId: string;
+    description?: string;
     hostAlias: string;
     list: (signal?: AbortSignal) => Promise<RemoteWorkspaceFile[]>;
     sync: (input: {
@@ -586,17 +583,15 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
    * remote machine sees the same tool surface it always had, and no machine name
    * it is not allowed to use ever reaches the model.
    */
-  const remoteRunnerAliases = (options.remoteRunners ?? []).map((runner) => runner.hostAlias);
-  // The property is declared to the type system either way so `params.machine`
-  // stays `string | undefined`; when no remote machine is allowed the key is
-  // simply absent from the emitted schema, so the model is never offered one.
-  const machineParameter = (remoteRunnerAliases.length
-    ? {
-      machine: Type.Optional(Type.String({
-        description: `Where to run this: "local" (default, the machine running ScienceDiscovery) or one of ${remoteRunnerAliases.join(", ")}. A remote machine has its own persistent workspace, so local files are only there after sync_remote_workspace pushed them.`,
-      })),
-    }
-    : {}) as { machine: TOptional<TString> };
+  const runnerCatalog = [
+    { runnerId: "local", description: "Default local sandbox; current Agent workspace and installed local environments." },
+    ...(options.remoteRunners ?? []).map((runner) => ({ runnerId: runner.runnerId, description: runner.description || runner.hostAlias })),
+  ];
+  const machineParameter = {
+    runner_id: Type.Optional(Type.String({
+      description: `Sandboxed execution environment ID (default: local). Available Runners: ${JSON.stringify(runnerCatalog)}. Non-default Runners have independent workspaces; sync selected inputs explicitly.`,
+    })),
+  };
   const pythonParameters = Type.Object({
     code: Type.String({ minLength: 1 }),
     environmentRevisionId: Type.Optional(Type.String({ minLength: 1 })),
@@ -847,9 +842,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           params.kernelMode ?? "ephemeral",
           signal,
           toolCallId,
-          params.machine,
+          params.runner_id,
         )
-        : await options.executePython(params.code, signal, toolCallId, params.machine);
+        : await options.executePython(params.code, signal, toolCallId, params.runner_id);
       if (result.exitCode !== 0) {
         throw new Error(`Python exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
       }
@@ -872,8 +867,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       conflict: Type.Optional(Type.Union([Type.Literal("reject"), Type.Literal("overwrite")])),
       // One Session can be allowed to use several machines, and each has its own
       // workspace, so the transfer always names which one it means.
-      machine: Type.String({
-        description: `Remote machine to exchange files with: one of ${remoteRunnerAliases.join(", ")}.`,
+      runner_id: Type.String({
+        description: `Runner workspace to exchange files with: one of ${runners.map((runner) => runner.runnerId).join(", ")}.`,
         minLength: 1,
       }),
       operation: Type.Union([Type.Literal("list"), Type.Literal("pull"), Type.Literal("push")]),
@@ -884,13 +879,13 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     });
     const remoteWorkspace: AgentTool<typeof remoteWorkspaceParameters> = {
       description: [
-        `Explicitly exchange selected paths between the local Session workspace and the independent persistent workspace of an allowed remote machine (${remoteRunnerAliases.join(", ")}).`,
+        `Explicitly exchange selected paths between the local Session workspace and the independent persistent workspace of an allowed remote machine (${runners.map((runner) => runner.runnerId).join(", ")}).`,
         "Use list to inspect remote files. Use push only when remote execution needs local inputs; use pull only for outputs the user should receive locally.",
         "Nothing is mirrored automatically. Unpulled intermediate files remain remote. The default conflict policy rejects existing destination files; choose overwrite explicitly when intended.",
       ].join(" "),
       execute: async (_toolCallId, params, signal) => {
-        const runner = runners.find((candidate) => candidate.hostAlias === params.machine);
-        if (!runner) throw new Error(`This Session may not use ${params.machine}; allowed machines: ${remoteRunnerAliases.join(", ")}`);
+        const runner = runners.find((candidate) => candidate.runnerId === params.runner_id);
+        if (!runner) throw new Error(`This Session may not use ${params.runner_id}; allowed machines: ${runners.map((runner) => runner.runnerId).join(", ")}`);
         if (params.operation === "list") {
           const files = await runner.list(signal);
           return { content: [{ type: "text", text: JSON.stringify({ files }) }], details: { files } };
@@ -1371,39 +1366,6 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(traceProvenance);
   }
-  const readyRemoteHosts = (options.remoteHosts ?? []).filter((host) => host.status === "ready");
-  if (options.proposeRemoteJob && readyRemoteHosts.length) {
-    const hostLiterals = readyRemoteHosts.map((host) => Type.Literal(host.id));
-    const remoteJobParameters = Type.Object({
-      command: Type.String({ maxLength: 50_000, minLength: 1 }),
-      hostId: Type.Union(hostLiterals as [typeof hostLiterals[number], ...typeof hostLiterals]),
-      inputPaths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), { maxItems: 50 })),
-      mode: Type.Union([Type.Literal("ssh"), Type.Literal("slurm")]),
-      outputs: Type.Optional(Type.Array(Type.Object({
-        disposition: Type.Union([Type.Literal("pull"), Type.Literal("remote")]),
-        path: Type.String({ maxLength: 2_000, minLength: 1 }),
-      }), { maxItems: 20 })),
-      remoteWorkingDirectory: Type.String({ maxLength: 2_000, minLength: 1 }),
-      resources: Type.Object({
-        cpus: Type.Integer({ maximum: 1_024, minimum: 1 }),
-        gpus: Type.Integer({ maximum: 64, minimum: 0 }),
-        memoryMb: Type.Integer({ maximum: 16 * 1024 * 1024, minimum: 64 }),
-        partition: Type.Optional(Type.String({ maxLength: 80, minLength: 1 })),
-        walltimeMinutes: Type.Integer({ maximum: 7 * 24 * 60, minimum: 1 }),
-      }),
-    });
-    const proposeRemoteJob: AgentTool<typeof remoteJobParameters> = {
-      description: `${options.approvalMode === "always_allow" ? "Create and immediately submit" : "Create an independent approval card for"} an SSH or SLURM job. Remote paths are used in place; mark only small results as pull and large or sensitive outputs as remote. Available targets: ${readyRemoteHosts.map((host) => `${host.id} (${host.alias}, SLURM=${host.capabilities?.slurm ?? false})`).join("; ")}`,
-      execute: async (_toolCallId, params) => {
-        const job = await options.proposeRemoteJob!(params);
-        return { content: [{ type: "text", text: JSON.stringify(job) }], details: job };
-      },
-      label: "Propose remote job",
-      name: "propose_remote_job",
-      parameters: remoteJobParameters,
-    };
-    tools.push(proposeRemoteJob);
-  }
   if (options.executeShell) {
     const shellParameters = Type.Object({
       arguments: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 32 })),
@@ -1431,7 +1393,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             : shellQuote(script.path);
           code = ["/usr/bin/bash", scriptWord, ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
-        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal, toolCallId, params.machine);
+        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal, toolCallId, params.runner_id);
         if (result.exitCode !== 0) throw new Error(`Shell exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
         return {
           content: [{ type: "text", text: [
@@ -1450,7 +1412,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(runShell);
   }
-  if (options.executeScientific && options.environments) {
+  if (options.executeScientific && (options.environments || options.remoteRunners?.length)) {
     const rParameters = Type.Object({
       code: Type.String({ minLength: 1 }),
       environmentRevisionId: Type.Optional(Type.String({ minLength: 1 })),
@@ -1467,7 +1429,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           params.kernelMode ?? "ephemeral",
           signal,
           toolCallId,
-          params.machine,
+          params.runner_id,
         );
         if (result.exitCode !== 0) throw new Error(`R exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
         return {
@@ -1487,11 +1449,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(runR);
 
-    const environmentList: AgentTool<typeof emptyParameters> = {
+    const environmentListParameters = Type.Object({ ...machineParameter });
+    const environmentList: AgentTool<typeof environmentListParameters> = {
       description: "List the shared read-only base and named scientific environments with their current immutable revision IDs.",
       execute: async (_toolCallId, _params, signal) => {
         const environments = options.environmentManagement
-          ? await options.environmentManagement.list(signal)
+          ? await options.environmentManagement.list(signal, _params.runner_id)
           : options.environments!;
         return {
           content: [{ type: "text", text: JSON.stringify(environments, null, 2) }],
@@ -1500,7 +1463,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       },
       label: "List scientific environments",
       name: ENVIRONMENT_TOOL_NAMES.list,
-      parameters: emptyParameters,
+      parameters: environmentListParameters,
     };
     tools.push(environmentList);
 

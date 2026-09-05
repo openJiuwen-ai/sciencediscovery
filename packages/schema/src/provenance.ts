@@ -52,6 +52,8 @@ export interface ExecutionRun {
    * Session that is allowed to use remote machines.
    */
   remoteHostAlias?: string;
+  /** Stable selected Runner ID; absent on historical runs. */
+  runnerId?: string;
   /**
    * CAS reference to the canonical JSON snapshot (sorted keys) of the effective
    * process environment the runner reported for this execution. `null` when the

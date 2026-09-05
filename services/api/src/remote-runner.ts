@@ -20,8 +20,9 @@ import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencedi
 
 import type { SessionStore } from "./store.js";
 
-export function remoteWorkspaceKey(projectId: string, sessionId: string): string {
-  return `${projectId}/${sessionId}`;
+export function remoteWorkspaceKey(projectId: string, sessionId: string, namespace?: string, agentId?: string): string {
+  const root = `${projectId}/${sessionId}${namespace ? `/runners/${namespace}` : ""}`;
+  return agentId ? `${root}/agents/${agentId}` : root;
 }
 
 function selected(path: string, requestedPaths: string[]): boolean {
@@ -99,6 +100,9 @@ async function writableLocalWorkspaceFile(root: string, pathValue: string): Prom
 
 export async function syncRemoteWorkspace(options: {
   hostId: string;
+  /** Trusted control-plane ownership, never taken from model-supplied paths. */
+  agentId?: string;
+  workspaceRoot?: string;
   input: RemoteWorkspaceSyncRequest;
   runnerClient: RunnerClient;
   sessionId: string;
@@ -114,10 +118,10 @@ export async function syncRemoteWorkspace(options: {
   if (!Array.isArray(options.input.paths) || options.input.paths.length < 1 || options.input.paths.length > 50) {
     throw new Error("Sync requires 1-50 workspace-relative paths");
   }
-  const workspaceRoot = options.store.workspacePath(options.sessionId);
+  const workspaceRoot = options.workspaceRoot ?? options.store.workspacePath(options.sessionId);
   const requestedPaths = [...new Set(options.input.paths.map((path) =>
     normalizeWorkspaceRelativePath(workspaceRoot, path)))];
-  const workspaceKey = remoteWorkspaceKey(session.projectId, session.id);
+  const workspaceKey = remoteWorkspaceKey(session.projectId, session.id, options.store.getRemoteHost(options.hostId)?.workspaceNamespace, options.agentId);
   const startedAt = new Date().toISOString();
   let files: RemoteWorkspaceFile[] = [];
   try {
@@ -178,6 +182,7 @@ export async function syncRemoteWorkspace(options: {
       direction: options.input.direction,
       fileCount: files.length,
       hostId: options.hostId,
+      ...(options.agentId ? { agentId: options.agentId } : {}),
       id: randomUUID(),
       paths: requestedPaths,
       sessionId: options.sessionId,
@@ -193,6 +198,7 @@ export async function syncRemoteWorkspace(options: {
       error: error instanceof Error ? error.message : "Remote workspace sync failed",
       fileCount: 0,
       hostId: options.hostId,
+      ...(options.agentId ? { agentId: options.agentId } : {}),
       id: randomUUID(),
       paths: requestedPaths,
       sessionId: options.sessionId,

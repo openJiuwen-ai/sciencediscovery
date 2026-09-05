@@ -7,9 +7,12 @@ import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import test from "node:test";
 import { RemoteComputeClient, SshHostKeyUntrustedError, type RemoteSshAccess } from "@sciencediscovery/executor";
-import type { RemoteHostTarget } from "@sciencediscovery/schema";
+import type { RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
 import { createApiServer } from "./http/index.js";
 import type { ServerConfig } from "./bootstrap/config.js";
+import { startApprovedRemoteJob } from "./permissions/index.js";
+import type { SessionStore } from "./store.js";
+import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
 
 test("SSH settings preserve credentials and destination through persistence and trust retries", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `ssh-api-regression-${Date.now()}-${process.pid}`);
@@ -49,6 +52,38 @@ test("SSH settings preserve credentials and destination through persistence and 
     const response = await fetch(origin + path, { method, headers: { authorization: "Bearer test-token", "content-type": "application/json" }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() as T };
   }
+  await context.test("independent job submission and old approval endpoints are retired", async () => {
+    for (const suffix of ["", "/old-job/decision", "/old-job/refresh"]) {
+      const before = targets.length;
+      const result = await request(`/api/sessions/unused/remote-jobs${suffix}`, { command: "unsafe command", decision: "allow_once" });
+      assert.equal(result.status, 410);
+      assert.equal(targets.length, before);
+    }
+  });
+  await context.test("resolving a historical approval cannot restart bare SSH execution", async () => {
+    const job = { id: "historical-job", state: "approved" } as RemoteJob;
+    const result = await startApprovedRemoteJob(job, {
+      updateRemoteJob: async (updated: RemoteJob) => updated,
+    } as SessionStore, remoteCompute, {} as ProvenanceRecorder);
+    assert.equal(result.state, "failed");
+    assert.match(result.error!, /retired/);
+    assert.equal(targets.length, 0);
+  });
+  await context.test("parallel Runner identities on one host retain independent credentials and metadata", async () => {
+    const first = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "same-host", runnerName: "CPU environment", description: "Data preparation", username: "cpu", password: "cpu-secret", port: 2201 });
+    const second = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "same-host", runnerName: "GPU environment", description: "Model training", username: "gpu", password: "gpu-secret", port: 2202 });
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    assert.notEqual(first.body.id, second.body.id);
+    assert.notEqual(first.body.workspaceNamespace, second.body.workspaceNamespace);
+    const refreshed = await request<RemoteHostTarget>(`/api/remote-hosts/${second.body.id}/probe`, {});
+    assert.equal(refreshed.body.description, "Model training");
+    assert.equal(refreshed.body.id, second.body.id);
+    assert.equal(targets.at(-1)?.credentials.password, "gpu-secret");
+    await request(`/api/remote-hosts/${first.body.id}/probe`, {});
+    assert.equal(targets.at(-1)?.credentials.password, "cpu-secret");
+    assert.equal(targets.at(-1)?.port, 2201);
+  });
   let hostId: string;
   await context.test("port, password and passphrase survive registration, probe and credential updates", async () => {
     const added = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "port-host", port: 2222, username: "old", password: " password ", passphrase: " phrase " });

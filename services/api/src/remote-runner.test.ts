@@ -43,6 +43,21 @@ test("explicit remote workspace push and pull preserve independent files and rec
     { remoteRunnerHostIds: [host.id] },
     { allowUnconfiguredModel: true },
   );
+  const childRoot = resolve(store.workspacePath(session.id), "subagents", "child-a");
+  await mkdir(childRoot, { recursive: true });
+  const childKey = remoteWorkspaceKey(project.id, session.id, undefined, "child-a");
+  assert.notEqual(childKey, remoteWorkspaceKey(project.id, session.id, undefined, "child-b"));
+  const childRunner = {
+    listRemoteWorkspaceFiles: async (key: string) => {
+      assert.equal(key, childKey);
+      return [{ path: "child.txt", modifiedAt: new Date().toISOString(), size: 5 }];
+    },
+    readRemoteWorkspaceFile: async (key: string) => { assert.equal(key, childKey); return Buffer.from("child"); },
+  } as unknown as RunnerClient;
+  const childResult = await syncRemoteWorkspace({ hostId: host.id, input: { direction: "pull", paths: ["child.txt"] }, runnerClient: childRunner, sessionId: session.id, store, agentId: "child-a", workspaceRoot: childRoot });
+  assert.equal(childResult.record.agentId, "child-a");
+  assert.equal(await readFile(resolve(childRoot, "child.txt"), "utf8"), "child");
+  await assert.rejects(readFile(resolve(store.workspacePath(session.id), "child.txt")), { code: "ENOENT" });
   const workspaceRoot = store.workspacePath(session.id);
   await writeFile(resolve(workspaceRoot, "input.txt"), "local-input");
 
@@ -96,7 +111,7 @@ test("explicit remote workspace push and pull preserve independent files and rec
   });
   assert.deepEqual(pulled.files, ["results/output.txt"]);
   assert.equal(await readFile(resolve(workspaceRoot, "results", "output.txt"), "utf8"), "remote-output");
-  assert.deepEqual(store.listRemoteWorkspaceSyncs(session.id).map((record) => [record.direction, record.status]), [
+  assert.deepEqual(store.listRemoteWorkspaceSyncs(session.id).filter((record) => !record.agentId).map((record) => [record.direction, record.status]), [
     ["pull", "completed"],
     ["pull", "failed"],
     ["push", "completed"],

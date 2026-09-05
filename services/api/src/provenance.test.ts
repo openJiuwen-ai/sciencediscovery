@@ -926,6 +926,35 @@ test("recorder mirrors provenance addressing fields to the memory graph on shell
   }
 });
 
+
+test("pulled child Runner artifacts retain private paths and immutable versions", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `runner-child-versions-${process.pid}-${Date.now()}`);
+  context.after(() => rm(dataDir, { recursive: true, force: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Runner versions");
+  const session = await store.createSession(project.id, "Analysis", {}, {}, { allowUnconfiguredModel: true });
+  const root = resolve(store.workspacePath(session.id), "subagents", "child-a");
+  await mkdir(root, { recursive: true });
+  const recorder = new ProvenanceRecorder(dataDir, store);
+  const options = {
+    path: "result.txt", sourcePath: "subagents/child-a/result.txt",
+    logicalName: "subagents/child-a/result.txt", workspaceRoot: root, sessionId: session.id,
+    parentSubagentId: "child-a", turnId: "child-execution",
+    originMeta: { runnerId: "runner-1", agentId: "child-a", source: "runner_pull" },
+  };
+  await writeFile(resolve(root, "result.txt"), "first");
+  const first = await recorder.registerWorkspaceArtifact(options);
+  await writeFile(resolve(root, "result.txt"), "second");
+  const second = await recorder.registerWorkspaceArtifact(options);
+  assert.equal(first.artifact.id, second.artifact.id);
+  assert.notEqual(first.version.id, second.version.id);
+  assert.equal(store.listArtifactVersions(session.id, first.artifact.id).length, 2);
+  const history = store.getWorkspaceFileProvenance(session.id, options.sourcePath);
+  assert.ok(history);
+  assert.equal(store.getWorkspaceFileProvenance(session.id, "result.txt"), undefined);
+});
+
 test("a `./`-prefixed sourcePath still mirrors the artifact to the memory graph", async (context) => {
   // Regression: declareWorkspaceArtifact matched the artifact-derivation by
   // string equality `item.path === options.sourcePath`. The derivation path is

@@ -13,16 +13,12 @@
 // limitations under the License.
 
 import { randomBytes } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
 import { createServer, type Server, type Socket } from "node:net";
 
 import type {
   RemoteHostCapabilities,
   RemoteHostEndpoint,
   RemoteHostTarget,
-  RemoteJob,
-  RemoteJobOutputRecord,
   RemoteRunnerStatus,
 } from "@sciencediscovery/schema";
 import { RUNNER_BUNDLE_ENTRY, type RunnerBundle } from "./runner-bundle.js";
@@ -35,8 +31,6 @@ import {
   type SshSession,
   type SshTarget,
 } from "./ssh-connection.js";
-
-const MAX_PULLED_OUTPUT_BYTES = 1024 * 1024;
 
 export interface RemoteCommandResult {
   exitCode: number;
@@ -94,14 +88,6 @@ export function validateRunnerCommand(value: string): string {
   return command;
 }
 
-function validateRemotePath(path: string, label: string): string {
-  const normalized = path.trim();
-  if (!normalized.startsWith("/") || normalized.includes("\0") || normalized.includes("\n") || normalized.length > 2_000) {
-    throw new Error(`${label} must be an absolute remote POSIX path of at most 2000 characters`);
-  }
-  return normalized;
-}
-
 /** One connection per command: the product owns the client, so there is no agent or config to inherit. */
 export class NativeSshTransport implements RemoteTransport {
   async open(target: RemoteSshAccess): Promise<SshSession> {
@@ -129,7 +115,6 @@ printf 'conda='; if command -v conda >/dev/null 2>&1 || command -v micromamba >/
 printf 'modules='; if command -v module >/dev/null 2>&1 || command -v modulecmd >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi
 printf 'containers='; found=''; for runtime in apptainer singularity docker podman; do if command -v "$runtime" >/dev/null 2>&1; then found="\${found}\${found:+,}$runtime"; fi; done; printf '%s\n' "$found"
 printf 'scratch='; found=''; for path in /scratch /tmp "\${SCRATCH:-}"; do if [ -n "$path" ] && [ -d "$path" ] && [ -w "$path" ]; then found="\${found}\${found:+,}$path"; fi; done; printf '%s\n' "$found"
-printf 'sbatch='; if command -v sbatch >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi
 printf 'runner='; if command -v -- ${shellQuote(runnerCommand)} >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi
 printf 'node='; if command -v node >/dev/null 2>&1; then node --version 2>/dev/null || printf '\n'; else printf '\n'; fi
 `;
@@ -155,7 +140,7 @@ function parseProbe(stdout: string): RemoteHostCapabilities {
     probedAt: new Date().toISOString(),
     runnerCommandAvailable: values.get("runner") === "1",
     scratchPaths: [...new Set(values.get("scratch")?.split(",").filter(Boolean) ?? [])],
-    slurm: values.get("sbatch") === "1",
+    slurm: false, // Historical capability field; standalone SLURM jobs are no longer supported.
   };
 }
 
@@ -524,142 +509,4 @@ export class RemoteComputeClient {
     this.runnerConnections.clear();
   }
 
-  async start(job: RemoteJob, workspaceRoot: string): Promise<RemoteJob> {
-    const access = await this.resolveAccess(job.card.targetId);
-    const workingDirectory = validateRemotePath(job.card.remoteWorkingDirectory, "Remote working directory");
-    const now = new Date().toISOString();
-    if (job.card.mode === "slurm") {
-      const partition = job.card.resources.partition;
-      if (partition && !/^[A-Za-z0-9._-]{1,80}$/.test(partition)) throw new Error("SLURM partition contains unsupported characters");
-      const batch = [
-        "#!/bin/sh",
-        `#SBATCH --cpus-per-task=${job.card.resources.cpus}`,
-        `#SBATCH --mem=${job.card.resources.memoryMb}M`,
-        `#SBATCH --time=${Math.floor(job.card.resources.walltimeMinutes / 60).toString().padStart(2, "0")}:${(job.card.resources.walltimeMinutes % 60).toString().padStart(2, "0")}:00`,
-        ...(job.card.resources.gpus ? [`#SBATCH --gpus=${job.card.resources.gpus}`] : []),
-        ...(partition ? [`#SBATCH --partition=${partition}`] : []),
-        "set -eu",
-        `cd -- ${shellQuote(workingDirectory)}`,
-        job.card.command,
-        "",
-      ].join("\n");
-      const scriptReference = `${workingDirectory}/.sciencediscovery/jobs/${job.id}.sh`;
-      const encoded = Buffer.from(batch).toString("base64");
-      const submit = await this.transport.run(access, [
-        "set -eu",
-        `job_script=${shellQuote(scriptReference)}`,
-        `mkdir -p -- ${shellQuote(dirname(scriptReference))}`,
-        `printf '%s' ${shellQuote(encoded)} | base64 -d > "$job_script"`,
-        "chmod 700 \"$job_script\"",
-        "sbatch --parsable \"$job_script\"",
-        "",
-      ].join("\n"), 30_000);
-      if (submit.exitCode !== 0) throw new Error(`SLURM submission failed (${submit.exitCode}): ${submit.stderr.trim() || submit.stdout.trim()}`);
-      const remoteJobId = submit.stdout.trim().split(/[;\s]/)[0];
-      if (!remoteJobId || !/^\d+(?:_\d+)?$/.test(remoteJobId)) throw new Error("SLURM did not return a valid job id");
-      return {
-        ...job,
-        outputRecords: job.card.outputs.map((output) => ({
-          ...output,
-          status: output.disposition === "remote" ? "remote" : "pending",
-        })),
-        remoteJobId,
-        scriptReference,
-        startedAt: now,
-        state: "submitted",
-        stderr: submit.stderr.slice(0, 20_000),
-        stdout: submit.stdout.slice(0, 20_000),
-        updatedAt: now,
-      };
-    }
-
-    const run = await this.transport.run(
-      access,
-      `set -eu\ncd -- ${shellQuote(workingDirectory)}\n${job.card.command}\n`,
-      Math.min(job.card.resources.walltimeMinutes * 60_000, 24 * 60 * 60_000),
-    );
-    const outputRecords = await this.collectOutputs(job, access, workspaceRoot);
-    return {
-      ...job,
-      error: run.exitCode === 0 ? undefined : `Remote SSH command exited with ${run.exitCode}`,
-      finishedAt: new Date().toISOString(),
-      outputRecords,
-      scriptReference: `inline:${job.id}`,
-      startedAt: now,
-      state: run.exitCode === 0 ? "completed" : "failed",
-      stderr: run.stderr.slice(0, 20_000),
-      stdout: run.stdout.slice(0, 20_000),
-      updatedAt: new Date().toISOString(),
-    };
-  }
-
-  async refresh(job: RemoteJob, workspaceRoot: string): Promise<RemoteJob> {
-    if (job.card.mode !== "slurm" || !job.remoteJobId || !["submitted", "running"].includes(job.state)) return job;
-    const access = await this.resolveAccess(job.card.targetId);
-    const status = await this.transport.run(access, [
-      "set +e",
-      `job_id=${shellQuote(job.remoteJobId)}`,
-      "state=$(sacct -j \"$job_id\" --noheader --parsable2 --format=State 2>/dev/null | awk -F'|' 'NF {print $1; exit}')",
-      "if [ -z \"$state\" ]; then state=$(squeue -h -j \"$job_id\" -o '%T' 2>/dev/null | head -n 1); fi",
-      "printf '%s\\n' \"$state\"",
-      "",
-    ].join("\n"), 20_000);
-    if (status.exitCode !== 0) throw new Error(`Could not refresh SLURM job: ${status.stderr.trim()}`);
-    const remoteState = status.stdout.trim().split(/[+\s]/)[0]?.toLocaleUpperCase();
-    if (remoteState === "COMPLETED") {
-      return {
-        ...job,
-        finishedAt: new Date().toISOString(),
-        outputRecords: await this.collectOutputs(job, access, workspaceRoot),
-        state: "completed",
-        updatedAt: new Date().toISOString(),
-      };
-    }
-    if (["FAILED", "TIMEOUT", "CANCELLED", "NODE_FAIL", "OUT_OF_MEMORY"].includes(remoteState ?? "")) {
-      return { ...job, error: `SLURM job ended in ${remoteState}`, finishedAt: new Date().toISOString(), state: "failed", updatedAt: new Date().toISOString() };
-    }
-    return { ...job, state: remoteState === "RUNNING" ? "running" : "submitted", updatedAt: new Date().toISOString() };
-  }
-
-  private async collectOutputs(job: RemoteJob, access: RemoteSshAccess, workspaceRoot: string): Promise<RemoteJobOutputRecord[]> {
-    const records: RemoteJobOutputRecord[] = [];
-    for (const [index, output] of job.card.outputs.entries()) {
-      const path = validateRemotePath(output.path, "Remote output path");
-      if (output.disposition === "remote") {
-        records.push({ ...output, status: "remote" });
-        continue;
-      }
-      const result = await this.transport.run(access, [
-        "set -eu",
-        `path=${shellQuote(path)}`,
-        "if [ ! -f \"$path\" ]; then printf 'missing\\n'; exit 0; fi",
-        "size=$(wc -c < \"$path\" | tr -d ' ')",
-        `if [ "$size" -gt ${MAX_PULLED_OUTPUT_BYTES} ]; then printf 'remote|%s\\n' "$size"; exit 0; fi`,
-        "printf 'file|%s|' \"$size\"",
-        "base64 < \"$path\" | tr -d '\\n'",
-        "printf '\\n'",
-        "",
-      ].join("\n"), 20_000);
-      if (result.exitCode !== 0) throw new Error(`Could not inspect remote output ${path}: ${result.stderr.trim()}`);
-      const [kind, rawSize, encoded] = result.stdout.trim().split("|", 3);
-      const size = Number(rawSize);
-      if (kind === "missing") {
-        records.push({ ...output, status: "missing" });
-      } else if (kind === "remote" || !Number.isSafeInteger(size) || size > MAX_PULLED_OUTPUT_BYTES) {
-        records.push({ ...output, ...(Number.isSafeInteger(size) ? { size } : {}), status: "remote" });
-      } else if (kind === "file" && encoded !== undefined) {
-        const content = Buffer.from(encoded, "base64");
-        if (content.length !== size) throw new Error(`Remote output size changed while pulling ${path}`);
-        const safeName = basename(path).replaceAll(/[^A-Za-z0-9._-]/g, "_") || `output-${index}`;
-        const localPath = `remote-outputs/${job.id}/${index}-${safeName}`;
-        const target = resolve(workspaceRoot, localPath);
-        await mkdir(dirname(target), { recursive: true });
-        await writeFile(target, content);
-        records.push({ ...output, localPath, size, status: "available" });
-      } else {
-        records.push({ ...output, status: "missing" });
-      }
-    }
-    return records;
-  }
 }

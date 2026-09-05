@@ -87,6 +87,11 @@ export interface RemoteHostEndpoint {
 }
 
 export interface RemoteHostTarget {
+  /** Stable execution environment name and purpose, independent of its SSH address. */
+  runnerName?: string;
+  description?: string;
+  /** New environments isolate their workspace by runner ID; older ones retain their paths. */
+  workspaceNamespace?: string;
   /**
    * For `ssh` hosts this is what the user typed: an SSH config alias, a
    * hostname, or an IP address — the product does not distinguish them and
@@ -191,6 +196,10 @@ export interface RemoteJob {
 }
 
 export interface RegisterRemoteHostRequest {
+  /** Existing runner ID for an explicit update; absent creates a named environment. */
+  id?: string;
+  runnerName?: string;
+  description?: string;
   /** SSH alias, hostname or IP address; or the display label of a self-deployed runner. */
   alias: string;
   connectionKind?: RemoteHostConnectionKind;
@@ -256,6 +265,8 @@ export interface RemoteWorkspaceSyncRequest {
 }
 
 export interface RemoteWorkspaceSyncRecord {
+  /** Owner of a child workspace, absent for the main Agent. */
+  agentId?: string;
   bytes: number;
   createdAt: string;
   direction: RemoteWorkspaceSyncDirection;

@@ -127,6 +127,7 @@ export interface RecordExecutionOptions {
   skillPackagesRoot?: string;
   /** Alias of the remote machine this execution runs on; absent means the local machine. */
   remoteHostAlias?: string;
+  runnerId?: string;
   /** Logical runner-local workspace. When set, generated files remain remote until explicit pull. */
   runnerWorkspaceKey?: string;
   runnerClient: RunnerClient;
@@ -504,7 +505,7 @@ export class ProvenanceRecorder {
         networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
-      ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
+        ...(options.runnerId ? { runnerId: options.runnerId } : {}),
         runnerVersion: "unavailable",
         sandbox,
         sessionId: options.sessionId,
@@ -540,6 +541,7 @@ export class ProvenanceRecorder {
       networkPolicy: result.networkPolicy,
       permissionEpochId: options.permissionEpoch.id,
       ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
+      ...(options.runnerId ? { runnerId: options.runnerId } : {}),
       runnerVersion: result.runnerVersion,
       sandbox: result.sandbox,
       sessionId: options.sessionId,
@@ -645,7 +647,7 @@ export class ProvenanceRecorder {
         networkPolicy: options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
-      ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
+        ...(options.runnerId ? { runnerId: options.runnerId } : {}),
         runnerVersion: "unavailable",
         sandbox,
         sessionId: options.sessionId,
@@ -700,6 +702,7 @@ export class ProvenanceRecorder {
       networkPolicy: result.networkPolicy,
       permissionEpochId: options.permissionEpoch.id,
       ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
+      ...(options.runnerId ? { runnerId: options.runnerId } : {}),
       runnerVersion: result.runnerVersion,
       sandbox: result.sandbox,
       sessionId: options.sessionId,

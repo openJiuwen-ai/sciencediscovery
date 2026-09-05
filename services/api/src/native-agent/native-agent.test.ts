@@ -133,6 +133,39 @@ test("loop streams a tool round trip and returns wire-format final messages", as
   }
 });
 
+
+test("main and child native Agents receive Runner IDs, descriptions and explicit sync tools", async (context) => {
+  for (const child of [false, true]) {
+    const seen: Array<string | undefined> = [];
+    const { streamer } = scriptStreamer([
+      (call) => {
+        assert.match(call.systemPrompt, /runner-gpu: GPU analysis/);
+        assert.equal(call.tools.some((tool) => tool.name === "propose_remote_job"), false);
+        assert.ok(call.tools.some((tool) => tool.name === "sync_remote_workspace"));
+        assert.match(JSON.stringify(call.tools), /runner_id/);
+        return toolTurn("run_python", { code: "print(42)", runner_id: "runner-gpu" });
+      },
+      () => textTurn("done"),
+    ]);
+    const restore = setModelTurnStreamerForTest(streamer);
+    const base = workspace();
+    context.after(() => import("node:fs/promises").then(({ rm }) => rm(base.workspaceRoot, { recursive: true, force: true })));
+    try {
+      const agent = createNativeAgent({
+        ...base,
+        ...(child ? { subagent: { name: "analysis", instructions: "Analyze in your own workspace" } } : {}),
+        executePython: async (_code, _signal, _toolCallId, runnerId) => {
+          seen.push(runnerId);
+          return { createdFiles: [], exitCode: 0, stderr: "", stdout: "42" } as never;
+        },
+        remoteRunners: [{ runnerId: "runner-gpu", hostAlias: "host", description: "GPU analysis", list: async () => [], sync: async () => { throw new Error("unused"); } }],
+      });
+      await agent.execute("Use the GPU Runner");
+      assert.deepEqual(seen, ["runner-gpu"]);
+    } finally { restore(); }
+  }
+});
+
 test("ordinary tools are available on the first model step without a mode activation handshake", async () => {
   const { calls, streamer } = scriptStreamer([
     (call) => {

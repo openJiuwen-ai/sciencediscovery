@@ -263,7 +263,7 @@ class NativeAgent implements NativeAgentHandle {
     const governance = {
       ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
       ...(options.memoryGraphEnabled ? { memoryGraphEnabled: options.memoryGraphEnabled } : {}),
-      ...(options.remoteHosts ? { remoteHosts: options.remoteHosts } : {}),
+      ...(options.remoteRunners?.length ? { remoteRunners: options.remoteRunners.map((runner) => `${runner.runnerId}: ${runner.description || runner.hostAlias}`) } : {}),
       ...(options.specialist ? { specialist: options.specialist } : {}),
       ...(options.specialists?.filter((specialist) => specialist.builtIn).length
         ? { builtinSpecialists: options.specialists!.filter((specialist) => specialist.builtIn).map((specialist) => ({ description: specialist.description, name: specialist.name })) }
@@ -658,8 +658,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.reviewCheckpoint ? { reviewCheckpoint: options.reviewCheckpoint } : {}),
     ...(options.proposeSkillLibraryUpdate ? { proposeSkillLibraryUpdate: options.proposeSkillLibraryUpdate } : {}),
     ...(options.publishSkillLibraryUpdate ? { publishSkillLibraryUpdate: options.publishSkillLibraryUpdate } : {}),
-    ...(options.proposeRemoteJob ? { proposeRemoteJob: options.proposeRemoteJob } : {}),
-    remoteHosts: options.remoteHosts ?? [],
+    ...(options.remoteRunners ? { remoteRunners: options.remoteRunners } : {}),
     skills: options.skills ?? [],
     specialists: options.specialists ?? [],
     toolPolicy: options.toolPolicy,

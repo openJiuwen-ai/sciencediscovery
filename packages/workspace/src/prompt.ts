@@ -15,7 +15,6 @@
 import type {
   ConnectorId,
   CreateSkillPackageRequest,
-  CreateRemoteJobRequest,
   DeclareClaimInput,
   DeclareClaimResult,
   DeclareEvidenceInput,
@@ -24,8 +23,6 @@ import type {
   SubagentInput,
   Environment,
   KernelMode,
-  RemoteHostTarget,
-  RemoteJob,
   ScientificExecutionResult,
   ScientificLanguage,
   SkillResource,
@@ -41,7 +38,7 @@ import type { ToolFilterPolicy, WorkspaceToolOptions } from "./workspace.js";
 // results) survive replay; the prompt layer only forwards them to the runtime.
 type AgentHistoryMessage = Record<string, unknown> & { role?: string };
 
-export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.5";
+export const WORKSPACE_SYSTEM_PROMPT_VERSION = "m8.1.6";
 // Bump when the workspace prompt contract changes, including subagent orchestration or skill disclosure rules.
 export const WORKSPACE_SYSTEM_PROMPT = [
   "You are a local science analysis agent.",
@@ -206,7 +203,6 @@ export interface WorkspacePromptGovernance {
   memoryGraphEnabled?: boolean;
   /** Remote machines this Session may use; local execution is always available too. */
   remoteRunners?: string[];
-  remoteHosts?: RemoteHostTarget[];
   specialist?: { description: string; instructions: string; name: string };
   builtinSpecialists?: Array<{ description: string; name: string }>;
   subagent?: { instructions: string; name: string };
@@ -232,6 +228,7 @@ function buildWorkspacePromptValues(
 ): string[] {
   return [
     WORKSPACE_SYSTEM_PROMPT,
+    'Runner local: default local sandbox and this Agent workspace. Execute Shell/Python/R only through Runner tools. Independent SSH/SLURM jobs are not supported.',
     scientificEnvsAvailable
       ? "\nManaged scientific environments are available. Use environment_list/environment_create/environment_delete/environment_install/environment_uninstall for governed environment changes; environment_install supports conda specs and, for Python, pip PyPI specs or current-workspace relative wheel files. Its optional pip indexUrl is the safe equivalent of --index-url for a one-time source override; otherwise the configured global conda or pip source is used. Never run conda, mamba, micromamba, or pip directly to mutate managed prefixes. The shared base is read-only, so clone a named environment before changing packages. R is installed on demand when an R environment is explicitly created. Persistent kernels retain variables only within the same Session, Permission Epoch, language, and Environment Revision."
       : "\nManaged scientific environments are unavailable. Use only ephemeral run_python without an environment selection.",
@@ -253,11 +250,8 @@ function buildWorkspacePromptValues(
           : ""
       }`
       : "",
-    governance?.remoteHosts?.length
-      ? `\nRemote compute is available through these user-controlled SSH targets: ${governance.remoteHosts.map((host) => `${host.id} (${host.alias}, SLURM=${host.capabilities?.slurm ?? false})`).join("; ")}. Remote datasets should stay at their existing absolute paths. Calling propose_remote_job creates an immutable job card.${governance.approvalMode === "always_allow" ? " The current approval policy submits it without a prompt." : " Dangerous remote jobs pause until the user reviews their independent permission card."}`
-      : "",
     governance?.remoteRunners?.length
-      ? `\nThis Session may also run on these remote machines: ${governance.remoteRunners.map(escapePromptTagText).join(", ")}. This machine remains the default: run code here unless the work needs the remote machine's data, scale, or hardware, and keep ordinary workspace file reads and writes local. To use one, pass its name as the machine parameter of run_python, run_r or run_shell. Each remote machine has its own independent persistent workspace, so local workspace file tools do not see remote-only files. Use sync_remote_workspace explicitly to list, push inputs, or pull selected outputs. Never assume files are mirrored; only pulled files can be declared as local Project artifacts.`
+      ? `\nAvailable additional sandboxed Runners (ID and description): ${governance.remoteRunners.map(escapePromptTagText).join(", ")}. This machine remains the default: run code here unless the work needs the remote machine's data, scale, or hardware, and keep ordinary workspace file reads and writes local. To use one, pass its ID as the runner_id parameter of run_python, run_r or run_shell. Each remote machine has its own independent persistent workspace, so local workspace file tools do not see remote-only files. Use sync_remote_workspace explicitly to list, push inputs, or pull selected outputs. Never assume files are mirrored; only pulled files can be declared as local Project artifacts.`
       : "",
     buildSkillSystemSection(skills),
     ...(governance?.memoryGraphEnabled
@@ -299,6 +293,7 @@ export function buildWorkspaceSystemPrompt(
 }
 
 export interface WorkspaceAgentOptions {
+  remoteRunners?: WorkspaceToolOptions["remoteRunners"];
   config: AgentConfig;
   createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
   enabledConnectorIds: ConnectorId[];
@@ -358,8 +353,6 @@ export interface WorkspaceAgentOptions {
   publishSkillLibraryUpdate?: WorkspaceToolOptions["publishSkillLibraryUpdate"];
   /** Trace provenance chain + broken signal (`trace_provenance` tool). */
   traceProvenance?: WorkspaceToolOptions["traceProvenance"];
-  proposeRemoteJob?: (input: CreateRemoteJobRequest) => Promise<RemoteJob>;
-  remoteHosts?: RemoteHostTarget[];
   skills?: RuntimeSkill[];
   specialist?: { description: string; instructions: string; name: string };
   specialists?: WorkspaceToolOptions["specialists"];
