@@ -387,6 +387,11 @@ stages:
               export CI_RESULTS_DIR="$PWD/.ci-results"
               export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
               export CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME=300
+              # Stop the guest well inside this job's 30-minute budget. If
+              # CodeArts kills the job first, no exit code is recorded, the log
+              # is never uploaded and the result jobs never run, so the merge
+              # request is left reporting a pipeline that is still running.
+              export QEMU_TIMEOUT_SECONDS=1500
               RESULT_DIR=.ci-results/ut-guest
               mkdir -p "$RESULT_DIR"
               set +e
@@ -556,6 +561,9 @@ stages:
               export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
               export CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME=300
+              # Same reason as the UT guest tier, inside this job's 120-minute
+              # budget: a guest killed by CodeArts leaves no result behind.
+              export QEMU_TIMEOUT_SECONDS=6300
               RESULT_DIR=.ci-results/e2e
               mkdir -p "$RESULT_DIR"
               set +e

@@ -112,6 +112,28 @@ test("both guest jobs install and build on their CodeArts host first", async () 
   assert.match(e2e, /bash \.ci\/run-qemu-layer\.sh e2e/);
 });
 
+test("each guest job stops its guest before CodeArts stops the job", async () => {
+  const workflow = await readFile(
+    resolve(ciDirectory, "..", ".codearts", "workflow", "codearts-pipeline.yml"),
+    "utf8",
+  );
+  for (const name of ["ut_guest", "e2e"]) {
+    const match = new RegExp(`\\n      ${name}:\\n([\\s\\S]*?)(?=\\n      [a-z_]+:\\n|$)`).exec(workflow);
+    assert.ok(match, `job ${name} is missing from the workflow`);
+    const jobTimeoutMinutes = Number(/\n\s+timeout: (\d+)\n/.exec(match[1])?.[1]);
+    const guestTimeoutSeconds = Number(/QEMU_TIMEOUT_SECONDS=(\d+)/.exec(match[1])?.[1]);
+    assert.ok(Number.isFinite(jobTimeoutMinutes), `${name} has no job timeout`);
+    assert.ok(Number.isFinite(guestTimeoutSeconds), `${name} does not bound its guest`);
+    // A guest that CodeArts kills records no exit code, uploads no log and
+    // never reaches its result step, which leaves the merge request reporting
+    // a pipeline that is still running.
+    assert.ok(
+      guestTimeoutSeconds < jobTimeoutMinutes * 60,
+      `${name} gives its guest ${guestTimeoutSeconds}s inside a ${jobTimeoutMinutes}-minute job`,
+    );
+  }
+});
+
 test("the packer refuses to build a payload without a dependency tree", async (t) => {
   await mkdir(testRoot, { recursive: true });
   const root = await mkdtemp(join(testRoot, "pack-workspace-"));
