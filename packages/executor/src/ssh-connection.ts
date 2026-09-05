@@ -108,6 +108,60 @@ function validateCredentials(credentials: SshCredentials): void {
   }
 }
 
+/** Protocol diagnostics must never retain credential payloads or debug logs. */
+class AuthenticationDiagnostics {
+  private offered: string[] | null = null;
+  private readonly attempted: string[] = [];
+  private banner = "";
+
+  constructor(private readonly target: SshTarget) {}
+
+  private safe(text: string, limit = 300): string {
+    for (const secret of [this.target.credentials.password, this.target.credentials.privateKey, this.target.credentials.passphrase]) {
+      if (secret) {
+        text = text.split(secret).join("[redacted]");
+        if (secret.trim()) text = text.split(secret.trim()).join("[redacted]");
+      }
+    }
+    return text
+      .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g, "[redacted key]")
+      .replace(/\b(password|passphrase|token|secret)\s*[:=]\s*\S+/gi, "$1=[redacted]")
+      .replace(/[A-Za-z0-9+/=_-]{48,}/g, "[redacted opaque value]")
+      .replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, " ")
+      .slice(0, limit);
+  }
+
+  setBanner(message: string): void { this.banner = this.safe(message); }
+
+  next(methods: string[] | null): string | false {
+    if (methods !== null) this.offered = methods;
+    // Discover server methods first; only try supported methods with available credentials.
+    const candidates = methods === null ? ["none"] : [
+      ...(this.target.credentials.password ? ["password"] : []),
+      ...(this.target.credentials.privateKey ? ["publickey"] : []),
+      ...(this.target.credentials.password ? ["keyboard-interactive"] : []),
+    ];
+    const method = candidates.find((candidate) => !this.attempted.includes(candidate)
+      && (methods === null || methods.includes(candidate)));
+    if (!method) return false;
+    this.attempted.push(method);
+    return method;
+  }
+
+  error(reason = "The server did not accept authentication. Check the credentials and the server's account/login policy.", prompt?: string): Error {
+    const host = this.target.destination.includes(":") ? `[${this.target.destination}]` : this.target.destination;
+    return new Error([
+      `SSH authentication failed for ${this.safe(this.target.credentials.username.trim(), 128)}@${this.safe(host, 200)}:${this.target.port ?? 22}.`,
+      `Server offered: ${this.offered === null ? "unknown (no method list received)" : this.safe(this.offered.join(", ")) || "none"}.`,
+      `Actually tried: ${this.attempted.join(", ") || "none"} (none is method discovery).`,
+      `Stored credentials: password ${this.target.credentials.password ? "yes" : "no"}; key ${this.target.credentials.privateKey ? "yes" : "no"}.`,
+      reason,
+      ...(this.banner ? [`Server banner: ${this.banner}`] : []),
+      ...(prompt ? [`Server prompt: ${this.safe(prompt)}`] : []),
+    ].join("\n"));
+  }
+}
+
 /**
  * What the rest of the product needs from a live SSH connection. Naming it
  * keeps the tunnel testable: a test can supply a session instead of a server.
@@ -143,21 +197,42 @@ export class SshConnection implements SshSession {
   static async open(target: SshTarget): Promise<SshConnection> {
     validateCredentials(target.credentials);
     const client = new Client();
+    const authentication = new AuthenticationDiagnostics(target);
     return await new Promise<SshConnection>((resolveOpen, reject) => {
       let untrusted: SshHostKeyChallenge | undefined;
+      let settled = false;
       const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
         client.end();
         // A refused host key surfaces as a plain connection error, so the
         // verifier's finding is what the caller is told about.
-        reject(untrusted ? new SshHostKeyUntrustedError(untrusted, target.destination) : error);
+        reject(untrusted ? new SshHostKeyUntrustedError(untrusted, target.destination)
+          : (error as Error & { level?: string }).level === "client-authentication" ? authentication.error() : error);
       };
-      client.once("error", fail);
+      // Retain the listener for late errors after an explicit authentication rejection.
+      client.on("error", fail);
+      client.on("banner", (message: string) => authentication.setBanner(message));
+      client.on("change password", (prompt: string) => fail(authentication.error(
+        "The server requires a password change. Change it through an administrator-approved login, then update the saved credentials and retry.", prompt,
+      )));
+      client.on("keyboard-interactive", (_name, _instructions, _language, prompts, finish) => {
+        if (!target.credentials.password || prompts.some((prompt) => prompt.echo)) {
+          fail(authentication.error("The server requested an interactive challenge that cannot be answered with the saved password."));
+          return;
+        }
+        finish(prompts.map(() => target.credentials.password!));
+      });
       client.once("ready", () => {
+        if (settled) { client.end(); return; }
+        settled = true;
         const connection = new SshConnection(client, target);
         client.removeListener("error", fail);
         resolveOpen(connection);
       });
       client.connect({
+        authHandler: (methods) => authentication.next(methods),
+        tryKeyboard: Boolean(target.credentials.password),
         host: target.destination,
         ...(target.port === undefined ? {} : { port: target.port }),
         username: target.credentials.username.trim(),

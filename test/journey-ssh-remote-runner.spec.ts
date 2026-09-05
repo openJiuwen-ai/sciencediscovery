@@ -72,6 +72,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     remoteRunnerHostIds: [],
     settingsOverrides: {},
   };
+  const authenticationError = "SSH authentication failed for operator@ssh.example.test:22.\nServer offered: publickey, password.\nActually tried: none, password, publickey (none is method discovery).\nStored credentials: password yes; key yes.\nThe server did not accept authentication. Check the credentials and the server\'s account/login policy.";
   const hostId = "e2e-linux-runner";
   let connected = false;
   let directHost: RemoteHostTarget | undefined;
@@ -227,7 +228,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     registeredSshHost = {
       ...registeredSshHost!,
       capabilities: undefined,
-      error: "All configured authentication methods failed",
+      error: authenticationError,
       hasPassword: true,
       hasPrivateKey: true,
       status: "error",
@@ -447,7 +448,10 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         expect(savedCredentials.privateKeyPath).toBe("~/.ssh/updated_ed25519");
         expect("privateKey" in savedCredentials).toBe(false);
         await expect(card.getByLabel("Username")).toHaveCount(0);
-        await expect(card).toContainText("All configured authentication methods failed");
+        await expect(card.getByRole("alert")).toHaveText(authenticationError);
+        await expect(card.getByRole("alert")).toBeVisible();
+        await expect(card.getByRole("alert")).toHaveCSS("white-space", "pre-wrap");
+        await expect(card.getByRole("alert")).toHaveCSS("text-overflow", "clip");
         await expect(card).toContainText("user operator · password stored · key stored");
         await expect(card).not.toContainText("cannot deploy: no runner and no Node.js 22+ found");
         await card.scrollIntoViewIfNeeded();
@@ -460,7 +464,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         // Dismiss the acknowledged error from the preceding SSH scenario.
-        const priorError = dialog.getByRole("alert").filter({ hasText: "All configured authentication methods failed" });
+        const priorError = dialog.getByRole("alert").filter({ hasText: "SSH authentication failed" }).filter({ has: page.getByRole("button") });
         if (await priorError.count()) await priorError.getByRole("button").click();
         await dialog.getByRole("button", { name: "Add self-deployed runner" }).click();
         await dialog.getByLabel("Name", { exact: true }).fill("lab-workstation");

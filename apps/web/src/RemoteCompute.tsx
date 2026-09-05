@@ -44,7 +44,7 @@ export function effectiveRemoteRunnerHostIds(project: Project | undefined, sessi
 
 function capacity(host: RemoteHostTarget): string {
   const capabilities = host.capabilities;
-  if (host.error) return host.error;
+  if (host.error) return "Probe failed";
   if (!capabilities) return "Probe unavailable";
   if (host.connectionKind === "direct") {
     return `${host.endpoint?.protocol ?? "http"}://${host.endpoint?.host ?? "?"}:${host.endpoint?.port ?? "?"} · token authenticated`;
@@ -525,7 +525,6 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
               ? <small>{[host.capabilities.platform ?? "OS unknown", source].filter(Boolean).join(" · ")}</small>
               : null}
           {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
-          {host.runnerStatus?.error ? <small>{host.runnerStatus.error}</small> : null}
           {storedCredentials ? <small>{storedCredentials}</small> : null}
           {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
           {publicKey ? <div className="remote-host-pubkey-line"><code title={publicKey}>{publicKey}</code><CopyButton getText={() => publicKey} label="Copy public key" /></div> : null}
@@ -537,6 +536,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
           {untrustedKey ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => setHostKeyPrompt({ changed: false, hostKey: untrustedKey, origin: host.id, target: host.alias, resume: async () => { setHostKeyPrompt(undefined); await probe(host, untrustedKey); } })} type="button">Trust host key</button> : null}
           <button className="danger-button" disabled={Boolean(busyId)} onClick={() => void removeHost(host)} type="button">Delete</button>
         </div>
+        {[...new Set([host.error, host.runnerStatus?.error].filter(Boolean))].map((error) =>
+          <div className="remote-host-error" role="alert" key={error}>{error}</div>)}
         {renderHostKeyPrompt(host.id)}
         {editingCredentials === host.id ? credentialsEditor(host) : null}
       </article>;

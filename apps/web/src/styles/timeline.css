@@ -159,6 +159,7 @@
 .remote-host-card-main { display: grid; flex: 1 1 300px; gap: 4px; min-width: 0; }
 .remote-host-card-title { display: flex; align-items: center; gap: 8px; }
 .remote-host-card small { color: var(--muted); }
+.remote-host-error { flex-basis: 100%; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--danger, #b42318); }
 .remote-host-status { border-radius: 999px; padding: 3px 8px; background: var(--surface-soft); color: var(--muted); font-size: 10px; text-transform: uppercase; }
 .remote-host-status.ready { background: var(--success-soft); color: var(--success); }
 .remote-host-status.error { background: var(--danger-soft); color: var(--danger); }

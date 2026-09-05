@@ -91,14 +91,18 @@ test("an SSH authentication failure does not invent missing runner or Node capab
   const editStates: boolean[] = [];
   const { output, renderer } = await renderHost(buildHost({
     capabilities: undefined,
-    error: "All configured authentication methods failed",
+    error: "SSH authentication failed for scientist@research-node:2222.\nServer offered: publickey, password.\nActually tried: none, password, publickey.\nStored credentials: password yes; key yes.",
     hasPassword: true,
     hasPrivateKey: true,
     status: "error",
     username: "scientist",
   }), (editing) => editStates.push(editing));
 
-  assert.match(output, /All configured authentication methods failed/);
+  const alert = renderer.root.findByProps({ role: "alert" });
+  assert.match(alert.children.join(""), /scientist@research-node:2222/);
+  assert.match(alert.children.join(""), /Server offered: publickey, password/);
+  assert.match(alert.children.join(""), /Actually tried: none, password, publickey/);
+  assert.equal(renderer.root.findAllByType("small").some((node) => node.children.join("").includes("SSH authentication failed")), false);
   assert.match(output, /user scientist · password stored · key stored/);
   assert.doesNotMatch(output, /cannot deploy: no runner and no Node\.js 22\+ found/);
   assert.doesNotMatch(output, /OS unknown/);

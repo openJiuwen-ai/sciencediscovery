@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
@@ -18,11 +19,13 @@ test("SSH settings preserve credentials and destination through persistence and 
   const root = resolve(process.cwd(), ".tmp", `ssh-api-regression-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   const targets: RemoteSshAccess[] = [];
+  const authenticationError = "SSH authentication failed for operator@auth-host:2222.\nServer offered: publickey, password.\nActually tried: none, password (none is method discovery).\nStored credentials: password yes; key no.";
   const challenge = { algorithm: "ssh-ed25519", fingerprint: `SHA256:${"a".repeat(43)}`, changed: false };
   const remoteCompute = new RemoteComputeClient(resolve(root, "ssh-config"), async () => { throw new Error("Explicit access required"); }, {
     open: async () => { throw new Error("No real SSH in this test"); },
     run: async (target) => {
       targets.push(structuredClone(target));
+      if (target.destination === "auth-host") throw new Error(authenticationError);
       if (target.destination === "generated-host" && !target.trustedHostKey) {
         throw new SshHostKeyUntrustedError(challenge, target.destination);
       }
@@ -60,14 +63,30 @@ test("SSH settings preserve credentials and destination through persistence and 
       assert.equal(targets.length, before);
     }
   });
+  await context.test("method-level authentication diagnostics persist on credential save and subsequent reads", async () => {
+    const password = randomBytes(24).toString("hex");
+    const added = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "auth-host", port: 2222, username: "operator", password });
+    assert.equal(added.status, 201);
+    const updated = await request<RemoteHostTarget>(`/api/remote-hosts/${added.body.id}/credentials`, { username: "operator", password }, "PUT");
+    assert.equal(updated.status, 200);
+    assert.equal(updated.body.error, authenticationError);
+    assert.equal(updated.body.hasPassword, true);
+    assert.equal(updated.body.hasPrivateKey, false);
+    assert.ok(targets.at(-1)?.credentials.password === password);
+    const list = await fetch(origin + "/api/remote-hosts", { headers: { authorization: "Bearer test-token" } });
+    const hosts = await list.json() as RemoteHostTarget[];
+    assert.equal(hosts.find((host) => host.id === added.body.id)?.error, authenticationError);
+    assert.ok(!JSON.stringify(hosts).includes(password), "host responses never contain stored passwords");
+  });
   await context.test("resolving a historical approval cannot restart bare SSH execution", async () => {
+    const before = targets.length;
     const job = { id: "historical-job", state: "approved" } as RemoteJob;
     const result = await startApprovedRemoteJob(job, {
       updateRemoteJob: async (updated: RemoteJob) => updated,
     } as SessionStore, remoteCompute, {} as ProvenanceRecorder);
     assert.equal(result.state, "failed");
     assert.match(result.error!, /retired/);
-    assert.equal(targets.length, 0);
+    assert.equal(targets.length, before);
   });
   await context.test("parallel Runner identities on one host retain independent credentials and metadata", async () => {
     const first = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "same-host", runnerName: "CPU environment", description: "Data preparation", username: "cpu", password: "cpu-secret", port: 2201 });

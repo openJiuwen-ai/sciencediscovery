@@ -2,10 +2,94 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 import ssh2 from "ssh2";
 
-import { SshConnection } from "./ssh-connection.js";
+import { hostKeyFingerprint, SshConnection, SshHostKeyUntrustedError, type SshCredentials } from "./ssh-connection.js";
+
+test("authentication diagnostics reflect actual SSH protocol exchanges without exposing credentials", async (context) => {
+  const hostKeys = ssh2.utils.generateKeyPairSync("ed25519");
+  const parsed = ssh2.utils.parseKey(hostKeys.private);
+  assert.ok(!(parsed instanceof Error) && !Array.isArray(parsed));
+  const trustedHostKey = { algorithm: "ssh-ed25519", fingerprint: hostKeyFingerprint(parsed.getPublicSSH()) };
+  const password = ` ${randomBytes(24).toString("hex")} `;
+  const privateKey = ssh2.utils.generateKeyPairSync("ed25519").private;
+  const passphrase = randomBytes(24).toString("hex");
+  const credentials: SshCredentials = { username: "operator", password, privateKey, passphrase };
+
+  for (const scenario of ["password rejected", "key rejected", "interactive accepted", "interactive rejected", "password change", "untrusted key"] as const) {
+    await context.test(scenario, { timeout: 5_000 }, async (t) => {
+      const attempts: string[] = [];
+      const connections = new Set<ssh2.Connection>();
+      const offered: ssh2.AuthenticationType[] = scenario === "key rejected" ? ["publickey"] : scenario.startsWith("interactive") ? ["keyboard-interactive"] : ["publickey", "password"];
+      const server = new ssh2.Server({
+        hostKeys: [hostKeys.private],
+        banner: `Authorized users only. password=${password.trim()} token=${randomBytes(24).toString("hex")} ${privateKey} ${passphrase} ${"notice ".repeat(100)}`,
+      }, (connection) => {
+        connections.add(connection);
+        connection.on("error", () => undefined);
+        connection.on("close", () => connections.delete(connection));
+        connection.on("authentication", (auth) => {
+          attempts.push(auth.method);
+          assert.equal(auth.username, "operator");
+          if (auth.method === "password") {
+            assert.ok(auth.password === password, "password bytes are preserved");
+            if (scenario === "password change") {
+              auth.requestChange(`Password expired; ${password} ${passphrase}`, () => assert.fail("must not change password automatically"));
+              return;
+            }
+          }
+          if (auth.method === "keyboard-interactive") {
+            auth.prompt([{ prompt: "Password:", echo: false }], (answers) => {
+              assert.ok(answers.length === 1 && answers[0] === password, "interactive answer preserves saved password");
+              if (scenario === "interactive accepted") auth.accept();
+              else auth.reject(offered);
+            });
+            return;
+          }
+          auth.reject(offered);
+        });
+      });
+      await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+      t.after(async () => {
+        for (const connection of connections) connection.end();
+        await new Promise<void>((done) => server.close(() => done()));
+      });
+      const port = (server.address() as AddressInfo).port;
+      const target = {
+        destination: "127.0.0.1", port,
+        credentials: scenario === "key rejected" ? { username: credentials.username, privateKey } : { username: credentials.username, password, passphrase },
+        ...(scenario === "untrusted key" ? {} : { trustedHostKey }),
+      };
+      if (scenario === "interactive accepted") {
+        const connection = await SshConnection.open(target);
+        connection.close();
+        assert.deepEqual(attempts, ["none", "keyboard-interactive"]);
+        return;
+      }
+      await assert.rejects(SshConnection.open(target), (error: Error) => {
+        if (scenario === "untrusted key") {
+          assert.ok(error instanceof SshHostKeyUntrustedError);
+          assert.equal(attempts.length, 0);
+          return true;
+        }
+        assert.ok(error.message.includes(`operator@127.0.0.1:${port}`));
+        assert.ok(error.message.includes(`Server offered: ${offered.join(", ")}.`));
+        assert.ok(error.message.includes(`Actually tried: ${attempts.join(", ")} (none is method discovery).`));
+        assert.ok(error.message.includes(scenario === "key rejected" ? "password no; key yes" : "password yes; key no"));
+        assert.ok(error.message.includes("Server banner: Authorized users only."));
+        for (const secret of [password.trim(), privateKey, passphrase]) assert.ok(!error.message.includes(secret), "diagnostics exclude credentials");
+        assert.ok(!error.message.includes("BEGIN OPENSSH PRIVATE KEY"));
+        assert.ok(error.message.length < 2_000);
+        if (scenario === "password change") assert.match(error.message, /requires a password change/);
+        else assert.match(error.message, /server did not accept authentication/);
+        return true;
+      });
+    });
+  }
+});
 
 test("SSH errors after ready fail only that connection and reject pending commands", async (context) => {
   const clients: ssh2.Client[] = [];
