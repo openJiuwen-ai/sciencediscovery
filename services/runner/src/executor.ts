@@ -542,6 +542,15 @@ async function runSandboxed(
         });
         child.once("error", (error) => finish(error));
         child.once("close", (code) => finish(undefined, code ?? 1));
+        // The sandbox can already be gone by the time its payload is written —
+        // that is what an aborted or crashed execution looks like from here.
+        // A stream error with no listener becomes an uncaught exception, so a
+        // broken pipe would take the whole Runner down on the way to the
+        // outcome the process's own events already carry.
+        child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+          if (error.code === "EPIPE") return;
+          finish(error);
+        });
         child.stdin.end(stdin);
       }).catch((error: Error) => finish(error));
     });
