@@ -920,10 +920,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/remote-hosts") {
-        sendJson(response, 200, store.listRemoteHosts().map((host) => ({
+        sendJson(response, 200, await Promise.all(store.listRemoteHosts().map(async (host) => ({
           ...host,
-          runnerStatus: remoteCompute.runnerStatus(host.id),
-        })));
+          runnerStatus: await remoteCompute.runnerStatusWithResources(host.id),
+        }))));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/remote-hosts") {

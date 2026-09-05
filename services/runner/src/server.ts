@@ -71,6 +71,7 @@ import { resolveEgressInterpreter } from "./egress-bridge.js";
 import { EgressGatewayRegistry } from "./egress-gateway.js";
 import { SECCOMP_BASELINE_VERSION } from "./seccomp.js";
 import { EnvironmentStore } from "./environment-store.js";
+import { collectRunnerResources } from "./resources.js";
 import { KernelManager } from "./kernel-manager.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
@@ -517,6 +518,10 @@ export function createRunnerServer(
       }
       if (!authorized(request, config.authToken)) {
         sendJson(response, 401, { error: "Unauthorized" } satisfies ApiError);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/resources") {
+        sendJson(response, 200, await collectRunnerResources(config.dataDir));
         return;
       }
       if (request.method === "GET" && url.pathname === "/status") {

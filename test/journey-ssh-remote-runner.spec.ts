@@ -127,6 +127,11 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       remoteVersion: "0.0.0-remote",
       state: "ready",
       versionMismatch: true,
+      resources: {
+        capturedAt: new Date().toISOString(), cpuCores: 32, loadAverage1m: 1.25,
+        memoryTotalBytes: 128 * 1024 ** 3, memoryFreeBytes: 80 * 1024 ** 3, uptimeSeconds: 86400,
+        workspaceDisk: { path: "/data/sciencediscovery/remote-workspaces", totalBytes: 100 * 1024 ** 3, availableBytes: 60 * 1024 ** 3 },
+      },
     } : { hostId, state: "disconnected" },
     status: "ready",
     updatedAt: new Date().toISOString(),
@@ -630,8 +635,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
-      "连接后说明是自动部署并提示版本差异",
-      "状态变为 connected，页面同时展示本地和远端版本、version differs 以及 deployed by ScienceDiscovery。",
+      "连接后查看 Runner 版本和工作区可用磁盘",
+      "状态变为 connected，同时展示版本差异、部署来源、workspace 所在文件系统剩余 60 GiB / 总计 100 GiB，以及 CPU、内存和采集时间。",
       async () => {
         const dialog = await openRemoteSettings();
         await dialog.getByRole("button", { name: "Connect runner" }).first().click();
@@ -639,6 +644,11 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByText(
           /Remote 0\.0\.0-remote · local 0\.0\.0-local · version differs · deployed by ScienceDiscovery/,
         )).toBeVisible();
+        const resources = dialog.getByLabel("Runner resources").first();
+        await expect(resources).toContainText("60.0 GiB available / 100.0 GiB total");
+        await expect(resources).toContainText("/data/sciencediscovery/remote-workspaces");
+        await expect(resources).toContainText("Memory: 80.0 GiB free / 128.0 GiB total");
+        await expect(resources).toContainText("refresh to update");
       },
     );
 
@@ -661,6 +671,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
           expect(Math.abs(box.width - first!.width)).toBeLessThan(2);
         }
         expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+        await expect(dialog.getByLabel("Runner resources").first()).toContainText("60.0 GiB available");
       },
     );
   } finally {

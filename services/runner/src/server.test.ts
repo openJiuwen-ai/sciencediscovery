@@ -93,6 +93,21 @@ function config(dataDir: string): RunnerConfig {
   };
 }
 
+test("Runner resources require authentication and report the remote workspace filesystem", async (context) => {
+  const root = await mkdtemp(resolve(tmpdir(), "runner-resource-api-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const server = createRunnerServer(config(root));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  assert.equal((await fetch(`${origin}/resources`)).status, 401);
+  const response = await fetch(`${origin}/resources`, { headers: { authorization: "Bearer runner-test-token" } });
+  assert.equal(response.status, 200);
+  const result = await response.json() as import("@sciencediscovery/schema").RunnerResources;
+  assert.equal(result.workspaceDisk?.path, resolve(root, "remote-workspaces"));
+  assert.ok(result.workspaceDisk!.totalBytes > 0);
+});
+
 function bashForTest(): string | undefined {
   try {
     execFileSync("bash", ["--version"], { stdio: "ignore" });

@@ -32,6 +32,7 @@ import type {
   PythonExecutionResult,
   RunnerHealth,
   RunnerRuntimeStatus,
+  RunnerResources,
   RemoteWorkspaceFile,
   ScientificEnvironmentSetup,
   ShellExecutionRequest,
@@ -56,6 +57,10 @@ export class RunnerClient {
 
   async status(): Promise<RunnerRuntimeStatus> {
     return await this.request("/status");
+  }
+
+  async resources(): Promise<RunnerResources> {
+    return await this.request("/resources", { signal: AbortSignal.timeout(3_000) });
   }
 
   async listRemoteWorkspaceFiles(workspaceKey: string, paths?: string[]): Promise<RemoteWorkspaceFile[]> {

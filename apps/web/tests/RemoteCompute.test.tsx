@@ -23,10 +23,31 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api.js";
 import { ApiRequestError } from "../src/api/auth.js";
 import { hostKeyFromError } from "../src/api/settings.js";
-import { RemoteHostManager, RemoteJobsPanel } from "../src/RemoteCompute.js";
+import { RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
 import { activityCardId } from "../src/session/run-activity.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
+test("resource cards distinguish available workspace disk, low space, and unavailable readings", () => {
+  const host = buildHost({ runnerStatus: { hostId: "host-1", state: "ready", resources: {
+    capturedAt: timestamp, cpuCores: 4, loadAverage1m: 0.25,
+    memoryTotalBytes: 4 * 1024 ** 3, memoryFreeBytes: 2 * 1024 ** 3, uptimeSeconds: 7200,
+    workspaceDisk: { path: "/data/remote-workspaces", availableBytes: 20 * 1024 ** 3, totalBytes: 30 * 1024 ** 3 },
+  } } });
+  const render = () => renderToStaticMarkup(createElement(RunnerResourceSummary, { host }));
+  assert.match(render(), /20.0 GiB available \/ 30.0 GiB total/);
+  assert.match(render(), /\/data\/remote-workspaces/);
+  assert.match(render(), /not a per-workspace quota/);
+  assert.doesNotMatch(render(), /Low workspace disk/);
+  host.runnerStatus!.resources!.workspaceDisk!.availableBytes = 0;
+  assert.match(render(), /role="alert"/);
+  assert.match(render(), /0.0 GiB available/);
+  host.runnerStatus!.resources!.workspaceDisk = null;
+  assert.match(render(), /Workspace disk: unknown/);
+  assert.doesNotMatch(render(), /0.0 GiB available/);
+  host.runnerStatus!.state = "disconnected";
+  assert.match(render(), /connect Runner to measure/);
+  assert.doesNotMatch(render(), /CPU:|GiB/);
+});
 const noopToggle = () => undefined;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

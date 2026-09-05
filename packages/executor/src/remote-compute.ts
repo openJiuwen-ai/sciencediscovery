@@ -240,6 +240,21 @@ export class RemoteComputeClient {
     return structuredClone(this.runnerStatuses.get(hostId) ?? { hostId, state: "disconnected" });
   }
 
+  async runnerStatusWithResources(hostId: string): Promise<RemoteRunnerStatus> {
+    const status = this.runnerStatus(hostId);
+    if (status.state !== "ready") return status;
+    try {
+      const resources = await this.runnerClient(hostId).resources();
+      // A concurrent disconnect must not resurrect a ready card or stale metrics.
+      if (this.runnerStatus(hostId).connectedAt !== status.connectedAt || this.runnerStatus(hostId).state !== "ready") {
+        return this.runnerStatus(hostId);
+      }
+      return { ...status, resources };
+    } catch {
+      return { ...this.runnerStatus(hostId), resourcesError: "Metrics unavailable. Refresh or reconnect an up-to-date Runner." };
+    }
+  }
+
   runnerClient(hostId: string): RunnerClient {
     const connection = this.runnerConnections.get(hostId);
     if (!connection || connection.status.state !== "ready") throw new Error("Remote runner is not connected");

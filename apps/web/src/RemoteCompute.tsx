@@ -68,6 +68,27 @@ function runnerSource(host: RemoteHostTarget): string | undefined {
   return "SEA runner deployed automatically over SSH; remote Node.js is not required";
 }
 
+function resourceBytes(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+export function RunnerResourceSummary({ host }: { host: RemoteHostTarget }): ReactNode {
+  const resources = host.runnerStatus?.resources;
+  if (host.runnerStatus?.state !== "ready") return <small>Workspace disk: unknown · connect Runner to measure</small>;
+  if (!resources) return <small>{host.runnerStatus.resourcesError ?? "Workspace disk: metrics not available yet"}</small>;
+  const disk = resources.workspaceDisk;
+  return <div className="remote-host-resources" aria-label="Runner resources">
+    <strong>Workspace disk: {disk ? `${resourceBytes(disk.availableBytes)} available / ${resourceBytes(disk.totalBytes)} total` : "unknown"}</strong>
+    {disk ? <small className="remote-host-resource-path">{disk.path}</small> : <small>{resources.workspaceDiskError}</small>}
+    {disk && (disk.availableBytes < 1024 ** 3 || disk.availableBytes < disk.totalBytes * 0.1)
+      ? <div role="alert">Low workspace disk space. Environment installs and file writes may fail.</div> : null}
+    <small>Filesystem free space, not a per-workspace quota. Other files on this filesystem share this space.</small>
+    <small>CPU: {resources.cpuCores} cores · load (1 min): {resources.loadAverage1m.toFixed(2)}</small>
+    <small>Memory: {resourceBytes(resources.memoryFreeBytes)} free / {resourceBytes(resources.memoryTotalBytes)} total · host uptime: {Math.floor(resources.uptimeSeconds / 3600)} h</small>
+    <small>Measured {new Date(resources.capturedAt).toLocaleString()} · refresh to update. Host readings may differ from container limits.</small>
+  </div>;
+}
+
 /**
  * Whether a Session can execute on this host. SSH hosts must be Linux and must
  * either carry the runner already or be able to receive the deployed one.
@@ -524,6 +545,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
               ? <small>{[host.capabilities.platform ?? "OS unknown", source].filter(Boolean).join(" · ")}</small>
               : null}
           {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
+          <RunnerResourceSummary host={host} />
           {storedCredentials ? <small>{storedCredentials}</small> : null}
           {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
           {publicKey ? <div className="remote-host-pubkey-line"><code title={publicKey}>{publicKey}</code><CopyButton getText={() => publicKey} label="Copy public key" /></div> : null}

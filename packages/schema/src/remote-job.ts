@@ -247,7 +247,25 @@ export interface SshKeyFileListing {
 
 export type RemoteRunnerConnectionState = "connecting" | "disconnected" | "error" | "ready";
 
+/** Point-in-time host readings, not workspace quotas or recursive directory sizes. */
+export interface RunnerResources {
+  capturedAt: string;
+  cpuCores: number;
+  loadAverage1m: number;
+  memoryTotalBytes: number;
+  memoryFreeBytes: number;
+  uptimeSeconds: number;
+  workspaceDisk: {
+    path: string;
+    totalBytes: number;
+    availableBytes: number;
+  } | null;
+  workspaceDiskError?: string;
+}
+
 export interface RemoteRunnerStatus {
+  resources?: RunnerResources;
+  resourcesError?: string;
   connectedAt?: string;
   /** Set when the connection failed because the machine's key is not trusted yet. */
   hostKeyChallenge?: RemoteHostKeyChallenge;
