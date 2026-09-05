@@ -93,7 +93,7 @@ fetch layer-env --output "$env_file"
 guest_env=(HOME=/home/ci)
 while IFS='=' read -r name value; do
   case "$name" in
-    CI_NPM_REGISTRY|UV_DEFAULT_INDEX|UV_PYTHON_INSTALL_MIRROR|E2E_SCIENTIFIC_ENVS|CI_E2E_STACK_TIMEOUT_SECONDS)
+    CI_NPM_REGISTRY|SCIENCE_AGENT_PYPI_INDEX|UV_DEFAULT_INDEX|UV_PYTHON_INSTALL_MIRROR|E2E_SCIENTIFIC_ENVS|CI_E2E_STACK_TIMEOUT_SECONDS)
       guest_env+=("$name=$value")
       ;;
     "") ;;

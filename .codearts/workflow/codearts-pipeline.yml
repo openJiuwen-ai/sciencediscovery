@@ -560,6 +560,11 @@ stages:
               export CI_NPM_REGISTRY="${{ env.HUAWEICLOUD_NPM_REGISTRY }}"
               export UV_DEFAULT_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               export UV_PYTHON_INSTALL_MIRROR="${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}"
+              # start-stack.sh reads this one: it backs up and restores each
+              # uv.lock around the mirror-resolved sync instead of leaving the
+              # guest checkout dirty. Without a mirror the sync reaches
+              # pypi.org directly and the stack never becomes healthy.
+              export SCIENCE_AGENT_PYPI_INDEX="${{ env.HUAWEICLOUD_PYPI_INDEX }}"
               export CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME=300
               # Same reason as the UT guest tier, inside this job's 120-minute
               # budget: a guest killed by CodeArts leaves no result behind.
