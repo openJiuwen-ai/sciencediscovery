@@ -157,7 +157,7 @@
 .remote-host-list { display: grid; gap: 10px; }
 .remote-host-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
 .remote-host-card-main { display: grid; flex: 1 1 300px; gap: 4px; min-width: 0; }
-.remote-host-resources { display: grid; gap: 4px; padding-block: 8px; min-width: 0; overflow-wrap: anywhere; }
+.remote-host-resources { display: grid; flex-basis: 100%; gap: 4px; padding-block: 8px; min-width: 0; overflow-wrap: anywhere; }
 .remote-host-resources small, .remote-host-resources strong { white-space: normal; overflow: visible; text-overflow: clip; }
 .remote-host-resources [role="alert"] { color: var(--danger, #b42318); }
 .remote-host-card-title { display: flex; align-items: center; gap: 8px; }

@@ -261,7 +261,11 @@ async function startFakeRunner(options: { platform: string; token: string; versi
       return;
     }
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ runnerVersion: options.version, status: "ok" }));
+    response.end(JSON.stringify(request.url === "/resources" ? {
+      capturedAt: new Date().toISOString(), cpuCores: 4, loadAverage1m: 0,
+      memoryTotalBytes: 4096, memoryFreeBytes: 2048, uptimeSeconds: 60,
+      workspaceDisk: { path: "/mounted/workspaces", totalBytes: 1000, availableBytes: 600 },
+    } : { runnerVersion: options.version, status: "ok" }));
   });
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
   const address = server.address();
@@ -312,7 +316,19 @@ test("a self-deployed runner is reachable by address only with the token it was 
   assert.equal(connected.remoteVersion, "runner-v1");
   assert.equal(connected.versionMismatch, true);
   assert.ok(client.runnerClient("host-direct"));
+  const measured = await client.runnerStatusWithResources("host-direct");
+  assert.equal(measured.resources?.workspaceDisk?.availableBytes, 600);
+  assert.equal(measured.resources?.workspaceDisk?.path, "/mounted/workspaces");
+  client.runnerClient("host-direct").resources = async () => { throw new Error("private error must not appear"); };
+  const unavailable = await client.runnerStatusWithResources("host-direct");
+  assert.equal(unavailable.state, "ready");
+  assert.equal(unavailable.resources, undefined);
+  assert.match(unavailable.resourcesError!, /Metrics unavailable/);
+  assert.doesNotMatch(JSON.stringify(unavailable), /private error/);
   await client.disconnectRunner("host-direct");
+  const disconnected = await client.runnerStatusWithResources("host-direct");
+  assert.equal(disconnected.state, "disconnected");
+  assert.equal(disconnected.resources, undefined);
 });
 
 test("a self-deployed runner that is not on Linux is refused", async (context) => {

@@ -545,7 +545,6 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
               ? <small>{[host.capabilities.platform ?? "OS unknown", source].filter(Boolean).join(" · ")}</small>
               : null}
           {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
-          <RunnerResourceSummary host={host} />
           {storedCredentials ? <small>{storedCredentials}</small> : null}
           {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
           {publicKey ? <div className="remote-host-pubkey-line"><code title={publicKey}>{publicKey}</code><CopyButton getText={() => publicKey} label="Copy public key" /></div> : null}
@@ -559,6 +558,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         </div>
         {[...new Set([host.error, host.runnerStatus?.error].filter(Boolean))].map((error) =>
           <div className="remote-host-error" role="alert" key={error}>{error}</div>)}
+        <RunnerResourceSummary host={host} />
         {renderHostKeyPrompt(host.id)}
         {editingCredentials === host.id ? credentialsEditor(host) : null}
       </article>;

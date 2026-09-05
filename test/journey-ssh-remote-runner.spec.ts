@@ -649,6 +649,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(resources).toContainText("/data/sciencediscovery/remote-workspaces");
         await expect(resources).toContainText("Memory: 80.0 GiB free / 128.0 GiB total");
         await expect(resources).toContainText("refresh to update");
+        await resources.scrollIntoViewIfNeeded();
       },
     );
 
@@ -672,6 +673,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         }
         expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
         await expect(dialog.getByLabel("Runner resources").first()).toContainText("60.0 GiB available");
+        await dialog.getByLabel("Runner resources").first().scrollIntoViewIfNeeded();
       },
     );
   } finally {
