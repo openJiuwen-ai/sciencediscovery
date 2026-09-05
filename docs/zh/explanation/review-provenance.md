@@ -8,12 +8,12 @@ CAS 是溯源体系的地基：所有需要事后核验的内容都以「SHA-256
 
 实现位于独立的 `@sciencediscovery/cas` 包；API、Runner 相关调用方共享同一地址与校验口径，公开边界见英文 [CAS 说明](../../en/explanation/cas.md)：
 
-- **地址**：`hash(content)` = 内容字节的 SHA-256 十六进制（64 字符）。对象路径为 `.sciencediscovery-data/cas/sha256/<hash 前 2 位>/<完整 hash>`，前 2 位作扇出目录，避免单目录文件过多。路径构造前先用 `/^[a-f0-9]{64}$/` 校验哈希，杜绝路径注入。
+- **地址**：新写入按工作区文件字节与 Agent 运行数据分别进入 versioning/data、versioning/agent-state OCI 池；旧裸 hash 兼容读取原混合布局。完整约定见 [CAS 说明](cas.md)。
 - **写入 `put(content)` / `putFile(path)`**：
-  1. 先 `stat` 目标路径——已存在则重新哈希校验一次（`verify`），通过即直接复用（去重），校验失败抛错而不是覆盖；
-  2. 不存在则写临时文件 `<path>.<pid>.<uuid>.tmp` 再 `rename` 到最终路径。rename 在同一文件系统上原子，因此并发写同一对象或进程中途崩溃都不会留下半截对象——最坏情况只剩可忽略的 `.tmp` 残留。
+  1. 校验已有对象，不复用损坏内容；
+  2. 临时文件 fsync 后用不覆盖的原子 hard link 发布，再同步目录；失败不留下半截正式对象。
   3. 返回 `CasObjectRef { hash, size }`——记录中存的就是这个结构，不含内容本身。
-- **读取与校验**：`read(hash)` 按路径读回；`verify(hash)` 读回后重算 SHA-256 与地址比对，不存在返回 false；`has(hash)` 仅探测存在性。
+- **读取与校验**：read 校验 hash；verify 对缺失或损坏返回 false；has 兼容读取并校验，新 typed 接口额外校验 pool 和 size。
 - **不可变、无删除**：本轮没有删除或修改接口。对象只增不改；单独删除 Session 不删除产物版本或 CAS 对象，CAS GC 另行设计。
 
 **谁在写入**（`cas.put` 的调用方）：

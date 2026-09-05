@@ -44,4 +44,8 @@ export class ToolLoopGuard {
     }
     return { action: "allow", count };
   }
+
+  snapshot(): { warnAt: number; stopAt: number; counts: [string, number][] } {
+    return { warnAt: this.warnAt, stopAt: this.stopAt, counts: [...this.counts.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0) };
+  }
 }

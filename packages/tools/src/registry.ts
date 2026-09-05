@@ -52,6 +52,8 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
    * newly added or MCP-provided tool from reaching the model unbounded.
    */
   outputGuard?: ToolOutputGuard;
+  /** Durable raw observation hook; awaited before bounding, never silently dropped. */
+  recordResult?(input: { call: RuntimeToolCall; content: string; isError: boolean; sequence: number }): Promise<void>;
 }
 
 /**
@@ -121,6 +123,16 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     }
   }
 
+  snapshot() {
+    return {
+      promoted: [...(this.deferredState?.promoted ?? [])].sort(),
+      visibleSpecs: this.visibleSpecs(),
+      availableNames: this.availableTools().map((tool) => tool.name),
+      nextExecutionSequence: this.nextExecutionSequence,
+      loopGuard: this.loopGuard.snapshot(),
+    };
+  }
+
   async execute(call: RuntimeToolCall, signal: AbortSignal): Promise<ToolDispatchResult<TMessage>> {
     // execute() is entered in model-declared order before concurrent handlers
     // yield, so this sequence remains deterministic even when completion order
@@ -146,6 +158,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     } else {
       ({ content, isError, selfBounded } = await this.executeRegistered(call, signal));
     }
+    if (this.options.recordResult) await this.options.recordResult({ call, content, isError, sequence });
     if (this.options.outputGuard) {
       const guarded = await this.options.outputGuard.applyDetailed(call.name, content, selfBounded);
       content = guarded.content;

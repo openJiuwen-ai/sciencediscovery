@@ -93,6 +93,7 @@ import {
 
 import { composeRuntime } from "../bootstrap/runtime.js";
 import { runLog } from "../logging.js";
+import { AgentVersionRecorder, type AgentVersioningOptions } from "./versioning.js";
 
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 240_000;
 export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
@@ -114,6 +115,7 @@ export function configuredMaxParallelToolCalls(
 }
 
 export interface NativeAgentOptions extends WorkspaceAgentOptions {
+  versioning?: AgentVersioningOptions;
   /** Stable identity for logging/tracing; use the session id. */
   sessionId: string;
   /** Hard deadline for one complete run, including streamed output. */
@@ -220,6 +222,7 @@ class NativeAgent implements NativeAgentHandle {
   private executed = false;
   private readonly contextId: string;
   private requestText: string | undefined;
+  private versionRecorder?: AgentVersionRecorder<WireMessage, ModelInput<WireMessage>, ModelUsage>;
 
   constructor(private readonly options: NativeAgentOptions) {
     this.contextId = `${options.sessionId}:${randomUUID()}`;
@@ -227,7 +230,13 @@ class NativeAgent implements NativeAgentHandle {
       history: options.gatewayHistory,
       ...(options.runContract ? { runContract: options.runContract } : {}),
     });
-    const executionTools = buildTools(options);
+    const executionTools = buildTools({ ...options, ...(options.runSubagent ? {
+      runSubagent: async (...args: Parameters<NonNullable<WorkspaceAgentOptions["runSubagent"]>>) => {
+        const result = await options.runSubagent!(...args);
+        this.versionRecorder?.childCompleted(`subagent:${result.id}`);
+        return result;
+      },
+    } : {}) });
     const planTools = options.planRepository
       ? createPlanLifecycleTools({ repository: options.planRepository })
       : [];
@@ -264,6 +273,7 @@ class NativeAgent implements NativeAgentHandle {
           version: skill.version,
         });
       },
+      recordResult: options.versioning ? async (input) => { await this.versionRecorder?.recordObservation(input); } : undefined,
       outputGuard: new ToolOutputGuard({
         maxBytes: toolOutputSettings.maxBytes,
         maxLines: toolOutputSettings.maxLines,
@@ -428,6 +438,36 @@ class NativeAgent implements NativeAgentHandle {
     };
 
     try {
+      if (this.options.versioning) {
+        this.versionRecorder = new AgentVersionRecorder(this.options.config.dataDir, this.options.workspaceRoot,
+          this.options.versioning, () => ({
+            toolState: this.toolRegistry.snapshot(),
+            runContract: this.options.runContract ?? null,
+            contextProjection: this.durableContext.snapshot(),
+            contextInputs: { systemPrompt: this.systemPrompt, promptParts: this.promptParts,
+              scope: this.options.contextScope ?? (this.options.subagent ? "subagent" : "main") },
+            environments: this.options.environments ?? [],
+            approvalMode: this.options.approvalMode ?? null,
+            contextMode: this.options.contextAssemblyMode ?? resolveContextAssemblyMode(),
+          }));
+        await this.versionRecorder.initialize({
+          model: { model: this.endpoint.model, apiProtocol: this.endpoint.apiProtocol,
+            apiVariant: this.endpoint.apiVariant, policy: this.policy,
+            thinkingMode: this.endpoint.thinkingMode, thinkingEffort: this.endpoint.thinkingEffort,
+            provider: (() => { const url = new URL(this.endpoint.baseUrl); return `${url.origin}${url.pathname}`; })() },
+          contextAssembler: {
+            entrypoint: "NativeAgent.createContextRegistry",
+            contributors: this.options.contextContributorFactories?.map((factory) => ({ id: factory.id, implementation: factory.create.toString() })) ?? [],
+          },
+          tools: this.toolRegistry.values().map((tool) => ({ name: tool.name, description: tool.description,
+            parameters: tool.parameters, implementation: tool.execute.toString(),
+            deferred: tool.deferred, routing: tool.routing, mcp: tool.mcp })),
+          skills: this.promptSkills.map(({ id, hash, revision, version }) => ({ id, hash, revision, version })),
+          toolBindings: this.options.mcpTools?.map((tool) => ({ sourceId: tool.sourceId, toolId: tool.toolId, implementation: tool.execute.toString() })) ?? [],
+          specialist: this.options.specialist ?? null,
+          subagent: this.options.subagent ?? null,
+        }, this.history);
+      }
       const compactor = new HistoryCompactor<WireMessage>(async (prompt, signal, onProgress) => {
         const summaryTurn = await modelTurnStreamer(
           this.endpoint,
@@ -451,6 +491,7 @@ class NativeAgent implements NativeAgentHandle {
       });
       const traceWriter = createContextTraceWriter(this.options.config.dataDir);
       const writeTrace = async (turn: number, record: Record<string, unknown>) => {
+        this.versionRecorder?.trace(record);
         if (!traceWriter) return;
         await traceWriter.write(this.contextId, turn, record).catch((error: unknown) => {
           runLog.warn("context.trace_write_failed", {
@@ -529,7 +570,8 @@ class NativeAgent implements NativeAgentHandle {
         contextAssembler,
         modelClient,
         toolDispatcher: this.toolRegistry,
-        eventSink: (event) => this.emitRuntimeEvent(event),
+        eventSink: (event) => { this.versionRecorder?.event(event); this.emitRuntimeEvent(event); },
+        turnLifecycle: this.versionRecorder,
         waitController: this.waitController,
       });
       const result = await loop.run(this.history, controller.signal, markProgress)
@@ -540,6 +582,7 @@ class NativeAgent implements NativeAgentHandle {
       if (usage) this.emit({ type: "usage", usage });
       return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")) };
     } finally {
+      this.versionRecorder?.close();
       if (turnTimeoutId) clearTimeout(turnTimeoutId);
       if (idleTimeoutId) clearTimeout(idleTimeoutId);
       this.pauseRunDeadline = undefined;

@@ -10,6 +10,7 @@ import {
   type RunEventSink,
   type RuntimeMessage,
   type ToolDispatcher,
+  type TurnLifecycle,
 } from "@sciencediscovery/runtime-core";
 
 export interface RuntimeComposition<TMessage extends RuntimeMessage, TModelInput, TUsage> {
@@ -20,6 +21,7 @@ export interface RuntimeComposition<TMessage extends RuntimeMessage, TModelInput
   modelClient: ModelClient<TMessage, TModelInput, TUsage>;
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController: ExternalWaitController;
+  turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
 }
 
 /** API composition root: adapters are registered here, not looked up by the core. */
@@ -32,6 +34,7 @@ export function composeRuntime<TMessage extends RuntimeMessage, TModelInput, TUs
     .withToolDispatcher(composition.toolDispatcher)
     .withEventSink(composition.eventSink)
     .withWaitController(composition.waitController)
+    .withTurnLifecycle(composition.turnLifecycle)
     .withMaxModelTurns(composition.maxModelTurns)
     .withMaxParallelToolCalls(composition.maxParallelToolCalls)
     .build();

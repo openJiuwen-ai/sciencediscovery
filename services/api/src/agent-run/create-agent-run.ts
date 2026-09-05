@@ -36,6 +36,7 @@ export interface AgentRunBindings {
   observer?: (event: AgentEvent) => void;
   planRepository?: PlanRepository;
   runIdleTimeoutMs?: number;
+  readVersioningAuthorities?: () => Promise<unknown>;
   workspace: WorkspaceAgentOptions;
 }
 
@@ -53,6 +54,18 @@ export function createAgentRun(
   const gatewayHistory = structuredClone(input.history);
   const agent = (bindings.createAgent ?? createNativeAgent)({
     ...bindings.workspace,
+    versioning: {
+      agentId: `${profile.kind}:${profile.gatewayThreadId}`,
+      trajectoryId: input.agentRunId,
+      requestExecutionId: input.requestExecutionId,
+      readAuthorities: async () => ({
+        plan: await bindings.planRepository?.latest() ?? null,
+        resources: profile.resources,
+        toolPolicy: profile.toolPolicy,
+        budget: profile.budget,
+        external: await bindings.readVersioningAuthorities?.() ?? null,
+      }),
+    },
     ...(bindings.planRepository ? { planRepository: bindings.planRepository } : {}),
     ...(bindings.contextContributorFactories?.length
       ? { contextContributorFactories: bindings.contextContributorFactories }

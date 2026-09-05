@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { randomUUID } from "node:crypto";
+import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -1627,6 +1628,7 @@ async function executeAgentRun(
           bindings: {
             abortSignal: childExecution.abortSignal,
             observer: observeSubagentEvent,
+            readVersioningAuthorities: versioningAuthorities(store, sessionId, runId),
             runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
             workspace: subagentWorkspace,
           },
@@ -1822,6 +1824,7 @@ async function executeAgentRun(
     bindings: {
       abortSignal: requestExecution.abortSignal,
       observer: observeMainEvent,
+      readVersioningAuthorities: versioningAuthorities(store, sessionId, runId),
       planRepository: {
         abandon: async (input) => {
           const plan = await store.abandonSessionPlan(sessionId, input);

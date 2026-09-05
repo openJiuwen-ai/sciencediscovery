@@ -197,6 +197,13 @@ export class ExternalWaitController {
   }
 }
 
+/** Awaited durable boundary, unlike best-effort event observers. Failures stop the run. */
+export interface TurnLifecycle<TMessage extends RuntimeMessage, TModelInput, TUsage> {
+  beforeTurn(input: { turn: number; history: TMessage[] }): Promise<void>;
+  afterAssembly(input: { turn: number; assembly: ContextAssembly<TMessage, TModelInput> }): Promise<void>;
+  afterTurn(input: { turn: number; history: TMessage[]; modelTurn: ModelTurn<TMessage, TUsage>; results: ToolDispatchResult<TMessage>[] }): Promise<void>;
+}
+
 export interface AgentLoopOptions<TMessage extends RuntimeMessage, TModelInput, TUsage> {
   contextAssembler: ContextAssembler<TMessage, TModelInput>;
   eventSink?: RunEventSink<TUsage>;
@@ -205,6 +212,7 @@ export interface AgentLoopOptions<TMessage extends RuntimeMessage, TModelInput, 
   modelClient: ModelClient<TMessage, TModelInput, TUsage>;
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController?: ExternalWaitController;
+  turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
 }
 
 export interface AgentLoopResult<TMessage extends RuntimeMessage, TUsage> {
@@ -247,6 +255,8 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
     try {
       for (let turn = 0; turn < this.options.maxModelTurns; turn += 1) {
         this.raiseForAbort(signal);
+        if (this.options.turnLifecycle) await this.options.turnLifecycle.beforeTurn({ turn, history: structuredClone(this.state.history) });
+        this.raiseForAbort(signal);
         this.transition("assembling_context", turn);
         let assembly = await this.options.contextAssembler.assemble({
           history: this.state.history,
@@ -256,6 +266,8 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         });
         this.raiseForAbort(signal);
         this.state.history = [...assembly.history];
+        if (this.options.turnLifecycle) await this.options.turnLifecycle.afterAssembly({ turn, assembly: structuredClone(assembly) });
+        this.raiseForAbort(signal);
 
         this.transition("calling_model", turn);
         this.emit({ type: "turn_start", turn });
@@ -279,6 +291,8 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
             onProgress,
           });
           this.state.history = [...assembly.history];
+          if (this.options.turnLifecycle) await this.options.turnLifecycle.afterAssembly({ turn, assembly: structuredClone(assembly) });
+          this.raiseForAbort(signal);
           this.transition("calling_model", turn);
           modelTurn = await this.options.modelClient.invoke(assembly.modelInput, signal, observer);
         }
@@ -287,6 +301,8 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         if (modelTurn.usage !== undefined) usage = modelTurn.usage;
         this.state.history.push(modelTurn.assistantMessage);
         if (modelTurn.toolCalls.length === 0) {
+          if (this.options.turnLifecycle) await this.options.turnLifecycle.afterTurn({ turn, history: structuredClone(this.state.history), modelTurn, results: [] });
+          this.raiseForAbort(signal);
           this.transition("completed", turn);
           this.emit({
             type: "completed",
@@ -297,7 +313,9 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         }
 
         this.transition("executing_tools", turn);
-        await scheduleToolCalls({
+        // The scheduler drains every started writer on failure/cancellation.
+        // Only a successfully settled batch may reach the durable Step boundary.
+        const results = await scheduleToolCalls({
           calls: modelTurn.toolCalls,
           classify: (call) => this.options.toolDispatcher.executionMode?.(call) ?? "exclusive",
           execute: (call) => this.options.toolDispatcher.execute(call, signal),
@@ -312,6 +330,8 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
           onStart: (call) => this.emit({ type: "tool_execution_start", call }),
           signal,
         });
+        this.raiseForAbort(signal);
+        if (this.options.turnLifecycle) await this.options.turnLifecycle.afterTurn({ turn, history: structuredClone(this.state.history), modelTurn, results });
         this.raiseForAbort(signal);
       }
 
@@ -363,6 +383,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   private modelClient?: ModelClient<TMessage, TModelInput, TUsage>;
   private toolDispatcher?: ToolDispatcher<TMessage>;
   private waitController?: ExternalWaitController;
+  private turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
 
   withContextAssembler(value: ContextAssembler<TMessage, TModelInput>): this { this.contextAssembler = value; return this; }
   withEventSink(value: RunEventSink<TUsage>): this { this.eventSink = value; return this; }
@@ -371,6 +392,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   withModelClient(value: ModelClient<TMessage, TModelInput, TUsage>): this { this.modelClient = value; return this; }
   withToolDispatcher(value: ToolDispatcher<TMessage>): this { this.toolDispatcher = value; return this; }
   withWaitController(value: ExternalWaitController): this { this.waitController = value; return this; }
+  withTurnLifecycle(value: TurnLifecycle<TMessage, TModelInput, TUsage> | undefined): this { this.turnLifecycle = value; return this; }
 
   build(): AgentLoop<TMessage, TModelInput, TUsage> {
     const missing = [
@@ -388,6 +410,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
       toolDispatcher: this.toolDispatcher!,
       ...(this.eventSink ? { eventSink: this.eventSink } : {}),
       ...(this.waitController ? { waitController: this.waitController } : {}),
+      ...(this.turnLifecycle ? { turnLifecycle: this.turnLifecycle } : {}),
     });
   }
 }

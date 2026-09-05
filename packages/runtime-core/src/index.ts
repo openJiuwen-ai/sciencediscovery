@@ -34,6 +34,7 @@ export {
   type RuntimeToolCall,
   type ToolDispatchResult,
   type ToolDispatcher,
+  type TurnLifecycle,
 } from "./runtime.js";
 export {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,

@@ -20,6 +20,44 @@ import { AgentLoop, ExternalWaitController, RuntimeBuilder, reduceRunState, type
 interface Input { history: RuntimeMessage[] }
 interface Usage { tokens: number }
 
+test("durable lifecycle is awaited and a failed commit cannot emit completion", async () => {
+  const order: string[] = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1,
+    contextAssembler: { async assemble({ history }) { order.push("assemble"); return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { order.push("model"); return { assistantMessage: { role: "assistant" }, toolCalls: [] }; } },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    turnLifecycle: {
+      async beforeTurn() { order.push("before"); },
+      async afterAssembly() { order.push("context"); },
+      async afterTurn() { await Promise.resolve(); order.push("commit"); throw new Error("disk failure"); },
+    },
+    eventSink: (event) => { if (event.type === "completed") order.push("completed"); },
+  });
+  await assert.rejects(loop.run([], new AbortController().signal, () => {}), /disk failure/);
+  assert.deepEqual(order, ["before", "assemble", "context", "model", "commit"]);
+  assert.equal(loop.snapshot().phase, "failed");
+});
+
+test("a failed dispatcher settles sibling workspace writers without committing the turn", async () => {
+  let settled = false; let commits = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { return { assistantMessage: { role: "assistant" }, toolCalls: [
+      { id: "fail", name: "write", args: {} }, { id: "slow", name: "write", args: {} },
+    ] }; } },
+    toolDispatcher: { executionMode: () => "parallel", async execute(call) {
+      if (call.id === "fail") throw new Error("failed");
+      await new Promise((done) => setTimeout(done, 10)); settled = true;
+      return { content: "done", isError: false, message: { role: "tool" } };
+    } },
+    turnLifecycle: { async beforeTurn() {}, async afterAssembly() {}, async afterTurn() { commits += 1; } },
+  });
+  await assert.rejects(loop.run([], new AbortController().signal, () => {}), /failed/);
+  assert.equal(settled, true); assert.equal(commits, 0);
+});
+
 test("runs model and concurrent tools while committing results in call order", async () => {
   const events: RunEvent<Usage>[] = [];
   let modelCalls = 0;
@@ -69,6 +107,70 @@ test("runs model and concurrent tools while committing results in call order", a
   assert.deepEqual(result.usage, { tokens: 7 });
   assert.equal(events.filter((event) => event.type === "completed").length, 1);
   assert.equal(loop.snapshot().phase, "completed");
+});
+
+test("durable turn commit follows the bounded pool and exclusive barriers", async () => {
+  let active = 0;
+  let peak = 0;
+  let commits = 0;
+  const ids = ["a", "b", "c", "exclusive", "d"];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1,
+    maxParallelToolCalls: 2,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { return { assistantMessage: { role: "assistant" },
+      toolCalls: ids.map((id) => ({ id, name: id, args: {} })) }; } },
+    toolDispatcher: {
+      executionMode: (call) => call.id === "exclusive" ? "exclusive" : "parallel",
+      async execute(call) {
+        if (call.id === "exclusive") assert.equal(active, 0);
+        active += 1; peak = Math.max(peak, active);
+        await new Promise((done) => setImmediate(done));
+        active -= 1;
+        return { content: call.id, isError: false, message: { role: "tool", content: call.id } };
+      },
+    },
+    turnLifecycle: {
+      async beforeTurn() {}, async afterAssembly() {},
+      async afterTurn({ results, history }) {
+        assert.equal(active, 0);
+        assert.deepEqual(results.map((result) => result.content), ids);
+        assert.deepEqual(history.slice(1).map((message) => message.content), ids);
+        await Promise.resolve(); commits += 1;
+      },
+    },
+  });
+  await loop.run([], new AbortController().signal, () => {});
+  assert.equal(peak, 2);
+  assert.equal(commits, 1);
+});
+
+test("cancellation drains started writers without committing a partial Step", async () => {
+  const controller = new AbortController();
+  const started: string[] = [];
+  let active = 0;
+  let commits = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1, maxParallelToolCalls: 2,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { return { assistantMessage: { role: "assistant" },
+      toolCalls: ["a", "b", "not-started"].map((id) => ({ id, name: "write", args: {} })) }; } },
+    toolDispatcher: {
+      executionMode: () => "parallel",
+      async execute(call) {
+        started.push(call.id); active += 1;
+        if (call.id === "b") controller.abort();
+        await new Promise((done) => setImmediate(done));
+        active -= 1;
+        return { content: call.id, isError: false, message: { role: "tool" } };
+      },
+    },
+    turnLifecycle: { async beforeTurn() {}, async afterAssembly() {}, async afterTurn() { commits += 1; } },
+  });
+  await assert.rejects(loop.run([], controller.signal, () => {}), /cancelled/);
+  assert.deepEqual(started, ["a", "b"]);
+  assert.equal(active, 0);
+  assert.equal(commits, 0);
 });
 
 test("the max-turn boundary closes every assistant tool call before returning", async () => {
