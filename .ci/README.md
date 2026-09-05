@@ -333,10 +333,19 @@ attempted command, exit code, and duration. It gives each run a unique
 leave generated logs or bootstrap tokens in the source mount. The E2E entry propagates
 Playwright's exit code after copying reports, including failure evidence.
 
-The default mocked suite currently has one known product failure: J4 expects
-both the main Agent and subagent declared artifacts in the Project catalog,
-but only the main artifact appears (F5). CI must keep that assertion and report
-the E2E layer as failed until the product is fixed.
+The default mocked suite passes today: 8 passed and 2 skipped against an
+isolated local stack. Both skips are preconditions, not coverage — J3 is
+BLOCKED because the generic command keeps `SCIENTIFIC_ENVS=0`, and the
+connector case is skipped for the same class of reason. Playwright exits 0 on
+a skip, so a job that only reads the exit code reports a blocked journey as a
+pass; read the counts and the not-passed titles as well.
+
+The earlier note here claimed J4 must stay red because only the main
+artifact reached the Project catalog. That is no longer the failure: J4 was
+red because it still drove the SubAgent card as an inline disclosure, which
+`fix(web): open SubAgent runs in a dedicated view` replaced, and it never
+reached the artifact assertions. With the journey following the card into its
+own conversation, both declared artifacts do appear.
 
 ## Known limits
 
