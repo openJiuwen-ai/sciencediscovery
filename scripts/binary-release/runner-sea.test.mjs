@@ -52,11 +52,10 @@ test("standalone Runner SEA starts and authenticates with no Node in PATH", {
     assert.equal(health.sandbox, "bubblewrap");
     assert.equal((await fetch(`http://127.0.0.1:${port}/status`)).status, 401);
     assert.equal((await fetch(`http://127.0.0.1:${port}/status`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
-    const workspace = join(data, "projects", "sea", "workspace");
-    await mkdir(workspace, { recursive: true });
     const client = new RunnerClient(`http://127.0.0.1:${port}`, token);
     const result = await client.executeShell({
-      agentId: "main", code: "printf SEA_SANDBOX_OK", executionId: "sea-smoke", workspaceRoot: workspace,
+      agentId: "main", code: "printf SEA_SANDBOX_OK", executionId: "sea-smoke",
+      workspaceRoot: "/control/workspace/not-on-this-runner", runnerWorkspaceKey: "sea/remote-smoke",
       permissionEpoch: { createdAt: new Date().toISOString(), environmentRevisionId: "system-shell", id: "sea-epoch",
         mounts: [{ mode: "read-write", source: "workspace" }], networkPolicy: "none", reason: "isolated SEA smoke", secretRefs: [], sessionId: "sea-session" },
     });

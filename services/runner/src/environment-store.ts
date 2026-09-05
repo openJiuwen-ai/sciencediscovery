@@ -335,6 +335,7 @@ export class EnvironmentStore {
     await mkdir(this.snapshotsRoot, { recursive: true });
     await mkdir(this.wheelsRoot, { recursive: true });
     if (!this.config.enabled) return void (this.initialized = true);
+    await mkdir(resolve(this.config.root, "provisioner", "pkgs"), { recursive: true });
     await this.loadCatalog();
     if (this.catalog.environments.some((environment) => environment.id === "starter-python")) {
       let component: keyof ScientificEnvironmentSetup["components"] = "micromamba";
@@ -989,7 +990,7 @@ export class EnvironmentStore {
       ? this.config.provisionerPath
         ? "Verify the configured micromamba executable path and execute permissions, then retry setup."
         : "Retry setup. If it fails again, verify access to the pinned micromamba release and write access to the application data directory."
-      : "Review the configured Conda channels or offline cache, then retry setup. Existing system Conda and shell settings are not modified.";
+      : "Check free disk space and write permissions in the Runner data directory, then the configured Conda channels or offline cache, and retry setup. Existing system Conda and shell settings are not modified.";
     this.updateSetupComponent(component, "failed", "failed", message, {
       action,
       completed: true,

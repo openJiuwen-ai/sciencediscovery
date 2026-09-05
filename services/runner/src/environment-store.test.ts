@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
@@ -382,6 +382,27 @@ test("scientific environments remain unavailable until managed setup succeeds", 
   await disabled.initialize();
   assert.equal(disabled.capability.available, false);
   await assert.rejects(async () => disabled.list(), /disabled/);
+});
+
+test("managed cache exists before setup and disk failures remain actionable and retryable", async (context) => {
+  let diskFull = true;
+  const { store, root } = await fixture(context, {
+    beforeCommand: (args) => {
+      if (args[1] === "create" && diskFull) throw new Error("critical libmamba Write failed: No space left on device");
+    },
+  });
+  await store.initialize();
+  assert.equal((await stat(resolve(root, "envs", "provisioner", "pkgs"))).isDirectory(), true);
+  await assert.rejects(store.setupManagedEnvironments(), /No space left on device/);
+  assert.equal(store.setup.components.micromamba.state, "ready");
+  assert.equal(store.setup.components.conda.state, "failed");
+  assert.match(store.setup.components.conda.action ?? "", /free disk space and write permissions/);
+  assert.throws(() => store.list(), /No space left on device/);
+  diskFull = false;
+  await store.setupManagedEnvironments();
+  assert.equal(store.setup.state, "ready");
+  const env = await store.createTask("Recovered", "python");
+  assert.equal(env.kind, "task");
 });
 
 test("background setup exposes progress, serializes callers, and retries after failure", async (context) => {

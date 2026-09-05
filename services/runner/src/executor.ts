@@ -223,12 +223,20 @@ export function appendBounded(
 }
 
 export async function validatedWorkspace(dataDir: string, requested: string): Promise<string> {
-  const projectsRoot = await realpath(resolve(dataDir, "projects"));
   const workspaceRoot = await realpath(requested);
-  if (workspaceRoot !== projectsRoot && !workspaceRoot.startsWith(`${projectsRoot}${sep}`)) {
-    throw new Error("Runner workspace must be inside the configured projects directory");
+  // Remote runners have their own persistent workspace tree and need not have
+  // the control API's local projects tree. Never authorize the whole data dir.
+  const dataRoot = await realpath(dataDir);
+  for (const directory of ["projects", "remote-workspaces"]) {
+    const root = await realpath(resolve(dataRoot, directory)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!root) continue;
+    if (directory === "remote-workspaces" && root !== resolve(dataRoot, directory)) continue;
+    if (workspaceRoot === root || workspaceRoot.startsWith(`${root}${sep}`)) return workspaceRoot;
   }
-  return workspaceRoot;
+  throw new Error("Runner workspace must be inside the configured projects or remote-workspaces directory");
 }
 
 function relativeDescendantPath(parent: string, child: string): string | undefined {

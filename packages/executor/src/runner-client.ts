@@ -39,7 +39,7 @@ import type {
   UninstallEnvironmentRequest,
 } from "@sciencediscovery/schema";
 
-export type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string };
+export type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string; runnerWorkspaceKey?: string };
 
 /** HTTP adapter for the isolated execution service. */
 export class RunnerClient {

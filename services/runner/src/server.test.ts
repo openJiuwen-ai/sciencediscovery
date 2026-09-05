@@ -33,7 +33,7 @@ import type {
   ShellExecutionResult,
 } from "@sciencediscovery/schema";
 
-import { appendBounded, executePython, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget } from "./executor.js";
+import { appendBounded, executePython, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
@@ -680,6 +680,100 @@ test("runner HTTP service requires its internal token", async (context) => {
     "antibody.protenix.v1",
   ]);
   assert.equal(health.npuBroker.workloads.some((workload) => workload.id === "antibody.pipeline.v1"), false);
+});
+
+test("workspace validation accepts remote roots without local projects and rejects escapes", async (context) => {
+  const dataDir = await mkdtemp(resolve(process.cwd(), ".tmp", "remote-validation-"));
+  context.after(() => rm(dataDir, { recursive: true, force: true }));
+  const root = resolve(dataDir, "remote-workspaces", "project", "session");
+  await mkdir(root, { recursive: true });
+  assert.equal(await validatedWorkspace(dataDir, root), root);
+  const outside = resolve(dataDir, "scientific-envs");
+  await mkdir(outside);
+  await symlink(outside, resolve(root, "escape"));
+  await assert.rejects(validatedWorkspace(dataDir, resolve(root, "escape")), /workspace must be inside/i);
+  await assert.rejects(validatedWorkspace(dataDir, outside), /workspace must be inside/i);
+  const local = resolve(dataDir, "projects", "project", "workspace");
+  await mkdir(local, { recursive: true });
+  assert.equal(await validatedWorkspace(dataDir, local), local);
+});
+
+test("remote workspace executes signed Shell and Python without a local projects tree", async (context) => {
+  const dataDir = await mkdtemp(resolve(process.cwd(), ".tmp", "remote-execution-"));
+  context.after(() => rm(dataDir, { recursive: true, force: true }));
+  const server = createRunnerServer(config(dataDir));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const headers = { authorization: "Bearer runner-test-token" };
+  for (const agentId of ["main", "subagent:child"]) {
+    const runnerWorkspaceKey = agentId === "main" ? "project/session" : "project/session/agents/child";
+    for (const kernelMode of ["ephemeral", "persistent"] as const) {
+      const result = await fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
+        agentId, executionId: `${agentId}-${kernelMode}`, kernelMode, runnerWorkspaceKey,
+        workspaceRoot: "/nonexistent/control/workspace", permissionEpoch: epoch(),
+        code: "printf remote-shell > shell.txt; cat shell.txt",
+      }));
+      const body = await result.json() as ShellExecutionResult;
+      assert.equal(result.status, 200, JSON.stringify(body));
+      assert.equal(body.exitCode, 0, body.stderr);
+      assert.equal(body.sandbox, "bubblewrap");
+      assert.match(body.stdout, /remote-shell/);
+    }
+    const result = await fetch(`${origin}/execute`, signedExecutionInit("runner-test-token", {
+      agentId, executionId: `${agentId}-python`, runnerWorkspaceKey,
+      workspaceRoot: "/nonexistent/control/workspace", permissionEpoch: epoch(),
+      code: "from pathlib import Path; print(Path('shell.txt').read_text()); Path('python.txt').write_text('ok')",
+    }));
+    const body = await result.json() as PythonExecutionResult;
+    assert.equal(result.status, 200, JSON.stringify(body));
+    assert.equal(body.exitCode, 0, body.stderr);
+    assert.match(body.stdout, /remote-shell/);
+    await fetch(`${origin}/kernels/teardown`, { method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: "session-test", reason: "test complete" }) });
+  }
+  await assert.rejects(stat(resolve(dataDir, "projects")), { code: "ENOENT" });
+  const outside = resolve(dataDir, "outside");
+  await mkdir(outside);
+  await symlink(outside, resolve(dataDir, "remote-workspaces", "escape"));
+  const escaped = await fetch(`${origin}/remote-workspace/files?workspace=escape/child`, { headers });
+  assert.equal(escaped.status, 400);
+  await assert.rejects(stat(resolve(outside, "child")), { code: "ENOENT" });
+});
+
+test("remote wheel installation resolves the Runner workspace key instead of a control host path", async (context) => {
+  const dataDir = await mkdtemp(resolve(process.cwd(), ".tmp", "remote-wheel-"));
+  context.after(() => rm(dataDir, { recursive: true, force: true }));
+  let installedRoot: string | undefined;
+  const store = {
+    list: () => [],
+    install: async (_id: string, packages: string[], _channels: string[], _manager: string, workspaceRoot: string) => {
+      installedRoot = workspaceRoot;
+      assert.equal(await readFile(resolve(workspaceRoot, packages[0]!), "utf8"), "explicitly transferred");
+      return { id: "rev-remote" };
+    },
+  } as unknown as EnvironmentStore;
+  const server = createRunnerServer(config(dataDir), store);
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const headers = { authorization: "Bearer runner-test-token", "content-type": "application/json" };
+  const upload = await fetch(`${origin}/remote-workspace/file?workspace=project/session/agents/child&path=wheels/pkg.whl`, {
+    method: "PUT", headers, body: "explicitly transferred",
+  });
+  assert.equal(upload.status, 201);
+  const installed = await fetch(`${origin}/environments/task-test/install`, {
+    method: "POST", headers, body: JSON.stringify({
+      runnerWorkspaceKey: "project/session/agents/child", workspaceRoot: "/control/host/path",
+      manager: "pip", packages: ["wheels/pkg.whl"],
+    }),
+  });
+  assert.equal(installed.status, 201, await installed.text());
+  assert.equal(installedRoot, resolve(dataDir, "remote-workspaces", "project/session/agents/child"));
+  const escaped = await fetch(`${origin}/environments/task-test/install`, {
+    method: "POST", headers, body: JSON.stringify({ runnerWorkspaceKey: "../escape", packages: ["pkg.whl"], manager: "pip" }),
+  });
+  assert.equal(escaped.status, 400);
 });
 
 test("runner keeps logical remote workspaces persistent and transfers only explicit files", async (context) => {

@@ -112,7 +112,7 @@ export interface RunnerConfig extends ExecutorConfig {
 }
 
 const MAX_BODY_BYTES = 2_000_000;
-type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string };
+type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string; runnerWorkspaceKey?: string };
 interface NpuJobSessionRequest {
   sessionId?: string;
 }
@@ -181,7 +181,17 @@ async function remoteWorkspaceRoot(dataDir: string, keyValue: string): Promise<s
   const base = resolve(dataDir, "remote-workspaces");
   const root = resolve(base, key);
   if (!root.startsWith(`${base}${sep}`)) throw new Error("Remote workspace escapes the runner data directory");
-  await mkdir(root, { recursive: true });
+  // Validate each existing component before creating descendants, so a link in
+  // a persisted workspace key cannot redirect writes outside this Runner.
+  let current = dataDir;
+  for (const part of ["remote-workspaces", ...key.split("/")]) {
+    current = resolve(current, part);
+    await mkdir(current).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw error;
+    });
+    const details = await lstat(current);
+    if (!details.isDirectory() || details.isSymbolicLink()) throw new Error("Remote workspace path must not contain symbolic links");
+  }
   return root;
 }
 
@@ -749,9 +759,9 @@ export function createRunnerServer(
         if (!environmentStore) throw new Error("Scientific environments are unavailable");
         const input = JSON.parse(await readBody(request)) as RunnerInstallEnvironmentRequest;
         const environmentId = decodeURIComponent(installMatch[1]!);
-        const workspaceRoot = input.workspaceRoot
-          ? await validatedWorkspace(config.dataDir, input.workspaceRoot)
-          : undefined;
+        const workspaceRoot = input.runnerWorkspaceKey
+          ? await validatedWorkspace(config.dataDir, await remoteWorkspaceRoot(config.dataDir, input.runnerWorkspaceKey))
+          : input.workspaceRoot ? await validatedWorkspace(config.dataDir, input.workspaceRoot) : undefined;
         const previousRevisionId = environmentStore.list().find((environment) => environment.id === environmentId)?.currentRevisionId;
         const revision = await environmentStore.install(
           environmentId,
@@ -953,19 +963,6 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     provisionerPath: config.provisionerPath,
     root: resolve(config.dataDir, "scientific-envs"),
     runnerVersion: RUNNER_VERSION,
-  }, async (provisionerPath, arguments_) => {
-    // Trusted control-plane install job (not agent code). Network is allowlisted by the provisioner;
-    // agent execution remains bubblewrap with networkPolicy=none.
-    const result = await execFileAsync(provisionerPath, arguments_, {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        MAMBA_ROOT_PREFIX: resolve(config.dataDir, "scientific-envs", "provisioner"),
-        ...(config.scientificPackageCacheDir ? { CONDA_PKGS_DIRS: config.scientificPackageCacheDir } : {}),
-      },
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    return result.stdout;
   });
   await environmentStore.initialize();
   const envProfiles = new SessionEnvProfileStore();
