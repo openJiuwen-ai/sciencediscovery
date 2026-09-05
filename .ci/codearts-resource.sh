@@ -72,19 +72,21 @@ runner_image_name=ScienceDiscovery-qemu-runner-noble-amd64.qcow2
 runner_recipe=qemu-runner-v2
 emulator_recipe=qemu-emulator-v1
 
-build_commit="${RESOURCE_BUILD_COMMIT:?RESOURCE_BUILD_COMMIT is required}"
 run_id="${RESOURCE_BUILD_RUN_ID:?RESOURCE_BUILD_RUN_ID is required}"
-[[ "$build_commit" =~ ^[0-9a-f]{40}$ ]] \
-  || { echo "FATAL: RESOURCE_BUILD_COMMIT is not a commit id." >&2; exit 2; }
 [[ "$run_id" =~ ^[0-9A-Za-z_-]+$ ]] \
   || { echo "FATAL: RESOURCE_BUILD_RUN_ID is not a run id." >&2; exit 2; }
 
-# The build task checks out a branch tip, while the OBS key and the VERSION
-# manifest carry the commit the pipeline resolved. A push that lands between
-# the two would otherwise publish one commit's artifact under another's key.
+# The commit is read from the checkout rather than passed in. A push-triggered
+# pipeline does not resolve `sources.<name>.commit_id`, so a pipeline that
+# forwarded it handed this script an empty string; the checkout is the commit
+# that actually got built. RESOURCE_BUILD_COMMIT stays supported so a caller
+# that does know the commit still gets the mismatch check.
 checked_out_commit="$(git rev-parse HEAD)"
+build_commit="${RESOURCE_BUILD_COMMIT:-$checked_out_commit}"
+[[ "$build_commit" =~ ^[0-9a-f]{40}$ ]] \
+  || { echo "FATAL: RESOURCE_BUILD_COMMIT is not a commit id." >&2; exit 2; }
 if [ "$checked_out_commit" != "$build_commit" ]; then
-  echo "FATAL: the build task checked out $checked_out_commit but the pipeline resolved $build_commit." >&2
+  echo "FATAL: the build task checked out $checked_out_commit but the caller expected $build_commit." >&2
   exit 1
 fi
 
@@ -214,7 +216,7 @@ verify_published_resources() {
   local log="$publish_dir/verify.log"
   verify_published "$obs_base/qemu-emulator/v1" \
     "$work_dir/qemu-emulator-published" "$emulator_name" "$emulator_recipe"
-  verify_published "$obs_base/qemu-runner/v1/$build_commit/$run_id" \
+  verify_published "$obs_base/qemu-runner/v2/$run_id" \
     "$work_dir/qemu-runner-published" "$runner_image_name" "$runner_recipe"
   grep -Fx "resource_run_id=$run_id" "$work_dir/qemu-runner-published/VERSION"
   # The consumer branch pins the Runner image by these three values.
