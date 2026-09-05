@@ -87,6 +87,7 @@ function validatePdf(bytes: Buffer): void {
 
 export class PaperService {
   private readonly cas: CasStore;
+  private readonly dataCas: CasStore;
 
   constructor(
     private readonly store: SessionStore,
@@ -95,6 +96,7 @@ export class PaperService {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {
     this.cas = new CasStore(store.dataDir);
+    this.dataCas = new CasStore(store.dataDir, "data");
   }
 
   async upload(input: {
@@ -309,7 +311,7 @@ export class PaperService {
       sessionId: input.sessionId,
       status: "succeeded",
     };
-    const [resultStat, resultRef] = await Promise.all([stat(resultTarget), this.cas.put(resultBytes)]);
+    const [resultStat, resultRef] = await Promise.all([stat(resultTarget), this.dataCas.put(resultBytes)]);
     const sourceRevisionId = this.store
       .getWorkspaceFileProvenance(input.sessionId, acquisition.pdfPath)
       ?.currentRevision.id;
@@ -353,8 +355,8 @@ export class PaperService {
       }
       const manifestBytes = await readFile(resolve(analysisPath, "manifest.json"));
       const [pdf, manifestRef] = await Promise.all([
-        this.cas.put(options.bytes),
-        this.cas.put(manifestBytes),
+        this.dataCas.put(options.bytes),
+        this.dataCas.put(manifestBytes),
       ]);
       await mkdir(resolve(targetRoot, ".."), { recursive: true });
       await rename(stagingRoot, targetRoot);
@@ -382,7 +384,7 @@ export class PaperService {
         const path = `${relativeRoot}/${file.path}`;
         const content = file.path === "source.pdf"
           ? pdf
-          : await this.cas.put(await readFile(resolveWorkspaceFile(targetRoot, file.path)));
+          : await this.dataCas.putFile(resolveWorkspaceFile(targetRoot, file.path));
         const revisionInput: WorkspaceFileRevisionInput = {
           contentHash: content.hash,
           mode: "write",

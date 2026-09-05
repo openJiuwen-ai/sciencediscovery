@@ -149,6 +149,7 @@ export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environm
 
 export class ProvenanceRecorder {
   readonly cas: CasStore;
+  private readonly dataCas: CasStore;
   private readonly artifactRegistry: ArtifactRegistry;
   private readonly memoryGraphSink: MemoryGraphSink | null;
 
@@ -158,11 +159,12 @@ export class ProvenanceRecorder {
     memoryGraphSink?: MemoryGraphSink,
   ) {
     this.cas = new CasStore(dataDir);
+    this.dataCas = new CasStore(dataDir, "data");
     this.memoryGraphSink = memoryGraphSink ?? null;
     this.artifactRegistry = new ArtifactRegistry(
       {
         putWorkspaceFile: async (workspaceRoot, path) =>
-          await this.cas.put(await readFile(resolveWorkspaceFile(workspaceRoot, path))),
+          await this.dataCas.putFile(resolveWorkspaceFile(workspaceRoot, path)),
       },
       { createVersion: async (input) => await this.store.createArtifactVersion(input) },
     );
@@ -420,7 +422,7 @@ export class ProvenanceRecorder {
       const logicalPath = options.artifactPathPrefix ? `${options.artifactPathPrefix}/${path}` : path;
       const target = resolveWorkspaceFile(options.workspaceRoot, path);
       const [content, fileStat] = await Promise.all([
-        this.cas.put(await readFile(target)),
+        this.dataCas.putFile(target),
         stat(target),
       ]);
       derivations.push({

@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { pipeline } from "node:stream/promises";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 import type { CasObjectRef } from "@sciencediscovery/schema";
+import { VersionStore, type ObjectRef, type Pool } from "./versioning.js";
+
+export * from "./versioning.js";
 
 export interface ContentStore {
   hash(content: string | Buffer): string;
@@ -40,13 +42,13 @@ export async function sha256File(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
-/** Append-only SHA-256 content-addressed storage rooted under data/cas/sha256. */
+/** Legacy hash facade: dual-pool writes, compatible reads of the old mixed layout. */
 export class CasStore implements ContentStore {
-  constructor(private readonly dataDir: string) {}
+  constructor(private readonly dataDir: string, private readonly pool: Pool = "agent-state") {}
 
   private objectPath(hash: string): string {
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("Invalid CAS hash");
-    return resolve(this.dataDir, "cas", "sha256", hash.slice(0, 2), hash);
+    return resolve(this.dataDir, "versioning", this.pool, "blobs", "sha256", hash);
   }
 
   hash(content: string | Buffer): string {
@@ -56,58 +58,18 @@ export class CasStore implements ContentStore {
   async put(content: string | Buffer): Promise<CasObjectRef> {
     const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);
     const hash = this.hash(bytes);
-    const path = this.objectPath(hash);
-    if (await this.has(hash)) return { hash, size: bytes.length };
-
-    await mkdir(dirname(path), { recursive: true });
-    const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temporaryPath, bytes);
-      await rename(temporaryPath, path);
-    } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    await new VersionStore(this.dataDir).put(this.pool, bytes);
     return { hash, size: bytes.length };
   }
 
   async putFile(sourcePath: string): Promise<CasObjectRef> {
-    const temporaryDirectory = resolve(this.dataDir, "cas", "sha256", ".tmp");
-    await mkdir(temporaryDirectory, { recursive: true });
-    const temporaryPath = resolve(temporaryDirectory, `${process.pid}.${randomUUID()}.tmp`);
-    const hash = createHash("sha256");
-    let size = 0;
-    try {
-      await pipeline(
-        createReadStream(sourcePath),
-        async function* (source) {
-          for await (const chunk of source) {
-            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            hash.update(bytes);
-            size += bytes.length;
-            yield bytes;
-          }
-        },
-        createWriteStream(temporaryPath, { flags: "wx" }),
-      );
-      const digest = hash.digest("hex");
-      const destination = this.objectPath(digest);
-      if (await this.has(digest)) {
-        await rm(temporaryPath, { force: true });
-      } else {
-        await mkdir(dirname(destination), { recursive: true });
-        await rename(temporaryPath, destination);
-      }
-      return { hash: digest, size };
-    } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    const ref = await new VersionStore(this.dataDir).putFile(this.pool, sourcePath);
+    return { hash: ref.digest.slice(7), size: ref.size };
   }
 
   async has(hash: string): Promise<boolean> {
     try {
-      await stat(this.objectPath(hash));
+      await this.read(hash);
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -116,15 +78,46 @@ export class CasStore implements ContentStore {
   }
 
   async verify(hash: string): Promise<boolean> {
+    this.objectPath(hash);
     try {
       return this.hash(await this.read(hash)) === hash;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as Error).message === "CAS integrity failure") return false;
       throw error;
     }
   }
 
   async read(hash: string): Promise<Buffer> {
-    return await readFile(this.objectPath(hash));
+    for (const path of this.readPaths(hash)) {
+      try {
+        const bytes = await readFile(path);
+        if (sha256(bytes) !== hash) throw new Error("CAS integrity failure");
+        return bytes;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
+  }
+
+  /** Promote a legacy reference into a typed pool without buffering large historical files. */
+  async retain<P extends Pool>(reference: CasObjectRef, pool: P): Promise<ObjectRef<P>> {
+    for (const path of this.readPaths(reference.hash)) {
+      try {
+        const target = await new VersionStore(this.dataDir).putFile(pool, path);
+        if (target.digest !== `sha256:${reference.hash}` || target.size !== reference.size) throw new Error("Legacy reference integrity failure");
+        return target;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
+  }
+
+  private readPaths(hash: string): string[] {
+    const current = this.objectPath(hash); // validates before resolving any path
+    const other = this.pool === "data" ? "agent-state" : "data";
+    return [current, resolve(this.dataDir, "versioning", other, "blobs", "sha256", hash),
+      resolve(this.dataDir, "cas", "sha256", hash.slice(0, 2), hash)];
   }
 }
