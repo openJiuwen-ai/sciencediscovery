@@ -163,7 +163,14 @@ verify_published() { # <base-url> <directory> <artifact-name> <recipe>
   fi
   cat "$directory/VERSION"
   grep -Fx "recipe=$recipe" "$directory/VERSION"
-  grep -Fx "resource_commit=$build_commit" "$directory/VERSION"
+  # The run id, not this job's own checkout, is what says the object came from
+  # this run. Every job fetches the branch tip when it starts, so a push that
+  # lands mid-run leaves the jobs on different commits -- and then a check
+  # against this job's HEAD fails an artifact that is otherwise fine, while
+  # still missing the case where two artifacts came from different commits.
+  # Pin the run here and compare the commits to each other below.
+  grep -Fx "resource_run_id=$run_id" "$directory/VERSION"
+  published_commits+=("$(sed -n 's/^resource_commit=//p' "$directory/VERSION")")
   echo "verified published $name: $actual"
 }
 
@@ -222,12 +229,22 @@ build_qemu_runner() {
 }
 
 verify_published_resources() {
-  local log="$publish_dir/verify.log"
+  local log="$publish_dir/verify.log" commit
+  published_commits=()
   verify_published "$obs_base/qemu-emulator/v1" \
     "$work_dir/qemu-emulator-published" "$emulator_name" "$emulator_recipe"
   verify_published "$obs_base/qemu-runner/v2/$run_id" \
     "$work_dir/qemu-runner-published" "$runner_image_name" "$runner_recipe"
-  grep -Fx "resource_run_id=$run_id" "$work_dir/qemu-runner-published/VERSION"
+  # One run must publish one commit's work. Different commits here means the
+  # branch moved while the run was in flight, and the artifacts do not belong
+  # to each other however well each one verifies on its own.
+  for commit in "${published_commits[@]}"; do
+    if [ "$commit" != "${published_commits[0]}" ]; then
+      echo "FATAL: this run published artifacts built from ${published_commits[0]} and $commit." >&2
+      return 1
+    fi
+  done
+  build_commit="${published_commits[0]}"
   # The consumer branch pins the Runner image by these three values.
   {
     printf 'resource_commit=%s\n' "$build_commit"
