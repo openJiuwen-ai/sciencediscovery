@@ -18,6 +18,11 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# One definition for the names, versions and locations every resource script
+# has to agree on. The checksums below stay here beside their download: a
+# version bump has to be reviewed together with the hash it changes.
+# shellcheck source=.ci/qemu-resources.sh
+source "$script_dir/qemu-resources.sh"
 group=""
 output_dir=""
 
@@ -45,8 +50,8 @@ done
   || { echo "--group must be toolchains or qemu." >&2; exit 2; }
 [[ -n "$output_dir" ]] || { echo "--output-dir is required." >&2; exit 2; }
 
-toolchain_cache_url="${CODEARTS_TOOLCHAIN_CACHE_URL:-https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/toolchains/v1}"
-qemu_cache_url="${CODEARTS_QEMU_CACHE_URL:-https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu/v1}"
+toolchain_cache_url="${CODEARTS_TOOLCHAIN_CACHE_URL:-$OBS_CACHE_BASE/toolchains/v1}"
+qemu_cache_url="${CODEARTS_QEMU_CACHE_URL:-$OBS_CACHE_BASE/qemu/v1}"
 download_max_time="${CODEARTS_RESOURCE_MAX_TIME:-1800}"
 
 fetch_toolchain() {
@@ -64,13 +69,13 @@ if [[ "$group" == toolchains ]]; then
   mkdir -p -- "$output_dir/toolchains"
 
   fetch_toolchain \
-    node-v22.19.0-linux-x64.tar.xz \
+    node-v$TOOLCHAIN_NODE_VERSION-linux-x64.tar.xz \
     c0649af18e6a24f6fe5535a3e86b341dd49a8e71117c8b68bde973ef834f16f2 \
-    https://npmmirror.com/mirrors/node/v22.19.0/node-v22.19.0-linux-x64.tar.xz
+    https://npmmirror.com/mirrors/node/v$TOOLCHAIN_NODE_VERSION/node-v$TOOLCHAIN_NODE_VERSION-linux-x64.tar.xz
   fetch_toolchain \
-    node-v22.19.0-linux-arm64.tar.xz \
+    node-v$TOOLCHAIN_NODE_VERSION-linux-arm64.tar.xz \
     0b2d9f564b6594222a62c82e1df2efe119dd4a4aff29644f4dd325bf360b6bcc \
-    https://npmmirror.com/mirrors/node/v22.19.0/node-v22.19.0-linux-arm64.tar.xz
+    https://npmmirror.com/mirrors/node/v$TOOLCHAIN_NODE_VERSION/node-v$TOOLCHAIN_NODE_VERSION-linux-arm64.tar.xz
   fetch_toolchain \
     cpython-3.12.13+20260805-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz \
     f04a55ae95e8bd352cdff8da11c344fe609ec84795d106fa91b6620366d786fe \
@@ -88,17 +93,17 @@ if [[ "$group" == toolchains ]]; then
     70c60a36609ee8bcc07a3a1a66b2c3a65cff7c1053466963437f1bda72e5210f \
     https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/linux-aarch64/micromamba-2.8.1-0.tar.bz2
   fetch_toolchain \
-    pnpm-11.1.2.tgz \
+    pnpm-$TOOLCHAIN_PNPM_VERSION.tgz \
     bfe4d2b2c7a3210565bba62929f9efe493eb5f24627201a102ea4514eae8cf80 \
-    https://repo.huaweicloud.com/repository/npm/pnpm/-/pnpm-11.1.2.tgz
+    https://repo.huaweicloud.com/repository/npm/pnpm/-/pnpm-$TOOLCHAIN_PNPM_VERSION.tgz
   fetch_toolchain \
-    uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
+    uv-$TOOLCHAIN_UV_VERSION-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
     b7e89798bd3df7dcc4b2b4ac4e2fc11d6b3ff4fe7d764aa3012d664c635e2922 \
-    https://pypi.tuna.tsinghua.edu.cn/packages/38/16/a07593a040fe6403c36f3b0a99b309f295cbfe19a1074dbadb671d5d4ef7/uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+    https://pypi.tuna.tsinghua.edu.cn/packages/38/16/a07593a040fe6403c36f3b0a99b309f295cbfe19a1074dbadb671d5d4ef7/uv-$TOOLCHAIN_UV_VERSION-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
   fetch_toolchain \
-    uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl \
+    uv-$TOOLCHAIN_UV_VERSION-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl \
     ea296b700d7c4c27acdfd23ffaef2b0ecdd0aa1b58d942c62ee87df3b30f06ac \
-    https://pypi.tuna.tsinghua.edu.cn/packages/ba/3d/b8186a7dec1346ca4630c674b760517d28bffa813a01965f4b57596bacf3/uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
+    https://pypi.tuna.tsinghua.edu.cn/packages/ba/3d/b8186a7dec1346ca4630c674b760517d28bffa813a01965f4b57596bacf3/uv-$TOOLCHAIN_UV_VERSION-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
 
   echo "Prepared 9 verified toolchain resources in $output_dir/toolchains"
   exit 0
@@ -108,5 +113,5 @@ mkdir -p -- "$output_dir/qemu"
 CI_QEMU_IMAGE_CACHE_URL="$qemu_cache_url" \
 CI_QEMU_IMAGE_DOWNLOAD_MAX_TIME="$download_max_time" \
   bash "$script_dir/fetch-qemu-image.sh" \
-    --output "$output_dir/qemu/noble-server-cloudimg-amd64.img"
+    --output "$output_dir/qemu/$QEMU_BASE_IMAGE_NAME"
 echo "Prepared the verified QEMU image in $output_dir/qemu"

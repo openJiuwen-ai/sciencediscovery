@@ -26,6 +26,12 @@
 
 set -Eeuo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# One definition for the names, versions and locations every resource script
+# has to agree on.
+# shellcheck source=.ci/qemu-resources.sh
+source "$script_dir/qemu-resources.sh"
+
 output_dir=""
 work_dir=""
 
@@ -81,7 +87,7 @@ alpine_signing_key=alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
 ca_bundle_file="$work_dir/ca-certificates-bundle-20260611-r0.apk"
 ca_bundle_url="$alpine_mirror/$alpine_release/main/x86_64/ca-certificates-bundle-20260611-r0.apk"
 ca_bundle_sha256=a18fd1bd8bea03966ee5719aa61e44d9a810db2c8b6641b45f92b30e860f0927
-payload_name=ScienceDiscovery-qemu-emulator-alpine-x86_64.tar
+payload_name="$QEMU_EMULATOR_PAYLOAD_NAME"
 
 download_verified() {
   local url=$1 destination=$2 expected_sha256=$3
@@ -174,7 +180,7 @@ tar --create --format=pax \
   sha256sum --check SHA256SUMS
 )
 cat > "$output_dir/VERSION" <<EOF
-recipe=qemu-emulator-v1
+recipe=$QEMU_EMULATOR_RECIPE
 alpine_release=$alpine_release
 alpine_bootstrap_release=$alpine_bootstrap_release
 qemu=$qemu_version

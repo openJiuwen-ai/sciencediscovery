@@ -71,13 +71,15 @@ esac
 rm -rf -- "$publish_dir"
 mkdir -p -- "$publish_dir"
 
-obs_base=https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache
-emulator_name=ScienceDiscovery-qemu-emulator-alpine-x86_64.tar
-runner_image_name=ScienceDiscovery-qemu-runner-noble-amd64.qcow2
-# Bumped whenever the image's contents change, so a guest that boots an older
-# published image fails its own assertion instead of running the tests.
-runner_recipe=qemu-runner-v2
-emulator_recipe=qemu-emulator-v1
+# One definition for the names, versions and locations every resource script
+# has to agree on.
+# shellcheck source=.ci/qemu-resources.sh
+source "$repo_root/.ci/qemu-resources.sh"
+obs_base="$OBS_CACHE_BASE"
+emulator_name="$QEMU_EMULATOR_PAYLOAD_NAME"
+runner_image_name="$QEMU_RUNNER_IMAGE_NAME"
+runner_recipe="$QEMU_RUNNER_RECIPE"
+emulator_recipe="$QEMU_EMULATOR_RECIPE"
 
 run_id="${RESOURCE_BUILD_RUN_ID:?RESOURCE_BUILD_RUN_ID is required}"
 [[ "$run_id" =~ ^[0-9A-Za-z_-]+$ ]] \
@@ -201,11 +203,11 @@ build_qemu_runner() {
   CI_QEMU_IMAGE_CACHE_URL="$obs_base/qemu/v1" \
   CI_QEMU_IMAGE_CACHE_ONLY=1 \
     bash .ci/fetch-qemu-image.sh \
-      --output "$base_dir/noble-server-cloudimg-amd64.img"
+      --output "$base_dir/$QEMU_BASE_IMAGE_NAME"
   RESOURCE_BUILD_COMMIT="$build_commit" \
   RESOURCE_BUILD_RUN_ID="$run_id" \
     bash .ci/build-qemu-runner-image.sh \
-      --base-image "$base_dir/noble-server-cloudimg-amd64.img" \
+      --base-image "$base_dir/$QEMU_BASE_IMAGE_NAME" \
       --output-dir "$output_dir"
   (cd "$output_dir" && sha256sum --check SHA256SUMS)
   cat "$output_dir/VERSION"

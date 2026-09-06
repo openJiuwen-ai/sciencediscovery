@@ -24,10 +24,13 @@ set -Eeuo pipefail
 # once already: the manifest said v2 while this file still baked v1 into the
 # image, and every guest failed the assertion it makes on this marker.
 recipe="${QEMU_RUNNER_RECIPE:?QEMU_RUNNER_RECIPE is required}"
+node_version="${TOOLCHAIN_NODE_VERSION:?TOOLCHAIN_NODE_VERSION is required}"
+pnpm_version="${TOOLCHAIN_PNPM_VERSION:?TOOLCHAIN_PNPM_VERSION is required}"
+uv_version="${TOOLCHAIN_UV_VERSION:?TOOLCHAIN_UV_VERSION is required}"
+toolchain_base="${OBS_CACHE_BASE:?OBS_CACHE_BASE is required}/toolchains/v1"
 
 result=125
 archive_dir=/var/cache/sciencediscovery-image-build
-toolchain_base=https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/toolchains/v1
 ci_home=/home/ci
 
 power_off() {
@@ -64,16 +67,14 @@ download_verified() {
 
 id ci >/dev/null 2>&1 || { echo "FATAL: cloud-init did not create user ci." >&2; exit 1; }
 
-node_version=22.19.0
-node_filename=node-v22.19.0-linux-x64.tar.xz
+node_filename="node-v$node_version-linux-x64.tar.xz"
 node_sha256=c0649af18e6a24f6fe5535a3e86b341dd49a8e71117c8b68bde973ef834f16f2
 node_archive="$(download_verified "$node_filename" "$node_sha256")"
 rm -rf -- "$ci_home/.local/node"
 mkdir -p "$ci_home/.local/node"
 tar -xJf "$node_archive" -C "$ci_home/.local/node" --strip-components=1
 
-pnpm_version=11.1.2
-pnpm_filename=pnpm-11.1.2.tgz
+pnpm_filename="pnpm-$pnpm_version.tgz"
 pnpm_sha256=bfe4d2b2c7a3210565bba62929f9efe493eb5f24627201a102ea4514eae8cf80
 pnpm_archive="$(download_verified "$pnpm_filename" "$pnpm_sha256")"
 pnpm_home="$ci_home/.local/share/pnpm"
@@ -85,8 +86,7 @@ test -x "$pnpm_install/bin/pnpm.mjs"
 ln -sfn "$pnpm_install/bin/pnpm.mjs" "$pnpm_home/pnpm"
 ln -sfn "$pnpm_install/bin/pnpx.mjs" "$pnpm_home/pnpx"
 
-uv_version=0.9.26
-uv_filename=uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+uv_filename="uv-$uv_version-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
 uv_sha256=b7e89798bd3df7dcc4b2b4ac4e2fc11d6b3ff4fe7d764aa3012d664c635e2922
 uv_archive="$(download_verified "$uv_filename" "$uv_sha256")"
 uv_install="$ci_home/.local/share/uv/$uv_version"
@@ -117,9 +117,9 @@ sysctl --system >/dev/null
 ci_path="$ci_home/.local/node/bin:$pnpm_home:$ci_home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 runuser --user ci -- env HOME="$ci_home" PATH="$ci_path" bash -c '
   set -e
-  test "$(node --version)" = v22.19.0
-  test "$(pnpm --version)" = 11.1.2
-  test "$(uv --version)" = "uv 0.9.26"
+  test "$(node --version)" = "v$node_version"
+  test "$(pnpm --version)" = "$pnpm_version"
+  test "$(uv --version)" = "uv $uv_version"
   bwrap --ro-bind / / --dev /dev true
 '
 

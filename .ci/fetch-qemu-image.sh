@@ -20,6 +20,11 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# One definition for the names, versions and locations every resource script
+# has to agree on.
+# shellcheck source=.ci/qemu-resources.sh
+source "$script_dir/qemu-resources.sh"
+
 output=""
 
 usage() {
@@ -43,8 +48,8 @@ done
 
 [[ -n "$output" ]] || { echo "--output is required." >&2; exit 2; }
 
-image_name=noble-server-cloudimg-amd64.img
-image_url=https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/noble/20260826/noble-server-cloudimg-amd64.img
+image_name="$QEMU_BASE_IMAGE_NAME"
+image_url=https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/noble/20260826/$QEMU_BASE_IMAGE_NAME
 image_sha256=d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30
 download_max_time="${CI_QEMU_IMAGE_DOWNLOAD_MAX_TIME:-1800}"
 cache_only="${CI_QEMU_IMAGE_CACHE_ONLY:-0}"

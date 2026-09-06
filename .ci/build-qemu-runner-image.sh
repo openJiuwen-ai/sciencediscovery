@@ -19,6 +19,11 @@
 set -Eeuo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# One definition for the names, versions and locations every resource script
+# has to agree on.
+# shellcheck source=.ci/qemu-resources.sh
+source "$script_dir/qemu-resources.sh"
+
 base_image=""
 output_dir=""
 
@@ -58,7 +63,7 @@ work_dir="$output_dir/.build"
 cache_dir="$output_dir/.qemu-cache"
 seed_dir="$work_dir/seed"
 serial_log="$work_dir/serial.log"
-image_name=ScienceDiscovery-qemu-runner-noble-amd64.qcow2
+image_name="$QEMU_RUNNER_IMAGE_NAME"
 image_path="$output_dir/$image_name"
 compacted_image="$work_dir/$image_name"
 http_pid=""
@@ -164,7 +169,7 @@ cp --reflink=auto -- "$base_image" "$image_path"
 "${qemu_img_command[@]}" resize "$image_path" 16G
 # One recipe name, used for the marker baked into the image, for the check
 # below that the image really carries it, and for the published manifest.
-recipe=qemu-runner-v2
+recipe="$QEMU_RUNNER_RECIPE"
 cp -- "$script_dir/provision-qemu-runner-image.sh" "$seed_dir/provision.sh"
 printf 'instance-id: sciencediscovery-qemu-runner-v1\nlocal-hostname: resource-builder\n' > "$seed_dir/meta-data"
 : > "$seed_dir/vendor-data"
@@ -225,12 +230,20 @@ packages:
   - xfonts-scalable
   - xvfb
 runcmd:
-  - [bash, -c, "curl --fail --location --retry 3 --silent --show-error http://10.0.2.2:QEMU_HTTP_PORT/provision.sh --output /usr/local/sbin/provision-qemu-runner-image && chmod 0755 /usr/local/sbin/provision-qemu-runner-image && QEMU_RUNNER_RECIPE=QEMU_RUNNER_RECIPE_VALUE /usr/local/sbin/provision-qemu-runner-image"]
+  - [bash, -c, "curl --fail --location --retry 3 --silent --show-error http://10.0.2.2:QEMU_HTTP_PORT/provision.sh --output /usr/local/sbin/provision-qemu-runner-image && chmod 0755 /usr/local/sbin/provision-qemu-runner-image && env QEMU_GUEST_ENV /usr/local/sbin/provision-qemu-runner-image"]
 CLOUD_CONFIG
 
 http_port=$((19080 + ($$ % 1000)))
 sed -i "s/QEMU_HTTP_PORT/$http_port/g" "$seed_dir/user-data"
-sed -i "s/QEMU_RUNNER_RECIPE_VALUE/$recipe/g" "$seed_dir/user-data"
+# The guest downloads the provisioning script on its own, so it cannot source
+# qemu-resources.sh; hand it the same values over the command line. The base URL
+# holds slashes, so the substitution cannot use them as its delimiter.
+guest_env="QEMU_RUNNER_RECIPE=$recipe"
+guest_env+=" TOOLCHAIN_NODE_VERSION=$TOOLCHAIN_NODE_VERSION"
+guest_env+=" TOOLCHAIN_PNPM_VERSION=$TOOLCHAIN_PNPM_VERSION"
+guest_env+=" TOOLCHAIN_UV_VERSION=$TOOLCHAIN_UV_VERSION"
+guest_env+=" OBS_CACHE_BASE=$OBS_CACHE_BASE"
+sed -i "s|QEMU_GUEST_ENV|$guest_env|g" "$seed_dir/user-data"
 python3 -m http.server "$http_port" --bind 0.0.0.0 --directory "$seed_dir" &
 http_pid=$!
 kill -0 "$http_pid" 2>/dev/null \
@@ -287,11 +300,11 @@ mv -- "$compacted_image" "$image_path"
 )
 cat > "$output_dir/VERSION" <<EOF
 recipe=$recipe
-base_image=noble-server-cloudimg-amd64.img
+base_image=$QEMU_BASE_IMAGE_NAME
 base_sha256=d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30
-node=22.19.0
-pnpm=11.1.2
-uv=0.9.26
+node=$TOOLCHAIN_NODE_VERSION
+pnpm=$TOOLCHAIN_PNPM_VERSION
+uv=$TOOLCHAIN_UV_VERSION
 system_packages=bubblewrap,ca-certificates,curl,git,python3,xz-utils,fonts-freefont-ttf,fonts-ipafont-gothic,fonts-liberation,fonts-noto-color-emoji,fonts-tlwg-loma-otf,fonts-unifont,fonts-wqy-zenhei,libasound2t64,libatk-bridge2.0-0t64,libatk1.0-0t64,libatspi2.0-0t64,libcairo2,libcups2t64,libdbus-1-3,libdrm2,libfontconfig1,libfreetype6,libgbm1,libglib2.0-0t64,libnspr4,libnss3,libpango-1.0-0,libx11-6,libxcb1,libxcomposite1,libxdamage1,libxext6,libxfixes3,libxkbcommon0,libxrandr2,xfonts-cyrillic,xfonts-scalable,xvfb
 resource_commit=${RESOURCE_BUILD_COMMIT:-unknown}
 resource_run_id=${RESOURCE_BUILD_RUN_ID:-unknown}
