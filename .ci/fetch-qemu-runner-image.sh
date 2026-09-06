@@ -41,8 +41,8 @@ done
 
 [[ -n "$output" ]] || { echo "--output is required." >&2; exit 2; }
 
-resource_commit=7365ff8e9bfb6aa2414c1dc09bf79b3f3e6bc4c8
-resource_run_id=f8d5a313663c418a8c54eec630ebe881
+resource_commit=4851e5b1f15a88be44af2b5981656de91634581f
+resource_run_id=6aa2a6f0ceab407e8404c1af46b09a96
 checksum_file="$script_dir/qemu-runner-image.sha256"
 if ! read -r image_sha256 image_name < "$checksum_file"; then
   echo "FATAL: could not read the QEMU Runner image checksum manifest." >&2
@@ -52,7 +52,10 @@ fi
   || { echo "FATAL: invalid QEMU Runner image SHA256 manifest entry." >&2; exit 1; }
 [[ "$image_name" =~ ^[0-9A-Za-z._+-]+$ ]] \
   || { echo "FATAL: invalid QEMU Runner image filename in checksum manifest." >&2; exit 1; }
-image_base_url="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu-runner/v1/$resource_commit/$resource_run_id"
+# The key holds only the run id. A push-triggered pipeline cannot resolve its
+# own commit into a step parameter, so the commit that built this image is
+# recorded in the published VERSION manifest and above rather than in the path.
+image_base_url="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu-runner/v2/$resource_run_id"
 
 echo "Fetching the pinned pre-provisioned QEMU Runner image"
 echo "resource commit: $resource_commit"

@@ -225,7 +225,13 @@ test("prebuilt QEMU Runner image and workflow share the immutable cache contract
   assert.doesNotMatch(fetcherSource, /image_sha256=[a-f0-9]{64}/);
   assert.match(fetcherSource, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME:-300/);
   assert.match(fetcherSource, /--cache-only/);
-  assert.match(fetcherSource, /sciencediscovery\/cache\/qemu-runner\/v1/);
+  // The key is scoped by run id alone. A push-triggered resource pipeline
+  // cannot resolve its own commit into a step parameter, so a path that still
+  // carried the commit would resolve to one with an empty segment.
+  assert.match(
+    fetcherSource,
+    /sciencediscovery\/cache\/qemu-runner\/v2\/\$resource_run_id"$/m,
+  );
   assert.match(workflow, /ut_guest:[\s\S]*?needs: \[\][\s\S]*?SH_FILE_PATH: \.ci\/codearts-layer\.sh/);
   const layer = await readFile(join(repositoryRoot, ".ci", "codearts-layer.sh"), "utf8");
   assert.match(layer, /CI_QEMU_RUNNER_IMAGE_DOWNLOAD_MAX_TIME:-300/);

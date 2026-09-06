@@ -141,7 +141,7 @@ runuser --user ci -- env \
     test "$(node --version)" = v22.19.0
     test "$(pnpm --version)" = 11.1.2
     test "$(uv --version)" = "uv 0.9.26"
-    grep -Fx "recipe=qemu-runner-v1" /etc/sciencediscovery-qemu-runner-image
+    grep -Fx "recipe=qemu-runner-v2" /etc/sciencediscovery-qemu-runner-image
     registry="${CI_NPM_REGISTRY:-https://repo.huaweicloud.com/repository/npm/}"
     npm config set registry "${registry%/}/" --location=user
     # The workspace arrived installed and built, and pnpm 11 defaults
