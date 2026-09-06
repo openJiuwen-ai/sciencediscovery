@@ -87,8 +87,9 @@ verify_binary_artifacts() {
 
 failed=0
 for entry in "${CODEARTS_CI_LAYERS[@]}"; do
-  name="${entry%%:*}"
-  suffix="${entry#*:}"
+  codearts_layer_fields "$entry"
+  name="$layer_name"
+  suffix="$layer_suffix"
   code="$(codearts_layer_exit_code "$suffix")"
   if [ "$code" = "0" ]; then
     echo "$name: PASSED"

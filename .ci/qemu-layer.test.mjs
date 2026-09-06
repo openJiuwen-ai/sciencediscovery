@@ -222,7 +222,7 @@ test("both guest layers install and build before handing the workspace over", as
 
 test("the disabled E2E layer is neither verified nor reported", async () => {
   const layers = await readFile(join(ciDirectory, "codearts-ci-layers.sh"), "utf8");
-  const listed = [...layers.matchAll(/^  "([a-z0-9_-]+):/gm)].map(([, name]) => name);
+  const listed = [...layers.matchAll(/^  "([a-z0-9_-]+)\|/gm)].map(([, name]) => name);
   assert.deepEqual(listed, ["ut-host", "ut-guest", "st", "binary-x86_64", "binary-aarch64"]);
   // A layer left in this list but absent from the workflow publishes no
   // exit-code, and a missing object is a failure by design -- the run would go
@@ -233,6 +233,15 @@ test("the disabled E2E layer is neither verified nor reported", async () => {
   // matter of this list and the workflow, not of rebuilding the layer.
   const layer = await readFile(join(ciDirectory, "codearts-layer.sh"), "utf8");
   assert.match(layer, /run_e2e\(\) \{/);
+
+  // The merge-request table is generated from the same records. It used to
+  // spell out one row per layer, so removing E2E from this list still left the
+  // table asking for an exit-code nobody published and reporting it FAILED.
+  const result = await readFile(join(ciDirectory, "codearts-pr-result.sh"), "utf8");
+  assert.match(result, /for entry in "\$\{CODEARTS_CI_LAYERS\[@\]\}"/);
+  for (const hardcoded of ["E2E", "ut-host", "ut-guest", "binary/x86_64", "host tier"]) {
+    assert.ok(!result.includes(hardcoded), `the result table spells out ${hardcoded}`);
+  }
 });
 
 test("the UT guest payload leaves the external dependency tree behind", async () => {

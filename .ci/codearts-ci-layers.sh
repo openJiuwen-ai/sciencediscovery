@@ -24,21 +24,30 @@
 #
 # Sourced, not executed.
 
-# name:obs-suffix, in the order the result table lists them.
+# One record per layer, in the order the merge-request table lists them:
 #
-# E2E is deliberately absent. Its journeys reach the browser and run to
-# completion under emulation, but every one of them outruns a Playwright
-# timeout sized for native speed, so the layer stays off until those are
-# scaled. The entry point, the guest and `pnpm ci:e2e` are untouched:
-# restoring it means adding the pair back here and the job back to the
-# workflow.
+#   name | obs-suffix | table group | table subtask | details cell
+#
+# The verification job and the table both read this list, so a layer exists
+# exactly once. E2E is deliberately absent: its journeys reach the browser and
+# run to completion under emulation, but every one of them outruns a Playwright
+# timeout sized for native speed. The entry point, the guest and `pnpm ci:e2e`
+# are untouched, so restoring it means adding a record here and the job back to
+# the workflow.
 CODEARTS_CI_LAYERS=(
-  "ut-host:ut-host"
-  "ut-guest:ut-guest"
-  "st:st"
-  "binary-x86_64:binary/x86_64"
-  "binary-aarch64:binary/aarch64"
+  "ut-host|ut-host|UT|host tier|log"
+  "ut-guest|ut-guest|UT|guest tier (QEMU TCG sandbox)|log"
+  "st|st|ST|-|log"
+  "binary-x86_64|binary/x86_64|Binary|x86_64 debug package|artifact"
+  "binary-aarch64|binary/aarch64|Binary|aarch64 debug package|artifact"
 )
+
+# Split one record into the caller's named variables.
+codearts_layer_fields() { # <record>
+  IFS='|' read -r layer_name layer_suffix layer_group layer_subtask layer_details <<EOF
+$1
+EOF
+}
 
 codearts_run_base_url() {
   printf 'https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/%s/%s' \

@@ -53,16 +53,6 @@ RESULT_FILE="$RESULT_DIR/result.html"
 PR_CHECK_URL="https://gitcode.com/openJiuwen/sciencediscovery/pull/${MERGE_ID}/check"
 CODECHECK_RESULT_BASE="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery"
 OBS_RUN_BASE="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/ci/$CI_COMMIT/$CI_RUN_ID"
-UT_HOST_LOG_URL="$OBS_RUN_BASE/ut-host/run.log"
-UT_GUEST_LOG_URL="$OBS_RUN_BASE/ut-guest/run.log"
-ST_LOG_URL="$OBS_RUN_BASE/st/run.log"
-E2E_LOG_URL="$OBS_RUN_BASE/e2e/run.log"
-BINARY_X86_64_LOG_URL="$OBS_RUN_BASE/binary/x86_64/run.log"
-BINARY_AARCH64_LOG_URL="$OBS_RUN_BASE/binary/aarch64/run.log"
-BINARY_X86_64_URL="$OBS_RUN_BASE/binary/x86_64/ScienceDiscovery-${CI_COMMIT:0:8}-linux-x86_64"
-BINARY_X86_64_SUMS_URL="$OBS_RUN_BASE/binary/x86_64/SHA256SUMS"
-BINARY_AARCH64_URL="$OBS_RUN_BASE/binary/aarch64/ScienceDiscovery-${CI_COMMIT:0:8}-linux-aarch64"
-BINARY_AARCH64_SUMS_URL="$OBS_RUN_BASE/binary/aarch64/SHA256SUMS"
 
 codecheck_result_fields() {
   python3 - "$1" <<'PY'
@@ -138,30 +128,49 @@ ANTI_POISON_LINK_CELL=$(printf '%s\n' "$ANTI_POISON_FIELDS" | sed -n '2p')
 SCA_RESULT=$(printf '%s\n' "$SCA_FIELDS" | sed -n '1p')
 SCA_LINK_CELL=$(printf '%s\n' "$SCA_FIELDS" | sed -n '2p')
 
+if [ "$kind" = success ]; then
+  HEADLINE="<p>&#9989; 流水线 <a href=\"$PR_CHECK_URL\">$CI_RUN_ID</a> 执行成功。</p>"
+else
+  HEADLINE="<p>&#10060; 流水线 <a href=\"$PR_CHECK_URL\">$CI_RUN_ID</a> 执行失败。</p>"
+fi
+
+# One row per record in CODEARTS_CI_LAYERS, so a layer that leaves the run
+# leaves this table with it. Rows sharing a group are merged under one heading,
+# which is why the records are kept in the order the table reads.
+#
 # Every CodeArts job is green by construction, because the build task's shell
 # returns success so its OBS action can upload the log. Read each layer's
 # recorded exit code instead, exactly as the verification job does.
-UT_HOST_RESULT=$(codearts_layer_status ut-host)
-UT_GUEST_RESULT=$(codearts_layer_status ut-guest)
-ST_RESULT=$(codearts_layer_status st)
-E2E_RESULT=$(codearts_layer_status e2e)
-BINARY_X86_64_RESULT=$(codearts_layer_status binary/x86_64)
-BINARY_AARCH64_RESULT=$(codearts_layer_status binary/aarch64)
-UT_HOST_LOG_CELL=$(public_log_cell "$UT_HOST_LOG_URL")
-UT_GUEST_LOG_CELL=$(public_log_cell "$UT_GUEST_LOG_URL")
-ST_LOG_CELL=$(public_log_cell "$ST_LOG_URL")
-E2E_LOG_CELL=$(public_log_cell "$E2E_LOG_URL")
-if [ "$kind" = success ]; then
-  # A successful run has the artifacts to point at; a failed one may not, so it
-  # links the packaging logs instead.
-  BINARY_X86_64_CELL="<a href=\"$BINARY_X86_64_URL\">binary</a> · <a href=\"$BINARY_X86_64_SUMS_URL\">SHA256SUMS</a>"
-  BINARY_AARCH64_CELL="<a href=\"$BINARY_AARCH64_URL\">binary</a> · <a href=\"$BINARY_AARCH64_SUMS_URL\">SHA256SUMS</a>"
-  HEADLINE="<p>&#9989; 流水线 <a href=\"$PR_CHECK_URL\">$CI_RUN_ID</a> 执行成功。</p>"
-else
-  BINARY_X86_64_CELL=$(public_log_cell "$BINARY_X86_64_LOG_URL")
-  BINARY_AARCH64_CELL=$(public_log_cell "$BINARY_AARCH64_LOG_URL")
-  HEADLINE="<p>&#10060; 流水线 <a href=\"$PR_CHECK_URL\">$CI_RUN_ID</a> 执行失败。</p>"
-fi
+layer_rows() {
+  local entry previous_group="" row_count
+  for entry in "${CODEARTS_CI_LAYERS[@]}"; do
+    codearts_layer_fields "$entry"
+    if [ "$layer_group" = "$previous_group" ]; then
+      printf '  <tr>'
+    else
+      row_count="$(printf '%s\n' "${CODEARTS_CI_LAYERS[@]}" | cut -d'|' -f3 | grep -cx -- "$layer_group")"
+      if [ "$row_count" -gt 1 ]; then
+        printf '  <tr><td rowspan="%s">%s</td>' "$row_count" "$layer_group"
+      else
+        printf '  <tr><td>%s</td>' "$layer_group"
+      fi
+      previous_group="$layer_group"
+    fi
+    local details
+    if [ "$layer_details" = artifact ] && [ "$kind" = success ]; then
+      # A successful run has the artifacts to point at; a failed one may not,
+      # so it links the packaging log instead.
+      local architecture="${layer_suffix#binary/}"
+      details="<a href=\"$OBS_RUN_BASE/$layer_suffix/ScienceDiscovery-${CI_COMMIT:0:8}-linux-$architecture\">binary</a>"
+      details="$details · <a href=\"$OBS_RUN_BASE/$layer_suffix/SHA256SUMS\">SHA256SUMS</a>"
+    else
+      details="$(public_log_cell "$OBS_RUN_BASE/$layer_suffix/run.log")"
+    fi
+    printf '<td>%s</td><td>%s</td><td>%s</td></tr>\n' \
+      "$layer_subtask" "$(codearts_layer_status "$layer_suffix")" "$details"
+  done
+}
+LAYER_ROWS="$(layer_rows)"
 cat > "$RESULT_FILE" <<RESULT_HTML
 $HEADLINE
 <p>可在 <a href="$PR_CHECK_URL">$PR_CHECK_URL</a> 查看完整构建日志。</p>
@@ -172,12 +181,7 @@ $HEADLINE
   <tr><td>Anti-poison（防投毒）</td><td>$ANTI_POISON_RESULT</td><td>$ANTI_POISON_LINK_CELL</td></tr>
   <tr><td>CodeCheck（静态检查）</td><td>$CODECHECK_RESULT</td><td>$CODECHECK_LINK_CELL</td></tr>
   <tr><td>Blacklist（禁用词）</td><td>$BLACKLIST_RESULT</td><td>$BLACKLIST_LINK_CELL</td></tr>
-  <tr><td rowspan="2">UT</td><td>host tier</td><td>$UT_HOST_RESULT</td><td>$UT_HOST_LOG_CELL</td></tr>
-  <tr><td>guest tier (QEMU TCG sandbox)</td><td>$UT_GUEST_RESULT</td><td>$UT_GUEST_LOG_CELL</td></tr>
-  <tr><td>ST</td><td>-</td><td>$ST_RESULT</td><td>$ST_LOG_CELL</td></tr>
-  <tr><td>E2E</td><td>mocked journeys (QEMU guest)</td><td>$E2E_RESULT</td><td>$E2E_LOG_CELL</td></tr>
-  <tr><td rowspan="2">Binary</td><td>x86_64 debug package</td><td>$BINARY_X86_64_RESULT</td><td>$BINARY_X86_64_CELL</td></tr>
-  <tr><td>aarch64 debug package</td><td>$BINARY_AARCH64_RESULT</td><td>$BINARY_AARCH64_CELL</td></tr>
+$LAYER_ROWS
 </table>
 RESULT_HTML
 test -s "$RESULT_FILE"
