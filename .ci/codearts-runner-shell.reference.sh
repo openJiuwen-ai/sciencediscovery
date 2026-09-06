@@ -21,7 +21,14 @@ fi
 
 set -Eeuo pipefail
 
+# The OBS action resolves the artifact path against the checkout the task's own
+# download step produced, which it puts under .codearts-build/repository. Work
+# there when it exists, so what this writes is what that action collects; the
+# task that has been publishing all along does the same.
 REPO_DIR="${WORKSPACE:-$PWD}"
+if [ -d "$REPO_DIR/.codearts-build/repository" ]; then
+  REPO_DIR="$REPO_DIR/.codearts-build/repository"
+fi
 ARTIFACT_PATH="${ARTIFACT_PATH:-.ci-results/publish}"
 STRICT_EXIT="${STRICT_EXIT:-0}"
 BAKED_CACHE=/opt/sciencediscovery/qemu-cache
@@ -98,6 +105,7 @@ set -e
 # only thing that can turn the run red.
 mkdir -p -- "$ARTIFACT_PATH"
 printf '%s\n' "$rc" > "$ARTIFACT_PATH/exit-code"
+log "artifacts in $(cd -- "$ARTIFACT_PATH" && pwd): $(ls -A "$ARTIFACT_PATH" | tr '\n' ' ')"
 log "script exited with status $rc"
 if [[ "$STRICT_EXIT" == 1 ]]; then
   exit "$rc"
