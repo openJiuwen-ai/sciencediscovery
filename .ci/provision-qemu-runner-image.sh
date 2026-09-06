@@ -19,6 +19,12 @@
 
 set -Eeuo pipefail
 
+# The recipe name is handed down by build-qemu-runner-image.sh, which also
+# writes it into the published VERSION manifest. Two literals drifted apart
+# once already: the manifest said v2 while this file still baked v1 into the
+# image, and every guest failed the assertion it makes on this marker.
+recipe="${QEMU_RUNNER_RECIPE:?QEMU_RUNNER_RECIPE is required}"
+
 result=125
 archive_dir=/var/cache/sciencediscovery-image-build
 toolchain_base=https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/toolchains/v1
@@ -118,7 +124,7 @@ runuser --user ci -- env HOME="$ci_home" PATH="$ci_path" bash -c '
 '
 
 cat > /etc/sciencediscovery-qemu-runner-image <<EOF
-recipe=qemu-runner-v1
+recipe=$recipe
 ubuntu=noble-20260826
 node=$node_version
 pnpm=$pnpm_version

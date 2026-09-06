@@ -162,6 +162,9 @@ fi
 
 cp --reflink=auto -- "$base_image" "$image_path"
 "${qemu_img_command[@]}" resize "$image_path" 16G
+# One recipe name, used for the marker baked into the image, for the check
+# below that the image really carries it, and for the published manifest.
+recipe=qemu-runner-v2
 cp -- "$script_dir/provision-qemu-runner-image.sh" "$seed_dir/provision.sh"
 printf 'instance-id: sciencediscovery-qemu-runner-v1\nlocal-hostname: resource-builder\n' > "$seed_dir/meta-data"
 : > "$seed_dir/vendor-data"
@@ -222,11 +225,12 @@ packages:
   - xfonts-scalable
   - xvfb
 runcmd:
-  - [bash, -c, "curl --fail --location --retry 3 --silent --show-error http://10.0.2.2:QEMU_HTTP_PORT/provision.sh --output /usr/local/sbin/provision-qemu-runner-image && chmod 0755 /usr/local/sbin/provision-qemu-runner-image && /usr/local/sbin/provision-qemu-runner-image"]
+  - [bash, -c, "curl --fail --location --retry 3 --silent --show-error http://10.0.2.2:QEMU_HTTP_PORT/provision.sh --output /usr/local/sbin/provision-qemu-runner-image && chmod 0755 /usr/local/sbin/provision-qemu-runner-image && QEMU_RUNNER_RECIPE=QEMU_RUNNER_RECIPE_VALUE /usr/local/sbin/provision-qemu-runner-image"]
 CLOUD_CONFIG
 
 http_port=$((19080 + ($$ % 1000)))
 sed -i "s/QEMU_HTTP_PORT/$http_port/g" "$seed_dir/user-data"
+sed -i "s/QEMU_RUNNER_RECIPE_VALUE/$recipe/g" "$seed_dir/user-data"
 python3 -m http.server "$http_port" --bind 0.0.0.0 --directory "$seed_dir" &
 http_pid=$!
 kill -0 "$http_pid" 2>/dev/null \
@@ -269,6 +273,10 @@ if [[ "$marker" -ne 0 ]]; then
   echo "FATAL: guest provisioning failed with status $marker (QEMU status $qemu_rc)." >&2
   exit "$marker"
 fi
+if ! tr -d '\r' < "$serial_log" | grep -Fxq "recipe=$recipe"; then
+  echo "FATAL: the provisioned image does not carry recipe=$recipe." >&2
+  exit 1
+fi
 
 "${qemu_img_command[@]}" check "$image_path"
 "${qemu_img_command[@]}" convert -p -O qcow2 "$image_path" "$compacted_image"
@@ -278,7 +286,7 @@ mv -- "$compacted_image" "$image_path"
   sha256sum "$image_name" > SHA256SUMS
 )
 cat > "$output_dir/VERSION" <<EOF
-recipe=qemu-runner-v2
+recipe=$recipe
 base_image=noble-server-cloudimg-amd64.img
 base_sha256=d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30
 node=22.19.0
