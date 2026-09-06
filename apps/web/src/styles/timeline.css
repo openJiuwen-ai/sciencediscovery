@@ -181,6 +181,25 @@
 @container (max-width: 620px) { .remote-host-card-details { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
 .remote-host-resources small, .remote-host-resources strong { white-space: normal; overflow: visible; text-overflow: clip; }
 .remote-host-disk-capacity { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.remote-detail-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.remote-detail-badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.remote-detail-badge.neutral { background: var(--surface-soft); color: var(--muted); }
+.remote-detail-badge.info { background: var(--accent-soft); color: var(--accent-ink); }
+.remote-detail-badge.warning { background: var(--warning-soft); color: var(--warning-strong); }
+.remote-resource-heading { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.remote-resource-tile { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); min-width: 0; }
+.remote-resource-tile > strong { font-size: 12px; font-weight: 500; }
+.remote-resource-tile .remote-host-disk-capacity { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.remote-resource-meter { display: grid; gap: 5px; color: var(--accent-ink); }
+.remote-resource-meter.success { color: var(--success); }
+.remote-resource-meter.warning { color: var(--warning-strong); }
+.remote-resource-meter-label { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.remote-resource-meter-track { height: 7px; border-radius: 10px; overflow: hidden; background: var(--border); }
+.remote-resource-meter-track > span { display: block; height: 100%; border-radius: inherit; background: currentColor; }
+.remote-resource-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.remote-resource-stats > div { display: grid; gap: 4px; padding: 10px; border-radius: 8px; background: var(--surface-soft); }
+.remote-resource-stats strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.remote-host-connection { gap: 10px; }
 .remote-host-resources [role="alert"] { color: var(--danger, #b42318); }
 .remote-host-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 .remote-host-card-title > strong { font-size: 15px; }

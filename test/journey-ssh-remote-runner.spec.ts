@@ -704,6 +704,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(resources).toContainText("60.0 GiB available / 100.0 GiB total");
         await expect(resources).toContainText("/data/sciencediscovery/remote-workspaces");
         await expect(resources).toContainText("Memory: 80.0 GiB free / 128.0 GiB total");
+        await expect(resources.getByRole("meter", { name: "Disk available" })).toHaveAttribute("aria-valuenow", "60");
+        await expect(resources.getByRole("meter", { name: "Memory free" })).toHaveAttribute("aria-valuenow", "62.5");
+        await expect(dialog.getByText("SSH tunnel", { exact: true }).first()).toBeVisible();
         await expect(resources).toContainText("refresh to update");
         await resources.scrollIntoViewIfNeeded();
       },

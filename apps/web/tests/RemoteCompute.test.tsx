@@ -38,16 +38,38 @@ test("resource cards distinguish available workspace disk, low space, and unavai
   assert.match(render(), /\/data\/remote-workspaces/);
   assert.match(render(), /not a per-workspace quota/);
   assert.doesNotMatch(render(), /Low workspace disk/);
+  assert.match(render(), /aria-label="Disk available"[^>]*aria-valuenow="66.7"/);
+  assert.match(render(), /aria-label="Memory free"[^>]*aria-valuenow="50"/);
+  assert.match(render(), /Load is a queue average, not CPU utilization/);
   host.runnerStatus!.resources!.workspaceDisk!.availableBytes = 0;
   assert.match(render(), /role="alert"/);
   assert.match(render(), /0.0 GiB available/);
+  assert.match(render(), /remote-resource-meter warning/);
+  assert.match(render(), /aria-label="Disk available"[^>]*aria-valuenow="0"/);
+  host.runnerStatus!.resources!.workspaceDisk!.totalBytes = 0;
+  assert.doesNotMatch(render(), /aria-label="Disk available"/);
+  assert.match(render(), /Disk available: unknown/);
   host.runnerStatus!.resources!.workspaceDisk = null;
   assert.match(render(), /Workspace disk: <span[^>]*>unknown/);
   assert.doesNotMatch(render(), /0.0 GiB available/);
+  assert.doesNotMatch(render(), /aria-label="Disk available"/);
   host.runnerStatus!.state = "disconnected";
   assert.match(render(), /connect Runner to measure/);
   assert.match(render(), /class="remote-host-resources" aria-label="Runner resources"/);
   assert.doesNotMatch(render(), /CPU:|GiB/);
+  assert.doesNotMatch(render(), /role="meter"/);
+});
+
+test("resource meters do not turn invalid telemetry into a percentage", () => {
+  for (const invalid of [NaN, Infinity, -1, 5 * 1024 ** 3]) {
+    const host = buildHost({ runnerStatus: { hostId: "host-1", state: "ready", resources: {
+      capturedAt: timestamp, cpuCores: 4, loadAverage1m: 0.25,
+      memoryTotalBytes: 4 * 1024 ** 3, memoryFreeBytes: invalid, uptimeSeconds: 7200, workspaceDisk: null,
+    } } });
+    const html = renderToStaticMarkup(createElement(RunnerResourceSummary, { host }));
+    assert.doesNotMatch(html, /role="meter"/);
+    assert.match(html, /Memory free: unknown/);
+  }
 });
 const noopToggle = () => undefined;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

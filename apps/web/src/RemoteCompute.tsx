@@ -72,23 +72,49 @@ function resourceBytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 }
 
+function ResourceMeter({ label, value, total, tone }: { label: string; value: number; total: number; tone: string }): ReactNode {
+  // Missing/invalid telemetry is not zero capacity. Keep the reading explicit.
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0 || value < 0 || value > total) return <small>{label}: unknown</small>;
+  const percent = Math.round(value / total * 1000) / 10;
+  return <div className={`remote-resource-meter ${tone}`}>
+    <div className="remote-resource-meter-label"><span>{label}</span><strong>{percent}%</strong></div>
+    <div className="remote-resource-meter-track" role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+      <span style={{ width: `${percent}%` }} />
+    </div>
+  </div>;
+}
+
 export function RunnerResourceSummary({ host }: { host: RemoteHostTarget }): ReactNode {
   const resources = host.runnerStatus?.resources;
   if (host.runnerStatus?.state !== "ready" || !resources) return <div className="remote-host-resources" aria-label="Runner resources">
-    <strong>Resources</strong>
+    <div className="remote-resource-heading"><strong>Resources</strong><span className="remote-detail-badge neutral">Not measured</span></div>
     <small>{host.runnerStatus?.state !== "ready"
       ? "Workspace disk: unknown · connect Runner to measure"
       : host.runnerStatus.resourcesError ?? "Workspace disk: metrics not available yet"}</small>
   </div>;
   const disk = resources.workspaceDisk;
+  const lowDisk = disk && (disk.availableBytes < 1024 ** 3 || disk.availableBytes < disk.totalBytes * 0.1);
   return <div className="remote-host-resources" aria-label="Runner resources">
+    <div className="remote-resource-heading"><strong>Resources</strong><span className="remote-detail-badge neutral">Host snapshot</span></div>
+    <div className="remote-resource-tile">
     <strong>Workspace disk: <span className="remote-host-disk-capacity">{disk ? `${resourceBytes(disk.availableBytes)} available / ${resourceBytes(disk.totalBytes)} total` : "unknown"}</span></strong>
+    {disk ? <ResourceMeter label="Disk available" value={disk.availableBytes} total={disk.totalBytes} tone={lowDisk ? "warning" : "success"} /> : null}
     {disk ? <small className="remote-host-resource-path">{disk.path}</small> : <small>{resources.workspaceDiskError}</small>}
-    {disk && (disk.availableBytes < 1024 ** 3 || disk.availableBytes < disk.totalBytes * 0.1)
+    {lowDisk
       ? <div role="alert">Low workspace disk space. Environment installs and file writes may fail.</div> : null}
     <small>Filesystem free space, not a per-workspace quota. Other files on this filesystem share this space.</small>
-    <small>CPU: {resources.cpuCores} cores · load (1 min): {resources.loadAverage1m.toFixed(2)}</small>
-    <small>Memory: {resourceBytes(resources.memoryFreeBytes)} free / {resourceBytes(resources.memoryTotalBytes)} total · host uptime: {Math.floor(resources.uptimeSeconds / 3600)} h</small>
+    </div>
+    <div className="remote-resource-tile">
+      <strong>Memory: <span className="remote-host-disk-capacity">{resourceBytes(resources.memoryFreeBytes)} free / {resourceBytes(resources.memoryTotalBytes)} total</span></strong>
+      <ResourceMeter label="Memory free" value={resources.memoryFreeBytes} total={resources.memoryTotalBytes} tone="info" />
+      <small>Free memory only; reclaimable caches are not included.</small>
+    </div>
+    <div className="remote-resource-stats">
+      <div><small>CPU cores</small><strong>{resources.cpuCores}</strong></div>
+      <div><small>Load · 1 min</small><strong>{resources.loadAverage1m.toFixed(2)}</strong></div>
+      <div><small>Host uptime</small><strong>{Math.floor(resources.uptimeSeconds / 3600)} <small>h</small></strong></div>
+    </div>
+    <small>Load is a queue average, not CPU utilization.</small>
     <small>Measured {new Date(resources.capturedAt).toLocaleString()} · refresh to update. Host readings may differ from container limits.</small>
   </div>;
 }
@@ -561,12 +587,17 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         <div className="remote-host-card-details">
           <section className="remote-host-connection" aria-label="Runner connection">
             <strong>Connection &amp; Runner</strong>
-            <small>{hostKindLabel(host)} · {capacity(host)}</small>
+            <div className="remote-detail-badges">
+              <span className="remote-detail-badge info">{host.connectionKind === "ssh" ? "SSH tunnel" : "Self-deployed · direct"}</span>
+              {host.capabilities?.platform ? <span className="remote-detail-badge neutral">{host.capabilities.platform}</span> : null}
+              {host.runnerStatus?.versionMismatch ? <span className="remote-detail-badge warning">Version differs</span> : null}
+            </div>
+            <small>{capacity(host)}</small>
             <small>Runner ID: {host.id}</small>
             {host.connectionKind === "ssh" && host.hostName && host.alias !== host.hostName ? <small>SSH alias: {host.alias}</small> : null}
             {host.capabilities ? <small>{[host.capabilities.platform ?? "OS unknown", source].filter(Boolean).join(" · ")}</small> : null}
             {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
-            {host.connectionKind === "ssh" ? <small>Credentials: {storedCredentials || "SSH configuration"}</small> : null}
+            {host.connectionKind === "ssh" ? <div className="remote-detail-badges"><span className="remote-detail-badge neutral">Credentials: {storedCredentials || "SSH configuration"}</span></div> : null}
             {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
             {publicKey ? <details className="remote-host-public-key"><summary>Public key</summary><div className="remote-host-pubkey-line"><code>{publicKey}</code><CopyButton getText={() => publicKey} label="Copy public key" /></div></details> : null}
           </section>
