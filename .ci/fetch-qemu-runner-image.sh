@@ -46,8 +46,8 @@ done
 
 [[ -n "$output" ]] || { echo "--output is required." >&2; exit 2; }
 
-resource_commit=4851e5b1f15a88be44af2b5981656de91634581f
-resource_run_id=6aa2a6f0ceab407e8404c1af46b09a96
+resource_commit=97c17ab77b9d30cdf982aaed7e6261bf7d358bd8
+resource_run_id=bd0367fec86e446e9295ff2f9e022bc6
 checksum_file="$script_dir/qemu-runner-image.sha256"
 if ! read -r image_sha256 image_name < "$checksum_file"; then
   echo "FATAL: could not read the QEMU Runner image checksum manifest." >&2
