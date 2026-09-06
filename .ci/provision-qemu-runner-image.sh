@@ -115,11 +115,26 @@ SYSCTL
 sysctl --system >/dev/null
 
 ci_path="$ci_home/.local/node/bin:$pnpm_home:$ci_home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-runuser --user ci -- env HOME="$ci_home" PATH="$ci_path" bash -c '
-  set -e
-  test "$(node --version)" = "v$node_version"
-  test "$(pnpm --version)" = "$pnpm_version"
-  test "$(uv --version)" = "uv $uv_version"
+# The versions have to travel through `env`: the block below is single quoted,
+# so it expands them in the unprivileged shell rather than in this one. They
+# used to be literals here, which is why nothing had to be passed.
+runuser --user ci -- env HOME="$ci_home" PATH="$ci_path" \
+  node_version="$node_version" \
+  pnpm_version="$pnpm_version" \
+  uv_version="$uv_version" \
+  bash -c '
+  set -eu
+  # A bare test under set -e exits 1 and prints nothing, which is how an empty
+  # expected version turned into a provisioning failure with no output at all.
+  expect() { # <what> <found> <wanted>
+    if [ "$2" != "$3" ]; then
+      echo "FATAL: the image has $1 '"'"'$2'"'"', not the pinned '"'"'$3'"'"'." >&2
+      exit 1
+    fi
+  }
+  expect node "$(node --version)" "v$node_version"
+  expect pnpm "$(pnpm --version)" "$pnpm_version"
+  expect uv "$(uv --version)" "uv $uv_version"
   bwrap --ro-bind / / --dev /dev true
 '
 
