@@ -40,6 +40,7 @@ test("SSH settings preserve credentials and destination through persistence and 
     runnerToken: "runner-test-token", runnerUrl: "http://127.0.0.1:1", sshConfigPath: resolve(root, "ssh-config"), staticDir: resolve(root, "no-web"),
     workspaceUpload: { maxFileBytes: 1_000_000, maxRequestBytes: 10_000_000, maxWorkspaceBytes: 10_737_418_240 },
     memoryGraph: { url: "http://127.0.0.1:1", internalToken: "test" },
+    evolve: { url: "http://127.0.0.1:1", internalToken: "test" },
   };
   const catalog = { loadedAt: new Date().toISOString(), revision: "ssh-settings-test", servers: [] };
   const server = createApiServer(config, { remoteCompute, mcpTransport: {
