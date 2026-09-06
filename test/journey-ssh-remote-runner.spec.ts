@@ -555,6 +555,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await alert.scrollIntoViewIfNeeded();
         await expect(alert).toHaveText(authenticationError);
         expect(await alert.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+        for (const button of await card.locator(".remote-host-actions > button").all()) {
+          expect(await button.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+        }
       },
     );
 

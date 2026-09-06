@@ -198,6 +198,10 @@
    danger/secondary buttons otherwise differ by a few pixels. */
 .remote-host-actions { display: flex; flex: 1 1 380px; gap: 8px; }
 .remote-host-actions > button { box-sizing: border-box; flex: 1 1 0; justify-content: center; min-width: 0; padding: 8px 6px; font-size: 12px; white-space: normal; }
+@container (max-width: 380px) {
+  .remote-host-actions { gap: 4px; }
+  .remote-host-actions > button { padding-inline: 2px; font-size: 11px; }
+}
 .remote-job-card { display: grid; gap: 10px; border: 1px solid var(--border); border-inline-start: 4px solid var(--warning-accent); border-radius: var(--radius-l); padding: 14px; background: var(--surface); }
 .remote-job-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .remote-job-heading span { display: grid; gap: 3px; }
