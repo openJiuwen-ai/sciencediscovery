@@ -14,6 +14,7 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { RUNNER_VERSION } from "@sciencediscovery/runner";
 
 import {
   SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID,
@@ -78,7 +79,7 @@ const shellVersion = firstWorkingVersion(
   [process.env.SCIENCE_AGENT_SHELL_PATH?.trim(), "bash", process.platform === "darwin" ? "/bin/bash" : "/usr/bin/bash"].filter(Boolean) as string[],
   ["--version"],
 ).split("\n")[0]!.trim();
-const runnerVersion = sandbox === "seatbelt" ? "m4-isolation-only-v1" : "m1-bwrap-v1";
+const runnerVersion = RUNNER_VERSION;
 const packageSource = sandbox === "seatbelt" ? "read-only system runtime" : "read-only system /usr";
 const pythonExecutable = "/usr/bin/python3";
 const shellExecutable = process.platform === "darwin" ? "/bin/bash" : "/usr/bin/bash";

@@ -9,9 +9,9 @@
   },
   "types": "./src/index.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-version.mjs",
     "start": "node dist/server.js",
-    "test": "node --test dist/*.test.js",
+    "test": "node --test scripts/*.test.mjs dist/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -13,10 +13,14 @@ import { gunzipSync } from "node:zlib";
 import { runnerAsset } from "./build-runner.mjs";
 import { packRunnerBundle } from "../../packages/executor/dist/runner-bundle.js";
 import { RunnerClient } from "../../packages/executor/dist/runner-client.js";
+import { RUNNER_VERSION } from "../../services/runner/dist/version.js";
 
 test("SEA asset preserves the ESM tree and excludes embedded binaries and tests", async () => {
   const files = JSON.parse(gunzipSync(runnerAsset((await packRunnerBundle()).archive)));
   assert.ok(files.some(file => file.path === "services/runner/dist/server.js"));
+  const metadata = files.find(file => file.path === "services/runner/dist/build-info.json");
+  assert.ok(metadata, "the SEA must carry the compiled Runner's build identity");
+  assert.equal(JSON.parse(Buffer.from(metadata.content, "base64")).version, RUNNER_VERSION);
   assert.ok(files.every(file => !file.path.includes("/sea/") && !file.path.endsWith(".test.js")));
 });
 
@@ -50,6 +54,7 @@ test("standalone Runner SEA starts and authenticates with no Node in PATH", {
     }
     assert.equal(health?.status, "ok", output.replaceAll(token, "[redacted]"));
     assert.equal(health.sandbox, "bubblewrap");
+    assert.equal(health.runnerVersion, RUNNER_VERSION);
     assert.equal((await fetch(`http://127.0.0.1:${port}/status`)).status, 401);
     assert.equal((await fetch(`http://127.0.0.1:${port}/status`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
     const client = new RunnerClient(`http://127.0.0.1:${port}`, token);
@@ -62,6 +67,7 @@ test("standalone Runner SEA starts and authenticates with no Node in PATH", {
     assert.equal(result.exitCode, 0, result.stderr);
     assert.match(result.stdout, /SEA_SANDBOX_OK/);
     assert.equal(result.sandbox, "bubblewrap");
+    assert.equal(result.runnerVersion, RUNNER_VERSION);
   } finally {
     if (child.exitCode === null) child.kill("SIGTERM");
     await exited;

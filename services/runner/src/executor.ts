@@ -54,7 +54,8 @@ import { profileKeyAllowed, sedimentableCwd, type SessionEnvProfile } from "./se
 import type { EnvironmentStore } from "./environment-store.js";
 import { buildSeatbeltProfile, seatbeltWorkspaceMapping } from "./seatbelt.js";
 
-export const RUNNER_VERSION = "m4-isolation-only-v1";
+import { RUNNER_VERSION } from "./version.js";
+export { RUNNER_VERSION } from "./version.js";
 
 /**
  * The two parts of the sandbox shape this host may refuse, resolved together so

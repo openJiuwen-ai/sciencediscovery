@@ -14,6 +14,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { RUNNER_VERSION } from "@sciencediscovery/runner";
 
 import {
   DEFAULT_ENVIRONMENT_PACKAGE_SPEC,
@@ -30,4 +31,11 @@ test("host probes preserve the Runner sandbox executable contract", () => {
   assert.equal(shellSpec.executable, process.platform === "darwin" ? "/bin/bash" : "/usr/bin/bash");
   assert.match(defaultEnvironmentRevision().languageVersion, /^Python 3\./);
   assert.match(defaultShellEnvironmentRevision().languageVersion, /^GNU bash, version /);
+});
+
+test("system environment provenance uses the shipped Runner build", () => {
+  assert.equal(defaultEnvironmentRevision().runnerVersion, RUNNER_VERSION);
+  assert.equal(defaultShellEnvironmentRevision().runnerVersion, RUNNER_VERSION);
+  assert.equal(JSON.parse(DEFAULT_ENVIRONMENT_PACKAGE_SPEC).runner, RUNNER_VERSION);
+  assert.equal(JSON.parse(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC).runner, RUNNER_VERSION);
 });
