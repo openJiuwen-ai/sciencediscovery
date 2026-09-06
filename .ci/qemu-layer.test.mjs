@@ -176,7 +176,7 @@ test("only the verification job can turn the run red", async () => {
   // log, so the layer jobs are green whatever happened. The gate must key on
   // the job that reads the recorded exit codes back, and the result table must
   // read them too rather than trusting a job status.
-  for (const layer of ["ut", "ut_guest", "st", "e2e", "binary", "binary_aarch64"]) {
+  for (const layer of ["ut", "ut_guest", "st", "binary", "binary_aarch64"]) {
     assert.match(verify, new RegExp(`\\n        - ${layer}\\n`), `verify_results must wait for ${layer}`);
   }
   assert.match(workflow, /completed\('verify_results', 'code_check'\)/);
@@ -186,7 +186,7 @@ test("only the verification job can turn the run red", async () => {
   const jobIdOf = (body) => /jobId: (\S+)/.exec(body)?.[1];
   const verifyJobId = jobIdOf(verify);
   assert.ok(verifyJobId, "verify_results has no build task");
-  for (const layer of ["ut", "ut_guest", "st", "e2e", "binary"]) {
+  for (const layer of ["ut", "ut_guest", "st", "binary"]) {
     assert.notEqual(
       jobIdOf(workflowJob(workflow, layer)),
       verifyJobId,
@@ -210,11 +210,29 @@ test("both guest layers install and build before handing the workspace over", as
     assert.ok(install >= 0 && build > install && run > build, `${fn} must install and build before the guest`);
   }
   const workflow = await workflowText();
-  for (const [job, argument] of [["ut_guest", "ut-guest"], ["e2e", "e2e"]]) {
+  // E2E has no job while its Playwright timeouts are sized for native speed,
+  // but run_e2e above still has to hold, so restoring the job is a one-line
+  // change rather than a rediscovery.
+  for (const [job, argument] of [["ut_guest", "ut-guest"]]) {
     const body = workflowJob(workflow, job);
     assert.match(body, /SH_FILE_PATH: \.ci\/codearts-layer\.sh/);
     assert.match(body, new RegExp(`ARGS: \\|-\\n\\s+${argument}\\n`));
   }
+});
+
+test("the disabled E2E layer is neither verified nor reported", async () => {
+  const layers = await readFile(join(ciDirectory, "codearts-ci-layers.sh"), "utf8");
+  const listed = [...layers.matchAll(/^  "([a-z0-9_-]+):/gm)].map(([, name]) => name);
+  assert.deepEqual(listed, ["ut-host", "ut-guest", "st", "binary-x86_64", "binary-aarch64"]);
+  // A layer left in this list but absent from the workflow publishes no
+  // exit-code, and a missing object is a failure by design -- the run would go
+  // red for a layer nobody ran.
+  const workflow = await workflowText();
+  assert.doesNotMatch(workflow, /\n      e2e:\n/);
+  // The guest and the entry point stay in place so turning it back on is a
+  // matter of this list and the workflow, not of rebuilding the layer.
+  const layer = await readFile(join(ciDirectory, "codearts-layer.sh"), "utf8");
+  assert.match(layer, /run_e2e\(\) \{/);
 });
 
 test("the UT guest payload leaves the external dependency tree behind", async () => {
@@ -232,7 +250,7 @@ test("the UT guest payload leaves the external dependency tree behind", async ()
 test("each guest layer stops its guest before CodeArts stops the job", async () => {
   const layer = await readFile(join(ciDirectory, "codearts-layer.sh"), "utf8");
   const workflow = await workflowText();
-  for (const [fn, job] of [["run_ut_guest", "ut_guest"], ["run_e2e", "e2e"]]) {
+  for (const [fn, job] of [["run_ut_guest", "ut_guest"]]) {
     const body = new RegExp(`${fn}\\(\\) \\{([\\s\\S]*?)\\n\\}`).exec(layer);
     assert.ok(body, `${fn} is missing from the layer entry point`);
     const guestSeconds = Number(/QEMU_TIMEOUT_SECONDS:-(\d+)/.exec(body[1])?.[1]);

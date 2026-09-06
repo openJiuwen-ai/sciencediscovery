@@ -157,42 +157,6 @@ stages:
         if: "${{ always() }}"
         runs-on:
         - default
-      e2e:
-        select: always
-        name: E2E (mocked, QEMU guest)
-        needs: []
-        timeout: 150
-        timeout_unit: minute
-        steps:
-        - name: Run this layer on the x64 build task
-          uses: official_devcloud_cloudBuild
-          with:
-            GIT_REPO_URL: https://gitcode.com/openJiuwen/sciencediscovery.git
-            GIT_REF: "refs/merge-requests/${MERGE_ID}/head"
-            GIT_TARGET_REF: "refs/heads/${sciencediscovery_TARGET_BRANCH}"
-            SH_FILE_PATH: .ci/codearts-layer.sh
-            ARTIFACT_PATH: .ci-results/publish
-            OBS_BUCKET: openjiuwen-ci
-            OBS_DIRECTORY: "sciencediscovery/ci/${{ sources.sciencediscovery.commit_id }}/${{ pipeline.run_id }}/e2e/"
-            OBS_ENDPOINT: obs.cn-north-4.myhuaweicloud.com
-            ENVS: |-
-              CI_NPM_REGISTRY=${{ env.HUAWEICLOUD_NPM_REGISTRY }}
-              CI_PYPI_INDEX=${{ env.HUAWEICLOUD_PYPI_INDEX }}
-              CI_BINARY_CACHE_URL=${{ env.CI_BINARY_CACHE_URL }}
-              UV_DEFAULT_INDEX=${{ env.HUAWEICLOUD_PYPI_INDEX }}
-              UV_PYTHON_INSTALL_MIRROR=${{ env.NPMMIRROR_PYTHON_INSTALL_MIRROR }}
-              SCIENCE_AGENT_PYPI_INDEX=${{ env.HUAWEICLOUD_PYPI_INDEX }}
-            ARGS: |-
-              e2e
-            __sameProject__: "true"
-            __projectId__: ""
-            jobId: b358513ca1e54d1b8d2500b94c870806
-            __repository__: sciencediscovery
-            artifactIdentifier: ""
-          identifier: 1788590000002c3d4e5f6-3333-4ccc-8003-2c3d4e5f6a03
-        if: "${{ always() }}"
-        runs-on:
-        - default
       st:
         select: always
         name: ST
@@ -312,7 +276,6 @@ stages:
         - ut
         - ut_guest
         - st
-        - e2e
         - binary
         - binary_aarch64
         timeout: 15
