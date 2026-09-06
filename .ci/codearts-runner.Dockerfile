@@ -57,7 +57,10 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://repo.huaweicloud.com/ubunt
       gzip \
       python3 \
       tar \
+      unzip \
       xz-utils \
+      zip \
+      zstd \
  && rm -rf /var/lib/apt/lists/*
 
 # Let the repository's own provisioning install the toolchain, from the same

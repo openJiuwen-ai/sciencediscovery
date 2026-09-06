@@ -114,7 +114,7 @@ stages:
               ut-host
             __sameProject__: "true"
             __projectId__: ""
-            jobId: b358513ca1e54d1b8d2500b94c870806
+            jobId: f0b81e4b4b554747b84171782f7a2b15
             __repository__: sciencediscovery
             artifactIdentifier: ""
           identifier: 1788590000000a1b2c3d4-1111-4aaa-8001-0a1b2c3d4e01
@@ -150,7 +150,7 @@ stages:
               ut-guest
             __sameProject__: "true"
             __projectId__: ""
-            jobId: b358513ca1e54d1b8d2500b94c870806
+            jobId: f0b81e4b4b554747b84171782f7a2b15
             __repository__: sciencediscovery
             artifactIdentifier: ""
           identifier: 1788590000001b2c3d4e5-2222-4bbb-8002-1b2c3d4e5f02
@@ -185,7 +185,7 @@ stages:
               st
             __sameProject__: "true"
             __projectId__: ""
-            jobId: b358513ca1e54d1b8d2500b94c870806
+            jobId: f0b81e4b4b554747b84171782f7a2b15
             __repository__: sciencediscovery
             artifactIdentifier: ""
           identifier: 1788590000003d4e5f6a7-4444-4ddd-8004-3d4e5f6a7b04
@@ -221,7 +221,7 @@ stages:
               binary-x86_64
             __sameProject__: "true"
             __projectId__: ""
-            jobId: b358513ca1e54d1b8d2500b94c870806
+            jobId: f0b81e4b4b554747b84171782f7a2b15
             __repository__: sciencediscovery
             artifactIdentifier: ""
           identifier: 1788590000004e5f6a7b8-5555-4eee-8005-4e5f6a7b8c05
@@ -295,9 +295,10 @@ stages:
             ENVS: |-
               CI_COMMIT=${{ sources.sciencediscovery.commit_id }}
               CI_RUN_ID=${{ pipeline.run_id }}
+            STRICT_EXIT: "1"
             __sameProject__: "true"
             __projectId__: ""
-            jobId: d84e08c4eee04564a45ecf3e00579b88
+            jobId: f0b81e4b4b554747b84171782f7a2b15
             __repository__: sciencediscovery
             artifactIdentifier: ""
           identifier: 1788590000005f6a7b8c9-6666-4fff-8006-5f6a7b8c9d06
@@ -365,7 +366,7 @@ post:
             success
           __sameProject__: "true"
           __projectId__: ""
-          jobId: b358513ca1e54d1b8d2500b94c870806
+          jobId: f0b81e4b4b554747b84171782f7a2b15
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 1788590000006a7b8c9d0-7777-4111-8007-6a7b8c9d0e07
@@ -421,7 +422,7 @@ post:
             failure
           __sameProject__: "true"
           __projectId__: ""
-          jobId: b358513ca1e54d1b8d2500b94c870806
+          jobId: f0b81e4b4b554747b84171782f7a2b15
           __repository__: sciencediscovery
           artifactIdentifier: ""
         identifier: 1788590000007b8c9d0e1-8888-4222-8008-7b8c9d0e1f08
