@@ -173,33 +173,36 @@
 .remote-host-card-main { display: grid; flex: 1 1 240px; gap: 8px; min-width: 0; }
 .remote-host-identity { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; overflow-wrap: anywhere; }
 .remote-host-description { margin: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
-.remote-host-card-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; border-top: 1px solid var(--border); padding-top: 12px; }
+.remote-host-disclosure { border-top: 1px solid var(--border); padding-top: 8px; min-width: 0; }
+.remote-host-disclosure > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; font-weight: 600; list-style: none; }
+.remote-host-disclosure > summary::-webkit-details-marker { display: none; }
+.remote-host-disclosure > summary::before { content: "›"; font-size: 16px; transition: transform 0.15s; }
+.remote-host-disclosure[open] > summary::before { transform: rotate(90deg); }
+.remote-host-disclosure > summary > small { margin-left: auto; font-weight: 400; text-align: right; }
+.remote-host-card-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding-top: 10px; }
 .remote-host-connection, .remote-host-resources { display: grid; align-content: start; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
 .remote-host-public-key { min-width: 0; font-size: 12px; }
 .remote-host-public-key summary { cursor: pointer; color: var(--text-secondary); }
 .remote-host-public-key[open] summary { margin-bottom: 8px; }
 @container (max-width: 620px) { .remote-host-card-details { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
 .remote-host-resources small, .remote-host-resources strong { white-space: normal; overflow: visible; text-overflow: clip; }
-.remote-host-disk-capacity { display: block; margin-top: 4px; overflow-wrap: anywhere; }
 .remote-detail-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 .remote-detail-badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 .remote-detail-badge.neutral { background: var(--surface-soft); color: var(--muted); }
 .remote-detail-badge.info { background: var(--accent-soft); color: var(--accent-ink); }
 .remote-detail-badge.warning { background: var(--warning-soft); color: var(--warning-strong); }
-.remote-resource-heading { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
-.remote-resource-tile { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); min-width: 0; }
-.remote-resource-tile > strong { font-size: 12px; font-weight: 500; }
-.remote-resource-tile .remote-host-disk-capacity { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.remote-resource-tile { display: grid; gap: 5px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); min-width: 0; }
 .remote-resource-meter { display: grid; gap: 5px; color: var(--accent-ink); }
 .remote-resource-meter.success { color: var(--success); }
 .remote-resource-meter.warning { color: var(--warning-strong); }
-.remote-resource-meter-label { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.remote-resource-meter-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 8px; font-size: 12px; color: var(--text); }
+.remote-resource-meter-label > strong { font-variant-numeric: tabular-nums; }
 .remote-resource-meter-track { height: 7px; border-radius: 10px; overflow: hidden; background: var(--border); }
 .remote-resource-meter-track > span { display: block; height: 100%; border-radius: inherit; background: currentColor; }
 .remote-resource-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.remote-resource-stats > div { display: grid; gap: 4px; padding: 10px; border-radius: 8px; background: var(--surface-soft); }
-.remote-resource-stats strong { font-size: 18px; font-variant-numeric: tabular-nums; }
-.remote-host-connection { gap: 10px; }
+.remote-resource-stats > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 6px; padding: 7px 8px; border-radius: 8px; background: var(--surface-soft); }
+.remote-resource-stats strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.remote-host-connection { gap: 7px; }
 .remote-host-resources [role="alert"] { color: var(--danger, #b42318); }
 .remote-host-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 .remote-host-card-title > strong { font-size: 15px; }

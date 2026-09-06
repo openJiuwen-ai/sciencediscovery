@@ -615,7 +615,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByText("Runner ID: e2e-direct-runner", { exact: true })).toBeVisible();
         await expect(dialog.getByText("Self-deployed CPU sandbox", { exact: true })).toBeVisible();
         await expect(dialog.getByText("Self-deployed · direct", { exact: true })).toBeVisible();
-        await expect(dialog.getByText(/http:\/\/192\.168\.1\.20:4311 · token authenticated/)).toBeVisible();
+        const directCard = dialog.locator(".remote-host-card", { hasText: "e2e-direct-runner" });
+        await expect(directCard.locator(".remote-host-identity")).toContainText("192.168.1.20:4311");
+        await expect(directCard.locator(".remote-host-identity")).toContainText("Token authentication");
         await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
         await dialog.locator(".remote-host-card", { hasText: "e2e-direct-runner" }).scrollIntoViewIfNeeded();
       },
@@ -693,22 +695,29 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
 
     await journey.step(
       "连接后查看 Runner 版本和工作区可用磁盘",
-      "状态变为 connected，同时展示版本差异、部署来源、workspace 所在文件系统剩余 60 GiB / 总计 100 GiB，以及 CPU、内存和采集时间。",
+      "状态变为 connected，详情顶部显示更新时间，紧凑容量条展示磁盘剩余 60/100 GiB、内存空闲 80/128 GiB，版本和 CPU 读数不重复。",
       async () => {
         const dialog = await openRemoteSettings();
         await dialog.getByRole("button", { name: "Connect runner" }).first().click();
         await expect(dialog.getByText("connected", { exact: true })).toBeVisible();
         await expect(dialog.getByText(
-          /Remote 0\.0\.0-remote · local 0\.0\.0-local · version differs · deployed by ScienceDiscovery/,
+          /Version 0\.0\.0-remote · local 0\.0\.0-local/,
         )).toBeVisible();
         const resources = dialog.getByLabel("Runner resources").first();
-        await expect(resources).toContainText("60.0 GiB available / 100.0 GiB total");
+        await expect(resources).toContainText("60.0 GiB / 100.0 GiB");
         await expect(resources).toContainText("/data/sciencediscovery/remote-workspaces");
-        await expect(resources).toContainText("Memory: 80.0 GiB free / 128.0 GiB total");
+        await expect(resources).toContainText("80.0 GiB / 128.0 GiB");
         await expect(resources.getByRole("meter", { name: "Disk available" })).toHaveAttribute("aria-valuenow", "60");
         await expect(resources.getByRole("meter", { name: "Memory free" })).toHaveAttribute("aria-valuenow", "62.5");
         await expect(dialog.getByText("SSH tunnel", { exact: true }).first()).toBeVisible();
-        await expect(resources).toContainText("refresh to update");
+        const card = resources.locator("xpath=ancestor::article");
+        await expect(card.locator(".remote-host-disclosure > summary")).toContainText("Updated");
+        await expect(card.getByText("Version differs", { exact: true })).toBeVisible();
+        await expect(card).not.toContainText("Filesystem free space");
+        await expect(card).not.toContainText("reclaimable caches");
+        await expect(card).not.toContainText("Load is a queue average");
+        await expect(card).not.toContainText("SEA runner deployed automatically");
+        await expect(card.getByLabel("Runner connection")).not.toContainText("GiB");
         await resources.scrollIntoViewIfNeeded();
       },
     );
@@ -737,7 +746,36 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const detailsBox = await card.locator(".remote-host-card-details").boundingBox();
         expect(first!.y).toBeGreaterThanOrEqual(identityBox!.y + identityBox!.height);
         expect(detailsBox!.y).toBeGreaterThanOrEqual(first!.y + first!.height);
-        await expect(dialog.getByLabel("Runner resources").first()).toContainText("60.0 GiB available");
+        await expect(dialog.getByLabel("Runner resources").first()).toContainText("60.0 GiB / 100.0 GiB");
+        await card.scrollIntoViewIfNeeded();
+      },
+    );
+    await journey.step(
+      "收起机器详情保留身份操作和更新时间",
+      "点击 Machine details 后，两栏详情一起收起；机器身份、连接操作和更新时间仍可见。",
+      async () => {
+        const card = page.locator(".remote-host-list .remote-host-card").first();
+        await card.locator(".remote-host-disclosure > summary").click();
+        await expect(card.getByLabel("Runner resources")).toBeHidden();
+        await expect(card.getByLabel("Runner connection")).toBeHidden();
+        await expect(card.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible();
+        await expect(card.locator(".remote-host-disclosure > summary")).toContainText("Updated");
+      },
+    );
+    await journey.step(
+      "键盘展开紧凑详情",
+      "用键盘重新展开后，容量标题和数值同行，左右信息不重复，磁盘与内存条恢复可见。",
+      async () => {
+        const card = page.locator(".remote-host-list .remote-host-card").first();
+        await card.locator(".remote-host-disclosure > summary").focus();
+        await page.keyboard.press("Enter");
+        await expect(card.getByRole("meter", { name: "Disk available" })).toBeVisible();
+        await expect(card.getByRole("meter", { name: "Memory free" })).toBeVisible();
+        for (const row of await card.locator(".remote-resource-meter-label").all()) {
+          const label = await row.locator("span").boundingBox();
+          const value = await row.locator("strong").boundingBox();
+          expect(Math.abs(label!.y - value!.y)).toBeLessThan(2);
+        }
         await card.scrollIntoViewIfNeeded();
       },
     );

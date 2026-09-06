@@ -34,24 +34,24 @@ test("resource cards distinguish available workspace disk, low space, and unavai
     workspaceDisk: { path: "/data/remote-workspaces", availableBytes: 20 * 1024 ** 3, totalBytes: 30 * 1024 ** 3 },
   } } });
   const render = () => renderToStaticMarkup(createElement(RunnerResourceSummary, { host }));
-  assert.match(render(), /20.0 GiB available \/ 30.0 GiB total/);
+  assert.match(render(), /20.0 GiB \/ 30.0 GiB/);
   assert.match(render(), /\/data\/remote-workspaces/);
-  assert.match(render(), /not a per-workspace quota/);
+  assert.doesNotMatch(render(), /not a per-workspace quota|reclaimable caches|Host snapshot/);
   assert.doesNotMatch(render(), /Low workspace disk/);
   assert.match(render(), /aria-label="Disk available"[^>]*aria-valuenow="66.7"/);
   assert.match(render(), /aria-label="Memory free"[^>]*aria-valuenow="50"/);
-  assert.match(render(), /Load is a queue average, not CPU utilization/);
+  assert.doesNotMatch(render(), /Load is a queue average, not CPU utilization/);
   host.runnerStatus!.resources!.workspaceDisk!.availableBytes = 0;
   assert.match(render(), /role="alert"/);
-  assert.match(render(), /0.0 GiB available/);
+  assert.match(render(), /0.0 GiB \/ 30.0 GiB/);
   assert.match(render(), /remote-resource-meter warning/);
   assert.match(render(), /aria-label="Disk available"[^>]*aria-valuenow="0"/);
   host.runnerStatus!.resources!.workspaceDisk!.totalBytes = 0;
   assert.doesNotMatch(render(), /aria-label="Disk available"/);
   assert.match(render(), /Disk available: unknown/);
   host.runnerStatus!.resources!.workspaceDisk = null;
-  assert.match(render(), /Workspace disk: <span[^>]*>unknown/);
-  assert.doesNotMatch(render(), /0.0 GiB available/);
+  assert.match(render(), /Disk available: unknown/);
+  assert.doesNotMatch(render(), /0.0 GiB \/ 0.0 GiB/);
   assert.doesNotMatch(render(), /aria-label="Disk available"/);
   host.runnerStatus!.state = "disconnected";
   assert.match(render(), /connect Runner to measure/);
@@ -219,7 +219,7 @@ test("an SSH authentication failure does not invent missing runner or Node capab
   assert.deepEqual(editStates, [true, false]);
 });
 
-test("a successfully probed Linux host without Node offers automatic SEA deployment", async () => {
+test("a successfully probed Linux host without Node can connect without deployment prose", async () => {
   const { output, renderer } = await renderHost(buildHost({
     capabilities: {
       conda: false,
@@ -238,7 +238,8 @@ test("a successfully probed Linux host without Node offers automatic SEA deploym
     },
   }));
 
-  assert.match(output, /SEA runner deployed automatically over SSH; remote Node.js is not required/);
+  assert.doesNotMatch(output, /SEA runner deployed automatically over SSH; remote Node.js is not required/);
+  assert.equal(renderer.root.findAllByType("button").find((node) => node.children.join("") === "Connect runner")!.props.disabled, false);
   await act(async () => renderer.unmount());
 });
 
@@ -248,7 +249,7 @@ test("remote Node version does not gate SEA deployment after a successful probe"
       platform: "Linux", nodeVersion, runnerCommandAvailable: false, conda: false, containerRuntimes: [],
       cpuCores: 1, cuda: null, gpu: null, memoryBytes: null, modules: false, probedAt: timestamp, scratchPaths: [], slurm: false,
     } }));
-    assert.equal(output.includes("deployed automatically over SSH"), true);
+    assert.equal(renderer.root.findAllByType("button").find((node) => node.children.join("") === "Connect runner")!.props.disabled, false);
     assert.equal(output.includes("cannot deploy"), false);
     await act(async () => renderer.unmount());
   }
