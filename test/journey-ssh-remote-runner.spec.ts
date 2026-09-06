@@ -645,7 +645,6 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const saveBox = await save.boundingBox();
         expect(saveBox!.y).toBeGreaterThanOrEqual(remoteBox!.y + remoteBox!.height);
         await save.scrollIntoViewIfNeeded();
-        await dialog.getByRole("button", { name: "Close scoped settings" }).click();
       },
     );
 
@@ -653,6 +652,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "Session 设置里覆盖允许名单",
       "Session 可独立选择 Project 未选的机器，或清空/恢复默认；全部设置之后才是保存按钮。",
       async () => {
+        await page.getByRole("dialog", { name: "project settings" }).getByRole("button", { name: "Close scoped settings" }).click();
         const dialog = await openSessionSettings();
         const mode = dialog.getByRole("combobox", { name: "Allowed remote runners" });
         await expect(mode).toHaveValue("inherit");
@@ -672,6 +672,10 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         // Back to inheriting the Project allowlist.
         await mode.selectOption("inherit");
         await expect.poll(() => session.remoteRunnerHostIds ?? null).toBeNull();
+        // Leave the independent selection visible in this step's evidence.
+        await mode.selectOption("override");
+        await independentHost.click();
+        await expect.poll(() => session.remoteRunnerHostIds).toEqual([hostId, "e2e-direct-runner"]);
         const saveBox = await dialog.locator('button[type="submit"]').boundingBox();
         const remoteBox = await dialog.locator(".scoped-remote-settings").boundingBox();
         expect(saveBox!.y).toBeGreaterThanOrEqual(remoteBox!.y + remoteBox!.height);
@@ -684,6 +688,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "同步记录只读展示，没有路径输入、Push 或 Pull 控件；删除远端 workspace 仍需用户显式确认。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "session settings" });
+        await dialog.getByRole("combobox", { name: "Allowed remote runners" }).selectOption("inherit");
         await expect(dialog.getByText("Remote workspace", { exact: true })).toBeVisible();
         await expect(dialog.getByText(/Only the model transfers files/)).toBeVisible();
         await expect(dialog.getByText(/pull · completed · 1 files · 64 bytes · results\/report\.md/)).toBeVisible();
@@ -793,6 +798,17 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await card.scrollIntoViewIfNeeded();
       },
     );
+    await journey.step("窄窗口 Project 保存位于末尾", "窄窗口中远程默认机器列表完整可读，保存位于列表下方且无横向溢出。", async () => {
+      await page.getByRole("dialog", { name: "系统设置" }).locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
+      await page.setViewportSize({ width: 640, height: 960 });
+      const dialog = await openProjectSettings();
+      const save = dialog.locator('button[type="submit"]');
+      await save.scrollIntoViewIfNeeded();
+      const saveBox = await save.boundingBox();
+      const remoteBox = await dialog.locator(".scoped-remote-settings").boundingBox();
+      expect(saveBox!.y).toBeGreaterThanOrEqual(remoteBox!.y + remoteBox!.height);
+      expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+    });
   } finally {
     await page.unrouteAll({ behavior: "wait" });
     await cleanupJourney(page, fixture);
