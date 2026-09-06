@@ -35,6 +35,12 @@ log "node/pnpm : $(node --version) / $(pnpm --version)"
 log "repository: $REPO_DIR"
 cd -- "$REPO_DIR"
 
+# The build agent creates this directory outside the container, under a uid the
+# container does not have, and git refuses a repository owned by someone else.
+# That check protects a shared machine from a repository it stumbled into; this
+# is a workspace handed to this container for one run.
+git config --global --add safe.directory '*'
+
 # --- checkout ---------------------------------------------------------------
 # The task is handed a ref to test and the ref it will merge into. Replaying the
 # change onto the target is what the pipeline is asked to verify; when the two
