@@ -286,7 +286,12 @@ if [[ "$marker" -ne 0 ]]; then
   echo "FATAL: guest provisioning failed with status $marker (QEMU status $qemu_rc)." >&2
   exit "$marker"
 fi
-if ! tr -d '\r' < "$serial_log" | grep -Fxq "recipe=$recipe"; then
+# The guest prints its marker file on the way out, but the serial log carries a
+# kernel timestamp and cloud-init's own prefix on every line, so an exact
+# whole-line match has to see the line without them.
+if ! tr -d '\r' < "$serial_log" \
+  | sed -E 's/^\[[0-9. ]+\] (cloud-init\[[0-9]+\]: )?//' \
+  | grep -Fxq "recipe=$recipe"; then
   echo "FATAL: the provisioned image does not carry recipe=$recipe." >&2
   exit 1
 fi
