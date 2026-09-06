@@ -21,14 +21,13 @@ fi
 
 set -Eeuo pipefail
 
-# The OBS action resolves the artifact path against the checkout the task's own
-# download step produced, which it puts under .codearts-build/repository. Work
-# there when it exists, so what this writes is what that action collects; the
-# task that has been publishing all along does the same.
-REPO_DIR="${WORKSPACE:-$PWD}"
-if [ -d "$REPO_DIR/.codearts-build/repository" ]; then
-  REPO_DIR="$REPO_DIR/.codearts-build/repository"
-fi
+# The OBS action resolves the artifact path under .codearts-build/repository --
+# its log says so outright: `解析构建产物路径：.codearts-build/repository/...`.
+# Working anywhere else leaves that action an empty directory to collect, which
+# is what happened while this used the workspace root: every layer ran, every
+# layer reported success, and the verification job found nothing published.
+REPO_DIR="${WORKSPACE:-$PWD}/.codearts-build/repository"
+mkdir -p -- "$REPO_DIR"
 ARTIFACT_PATH="${ARTIFACT_PATH:-.ci-results/publish}"
 STRICT_EXIT="${STRICT_EXIT:-0}"
 BAKED_CACHE=/opt/sciencediscovery/qemu-cache

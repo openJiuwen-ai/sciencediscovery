@@ -117,12 +117,16 @@ assert_requirements_clean() { # <requirements file>
 # whole payload are scanned for the repository root and the builder's HOME;
 # a hit fails the build instead of leaking a private path to every user.
 assert_no_build_paths() { # <payload root>
-  local root="$1" needle leaks=""
+  local root="$1" needle pattern leaks=""
   # Exact current-machine roots avoid treating valid runtime constants such as
-  # /tmp or URL paths containing /home/ as build-machine disclosure.
+  # /tmp or URL paths containing /home/ as build-machine disclosure. The match
+  # also has to end on a path boundary: a builder running as root has HOME=/root,
+  # and a substring search for that flags every file mentioning the Model Context
+  # Protocol's own `/roots/list_changed`, which discloses nothing.
   for needle in "$repository_root" "$shared_dir" "$output" "${HOME:-}" "${USERPROFILE:-}"; do
     if [[ -n "$needle" ]]; then
-      leaks+="$(grep -rIlF -- "$needle" "$root" || true)"$'\n'
+      pattern="$(printf '%s' "$needle" | sed 's/[][\\.*^$(){}?+|/]/\\&/g')"
+      leaks+="$(grep -rIlE -- "$pattern([^[:alnum:]]|\$)" "$root" || true)"$'\n'
     fi
   done
   leaks+="$(grep -rIlE '\.missioncrew|MissionCrew|\.worktrees' "$root" || true)"
