@@ -74,8 +74,12 @@ function resourceBytes(bytes: number): string {
 
 export function RunnerResourceSummary({ host }: { host: RemoteHostTarget }): ReactNode {
   const resources = host.runnerStatus?.resources;
-  if (host.runnerStatus?.state !== "ready") return <small>Workspace disk: unknown · connect Runner to measure</small>;
-  if (!resources) return <small>{host.runnerStatus.resourcesError ?? "Workspace disk: metrics not available yet"}</small>;
+  if (host.runnerStatus?.state !== "ready" || !resources) return <div className="remote-host-resources" aria-label="Runner resources">
+    <strong>Resources</strong>
+    <small>{host.runnerStatus?.state !== "ready"
+      ? "Workspace disk: unknown · connect Runner to measure"
+      : host.runnerStatus.resourcesError ?? "Workspace disk: metrics not available yet"}</small>
+  </div>;
   const disk = resources.workspaceDisk;
   return <div className="remote-host-resources" aria-label="Runner resources">
     <strong>Workspace disk: {disk ? `${resourceBytes(disk.availableBytes)} available / ${resourceBytes(disk.totalBytes)} total` : "unknown"}</strong>
@@ -527,27 +531,21 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       const untrustedKey = host.hostKey?.trusted === false ? host.hostKey : undefined;
       const publicKey = host.publicKey;
       const source = runnerSource(host);
+      const address = host.connectionKind === "direct" ? host.endpoint?.host : host.hostName ?? host.alias;
+      const port = host.connectionKind === "direct" ? host.endpoint?.port : host.port ?? 22;
+      const destination = address?.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
       const storedCredentials = [
-        host.username ? `user ${host.username}` : undefined,
         host.hasPassword ? "password stored" : undefined,
         host.hasPrivateKey ? "key stored" : undefined,
       ].filter(Boolean).join(" · ");
       return <article className={`remote-host-card ${host.status}`} key={host.id}>
+        <header className="remote-host-card-header">
         <div className="remote-host-card-main">
           <div className="remote-host-card-title"><strong>{host.runnerName ?? host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? "connected" : state}</span></div>
-          <small>Runner ID: {host.id}</small>
-          {host.connectionKind !== "direct" ? <small>SSH target: {host.alias}</small> : null}
-          <small>{host.description || host.runnerName || host.alias}</small>
-          <small>{hostKindLabel(host)} · {capacity(host)}</small>
-          {host.connectionKind === "direct"
-            ? <small>{host.capabilities?.platform ?? "OS unknown"}</small>
-            : host.capabilities
-              ? <small>{[host.capabilities.platform ?? "OS unknown", source].filter(Boolean).join(" · ")}</small>
-              : null}
-          {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
-          {storedCredentials ? <small>{storedCredentials}</small> : null}
-          {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
-          {publicKey ? <div className="remote-host-pubkey-line"><code title={publicKey}>{publicKey}</code><CopyButton getText={() => publicKey} label="Copy public key" /></div> : null}
+          <div className="remote-host-identity">
+            <span>{destination ?? "Address unknown"}:{port ?? "?"}</span>
+            <span>{host.connectionKind === "ssh" ? `user ${host.username ?? "from SSH config"}` : "Token authentication"}</span>
+          </div>
         </div>
         <div className="remote-host-actions">
           <button className="secondary-button" disabled={Boolean(busyId) || (!connected && !runnerUsable(host))} onClick={() => void toggleRunnerConnection(host, connected)} type="button">{connected ? "Disconnect" : "Connect runner"}</button>
@@ -556,9 +554,24 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
           {untrustedKey ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => setHostKeyPrompt({ changed: false, hostKey: untrustedKey, origin: host.id, target: host.alias, resume: async () => { setHostKeyPrompt(undefined); await probe(host, untrustedKey); } })} type="button">Trust host key</button> : null}
           <button className="danger-button" disabled={Boolean(busyId)} onClick={() => void removeHost(host)} type="button">Delete</button>
         </div>
+        </header>
         {[...new Set([host.error, host.runnerStatus?.error].filter(Boolean))].map((error) =>
           <div className="remote-host-error" role="alert" key={error}>{error}</div>)}
-        <RunnerResourceSummary host={host} />
+        {host.description && ![host.alias, host.runnerName].includes(host.description) ? <p className="remote-host-description">{host.description}</p> : null}
+        <div className="remote-host-card-details">
+          <section className="remote-host-connection" aria-label="Runner connection">
+            <strong>Connection &amp; Runner</strong>
+            <small>{hostKindLabel(host)} · {capacity(host)}</small>
+            <small>Runner ID: {host.id}</small>
+            {host.connectionKind === "ssh" && host.hostName && host.alias !== host.hostName ? <small>SSH alias: {host.alias}</small> : null}
+            {host.capabilities ? <small>{[host.capabilities.platform ?? "OS unknown", source].filter(Boolean).join(" · ")}</small> : null}
+            {host.runnerStatus?.remoteVersion ? <small>Remote {host.runnerStatus.remoteVersion} · local {host.runnerStatus.localVersion ?? "unknown"}{host.runnerStatus.versionMismatch ? " · version differs" : ""}{host.runnerStatus.deployed ? " · deployed by ScienceDiscovery" : ""}</small> : null}
+            {host.connectionKind === "ssh" ? <small>Credentials: {storedCredentials || "SSH configuration"}</small> : null}
+            {untrustedKey ? <small>{`Host key not trusted: ${untrustedKey.algorithm} · ${untrustedKey.fingerprint}`}</small> : null}
+            {publicKey ? <details className="remote-host-public-key"><summary>Public key</summary><div className="remote-host-pubkey-line"><code>{publicKey}</code><CopyButton getText={() => publicKey} label="Copy public key" /></div></details> : null}
+          </section>
+          <RunnerResourceSummary host={host} />
+        </div>
         {renderHostKeyPrompt(host.id)}
         {editingCredentials === host.id ? credentialsEditor(host) : null}
       </article>;

@@ -46,6 +46,7 @@ test("resource cards distinguish available workspace disk, low space, and unavai
   assert.doesNotMatch(render(), /0.0 GiB available/);
   host.runnerStatus!.state = "disconnected";
   assert.match(render(), /connect Runner to measure/);
+  assert.match(render(), /class="remote-host-resources" aria-label="Runner resources"/);
   assert.doesNotMatch(render(), /CPU:|GiB/);
 });
 const noopToggle = () => undefined;
@@ -108,6 +109,32 @@ async function renderHost(
   return { output: JSON.stringify(renderer!.toJSON()), renderer: renderer! };
 }
 
+test("machine identity and actions lead the card, with metadata and public key below", async () => {
+  const { renderer } = await renderHost(buildHost({
+    runnerName: "Analysis", hostName: "192.0.2.40", port: 2222, username: "scientist",
+    description: "Analysis", publicKey: "ssh-ed25519 public-test-data", hasPrivateKey: true,
+  }));
+  const header = renderer.root.findByProps({ className: "remote-host-card-header" });
+  assert.equal(header.findByProps({ className: "remote-host-identity" }).findAllByType("span")[0]!.children.join(""), "192.0.2.40:2222");
+  assert.equal(header.findByProps({ className: "remote-host-identity" }).findAllByType("span")[1]!.children.join(""), "user scientist");
+  assert.equal(header.findByProps({ className: "remote-host-actions" }).findAllByType("button").length, 4);
+  assert.equal(header.findAllByType("details").length, 0);
+  assert.equal(renderer.root.findAllByProps({ className: "remote-host-description" }).length, 0);
+  const details = renderer.root.findByProps({ className: "remote-host-card-details" });
+  assert.ok(details.findByProps({ "aria-label": "Runner connection" }));
+  assert.ok(details.findByProps({ "aria-label": "Runner resources" }));
+  assert.equal(details.findByType("details").props.open, undefined);
+  await act(async () => renderer.unmount());
+});
+
+test("direct runner identity uses endpoint and token authentication, never an SSH username", async () => {
+  const { renderer } = await renderHost(buildHost({ connectionKind: "direct", endpoint: { host: "::1", port: 4311, protocol: "http" }, hasToken: true }));
+  const identity = renderer.root.findByProps({ className: "remote-host-identity" });
+  assert.equal(identity.findAllByType("span")[0]!.children.join(""), "[::1]:4311");
+  assert.equal(identity.findAllByType("span")[1]!.children.join(""), "Token authentication");
+  await act(async () => renderer.unmount());
+});
+
 test("an SSH authentication failure does not invent missing runner or Node capabilities", async () => {
   const editStates: boolean[] = [];
   const { output, renderer } = await renderHost(buildHost({
@@ -124,7 +151,8 @@ test("an SSH authentication failure does not invent missing runner or Node capab
   assert.match(alert.children.join(""), /Server offered: publickey, password/);
   assert.match(alert.children.join(""), /Actually tried: none, password, publickey/);
   assert.equal(renderer.root.findAllByType("small").some((node) => node.children.join("").includes("SSH authentication failed")), false);
-  assert.match(output, /user scientist · password stored · key stored/);
+  assert.match(output, /user scientist/);
+  assert.match(output, /password stored · key stored/);
   assert.doesNotMatch(output, /cannot deploy: no runner and no Node\.js 22\+ found/);
   assert.doesNotMatch(output, /OS unknown/);
 

@@ -97,6 +97,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
   /** An SSH machine with no runner installed, so connecting has to deploy one. */
   const sshHost = (): RemoteHostTarget => ({
     alias: "institution-linux",
+    hostName: "192.0.2.40",
+    port: 2222,
+    username: "researcher",
     runnerName: "GPU analysis",
     description: "Python and R analysis on the lab GPU",
     capabilities: {
@@ -324,8 +327,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
-      "主机卡片操作同组同行且等宽",
-      "Connect runner、Refresh probe、Delete 在同一操作组、同一行，宽度一致；Delete 不单独占一行。",
+      "先看机器身份，右侧操作，下方连接与资源详情",
+      "名称、IP/端口和用户名在卡片顶部，操作在右侧同行等宽；未连接时磁盘提示仍在下方详情区域。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const actions = dialog.locator(".remote-host-card .remote-host-actions").first();
@@ -342,6 +345,17 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         expect(Math.abs(refresh.y - remove.y)).toBeLessThan(2);
         expect(Math.abs(connect.width - refresh.width)).toBeLessThan(2);
         expect(Math.abs(refresh.width - remove.width)).toBeLessThan(2);
+        const card = dialog.locator(".remote-host-list .remote-host-card").first();
+        const header = card.locator(".remote-host-card-header");
+        await expect(header).toContainText("GPU analysis");
+        await expect(header).toContainText("192.0.2.40:2222");
+        await expect(header).toContainText("user researcher");
+        const identityBox = await header.locator(".remote-host-card-main").boundingBox();
+        const headerBox = await header.boundingBox();
+        const detailsBox = await card.locator(".remote-host-card-details").boundingBox();
+        expect(connect.x).toBeGreaterThan(identityBox!.x + identityBox!.width);
+        expect(detailsBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
+        await expect(card.getByLabel("Runner resources")).toContainText("connect Runner to measure");
       },
     );
 
@@ -484,6 +498,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         expect(lastSshRegisterBody?.privateKeyPath).toBe(generatedKeyPath);
         expect("privateKey" in (lastSshRegisterBody as unknown as Record<string, unknown>)).toBe(false);
         expect(lastSshRegisterBody?.trustHostKey).toEqual({ algorithm: "ssh-ed25519", fingerprint: "SHA256:e2e-fingerprint" });
+        await expect(card.getByRole("button", { name: "Copy public key" })).toBeHidden();
+        await card.locator("summary").filter({ hasText: "Public key" }).click();
         await expect(card.getByRole("button", { name: "Copy public key" })).toBeVisible();
         await expect(dialog.getByLabel("Password (optional)")).toHaveCount(0);
       },
@@ -521,7 +537,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(card.getByRole("alert")).toBeVisible();
         await expect(card.getByRole("alert")).toHaveCSS("white-space", "pre-wrap");
         await expect(card.getByRole("alert")).toHaveCSS("text-overflow", "clip");
-        await expect(card).toContainText("user operator · password stored · key stored");
+        await expect(card.locator(".remote-host-identity")).toContainText("user operator");
+        await expect(card).toContainText("password stored · key stored");
         await expect(card).not.toContainText("cannot deploy: no runner and no Node.js 22+ found");
         await card.scrollIntoViewIfNeeded();
       },
@@ -672,6 +689,11 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
           expect(Math.abs(box.width - first!.width)).toBeLessThan(2);
         }
         expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+        const card = dialog.locator(".remote-host-list .remote-host-card").first();
+        const identityBox = await card.locator(".remote-host-card-main").boundingBox();
+        const detailsBox = await card.locator(".remote-host-card-details").boundingBox();
+        expect(first!.y).toBeGreaterThanOrEqual(identityBox!.y + identityBox!.height);
+        expect(detailsBox!.y).toBeGreaterThanOrEqual(first!.y + first!.height);
         await expect(dialog.getByLabel("Runner resources").first()).toContainText("60.0 GiB available");
         await dialog.getByLabel("Runner resources").first().scrollIntoViewIfNeeded();
       },

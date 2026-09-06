@@ -155,12 +155,21 @@
 /* Inside a card the trust card takes a full row under the action group. */
 .remote-host-card > .remote-host-key-prompt { flex-basis: 100%; }
 .remote-host-list { display: grid; gap: 10px; }
-.remote-host-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
-.remote-host-card-main { display: grid; flex: 1 1 300px; gap: 4px; min-width: 0; }
-.remote-host-resources { display: grid; flex-basis: 100%; gap: 4px; padding-block: 8px; min-width: 0; overflow-wrap: anywhere; }
+.remote-host-card { display: grid; gap: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 16px; container-type: inline-size; min-width: 0; }
+.remote-host-card-header { display: flex; flex-wrap: wrap; align-items: start; gap: 12px 20px; }
+.remote-host-card-main { display: grid; flex: 1 1 240px; gap: 8px; min-width: 0; }
+.remote-host-identity { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; overflow-wrap: anywhere; }
+.remote-host-description { margin: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.remote-host-card-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; border-top: 1px solid var(--border); padding-top: 12px; }
+.remote-host-connection, .remote-host-resources { display: grid; align-content: start; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.remote-host-public-key { min-width: 0; font-size: 12px; }
+.remote-host-public-key summary { cursor: pointer; color: var(--text-secondary); }
+.remote-host-public-key[open] summary { margin-bottom: 8px; }
+@container (max-width: 620px) { .remote-host-card-details { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
 .remote-host-resources small, .remote-host-resources strong { white-space: normal; overflow: visible; text-overflow: clip; }
 .remote-host-resources [role="alert"] { color: var(--danger, #b42318); }
-.remote-host-card-title { display: flex; align-items: center; gap: 8px; }
+.remote-host-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.remote-host-card-title > strong { font-size: 15px; }
 .remote-host-card small { color: var(--muted); }
 .remote-host-error { flex-basis: 100%; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--danger, #b42318); }
 .ssh-key-file-field { display: grid; gap: 6px; min-width: 0; grid-column: 1 / -1; }
@@ -186,8 +195,8 @@
    and split the group's width evenly, so no button — especially Delete — gets
    its own row or a different size. Padding is normalized because the global
    danger/secondary buttons otherwise differ by a few pixels. */
-.remote-host-actions { display: flex; flex: 1 1 400px; gap: 8px; }
-.remote-host-actions > button { box-sizing: border-box; flex: 1 1 0; justify-content: center; min-width: 0; padding: 8px 10px; }
+.remote-host-actions { display: flex; flex: 1 1 380px; gap: 8px; }
+.remote-host-actions > button { box-sizing: border-box; flex: 1 1 0; justify-content: center; min-width: 0; padding: 8px 10px; white-space: normal; overflow-wrap: anywhere; }
 .remote-job-card { display: grid; gap: 10px; border: 1px solid var(--border); border-inline-start: 4px solid var(--warning-accent); border-radius: var(--radius-l); padding: 14px; background: var(--surface); }
 .remote-job-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .remote-job-heading span { display: grid; gap: 3px; }
