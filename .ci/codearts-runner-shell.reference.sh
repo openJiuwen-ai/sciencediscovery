@@ -11,6 +11,14 @@
 #   ARGS             script arguments, one per line
 #   ARTIFACT_PATH    directory the OBS action uploads, default .ci-results/publish
 #   STRICT_EXIT      1 to fail the task on a non-zero script status
+# CodeArts runs this step's command with /bin/sh, and on this image that is
+# dash, which rejects `set -o pipefail` on the line below. The shebang is only
+# honoured when the file is executed directly, so hand over explicitly before
+# anything else runs.
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /bin/bash "$0" "$@"
+fi
+
 set -Eeuo pipefail
 
 REPO_DIR="${WORKSPACE:-$PWD}"
