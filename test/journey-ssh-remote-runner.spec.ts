@@ -361,16 +361,51 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
-      "SSH 凭据只有本机密钥路径，没有私钥粘贴框",
-      "点 Add SSH machine 才出现表单；凭据默认收起，展开后可填用户名、密码和本机私钥路径，页面没有任何私钥文本粘贴入口。",
+      "添加 SSH 按连接登录与 Runner 信息分组",
+      "用户名和密码直接可见，说明只有匹配配置提供 User 才能留空；导入属于连接区，密钥和高级参数按需展开。取消后表单收回。",
       async () => {
+        await page.setViewportSize({ width: 1440, height: 1200 });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.getByRole("button", { name: "Add SSH machine" }).click();
+        const form = dialog.getByRole("form", { name: "Add SSH machine" });
+        await expect(form.getByRole("group", { name: "1. Connection" })).toBeVisible();
+        await expect(form.getByRole("group", { name: "2. Login" }).getByLabel("Username", { exact: true })).toBeVisible();
+        await expect(form.getByLabel("Password (optional)")).toBeVisible();
+        await expect(form.getByText(/SSH requires a username/)).toBeVisible();
+        await expect(form.getByLabel("Runner executable")).toBeHidden();
+        await form.getByLabel("Username", { exact: true }).fill("draft-user");
+        await form.getByRole("button", { name: "Cancel", exact: true }).click();
+        await expect(form).toHaveCount(0);
+        await dialog.getByRole("button", { name: "Add SSH machine" }).click();
+        await expect(form.getByLabel("Username", { exact: true })).toHaveValue("");
+        await form.scrollIntoViewIfNeeded();
+      },
+    );
+
+    await journey.step(
+      "窄窗口添加表单按分组纵向排列",
+      "640px 窗口内字段单列、用户名说明完整换行，没有横向溢出；高级 Runner 参数可展开编辑。",
+      async () => {
+        await page.setViewportSize({ width: 640, height: 1200 });
+        const form = page.getByRole("form", { name: "Add SSH machine" });
+        await form.getByText("Advanced Runner settings", { exact: true }).click();
+        await expect(form.getByLabel("Runner executable")).toBeVisible();
+        await form.getByText("Advanced Runner settings", { exact: true }).click();
+        expect(await form.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+        await form.getByRole("group", { name: "2. Login" }).scrollIntoViewIfNeeded();
+      },
+    );
+
+    await journey.step(
+      "SSH 凭据只有本机密钥路径，没有私钥粘贴框",
+      "在登录区按需展开 SSH key，可选择私钥文件或生成密钥；用户名和密码仍直接可见，没有私钥粘贴入口。",
+      async () => {
+        await page.setViewportSize({ width: 1440, height: 1200 });
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
         await expect(dialog.getByLabel("SSH alias or IP/hostname")).toBeVisible();
         await expect(dialog.getByLabel("Port (optional)")).toBeVisible();
-        await expect(dialog.getByText(/alias from your SSH config or a plain IP\/hostname/)).toBeVisible();
-        await expect(dialog.getByLabel("Password (optional)")).toHaveCount(0);
-        await dialog.getByRole("button", { name: "Credentials (optional)" }).click();
+        await expect(dialog.getByLabel("Password (optional)")).toBeVisible();
+        await dialog.getByRole("button", { name: "SSH key (optional)" }).click();
         await expect(dialog.getByLabel("Private key file (optional)")).toBeVisible();
         await expect(dialog.getByRole("textbox", { name: /private key/i })).toHaveCount(1);
         await expect(dialog.locator("textarea")).toHaveCount(0);

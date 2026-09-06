@@ -135,6 +135,19 @@
 .remote-host-form-extras { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .remote-host-form-extras small { color: var(--muted); }
 .remote-host-form-credentials { display: grid; gap: 10px; }
+.remote-host-ssh-form { container-type: inline-size; padding: 16px; gap: 18px; min-width: 0; }
+.remote-host-form-heading { display: grid; gap: 6px; }
+.remote-host-form-heading > strong { font-size: 16px; }
+.remote-host-form-section { display: grid; gap: 12px; margin: 0; padding: 12px 14px 14px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.remote-host-form-section legend { padding: 0 6px; font-size: 13px; font-weight: 700; color: var(--text-heading); }
+.remote-host-ssh-form .remote-host-form-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.remote-host-ssh-form label { min-width: 0; margin: 0; }
+.remote-host-ssh-form input { box-sizing: border-box; width: 100%; min-width: 0; }
+.remote-host-ssh-form .remote-host-form-help { line-height: 1.5; overflow-wrap: anywhere; }
+.remote-host-form-advanced { font-size: 12px; }
+.remote-host-form-advanced summary { cursor: pointer; color: var(--text-secondary); }
+.remote-host-form-advanced[open] summary { margin-bottom: 10px; }
+@container (max-width: 480px) { .remote-host-ssh-form .remote-host-form-fields { grid-template-columns: minmax(0, 1fr); } }
 .remote-host-import-list { display: grid; max-height: 220px; overflow: auto; gap: 6px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); padding: 7px; }
 .remote-host-import-entry { display: grid; gap: 3px; width: 100%; border: 1px solid transparent; border-radius: 7px; background: var(--surface); padding: 9px 10px; color: inherit; text-align: left; cursor: pointer; }
 .remote-host-import-entry:hover, .remote-host-import-entry:focus-visible { border-color: var(--accent-border); background: var(--accent-soft); }

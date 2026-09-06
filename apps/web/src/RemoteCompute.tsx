@@ -580,18 +580,17 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       <button aria-expanded={adding === "ssh"} className="secondary-button" onClick={() => setAdding(adding === "ssh" ? undefined : "ssh")} type="button">Add SSH machine</button>
       <button aria-expanded={adding === "direct"} className="secondary-button" onClick={() => setAdding(adding === "direct" ? undefined : "direct")} type="button">Add self-deployed runner</button>
     </div>
-    {adding === "ssh" ? <form className="remote-host-form" onSubmit={(event) => { event.preventDefault(); void submitSshForm(); }}>
-      <p className="remote-host-form-help">An alias from your SSH config or a plain IP/hostname — one field for both; leave the port empty to let the SSH configuration resolve it. Add a username and a password or key when the machine needs them; credentials are stored encrypted and never shown again. ScienceDiscovery probes the machine and, when no runner is installed, deploys and starts its own runner over the same SSH connection — no manual install. Versions are shown and differences are flagged.</p>
-      <div className="remote-host-form-fields">
-        <label><span>Runner name</span><input value={runnerName} onChange={(event) => setRunnerName(event.target.value)} placeholder="e.g. GPU analysis environment" /></label>
-        <label><span>Description</span><input maxLength={2000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose, hardware and installed software" /></label>
-        <label><span>SSH alias or IP/hostname</span><input required value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="institution-hpc or 192.168.1.20" /></label>
-        <label><span>Port (optional)</span><input inputMode="numeric" value={sshPort} onChange={(event) => setSshPort(event.target.value)} placeholder="From SSH config" /></label>
-        <label><span>Runner executable</span><input required value={runnerCommand} onChange={(event) => setRunnerCommand(event.target.value)} placeholder="sciencediscovery-runner" /></label>
-      </div>
+    {adding === "ssh" ? <form className="remote-host-form remote-host-ssh-form" aria-label="Add SSH machine" onSubmit={(event) => { event.preventDefault(); void submitSshForm(); }}>
+      <div className="remote-host-form-heading"><strong>Add SSH machine</strong><p className="remote-host-form-help">Connect a Linux machine. Runner traffic stays inside the SSH tunnel.</p></div>
+      <fieldset className="remote-host-form-section"><legend>1. Connection</legend>
       <div className="remote-host-form-extras">
         <button aria-expanded={configListOpen} className="secondary-button" disabled={Boolean(busyId)} onClick={() => void toggleConfigList()} type="button">Import from ssh_config</button>
-        {importNote ? <small>{importNote}</small> : null}
+        <small>Start from a saved Host entry, or enter the address below.</small>
+      </div>
+      {importNote ? <p className="remote-host-form-help" role="status">{importNote}</p> : null}
+      <div className="remote-host-form-fields">
+        <label><span>SSH alias or IP/hostname</span><input required value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="institution-hpc or 192.168.1.20" /></label>
+        <label><span>Port (optional)</span><input inputMode="numeric" value={sshPort} onChange={(event) => setSshPort(event.target.value)} placeholder="SSH config or 22" /></label>
       </div>
       {configListOpen ? <div className="remote-host-import-list">
         {configHosts === undefined ? <small>Loading ssh_config…</small>
@@ -601,14 +600,20 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
             <small>{[entry.hostName, entry.port ? `port ${entry.port}` : "", entry.username].filter(Boolean).join(" · ")}</small>
           </button>)}
       </div> : null}
+      </fieldset>
+      <fieldset className="remote-host-form-section"><legend>2. Login</legend>
+      <div className="remote-host-form-fields">
+        <label><span>Username</span><input aria-describedby="ssh-add-username-help" autoComplete="off" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Remote account, e.g. root" /></label>
+        <label><span>Password (optional)</span><input autoComplete="new-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Remote account password" /></label>
+      </div>
+      <p className="remote-host-form-help" id="ssh-add-username-help">SSH requires a username. Leave it blank only if an exact Host entry in ssh_config provides User. Otherwise enter the remote account; your local username is not used automatically.</p>
+      <p className="remote-host-form-help">Use a password or an SSH key. Saved secrets are encrypted and never shown again.</p>
       <div className="remote-host-form-extras">
-        <button aria-expanded={showCredentials} className="secondary-button" onClick={() => setShowCredentials(!showCredentials)} type="button">Credentials (optional)</button>
-        {!showCredentials ? <small>Username, password, or a key file — only when the machine needs them.</small> : null}
+        <button aria-expanded={showCredentials} className="secondary-button" onClick={() => setShowCredentials(!showCredentials)} type="button">SSH key (optional)</button>
+        {!showCredentials ? <small>Choose a key file or generate a key pair.</small> : null}
       </div>
       {showCredentials ? <div className="remote-host-form-credentials">
         <div className="remote-host-form-fields">
-          <label><span>Username</span><input autoComplete="off" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="researcher" /></label>
-          <label><span>Password (optional)</span><input autoComplete="new-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Stored encrypted, never shown again" /></label>
           <SshKeyFileField client={client} label="Private key file (optional)" value={keyPath} disabled={Boolean(busyId)}
             onChange={(path) => { setKeyPath(path); setGeneratedKey(undefined); }} placeholder="~/.ssh/id_ed25519" />
           <label><span>Key passphrase (optional)</span><input autoComplete="new-password" type="password" value={keyPassphrase} onChange={(event) => setKeyPassphrase(event.target.value)} placeholder="Only if the key is encrypted" /></label>
@@ -619,6 +624,17 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         </div>
         {generatedKey ? renderGeneratedKey(generatedKey, alias.trim(), username.trim()) : null}
       </div> : null}
+      </fieldset>
+      <fieldset className="remote-host-form-section"><legend>3. Runner details</legend>
+        <div className="remote-host-form-fields">
+          <label><span>Runner name</span><input value={runnerName} onChange={(event) => setRunnerName(event.target.value)} placeholder="e.g. GPU analysis environment" /></label>
+          <label><span>Description</span><input maxLength={2000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose and installed software" /></label>
+        </div>
+        <p className="remote-host-form-help">A name and description help you and the Agent identify this environment. If no runner is installed, ScienceDiscovery deploys its SEA runner automatically; remote Node.js is not required.</p>
+        <details className="remote-host-form-advanced"><summary>Advanced Runner settings</summary>
+          <label><span>Runner executable</span><input required value={runnerCommand} onChange={(event) => setRunnerCommand(event.target.value)} placeholder="sciencediscovery-runner" /></label>
+        </details>
+      </fieldset>
       {renderHostKeyPrompt("add")}
       <div className="remote-host-form-actions">
         <button className="secondary-button" onClick={() => { clearSshForm(); setAdding(undefined); }} type="button">Cancel</button>

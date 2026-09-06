@@ -109,6 +109,31 @@ async function renderHost(
   return { output: JSON.stringify(renderer!.toJSON()), renderer: renderer! };
 }
 
+test("SSH add form groups connection login and runner details without hiding username", async () => {
+  const { renderer } = await renderHost(buildHost());
+  const click = async (name: string) => {
+    const button = renderer.root.findAllByType("button").find((node) => node.children.join("") === name);
+    assert.ok(button);
+    await act(async () => button.props.onClick());
+  };
+  await click("Add SSH machine");
+  const form = renderer.root.findByType("form");
+  assert.deepEqual(form.findAllByType("legend").map((node) => node.children.join("")), ["1. Connection", "2. Login", "3. Runner details"]);
+  const user = form.findByProps({ "aria-describedby": "ssh-add-username-help" });
+  assert.equal(user.props.required, undefined, "A matching SSH config may supply User");
+  assert.match(form.findByProps({ id: "ssh-add-username-help" }).children.join(""), /requires a username.*exact Host entry.*local username is not used automatically/);
+  assert.equal(form.findAllByProps({ type: "password" }).length, 1, "Password is visible before expanding key settings");
+  assert.equal(form.findByType("details").props.open, undefined);
+  await act(async () => user.props.onChange({ target: { value: "scientist" } }));
+  await click("SSH key (optional)");
+  assert.equal(form.findByProps({ "aria-describedby": "ssh-add-username-help" }).props.value, "scientist");
+  await click("Cancel");
+  assert.equal(renderer.root.findAllByType("form").length, 0);
+  await click("Add SSH machine");
+  assert.equal(renderer.root.findByProps({ "aria-describedby": "ssh-add-username-help" }).props.value, "");
+  await act(async () => renderer.unmount());
+});
+
 test("machine identity and actions lead the card, with metadata and public key below", async () => {
   const { renderer } = await renderHost(buildHost({
     runnerName: "Analysis", hostName: "192.0.2.40", port: 2222, username: "scientist",
@@ -229,7 +254,7 @@ test("generated-key registration resumes trust by host id without resubmitting t
     await act(async () => button.props.onClick());
   };
   await click("Add SSH machine");
-  await click("Credentials (optional)");
+  await click("SSH key (optional)");
   await click("Generate a key pair");
   assert.match(JSON.stringify(renderer!.toJSON()), /public-fixture/);
   await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
