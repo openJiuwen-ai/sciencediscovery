@@ -438,6 +438,48 @@ test("combines separately named Agent drafts into one stable Skill version histo
   }
 });
 
+test("merges drafts that share a timestamp in the order they were listed", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const names = ["survey-first", "survey-second", "survey-third"];
+    const draftIds: string[] = [];
+    const create = new SkillCatalog(dataDir, repositoryRoot);
+    await create.load();
+    for (const name of names) {
+      const draft = await create.createReviewDraft({
+        description: `A ${name} literature survey proposal.`,
+        instructions: `# ${name}\n\nRun the ${name} survey.`,
+        metadata: { version: name },
+        name,
+      });
+      draftIds.push(draft.draftId);
+    }
+    // Three drafts created back to back land in the same millisecond most of
+    // the time; force the tie so the ordering is tested rather than the clock.
+    const shared = "2026-01-01T00:00:00.000Z";
+    for (const draftId of draftIds) {
+      const path = resolve(dataDir, "skills", ".drafts", `${draftId}.json`);
+      const stored = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+      await writeFile(path, JSON.stringify({ ...stored, createdAt: shared, updatedAt: shared }));
+    }
+
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const merged = await catalog.mergeReviewDrafts({ draftIds, targetDraftId: draftIds[0]! });
+    const versions = await catalog.listSkillVersions(merged.name);
+    // Newest first, so the draft listed first is the oldest proposal. Before
+    // the tie was broken by list order it was broken by a random id, which put
+    // an arbitrary one of the three here.
+    const oldest = await catalog.getSkillVersion(merged.name, versions.at(-1)!.id);
+    const parsed = parseSkillMarkdown(
+      Buffer.from(oldest.files.find((file) => file.path === "SKILL.md")!.content!),
+    );
+    assert.match(parsed.instructions, /# survey-first/);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("lists every managed revision and edits any UTF-8 package file as a new revision", async () => {
   const dataDir = await temporaryDataDir();
   try {

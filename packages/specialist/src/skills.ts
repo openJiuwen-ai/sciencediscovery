@@ -1335,8 +1335,12 @@ export class SkillCatalog {
           provenance: draft.provenance ?? { source: "agent" },
           proposalId: randomUUID(),
         },
-      ]).toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)
-        || left.proposalId.localeCompare(right.proposalId));
+      // Ties are common: drafts written in quick succession share a millisecond,
+      // and every draft's own proposal carries a freshly generated id, so a
+      // tie broken by proposalId would order the merged history at random. The
+      // sort is stable, so an equal timestamp keeps the order the caller listed
+      // the drafts in, which is the only ordering the caller can predict.
+      ]).toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
       const current = proposals.at(-1)!;
       const proposalHistory = proposals.slice(0, -1);
       const updated: StoredSkillReviewDraft = {
