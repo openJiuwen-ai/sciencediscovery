@@ -92,22 +92,18 @@ RUN set -Eeuo pipefail \
  && mkdir -p /opt/qemu \
  && tar -xf /tmp/qemu-emulator.tar -C /opt/qemu \
  && rm -f /tmp/qemu-emulator.tar \
- && for tool in qemu-system-x86_64 qemu-img; do \
-      printf '%s\n' \
-        '#!/bin/sh' \
-        'exec env QEMU_MODULE_DIR=/opt/qemu/usr/lib/qemu \' \
-        '  /opt/qemu/lib/ld-musl-x86_64.so.1 \' \
-        '  --library-path /opt/qemu/lib:/opt/qemu/usr/lib \' \
-        "  /opt/qemu/usr/bin/$tool \"\$@\"" \
-        > "/usr/local/bin/$tool"; \
-      chmod 0755 "/usr/local/bin/$tool"; \
-    done \
+ && loader='/opt/qemu/lib/ld-musl-x86_64.so.1 --library-path /opt/qemu/lib:/opt/qemu/usr/lib' \
+ && printf '#!/bin/sh\nexec env QEMU_MODULE_DIR=/opt/qemu/usr/lib/qemu %s /opt/qemu/usr/bin/qemu-system-x86_64 -L /opt/qemu/usr/share/qemu "$@"\n' \
+      "$loader" > /usr/local/bin/qemu-system-x86_64 \
+ && printf '#!/bin/sh\nexec env QEMU_MODULE_DIR=/opt/qemu/usr/lib/qemu %s /opt/qemu/usr/bin/qemu-img "$@"\n' \
+      "$loader" > /usr/local/bin/qemu-img \
+ && chmod 0755 /usr/local/bin/qemu-system-x86_64 /usr/local/bin/qemu-img \
+ && ln -sfn /opt/qemu/usr/share/qemu /usr/share/qemu \
  && qemu-system-x86_64 --version | head -n 1 \
- && qemu-img --version | head -n 1
+ && qemu-img --version | head -n 1 \
+ && timeout 10 qemu-system-x86_64 -machine q35 -m 128 -display none -no-reboot -serial null 2>&1 \
+    | grep -qi 'could not load PC BIOS' && { echo "FATAL: the wrapped emulator cannot find its firmware." >&2; exit 1; } || true
 
-# The QEMU firmware lives in the payload, and the layer only passes -L and
-# -bios when it falls back to that payload. Point the system copies at it so
-# the wrappers above behave like a distribution install.
 ENV QEMU_MODULE_DIR=/opt/qemu/usr/lib/qemu
 
 # Last, and on its own, because it is by far the largest thing here and the

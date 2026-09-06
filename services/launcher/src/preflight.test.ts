@@ -264,7 +264,10 @@ describe("host preflight", () => {
     assert.match(await readFile(argumentLog, "utf8"), /--disable-userns/);
   });
 
-  test("rejects a data directory it cannot write", async () => {
+  // Mode bits do not restrain root, so the unwritable directory this needs
+  // cannot be built when the tests run as one, which is the case inside the CI
+  // container. The check itself is unconditional in the product.
+  test("rejects a data directory it cannot write", { skip: process.getuid?.() === 0 }, async () => {
     const readOnly = join(workspace, "read-only");
     await mkdir(readOnly, { recursive: true });
     await chmod(readOnly, 0o500);
