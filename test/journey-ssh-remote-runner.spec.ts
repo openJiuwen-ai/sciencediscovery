@@ -356,6 +356,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         expect(connect.x).toBeGreaterThan(identityBox!.x + identityBox!.width);
         expect(detailsBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
         await expect(card.getByLabel("Runner resources")).toContainText("connect Runner to measure");
+        await card.scrollIntoViewIfNeeded();
       },
     );
 
@@ -674,7 +675,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "窄窗口下机器操作仍同行等宽",
       "缩窄窗口后，机器卡片不产生横向溢出，Disconnect、Refresh、Credentials、Delete 仍在同一操作组中同行等宽。",
       async () => {
-        await page.setViewportSize({ width: 900, height: 720 });
+        await page.setViewportSize({ width: 900, height: 1000 });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const actions = dialog.locator(".remote-host-card .remote-host-actions").first();
         const boxes = await Promise.all(["Disconnect", "Refresh probe", "Credentials", "Delete"].map(async (name) => {
@@ -695,7 +696,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         expect(first!.y).toBeGreaterThanOrEqual(identityBox!.y + identityBox!.height);
         expect(detailsBox!.y).toBeGreaterThanOrEqual(first!.y + first!.height);
         await expect(dialog.getByLabel("Runner resources").first()).toContainText("60.0 GiB available");
-        await dialog.getByLabel("Runner resources").first().scrollIntoViewIfNeeded();
+        await card.scrollIntoViewIfNeeded();
       },
     );
   } finally {

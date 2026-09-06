@@ -82,7 +82,7 @@ export function RunnerResourceSummary({ host }: { host: RemoteHostTarget }): Rea
   </div>;
   const disk = resources.workspaceDisk;
   return <div className="remote-host-resources" aria-label="Runner resources">
-    <strong>Workspace disk: {disk ? `${resourceBytes(disk.availableBytes)} available / ${resourceBytes(disk.totalBytes)} total` : "unknown"}</strong>
+    <strong>Workspace disk: <span className="remote-host-disk-capacity">{disk ? `${resourceBytes(disk.availableBytes)} available / ${resourceBytes(disk.totalBytes)} total` : "unknown"}</span></strong>
     {disk ? <small className="remote-host-resource-path">{disk.path}</small> : <small>{resources.workspaceDiskError}</small>}
     {disk && (disk.availableBytes < 1024 ** 3 || disk.availableBytes < disk.totalBytes * 0.1)
       ? <div role="alert">Low workspace disk space. Environment installs and file writes may fail.</div> : null}

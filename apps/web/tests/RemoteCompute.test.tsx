@@ -42,7 +42,7 @@ test("resource cards distinguish available workspace disk, low space, and unavai
   assert.match(render(), /role="alert"/);
   assert.match(render(), /0.0 GiB available/);
   host.runnerStatus!.resources!.workspaceDisk = null;
-  assert.match(render(), /Workspace disk: unknown/);
+  assert.match(render(), /Workspace disk: <span[^>]*>unknown/);
   assert.doesNotMatch(render(), /0.0 GiB available/);
   host.runnerStatus!.state = "disconnected";
   assert.match(render(), /connect Runner to measure/);

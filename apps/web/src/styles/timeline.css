@@ -167,6 +167,7 @@
 .remote-host-public-key[open] summary { margin-bottom: 8px; }
 @container (max-width: 620px) { .remote-host-card-details { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
 .remote-host-resources small, .remote-host-resources strong { white-space: normal; overflow: visible; text-overflow: clip; }
+.remote-host-disk-capacity { display: block; margin-top: 4px; overflow-wrap: anywhere; }
 .remote-host-resources [role="alert"] { color: var(--danger, #b42318); }
 .remote-host-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 .remote-host-card-title > strong { font-size: 15px; }
@@ -196,7 +197,7 @@
    its own row or a different size. Padding is normalized because the global
    danger/secondary buttons otherwise differ by a few pixels. */
 .remote-host-actions { display: flex; flex: 1 1 380px; gap: 8px; }
-.remote-host-actions > button { box-sizing: border-box; flex: 1 1 0; justify-content: center; min-width: 0; padding: 8px 10px; white-space: normal; overflow-wrap: anywhere; }
+.remote-host-actions > button { box-sizing: border-box; flex: 1 1 0; justify-content: center; min-width: 0; padding: 8px 6px; font-size: 12px; white-space: normal; }
 .remote-job-card { display: grid; gap: 10px; border: 1px solid var(--border); border-inline-start: 4px solid var(--warning-accent); border-radius: var(--radius-l); padding: 14px; background: var(--surface); }
 .remote-job-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .remote-job-heading span { display: grid; gap: 3px; }
