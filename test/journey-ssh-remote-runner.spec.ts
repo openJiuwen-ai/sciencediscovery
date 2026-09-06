@@ -716,7 +716,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByRole("button", { name: "Delete remote workspace" })).toHaveCount(0);
         await dialog.getByRole("button", { name: "Close scoped settings" }).click();
         const settings = await openRemoteSettings();
-        await settings.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /科学环境/ }).click();
+        await settings.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^环境/ }).click();
         await settings.getByRole("combobox", { name: "Manage Runner" }).selectOption(hostId);
         await settings.getByRole("button", { name: "Workspaces", exact: true }).click();
         await expect(settings.getByText("Remote workspaces", { exact: true })).toBeVisible();
@@ -841,7 +841,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       await page.getByRole("dialog", { name: "project settings" }).getByRole("button", { name: "Close scoped settings" }).click();
       await page.setViewportSize({ width: 1440, height: 1000 });
       const dialog = await openRemoteSettings();
-      await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /科学环境/ }).click();
+      await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^环境/ }).click();
       await dialog.getByRole("combobox", { name: "Manage Runner" }).selectOption(hostId);
       await expect(dialog.getByText("Remote Python base", { exact: true })).toBeVisible();
       await dialog.getByRole("combobox", { name: "Environment language" }).selectOption("r");

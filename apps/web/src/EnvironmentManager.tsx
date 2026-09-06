@@ -225,9 +225,8 @@ export function EnvironmentManager({ client, onError }: { client: ApiClient; onE
     await run(async () => { await client.deleteEnvironment(environment.id); });
   }
 
-  if (!setup || !sourceSettings || !sourceDraft) {
-    return loadError ? <div role="alert">{loadError}<button type="button" className="secondary-button" onClick={() => { setLoadError(""); void refresh().catch((reason: Error) => setLoadError(reason.message)); }}>Retry environments</button></div> : <p className="muted">Loading scientific environment settings…</p>;
-  }
+  if (loadError) return <div role="alert">{loadError}<button type="button" className="secondary-button" onClick={() => { setLoadError(""); void refresh().catch((reason: Error) => setLoadError(reason.message)); }}>Retry environments</button></div>;
+  if (!setup || !sourceSettings || !sourceDraft) return <p className="muted">Loading scientific environment settings…</p>;
 
   return <div className="environment-manager">
     <div className="settings-detail-header">

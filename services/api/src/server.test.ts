@@ -502,7 +502,11 @@ test("global Runner management routes remotely, requires authentication and neve
     if (!connected) throw new Error("Runner disconnected");
     return { listEnvironments: async () => [{ id: "remote-only" }], deleteRemoteWorkspace: async (key: string) => { deleted.push(key); } } as unknown as RunnerClient;
   });
-  const server = createApiServer(testConfig(root), { remoteCompute: remote });
+  const emptyCatalog: McpCatalog = { loadedAt: new Date().toISOString(), revision: "runner-management", servers: [] };
+  const server = createApiServer({ ...testConfig(root), memoryGraph: { url: "", internalToken: "" } }, {
+    remoteCompute: remote,
+    mcpTransport: { catalog: async () => emptyCatalog, reload: async () => emptyCatalog, invoke: async () => { throw new Error("No MCP in Runner settings test"); } },
+  });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   context.after(async () => { await new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); }); await rm(root, { recursive: true, force: true }); });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
