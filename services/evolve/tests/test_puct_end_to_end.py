@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
 import pytest
+
+from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 from fastapi.testclient import TestClient
 
 from sciencediscovery_evolve.measurement import GATE, ROLLOUT, TEST, missing_candidate_runtime
@@ -157,6 +159,10 @@ SCORECARD: Dict[str, Any] = {
 }
 
 
+@pytest.mark.skipif(
+    not detect_local_capability().available,
+    reason="needs a real sandbox: this exercises the confinement itself, and a host that only carries the binary cannot provide it",
+)
 def test_a_real_search_improves_on_its_baseline(tmp_path: Path, model_server: str) -> None:
     capability = detect_local_capability()
     if not capability.available:

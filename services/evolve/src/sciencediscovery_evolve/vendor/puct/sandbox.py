@@ -51,9 +51,11 @@ from __future__ import annotations
 import math
 import os
 import shutil
+import subprocess
 import sys
 import sysconfig
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Mapping, Dict, List, Optional, Sequence, Tuple
 
@@ -107,14 +109,34 @@ class SandboxCapability:
         return self.backend in ("bwrap", "seatbelt")
 
 
+@lru_cache(maxsize=1)
+def _bwrap_can_start(bwrap_path: str) -> bool:
+    """Whether this bwrap can actually build a namespace, not merely exist.
+
+    A container can carry the binary and still refuse the unshare -- a seccomp
+    filter or a missing CAP_SYS_ADMIN is enough -- and then every caller that
+    trusted ``which`` fails deep inside a candidate run with a message about
+    namespaces. Asking once here costs one process and turns that into an
+    honest "no sandbox".
+    """
+    try:
+        return subprocess.run(
+            [bwrap_path, "--ro-bind", "/", "/", "--dev", "/dev", "true"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def detect_local_capability() -> SandboxCapability:
     """A local fallback for tests and for a sidecar started without a probe.
 
     Deliberately not used on the run path: the control plane's probe is the
     authority, because it knows about the container corrections.
     """
-    if shutil.which("bwrap"):
-        return SandboxCapability(backend="bwrap", bwrap_path=shutil.which("bwrap") or "bwrap")
+    bwrap_path = shutil.which("bwrap")
+    if bwrap_path and _bwrap_can_start(bwrap_path):
+        return SandboxCapability(backend="bwrap", bwrap_path=bwrap_path)
     if sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").exists():
         return SandboxCapability(backend="seatbelt")
     return SandboxCapability()

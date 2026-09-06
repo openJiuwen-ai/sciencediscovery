@@ -34,7 +34,7 @@ from sciencediscovery_evolve.measurement import (
     load_dataset,
     measure,
 )
-from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability
+from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability, detect_local_capability
 
 
 def criterion(cid: str, metric: str, direction: str = "maximize") -> Dict[str, Any]:
@@ -251,6 +251,10 @@ def test_the_wrong_number_of_predictions_is_a_failure(
     assert not result.ok
 
 
+@pytest.mark.skipif(
+    not detect_local_capability().available,
+    reason="needs a real sandbox: this exercises the confinement itself, and a host that only carries the binary cannot provide it",
+)
 def test_a_real_candidate_runs_under_the_real_sandbox_and_is_scored(tmp_path: Path) -> None:
     """The one test that does not stub `run_candidate`.
 

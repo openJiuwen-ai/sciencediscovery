@@ -34,7 +34,7 @@ from sciencediscovery_evolve.test_gate_domain import (
     _roles,
     test_gate_domain as build_domain,
 )
-from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability
+from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability, detect_local_capability
 
 CARD: Dict[str, Any] = {
     "aggregate": "weighted_sum",
@@ -188,6 +188,10 @@ def test_an_unparseable_report_is_an_error_rather_than_a_zero(tmp_path: Path) ->
         _read_junit(report)
 
 
+@pytest.mark.skipif(
+    not detect_local_capability().available,
+    reason="needs a real sandbox: this exercises the confinement itself, and a host that only carries the binary cannot provide it",
+)
 def test_a_candidate_that_rewrites_the_tests_at_run_time_gains_nothing(tmp_path: Path) -> None:
     """The layer that cannot be skipped, exercised by actually running it.
 
