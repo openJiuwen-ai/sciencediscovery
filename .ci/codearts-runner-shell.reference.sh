@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# ScienceDiscovery CodeArts build task, running inside
+# swr.cn-north-4.myhuaweicloud.com/openjiuwen/sciencediscovery-ci-runner:latest
+#
+# Custom parameters this task reads:
+#   GIT_REPO_URL     repository to check out
+#   GIT_REF          ref to test, e.g. refs/merge-requests/<id>/head
+#   GIT_TARGET_REF   ref it will merge into, e.g. refs/heads/main
+#   SH_FILE_PATH     repository-relative script the dispatcher runs
+#   ENVS             NAME=VALUE records, one per line
+#   ARGS             script arguments, one per line
+#   ARTIFACT_PATH    directory the OBS action uploads, default .ci-results/publish
+#   STRICT_EXIT      1 to fail the task on a non-zero script status
+set -Eeuo pipefail
+
+REPO_DIR="${WORKSPACE:-$PWD}"
+ARTIFACT_PATH="${ARTIFACT_PATH:-.ci-results/publish}"
+STRICT_EXIT="${STRICT_EXIT:-0}"
+BAKED_CACHE=/opt/sciencediscovery/qemu-cache
+
+log() { printf '%s\n' "$*"; }
+fail() { printf 'FATAL: %s\n' "$*" >&2; exit 2; }
+
+log "=== ScienceDiscovery run-shell task ==="
+log "image     : $(cat /etc/sciencediscovery-ci-runner 2>/dev/null || echo unlabelled)"
+log "node/pnpm : $(node --version) / $(pnpm --version)"
+log "repository: $REPO_DIR"
+cd -- "$REPO_DIR"
+
+# --- checkout ---------------------------------------------------------------
+# The task is handed a ref to test and the ref it will merge into. Replaying the
+# change onto the target is what the pipeline is asked to verify; when the two
+# are the same ref, as on a push-triggered branch, that replay is a no-op.
+[[ -n "${GIT_REPO_URL:-}" ]] || fail "GIT_REPO_URL is required."
+[[ -n "${GIT_REF:-}" ]] || fail "GIT_REF is required."
+TARGET_REF="${GIT_TARGET_REF:-$GIT_REF}"
+if [[ ! -e .git ]]; then
+  git init --quiet .
+  git remote add origin "$GIT_REPO_URL"
+fi
+git fetch --no-tags --force origin \
+  "+$TARGET_REF:refs/remotes/origin/codearts-target" \
+  "+$GIT_REF:refs/remotes/origin/codearts-source"
+target_sha="$(git rev-parse refs/remotes/origin/codearts-target)"
+source_sha="$(git rev-parse refs/remotes/origin/codearts-source)"
+git checkout --force --detach "$target_sha"
+if [[ "$source_sha" != "$target_sha" ]]; then
+  [[ -f .ci/rebase-codearts-pr.sh ]] || fail "the target lacks .ci/rebase-codearts-pr.sh."
+  bash .ci/rebase-codearts-pr.sh codearts-pr-source "$source_sha"
+fi
+log "checked out: $(git rev-parse HEAD) ($(git log -1 --format=%s))"
+export EXPECTED_COMMIT="$(git rev-parse HEAD)"
+export ARTIFACT_COMMIT="$EXPECTED_COMMIT"
+
+# --- what the image already provides ----------------------------------------
+# The guest image is the largest thing a run used to download. It is baked in;
+# seeding the cache with a link makes the repository's fetcher find it, verify
+# its checksum as usual, and skip the download. A pin the image predates simply
+# misses the checksum and downloads as before.
+if [[ -d "$BAKED_CACHE" ]]; then
+  mkdir -p .ci-results/qemu-cache
+  for baked in "$BAKED_CACHE"/*; do
+    [[ -e "$baked" ]] || continue
+    ln -sfn "$baked" ".ci-results/qemu-cache/$(basename "$baked")"
+  done
+  log "seeded the QEMU cache from the image"
+fi
+
+# --- run --------------------------------------------------------------------
+[[ -n "${SH_FILE_PATH:-}" ]] || fail "SH_FILE_PATH is required."
+[[ -f .ci/codearts-build-dispatch.sh ]] || fail "the checkout lacks .ci/codearts-build-dispatch.sh."
+set +e
+WORKSPACE="$REPO_DIR" bash .ci/codearts-build-dispatch.sh
+rc=$?
+set -e
+
+# --- report -----------------------------------------------------------------
+# Every layer records its status where the verification job and the merge
+# request table read it, because a task that fails here would skip its own OBS
+# upload and leave nothing to read. One task runs with STRICT_EXIT=1 and is the
+# only thing that can turn the run red.
+mkdir -p -- "$ARTIFACT_PATH"
+printf '%s\n' "$rc" > "$ARTIFACT_PATH/exit-code"
+log "script exited with status $rc"
+if [[ "$STRICT_EXIT" == 1 ]]; then
+  exit "$rc"
+fi
+log "status recorded for the verification job; this task reports success so its artifacts upload."
+exit 0
