@@ -34,10 +34,13 @@ cd -- "$REPO_DIR"
 [[ -n "${GIT_REPO_URL:-}" ]] || fail "GIT_REPO_URL is required."
 [[ -n "${GIT_REF:-}" ]] || fail "GIT_REF is required."
 TARGET_REF="${GIT_TARGET_REF:-$GIT_REF}"
-if [[ ! -e .git ]]; then
-  git init --quiet .
-  git remote add origin "$GIT_REPO_URL"
-fi
+# The task may have downloaded the repository already. Point origin at the URL
+# this run was given either way: the rebase helper falls back to `fetch
+# --unshallow origin` when it needs history, so origin has to be the repository
+# under test and not whatever a previous step configured.
+[[ -e .git ]] || git init --quiet .
+git remote remove origin >/dev/null 2>&1 || true
+git remote add origin "$GIT_REPO_URL"
 git fetch --no-tags --force origin \
   "+$TARGET_REF:refs/remotes/origin/codearts-target" \
   "+$GIT_REF:refs/remotes/origin/codearts-source"
