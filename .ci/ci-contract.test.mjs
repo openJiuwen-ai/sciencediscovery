@@ -187,15 +187,26 @@ test("a third UT entry point outside the two tiers is rejected", async (t) => {
 
 test("no CI script restates a value ci-constants.sh owns", async () => {
   const ciDirectory = dirname(fileURLToPath(import.meta.url));
-  // Source it rather than read it: some values are derived from where the
-  // product already pins them, and those must be covered too.
+  // Take the names from the file and the values from sourcing it. Reading the
+  // text alone would miss the versions, which are read from where the product
+  // pins them; diffing the shell's variables instead would pick up both bash's
+  // own bookkeeping and the CI_* settings the build task exports, and the
+  // latter already failed a script for carrying its own default.
+  const constants = await readFile(join(ciDirectory, "ci-constants.sh"), "utf8");
+  const names = [
+    ...constants.matchAll(/^([A-Z][A-Z0-9_]*)=/gm),
+    ...constants.matchAll(/^\s*read -r ([A-Z][A-Z0-9_]*)$/gm),
+  ].map(([, name]) => name);
+  assert.ok(names.length >= 4, "ci-constants.sh defines nothing to check");
+
   const printed = spawnSync("bash", ["-c",
-    `source ${JSON.stringify(join(ciDirectory, "ci-constants.sh"))}; `
-    + 'for name in ${!CI_@}; do printf "%s=%s\\n" "$name" "${!name}"; done'],
+    `source ${JSON.stringify(join(ciDirectory, "ci-constants.sh"))}\n`
+    + names.map((name) => `printf '%s=%s\\n' ${name} "\${${name}}"`).join("\n")],
   { encoding: "utf8" });
   assert.equal(printed.status, 0, printed.stderr);
-  const owned = [...printed.stdout.matchAll(/^(CI_[A-Z0-9_]*)=(\S+)$/gm)]
+  const owned = [...printed.stdout.matchAll(/^([A-Z][A-Z0-9_]*)=(\S+)$/gm)]
     .map(([, name, value]) => ({ name, value }));
+  assert.equal(owned.length, names.length, printed.stdout);
   assert.ok(owned.length >= 4, "ci-constants.sh defines nothing to check");
 
   const scripts = (await readdir(ciDirectory))
