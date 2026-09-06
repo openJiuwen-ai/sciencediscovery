@@ -614,7 +614,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await dialog.getByRole("button", { name: "Connect and add" }).click();
         await expect(dialog.getByText("Runner ID: e2e-direct-runner", { exact: true })).toBeVisible();
         await expect(dialog.getByText("Self-deployed CPU sandbox", { exact: true })).toBeVisible();
-        await expect(dialog.getByText(/self-deployed · http:\/\/192\.168\.1\.20:4311 · token authenticated/)).toBeVisible();
+        await expect(dialog.getByText("Self-deployed · direct", { exact: true })).toBeVisible();
+        await expect(dialog.getByText(/http:\/\/192\.168\.1\.20:4311 · token authenticated/)).toBeVisible();
         await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
         await dialog.locator(".remote-host-card", { hasText: "e2e-direct-runner" }).scrollIntoViewIfNeeded();
       },
