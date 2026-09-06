@@ -55,7 +55,8 @@ invalid checksum.
 `.codearts/workflow/codearts-auto-merge-pipeline.yml` is the auto-merge
 pipeline, triggered by a `/merge` comment on a merge request targeting
 `main`. A copy named `codearts-auto-merge-pipeline-test.yml` exists only on
-`ci/verify-pr-ci`, registered against that branch, for experiments. On a
+`ci/verify-pr-ci`, registered against that branch, for experiments; that branch
+is where a pipeline change is proven before it reaches this file. On a
 `/merge` comment it checks the commenter against
 `CODEOWNERS` on `main`, reads the merge request's live state (open, base equal to the merge
 request's own target branch, not draft, `mergeable`, head still the commit
@@ -133,10 +134,10 @@ already chosen `final_label` to the bot. The bot downloads and posts the HTML
 unchanged; it must not read other result artifacts or derive a result
 independently, because stale artifacts can disagree with the current run.
 
-Do not use a `rerun` comment to validate changes made only on
-`ci/verify-pr-ci`: CodeArts can restart the pipeline definition registered for
-`main`. Update and push the PR source branch instead so the debug pipeline is
-selected again from the CI target branch.
+Do not use a `rerun` comment to validate a pipeline change: CodeArts can
+restart the definition registered for the target branch rather than the one
+under test. Update and push the merge request's source branch instead, so the
+definition is selected again from the branch the request targets.
 
 ## PaC syntax and source checkout
 

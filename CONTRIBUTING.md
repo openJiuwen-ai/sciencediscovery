@@ -168,10 +168,13 @@ merge-request CI is CodeArts-only; this repository intentionally has no
 | Pipeline | UT | ST | E2E | Release binaries |
 | --- | --- | --- | --- | --- |
 | GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
-| CodeArts debug — `.codearts/workflow/` targeting `ci/verify-pr-ci` | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | mocked `ci:e2e` in the same QEMU guest | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts — `.codearts/workflow/` on a merge request to `main` | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | off while its Playwright timeouts are sized for native speed | x86_64 + aarch64 packages; smoke is host-dependent |
 
-The CodeArts row above is a temporary `ci/verify-pr-ci`-only debug pipeline,
-not a release gate for `main`. Its x86_64 and aarch64 jobs each call
+Every CodeArts job runs on a build task rather than a pipeline executor,
+because the two are billed against separate quotas and only the build one has
+room. No job's own status decides the run: each records an exit code in OBS and
+a single verification job reads them back, which is also what the merge
+request's result table reports. Its x86_64 and aarch64 jobs each call
 `scripts/package-binary-release.sh` and verifies `SHA256SUMS`. The x86_64 job
 runs directly on the hosted x64 runner and uploads its files to a run-specific
 OBS path. The aarch64 job invokes the separately configured ARM CodeArts Build

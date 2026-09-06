@@ -30,7 +30,7 @@ Three pipelines exist and none runs everything.
 
 | Pipeline | Trigger | UT | ST | E2E | Binary/resource output |
 | --- | --- | --- | --- | --- | --- |
-| CodeArts debug — `.codearts/workflow/codearts-pipeline.yml` | merge request to `ci/verify-pr-ci` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh debug run | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | `ci:st` | mocked `ci:e2e` in the same QEMU guest | x86_64 + aarch64 packages; smoke is host-dependent |
+| CodeArts — `.codearts/workflow/codearts-pipeline.yml` | merge request to `main` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh run | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | `ci:st` | off; the journeys reach a browser under emulation but outrun timeouts sized for native speed | x86_64 + aarch64 packages; smoke is host-dependent |
 | CodeArts resources — `.codearts/workflow/codearts-resources-pipeline.yml` on `ci/codearts-resources` | push to `ci/codearts-resources` | — | — | — | checksum-pinned toolchains and QEMU image uploaded to stable OBS keys |
 | GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
