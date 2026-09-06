@@ -67,6 +67,15 @@ fetch() {
   curl --fail --location --retry 3 --silent --show-error "$seed_url/$1" "${@:2}"
 }
 
+# The image pins the host expects this guest to have booted. Sourcing a file
+# from the seed server is the same trust as this script, which the guest
+# downloaded from there and is running.
+fetch guest-pins --output /root/guest-pins
+# shellcheck source=/dev/null
+source /root/guest-pins
+: "${CI_NODE_VERSION:?the host did not send the expected Node version}"
+: "${CI_QEMU_RUNNER_RECIPE:?the host did not send the expected image recipe}"
+
 layer="$(fetch layer)"
 layer_env=()
 case "$layer" in
@@ -132,16 +141,31 @@ runuser --user ci -- env \
   ${layer_env[@]+"${layer_env[@]}"} \
   "${guest_env[@]}" \
   "QEMU_LAYER_SCRIPT=$layer_script" \
+  "CI_NODE_VERSION=$CI_NODE_VERSION" \
+  "CI_PNPM_VERSION=$CI_PNPM_VERSION" \
+  "CI_UV_VERSION=$CI_UV_VERSION" \
+  "CI_QEMU_RUNNER_RECIPE=$CI_QEMU_RUNNER_RECIPE" \
   bash -c '
     set -Eeuo pipefail
     cd /home/ci/sciencediscovery
     export CI_RESULTS_DIR=/home/ci/ci-results
     export CI_RUNTIME_DIR=/home/ci/ci-runtime
     export PATH="$HOME/.local/node/bin:$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH"
-    test "$(node --version)" = v22.19.0
-    test "$(pnpm --version)" = 11.1.2
-    test "$(uv --version)" = "uv 0.9.26"
-    grep -Fx "recipe=qemu-runner-v2" /etc/sciencediscovery-qemu-runner-image
+    # A bare test or grep under set -e exits 1 and prints nothing, which is how
+    # a guest that had booted the wrong image generation produced a run whose
+    # entire log was this header. Name the mismatch instead.
+    expect() { # <what> <found> <pinned>
+      if [ "$2" != "$3" ]; then
+        echo "FATAL: this guest reports $1 '"'"'$2'"'"', but the host pinned '"'"'$3'"'"'." >&2
+        exit 1
+      fi
+    }
+    expect node "$(node --version)" "v$CI_NODE_VERSION"
+    expect pnpm "$(pnpm --version)" "$CI_PNPM_VERSION"
+    expect uv "$(uv --version)" "uv $CI_UV_VERSION"
+    expect "image recipe" \
+      "$(sed -n '"'"'s/^recipe=//p'"'"' /etc/sciencediscovery-qemu-runner-image)" \
+      "$CI_QEMU_RUNNER_RECIPE"
     registry="${CI_NPM_REGISTRY:-https://repo.huaweicloud.com/repository/npm/}"
     npm config set registry "${registry%/}/" --location=user
     # The workspace arrived installed and built, and pnpm 11 defaults

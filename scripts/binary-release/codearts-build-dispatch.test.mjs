@@ -230,7 +230,7 @@ test("prebuilt QEMU Runner image and workflow share the immutable cache contract
   // carried the commit would resolve to one with an empty segment.
   assert.match(
     fetcherSource,
-    /sciencediscovery\/cache\/qemu-runner\/v2\/\$resource_run_id"$/m,
+    /\$CI_OBS_CACHE_BASE\/qemu-runner\/v2\/\$resource_run_id"$/m,
   );
   assert.match(workflow, /ut_guest:[\s\S]*?needs: \[\][\s\S]*?SH_FILE_PATH: \.ci\/codearts-layer\.sh/);
   const layer = await readFile(join(repositoryRoot, ".ci", "codearts-layer.sh"), "utf8");
@@ -246,7 +246,7 @@ test("the portable QEMU emulator is downloaded, never reassembled", async () => 
   assert.match(fetcherSource, /checksum_file="\$script_dir\/qemu-emulator\.sha256"/);
   assert.doesNotMatch(fetcherSource, /payload_sha256=[a-f0-9]{64}/);
   assert.match(fetcherSource, /--cache-only/);
-  assert.match(fetcherSource, /sciencediscovery\/cache\/qemu-emulator\/v1/);
+  assert.match(fetcherSource, /\$CI_OBS_CACHE_BASE\/qemu-emulator\/v1"$/m);
   assert.match(runner, /\.ci\/fetch-qemu-emulator\.sh/);
   // Assembling QEMU from Alpine packages cost about 166 seconds on every guest
   // job. The resource branch owns that now; a test job only downloads.

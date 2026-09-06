@@ -13,7 +13,8 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -182,4 +183,34 @@ test("a third UT entry point outside the two tiers is rejected", async (t) => {
   const problems = await utContractProblems(catalog, root);
   assert.match(problems.join("\n"), /script ci:ut:macos is a UT entry point outside the two tiers/);
   assert.deepEqual(problems.filter((problem) => problem.startsWith("script ci:ut") && !problem.includes("macos")), []);
+});
+
+test("no CI script restates a value ci-constants.sh owns", async () => {
+  const ciDirectory = dirname(fileURLToPath(import.meta.url));
+  // Source it rather than read it: some values are derived from where the
+  // product already pins them, and those must be covered too.
+  const printed = spawnSync("bash", ["-c",
+    `source ${JSON.stringify(join(ciDirectory, "ci-constants.sh"))}; `
+    + 'for name in ${!CI_@}; do printf "%s=%s\\n" "$name" "${!name}"; done'],
+  { encoding: "utf8" });
+  assert.equal(printed.status, 0, printed.stderr);
+  const owned = [...printed.stdout.matchAll(/^(CI_[A-Z0-9_]*)=(\S+)$/gm)]
+    .map(([, name, value]) => ({ name, value }));
+  assert.ok(owned.length >= 4, "ci-constants.sh defines nothing to check");
+
+  const scripts = (await readdir(ciDirectory))
+    .filter((name) => name.endsWith(".sh") && name !== "ci-constants.sh");
+  const restated = [];
+  for (const script of scripts) {
+    const source = await readFile(join(ciDirectory, script), "utf8");
+    for (const { name, value } of owned) {
+      // A version like 22.19.0 is short enough to appear by accident, so the
+      // check is on the exact value and the script is expected to interpolate.
+      if (source.includes(value)) restated.push(`${script} spells out ${name}=${value}`);
+    }
+  }
+  // The recipe name drifted exactly this way on the resources branch: one of
+  // two copies was bumped, the image announced a generation it did not carry,
+  // and both guest layers failed a preflight that printed nothing.
+  assert.deepEqual(restated, []);
 });

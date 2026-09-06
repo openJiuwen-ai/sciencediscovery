@@ -36,6 +36,11 @@
 set -uo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# One definition for the versions, names and locations more than one CI
+# script has to agree on.
+# shellcheck source=.ci/ci-constants.sh
+source "$script_dir/ci-constants.sh"
+
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -58,10 +63,10 @@ binary_cache_only="${CI_BINARY_CACHE_ONLY:-0}"
 [[ "$binary_cache_only" =~ ^[01]$ ]] \
   || { echo "CI_BINARY_CACHE_ONLY must be 0 or 1." >&2; exit 2; }
 
-# package.json requires >=22.19.0. Provisioning Node here rather than through a
+# package.json sets the floor. Provisioning Node here rather than through a
 # setup action keeps the workflow dependent on one platform action (checkout)
 # instead of two, and makes the version the repository's business.
-NODE_REQUIRED=22.19.0
+NODE_REQUIRED="$CI_NODE_VERSION"
 node_too_old() {
   have node || return 0
   local current
@@ -151,7 +156,7 @@ install_pnpm_from_registry() {
   local registry="$1" version="${pnpm_spec#pnpm@}" archive install_dir expected_sha256 expected_sha512 actual_sha512
   local -a cache_arguments=()
   case "$version" in
-    11.1.2)
+    "$CI_PNPM_VERSION")
       expected_sha256=bfe4d2b2c7a3210565bba62929f9efe493eb5f24627201a102ea4514eae8cf80
       expected_sha512=415a1cc25974731e75455c1468371be74c5aa5fb7621b50d4056d222451609f11412f23fd602e6169f1e060466641f798597e1be961a10688836a67b16569499
       ;;
@@ -214,7 +219,7 @@ else
 fi
 pnpm --version || { echo "FATAL: pnpm installed but not runnable." >&2; exit 1; }
 
-UV_REQUIRED=0.9.26
+UV_REQUIRED="$CI_UV_VERSION"
 install_uv_from_mirror() {
   local install_dir="$HOME/.local/share/uv/$UV_REQUIRED" runtime_arch uv_wheel uv_wheel_sha256 uv_wheel_path default_uv_wheel_url uv_wheel_url actual_sha256 wheel_scripts
   local -a cache_arguments=()
@@ -222,11 +227,11 @@ install_uv_from_mirror() {
   case "$(uname -m)" in
     aarch64|arm64)
       runtime_arch=aarch64
-      default_uv_wheel_url=https://pypi.tuna.tsinghua.edu.cn/packages/ba/3d/b8186a7dec1346ca4630c674b760517d28bffa813a01965f4b57596bacf3/uv-0.9.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
+      default_uv_wheel_url=https://pypi.tuna.tsinghua.edu.cn/packages/ba/3d/b8186a7dec1346ca4630c674b760517d28bffa813a01965f4b57596bacf3/uv-$UV_REQUIRED-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
       ;;
     amd64|x86_64)
       runtime_arch=x86_64
-      default_uv_wheel_url=https://pypi.tuna.tsinghua.edu.cn/packages/38/16/a07593a040fe6403c36f3b0a99b309f295cbfe19a1074dbadb671d5d4ef7/uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      default_uv_wheel_url=https://pypi.tuna.tsinghua.edu.cn/packages/38/16/a07593a040fe6403c36f3b0a99b309f295cbfe19a1074dbadb671d5d4ef7/uv-$UV_REQUIRED-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       ;;
     *) return 1 ;;
   esac

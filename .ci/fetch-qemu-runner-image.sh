@@ -20,6 +20,11 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# One definition for the versions, names and locations more than one CI
+# script has to agree on.
+# shellcheck source=.ci/ci-constants.sh
+source "$script_dir/ci-constants.sh"
+
 output=""
 
 usage() {
@@ -55,7 +60,7 @@ fi
 # The key holds only the run id. A push-triggered pipeline cannot resolve its
 # own commit into a step parameter, so the commit that built this image is
 # recorded in the published VERSION manifest and above rather than in the path.
-image_base_url="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu-runner/v2/$resource_run_id"
+image_base_url="$CI_OBS_CACHE_BASE/qemu-runner/v2/$resource_run_id"
 
 echo "Fetching the pinned pre-provisioned QEMU Runner image"
 echo "resource commit: $resource_commit"

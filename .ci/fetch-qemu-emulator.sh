@@ -24,6 +24,11 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# One definition for the versions, names and locations more than one CI
+# script has to agree on.
+# shellcheck source=.ci/ci-constants.sh
+source "$script_dir/ci-constants.sh"
+
 output=""
 
 usage() {
@@ -54,7 +59,7 @@ fi
   || { echo "FATAL: invalid QEMU emulator SHA256 manifest entry." >&2; exit 1; }
 [[ "$payload_name" =~ ^[0-9A-Za-z._+-]+$ ]] \
   || { echo "FATAL: invalid QEMU emulator filename in checksum manifest." >&2; exit 1; }
-cache_base_url=https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache/qemu-emulator/v1
+cache_base_url="$CI_OBS_CACHE_BASE/qemu-emulator/v1"
 
 echo "Fetching the pinned portable QEMU emulator"
 exec bash "$script_dir/fetch-verified-binary.sh" \

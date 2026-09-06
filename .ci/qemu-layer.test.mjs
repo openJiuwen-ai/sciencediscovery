@@ -50,6 +50,16 @@ async function skeleton(t, present) {
   t.after(() => rm(root, { force: true, recursive: true }));
   await mkdir(join(root, ".ci"), { recursive: true });
   await copyFile(script, join(root, ".ci", "run-qemu-layer.sh"));
+  // The runner sources the shared constants before it checks anything, and
+  // those read the toolchain versions from where the repository pins them.
+  await copyFile(join(ciDirectory, "ci-constants.sh"), join(root, ".ci", "ci-constants.sh"));
+  const repositoryRoot = resolve(ciDirectory, "..");
+  await copyFile(join(repositoryRoot, "package.json"), join(root, "package.json"));
+  await mkdir(join(root, "scripts", "binary-release"), { recursive: true });
+  await copyFile(
+    join(repositoryRoot, "scripts", "binary-release", "runtimes.json"),
+    join(root, "scripts", "binary-release", "runtimes.json"),
+  );
   for (const path of present) await mkdir(join(root, path), { recursive: true });
   return root;
 }

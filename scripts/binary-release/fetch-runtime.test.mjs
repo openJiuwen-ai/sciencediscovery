@@ -129,7 +129,11 @@ test("the formal workflow consumes caches without owning stable cache uploads", 
   const workflow = await readFile(resolve(".codearts/workflow/codearts-pipeline.yml"), "utf8");
 
   for (const entry of Object.values(manifest.uv.architectures)) {
-    assert.match(provisioner, new RegExp(entry.filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    // The provisioner names the same wheels but takes the version from this
+    // manifest through .ci/ci-constants.sh instead of spelling it out again.
+    const named = entry.filename.replace(manifest.uv.version, "$UV_REQUIRED");
+    assert.notEqual(named, entry.filename, "the manifest filename does not carry its version");
+    assert.match(provisioner, new RegExp(named.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.ok(Object.values(micromamba.releases).every((release) => release.condaPackage));
   const pnpmVersion = packageJson.packageManager.replace(/^pnpm@/, "");

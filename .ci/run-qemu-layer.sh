@@ -26,6 +26,11 @@
 set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# One definition for the versions, names and locations more than one CI script
+# has to agree on. The guest is handed a copy below, because it runs from a
+# single file the seed server serves and cannot source anything.
+# shellcheck source=.ci/ci-constants.sh
+source "$repo_root/.ci/ci-constants.sh"
 layer="${1:-}"
 pack_arguments=()
 case "$layer" in
@@ -178,6 +183,14 @@ bash "$repo_root/.ci/pack-workspace.sh" --output "$seed_dir/workspace.tar.gz" \
   ${pack_arguments[@]+"${pack_arguments[@]}"}
 cp "$repo_root/.ci/qemu-guest-layer.sh" "$seed_dir/guest.sh"
 printf '%s\n' "$layer" > "$seed_dir/layer"
+# What the guest must find in the image it booted. These are pins, not host
+# settings, so they travel separately from the allow-listed environment below.
+{
+  printf 'CI_NODE_VERSION=%s\n' "$CI_NODE_VERSION"
+  printf 'CI_PNPM_VERSION=%s\n' "$CI_PNPM_VERSION"
+  printf 'CI_UV_VERSION=%s\n' "$CI_UV_VERSION"
+  printf 'CI_QEMU_RUNNER_RECIPE=%s\n' "$CI_QEMU_RUNNER_RECIPE"
+} > "$seed_dir/guest-pins"
 # Only mirror and behaviour settings cross into the guest; nothing here may
 # carry a credential.
 : > "$seed_dir/layer-env"
