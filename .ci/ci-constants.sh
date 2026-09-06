@@ -38,19 +38,32 @@ for _ci_constants_pin in package.json scripts/binary-release/runtimes.json; do
     exit 1
   }
 done
-_ci_constants_versions="$(python3 - "$_ci_constants_root" <<'CI_VERSIONS'
+# The CodeArts build executor's python3 is older than the one on a development
+# machine, so this reads the two files with nothing newer than json and open.
+# `str.removeprefix` is 3.9+ and failed here with an AttributeError that left
+# all three versions empty.
+if ! _ci_constants_versions="$(python3 - "$_ci_constants_root" <<'CI_VERSIONS'
 import json
+import os
 import sys
-from pathlib import Path
 
-root = Path(sys.argv[1])
-runtimes = json.loads((root / "scripts/binary-release/runtimes.json").read_text())
-package = json.loads((root / "package.json").read_text())
-print(runtimes["node"]["version"].removeprefix("v"))
+root = sys.argv[1]
+
+def load(relative_path):
+    with open(os.path.join(root, relative_path)) as handle:
+        return json.load(handle)
+
+runtimes = load("scripts/binary-release/runtimes.json")
+package = load("package.json")
+node = runtimes["node"]["version"]
+print(node[1:] if node.startswith("v") else node)
 print(package["packageManager"].split("@", 1)[1])
 print(runtimes["uv"]["version"])
 CI_VERSIONS
-)"
+)"; then
+  echo "FATAL: python3 could not read the pinned toolchain versions." >&2
+  exit 1
+fi
 {
   read -r CI_NODE_VERSION
   read -r CI_PNPM_VERSION
