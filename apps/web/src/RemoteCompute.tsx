@@ -756,7 +756,6 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
         </label>)}</div>
         : <p className="settings-choice-empty">No usable remote machines yet. Add one in system settings → Remote compute.</p>
     ) : null}
-    <small>Manage remote workspaces and Python/R environments in system settings → Scientific environments.</small>
   </section>;
 }
 
