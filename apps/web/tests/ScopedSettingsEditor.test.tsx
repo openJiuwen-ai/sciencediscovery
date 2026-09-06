@@ -116,6 +116,14 @@ function render(settings: RuntimeSettingsDetails): string {
   }));
 }
 
+test("scope save stays after all additional settings sections", () => {
+  const html = renderToStaticMarkup(createElement(ScopedSettingsEditor, {
+    connectors: [], details: details(), models: [], skills: [], scopeLabel: "Session", onSave: () => undefined,
+    afterFields: createElement("section", { "data-testid": "remote-settings" }, "Remote settings"),
+  }));
+  assert.ok(html.indexOf("Remote settings") < html.lastIndexOf('type="submit"'));
+});
+
 test("renders inherited effective values and their field sources", () => {
   const html = render(details());
 

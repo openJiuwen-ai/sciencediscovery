@@ -6,6 +6,7 @@
 - [控制面](control-plane.md) — `services/api` 的职责、存储与运行生命周期。
 - [Agent 后端](agent-backend.md) — Node 原生 agent loop 的模块结构、模型传输、延迟工具与历史压缩。
 - [沙箱执行](sandbox-execution.md) — bubblewrap/seccomp、科学环境和持久内核机制。
+- [Project/Session Runner 继承](runner-inheritance.md) — Project 提供默认值，Session 可独立选机，不是权限子集。
 - [Ascend NPU 宿主 Broker](ascend-npu-runner.md) — 昇腾设备不能稳定直通 bwrap 时的宿主白名单作业方案。
 - [外部数据源限流](rate-limiting.md) — MCP 限流底座、队列、429 冷却和覆盖边界。
 - [科研连接器](science-connectors.md) — 科研 MCP 的治理链、审计和引用。

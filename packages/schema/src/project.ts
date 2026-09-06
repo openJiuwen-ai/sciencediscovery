@@ -19,7 +19,7 @@ export interface Project {
   createdAt: string;
   id: string;
   name: string;
-  /** Remote hosts this Project permits Sessions to select. Empty means local-only. */
+  /** Default remote hosts for inheriting Sessions; not a ceiling on Session overrides. */
   remoteRunnerHostIds: string[];
   settingsOverrides: RuntimeSettingsOverrides;
 }

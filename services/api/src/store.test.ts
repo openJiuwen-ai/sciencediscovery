@@ -2862,7 +2862,7 @@ test("one-time preflight authorizations are consumed once without creating a gra
   assert.equal(store.listPermissionGrants().length, 0);
 });
 
-test("Project allowlists set which remote machines a Session may use, and Session overrides only narrow", async (context) => {
+test("Project runner defaults are inherited, not a ceiling on independent Session selections", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-remote-runner-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -2885,17 +2885,18 @@ test("Project allowlists set which remote machines a Session may use, and Sessio
   } });
   const second = await store.registerRemoteHost({ alias: "linux-runner-2", capabilities: host.capabilities! });
   const project = await store.createProject("Remote runner project");
-  await assert.rejects(
-    store.createSession(project.id, "Blocked", {}, { remoteRunnerHostIds: [host.id] }, { allowUnconfiguredModel: true }),
-    /is not allowed by this Project/,
-  );
-  const missingRunner = await store.registerRemoteHost({ alias: "linux-without-runner", capabilities: {
+  const independent = await store.createSession(project.id, "Independent", {}, { remoteRunnerHostIds: [host.id] }, { allowUnconfiguredModel: true });
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(independent.id).map((entry) => entry.id), [host.id]);
+  assert.equal(store.assertSessionAllowsRemoteRunner(independent.id, host.id).id, host.id);
+  await assert.rejects(store.updateSession(independent.id, { remoteRunnerHostIds: ["unknown-host"] }), /Remote host not found/);
+  const missingRunner = await store.registerRemoteHost({ alias: "unsupported-runner", capabilities: {
     ...host.capabilities!,
+    platform: "Darwin",
     runnerCommandAvailable: false,
   } });
   await assert.rejects(
     store.updateProject(project.id, { remoteRunnerHostIds: [missingRunner.id] }),
-    /no runner can be deployed there/,
+    /Linux only/,
   );
   const allowed = await store.updateProject(project.id, { remoteRunnerHostIds: [host.id, second.id] });
   assert.deepEqual(allowed.remoteRunnerHostIds, [host.id, second.id]);
@@ -2905,14 +2906,14 @@ test("Project allowlists set which remote machines a Session may use, and Sessio
   assert.equal(inheriting.remoteRunnerHostIds, undefined);
   assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [host.id, second.id]);
 
-  // An override narrows, and may not reach outside the Project list.
+  // An override replaces the defaults, rather than intersecting them.
   const narrowed = await store.updateSession(inheriting.id, { remoteRunnerHostIds: [second.id] });
   assert.deepEqual(narrowed.remoteRunnerHostIds, [second.id]);
   assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [second.id]);
   assert.throws(() => store.assertSessionAllowsRemoteRunner(inheriting.id, host.id), /is not allowed by this Session/);
   await assert.rejects(
     store.updateSession(inheriting.id, { remoteRunnerHostIds: [missingRunner.id] }),
-    /is not allowed by this Project/,
+    /Linux only/,
   );
 
   // An empty override is a real answer: this Session gets no remote machine.
@@ -2925,12 +2926,21 @@ test("Project allowlists set which remote machines a Session may use, and Sessio
   assert.equal(restored.remoteRunnerHostIds, undefined);
   assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [host.id, second.id]);
 
-  // Narrowing the Project narrows every Session in it without editing them.
+  // Changing Project defaults cannot revoke an independent selection.
   await store.updateSession(inheriting.id, { remoteRunnerHostIds: [host.id, second.id] });
   await store.updateProject(project.id, { remoteRunnerHostIds: [host.id] });
-  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [host.id]);
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [host.id, second.id]);
   assert.deepEqual((await store.updateProject(project.id, { remoteRunnerHostIds: [] })).remoteRunnerHostIds, []);
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [host.id, second.id]);
+  await assert.rejects(store.deleteRemoteHost(second.id), /selected by a Session/);
+  await store.updateSession(inheriting.id, { remoteRunnerHostIds: null });
   assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id), []);
+  await store.updateProject(project.id, { remoteRunnerHostIds: [second.id] });
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(inheriting.id).map((entry) => entry.id), [second.id]);
+  assert.deepEqual(store.effectiveRemoteRunnerHosts(independent.id).map((entry) => entry.id), [host.id]);
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.deepEqual(reloaded.effectiveRemoteRunnerHosts(independent.id).map((entry) => entry.id), [host.id]);
 });
 
 test("SessionStore auto-submits remote jobs and keeps manual jobs independently approval-gated", async (context) => {

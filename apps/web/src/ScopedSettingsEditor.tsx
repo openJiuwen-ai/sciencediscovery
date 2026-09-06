@@ -100,6 +100,7 @@ export function globalSettingsDraft(details: RuntimeSettingsDetails): RuntimeSet
 export function ScopedSettingsEditor({
   allowInheritance = true,
   beforeFields,
+  afterFields,
   connectors,
   description,
   details,
@@ -118,6 +119,7 @@ export function ScopedSettingsEditor({
 }: {
   allowInheritance?: boolean;
   beforeFields?: ReactNode | ((draft: RuntimeSettingsOverrides) => ReactNode);
+  afterFields?: ReactNode;
   connectors: ConnectorManifest[];
   description?: string;
   details: RuntimeSettingsDetails;
@@ -319,6 +321,7 @@ export function ScopedSettingsEditor({
         <SettingsSource details={details} field="enabledSkillLibraries" />
       </fieldset>}
 
+      {afterFields}
       {disabled ? <p className="settings-readonly">{t("settings.archivedReadonly")}</p> : null}
       {!showActions ? null : onCancel ? <div className="dialog-actions">
         <button className="secondary-button" disabled={saving} onClick={onCancel} type="button">{t("common.cancel")}</button>

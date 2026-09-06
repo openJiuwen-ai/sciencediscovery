@@ -4876,6 +4876,22 @@ export function App() {
               onDismiss={() => setScopedSettingsErrors((current) => current.filter((item) => item !== detail))}
             />)}
             {scopedSettings ? <ScopedSettingsEditor
+              afterFields={<>
+                {scopedSettingsProject ? <ProjectRemoteSettings
+                  client={client}
+                  onError={reportScopedSettingsError}
+                  onProjectChange={(updated) => setProjects((current) => current.map((item) => item.id === updated.id ? updated : item))}
+                  project={scopedSettingsProject}
+                /> : null}
+                {scopedSettingsSession && scopedSettingsSessionProject ? <SessionRemoteSettings
+                  client={client}
+                  disabled={session?.id === settingsTarget.id && sessionArchived}
+                  onError={reportScopedSettingsError}
+                  onSessionChange={syncSessionSummary}
+                  project={scopedSettingsSessionProject}
+                  session={scopedSettingsSession}
+                /> : null}
+              </>}
               connectors={connectors}
               details={scopedSettings}
               disabled={settingsTarget.kind === "session" && session?.id === settingsTarget.id && sessionArchived}
@@ -4887,20 +4903,6 @@ export function App() {
               skillScope={settingsTarget.kind === "project" ? "project" : "session"}
               skills={skills}
             /> : <p className="muted">Loading effective settings and sources…</p>}
-            {scopedSettingsProject ? <ProjectRemoteSettings
-              client={client}
-              onError={reportScopedSettingsError}
-              onProjectChange={(updated) => setProjects((current) => current.map((item) => item.id === updated.id ? updated : item))}
-              project={scopedSettingsProject}
-            /> : null}
-            {scopedSettingsSession && scopedSettingsSessionProject ? <SessionRemoteSettings
-              client={client}
-              disabled={session?.id === settingsTarget.id && sessionArchived}
-              onError={reportScopedSettingsError}
-              onSessionChange={syncSessionSummary}
-              project={scopedSettingsSessionProject}
-              session={scopedSettingsSession}
-            /> : null}
           </section>
         </div>
       ) : null}

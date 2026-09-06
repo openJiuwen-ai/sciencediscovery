@@ -74,7 +74,7 @@ export interface Session {
   /** @deprecated Legacy Semantic Review catalog compatibility. */
   reviewMode: "auto" | "manual";
   /**
-   * Session override of the Project's allowed remote machines. Absent means the
+   * Independent Session selection from the global remote catalog. Absent means the
    * Session inherits the Project list; an empty array means this Session may not
    * use any remote machine. Local execution is always available either way.
    */

@@ -682,7 +682,7 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
   }
 
   return <section className="scoped-remote-settings">
-    <div className="editor-heading"><strong>Remote compute</strong><small>Remote machines this Project's Sessions may use. Register and connect machines in system settings → Remote compute.</small></div>
+    <div className="editor-heading"><strong>Remote compute</strong><small>Default remote machines for Sessions. Each Session can choose its own machines independently. Runner choices are saved immediately.</small></div>
     {!hosts ? <p className="muted">Loading remote machines…</p>
       : usable.length ? <div className="settings-choices">{usable.map((host) => <label key={host.id}>
         <input checked={project.remoteRunnerHostIds.includes(host.id)} disabled={Boolean(busyId)} onChange={() => void toggle(host)} type="checkbox" />
@@ -721,7 +721,7 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
 
   const override = session.remoteRunnerHostIds;
   const mode = override == null ? "inherit" : "override";
-  const projectHosts = (hosts ?? []).filter((host) => project.remoteRunnerHostIds.includes(host.id) && runnerUsable(host));
+  const availableHosts = (hosts ?? []).filter(runnerUsable);
   const effectiveIds = effectiveRemoteRunnerHostIds(project, session);
   const effectiveHosts = (hosts ?? []).filter((host) => effectiveIds.includes(host.id));
 
@@ -774,21 +774,21 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
   }
 
   return <section className="scoped-remote-settings">
-    <div className="editor-heading"><strong>Remote compute</strong><small>Remote machines this Session may use. Allowing one only makes it available — local file access and local execution stay available either way.</small></div>
+    <div className="editor-heading"><strong>Remote compute</strong><small>Inherit Project defaults, or choose independently from all available machines. Local execution always stays available. Runner choices are saved immediately.</small></div>
     <label className="settings-field">
       <span>Allowed remote runners</span>
       <select disabled={disabled || Boolean(busyId)} value={mode} onChange={(event) => void setMode(event.target.value as "inherit" | "override")}>
-        <option value="inherit">Inherit · Project allows {project.remoteRunnerHostIds.length}</option>
+        <option value="inherit">Inherit · Project defaults {project.remoteRunnerHostIds.length}</option>
         <option value="override">Override · {mode === "override" ? (override?.length ?? 0) : effectiveIds.length} selected</option>
       </select>
     </label>
     {mode === "override" ? (
       !hosts ? <p className="muted">Loading remote machines…</p>
-        : projectHosts.length ? <div className="settings-choices">{projectHosts.map((host) => <label key={host.id}>
+        : availableHosts.length ? <div className="settings-choices">{availableHosts.map((host) => <label key={host.id}>
           <input checked={(override ?? []).includes(host.id)} disabled={disabled || Boolean(busyId)} onChange={() => void toggle(host)} type="checkbox" />
           <span>{host.runnerName ?? host.alias}<small>{host.id} · {host.alias} · {hostKindLabel(host)}</small></span>
         </label>)}</div>
-        : <p className="settings-choice-empty">This Project allows no remote machines yet; widen it in the Project settings.</p>
+        : <p className="settings-choice-empty">No usable remote machines yet. Add one in system settings → Remote compute.</p>
     ) : null}
     {workspaceHosts.length > 0 ? <div className="remote-workspace-panel">
       <div className="editor-heading"><strong>Remote workspace</strong><small>Each machine keeps a workspace separate from this Session's local one, across connections. Only the model transfers files, by naming the paths it needs; nothing is mirrored on connect, cancel, or disconnect.</small></div>

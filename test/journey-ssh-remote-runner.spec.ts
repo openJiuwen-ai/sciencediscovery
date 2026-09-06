@@ -48,7 +48,7 @@ type SessionWithRemoteOverride = SessionDetail & { remoteRunnerHostIds?: string[
 test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@mocked" }, async ({ journey, page }) => {
   test.setTimeout(120_000);
   journey.scenario({
-    goal: "一位用户把一台远程 Linux runner 登记进机器目录，在 Project 里允许它，并在一个 Session 里收窄或恢复继承；允许远端不等于锁死本机执行。",
+    goal: "用户登记远程 Runner，Project 提供默认值，Session 可独立选择 Project 未选的机器或恢复继承；本机始终可用，保存位于设置底部。",
     preconditions: [
       "隔离栈已启动且浏览器持有本地访问 token",
       "本旅程不连接真实 SSH 主机，也不真的部署 runner",
@@ -640,13 +640,18 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const textBox = await label.locator("span").first().boundingBox();
         if (!box || !textBox) throw new Error("Allowlist row has no layout box");
         expect(Math.abs((box.y + box.height / 2) - (textBox.y + textBox.height / 2))).toBeLessThan(6);
+        const save = dialog.locator('button[type="submit"]');
+        const remoteBox = await dialog.locator(".scoped-remote-settings").boundingBox();
+        const saveBox = await save.boundingBox();
+        expect(saveBox!.y).toBeGreaterThanOrEqual(remoteBox!.y + remoteBox!.height);
+        await save.scrollIntoViewIfNeeded();
         await dialog.getByRole("button", { name: "Close scoped settings" }).click();
       },
     );
 
     await journey.step(
       "Session 设置里覆盖允许名单",
-      "Session 继承 Project 名单，可收窄到子集或全部禁用，也可恢复继承；没有互斥的 Execution runner 下拉。",
+      "Session 可独立选择 Project 未选的机器，或清空/恢复默认；全部设置之后才是保存按钮。",
       async () => {
         const dialog = await openSessionSettings();
         const mode = dialog.getByRole("combobox", { name: "Allowed remote runners" });
@@ -656,12 +661,21 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect.poll(() => session.remoteRunnerHostIds).toEqual([hostId]);
         const hostToggle = dialog.getByRole("checkbox", { name: /institution-linux/ });
         await expect(hostToggle).toBeChecked();
+        const independentHost = dialog.getByRole("checkbox", { name: /lab-workstation/ });
+        await independentHost.click();
+        await expect.poll(() => session.remoteRunnerHostIds).toEqual([hostId, "e2e-direct-runner"]);
+        expect(project.remoteRunnerHostIds).toEqual([hostId]);
+        await independentHost.click();
         // Narrow to nothing: this Session forbids every remote machine.
         await hostToggle.click();
         await expect.poll(() => session.remoteRunnerHostIds).toEqual([]);
         // Back to inheriting the Project allowlist.
         await mode.selectOption("inherit");
         await expect.poll(() => session.remoteRunnerHostIds ?? null).toBeNull();
+        const saveBox = await dialog.locator('button[type="submit"]').boundingBox();
+        const remoteBox = await dialog.locator(".scoped-remote-settings").boundingBox();
+        expect(saveBox!.y).toBeGreaterThanOrEqual(remoteBox!.y + remoteBox!.height);
+        await dialog.locator('button[type="submit"]').scrollIntoViewIfNeeded();
       },
     );
 

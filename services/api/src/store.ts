@@ -2317,9 +2317,7 @@ export class SessionStore {
     if (!project) throw new Error("Project not found");
     if (changes.name !== undefined) project.name = requiredLabel(changes.name, "Project name");
     if (changes.remoteRunnerHostIds !== undefined) {
-      // Narrowing the Project list narrows every Session in it: a Session
-      // override is only ever read through this list, so a machine removed here
-      // stops being usable immediately without editing each Session.
+      // Project choices are defaults, not a ceiling on Session overrides.
       project.remoteRunnerHostIds = this.validateProjectRemoteRunnerHosts(changes.remoteRunnerHostIds);
     }
     await this.saveCatalog();
@@ -2339,28 +2337,19 @@ export class SessionStore {
   }
 
   /**
-   * Validate a Session's override of the Project allowlist. An override may only
-   * narrow: naming a machine the Project does not allow is rejected rather than
-   * silently dropped, so the Session setting never claims more than it has.
+   * Session overrides select from the global usable catalog independently of
+   * Project defaults. The same host existence/capability checks still apply.
    */
   private validateSessionRemoteRunnerHosts(projectId: string, hostIds: string[]): string[] {
     if (!Array.isArray(hostIds)) throw new Error("Session remote runner allowlist must be an array");
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
-    const normalized = [...new Set(hostIds.map((id) => id.trim()).filter(Boolean))];
-    for (const hostId of normalized) {
-      if (!project.remoteRunnerHostIds.includes(hostId)) {
-        const host = this.getRemoteHost(hostId);
-        throw new Error(`Remote runner host ${host?.alias ?? hostId} is not allowed by this Project`);
-      }
-    }
-    return normalized;
+    return this.validateProjectRemoteRunnerHosts(hostIds);
   }
 
   /**
    * The machines this Session may use right now: its own override when it has
-   * one, otherwise the Project list, always intersected with what the Project
-   * still allows and with what is currently usable. Local execution is not part
+   * one, otherwise the Project defaults, filtered by current host usability. Local execution is not part
    * of this list because it is always available.
    */
   effectiveRemoteRunnerHosts(sessionId: string): RemoteHostTarget[] {
@@ -2370,7 +2359,6 @@ export class SessionStore {
     if (!project) return [];
     const selected = session.remoteRunnerHostIds ?? project.remoteRunnerHostIds;
     return selected
-      .filter((hostId) => project.remoteRunnerHostIds.includes(hostId))
       .flatMap((hostId) => {
         const host = this.getRemoteHost(hostId);
         return host && !remoteRunnerUnusableReason(host) ? [host] : [];
@@ -3617,6 +3605,9 @@ export class SessionStore {
     }
     if (this.catalog.projects.some((project) => project.remoteRunnerHostIds.includes(hostId))) {
       throw new Error("Remote host is allowed by a Project and cannot be deleted");
+    }
+    if (this.catalog.sessions.some((session) => session.remoteRunnerHostIds?.includes(hostId))) {
+      throw new Error("Remote host is selected by a Session and cannot be deleted");
     }
     this.catalog.remoteHosts = this.catalog.remoteHosts.filter((host) => host.id !== hostId);
     this.database?.prepare("DELETE FROM remote_host_credentials WHERE host_id = ?").run(hostId);

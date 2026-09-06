@@ -35,7 +35,9 @@ test("explicit remote workspace push and pull preserve independent files and rec
     scratchPaths: ["/tmp"],
     slurm: false,
   } });
-  const project = await store.createProject("Remote", {}, [host.id]);
+  // Both main and child workspace operations use the independent Session
+  // selection even when the Project has no remote defaults.
+  const project = await store.createProject("Remote", {}, []);
   const session = await store.createSession(
     project.id,
     "Remote Session",
