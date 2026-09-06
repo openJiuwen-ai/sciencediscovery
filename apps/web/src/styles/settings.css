@@ -741,6 +741,7 @@
 .runner-environment-settings .remote-workspace-host header > div { display: grid; gap: 4px; min-width: 0; }
 .runner-environment-settings .remote-workspace-host code,
 .runner-environment-settings .remote-workspace-host small { overflow-wrap: anywhere; }
+.runner-environment-settings .remote-workspace-panel > .editor-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
 .remote-workspace-host { display: grid; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
 .remote-workspace-host:first-of-type { border-top: 0; padding-top: 0; }
 .remote-workspace-host > strong { color: var(--text-heading); font-size: 13px; }

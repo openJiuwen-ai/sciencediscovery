@@ -29,7 +29,7 @@ export function RunnerEnvironmentSettings({ client, onError }: { client: ApiClie
       <button type="button" className={tab === "workspaces" ? "primary-button" : "secondary-button"} onClick={() => setTab("workspaces")}>Workspaces</button>
     </div>
     {runnerId !== "local" && host?.runnerStatus?.state !== "ready" ? <p role="status">Connect this Runner in Remote compute before installing environments or deleting workspaces.</p> : null}
-    {tab === "environments" ? <EnvironmentManager key={runnerId} client={scopedClient} onError={onError} />
+    {tab === "environments" ? <EnvironmentManager key={runnerId} client={scopedClient} compact={runnerId !== "local"} onError={onError} />
       : runnerId === "local" ? <p>Local workspace files are managed in each Session's file panel.</p>
       : <RunnerWorkspaces key={runnerId} client={client} runnerId={runnerId} runnerName={host?.runnerName ?? host?.alias ?? runnerId} />}
   </div>;

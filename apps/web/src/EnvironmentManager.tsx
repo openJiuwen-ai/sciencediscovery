@@ -129,7 +129,7 @@ export function environmentSetupActionLabel(setup: ScientificEnvironmentSetup, b
   return "Install micromamba and Python base";
 }
 
-export function EnvironmentManager({ client, onError }: { client: ApiClient; onError: (message: string) => void }) {
+export function EnvironmentManager({ client, onError, compact = false }: { client: ApiClient; onError: (message: string) => void; compact?: boolean }) {
   const [setup, setSetup] = useState<ScientificEnvironmentSetup>();
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [revisions, setRevisions] = useState<EnvironmentRevision[]>([]);
@@ -227,14 +227,17 @@ export function EnvironmentManager({ client, onError }: { client: ApiClient; onE
 
   if (loadError) return <div role="alert">{loadError}<button type="button" className="secondary-button" onClick={() => { setLoadError(""); void refresh().catch((reason: Error) => setLoadError(reason.message)); }}>Retry environments</button></div>;
   if (!setup || !sourceSettings || !sourceDraft) return <p className="muted">Loading scientific environment settings…</p>;
+  const SourceContainer = compact ? "details" : "div";
 
   return <div className="environment-manager">
-    <div className="settings-detail-header">
+    {compact ? null : <div className="settings-detail-header">
       <span className="eyebrow">Managed runtimes</span>
       <h3>Scientific environments</h3>
       <p>Use the shared read-only Python base or create named Python and R environments with immutable revisions.</p>
-    </div>
+    </div>}
 
+    <SourceContainer>
+    {compact ? <summary>Global package sources</summary> : null}
     <EnvironmentSourceSettingsEditor
       busy={busy}
       draft={sourceDraft}
@@ -246,8 +249,9 @@ export function EnvironmentManager({ client, onError }: { client: ApiClient; onE
       saved={sourceSaved}
       savedSettings={sourceSettings}
     />
+    </SourceContainer>
 
-    <EnvironmentSetupStatus setup={setup} />
+    {compact && setup.state === "ready" ? <details><summary>Scientific environment setup · Ready</summary><EnvironmentSetupStatus setup={setup} /></details> : <EnvironmentSetupStatus setup={setup} />}
 
     {setup.state !== "ready" ? <>
       <div className="environment-starter-plan">
