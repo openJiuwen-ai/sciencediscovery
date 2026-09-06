@@ -141,6 +141,7 @@ export function EnvironmentManager({ client, onError }: { client: ApiClient; onE
   const [sourceSettings, setSourceSettings] = useState<EnvironmentSourceSettings>();
   const [sourceDraft, setSourceDraft] = useState<EnvironmentSourceSettings>();
   const [sourceSaved, setSourceSaved] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const revisionById = useMemo(() => new Map(revisions.map((revision) => [revision.id, revision])), [revisions]);
 
@@ -166,7 +167,7 @@ export function EnvironmentManager({ client, onError }: { client: ApiClient; onE
   }
 
   useEffect(() => {
-    void refresh().catch((reason: Error) => onError(reason.message));
+    void refresh().catch((reason: Error) => setLoadError(reason.message));
   }, [client]);
 
   useEffect(() => {
@@ -225,7 +226,7 @@ export function EnvironmentManager({ client, onError }: { client: ApiClient; onE
   }
 
   if (!setup || !sourceSettings || !sourceDraft) {
-    return <p className="muted">Loading scientific environment settings…</p>;
+    return loadError ? <div role="alert">{loadError}<button type="button" className="secondary-button" onClick={() => { setLoadError(""); void refresh().catch((reason: Error) => setLoadError(reason.message)); }}>Retry environments</button></div> : <p className="muted">Loading scientific environment settings…</p>;
   }
 
   return <div className="environment-manager">

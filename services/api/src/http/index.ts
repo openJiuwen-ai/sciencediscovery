@@ -244,6 +244,7 @@ import {
   streamStoredRunEvents,
 } from "../runs/index.js";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
+import { manageRunnerEnvironment, runnerWorkspaceBindings } from "../runner-management.js";
 import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
 import {
   createPlatformServices,
@@ -1292,6 +1293,32 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         await skillCatalog.delete(skillId);
         store.setAvailableSkillIds(skillCatalog.ids());
         sendJson(response, 200, { deleted: skillId });
+        return;
+      }
+      const runnerManagement = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/(environment-setup|environment-revisions|environments(?:\/[^/]+(?:\/(?:install|uninstall))?)?|workspaces(?:\/[^/]+)?)$/);
+      if (runnerManagement) {
+        const hostId = decodeURIComponent(runnerManagement[1]!);
+        const host = store.getRemoteHost(hostId);
+        if (!host) return sendError(response, 404, "Remote host not found");
+        const operation = runnerManagement[2]!;
+        if (operation === "workspaces" && request.method === "GET") {
+          sendJson(response, 200, await runnerWorkspaceBindings(store, hostId));
+          return;
+        }
+        let target: RunnerClient;
+        try { target = remoteCompute.runnerClient(hostId); }
+        catch (error) { return sendError(response, 503, error instanceof Error ? error.message : "Connect this Runner first"); }
+        if (operation.startsWith("workspaces/") && request.method === "DELETE") {
+          const sessionId = decodeURIComponent(operation.slice("workspaces/".length));
+          const binding = (await runnerWorkspaceBindings(store, hostId)).find((item) => item.sessionId === sessionId);
+          if (!binding) return sendError(response, 404, "Workspace binding not found");
+          if (await sessionHasActiveRun(store, sessionId)) return sendError(response, 409, "Cannot delete a remote workspace during an active run");
+          await target.deleteRemoteWorkspace(binding.workspaceKey);
+          sendJson(response, 200, { deleted: true });
+          return;
+        }
+        const body = request.method === "POST" ? await readJson(request) : undefined;
+        sendJson(response, request.method === "POST" ? 201 : 200, await manageRunnerEnvironment(target, store, operation, request.method ?? "GET", body));
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/environment-revisions") {

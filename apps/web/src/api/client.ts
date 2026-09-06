@@ -12,13 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ChatMessage } from "@sciencediscovery/schema";
+import type { ChatMessage, RemoteWorkspaceSyncRecord } from "@sciencediscovery/schema";
 
 import { WebApiClient } from "./web.js";
 
 export { ApiRequestError } from "./auth.js";
 
-export class ApiClient extends WebApiClient {}
+export interface RunnerWorkspaceBinding {
+  sessionId: string;
+  sessionTitle: string;
+  projectName: string;
+  workspaceKey: string;
+  records: RemoteWorkspaceSyncRecord[];
+}
+
+export class ApiClient extends WebApiClient {
+  forEnvironmentRunner(runnerId: string): ApiClient {
+    return runnerId === "local" ? this : new RunnerEnvironmentApiClient(this.token, this.onAuthFailure, runnerId);
+  }
+
+  listRunnerWorkspaces(runnerId: string): Promise<RunnerWorkspaceBinding[]> {
+    return this.request(`/api/remote-hosts/${encodeURIComponent(runnerId)}/workspaces`);
+  }
+
+  deleteRunnerWorkspace(runnerId: string, sessionId: string): Promise<{ deleted: boolean }> {
+    return this.request(`/api/remote-hosts/${encodeURIComponent(runnerId)}/workspaces/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  }
+}
+
+class RunnerEnvironmentApiClient extends ApiClient {
+  constructor(token: string, onAuthFailure: (() => void) | undefined, private readonly runnerId: string) { super(token, onAuthFailure); }
+
+  protected override request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    // Source preferences remain global; only execution-environment APIs route remotely.
+    if (/^\/api\/(?:environments(?:\/|$)|environment-setup$|environment-revisions$)/.test(path)) {
+      path = `/api/remote-hosts/${encodeURIComponent(this.runnerId)}/${path.slice(5)}`;
+    }
+    return super.request(path, init);
+  }
+}
 
 /** True for the rejection fetch and its body reader raise when a caller aborts. */
 export function isAbortError(reason: unknown): boolean {

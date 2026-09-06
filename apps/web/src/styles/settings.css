@@ -734,6 +734,13 @@
 .scoped-remote-settings { display: grid; gap: 12px; margin-top: 18px; border-top: 1px solid var(--border); padding-top: 18px; }
 .scoped-remote-settings .settings-field { margin: 0; }
 .remote-workspace-panel { display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 9px; padding: 12px; }
+.runner-environment-settings { display: grid; gap: 16px; min-width: 0; }
+.runner-management-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.runner-management-tabs > button { flex: 1; }
+.runner-environment-settings .remote-workspace-host header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.runner-environment-settings .remote-workspace-host header > div { display: grid; gap: 4px; min-width: 0; }
+.runner-environment-settings .remote-workspace-host code,
+.runner-environment-settings .remote-workspace-host small { overflow-wrap: anywhere; }
 .remote-workspace-host { display: grid; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
 .remote-workspace-host:first-of-type { border-top: 0; padding-top: 0; }
 .remote-workspace-host > strong { color: var(--text-heading); font-size: 13px; }

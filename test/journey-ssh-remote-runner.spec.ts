@@ -281,6 +281,30 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
   });
   await page.route(`**/api/sessions/${fixture.session.id}/remote-workspace/sync-records`, (route) =>
     route.fulfill({ json: syncRecords }));
+  let deletedWorkspace = false;
+  await page.route(`**/api/remote-hosts/${hostId}/workspaces`, (route) => route.fulfill({ json: [{
+    sessionId: fixture.session.id, sessionTitle: session.title, projectName: project.name,
+    workspaceKey: `${project.id}/${session.id}`, records: syncRecords,
+  }] }));
+  await page.route(`**/api/remote-hosts/${hostId}/workspaces/${fixture.session.id}`, (route) => {
+    expect(route.request().method()).toBe("DELETE"); deletedWorkspace = true;
+    return route.fulfill({ json: { deleted: true } });
+  });
+  const remoteEnvironments = [{ id: "remote-python", name: "Remote Python base", language: "python", kind: "starter", currentRevisionId: "remote-revision" }];
+  await page.route(`**/api/remote-hosts/${hostId}/environment-setup`, (route) => route.fulfill({ json: {
+    state: "ready", provisioner: "micromamba", allowedChannels: ["conda-forge"],
+    components: { micromamba: { state: "ready", phase: "ready", message: "Ready" }, conda: { state: "ready", phase: "ready", message: "Ready" } },
+  } }));
+  await page.route(`**/api/remote-hosts/${hostId}/environment-revisions`, (route) => route.fulfill({ json: [{ id: "remote-revision", packages: ["python", "numpy"] }] }));
+  await page.route(`**/api/remote-hosts/${hostId}/environments`, async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      expect(body.language).toBe("r");
+      remoteEnvironments.push({ id: "remote-r", name: body.name, language: "r", kind: "task", currentRevisionId: "remote-revision" });
+      return route.fulfill({ status: 201, json: remoteEnvironments[1] });
+    }
+    return route.fulfill({ json: remoteEnvironments });
+  });
 
   /** The global Remote compute group inside the system settings dialog. */
   const openRemoteSettings = async () => {
@@ -684,18 +708,21 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
-      "远端 workspace 只读记录在 Session 设置里",
-      "同步记录只读展示，没有路径输入、Push 或 Pull 控件；删除远端 workspace 仍需用户显式确认。",
+      "Session 只保留选机，工作区管理移到全局设置",
+      "Session 设置不再展示工作区删除控件；全局设置按 Runner 展示 Project/Session 工作区及只读同步记录。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "session settings" });
         await dialog.getByRole("combobox", { name: "Allowed remote runners" }).selectOption("inherit");
-        await expect(dialog.getByText("Remote workspace", { exact: true })).toBeVisible();
-        await expect(dialog.getByText(/Only the model transfers files/)).toBeVisible();
-        await expect(dialog.getByText(/pull · completed · 1 files · 64 bytes · results\/report\.md/)).toBeVisible();
-        await expect(dialog.getByLabel(/Paths/)).toHaveCount(0);
-        await expect(dialog.getByRole("button", { name: /Push|Pull/ })).toHaveCount(0);
-        await expect(dialog.getByRole("button", { name: "Delete remote workspace" })).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "Delete remote workspace" })).toHaveCount(0);
         await dialog.getByRole("button", { name: "Close scoped settings" }).click();
+        const settings = await openRemoteSettings();
+        await settings.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /科学环境/ }).click();
+        await settings.getByRole("combobox", { name: "Manage Runner" }).selectOption(hostId);
+        await settings.getByRole("button", { name: "Workspaces", exact: true }).click();
+        await expect(settings.getByText("Remote workspaces", { exact: true })).toBeVisible();
+        await settings.getByText("Transfer history · 1").click();
+        await expect(settings.getByText(/pull · completed · 1 files · results\/report\.md/)).toBeVisible();
+        await expect(settings.getByRole("button", { name: /Push|Pull/ })).toHaveCount(0);
       },
     );
 
@@ -703,6 +730,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "会话栏徽章完整显示「远端可用」",
       "徽章完整可读、不被截断，文案表示这个 Session 可以使用远端机，而不是固定在某一台上。",
       async () => {
+        await page.getByRole("dialog", { name: "系统设置" }).locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
         const badge = page.locator(".session-runner-target");
         await expect(badge).toHaveText("Remote available");
         await expect(badge).toHaveAttribute("title", /Local runner stays available/);
@@ -807,6 +835,33 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       const saveBox = await save.boundingBox();
       const remoteBox = await dialog.locator(".scoped-remote-settings").boundingBox();
       expect(saveBox!.y).toBeGreaterThanOrEqual(remoteBox!.y + remoteBox!.height);
+      expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+    });
+    await journey.step("按 Runner 管理 Python 和 R 环境", "科学环境页明确所选 Runner，能看到远端 Python base 并在同一个 Runner 创建 R 环境。", async () => {
+      await page.getByRole("dialog", { name: "project settings" }).getByRole("button", { name: "Close scoped settings" }).click();
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      const dialog = await openRemoteSettings();
+      await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /科学环境/ }).click();
+      await dialog.getByRole("combobox", { name: "Manage Runner" }).selectOption(hostId);
+      await expect(dialog.getByText("Remote Python base", { exact: true })).toBeVisible();
+      await dialog.getByRole("combobox", { name: "Environment language" }).selectOption("r");
+      await dialog.getByRole("textbox", { name: "Environment name" }).fill("Remote R analysis");
+      await dialog.getByRole("button", { name: "Create", exact: true }).click();
+      await expect(dialog.getByText("Remote R analysis", { exact: true })).toBeVisible();
+    });
+    await journey.step("窄窗口集中清理远端工作区", "工作区按 Project/Session 展示；取消删除不发请求，确认后显示清理结果，记录保留。", async () => {
+      await page.setViewportSize({ width: 640, height: 960 });
+      const dialog = page.getByRole("dialog", { name: "系统设置" });
+      await dialog.getByRole("button", { name: "Workspaces", exact: true }).click();
+      const remove = dialog.getByRole("button", { name: "Delete remote workspace" });
+      page.once("dialog", (prompt) => prompt.dismiss());
+      await remove.click();
+      expect(deletedWorkspace).toBe(false);
+      page.once("dialog", (prompt) => prompt.accept());
+      await remove.click();
+      await expect(dialog.getByText("Workspace deleted. Future execution can recreate this location.")).toBeVisible();
+      expect(deletedWorkspace).toBe(true);
+      await dialog.getByText("Transfer history · 1").click();
       expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
     });
   } finally {

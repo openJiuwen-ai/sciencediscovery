@@ -24,7 +24,7 @@ import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 
 import { createRunnerServer, type RunnerConfig } from "@sciencediscovery/runner";
-import { RemoteComputeClient, type RemoteSshAccess, type RemoteTransport } from "@sciencediscovery/executor";
+import { RemoteComputeClient, type RemoteSshAccess, type RemoteTransport, type RunnerClient } from "@sciencediscovery/executor";
 import { ModelCatalogFetchError } from "@sciencediscovery/model";
 import { resolveModelFacts } from "@sciencediscovery/schema";
 import type {
@@ -480,6 +480,43 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<{ body: 
   const response = await fetch(url, init);
   return { body: (await response.json()) as T, response };
 }
+
+test("global Runner management routes remotely, requires authentication and never falls back locally", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `runner-management-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  const store = new SessionStore(root);
+  await store.load();
+  const host = await store.registerRemoteHost({ alias: "management-target", capabilities: {
+    platform: "Linux", runnerCommandAvailable: true, nodeVersion: null, cpuCores: 2, memoryBytes: 1024,
+    conda: false, containerRuntimes: [], cuda: null, gpu: null, modules: false, probedAt: new Date().toISOString(), scratchPaths: [], slurm: false,
+  } });
+  const project = await store.createProject("Management", {}, [host.id]);
+  const session = await store.createSession(project.id, "Historical", {}, {}, { allowUnconfiguredModel: true });
+  await store.appendRemoteWorkspaceSync({ id: "management-sync", createdAt: new Date().toISOString(), hostId: host.id, sessionId: session.id, direction: "pull", status: "completed", paths: ["result.txt"], fileCount: 1, bytes: 1 });
+  await store.updateProject(project.id, { remoteRunnerHostIds: [] });
+  const remote = new RemoteComputeClient(resolve(root, "ssh-config"));
+  let connected = true;
+  const deleted: string[] = [];
+  context.mock.method(remote, "runnerClient", (id: string) => {
+    assert.equal(id, host.id);
+    if (!connected) throw new Error("Runner disconnected");
+    return { listEnvironments: async () => [{ id: "remote-only" }], deleteRemoteWorkspace: async (key: string) => { deleted.push(key); } } as unknown as RunnerClient;
+  });
+  const server = createApiServer(testConfig(root), { remoteCompute: remote });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(async () => { await new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); }); await rm(root, { recursive: true, force: true }); });
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const prefix = `${origin}/api/remote-hosts/${host.id}`;
+  assert.equal((await fetch(`${prefix}/environments`)).status, 401);
+  assert.deepEqual((await jsonRequest(`${prefix}/environments`, { headers: authorization })).body, [{ id: "remote-only" }]);
+  const bindings = await jsonRequest<Array<{ sessionId: string }>>(`${prefix}/workspaces`, { headers: authorization });
+  assert.equal(bindings.body[0]?.sessionId, session.id);
+  assert.equal((await fetch(`${prefix}/workspaces/${session.id}`, { headers: authorization, method: "DELETE" })).status, 200);
+  assert.deepEqual(deleted, [`${project.id}/${session.id}`]);
+  assert.equal((await fetch(`${origin}/api/remote-hosts/missing/environments`, { headers: authorization })).status, 404);
+  connected = false;
+  assert.equal((await fetch(`${prefix}/environments`, { headers: authorization })).status, 503);
+});
 
 test("updating SSH credentials immediately probes with the newly stored username and password", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `remote-credentials-probe-${Date.now()}-${process.pid}`);

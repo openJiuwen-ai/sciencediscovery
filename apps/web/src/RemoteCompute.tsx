@@ -20,7 +20,6 @@ import type {
   SshConfigHostImport,
   RemoteHostTarget,
   RemoteJob,
-  RemoteWorkspaceSyncRecord,
   Session,
   UpdateSessionRequest,
 } from "@sciencediscovery/schema";
@@ -693,8 +692,8 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
 }
 
 /**
- * Session-scoped override of the Project allowlist, plus the read-only remote
- * workspace record, rendered inside the Session settings dialog. Allowing a
+ * Session-scoped override of Project defaults. Workspace and scientific
+ * environment administration lives in system settings. Allowing a
  * remote machine only makes it available; local file access and local
  * execution always stay available.
  */
@@ -707,23 +706,12 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
   session: Session;
 }) {
   const hosts = useRemoteHosts(client, onError);
-  const [syncRecords, setSyncRecords] = useState<RemoteWorkspaceSyncRecord[]>([]);
   const [busyId, setBusyId] = useState<string>();
-
-  useEffect(() => {
-    let cancelled = false;
-    void client.listRemoteWorkspaceSyncs(session.id)
-      .then((records) => { if (!cancelled) setSyncRecords(records); })
-      .catch((error: Error) => { if (!cancelled) onError(error.message); });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, session.id]);
 
   const override = session.remoteRunnerHostIds;
   const mode = override == null ? "inherit" : "override";
   const availableHosts = (hosts ?? []).filter(runnerUsable);
   const effectiveIds = effectiveRemoteRunnerHostIds(project, session);
-  const effectiveHosts = (hosts ?? []).filter((host) => effectiveIds.includes(host.id));
 
   async function update(body: UpdateSessionRequest, fallback: string): Promise<void> {
     setBusyId("session-remote");
@@ -751,28 +739,6 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
     await update({ remoteRunnerHostIds: ids }, "Could not update the Session allowlist");
   }
 
-  // Each allowed machine owns a separate remote workspace; records and the
-  // destructive delete are grouped under the machine they belong to.
-  const workspaceHosts: Array<{ alias: string; id: string }> = [];
-  for (const host of effectiveHosts) workspaceHosts.push({ alias: host.runnerName ?? host.alias, id: host.id });
-  for (const record of syncRecords) {
-    if (!workspaceHosts.some((host) => host.id === record.hostId)) {
-      workspaceHosts.push({ alias: hosts?.find((host) => host.id === record.hostId)?.alias ?? record.hostId, id: record.hostId });
-    }
-  }
-
-  async function deleteWorkspace(host: { alias: string; id: string }): Promise<void> {
-    if (!window.confirm(`Delete every file in this Session's remote workspace on ${host.alias}? This cannot be undone.`)) return;
-    setBusyId(`delete-remote-workspace:${host.id}`);
-    try {
-      await client.deleteRemoteWorkspace(session.id, host.id);
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not delete remote workspace");
-    } finally {
-      setBusyId(undefined);
-    }
-  }
-
   return <section className="scoped-remote-settings">
     <div className="editor-heading"><strong>Remote compute</strong><small>Inherit Project defaults, or choose independently from all available machines. Local execution always stays available. Runner choices are saved immediately.</small></div>
     <label className="settings-field">
@@ -790,19 +756,7 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
         </label>)}</div>
         : <p className="settings-choice-empty">No usable remote machines yet. Add one in system settings → Remote compute.</p>
     ) : null}
-    {workspaceHosts.length > 0 ? <div className="remote-workspace-panel">
-      <div className="editor-heading"><strong>Remote workspace</strong><small>Each machine keeps a workspace separate from this Session's local one, across connections. Only the model transfers files, by naming the paths it needs; nothing is mirrored on connect, cancel, or disconnect.</small></div>
-      {workspaceHosts.map((host) => {
-        const records = syncRecords.filter((record) => record.hostId === host.id);
-        return <div className="remote-workspace-host" key={host.id}>
-          <strong>{host.alias}</strong><small>Runner ID: {host.id}</small>
-          <div className="remote-workspace-records">
-            {records.length ? records.slice(0, 10).map((record) => <small key={record.id}>{record.agentId ? `Agent ${record.agentId}` : "Main Agent"} · {record.direction} · {record.status} · {record.fileCount} files · {record.bytes} bytes · {record.paths.join(", ")}{record.error ? ` · ${record.error}` : ""}</small>) : <small>No transfers yet.</small>}
-          </div>
-          <div className="remote-workspace-actions"><button className="danger-button" disabled={disabled || Boolean(busyId)} onClick={() => void deleteWorkspace(host)} type="button">Delete remote workspace</button></div>
-        </div>;
-      })}
-    </div> : null}
+    <small>Manage remote workspaces and Python/R environments in system settings → Scientific environments.</small>
   </section>;
 }
 

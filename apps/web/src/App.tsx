@@ -183,7 +183,7 @@ import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEdito
 import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
 import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./ArtifactLifecycleControls.js";
 import { SkillManager } from "./SkillManager.js";
-import { EnvironmentManager } from "./EnvironmentManager.js";
+import { RunnerEnvironmentSettings } from "./RunnerEnvironmentSettings.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
 import { SubagentConversation } from "./SubagentConversation.js";
 import {
@@ -4828,7 +4828,7 @@ export function App() {
                 onCredentialEditStateChange={setRemoteCredentialDraftOpen}
                 onError={reportSystemSettingsError}
               /> : null}
-              {systemSettingsGroup === "environments" ? <EnvironmentManager client={client} onError={reportSystemSettingsError} /> : null}
+              {systemSettingsGroup === "environments" ? <RunnerEnvironmentSettings client={client} onError={reportSystemSettingsError} /> : null}
               {systemSettingsGroup === "connection" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.localAccess")}</span><h3>{t("settings.connection")}</h3><p>{t("settings.connectionHelp")}</p></div>
                 {tokenRejected ? <InlineErrorAlert detail={t("settings.tokenRejected")} title={t("settings.tokenRejectedTitle")} /> : null}
