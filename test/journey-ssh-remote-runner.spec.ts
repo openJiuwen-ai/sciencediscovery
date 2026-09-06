@@ -694,8 +694,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
-      "连接后查看 Runner 版本和工作区可用磁盘",
-      "状态变为 connected，详情顶部显示更新时间，紧凑容量条展示磁盘剩余 60/100 GiB、内存空闲 80/128 GiB，版本和 CPU 读数不重复。",
+      "连接后查看 Runner 版本和资源使用量",
+      "状态变为 connected，详情顶部显示更新时间，紧凑容量条展示磁盘已用 40/100 GiB（40%）、内存已用 48/128 GiB（37.5%），版本和 CPU 读数不重复。",
       async () => {
         const dialog = await openRemoteSettings();
         await dialog.getByRole("button", { name: "Connect runner" }).first().click();
@@ -704,11 +704,11 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
           /Version 0\.0\.0-remote · local 0\.0\.0-local/,
         )).toBeVisible();
         const resources = dialog.getByLabel("Runner resources").first();
-        await expect(resources).toContainText("60.0 GiB / 100.0 GiB");
+        await expect(resources).toContainText("40.0 GiB / 100.0 GiB");
         await expect(resources).toContainText("/data/sciencediscovery/remote-workspaces");
-        await expect(resources).toContainText("80.0 GiB / 128.0 GiB");
-        await expect(resources.getByRole("meter", { name: "Disk available" })).toHaveAttribute("aria-valuenow", "60");
-        await expect(resources.getByRole("meter", { name: "Memory free" })).toHaveAttribute("aria-valuenow", "62.5");
+        await expect(resources).toContainText("48.0 GiB / 128.0 GiB");
+        await expect(resources.getByRole("meter", { name: "Disk used" })).toHaveAttribute("aria-valuenow", "40");
+        await expect(resources.getByRole("meter", { name: "Memory used" })).toHaveAttribute("aria-valuenow", "37.5");
         await expect(dialog.getByText("SSH tunnel", { exact: true }).first()).toBeVisible();
         const card = resources.locator("xpath=ancestor::article");
         await expect(card.locator(".remote-host-disclosure > summary")).toContainText("Updated");
@@ -746,7 +746,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const detailsBox = await card.locator(".remote-host-card-details").boundingBox();
         expect(first!.y).toBeGreaterThanOrEqual(identityBox!.y + identityBox!.height);
         expect(detailsBox!.y).toBeGreaterThanOrEqual(first!.y + first!.height);
-        await expect(dialog.getByLabel("Runner resources").first()).toContainText("60.0 GiB / 100.0 GiB");
+        await expect(dialog.getByLabel("Runner resources").first()).toContainText("40.0 GiB / 100.0 GiB");
         await card.scrollIntoViewIfNeeded();
       },
     );
@@ -769,8 +769,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const card = page.locator(".remote-host-list .remote-host-card").first();
         await card.locator(".remote-host-disclosure > summary").focus();
         await page.keyboard.press("Enter");
-        await expect(card.getByRole("meter", { name: "Disk available" })).toBeVisible();
-        await expect(card.getByRole("meter", { name: "Memory free" })).toBeVisible();
+        await expect(card.getByRole("meter", { name: "Disk used" })).toBeVisible();
+        await expect(card.getByRole("meter", { name: "Memory used" })).toBeVisible();
         for (const row of await card.locator(".remote-resource-meter-label").all()) {
           const label = await row.locator("span").boundingBox();
           const value = await row.locator("strong").boundingBox();

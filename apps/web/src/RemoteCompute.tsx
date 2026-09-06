@@ -69,13 +69,13 @@ export function RunnerResourceSummary({ host }: { host: RemoteHostTarget }): Rea
   const lowDisk = disk && (disk.availableBytes < 1024 ** 3 || disk.availableBytes < disk.totalBytes * 0.1);
   return <div className="remote-host-resources" aria-label="Runner resources">
     <div className="remote-resource-tile">
-    {disk ? <ResourceMeter label="Disk available" value={disk.availableBytes} total={disk.totalBytes} tone={lowDisk ? "warning" : "success"} /> : <small>Disk available: unknown</small>}
+    {disk ? <ResourceMeter label="Disk used" value={disk.totalBytes - disk.availableBytes} total={disk.totalBytes} tone={lowDisk ? "warning" : "success"} /> : <small>Disk used: unknown</small>}
     {disk ? <small className="remote-host-resource-path">{disk.path}</small> : <small>{resources.workspaceDiskError}</small>}
     {lowDisk
       ? <div role="alert">Low workspace disk space. Environment installs and file writes may fail.</div> : null}
     </div>
     <div className="remote-resource-tile">
-      <ResourceMeter label="Memory free" value={resources.memoryFreeBytes} total={resources.memoryTotalBytes} tone="info" />
+      <ResourceMeter label="Memory used" value={resources.memoryTotalBytes - resources.memoryFreeBytes} total={resources.memoryTotalBytes} tone="info" />
     </div>
     <div className="remote-resource-stats">
       <div><small>CPU cores</small><strong>{resources.cpuCores}</strong></div>
