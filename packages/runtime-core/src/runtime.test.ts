@@ -50,6 +50,7 @@ test("runs model and concurrent tools while committing results in call order", a
       },
     },
     toolDispatcher: {
+      executionMode: () => "parallel",
       async execute(call) {
         started.add(call.id);
         await Promise.resolve();

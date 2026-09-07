@@ -8,6 +8,7 @@ import type {
   RuntimeToolCall,
   ToolDispatchResult,
   ToolDispatcher,
+  ToolExecutionMode,
 } from "@sciencediscovery/runtime-core";
 
 import type { ToolOutputGuard, ToolOutputRecord } from "./bounded-output.js";
@@ -107,6 +108,17 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       .map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters as unknown }));
     if (deferredState) specs.push({ ...TOOL_SEARCH_SPEC });
     return specs;
+  }
+
+  executionMode(call: RuntimeToolCall): ToolExecutionMode {
+    if (call.name === TOOL_SEARCH_NAME) return "parallel";
+    const tool = this.tools.get(call.name);
+    if (!tool?.isConcurrencySafe || !this.toolIsAvailable(call.name)) return "exclusive";
+    try {
+      return tool.isConcurrencySafe(call.args as never) === true ? "parallel" : "exclusive";
+    } catch {
+      return "exclusive";
+    }
   }
 
   async execute(call: RuntimeToolCall, signal: AbortSignal): Promise<ToolDispatchResult<TMessage>> {

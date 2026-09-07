@@ -586,6 +586,7 @@ export function createToolOutputTools(
         details: { ...page, readObservation: observation },
       };
     },
+    isConcurrencySafe: () => true,
     label: "Read stored tool output",
     name: "read_tool_output",
     parameters: readToolOutputParameters,

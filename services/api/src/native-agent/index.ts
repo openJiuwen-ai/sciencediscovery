@@ -64,7 +64,12 @@ import {
   type PlanRepository,
 } from "@sciencediscovery/plan-mode";
 import { createEvolveTools, type EvolveToolRuntime } from "@sciencediscovery/evolve";
-import { ExternalWaitController, type RunEvent } from "@sciencediscovery/runtime-core";
+import {
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+  ExternalWaitController,
+  resolveMaxParallelToolCalls,
+  type RunEvent,
+} from "@sciencediscovery/runtime-core";
 import {
   createToolOutputTools,
   resolveToolOutputSettings,
@@ -95,6 +100,18 @@ export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
 /** Hard safety net against a runaway model loop; time budgets remain the
  *  primary bound (`runTimeoutMs` / `runIdleTimeoutMs`). */
 const MAX_MODEL_TURNS = 128;
+
+export function configuredMaxParallelToolCalls(
+  raw = process.env.SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS,
+): number {
+  const value = raw?.trim();
+  if (!value) return DEFAULT_MAX_PARALLEL_TOOL_CALLS;
+  try {
+    return resolveMaxParallelToolCalls(Number(value));
+  } catch {
+    throw new Error("SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS must be a positive integer");
+  }
+}
 
 export interface NativeAgentOptions extends WorkspaceAgentOptions {
   /** Stable identity for logging/tracing; use the session id. */
@@ -508,6 +525,7 @@ class NativeAgent implements NativeAgentHandle {
       const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, modelTurnStreamer);
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         maxModelTurns: MAX_MODEL_TURNS,
+        maxParallelToolCalls: configuredMaxParallelToolCalls(),
         contextAssembler,
         modelClient,
         toolDispatcher: this.toolRegistry,

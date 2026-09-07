@@ -173,6 +173,16 @@ The denylist covers every authority block this product injects (`available-defer
 | `model_usage` | loop end | recorded as the run's usage, not forwarded directly |
 | `usage` | loop end with usage present | subagent usage roll-up |
 
+Tool calls use a bounded rolling pool instead of an unbounded `Promise.all`.
+Only tools whose private definition explicitly classifies the current arguments
+as concurrency-safe may overlap; undeclared or failing classifiers become
+exclusive ordering barriers. `SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS` controls
+the pool width (default `10`, `1` for serial execution). A settled parallel call
+immediately admits the next queued call, while result messages and completion
+events remain in model-declared order. Cancellation stops queue replenishment
+and drains calls that already started. This setting limits instantaneous
+pressure; it does not limit the total calls in one model response.
+
 ## 5. `native-agent/model-client.ts` — streaming model transport
 
 **Responsibility.** One model turn: two dialects in, one normalized result out.

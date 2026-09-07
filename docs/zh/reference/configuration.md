@@ -22,6 +22,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | 每个类别保留的滚动历史文件数 |
 | `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | 初始 Agent 无响应上限：无流式输出或进度（`0` = 无限） |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | 初始 Agent 单轮总时长上限（`0` = 无限） |
+| `SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS` | `10` | 单个 Agent Step 中显式声明为并发安全的工具最大并发数；必须为正整数，`1` 表示工具串行执行 |
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner 监听地址 |
 | `SCIENCE_AGENT_RUNNER_PORT` | `4311` | Runner 监听端口 |
 | `SCIENCE_AGENT_RUNNER_URL` | `http://127.0.0.1:4311` | Runner 端点（API 客户端） |

@@ -22,6 +22,7 @@ import type { ContextContributorFactory } from "@sciencediscovery/context";
 import type { AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 
 import {
+  configuredMaxParallelToolCalls,
   createNativeAgent,
   setModelTurnStreamerForTest,
   type ModelTurnStreamer,
@@ -93,6 +94,19 @@ function toolBatchTurn(calls: Array<{ args: Record<string, unknown>; id: string;
     toolCalls: calls,
   };
 }
+
+test("max parallel tool call configuration defaults and validates", () => {
+  assert.equal(configuredMaxParallelToolCalls(""), 10);
+  assert.equal(configuredMaxParallelToolCalls("3"), 3);
+  assert.throws(
+    () => configuredMaxParallelToolCalls("0"),
+    /SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS must be a positive integer/u,
+  );
+  assert.throws(
+    () => configuredMaxParallelToolCalls("1.5"),
+    /SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS must be a positive integer/u,
+  );
+});
 
 test("loop streams a tool round trip and returns wire-format final messages", async () => {
   const { calls, streamer } = scriptStreamer([

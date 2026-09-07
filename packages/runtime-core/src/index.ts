@@ -35,3 +35,10 @@ export {
   type ToolDispatchResult,
   type ToolDispatcher,
 } from "./runtime.js";
+export {
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+  resolveMaxParallelToolCalls,
+  scheduleToolCalls,
+  type ToolExecutionMode,
+  type ToolScheduleOptions,
+} from "./tool-scheduler.js";

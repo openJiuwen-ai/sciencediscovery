@@ -20,6 +20,13 @@
  * and provider protocols are supplied through ports by the composition root.
  */
 
+import {
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+  resolveMaxParallelToolCalls,
+  scheduleToolCalls,
+  type ToolExecutionMode,
+} from "./tool-scheduler.js";
+
 export type RuntimeMessage = Record<string, unknown> & { role?: string };
 
 export interface RuntimeToolCall {
@@ -81,6 +88,8 @@ export interface ToolDispatchResult<TMessage extends RuntimeMessage> {
 }
 
 export interface ToolDispatcher<TMessage extends RuntimeMessage> {
+  /** Fail-closed scheduling classification; only an explicit parallel result overlaps. */
+  executionMode?(call: RuntimeToolCall): ToolExecutionMode;
   execute(call: RuntimeToolCall, signal: AbortSignal): Promise<ToolDispatchResult<TMessage>>;
 }
 
@@ -192,6 +201,7 @@ export interface AgentLoopOptions<TMessage extends RuntimeMessage, TModelInput, 
   contextAssembler: ContextAssembler<TMessage, TModelInput>;
   eventSink?: RunEventSink<TUsage>;
   maxModelTurns: number;
+  maxParallelToolCalls?: number;
   modelClient: ModelClient<TMessage, TModelInput, TUsage>;
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController?: ExternalWaitController;
@@ -212,9 +222,10 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
     if (!Number.isInteger(options.maxModelTurns) || options.maxModelTurns <= 0) {
       throw new Error("maxModelTurns must be a positive integer");
     }
+    const maxParallelToolCalls = resolveMaxParallelToolCalls(options.maxParallelToolCalls);
     // Copy and freeze the run registry. Mutating caller-owned composition
     // objects after construction cannot alter an in-flight run.
-    this.options = Object.freeze({ ...options });
+    this.options = Object.freeze({ ...options, maxParallelToolCalls });
   }
 
   snapshot(): AgentLoopState<TMessage> {
@@ -286,27 +297,22 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         }
 
         this.transition("executing_tools", turn);
-        for (const call of modelTurn.toolCalls) {
-          this.emit({ type: "tool_execution_start", call });
-        }
-        // Execute independent calls concurrently, then commit results in the
-        // model-declared order so every assistant/tool pairing stays stable.
-        const results = await Promise.all(
-          modelTurn.toolCalls.map((call) => this.options.toolDispatcher.execute(call, signal)),
-        );
+        await scheduleToolCalls({
+          calls: modelTurn.toolCalls,
+          classify: (call) => this.options.toolDispatcher.executionMode?.(call) ?? "exclusive",
+          execute: (call) => this.options.toolDispatcher.execute(call, signal),
+          maxParallelToolCalls: this.options.maxParallelToolCalls ?? DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+          onResult: (call, result) => {
+            this.state.history.push(result.message);
+            this.emit({
+              type: "tool_execution_end", call, content: result.content, isError: result.isError,
+            });
+            onProgress();
+          },
+          onStart: (call) => this.emit({ type: "tool_execution_start", call }),
+          signal,
+        });
         this.raiseForAbort(signal);
-        for (const [index, result] of results.entries()) {
-          const call = modelTurn.toolCalls[index];
-          if (!call) continue;
-          this.state.history.push(result.message);
-          this.emit({
-            type: "tool_execution_end",
-            call,
-            content: result.content,
-            isError: result.isError,
-          });
-          onProgress();
-        }
       }
 
       // Preserve the historical safety-net behavior: a bounded run returns
@@ -353,6 +359,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   private contextAssembler?: ContextAssembler<TMessage, TModelInput>;
   private eventSink?: RunEventSink<TUsage>;
   private maxModelTurns?: number;
+  private maxParallelToolCalls = DEFAULT_MAX_PARALLEL_TOOL_CALLS;
   private modelClient?: ModelClient<TMessage, TModelInput, TUsage>;
   private toolDispatcher?: ToolDispatcher<TMessage>;
   private waitController?: ExternalWaitController;
@@ -360,6 +367,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   withContextAssembler(value: ContextAssembler<TMessage, TModelInput>): this { this.contextAssembler = value; return this; }
   withEventSink(value: RunEventSink<TUsage>): this { this.eventSink = value; return this; }
   withMaxModelTurns(value: number): this { this.maxModelTurns = value; return this; }
+  withMaxParallelToolCalls(value: number): this { this.maxParallelToolCalls = value; return this; }
   withModelClient(value: ModelClient<TMessage, TModelInput, TUsage>): this { this.modelClient = value; return this; }
   withToolDispatcher(value: ToolDispatcher<TMessage>): this { this.toolDispatcher = value; return this; }
   withWaitController(value: ExternalWaitController): this { this.waitController = value; return this; }
@@ -375,6 +383,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
     return new AgentLoop({
       contextAssembler: this.contextAssembler!,
       maxModelTurns: this.maxModelTurns!,
+      maxParallelToolCalls: this.maxParallelToolCalls,
       modelClient: this.modelClient!,
       toolDispatcher: this.toolDispatcher!,
       ...(this.eventSink ? { eventSink: this.eventSink } : {}),

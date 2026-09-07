@@ -22,6 +22,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | Rotated files retained per category |
 | `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | Initial no-output/no-progress timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | Initial whole-turn timeout (`0` is unlimited) |
+| `SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS` | `10` | Maximum concurrency for explicitly parallel-safe tool calls in one Agent step; positive integer, and `1` makes tool execution serial |
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner bind address |
 | `SCIENCE_AGENT_RUNNER_PORT` | `4311` | Runner port |
 | `SCIENCE_AGENT_RUNNER_URL` | `http://127.0.0.1:4311` | Runner endpoint used by the API |

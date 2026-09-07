@@ -29,6 +29,29 @@ test("executes tools and creates the canonical result message", async () => {
   assert.deepEqual(result.message, { role: "tool", name: "echo", tool_call_id: "1", content: "ok" });
 });
 
+test("tool scheduling is fail-closed and only exact true enables parallel execution", () => {
+  const registry = new ToolRegistry([
+    {
+      name: "read", label: "read", description: "read", parameters: Type.Object({}),
+      isConcurrencySafe: () => true,
+      async execute() { return { content: [], details: {} }; },
+    },
+    {
+      name: "write", label: "write", description: "write", parameters: Type.Object({}),
+      async execute() { return { content: [], details: {} }; },
+    },
+    {
+      name: "broken", label: "broken", description: "broken", parameters: Type.Object({}),
+      isConcurrencySafe() { throw new Error("classifier failed"); },
+      async execute() { return { content: [], details: {} }; },
+    },
+  ], { createResultMessage: resultMessage });
+  assert.equal(registry.executionMode({ args: {}, id: "1", name: "read" }), "parallel");
+  assert.equal(registry.executionMode({ args: {}, id: "2", name: "write" }), "exclusive");
+  assert.equal(registry.executionMode({ args: {}, id: "3", name: "broken" }), "exclusive");
+  assert.equal(registry.executionMode({ args: {}, id: "4", name: "missing" }), "exclusive");
+});
+
 test("result observations retain model-declared order across concurrent completion", async () => {
   const observed: Array<{ name: string; sequence: number }> = [];
   const registry = new ToolRegistry([

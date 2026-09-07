@@ -16,6 +16,7 @@ export interface RuntimeComposition<TMessage extends RuntimeMessage, TModelInput
   contextAssembler: ContextAssembler<TMessage, TModelInput>;
   eventSink: RunEventSink<TUsage>;
   maxModelTurns: number;
+  maxParallelToolCalls: number;
   modelClient: ModelClient<TMessage, TModelInput, TUsage>;
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController: ExternalWaitController;
@@ -32,5 +33,6 @@ export function composeRuntime<TMessage extends RuntimeMessage, TModelInput, TUs
     .withEventSink(composition.eventSink)
     .withWaitController(composition.waitController)
     .withMaxModelTurns(composition.maxModelTurns)
+    .withMaxParallelToolCalls(composition.maxParallelToolCalls)
     .build();
 }

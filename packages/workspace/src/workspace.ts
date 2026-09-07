@@ -626,6 +626,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         details: { files },
       };
     },
+    isConcurrencySafe: () => true,
     label: "List workspace files",
     name: "list_files",
     parameters: emptyParameters,
@@ -694,6 +695,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       ].join("\n");
       return { bounded: true, content: [{ type: "text", text: `${header}\n${page.text}` }], details };
     },
+    isConcurrencySafe: () => true,
     label: "Read workspace file",
     name: "read_file",
     parameters: readFileParameters,
@@ -713,6 +715,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           details: provenance,
         };
       },
+      isConcurrencySafe: () => true,
       label: "Get file provenance",
       name: "get_file_provenance",
       parameters: provenanceParameters,
@@ -728,6 +731,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const artifacts = await options.listArtifacts!();
         return { content: [{ type: "text", text: JSON.stringify(artifacts) }], details: { artifacts } };
       },
+      isConcurrencySafe: () => true,
       label: "List project artifacts",
       name: "list_artifacts",
       parameters: emptyParameters,
@@ -761,6 +765,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         });
         return { bounded: true, content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
+      isConcurrencySafe: () => true,
       label: "Read project artifact",
       name: "read_artifact",
       parameters,
@@ -1041,6 +1046,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const result = await options.webSearch!(toolCallId, params.query, signal);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
+      isConcurrencySafe: () => true,
       label: "Search the web",
       name: "web_search",
       parameters,
@@ -1057,6 +1063,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const result = await options.webFetch!(toolCallId, params.url, signal);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
+      isConcurrencySafe: () => true,
       label: "Fetch web page",
       name: "web_fetch",
       parameters,
@@ -1071,6 +1078,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const result = await options.queryGraph!(params.query);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
+      isConcurrencySafe: () => true,
       label: "Query memory graph",
       name: "query_graph",
       parameters: queryGraphParameters,
@@ -1209,6 +1217,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const summary = summarizeSubagentResult(subagent);
         return { content: [{ type: "text", text: JSON.stringify(summary) }], details: { subagent, summary } };
       },
+      isConcurrencySafe: () => true,
       label: "Run subagent",
       name: "task",
       parameters: taskParameters,
@@ -1229,6 +1238,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           details: result,
         };
       },
+      isConcurrencySafe: () => true,
       label: "Review artifact checkpoint",
       name: "review_checkpoint",
       parameters: reviewCheckpointParameters,
@@ -1463,6 +1473,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           details: { environments },
         };
       },
+      isConcurrencySafe: () => true,
       label: "List scientific environments",
       name: ENVIRONMENT_TOOL_NAMES.list,
       parameters: environmentListParameters,
@@ -1622,6 +1633,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           },
         };
       },
+      isConcurrencySafe: () => true,
       label: "Read skill",
       name: "read_skill",
       parameters: readSkillParameters,
@@ -1657,6 +1669,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           details: result,
         };
       },
+      isConcurrencySafe: () => true,
       label: "Read skill resource",
       name: "read_skill_resource",
       parameters: skillResourceParameters,
@@ -1718,6 +1731,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           details: result,
         };
       },
+      isConcurrencySafe: () => true,
       label: mcpTool.displayName,
       mcp: { sourceId: mcpTool.sourceId, toolId: mcpTool.toolId },
       name: mcpTool.name,

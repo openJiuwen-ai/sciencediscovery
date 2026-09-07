@@ -1087,8 +1087,10 @@ async function startSubagentModel(
       response.write(`data: ${JSON.stringify(responseChunk)}\n\n`);
     }
     response.write(`data: ${JSON.stringify(finish)}\n\n`);
-    response.end("data: [DONE]\n\n");
+    // The response is complete before `end()` yields to a replenished client
+    // slot, so the fixture measures active work instead of socket teardown.
     if (isSubagent) activeSubagentRequests -= 1;
+    response.end("data: [DONE]\n\n");
   });
   await new Promise<void>((resolveListen) => modelServer.listen(0, "127.0.0.1", resolveListen));
   context.after(() => new Promise<void>((resolveClose) => modelServer.close(() => resolveClose())));
@@ -5151,7 +5153,7 @@ test("API runs two task calls concurrently with independent persisted records", 
   assert.equal(new Set(updatedIds).size, 2);
 });
 
-test("API enforces the per-run subagent concurrency limit", async (context) => {
+test("API rolls surplus task calls through the bounded per-run concurrency pool", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-limit-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -5192,23 +5194,16 @@ test("API enforces the per-run subagent concurrency limit", async (context) => {
     `${origin}/api/sessions/${session.body.id}/subagents`,
     { headers: authorization },
   );
-  assert.equal(subagents.body.length, DEFAULT_MAX_CONCURRENT_SUBAGENTS);
+  assert.equal(subagents.body.length, taskCount);
   const startedDescriptions = subagents.body.map((subagent) => subagent.input.description).toSorted();
   const allDescriptions = Array.from({ length: taskCount }, (_, index) => `Inspect workspace ${index + 1}`);
-  assert.equal(startedDescriptions.length, DEFAULT_MAX_CONCURRENT_SUBAGENTS);
+  assert.equal(startedDescriptions.length, taskCount);
   assert.deepEqual(startedDescriptions.filter((description) => allDescriptions.includes(description)), startedDescriptions);
-  const rejectedDescription = allDescriptions.find((description) => !startedDescriptions.includes(description));
-  assert.ok(rejectedDescription);
 
   const parentResultRequest = fixture.requests.find((request) =>
     request.messages?.some((message) =>
       message.role === "tool" && message.content?.includes("Subagent concurrency limit reached")));
-  assert.ok(parentResultRequest);
-  const rejectedToolMessages = parentResultRequest.messages?.filter((message) =>
-    message.role === "tool"
-    && message.content?.includes("Subagent concurrency limit reached")
-    && message.content.includes(rejectedDescription)) ?? [];
-  assert.equal(rejectedToolMessages.length, 1);
+  assert.equal(parentResultRequest, undefined);
 });
 
 test("hierarchical settings and Project/Session lifecycle APIs preserve and delete the expected data", async (context) => {
