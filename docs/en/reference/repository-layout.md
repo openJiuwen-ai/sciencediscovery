@@ -21,7 +21,7 @@ sciencediscovery/
 │   └── mcp-sources/          # scientific MCP manifests and trust boundary
 ├── skills/                   # built-in Agent Skills
 ├── scripts/                  # shared launcher and mode wrappers
-├── test/                     # integration and browser E2E outside pnpm check
+├── test/                     # integration checks and user-perspective E2E outside pnpm check
 ├── docs/                     # complete English and Chinese documentation
 ├── data/                     # gitignored runtime state
 ├── .e2e/                     # gitignored local Playwright environment
@@ -94,7 +94,25 @@ All skills are available by default and may be narrowed at Project/Session scope
 
 ### 2.8 `test/`
 
-Root tests contain Playwright browser E2E plus gateway/API mock and real smoke suites. Playwright is not part of the default `pnpm check` path.
+E2E is a real-use journey from a user's goal to an observable outcome, not a
+synonym for browser automation. Browser journeys use the pinned Playwright
+environment in `.e2e/`; `pnpm ci:e2e` runs only their mocked subset.
+
+Public API, CLI and local-stack journeys start the product with
+`start-stack.sh` or a documented equivalent and verify user-facing Run,
+artifact, permission or other outcomes. Reusable non-browser drivers belong
+in `test/api/` with exact invocation instructions; they are not automatically
+part of browser CI. The existing `run_m1_smoke.sh` and `run_real_smoke.sh`
+instantiate the adapter in-process and remain integration smokes, not E2E.
+There is no universal non-browser journey runner today; inspect or add the
+specific driver rather than assuming the directory supplies one.
+
+Implementers add or improve journeys with user-observable behavior changes,
+or identify and rerun existing coverage. Only changes with no affected user
+product path may report E2E as not applicable; backend-only/no UI is not an
+exemption. These tests are outside `pnpm check`. See
+[CONTRIBUTING](../../../CONTRIBUTING.md#user-perspective-e2e) for the definition,
+stack isolation, browser setup and API/stack journey contract.
 
 ## 3. Data and configuration
 

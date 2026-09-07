@@ -28,14 +28,34 @@ pnpm --filter @sciencediscovery/web dev   # UI hot reload on :5173 (proxies API 
 
 ## Agent-loop smoke tests
 
-Targeted smokes, not wired into `pnpm smoke`; run from the repository root:
+Targeted adapter/integration smokes, not wired into `pnpm smoke`; run from the
+repository root. These scripts instantiate `createNativeAgent` in-process and
+do not test the product startup and public client path, so they are not E2E:
 
 ```bash
 ./test/api/run_m1_smoke.sh       # Node adapter (hermetic)
-./test/api/run_real_smoke.sh     # adapter → gateway → live model → real tool
+./test/api/run_real_smoke.sh     # native adapter → live model → tool callbacks
 ```
 
-## Browser e2e (Playwright)
+## User-perspective E2E
+
+E2E simulates how a user actually uses the product, from a recognizable goal
+through its observable outcome. Browser, public HTTP API, CLI, and local-stack
+journeys can all qualify. A type check, package test, direct call to an internal
+function, or assertion that a request was merely sent cannot replace that
+journey.
+
+When changing user-observable behavior, add or improve the relevant journey
+with the implementation; if an existing journey covers the changed contract,
+identify and rerun it. Do not leave coverage to PR preparation. Run outcomes,
+tool execution, queryable versioned state, artifacts, permissions and failure
+feedback count even without a new page. Select success, failure, repeat,
+cancellation and recovery scenarios according to the risk. Only changes with
+no affected user-observable product path (such as documentation-only edits)
+may report **E2E: not applicable**, with a reason. “Backend-only / no UI” is
+not such a reason; unavailable prerequisites are BLOCKED, not an exemption.
+
+### Browser journeys (Playwright)
 
 Requires an isolated running stack on `:4310` (or `E2E_BASE_URL`) and its
 generated access token exported as `E2E_API_TOKEN`. Specs live in `test/`; the
@@ -76,7 +96,7 @@ npm run check:meta       # validates the per-test E2E-META comment blocks
 
 Every migrated test carries an `E2E-META` comment (purpose, steps, environment,
 mocked/real type, each external capability, credentials, cost/side effects)
-checked by `test/check-e2e-meta.mjs`. New E2E files are organized by complete
+checked by `test/check-e2e-meta.mjs`. New browser E2E files are organized by complete
 user journey, not shell/Python/environment/internal modules, and reuse
 `test/helpers/journeys.ts` for common user actions.
 
@@ -98,7 +118,52 @@ for the full conventions, including the copyable journey skeleton, the automatic
 HTTP/WebSocket guard, isolation, failure attribution, and
 discovered/executed/skipped reporting.
 
-Integration/e2e tests under `test/` are **not** part of `pnpm check`.
+### API / CLI / local-stack journeys
+
+Start the real product from the assigned worktree at the committed SHA, using
+run-specific data, ports and service URLs:
+
+```bash
+./scripts/start-stack.sh --mode local
+# Only when this SHA has already been built:
+./scripts/start-stack.sh --mode local --no-build
+```
+
+These are alternative startup commands, not two stacks to launch together.
+In a separate client terminal, set `E2E_BASE_URL` to this API and
+`E2E_API_TOKEN` to its generated token. Verify API/Runner and other required
+service health first. Follow the E2E skill's isolation table; do not reuse
+another run's data or ports. An equivalent documented product entry point is
+allowed when testing that entry, but directly constructing an internal server
+or Agent in the test process is not equivalent.
+
+Drive the supported HTTP API or documented CLI as a user would: for example,
+create a Project/Session, submit a request, handle permission feedback, wait
+for its Run to finish, retrieve the resulting artifact or queryable state,
+and check the Session remains usable. Health alone or a successful submission
+without the final outcome is not sufficient. UI changes still need browser
+coverage; an API journey is not a substitute for layout/interaction assertions.
+
+Keep reusable non-browser journey drivers in `test/api/`, with goal-based
+names and an exact invocation documented beside the driver. Inspect the
+chosen script before running it: this directory also contains the in-process
+smokes above, and there is no universal non-browser E2E runner today. Add the
+missing journey when needed rather than renaming a smoke or claiming the
+browser CI command covers it.
+
+Default to a journey-owned local stub model registered through the API;
+real models/services require explicit opt-in and declared credentials/costs.
+The browser's network guard does not intercept backend or CLI traffic.
+Non-browser drivers declare the same E2E-META information and enforce their
+own precondition gates. Write numbered user steps and a `report.md` containing
+SHA, startup/driver commands, environment, expected/actual outcomes, verdict
+(PASS/FAIL/BLOCKED), redacted API responses or CLI output/exit codes, and
+failure evidence. Preserve reports for all outcomes; no page screenshots are
+required for a non-browser journey. Clean up only this run's records/processes
+after saving evidence. See the [E2E skill](.agents/skills/e2e-testing/SKILL.md#api--cli--local-stack-journeys)
+for the full contract.
+
+Integration/E2E tests under `test/` are **not** part of `pnpm check`.
 
 ## CI layers
 
@@ -108,8 +173,13 @@ pipeline failure locally means running the same one:
 ```bash
 pnpm ci:ut    # both UT tiers: static checks, package tests, Python suites
 pnpm ci:st    # build, then the hermetic agent-loop smoke
-pnpm ci:e2e   # starts its own isolated stack and runs the @mocked journeys
+pnpm ci:e2e   # starts its own isolated stack and runs @mocked browser journeys
 ```
+
+The CI `e2e` layer is the mocked browser subset, not the definition of all
+user-perspective E2E. Record separately executed API/CLI/stack journeys in the
+E2E conclusion with their actual commands; these are not automatically
+discovered by `pnpm ci:e2e`. `ci:st` remains the hermetic adapter smoke layer.
 
 Each writes `run.log` and a machine-readable summary below `CI_RESULTS_DIR`,
 and gives the run a scratch data directory below `CI_RUNTIME_DIR`. Both default
@@ -165,9 +235,9 @@ Two test-layer pipelines run, and **neither runs everything**. GitCode
 merge-request CI is CodeArts-only; this repository intentionally has no
 `.gitcode/workflows/` Actions pipeline.
 
-| Pipeline | UT | ST | E2E | Release binaries |
+| Pipeline | UT | ST | Browser E2E subset | Release binaries |
 | --- | --- | --- | --- | --- |
-| GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | yes | x86_64 + aarch64, smoke-gated |
+| GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 | CodeArts — `.codearts/workflow/` on a merge request to `main` | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | off while its Playwright timeouts are sized for native speed | x86_64 + aarch64 packages; smoke is host-dependent |
 
 Every CodeArts job runs on a build task rather than a pipeline executor,
@@ -263,6 +333,14 @@ pnpm ci:ut     # not ci:ut:host — the sandbox tests run only here and on GitHu
 pnpm ci:st
 pnpm ci:e2e
 ```
+
+In addition to those existing CI gates, report a user-perspective E2E
+conclusion for affected product paths, including API/CLI/stack journeys when
+appropriate. A green browser subset does not certify untested non-browser
+behavior. Include the tested SHA, interface, scenario/expected/actual table,
+commands and passed/failed/blocked/skipped counts. Only a change with no
+affected user-observable product path may say **E2E: not applicable** and give
+the reason; that statement does not turn an unrun CI layer into a pass.
 
 `ci:ut` and `ci:e2e` need a working sandbox. Check before blaming a change:
 

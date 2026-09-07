@@ -2,6 +2,13 @@
 
 This directory defines a source-free CI toolchain image and the repository
 entry points for unit tests (UT), hermetic system tests (ST), and browser E2E.
+Here the `e2e` layer is the mocked browser subset, not the definition of all
+E2E: public API, CLI and local-stack user journeys also qualify when they use
+the real product entry path and assert user outcomes. Their separate driver
+commands are not automatically run by `pnpm ci:e2e`; see
+[CONTRIBUTING](../CONTRIBUTING.md#user-perspective-e2e). The existing layer
+names and pipeline entry points are unchanged.
+
 The image contains Node.js 22.19, pnpm 11.1.2, Python 3.12, uv, bubblewrap,
 build tools, and Playwright's Chromium system libraries. Product source and
 test dependencies are supplied only by the checkout mounted at `/src`.

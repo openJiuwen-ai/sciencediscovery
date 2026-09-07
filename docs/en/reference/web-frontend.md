@@ -43,7 +43,7 @@ The React browser UI is served as static assets by the control API after build a
 
 - `pnpm --filter @sciencediscovery/web dev` starts Vite at `127.0.0.1:5173` and proxies `/api` and `/health` to `127.0.0.1:4310`.
 - `tsx --test tests/*.test.tsx` covers reducers, stop flow, composer state, and multi-Session stream isolation.
-- Root `test/` contains Playwright scenarios; see [CONTRIBUTING](../../../CONTRIBUTING.md).
+- User-perspective E2E verifies a user's goal through actual product use, not just the browser. Root `test/` contains pinned Playwright journeys; `pnpm ci:e2e` runs the mocked browser subset. API/CLI/local-stack journeys use the public product entry points and have separate driver commands. Changed UI interactions and layout still need browser coverage, not only API assertions. See [CONTRIBUTING](../../../CONTRIBUTING.md#user-perspective-e2e) for coverage requirements and setup.
 
 ## Related documentation
 

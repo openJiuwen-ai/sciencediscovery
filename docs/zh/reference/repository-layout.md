@@ -24,9 +24,9 @@ sciencediscovery/
 │   ├── start-stack.sh        # 本地与 Docker 共用的三进程启动入口
 │   ├── run-local.sh          # 本地模式兼容包装
 │   └── docker-entrypoint.sh  # Docker 模式兼容包装
-├── test/                     # 集成与 e2e（不在 pnpm check 内）
+├── test/                     # 集成检查与用户视角 E2E（不在 pnpm check 内）
 │   ├── *.spec.ts             # Playwright 用例
-│   ├── api/                  # Node 适配层 smoke
+│   ├── api/                  # 现有适配器 smoke；新增 API/CLI 用户旅程驱动的放置目录
 │   ├── gateway/              # gateway mock / real smoke
 │   └── e2e.package*.json     # Playwright 本地环境引导文件
 ├── docs/                     # 本目录：中文技术文档
@@ -116,10 +116,14 @@ sciencediscovery/
 
 技能默认全部可用，可在 Project / Session 中收窄为白名单；运行时冻结 revision 并记入 Prompt Manifest。
 
-### 2.8 `test/` — 测试（不并入默认 `pnpm check` 全量路径中的 Playwright）
+### 2.8 `test/` — 集成检查与用户视角 E2E
 
-- Playwright 浏览器 e2e（本地环境在 `.e2e/`）
-- `test/api/*` smoke（脚本化模型端点 / 真实模型）
+- E2E 是从用户目标到可观察结果的真实使用旅程，不限于 Web。浏览器旅程使用固定 Playwright，环境在 `.e2e/`，`pnpm ci:e2e` 仅运行 mocked 浏览器子集。
+- API/CLI/本机栈旅程通过 `start-stack.sh` 或文档中的等价产品入口启动，从公开接口验证 Run、产物、权限等用户结果；可复用驱动放 `test/api/` 并写明运行命令。这些旅程不自动归入浏览器 CI 层。
+- `test/api/run_m1_smoke.sh` 与 `run_real_smoke.sh` 是现有适配器 smoke，直接在进程内构造 Agent，不因目录位置而成为 E2E。当前没有统一的非浏览器 E2E 运行器，需按具体旅程检查或新增驱动。
+- 改动用户可观察行为时，实施者随功能新增或完善旅程，已有覆盖需指出并重跑；只有不影响任何用户产品路径的改动才可写“不适用”，不能以“纯后端无 UI”为由跳过。
+
+这些测试不并入默认 `pnpm check`；定义、启动隔离、浏览器装配及 API/栈旅程要求见 [CONTRIBUTING.md](../../../CONTRIBUTING.md#user-perspective-e2e)。
 
 ## 3. 数据与配置落点
 

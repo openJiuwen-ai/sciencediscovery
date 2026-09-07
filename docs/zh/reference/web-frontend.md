@@ -46,7 +46,7 @@ React 浏览器 UI，构建后由控制 API 作为静态资源托管；开发时
 
 - 开发：`pnpm --filter @sciencediscovery/web dev` → Vite `127.0.0.1:5173`，代理 `/api` 与 `/health` 到 `127.0.0.1:4310`。
 - 单元测试：`tsx --test tests/*.test.tsx`（Node test runner），覆盖时间线归约、停止流程、composer 状态、多会话流隔离等。
-- 浏览器 e2e：Playwright 用例在仓库根 `test/`，环境搭建见 [CONTRIBUTING.md](../../../CONTRIBUTING.md)。
+- 用户视角 E2E：从真实使用步骤验证用户目标和结果，不限于 Web。浏览器旅程的固定 Playwright 用例在根 `test/`，`pnpm ci:e2e` 运行 mocked 浏览器子集；API/CLI/本机栈旅程另按公开产品入口运行。UI 改动仍需浏览器交互与布局验证，不能由 API 断言代替；定义、补用例时机与装配见 [CONTRIBUTING.md](../../../CONTRIBUTING.md#user-perspective-e2e)。
 
 ## 相关文档
 
