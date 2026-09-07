@@ -1,19 +1,27 @@
 ---
 name: e2e-testing
 description: >
-  Write, group, select, and run browser E2E tests for ScienceDiscovery
-  (Playwright specs in test/). Use when adding or changing an E2E spec,
-  filtering E2E CI cases by environment tags, running the mocked or real E2E
-  group, isolating a test stack (worktree, ports, data dir), collecting
-  screenshots/traces as evidence, or attributing an E2E failure.
+  Design, extend, and run ScienceDiscovery E2E user journeys through the
+  browser, public HTTP API, CLI, or local product stack. Use when changing
+  user-observable behavior, selecting mocked/real journeys, isolating a test
+  stack, reporting user outcomes, or attributing an E2E failure. Browser
+  journeys use the pinned Playwright environment in test/.
 ---
 
-# Browser E2E testing (Playwright)
+# User-perspective E2E testing
 
-Project-local skill for **ScienceDiscovery**. Scope: browser E2E specs in
-[`test/`](../../../test). Unit tests (`pnpm check`) and the gateway/adapter
-smoke scripts (`test/api/`) are covered by
-[`CONTRIBUTING.md`](../../../CONTRIBUTING.md), not here.
+Project-local skill for **ScienceDiscovery**. E2E means simulating actual
+product use from a user's goal to an observable outcome, not selecting a
+particular test framework. Browser journeys use Playwright; public API, CLI,
+and local-stack journeys also qualify when they cross the real product entry
+point. Package tests, type checks, in-process calls to internal functions, or
+assertions that only prove a request/click occurred are not E2E.
+
+Read the shared target/isolation rules for every journey. For browser work,
+follow the pinned Playwright, metadata, fixtures, and report rules below. For
+non-browser work, follow [API / CLI / local-stack journeys](#api--cli--local-stack-journeys).
+`pnpm ci:e2e` and the CI `e2e` layer still run the mocked **browser subset**;
+they neither discover nor certify every kind of user-perspective E2E.
 
 The primary unit of coverage is a **user journey**: one recognizable user goal
 from entering the product through its observable outcome. Do not split the
@@ -23,8 +31,28 @@ permissions, and artifacts should appear naturally as steps inside journeys.
 
 A journey is written as **numbered user steps**, and every run writes a
 step-by-step report a human can read without opening the spec. That contract is
-mandatory for new work — see [Journey steps and automatic
-reports](#journey-steps-and-automatic-reports-mandatory).
+mandatory for new work. Browser automation uses [Journey steps and automatic
+reports](#journey-steps-and-automatic-reports-mandatory); API/CLI drivers record
+equivalent steps and outcomes without requiring page screenshots.
+
+## When to add coverage
+
+When an implementation changes user-observable behavior, its implementer must
+add or improve the relevant journey with the feature, unless existing coverage
+already verifies the changed contract (identify and rerun it). Do not defer
+journey coverage to PR preparation or another role. This includes Run outcomes,
+tool execution, queryable versioned state, artifacts, permissions, failure
+feedback, cancellation, and recovery, even when no page changes. An independent
+tester, when assigned, designs scenarios from the user requirements rather
+than copying implementation conclusions.
+
+Choose the interface the user actually uses. API coverage complements but does
+not replace browser checks for changed UI behavior. Cover success and the
+relevant failure/repeat/cancel/recovery paths in proportion to risk.
+Write **E2E: not applicable** only when there is no user-observable product
+path affected (for example documentation/comments-only changes), and explain
+why. **Backend-only / no new UI is not an exemption.** A missing environment
+or journey driver is BLOCKED or a coverage gap, not “not applicable.”
 
 ## Target commit and worktree
 
@@ -56,7 +84,51 @@ treating the current run as validation of the target. Create and commit a new
 candidate under the repository's development rules, then rerun E2E against
 that new immutable commit.
 
-## The pinned Playwright, and nothing else
+## API / CLI / local-stack journeys
+
+1. Start the isolated, committed product with `./scripts/start-stack.sh --mode local`,
+   or a documented equivalent product entry point when testing that
+   entry itself. Use `--no-build` only for artifacts built from the target SHA.
+   Follow [Isolated stack per run](#isolated-stack-per-run) for ports, data,
+   service URLs and authentication. Verify the services required by the journey;
+   check the Web entry only when the journey uses it.
+2. Drive the running product from a separate client through its supported HTTP
+   API or documented CLI. A representative goal is: create a Project/Session,
+   submit a request, handle any permission prompt, wait for the Run terminal
+   state, retrieve the output/artifact, and confirm the Session can continue.
+   Assert the documented result and feedback, not a hard-coded incidental tool
+   order. Neither importing `createNativeAgent`/`createAgentRun` in-process nor
+   starting only a test-constructed server substitutes for the product startup
+   path. `/api/health` alone is a preflight, not this complete journey.
+3. Store reusable non-browser drivers in `test/api/`, named after the user goal,
+   with their exact root-level invocation and required environment documented.
+   The existing `run_m1_smoke.sh` and `run_real_smoke.sh` directly instantiate
+   the adapter: they remain smoke/integration checks, not E2E by location or
+   name. There is currently no generic non-browser E2E command; inspect the
+   committed driver or add the missing journey. Do not invent a `pnpm` entry
+   point or claim `ci:e2e` ran it. Integrate future drivers into the existing
+   test catalog when requested, without silently changing CI layer behavior.
+4. Declare the same purpose, steps, environment, external capabilities,
+   credentials, mocked/real choice and cost/side effects as E2E-META. Playwright
+   tags, fixtures and `check-e2e-meta.mjs` apply to browser specs; a non-browser
+   driver must document and enforce its own gates and reporting. Default to a
+   journey-owned local model stub registered through the product API. Real
+   models/services require explicit opt-in and documented costs. Browser
+   network guards do not protect a CLI or backend: keep their configured
+   endpoints local and audit all external calls as well.
+5. Wait for observable status with bounded polling/stream consumption, not
+   fixed sleeps. Record numbered user steps, expected/actual results, SHA,
+   startup and driver commands, health, redacted request/response summaries,
+   CLI exit status/output, and necessary service logs in `report.md` for PASS,
+   FAIL and BLOCKED. Assert product-promised persistent records where relevant;
+   internal database reads alone do not replace the user's access path. A
+   driver must fail on a failed outcome and report missing prerequisites as
+   BLOCKED, never as a successful zero-case run. No fake screenshots required.
+6. Clean up only journey-owned records and processes in `finally`, after
+   preserving evidence. Keep data and report files in the run's isolated
+   directories; never publish credentials or commit generated results.
+
+## Browser: the pinned Playwright, and nothing else
 
 Use only the `@playwright/test` declared by `test/e2e.package.json`, assembled
 into the gitignored `.e2e/` environment:
@@ -107,9 +179,11 @@ Isolation variables (set for `start-stack.sh` and the API alike):
 | `E2E_API_TOKEN` | none | Required browser/API token; use the value printed/generated by this isolated stack |
 | `E2E_BASE_URL` | `http://127.0.0.1:4310` | must point at the same API the fixtures use |
 
-After starting, verify API/Runner/Gateway health and the web entry before
-running specs. Export the stack's token as `E2E_API_TOKEN`; the global setup
-fails before the first scenario when it is absent. When a required service,
+After starting, verify API/Runner and any other service required by the
+journey; verify the web entry for browser journeys. Export the stack's token
+as `E2E_API_TOKEN`; browser global setup fails before the first scenario when
+it is absent. Non-browser clients must use the same stack and authentication.
+When a required service,
 port, or credential is missing, record the run as **BLOCKED** with the missing
 item — never skip silently.
 
@@ -127,7 +201,7 @@ Two isolation traps that produce confusing port-bind failures:
   `.env`. Explicitly exported variables win over dotenv; alternatively copy a
   trimmed `.env` into the worktree as the run's baseline.
 
-## Discover, filter, run
+## Browser: discover, filter, run
 
 For repository CI scheduling, use the cross-runner catalog from the repository
 root before assembling a stack:
@@ -199,7 +273,7 @@ record authorization. A skipped real test with a `BLOCKED:` reason remains
 BLOCKED in the run report; zero failures does not turn blocked/skipped cases
 into PASS.
 
-## E2E-META: every test documents itself
+## E2E-META: every browser test documents itself
 
 Each `test()` carries an `E2E-META` comment directly above it and a matching
 `{ tag: "@mocked" }` or `{ tag: "@real" }` option. `node test/check-e2e-meta.mjs`
@@ -399,7 +473,7 @@ blocked on it. **A new file has no grace period**: any spec added as
 grows into a full user flow should be renamed and converted rather than kept as
 an untracked exception.
 
-## Mocked rules
+## Browser mocked rules
 
 - The model is always a spec-owned local stub (`node:http` `createServer` on
   `127.0.0.1`, registered through `/api/models`) or a seeded fake such as the
@@ -419,7 +493,7 @@ an untracked exception.
   captured bodies), not on timing.
 - Mocked specs must pass repeatedly on a clean stack with no credentials.
 
-## Real rules
+## Browser real rules
 
 - Real specs are explicit opt-in (`E2E_REAL=1`), tagged `@real`, and declare
   their external behavior and cost in E2E-META.
@@ -442,7 +516,7 @@ an untracked exception.
 - Record what the run actually consumed (model, endpoints, connectors) and
   keep traces/screenshots so results can be reviewed without re-spending.
 
-## Writing specs
+## Writing browser specs
 
 - Organize files and `describe` blocks by user goal, not by implementation
   module. A journey may use shell, Python, an environment, a subagent, and
@@ -479,7 +553,7 @@ an untracked exception.
 - Long-term regression specs live in `test/`; throwaway diagnostic specs stay
   in the E2E worktree and are never committed.
 
-## Screenshots, evidence, artifacts
+## Browser screenshots, evidence, artifacts
 
 - **Journey specs take no screenshots of their own.** `journey.step()` names
   them in step order, waits for the page to settle, and files them with the
@@ -528,7 +602,7 @@ report the derived commit when present; never pollute the target candidate.
 | Test infrastructure | Worktree/port/data clash, wrong service, build ≠ SHA, dependency assembly or discovery error |
 
 A timeout is a tripwire, not a conclusion: confirm whether the run was issued,
-the service responded, and the UI gave feedback. Every verdict needs at least
+the service responded, and the UI/API/CLI gave feedback. Every verdict needs at least
 one piece of evidence (network log, console, service log, product message,
 screenshot, trace); timeouts need two points along that chain. An external
 failure the product swallows silently is still a product defect. Fix test or

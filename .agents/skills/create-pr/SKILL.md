@@ -31,6 +31,12 @@ attribution: [.agents/skills/ci/SKILL.md](../ci/SKILL.md).
 4. **Say what was verified in the body**, with the actual numbers. "Tests pass"
    is not reviewable; "382 API tests, 100 runner tests, mocked E2E 5 passed /
    2 skipped" is.
+5. **E2E is a user-perspective journey, not a browser-only gate.** Report
+   affected product paths through the UI, public API, CLI, or local stack.
+   Implementers add or improve relevant journeys with behavior changes (or
+   identify and rerun existing coverage), including backend-only changes to
+   Runs, tools, versioned state, artifacts or permissions. Do not defer this
+   coverage until the PR is opened.
 
 ## Run the layers first
 
@@ -56,6 +62,12 @@ CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:e2e
   totals, the ST smoke line, and the E2E discovered / passed / failed /
   skipped split. A skipped or BLOCKED E2E case is not a pass; the
   [e2e-testing skill](../e2e-testing/SKILL.md) owns that reporting.
+- `pnpm ci:e2e` runs only the mocked **browser subset**. Also run the relevant
+  API/CLI/local-stack journeys through `start-stack.sh` or a documented
+  equivalent product entry point and the supported client interface. An
+  in-process adapter smoke or package test is not E2E; do not relabel `ci:st`.
+  Keep the CI layer commands unchanged and report each additional driver
+  separately. Browser coverage remains necessary for changed UI behavior.
 - When a layer fails, attribute it before touching anything: run the same
   layer on unmodified `origin/main` in a separate detached worktree. An
   identical failure is pre-existing — state it in the body with the step, the
@@ -84,7 +96,23 @@ make obvious once you get there.
 
 ## Validation
 <Layer results with numbers. Name anything not covered and why.>
+
+## E2E user journeys
+<PASS / FAIL / BLOCKED; tested SHA; browser / API / CLI / local stack;
+scenario → expected outcome → actual outcome; startup and test commands;
+passed / failed / blocked / skipped counts and failure attribution.>
+<Browser: journey reports and screenshots for UI changes. API/CLI: redacted
+request/response summaries, exit codes, observable Run/artifact state and logs;
+do not fabricate page screenshots.>
 ```
+
+Only when no user-observable product path is affected (for example a pure
+documentation/comment change) may the E2E section say **not applicable**, with
+a concrete reason. **Backend-only / no new UI is not an exemption.** Missing
+credentials, startup failures or absent coverage must be reported as BLOCKED
+or a coverage gap, not not-applicable or PASS. This applicability decision does
+not remove the CI gates above. Evidence must be public-safe: no credentials,
+local/private paths, or links that a repository reader cannot access.
 
 Mark a merge request that must not land — a CI experiment, a spike — in both
 the title and the body, and say what to delete before it could be merged.

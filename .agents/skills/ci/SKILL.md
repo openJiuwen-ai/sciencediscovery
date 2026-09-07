@@ -26,9 +26,18 @@ comment the bot posts on it are in
 
 ## What runs where
 
+Here, the CI `e2e` layer and `pnpm ci:e2e` mean the mocked **browser subset**.
+E2E as a validation method also includes user journeys through public API,
+CLI and local-stack product entry points; see the
+[E2E skill](../e2e-testing/SKILL.md). Those journeys have their own documented
+driver commands and are not automatically run by the browser layer. Adapter
+smokes in `ci:st` are not E2E merely because they call a model. Keep layer
+names, entry points and pipeline scheduling unchanged when reporting this
+broader coverage.
+
 Three pipelines exist and none runs everything.
 
-| Pipeline | Trigger | UT | ST | E2E | Binary/resource output |
+| Pipeline | Trigger | UT | ST | Browser E2E subset | Binary/resource output |
 | --- | --- | --- | --- | --- | --- |
 | CodeArts — `.codearts/workflow/codearts-pipeline.yml` | merge request to `main` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh run | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | `ci:st` | off; the journeys reach a browser under emulation but outrun timeouts sized for native speed | x86_64 + aarch64 packages; smoke is host-dependent |
 | CodeArts resources — `.codearts/workflow/codearts-resources-pipeline.yml` on `ci/codearts-resources` | push to `ci/codearts-resources` | — | — | — | checksum-pinned toolchains and QEMU image uploaded to stable OBS keys |
