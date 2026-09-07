@@ -115,12 +115,14 @@ echo "authorizing @$COMMENTER against CODEOWNERS of $AUTH_BRANCH@$(git rev-parse
 if [[ -z "$OWNERS" ]]; then
   fail "❌ 自动合并失败：从 \`$AUTH_BRANCH\` 读到的 CODEOWNERS 没有任何 \`@用户名\`，无法核对授权。"
 fi
-# Membership is decided by bash alone. Written as a pipeline into `grep -q`
-# this could not tell "@x is not an owner" from "the check did not run": under
-# `pipefail` a grep that exits on the first match makes the writer's SIGPIPE
-# the pipeline's status, and a grep killed by anything else looks identical.
-# Every one of those renders as a refusal that names a real code owner, which
-# is what one CI run reported for a fixture that listed them.
+# Membership is decided by bash alone, because a pipeline's exit status cannot
+# answer this question honestly. `if ! ... | grep -q ...` reads every non-zero
+# status as "not an owner": a real miss, a grep or a writer the kernel killed,
+# or -- once the list is large enough that the writer needs a second write --
+# the SIGPIPE that grep's early exit sends it, which `pipefail` then reports as
+# the pipeline's status. One CI run refused a fixture that lists the commenter
+# as an owner. Which of those fired was never established, and that is the
+# point: a check that cannot say why it said no leaves nothing to investigate.
 is_owner=0
 while IFS= read -r owner; do
   if [[ "$owner" == "$COMMENTER_LOWER" ]]; then is_owner=1; fi
