@@ -20,6 +20,7 @@ const DEEP_AUTOMATIC_COOLDOWN_MS = 5 * 60_000;
 const DEEP_BATCH_QUIET_MS = 2 * 60_000;
 const QUICK_BATCH_QUIET_MS = 60_000;
 const AUTOMATIC_RETRY_WHILE_MAIN_BUSY_MS = 15_000;
+const READ_ONLY_FEEDBACK_POLICY: ReviewerFeedbackPolicy = "record";
 const TERMINAL = new Set<ReviewerAuditTask["status"]>(["cancelled", "completed", "failed", "superseded"]);
 
 export type ReviewerAuditExecutionResult = ArtifactReviewRun[] | { skipped: true };
@@ -70,7 +71,7 @@ export class ReviewerAuditCoordinator {
     return await this.createTask({
       artifactVersionIds: this.latestReportArtifactVersionIds(sessionId),
       checkpointMessageId: messageId,
-      feedbackPolicy: settings.feedbackPolicy,
+      feedbackPolicy: READ_ONLY_FEEDBACK_POLICY,
       origin: "manual",
       reviewLevel: settings.level,
       sessionId,
@@ -118,7 +119,7 @@ export class ReviewerAuditCoordinator {
     const task = await this.createTask({
       artifactVersionIds,
       checkpointMessageId,
-      feedbackPolicy: settings.feedbackPolicy,
+      feedbackPolicy: READ_ONLY_FEEDBACK_POLICY,
       origin: "artifact_registered",
       reviewLevel,
       sessionId: input.sessionId,
@@ -410,11 +411,13 @@ export class ReviewerAuditCoordinator {
     const critical = findings.filter((finding) => finding.severity === "critical").length;
     const warning = findings.filter((finding) => finding.severity === "warning").length;
     const inconclusive = reviews.filter((review) => review.smartStatus === "inconclusive").length;
-    const feedbackFingerprint = fingerprint({ artifactVersionIds: task.artifactVersionIds, reviewIds: reviews.map((review) => review.id), policy: task.feedbackPolicy });
-    const recordedOnly = task.feedbackPolicy === "record";
+    const feedbackFingerprint = fingerprint({
+      artifactVersionIds: task.artifactVersionIds,
+      policy: READ_ONLY_FEEDBACK_POLICY,
+      reviewIds: reviews.map((review) => review.id),
+    });
     return {
       artifactVersionIds: task.artifactVersionIds,
-      ...(recordedOnly ? { consumedAt: new Date().toISOString() } : {}),
       createdAt: new Date().toISOString(),
       feedbackFingerprint,
       id: randomUUID(),
@@ -424,10 +427,12 @@ export class ReviewerAuditCoordinator {
         message: finding.message.slice(0, 500),
         severity: finding.severity,
       })),
-      policy: task.feedbackPolicy,
+      policy: READ_ONLY_FEEDBACK_POLICY,
       reviewIds: reviews.map((review) => review.id),
       sessionId: task.sessionId,
-      status: recordedOnly ? "consumed" : "ready",
+      // Every completed review is handed to the lead Agent as read-only
+      // evidence at the next user-request boundary.
+      status: "ready",
       summary: { critical, inconclusive, warning },
       taskId: task.id,
     };

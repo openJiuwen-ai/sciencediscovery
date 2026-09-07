@@ -42,6 +42,7 @@ test("built-in Reviewer Specialist exposes the configured Quick/Deep control", (
   assert.match(html, /<option value="quick">Quick<\/option>/);
   assert.match(html, /<option value="deep" selected="">Deep<\/option>/);
   assert.doesNotMatch(html, /value="smart"/);
+  assert.doesNotMatch(html, /Completed-review handoff/);
   assert.match(html, /<select[^>]*disabled=""/);
   assert.match(html, /aria-checked="true"/);
 });

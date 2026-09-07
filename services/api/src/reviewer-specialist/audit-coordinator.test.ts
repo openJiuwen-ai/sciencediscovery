@@ -30,7 +30,7 @@ test("automatic audit is durable, non-blocking, and creates bounded feedback", a
   await store.load();
   const project = await store.createProject("Reviewer task");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "suggest", level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
   const registered = await store.createArtifactVersion({
     content: { hash: "a".repeat(64), size: 3 },
     kind: "markdown",
@@ -76,7 +76,7 @@ test("automatic audit is durable, non-blocking, and creates bounded feedback", a
   assert.equal(executions, 1);
   const feedback = await store.listReviewFeedback(session.id);
   assert.deepEqual(feedback[0]?.summary, { critical: 0, inconclusive: 0, warning: 0 });
-  assert.equal(feedback[0]?.policy, "suggest");
+  assert.equal(feedback[0]?.policy, "record");
   assert.equal(feedback[0]?.status, "ready");
 });
 

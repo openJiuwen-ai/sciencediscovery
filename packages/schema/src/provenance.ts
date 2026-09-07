@@ -249,6 +249,7 @@ export interface ReviewerAuditTask {
   checkpointPublishedAt?: string;
   createdAt: string;
   errorSummary?: string;
+  /** Legacy task metadata; new tasks always use the read-only record policy. */
   feedbackPolicy: ReviewerFeedbackPolicy;
   finishedAt?: string;
   id: string;
@@ -272,6 +273,7 @@ export interface ReviewFeedback {
   createdAt: string;
   feedbackFingerprint: string;
   id: string;
+  /** Legacy metadata; newly completed reviews are always read-only. */
   policy: ReviewerFeedbackPolicy;
   reviewIds: string[];
   /** Capped, location-preserving findings safe to hand to the lead Agent. */
