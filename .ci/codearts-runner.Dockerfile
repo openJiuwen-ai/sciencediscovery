@@ -43,6 +43,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 # because the default archive is slow from the build network. bubblewrap is
 # what the sandbox tests need, and the guest is started by a QEMU that has no
 # use for /dev/kvm, so nothing here is privileged.
+#
+# This list is not only what the CI scripts run: it is also every OS binary the
+# product's tests shell out to. That distinction cost a broken main. The
+# platform image this replaced was a general-purpose one that happened to carry
+# OpenSSH, so `packages/executor` could run `ssh-keygen -y` to check its
+# generated key against the reference implementation without anyone declaring
+# it. On a curated image that dependency is real, and the check at the end of
+# this step is what keeps it declared.
 RUN mirror="${APT_MIRROR:?APT_MIRROR is required}" \
  && sed -i "s|http://archive.ubuntu.com/ubuntu|$mirror|g; s|http://security.ubuntu.com/ubuntu|$mirror|g" \
       /etc/apt/sources.list.d/ubuntu.sources \
@@ -55,13 +63,17 @@ RUN mirror="${APT_MIRROR:?APT_MIRROR is required}" \
       file \
       git \
       gzip \
+      openssh-client \
       python3 \
       tar \
       unzip \
       xz-utils \
       zip \
       zstd \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && for tool in bash git python3 ssh-keygen; do command -v "$tool" >/dev/null \
+      || { echo "FATAL: the tests spawn $tool and this image does not have it." >&2; exit 1; }; \
+    done
 
 # Let the repository's own provisioning install the toolchain, from the same
 # checksum-pinned cache a run would use. Restating those checksums here would
@@ -119,12 +131,13 @@ RUN set -Eeuo pipefail \
 # the same kind of marker, and the one time it disagreed with what had been
 # published it cost a full debugging round to find out.
 RUN set -Eeuo pipefail \
- && { printf 'recipe=%s\n' "ci-runner-v1"; \
+ && { printf 'recipe=%s\n' "ci-runner-v2"; \
       printf 'ubuntu=%s\n' "$(. /etc/os-release && echo "$VERSION_ID")"; \
       printf 'node=%s\n' "$(node --version | sed 's/^v//')"; \
       printf 'pnpm=%s\n' "$(pnpm --version)"; \
       printf 'uv=%s\n' "$(uv --version | awk '{print $2}')"; \
       printf 'bubblewrap=%s\n' "$(bwrap --version | awk '{print $2}')"; \
+      printf 'openssh=%s\n' "$(dpkg-query --showformat='${Version}' --show openssh-client)"; \
       printf 'qemu=%s\n' "$(qemu-system-x86_64 --version | sed -n '1s/.*version \([0-9.]*\).*/\1/p')"; \
       printf 'qemu_runner_image_sha256=%s\n' "$QEMU_RUNNER_IMAGE_SHA256"; \
       printf 'source_commit=%s\n' "${SOURCE_COMMIT:-unknown}"; \

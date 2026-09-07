@@ -72,10 +72,10 @@ are built from this directory by
 
 | `RUNNER_IMAGE` | recipe | what it carries |
 | --- | --- | --- |
-| `sciencediscovery-ci-runner:latest` (console default) | [`codearts-runner.Dockerfile`](codearts-runner.Dockerfile) | node, pnpm, uv, bubblewrap, the QEMU emulator and the 3.1 GB guest image |
+| `sciencediscovery-ci-runner:latest` (console default) | [`codearts-runner.Dockerfile`](codearts-runner.Dockerfile) | node, pnpm, uv, bubblewrap, OpenSSH, the QEMU emulator and the 3.1 GB guest image |
 | `sciencediscovery-ci-light:latest` | [`codearts-light-runner.Dockerfile`](codearts-light-runner.Dockerfile) | git, python3, curl and a CA bundle |
 
-*How to tell which one ran*: the shell prints `image : recipe=ci-runner-v1` or
+*How to tell which one ran*: the shell prints `image : recipe=ci-runner-v2` or
 `recipe=ci-light-v1` on its second line, and `node/pnpm : none / none` on the
 light one.
 
