@@ -92,9 +92,15 @@ mkdir -p "$output_dir"
 output_dir="$(cd -- "$output_dir" && pwd)"
 
 assert_no_release_build_paths() { # <release artifact>
-  local artifact="$1" needle
+  local artifact="$1" needle pattern
+  # The match has to sit on path boundaries at both ends. A builder running as
+  # root has HOME=/root, and this artifact bundles the Model Context Protocol,
+  # whose own `/roots/list_changed` contains that string while disclosing
+  # nothing. A path that really leaked always begins and ends a component.
   for needle in "$repository_root" "$output_dir" "${HOME:-}" "${USERPROFILE:-}"; do
-    if [[ -n "$needle" ]] && grep -aFq -- "$needle" "$artifact"; then
+    if [[ -z "$needle" ]]; then continue; fi
+    pattern="$(printf '%s' "$needle" | sed 's/[][\.*^$(){}?+|/]/\\&/g')"
+    if grep -aEq -- "(^|[^[:alnum:]])$pattern([^[:alnum:]]|\$)" "$artifact"; then
       echo "Release artifact leaks a build-machine path: $needle" >&2
       exit 1
     fi
