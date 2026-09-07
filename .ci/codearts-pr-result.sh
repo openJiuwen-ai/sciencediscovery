@@ -174,7 +174,6 @@ LAYER_ROWS="$(layer_rows)"
 cat > "$RESULT_FILE" <<RESULT_HTML
 $HEADLINE
 <p>可在 <a href="$PR_CHECK_URL">$PR_CHECK_URL</a> 查看完整构建日志。</p>
-<p>如需重新验证，请更新并推送 PR 源分支；不要用 <code>rerun</code> 评论触发 CI 分支流水线。</p>
 <table style="border-collapse: collapse">
   <tr><th>任务名称</th><th>子任务</th><th>状态</th><th>详情</th></tr>
   <tr><td rowspan="4">代码检查</td><td>SCA（开源合规）</td><td>$SCA_RESULT</td><td>$SCA_LINK_CELL</td></tr>
