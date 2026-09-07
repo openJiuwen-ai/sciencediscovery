@@ -1731,7 +1731,6 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           details: result,
         };
       },
-      isConcurrencySafe: () => true,
       label: mcpTool.displayName,
       mcp: { sourceId: mcpTool.sourceId, toolId: mcpTool.toolId },
       name: mcpTool.name,

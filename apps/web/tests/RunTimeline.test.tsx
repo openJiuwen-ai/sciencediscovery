@@ -329,6 +329,30 @@ test("a stopped run closes the tool that was still in flight", () => {
   assert.equal(entries[1]?.type === "tool" && entries[1].trace.summary, "Run cancelled by the user");
 });
 
+test("cancelling a parallel batch preserves completed tools and closes every started tool", () => {
+  const entries = apply([
+    { trace: { id: "tool-completed", name: "web_search", status: "running" }, type: "tool.started" },
+    { trace: { id: "tool-running-a", name: "web_search", status: "running" }, type: "tool.started" },
+    { trace: { id: "tool-running-b", name: "task", status: "running" }, type: "tool.started" },
+    {
+      trace: { id: "tool-completed", name: "web_search", status: "completed", summary: "Found 3 results" },
+      type: "tool.completed",
+    },
+    { reason: "Run cancelled by the user", type: "run.cancelled" },
+  ]);
+
+  const tools = entries.filter((entry): entry is Extract<RunTimelineEntry, { type: "tool" }> => entry.type === "tool");
+  assert.deepEqual(tools.map((entry) => entry.trace.id), ["tool-completed", "tool-running-a", "tool-running-b"]);
+  assert.equal(tools[0]?.trace.status, "completed");
+  assert.equal(tools[0]?.trace.summary, "Found 3 results");
+  for (const tool of tools.slice(1)) {
+    assert.equal(tool.trace.status, "failed");
+    assert.equal(tool.trace.summary, "Run cancelled by the user");
+    assert.equal(tool.expanded, false);
+  }
+  assert.equal(tools.some((entry) => entry.trace.id === "tool-not-started"), false);
+});
+
 test("replay snapshots replace text and permission decisions stay in timeline order", () => {
   const pending = {
     action: "code" as const,

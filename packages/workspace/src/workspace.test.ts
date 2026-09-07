@@ -760,7 +760,7 @@ test("declare_claim omits the instruction reminder when the chip map is empty; f
   assert.equal(businessPayload.instruction, "re-call declare_evidence", "instruction forwarded on business error");
 });
 
-test("MCP tools retain deferred discovery and routing metadata", async () => {
+test("MCP tools retain metadata and remain exclusive unless explicitly classified", async () => {
   let received: unknown;
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
@@ -797,6 +797,7 @@ test("MCP tools retain deferred discovery and routing metadata", async () => {
   const tool = tools.find((candidate) => candidate.name === "mcp__uniprot__lookup");
   assert.ok(tool);
   assert.equal(tool.deferred, true);
+  assert.equal(tool.isConcurrencySafe, undefined, "opaque MCP tools must fail closed to exclusive execution");
   assert.deepEqual(tool.mcp, { sourceId: "uniprot", toolId: "lookup" });
   assert.deepEqual(tool.routing?.keywords, ["protein", "accession"]);
   const result = await tool.execute("call-1", { accession: "P04637" });
@@ -1692,4 +1693,3 @@ test("review_checkpoint exposes only versions and reason to its callback", async
   });
   assert.equal((result.details as { checkpoint: { status: string } }).checkpoint.status, "completed");
 });
-
