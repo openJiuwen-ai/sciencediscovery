@@ -72,7 +72,10 @@ result JSON independently, and renders one result comment with those four
 statuses, UT, ST, and both debug binary jobs. A second CodeArts
 pipeline, `codearts-auto-merge-pipeline.yml`, lands a merge request when a
 `CODEOWNERS` member comments `/merge` on it, through GitCode's merge API with
-`merge_method=rebase` (see the CodeArts reference). This repository
+`merge_method=rebase` (see the CodeArts reference). Both pipelines call build
+tasks whose images, parameters and shell are configured on the CodeArts
+console; `.ci/codearts-console.reference.md` mirrors that side, and changing
+the console without changing it has already cost a wasted CI round. This repository
 intentionally has no `.gitcode/workflows/` pipeline; do not reintroduce
 GitCode Actions unless the user changes that policy.
 

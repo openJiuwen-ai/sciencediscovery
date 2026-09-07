@@ -15,13 +15,12 @@ pipeline quota is exhausted, so every step is an
 parameterised with `SH_FILE_PATH`, `ARGS` and `ENVS`. Every x64 job uses
 `f0b81e4b4b554747b84171782f7a2b15`, and so does the auto-merge pipeline;
 aarch64 still uses `b6e9c483743d470d9725a1b23c6d1d91`. Which image that task
-runs in is a parameter: `RUNNER_IMAGE` is a bare `name:tag` under
-`swr.cn-north-4.myhuaweicloud.com/openjiuwen/`, defaulting on the console to
-`sciencediscovery-ci-runner:latest`, which carries the toolchain, the emulator
-and the 3.1 GB guest image. A job that opens none of those passes
-`sciencediscovery-ci-light:latest` instead and starts about forty seconds
-sooner. Both recipes are built by `.ci/build-codearts-runner-image.sh
---variant full|light`. That task's
+runs in is a parameter, so a job that opens neither the toolchain nor the
+guest image starts about forty seconds sooner on the light one. Everything
+configured on the console rather than here -- those tasks, the parameters they
+declare, their defaults, the private token and the shell they run -- is
+mirrored in `.ci/codearts-console.reference.md`, and a console change is not
+finished until that file changes with it. That task's
 console shell records the script's status and then reports success itself, so
 its OBS action uploads the log whatever the layer did. Passing
 `STRICT_EXIT: "1"` makes it propagate the status instead, and any job that has
