@@ -20,7 +20,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
@@ -192,17 +192,30 @@ const GIT_IDENTITY = {
   GIT_COMMITTER_NAME: "ci", GIT_COMMITTER_EMAIL: "ci@example.test",
 };
 
+// A fixture repository must never resolve to the repository this file lives
+// in. Two things could make it: git walking up out of the fixture if its
+// `.git` is not where this expects, and a GIT_DIR or GIT_WORK_TREE inherited
+// from whatever invoked the tests. The ceiling stops the walk at the fixture
+// root, so either mistake surfaces as "not a git repository" instead of
+// quietly reading the real CODEOWNERS -- which is how one CI run came to
+// report that @alice is not a code owner of a fixture that names her one.
+function gitEnvironment() {
+  const environment = { ...process.env, ...GIT_IDENTITY, GIT_CEILING_DIRECTORIES: testRoot };
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"]) {
+    delete environment[name];
+  }
+  return environment;
+}
+
 function git(cwd, ...args) {
-  const result = spawnSync("git", args, {
-    cwd, encoding: "utf8", env: { ...process.env, ...GIT_IDENTITY },
-  });
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", env: gitEnvironment() });
   assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
   return result.stdout.trim();
 }
 
 // A repository whose main branch carries CODEOWNERS and whose feature branch
 // is two commits ahead: merging is moving main to it.
-async function fixture(name) {
+async function fixture(name, codeowners) {
   await mkdir(testRoot, { recursive: true });
   const directory = await mkdtemp(join(testRoot, `${name}-`));
   const remote = join(directory, "remote.git");
@@ -210,7 +223,7 @@ async function fixture(name) {
   const work = join(directory, "work");
   git(directory, "init", "--bare", "--quiet", remote);
   git(directory, "-c", "init.defaultBranch=main", "init", "--quiet", seed);
-  await writeFile(join(seed, "CODEOWNERS"), "# owners\n* @Alice @carol\n", "utf8");
+  await writeFile(join(seed, "CODEOWNERS"), codeowners, "utf8");
   git(seed, "add", "-A");
   git(seed, "commit", "--quiet", "-m", "main");
   git(seed, "push", "--quiet", remote, "main");
@@ -224,6 +237,9 @@ async function fixture(name) {
   const head = git(seed, "rev-parse", "HEAD");
 
   git(directory, "-c", "init.defaultBranch=main", "init", "--quiet", work);
+  assert.equal(
+    await realpath(git(work, "rev-parse", "--show-toplevel")), await realpath(work),
+    "the fixture checkout resolved to another repository");
   git(work, "remote", "add", "origin", remote);
   await mkdir(join(work, ".ci"), { recursive: true });
   await copyFile(autoMergeScript, join(work, ".ci", "codearts-auto-merge.sh"));
@@ -231,8 +247,11 @@ async function fixture(name) {
   return { directory, remote, work, head };
 }
 
-async function run(name, { commenter = "alice", commentId = 7, commentedOn, pr = {}, mergeError } = {}) {
-  const { directory, remote, work, head } = await fixture(name);
+async function run(name, {
+  codeowners = "# owners\n* @Alice @carol\n",
+  commenter = "alice", commentId = 7, commentedOn, pr = {}, mergeError,
+} = {}) {
+  const { directory, remote, work, head } = await fixture(name, codeowners);
   const state = join(directory, "state.json");
   const log = join(directory, "comments.md");
   await writeFile(state, JSON.stringify({
@@ -256,7 +275,7 @@ async function run(name, { commenter = "alice", commentId = 7, commentedOn, pr =
     cwd: work,
     encoding: "utf8",
     env: {
-      ...process.env, ...GIT_IDENTITY,
+      ...gitEnvironment(),
       GITCODE_TOKEN: "test-token",
       CODEARTS_MERGE_ID: "74",
       CODEARTS_COMMIT_ID: commentedOn ?? head,
@@ -265,15 +284,19 @@ async function run(name, { commenter = "alice", commentId = 7, commentedOn, pr =
   });
   const comments = await readFile(log, "utf8").catch(() => "");
   const merged = git(remote, "rev-parse", "refs/heads/main") === head;
-  return { comments, directory, head, merged, result };
+  // The script names the CODEOWNERS it read and the state it saw on stdout.
+  // A failure that does not quote it costs a trip back to the machine that
+  // produced it, which for a CI-only failure is the whole investigation.
+  const report = `${name}\n${result.stdout}${result.stderr}`;
+  return { comments, directory, head, merged, report, result };
 }
 
 test("a CODEOWNER's /merge merges and reports the range it landed", async () => {
-  const { comments, merged, result } = await run("owner");
-  assert.equal(result.status, 0, result.stderr);
+  const { comments, merged, report, result } = await run("owner");
+  assert.equal(result.status, 0, report);
   assert.ok(merged, "the target branch must have moved");
   assert.match(comments, /🔄 收到 @alice/);
-  assert.match(comments, /✅ 自动合并完成/);
+  assert.match(comments, /✅ 自动合并完成/, report);
   assert.match(comments, /（2 个提交）/);
 });
 
@@ -282,11 +305,23 @@ test("CODEOWNERS is matched without regard to case", async () => {
   assert.equal(result.status, 0, result.stderr);
 });
 
+test("a CODEOWNERS with no owners in it is a broken lookup, not an empty club", async () => {
+  const { comments, merged, report, result } = await run("no-owners", {
+    codeowners: "# every line here is a comment\n",
+  });
+  assert.equal(result.status, 1, report);
+  assert.equal(merged, false, report);
+  assert.match(comments, /没有任何 `@用户名`/, report);
+  // Saying "@alice is not a code owner" when the file lists nobody at all
+  // sends whoever reads it looking for their own name instead of the file.
+  assert.doesNotMatch(comments, /不在 `main` 分支的 CODEOWNERS 中/);
+});
+
 test("a /merge from outside CODEOWNERS is refused and the branch stays put", async () => {
-  const { comments, merged, result } = await run("outsider", { commenter: "mallory" });
+  const { comments, merged, report, result } = await run("outsider", { commenter: "mallory" });
   assert.equal(result.status, 1);
   assert.equal(merged, false);
-  assert.match(comments, /@mallory 不在 `main` 分支的 CODEOWNERS 中/);
+  assert.match(comments, /@mallory 不在 `main` 分支的 CODEOWNERS 中/, report);
   assert.doesNotMatch(comments, /✅/);
 });
 
@@ -304,10 +339,10 @@ test("draft, closed, merged and conflicting merge requests each say why", async 
     ["already", { merged: "true" }, /已经合并/],
     ["conflict", { mergeable: "false" }, /有冲突/],
   ]) {
-    const { comments, merged, result } = await run(name, { pr });
-    assert.equal(result.status, 1, `${name} must fail the job`);
-    assert.equal(merged, false, `${name} must not merge`);
-    assert.match(comments, expected);
+    const { comments, merged, report, result } = await run(name, { pr });
+    assert.equal(result.status, 1, `${name} must fail the job: ${report}`);
+    assert.equal(merged, false, `${name} must not merge: ${report}`);
+    assert.match(comments, expected, report);
   }
 });
 

@@ -110,7 +110,22 @@ OWNERS="$(git show "origin/$AUTH_BRANCH:CODEOWNERS" \
   | sed -e 's/#.*//' | tr -s '[:space:]' '\n' | sed -n 's/^@//p' | tr '[:upper:]' '[:lower:]' | sort -u)"
 COMMENTER_LOWER="$(printf '%s' "$COMMENTER" | tr '[:upper:]' '[:lower:]')"
 echo "authorizing @$COMMENTER against CODEOWNERS of $AUTH_BRANCH@$(git rev-parse --short "origin/$AUTH_BRANCH"): $(printf '%s\n' "$OWNERS" | tr '\n' ' ')"
-if ! printf '%s\n' "$OWNERS" | grep -qx -- "$COMMENTER_LOWER"; then
+# An empty owner list is a broken lookup, not an empty club, and saying so is
+# the difference between "fix your CODEOWNERS" and "why am I not an owner".
+if [[ -z "$OWNERS" ]]; then
+  fail "❌ 自动合并失败：从 \`$AUTH_BRANCH\` 读到的 CODEOWNERS 没有任何 \`@用户名\`，无法核对授权。"
+fi
+# Membership is decided by bash alone. Written as a pipeline into `grep -q`
+# this could not tell "@x is not an owner" from "the check did not run": under
+# `pipefail` a grep that exits on the first match makes the writer's SIGPIPE
+# the pipeline's status, and a grep killed by anything else looks identical.
+# Every one of those renders as a refusal that names a real code owner, which
+# is what one CI run reported for a fixture that listed them.
+is_owner=0
+while IFS= read -r owner; do
+  if [[ "$owner" == "$COMMENTER_LOWER" ]]; then is_owner=1; fi
+done <<<"$OWNERS"
+if [[ "$is_owner" -eq 0 ]]; then
   fail "❌ 自动合并被拒绝：@$COMMENTER 不在 \`$AUTH_BRANCH\` 分支的 CODEOWNERS 中（以 \`$AUTH_BRANCH\` 上的文件为准，PR 里对 CODEOWNERS 的修改不生效），只有 CODEOWNERS 里的成员可以发送 \`/merge\`。"
 fi
 
