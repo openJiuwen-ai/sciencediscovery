@@ -83,3 +83,10 @@ unset _ci_constants_root _ci_constants_versions _ci_constants_version _ci_consta
 CI_QEMU_RUNNER_RECIPE=qemu-runner-v2
 
 CI_OBS_CACHE_BASE=https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/sciencediscovery/cache
+
+# Where the build-task images install their packages from. Over http, because
+# an Ubuntu base image ships no CA bundle and the first thing that would need
+# one is the request that installs it; apt verifies package signatures either
+# way. Both image recipes take this as a build argument rather than spelling it
+# out, so a mirror change cannot reach one image and miss the other.
+CI_APT_MIRROR=http://repo.huaweicloud.com/ubuntu

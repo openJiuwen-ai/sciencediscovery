@@ -30,6 +30,7 @@
 
 FROM ubuntu:24.04
 
+ARG APT_MIRROR
 ARG CI_OBS_CACHE_BASE
 ARG CI_NPM_REGISTRY
 ARG QEMU_RUNNER_IMAGE_SHA256
@@ -38,13 +39,12 @@ ARG SOURCE_COMMIT
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
-# The mirror the rest of CI already uses; the default archive is slow from the
-# build network. Over http, because the base image ships no CA bundle and the
-# first thing that would need one is the request that installs it -- the stock
-# sources are http for the same reason, and apt verifies package signatures
-# either way. bubblewrap is what the sandbox tests need, and the guest is
-# started by a QEMU that has no use for /dev/kvm, so nothing here is privileged.
-RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://repo.huaweicloud.com/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://repo.huaweicloud.com/ubuntu|g' \
+# The mirror the rest of CI already uses -- ci-constants.sh owns the address --
+# because the default archive is slow from the build network. bubblewrap is
+# what the sandbox tests need, and the guest is started by a QEMU that has no
+# use for /dev/kvm, so nothing here is privileged.
+RUN mirror="${APT_MIRROR:?APT_MIRROR is required}" \
+ && sed -i "s|http://archive.ubuntu.com/ubuntu|$mirror|g; s|http://security.ubuntu.com/ubuntu|$mirror|g" \
       /etc/apt/sources.list.d/ubuntu.sources \
  && apt-get update \
  && apt-get install --yes --no-install-recommends \

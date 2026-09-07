@@ -37,7 +37,12 @@ fail() { printf 'FATAL: %s\n' "$*" >&2; exit 2; }
 
 log "=== ScienceDiscovery run-shell task ==="
 log "image     : $(cat /etc/sciencediscovery-ci-runner 2>/dev/null || echo unlabelled)"
-log "node/pnpm : $(node --version) / $(pnpm --version)"
+# Two images run this same shell. The full one carries the toolchain for the
+# test layers; the light one carries git and python3 for a job that needs
+# neither, and pulls in a second instead of forty. So report the toolchain
+# rather than require it: a layer that needs node then fails inside the layer,
+# where the reason is legible, instead of on this banner.
+log "node/pnpm : $(node --version 2>/dev/null || echo none) / $(pnpm --version 2>/dev/null || echo none)"
 log "repository: $REPO_DIR"
 cd -- "$REPO_DIR"
 
