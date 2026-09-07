@@ -80,6 +80,115 @@ test("automatic audit is durable, non-blocking, and creates bounded feedback", a
   assert.equal(feedback[0]?.status, "ready");
 });
 
+test("feedback persistence failure leaves the audit task failed instead of completed", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-feedback-failure-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer feedback failure");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  const registered = await store.createArtifactVersion({
+    content: { hash: "1".repeat(64), size: 3 },
+    kind: "markdown",
+    logicalName: "result.md",
+    mediaType: "text/markdown",
+    origin: "llm_declared",
+    sessionId: session.id,
+    sourcePath: "result.md",
+  });
+  const originalAppend = store.appendReviewFeedback.bind(store);
+  store.appendReviewFeedback = async (feedback) => {
+    throw new Error("feedback write failed");
+  };
+  const coordinator = new ReviewerAuditCoordinator(store, {
+    run: async (task): Promise<ArtifactReviewRun[]> => [{
+      artifactContentHash: registered.version.content.hash,
+      artifactId: registered.artifact.id,
+      artifactLogicalName: registered.artifact.logicalName,
+      artifactVersionId: registered.version.id,
+      checkpointId: task.id,
+      createdAt: new Date().toISOString(),
+      decision: "ACCEPT_AND_PROCEED",
+      finishedAt: new Date().toISOString(),
+      findings: [],
+      id: `review-${task.id}`,
+      reviewerSpecialistVersion: "test",
+      reviewLevel: "quick",
+      sessionId: task.sessionId,
+      status: "completed",
+      toolCallId: task.toolCallId,
+    }],
+  }, { quickBatchQuietMs: 0 });
+
+  const task = await coordinator.enqueueArtifactVersion({
+    artifactVersionId: registered.version.id,
+    contentHash: registered.version.content.hash,
+    mediaType: registered.version.mediaType,
+    sessionId: session.id,
+  });
+  assert.ok(task);
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id))[0]?.status === "failed");
+  assert.equal((await store.listReviewerAuditTasks(session.id))[0]?.errorSummary, "feedback write failed");
+  assert.deepEqual(await store.listReviewFeedback(session.id), []);
+  store.appendReviewFeedback = originalAppend;
+});
+
+test("automatic lane is released when checkpoint admission fails", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-lane-failure-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer lane failure");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  const first = await store.createArtifactVersion({
+    content: { hash: "2".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "first.md",
+  });
+  const second = await store.createArtifactVersion({
+    content: { hash: "3".repeat(64), size: 1 }, kind: "markdown", logicalName: "second.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "second.md",
+  });
+  const originalAppend = store.appendReviewerCheckpointMessage.bind(store);
+  let failOnce = true;
+  store.appendReviewerCheckpointMessage = async (...args) => {
+    if (failOnce) {
+      failOnce = false;
+      throw new Error("checkpoint write failed");
+    }
+    return await originalAppend(...args);
+  };
+  let executions = 0;
+  const coordinator = new ReviewerAuditCoordinator(store, {
+    run: async () => {
+      executions += 1;
+      return [];
+    },
+  }, { quickBatchQuietMs: 0 });
+
+  const firstTask = await coordinator.enqueueArtifactVersion({
+    artifactVersionId: first.version.id,
+    contentHash: first.version.content.hash,
+    mediaType: first.version.mediaType,
+    sessionId: session.id,
+  });
+  assert.ok(firstTask);
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id))[0]?.status === "failed");
+  const secondTask = await coordinator.enqueueArtifactVersion({
+    artifactVersionId: second.version.id,
+    contentHash: second.version.content.hash,
+    mediaType: second.version.mediaType,
+    sessionId: session.id,
+  });
+  assert.ok(secondTask);
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id)).some((item) => item.id === secondTask.id && item.status === "completed"));
+  assert.equal(executions, 1);
+  store.appendReviewerCheckpointMessage = originalAppend;
+});
+
 test("automatic audit batches artifacts and retains only each Artifact's newest queued version", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `reviewer-batch-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });

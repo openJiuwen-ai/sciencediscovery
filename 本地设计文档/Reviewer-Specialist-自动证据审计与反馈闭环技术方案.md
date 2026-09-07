@@ -116,8 +116,8 @@ interface ReviewFeedback {
 
 - 任务、`ArtifactReviewRun` 和 `ReviewFeedback` 均可通过 API 查询。
 - Web 在任务处于排队或运行状态时短轮询查询结果，审核卡片无需手动刷新即可更新。
-- 若现有上下文入口读取 `ReviewFeedback`，只追加审核原文支持的只读信息；不触发主 Agent 的新流程，不修改 Artifact，不调用外部工具。
-- `ReviewFeedback` 成功被读取后才标记为 `consumed`，避免刷新或重试导致重复消费。
+- 审核 checkpoint 消息和反馈查询接口只暴露审核原文支持的只读信息；不触发主 Agent 的新流程，不修改 Artifact，不调用外部工具。
+- `ReviewFeedback` 默认保持 `ready`，由查询方按需读取；本迭代不自动消费反馈，也不修改主 Agent 的输入或执行流程。
 
 ## 5. 可保留的实现保护
 
@@ -140,7 +140,6 @@ interface ReviewFeedback {
 | Reviewer | `services/api/src/reviewer-specialist/audit-coordinator.ts` | 自动入队、异步执行、状态流转、反馈生成 |
 | 持久化 | `services/api/src/store.ts`、`packages/schema/src/provenance.ts` | 任务、审核运行和结构化反馈的保存与查询 |
 | API | `services/api/src/http/index.ts` | 任务/审核/反馈查询及手动审核兼容入口 |
-| 上下文适配 | `services/api/src/runs/index.ts` | 仅允许只读反馈可见；不增加主 Agent 行为 |
 | Web | `apps/web/src/App.tsx`、Reviewer 相关组件 | 状态轮询和结果展示；不执行审核或修订 |
 
 不新增 Reviewer 以外的通用任务、事件、策略或修复模块。

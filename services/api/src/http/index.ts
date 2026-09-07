@@ -236,7 +236,6 @@ import { contentTypeForPath, serveStatic } from "./static.js";
 import {
   ApiStatusError,
   cancelCurrentSessionRun,
-  cancelReviewerSpecialist,
   cancelSessionRun,
   stopSessionSubagent,
   createSkillEvolutionRun,
@@ -2494,15 +2493,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const cancelReviewerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/cancel$/);
       if (cancelReviewerMatch && request.method === "POST") {
         const sessionId = cancelReviewerMatch[1]!;
-        // Automatic batches intentionally have no visible checkpoint during
-        // their quiet window. They are nevertheless cancellable; falling
-        // through to the legacy checkpoint-only path would incorrectly return
-        // 404/409 and leave the queued batch alive.
-        if (await reviewerAuditCoordinator.cancelSession(sessionId)) {
-          sendJson(response, 200, { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);
-          return;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        // Automatic and manual Reviewer tasks are owned by the coordinator;
+        // do not route cancellation through the main-Agent run controller.
+        if (!await reviewerAuditCoordinator.cancelSession(sessionId)) {
+          return sendError(response, 409, "No Reviewer Specialist review is active for this session");
         }
-        await cancelReviewerSpecialist(response, store, sessionId);
+        sendJson(response, 200, { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);
         return;
       }
       const manualReviewerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/review$/);

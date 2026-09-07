@@ -348,17 +348,18 @@ export class ReviewerAuditCoordinator {
           }
           this.automaticTaskId = task.id;
         }
-        const published = await this.publishCheckpoint(task);
-        const running = await this.store.updateReviewerAuditTask(sessionId, task.id, {
-          startedAt: new Date().toISOString(), status: "running",
-        });
-        if (running.status !== "running") {
-          if (this.automaticTaskId === task.id) this.automaticTaskId = undefined;
-          continue;
-        }
-        const controller = new AbortController();
-        this.active.set(task.id, controller);
+        let controller: AbortController | undefined;
         try {
+          // Keep admission inside the same guarded section as execution. A
+          // storage failure while publishing the checkpoint or claiming the
+          // task must still release the process-wide automatic lane.
+          const published = await this.publishCheckpoint(task);
+          const running = await this.store.updateReviewerAuditTask(sessionId, task.id, {
+            startedAt: new Date().toISOString(), status: "running",
+          });
+          if (running.status !== "running") continue;
+          controller = new AbortController();
+          this.active.set(task.id, controller);
           const outcome = await this.execution.run({ ...running, checkpointPublishedAt: published.checkpointPublishedAt }, controller.signal);
           const settled = await this.store.listReviewerAuditTasks(sessionId);
           if (settled.find((item) => item.id === task.id)?.status === "cancelled") continue;
@@ -375,12 +376,15 @@ export class ReviewerAuditCoordinator {
           }
           const reviews = outcome;
           const reviewIds = reviews.map((review) => review.id);
+          // Persist the handoff before declaring the task complete. Otherwise
+          // a transient feedback-file failure can leave a completed task with
+          // no ready feedback and no retry path.
+          await this.store.appendReviewFeedback(this.feedbackFor(running, reviews));
           await this.store.updateReviewerAuditTask(sessionId, task.id, {
             finishedAt: new Date().toISOString(), reviewIds, status: "completed",
           });
-          await this.store.appendReviewFeedback(this.feedbackFor(running, reviews));
         } catch (error) {
-          const cancelled = controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
+          const cancelled = Boolean(controller?.signal.aborted) || (error instanceof DOMException && error.name === "AbortError");
           const current = (await this.store.listReviewerAuditTasks(sessionId)).find((item) => item.id === task.id);
           if (!current || TERMINAL.has(current.status)) continue;
           await this.store.updateReviewerAuditTask(sessionId, task.id, {
@@ -389,7 +393,7 @@ export class ReviewerAuditCoordinator {
             status: cancelled ? "cancelled" : "failed",
           });
         } finally {
-          this.active.delete(task.id);
+          if (controller) this.active.delete(task.id);
           if (this.automaticTaskId === task.id) this.automaticTaskId = undefined;
         }
       }

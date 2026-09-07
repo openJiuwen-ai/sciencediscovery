@@ -2089,16 +2089,18 @@ export async function cancelQueuedRunBeforeExecution(
   return cancelled;
 }
 
-/**
- * Reviewer checkpoints are not SessionRuns: a manual review is a request-scoped
- * operation, while an Agent-triggered review is nested inside an Agent run.
- * Keep their cancellation isolated so a user can stop review work without
- * stopping the main Agent.
- */
-async function cancelReviewerSpecialistForSession(
+export async function cancelCurrentSessionRun(
+  response: ServerResponse,
   store: SessionStore,
   sessionId: string,
-): Promise<boolean> {
+  legacyResponse = false,
+): Promise<void> {
+  if (!store.getSession(sessionId)) {
+    sendError(response, 404, "Session not found");
+    return;
+  }
+  // Manual Reviewer runs do not create a SessionRun, so Stop must cancel its
+  // own per-Session controller as well as the main Agent run when one exists.
   const reviewerCancelled = cancelReviewerCheckpoints(sessionId);
   // The controller map is intentionally in-process. If an API process was
   // restarted (or a request was routed to a sibling process), there can still
@@ -2117,40 +2119,14 @@ async function cancelReviewerSpecialistForSession(
       });
     }
   }
-  return reviewerCancelled || runningReviewerMessages.length > 0;
-}
-
-/** Stop only the active Reviewer Specialist work for a Session. */
-export async function cancelReviewerSpecialist(
-  response: ServerResponse,
-  store: SessionStore,
-  sessionId: string,
-): Promise<void> {
-  if (!store.getSession(sessionId)) {
-    sendError(response, 404, "Session not found");
-    return;
-  }
-  if (!await cancelReviewerSpecialistForSession(store, sessionId)) {
-    sendError(response, 409, "No Reviewer Specialist review is active for this session");
-    return;
-  }
-  sendJson(response, 200, { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);
-}
-
-export async function cancelCurrentSessionRun(
-  response: ServerResponse,
-  store: SessionStore,
-  sessionId: string,
-  legacyResponse = false,
-): Promise<void> {
-  if (!store.getSession(sessionId)) {
-    sendError(response, 404, "Session not found");
-    return;
-  }
   const active = await findCurrentCancelableRun(store, sessionId);
   if (!active) {
-    // Reviewer checkpoints use their own cancellation endpoint. A main Agent
-    // stop must not terminate an independent review.
+    if (reviewerCancelled || runningReviewerMessages.length) {
+      sendJson(response, legacyResponse ? 202 : 200, legacyResponse
+        ? { cancelled: true, sessionId }
+        : { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);
+      return;
+    }
     sendError(response, 409, "No run is active for this session");
     return;
   }
@@ -2455,7 +2431,7 @@ export async function createQueuedRun(
   if (session.archivedAt) throw new ApiStatusError(409, "Session is archived and read-only");
   const submittedPrompt = body.content?.trim();
   const slashRefresh = submittedPrompt?.startsWith("/web-refresh ");
-  let prompt = slashRefresh ? submittedPrompt.slice("/web-refresh ".length).trim() : submittedPrompt;
+  const prompt = slashRefresh ? submittedPrompt.slice("/web-refresh ".length).trim() : submittedPrompt;
   if (!prompt) throw new ApiStatusError(400, "Message content is required");
   let references: ComposerReference[];
   try {
@@ -2471,27 +2447,6 @@ export async function createQueuedRun(
     skillLibraryRefs = mergeSkillLibraryRefs(configuredRefs, declaredRefs);
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Skill library references are invalid");
-  }
-  // Audit feedback is a bounded, read-only handoff. Consume it only after
-  // client input has been validated, at the new user-request boundary—not in
-  // an in-flight model call—so a rejected submission never loses feedback.
-  const readyFeedback = (await store.listReviewFeedback(sessionId))
-    .filter((feedback) => feedback.status === "ready")
-    // Keep any remaining ready records for a later user-request boundary.
-    .slice(0, 4);
-  const acceptedFeedback = [] as typeof readyFeedback;
-  for (const feedback of readyFeedback) {
-    if (await store.consumeReviewFeedback(sessionId, feedback.id)) acceptedFeedback.push(feedback);
-  }
-  if (acceptedFeedback.length) {
-    const summary = acceptedFeedback.map((feedback) => {
-      const counts = `review: ${feedback.summary.critical} critical, ${feedback.summary.warning} warning, ${feedback.summary.inconclusive} inconclusive`;
-      const findings = feedback.findings.slice(0, 6).map((finding) =>
-        `- ${finding.severity} ${finding.code}: ${finding.message} [${finding.evidenceRefs.join(", ")}]`,
-      ).join("\n");
-      return `${counts}${findings ? `\n${findings}` : ""}`;
-    }).join("\n");
-    prompt = `${prompt}\n\n[Reviewer audit evidence]\n${summary}\nTreat this as read-only evidence. Use only what the review supports; do not modify Artifacts or perform external side effects based on this evidence alone.`;
   }
   if (skillAuthoringCommandPrompt(prompt)) {
     settingsSnapshot.enabledSkillIds = [...new Set([...settingsSnapshot.enabledSkillIds, "skill-creator"])];
