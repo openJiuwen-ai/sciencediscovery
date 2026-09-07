@@ -79,6 +79,24 @@ test("ReviewerPanel shows missing citation identifiers", () => {
   assert.match(html, /class="warning"/);
 });
 
+test("ReviewerPanel calls a missing academic citation a standard citation", () => {
+  const finding = {
+    code: "CITATION_MARKER_MISSING",
+    evidenceRefs: ["artifact:version-1"],
+    id: "finding-1",
+    message: "Add [1] next to the claim and match it to the reference list.",
+    severity: "warning" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ decision: "REVISE_AND_RETRY", findings: [finding] })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Standard citation missing/);
+  assert.doesNotMatch(html, /Citation marker missing/);
+});
+
 test("ReviewerPanel keeps only actionable findings and hides Deep operational incompleteness", () => {
   const finding = {
     code: "COMPUTATION_EVIDENCE_VALUE_MISMATCH",

@@ -206,13 +206,11 @@ export function offlineCitationPrecheck(content: Buffer, versionId: string): {
   const numericMarkers = [...prose.matchAll(/(?:\[|【)(\d+(?:\s*[-,，]\s*\d+)*)(?:\]|】)/gu)]
     .flatMap((match) => match[1]!.split(/\s*[-,，]\s*/u));
   const footnoteMarkers = [...prose.matchAll(/\[\^([^\]]+)\]/gu)].map((match) => match[1]!);
-  const evidenceMarkers = [...prose.matchAll(/\[(ev\d+)\]/giu)].map((match) => match[1]!);
   const hasAuthorYearMarker = /\([^()\n]*(?:19|20)\d{2}[a-z]?[^()\n]*\)|\bet al\.,?\s*(?:\(|,)?\s*(?:19|20)\d{2}\b/iu.test(prose);
   const hasSuperscriptMarker = /<sup>\s*\d+(?:\s*[-,]\s*\d+)*\s*<\/sup>|[¹²³⁴⁵⁶⁷⁸⁹⁰]+/iu.test(prose);
   const hasInlineSourceLink = /\[[^\]]+\]\(https?:\/\/[^)]+\)|https?:\/\/\S+/iu.test(prose);
   const hasInlineMarker = numericMarkers.length > 0
     || footnoteMarkers.length > 0
-    || evidenceMarkers.length > 0
     || hasAuthorYearMarker
     || hasSuperscriptMarker
     || hasInlineSourceLink;
@@ -254,7 +252,7 @@ export function offlineCitationPrecheck(content: Buffer, versionId: string): {
       code: "CITATION_MARKER_MISSING",
       evidenceRefs: [`artifact:${versionId}`],
       id: randomUUID(),
-      message: "A source identifier was found, but no inline citation marker links it to the text.",
+      message: "The reference list contains a literature source, but the report body has no matching standard citation. Add a numbered marker such as [1] immediately after each supported claim and ensure [1] maps to the same numbered reference entry. [evidenceN] is an internal provenance tag, not a replacement for an academic citation.",
       severity: "warning",
       status: "open",
     });

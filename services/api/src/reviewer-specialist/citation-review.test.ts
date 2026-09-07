@@ -69,6 +69,7 @@ test("offline MVP reports a source without an inline citation marker", () => {
   );
   assert.equal(result.decision, "REVISE_AND_RETRY");
   assert.equal(result.findings[0]?.code, "CITATION_MARKER_MISSING");
+  assert.match(result.findings[0]?.message ?? "", /numbered marker such as \[1\]/);
 });
 
 test("Deep citation candidate requires an explicit literature reference", () => {
@@ -99,12 +100,15 @@ test("Quick citation review accepts Markdown footnotes and Chinese numeric marke
   assert.equal(chinese.decision, "ACCEPT_AND_PROCEED");
 });
 
-test("Quick citation review accepts an Evidence chip as an inline marker", () => {
+test("Quick citation review does not treat a provenance chip as an academic citation", () => {
   const result = offlineCitationPrecheck(
-    Buffer.from("The reported result is supported by graph evidence [ev1].\nDOI: 10.1000/example"),
+    Buffer.from("The reported result is supported by graph evidence [evidence1].\n\n## References\n1. Example et al. DOI: 10.1000/example [evidence1]"),
     "version-1",
   );
-  assert.equal(result.findings.some((finding) => finding.code === "CITATION_MARKER_MISSING"), false);
+  const finding = result.findings.find((item) => item.code === "CITATION_MARKER_MISSING");
+  assert.equal(result.decision, "REVISE_AND_RETRY");
+  assert.ok(finding);
+  assert.match(finding.message, /\[evidenceN\].*not a replacement for an academic citation/i);
 });
 
 test("Quick citation review reports only obvious dangling or unfinished references", () => {

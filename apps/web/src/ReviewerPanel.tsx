@@ -55,7 +55,7 @@ function findingType(code: string): string {
     CITATION_CLAIM_NOT_SUPPORTED: "Citation claim unsupported",
     CITATION_EVIDENCE_ALIAS_UNRESOLVED: "Evidence reference missing",
     CITATION_IDENTIFIER_MISSING: "Citation identifier missing",
-    CITATION_MARKER_MISSING: "Citation marker missing",
+    CITATION_MARKER_MISSING: "Standard citation missing",
     CITATION_REFERENCE_MISSING: "Citation reference missing",
     CITATION_SOURCE_UNAVAILABLE: "Citation source unavailable",
     ARTIFACT_JSON_INVALID: "Invalid JSON",

@@ -295,6 +295,38 @@ test("Reviewer checkpoint feedback exposes findings to the next model context", 
   assert.match(partial, /available for the next main-Agent action/);
 });
 
+test("Reviewer checkpoint explains that provenance chips do not replace academic citations", () => {
+  const review = {
+    artifactContentHash: "hash",
+    artifactId: "artifact-1",
+    artifactLogicalName: "survey.md",
+    artifactVersionId: "version-1",
+    checkpointId: "checkpoint-1",
+    createdAt: "2026-09-04T00:00:00.000Z",
+    decision: "REVISE_AND_RETRY",
+    findings: [{
+      code: "CITATION_MARKER_MISSING",
+      evidenceRefs: ["artifact:version-1"],
+      id: "finding-1",
+      message: "The report body has no matching standard citation.",
+      severity: "warning",
+      status: "open",
+    }],
+    finishedAt: "2026-09-04T00:00:01.000Z",
+    id: "review-1",
+    reviewerSpecialistVersion: "1.0.0",
+    reviewLevel: "quick" as const,
+    sessionId: "session-1",
+    status: "completed",
+  } satisfies ArtifactReviewRun;
+
+  const content = reviewerCheckpointPromptContent([review]);
+  assert.match(content, /report-writing issue, not a missing Paper\/Evidence-node issue/i);
+  assert.match(content, /standard numbered citation such as \[1\], \[2\]/i);
+  assert.match(content, /\[evidenceN\].*does not replace \[1\]/i);
+  assert.match(content, /Do not call declare_evidence merely to fix this formatting finding/i);
+});
+
 test("Reviewer checkpoint failure is context, not an Artifact defect", () => {
   const content = reviewerCheckpointPromptContent([], "memory graph unavailable");
   assert.match(content, /Status: FAILED/);

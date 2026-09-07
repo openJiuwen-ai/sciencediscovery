@@ -228,6 +228,10 @@ test("memory graph prompt lays out the citation-chain flow in order", () => {
   assert.match(prompt, /artifact\+number for artifacts \(e\.g\. \[artifact1\]\)/i);
   assert.match(prompt, /sourcefile\+number for uploaded data files \(e\.g\. \[sourcefile1\]\)/i);
   assert.match(prompt, /no other formats/i);
+  // Provenance chips remain distinct from standard scholarly citations.
+  assert.match(prompt, /Academic citations are separate from provenance chips/i);
+  assert.match(prompt, /standard marker such as \[1\]/i);
+  assert.match(prompt, /never treat it as a substitute for \[1\]/i);
   // Silence rule: do not narrate declare/query steps to the user.
   assert.match(prompt, /Do NOT narrate these steps to the user/i);
   assert.match(prompt, /never say .*I will declare these files as artifacts/i);
