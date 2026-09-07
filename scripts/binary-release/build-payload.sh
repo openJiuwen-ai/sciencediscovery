@@ -120,13 +120,14 @@ assert_no_build_paths() { # <payload root>
   local root="$1" needle pattern leaks=""
   # Exact current-machine roots avoid treating valid runtime constants such as
   # /tmp or URL paths containing /home/ as build-machine disclosure. The match
-  # also has to end on a path boundary: a builder running as root has HOME=/root,
-  # and a substring search for that flags every file mentioning the Model Context
-  # Protocol's own `/roots/list_changed`, which discloses nothing.
+  # also has to sit on path boundaries at both ends: a builder running as root
+  # has HOME=/root, and a substring search for that flags the Model Context
+  # Protocol's own `/roots/list_changed` on the right and a fixture path like
+  # `/workspace/root script.sh` on the left. Neither discloses anything.
   for needle in "$repository_root" "$shared_dir" "$output" "${HOME:-}" "${USERPROFILE:-}"; do
     if [[ -n "$needle" ]]; then
       pattern="$(printf '%s' "$needle" | sed 's/[][\\.*^$(){}?+|/]/\\&/g')"
-      leaks+="$(grep -rIlE -- "$pattern([^[:alnum:]]|\$)" "$root" || true)"$'\n'
+      leaks+="$(grep -rIlE -- "(^|[^[:alnum:]])$pattern([^[:alnum:]]|\$)" "$root" || true)"$'\n'
     fi
   done
   leaks+="$(grep -rIlE '\.missioncrew|MissionCrew|\.worktrees' "$root" || true)"
