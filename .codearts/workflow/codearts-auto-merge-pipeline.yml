@@ -37,9 +37,10 @@ stages:
         timeout: 20
         timeout_unit: minute
         steps:
-        - name: Run the auto merge on the x64 build task
+        - name: Run the auto merge on the light image
           uses: official_devcloud_cloudBuild
           with:
+            RUNNER_IMAGE: sciencediscovery-ci-light:latest
             GIT_REPO_URL: https://gitcode.com/openJiuwen/sciencediscovery.git
             GIT_REF: refs/heads/main
             GIT_TARGET_REF: refs/heads/main

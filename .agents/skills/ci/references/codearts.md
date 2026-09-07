@@ -13,9 +13,15 @@ no shell of its own. CodeArts bills pipelines and build tasks separately; the
 pipeline quota is exhausted, so every step is an
 `official_devcloud_cloudBuild` invocation of a generic run-shell task,
 parameterised with `SH_FILE_PATH`, `ARGS` and `ENVS`. Every x64 job uses
-`f0b81e4b4b554747b84171782f7a2b15`, whose container image already carries the
-toolchain and the QEMU guest image, and the auto-merge pipeline calls the same
-task; aarch64 still uses `b6e9c483743d470d9725a1b23c6d1d91`. That task's
+`f0b81e4b4b554747b84171782f7a2b15`, and so does the auto-merge pipeline;
+aarch64 still uses `b6e9c483743d470d9725a1b23c6d1d91`. Which image that task
+runs in is a parameter: `RUNNER_IMAGE` is a bare `name:tag` under
+`swr.cn-north-4.myhuaweicloud.com/openjiuwen/`, defaulting on the console to
+`sciencediscovery-ci-runner:latest`, which carries the toolchain, the emulator
+and the 3.1 GB guest image. A job that opens none of those passes
+`sciencediscovery-ci-light:latest` instead and starts about forty seconds
+sooner. Both recipes are built by `.ci/build-codearts-runner-image.sh
+--variant full|light`. That task's
 console shell records the script's status and then reports success itself, so
 its OBS action uploads the log whatever the layer did. Passing
 `STRICT_EXIT: "1"` makes it propagate the status instead, and any job that has
@@ -59,8 +65,9 @@ workflow it cannot be rehearsed on `ci/verify-pr-ci`: a change here only takes
 effect once it is on `main`. The pipeline
 itself only routes the trigger: its single job is an
 `official_devcloud_cloudBuild` step that runs `.ci/codearts-auto-merge.sh` on
-the same x64 build task the test layers use, because pipeline executor minutes
-ran out. `.ci/gitcode-merge-request.py` makes the GitCode
+the same x64 build task the test layers use -- pipeline executor minutes ran
+out -- pointed by `RUNNER_IMAGE` at the light image, since it needs no
+toolchain. `.ci/gitcode-merge-request.py` makes the GitCode
 calls, and `.ci/auto-merge.test.mjs` rehearses every decision against a
 fixture repository and a fake API.
 

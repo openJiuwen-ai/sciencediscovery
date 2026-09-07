@@ -140,6 +140,10 @@ test("the pipeline runs the merge on a build task, not on a pipeline executor", 
   // request: a merge request must not be able to edit what merges it.
   assert.match(pipeline, /GIT_REF: refs\/heads\/main/);
   assert.match(pipeline, /merge_comment: \/merge/);
+  // The task is shared with the test layers, whose image carries a toolchain,
+  // an emulator and a 3.1 GB guest image. This job opens none of them, and the
+  // pull was half of the first run's eighty-six seconds.
+  assert.match(pipeline, /RUNNER_IMAGE: sciencediscovery-ci-light:latest/);
 });
 
 test("the pipeline names a real build task", async () => {
