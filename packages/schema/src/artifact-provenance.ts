@@ -66,6 +66,14 @@ export interface ScientificArtifactVersion {
   version: number;
 }
 
+/** One declared Artifact version produced in a Session. The client assigns it
+ * to the visible top-level Run from `version.turnId`; keeping that derived
+ * relationship out of the Catalog preserves the original execution lineage. */
+export interface SessionArtifactOutput {
+  artifact: ScientificArtifact;
+  version: ScientificArtifactVersion;
+}
+
 /** Line range returned for one `read_artifact` page. */
 export interface ArtifactTextPage {
   bytes: number;

@@ -285,6 +285,25 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .copy-button.failed { border-color: var(--danger-border); color: var(--danger); opacity: 1; }
 .message > .message-usage-inline { grid-column: 2; margin: 10px 0 18px; }
 .message-usage-inline { margin: 8px 0 18px 55px; color: var(--text-faint); font-size: 11px; font-weight: 600; line-height: 1.45; }
+.conversation-artifact-list { width: calc(100% - 55px); max-width: 765px; margin: -4px 0 18px 55px; border: 1px solid var(--accent-border); border-radius: var(--radius-m); background: var(--surface); box-shadow: var(--shadow-1); }
+.conversation-artifact-list > header { display: flex; align-items: center; min-height: 36px; border-bottom: 1px solid var(--accent-border); padding: 0 12px; background: var(--accent-soft); }
+.conversation-artifact-list > header > span { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.conversation-artifact-list > header strong { color: var(--text-heading); font-size: 12px; }
+.conversation-artifact-list > header small { min-width: 19px; border-radius: 999px; background: var(--surface); padding: 2px 6px; color: var(--accent-ink); font-size: 10px; font-weight: 800; text-align: center; }
+.conversation-artifact-list ul { display: grid; gap: 0; margin: 0; padding: 4px; list-style: none; }
+.conversation-artifact-list li + li { border-top: 1px solid var(--border); }
+.conversation-artifact-list ul button { display: grid; grid-template-columns: 16px minmax(0, 1fr) 16px; align-items: center; gap: 9px; width: 100%; min-height: 42px; border: 0; border-radius: 7px; background: transparent; padding: 7px 8px; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.conversation-artifact-list ul button:hover { background: var(--surface-hover); }
+.conversation-artifact-list ul button:focus-visible, .conversation-artifact-list > footer button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.conversation-artifact-list ul button > span { display: grid; min-width: 0; gap: 2px; }
+.conversation-artifact-list ul button strong, .conversation-artifact-list ul button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-artifact-list ul button strong { color: var(--text-heading); font-size: 12px; }
+.conversation-artifact-list ul button small { color: var(--muted); font-size: 10px; }
+.conversation-artifact-open-icon { color: var(--text-faint); transition: color var(--motion-fast), transform var(--motion-fast); }
+.conversation-artifact-list ul button:hover .conversation-artifact-open-icon { color: var(--accent-strong); transform: translateX(2px); }
+.conversation-artifact-list > footer { display: flex; justify-content: center; border-top: 1px solid var(--border); padding: 5px; }
+.conversation-artifact-list > footer button { border: 0; border-radius: 6px; background: transparent; padding: 5px 8px; color: var(--accent-strong); cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+.conversation-artifact-list > footer button:hover { background: var(--accent-soft); }
 .run-queue { width: calc(100% - 55px); max-width: 765px; display: grid; gap: 8px; margin: 0 0 22px 55px; }
 .run-queue-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 54px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); padding: 10px 12px; }
 .run-queue-item.running { border-color: var(--accent-border-soft); background: var(--accent-soft); }
@@ -312,6 +331,7 @@ button.session-bar-project:hover { color: var(--accent-strong); }
   .reviewer-finding-list li { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .queued-runs-panel { width: calc(100% - 45px); margin-left: 45px; }
   .run-queue { width: calc(100% - 45px); margin-left: 45px; }
+  .conversation-artifact-list { width: calc(100% - 45px); margin-left: 45px; }
   .message-usage-inline { margin-left: 45px; }
   .message > .message-usage-inline { margin-left: 0; }
 }

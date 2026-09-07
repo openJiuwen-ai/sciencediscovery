@@ -103,6 +103,7 @@ import type {
   ScientificArtifact,
   ScientificArtifactKind,
   ScientificArtifactVersion,
+  SessionArtifactOutput,
   SessionListState,
   SkillDeletionImpact,
   SkillSelectionMode,
@@ -2944,6 +2945,31 @@ export class SessionStore {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
     return this.listProjectArtifacts(session.projectId);
+  }
+
+  /**
+   * Declared Artifact versions that this Session's agent or subagents produced.
+   *
+   * The project-level Artifact catalog intentionally represents the latest
+   * logical product, while a conversation needs the exact version generated in
+   * one Session. `turnId` is required because older or user-uploaded versions
+   * cannot be safely attached to a chat Run.
+   */
+  listSessionArtifactOutputs(sessionId: string): SessionArtifactOutput[] {
+    const session = this.getSession(sessionId);
+    if (!session) throw new SessionStoreHttpError("Session not found", 404);
+    const artifactsById = new Map(this.catalog.artifacts
+      .filter((artifact) => artifact.projectId === session.projectId && !artifact.deletedAt)
+      .map((artifact) => [artifact.id, artifact]));
+    const outputs = this.catalog.artifactVersions.flatMap((version) => {
+      if (version.projectId !== session.projectId || version.sessionId !== sessionId || !version.turnId) return [];
+      const artifact = artifactsById.get(version.artifactId);
+      return artifact ? [{ artifact, version } satisfies SessionArtifactOutput] : [];
+    });
+    return structuredClone(outputs).toSorted((left, right) =>
+      left.version.createdAt.localeCompare(right.version.createdAt)
+      || left.version.version - right.version.version,
+    );
   }
 
   listProjectArtifacts(projectId: string): ScientificArtifact[] {

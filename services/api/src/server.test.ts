@@ -61,6 +61,7 @@ import type {
   RuntimeSettingsDetails,
   RuntimeStatus,
   Session,
+  SessionArtifactOutput,
   SessionDetail,
   SessionRun,
   SessionRunEvent,
@@ -5932,6 +5933,33 @@ test("same-named uploads remain physically isolated and append one Project artif
     { headers: authorization },
   );
   assert.deepEqual(versions.body.map((version) => version.sessionId), [sessionA.body.id, sessionB.body.id]);
+});
+
+test("artifact outputs endpoint is Session-scoped and rejects an unknown Session", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-outputs-api-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const { origin } = await startTestApi(context, tempRoot);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Artifact outputs API" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(project.response.status, 201, JSON.stringify(project.body));
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ title: "Outputs" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(session.response.status, 201, JSON.stringify(session.body));
+
+  const outputs = await jsonRequest<SessionArtifactOutput[]>(
+    `${origin}/api/sessions/${session.body.id}/artifact-outputs`,
+    { headers: authorization },
+  );
+  assert.equal(outputs.response.status, 200, JSON.stringify(outputs.body));
+  assert.deepEqual(outputs.body, []);
+  assert.equal((await fetch(`${origin}/api/sessions/missing/artifact-outputs`, { headers: authorization })).status, 404);
 });
 
 test("Artifact deletion endpoint logically deletes without removing history or workspace files", async (context) => {

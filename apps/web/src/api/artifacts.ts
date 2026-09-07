@@ -41,6 +41,7 @@ import type {
   Session,
   ScientificArtifact,
   ScientificArtifactVersion,
+  SessionArtifactOutput,
   UploadFileRequest,
   WorkspaceCapabilities,
   WorkspaceFile,
@@ -106,6 +107,10 @@ export class ArtifactsApiClient extends RunsApiClient {
 
   listArtifacts(sessionId: string): Promise<ScientificArtifact[]> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/artifacts`);
+  }
+
+  listArtifactOutputs(sessionId: string): Promise<SessionArtifactOutput[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/artifact-outputs`);
   }
 
   listProjectArtifacts(projectId: string): Promise<ScientificArtifact[]> {

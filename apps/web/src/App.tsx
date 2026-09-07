@@ -72,6 +72,7 @@ import type {
   SessionRun,
   ToolTrace,
   Session,
+  SessionArtifactOutput,
   SessionDetail,
   SessionListState,
   SessionPlan,
@@ -295,6 +296,8 @@ import {
   type GovernedDownloadCandidate,
   type RunActivityGroup,
 } from "./session/run-activity.js";
+import { ConversationArtifactList } from "./session/ConversationArtifactList.js";
+import { anchorArtifactOutputs, groupArtifactOutputsByRun } from "./session/run-artifacts.js";
 import {
   clearSessionTimeline,
   collectTimelinePermissionRequestIds,
@@ -1041,6 +1044,7 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [session, setSession] = useState<SessionDetail>();
   const [artifacts, setArtifacts] = useState<ScientificArtifact[]>([]);
+  const [artifactOutputs, setArtifactOutputs] = useState<SessionArtifactOutput[]>([]);
   const [artifactSessions, setArtifactSessions] = useState<Session[]>([]);
   const [artifactSessionCatalogProjectId, setArtifactSessionCatalogProjectId] = useState<string>();
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
@@ -1822,6 +1826,7 @@ export function App() {
     if (!activeProjectId) {
       setSessions([]);
       setArtifacts([]);
+      setArtifactOutputs([]);
       setArtifactSessions([]);
       setArtifactSessionCatalogProjectId(undefined);
       setActiveSessionId(undefined);
@@ -1835,6 +1840,7 @@ export function App() {
     }
     setSessionsLoaded(false);
     setArtifacts([]);
+    setArtifactOutputs([]);
     setArtifactSessions([]);
     setArtifactSessionCatalogProjectId(undefined);
     void Promise.all([
@@ -1881,6 +1887,7 @@ export function App() {
       setPermissionRequests([]);
       setSessionUsage(undefined);
       setSessionRuns([]);
+      setArtifactOutputs([]);
       setExecutionRuns([]);
       setEnvironments([]);
       setEnvironmentRevisions([]);
@@ -1899,7 +1906,7 @@ export function App() {
       return;
     }
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
-    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, invocations, claimItems, linkItems, paperItems, visionItems, environmentItems, revisionItems, planItems, subagentItems, remoteJobItems] = await Promise.all([
+    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, invocations, claimItems, linkItems, paperItems, visionItems, environmentItems, revisionItems, planItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
       client.getSession(sessionId),
       client.listFiles(sessionId),
       client.getPermissionEpoch(sessionId),
@@ -1921,6 +1928,7 @@ export function App() {
       client.listSessionPlans(sessionId),
       client.listSubagents(sessionId),
       client.listRemoteJobs(sessionId),
+      client.listArtifactOutputs(sessionId),
     ]);
     const activeRun = selectSessionReplayRun(sessionRunItems.filter((run) => isActiveRunStatus(run.status)));
     const replayEvents = activeRun ? await client.listRunEvents(sessionId, activeRun.id) : [];
@@ -1963,6 +1971,7 @@ export function App() {
     setSessionUsage(usageSummary);
     setExecutionRuns(executionRunItems);
     setSessionRuns(sessionRunItems);
+    setArtifactOutputs(artifactOutputItems);
     syncSessionRunActivity(sessionId, sessionRunItems);
     setEnvironments(environmentItems);
     setEnvironmentRevisions(revisionItems);
@@ -2017,6 +2026,11 @@ export function App() {
       setRunTimelines((current) => clearSessionTimeline(current, sessionId));
       setTimelineMessageIds((current) => forgetSession(current, sessionId));
     }
+  }
+
+  async function refreshArtifactOutputs(sessionId: string): Promise<void> {
+    const outputs = await client.listArtifactOutputs(sessionId);
+    if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) setArtifactOutputs(outputs);
   }
 
   // A manual review keeps running on the server after a browser refresh. Poll
@@ -2198,6 +2212,7 @@ export function App() {
       setArtifactSessions([firstSession]);
       setArtifactSessionCatalogProjectId(project.id);
       setArtifacts([]);
+      setArtifactOutputs([]);
       setActiveProjectId(project.id);
       setActiveSessionId(firstSession.id);
       focusComposerSessionId.current = firstSession.id;
@@ -2987,6 +3002,9 @@ export function App() {
     });
     if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail);
     if (!routing.updatesSessionView) return;
+    if (streamEvent.type === "run.status" && isTerminalRunStatus(streamEvent.status)) {
+      void refreshArtifactOutputs(sessionId).catch(() => undefined);
+    }
     if (streamEvent.type === "artifact_review.completed") {
       setArtifactReviews((current) => [
         ...current.filter((item) => item.id !== streamEvent.review.id),
@@ -3041,6 +3059,13 @@ export function App() {
     if (streamEvent.type === "artifact.upserted") {
       setArtifacts((current) => [streamEvent.artifact, ...current.filter((item) => item.id !== streamEvent.artifact.id)]
         .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
+      if (streamEvent.version?.sessionId === sessionId && streamEvent.version.turnId) {
+        setArtifactOutputs((current) => [
+          { artifact: streamEvent.artifact, version: streamEvent.version! },
+          ...current.filter((item) => item.version.id !== streamEvent.version!.id),
+        ].toSorted((left, right) => left.version.createdAt.localeCompare(right.version.createdAt)
+          || left.version.version - right.version.version));
+      }
     }
     if (streamEvent.type === "workspace.changed") {
       setFiles(streamEvent.files);
@@ -3347,10 +3372,17 @@ export function App() {
     setArtifactModalName(artifact.name);
   }
 
+  function openArtifactVersion(artifact: ScientificArtifact, version: SessionArtifactOutput["version"]): void {
+    setArtifactModalVersion(version.version);
+    setArtifactModalSessionId(version.sessionId || undefined);
+    setArtifactModalName(artifact.name);
+  }
+
   async function deleteArtifact(artifact: ScientificArtifact): Promise<void> {
     if (!activeProjectId) return;
     await client.deleteProjectArtifact(activeProjectId, artifact.id);
     setArtifacts((current) => current.filter((candidate) => candidate.id !== artifact.id));
+    setArtifactOutputs((current) => current.filter((candidate) => candidate.artifact.id !== artifact.id));
     setSelectedArtifactIds((current) => {
       const next = new Set(current);
       next.delete(artifact.id);
@@ -3679,6 +3711,7 @@ export function App() {
     remoteJobs,
     subagents,
   }, session?.id ? runChangedPaths[session.id] ?? {} : {}, mcpInvocations);
+  const artifactOutputsByRun = groupArtifactOutputsByRun(artifactOutputs, sessionRuns, subagents);
   const displayedMessageIds = new Set(displayedMessages.map((item) => item.id));
   const activityGroupsByTimelineRun = new Map<string, RunActivityGroup[]>();
   const activityGroupsByMessage = new Map<string, RunActivityGroup[]>();
@@ -3699,6 +3732,11 @@ export function App() {
       tailActivityGroups.push(group);
     }
   }
+  const artifactOutputAnchors = anchorArtifactOutputs(artifactOutputsByRun, sessionRuns, {
+    activeTimelineRunId,
+    displayedMessageIds,
+    replayedRunIds,
+  });
   const sessionArchived = Boolean(session?.archivedAt);
   const sessionPending = Boolean(activeSessionId) && session?.id !== activeSessionId;
   const artifactGroups = groupArtifactsBySession({
@@ -4155,6 +4193,7 @@ export function App() {
                         </article>
                       )}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
+                      <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.byMessage.get(block.message.id) ?? []} />
                     </Fragment>
                   ) : (
                     <Fragment key={`run-${block.runId}`}>
@@ -4165,6 +4204,7 @@ export function App() {
                           <RunUsageInline run={runUsageByRunId.get(block.runId)} />
                           {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) =>
                             renderRunActivityGroup(group, replayTimelineSubagentIds.get(block.runId)))}
+                          <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.byReplayTimeline.get(block.runId) ?? []} />
                         </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
@@ -4199,6 +4239,7 @@ export function App() {
                     footer={<>
                       <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
                       {tailActivityGroups.map((group) => renderRunActivityGroup(group, activeTimelineSubagentIds))}
+                      <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.activeTimeline} />
                     </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}

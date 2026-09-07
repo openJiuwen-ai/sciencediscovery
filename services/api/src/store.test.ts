@@ -2027,6 +2027,54 @@ test("SessionStore permanently deletes Session and Project cascades from catalog
   for (const path of secondPaths) await assert.rejects(stat(path), { code: "ENOENT" });
 });
 
+test("listSessionArtifactOutputs returns only declared, live Artifact versions from the requested Session", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-outputs-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(async () => {
+    await rm(tempRoot, { force: true, recursive: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EBUSY") throw error;
+    });
+  });
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Artifact outputs");
+  const first = await store.createSession(project.id, "First", {}, {}, { allowUnconfiguredModel: true });
+  const second = await store.createSession(project.id, "Second", {}, {}, { allowUnconfiguredModel: true });
+  const firstOutput = await store.createArtifactVersion({
+    content: { hash: "a".repeat(64), size: 1 }, kind: "dataset", logicalName: "result.csv", mediaType: "text/csv",
+    sessionId: first.id, turnId: "run-first",
+  });
+  await store.createArtifactVersion({
+    content: { hash: "b".repeat(64), size: 1 }, kind: "dataset", logicalName: "legacy.csv", mediaType: "text/csv",
+    sessionId: first.id,
+  });
+  const secondOutput = await store.createArtifactVersion({
+    content: { hash: "c".repeat(64), size: 1 }, kind: "dataset", logicalName: "result.csv", mediaType: "text/csv",
+    sessionId: second.id, turnId: "run-second",
+  });
+  const removed = await store.createArtifactVersion({
+    content: { hash: "d".repeat(64), size: 1 }, kind: "dataset", logicalName: "removed.csv", mediaType: "text/csv",
+    sessionId: first.id, turnId: "run-first",
+  });
+  await store.deleteArtifact(project.id, removed.artifact.id);
+
+  assert.deepEqual(store.listSessionArtifactOutputs(first.id).map((item) => ({
+    artifactId: item.artifact.id,
+    name: item.artifact.name,
+    sessionId: item.version.sessionId,
+    turnId: item.version.turnId,
+    version: item.version.version,
+  })), [{
+    artifactId: firstOutput.artifact.id,
+    name: "result.csv",
+    sessionId: first.id,
+    turnId: "run-first",
+    version: 1,
+  }]);
+  assert.deepEqual(store.listSessionArtifactOutputs(second.id).map((item) => item.version.id), [secondOutput.version.id]);
+  assert.throws(() => store.listSessionArtifactOutputs("missing"), /Session not found/);
+});
+
 test("deleting a Session removes the stored tool output its history still references", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-delete-tool-output-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

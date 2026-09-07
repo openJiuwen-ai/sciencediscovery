@@ -2006,6 +2006,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listArtifacts(artifactsMatch[1]!));
         return;
       }
+      const artifactOutputsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifact-outputs$/);
+      if (artifactOutputsMatch && request.method === "GET") {
+        sendJson(response, 200, store.listSessionArtifactOutputs(artifactOutputsMatch[1]!));
+        return;
+      }
       const artifactReviewsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifact-reviews$/);
       if (artifactReviewsMatch && request.method === "GET") {
         const sessionId = artifactReviewsMatch[1]!;
