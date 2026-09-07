@@ -320,6 +320,7 @@ import {
 const SELF_EVOLUTION_LIBRARY_ID = "project-skills";
 const BUILT_IN_SKILL_LIBRARY_ID = "built-in-skills";
 const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
+const EMPTY_STRING_ARRAY: readonly string[] = [];
 
 function subagentsByRootRun(runs: readonly SessionRun[], subagents: readonly Subagent[]): Map<string, Subagent[]> {
   const runIds = new Set(runs.map((run) => run.id));
@@ -368,6 +369,36 @@ export function workspaceFileTreeIconKind(
   file: Pick<WorkspaceFile, "previewKind">,
 ): ScientificArtifactKind {
   return file.previewKind ?? "other";
+}
+
+/**
+ * An automatic review owns a checkpoint message that is created after the
+ * Artifact stream event. Merge it into the local transcript rather than only
+ * updating a card that was already present when polling began.
+ */
+export function mergeReviewerCheckpointMessages(
+  currentMessages: readonly ChatMessage[],
+  remoteMessages: readonly ChatMessage[],
+): ChatMessage[] {
+  const remoteCheckpoints = remoteMessages.filter((message) => message.kind === "reviewer_checkpoint");
+  const remoteById = new Map(remoteCheckpoints.map((message) => [message.id, message]));
+  const currentIds = new Set(currentMessages.map((message) => message.id));
+  return [
+    ...currentMessages.map((message) => message.kind === "reviewer_checkpoint"
+      ? remoteById.get(message.id) ?? message
+      : message),
+    ...remoteCheckpoints.filter((message) => !currentIds.has(message.id)),
+  ];
+}
+
+export function hasAutomaticReviewerTaskForArtifactVersions(
+  tasks: readonly Pick<ReviewerAuditTask, "artifactVersionIds" | "origin">[],
+  artifactVersionIds: readonly string[],
+): boolean {
+  if (!artifactVersionIds.length) return false;
+  const watched = new Set(artifactVersionIds);
+  return tasks.some((task) => task.origin === "artifact_registered"
+    && task.artifactVersionIds.some((versionId) => watched.has(versionId)));
 }
 
 function TreeFileIcon({ kind }: { kind: ScientificArtifactKind }): ReactNode {
@@ -1077,6 +1108,10 @@ export function App() {
   const [promptManifests, setPromptManifests] = useState<PromptManifest[]>([]);
   const [artifactReviews, setArtifactReviews] = useState<ArtifactReviewRun[]>([]);
   const [reviewerAuditTasks, setReviewerAuditTasks] = useState<ReviewerAuditTask[]>([]);
+  // Artifact registration intentionally does not wait for automatic review
+  // scheduling. Keep watching a newly declared report briefly so its queued
+  // background task can turn on the normal reviewer poll without a reload.
+  const [reviewerTaskDiscoveryVersions, setReviewerTaskDiscoveryVersions] = useState<Record<string, string[]>>({});
   const [downloadCandidates, setDownloadCandidates] = useState<GovernedDownloadCandidate[]>([]);
   const [downloadJobs, setDownloadJobs] = useState<ArtifactJob[]>([]);
   const [downloadPlans, setDownloadPlans] = useState<ArtifactPlan[]>([]);
@@ -1380,6 +1415,10 @@ export function App() {
   const reviewerCheckpointRunning = Boolean(session?.messages.some((message) =>
     message.kind === "reviewer_checkpoint" && message.reviewerCheckpoint?.status === "running"));
   const reviewerAuditRunning = reviewerAuditTasks.some((task) => task.status === "queued" || task.status === "running");
+  const reviewerTaskDiscoveryVersionIds = session?.id
+    ? reviewerTaskDiscoveryVersions[session.id] ?? EMPTY_STRING_ARRAY
+    : EMPTY_STRING_ARRAY;
+  const reviewerTaskDiscoveryPending = reviewerTaskDiscoveryVersionIds.length > 0;
   /**
    * The timeline and folded-in message of the Session whose messages are on
    * screen, so the two always describe the same Session.
@@ -2075,21 +2114,33 @@ export function App() {
   // small state until terminal, so background audits never block the chat.
   useEffect(() => {
     const sessionId = session?.id;
-    if (!sessionId || (!reviewerCheckpointRunning && !reviewerAuditRunning)) return;
+    if (!sessionId || (!reviewerCheckpointRunning && !reviewerAuditRunning && !reviewerTaskDiscoveryPending)) return;
     let active = true;
+    let discoveryMisses = 0;
     const refreshReviewerCheckpoint = () => {
       void Promise.all([client.getSession(sessionId), client.listArtifactReviews(sessionId), client.listReviewerAuditTasks(sessionId)])
         .then(([detail, reviews, tasks]) => {
           if (!active || !shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
-          const remoteById = new Map(detail.messages.map((message) => [message.id, message]));
-          setSession((current) => current?.id === sessionId ? {
-            ...current,
-            messages: current.messages.map((message) => message.kind === "reviewer_checkpoint"
-              ? remoteById.get(message.id) ?? message
-              : message),
-          } : current);
+          setSession((current) => current?.id === sessionId
+            ? { ...current, messages: mergeReviewerCheckpointMessages(current.messages, detail.messages) }
+            : current);
           setArtifactReviews(reviews);
           setReviewerAuditTasks(tasks);
+          if (reviewerTaskDiscoveryVersionIds.length) {
+            const taskWasScheduled = hasAutomaticReviewerTaskForArtifactVersions(tasks, reviewerTaskDiscoveryVersionIds);
+            discoveryMisses = taskWasScheduled ? 0 : discoveryMisses + 1;
+            // Registration is intentionally asynchronous. After a few short
+            // polls, leave any actual queued/running task to the normal poll;
+            // otherwise stop watching a non-reviewable Artifact.
+            if (taskWasScheduled || discoveryMisses >= 5) {
+              setReviewerTaskDiscoveryVersions((current) => {
+                if (!current[sessionId]) return current;
+                const next = { ...current };
+                delete next[sessionId];
+                return next;
+              });
+            }
+          }
         })
         .catch(() => undefined);
     };
@@ -2099,7 +2150,7 @@ export function App() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [client, reviewerAuditRunning, reviewerCheckpointRunning, session?.id]);
+  }, [client, reviewerAuditRunning, reviewerCheckpointRunning, reviewerTaskDiscoveryPending, reviewerTaskDiscoveryVersionIds, session?.id]);
 
   useEffect(() => {
     const visibleSessionId = activeSessionId;
@@ -3144,6 +3195,16 @@ export function App() {
           ...current.filter((item) => item.version.id !== streamEvent.version!.id),
         ].toSorted((left, right) => left.version.createdAt.localeCompare(right.version.createdAt)
           || left.version.version - right.version.version));
+      }
+      if (streamEvent.artifact.origin === "llm_declared"
+        && streamEvent.version
+        && ["html", "latex", "markdown", "report"].includes(streamEvent.artifact.kind)) {
+        const artifactVersionId = streamEvent.version.id;
+        setReviewerTaskDiscoveryVersions((current) => {
+          const watched = current[sessionId] ?? EMPTY_STRING_ARRAY;
+          if (watched.includes(artifactVersionId)) return current;
+          return { ...current, [sessionId]: [...watched, artifactVersionId] };
+        });
       }
     }
     if (streamEvent.type === "workspace.changed") {
