@@ -11,20 +11,20 @@ repository intentionally does not use GitCode Actions.
 `.codearts/workflow/codearts-pipeline.yml` is the parent, and it now contains
 no shell of its own. CodeArts bills pipelines and build tasks separately; the
 pipeline quota is exhausted, so every step is an
-`official_devcloud_cloudBuild` invocation of the generic `run-shell` task
-(`x64-run-shell-sciencediscovery`, `b358513ca1e54d1b8d2500b94c870806`, and its
-aarch64 sibling), parameterised with `SH_FILE_PATH`, `ARGS` and `ENVS`. That
-task's console shell returns success whatever the script did, so its OBS action
-can still upload the log. A second task,
-`d84e08c4eee04564a45ecf3e00579b88`, takes the same parameters but propagates
-the exit code and uploads nothing; any job that has to be able to fail — today
-only `verify_results` — must use it. A judge running on the masking task
-cannot be red, which is how a run with two failed layers was once published as
-successful. The
+`official_devcloud_cloudBuild` invocation of a generic run-shell task,
+parameterised with `SH_FILE_PATH`, `ARGS` and `ENVS`. Every x64 job uses
+`f0b81e4b4b554747b84171782f7a2b15`, whose container image already carries the
+toolchain and the QEMU guest image, and the auto-merge pipeline calls the same
+task; aarch64 still uses `b6e9c483743d470d9725a1b23c6d1d91`. That task's
+console shell records the script's status and then reports success itself, so
+its OBS action uploads the log whatever the layer did. Passing
+`STRICT_EXIT: "1"` makes it propagate the status instead, and any job that has
+to be able to fail — today `verify_results` and the auto merge — must pass it.
+A judge that cannot be red is how a run with two failed layers was once
+published as successful. The
 layers themselves live in `.ci/codearts-layer.sh`: the two UT tiers —
 `ci:ut:host` on the build host and `ci:ut:guest` in a QEMU guest — the
-hermetic `ci:st` entry point, the mocked `ci:e2e` group in that same guest,
-and the x86_64 package. Because that console shell returns success even when
+hermetic `ci:st` entry point, and the x86_64 package. Because that console shell returns success even when
 the layer failed — so its OBS action can still upload the log — every CodeArts
 job is green by construction. `.ci/codearts-verify.sh` is therefore the run's
 only failure authority: it waits for every layer, reads each recorded
@@ -54,13 +54,25 @@ invalid checksum.
 
 `.codearts/workflow/codearts-auto-merge-pipeline.yml` is the auto-merge
 pipeline, triggered by a `/merge` comment on a merge request targeting
-`main`. A copy named `codearts-auto-merge-pipeline-test.yml` exists only on
-`ci/verify-pr-ci`, registered against that branch, for experiments; that branch
-is where a pipeline change is proven before it reaches this file. On a
-`/merge` comment it checks the commenter against
-`CODEOWNERS` on `main`, reads the merge request's live state (open, base equal to the merge
-request's own target branch, not draft, `mergeable`, head still the commit
-the comment was made on), then calls GitCode's
+`main`. It is registered against `main` in the console, so unlike the parent
+workflow it cannot be rehearsed on `ci/verify-pr-ci`: a change here only takes
+effect once it is on `main`. The pipeline
+itself only routes the trigger: its single job is an
+`official_devcloud_cloudBuild` step that runs `.ci/codearts-auto-merge.sh` on
+the same x64 build task the test layers use, because pipeline executor minutes
+ran out. `.ci/gitcode-merge-request.py` makes the GitCode
+calls, and `.ci/auto-merge.test.mjs` rehearses every decision against a
+fixture repository and a fake API.
+
+The script is fetched from `refs/heads/main`, never from the merge request, so
+a merge request cannot edit what merges it. Only three values cross the
+build-parameter boundary — `${MERGE_ID}`, `${COMMIT_ID}` and the private
+`GITCODE_TOKEN` — because a note webhook payload is kilobytes of JSON and a
+build parameter is the wrong place for it. The commenter therefore comes back
+from `GET /pulls/{number}/comments`: the newest comment whose first word is
+`/merge` is the request being served. The script checks that commenter against
+`CODEOWNERS` on `main`, reads the merge request's live state (open, not draft,
+`mergeable`, head still the commit `${COMMIT_ID}` names), then calls GitCode's
 `PUT /api/v5/repos/{owner}/{repo}/pulls/{number}/merge` with
 `merge_method=rebase` and `force_merge=true` — linear history, no merge
 commit, and GitCode marks the merge request merged. The `/merge` comment from
@@ -69,13 +81,11 @@ past the repository's `review_mode: approval` rule, which otherwise answers
 `405 Not enough required approvers` to API and UI alike; the report says
 when that happened. `force_merge` needs the repository setting 允许管理员强制合入
 and an administrator token. A conflict, a stale head, a rejected merge, or a
-non-owner commenter produces an error comment instead. It declares no
-inputs: the merge request number, source commit, and
-note payload come from the system `${MERGE_ID}`, `${COMMIT_ID}`, and
-`${WEBHOOK_PAYLOAD}`; the only parameter is `GITCODE_TOKEN`, kept as a
-private parameter in the console, whose account must be allowed to merge
-and comment on merge requests. Without a merge-request context the job is
-skipped.
+non-owner commenter produces an error comment instead, and the build task runs
+with `STRICT_EXIT: "1"` so that refusal is also a red run. The pipeline
+declares no inputs of its own; its only parameter is `GITCODE_TOKEN`, kept as
+a private parameter in the console, whose account must be allowed to merge and
+comment on merge requests. Without a merge-request context the job is skipped.
 
 GitHub remains a separate mirrored repository and covers full UT, mocked E2E,
 and smoke-gated binaries. Do not add `.gitcode/workflows/ci.yml` as another CI
