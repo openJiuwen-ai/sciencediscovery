@@ -2043,6 +2043,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   const runnerOrigin = `http://127.0.0.1:${(runner.address() as AddressInfo).port}`;
 
   let gatewayMode: "silent" | "tool-success-timeout-text" | "tool-timeout" = "silent";
+  let completionNotifications = 0;
   const openModelResponses: ServerResponse[] = [];
   const gateway = createHttpServer((request, response) => {
     if (request.url !== "/chat/completions" || request.method !== "POST") {
@@ -2052,16 +2053,22 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
     let raw = "";
     request.on("data", (chunk) => { raw += chunk; });
     request.on("end", () => {
-      if (gatewayMode === "silent") {
+      const body = JSON.parse(raw) as { messages: Array<{ content?: unknown; role?: string }> };
+      const latestUser = body.messages.findLast((message) => message.role === "user"
+        && !(typeof message.content === "string" && message.content.startsWith("<runtime_context_data ")))?.content;
+      const notification = typeof latestUser === "string" && latestUser.startsWith("[Execution notifications]");
+      if (gatewayMode === "silent" && !notification) {
         // The API's configured idle timer aborts this deliberately silent stream.
         openModelResponses.push(response);
         return;
       }
-      const body = JSON.parse(raw) as { messages: Array<{ content?: unknown; role?: string }> };
       const lastRole = body.messages.at(-1)?.role;
       response.writeHead(200, { "content-type": "text/event-stream" });
       const send = (frame: unknown) => response.write(`data: ${JSON.stringify(frame)}\n\n`);
-      if (lastRole === "tool" || body.messages.some((message) => message.role === "tool")) {
+      if (notification) {
+        completionNotifications++;
+        send({ choices: [{ delta: { content: "Completion recorded; no command replay." } }] });
+      } else if (lastRole === "tool" || body.messages.some((message) => message.role === "tool")) {
         send({ choices: [{ delta: { content: gatewayMode === "tool-timeout"
           ? "The requested operation did not complete."
           : "The successful tool output was summarized." } }] });
@@ -2240,6 +2247,18 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   assert.equal(completedExecutions.body.length, 1);
   assert.equal(completedExecutions.body[0]?.exitCode, 0);
   assert.equal(completedExecutions.body[0]?.status, "succeeded");
+
+  // Both completed Shells wake the model independently. Drain their bounded
+  // notification turns before switching the shared fixture to a silent user
+  // request; otherwise the cancellation assertion observes unrelated work.
+  const notificationDeadline = Date.now() + 10000;
+  let settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
+  while ((completionNotifications !== 2 || settled.body.sessions.length !== 0) && Date.now() < notificationDeadline) {
+    await new Promise((done) => setTimeout(done, 25));
+    settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
+  }
+  assert.equal(completionNotifications, 2);
+  assert.deepEqual(settled.body.sessions, []);
 
   gatewayMode = "silent";
   await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
