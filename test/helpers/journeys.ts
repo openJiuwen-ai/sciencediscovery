@@ -598,7 +598,7 @@ export async function artifactTree(page: Page): Promise<{
   };
 }
 
-/** Read environment state after UI creation so only the stub receives its immutable revision id. */
+/** Read the selectable environment ID and its audit revision after UI creation. */
 export async function currentEnvironmentRevision(
   page: Page,
   name: string,

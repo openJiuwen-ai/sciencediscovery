@@ -50,6 +50,8 @@ test("renders the sandbox network access modes and allowed domains", () => {
     mode: "domain-allowlist",
   });
   assert.match(html, /Sandbox network access/);
+  assert.match(html, /<code>run_shell<\/code>/);
+  assert.doesNotMatch(html, /run_python|run_r\b/);
   assert.match(html, /No network/);
   assert.match(html, /Domain allowlist/);
   assert.match(html, /Allowed domains/);
@@ -137,5 +139,7 @@ test("the settings group labels describe sandbox network access without proxy wo
     const description = catalog["settings.groups.sandbox-network.description"];
     assert.ok(label && description, "missing sandbox network group labels");
     assert.doesNotMatch(`${label} ${description}`, /proxy|代理/i);
+    assert.match(description, /run_shell/);
+    assert.doesNotMatch(description, /run_python|run_r\b/);
   }
 });

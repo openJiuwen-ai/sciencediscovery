@@ -229,9 +229,9 @@ test("markdown previews anchor to the run that wrote them instead of pinning to 
 
   // Three rounds: round 1 and 2 each write a different markdown file, round 3
   // pushes round 2's group into its replayed conversation block.
-  await submit("请调用 run_python 工具在工作区根目录写入文件 findings-a.md（一段简短 markdown 即可），然后用一句话汇报。");
+  await submit("请调用 run_shell 工具在工作区根目录写入文件 findings-a.md（一段简短 markdown 即可），显式声明为 artifact，然后用一句话汇报。");
   await expect(page.locator(".result-preview", { hasText: "findings-a.md" })).toBeVisible({ timeout: 120_000 });
-  await submit("请调用 run_python 工具在工作区根目录写入文件 findings-b.md（一段简短 markdown 即可），然后用一句话汇报。");
+  await submit("请调用 run_shell 工具在工作区根目录写入文件 findings-b.md（一段简短 markdown 即可），显式声明为 artifact，然后用一句话汇报。");
   await expect(page.locator(".result-preview", { hasText: "findings-b.md" })).toBeVisible({ timeout: 120_000 });
   await submit("第三轮：直接回答 1+1 等于几，不要写任何文件。");
   await expect(page.locator(".messages > article.message.user")).toHaveCount(3, { timeout: 60_000 });

@@ -293,7 +293,7 @@ export function QuotaSettingsEditor({
 }
 
 /**
- * Sandbox network access: whether run_python / run_r / run_shell may reach the
+ * Sandbox network access: whether commands executed through run_shell may reach the
  * network, and which domains they may reach. Deliberately its own settings
  * group, separate from the Network proxies group, which configures this
  * service's own outbound calls and does not affect sandbox code.
@@ -329,7 +329,7 @@ export function SandboxNetworkSettingsEditor({
       <span className="eyebrow">Sandbox code execution</span>
       <h3>Sandbox network access</h3>
       <p>
-        Controls whether code run by <code>run_python</code>, <code>run_r</code> and <code>run_shell</code> can
+        Controls whether commands run by <code>run_shell</code> can
         reach the network. The sandbox never gets a network interface: with a domain allowlist, outbound traffic
         leaves only through this deployment&apos;s egress gateway, which allows the domains listed here.
         Web and MCP outbound servers are configured separately under Network proxies and do not affect sandbox code.

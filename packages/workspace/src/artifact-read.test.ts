@@ -87,6 +87,8 @@ test("paging stops at the decodable text window instead of promising a page no o
   assert.equal(first.page?.totalLines, windowLines, "totalLines counts the window, not the whole version");
   assert.match(String(first.note), /Only the first 8388608 bytes/);
   assert.match(String(first.note), /offset cannot reach past line 8389/);
+  assert.match(String(first.note), /Process the rest with run_shell/);
+  assert.doesNotMatch(String(first.note), /run_python|run_r\b/);
 
   // Walking the protocol has to terminate: every nextOffset must advance.
   let offset = 1;
@@ -126,5 +128,7 @@ test("an over-wide line reports that offsets cannot reach its remainder", () => 
   assert.equal(page.page?.hasMore, true, "line 2 is still reachable by offset");
   assert.equal(page.page?.nextOffset, 2);
   assert.match(String(page.note), /Line 1 is wider than one page and was cut/);
+  assert.match(String(page.note), /read it with run_shell instead/);
+  assert.doesNotMatch(String(page.note), /run_python|run_r\b/);
   assert.equal(page.truncated, false, "the version fits the text window; only the page was cut");
 });

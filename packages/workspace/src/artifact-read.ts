@@ -125,13 +125,13 @@ function describeUnreachable(
     notes.push(
       `Only the first ${MAX_ARTIFACT_TEXT_BYTES} bytes of this ${size}-byte version are readable as text,`
       + ` which is ${windowLines} lines; offset cannot reach past line ${windowLines}.`
-      + " Process the rest with run_python or run_shell.",
+      + " Process the rest with run_shell.",
     );
   }
   if (partialLine) {
     notes.push(
       `Line ${startLine} is wider than one page and was cut. Line offsets cannot address the rest of that`
-      + " line; read it with run_python or run_shell instead.",
+      + " line; read it with run_shell instead.",
     );
   }
   return notes.length ? notes.join(" ") : undefined;

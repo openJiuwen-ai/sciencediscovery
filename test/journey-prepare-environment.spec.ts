@@ -35,12 +35,12 @@ import {
  * Steps:
  *   1. Verify the isolated stack already has a ready managed Python base, then open Environments through the UI.
  *   2. Inspect separate pip/conda sources and the read-only base; create a named Python environment through the UI.
- *   3. Confirm package installation controls exist without invoking them, then read the created environment's current revision through REST for stub injection only.
+ *   3. Confirm package installation controls exist without invoking them, then read the created environment ID and current revision through REST.
  *   4. Tell the Agent the environment name and verify marked Python output plus environment provenance.
  *   5. Return to settings and delete the named environment through the UI.
  * Environment: Isolated local stack at E2E_BASE_URL with managed Python setup already ready; no package installation is performed.
  * Type: mocked
- * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; deterministic run_python call using the UI-created revision.
+ * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; deterministic run_shell call using the UI-created environment ID; revision is checked only as provenance.
  * WebSearch: none
  * PaperSources: none
  * MCP: none
@@ -56,7 +56,7 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
     preconditions: [
       "隔离栈已启动，且托管 Python base 已经就绪（未就绪时本旅程记为 BLOCKED，不记通过）",
       "本旅程只做创建 / 查看 / 选用 / 删除，不执行任何联网的软件包安装",
-      "模型由旅程自带的本地 stub 驱动，替用户说出环境名并传入该环境的当前修订",
+      "模型由旅程自带的本地 stub 驱动，传入环境 ID，服务端选择最新版；修订只用于溯源核对",
     ],
   });
 
@@ -88,7 +88,7 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
       await expect(pipSources.getByRole("option", { name: "Huawei Cloud" })).toHaveCount(1);
       await expect(condaSources.getByRole("option", { name: "Huawei Cloud" })).toHaveCount(0);
 
-      const base = manager.locator(".environment-catalog article").filter({ hasText: /PYTHON · base/i });
+      const base = manager.locator(".environment-catalog article").filter({ hasText: /PYTHON base/i });
       await expect(base).toBeVisible();
       await expect(base).toContainText("Read-only");
       await expect(base.getByRole("button", { name: "Delete" })).toHaveCount(0);
@@ -97,9 +97,10 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
 
   await journey.step(
     "在界面上创建一个自己的命名 Python 环境",
-    "填名字、选 Python、点创建之后，这个环境作为「named」出现在环境目录里。",
+    "点添加、填名字、选初始 Python 工具、点创建之后，这个环境出现在受管理环境目录里。",
     async () => {
-      await manager.getByLabel("Environment language").selectOption("python");
+      await manager.getByRole("button", { name: "Add environment", exact: true }).click();
+      await manager.getByLabel("Initial environment tools").selectOption("python");
       await manager.getByLabel("Environment name").fill(environmentName);
       const createResponsePromise = page.waitForResponse((response) =>
         response.request().method() === "POST" && new URL(response.url()).pathname === "/api/environments", {
@@ -110,7 +111,7 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
 
       const environmentCard = manager.locator(".environment-catalog article").filter({ hasText: environmentName });
       await expect(environmentCard).toBeVisible({ timeout: 60_000 });
-      await expect(environmentCard).toContainText("PYTHON · named");
+      await expect(environmentCard).toContainText("Managed environment");
     },
   );
 
@@ -135,12 +136,11 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
   const stub = await scriptedModel([
     {
       arguments: {
-        code: `print('${marker}')`,
-        environmentRevisionId: revision.id,
-        kernelMode: "ephemeral",
+        command: `python -c "print('${marker}')"`,
+        environmentId: revision.environmentId,
       },
       delayMs: 500,
-      tool: "run_python",
+      tool: "run_shell",
     },
     { text: `The calculation completed in ${environmentName}; output marker ${marker}.` },
   ]);
