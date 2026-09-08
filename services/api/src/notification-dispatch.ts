@@ -26,8 +26,12 @@ export class NotificationDispatcher {
       this.store.notifications.poll();
       for (const owner of this.store.notifications.pendingOwners()) {
         if (this.closed) return;
-        // Child continuations require their own orchestration context; never route them to Main.
-        if (owner.agentId !== "main" || !this.store.getSession(owner.sessionId)) continue;
+        if (!this.store.getSession(owner.sessionId)) continue;
+        if (owner.agentId !== "main") {
+          const child = this.store.listSubagents(owner.sessionId).find((item) => `subagent:${item.id}` === owner.agentId);
+          // A child uses its own saved context and workspace; never redirect to Main.
+          if (!child?.contextRef || child.status === "running") continue;
+        }
         const runs = await this.store.listSessionRuns(owner.sessionId);
         if (runs.some((run) => ["queued", "running", "blocked"].includes(run.status))) continue;
         const batch = this.store.notifications.prepareDelivery(owner);

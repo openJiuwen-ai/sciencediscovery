@@ -19,6 +19,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
+import { VersionStore } from "@sciencediscovery/cas";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
 import {
@@ -470,7 +471,11 @@ async function executeAgentRun(
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
+  notificationDelivery?: NotificationBatch,
 ): Promise<SessionRunStatus> {
+  const continuation = notificationDelivery && notificationDelivery.agentId !== "main"
+    ? store.listSubagents(sessionId).find((child) => `subagent:${child.id}` === notificationDelivery.agentId) : undefined;
+  if (notificationDelivery?.agentId !== "main" && notificationDelivery && !continuation) throw new Error("Notification owner not found");
   if (activeSessions.has(sessionId)) {
     throw new ApiStatusError(409, "A run is already active for this session");
   }
@@ -1250,7 +1255,7 @@ async function executeAgentRun(
       const releaseSubagentSlot = reserveSubagentSlot(subagentInput.description);
       let childId: string | undefined;
       try {
-        let subagent = await store.createSubagent(sessionId, runId, subagentInput, {
+        let subagent = continuation ? await store.updateSubagent({ ...continuation, status: "running", finishedAt: undefined, error: undefined }) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
           model: { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
           timeoutSeconds: subagentConfig.timeoutSeconds,
@@ -1278,6 +1283,7 @@ async function executeAgentRun(
           status: "running",
         });
         const steps: SubagentStep[] = [...subagent.steps];
+        const startingTurn = subagent.turnCount;
         let handoff: NonNullable<Subagent["handoff"]> | undefined;
         const releaseParentWait = mainExecution?.beginExternalWait();
         let assistantOutput = "";
@@ -1331,7 +1337,7 @@ async function executeAgentRun(
           publishStep(step);
         };
         try {
-          handoff = await prepareSubagentHandoff(store, sessionId, subagent.id, subagent.input);
+          handoff = continuation?.handoff ?? await prepareSubagentHandoff(store, sessionId, subagent.id, subagent.input);
           childSignal.throwIfAborted();
           const handoffStep: SubagentStep = {
             content: `Workspace: ${handoff.workspaceId}\nHandoff manifest: handoff.json`,
@@ -1575,7 +1581,7 @@ async function executeAgentRun(
             if (event.type === "turn_start") {
               activeMessageStep = undefined;
               const nextTurn = subagent.turnCount + 1;
-              if (nextTurn > subagentProfile.budget.maxModelTurns) {
+              if (nextTurn - startingTurn > subagentProfile.budget.maxModelTurns) {
                 maxTurnsExceeded = true;
                 subagentRunHandle?.abort();
                 return;
@@ -1628,6 +1634,9 @@ async function executeAgentRun(
           }
         };
         const subagentExecutionPrompt = formatSubagentExecutionPrompt(subagent.input, handoff);
+        const versions = new VersionStore(store.dataDir);
+        const history = continuation?.contextRef
+          ? closedModelContext(JSON.parse((await versions.readState(continuation.contextRef)).toString()) as AgentHistoryMessage[]) : [];
         subagentRunHandle = runSubagentTask({
           bindings: {
             abortSignal: childExecution.abortSignal,
@@ -1637,7 +1646,8 @@ async function executeAgentRun(
             workspace: subagentWorkspace,
           },
           profile: subagentProfile,
-          prompt: subagentExecutionPrompt,
+          history,
+          prompt: continuation ? body.content : subagentExecutionPrompt,
           requestExecutionId: childExecution.identity.executionId,
           runContract: subagentExecutionPrompt,
         });
@@ -1645,7 +1655,9 @@ async function executeAgentRun(
           childExecution.identity.executionId,
           () => subagentRunHandle!.beginExternalWait(),
         );
-        await subagentRunHandle.execute();
+        if (notificationDelivery && !store.notifications.deliveryAllowed(notificationDelivery)) throw new Error("Agent stopped before notification delivery");
+        const result = await subagentRunHandle.execute();
+        subagent.contextRef = await versions.put("agent-state", JSON.stringify(closedModelContext(result.finalMessages)), "application/json");
         childSignal.throwIfAborted();
         assistantOutput = steps
           .findLast((step) => step.kind === "assistant" && step.content.trim())
@@ -1872,6 +1884,13 @@ async function executeAgentRun(
   );
   try {
     assertRunActive();
+    if (continuation) {
+      const child = await agentOptions.runSubagent!(continuation.input, requestExecution.abortSignal);
+      const message = await store.appendMessage(sessionId, "assistant", `Subagent ${child.input.description}: ${child.steps.findLast((step) => step.kind === "assistant")?.content ?? child.error ?? child.status}`, selectedModel);
+      await store.updateSessionRun(sessionId, runId, { assistantMessageId: message.id });
+      await emit({ files: await listWorkspaceFiles(store, sessionId), message, type: "run.completed" });
+      return child.status === "completed" ? "completed" : child.status === "cancelled" ? "cancelled" : "failed";
+    }
     lastAgentUsage = unreportedModelUsage();
     const initialResult = await mainExecution.executeAgentRun({
       history: promptHistory,
@@ -2644,6 +2663,7 @@ export function scheduleSessionRuns(
             serverConfig,
             memoryGraphClient,
             evolve,
+            delivery && delivery.agentId !== "main" ? delivery : undefined,
           );
         } catch (reason) {
           error = runFailureMessage(reason);

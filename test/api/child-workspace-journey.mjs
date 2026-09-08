@@ -87,7 +87,7 @@ const stub = createServer(async (request, response) => {
           : { name: "workspace_transfer", arguments: { operation: "status", transfer_id: id } };
       }
     }
-    if (legacy) {
+    if (legacy && !wake) {
       call = results.length < 2
         ? { name: "sync_remote_workspace", arguments: { runner_id: remoteRunnerId, operation: results.length ? "pull" : "push",
             paths: ["roundtrip.txt"], conflict: "overwrite" } }
@@ -97,7 +97,7 @@ const stub = createServer(async (request, response) => {
         assert.equal((records.match(/"state"\s*:\s*"completed"/g) ?? []).length >= 2, true, records);
       }
     }
-    if (evolution) {
+    if (evolution && !wake) {
       call = results.length === 0 ? { name: "create_evolve_run", arguments: {
         statement: "Improve solver against committed tests", howScored: "Fraction of frozen tests passed", mode: "test_gate",
         startingPointPath: "solver.py", entrypointPath: "solver.py", testCmd: "python test.py", frozenGlobs: ["test.py"],
@@ -108,6 +108,12 @@ const stub = createServer(async (request, response) => {
         split: { gateShards: 8, rolloutShards: 4, testShards: 2, seed: 0, shardRows: 1, trainRows: null }, expansions: 12, workers: 1,
       } } : undefined;
       if (results.length) assert.ok(!JSON.stringify(results).includes("refusedBecause"), JSON.stringify(results));
+    }
+    const childBackground = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Child background journey"));
+    if (childBackground && !wake) {
+      call = !results.length ? (child
+        ? { name: "run_shell", arguments: { command: "sleep 2; printf child-once >> child-background.txt", background: true } }
+        : { name: "task", arguments: { description: "Background child", prompt: "Child background journey: start one job and report its ID.", subagent_type: "general-purpose" } }) : undefined;
     }
     if (managed && !wake) {
       const data = (index) => JSON.parse(results[index].content);
@@ -403,6 +409,25 @@ try {
       assert.equal(await file.text(), "wake-complete");
     }
     return "Both Stop and Archive suppressed automatic runs after real process completion; explicit user resume delivered unread execution facts and the command remained single-execution";
+  });
+  await step("12. 子 Agent 完成通知恢复原上下文", "后台完成唤醒原子 Agent，使用同一独立 Workspace 和历史，不重新交付或重放命令。", async () => {
+    const target = await json(`/api/projects/${session.projectId}/sessions`, { title: "Child wake", modelId: session.modelId, approvalMode: "always_allow" });
+    const initial = await json(`/api/sessions/${target.id}/runs`, { content: "Child background journey: delegate one background job." });
+    await until(async () => (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.id === initial.id)?.status === "completed");
+    let automatic;
+    await until(async () => { automatic = (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.automaticWake && run.notificationDelivery?.agentId.startsWith("subagent:") && run.status === "completed"); return automatic; });
+    const children = await json(`/api/sessions/${target.id}/subagents`);
+    assert.equal(children.length, 1);
+    const child = children[0];
+    assert.equal(automatic.notificationDelivery.agentId, `subagent:${child.id}`);
+    assert.equal(child.steps.filter((step) => step.toolName === "run_shell").length, 1);
+    assert.equal(child.contextRef.pool, "agent-state");
+    assert.ok(requests.some((input) => input.messages?.some((message) => message.role === "system" && message.content?.includes("Applied subagent preset general-purpose"))
+      && input.messages.some((message) => message.role === "tool")
+      && input.messages.some((message) => typeof message.content === "string" && message.content.includes("[Execution notifications]") && message.content.includes(automatic.notificationDelivery.notifications[0].sourceId))), "child wake must include its own closed tool history");
+    assert.equal(await readFile(resolve(dataDir, "projects", target.projectId, "sessions", target.id, "agent-workspaces", child.handoff.workspaceId, "child-background.txt"), "utf8"), "child-once");
+    assert.ok(!(await json(`/api/sessions/${target.id}/files`)).some((file) => file.path === "child-background.txt"));
+    return "Original child ID/context/workspace resumed; one Shell invocation and one output write; parent Workspace unchanged";
   });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }

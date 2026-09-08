@@ -93,6 +93,7 @@ export function normalizePersistedSubagent(value: unknown): Subagent | undefined
         inputPaths: rawHandoff.inputPaths.filter((item): item is string => typeof item === "string"),
         manifestPath: rawHandoff.manifestPath,
         privateWorkspacePath: rawHandoff.privateWorkspacePath,
+        ...(typeof rawHandoff.workspaceId === "string" ? { workspaceId: rawHandoff.workspaceId } : {}),
         ...(Array.isArray(rawHandoff.skippedInputPaths) ? {
           skippedInputPaths: rawHandoff.skippedInputPaths.flatMap((item) => {
             if (!isRecord(item) || typeof item.path !== "string" || typeof item.reason !== "string") return [];
@@ -136,6 +137,10 @@ export function normalizePersistedSubagent(value: unknown): Subagent | undefined
     : undefined;
   return {
     createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
+    ...(isRecord(value.contextRef) && value.contextRef.pool === "agent-state"
+      && typeof value.contextRef.digest === "string" && /^sha256:[a-f0-9]{64}$/.test(value.contextRef.digest)
+      && typeof value.contextRef.size === "number" && typeof value.contextRef.mediaType === "string"
+      ? { contextRef: value.contextRef as unknown as NonNullable<Subagent["contextRef"]> } : {}),
     ...(error ? { error } : {}),
     ...(finishedAt ? { finishedAt } : {}),
     ...(handoff ? { handoff } : {}),

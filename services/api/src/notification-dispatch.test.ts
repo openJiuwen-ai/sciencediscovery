@@ -40,7 +40,7 @@ test("failed enqueue retains unread; child notices are never redirected to Main"
   const notifications = new AgentNotifications(db, () => false);
   const main = { sessionId: "session", agentId: "main" };
   notifications.complete({ ...main, agentId: "subagent:child" }, "child-job", "child done");
-  const store = { notifications, getSession: () => ({}), listSessionRuns: async () => [] } as unknown as SessionStore;
+  const store = { notifications, getSession: () => ({}), listSubagents: () => [], listSessionRuns: async () => [] } as unknown as SessionStore;
   let attempts = 0;
   const dispatcher = new NotificationDispatcher(store, async () => { attempts++; throw new Error("storage failed"); }, () => assert.fail());
   await dispatcher.tick(); assert.equal(attempts, 0);
@@ -48,4 +48,20 @@ test("failed enqueue retains unread; child notices are never redirected to Main"
   await assert.rejects(dispatcher.tick(), /storage failed/);
   assert.equal(notifications.unread(main).length, 1);
   dispatcher.close(); await dispatcher.tick(); assert.equal(attempts, 1);
+});
+
+test("child dispatch preserves owner and requires a saved idle context", async (t) => {
+  const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+  const notifications = new AgentNotifications(db, () => false);
+  const owner = { sessionId: "session", agentId: "subagent:child" };
+  const child = { id: "child", status: "running", contextRef: {} };
+  const store = { notifications, getSession: () => ({}), listSubagents: () => [child], listSessionRuns: async () => [] } as unknown as SessionStore;
+  let count = 0;
+  const dispatcher = new NotificationDispatcher(store, async (batch) => {
+    assert.equal(batch.agentId, owner.agentId); count++; return {} as SessionRun;
+  }, () => {});
+  notifications.complete(owner, "job", "done");
+  await dispatcher.tick(); assert.equal(count, 0);
+  child.status = "completed"; await dispatcher.tick(); assert.equal(count, 1);
+  notifications.stopAgent(owner); await dispatcher.tick(); assert.equal(count, 1);
 });

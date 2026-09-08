@@ -82,6 +82,8 @@ export interface SubagentStep {
 }
 
 export interface Subagent {
+  /** Closed model history in the existing agent-state pool, never executable replay. */
+  contextRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   createdAt: string;
   error?: string;
   finishedAt?: string;
