@@ -85,12 +85,15 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
       "知识引擎页可见；通过 ke-create-kb 建立新库并成为当前库。",
       async () => {
         await page.goto("/");
-        await page.getByRole("button", { name: /知识引擎/ }).click();
+        await page.getByRole("button", { name: "Knowledge Engine" }).click();
         await expect(page.getByTestId("knowledge-engine-page")).toBeVisible();
-        const panel = page.getByTestId("ke-create-kb");
-        await panel.getByRole("textbox").first().fill(kbName);
-        await panel.getByRole("button").first().click();
-        await expect(page.getByText(kbName).first()).toBeVisible({ timeout: 30_000 });
+        await page.getByLabel("new kb name").fill(kbName);
+        await page.getByTestId("ke-create-kb").click();
+        const kbItem = page.locator('[data-testid^="ke-kb-"]').filter({ hasText: kbName });
+        await expect(kbItem).toBeVisible({ timeout: 30_000 });
+        // Creating does not auto-select; the Seed panel only renders for the active KB.
+        await kbItem.click();
+        await expect(page.getByLabel("seed query")).toBeVisible();
       },
     );
 
@@ -111,9 +114,8 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
         const modelBody = await model.json() as { id: string };
         await api.put(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader(), data: { modelId: modelBody.id } });
 
-        const seed = page.getByTestId("ke-seed");
-        await seed.getByRole("textbox").first().fill(seedQuery);
-        await seed.getByRole("button").first().click();
+        await page.getByLabel("seed query").fill(seedQuery);
+        await page.getByTestId("ke-seed").click();
         await expect(page.getByTestId("ke-job-status")).toContainText(/pending|running|等待|运行/, { timeout: 30_000 });
       },
     );

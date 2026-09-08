@@ -3,31 +3,31 @@
 > 规则见 qa/handoff/CRUISE-PLAYBOOK.md。任何 agent 修改本文件必须同时把动作追加到 logs/。
 
 ```yaml
-stage: I                    # 阶段 I = W1+W2（主链路+增长闭环）；II = W3+W4；III = W5
-wave: W2（growth，开发中——81cce98 已落 W1 全量，4208c92 已落 W2 growth core）
-stage_gate_pending: false   # W2 完工通知声明「阶段 I 末」时置 true → 触发 QA 六拍全量
-qa_mode: whitebox           # 平时=白盒测试写作；阶段门=全量评审+E2E 强化
-turn: claude                # dev 行动方 = 用户交互式会话 bd0af9db
+stage: I                    # 阶段 I = W1+W2；II = W3+W4；III = W5
+wave: W2 完成（fbc0c3f）——阶段 I 全部落库，进入阶段门
+stage_gate_pending: true    # 21:31 巡航置位（W2 完工通知含「给阶段 I 门的接口事实」）
+qa_mode: stage-gate         # 六拍执行中：评审（进行）→ 等会话空闲后部署+E2E → 阶段报告
+turn: zcode                 # QA 行动方
 lock:
-  owner: human-interactive
-  since: 2026-09-08T19:32+08:00
+  owner: zcode-cruise        # 22:05 接管（会话 30.7 分钟无写入 + claude.exe=0）
+  since: 2026-09-08T22:05+08:00
 fuse:
   consecutive_failures: 0
 budget:
   dispatches_today: 0
-queued: []
-whitebox_backlog:
-  done:
-    - journey-ke-create-kb-seed.spec.ts（J-KE1，5bb283b）
-    - journey-ke-graph-renders.spec.ts（J-KE2，5bb283b）
-  next:
-    - 阶段 I 门执行（预案已备：qa/specs/stage-I-e2e-plan.md，ffc5609）——等 W2 完工通知
-    - 阶段门首跑校准 5 项 + 向 dev 提「运行时录制代理模式」增强（已写入预案 §2）
-    - W3 消费层旅程骨架（等 W3 开工后按白盒写）
+stage_gate_progress:
+  review:
+    growth-algorithms: PASS（21:31 巡航，2×P3）
+    grow-ts: PASS 无 P1/P2（22:06 巡航：watermark/doom/finalize/refIds 边界全核）
+    remaining: orchestrator 重构等价性 / routes grow API / KeGrowPanel / pdf-text 修复
+  deploy: 完成——隔离栈 4390/4391 就绪（fixture env 注入，独立数据目录，token 存临时文件，启动脚本 ~/start-sd-e2e-mocked.sh）
+  mocked: 首跑完成 8F/2S/3P——归因=测试基建（WSL→Windows localhost 单向，stub 不可达；详 logs/2026-09-08-2245 补记二）；修正=Playwright 迁 WSL 内重跑（待执行）
+  real: 待 mocked 后（按预案 §1.5 注入 minimax/siliconflow）
+  report: 待
 notes: >-
-  2026-09-08 18:4x 用户决策：波次门 → 阶段门 + 平行白盒测试（qa/README.md 与 playbook 已同步）。
-  进度：f4036b5（W0+W1.1/W1.2）已提交；W1.3 工作区开发中（routes/orchestrator/前端）。
-  QA 白盒待办 backlog：① journey-ke-* 骨架×4（依 qa/specs/W1-acceptance.md）② scholarly fixture
-  录制模式对接 FixtureScholarlyTransport（注意 JATS 4xx→null 双路径）③ 单测边界补强（W0 代码已
-  定稿部分）。Claude 波次末完工通知照写，但不等 QA、直接进下波次；全量评审在 W2 完成后（阶段 I 门）。
+  W2 完工通知（to-zcode/2026-09-08T2200-w2-done.md）关键情报：① grow API 202 {jobId,cycleId,reused}
+  / GET engineState.signals 结构；② 前端 testid ke-grow-panel/ke-grow-start/ke-grow-progress/ke-grow-signals
+  （J-KE2 可加 grow 步骤）；③ pdf-text 空目录契约修复（W1 冒烟盲区，已加回归护栏）；④ 冒烟 KB
+  4b62533a-c0d2-4f9f-8177-8272e09fd6b2（真实数据，real 层可复用）；⑤ S2 无 key 限流凶猛、OpenAlex
+  是主力 resolver（real 层归因参考）；⑥ deferred 搁浅任务保持 DA 语义（已知限制已注释，留 W5 议）。
 ```
