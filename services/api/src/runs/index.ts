@@ -839,6 +839,7 @@ async function executeAgentRun(
     responseSink,
   });
   const reviewerSpecialistSettings = store.getReviewerSpecialistSettings();
+  const sessionReviewerSpecialistSettings = store.getSessionReviewerSpecialistSettings(sessionId);
   let activeSubagentCalls = 0;
   let launchedSubagentCalls = 0;
   const reserveSubagentSlot = (description: string): (() => void) => {
@@ -1146,7 +1147,7 @@ async function executeAgentRun(
       return result;
     },
     ...(reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, body.content)
-      && reviewerSpecialistSupportsLevel(reviewerSpecialistSettings.level, "quick") ? {
+      && reviewerSpecialistSupportsLevel(sessionReviewerSpecialistSettings.level, "quick") ? {
       reviewCheckpoint: async (input, signal, toolCallId) => {
         const checkpointToolCallId = toolCallId ?? randomUUID();
         const checkpointMessageId = checkpointToolCallId;
@@ -1177,7 +1178,7 @@ async function executeAgentRun(
           suppressMemoryGraphMirror: true,
           turnId: toolCallId ?? runId,
         });
-        const semanticReview = reviewerSpecialistSupportsLevel(reviewerSpecialistSettings.level, "deep")
+        const semanticReview = reviewerSpecialistSupportsLevel(sessionReviewerSpecialistSettings.level, "deep")
           ? createReviewAgentOptions({
               modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
               runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
@@ -1191,7 +1192,7 @@ async function executeAgentRun(
             cas: provenanceRecorder.cas,
             parentRunId: runId,
             reason: input.reason,
-            reviewLevel: reviewerSpecialistSettings.level,
+            reviewLevel: sessionReviewerSpecialistSettings.level,
             sessionId,
             signal,
             store,

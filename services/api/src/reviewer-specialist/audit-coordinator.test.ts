@@ -30,7 +30,7 @@ test("automatic audit is durable, non-blocking, and creates bounded feedback", a
   await store.load();
   const project = await store.createProject("Reviewer task");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const registered = await store.createArtifactVersion({
     content: { hash: "a".repeat(64), size: 3 },
     kind: "markdown",
@@ -88,7 +88,7 @@ test("feedback persistence failure leaves the audit task failed instead of compl
   await store.load();
   const project = await store.createProject("Reviewer feedback failure");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const registered = await store.createArtifactVersion({
     content: { hash: "1".repeat(64), size: 3 },
     kind: "markdown",
@@ -143,7 +143,7 @@ test("automatic lane is released when checkpoint admission fails", async (contex
   await store.load();
   const project = await store.createProject("Reviewer lane failure");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const first = await store.createArtifactVersion({
     content: { hash: "2".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "first.md",
@@ -197,7 +197,7 @@ test("automatic audit batches artifacts and retains only each Artifact's newest 
   await store.load();
   const project = await store.createProject("Reviewer batch");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const first = await store.createArtifactVersion({
     content: { hash: "b".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
@@ -233,7 +233,7 @@ test("a generated Artifact registered during a running audit waits for the next 
   await store.load();
   const project = await store.createProject("Reviewer next batch");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const first = await store.createArtifactVersion({
     content: { hash: "e".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "first.md",
@@ -272,7 +272,7 @@ test("uploads and Agent code/data outputs remain Artifacts but are not automatic
   await store.load();
   const project = await store.createProject("Reviewer uploads");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const upload = await store.createArtifactVersion({
     content: { hash: "9".repeat(64), size: 1 }, kind: "markdown", logicalName: "input.md", mediaType: "text/markdown",
     origin: "user_upload", sessionId: session.id, sourcePath: "input.md",
@@ -309,7 +309,7 @@ test("manual review selects report deliverables and ignores code/data Artifacts"
   await store.load();
   const project = await store.createProject("Reviewer manual reports");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const report = await store.createArtifactVersion({
     content: { hash: "8".repeat(64), size: 1 }, kind: "markdown", logicalName: "analysis_summary.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "analysis_summary.md",
@@ -325,6 +325,35 @@ test("manual review selects report deliverables and ignores code/data Artifacts"
   await coordinator.cancelSession(session.id);
 });
 
+test("Session automatic-review settings skip background work but set the manual review level", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-session-settings-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer Session settings");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
+  await store.updateSessionReviewerSpecialistSettings(session.id, {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
+  const report = await store.createArtifactVersion({
+    content: { hash: "e".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
+  });
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => [] }, { quickBatchQuietMs: 0 });
+  assert.equal(await coordinator.enqueueArtifactVersion({
+    artifactVersionId: report.version.id,
+    contentHash: report.version.content.hash,
+    mediaType: report.version.mediaType,
+    sessionId: session.id,
+  }), undefined);
+  const manual = await coordinator.enqueueManual(session.id, "manual-session-level");
+  assert.equal(manual.reviewLevel, "deep");
+  await coordinator.cancelSession(session.id);
+});
+
 test("Stop review cancels a quiet-window batch before it starts", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `reviewer-stop-batch-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });
@@ -333,7 +362,7 @@ test("Stop review cancels a quiet-window batch before it starts", async (context
   await store.load();
   const project = await store.createProject("Reviewer stop batch");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const generated = await store.createArtifactVersion({
     content: { hash: "1".repeat(64), size: 1 }, kind: "markdown", logicalName: "result.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "result.md",
@@ -358,7 +387,7 @@ test("an automatic audit with no current report is silently superseded without c
   await store.load();
   const project = await store.createProject("Reviewer stale automatic task");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const report = await store.createArtifactVersion({
     content: { hash: "c".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
@@ -381,7 +410,7 @@ test("automatic audits wait for the lead Agent to be idle", async (context) => {
   await store.load();
   const project = await store.createProject("Reviewer yields to lead");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const report = await store.createArtifactVersion({
     content: { hash: "d".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
@@ -414,7 +443,7 @@ test("automatic audits share one process-wide background lane", async (context) 
   const project = await store.createProject("Reviewer global lane");
   const firstSession = await store.createSession(project.id, "First", {}, {}, { allowUnconfiguredModel: true });
   const secondSession = await store.createSession(project.id, "Second", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "quick" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
   const first = await store.createArtifactVersion({
     content: { hash: "e".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: firstSession.id, sourcePath: "first.md",
@@ -452,7 +481,11 @@ test("the Deep cooldown is applied once to the next automatic batch", async (con
   await store.load();
   const project = await store.createProject("Reviewer Deep cooldown");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "deep" });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
+  await store.updateSessionReviewerSpecialistSettings(session.id, {
+    automaticReviewEnabled: true,
+    level: "deep",
+  });
   const first = await store.createArtifactVersion({
     content: { hash: "2".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "first.md",

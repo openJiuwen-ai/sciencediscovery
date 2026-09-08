@@ -1937,6 +1937,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const sessionReviewerSettingsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/settings$/);
+      if (sessionReviewerSettingsMatch && request.method === "GET") {
+        sendJson(response, 200, store.getSessionReviewerSpecialistSettings(sessionReviewerSettingsMatch[1]!));
+        return;
+      }
+      if (sessionReviewerSettingsMatch && request.method === "PUT") {
+        sendJson(response, 200, await store.updateSessionReviewerSpecialistSettings(
+          sessionReviewerSettingsMatch[1]!,
+          await readJson(request),
+        ));
+        return;
+      }
+
       const sessionArchiveMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/(archive|restore)$/);
       if (sessionArchiveMatch && request.method === "POST") {
         if (await sessionHasActiveRun(store, sessionArchiveMatch[1]!)) {

@@ -20,30 +20,40 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { ReviewerControlCard } from "../src/ReviewerControlCard.js";
 
-test("Reviewer control card shows read-only settings and the manual action", () => {
+test("Reviewer control card exposes Session automatic review and its Quick/Deep level", () => {
   const html = renderToStaticMarkup(createElement(ReviewerControlCard, {
+    automaticReviewEnabled: true,
     busy: false,
+    level: "deep",
+    onAutomaticReviewChange: () => undefined,
+    onLevelChange: () => undefined,
     onRun: () => undefined,
     onStop: () => undefined,
-    settings: { enabled: true, level: "deep" },
+    settings: { enabled: true },
   }));
 
   assert.match(html, /Reviewer Specialist/);
   assert.match(html, /Built-in Specialist/);
   assert.match(html, />On</);
   assert.match(html, />Level</);
-  assert.match(html, />Deep</);
+  assert.match(html, /<option value="deep" selected="">Deep<\/option>/);
   assert.match(html, />Run review</);
-  assert.doesNotMatch(html, /<select/);
-  assert.doesNotMatch(html, /role="switch"/);
+  assert.match(html, /Automatic review/);
+  assert.match(html, /aria-label="Turn automatic review off"/);
+  assert.match(html, /<select/);
+  assert.match(html, /role="switch"/);
 });
 
 test("Reviewer control card exposes a dedicated stop action while a review is running", () => {
   const html = renderToStaticMarkup(createElement(ReviewerControlCard, {
+    automaticReviewEnabled: true,
     busy: true,
+    level: "quick",
+    onAutomaticReviewChange: () => undefined,
+    onLevelChange: () => undefined,
     onRun: () => undefined,
     onStop: () => undefined,
-    settings: { enabled: true, level: "quick" },
+    settings: { enabled: true },
   }));
 
   assert.match(html, />Stop review</);
@@ -54,10 +64,14 @@ test("Reviewer control card exposes a dedicated stop action while a review is ru
 
 test("Reviewer control card disables its stop action only while cancellation is pending", () => {
   const html = renderToStaticMarkup(createElement(ReviewerControlCard, {
+    automaticReviewEnabled: true,
     busy: true,
+    level: "quick",
+    onAutomaticReviewChange: () => undefined,
+    onLevelChange: () => undefined,
     onRun: () => undefined,
     onStop: () => undefined,
-    settings: { enabled: true, level: "quick" },
+    settings: { enabled: true },
     stopping: true,
   }));
 
@@ -67,10 +81,14 @@ test("Reviewer control card disables its stop action only while cancellation is 
 
 test("Reviewer control card is absent when settings are off", () => {
   const html = renderToStaticMarkup(createElement(ReviewerControlCard, {
+    automaticReviewEnabled: true,
     busy: false,
+    level: "deep",
+    onAutomaticReviewChange: () => undefined,
+    onLevelChange: () => undefined,
     onRun: () => undefined,
     onStop: () => undefined,
-    settings: { enabled: false, level: "deep" },
+    settings: { enabled: false },
   }));
 
   assert.equal(html, "");

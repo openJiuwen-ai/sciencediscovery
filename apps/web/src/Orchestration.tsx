@@ -16,7 +16,6 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type {
   ConnectorManifest,
-  ReviewerSpecialistLevel,
   Subagent,
   SubagentStep,
   SessionPlan,
@@ -28,10 +27,6 @@ import type { ApiClient } from "./api.js";
 import { ChevronRightIcon } from "./icons.js";
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
-
-type VisibleReviewerLevel = ReviewerSpecialistLevel;
-
-function visibleReviewerLevel(level: ReviewerSpecialistLevel): VisibleReviewerLevel { return level; }
 
 function planSummary(plan: SessionPlan): string {
   const feasibility = `${plan.feasibilityConfidence} feasibility`;
@@ -160,7 +155,6 @@ export function SpecialistManager({
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [reviewerEnabled, setReviewerEnabled] = useState(false);
-  const [reviewerLevel, setReviewerLevel] = useState<VisibleReviewerLevel>("quick");
   const [reviewerBusy, setReviewerBusy] = useState(true);
   const [builtinBusy, setBuiltinBusy] = useState(false);
   const [builtinExpanded, setBuiltinExpanded] = useState(false);
@@ -208,7 +202,6 @@ export function SpecialistManager({
     void client.getReviewerSpecialistSettings()
       .then((settings) => {
         setReviewerEnabled(settings.enabled);
-        setReviewerLevel(visibleReviewerLevel(settings.level));
       })
       .catch((error: Error) => onError(error.message))
       .finally(() => setReviewerBusy(false));
@@ -219,25 +212,10 @@ export function SpecialistManager({
     try {
       const settings = await client.updateReviewerSpecialistSettings({
         enabled: !reviewerEnabled,
-        level: reviewerLevel,
       });
       setReviewerEnabled(settings.enabled);
-      setReviewerLevel(visibleReviewerLevel(settings.level));
     } catch (error) {
       onError(error instanceof Error ? error.message : "Could not update Reviewer Specialist");
-    } finally {
-      setReviewerBusy(false);
-    }
-  }
-
-  async function changeReviewerLevel(level: VisibleReviewerLevel): Promise<void> {
-    setReviewerBusy(true);
-    try {
-      const settings = await client.updateReviewerSpecialistSettings({ enabled: reviewerEnabled, level });
-      setReviewerEnabled(settings.enabled);
-      setReviewerLevel(visibleReviewerLevel(settings.level));
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not update Reviewer Specialist level");
     } finally {
       setReviewerBusy(false);
     }
@@ -301,8 +279,6 @@ export function SpecialistManager({
     <BuiltInReviewerSpecialist
       busy={reviewerBusy}
       enabled={reviewerEnabled}
-      level={reviewerLevel}
-      onLevelChange={(level) => void changeReviewerLevel(level)}
       onToggle={() => void toggleReviewer()}
     />
     {builtinSpecialists.length > 0 ? (() => {
@@ -357,14 +333,10 @@ export function SpecialistManager({
 export function BuiltInReviewerSpecialist({
   busy,
   enabled,
-  level,
-  onLevelChange,
   onToggle,
 }: {
   busy: boolean;
   enabled: boolean;
-  level: VisibleReviewerLevel;
-  onLevelChange: (level: VisibleReviewerLevel) => void;
   onToggle: () => void;
 }) {
   return <section aria-label="Built-in specialists" className="built-in-specialists">
@@ -375,16 +347,7 @@ export function BuiltInReviewerSpecialist({
         <strong>Reviewer Specialist</strong>
       </span>
       <div className="reviewer-specialist-settings">
-        <select
-          aria-label="Reviewer Specialist level"
-          disabled={busy}
-          onChange={(event) => onLevelChange(event.target.value as VisibleReviewerLevel)}
-          title="Quick: local checks; Deep: Quick plus semantic verification"
-          value={level}
-        >
-          <option value="quick">Quick</option>
-          <option value="deep">Deep</option>
-        </select>
+        <small>Choose the level of Quick/Deep per Session.</small>
         <button
           aria-checked={enabled}
           aria-label={enabled ? "Turn Reviewer Specialist off" : "Turn Reviewer Specialist on"}

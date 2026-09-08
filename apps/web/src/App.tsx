@@ -66,6 +66,7 @@ import type {
   RemoteHostTarget,
   RemoteJob,
   ReviewerAuditTask,
+  ReviewerSpecialistLevel,
   ReviewerSpecialistSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,
@@ -1116,6 +1117,7 @@ export function App() {
   const [downloadJobs, setDownloadJobs] = useState<ArtifactJob[]>([]);
   const [downloadPlans, setDownloadPlans] = useState<ArtifactPlan[]>([]);
   const [reviewerSpecialistSettings, setReviewerSpecialistSettings] = useState<ReviewerSpecialistSettings>();
+  const [reviewerSessionSettingsBusy, setReviewerSessionSettingsBusy] = useState(false);
   /** Manual Reviewer activity is isolated per Session, matching the API queue. */
   const [manualReviewerBusyBySession, setManualReviewerBusyBySession] = useState<Record<string, true>>({});
   /** Cancelling a review is independent from stopping the main Agent run. */
@@ -2734,6 +2736,35 @@ export function App() {
     }, t("error.revokePermission"));
   }
 
+  async function updateSessionReviewerSpecialistSettings(next: {
+    automaticReviewEnabled: boolean;
+    level: ReviewerSpecialistLevel;
+  }): Promise<void> {
+    const targetSessionId = activeSessionId;
+    if (!targetSessionId || session?.archivedAt) return;
+    setReviewerSessionSettingsBusy(true);
+    try {
+      const updated = await client.updateSessionReviewerSpecialistSettings(targetSessionId, next);
+      if (shouldApplySessionScopedUpdate(targetSessionId, activeSessionIdRef.current)) {
+        setSession((current) => current?.id === targetSessionId ? {
+          ...current,
+          reviewerAutomaticReviewEnabled: updated.automaticReviewEnabled,
+          reviewerSpecialistLevel: updated.level,
+        } : current);
+      }
+      setSessions((current) => current.map((item) => item.id === targetSessionId ? {
+        ...item,
+        reviewerAutomaticReviewEnabled: updated.automaticReviewEnabled,
+        reviewerSpecialistLevel: updated.level,
+      } : item));
+      setError(undefined);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not update Reviewer Specialist settings");
+    } finally {
+      setReviewerSessionSettingsBusy(false);
+    }
+  }
+
   async function runManualReviewerSpecialist(): Promise<void> {
     const targetSessionId = activeSessionId;
     if (!targetSessionId
@@ -4321,7 +4352,7 @@ export function App() {
                           checkpointError={block.message.reviewerCheckpoint.error}
                           checkpointProgress={block.message.reviewerCheckpoint.progress}
                           checkpointStatus={block.message.reviewerCheckpoint.status}
-                          reviewLevel={reviewerSpecialistSettings?.level}
+                          reviewLevel={session.reviewerSpecialistLevel}
                           reviews={artifactReviews}
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
                         />
@@ -4376,7 +4407,7 @@ export function App() {
                             },
                           };
                         })}
-                        reviewerLevel={reviewerSpecialistSettings?.level}
+                        reviewerLevel={session.reviewerSpecialistLevel}
                         workspaceSessionId={session.id}
                       />
                       {renderSkillEvolutionCard(sessionRuns.find((run) => run.id === block.runId))}
@@ -4416,7 +4447,7 @@ export function App() {
                         },
                       };
                     })}
-                    reviewerLevel={reviewerSpecialistSettings?.level}
+                    reviewerLevel={session.reviewerSpecialistLevel}
                     workspaceSessionId={session.id}
                   />
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
@@ -4647,7 +4678,18 @@ export function App() {
 
             {session ? <ReviewerControlCard
               busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning || reviewerAuditRunning}
+              configBusy={reviewerSessionSettingsBusy}
               disabled={sessionArchived}
+              automaticReviewEnabled={session.reviewerAutomaticReviewEnabled}
+              level={session.reviewerSpecialistLevel}
+              onAutomaticReviewChange={(automaticReviewEnabled) => void updateSessionReviewerSpecialistSettings({
+                automaticReviewEnabled,
+                level: session.reviewerSpecialistLevel,
+              })}
+              onLevelChange={(level) => void updateSessionReviewerSpecialistSettings({
+                automaticReviewEnabled: session.reviewerAutomaticReviewEnabled,
+                level,
+              })}
               onRun={() => void runManualReviewerSpecialist()}
               onStop={() => void stopReviewerSpecialist()}
               settings={reviewerSpecialistSettings}

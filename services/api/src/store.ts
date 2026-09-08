@@ -92,6 +92,7 @@ import type {
   RemoteJob,
   RemoteWorkspaceSyncRecord,
   ReviewRun,
+  SessionReviewerSpecialistSettings,
   ReviewerSpecialistLevel,
   ReviewerSpecialistSettings,
   RevisePlanRequest,
@@ -885,6 +886,12 @@ export class SessionStore {
         ? session.enabledSkillIds.filter((id): id is string => this.skillIds.has(id))
         : [];
       const semanticReviewEnabled = session.semanticReviewEnabled ?? true;
+      const reviewerAutomaticReviewEnabled = typeof session.reviewerAutomaticReviewEnabled === "boolean"
+        ? session.reviewerAutomaticReviewEnabled
+        : true;
+      const reviewerSpecialistLevel = isReviewerSpecialistLevel(session.reviewerSpecialistLevel)
+        ? session.reviewerSpecialistLevel
+        : DEFAULT_REVIEWER_SPECIALIST_LEVEL;
       const reviewCriteria = Array.isArray(session.reviewCriteria)
         ? session.reviewCriteria.filter((criterion): criterion is string => typeof criterion === "string").slice(0, 20)
         : [];
@@ -917,6 +924,8 @@ export class SessionStore {
         reviewCriteria,
         reviewMode,
         ...normalizePersistedSessionRemoteRunners(session),
+        reviewerAutomaticReviewEnabled,
+        reviewerSpecialistLevel,
         semanticReviewEnabled,
         settingsOverrides,
         ...(session.specialistId && specialistIds.has(session.specialistId) ? { specialistId: session.specialistId } : { specialistId: undefined }),
@@ -1702,7 +1711,6 @@ export class SessionStore {
     return {
       enabled: this.catalog.reviewerSpecialistEnabled,
       feedbackPolicy: this.catalog.reviewerSpecialistFeedbackPolicy,
-      level: this.catalog.reviewerSpecialistLevel,
     };
   }
 
@@ -1710,17 +1718,40 @@ export class SessionStore {
     if (!isRecord(value) || typeof value.enabled !== "boolean") {
       throw new Error("Reviewer Specialist enabled must be a boolean");
     }
-    if (value.level !== undefined && !isReviewerSpecialistLevel(value.level)) {
-      throw new Error("Reviewer Specialist level must be quick or deep");
-    }
     if (value.feedbackPolicy !== undefined && !isReviewerFeedbackPolicy(value.feedbackPolicy)) {
       throw new Error("Reviewer Specialist feedback policy must be record, explain, suggest, or repair");
     }
     this.catalog.reviewerSpecialistEnabled = value.enabled;
-    if (value.level !== undefined) this.catalog.reviewerSpecialistLevel = value.level;
     if (value.feedbackPolicy !== undefined) this.catalog.reviewerSpecialistFeedbackPolicy = value.feedbackPolicy;
     await this.saveCatalog();
     return this.getReviewerSpecialistSettings();
+  }
+
+  getSessionReviewerSpecialistSettings(sessionId: string): SessionReviewerSpecialistSettings {
+    const session = this.getSession(sessionId);
+    if (!session) throw new Error("Session not found");
+    return {
+      automaticReviewEnabled: session.reviewerAutomaticReviewEnabled,
+      level: session.reviewerSpecialistLevel,
+    };
+  }
+
+  async updateSessionReviewerSpecialistSettings(
+    sessionId: string,
+    value: unknown,
+  ): Promise<SessionReviewerSpecialistSettings> {
+    if (!isRecord(value) || typeof value.automaticReviewEnabled !== "boolean") {
+      throw new Error("Reviewer Specialist automatic review must be a boolean");
+    }
+    if (!isReviewerSpecialistLevel(value.level)) {
+      throw new Error("Reviewer Specialist level must be quick or deep");
+    }
+    const session = this.assertSessionWritable(sessionId);
+    session.reviewerAutomaticReviewEnabled = value.automaticReviewEnabled;
+    session.reviewerSpecialistLevel = value.level;
+    session.updatedAt = new Date().toISOString();
+    await this.saveCatalog();
+    return this.getSessionReviewerSpecialistSettings(sessionId);
   }
 
   getWebSettings(): WebSettingsDetails {
@@ -2570,6 +2601,9 @@ export class SessionStore {
       reviewCriteria: this.normalizeReviewCriteria(governance.reviewCriteria),
       reviewMode: governance.reviewMode === "manual" ? "manual" : "auto",
       ...(remoteRunnerHostIds ? { remoteRunnerHostIds } : {}),
+      ...(remoteRunnerHostIds ? { remoteRunnerHostIds } : {}),
+      reviewerAutomaticReviewEnabled: true,
+      reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
       semanticReviewEnabled: resolved.effective.semanticReviewEnabled,
       settingsOverrides,
       ...(governance.specialistId ? { specialistId: governance.specialistId } : {}),

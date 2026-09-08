@@ -66,14 +66,14 @@ export class ReviewerAuditCoordinator {
   ) {}
 
   async enqueueManual(sessionId: string, messageId: string): Promise<ReviewerAuditTask> {
-    const settings = this.store.getReviewerSpecialistSettings();
-    if (!settings.enabled) throw new Error("Reviewer Specialist is off");
+    if (!this.store.getReviewerSpecialistSettings().enabled) throw new Error("Reviewer Specialist is off");
+    const sessionSettings = this.store.getSessionReviewerSpecialistSettings(sessionId);
     return await this.createTask({
       artifactVersionIds: this.latestReportArtifactVersionIds(sessionId),
       checkpointMessageId: messageId,
       feedbackPolicy: READ_ONLY_FEEDBACK_POLICY,
       origin: "manual",
-      reviewLevel: settings.level,
+      reviewLevel: sessionSettings.level,
       sessionId,
     }, true);
   }
@@ -90,13 +90,14 @@ export class ReviewerAuditCoordinator {
     // platform-produced scientific conclusion. Reviewer Specialist is scoped
     // to readable report deliverables, never code or data intermediates.
     if (!version || !artifact || artifact.origin !== "llm_declared" || !isReviewerReportCandidate(artifact, version)) return undefined;
-    const settings = this.store.getReviewerSpecialistSettings();
-    if (!settings.enabled) return undefined;
+    if (!this.store.getReviewerSpecialistSettings().enabled) return undefined;
+    const sessionSettings = this.store.getSessionReviewerSpecialistSettings(input.sessionId);
+    if (!sessionSettings.automaticReviewEnabled) return undefined;
     // Structured data is always checked deterministically. It must not spend a
-    // Deep model call merely because the global selector currently says Deep.
+    // Deep model call merely because this Session selected Deep.
     const reviewLevel: ReviewerSpecialistLevel = /(?:^|\/)json(?:;|$)/i.test(input.mediaType)
       ? "quick"
-      : settings.level;
+      : sessionSettings.level;
     const tasks = await this.store.listReviewerAuditTasks(input.sessionId);
     const pending = tasks.find((task) => task.origin === "artifact_registered"
       && task.status === "queued" && !task.checkpointPublishedAt);
@@ -328,6 +329,15 @@ export class ReviewerAuditCoordinator {
           continue;
         }
         if (task.origin === "artifact_registered") {
+          const sessionSettings = this.store.getSessionReviewerSpecialistSettings(sessionId);
+          if (!this.store.getReviewerSpecialistSettings().enabled || !sessionSettings.automaticReviewEnabled) {
+            await this.store.updateReviewerAuditTask(sessionId, task.id, {
+              errorSummary: "Automatic review is disabled",
+              finishedAt: new Date().toISOString(),
+              status: "superseded",
+            });
+            continue;
+          }
           // Automatic review is intentionally low priority: it never starts
           // while its Session's lead Agent has queued/running work, and the
           // one process-wide lane prevents separate Sessions from piling up

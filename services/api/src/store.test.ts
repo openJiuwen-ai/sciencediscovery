@@ -57,6 +57,8 @@ interface PersistedCatalog {
     id: string;
     modelId?: string;
     permissionEpochId: string;
+    reviewerAutomaticReviewEnabled?: boolean;
+    reviewerSpecialistLevel?: string;
     reviewModelId?: string;
     settingsOverrides: Record<string, unknown>;
     title: string;
@@ -407,32 +409,52 @@ test("SessionStore persists a Reviewer Specialist conversation checkpoint", asyn
   assert.deepEqual(lateProgress, completed);
 });
 
-test("SessionStore persists the Reviewer Specialist switch and cumulative review level", async (context) => {
+test("SessionStore persists the global Reviewer switch and per-Session automatic review settings", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-settings-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
 
   const store = new SessionStore(tempRoot);
   await store.load();
-  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "record", level: "quick" });
+  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "record" });
 
-  await store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "suggest", level: "deep" });
-  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest", level: "deep" });
+  await store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "suggest" });
+  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest" });
   assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistEnabled, true);
   assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistFeedbackPolicy, "suggest");
-  assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistLevel, "deep");
+  const project = await store.createProject("Reviewer settings");
+  const session = await store.createSession(project.id, "Quick by default", {}, {}, { allowUnconfiguredModel: true });
+  assert.deepEqual(store.getSessionReviewerSpecialistSettings(session.id), {
+    automaticReviewEnabled: true,
+    level: "quick",
+  });
+  await store.updateSessionReviewerSpecialistSettings(session.id, {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
+  assert.deepEqual(store.getSessionReviewerSpecialistSettings(session.id), {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
+  const persistedSession = (await readPersistedCatalog(tempRoot)).sessions.find((item) => item.id === session.id);
+  assert.equal(persistedSession?.reviewerAutomaticReviewEnabled, false);
+  assert.equal(persistedSession?.reviewerSpecialistLevel, "deep");
 
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
-  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest", level: "deep" });
+  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest" });
+  assert.deepEqual(reopened.getSessionReviewerSpecialistSettings(session.id), {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
   await reopened.updateReviewerSpecialistSettings({ enabled: false });
-  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "suggest", level: "deep" });
+  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "suggest" });
   await assert.rejects(
     store.updateReviewerSpecialistSettings({ enabled: "yes" }),
     /enabled must be a boolean/,
   );
   await assert.rejects(
-    store.updateReviewerSpecialistSettings({ enabled: true, level: "extreme" }),
+    store.updateSessionReviewerSpecialistSettings(session.id, { automaticReviewEnabled: true, level: "extreme" }),
     /level must be quick or deep/,
   );
   await assert.rejects(

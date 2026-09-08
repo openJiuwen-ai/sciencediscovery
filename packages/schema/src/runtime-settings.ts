@@ -127,6 +127,11 @@ export interface ReviewerSpecialistSettings {
   enabled: boolean;
   /** Legacy setting retained for persisted/API compatibility; no longer user-configurable. */
   feedbackPolicy: ReviewerFeedbackPolicy;
+}
+
+/** Reviewer behaviour that belongs to one Session, not the global Specialist switch. */
+export interface SessionReviewerSpecialistSettings {
+  automaticReviewEnabled: boolean;
   level: ReviewerSpecialistLevel;
 }
 

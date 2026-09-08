@@ -81,6 +81,7 @@ export interface Catalog {
   sandboxNetworkSettings: SandboxNetworkSettings;
   reviewerSpecialistEnabled: boolean;
   reviewerSpecialistFeedbackPolicy: import("@sciencediscovery/schema").ReviewerFeedbackPolicy;
+  /** Legacy persisted value retained only while older catalogs are migrated; runtime uses Session settings. */
   reviewerSpecialistLevel: ReviewerSpecialistLevel;
   remoteHosts: RemoteHostTarget[];
   remoteJobs: RemoteJob[];

@@ -5401,6 +5401,20 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
   assert.equal(session.response.status, 201);
   assert.equal(session.body.modelId, modelB.id);
   assert.deepEqual(session.body.settingsOverrides, {});
+  const reviewerDefaults = await jsonRequest<{ automaticReviewEnabled: boolean; level: string }>(
+    `${origin}/api/sessions/${session.body.id}/reviewer-specialist/settings`,
+    { headers: authorization },
+  );
+  assert.deepEqual(reviewerDefaults.body, { automaticReviewEnabled: true, level: "quick" });
+  const reviewerSessionSettings = await jsonRequest<{ automaticReviewEnabled: boolean; level: string }>(
+    `${origin}/api/sessions/${session.body.id}/reviewer-specialist/settings`,
+    {
+      body: JSON.stringify({ automaticReviewEnabled: false, level: "deep" }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "PUT",
+    },
+  );
+  assert.deepEqual(reviewerSessionSettings.body, { automaticReviewEnabled: false, level: "deep" });
   const renamedSession = await jsonRequest<Session>(`${origin}/api/sessions/${session.body.id}`, {
     body: JSON.stringify({ title: "Renamed lifecycle session" }),
     headers: { ...authorization, "content-type": "application/json" },
@@ -5482,6 +5496,11 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
   })).status, 409);
   assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/settings`, {
     body: JSON.stringify({}),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  })).status, 409);
+  assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/reviewer-specialist/settings`, {
+    body: JSON.stringify({ automaticReviewEnabled: true, level: "quick" }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "PUT",
   })).status, 409);

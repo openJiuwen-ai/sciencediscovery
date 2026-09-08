@@ -26,7 +26,7 @@ import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, SessionPlan } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
-import type { EffectiveRuntimeSettings, EnabledSkillLibrary, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
+import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
 import type { Subagent, SubagentStep, SubagentUsage } from "./subagent.js";
 
 export const SESSION_TITLE_MAX_CHARACTERS = 24;
@@ -79,6 +79,10 @@ export interface Session {
    * use any remote machine. Local execution is always available either way.
    */
   remoteRunnerHostIds?: string[];
+  /** Enables automatic Reviewer Specialist tasks for this Session only. */
+  reviewerAutomaticReviewEnabled: boolean;
+  /** Quick is the default; Deep adds semantic verification for this Session. */
+  reviewerSpecialistLevel: ReviewerSpecialistLevel;
   /** @deprecated Legacy Semantic Review catalog compatibility; no runtime reviewer consumes it. */
   semanticReviewEnabled: boolean;
   settingsOverrides: RuntimeSettingsOverrides;

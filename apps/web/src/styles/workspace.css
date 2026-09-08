@@ -205,8 +205,13 @@
 .reviewer-control-card > header small { color: var(--muted); font-size: 11px; }
 .reviewer-control-card > header i { border-radius: 999px; background: var(--surface-track); padding: 4px 9px; color: var(--muted); font-size: 11px; font-style: normal; font-weight: 750; }
 .reviewer-control-card > header i.on { background: var(--success-tint); color: var(--success); }
-.reviewer-control-level { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); padding-top: 10px; color: var(--muted); font-size: 12px; }
-.reviewer-control-level strong { color: var(--text-heading); font-size: 12px; }
+.reviewer-control-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.reviewer-control-setting > span { display: grid; }
+.reviewer-control-setting strong { color: var(--text-heading); font-size: 12px; }
+.reviewer-control-setting small { color: var(--muted); font-size: 10px; line-height: 1.35; }
+.reviewer-control-level { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.reviewer-control-level select { min-width: 92px; height: 31px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 4px 28px 4px 10px; color: var(--text-heading); font-size: 12px; font-weight: 700; }
+.reviewer-control-level select:disabled { cursor: wait; opacity: .6; }
 .reviewer-control-card > button { width: 100%; min-height: 36px; }
 .reviewer-control-card > button:disabled { cursor: not-allowed; opacity: .55; }
 /* Activity belongs to the Session; management does not acquire its write lease. */

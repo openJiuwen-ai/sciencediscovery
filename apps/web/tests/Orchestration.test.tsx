@@ -29,21 +29,17 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const timestamp = "2026-07-15T00:00:00.000Z";
 const noopToggle = () => undefined;
 
-test("built-in Reviewer Specialist exposes the configured Quick/Deep control", () => {
+test("built-in Reviewer Specialist explains that Quick/Deep is chosen per Session", () => {
   const html = renderToStaticMarkup(createElement(BuiltInReviewerSpecialist, {
     busy: true,
     enabled: true,
-    level: "deep",
-    onLevelChange: () => undefined,
     onToggle: noopToggle,
   }));
 
-  assert.match(html, /aria-label="Reviewer Specialist level"/);
-  assert.match(html, /<option value="quick">Quick<\/option>/);
-  assert.match(html, /<option value="deep" selected="">Deep<\/option>/);
-  assert.doesNotMatch(html, /value="smart"/);
+  assert.match(html, /Choose the level of Quick\/Deep per Session\./);
+  assert.doesNotMatch(html, /<select/);
   assert.doesNotMatch(html, /Completed-review handoff/);
-  assert.match(html, /<select[^>]*disabled=""/);
+  assert.match(html, /<button[^>]*disabled=""/);
   assert.match(html, /aria-checked="true"/);
 });
 
