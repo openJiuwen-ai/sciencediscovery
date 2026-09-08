@@ -232,6 +232,7 @@ import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 // App layer so the right-rail card can open it directly (previously the only
 // entries were the per-product modals).
 const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
+const KnowledgeEnginePage = lazy(() => import("./knowledge-engine/KnowledgeEnginePage.js").then((m) => ({ default: m.KnowledgeEnginePage })));
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ApprovalModeToggle } from "./composer/ApprovalModeToggle.js";
@@ -1101,6 +1102,7 @@ export function App() {
   // button). The snapshot is shared via useMemorySubgraph so the explorer never
   // re-fetches what the card already polled.
   const [memoryExplorerOpen, setMemoryExplorerOpen] = useState(false);
+  const [knowledgeEngineOpen, setKnowledgeEngineOpen] = useState(false);
   // A graph node a report chip asked to open; MemoryGraphView selects it on
   // change, then clears the pending state. Set by handleChipClick (paper chips).
   const [pendingMemoryNode, setPendingMemoryNode] = useState<{ label: MemoryGraphNodeLabel; id: string } | undefined>();
@@ -4102,6 +4104,7 @@ export function App() {
         <div className="sidebar-quick-actions" aria-label="Workbench navigation">
           <button type="button" onClick={() => void openGlobalSearch()}><span><SearchIcon size={16} /></span><span>{t("app.search")}</span><kbd>Ctrl K</kbd></button>
           <button type="button" className={workspaceView === "usage" ? "active" : undefined} onClick={() => void openUsageView()}><span><SparkleIcon size={16} /></span><span>{t("app.usage")}</span></button>
+          <button type="button" onClick={() => setKnowledgeEngineOpen(true)}><span><SparkleIcon size={16} /></span><span>Knowledge Engine</span></button>
           <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); if (workspaceCollapsed) setWorkspaceCollapsed(false); else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
         </div>
         <button className="settings-button" onClick={() => { if (showConfig) cancelSystemSettings(); else openSystemSettings(); }}>
@@ -4692,6 +4695,13 @@ export function App() {
         provenance={workspaceFileProvenanceTarget.provenance}
       /> : null}
 
+      {knowledgeEngineOpen ? (
+        <ErrorBoundary label="KnowledgeEngine" onError={(message) => { reportError(message); setKnowledgeEngineOpen(false); }}>
+          <Suspense fallback={null}>
+            <KnowledgeEnginePage client={client} onClose={() => setKnowledgeEngineOpen(false)} />
+          </Suspense>
+        </ErrorBoundary>
+      ) : null}
       {memoryExplorerOpen && session && memorySubgraph ? (
         <ErrorBoundary label="ScienceMemory" onError={(message) => { reportError(message); setMemoryExplorerOpen(false); }}>
           <Suspense fallback={null}>

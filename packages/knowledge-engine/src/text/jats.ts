@@ -135,9 +135,22 @@ export function decodeXmlEntities(value: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_match, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) => safeCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, dec: string) => safeCodePoint(Number.parseInt(dec, 10)))
     .replace(/&amp;/g, "&");
+}
+
+/** fromCodePoint throws RangeError on out-of-range input — a malformed JATS
+ *  numeric entity must degrade, never crash the conversion. */
+function safeCodePoint(value: number): string {
+  if (!Number.isFinite(value) || value < 0 || value > 0x10ffff) {
+    return "�";
+  }
+  try {
+    return String.fromCodePoint(value);
+  } catch {
+    return "�";
+  }
 }
 
 // ---------------------------------------------------------------------------

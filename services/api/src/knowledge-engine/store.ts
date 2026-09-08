@@ -375,6 +375,60 @@ export class KnowledgeEngineStore {
 
   // -------------------------------------------------------------- documents
 
+  /** Per-KB counts via SQL aggregates — never hydrates fulltext/embeddings
+   *  just to count (the list endpoints' job). */
+  countKbStats(kbId: string): { documents: number; documentsReady: number; documentsError: number; entities: number; edges: number } {
+    const docs = this.database
+      .prepare(
+        `SELECT count(*) AS total,
+                sum(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready,
+                sum(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error
+         FROM ke_documents WHERE kb_id = ?`,
+      )
+      .get(kbId) as { total: number; ready: number | null; error: number | null };
+    const entities = this.database.prepare("SELECT count(*) AS total FROM ke_entities WHERE kb_id = ?").get(kbId) as {
+      total: number;
+    };
+    const edges = this.database.prepare("SELECT count(*) AS total FROM ke_edges WHERE kb_id = ?").get(kbId) as {
+      total: number;
+    };
+    return {
+      documents: Number(docs.total),
+      documentsReady: Number(docs.ready ?? 0),
+      documentsError: Number(docs.error ?? 0),
+      entities: Number(entities.total),
+      edges: Number(edges.total),
+    };
+  }
+
+  /** Documents WITHOUT the fulltext column — the lean list shape the graph
+   *  page polls. source_meta stays (small, carries watermarks/channels). */
+  listDocumentsLean(kbId: string, options: { status?: KeDocumentStatus; limit?: number } = {}): KeDocumentRow[] {
+    const limit = options.limit ?? 10_000;
+    const columns =
+      "id, kb_id, source_uri, dedup_key, title, authors, year, venue, abstract, NULL AS fulltext, ref_ids, status, source_meta, created_at, updated_at";
+    const rows = (
+      options.status
+        ? this.database
+            .prepare(`SELECT ${columns} FROM ke_documents WHERE kb_id = ? AND status = ? ORDER BY created_at, id LIMIT ?`)
+            .all(kbId, options.status, limit)
+        : this.database.prepare(`SELECT ${columns} FROM ke_documents WHERE kb_id = ? ORDER BY created_at, id LIMIT ?`).all(kbId, limit)
+    ) as Array<Record<string, unknown>>;
+    return rows.map(mapDocument);
+  }
+
+  /** Entities WITHOUT the embedding BLOB — the graph payload shape. */
+  listEntitiesForGraph(kbId: string, options: { limit?: number } = {}): KeEntityRow[] {
+    const limit = options.limit ?? 50_000;
+    const columns =
+      "id, kb_id, name, normalized_name, type, description, aliases, NULL AS embedding, support_count, trust_level, first_seen_doc, community_id, created_at, updated_at";
+    const rows = this.database
+      .prepare(`SELECT ${columns} FROM ke_entities WHERE kb_id = ? ORDER BY support_count DESC, id LIMIT ?`)
+      .all(kbId, limit) as Array<Record<string, unknown>>;
+    return rows.map(mapEntity);
+  }
+
+
   /**
    * Insert or update a document by (kb_id, dedup_key). Returns the stored row.
    * Update semantics: passing undefined keeps the stored value; an explicit
@@ -828,7 +882,7 @@ export class KnowledgeEngineStore {
     });
   }
 
-  listJobs(options: { type?: string; status?: KeJobStatus; limit?: number } = {}): KeJobRow[] {
+  listJobs(options: { type?: string; status?: KeJobStatus; kbId?: string; limit?: number } = {}): KeJobRow[] {
     const limit = options.limit ?? 1_000;
     const clauses: string[] = [];
     const params: Array<string | number> = [];
@@ -839,6 +893,10 @@ export class KnowledgeEngineStore {
     if (options.status) {
       clauses.push("status = ?");
       params.push(options.status);
+    }
+    if (options.kbId) {
+      clauses.push("json_extract(payload, '$.kbId') = ?");
+      params.push(options.kbId);
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.database

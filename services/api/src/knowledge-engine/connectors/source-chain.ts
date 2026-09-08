@@ -39,6 +39,7 @@ import type { ScholarlyTransport } from "./transport.js";
 import { NotFoundError, RateLimitError, paperDedupKey, type PaperConnector, type PaperRef } from "./types.js";
 
 const MAX_PDF_BYTES = 80 * 1024 * 1024; // 80 MB safety cap
+const MAX_REDIRECT_HOPS = 5;
 
 export interface SourceChainConfig {
   readonly transport: ScholarlyTransport;
@@ -179,31 +180,53 @@ export async function downloadPaperPdf(
  * Fetch a URL and validate it is actually a PDF.
  * Returns null for DEFINITIVE misses (404, non-PDF content, oversize).
  * Throws for transient failures (timeout, 5xx, network) — retryable.
+ *
+ * Redirects are followed MANUALLY with the SSRF guard re-applied per hop:
+ * publisher URLs come from untrusted upstream metadata and 302-ing to a
+ * private address must not slip past the initial-URL check. (Residual
+ * DNS-rebinding TOCTOU between lookup and connect is accepted and noted.)
  */
 async function fetchPdf(
   url: string,
   transport: ScholarlyTransport,
   assertUrl: (url: string) => Promise<void>,
 ): Promise<Uint8Array | null> {
-  await assertUrl(url);
-  const response = await transport.get(url, {
-    headers: { accept: "application/pdf,*/*" },
-    timeoutMs: 120_000,
-  });
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop += 1) {
+    await assertUrl(current);
+    const response = await transport.get(current, {
+      headers: { accept: "application/pdf,*/*" },
+      redirect: "manual",
+      timeoutMs: 120_000,
+    });
 
-  if (response.status === 404 || response.status === 410) return null; // definitive
-  if (response.status >= 500) throw new Error(`HTTP ${response.status} from ${new URL(url).host}`); // transient
-  if (response.status !== 200) return null; // other 4xx — definitive miss
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.header("location");
+      if (!location) return null; // redirect with no target — definitive miss
+      if (hop === MAX_REDIRECT_HOPS) return null;
+      current = new URL(location, current).toString();
+      continue;
+    }
 
-  const contentLength = Number(response.header("content-length") ?? 0);
-  if (contentLength > MAX_PDF_BYTES) return null;
+    if (response.status === 404 || response.status === 410) return null; // definitive
+    if (response.status >= 500) throw new Error(`HTTP ${response.status} from ${new URL(current).host}`); // transient
+    if (response.status !== 200) return null; // other 4xx — definitive miss
 
-  const bytes = await response.bytes();
-  if (bytes.length > MAX_PDF_BYTES) return null;
-  // PDF magic bytes; also allow leading whitespace before %PDF.
-  const head = new TextDecoder("latin1").decode(bytes.subarray(0, 1024));
-  if (!head.includes("%PDF-")) return null;
-  return bytes;
+    const contentLength = Number(response.header("content-length") ?? 0);
+    if (contentLength > MAX_PDF_BYTES) {
+      throw new NotFoundError(`PDF exceeds the 80MB safety cap (content-length ${contentLength})`);
+    }
+
+    const bytes = await response.bytes();
+    if (bytes.length > MAX_PDF_BYTES) {
+      throw new NotFoundError(`PDF exceeds the 80MB safety cap (${bytes.length} bytes)`);
+    }
+    // PDF magic bytes; also allow leading whitespace before %PDF.
+    const head = new TextDecoder("latin1").decode(bytes.subarray(0, 1024));
+    if (!head.includes("%PDF-")) return null;
+    return bytes;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

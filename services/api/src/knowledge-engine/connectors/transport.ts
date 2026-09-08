@@ -44,6 +44,12 @@ export interface ScholarlyResponse {
 export interface ScholarlyRequest {
   readonly headers?: Record<string, string>;
   readonly timeoutMs?: number;
+  /**
+   * Redirect policy. "follow" (default) for metadata APIs; "manual" for
+   * downloads of untrusted URLs, where the caller re-validates every hop
+   * (SSRF guard — see source-chain fetchPdf).
+   */
+  readonly redirect?: "follow" | "manual";
 }
 
 export interface ScholarlyTransport {
@@ -63,6 +69,7 @@ export class HttpScholarlyTransport implements ScholarlyTransport {
     await this.limiter.throttle(host);
     const response = await fetch(url, {
       headers: { "user-agent": this.userAgent, ...options.headers },
+      redirect: options.redirect ?? "follow",
       signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });
     if (response.status === 429) {

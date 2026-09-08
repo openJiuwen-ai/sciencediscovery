@@ -54,6 +54,16 @@ import {
   handleRunEvents as handleEvolveRunEvents,
   handleStopRun as handleEvolveStopRun,
 } from "../evolution/routes.js";
+import {
+  handleKeCreateKb,
+  handleKeGetEntity,
+  handleKeGetGraph,
+  handleKeGetKb,
+  handleKeListDocuments,
+  handleKeListJobs,
+  handleKeListKbs,
+  handleKeSeed,
+} from "../knowledge-engine/routes.js";
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
@@ -265,6 +275,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const {
     artifactManager,
     evolutionStore,
+    keOrchestrator,
+    knowledgeEngineStore,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -2195,6 +2207,46 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const evolveRunStopMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/stop$/);
       if (evolveRunStopMatch && request.method === "POST") {
         await handleEvolveStopRun(response, evolutionStore, evolveOrchestrator, decodeURIComponent(evolveRunStopMatch[1]!));
+        return;
+      }
+
+      // ---------------------------------------------------------- knowledge engine
+      if (url.pathname === "/api/knowledge-engine/kbs" && request.method === "GET") {
+        handleKeListKbs(response, knowledgeEngineStore);
+        return;
+      }
+      if (url.pathname === "/api/knowledge-engine/kbs" && request.method === "POST") {
+        await handleKeCreateKb(request, response, knowledgeEngineStore);
+        return;
+      }
+      const keKbMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)$/);
+      if (keKbMatch && request.method === "GET") {
+        handleKeGetKb(response, knowledgeEngineStore, decodeURIComponent(keKbMatch[1]!));
+        return;
+      }
+      const keSeedMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/seed$/);
+      if (keSeedMatch && request.method === "POST") {
+        await handleKeSeed(request, response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keSeedMatch[1]!));
+        return;
+      }
+      const keDocsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents$/);
+      if (keDocsMatch && request.method === "GET") {
+        handleKeListDocuments(response, knowledgeEngineStore, decodeURIComponent(keDocsMatch[1]!));
+        return;
+      }
+      const keJobsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/jobs$/);
+      if (keJobsMatch && request.method === "GET") {
+        handleKeListJobs(response, knowledgeEngineStore, decodeURIComponent(keJobsMatch[1]!));
+        return;
+      }
+      const keGraphMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/graph$/);
+      if (keGraphMatch && request.method === "GET") {
+        handleKeGetGraph(response, knowledgeEngineStore, decodeURIComponent(keGraphMatch[1]!));
+        return;
+      }
+      const keEntityMatch = url.pathname.match(/^\/api\/knowledge-engine\/entities\/([^/]+)$/);
+      if (keEntityMatch && request.method === "GET") {
+        handleKeGetEntity(response, knowledgeEngineStore, decodeURIComponent(keEntityMatch[1]!));
         return;
       }
 

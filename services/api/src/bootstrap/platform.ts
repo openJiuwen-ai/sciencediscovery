@@ -47,6 +47,15 @@ import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
 import { NativeWebProviderClient, WebBroker } from "@sciencediscovery/data-source";
+import { EmbeddingClient } from "../knowledge-engine/embedding.js";
+import { KeJobRunner } from "../knowledge-engine/job-runner.js";
+import { KeOrchestrator } from "../knowledge-engine/orchestrator.js";
+import { extractPdfText } from "../knowledge-engine/pdf-text.js";
+import { KnowledgeEngineStore } from "../knowledge-engine/store.js";
+import { createScholarlyRateLimiter } from "../knowledge-engine/connectors/rate-limiter.js";
+import { buildSourceChain } from "../knowledge-engine/connectors/source-chain.js";
+import { FixtureScholarlyTransport, HttpScholarlyTransport } from "../knowledge-engine/connectors/transport.js";
+import { BIOMEDICAL_SCHEMA } from "@sciencediscovery/knowledge-engine";
 import type { ServerConfig } from "./config.js";
 
 export interface ApiServerDependencies {
@@ -352,9 +361,76 @@ export function createPlatformServices(
     },
   });
 
+  // The knowledge-engine subsystem: self-contained SQLite store, scholarly
+  // connectors over the shared transport, a serial job runner, and pipeline
+  // helpers (embedding/LLM) resolved from the same model configuration the
+  // agent uses. Everything degrades cleanly: no embedding env → vectors are
+  // skipped, no default task model → extraction jobs fail with a clear error.
+  const knowledgeEngineStore = KnowledgeEngineStore.open(config.dataDir);
+  // Mocked E2E (qa/README.md three-layer model): with a fixture dir set, all
+  // scholarly traffic replays local recordings (unrecorded URLs fail loudly)
+  // and the SSRF DNS guard becomes a no-op — nothing reaches the network.
+  const keFixtureDir = process.env.SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR?.trim();
+  const keTransport = keFixtureDir
+    ? new FixtureScholarlyTransport(keFixtureDir)
+    : new HttpScholarlyTransport(createScholarlyRateLimiter());
+  const keChain = buildSourceChain({
+    transport: keTransport,
+    openalex: {
+      apiKey: process.env.SCIENCE_AGENT_KE_OPENALEX_API_KEY?.trim() || null,
+      // The mailto politeness identity is shared with Unpaywall's contact
+      // email (both identify the operator); separate them here if they diverge.
+      mailto: process.env.SCIENCE_AGENT_KE_UNPAYWALL_EMAIL?.trim() || null,
+    },
+    unpaywall: { email: process.env.SCIENCE_AGENT_KE_UNPAYWALL_EMAIL?.trim() || null },
+  });
+  const keEmbeddingBaseUrl = process.env.SCIENCE_AGENT_KE_EMBEDDING_BASE_URL?.trim();
+  const keEmbeddingApiKey = process.env.SCIENCE_AGENT_KE_EMBEDDING_API_KEY?.trim();
+  const keEmbeddingModel = process.env.SCIENCE_AGENT_KE_EMBEDDING_MODEL?.trim();
+  const keEmbedding = keEmbeddingBaseUrl && keEmbeddingApiKey && keEmbeddingModel
+    ? new EmbeddingClient({ baseUrl: keEmbeddingBaseUrl, apiKey: keEmbeddingApiKey, model: keEmbeddingModel })
+    : undefined;
+  const keOrchestrator = new KeOrchestrator({
+    store: knowledgeEngineStore,
+    chain: keChain,
+    transport: keTransport,
+    schema: BIOMEDICAL_SCHEMA,
+    embedding: keEmbedding,
+    resolveEndpoint: () => {
+      const modelId = store.getGlobalSettings().overrides.modelId;
+      const model = store.getModel(modelId);
+      if (!model) return undefined;
+      return {
+        baseUrl: model.baseUrl,
+        model: model.model,
+        apiToken: store.getModelApiToken(model.id),
+        ...(model.apiProtocol ? { apiProtocol: model.apiProtocol } : {}),
+        ...(model.apiVariant ? { apiVariant: model.apiVariant } : {}),
+      };
+    },
+    paperText: (pdfBytes, docId) =>
+      extractPdfText({
+        pythonPath: config.paperPythonPath,
+        workerPath: config.paperWorkerPath,
+        workDirRoot: resolve(config.dataDir, "knowledge-engine", "staging"),
+        pdfBytes,
+        docId,
+      }),
+    // Fixture mode never touches DNS (see transport selection above).
+    ...(keFixtureDir ? { assertUrl: async () => {} } : {}),
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+  });
+  const keJobRunner = new KeJobRunner(knowledgeEngineStore, {
+    onError: (message, detail) => apiLog.warn("knowledge_engine_jobs", { message, detail }),
+  });
+  keOrchestrator.registerJobs(keJobRunner);
+
   return {
     artifactManager,
     evolutionStore,
+    keJobRunner,
+    keOrchestrator,
+    knowledgeEngineStore,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -426,6 +502,9 @@ export async function initializePlatformServices(
     .catch((error: unknown) => {
       apiLog.warn("evolve_boot_failed", { reason: error instanceof Error ? error.message : String(error) });
     });
+
+  // Recover crash-orphaned KE jobs and resume queue processing.
+  services.keJobRunner.start();
 
   const storedNeo4jPassword = store.getMemoryGraphNeo4jPassword();
   if (storedNeo4jPassword) {

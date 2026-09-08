@@ -339,3 +339,36 @@ test("RateLimitError carries the retry delay", () => {
   const error = new RateLimitError("slow down", 5000);
   assert.equal(error.retryAfterMs, 5000);
 });
+
+test("fetchPdf follows redirects manually and re-validates every hop", async () => {
+  const connector: PaperConnector = {
+    name: "redirector",
+    search: async () => [],
+    fetchMetadata: async () => null,
+    resolvePdf: async () => "https://a.test/p.pdf",
+  };
+  const transport = fakeTransport({
+    "https://a.test/p.pdf": { status: 302, body: "" },
+    "https://evil.test/p.pdf": { status: 200, body: PDF_BYTES },
+  });
+  // Patch the 302 to carry a Location header via a wrapper transport.
+  const wrapping: ScholarlyTransport = {
+    get: async (url, options) => {
+      const response = await transport.get(url, options);
+      if (response.status === 302) {
+        return { ...response, header: (name: string) => (name.toLowerCase() === "location" ? "https://evil.test/p.pdf" : null) };
+      }
+      return response;
+    },
+  };
+  const asserted: string[] = [];
+  const outcome = await downloadPaperPdf([connector], ref(), {
+    transport: wrapping,
+    assertUrl: async (url: string) => {
+      asserted.push(url);
+    },
+  });
+  // Both the initial URL AND the redirect target passed the SSRF guard.
+  assert.deepEqual(asserted, ["https://a.test/p.pdf", "https://evil.test/p.pdf"]);
+  assert.equal(outcome.source, "redirector");
+});
