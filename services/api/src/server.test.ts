@@ -97,6 +97,7 @@ import {
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
 } from "@sciencediscovery/orchestration";
 import { strToU8, zipSync } from "fflate";
+import { RefStore, VersionStore, withWorkspaceMutation, workspaceHeadName } from "@sciencediscovery/cas";
 
 import {
   aggregateToolText,
@@ -5853,6 +5854,51 @@ test("model registry persists multiple profiles and assigns them per session", a
   database.close();
   assert.doesNotMatch(catalog.json, /must-not-persist/);
   assert.doesNotMatch(await readFile(resolve(tempRoot, "catalog.sqlite"), "utf8"), /must-not-persist/);
+});
+
+test("Workspace HTTP writes wait for the active writer and publish refs before returning", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `workspace-admission-${randomUUID()}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { recursive: true, force: true }));
+  const { origin } = await startTestApi(context, dataDir);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ name: "Single writer" }),
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ modelId: model.id, title: "Admission" }),
+  });
+  const store = new SessionStore(dataDir); await store.load();
+  const workspace = store.workspacePath(session.body.id);
+  const versions = new VersionStore(dataDir);
+  for (const multipart of [false, true]) {
+    let entered!: () => void; const started = new Promise<void>((done) => { entered = done; });
+    let release!: () => void; const gate = new Promise<void>((done) => { release = done; });
+    const writer = withWorkspaceMutation(versions, workspace, async () => { entered(); await gate; }, { kind: "running-command" });
+    await started;
+    const name = multipart ? "multipart.txt" : "file.txt";
+    const form = new FormData(); form.append("files", new Blob(["uploaded"]), name);
+    let returned = false;
+    const upload = fetch(`${origin}/api/sessions/${session.body.id}/${multipart ? "workspace/upload" : "files"}`, {
+      method: "POST", headers: multipart ? authorization : { ...authorization, "content-type": "application/json" },
+      body: multipart ? form : JSON.stringify({ path: name, content: "uploaded" }),
+    }).then((response) => { returned = true; return response; });
+    try {
+      await new Promise((done) => setTimeout(done, 60));
+      assert.equal(returned, false);
+      await assert.rejects(access(resolve(workspace, name)), { code: "ENOENT" });
+    } finally { release(); await writer; }
+    const response = await upload;
+    assert.equal(response.status, 201, await response.text());
+    assert.equal(await readFile(resolve(workspace, name), "utf8"), "uploaded");
+    const refs = await RefStore.open(versions);
+    try {
+      const head = refs.head(workspaceHeadName(workspace)); assert.ok(head);
+      const record = await versions.readRecord<{ kind: string }>(head, "WorkspaceMutation");
+      assert.equal(record.value.kind, multipart ? "user-upload" : "user-file-write");
+      await versions.validateClosure(head);
+    } finally { refs.close(); }
+  }
 });
 
 test("WSP-001 multipart upload preserves hashes and exposes specific workspace preview kinds", async (context) => {

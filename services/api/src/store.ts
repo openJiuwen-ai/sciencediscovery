@@ -14,6 +14,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
@@ -380,6 +381,11 @@ export class SessionStoreHttpError extends Error {
 
 export class SessionStore {
   readonly dataDir: string;
+
+  /** File publishers share the Runner's cross-process admission and commit boundary. */
+  async mutateWorkspace<T>(root: string, kind: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    return withWorkspaceMutation(new VersionStore(this.dataDir), root, operation, { kind }, signal);
+  }
   private readonly arrayMutationQueues = new Map<string, Promise<void>>();
   private readonly streamAppendQueues = new Map<string, Promise<void>>();
   private readonly streamTailSequences = new Map<string, number>();

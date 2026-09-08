@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { dirname, resolve } from "node:path";
 import { listSshKeyFiles } from "../ssh-key-files.js";
 
@@ -2117,7 +2118,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
         };
         const parts = await readMultipartUploads(request, uploadLimits.maxRequestBytes);
-        const result: WorkspaceUploadResult = await uploadWorkspaceParts({
+        const result: WorkspaceUploadResult = await withWorkspaceMutation(new VersionStore(store.dataDir), store.workspacePath(sessionId), () => uploadWorkspaceParts({
           conflict,
           limits: uploadLimits,
           listFiles: () => listWorkspaceFiles(store, sessionId),
@@ -2132,7 +2133,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             });
           },
           workspaceRoot: store.workspacePath(sessionId),
-        });
+        }), { kind: "user-upload" });
         // Mirror each uploaded file into a SourceFile node + feeds edge to the
         // session's ResearchGoal. Fire-and-forget: a degraded/unreachable graph
         // never fails the upload (the sink swallows). Only non-failed entries
@@ -2784,15 +2785,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const body = await readJson<UploadFileRequest>(request);
         const target = resolveWorkspaceFile(store.workspacePath(filesMatch[1]!), body.path ?? "");
         if (Buffer.byteLength(body.content ?? "") > 1_000_000) return sendError(response, 413, "File exceeds 1 MB");
-        await mkdir(dirname(target), { recursive: true });
-        await writeFile(target, body.content ?? "", "utf8");
-        await provenanceRecorder.registerWorkspaceArtifact({
-          origin: "user_upload",
-          originMeta: { uploadedFilename: body.path },
-          path: body.path,
-          sessionId: filesMatch[1]!,
-          workspaceRoot: store.workspacePath(filesMatch[1]!),
-        });
+        await withWorkspaceMutation(new VersionStore(store.dataDir), store.workspacePath(filesMatch[1]!), async () => {
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, body.content ?? "", "utf8");
+          await provenanceRecorder.registerWorkspaceArtifact({
+            origin: "user_upload",
+            originMeta: { uploadedFilename: body.path },
+            path: body.path,
+            sessionId: filesMatch[1]!,
+            workspaceRoot: store.workspacePath(filesMatch[1]!),
+          });
+        }, { kind: "user-file-write" });
         sendJson(response, 201, (await listWorkspaceFiles(store, filesMatch[1]!)).find((file) => file.path === body.path));
         return;
       }

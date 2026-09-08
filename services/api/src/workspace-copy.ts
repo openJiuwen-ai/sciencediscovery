@@ -6,6 +6,7 @@ import { constants } from "node:fs";
 import { link, lstat, mkdir, open, realpath, rename, rm, statfs } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { withWorkspaceLease, withWorkspaceLeases, withWorkspaceMutation, type VersionStore } from "@sciencediscovery/cas";
 
 /** Paths are resolved only after the control plane grants source/target Workspace access. */
 async function safePath(root: string, path: string, createParents: boolean): Promise<string> {
@@ -28,7 +29,14 @@ export async function publishWorkspaceFile(input: {
   root: string; path: string; chunks: AsyncIterable<Uint8Array>;
   conflict?: "reject" | "overwrite"; expectedBytes?: number; expectedHash?: string;
   verifySource?: () => Promise<void>; signal?: AbortSignal;
+  versions?: VersionStore;
 }): Promise<{ transferId: string; bytes: number; sha256: string }> {
+  const operation = () => publishUnlocked(input);
+  return input.versions ? withWorkspaceMutation(input.versions, input.root, operation, { kind: "workspace-copy" }, input.signal)
+    : withWorkspaceLease(input.root, operation, input.signal);
+}
+
+async function publishUnlocked(input: Parameters<typeof publishWorkspaceFile>[0]): ReturnType<typeof publishWorkspaceFile> {
   if (input.conflict !== undefined && input.conflict !== "reject" && input.conflict !== "overwrite") throw new Error("Invalid copy conflict policy");
   const target = await safePath(input.root, input.path, true);
   const disk = await statfs(dirname(target));
@@ -82,14 +90,19 @@ export async function publishWorkspaceFile(input: {
 export async function copyWorkspaceFile(input: {
   sourceRoot: string; sourcePath: string; targetRoot: string; targetPath: string;
   conflict?: "reject" | "overwrite"; signal?: AbortSignal;
+  versions?: VersionStore;
 }) {
+  return withWorkspaceLeases([input.sourceRoot, input.targetRoot], () => copyUnlocked(input), input.signal);
+}
+
+async function copyUnlocked(input: Parameters<typeof copyWorkspaceFile>[0]) {
   const sourcePath = await safePath(input.sourceRoot, input.sourcePath, false);
   const source = await open(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await source.stat({ bigint: true });
     if (!before.isFile()) throw new Error("Workspace copy requires a regular file");
     return await publishWorkspaceFile({ root: input.targetRoot, path: input.targetPath, conflict: input.conflict,
-      signal: input.signal, expectedBytes: Number(before.size), chunks: source.createReadStream({ autoClose: false }),
+      versions: input.versions, signal: input.signal, expectedBytes: Number(before.size), chunks: source.createReadStream({ autoClose: false }),
       verifySource: async () => {
         await safePath(input.sourceRoot, input.sourcePath, false);
         const after = await source.stat({ bigint: true });

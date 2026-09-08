@@ -20,6 +20,7 @@ import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencedi
 
 import type { SessionStore } from "./store.js";
 import { publishWorkspaceFile } from "./workspace-copy.js";
+import { VersionStore } from "@sciencediscovery/cas";
 
 export function remoteWorkspaceKey(projectId: string, sessionId: string, namespace?: string, agentId?: string): string {
   const root = `${projectId}/${sessionId}${namespace ? `/runners/${namespace}` : ""}`;
@@ -138,7 +139,7 @@ export async function syncRemoteWorkspace(options: {
         const chunks = runner.streamRemoteWorkspaceFile
           ? await runner.streamRemoteWorkspaceFile(workspaceKey, file.path, options.signal)
           : (async function* () { yield await runner.readRemoteWorkspaceFile(workspaceKey, file.path); })();
-        const copied = await publishWorkspaceFile({ root: workspaceRoot, path: file.path, chunks,
+        const copied = await publishWorkspaceFile({ versions: new VersionStore(options.store.dataDir), root: workspaceRoot, path: file.path, chunks,
           conflict, expectedBytes: file.size, signal: options.signal });
         const agent = options.agentId ? `subagent:${options.agentId}` : "main";
         const logicalPath = options.agentId ? `subagents/${options.agentId}/${file.path}` : file.path;

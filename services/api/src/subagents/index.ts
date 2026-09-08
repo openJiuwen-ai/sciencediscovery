@@ -21,6 +21,7 @@ import { validateSubagentOutputValue } from "../subagent-brief.js";
 import { SessionStore } from "../store.js";
 import { listWorkspaceFiles } from "../artifacts/index.js";
 import { copyWorkspaceFile } from "../workspace-copy.js";
+import { VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 
 /** Session-workspace prefix holding each subagent's private handoff scratch space. */
 export const SUBAGENT_PRIVATE_WORKSPACE_PREFIX = "subagents/";
@@ -96,6 +97,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
   const selected = selectSubagentHandoffInputs(availableParentInputFiles, input);
   const parentInputFiles = selected.files;
   await mkdir(childRoot, { recursive: true });
+  const versions = new VersionStore(store.dataDir);
   const inputPaths: string[] = [];
   const skippedInputPaths: NonNullable<NonNullable<Subagent["handoff"]>["skippedInputPaths"]> = [...selected.skippedInputPaths];
   let copiedBytes = 0;
@@ -118,7 +120,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
     const snapshotDestination = resolveWorkspaceFile(childRoot, copiedPath);
     const originalPathDestination = resolveWorkspaceFile(childRoot, file.path);
     try {
-      const copied = await copyWorkspaceFile({ sourceRoot: workspaceRoot, sourcePath: file.path, targetRoot: childRoot, targetPath: copiedPath });
+      const copied = await copyWorkspaceFile({ versions, sourceRoot: workspaceRoot, sourcePath: file.path, targetRoot: childRoot, targetPath: copiedPath });
       const snapshotStat = await stat(snapshotDestination);
       provenanceInputs.push({
         mode: "write",
@@ -132,7 +134,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
         subagentId,
       });
       if (originalPathDestination !== snapshotDestination) {
-        const originalCopy = await copyWorkspaceFile({ sourceRoot: workspaceRoot, sourcePath: file.path, targetRoot: childRoot, targetPath: file.path });
+        const originalCopy = await copyWorkspaceFile({ versions, sourceRoot: workspaceRoot, sourcePath: file.path, targetRoot: childRoot, targetPath: file.path });
         const originalStat = await stat(originalPathDestination);
         provenanceInputs.push({
           mode: "write",
@@ -158,7 +160,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
     }
   }
   const manifestTarget = resolveWorkspaceFile(childRoot, "handoff.json");
-  await writeFile(manifestTarget, `${JSON.stringify({
+  await withWorkspaceMutation(versions, childRoot, () => writeFile(manifestTarget, `${JSON.stringify({
     createdAt: new Date().toISOString(),
     inputPaths,
     parentInputPaths: parentInputFiles.map((file) => file.path),
@@ -166,7 +168,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
     workspaceId,
     ...(skippedInputPaths.length ? { skippedInputPaths } : {}),
     subagentId,
-  }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  }, null, 2)}\n`, { encoding: "utf8", flag: "wx" }), { kind: "subagent-handoff" });
   const manifestStat = await stat(manifestTarget);
   provenanceInputs.push({
     mode: "write",

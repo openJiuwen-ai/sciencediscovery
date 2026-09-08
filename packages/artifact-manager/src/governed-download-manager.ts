@@ -75,6 +75,7 @@ export interface GovernedDownloadStore {
   resolveProxy(policy?: ProxyPolicy): ResolvedProxy;
   workspacePath(sessionId: string): string;
   workspaceLocation?(sessionId: string, path: string): { root: string; path: string };
+  mutateWorkspace?<T>(root: string, kind: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 
 const DEFAULT_MAX_ARTIFACT_BYTES = 5 * 1024 * 1024 * 1024;
@@ -544,6 +545,15 @@ export class GovernedDownloadManager {
     const location = this.store.workspaceLocation?.(job.sessionId, plan.destination.path)
       ?? { root: this.store.workspacePath(job.sessionId), path: plan.destination.path };
     const workspaceRoot = location.root;
+    const operation = () => this.downloadIntoWorkspace(job, plan, candidate, location, signal);
+    const completed = await (this.store.mutateWorkspace ? this.store.mutateWorkspace(workspaceRoot, "governed-download", operation, signal) : operation());
+    // Observers may act on terminal jobs; publish that state only after the file/ref commit.
+    await this.store.replaceArtifactJob(completed);
+  }
+
+  private async downloadIntoWorkspace(job: ArtifactJob, plan: ArtifactPlan, candidate: ArtifactCandidate,
+    location: { root: string; path: string }, signal: AbortSignal): Promise<ArtifactJob> {
+    const workspaceRoot = location.root;
     const finalPath = resolveWorkspaceFile(workspaceRoot, location.path);
     const stagingPath = resolve(workspaceRoot, ".sciencediscovery", "staging", `${job.id}.part`);
     await assertSafeArtifactPath(workspaceRoot, finalPath);
@@ -638,7 +648,7 @@ export class GovernedDownloadManager {
         plan: structuredClone(plan),
       });
     }
-    await this.store.replaceArtifactJob(completed);
+    return completed;
   }
 
   private async updateProgress(
