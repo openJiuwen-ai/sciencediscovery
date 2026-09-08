@@ -1,0 +1,152 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import { expect } from "@playwright/test";
+
+import { test } from "./helpers/e2e.ts";
+import { scriptedModel } from "./helpers/journeys.ts";
+
+test.use({ locale: "zh-CN" });
+
+/**
+ * E2E-META
+ * Purpose: After a seeded knowledge base ingests, the researcher sees the entity graph render without console errors and can drill into an entity's evidence-backed detail.
+ * Steps:
+ *   1. Open the knowledge-engine page and create a knowledge base through the UI.
+ *   2. Register a journey-owned stub as the default model so the extraction pipeline has a non-agent LLM.
+ *   3. Issue the seed query through the ke-seed panel and wait for the pipeline to succeed.
+ *   4. Observe the graph canvas render non-empty with zero console errors.
+ *   5. Click a graph node and verify the entity detail panel shows the entity with its evidence quote and source document.
+ * Environment: Isolated local stack at E2E_BASE_URL started with SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR pointing at test/fixtures/scholarly; zh-CN locale.
+ * Type: mocked
+ * LLM: journey-registered OpenAI-compatible HTTP stub on 127.0.0.1 returning a fixed extraction JSON for the non-agent pipeline calls.
+ * WebSearch: none
+ * PaperSources: fixture replay only — all scholarly connector responses come from test/fixtures/scholarly; un-recorded URLs fail loudly by design.
+ * MCP: none
+ * OtherExternal: none — non-local browser requests are aborted by the network guard.
+ * Credentials: E2E_API_TOKEN for the isolated local API only; the stub token has no external access.
+ * CostSideEffects: no external cost; knowledge-base records live inside the disposable isolated data dir.
+ */
+test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, page }) => {
+  test.setTimeout(300_000);
+  journey.scenario({
+    goal: "种子摄取完成后，研究人员能在图谱页看到实体关系图（无 console error），"
+      + "点开一个实体能看到带证据引用的详情面板。",
+    preconditions: [
+      "隔离栈以 fixture 模式启动，学术源全部走本地录制回放，不出网",
+      "浏览器已持有访问 token，语言为 zh-CN",
+      "抽取管线模型由旅程注册的本地 stub 提供，stub 返回含已知实体/关系/逐字证据的固定 JSON",
+    ],
+  });
+  await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-locale", "zh-CN"));
+
+  const seedQuery = "Ebola virus glycoprotein antibody neutralization";
+  const kbName = `J-KE2 知识库 ${Date.now()}`;
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+
+  const stub = await scriptedModel([
+    [
+      {
+        text: JSON.stringify({
+          entities: [
+            { name: "Ebola virus glycoprotein", type: "protein", quote: "the Ebola virus glycoprotein mediates entry" },
+            { name: "mAb114", type: "antibody", quote: "mAb114 neutralizes Ebola virus" },
+          ],
+          relations: [
+            { src: "mAb114", dst: "Ebola virus glycoprotein", type: "binds", quote: "mAb114 binds the Ebola virus glycoprotein" },
+          ],
+        }),
+      },
+    ],
+  ]);
+
+  try {
+    await journey.step(
+      "打开知识引擎页并建库",
+      "知识引擎页可见；通过 ke-create-kb 建立新库并成为当前库。",
+      async () => {
+        await page.goto("/");
+        await page.getByRole("button", { name: /知识引擎/ }).click();
+        await expect(page.getByTestId("knowledge-engine-page")).toBeVisible();
+        const panel = page.getByTestId("ke-create-kb");
+        await panel.getByRole("textbox").first().fill(kbName);
+        await panel.getByRole("button").first().click();
+        await expect(page.getByText(kbName).first()).toBeVisible({ timeout: 30_000 });
+      },
+    );
+
+    await journey.step(
+      "注册抽取 stub 并发起种子",
+      "stub 注册为默认模型后，ke-seed 发起种子查询，任务进入运行。",
+      async () => {
+        const api = page.request;
+        const provider = await api.post(`${apiBaseUrl()}/api/providers`, {
+          headers: authorizationHeader(),
+          data: { name: `J-KE2 stub ${Date.now()}`, baseUrl: stub.baseUrl, apiToken: stub.apiToken, kind: "openai" },
+        });
+        const providerBody = await provider.json() as { id: string };
+        const model = await api.post(`${apiBaseUrl()}/api/providers/${providerBody.id}/models`, {
+          headers: authorizationHeader(),
+          data: { modelId: stub.model, displayName: `J-KE2 ${stub.model}` },
+        });
+        const modelBody = await model.json() as { id: string };
+        await api.put(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader(), data: { modelId: modelBody.id } });
+
+        const seed = page.getByTestId("ke-seed");
+        await seed.getByRole("textbox").first().fill(seedQuery);
+        await seed.getByRole("button").first().click();
+        await expect(page.getByTestId("ke-job-status")).toContainText(/pending|running|等待|运行/, { timeout: 30_000 });
+      },
+    );
+
+    await journey.step(
+      "等待管线完成并观察图谱渲染",
+      "任务成功后图谱画布渲染出节点与边（非空），期间无 console error。",
+      async () => {
+        await expect(page.getByTestId("ke-job-status")).toContainText(/succeeded|成功|完成/, { timeout: 240_000 });
+        const canvas = page.getByTestId("ke-graph-canvas");
+        await expect(canvas).toBeVisible({ timeout: 60_000 });
+        await expect(canvas.locator("*").first()).toBeVisible({ timeout: 60_000 });
+      },
+    );
+
+    await journey.step(
+      "点开实体详情",
+      "点击图中一个节点，ke-entity-detail 面板展示实体名称与证据（逐字引用及来源文档）。",
+      async () => {
+        const canvas = page.getByTestId("ke-graph-canvas");
+        const node = canvas.locator("canvas").or(canvas.locator("*")).first();
+        await node.click({ force: true });
+        const detail = page.getByTestId("ke-entity-detail");
+        await expect(detail).toBeVisible({ timeout: 30_000 });
+        await expect(detail).toContainText(/Ebola virus glycoprotein|mAb114/);
+        await expect(detail).toContainText(/mAb114 binds the Ebola virus glycoprotein|mediates entry/);
+      },
+    );
+
+    await journey.step(
+      "整个旅程零 console error",
+      "旅程结束时收集到的 console error 为空。",
+      async () => {
+        expect(consoleErrors).toEqual([]);
+      },
+    );
+  } finally {
+    await stub.stop();
+  }
+});
