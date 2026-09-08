@@ -48,7 +48,7 @@ const stub = createServer(async (request, response) => {
       description: "Inspect selected file", prompt: "Use selected.txt; verify no hidden.txt is available, change your copy, and declare result.txt as an Artifact.",
       inputPaths: ["selected.txt"], subagent_type: "general-purpose",
     } };
-    if (child && results.length === 0) call = { name: "run_shell", arguments: { code:
+    if (child && results.length === 0) call = { name: "run_shell", arguments: { command:
       "test -f selected.txt && test ! -f hidden.txt && printf 'child copy' > selected.txt && printf 'isolated result' > result.txt && echo isolated" } };
     if (child && results.length === 1) call = { name: "declare_artifact", arguments: { path: "result.txt", name: "Independent child result" } };
     response.writeHead(200, { "content-type": "text/event-stream" });
