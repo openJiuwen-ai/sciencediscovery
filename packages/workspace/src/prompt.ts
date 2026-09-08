@@ -345,6 +345,10 @@ export interface WorkspaceAgentOptions {
   memoryGraphEnabled?: boolean;
   /** Cross-session memory-graph substring search (`query_graph` tool). */
   queryGraph?: WorkspaceToolOptions["queryGraph"];
+  /** Knowledge-engine consumption port (`list_knowledge_bases` /
+   *  `concept_explore` / `deep_dive` / `entity_unified_search` /
+   *  `validate_entities` / `gap_candidates` tools). */
+  knowledgeEngine?: WorkspaceToolOptions["knowledgeEngine"];
   /** Create an Evidence node + extracts edge, Paper → Evidence
    * (`declare_evidence` tool). */
   declareEvidence?: (input: DeclareEvidenceInput) => Promise<DeclareResult>;

@@ -173,6 +173,9 @@ test("seed → ingest(JATS) → extract: full pipeline builds the graph", async 
   // Graph: 3 entities, 2 verified edges (fabricated relation dropped by the gate).
   const entities = store.listEntities(kb.id);
   assert.equal(entities.length, 3);
+  // Extractor-provided aliases persist (the resolution chain depends on them).
+  const glycoprotein = entities.find((entity) => entity.name === "glycoprotein");
+  assert.deepEqual(glycoprotein?.aliases, ["GP"]);
   const edges = store.listEdges(kb.id);
   assert.equal(edges.length, 2);
   assert.deepEqual(

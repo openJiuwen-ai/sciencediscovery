@@ -599,12 +599,31 @@ export class KnowledgeEngineStore {
     name: string;
     type: string;
     description?: string | null;
+    /** Explicit aliases from the extractor (merged, capped, deduplicated). */
+    aliases?: readonly string[];
     firstSeenDoc?: string | null;
     incrementSupport?: boolean;
   }): KeEntityRow {
     const normalizedName = normalizeEntityName(input.name);
     const timestamp = now();
     return this.inTransaction(() => {
+      const mergeAliases = (current: string[]): string[] => {
+        // Cap alias growth: hot entities would otherwise accumulate an
+        // unbounded surface-form list over the KB's lifetime.
+        const merged = [...current];
+        for (const alias of input.aliases ?? []) {
+          const trimmed = alias.trim();
+          if (
+            trimmed &&
+            normalizeEntityName(trimmed) !== normalizedName &&
+            !merged.some((existing) => normalizeEntityName(existing) === normalizeEntityName(trimmed)) &&
+            merged.length < MAX_ENTITY_ALIASES
+          ) {
+            merged.push(trimmed);
+          }
+        }
+        return merged;
+      };
       const existing = this.database
         .prepare("SELECT * FROM ke_entities WHERE kb_id = ? AND normalized_name = ? AND type = ?")
         .get(input.kbId, normalizedName, input.type) as Record<string, unknown> | undefined;
@@ -614,11 +633,22 @@ export class KnowledgeEngineStore {
           .prepare(
             `INSERT INTO ke_entities
                (id, kb_id, name, normalized_name, type, description, aliases, support_count, first_seen_doc, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, '[]', 1, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
           )
-          .run(id, input.kbId, input.name, normalizedName, input.type, input.description ?? null, input.firstSeenDoc ?? null, timestamp, timestamp);
+          .run(
+            id,
+            input.kbId,
+            input.name,
+            normalizedName,
+            input.type,
+            input.description ?? null,
+            JSON.stringify(mergeAliases([])),
+            input.firstSeenDoc ?? null,
+            timestamp,
+            timestamp,
+          );
       } else {
-        const aliases = parseJson<string[]>(existing["aliases"], []);
+        const aliases = mergeAliases(parseJson<string[]>(existing["aliases"], []));
         // Cap alias growth: hot entities would otherwise accumulate an
         // unbounded surface-form list over the KB's lifetime.
         if (
@@ -715,6 +745,41 @@ export class KnowledgeEngineStore {
     return rows.map((row) => row.document_id);
   }
 
+  /** FTS5 document hits with a match snippet (unified-search documents source). */
+  searchDocuments(kbId: string, query: string, limit = 5): Array<{ docId: string; title: string; snippet: string }> {
+    const ftsQuery = toFtsQuery(query);
+    if (ftsQuery === null) {
+      return [];
+    }
+    const rows = this.database
+      .prepare(
+        `SELECT d.id, d.title,
+                snippet(ke_documents_fts, 4, '[', ']', '…', 24) AS snippet
+         FROM ke_documents_fts
+         JOIN ke_documents d ON d.id = ke_documents_fts.document_id
+         WHERE ke_documents_fts MATCH ? AND ke_documents_fts.kb_id = ?
+         ORDER BY ke_documents_fts.rank, d.id LIMIT ?`,
+      )
+      .all(ftsQuery, kbId, limit) as Array<{ id: string; title: string; snippet: string }>;
+    return rows.map((row) => ({ docId: row.id, title: row.title, snippet: row.snippet }));
+  }
+
+  /** Top entities by support (resident summary, gap analysis input). */
+  topEntitiesBySupport(kbId: string, limit: number): KeEntityRow[] {
+    const rows = this.database
+      .prepare("SELECT * FROM ke_entities WHERE kb_id = ? ORDER BY support_count DESC, id LIMIT ?")
+      .all(kbId, limit) as Array<Record<string, unknown>>;
+    return rows.map(mapEntity);
+  }
+
+  /** Top edges by support (resident summary strongest-relations slice). */
+  topEdgesBySupport(kbId: string, limit: number): KeEdgeRow[] {
+    const rows = this.database
+      .prepare("SELECT * FROM ke_edges WHERE kb_id = ? ORDER BY support_count DESC, id LIMIT ?")
+      .all(kbId, limit) as Array<Record<string, unknown>>;
+    return rows.map(mapEdge);
+  }
+
   // ------------------------------------------------------------------ edges
 
   /**
@@ -781,12 +846,19 @@ export class KnowledgeEngineStore {
 
   listEdges(kbId: string, options: { entityId?: string; limit?: number } = {}): KeEdgeRow[] {
     const limit = options.limit ?? 100_000;
+    // Strongest-first: consumers (deep_dive, neighborhood reads) treat the
+    // leading rows as the best-supported evidence — a bare id order would
+    // feed them random-UUID arbitrariness.
     const rows = (
       options.entityId
         ? this.database
-            .prepare("SELECT * FROM ke_edges WHERE kb_id = ? AND (src_id = ? OR dst_id = ?) ORDER BY id LIMIT ?")
+            .prepare(
+              "SELECT * FROM ke_edges WHERE kb_id = ? AND (src_id = ? OR dst_id = ?) ORDER BY support_count DESC, id LIMIT ?",
+            )
             .all(kbId, options.entityId, options.entityId, limit)
-        : this.database.prepare("SELECT * FROM ke_edges WHERE kb_id = ? ORDER BY id LIMIT ?").all(kbId, limit)
+        : this.database
+            .prepare("SELECT * FROM ke_edges WHERE kb_id = ? ORDER BY support_count DESC, id LIMIT ?")
+            .all(kbId, limit)
     ) as Array<Record<string, unknown>>;
     return rows.map(mapEdge);
   }

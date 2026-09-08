@@ -22,3 +22,6 @@ export * from "./extraction/prompt.js";
 export * from "./growth/selection.js";
 export * from "./growth/convergence.js";
 export * from "./growth/patch-queries.js";
+export * from "./graph/explore.js";
+export * from "./graph/gaps.js";
+export * from "./graph/resident-summary.js";

@@ -52,6 +52,7 @@ import { KeJobRunner } from "../knowledge-engine/job-runner.js";
 import { KeOrchestrator } from "../knowledge-engine/orchestrator.js";
 import { extractPdfText } from "../knowledge-engine/pdf-text.js";
 import { KnowledgeEngineStore } from "../knowledge-engine/store.js";
+import { createKnowledgeEngineTools } from "../knowledge-engine/tools.js";
 import { createScholarlyRateLimiter } from "../knowledge-engine/connectors/rate-limiter.js";
 import { buildSourceChain } from "../knowledge-engine/connectors/source-chain.js";
 import { FixtureScholarlyTransport, HttpScholarlyTransport } from "../knowledge-engine/connectors/transport.js";
@@ -424,6 +425,10 @@ export function createPlatformServices(
     onError: (message, detail) => apiLog.warn("knowledge_engine_jobs", { message, detail }),
   });
   keOrchestrator.registerJobs(keJobRunner);
+  // Consumption tools (concept_explore / deep_dive / unified search /
+  // validate / gaps) — a plain port object; the agent runtime registers the
+  // LLM tools when this is present.
+  const knowledgeEngineTools = createKnowledgeEngineTools(knowledgeEngineStore);
 
   return {
     artifactManager,
@@ -431,6 +436,7 @@ export function createPlatformServices(
     keJobRunner,
     keOrchestrator,
     knowledgeEngineStore,
+    knowledgeEngineTools,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -544,6 +550,7 @@ export async function initializePlatformServices(
         config,
         memoryGraphClient,
         evolveRuntimeFactory,
+        services.knowledgeEngineTools,
       );
     }
   }

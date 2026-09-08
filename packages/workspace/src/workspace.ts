@@ -71,7 +71,7 @@ import type {
   UninstallEnvironmentRequest,
   WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
-import { Type, type TSchema } from "typebox";
+import { Type, type Static, type TSchema } from "typebox";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -300,6 +300,28 @@ export interface WorkspaceToolOptions {
   }>;
   /** Cross-session memory-graph substring search (the `query_graph` LLM tool). */
   queryGraph?: (query: string) => Promise<MemoryGraphMatchResponse>;
+  /**
+   * Knowledge-engine consumption port (the `list_knowledge_bases` /
+   * `concept_explore` / `deep_dive` / `entity_unified_search` /
+   * `validate_entities` / `gap_candidates` LLM tools). Results are
+   * JSON-serializable; the workspace package stays agnostic of the KE
+   * domain types by design.
+   */
+  knowledgeEngine?: {
+    listKnowledgeBases: () => Promise<unknown>;
+    conceptExplore: (kbId: string, entity: string, opts: { hops?: 1 | 2; limit?: number }) => Promise<unknown>;
+    deepDive: (kbId: string, entity: string, opts: { maxEdges?: number }) => Promise<unknown>;
+    entityUnifiedSearch: (
+      kbId: string,
+      entity: string,
+      opts: { graphLimit?: number; maxEdges?: number; docTopK?: number },
+    ) => Promise<unknown>;
+    validateEntities: (kbId: string, names: string[]) => Promise<unknown>;
+    gapCandidates: (
+      kbId: string,
+      opts: { topN?: number; signals?: Array<"holes" | "conflicts" | "transfers"> },
+    ) => Promise<unknown>;
+  };
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
    * `declare_evidence` LLM tool). Returns a structured error code instead of
    * degrading. */
@@ -1150,6 +1172,112 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: declareClaimParameters,
     };
     tools.push(declareClaim);
+  }
+  if (options.knowledgeEngine) {
+    const knowledgeEngine = options.knowledgeEngine;
+    const keTool = <T extends TSchema>(
+      name: string,
+      label: string,
+      description: string,
+      parameters: T,
+      invoke: (params: Static<T>) => Promise<unknown>,
+    ): AgentTool<T> => ({
+      description,
+      execute: async (_toolCallId, params) => {
+        const result = await invoke(params);
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+      isConcurrencySafe: () => true,
+      label,
+      name,
+      parameters,
+    });
+    const kbIdField = Type.String({ minLength: 1, description: "Knowledge base id (see list_knowledge_bases)." });
+
+    tools.push(
+      keTool(
+        "list_knowledge_bases",
+        "List knowledge bases",
+        "List the knowledge bases built by the knowledge engine, with per-KB stats (documents, ready documents, entities, edges). Call this first to discover kbId values for the other knowledge tools.",
+        Type.Object({}),
+        () => knowledgeEngine.listKnowledgeBases(),
+      ),
+      keTool(
+        "concept_explore",
+        "Explore concept neighborhood",
+        "Read the neighborhood of an entity in a knowledge base's entity graph. Returns the center entity plus neighbors, each with name/type/description/support count/trust level, the relation type to the center, direction, and hop (1 = direct, 2 = via the strongest 1-hop neighbors). Name resolution: exact (normalized) → alias → substring; ambiguity returns candidates instead of guessing. LIMITATION: covers only content already extracted into the graph; truncated=true means edges remain beyond the limit.",
+        Type.Object({
+          kbId: kbIdField,
+          entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
+          hops: Type.Optional(Type.Union([Type.Literal(1), Type.Literal(2)])),
+          limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+        }),
+        (params) =>
+          knowledgeEngine.conceptExplore(params.kbId, params.entity, {
+            hops: params.hops ?? 1,
+            ...(params.limit === undefined ? {} : { limit: params.limit }),
+          }),
+      ),
+      keTool(
+        "deep_dive",
+        "Deep dive entity",
+        "Full detail for one entity in the knowledge graph: aliases, description, and its relation edges each with the VERBATIM evidence quote (evidenceQuote) and source document (evidenceDocId/evidenceDocName). Use it to ground claims about an entity in citable evidence. LIMITATION: covers only extracted content; truncated=true means more edges exist beyond maxEdges.",
+        Type.Object({
+          kbId: kbIdField,
+          entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
+          maxEdges: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+        }),
+        (params) =>
+          knowledgeEngine.deepDive(params.kbId, params.entity, {
+            ...(params.maxEdges === undefined ? {} : { maxEdges: params.maxEdges }),
+          }),
+      ),
+      keTool(
+        "entity_unified_search",
+        "Unified entity search",
+        "One call, concurrent independent sections over a knowledge base for one entity — graph (neighborhood), evidence (verbatim quotes per edge), documents (keyword-matched source documents). Sections are returned independently (no cross-source fusion); a failing section reports status=error without affecting the others. Ambiguous names surface merged candidates instead of guessing. The citations section is not enabled in this build.",
+        Type.Object({
+          kbId: kbIdField,
+          entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
+          graphLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+          maxEdges: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+          docTopK: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
+        }),
+        (params) =>
+          knowledgeEngine.entityUnifiedSearch(params.kbId, params.entity, {
+            ...(params.graphLimit === undefined ? {} : { graphLimit: params.graphLimit }),
+            ...(params.maxEdges === undefined ? {} : { maxEdges: params.maxEdges }),
+            ...(params.docTopK === undefined ? {} : { docTopK: params.docTopK }),
+          }),
+      ),
+      keTool(
+        "validate_entities",
+        "Validate entity names",
+        "Anti-hallucination check: verify a list of entity names against the knowledge graph BEFORE citing them. Per name returns found (with the entity), ambiguous (with candidates), or unknown. Names that come back unknown are not in the graph — do not present them as established knowledge-base facts.",
+        Type.Object({
+          kbId: kbIdField,
+          names: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
+        }),
+        (params) => knowledgeEngine.validateEntities(params.kbId, params.names),
+      ),
+      keTool(
+        "gap_candidates",
+        "Find gap candidates",
+        "Deterministic whitespace analysis over the entity graph — three structural signals (the LLM never decides what the candidates ARE): holes (entity pairs with ≥3 shared neighbors but no direct edge; crossCommunity=true marks the most valuable cross-community holes), conflicts (high-support contradicts/contrasts_with edges with a sample quote), transfers (method used by A where context-sharing B has no link to it). LIMITATION: analyzes the top-500 entities by support (stats.truncated reports truncation); a missing edge means unknown (possibly merely unextracted), not disproven — semantic relevance and novelty need separate verification.",
+        Type.Object({
+          kbId: kbIdField,
+          signals: Type.Optional(
+            Type.Array(Type.Union([Type.Literal("holes"), Type.Literal("conflicts"), Type.Literal("transfers")])),
+          ),
+          topN: Type.Optional(Type.Number({ minimum: 1, maximum: 25 })),
+        }),
+        (params) =>
+          knowledgeEngine.gapCandidates(params.kbId, {
+            ...(params.topN === undefined ? {} : { topN: params.topN }),
+            ...(params.signals === undefined ? {} : { signals: params.signals }),
+          }),
+      ),
+    );
   }
   if (options.runSubagent) {
     const specialistSummary = summarizeSpecialistsForTaskTool(options.specialists);

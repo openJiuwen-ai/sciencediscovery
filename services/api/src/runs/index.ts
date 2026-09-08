@@ -19,6 +19,9 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
+
+import type { KnowledgeEngineToolPort } from "../knowledge-engine/tools.js";
+import { createKeResidentSummaryFactory } from "../knowledge-engine/contributor.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
 import {
@@ -459,6 +462,7 @@ async function executeAgentRun(
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
+  knowledgeEngineTools: KnowledgeEngineToolPort | undefined,
 ): Promise<SessionRunStatus> {
   if (activeSessions.has(sessionId)) {
     throw new ApiStatusError(409, "A run is already active for this session");
@@ -1051,6 +1055,7 @@ async function executeAgentRun(
       });
       return await skillLibraryCatalog.publishProposals(input.proposalIds);
     },
+    ...(knowledgeEngineTools ? { knowledgeEngine: knowledgeEngineTools } : {}),
     queryGraph: async (query: string) => {
       // Degraded when the toggle is off or the sidecar is unreachable —
       // matches getSubgraph's contract so the agent loop never breaks.
@@ -1825,6 +1830,12 @@ async function executeAgentRun(
       abortSignal: requestExecution.abortSignal,
       observer: observeMainEvent,
       readVersioningAuthorities: versioningAuthorities(store, sessionId, runId),
+      // Knowledge-engine awareness: the resident-summary contributor injects
+      // per-KB graph digests so the model knows which KBs exist and how
+      // mature they are before calling the consumption tools.
+      ...(knowledgeEngineTools
+        ? { contextContributorFactories: [createKeResidentSummaryFactory<AgentHistoryMessage>(knowledgeEngineTools)] }
+        : {}),
       planRepository: {
         abandon: async (input) => {
           const plan = await store.abandonSessionPlan(sessionId, input);
@@ -2548,6 +2559,7 @@ export function scheduleSessionRuns(
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
+  knowledgeEngineTools: KnowledgeEngineToolPort | undefined,
 ): void {
   if (scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
@@ -2610,6 +2622,7 @@ export function scheduleSessionRuns(
             serverConfig,
             memoryGraphClient,
             evolve,
+            knowledgeEngineTools,
           );
         } catch (reason) {
           error = runFailureMessage(reason);
@@ -2662,6 +2675,7 @@ export function scheduleSessionRuns(
         serverConfig,
         memoryGraphClient,
         evolve,
+        knowledgeEngineTools,
       );
     }
   })();
@@ -2787,6 +2801,7 @@ export async function streamAgentRun(
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
+  knowledgeEngineTools: KnowledgeEngineToolPort | undefined,
 ): Promise<void> {
   const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, body);
   scheduleSessionRuns(
@@ -2807,6 +2822,7 @@ export async function streamAgentRun(
     serverConfig,
     memoryGraphClient,
     evolve,
+    knowledgeEngineTools,
   );
   request.once("close", () => {
     // Browser disconnects should not cancel queued backend work. Cancellation

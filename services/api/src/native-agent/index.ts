@@ -739,6 +739,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.webFetch ? { webFetch: options.webFetch } : {}),
     ...(options.webSearch ? { webSearch: options.webSearch } : {}),
     ...(options.queryGraph ? { queryGraph: options.queryGraph } : {}),
+    ...(options.knowledgeEngine ? { knowledgeEngine: options.knowledgeEngine } : {}),
     ...(options.declareEvidence ? { declareEvidence: options.declareEvidence } : {}),
     ...(options.declareClaim ? { declareClaim: options.declareClaim } : {}),
     ...(options.reviewCheckpoint ? { reviewCheckpoint: options.reviewCheckpoint } : {}),

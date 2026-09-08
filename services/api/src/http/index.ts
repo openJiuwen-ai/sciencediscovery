@@ -279,6 +279,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     evolutionStore,
     keOrchestrator,
     knowledgeEngineStore,
+    knowledgeEngineTools,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -2151,6 +2152,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           config,
           memoryGraphClient,
           evolveRuntimeFactory,
+          knowledgeEngineTools,
         );
         sendJson(response, 201, run);
         return;
@@ -2291,6 +2293,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           config,
           memoryGraphClient,
           evolveRuntimeFactory,
+          knowledgeEngineTools,
         );
         sendJson(response, 201, run);
         return;
@@ -2853,6 +2856,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           config,
           memoryGraphClient,
           evolveRuntimeFactory,
+          knowledgeEngineTools,
         );
         return;
       }

@@ -452,6 +452,7 @@ export class KeOrchestrator {
         name: entity.name,
         type: entity.type,
         description: entity.definition ?? null,
+        aliases: entity.aliases ?? [],
         firstSeenDoc: doc.id,
       });
       nameToId.set(normalized, stored.id);

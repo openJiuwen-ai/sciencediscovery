@@ -1693,3 +1693,50 @@ test("review_checkpoint exposes only versions and reason to its callback", async
   });
   assert.equal((result.details as { checkpoint: { status: string } }).checkpoint.status, "completed");
 });
+
+test("knowledge-engine tools register when the port is wired, absent otherwise", async () => {
+  const calls: string[] = [];
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [],
+    conceptExplore: async (kbId: string, entity: string) => {
+      calls.push(`concept_explore:${kbId}:${entity}`);
+      return { found: false, hops: 1 };
+    },
+    deepDive: async () => ({ found: false }),
+    entityUnifiedSearch: async () => ({ sources: {} }),
+    validateEntities: async () => ({ found: 1, ambiguous: 0, unknown: 0, results: [] }),
+    gapCandidates: async () => ({ holes: [], conflicts: [], transfers: [] }),
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+  });
+  const names = tools.map((tool) => tool.name);
+  for (const expected of [
+    "list_knowledge_bases",
+    "concept_explore",
+    "deep_dive",
+    "entity_unified_search",
+    "validate_entities",
+    "gap_candidates",
+  ]) {
+    assert.ok(names.includes(expected), `${expected} should be registered`);
+  }
+
+  // The port is invoked with the tool parameters.
+  const explore = tools.find((tool) => tool.name === "concept_explore")!;
+  const result = await explore.execute("ke-call", { kbId: "kb1", entity: "mAb114", hops: 1 });
+  assert.deepEqual(calls, ["concept_explore:kb1:mAb114"]);
+  assert.equal((result.details as { found: boolean }).found, false);
+
+  // Without the port, none of the six tools exist.
+  const bare = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const bareNames = new Set(bare.map((tool) => tool.name));
+  for (const absent of ["concept_explore", "deep_dive", "entity_unified_search", "validate_entities", "gap_candidates", "list_knowledge_bases"]) {
+    assert.equal(bareNames.has(absent), false, `${absent} must not register without the port`);
+  }
+});
