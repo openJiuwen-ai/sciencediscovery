@@ -41,11 +41,11 @@ Compaction happens inside the native loop (`services/api/src/native-agent/compac
 
 ## 7. Child workspace
 
-Each child writes only `subagents/<subagentId>/`; runner mounts the parent Session workspace read-only. Explicit `inputPaths`, or paths mentioned in prompt/Brief, are copied to `inputs/<original>` for audit and mirrored at `<original>` for relative access. Count/file/total limits apply; skipped excess files are recorded without aborting initialization.
+Each child has a separate Workspace identity on each Runner. Its local physical root is a sibling of the main Workspace, not a directory inside it; `subagents/<subagentId>/` remains a logical audit/file-reference prefix. New children do not mount the parent Workspace, even read-only. Explicit `inputPaths`, or paths mentioned in prompt/Brief, are copied to `inputs/<original>` for audit and mirrored at `<original>` for relative access. Unselected parent files are not available to the child. Count/file/total limits apply; skipped excess files are recorded without aborting initialization. The Runner retains optional read-only mount support, but child startup does not pass the parent root.
 
 ## 8. Capability boundary
 
-ScienceDiscovery has the Node-executed `task` tool, lead orchestration prompt, API 10/50 limits, structured result contract, repeated-call guard, runtime summary checkpoint, and read-only parent workspace. It deliberately does not share one mutable state across main and child, and child nesting stays disabled. Per-run token hard budgets are also absent; usage, timeout, and turn limits are returned/enforced instead.
+ScienceDiscovery has the Node-executed `task` tool, lead orchestration prompt, API 10/50 limits, structured result contract, repeated-call guard, runtime summary checkpoint, and independent child Workspaces with explicit input copying. It deliberately does not share one mutable state across main and child, and child nesting stays disabled. Per-run token hard budgets are also absent; usage, timeout, and turn limits are returned/enforced instead.
 
 Shared state and re-nesting would add orchestration power but require a shared checkpointer and cross-run mutable state. Keeping "Node is the only source of truth, each run is independent" retains the most important prompt, limit, result, summary, and loop protections.
 

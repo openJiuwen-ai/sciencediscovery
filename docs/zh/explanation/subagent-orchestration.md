@@ -125,13 +125,13 @@ ScienceDiscovery 在 Node 原生 loop 的工具调度层检测“同一工具 + 
 
 ## 7. 子 Agent 工作区
 
-子 Agent 有自己的私有 workspace，路径形如：
+每个子 Agent 在每个 Runner 上有独立的 Workspace 身份。本地子 Agent 的物理目录与主 Workspace 并列，不位于主 Workspace 内；审计和文件引用仍使用逻辑前缀：
 
 ```text
 subagents/<subagentId>/
 ```
 
-Runner 会把父 Session workspace 以只读方式挂载给子 Agent。即使 `inputPaths` 未显式指定，子 Agent 也能读取父 workspace 文件；写入只能落到自己的私有 workspace。
+新子 Agent 不再默认挂载父 Workspace。子 Agent 只能使用已显式复制到自己 Workspace 的输入，不能通过父目录读取主 Agent 文件。Runner 的可选只读挂载能力仍保留，但子 Agent 启动不会传入父 Workspace。
 
 当 `inputPaths` 显式指定，或 delegated prompt / Brief 明确提到父 workspace 路径时，API 会复制输入快照：
 
@@ -150,7 +150,7 @@ Runner 会把父 Session workspace 以只读方式挂载给子 Agent。即使 `i
 | 结构化结果回流 | 已有 | 状态、停止原因、usage、Brief 校验结果回流 |
 | 重复工具调用检测 | 已有 | 原生 loop 工具调度层警告和硬停 |
 | 运行时摘要 | 已有 | 原生 loop 内的 summary checkpoint + `finalMessages` handoff |
-| 父 workspace 只读挂载 | 已有 | 子 Agent 可读父 workspace，只能写私有目录 |
+| 独立子 Workspace | 已有 | 物理根与主 Workspace 分离；输入经显式复制交接，不默认挂载父目录 |
 | 主/子共享一份可变 state | 未接入 | 每个 AgentRun 独立历史，交接点是显式 `finalMessages` |
 | 子 Agent 再嵌套 | 禁用 | API 明确拒绝 nested subagents |
 | per-run token 硬预算 | 未接入 | 当前只做 usage 回流和运行超时/轮数限制 |
@@ -168,4 +168,5 @@ Runner 会把父 Session workspace 以只读方式挂载给子 Agent。即使 `i
 - `services/api/src/runs/index.ts` — 子 Agent 限流、handoff、Brief 校验、嵌套禁用
 - `services/api/src/native-agent/index.ts` — run contract 注入、工具循环检测、超时与取消
 - `services/api/src/native-agent/compaction.ts` — summary checkpoint 与历史压缩
-- `services/runner/src/executor.ts` — 父 workspace 只读挂载与私有 workspace 写入
+- `services/api/src/subagents/index.ts`、`workspace-copy.ts` — 独立 Workspace 输入交接和文件复制
+- `services/runner/src/executor.ts` — 执行 Workspace 的沙箱边界

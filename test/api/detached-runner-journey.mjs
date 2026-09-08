@@ -33,6 +33,8 @@ let child;
 let client;
 let serviceLog = "";
 let origin;
+let pendingUpload;
+let pendingLegacy;
 const redact = (value) => String(value).replaceAll(token, "[redacted]").replaceAll(process.cwd(), "<worktree>");
 async function until(check, timeout = 15_000) {
   const deadline = Date.now() + timeout;
@@ -110,15 +112,36 @@ try {
     assert.equal((await client.getShellExecution("training", owner)).state, "running");
     return "same workspace queued; independent workspace completed";
   });
+  await step("上传与旧执行入口不能绕过后台写入", "同一 Workspace 的上传和旧 Shell 请求保持等待，查询日志仍可用。", async () => {
+    let uploaded = false;
+    let executed = false;
+    pendingUpload = client.writeRemoteWorkspaceFile("project/session/main", "uploaded.txt", Buffer.from("upload"))
+      .then((value) => { uploaded = true; return value; });
+    pendingLegacy = client.executeShell({ ...request("legacy", "echo legacy > legacy.txt"), executionTimeoutMs: 0 })
+      .then((value) => { executed = true; return value; });
+    void pendingUpload.catch(() => undefined);
+    void pendingLegacy.catch(() => undefined);
+    // The negative observation is bounded; subsequent steps must also verify completion.
+    await new Promise((done) => setTimeout(done, 150));
+    assert.equal(uploaded, false);
+    assert.equal(executed, false);
+    assert.equal((await client.getShellExecution("training", owner)).state, "running");
+    assert.ok((await client.shellExecutionLogs("training", owner)).chunks.length);
+    return "upload and legacy Shell waiting; running status and logs remain observable";
+  });
   await step("取消长期任务并取得后续结果", "取消经过管理接口，下一项随后执行；可查询 CAS 版本引用与写入文件。", async () => {
     await client.cancelShellExecution("training", owner);
     await until(async () => (await client.getShellExecution("training", owner)).state === "cancelled");
     await until(async () => (await client.getShellExecution("next", owner)).state === "completed");
+    assert.equal((await pendingUpload).path, "uploaded.txt");
+    assert.equal((await pendingLegacy).exitCode, 0);
     const completed = await client.getShellExecution("next", owner);
     assert.match(completed.version.digest, /^sha256:[a-f0-9]{64}$/);
     const files = await client.listRemoteWorkspaceFiles("project/session/main");
     assert.ok(files.some((file) => file.path === "output.txt"));
-    return `cancelled; next completed; version=${completed.version.digest}; output.txt listed`;
+    assert.ok(files.some((file) => file.path === "uploaded.txt"));
+    assert.ok(files.some((file) => file.path === "legacy.txt"));
+    return `cancelled; next/upload/legacy completed; version=${completed.version.digest}; all three files listed`;
   });
   await step("重启后查回结果且禁止重放", "相同 ID 的结果和日志仍可查询；重新提交旧 ID 被拒绝，不执行旧命令。", async () => {
     await stop();
