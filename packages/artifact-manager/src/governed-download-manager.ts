@@ -74,6 +74,7 @@ export interface GovernedDownloadStore {
   >;
   resolveProxy(policy?: ProxyPolicy): ResolvedProxy;
   workspacePath(sessionId: string): string;
+  workspaceLocation?(sessionId: string, path: string): { root: string; path: string };
 }
 
 const DEFAULT_MAX_ARTIFACT_BYTES = 5 * 1024 * 1024 * 1024;
@@ -231,8 +232,10 @@ export class GovernedDownloadManager {
       };
     }
     this.assertCandidateUrl(candidate);
-    resolveWorkspaceFile(this.store.workspacePath(sessionId), input.destination.path);
-    const filesystem = await statfs(this.store.workspacePath(sessionId));
+    const destination = this.store.workspaceLocation?.(sessionId, input.destination.path)
+      ?? { root: this.store.workspacePath(sessionId), path: input.destination.path };
+    resolveWorkspaceFile(destination.root, destination.path);
+    const filesystem = await statfs(destination.root);
     const quotaAvailableBytes = Number(filesystem.bavail * filesystem.bsize);
     if (candidate.expectedBytes !== undefined && candidate.expectedBytes > quotaAvailableBytes) {
       throw new Error("Artifact is larger than the available workspace filesystem quota");
@@ -538,8 +541,10 @@ export class GovernedDownloadManager {
     if (candidate.expiresAt && Date.parse(candidate.expiresAt) <= Date.now()) {
       throw new ArtifactValidationError("NOT_FOUND", "Artifact download URL has expired");
     }
-    const workspaceRoot = this.store.workspacePath(job.sessionId);
-    const finalPath = resolveWorkspaceFile(workspaceRoot, plan.destination.path);
+    const location = this.store.workspaceLocation?.(job.sessionId, plan.destination.path)
+      ?? { root: this.store.workspacePath(job.sessionId), path: plan.destination.path };
+    const workspaceRoot = location.root;
+    const finalPath = resolveWorkspaceFile(workspaceRoot, location.path);
     const stagingPath = resolve(workspaceRoot, ".sciencediscovery", "staging", `${job.id}.part`);
     await assertSafeArtifactPath(workspaceRoot, finalPath);
     await assertSafeArtifactPath(workspaceRoot, stagingPath);
@@ -646,9 +651,7 @@ export class GovernedDownloadManager {
   ): Promise<void> {
     const current = await this.getJob(sessionId, jobId);
     if (current.state === "cancelled") throw new DOMException("Cancelled", "AbortError");
-    const relativeStaging = stagingPath.startsWith(this.store.workspacePath(sessionId))
-      ? stagingPath.slice(this.store.workspacePath(sessionId).length + 1)
-      : stagingPath;
+    const relativeStaging = `.sciencediscovery/staging/${jobId}.part`;
     await this.store.replaceArtifactJob({
       ...current,
       progress: {

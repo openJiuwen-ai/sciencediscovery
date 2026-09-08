@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import type { Subagent, SubagentBrief, SubagentInput, WorkspaceFile, WorkspaceFileRevisionInput } from "@sciencediscovery/schema";
@@ -21,6 +20,7 @@ import type { Subagent, SubagentBrief, SubagentInput, WorkspaceFile, WorkspaceFi
 import { validateSubagentOutputValue } from "../subagent-brief.js";
 import { SessionStore } from "../store.js";
 import { listWorkspaceFiles } from "../artifacts/index.js";
+import { copyWorkspaceFile } from "../workspace-copy.js";
 
 /** Session-workspace prefix holding each subagent's private handoff scratch space. */
 export const SUBAGENT_PRIVATE_WORKSPACE_PREFIX = "subagents/";
@@ -89,11 +89,13 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
   const privateWorkspacePath = `${SUBAGENT_PRIVATE_WORKSPACE_PREFIX}${subagentId}`;
   const manifestPath = `${privateWorkspacePath}/handoff.json`;
   const workspaceRoot = store.workspacePath(sessionId);
+  const childRoot = store.agentWorkspacePath(sessionId, subagentId);
+  const workspaceId = store.workspaceIdentity(sessionId, `subagent:${subagentId}`).id;
   const availableParentInputFiles = (await listWorkspaceFiles(store, sessionId))
     .filter((file) => !isSubagentPrivateWorkspacePath(file.path) && !file.path.startsWith("tracks/"));
   const selected = selectSubagentHandoffInputs(availableParentInputFiles, input);
   const parentInputFiles = selected.files;
-  await mkdir(resolveWorkspaceFile(workspaceRoot, privateWorkspacePath), { recursive: true });
+  await mkdir(childRoot, { recursive: true });
   const inputPaths: string[] = [];
   const skippedInputPaths: NonNullable<NonNullable<Subagent["handoff"]>["skippedInputPaths"]> = [...selected.skippedInputPaths];
   let copiedBytes = 0;
@@ -113,32 +115,31 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
       continue;
     }
     const copiedPath = `inputs/${file.path}`;
-    const source = resolveWorkspaceFile(workspaceRoot, file.path);
-    const snapshotDestination = resolveWorkspaceFile(workspaceRoot, `${privateWorkspacePath}/${copiedPath}`);
-    const originalPathDestination = resolveWorkspaceFile(workspaceRoot, `${privateWorkspacePath}/${file.path}`);
+    const snapshotDestination = resolveWorkspaceFile(childRoot, copiedPath);
+    const originalPathDestination = resolveWorkspaceFile(childRoot, file.path);
     try {
-      await mkdir(dirname(snapshotDestination), { recursive: true });
-      await copyFile(source, snapshotDestination);
+      const copied = await copyWorkspaceFile({ sourceRoot: workspaceRoot, sourcePath: file.path, targetRoot: childRoot, targetPath: copiedPath });
       const snapshotStat = await stat(snapshotDestination);
       provenanceInputs.push({
         mode: "write",
         modifiedAt: snapshotStat.mtime.toISOString(),
         origin: "system",
-        originMeta: { kind: "subagent-handoff-copy", sourcePath: file.path },
+        originMeta: { kind: "subagent-handoff-copy", sourcePath: file.path, sourceWorkspaceId: store.workspaceIdentity(sessionId).id,
+          workspaceId, transferId: copied.transferId, sha256: copied.sha256 },
         ...(file.provenance ? { parentRevisionId: file.provenance.revisionId } : {}),
         path: `${privateWorkspacePath}/${copiedPath}`,
         size: snapshotStat.size,
         subagentId,
       });
       if (originalPathDestination !== snapshotDestination) {
-        await mkdir(dirname(originalPathDestination), { recursive: true });
-        await copyFile(source, originalPathDestination);
+        const originalCopy = await copyWorkspaceFile({ sourceRoot: workspaceRoot, sourcePath: file.path, targetRoot: childRoot, targetPath: file.path });
         const originalStat = await stat(originalPathDestination);
         provenanceInputs.push({
           mode: "write",
           modifiedAt: originalStat.mtime.toISOString(),
           origin: "system",
-          originMeta: { kind: "subagent-handoff-copy", sourcePath: file.path },
+          originMeta: { kind: "subagent-handoff-copy", sourcePath: file.path, sourceWorkspaceId: store.workspaceIdentity(sessionId).id,
+            workspaceId, transferId: originalCopy.transferId, sha256: originalCopy.sha256 },
           ...(file.provenance ? { parentRevisionId: file.provenance.revisionId } : {}),
           path: `${privateWorkspacePath}/${file.path}`,
           size: originalStat.size,
@@ -156,15 +157,16 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
       });
     }
   }
-  const manifestTarget = resolveWorkspaceFile(workspaceRoot, manifestPath);
+  const manifestTarget = resolveWorkspaceFile(childRoot, "handoff.json");
   await writeFile(manifestTarget, `${JSON.stringify({
     createdAt: new Date().toISOString(),
     inputPaths,
     parentInputPaths: parentInputFiles.map((file) => file.path),
     privateWorkspacePath,
+    workspaceId,
     ...(skippedInputPaths.length ? { skippedInputPaths } : {}),
     subagentId,
-  }, null, 2)}\n`, "utf8");
+  }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
   const manifestStat = await stat(manifestTarget);
   provenanceInputs.push({
     mode: "write",
@@ -177,6 +179,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
   });
   await store.recordWorkspaceFileRevisions(sessionId, provenanceInputs);
   return {
+    workspaceId,
     inputPaths,
     manifestPath,
     privateWorkspacePath,
@@ -200,8 +203,8 @@ export function formatSubagentExecutionPrompt(input: SubagentInput, handoff: Non
       `Collaboration rules:\n${numberedLines(brief.collaborationRules)}`,
     ] : []),
     input.prompt,
-    `Private workspace root: ${handoff.privateWorkspacePath}`,
-    "Code execution starts in the writable private root inside /workspace. The parent Session workspace is visible read-only at /workspace; write outputs with relative paths so they stay in the private root.",
+    `Workspace ID: ${handoff.workspaceId ?? "legacy-private-workspace"}`,
+    "Code execution starts in your independent writable Workspace. The parent Workspace is not mounted or readable. Use relative paths for delivered inputs and your outputs; request explicit file delivery when an input is missing.",
     "Handoff manifest visible inside your workspace: handoff.json",
     handoff.inputPaths.length
       ? `Input snapshots visible inside your workspace:\n${handoff.inputPaths.join("\n")}`

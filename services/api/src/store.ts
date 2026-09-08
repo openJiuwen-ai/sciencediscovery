@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -5128,6 +5128,34 @@ export class SessionStore {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
     return resolve(this.dataDir, "projects", session.projectId, "sessions", session.id, "workspace");
+  }
+
+  /** Stable Agent-instance × Runner identity. Paths are never used as an authorization grant. */
+  workspaceIdentity(sessionId: string, agentId = "main", runnerId = "local") {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    if (!/^[A-Za-z0-9_:.-]{1,160}$/.test(agentId) || !/^[A-Za-z0-9_:.-]{1,160}$/.test(runnerId)) throw new Error("Invalid Workspace owner");
+    return { id: `ws_${createHash("sha256").update(JSON.stringify([sessionId, agentId, runnerId])).digest("hex")}`,
+      sessionId, agentId, runnerId };
+  }
+
+  agentWorkspacePath(sessionId: string, subagentId: string): string {
+    const main = this.workspacePath(sessionId);
+    const identity = this.workspaceIdentity(sessionId, `subagent:${subagentId}`);
+    return resolve(main, "..", "agent-workspaces", identity.id);
+  }
+
+  /** Resolve persisted logical audit paths without mounting child Workspaces inside the parent. */
+  workspaceLocation(sessionId: string, logicalPath: string): { root: string; path: string } {
+    const main = this.workspacePath(sessionId);
+    for (const child of this.listSubagents(sessionId)) {
+      const handoff = child.handoff;
+      if (!handoff?.workspaceId) continue;
+      const expected = this.workspaceIdentity(sessionId, `subagent:${child.id}`);
+      if (handoff.workspaceId !== expected.id) throw new Error("Stored Workspace identity does not match its Agent");
+      const prefix = `${handoff.privateWorkspacePath}/`;
+      if (logicalPath.startsWith(prefix)) return { root: this.agentWorkspacePath(sessionId, child.id), path: logicalPath.slice(prefix.length) };
+    }
+    return { root: main, path: logicalPath };
   }
 
   /** Content-addressed root for one selected Skill set, shared by every run that selects it. */

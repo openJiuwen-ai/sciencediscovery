@@ -7,7 +7,7 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 
 import { randomUUID } from "node:crypto";
-import { link, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
 import type {
@@ -19,6 +19,7 @@ import type { RunnerClient } from "@sciencediscovery/executor";
 import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 
 import type { SessionStore } from "./store.js";
+import { publishWorkspaceFile } from "./workspace-copy.js";
 
 export function remoteWorkspaceKey(projectId: string, sessionId: string, namespace?: string, agentId?: string): string {
   const root = `${projectId}/${sessionId}${namespace ? `/runners/${namespace}` : ""}`;
@@ -78,26 +79,6 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function writableLocalWorkspaceFile(root: string, pathValue: string): Promise<string> {
-  const path = normalizeWorkspaceRelativePath(root, pathValue);
-  const candidate = resolveWorkspaceFile(root, path);
-  let parent = root;
-  for (const segment of path.split("/").slice(0, -1)) {
-    const next = resolve(parent, segment);
-    try {
-      const details = await lstat(next);
-      if (details.isSymbolicLink() || !details.isDirectory()) {
-        throw new Error("Local workspace parent must be a real directory");
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      await mkdir(next);
-    }
-    parent = next;
-  }
-  return candidate;
-}
-
 export async function syncRemoteWorkspace(options: {
   hostId: string;
   /** Trusted control-plane ownership, never taken from model-supplied paths. */
@@ -107,6 +88,7 @@ export async function syncRemoteWorkspace(options: {
   runnerClient: RunnerClient;
   sessionId: string;
   store: SessionStore;
+  signal?: AbortSignal;
 }): Promise<{ files: string[]; record: RemoteWorkspaceSyncRecord }> {
   const session = options.store.assertSessionWritable(options.sessionId);
   options.store.assertSessionAllowsRemoteRunner(options.sessionId, options.hostId);
@@ -152,28 +134,23 @@ export async function syncRemoteWorkspace(options: {
         }
       }
       for (const file of files) {
-        const destination = await writableLocalWorkspaceFile(workspaceRoot, file.path);
-        const temporary = `${destination}.remote-sync-${randomUUID()}`;
-        try {
-          await writeFile(temporary, await options.runnerClient.readRemoteWorkspaceFile(workspaceKey, file.path), {
-            flag: "wx",
-            mode: 0o600,
-          });
-          if (conflict === "reject") {
-            // Both paths are in the same directory/filesystem. Creating the
-            // hard link atomically fails if another writer won during download.
-            try { await link(temporary, destination); } catch (error) {
-              if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-                throw syncConflict(`Local workspace file already exists: ${file.path}`);
-              }
-              throw error;
-            }
-          } else {
-            await rename(temporary, destination);
-          }
-        } finally {
-          await rm(temporary, { force: true }).catch(() => undefined);
-        }
+        const runner = options.runnerClient;
+        const chunks = runner.streamRemoteWorkspaceFile
+          ? await runner.streamRemoteWorkspaceFile(workspaceKey, file.path, options.signal)
+          : (async function* () { yield await runner.readRemoteWorkspaceFile(workspaceKey, file.path); })();
+        const copied = await publishWorkspaceFile({ root: workspaceRoot, path: file.path, chunks,
+          conflict, expectedBytes: file.size, signal: options.signal });
+        const agent = options.agentId ? `subagent:${options.agentId}` : "main";
+        const logicalPath = options.agentId ? `subagents/${options.agentId}/${file.path}` : file.path;
+        const info = await stat(resolveWorkspaceFile(workspaceRoot, file.path));
+        await options.store.recordWorkspaceFileRevision(options.sessionId, {
+          path: logicalPath, mode: "write", modifiedAt: info.mtime.toISOString(), size: copied.bytes, origin: "system",
+          ...(options.agentId ? { subagentId: options.agentId } : {}),
+          originMeta: { source: "runner_pull", runnerId: options.hostId, agentId: agent,
+            sourceWorkspaceId: options.store.workspaceIdentity(options.sessionId, agent, options.hostId).id,
+            workspaceId: options.store.workspaceIdentity(options.sessionId, agent).id,
+            transferId: copied.transferId, sha256: copied.sha256 },
+        });
       }
     }
     const record: RemoteWorkspaceSyncRecord = {

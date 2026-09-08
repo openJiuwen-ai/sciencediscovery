@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -99,6 +99,21 @@ test("explicit PDF extraction persists lifecycle and is idempotent after complet
   });
   assert.equal(second.job.id, first.job.id);
   assert.equal((await store.listArtifactExtractionJobs(session.id)).length, 1);
+
+  const child = await store.createSubagent(session.id, "parent-request", { description: "Child extraction", prompt: "Read delivered paper" });
+  const prefix = `subagents/${child.id}`;
+  await store.updateSubagent({ ...child, handoff: { workspaceId: store.workspaceIdentity(session.id, `subagent:${child.id}`).id,
+    inputPaths: [], privateWorkspacePath: prefix, manifestPath: `${prefix}/handoff.json` } });
+  const childRoot = store.agentWorkspacePath(session.id, child.id);
+  await mkdir(resolve(childRoot, "downloads"), { recursive: true });
+  await writeFile(resolve(childRoot, relativePath), await readFile(target));
+  const extracted = await service.extractArtifact({ artifactJobId: "child-download", candidate,
+    path: `${prefix}/${relativePath}`, outputPathPrefix: prefix, sessionId: session.id });
+  assert.equal(extracted.job.state, "completed");
+  const location = store.workspaceLocation(session.id, extracted.acquisition.manifestPath);
+  assert.equal(location.root, childRoot);
+  assert.ok(await readFile(resolve(location.root, location.path), "utf8"));
+  await assert.rejects(readFile(resolve(store.workspacePath(session.id), extracted.acquisition.manifestPath)), { code: "ENOENT" });
 });
 
 test("failed PDF extraction persists a terminal failed task", async (context) => {

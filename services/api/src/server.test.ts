@@ -3705,7 +3705,8 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.doesNotMatch(subagentSystemPrompt, /# Code Engineer/);
   assert.doesNotMatch(subagentSystemPrompt, /Plan governance mode/);
   const subagentUserPrompt = subagentRequest.messages?.find((message) => message.role === "user")?.content ?? "";
-  assert.match(subagentUserPrompt, new RegExp(`Private workspace root: subagents/${subagents.body[0]?.id}`));
+  assert.match(subagentUserPrompt, new RegExp(`Workspace ID: ${subagents.body[0]?.handoff?.workspaceId}`));
+  assert.match(subagentUserPrompt, /parent Workspace is not mounted or readable/);
   assert.match(subagentUserPrompt, /Handoff manifest visible inside your workspace: handoff\.json/);
   assert.ok(fixture.requests.some((request) => request.tools?.some((tool) => tool.function?.name === "task")));
   assert.equal(leadRequest.tools?.some((tool) => tool.function?.name === "propose_plan"), true);
@@ -3859,8 +3860,9 @@ test("subagent handoff skips oversized parent files instead of failing the run s
   assert.deepEqual(handoff.inputPaths, ["inputs/small.csv"]);
   assert.equal(handoff.skippedInputPaths?.[0]?.path, "large.csv");
   assert.match(handoff.skippedInputPaths?.[0]?.reason ?? "", /single file size limit/);
-  assert.equal((await readFile(resolve(workspaceRoot, "subagents/subagent-limit-test/inputs/small.csv"), "utf8")), "value\n1\n");
-  const manifest = JSON.parse(await readFile(resolve(workspaceRoot, handoff.manifestPath), "utf8")) as NonNullable<Subagent["handoff"]>;
+  const childRoot = store.agentWorkspacePath(session.id, "subagent-limit-test");
+  assert.equal((await readFile(resolve(childRoot, "inputs/small.csv"), "utf8")), "value\n1\n");
+  const manifest = JSON.parse(await readFile(resolve(childRoot, "handoff.json"), "utf8")) as NonNullable<Subagent["handoff"]>;
   assert.equal(manifest.skippedInputPaths?.[0]?.path, "large.csv");
 });
 
@@ -3886,9 +3888,13 @@ test("subagent handoff copies only declared or referenced parent files", async (
   });
 
   assert.deepEqual(handoff.inputPaths, ["inputs/needed.csv"]);
-  assert.equal((await readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/needed.csv"), "utf8")), "value\n1\n");
-  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/inputs/notneeded.csv")));
-  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/inputs/unmentioned.csv")));
+  const childRoot = store.agentWorkspacePath(session.id, "subagent-selective-test");
+  assert.equal((await readFile(resolve(childRoot, "needed.csv"), "utf8")), "value\n1\n");
+  await assert.rejects(readFile(resolve(childRoot, "inputs/notneeded.csv")));
+  await assert.rejects(readFile(resolve(childRoot, "inputs/unmentioned.csv")));
+  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/needed.csv")));
+  await writeFile(resolve(childRoot, "needed.csv"), "child changed");
+  assert.equal(await readFile(resolve(workspaceRoot, "needed.csv"), "utf8"), "value\n1\n");
   const copiedProvenance = store.getWorkspaceFileProvenance(
     session.id,
     "subagents/subagent-selective-test/inputs/needed.csv",
@@ -3897,7 +3903,9 @@ test("subagent handoff copies only declared or referenced parent files", async (
   assert.equal(copiedProvenance?.currentRevision.originMeta?.kind, "subagent-handoff-copy");
   assert.equal(copiedProvenance?.lineage[0]?.path, "needed.csv");
   assert.equal(copiedProvenance?.lineage[0]?.session.id, session.id);
-  const manifest = JSON.parse(await readFile(resolve(workspaceRoot, handoff.manifestPath), "utf8")) as {
+  assert.equal(copiedProvenance?.currentRevision.originMeta?.workspaceId, handoff.workspaceId);
+  assert.ok(copiedProvenance?.currentRevision.originMeta?.transferId);
+  const manifest = JSON.parse(await readFile(resolve(childRoot, "handoff.json"), "utf8")) as {
     availableParentInputPaths?: string[];
     parentInputPaths?: string[];
   };
@@ -3925,9 +3933,10 @@ test("subagent handoff does not implicitly copy the only parent file", async (co
   });
 
   assert.deepEqual(handoff.inputPaths, []);
-  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-no-default-test/inputs/mmc5.csv")));
-  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-no-default-test/mmc5.csv")));
-  const manifest = JSON.parse(await readFile(resolve(workspaceRoot, handoff.manifestPath), "utf8")) as {
+  const childRoot = store.agentWorkspacePath(session.id, "subagent-no-default-test");
+  await assert.rejects(readFile(resolve(childRoot, "inputs/mmc5.csv")));
+  await assert.rejects(readFile(resolve(childRoot, "mmc5.csv")));
+  const manifest = JSON.parse(await readFile(resolve(childRoot, "handoff.json"), "utf8")) as {
     parentInputPaths?: string[];
   };
   assert.deepEqual(manifest.parentInputPaths, []);
@@ -3952,9 +3961,10 @@ test("subagent handoff preserves copied input snapshots for audit", async (conte
     inputPaths: ["needed.csv"],
     prompt: "Use the declared input.",
   });
-  assert.equal((await readFile(resolve(workspaceRoot, "subagents/subagent-cleanup-test/inputs/needed.csv"), "utf8")), "value\n1\n");
-  assert.equal((await readFile(resolve(workspaceRoot, "subagents/subagent-cleanup-test/needed.csv"), "utf8")), "value\n1\n");
-  assert.ok(JSON.parse(await readFile(resolve(workspaceRoot, handoff.manifestPath), "utf8")));
+  const childRoot = store.agentWorkspacePath(session.id, "subagent-cleanup-test");
+  assert.equal((await readFile(resolve(childRoot, "inputs/needed.csv"), "utf8")), "value\n1\n");
+  assert.equal((await readFile(resolve(childRoot, "needed.csv"), "utf8")), "value\n1\n");
+  assert.ok(JSON.parse(await readFile(resolve(childRoot, "handoff.json"), "utf8")));
 });
 
 test("API fails subagents when structured output fails schema validation", async (context) => {

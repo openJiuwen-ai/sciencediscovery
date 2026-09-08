@@ -150,6 +150,24 @@ test("governed download manager derives an immutable plan from MCP CAS data and 
     await readFile(resolve(store.workspacePath(session.id), "downloads/record.pdf"), "utf8"),
     bytes.toString("utf8"),
   );
+
+  const child = await store.createSubagent(session.id, "parent-request", { description: "Child download", prompt: "Download a paper" });
+  const identity = store.workspaceIdentity(session.id, `subagent:${child.id}`);
+  await store.updateSubagent({ ...child, handoff: { workspaceId: identity.id, inputPaths: [],
+    privateWorkspacePath: `subagents/${child.id}`, manifestPath: `subagents/${child.id}/handoff.json` } });
+  const childRoot = store.agentWorkspacePath(session.id, child.id);
+  await mkdir(childRoot, { recursive: true });
+  const childCreation = await manager.prepare(session.id, {
+    candidateId: "candidate-1", destination: { path: `subagents/${child.id}/downloads/record.pdf`, type: "workspace" },
+    mcpInvocationId: invocation.id,
+  });
+  assert.ok(childCreation.permissionRequest);
+  const childTerminal = manager.waitForPlanTerminal(session.id, childCreation.plan.id);
+  await store.decidePermissionRequest(childCreation.permissionRequest.id, "allow_once");
+  await manager.approveByPermissionRequest(childCreation.permissionRequest.id);
+  assert.equal((await childTerminal).status, "completed");
+  assert.equal(await readFile(resolve(childRoot, "downloads/record.pdf"), "utf8"), bytes.toString("utf8"));
+  await assert.rejects(readFile(resolve(store.workspacePath(session.id), `subagents/${child.id}/downloads/record.pdf`)), { code: "ENOENT" });
 });
 
 test("governed download manager resumes concurrent downloads without corrupting shared job state", async (context) => {

@@ -514,20 +514,9 @@ async function executeAgentRun(
       });
       const result = await syncRemoteWorkspace({
         hostId: host.id, input, runnerClient: remoteCompute.runnerClient(host.id),
-        sessionId, store, workspaceRoot, ...(agentId ? { agentId } : {}),
+        sessionId, store, workspaceRoot, signal, ...(agentId ? { agentId } : {}),
       });
-      if (input.direction === "pull") {
-        for (const path of result.files) {
-          const logicalPath = artifactPathPrefix ? `${artifactPathPrefix}/${path}` : path;
-          await provenanceRecorder.registerWorkspaceArtifact({
-            logicalName: logicalPath, origin: "user_upload",
-            originMeta: { runnerId: host.id, agentId: agentId ?? "main", source: "runner_pull" },
-            path, sourcePath: logicalPath, sessionId, title: path,
-            ...(agentId ? { parentSubagentId: agentId } : {}),
-            turnId: executionId, workspaceRoot,
-          });
-        }
-      }
+      // Transfer provenance is recorded by the copy service. Artifact declaration is a separate action.
       return result;
     },
   }));
@@ -1328,7 +1317,7 @@ async function executeAgentRun(
         try {
           handoff = await prepareSubagentHandoff(store, sessionId, subagent.id, subagent.input);
           const handoffStep: SubagentStep = {
-            content: `Private workspace: ${handoff.privateWorkspacePath}\nHandoff manifest: ${handoff.manifestPath}`,
+            content: `Workspace: ${handoff.workspaceId}\nHandoff manifest: handoff.json`,
             createdAt: new Date().toISOString(),
             id: randomUUID(),
             kind: "system",
@@ -1348,7 +1337,7 @@ async function executeAgentRun(
             ...(roleSkillId ? [roleSkillId] : []),
           ])];
           const subagentConnectorIds = [...new Set([...settingsSnapshot.enabledConnectorIds, ...(specialist?.connectorIds ?? [])])];
-          const subagentWorkspaceRoot = resolveWorkspaceFile(store.workspacePath(sessionId), handoff.privateWorkspacePath);
+          const subagentWorkspaceRoot = store.agentWorkspacePath(sessionId, subagent.id);
           const subagentSnapshots = skillCatalog.resolve(subagentSkillIds);
           const subagentSkillPackagesRoot = subagentSnapshots.length
             ? store.skillPackagesPath(sessionId, skillPackageSetHash(subagentSnapshots))
@@ -1407,7 +1396,6 @@ async function executeAgentRun(
               permissionScopeLabel: `in subagent ${subagent.id}`,
               artifactPathPrefix: handoff.privateWorkspacePath,
               provenanceRecorder,
-              readOnlyWorkspaceRoot: store.workspacePath(sessionId),
               runnerClient,
               ...(remoteTargets.length ? { remoteTargets: remoteTargets.map((target) => ({
                 ...target, workspaceKey: `${target.workspaceKey}/agents/${subagent.id}`,
@@ -1557,7 +1545,6 @@ async function executeAgentRun(
             runSubagent: async () => {
               throw new Error("Nested subagents are disabled");
             },
-            readOnlyWorkspaceRoot: store.workspacePath(sessionId),
             ...(subagentSkillPackagesRoot ? { skillPackagesRoot: subagentSkillPackagesRoot } : {}),
             subagent: {
               instructions: subagentConfig.systemPrompt,

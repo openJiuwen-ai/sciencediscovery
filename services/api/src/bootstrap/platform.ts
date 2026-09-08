@@ -163,6 +163,7 @@ export function createPlatformServices(
     dependencies.connectorFetch,
   );
   artifactManager.setCompletedHandler(async ({ candidate, job, plan }) => {
+    const location = store.workspaceLocation(job.sessionId, plan.destination.path);
     await provenanceRecorder.registerWorkspaceArtifact({
       logicalName: candidate.logicalName,
       origin: "mcp_download",
@@ -173,11 +174,11 @@ export function createPlatformServices(
         sourceRecordId: candidate.sourceRecordId,
         sourceUrl: candidate.sourceUrl,
       },
-      path: plan.destination.path,
+      path: location.path,
       sessionId: job.sessionId,
       sourcePath: plan.destination.path,
       title: candidate.logicalName,
-      workspaceRoot: store.workspacePath(job.sessionId),
+      workspaceRoot: location.root,
     });
   });
 

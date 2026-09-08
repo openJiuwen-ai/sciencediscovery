@@ -45,7 +45,7 @@ test("explicit remote workspace push and pull preserve independent files and rec
     { remoteRunnerHostIds: [host.id] },
     { allowUnconfiguredModel: true },
   );
-  const childRoot = resolve(store.workspacePath(session.id), "subagents", "child-a");
+  const childRoot = store.agentWorkspacePath(session.id, "child-a");
   await mkdir(childRoot, { recursive: true });
   const childKey = remoteWorkspaceKey(project.id, session.id, undefined, "child-a");
   assert.notEqual(childKey, remoteWorkspaceKey(project.id, session.id, undefined, "child-b"));
@@ -59,6 +59,8 @@ test("explicit remote workspace push and pull preserve independent files and rec
   const childResult = await syncRemoteWorkspace({ hostId: host.id, input: { direction: "pull", paths: ["child.txt"] }, runnerClient: childRunner, sessionId: session.id, store, agentId: "child-a", workspaceRoot: childRoot });
   assert.equal(childResult.record.agentId, "child-a");
   assert.equal(await readFile(resolve(childRoot, "child.txt"), "utf8"), "child");
+  assert.equal(store.listArtifacts(session.id).length, 0, "pull does not implicitly declare an Artifact");
+  assert.ok(store.getWorkspaceFileProvenance(session.id, "subagents/child-a/child.txt")?.currentRevision.originMeta?.transferId);
   await assert.rejects(readFile(resolve(store.workspacePath(session.id), "child.txt")), { code: "ENOENT" });
   const workspaceRoot = store.workspacePath(session.id);
   await writeFile(resolve(workspaceRoot, "input.txt"), "local-input");
@@ -149,5 +151,5 @@ test("explicit remote workspace push and pull preserve independent files and rec
   assert.equal(competing.filter((result) => result.status === "fulfilled").length, 1);
   const loser = competing.find((result) => result.status === "rejected");
   assert.equal(loser?.status === "rejected" && loser.reason.code, "CONFLICT");
-  assert.equal((await readdir(workspaceRoot)).some((name) => name.includes(".remote-sync-")), false);
+  assert.equal((await readdir(workspaceRoot)).some((name) => name.includes(".transfer-")), false);
 });

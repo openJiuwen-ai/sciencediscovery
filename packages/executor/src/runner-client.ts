@@ -81,15 +81,28 @@ export class RunnerClient {
   }
 
   async readRemoteWorkspaceFile(workspaceKey: string, path: string): Promise<Buffer> {
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of await this.streamRemoteWorkspaceFile(workspaceKey, path)) chunks.push(chunk);
+    return Buffer.concat(chunks);
+  }
+
+  async streamRemoteWorkspaceFile(workspaceKey: string, path: string, signal?: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
     const response = await fetch(
       `${this.baseUrl}/remote-workspace/file?workspace=${encodeURIComponent(workspaceKey)}&path=${encodeURIComponent(path)}`,
-      { headers: { authorization: `Bearer ${this.token}` } },
+      { headers: { authorization: `Bearer ${this.token}` }, signal },
     );
     if (!response.ok) {
       const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
       throw new Error(body.error || `Remote workspace read failed (${response.status})`);
     }
-    return Buffer.from(await response.arrayBuffer());
+    if (!response.body) throw new Error("Remote workspace file response has no body");
+    const body = response.body;
+    return (async function* () {
+      const reader = body.getReader();
+      try {
+        while (true) { const next = await reader.read(); if (next.done) break; yield next.value; }
+      } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    })();
   }
 
   async writeRemoteWorkspaceFile(

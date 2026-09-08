@@ -49,6 +49,8 @@ export interface SubagentInput {
 }
 
 export interface SubagentHandoff {
+  /** Stable independent Workspace identity; absent on legacy parent-directory handoffs. */
+  workspaceId?: string;
   inputPaths: string[];
   manifestPath: string;
   privateWorkspacePath: string;
