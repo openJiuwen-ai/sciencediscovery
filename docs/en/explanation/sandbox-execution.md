@@ -1,17 +1,16 @@
 # Sandbox Execution: `services/runner`
 
-Runner is a rootless executor. `run_python`, `run_r`, and `run_shell` run in a Bubblewrap/seccomp sandbox that sees only the Session workspace and, by default, has no network. Sandbox network access is a configurable policy that defaults to `none`; see §3.1. Runner also manages micromamba environments and persistent kernels, listens only on `127.0.0.1:4311`, and accepts API as its sole client.
+Runner is a rootless executor. Ordinary Agent execution uses `run_shell`, including `python -m`, Python files and `Rscript`, inside a Bubblewrap/seccomp sandbox with its Agent×Runner Workspace. Each call starts a fresh process; cwd, exports and interpreter memory do not carry across calls. Sandbox network access defaults to `none`; see §3.1. Runner also manages micromamba environments. Its default listener is `127.0.0.1:4311`, with API as its client.
 
 ## 1. Source structure
 
 | File | Responsibility |
 |---|---|
-| `server.ts` | Routes, bearer/HMAC auth, one-worker queue, startup preflight |
+| `server.ts` | Routes, bearer/HMAC auth, Workspace admission and execution queue, startup preflight |
 | `executor.ts` | Ephemeral Bubblewrap construction, quota/timeout, workspace snapshots |
-| `kernel-manager.ts` | Persistent JSON-line Python/R workers and lifecycle |
-| `shell-session-manager.ts` | Persistent Bash preserving cwd/export |
-| `session-env-profile.ts` | Safe environment/cwd transfer from shell to later execution |
-| `environment-store.ts` | micromamba catalog and immutable revisions |
+| `execution-manager.ts` | Managed Shell lifetime, status/logs/cancel and committed Workspace receipts |
+| `kernel-manager.ts`, `shell-session-manager.ts`, `session-env-profile.ts` | Legacy internal primitives; HTTP execution no longer starts persistent workers or injects saved profiles |
+| `environment-store.ts` | micromamba catalog, in-place named environments and revision records |
 | `npu-broker.ts` | Optional Host NPU Broker that starts allowlisted host NPU workloads under Runner control |
 | `workloads/` | Broker default workload allowlist, Ascend smoke probe, and controlled adapters |
 | `seccomp.ts` | x86_64/aarch64 BPF generated under runner runtime; baseline and network profiles |
@@ -37,13 +36,13 @@ Startup checks required Bubblewrap options and executes a probe. Two parts of th
 read-only /usr plus system links, /dev; tmpfs /tmp
 --proc /proc, or --ro-bind /proc /proc when a fresh procfs is refused
 hide host Python/R when managed environments are enabled
-read-only revision at /opt/science-env
-bind Session workspace read-write at /workspace
---clearenv plus runner baseline and safe Session profile
+read-only selected environment at /opt/science-env
+bind Agent×Runner Workspace read-write at /workspace
+--clearenv plus runner baseline; cwd selected explicitly for this call
 --seccomp 3
 ```
 
-Disconnect or Stop run propagates Abort and `SIGKILL`.
+Legacy synchronous requests abort on disconnect. Managed Shell Executions survive a client waiting deadline or disconnect; cancellation is explicit through the Execution management endpoint.
 
 ### 3.1 Sandbox network access
 
@@ -68,12 +67,12 @@ sandbox process (own netns, no interface)
 Properties:
 
 - **No root, no CAP_NET_ADMIN, no socat dependency.** The bridge is a product-owned stdlib Python script; its interpreter and standard library are bind-mounted read-only under `/opt/sciencediscovery-net/`. When the host has no usable python3 the mode fails closed and `/health.sandboxNetwork` reports why.
-- The bridge listens before it forks and runs the real workload as its child with inherited stdio, so the persistent kernel and shell line protocols are unaffected; the child's exit status is passed through.
+- The bridge listens before it forks and runs the real workload as its child with inherited stdio; the child's exit status is passed through.
 - seccomp switches to the network profile: it allows only the socket family (`socket/connect/bind/listen/accept/accept4/socketpair`) and keeps denying ptrace, mount, setns, bpf, keyring, io_uring and the rest. Raw and packet sockets need `CAP_NET_RAW`, which `--cap-drop ALL` already removes.
 - Entries are `example.org` or `*.example.org` (label-boundary match, never the apex), optionally with `:443` to pin a port. IP literals are rejected both as entries and as request targets.
 - The gateway resolves the name, classifies the addresses, rejects loopback, link-local and private space by default, and connects to the approved address so DNS cannot change between check and connect. An internal mirror can be enabled explicitly.
 - Boundary: **TLS is not intercepted**. Filtering is by CONNECT / absolute-URI host name, so a broad entry remains a broad grant.
-- Changing the policy rotates the Permission Epoch and reclaims that Session's persistent kernels and shell, because the epoch id is part of the reuse key.
+- Changing the policy rotates the Permission Epoch; new executions use the new policy snapshot.
 - Scientific environment install networking (conda channels, pip index, offline cache) is independent of this policy.
 
 ### 3.2 Ascend NPU Broker (optional host execution)
@@ -82,7 +81,7 @@ Ascend NPU access is not modeled as ordinary device passthrough into bwrap. On t
 
 Runner therefore keeps the normal sandbox boundary and exposes an opt-in Host NPU Broker:
 
-- `run_python`, `run_r`, `run_shell`, and persistent kernels still run inside Bubblewrap; NPU support does not loosen namespaces, seccomp, or network policy.
+- Ordinary Shell commands (including Python/R launched by Shell) and the legacy ephemeral language endpoints run inside Bubblewrap; NPU support does not loosen namespaces, seccomp, or network policy.
 - The API exposes `run_npu_job` only when `SCIENCE_AGENT_NPU_BROKER=1`.
 - Broker job children run in the host namespace so CANN, MindSpore, and Ascend device initialization can succeed.
 - The Broker accepts only `workloadId` values from a JSON allowlist and starts commands with `shell: false`; the Agent cannot submit arbitrary host commands.
@@ -94,12 +93,12 @@ The exception is “allowlisted host model job,” not “host shell for the Age
 
 ## 4. Execution model and quotas
 
-- A Promise chain serializes all execution globally; an aborted queued item is removed before start.
+- Writes to the same physical Workspace serialize across processes. Different Workspaces can execute concurrently. The lease remains held until the workload exits and CAS snapshot/ref publication completes; status and logs do not take the write lease.
 - Runner workspace defaults to 10 GiB and is checked before and every 100 ms during execution; `0` is unlimited.
 - Runner has no per-file execution quota (`maxFileBytes=0`).
 - Retained stdout+stderr defaults to 1 GiB; excess is head/tail truncated but does not fail the run; `0` disables truncation.
 - API upload limits are separate: 1 GiB per file and 10 GiB per multipart request.
-- Execution wall clock defaults to unlimited and kills on expiry.
+- Legacy synchronous endpoints support a wall-clock execution limit (unlimited by default). Managed Shell Executions have no automatic kill at the client waiting deadline.
 - There is no CPU or memory cgroup quota.
 
 ### Inspect or modify quotas
@@ -109,15 +108,15 @@ curl -s http://127.0.0.1:4310/health | jq '.workspace, .runner.maxWorkspaceBytes
 curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:4310/api/quota-settings
 ```
 
-The Web Quotas settings persist values for new executions. Environment seeds are `SCIENCE_AGENT_MAX_WORKSPACE_BYTES`, `SCIENCE_AGENT_MAX_OUTPUT_BYTES`, `SCIENCE_AGENT_SHELL_IDLE_MS`, `SCIENCE_AGENT_WORKSPACE_MAX_BYTES`, and the upload file/request limits; `0` means unlimited for the relevant dimension.
+The Web Quotas settings persist values for new executions. Environment seeds are `SCIENCE_AGENT_MAX_WORKSPACE_BYTES`, `SCIENCE_AGENT_MAX_OUTPUT_BYTES`, `SCIENCE_AGENT_WORKSPACE_MAX_BYTES`, and the upload file/request limits; `0` means unlimited for the relevant dimension.
 
 ## 5. Language runtimes
 
-| Language | Ephemeral | Persistent |
-|---|---|---|
-| Python | `python3 -I -` | isolated unbuffered worker with persistent namespace |
-| R | `R --vanilla --slave` | R JSON-line worker |
-| Shell | strict Bash stdin | Bash driver loop preserving state |
+| Entry | Process |
+|---|---|
+| Ordinary `run_shell` | Fresh strict Bash; may launch Python modules/files, Rscript and other selected-environment tools |
+| Legacy Python HTTP execution | Ephemeral `python3 -I -` |
+| Legacy R HTTP execution | Ephemeral `R --vanilla --slave` |
 
 Interpreters come from host `/usr/bin` or managed `/opt/science-env/bin`.
 
@@ -126,21 +125,19 @@ Interpreters come from host `/usr/bin` or managed `/opt/science-env/bin`.
 - A fixed micromamba release and SHA256 are shared by runner, Docker, and packaging. Host mode downloads/caches on setup; Docker bakes and seeds it, so runtime need not fetch GitHub. Administrators may override the path.
 - Bootstrap is asynchronous after health becomes available. Setup endpoints report phase/state/error and trigger serialized retry without terminating runner.
 - Cold start creates only a read-only Python 3.12 base with numpy/pandas/scipy/matplotlib. The first explicit R named environment lazily creates an R 4.4 base with tidyverse/data.table.
-- Catalog and source settings are instance-global. Bases are read-only; named environment mutations create immutable revisions.
+- Catalog and source settings are instance-global. Bases are read-only; named environments update in place under an environment lock. Revision records support tracing, not selection of an old runnable prefix.
 - Pip presets are upstream, TUNA, USTC, and Huawei Cloud; conda omits Huawei. Precedence is explicit request, global preset, upstream. Conda uses override/strict priority and an operator channel allowlist; exact built-in mirror URLs are accepted. Offline cache validates sources but uses local no-index/offline operation; CRAN/Bioconductor are rejected offline.
-- Layout includes catalog, provisioner, micromamba, immutable revision prefixes/snapshots, and SHA256-addressed wheel copies under `.sciencediscovery-data/scientific-envs/`.
+- Layout includes catalog, provisioner, micromamba, named environment prefixes, revision snapshots, and SHA256-addressed wheel copies under `.sciencediscovery-data/scientific-envs/`.
 - Pip `indexUrl` must be credential-free HTTPS, at most 2048 characters, without query/fragment/whitespace/control characters. Package lists reject option injection and remote URLs. A Session-relative wheel is copied to persistent hash storage and its source/hash/distribution/version enter the revision snapshot.
 - Direct package-manager mutation in `run_shell` is unsupported and the managed prefix is read-only in the sandbox.
 
-## 7. Persistent kernels
+## 7. Execution lifetime and migration
 
-A kernel is one resident Bubblewrap Python/R worker using JSON lines. Each result reports exit code, output, cwd, and environment; output uses the same truncation. Reuse key is Session, language, revision, and permission epoch, so environment/permission changes replace it. Idle expiry records memory loss; kernels can be reclaimed by Session, ID, or revision.
+HTTP `/execute`, `/execute-shell` and `/shell-executions` reject `kernelMode=persistent` before creating a Workspace or starting code. Once-scoped permission does not silently downgrade that request. Omit the field or use `ephemeral`; use a managed Shell Execution for a long-running task.
 
-## 8. Persistent shell and Session environment profile
+A resident interpreter could otherwise leave a thread or subprocess writing after a call returned and the Workspace lease was released. On Linux, ephemeral executions end their Bubblewrap PID namespace before the final snapshot and lease release. A managed background Execution instead retains ownership while its workload runs; it is not a reusable interactive Shell.
 
-`run_shell` defaults to a persistent shell (once-only permission downgrades to ephemeral). A Session Bash preserves `cd`, `export`, and `source`. A command failure reports its code without ending the shell; explicit `set -e` termination or `exit` ends it and the next call reports lost state. Shells use Session/system-shell revision/permission-epoch identity and share idle refresh with other Session execution.
-
-After each shell evaluation, safe variables and `/workspace` cwd become the Session/permission-epoch profile for later Python/R/ephemeral shell. Names must be valid; runner-reserved and dangerous keys such as `LD_*`, `BASH_ENV`, `IFS`, `PYTHONHOME`, and startup hooks are removed. Values above 32 KiB and total above 256 KiB are dropped; cwd must still exist under `/workspace`. Host environment never enters the profile and cannot override runner baseline. Profile dies with shell teardown/idle/exit/epoch change; already-running Python/R kernels do not receive later changes.
+Historical Session profiles are not injected. Select cwd and environment on every call; put required exports and commands in the same script. Python/R memory is not retained between calls. Notebook-style shared memory is outside this implementation.
 
 ## Related documentation
 

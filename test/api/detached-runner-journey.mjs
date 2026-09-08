@@ -209,6 +209,22 @@ try {
     } finally { db.close(); }
     return "three durable Transfers completed via the Agent tool; two production Runner processes; only input/output exist locally";
   });
+  await step("旧持久入口不能留下越界写入", "旧 persistent 请求明确拒绝；临时 Shell 与 Python 的派生任务不能在提交后继续写 Workspace。", async () => {
+    const workspace = "project/ephemeral-boundary/main";
+    const legacy = { ...request("reject-persistent", "echo forbidden", workspace), kernelMode: "persistent", executionTimeoutMs: 0 };
+    await assert.rejects(client.executeShell(legacy), /persistent runtimes are no longer supported/);
+    await assert.rejects(client.execute({ ...legacy, executionId: "reject-python", language: "python" }), /persistent runtimes are no longer supported/);
+    await assert.rejects(client.execute({ ...legacy, executionId: "reject-r", language: "r" }), /persistent runtimes are no longer supported/);
+    await assert.rejects(client.startShellExecution({ ...legacy, executionId: "reject-managed" }), /persistent runtimes are no longer supported/);
+    const shell = await client.executeShell({ ...request("shell-descendant", "(echo ready > ready; sleep 0.3; echo leaked > late-shell) & while test ! -f ready; do sleep 0.01; done; export LEGACY_VAR=old; echo returned", workspace), executionTimeoutMs: 0 });
+    assert.equal(shell.exitCode, 0, shell.stderr); assert.ok(shell.workspaceSnapshot);
+    const python = await client.execute({ ...request("python-descendant", "import threading, time\nfrom pathlib import Path\ne = threading.Event()\ndef work():\n e.set(); time.sleep(0.3); Path('late-python').write_text('leaked')\nthreading.Thread(target=work, daemon=True).start()\ne.wait()\nprint('returned')", workspace), executionTimeoutMs: 0 });
+    assert.equal(python.exitCode, 0, python.stderr); assert.ok(python.workspaceSnapshot);
+    const inspect = await client.executeShell({ ...request("check-descendants", 'sleep 0.6; test ! -f late-shell && test ! -f late-python && test -z "$LEGACY_VAR" && echo isolated', workspace), executionTimeoutMs: 0 });
+    assert.equal(inspect.exitCode, 0, inspect.stderr); assert.match(inspect.stdout, /isolated/);
+    assert.deepEqual((await client.status()).kernels, []);
+    return "Shell/Python/R persistent requests and managed persistent request rejected; acknowledged child/daemon thread did not write after ephemeral completion; later Shell inherited no exported state; no persistent kernels";
+  });
   outcome = "PASS";
 } catch (error) {
   process.exitCode = 1;

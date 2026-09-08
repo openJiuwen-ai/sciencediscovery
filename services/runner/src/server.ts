@@ -170,6 +170,15 @@ async function readBytes(request: IncomingMessage, maxBytes: number): Promise<Bu
   return Buffer.concat(chunks);
 }
 
+function requireEphemeralExecution(request: PythonExecutionRequest | ShellExecutionRequest): void {
+  // A persistent worker can keep writing after its call returns and releases
+  // the Workspace lease. Background lifetime belongs to managed Executions.
+  if (request.kernelMode !== undefined && request.kernelMode !== "ephemeral") {
+    throw new Error("Runner executions must be ephemeral; persistent runtimes are no longer supported. Use managed Shell Execution for background tasks");
+  }
+  request.kernelMode = "ephemeral";
+}
+
 function validateRunnerWorkspaceKey(value: string): string {
   const key = value.trim();
   if (!key || key.length > 500 || key.includes("\\") || isAbsolute(key)) {
@@ -911,9 +920,8 @@ export function createRunnerServer(
           return;
         }
         const execution = JSON.parse(body) as ShellExecutionRequest;
+        requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
-        if (execution.kernelMode === "persistent") throw new Error("Managed Shell executions must be ephemeral");
-        execution.kernelMode = "ephemeral";
         execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
         execution.maxOutputBytes ??= config.maxOutputBytes;
         const accepted = managedExecutions.start(execution, (signal, log) => execution.environmentId
@@ -934,8 +942,8 @@ export function createRunnerServer(
           return;
         }
         const execution = JSON.parse(body) as ShellExecutionRequest;
+        requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
-        if (execution.permissionEpoch.executeGrantScope === "once") execution.kernelMode = "ephemeral";
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
           if (now - seenAt > 60_000) seenExecutions.delete(id);
@@ -953,14 +961,9 @@ export function createRunnerServer(
           () => execution.environmentId
             ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
                 if (signal.aborted) throw new Error("Runner execution aborted before start");
-                if (execution.kernelMode === "persistent") throw new Error("Managed Shell executions must be ephemeral");
                 return executeShell(config, execution, signal, undefined, gateways, runtime);
               }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
-            : execution.kernelMode === "persistent"
-            ? shellSessions.execute(execution, signal)
-            : executeShell(config, execution, signal,
-                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id),
-                gateways),
+            : executeShell(config, execution, signal, undefined, gateways),
         )));
         return;
       }
@@ -973,8 +976,8 @@ export function createRunnerServer(
           return;
         }
         const execution = JSON.parse(body) as PythonExecutionRequest;
+        requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
-        if (execution.permissionEpoch.executeGrantScope === "once") execution.kernelMode = "ephemeral";
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
           if (now - seenAt > 60_000) seenExecutions.delete(id);
@@ -984,19 +987,12 @@ export function createRunnerServer(
           return;
         }
         seenExecutions.set(execution.executionId, now);
-        // Activity keeps only this Agent's persistent shell alive.
-        shellSessions.touchAgent(execution.permissionEpoch.sessionId, execution.agentId);
         sendJson(response, 200, await abortOnDisconnect(response, (signal) => executeQueued(
           execution,
           execution.language ?? "python",
           execution.kernelMode ?? "ephemeral",
           signal,
-          () => execution.kernelMode === "persistent"
-            ? kernelManager?.execute(execution, signal)
-              ?? Promise.reject(new Error("Persistent kernels are unavailable"))
-            : executePython(config, execution, signal, environmentStore,
-                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id),
-                gateways),
+          () => executePython(config, execution, signal, environmentStore, undefined, gateways),
         )));
         return;
       }
