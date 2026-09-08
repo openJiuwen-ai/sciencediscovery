@@ -34,7 +34,7 @@ import {
  *   2. Let the subagent create and declare review notes while retaining a private file; let the main Agent create and declare the final report.
  *   3. Inspect the subagent card's identity and terminal state, then open its dedicated conversation for the tool/text steps and usage feedback.
  *   4. Verify the main answer and both declared Artifacts, while private files stay out of the Artifact catalog and @ suggestions.
- *   5. Open the separate physical-file tree and reload the Session to verify persisted subagent state.
+ *   5. Confirm child-private files exist in the child execution but not the main Workspace; reload the Session to verify persisted subagent state.
  * Environment: Isolated local stack at E2E_BASE_URL with shell sandbox and a journey-owned Project/Session.
  * Type: mocked
  * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; main/subagent routing uses the general-purpose preset system marker.
@@ -71,7 +71,7 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
   ], [
     {
       arguments: {
-        command: `mkdir -p review private && printf '# Review notes\\n\\n${childMarker}\\n' > review/notes.md && printf 'private context' > private/context.txt && echo ${childMarker}`,
+        command: `mkdir -p review private && printf '# Review notes\\n\\n${childMarker}\\n' > review/notes.md && printf 'private context' > private/context.txt && test "$(cat private/context.txt)" = 'private context' && echo PRIVATE-FILE-VERIFIED && echo ${childMarker}`,
       },
       delayMs: 700,
       tool: "run_shell",
@@ -142,6 +142,9 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
         await expect(conversation.locator(".subagent-page-meta")).toContainText(/tokens|Usage unavailable/);
         // The subagent executes the two journey tools without a mode-selection round trip.
         await expect(conversation.locator(".run-timeline details.timeline-disclosure.tool")).toHaveCount(2);
+        const execution = conversation.locator(".run-timeline details.timeline-disclosure.tool").first();
+        await execution.locator("summary").click();
+        await expect(execution).toContainText("PRIVATE-FILE-VERIFIED");
         const reply = conversation.locator(".run-timeline .message.assistant").last();
         await expect(reply).toContainText("review notes are ready");
         await expect(reply).toContainText(childMarker);
@@ -199,15 +202,14 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
     );
 
     await journey.step(
-      "确认助手的草稿纸确实存在，只是不算成果",
-      "打开工作区文件树后，助手私有目录下的文件都能看到；它们只是没有资格进入产物目录。",
+      "确认助手的独立工作区没有混进主工作区",
+      "助手步骤已验证私有文件存在；主工作区只包含主 Agent 的文件，不隐式出现子工作区或其副本。",
       async () => {
         await tree.openPhysicalFiles();
         const physicalNames = await tree.physicalFiles.evaluateAll((elements) =>
           elements.map((element) => element.getAttribute("title") ?? element.textContent ?? ""));
         expect(physicalNames).toContain("results/final.md");
-        expect(physicalNames.some((name) => /subagents\/.+\/review\/notes\.md$/.test(name))).toBe(true);
-        expect(physicalNames.some((name) => /subagents\/.+\/private\/context\.txt$/.test(name))).toBe(true);
+        expect(physicalNames.some((name) => /(?:^|\/)(?:subagents|private|review)\//.test(name))).toBe(false);
       },
     );
 

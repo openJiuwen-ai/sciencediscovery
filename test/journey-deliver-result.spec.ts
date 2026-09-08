@@ -53,18 +53,17 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
     [
       {
         arguments: {
-          code: [
+          command: "python3 - <<'PY'\n" + [
             "from pathlib import Path",
             "Path('scratch').mkdir(exist_ok=True)",
             "Path('results').mkdir(exist_ok=True)",
             "Path('scratch/intermediate.csv').write_text('value\\n40\\n44\\n', encoding='utf-8')",
             "Path('results/summary.md').write_text('# Summary\\n\\nmean=42.0\\n', encoding='utf-8')",
             `print('${firstMarker}')`,
-          ].join("\n"),
-          kernelMode: "ephemeral",
+          ].join("\n") + "\nPY",
         },
         delayMs: 500,
-        tool: "run_python",
+        tool: "run_shell",
       },
       { arguments: { path: "results/summary.md" }, tool: "declare_artifact" },
       { text: "The analysis is complete. Download or preview results/summary.md; its mean is 42.0." },
@@ -72,14 +71,13 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
     [
       {
         arguments: {
-          code: [
+          command: "python3 - <<'PY'\n" + [
             "from pathlib import Path",
             "Path('results/summary.md').write_text('# Summary\\n\\nmean=50.0\\n', encoding='utf-8')",
             `print('${secondMarker}')`,
-          ].join("\n"),
-          kernelMode: "ephemeral",
+          ].join("\n") + "\nPY",
         },
-        tool: "run_python",
+        tool: "run_shell",
       },
       { arguments: { path: "results/summary.md" }, tool: "declare_artifact" },
       { text: "The updated results/summary.md now reports mean=50.0." },

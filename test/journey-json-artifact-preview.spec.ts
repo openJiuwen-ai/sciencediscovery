@@ -125,7 +125,7 @@ test("J8 打开超长字段 JSON 产物时预览完整可读且契约不变", { 
   ].join("\n");
   const stub = await scriptedModel([
     [
-      { arguments: { code: python, kernelMode: "ephemeral" }, delayMs: 300, tool: "run_python" },
+      { arguments: { command: `python3 - <<'PY'\n${python}\nPY` }, delayMs: 300, tool: "run_shell" },
       { arguments: { path: "results/sequences.json" }, tool: "declare_artifact" },
       { arguments: { path: "results/table.json" }, tool: "declare_artifact" },
       { arguments: { path: "results/big.json" }, tool: "declare_artifact" },

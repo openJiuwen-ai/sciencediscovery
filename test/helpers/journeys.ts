@@ -178,6 +178,7 @@ export function scriptedModel(
   let mainStepIndex = 0;
   let mainTurn = 0;
   let subagentStepIndex = 0;
+  const lastAnswer: Partial<Record<"main" | "subagent", string>> = {};
   const server: Server = createServer((request, response) => {
     const bodyChunks: Buffer[] = [];
     request.on("data", (chunk) => bodyChunks.push(Buffer.from(chunk)));
@@ -206,6 +207,20 @@ export function scriptedModel(
         const systemPrompt = String(messages.find((message) => message.role === "system")?.content ?? "");
         const isSubagent = systemPrompt.includes(SUBAGENT_PRESET_MARKER);
         const route = isSubagent ? "subagent" : "main";
+        const latestUser = [...messages].reverse().find((message) => message.role === "user")?.content;
+        if (typeof latestUser === "string" && latestUser.startsWith("[Execution notifications]")) {
+          // Completion is a notification turn, not the next scripted user task.
+          // Acknowledge the prior answer without replaying commands or consuming
+          // the next user turn's fixture (including a child's reset sequence).
+          const answer = lastAnswer[route];
+          if (!answer) throw new Error("Completion notification arrived before a scripted answer");
+          const id = `chatcmpl-journey-notice-${++sequence}`;
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.write(`data: ${JSON.stringify(completionChunk(id, model, { content: answer, role: "assistant" }, null))}\n\n`);
+          response.write(`data: ${JSON.stringify(completionChunk(id, model, {}, "stop"))}\n\n`);
+          response.end("data: [DONE]\n\n");
+          return;
+        }
         const turn = isSubagent ? 0 : mainTurn;
         const scripts = isSubagent ? subagentSteps : mainSteps;
         if (!scripts) throw new Error("The product made an unexpected subagent model request");
@@ -249,6 +264,7 @@ export function scriptedModel(
           })}\n\n`);
         }
         response.end("data: [DONE]\n\n");
+        if (!("tool" in step)) lastAnswer[route] = step.text;
         if (isSubagent) {
           if ("tool" in step) subagentStepIndex += 1;
           else subagentStepIndex = 0;

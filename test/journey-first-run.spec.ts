@@ -39,7 +39,7 @@ test.use({ locale: "zh-CN" });
  *   1. Open an empty zh-CN workbench and configure a Chat Completions reasoning variant through System settings.
  *   2. Create a Project through the UI, then explicitly select the newly registered model for the task.
  *   3. Send a shell-backed request, inspect its marked tool input/output, and observe completion.
- *   4. Send a second request whose output proves the persistent shell retained state from the first request.
+ *   4. Send a second request proving Workspace files persist but Shell cwd/export do not.
  *   5. Reload and verify the same Project, Session, messages, and expandable tool history remain.
  * Environment: Isolated local stack at E2E_BASE_URL with an empty model/project catalog; zh-CN browser locale and persisted UI locale.
  * Type: mocked
@@ -55,7 +55,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
   test.setTimeout(180_000);
   journey.scenario({
     goal: "一位第一次打开 ScienceDiscovery 的中文用户，要把工作台配起来，"
-      + "并确认产品真的在本机执行命令、记得上一条命令留下的状态，刷新之后工作也还在。",
+      + "并确认产品真的在本机执行命令、保留工作区文件而不继承 Shell 状态，刷新之后工作也还在。",
     preconditions: [
       "隔离栈已启动，浏览器已持有本实例的访问 token",
       "实例内没有可用模型、没有项目；模型与项目都由本旅程自己创建并在结束时清理",
@@ -66,14 +66,13 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
   await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-locale", "zh-CN"));
 
   const firstMarker = `J1-FIRST-${Date.now()}`;
-  const persistentValue = `J1-PERSIST-${Date.now()}`;
+  const persistedFileValue = `J1-FILE-${Date.now()}`;
   const secondMarker = `J1-SECOND-${Date.now()}`;
   const stub = await scriptedModel([
     [
       {
         arguments: {
-          command: `cd /workspace && export J1_VAR=${persistentValue} && echo ${firstMarker}`,
-          kernelMode: "persistent",
+          command: `mkdir -p scratch && cd scratch && export J1_VAR=first-process-only && printf '%s' '${persistedFileValue}' > value.txt && echo ${firstMarker}`,
         },
         delayMs: 700,
         tool: "run_shell",
@@ -83,18 +82,17 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
     [
       {
         arguments: {
-          command: `pwd -P && printf '${secondMarker}:%s\\n' "$J1_VAR"`,
-          kernelMode: "persistent",
+          command: `test "$(pwd -P)" = /workspace && test -z "\${J1_VAR-}" && printf '${secondMarker}:%s\\n' "$(cat scratch/value.txt)" && echo FRESH-SHELL`,
         },
         delayMs: 700,
         tool: "run_shell",
       },
-      { text: `第二次分析已完成，并从第二条命令读回 ${persistentValue}。` },
+      { text: `第二次分析已完成，从工作区文件读回 ${persistedFileValue}，Shell 状态没有继承。` },
     ],
   ]);
 
-  const firstPrompt = "在持久 shell 中保存一个值，并把本轮标记打印出来。";
-  const secondPrompt = "继续使用同一个持久 shell，只用第二条命令读回刚才保存的值。";
+  const firstPrompt = "把一个值保存到工作区文件，并把本轮标记打印出来。";
+  const secondPrompt = "用新的 Shell 读回工作区文件，确认 cwd 和环境变量没有继承。";
   let fixture: JourneyFixture | undefined;
   let modelName = "";
   let providerName = "";
@@ -259,15 +257,16 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
     );
 
     await journey.step(
-      "再发一条任务，确认它记得上一条命令留下的状态",
-      "第二条命令只负责读取，输出里带回第一条命令保存的值，说明同一会话的 shell 状态是连续的。",
+      "再发一条任务，确认文件保留但 Shell 状态不继承",
+      "第二条命令从工作区文件读回保存的值，同时确认 cwd 回到工作区根、上一条 export 不存在。",
       async () => {
         const secondRun = await sendUserMessage(page, fixture!.session.id, secondPrompt);
         const secondTerminal = await waitForRunTerminal(page, fixture!.session.id, secondRun.id);
         expect(secondTerminal.status).toBe("completed");
         const secondTool = await expandToolStep(page, { contains: secondMarker });
-        await expect(secondTool).toContainText(`${secondMarker}:${persistentValue}`);
-        await expect(page.locator(".message.assistant").last()).toContainText(persistentValue);
+        await expect(secondTool).toContainText(`${secondMarker}:${persistedFileValue}`);
+        await expect(secondTool).toContainText("FRESH-SHELL");
+        await expect(page.locator(".message.assistant").last()).toContainText(persistedFileValue);
       },
     );
 
@@ -282,7 +281,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         // Each run exposes the requested shell tool on its first model step.
         await expect(page.getByRole("region", { name: "Agent 活动" }).locator("details.timeline-disclosure.tool"))
           .toHaveCount(2);
-        await expect(await expandToolStep(page, { contains: secondMarker })).toContainText(persistentValue);
+        await expect(await expandToolStep(page, { contains: secondMarker })).toContainText(persistedFileValue);
       },
     );
 
