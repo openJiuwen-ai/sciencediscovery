@@ -96,7 +96,7 @@ declare_claim(content, cites_evidence_aliases={"evidence1": evidence_id}, …)
 
 **路径 B — 代码产出（`[artifact1]`，无文献）**
 ```
-run_python → 写工作区文件并记录 Derivation/CAS
+run_shell → 写工作区文件并记录 Derivation/CAS
 declare_artifact(path) → 注册 Project 产物版本并返回 artifact_id
   → 将已声明的该版本镜像为 Code -produces-> Artifact
 declare_claim(content, cites_artifact_aliases={"artifact1": artifact_id}, …)

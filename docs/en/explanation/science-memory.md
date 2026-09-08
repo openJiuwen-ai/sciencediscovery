@@ -96,7 +96,7 @@ report body writes [evidence1]
 
 **Path B — code output (`[artifact1]`, no literature)**
 ```
-run_python → writes a workspace file and records Derivation/CAS
+run_shell → writes a workspace file and records Derivation/CAS
 declare_artifact(path) → registers a Project artifact version and returns artifact_id
   → mirrors the declared version as Code -produces-> Artifact
 declare_claim(content, cites_artifact_aliases={"artifact1": artifact_id}, …)

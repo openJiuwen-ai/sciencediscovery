@@ -16,7 +16,7 @@ Container ID verify failed (session ct_id=0; device ct_id=...)
 
 ## 2. 设计边界
 
-- `run_python`、`run_r`、`run_shell` 与持久内核仍在 bubblewrap + seccomp 沙箱内运行。
+- 常规执行统一使用 `run_shell`，包括 `python -m`、Python 文件和 `Rscript`；每次使用新沙箱（Linux 上为 bubblewrap + seccomp），不跨调用保留解释器状态。
 - NPU 模型作业不走持久 kernel REPL。
 - Host NPU Broker 默认关闭，只有 `SCIENCE_AGENT_NPU_BROKER=1` 时才向 Agent 暴露 `run_npu_job`。
 - Broker 只运行 workload 白名单中的固定 entrypoint，不提供任意宿主 shell。
@@ -42,7 +42,7 @@ Broker 的可扩展性来自“注册新的 workload manifest”，不是开放�
 
 - 固定 entrypoint；
 - `shell: false`；
-- 默认通过 `run_npu_job` 请求携带的 ScienceDiscovery scientific environment revision 解析 Python；只有自定义 manifest 显式使用 `${python}` 时才读取 `SCIENCE_AGENT_NPU_PYTHON`；
+- 默认通过 `run_npu_job(environment_id=...)` 所选托管环境的最新版解析 Python，解析出的 Revision 仅在内部保留用于审计；只有自定义 manifest 显式使用 `${python}` 时才读取 `SCIENCE_AGENT_NPU_PYTHON`；
 - workspace 与仓库路径 `realpath` 边界校验；
 - 明确的环境变量 / 站点资产引用；
 - 按 Session 隔离的 status / logs / result / cancel；

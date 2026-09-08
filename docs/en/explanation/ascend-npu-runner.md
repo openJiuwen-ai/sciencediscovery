@@ -16,7 +16,7 @@ The current design therefore does not keep pushing NPU devices into bwrap. Norma
 
 ## 2. Design boundary
 
-- `run_python`, `run_r`, `run_shell`, and persistent kernels still run inside Bubblewrap and seccomp.
+- Normal execution uses `run_shell` in a fresh sandbox (Bubblewrap and seccomp on Linux), including `python -m`, Python files, and `Rscript`; interpreter state does not persist between calls.
 - NPU model jobs do not use the persistent kernel REPL.
 - Host NPU Broker is disabled by default; only `SCIENCE_AGENT_NPU_BROKER=1` exposes `run_npu_job` to the Agent.
 - The Broker runs only fixed entry points from the workload allowlist and does not provide arbitrary host shell.
@@ -42,7 +42,7 @@ Broker extensibility comes from registering workload manifests, not from opening
 
 - fixed entry point;
 - `shell: false`;
-- default Python resolution through the ScienceDiscovery scientific environment revision carried by `run_npu_job`; `SCIENCE_AGENT_NPU_PYTHON` is only read by custom manifests that explicitly use `${python}`;
+- default Python resolution from the latest managed environment selected by `run_npu_job(environment_id=...)`, with the resolved Revision retained internally for audit; `SCIENCE_AGENT_NPU_PYTHON` is only read by custom manifests that explicitly use `${python}`;
 - `realpath` boundary checks for workspace and repository paths;
 - explicit environment variables or site asset references;
 - Session-scoped status, logs, result, and cancel;

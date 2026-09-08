@@ -80,7 +80,7 @@ sudo apk add bubblewrap              # Alpine
 
 开启**沙箱网络访问**的 `domain-allowlist` 模式时，宿主还需要一个可用的 `python3`（沙箱内 egress bridge 的解释器，可用 `SCIENCE_AGENT_EGRESS_PYTHON` 指定）。缺失时该模式的执行会直接失败并说明原因，默认的 `none` 模式不受影响；两种模式都**不需要** root、额外 capability 或系统防火墙配置。
 
-只想先看 Web UI、暂不使用沙箱执行时，可用 `--skip-sandbox-check` 启动；此时 `run_python` / `run_shell` 会失败，其余功能正常。bubblewrap 已安装但宿主限制了无特权用户命名空间时，`serve` 会给出告警并继续启动，排查方式与 [Docker 的沙箱与宿主要求](#沙箱与宿主要求)相同。
+只想先看 Web UI、暂不使用沙箱执行时，可用 `--skip-sandbox-check` 启动；此时 `run_shell` 会失败，其余功能正常。bubblewrap 已安装但宿主限制了无特权用户命名空间时，`serve` 会给出告警并继续启动，排查方式与 [Docker 的沙箱与宿主要求](#沙箱与宿主要求)相同。
 
 ### 命令与选项
 
@@ -244,7 +244,7 @@ docker compose up -d --build  # 拉取新代码后重建并重启
 
 **若未放开 `systempaths`（例如沿用旧版 Compose、裸 `docker run` 或 K8s 默认配置）**：产品会自动回退为 `--ro-bind /proc /proc`，执行仍可进行，但沙箱内看到的是**容器的进程列表**，而不是只有自己的进程。回退时 runner 启动日志与预检都会打印明确 warning，说明原因与影响。要恢复更强的隔离，请加回 `systempaths=unconfined`，不要改用 `privileged`。
 
-如果宿主仍然限制用户命名空间，API 与 UI 仍可正常启动、`GET /health` 会反映 runner 状态，但每次 `run_python` / `run_shell` 都会失败。入口脚本在启动时会做一次 bubblewrap 预检，因此 `docker compose logs` 中会出现带上述检查命令的明确告警。Ubuntu 24.04+ 上通常的修复方式是：
+如果宿主仍然限制用户命名空间，API 与 UI 仍可正常启动、`GET /health` 会反映 runner 状态，但每次 `run_shell` 都会失败。入口脚本在启动时会做一次 bubblewrap 预检，因此 `docker compose logs` 中会出现带上述检查命令的明确告警。Ubuntu 24.04+ 上通常的修复方式是：
 
 ```bash
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

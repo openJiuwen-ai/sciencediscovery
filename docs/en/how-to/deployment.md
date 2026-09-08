@@ -74,7 +74,7 @@ sudo apk add bubblewrap              # Alpine
 
 Enabling the `domain-allowlist` mode of **sandbox network access** additionally needs a usable `python3` on the host (the interpreter for the in-sandbox egress bridge; override it with `SCIENCE_AGENT_EGRESS_PYTHON`). Without it, executions in that mode fail with an explicit reason and the default `none` mode is unaffected. Neither mode needs root, extra capabilities, or host firewall configuration.
 
-To inspect the UI without sandbox execution, start with `--skip-sandbox-check`; `run_python` and `run_shell` will fail while other functions remain available. If Bubblewrap exists but unprivileged user namespaces are restricted, `serve` warns and continues. Diagnose it as described under [Sandbox and host requirements](#sandbox-and-host-requirements).
+To inspect the UI without sandbox execution, start with `--skip-sandbox-check`; `run_shell` will fail while other functions remain available. If Bubblewrap exists but unprivileged user namespaces are restricted, `serve` warns and continues. Diagnose it as described under [Sandbox and host requirements](#sandbox-and-host-requirements).
 
 ### Commands and options
 
@@ -218,7 +218,7 @@ No capability is added, `privileged: true` is not used, and the Docker socket is
 
 **If `systempaths` is not relaxed** (an older Compose file, a bare `docker run`, or Kubernetes defaults), the product automatically falls back to `--ro-bind /proc /proc`. Executions still run, but the sandbox sees the **container's process list** instead of only its own processes. The fallback is never silent: both the runner startup log and the preflight print a warning naming the cause and the consequence. Restore the stronger profile by adding `systempaths=unconfined` — do not switch to `privileged`.
 
-If the host still restricts user namespaces, the API and UI start and `GET /health` reports runner state, but every `run_python` and `run_shell` fails. Startup runs a Bubblewrap preflight and prints a warning with the checks above. On Ubuntu 24.04+, the usual fix is:
+If the host still restricts user namespaces, the API and UI start and `GET /health` reports runner state, but every `run_shell` fails. Startup runs a Bubblewrap preflight and prints a warning with the checks above. On Ubuntu 24.04+, the usual fix is:
 
 ```bash
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

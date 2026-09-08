@@ -53,7 +53,7 @@ system prompt 逐个列出 <package_path> 与 <package_hash>
 | 工具 | 执行位置 | 职责 |
 |------|----------|------|
 | `read_file` | Node 工作区工具 | 像读工作区文件一样，分页读取技能包根目录下任意已放入的包文件 |
-| `run_shell` / `run_python` / `run_r` | Runner 沙箱 | 直接在包路径上用显式 argv 执行捆绑脚本，不复制、不改写 |
+| `run_shell` | Runner 沙箱 | 直接在包路径上用显式 argv 执行捆绑脚本，不复制、不改写 |
 | `read_skill` | Node 工作区工具 | 兼容通道，返回同一份冻结 instructions 以及包路径 |
 | `read_skill_resource` | Node 工作区工具 | 按 path 读取有界 UTF-8 supporting resource；不执行脚本、不安装依赖 |
 

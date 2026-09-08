@@ -20,7 +20,7 @@
 
 所有工具结果在进入模型输入前经过同一个边界：普通的非自限界结果超过 8 KiB 时原样落盘并在消息元数据中附结构化 ref，保证后续压缩可恢复；超过 2000 行或 50 KiB 时，首次展示即改为 head/tail 预览 + ref。完整正文按 Session 保存在 `<dataDir>/tool-outputs/<sessionId>/`。`read_tool_output` 应优先用 `query` 做普通文本搜索，常规文本使用行范围，只有单行过宽时才使用字符范围；三种模式的返回都限制在约 40 KiB。工具在单次 AgentRun 内按 ref 统计读取，重复范围/查询或累计约 64/96 KiB 时会提醒模型只为明确缺失信息继续读取，但不会阻断合理操作。阈值可通过 `.env.example` 中的 `SCIENCE_AGENT_TOOL_OUTPUT_*` 环境变量调整。
 
-`run_python` / `run_shell` 首次执行会触发 `code` 类权限卡片（见[运行时行为参考](runtime-behavior.md#权限与评审器)）。执行产生的文件仍保留 diff 与 derivation 审计，但不会仅因出现在工作区就进入产物目录；Agent 必须调用 `declare_artifact`，用户上传、MCP 下载与拉回的远程任务输出则由控制面在入口处注册。
+`run_shell` 首次执行会触发 `code` 类权限卡片（见[运行时行为参考](runtime-behavior.md#权限与评审器)）。执行产生的文件仍保留 diff 与 derivation 审计，但不会仅因出现在工作区就进入产物目录；Agent 必须调用 `declare_artifact`，用户上传与 MCP 下载由控制面在入口处注册；远程文件必须先显式复制到本地 Workspace，再声明 Artifact，复制本身不自动声明。
 
 ## Web 工具（恒有）
 
@@ -102,5 +102,5 @@
 
 - [agent-backend.md](../explanation/agent-backend.md) — 工具规格如何下发到 gateway、回调如何执行
 - [control-plane.md](../explanation/control-plane.md) — 权限系统与工具回调注册
-- [sandbox-execution.md](../explanation/sandbox-execution.md) — `run_python` / `run_r` / `run_shell` 背后的沙箱
+- [sandbox-execution.md](../explanation/sandbox-execution.md) — `run_shell`（含 Python/R 命令）背后的沙箱
 - [Ascend NPU 宿主 Broker](../explanation/ascend-npu-runner.md) — Ascend NPU Broker 的设计背景与文档入口
