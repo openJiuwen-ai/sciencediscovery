@@ -22,6 +22,26 @@ import type { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
+test("Transfer binding exposes only owned Workspaces and rechecks Runner access after permission", async () => {
+  let allowed = true; let starts = 0;
+  const store = {
+    workspaceIdentity: (_session: string, agent: string, runner = "local") => ({ id: `${agent}-${runner}` }),
+    assertSessionWritable() {}, assertSessionAllowsRemoteRunner() { if (!allowed) throw new Error("revoked"); },
+    transfers: { start() { starts++; return {}; } },
+  } as unknown as SessionStore;
+  const binding = createWorkspaceExecutionBindings({
+    agentId: "child", sessionId: "session", executionId: "run", workspaceRoot: "/workspace", store,
+    permissionScopeLabel: "child", provenanceRecorder: {} as ProvenanceRecorder, runnerClient: {} as RunnerClient,
+    permission: { requirePrivilege: async () => { allowed = false; } } as unknown as AgentPermissionRuntime,
+    remoteTargets: [{ runnerId: "remote", hostAlias: "Allowed", workspaceKey: "child-key", runnerClient: () => ({} as RunnerClient) }],
+  }).workspaceTransfers!;
+  assert.deepEqual(binding.workspaces().map((item) => item.id), ["child-local", "child-remote"]);
+  await assert.rejects(binding.start({ sourceWorkspaceId: "parent-local", targetWorkspaceId: "child-local", files: [{ sourcePath: "secret", targetPath: "secret" }] }), /not owned/);
+  await assert.rejects(binding.start({ sourceWorkspaceId: "child-local", targetWorkspaceId: "child-remote", files: [{ sourcePath: "in", targetPath: "out" }] }), /revoked/);
+  assert.equal(starts, 0);
+  assert.deepEqual(binding.workspaces().map((item) => item.id), ["child-local"]);
+});
+
 test("main and child execution bindings route by Runner ID and record isolated workspace ownership", async () => {
   const executed: Array<{
     agentId: string;

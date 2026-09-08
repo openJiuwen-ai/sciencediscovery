@@ -297,6 +297,7 @@ export function buildWorkspaceSystemPrompt(
 }
 
 export interface WorkspaceAgentOptions {
+  workspaceTransfers?: WorkspaceToolOptions["workspaceTransfers"];
   remoteRunners?: WorkspaceToolOptions["remoteRunners"];
   config: AgentConfig;
   createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;

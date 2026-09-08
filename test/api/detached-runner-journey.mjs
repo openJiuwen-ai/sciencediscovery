@@ -18,6 +18,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { RunnerClient } from "../../packages/executor/dist/runner-client.js";
+import { DatabaseSync } from "node:sqlite";
+import { VersionStore } from "../../packages/cas/dist/index.js";
+import { WorkspaceTransfers } from "../../services/api/dist/workspace-transfers.js";
+import { createWorkspaceTools } from "../../packages/workspace/dist/workspace.js";
 
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 if (execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim()) {
@@ -30,6 +34,7 @@ const token = randomUUID();
 const owner = { sessionId: "journey-session", agentId: "main" };
 const steps = [];
 let child;
+let peer;
 let client;
 let serviceLog = "";
 let origin;
@@ -162,12 +167,57 @@ try {
     assert.equal(Buffer.concat(chunks).toString(), "delivered\n", "export survives restart and live source overwrite");
     return "result, logs and immutable source export retained; duplicate submission rejected";
   });
+  await step("统一工具在两个 Runner 与本地之间交付文件", "通过 Transfer ID 查询本地→远端甲→远端乙→本地，跨 Runner 不中途落入本地 Workspace。", async () => {
+    let peerOrigin;
+    peer = spawn(process.execPath, ["services/runner/dist/server.js"], { stdio: ["ignore", "pipe", "pipe"], env: {
+      PATH: process.env.PATH, TMPDIR: root, SCIENCE_AGENT_DATA_DIR: resolve(dataDir, "peer"),
+      SCIENCE_AGENT_RUNNER_PORT: "0", SCIENCE_AGENT_RUNNER_HOST: "127.0.0.1", SCIENCE_AGENT_RUNNER_TOKEN: token,
+      SCIENCE_AGENT_NPU_BROKER: "0", SCIENTIFIC_ENVS: "0",
+    } });
+    peer.stdout.on("data", (chunk) => { const match = chunk.toString().match(/runner listening on (http:\/\/127\.0\.0\.1:\d+)/); if (match) peerOrigin = match[1]; });
+    peer.stderr.on("data", (chunk) => { serviceLog += redact(chunk.toString()); });
+    await until(() => { if (peer.exitCode !== null) throw new Error("Peer Runner exited"); return Boolean(peerOrigin); });
+    const peerClient = new RunnerClient(peerOrigin, token);
+    const local = resolve(dataDir, "transfer-local"); await mkdir(local);
+    await writeFile(resolve(local, "input"), "scientific payload\n");
+    const db = new DatabaseSync(resolve(dataDir, "transfer-test.sqlite"));
+    const transfers = new WorkspaceTransfers(db, new VersionStore(dataDir));
+    const endpoints = new Map([
+      ["local", { id: "local", root: local }],
+      ["a", { id: "a", runner: client, workspaceKey: "transfer/a" }],
+      ["b", { id: "b", runner: peerClient, workspaceKey: "transfer/b" }],
+    ]);
+    const tools = createWorkspaceTools(local, { enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); }, workspaceTransfers: {
+      workspaces: () => [...endpoints.keys()].map((id) => ({ id, runnerId: id, description: id })),
+      start: async (input) => transfers.start(owner, input, { resolve: (id) => { if (!endpoints.has(id)) throw new Error("denied"); return endpoints.get(id); } }),
+      get: (id) => transfers.get(id, owner), list: () => transfers.list(owner), cancel: (id) => transfers.cancel(id, owner),
+    } });
+    const tool = tools.find((tool) => tool.name === "workspace_transfer");
+    try {
+      for (const [from, to, source, target] of [["local", "a", "input", "remote-a"], ["a", "b", "remote-a", "remote-b"], ["b", "local", "remote-b", "output"]]) {
+        const result = await tool.execute("transfer", { operation: "start", source_workspace_id: from, target_workspace_id: to,
+          files: [{ source_path: source, target_path: target }] });
+        const accepted = JSON.parse(result.content[0].text);
+        await until(() => !["queued", "running"].includes(transfers.get(accepted.id, owner).state));
+        const status = JSON.parse((await tool.execute("status", { operation: "status", transfer_id: accepted.id })).content[0].text);
+        assert.equal(status.state, "completed", status.error); assert.equal(status.progress[0].state, "completed");
+      }
+      const { readFile, readdir } = await import("node:fs/promises");
+      assert.equal(await readFile(resolve(local, "output"), "utf8"), "scientific payload\n");
+      assert.deepEqual((await readdir(local)).sort(), ["input", "output"]);
+      assert.equal(transfers.list(owner).length, 3);
+    } finally { db.close(); }
+    return "three durable Transfers completed via the Agent tool; two production Runner processes; only input/output exist locally";
+  });
   outcome = "PASS";
 } catch (error) {
   process.exitCode = 1;
   console.error(redact(error.message));
 } finally {
   await stop();
+  if (peer && peer.exitCode === null && peer.signalCode === null) {
+    const exited = new Promise((done) => peer.once("exit", done)); peer.kill("SIGTERM"); await exited;
+  }
   await writeFile(resolve(root, "report.md"), [
     "# Detached Runner operator journey", "", `Result: ${outcome}`, `Commit: ${sha}`, "",
     "Invocation: `node test/api/detached-runner-journey.mjs` (repository root).",

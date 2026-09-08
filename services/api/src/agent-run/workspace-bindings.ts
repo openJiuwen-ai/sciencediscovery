@@ -28,7 +28,7 @@ import { syncScientificEnvironmentCatalog } from "../scientific-environment-cata
 
 type ExecutionBindings = Pick<
   WorkspaceAgentOptions,
-  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker"
+  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "workspaceTransfers"
 >;
 
 /**
@@ -141,6 +141,45 @@ export function createWorkspaceExecutionBindings(
     return job;
   };
   const common = {
+    workspaceTransfers: {
+      workspaces: () => {
+        const candidates = [{ runnerId: "local", description: "Local Workspace" }, ...(options.remoteTargets ?? []).map((target) => ({ runnerId: target.runnerId, description: target.hostAlias }))];
+        return candidates.filter((candidate) => {
+          try { if (candidate.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, candidate.runnerId); return true; } catch { return false; }
+        }).map((candidate) => ({ ...candidate, id: options.store.workspaceIdentity(options.sessionId, options.agentId, candidate.runnerId).id }));
+      },
+      list: () => options.store.transfers.list({ sessionId: options.sessionId, agentId: options.agentId }),
+      get: (id: string) => options.store.transfers.get(id, { sessionId: options.sessionId, agentId: options.agentId }),
+      cancel: (id: string) => options.store.transfers.cancel(id, { sessionId: options.sessionId, agentId: options.agentId }),
+      start: async (input: import("@sciencediscovery/schema").WorkspaceTransferInput, signal?: AbortSignal) => {
+        const resolve = (id: string): import("../workspace-transfers.js").TransferEndpoint => {
+          options.store.assertSessionWritable(options.sessionId);
+          if (id === options.store.workspaceIdentity(options.sessionId, options.agentId).id) return { id, root: options.workspaceRoot };
+          const target = options.remoteTargets?.find((target) => options.store.workspaceIdentity(options.sessionId, options.agentId, target.runnerId).id === id);
+          if (!target) throw new Error("Workspace is not owned by this Agent or its allowed Runners");
+          options.store.assertSessionAllowsRemoteRunner(options.sessionId, target.runnerId);
+          return { id, runner: target.runnerClient(), workspaceKey: target.workspaceKey };
+        };
+        resolve(input.sourceWorkspaceId); resolve(input.targetWorkspaceId);
+        await options.permission.requirePrivilege({ action: "host", executionId: options.executionId,
+          resource: `workspace-transfer:${input.sourceWorkspaceId}:${input.targetWorkspaceId}`, signal,
+          summary: `Copy ${input.files.length} selected files between authorized Workspaces` });
+        signal?.throwIfAborted();
+        resolve(input.sourceWorkspaceId); resolve(input.targetWorkspaceId);
+        return options.store.transfers.start({ sessionId: options.sessionId, agentId: options.agentId }, input, { resolve,
+          committed: async (file, transfer) => {
+            if (transfer.targetWorkspaceId !== options.store.workspaceIdentity(options.sessionId, options.agentId).id) return;
+            await options.store.recordWorkspaceFileRevision(options.sessionId, {
+              path: options.artifactPathPrefix ? `${options.artifactPathPrefix}/${file.targetPath}` : file.targetPath,
+              mode: "write", origin: "system", size: file.size, contentHash: file.sha256, modifiedAt: new Date().toISOString(),
+              ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}),
+              originMeta: { transferId: transfer.id, sourceSnapshotId: transfer.sourceSnapshotId!,
+                sourceWorkspaceId: transfer.sourceWorkspaceId, workspaceId: transfer.targetWorkspaceId },
+            });
+          },
+        });
+      },
+    },
     ...(options.npuBrokerEnabled ? { npuBroker: {
       cancel: async (jobId: string, signal?: AbortSignal) => {
         options.store.assertSessionWritable(options.sessionId);

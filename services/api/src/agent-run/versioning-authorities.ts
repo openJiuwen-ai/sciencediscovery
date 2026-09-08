@@ -36,6 +36,7 @@ export function versioningAuthorities(store: SessionStore, sessionId: string, ru
       environmentRevisions: store.listEnvironmentRevisions(),
       children: store.listSubagents(sessionId),
       notifications: store.notifications.snapshot(sessionId),
+      transfers: store.transfers.snapshot(sessionId),
       reviews: await store.listReviews(sessionId),
       artifactReviews: await store.listArtifactReviews(sessionId),
       executions,

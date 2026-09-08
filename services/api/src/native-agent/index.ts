@@ -745,6 +745,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.proposeSkillLibraryUpdate ? { proposeSkillLibraryUpdate: options.proposeSkillLibraryUpdate } : {}),
     ...(options.publishSkillLibraryUpdate ? { publishSkillLibraryUpdate: options.publishSkillLibraryUpdate } : {}),
     ...(options.remoteRunners ? { remoteRunners: options.remoteRunners } : {}),
+    ...(options.workspaceTransfers ? { workspaceTransfers: options.workspaceTransfers } : {}),
     skills: options.skills ?? [],
     specialists: options.specialists ?? [],
     toolPolicy: options.toolPolicy,

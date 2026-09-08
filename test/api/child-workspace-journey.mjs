@@ -50,7 +50,24 @@ const stub = createServer(async (request, response) => {
     } };
     if (child && results.length === 0) call = { name: "run_shell", arguments: { command:
       "test -f selected.txt && test ! -f hidden.txt && printf 'child copy' > selected.txt && printf 'isolated result' > result.txt && echo isolated" } };
-    if (child && results.length === 1) call = { name: "declare_artifact", arguments: { path: "result.txt", name: "Independent child result" } };
+    if (child && results.length === 1) call = { name: "workspace_transfer", arguments: { operation: "workspaces" } };
+    if (child && results.length === 2) {
+      const workspace = JSON.stringify(results[1]).match(/ws_[a-z0-9]+/)?.[0];
+      assert.ok(workspace, "child must discover its owned Workspace ID");
+      call = { name: "workspace_transfer", arguments: { operation: "start", source_workspace_id: workspace, target_workspace_id: workspace,
+        files: [{ source_path: "result.txt", target_path: "copied-result.txt" }] } };
+    }
+    if (child && results.length >= 3) {
+      const text = JSON.stringify(results.at(-1)).replaceAll('\\"', '"');
+      const artifactDone = text.includes("Independent child result");
+      if (!artifactDone) {
+        const id = JSON.stringify(results[2]).replaceAll('\\"', '"').match(/"id"\s*:\s*"([a-f0-9-]{36})"/)?.[1];
+        assert.ok(id, "Transfer submission must return an ID");
+        call = /"state"\s*:\s*"completed"/.test(text)
+          ? { name: "declare_artifact", arguments: { path: "copied-result.txt", name: "Independent child result" } }
+          : { name: "workspace_transfer", arguments: { operation: "status", transfer_id: id } };
+      }
+    }
     response.writeHead(200, { "content-type": "text/event-stream" });
     const delta = call ? { role: "assistant", tool_calls: [{ index: 0, id: `call-${child ? "child" : "main"}-${results.length}`,
       type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] }
@@ -136,11 +153,14 @@ try {
     assert.equal(children[0].status, "completed");
     assert.match(children[0].handoff.workspaceId, /^ws_/);
     const tools = children[0].steps.filter((item) => item.kind === "tool");
-    assert.deepEqual(tools.map((item) => [item.toolName, item.status]), [["run_shell", "completed"], ["declare_artifact", "completed"]], redact(JSON.stringify(tools)));
+    assert.ok(tools.every((item) => item.status === "completed"), redact(JSON.stringify(tools)));
+    assert.equal(tools[0].toolName, "run_shell");
+    assert.ok(tools.filter((item) => item.toolName === "workspace_transfer").length >= 3);
+    assert.equal(tools.at(-1).toolName, "declare_artifact");
     assert.match(tools[0].content, /isolated/);
     const artifacts = await json(`/api/sessions/${session.id}/artifacts`);
     assert.equal(artifacts.filter((artifact) => artifact.logicalName === "Independent child result").length, 1);
-    return "Child completed; independent Workspace ID; Shell and local Artifact declaration completed";
+    return "Child completed; discovered its own Workspace; submitted and queried a durable Transfer; copied local Artifact declared";
   });
   await step("4. 核对父目录未被隐式修改", "父输入仍为原内容，子 Agent 文件不作为父目录子树出现。", async () => {
     const files = await json(`/api/sessions/${session.id}/files`);

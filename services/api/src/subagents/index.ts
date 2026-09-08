@@ -20,7 +20,6 @@ import type { Subagent, SubagentBrief, SubagentInput, WorkspaceFile, WorkspaceFi
 import { validateSubagentOutputValue } from "../subagent-brief.js";
 import { SessionStore } from "../store.js";
 import { listWorkspaceFiles } from "../artifacts/index.js";
-import { copyWorkspaceFile } from "../workspace-copy.js";
 import { VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 
 /** Session-workspace prefix holding each subagent's private handoff scratch space. */
@@ -98,6 +97,24 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
   const parentInputFiles = selected.files;
   await mkdir(childRoot, { recursive: true });
   const versions = new VersionStore(store.dataDir);
+  const copyInput = async (sourcePath: string, targetPath: string) => {
+    const owner = { sessionId, agentId: "main" };
+    const sourceWorkspaceId = store.workspaceIdentity(sessionId).id;
+    const transfer = store.transfers.start(owner, { sourceWorkspaceId, targetWorkspaceId: workspaceId,
+      files: [{ sourcePath, targetPath }] }, {
+      // Only the orchestrator grants this selected parent-to-child delivery;
+      // child tools never receive a capability to browse the parent's root.
+      resolve: (id) => {
+        store.assertSessionWritable(sessionId);
+        if (id === sourceWorkspaceId) return { id, root: workspaceRoot };
+        if (id === workspaceId) return { id, root: childRoot };
+        throw new Error("Workspace is outside this handoff");
+      },
+    });
+    const result = await store.transfers.wait(transfer.id, owner);
+    if (result.state !== "completed") throw new Error(result.error ?? "Handoff transfer did not complete");
+    return { transferId: result.id, bytes: result.progress[0]!.size, sha256: result.progress[0]!.sha256 };
+  };
   const inputPaths: string[] = [];
   const skippedInputPaths: NonNullable<NonNullable<Subagent["handoff"]>["skippedInputPaths"]> = [...selected.skippedInputPaths];
   let copiedBytes = 0;
@@ -120,7 +137,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
     const snapshotDestination = resolveWorkspaceFile(childRoot, copiedPath);
     const originalPathDestination = resolveWorkspaceFile(childRoot, file.path);
     try {
-      const copied = await copyWorkspaceFile({ versions, sourceRoot: workspaceRoot, sourcePath: file.path, targetRoot: childRoot, targetPath: copiedPath });
+      const copied = await copyInput(file.path, copiedPath);
       const snapshotStat = await stat(snapshotDestination);
       provenanceInputs.push({
         mode: "write",
@@ -134,7 +151,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
         subagentId,
       });
       if (originalPathDestination !== snapshotDestination) {
-        const originalCopy = await copyWorkspaceFile({ versions, sourceRoot: workspaceRoot, sourcePath: file.path, targetRoot: childRoot, targetPath: file.path });
+        const originalCopy = await copyInput(file.path, file.path);
         const originalStat = await stat(originalPathDestination);
         provenanceInputs.push({
           mode: "write",

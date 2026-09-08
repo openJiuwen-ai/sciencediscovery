@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { AgentTool } from "@sciencediscovery/tools";
+import type { WorkspaceTransfer, WorkspaceTransferInput } from "@sciencediscovery/schema";
 import {
   SANDBOX_SKILL_EXTENSIONS_ROOT,
   SANDBOX_SKILL_PACKAGES_ROOT,
@@ -288,6 +289,13 @@ export interface WorkspaceToolOptions {
    * pinned: every execution tool still defaults to this machine, and each of
    * these entries is an additional place the model may choose to run.
    */
+  workspaceTransfers?: {
+    workspaces(): Array<{ id: string; runnerId: string; description: string }>;
+    start(input: WorkspaceTransferInput, signal?: AbortSignal): Promise<WorkspaceTransfer>;
+    list(): WorkspaceTransfer[];
+    get(id: string): WorkspaceTransfer;
+    cancel(id: string): Promise<WorkspaceTransfer>;
+  };
   remoteRunners?: Array<{
     runnerId: string;
     description?: string;
@@ -835,6 +843,35 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
 
 
   const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...provenanceTools, ...artifactTools];
+  if (options.workspaceTransfers) {
+    const transfers = options.workspaceTransfers;
+    const parameters = Type.Object({
+      operation: Type.Union([Type.Literal("workspaces"), Type.Literal("start"), Type.Literal("list"), Type.Literal("status"), Type.Literal("cancel")]),
+      transfer_id: Type.Optional(Type.String({ minLength: 1 })),
+      source_workspace_id: Type.Optional(Type.String({ minLength: 1 })),
+      target_workspace_id: Type.Optional(Type.String({ minLength: 1 })),
+      files: Type.Optional(Type.Array(Type.Object({ source_path: Type.String({ minLength: 1 }), target_path: Type.String({ minLength: 1 }) }), { minItems: 1, maxItems: 50 })),
+      conflict: Type.Optional(Type.Union([Type.Literal("reject"), Type.Literal("overwrite")])),
+    });
+    const transferTool: AgentTool<typeof parameters> = { name: "workspace_transfer", label: "Transfer workspace files", parameters,
+      description: "Copy explicit file mappings between your authorized Workspaces, locally or across Runners. Discover Workspace IDs with workspaces. start returns a durable Transfer ID immediately; inspect progress, completed files and errors with status/list, or cancel. No mirroring or implicit Artifact declaration. Unknown target outcomes must be inspected before explicit retry.",
+      execute: async (_id, params, signal) => {
+        let result: unknown;
+        if (params.operation === "workspaces") result = transfers.workspaces();
+        else if (params.operation === "list") result = transfers.list();
+        else if (params.operation === "start") {
+          if (!params.source_workspace_id || !params.target_workspace_id || !params.files?.length) throw new Error("Both Workspace IDs and explicit file mappings are required");
+          result = await transfers.start({ sourceWorkspaceId: params.source_workspace_id, targetWorkspaceId: params.target_workspace_id,
+            files: params.files.map((file) => ({ sourcePath: file.source_path, targetPath: file.target_path })), conflict: params.conflict ?? "reject" }, signal);
+        } else {
+          if (!params.transfer_id) throw new Error("transfer_id is required");
+          result = params.operation === "cancel" ? await transfers.cancel(params.transfer_id) : transfers.get(params.transfer_id);
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+    };
+    tools.push(transferTool);
+  }
   if (options.remoteRunners?.length) {
     const runners = options.remoteRunners;
     const remoteWorkspaceParameters = Type.Object({

@@ -1581,6 +1581,30 @@ test("independent SSH/SLURM jobs are not offered to the model", () => {
   assert.equal(JSON.stringify(shell.parameters).includes("kernelMode"), false);
 });
 
+test("workspace_transfer exposes explicit mappings and independent management operations", async () => {
+  const calls: string[] = [];
+  const record = { id: "transfer", state: "queued" } as import("@sciencediscovery/schema").WorkspaceTransfer;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    workspaceTransfers: {
+      workspaces: () => [{ id: "own", runnerId: "local", description: "Local" }],
+      start: async (input) => { calls.push(JSON.stringify(input)); return record; },
+      get: (id) => { calls.push(`status:${id}`); return record; },
+      list: () => [record], cancel: async (id) => { calls.push(`cancel:${id}`); return record; },
+    },
+  });
+  const tool = tools.find((tool) => tool.name === "workspace_transfer")!;
+  assert.ok(tool);
+  const listed = await tool.execute("list", { operation: "workspaces" });
+  assert.match((listed.content[0] as { text: string }).text, /own/);
+  await tool.execute("copy", { operation: "start", source_workspace_id: "own", target_workspace_id: "remote", files: [{ source_path: "in", target_path: "out" }] });
+  assert.deepEqual(JSON.parse(calls[0]!), { sourceWorkspaceId: "own", targetWorkspaceId: "remote", files: [{ sourcePath: "in", targetPath: "out" }], conflict: "reject" });
+  await tool.execute("status", { operation: "status", transfer_id: "transfer" });
+  await tool.execute("cancel", { operation: "cancel", transfer_id: "transfer" });
+  assert.deepEqual(calls.slice(1), ["status:transfer", "cancel:transfer"]);
+  await assert.rejects(tool.execute("missing", { operation: "start" }), /explicit file mappings/);
+});
+
 test("sync_remote_workspace exposes only explicit list, push, and pull operations", async () => {
   const calls: string[] = [];
   const tools = createWorkspaceTools(process.cwd(), {

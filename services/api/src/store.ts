@@ -18,6 +18,7 @@ import { VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
+import { WorkspaceTransfers } from "./workspace-transfers.js";
 
 import type {
   ChatMessage,
@@ -394,6 +395,7 @@ export class SessionStore {
   private catalog: Catalog = emptyCatalog();
   private database?: DatabaseSync;
   private notificationStore?: AgentNotifications;
+  private transferStore?: WorkspaceTransfers;
   private loaded = false;
   private saveQueue = Promise.resolve();
   private secretKey?: Buffer;
@@ -425,6 +427,11 @@ export class SessionStore {
   get notifications(): AgentNotifications {
     if (!this.notificationStore) throw new Error("Notification storage is not initialized");
     return this.notificationStore;
+  }
+
+  get transfers(): WorkspaceTransfers {
+    if (!this.transferStore) throw new Error("Transfer storage is not initialized");
+    return this.transferStore;
   }
 
   private normalizeReviewCriteria(values: string[] | undefined): string[] {
@@ -532,6 +539,7 @@ export class SessionStore {
       const session = this.getSession(sessionId);
       return !session || Boolean(session.archivedAt);
     });
+    this.transferStore = new WorkspaceTransfers(this.database, new VersionStore(this.dataDir));
     this.secretKey = await this.loadOrCreateSecretKey();
     this.migrateRemoteHostTokens();
     const modelIdsWithSecrets = new Set((this.database.prepare("SELECT model_id FROM model_secrets").all() as Array<{ model_id: string }>).map((row) => row.model_id));
