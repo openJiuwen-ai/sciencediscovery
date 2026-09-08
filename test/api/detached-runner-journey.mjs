@@ -220,7 +220,7 @@ try {
     assert.equal(shell.exitCode, 0, shell.stderr); assert.ok(shell.workspaceSnapshot);
     const python = await client.execute({ ...request("python-descendant", "import threading, time\nfrom pathlib import Path\ne = threading.Event()\ndef work():\n e.set(); time.sleep(0.3); Path('late-python').write_text('leaked')\nthreading.Thread(target=work, daemon=True).start()\ne.wait()\nprint('returned')", workspace), executionTimeoutMs: 0 });
     assert.equal(python.exitCode, 0, python.stderr); assert.ok(python.workspaceSnapshot);
-    const inspect = await client.executeShell({ ...request("check-descendants", 'sleep 0.6; test ! -f late-shell && test ! -f late-python && test -z "$LEGACY_VAR" && echo isolated', workspace), executionTimeoutMs: 0 });
+    const inspect = await client.executeShell({ ...request("check-descendants", 'sleep 0.6; test ! -f late-shell && test ! -f late-python && test -z "${LEGACY_VAR-}" && echo isolated', workspace), executionTimeoutMs: 0 });
     assert.equal(inspect.exitCode, 0, inspect.stderr); assert.match(inspect.stdout, /isolated/);
     assert.deepEqual((await client.status()).kernels, []);
     return "Shell/Python/R persistent requests and managed persistent request rejected; acknowledged child/daemon thread did not write after ephemeral completion; later Shell inherited no exported state; no persistent kernels";
