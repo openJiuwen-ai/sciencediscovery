@@ -100,7 +100,7 @@ const stub = createServer(async (request, response) => {
         caseSplit: { gateGroups: 8, rolloutGroups: 4, testGroups: 2 }, expansions: 12, workers: 1,
       } } : results.length === 1 ? { name: "create_evolve_run", arguments: {
         statement: "Score the committed solver", howScored: "Independent scripted cases", mode: "custom_script", startingPointPath: "solver.py",
-        evaluatorSource: "import os\n# cases come from SCIENCE_AGENT_SHARDS\nprint(0.4)", direction: "maximize",
+        evaluatorSource: 'import os, json\nshards = os.environ["SCIENCE_AGENT_SHARDS"]\nwith open(os.environ["SCIENCE_AGENT_RESULT"], "w") as output:\n    json.dump({"score": 0.4}, output)', direction: "maximize",
         split: { gateShards: 8, rolloutShards: 4, testShards: 2, seed: 0, shardRows: 1, trainRows: null }, expansions: 12, workers: 1,
       } } : undefined;
       if (results.length) assert.ok(!JSON.stringify(results).includes("refusedBecause"), JSON.stringify(results));
