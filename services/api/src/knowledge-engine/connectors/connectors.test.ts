@@ -1,0 +1,341 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import test from "node:test";
+
+import { normalizeArxivId, parseArxivEntries } from "./arxiv.js";
+import { epmcToRef, createEuropePmcConnector } from "./europepmc.js";
+import { deinvertAbstract, openAlexToRef } from "./openalex.js";
+import { parsePubmedArticles } from "./pubmed.js";
+import { RateLimiter } from "./rate-limiter.js";
+import { s2ToRef } from "./semantic-scholar.js";
+import { downloadPaperPdf, searchAcrossChain } from "./source-chain.js";
+import { FixtureScholarlyTransport, fixtureFileName, type ScholarlyResponse, type ScholarlyTransport } from "./transport.js";
+import { NotFoundError, RateLimitError, paperDedupKey, type PaperConnector, type PaperRef } from "./types.js";
+
+// ---------------------------------------------------------------- parsers
+
+test("normalizeArxivId handles urls, versions and legacy ids", () => {
+  assert.equal(normalizeArxivId("https://arxiv.org/abs/2301.12345v2"), "2301.12345");
+  assert.equal(normalizeArxivId("2301.12345"), "2301.12345");
+  assert.equal(normalizeArxivId("hep-th/9901001"), "hep-th/9901001");
+  assert.equal(normalizeArxivId("not-an-id"), null);
+});
+
+test("parseArxivEntries parses a minimal feed", () => {
+  const xml = `<?xml version="1.0"?><feed>
+    <entry>
+      <id>http://arxiv.org/abs/2301.00001v1</id>
+      <title> Ebola   glycoprotein\n antibodies </title>
+      <summary>We study GP.</summary>
+      <published>2023-01-02T00:00:00Z</published>
+      <author><name>Alice Smith</name></author>
+      <author><name>Bob Jones</name></author>
+      <arxiv:doi>10.1000/test</arxiv:doi>
+    </entry>
+    <entry><id>not-an-arxiv-id</id><title>skip me</title></entry>
+  </feed>`;
+  const entries = parseArxivEntries(xml);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.arxivId, "2301.00001");
+  assert.equal(entries[0]?.title, "Ebola glycoprotein antibodies");
+  assert.deepEqual(entries[0]?.authors, ["Alice Smith", "Bob Jones"]);
+  assert.equal(entries[0]?.year, 2023);
+  assert.equal(entries[0]?.doi, "10.1000/test");
+});
+
+test("s2ToRef maps external ids and OA pdf", () => {
+  const ref = s2ToRef({
+    paperId: "abc",
+    title: "T",
+    authors: [{ name: "A" }],
+    year: 2024,
+    externalIds: { DOI: "10.1/x", ArXiv: "2301.1", PubMedCentral: "PMC123" },
+    openAccessPdf: { url: "http://pdf" },
+    citationCount: 42,
+    venue: "Nature",
+  });
+  assert.equal(ref?.doi, "10.1/x");
+  assert.equal(ref?.arxivId, "2301.1");
+  assert.equal(ref?.pmcId, "PMC123");
+  assert.equal(ref?.pdfUrl, "http://pdf");
+  assert.equal(ref?.citationCount, 42);
+  assert.equal(s2ToRef({ paperId: "x" }), null);
+});
+
+test("deinvertAbstract reconstructs word order", () => {
+  assert.equal(deinvertAbstract({ hello: [0], world: [1] }), "hello world");
+  assert.equal(deinvertAbstract(null), null);
+  assert.equal(deinvertAbstract({}), null);
+});
+
+test("openAlexToRef strips doi url prefix and maps venue", () => {
+  const ref = openAlexToRef({
+    id: "https://openalex.org/W1",
+    doi: "https://doi.org/10.1/x",
+    title: "T",
+    publication_year: 2022,
+    authorships: [{ author: { display_name: "A" } }],
+    primary_location: { pdf_url: "http://p", source: { display_name: "Cell" } },
+    open_access: { is_oa: true, oa_url: "http://oa" },
+    cited_by_count: 7,
+  });
+  assert.equal(ref?.doi, "10.1/x");
+  assert.equal(ref?.sourceId, "W1");
+  assert.equal(ref?.pdfUrl, "http://oa");
+  assert.equal(ref?.venue, "Cell");
+});
+
+test("epmcToRef picks http pdf urls only", () => {
+  const ref = epmcToRef({
+    title: "T",
+    authorString: "A B, C D",
+    pubYear: "2021",
+    doi: "10.1/x",
+    pmcid: "PMC999",
+    abstractText: "<b>abstract</b>",
+    fullTextUrlList: {
+      fullTextUrl: [
+        { url: "ftp://nope", documentStyle: "pdf" },
+        { url: "https://ok", documentStyle: "pdf" },
+      ],
+    },
+  });
+  assert.equal(ref?.pdfUrl, "https://ok");
+  assert.equal(ref?.abstract, "abstract");
+  assert.deepEqual(ref?.authors, ["A B", "C D"]);
+  assert.equal(ref?.pmcId, "PMC999");
+});
+
+test("parsePubmedArticles parses efetch xml", () => {
+  const xml = `<PubmedArticleSet><PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">12345</PMID>
+      <Article>
+        <ArticleTitle>Ebola <i>virus</i> entry</ArticleTitle>
+        <AuthorList><Author><LastName>Smith</LastName><ForeName>Alice</ForeName></Author></AuthorList>
+        <Abstract><AbstractText>GP mediated.</AbstractText></Abstract>
+        <Journal><JournalIssue><PubDate><Year>2020</Year></PubDate></JournalIssue></Journal>
+      </Article>
+    </MedlineCitation>
+    <PubmedData><ArticleIdList>
+      <ArticleId IdType="doi">10.1/ebola</ArticleId>
+      <ArticleId IdType="pmc">PMC777</ArticleId>
+    </ArticleIdList></PubmedData>
+  </PubmedArticle></PubmedArticleSet>`;
+  const refs = parsePubmedArticles(xml);
+  assert.equal(refs.length, 1);
+  assert.equal(refs[0]?.title, "Ebola virus entry");
+  assert.equal(refs[0]?.sourceId, "12345");
+  assert.equal(refs[0]?.doi, "10.1/ebola");
+  assert.equal(refs[0]?.pmcId, "PMC777");
+  assert.deepEqual(refs[0]?.authors, ["Alice Smith"]);
+});
+
+test("paperDedupKey prefers doi over arxiv over title", () => {
+  assert.equal(paperDedupKey({ doi: "10.1/X ", arxivId: "1", title: "T" }), "doi:10.1/x");
+  assert.equal(paperDedupKey({ doi: null, arxivId: "2301.1", title: "T" }), "arxiv:2301.1");
+  assert.equal(paperDedupKey({ doi: null, arxivId: null, title: " A  B-C " }), "title:a b c");
+});
+
+// ------------------------------------------------------------- transport
+
+test("fixture transport replays recorded responses and is loud on holes", async (context) => {
+  const dir = await mkdtemp(resolve(tmpdir(), "ke-fixture-"));
+  context.after(() => rm(dir, { force: true, recursive: true }));
+  const url = "https://api.example.com/search?q=ebola&limit=10";
+  await writeFile(
+    resolve(dir, `${fixtureFileName(url)}.json`),
+    JSON.stringify({ status: 200, headers: { "content-type": "application/json" }, body: '{"hits": 1}' }),
+  );
+  const transport = new FixtureScholarlyTransport(dir);
+  const response = await transport.get(url);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { hits: 1 });
+  assert.equal(response.header("CONTENT-TYPE"), "application/json");
+  await assert.rejects(() => transport.get("https://api.example.com/unrecorded"), /no scholarly fixture/);
+});
+
+test("fixture filename is deterministic and query-sensitive", () => {
+  const a = fixtureFileName("https://x.com/p?q=1");
+  assert.equal(a, fixtureFileName("https://x.com/p?q=1"));
+  assert.notEqual(a, fixtureFileName("https://x.com/p?q=2"));
+});
+
+// ------------------------------------------------------------ rate limit
+
+test("rate limiter blocks after a 429 until Retry-After elapses", async () => {
+  const limiter = new RateLimiter(10, 10);
+  const wait = limiter.respectRetryAfter("h", "1");
+  assert.equal(wait, 1000);
+  const start = Date.now();
+  await limiter.throttle("h");
+  assert.ok(Date.now() - start >= 900, `expected to wait ~1s, waited ${Date.now() - start}ms`);
+});
+
+// ----------------------------------------------------------- source chain
+
+/** A scriptable transport for source-chain tests. */
+function fakeTransport(
+  routes: Record<string, { status: number; body?: string | Uint8Array }>,
+): ScholarlyTransport & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    async get(url: string): Promise<ScholarlyResponse> {
+      calls.push(url);
+      const route = routes[url];
+      if (!route) {
+        throw new Error(`unexpected url ${url}`);
+      }
+      const bytes = typeof route.body === "string" ? new TextEncoder().encode(route.body) : (route.body ?? new Uint8Array());
+      return {
+        status: route.status,
+        url,
+        header: () => null,
+        text: async () => new TextDecoder().decode(bytes),
+        json: async () => JSON.parse(new TextDecoder().decode(bytes)),
+        bytes: async () => bytes,
+      };
+    },
+  };
+}
+
+function ref(overrides: Partial<PaperRef> = {}): PaperRef {
+  return {
+    title: "T",
+    authors: [],
+    year: null,
+    doi: null,
+    arxivId: null,
+    abstract: null,
+    pdfUrl: null,
+    source: "test",
+    sourceId: "x",
+    ...overrides,
+  };
+}
+
+test("searchAcrossChain merges and dedups across sources, skipping failures", async () => {
+  const good: PaperConnector = {
+    name: "good",
+    search: async () => [ref({ doi: "10.1/a" }), ref({ doi: "10.1/a" }), ref({ doi: "10.1/b" })],
+    fetchMetadata: async () => null,
+    resolvePdf: async () => null,
+  };
+  const bad: PaperConnector = {
+    name: "bad",
+    search: async () => {
+      throw new Error("down");
+    },
+    fetchMetadata: async () => null,
+    resolvePdf: async () => null,
+  };
+  const warnings: string[] = [];
+  const results = await searchAcrossChain([bad, good], "q", 10, (message: string) => warnings.push(message));
+  assert.equal(results.length, 2);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /bad/);
+});
+
+const PDF_BYTES = new TextEncoder().encode("%PDF-1.4 fake pdf body");
+
+test("downloadPaperPdf returns the first working pdf in chain order", async () => {
+  const first: PaperConnector = {
+    name: "first",
+    search: async () => [],
+    fetchMetadata: async () => null,
+    resolvePdf: async () => "https://a.test/paper.pdf",
+  };
+  const second: PaperConnector = {
+    name: "second",
+    search: async () => [],
+    fetchMetadata: async () => null,
+    resolvePdf: async () => "https://b.test/paper.pdf",
+  };
+  const transport = fakeTransport({
+    "https://a.test/paper.pdf": { status: 404 },
+    "https://b.test/paper.pdf": { status: 200, body: PDF_BYTES },
+  });
+  const outcome = await downloadPaperPdf([first, second], ref(), {
+    transport,
+    assertUrl: async () => {},
+  });
+  assert.equal(outcome.source, "second");
+  assert.equal(outcome.url, "https://b.test/paper.pdf");
+  assert.deepEqual([...outcome.bytes], [...PDF_BYTES]);
+});
+
+test("downloadPaperPdf: transient failure outranks definitive misses", async () => {
+  const flaky: PaperConnector = {
+    name: "flaky",
+    search: async () => [],
+    fetchMetadata: async () => null,
+    resolvePdf: async () => "https://a.test/p.pdf",
+  };
+  const transport = fakeTransport({
+    "https://a.test/p.pdf": { status: 503 },
+  });
+  await assert.rejects(
+    () => downloadPaperPdf([flaky], ref(), { transport, assertUrl: async () => {} }),
+    /HTTP 503/,
+  );
+});
+
+test("downloadPaperPdf: all definitive misses produce NotFoundError", async () => {
+  const empty: PaperConnector = {
+    name: "empty",
+    search: async () => [],
+    fetchMetadata: async () => null,
+    resolvePdf: async () => null,
+  };
+  await assert.rejects(
+    () => downloadPaperPdf([empty], ref({ title: "X" }), { transport: fakeTransport({}), assertUrl: async () => {} }),
+    (error: unknown) => error instanceof NotFoundError,
+  );
+});
+
+test("downloadPaperPdf rejects non-pdf content as a definitive miss", async () => {
+  const connector: PaperConnector = {
+    name: "html",
+    search: async () => [],
+    fetchMetadata: async () => null,
+    resolvePdf: async () => "https://a.test/p.pdf",
+  };
+  const transport = fakeTransport({ "https://a.test/p.pdf": { status: 200, body: "<html>paywall</html>" } });
+  await assert.rejects(
+    () => downloadPaperPdf([connector], ref(), { transport, assertUrl: async () => {} }),
+    NotFoundError,
+  );
+});
+
+test("europepmc resolveFullTextXml returns jats for OA and null for 404", async () => {
+  const jats = '<?xml version="1.0"?><article><body><sec><p>text</p></sec></body></article>';
+  const transport = fakeTransport({
+    "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC123/fullTextXML": { status: 200, body: jats },
+    "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC404/fullTextXML": { status: 404 },
+  });
+  const connector = createEuropePmcConnector(transport);
+  assert.equal(await connector.resolveFullTextXml(ref({ pmcId: "PMC123" })), jats);
+  assert.equal(await connector.resolveFullTextXml(ref({ pmcId: "PMC404" })), null);
+  assert.equal(await connector.resolveFullTextXml(ref({ doi: null })), null);
+});
+
+test("RateLimitError carries the retry delay", () => {
+  const error = new RateLimitError("slow down", 5000);
+  assert.equal(error.retryAfterMs, 5000);
+});

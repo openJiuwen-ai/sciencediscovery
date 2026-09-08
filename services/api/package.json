@@ -19,6 +19,7 @@
     "@sciencediscovery/evolve": "workspace:*",
     "@sciencediscovery/executor": "workspace:*",
     "@sciencediscovery/governance": "workspace:*",
+    "@sciencediscovery/knowledge-engine": "workspace:*",
     "@sciencediscovery/mcp-sources": "workspace:*",
     "@sciencediscovery/memory": "workspace:*",
     "@sciencediscovery/model": "workspace:*",
