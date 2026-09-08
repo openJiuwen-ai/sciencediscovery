@@ -47,8 +47,8 @@ const stub = createServer(async (request, response) => {
     const input = JSON.parse(Buffer.concat(chunks).toString());
     if (request.url === "/evolve/probe" || request.url === "/evolve/runs") {
       evolutionExports.push({ baseline: input.baseline_code,
-        solver: await readFile(resolve(input.workspace_dir, "solver.py"), "utf8"),
-        test: await readFile(resolve(input.workspace_dir, "test.py"), "utf8") });
+        ...(input.workspace_dir ? { solver: await readFile(resolve(input.workspace_dir, "solver.py"), "utf8"),
+          test: await readFile(resolve(input.workspace_dir, "test.py"), "utf8") } : {}) });
       if (request.url.endsWith("/probe")) return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ baseline: 0.4, worsened: 0.1, flat: false, label: "constant" }));
       return response.writeHead(200, { "content-type": "application/x-ndjson" }).end(JSON.stringify({ sequence: 1, createdAt: new Date().toISOString(),
         event: { type: "search_finished", status: "succeeded", candidates: 0, bestNodeIndex: null } }) + "\n");
@@ -94,11 +94,15 @@ const stub = createServer(async (request, response) => {
       }
     }
     if (evolution) {
-      call = results.length ? undefined : { name: "create_evolve_run", arguments: {
+      call = results.length === 0 ? { name: "create_evolve_run", arguments: {
         statement: "Improve solver against committed tests", howScored: "Fraction of frozen tests passed", mode: "test_gate",
         startingPointPath: "solver.py", entrypointPath: "solver.py", testCmd: "python test.py", frozenGlobs: ["test.py"],
         caseSplit: { gateGroups: 8, rolloutGroups: 4, testGroups: 2 }, expansions: 12, workers: 1,
-      } };
+      } } : results.length === 1 ? { name: "create_evolve_run", arguments: {
+        statement: "Score the committed solver", howScored: "Independent scripted cases", mode: "custom_script", startingPointPath: "solver.py",
+        evaluatorSource: "import os\n# cases come from SCIENCE_AGENT_SHARDS\nprint(0.4)", direction: "maximize",
+        split: { gateShards: 8, rolloutShards: 4, testShards: 2, seed: 0, shardRows: 1, trainRows: null }, expansions: 12, workers: 1,
+      } } : undefined;
       if (results.length) assert.ok(!JSON.stringify(results).includes("refusedBecause"), JSON.stringify(results));
     }
     response.writeHead(200, { "content-type": "text/event-stream" });
@@ -255,8 +259,9 @@ try {
         body: JSON.stringify({ content: "Evolution committed export: improve solver against the committed tests." }), signal: AbortSignal.timeout(30_000) });
       assert.equal(response.status, 200); assert.match(await response.text(), /"type":"run.completed"/);
       await until(async () => (await json(`/api/evolve/runs?sessionId=${target.id}`)).some((run) => run.status === "succeeded"));
-      assert.equal(evolutionExports.length, 2, "probe and search both stage the Workspace");
-      assert.deepEqual(evolutionExports, Array.from({ length: 2 }, () => ({ baseline: "committed solver", solver: "committed solver", test: "committed tests" })));
+      assert.equal(evolutionExports.length, 4, "test-gated and scripted searches each probe and run");
+      assert.deepEqual(evolutionExports.filter((value) => value.solver), Array.from({ length: 2 }, () => ({ baseline: "", solver: "committed solver", test: "committed tests" })));
+      assert.deepEqual(evolutionExports.filter((value) => !value.solver), Array.from({ length: 2 }, () => ({ baseline: "committed solver" })));
       assert.equal((await runner.getShellExecution(executionId, owner)).state, "running");
     } finally { await runner.cancelShellExecution(executionId, owner); }
     return "Main Agent created Evolution; probe/search consumed committed baseline and tests while the writer remained running; writer explicitly cancelled afterwards";
