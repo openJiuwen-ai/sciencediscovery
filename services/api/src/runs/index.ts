@@ -1285,7 +1285,7 @@ async function executeAgentRun(
         const steps: SubagentStep[] = [...subagent.steps];
         const startingTurn = subagent.turnCount;
         let handoff: NonNullable<Subagent["handoff"]> | undefined;
-        const releaseParentWait = mainExecution?.beginExternalWait();
+        const releaseParentWait = continuation ? undefined : mainExecution?.beginExternalWait();
         let assistantOutput = "";
         let activeMessageStep: { id: string; kind: Extract<SubagentStep["kind"], "assistant" | "thinking"> } | undefined;
         let progressFlushFailure: unknown;
