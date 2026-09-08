@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { committedWorkspaceSnapshot, publishWorkspaceFile, streamSnapshotFile, workspaceSnapshotFiles, VersionStore } from "@sciencediscovery/cas";
+import { committedWorkspaceSnapshot, publishWorkspaceFile, streamSnapshotFile, workspaceSnapshotFiles, VersionStore, type AgentStateRef } from "@sciencediscovery/cas";
 import type { RunnerClient } from "@sciencediscovery/executor";
 import type { ExecutionOwner, WorkspaceTransfer, WorkspaceTransferInput } from "@sciencediscovery/schema";
 
@@ -10,6 +10,8 @@ export type TransferEndpoint = { id: string; root: string } | { id: string; work
 export interface TransferAccess {
   /** Resolve every operation from trusted ownership and current permissions, never from a model path. */
   resolve(id: string): TransferEndpoint;
+  /** Orchestrator-only captured local source; never accepted in model input. */
+  sourceSnapshot?: AgentStateRef;
   committed?(file: WorkspaceTransfer["progress"][number], transfer: WorkspaceTransfer): Promise<void>;
 }
 const terminal = (state: WorkspaceTransfer["state"]) => !["queued", "running"].includes(state);
@@ -84,7 +86,7 @@ export class WorkspaceTransfers {
       let entries: Array<{ path: string; size: number; sha256: string; executable: number }>;
       let read: (path: string) => Promise<AsyncIterable<Uint8Array>>;
       if ("root" in source) {
-        const tree = await committedWorkspaceSnapshot(this.versions, source.root);
+        const tree = access.sourceSnapshot ?? await committedWorkspaceSnapshot(this.versions, source.root);
         job.sourceSnapshotId = tree.digest;
         const manifest = await workspaceSnapshotFiles(this.versions, tree, job.files.map((file) => file.sourcePath));
         entries = manifest.map((file) => ({ path: file.path, size: file.content.size, sha256: file.content.digest.slice(7), executable: file.executable }));
@@ -146,6 +148,8 @@ export class WorkspaceTransfers {
       job.state = "completed";
     } catch (error) {
       job.error = error instanceof Error ? error.message : "Transfer failed";
+      const errorCode = (error as { code?: unknown })?.code;
+      if (typeof errorCode === "string") job.errorCode = errorCode;
       job.state = job.progress.some((file) => file.state === "unknown") ? "unknown"
         : job.progress.some((file) => file.state === "completed") ? "partial" : signal.aborted ? "cancelled" : "failed";
       if (signal.aborted) for (const file of job.progress) if (file.state === "pending") file.state = "cancelled";

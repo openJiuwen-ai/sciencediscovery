@@ -98,10 +98,15 @@ test("explicit remote workspace push and pull preserve independent files and rec
       }));
     },
     readRemoteWorkspaceFile: async (_key: string, path: string) => remote.get(path)!,
-    writeRemoteWorkspaceFile: async (_key: string, path: string, bytes: Uint8Array, conflict: "overwrite" | "reject") => {
+    uploadWorkspaceSnapshotFile: async (_key: string, path: string, chunks: AsyncIterable<Uint8Array>, expected: { sha256: string; size: number }, conflict: "overwrite" | "reject") => {
+      await writeFile(resolve(workspaceRoot, "input.txt"), "next local execution");
       if (conflict === "reject" && remote.has(path)) throw new Error("collision");
-      remote.set(path, Buffer.from(bytes));
-      return { path, size: bytes.length };
+      const parts: Buffer[] = [];
+      for await (const bytes of chunks) parts.push(Buffer.from(bytes));
+      const bytes = Buffer.concat(parts);
+      assert.equal(createHash("sha256").update(bytes).digest("hex"), expected.sha256);
+      remote.set(path, bytes);
+      return { path, size: bytes.length, sha256: expected.sha256 };
     },
   } as unknown as RunnerClient;
 
@@ -114,6 +119,8 @@ test("explicit remote workspace push and pull preserve independent files and rec
   });
   assert.equal(remote.get("input.txt")?.toString("utf8"), "local-input");
   assert.equal(pushed.record.direction, "push");
+  assert.equal(pushed.transfer.id, pushed.record.id);
+  assert.equal(store.transfers.get(pushed.transfer.id, { sessionId: session.id, agentId: "main" }).state, "completed");
   const outside = resolve(root, "outside");
   await mkdir(outside);
   await symlink(outside, resolve(workspaceRoot, "escape"));
@@ -180,4 +187,57 @@ test("explicit remote workspace push and pull preserve independent files and rec
   const loser = competing.find((result) => result.status === "rejected");
   assert.equal(loser?.status === "rejected" && loser.reason.code, "CONFLICT");
   assert.equal((await readdir(workspaceRoot)).some((name) => name.includes(".transfer-")), false);
+
+  await context.test("legacy sync reports durable partial success instead of zeroing completed files", async () => {
+    remote.set("partial-first.txt", Buffer.from("first"));
+    remote.set("partial-second.txt", Buffer.from("second"));
+    await writeFile(resolve(workspaceRoot, "partial-second.txt"), "existing");
+    let failedId = "";
+    await assert.rejects(syncRemoteWorkspace({
+      hostId: host.id, input: { direction: "pull", paths: ["partial-first.txt", "partial-second.txt"] },
+      runnerClient, sessionId: session.id, store,
+    }), (error: unknown) => {
+      const failure = error as Error & { transferId: string; code: string };
+      failedId = failure.transferId;
+      assert.equal(failure.code, "CONFLICT");
+      assert.match(failure.message, /partial/);
+      return true;
+    });
+    const job = store.transfers.get(failedId, { sessionId: session.id, agentId: "main" });
+    assert.equal(job.state, "partial");
+    assert.equal(job.progress[0]?.state, "completed");
+    const record = store.listRemoteWorkspaceSyncs(session.id).find((item) => item.id === failedId)!;
+    assert.equal(record.fileCount, 1);
+    assert.equal(record.bytes, 5);
+    assert.equal(await readFile(resolve(workspaceRoot, "partial-second.txt"), "utf8"), "existing");
+  });
+
+  await context.test("legacy sync refuses old Runners without reading their live files", async () => {
+    let liveRead = false;
+    await assert.rejects(syncRemoteWorkspace({
+      hostId: host.id, input: { direction: "pull", paths: ["old.txt"] },
+      runnerClient: {
+        snapshotRemoteWorkspace: async () => { throw new Error("Immutable snapshot support required"); },
+        readRemoteWorkspaceFile: async () => { liveRead = true; return Buffer.from("unsafe"); },
+      } as unknown as RunnerClient, sessionId: session.id, store,
+    }), /Immutable snapshot support required.*Transfer/);
+    assert.equal(liveRead, false);
+  });
+
+  await context.test("legacy cancellation joins Transfer cleanup and leaves no partial target", async () => {
+    remote.set("cancel.txt", Buffer.from("cancel"));
+    const controller = new AbortController();
+    const cancelling = { ...runnerClient, streamWorkspaceSnapshot: async () => (async function* () {
+      yield Buffer.from("can");
+      controller.abort();
+      yield Buffer.from("cel");
+    })() } as unknown as RunnerClient;
+    await assert.rejects(syncRemoteWorkspace({
+      hostId: host.id, input: { direction: "pull", paths: ["cancel.txt"] },
+      runnerClient: cancelling, sessionId: session.id, store, signal: controller.signal,
+    }), /cancelled/);
+    await assert.rejects(readFile(resolve(workspaceRoot, "cancel.txt")), { code: "ENOENT" });
+    assert.equal((await readdir(workspaceRoot)).some((name) => name.includes(".transfer-")), false);
+    assert.equal(store.transfers.list({ sessionId: session.id, agentId: "main" })[0]?.state, "cancelled");
+  });
 });
