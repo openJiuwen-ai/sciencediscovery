@@ -143,8 +143,12 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
         // The subagent executes the two journey tools without a mode-selection round trip.
         await expect(conversation.locator(".run-timeline details.timeline-disclosure.tool")).toHaveCount(2);
         const execution = conversation.locator(".run-timeline details.timeline-disclosure.tool").first();
-        await execution.locator("summary").click();
-        await expect(execution).toContainText("PRIVATE-FILE-VERIFIED");
+        await execution.locator(":scope > summary").click();
+        const result = execution.locator(".tool-io-section").filter({ has: page.locator(".tool-io-label", { hasText: /^Result$/ }) }).locator("pre");
+        const completed = JSON.parse(await result.textContent() ?? "{}");
+        expect(completed.state).toBe("completed");
+        expect(completed.result.exitCode).toBe(0);
+        expect(completed.result.stdout).toContain("PRIVATE-FILE-VERIFIED");
         const reply = conversation.locator(".run-timeline .message.assistant").last();
         await expect(reply).toContainText("review notes are ready");
         await expect(reply).toContainText(childMarker);

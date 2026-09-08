@@ -5078,7 +5078,10 @@ test("failed subagent tool steps retain raw input and the full error result", as
   );
   const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
   assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
-  assert.equal(toolStep?.status, "failed");
+  const execution = JSON.parse(toolStep?.content ?? "{}");
+  assert.equal(execution.state, "failed");
+  assert.equal(execution.result?.exitCode, 1);
+  assert.equal(toolStep?.status, "failed", "Failed Shell result must remain failed in the subagent timeline");
   assert.ok((toolStep?.content.length ?? 0) > 400);
   assert.match(toolStep?.content ?? "", /RuntimeError/);
   assert.match(toolStep?.content ?? "", /y{650}/);

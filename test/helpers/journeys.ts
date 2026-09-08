@@ -15,7 +15,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, request, type Locator, type Page } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
 
@@ -119,7 +119,7 @@ const TERMINAL_RUN_STATUSES = new Set<JourneyRunStatus>([
 ]);
 
 async function apiJson<T>(
-  page: Page,
+  page: Pick<Page, "request">,
   path: string,
   options: { data?: unknown; method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT" } = {},
 ): Promise<T> {
@@ -207,7 +207,10 @@ export function scriptedModel(
         const systemPrompt = String(messages.find((message) => message.role === "system")?.content ?? "");
         const isSubagent = systemPrompt.includes(SUBAGENT_PRESET_MARKER);
         const route = isSubagent ? "subagent" : "main";
-        const latestUser = [...messages].reverse().find((message) => message.role === "user")?.content;
+        // Runtime observations are appended as data-only user messages. They
+        // must not hide the actual user request or completion notification.
+        const latestUser = [...messages].reverse().find((message) => message.role === "user"
+          && !(typeof message.content === "string" && message.content.startsWith("<runtime_context_data ")))?.content;
         if (typeof latestUser === "string" && latestUser.startsWith("[Execution notifications]")) {
           // Completion is a notification turn, not the next scripted user task.
           // Acknowledge the prior answer without replaying commands or consuming
@@ -306,7 +309,7 @@ export function registerModel(
   return apiJson(page, "/api/models", { data: { vision: false, ...input }, method: "POST" });
 }
 
-async function deleteJourneyModel(page: Page, model: JourneyModel): Promise<void> {
+async function deleteJourneyModel(page: Pick<Page, "request">, model: JourneyModel): Promise<void> {
   const settings = await apiJson<{ overrides?: Record<string, unknown> }>(page, "/api/settings").catch(() => undefined);
   if (settings?.overrides) {
     const overrides = { ...settings.overrides };
@@ -616,11 +619,14 @@ export function environmentSetup(page: Page): Promise<{ message: string; state: 
 
 /** Best-effort cleanup for data created in an isolated E2E run. */
 export async function cleanupJourney(page: Page, fixture: JourneyFixture): Promise<void> {
-  await apiJson(page, `/api/projects/${encodeURIComponent(fixture.project.id)}`, {
-    data: { confirmationId: fixture.project.id },
-    method: "DELETE",
-  }).catch(() => undefined);
-  if (fixture.model) {
-    await deleteJourneyModel(page, fixture.model).catch(() => undefined);
-  }
+  // Failure teardown may already have closed the page's request context.
+  const api = await request.newContext();
+  try {
+    const client = { request: api };
+    await apiJson(client, `/api/projects/${encodeURIComponent(fixture.project.id)}`, {
+      data: { confirmationId: fixture.project.id },
+      method: "DELETE",
+    }).catch(() => undefined);
+    if (fixture.model) await deleteJourneyModel(client, fixture.model).catch(() => undefined);
+  } finally { await api.dispose(); }
 }
