@@ -41,6 +41,7 @@ export * from "./evidence.js";
 export * from "./mcp-audit.js";
 export * from "./mcp-result.js";
 export * from "./mcp-source.js";
+export * from "./custom-mcp.js";
 export * from "./scientific-artifact.js";
 export * from "./web.js";
 export * from "./proxy.js";

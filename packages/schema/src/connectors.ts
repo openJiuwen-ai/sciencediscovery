@@ -35,6 +35,7 @@ export const CONNECTOR_CITATION_TYPES: Record<string, EvidenceCitationType> = {
 };
 
 export interface ConnectorManifest {
+  displayName?: string;
   attributionTemplate: string;
   cacheTtlSeconds: number;
   citationTemplate: string;

@@ -152,23 +152,17 @@ function contentBlocks(result: Record<string, unknown>): { blocks: McpInvokeResp
 interface ServerSession {
   client: Client;
   proxySignature: string;
+  configSignature: string;
 }
 
 export class McpNodeClient {
   private readonly sessions = new Map<string, ServerSession>();
   private proxies: Record<string, ResolvedProxy> = {};
-  private configSignature: string | undefined;
 
   constructor(private readonly loadConfig: () => ExtensionsConfigFile = loadExtensionsConfig) {}
 
   private currentConfig(): ExtensionsConfigFile {
-    const config = this.loadConfig();
-    if (this.configSignature !== undefined && config.signature !== this.configSignature) {
-      // Config content changed: rebuild every session on next use.
-      void this.closeAll();
-    }
-    this.configSignature = config.signature;
-    return config;
+    return this.loadConfig();
   }
 
   private proxySignature(serverId: string): string {
@@ -190,14 +184,30 @@ export class McpNodeClient {
 
   private async session(serverId: string, server: McpServerEntry): Promise<Client> {
     const proxySignature = this.proxySignature(serverId);
+    const configSignature = JSON.stringify(server);
     const existing = this.sessions.get(serverId);
-    if (existing && existing.proxySignature === proxySignature) return existing.client;
+    if (existing && existing.proxySignature === proxySignature && existing.configSignature === configSignature) return existing.client;
     if (existing) await this.closeSession(serverId);
 
     const client = new Client({ name: "sciencediscovery-api", version: "1.0.0" });
+    const options = { timeout: Math.min(10_000, (server.toolCallTimeoutSeconds ?? 60) * 1_000) };
+    const connect = async (transport: Parameters<Client["connect"]>[0]): Promise<void> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          client.connect(transport, options),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("MCP connection timeout")), options.timeout);
+          }),
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
+    };
+    try {
     if (server.transport === "stdio") {
       if (!server.command) throw new Error(`MCP server '${serverId}' with stdio transport requires 'command'`);
-      const command = server.command === "python" || server.command === "python3"
+      const bundledPython = (server.command === "python" || server.command === "python3")
+        && server.args.some((arg) => arg === "sciencediscovery_gateway.public_biomed_mcp" || arg === "sciencediscovery_gateway.uniprot_mcp");
+      const command = bundledPython
         ? resolveMcpPython()
         : server.command;
       const overlay = proxyEnvOverlay(this.proxies[serverId]);
@@ -213,19 +223,23 @@ export class McpNodeClient {
         env,
         stderr: "ignore",
       });
-      await client.connect(transport);
+      await connect(transport);
     } else if (server.transport === "sse") {
       if (!server.url) throw new Error(`MCP server '${serverId}' with sse transport requires 'url'`);
-      await client.connect(new SSEClientTransport(new URL(server.url), {
+      await connect(new SSEClientTransport(new URL(server.url), {
         requestInit: { headers: server.headers },
       }));
     } else {
       if (!server.url) throw new Error(`MCP server '${serverId}' with http transport requires 'url'`);
-      await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+      await connect(new StreamableHTTPClientTransport(new URL(server.url), {
         requestInit: { headers: server.headers },
       }));
     }
-    this.sessions.set(serverId, { client, proxySignature });
+    } catch (error) {
+      await client.close().catch(() => undefined);
+      throw error;
+    }
+    this.sessions.set(serverId, { client, configSignature, proxySignature });
     return client;
   }
 
@@ -233,8 +247,9 @@ export class McpNodeClient {
     const client = await this.session(serverId, server);
     const tools: McpCatalogTool[] = [];
     let cursor: string | undefined;
+    const seen = new Set<string>();
     do {
-      const page = await client.listTools(cursor ? { cursor } : {});
+      const page = await client.listTools(cursor ? { cursor } : {}, { timeout: 10_000 });
       for (const tool of page.tools) {
         const inputSchema = (tool.inputSchema ?? { properties: {}, type: "object" }) as Record<string, unknown>;
         const routing = effectiveRouting(server, tool.name);
@@ -247,6 +262,8 @@ export class McpNodeClient {
         });
       }
       cursor = page.nextCursor ?? undefined;
+      if (tools.length > 1_000 || (cursor && seen.has(cursor))) throw new Error("MCP tool catalog pagination limit exceeded");
+      if (cursor) seen.add(cursor);
     } while (cursor);
     tools.sort((a, b) => a.name.localeCompare(b.name));
     return tools;
@@ -254,18 +271,24 @@ export class McpNodeClient {
 
   async catalog(): Promise<McpCatalog> {
     const config = this.currentConfig();
+    for (const id of this.sessions.keys()) {
+      if (!config.servers[id]?.enabled) await this.closeSession(id);
+    }
     const servers: McpCatalogServer[] = [];
     for (const [serverId, server] of Object.entries(config.servers).sort(([a], [b]) => a.localeCompare(b))) {
       if (!server.enabled) continue;
       let tools: McpCatalogTool[] = [];
+      let error: string | undefined;
       try {
         tools = await this.serverTools(serverId, server);
-      } catch {
+      } catch (cause) {
+        error = cause instanceof Error ? cause.message : "MCP connection failed";
         // One broken server must not prevent healthy servers from
         // contributing; drop its session so the next catalog reconnects.
         await this.closeSession(serverId);
       }
       servers.push({
+        ...(error ? { error } : {}),
         ...(server.description ? { description: server.description } : {}),
         enabled: true,
         id: serverId,
@@ -280,7 +303,6 @@ export class McpNodeClient {
   async reload(proxies?: Record<string, ResolvedProxy>): Promise<McpCatalog> {
     if (proxies) this.proxies = { ...proxies };
     await this.closeAll();
-    this.configSignature = undefined;
     return this.catalog();
   }
 

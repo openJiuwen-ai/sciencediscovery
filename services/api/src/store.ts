@@ -390,6 +390,7 @@ export class SessionStore {
   private saveQueue = Promise.resolve();
   private secretKey?: Buffer;
   private skillIds = new Set<string>(BUNDLED_SKILL_IDS);
+  private connectorIds = knownConnectorIdSet();
   private readonly initialTimeoutSettings: SystemTimeoutSettings;
   private readonly initialQuotaSettings: SystemQuotaSettings;
   /**
@@ -674,7 +675,7 @@ export class SessionStore {
     const defaultGlobalSettings = emptyCatalog(this.initialTimeoutSettings, this.initialQuotaSettings).globalSettings;
     const normalizedGlobalSettings = saved.globalSettings === undefined
       ? undefined
-      : withoutSkillSelection(normalizeRuntimeSettings(saved.globalSettings, modelIds, this.skillIds, false));
+      : withoutSkillSelection(normalizeRuntimeSettings(saved.globalSettings, modelIds, this.skillIds, false, this.connectorIds));
     const globalSettings = normalizedGlobalSettings === undefined
       ? defaultGlobalSettings
       : normalizedGlobalSettings;
@@ -694,7 +695,7 @@ export class SessionStore {
       remoteRunnerHostIds: Array.isArray(project.remoteRunnerHostIds)
         ? project.remoteRunnerHostIds.filter((id): id is string => typeof id === "string")
         : [],
-      settingsOverrides: normalizeRuntimeSettings(project.settingsOverrides, modelIds, this.skillIds, false),
+      settingsOverrides: normalizeRuntimeSettings(project.settingsOverrides, modelIds, this.skillIds, false, this.connectorIds),
     }));
     const migratedHierarchicalSettings = saved.globalSettings === undefined
       || JSON.stringify(globalSettings) !== JSON.stringify(saved.globalSettings)
@@ -832,7 +833,7 @@ export class SessionStore {
         : modelId ?? fallbackModelId;
       if (modelId !== session.modelId || reviewModelId !== session.reviewModelId) migratedSessionAssignments = true;
       const enabledConnectorIds = Array.isArray(session.enabledConnectorIds)
-        ? session.enabledConnectorIds.filter((id): id is ConnectorId => knownConnectorIdSet().has(id))
+        ? session.enabledConnectorIds.filter((id): id is ConnectorId => this.connectorIds.has(id))
         : [];
       // Compatibility mirror only; syncSessionCompatibility recomputes it after load.
       const enabledSkillIds = Array.isArray(session.enabledSkillIds)
@@ -844,7 +845,7 @@ export class SessionStore {
         : [];
       const reviewMode = session.reviewMode === "manual" ? "manual" as const : "auto" as const;
       const settingsOverrides = isRecord(session.settingsOverrides)
-        ? normalizeRuntimeSettings(session.settingsOverrides, modelIds, this.skillIds, false)
+        ? normalizeRuntimeSettings(session.settingsOverrides, modelIds, this.skillIds, false, this.connectorIds)
         : {
             enabledConnectorIds,
             ...(modelId ? { modelId } : {}),
@@ -1400,7 +1401,21 @@ export class SessionStore {
   }
 
   private normalizeSettings(value: unknown): RuntimeSettingsOverrides {
-    return normalizeRuntimeSettings(value, new Set(this.catalog.models.map((model) => model.id)), this.skillIds, true);
+    return normalizeRuntimeSettings(value, new Set(this.catalog.models.map((model) => model.id)), this.skillIds, true, this.connectorIds);
+  }
+
+  setCustomConnectorIds(ids: Iterable<string>): void {
+    this.connectorIds = new Set([...knownConnectorIdSet(), ...ids]);
+  }
+
+  async removeCustomConnectorReferences(id: string): Promise<void> {
+    if (!/^custom-[a-f0-9]{12}$/.test(id)) throw new Error("Not a custom MCP connector");
+    for (const settings of [this.catalog.globalSettings, ...this.catalog.projects.map((item) => item.settingsOverrides), ...this.catalog.sessions.map((item) => item.settingsOverrides)]) {
+      if (settings.enabledConnectorIds) settings.enabledConnectorIds = settings.enabledConnectorIds.filter((value) => value !== id);
+    }
+    for (const specialist of this.catalog.specialists) specialist.connectorIds = specialist.connectorIds.filter((value) => value !== id);
+    this.syncSessionCompatibilityForProject();
+    await this.saveCatalog();
   }
 
   setAvailableSkillIds(ids: Iterable<string>): void {
@@ -2485,7 +2500,7 @@ export class SessionStore {
     const unavailableSkills = enabledSkillIds.filter((id) => !this.skillIds.has(id));
     if (unavailableSkills.length) throw new Error(`Specialist skills are unavailable: ${unavailableSkills.join(", ")}`);
     const connectorIds = [...new Set(input.connectorIds ?? [])];
-    const unavailableConnectors = connectorIds.filter((id) => !knownConnectorIdSet().has(id));
+    const unavailableConnectors = connectorIds.filter((id) => !this.connectorIds.has(id));
     if (unavailableConnectors.length) throw new Error(`Specialist connectors are unavailable: ${unavailableConnectors.join(", ")}`);
     return { connectorIds, description, enabledSkillIds, instructions, name };
   }

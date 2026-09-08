@@ -217,6 +217,7 @@ import {
 } from "./artifactTree.js";
 import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest, type WebSettingsDraft } from "./WebSettingsEditor.js";
 import { ProxyPolicySelect, ProxySettingsEditor } from "./ProxySettingsEditor.js";
+import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
@@ -640,6 +641,7 @@ export type SystemSettingsGroup =
   | "language"
   | "memory-graph"
   | "models"
+  | "mcp"
   | "permissions"
   | "proxies"
   | "quotas"
@@ -661,6 +663,7 @@ const SYSTEM_SETTINGS_GROUPS: Array<{
   { id: "sandbox-network" },
   { id: "runtime" },
   { id: "models" },
+  { id: "mcp" },
   { id: "proxies" },
   { id: "web" },
   { id: "memory-graph" },
@@ -4783,6 +4786,11 @@ export function App() {
                   ref={providerSettingsRef}
                 />
               </> : null}
+              {systemSettingsGroup === "mcp" ? <McpServerSettings client={client} sources={mcpSources} sessionId={activeSessionId || undefined} sessionTitle={session?.title} onChanged={async () => {
+                const [items, sourceDetails] = await Promise.all([client.listConnectors(), client.listMcpSources()]);
+                setConnectors(items);
+                setMcpSources(sourceDetails.map((item) => item.manifest));
+              }} /> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings
                   ? <ProxySettingsEditor

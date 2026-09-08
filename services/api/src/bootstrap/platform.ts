@@ -18,6 +18,7 @@ import { resolve } from "node:path";
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { CustomMcpServers } from "../mcp/custom-servers.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { reviewerLog } from "@sciencediscovery/provenance";
 import type {
@@ -126,7 +127,8 @@ export function createPlatformServices(
   const memoryGraphEnabled = () => store.getMemoryGraphSettings().enabled;
   const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
   const mcpRegistry = createBuiltinMcpSourceRegistry();
-  const mcpGateway: McpTransportClient = dependencies.mcpTransport ?? new McpNodeClient();
+  const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
+  const mcpGateway: McpTransportClient = dependencies.mcpTransport ?? new McpNodeClient(() => customMcpServers.transportConfig());
   const mcpProxyMap = (): Record<string, ResolvedProxy> => {
     const serverIds = new Set<string>();
     for (const manifest of mcpRegistry.listManifests()) serverIds.add(manifest.transport.mcpServerId);
@@ -141,7 +143,7 @@ export function createPlatformServices(
     }
     return map;
   };
-  const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap);
+  const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap, (catalog) => customMcpServers.applyCatalog(catalog));
   const webBroker = new WebBroker(config.dataDir, store, new NativeWebProviderClient());
   const mcpBroker = new McpGovernanceBroker(
     config.dataDir,
@@ -354,6 +356,7 @@ export function createPlatformServices(
 
   return {
     artifactManager,
+    customMcpServers,
     evolutionStore,
     evolveCandidates,
     evolveOrchestrator,
@@ -411,6 +414,7 @@ export async function initializePlatformServices(
   } = services;
   await skillCatalog.load();
   store.setAvailableSkillIds(skillCatalog.ids());
+  await services.customMcpServers.load();
   await store.load();
   await mcpCatalog.refresh().catch((error) => {
     apiLog.warn("mcp_catalog_startup_failed", { errorMessage: shortErrorMessage(error) });

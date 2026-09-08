@@ -352,6 +352,7 @@ export function aggregateToolText(result: unknown): string | undefined {
 
 export function mcpConnectorManifest(manifest: import("@sciencediscovery/schema").McpSourceManifest): ConnectorManifest {
   return {
+    displayName: manifest.displayName,
     attributionTemplate: manifest.governance.attribution,
     cacheTtlSeconds: manifest.cache.ttlSeconds,
     citationTemplate: manifest.prompt.citationPolicy,
@@ -372,7 +373,7 @@ export function mcpConnectorManifest(manifest: import("@sciencediscovery/schema"
     schemaVersion: manifest.schemaVersion,
     signature: null,
     termsUrl: manifest.governance.termsUrl,
-    trustLevel: "bundled",
+    trustLevel: manifest.id.startsWith("custom-") ? "extension" : "bundled",
     version: manifest.version,
   };
 }

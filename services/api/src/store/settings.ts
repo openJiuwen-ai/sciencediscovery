@@ -145,6 +145,7 @@ export function normalizeRuntimeSettings(
   modelIds: ReadonlySet<string>,
   skillIds: ReadonlySet<string>,
   strict: boolean,
+  connectorIds: ReadonlySet<string> = knownConnectorIdSet(),
 ): RuntimeSettingsOverrides {
   if (!isRecord(value)) {
     if (strict) throw new Error("Runtime settings must be an object");
@@ -160,7 +161,7 @@ export function normalizeRuntimeSettings(
     const connectors = normalizeStringArray(
       value.enabledConnectorIds,
       "enabledConnectorIds",
-      knownConnectorIdSet(),
+      connectorIds,
       strict,
     );
     if (connectors) normalized.enabledConnectorIds = connectors as ConnectorId[];

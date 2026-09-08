@@ -14,6 +14,10 @@
 
 import type {
   ConnectorManifest,
+  CustomMcpServerDetails,
+  CustomMcpServerInput,
+  McpInspectorRequest,
+  McpInspectorResult,
   McpSourceManifest,
   McpSourceStatus,
   UpdateWebSettingsRequest,
@@ -25,6 +29,29 @@ import type {
 import { EvolveApiClient } from "./evolve.js";
 
 export class WebApiClient extends EvolveApiClient {
+  inspectMcpTool(id: string, body: McpInspectorRequest, signal?: AbortSignal): Promise<McpInspectorResult> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/inspect`, { method: "POST", body: JSON.stringify(body), signal });
+  }
+  listMcpServers(): Promise<CustomMcpServerDetails[]> {
+    return this.request("/api/mcp/servers");
+  }
+
+  saveMcpServer(body: CustomMcpServerInput, id?: string): Promise<CustomMcpServerDetails> {
+    return this.request(`/api/mcp/servers${id ? `/${encodeURIComponent(id)}` : ""}`, { method: id ? "PUT" : "POST", body: JSON.stringify(body) });
+  }
+
+  testMcpServer(id: string): Promise<CustomMcpServerDetails> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/test`, { method: "POST" });
+  }
+
+  deleteMcpServer(id: string): Promise<{ deleted: boolean }> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  importMcpServers(body: unknown): Promise<CustomMcpServerDetails[]> {
+    return this.request("/api/mcp/servers/import", { method: "POST", body: JSON.stringify(body) });
+  }
+
   listMcpSources(): Promise<Array<{ manifest: McpSourceManifest; status: McpSourceStatus }>> {
     return this.request("/api/mcp/sources");
   }

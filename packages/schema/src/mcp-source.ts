@@ -193,6 +193,7 @@ export interface McpCatalogTool {
 }
 
 export interface McpCatalogServer {
+  error?: string;
   description?: string;
   enabled: boolean;
   id: string;

@@ -266,7 +266,7 @@ export function ScopedSettingsEditor({
           <option value="override">Override · {draft.enabledConnectorIds?.length ?? 0} selected</option>
         </select> : null}
         {connectorOverride || !allowInheritance ? <div className="settings-choices">
-          {connectors.map((connector) => <label key={connector.id}><input type="checkbox" checked={draft.enabledConnectorIds?.includes(connector.id) ?? false} onChange={() => toggleArrayValue("enabledConnectorIds", connector.id)} /><span>{connector.id}</span></label>)}
+          {connectors.map((connector) => <label key={connector.id}><input type="checkbox" checked={draft.enabledConnectorIds?.includes(connector.id) ?? false} onChange={() => toggleArrayValue("enabledConnectorIds", connector.id)} /><span>{connector.displayName ?? connector.id}</span></label>)}
         </div> : null}
         {allowInheritance ? <SettingsSource details={details} field="enabledConnectorIds" /> : null}
       </fieldset>

@@ -86,7 +86,7 @@ export function ConnectorPicker({
       <div className="connector-picker-heading"><strong>{t("connectors.title")}</strong><span>{t("connectors.enabled", { enabled: enabledCount, total: connectors.length })}</span></div>
       <ul>
         {connectors.map((connector) => {
-          const name = connectorName(connector.id);
+          const name = connector.displayName ?? connectorName(connector.id);
           return <li key={connector.id}>
             <label>
               <input
@@ -97,13 +97,13 @@ export function ConnectorPicker({
               />
               <span><strong>{name}</strong><small>{connector.publisher}</small></span>
             </label>
-            <a
+            {connector.termsUrl ? <a
               aria-label={`${name} provider policy`}
               href={connector.termsUrl}
               rel="noreferrer"
               target="_blank"
               title={`${name} provider policy`}
-            ><ExternalIcon size={13} /></a>
+            ><ExternalIcon size={13} /></a> : null}
           </li>;
         })}
       </ul>

@@ -227,6 +227,7 @@ import { accessTokenBanner } from "./bootstrap-tokens.js";
 import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
 import { isKnownClientInputError } from "./error-classification.js";
 import { send, sendError, sendJson } from "./response.js";
+import { handleCustomMcpRequest } from "./custom-mcp.js";
 import { contentTypeForPath, serveStatic } from "./static.js";
 import {
   ApiStatusError,
@@ -542,6 +543,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listProjects());
         return;
       }
+      if (await handleCustomMcpRequest(request, response, url, platform.customMcpServers, () => readJson(request), { broker: mcpBroker, registry: mcpRegistry, store })) return;
       if (request.method === "GET" && url.pathname === "/api/mcp/sources") {
         sendJson(response, 200, mcpRegistry.listManifests().map((manifest) => ({
           manifest,
