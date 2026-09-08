@@ -136,7 +136,7 @@ try {
     assert.equal(children[0].status, "completed");
     assert.match(children[0].handoff.workspaceId, /^ws_/);
     const tools = children[0].steps.filter((item) => item.kind === "tool");
-    assert.deepEqual(tools.map((item) => [item.toolName, item.status]), [["run_shell", "completed"], ["declare_artifact", "completed"]]);
+    assert.deepEqual(tools.map((item) => [item.toolName, item.status]), [["run_shell", "completed"], ["declare_artifact", "completed"]], redact(JSON.stringify(tools)));
     assert.match(tools[0].content, /isolated/);
     const artifacts = await json(`/api/sessions/${session.id}/artifacts`);
     assert.equal(artifacts.filter((artifact) => artifact.logicalName === "Independent child result").length, 1);
