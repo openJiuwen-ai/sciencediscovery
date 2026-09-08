@@ -409,6 +409,7 @@ test("runner health remains available while Python base bootstraps in the backgr
     root: resolve(root, "scientific-envs"),
     runnerVersion: "test",
   }, async (_path, arguments_) => {
+    if (arguments_[1] === "-c") return "[]";
     const prefixIndex = arguments_.indexOf("--prefix");
     const prefix = prefixIndex >= 0 ? arguments_[prefixIndex + 1]! : "";
     if (arguments_[1] === "create") {

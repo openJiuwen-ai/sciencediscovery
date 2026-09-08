@@ -40,8 +40,8 @@ test("managed environment prompt directs mutations through governed tools", () =
   const prompt = buildWorkspaceSystemPrompt([], true);
   assert.match(prompt, /environment_list\/environment_create\/environment_delete\/environment_install\/environment_uninstall/);
   assert.match(prompt, /shared base is read-only/i);
-  assert.match(prompt, /pip PyPI specs or current-workspace relative wheel files/i);
-  assert.match(prompt, /never run conda, mamba, micromamba, or pip directly/i);
+  assert.match(prompt, /pip supports package specs or explicitly staged local wheel files/i);
+  assert.match(prompt, /managed prefixes are read-only in the sandbox; use environment_create\/install\/uninstall\/delete/i);
   assert.doesNotMatch(prompt, /only the user can create, install, delete/);
 });
 

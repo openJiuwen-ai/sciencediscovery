@@ -157,7 +157,8 @@ test("main and child native Agents receive Runner IDs, descriptions and explicit
         assert.equal(call.tools.some((tool) => tool.name === "propose_remote_job"), false);
         assert.ok(call.tools.some((tool) => tool.name === "sync_remote_workspace"));
         assert.match(JSON.stringify(call.tools), /runner_id/);
-        return toolTurn("run_python", { code: "print(42)", runner_id: "runner-gpu" });
+        assert.equal(call.tools.some((tool) => tool.name === "run_python" || tool.name === "run_r"), false);
+        return toolTurn("run_shell", { command: "python -c 'print(42)'", runner_id: "runner-gpu" });
       },
       () => textTurn("done"),
     ]);
@@ -168,7 +169,8 @@ test("main and child native Agents receive Runner IDs, descriptions and explicit
       const agent = createNativeAgent({
         ...base,
         ...(child ? { subagent: { name: "analysis", instructions: "Analyze in your own workspace" } } : {}),
-        executePython: async (_code, _signal, _toolCallId, runnerId) => {
+        executeShell: async (_code, mode, _signal, _toolCallId, runnerId) => {
+          assert.equal(mode, "ephemeral");
           seen.push(runnerId);
           return { createdFiles: [], exitCode: 0, stderr: "", stdout: "42" } as never;
         },
@@ -914,7 +916,7 @@ test("an oversized execution result enters history as a head/tail preview the mo
   const stdout = Array.from({ length: 200_000 }, (_, index) => `metric-${index + 1}`).join("\n");
   let refInHistory = "";
   const { streamer } = scriptStreamer([
-    () => toolTurn("run_python", { code: "print(metrics)" }),
+    () => toolTurn("run_shell", { command: "python metrics.py" }),
     (call) => {
       refInHistory = /ref "(tool-output-[0-9a-f]{16})"/.exec(String(call.history.at(-1)?.content))?.[1] ?? "";
       return toolTurn("read_tool_output", { limit: 3, ref: refInHistory }, "call-read-back");
@@ -925,14 +927,14 @@ test("an oversized execution result enters history as a head/tail preview the mo
   try {
     const agent = createNativeAgent({
       ...options,
-      executePython: async () => ({
+      executeShell: async () => ({
         createdFiles: [],
         environmentRevisionId: "rev-1",
         exitCode: 0,
         finishedAt: "2026-08-28T00:00:01.000Z",
         kernelId: "kernel-1",
         kernelMode: "ephemeral",
-        language: "python",
+        language: "shell",
         modifiedFiles: [],
         networkPolicy: "deny",
         runnerVersion: "test",
@@ -945,19 +947,19 @@ test("an oversized execution result enters history as a head/tail preview the mo
     } as unknown as NativeAgentOptions);
     const result = await agent.execute("run the metrics script");
 
-    const executionResult = String(result.finalMessages.find((message) => message.name === "run_python")?.content);
+    const executionResult = String(result.finalMessages.find((message) => message.name === "run_shell")?.content);
     assert.ok(
       Buffer.byteLength(executionResult, "utf8") < 60 * 1_024,
       `the result entering history is ${Buffer.byteLength(executionResult, "utf8")} bytes`,
     );
-    assert.match(executionResult, /^\[bounded tool output] run_python produced 200003 lines/);
+    assert.match(executionResult, /^\[bounded tool output] run_shell produced 200004 lines/);
     assert.match(executionResult, /head\/tail preview/, "both initial context and the trailing outcome survive");
     assert.equal(executionResult.includes("metric-1\n"), true, "the head survives in the current result");
     assert.equal(executionResult.includes("created files: none"), true, "the trailing summary survives");
     assert.ok(refInHistory, "the bounded result carries a re-read ref");
 
     const pagedBack = String(result.finalMessages.find((message) => message.name === "read_tool_output")?.content);
-    assert.match(pagedBack, /\[tool output page] run_python ref tool-output-[0-9a-f]{16}: lines 1-3 of 200003/);
+    assert.match(pagedBack, /\[tool output page] run_shell ref tool-output-[0-9a-f]{16}: lines 1-3 of 200004/);
     assert.equal(pagedBack.endsWith("stdout:\nmetric-1\nmetric-2\n"), true, "the omitted head is recoverable");
   } finally {
     restore();

@@ -222,6 +222,7 @@ export interface WorkspaceToolOptions {
     signal?: AbortSignal,
     toolCallId?: string,
     machine?: string,
+    environment?: { environmentId?: string; cwd?: string },
   ) => Promise<ShellExecutionResult>;
   executeScientific?: (
     language: ScientificLanguage,
@@ -594,12 +595,6 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       description: `Sandboxed execution environment ID (default: local). Available Runners: ${JSON.stringify(runnerCatalog)}. Non-default Runners have independent workspaces; sync selected inputs explicitly.`,
     })),
   };
-  const pythonParameters = Type.Object({
-    code: Type.String({ minLength: 1 }),
-    environmentRevisionId: Type.Optional(Type.String({ minLength: 1 })),
-    kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
-    ...machineParameter,
-  });
   const listFiles: AgentTool<typeof emptyParameters> = {
     description: "List files in the current session workspace",
     execute: async () => {
@@ -633,7 +628,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   };
 
   const readWorkspaceFile: AgentTool<typeof readFileParameters> = {
-    description: "Read a page of a text file from the current session workspace. Reads start at the first line and return at most 2000 lines or 40 KB; pass offset (1-based line) and limit to page through a larger file. Binary files are not read as text: the result reports the media type and size so you can process the file with run_python or run_shell instead.",
+    description: "Read a page of a text file from the current workspace. Reads start at the first line and return at most 2000 lines or 40 KB; pass offset (1-based line) and limit to page through a larger file. Binary files are not read as text: the result reports the media type and size so you can process the file with run_shell instead.",
     execute: async (_toolCallId, params) => {
       const requested = normalizeMountedReadPath(params.path);
       const roots = requested.root === "parent"
@@ -665,7 +660,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const details = {
           binary: true,
           mediaType: guessMediaType(requested.path),
-          note: "Binary content is never inlined into the conversation. Process this file in the sandbox with run_python or run_shell, or expose it to the user with declare_artifact.",
+          note: "Binary content is never inlined into the conversation. Process this file in the sandbox with run_shell, or expose it to the user with declare_artifact.",
           path: requested.path,
           size: metadata.size,
         };
@@ -753,7 +748,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       version: Type.Optional(Type.Integer({ minimum: 1 })),
     });
     const readArtifact: AgentTool<typeof parameters> = {
-      description: "Read a Project artifact by artifact_id or name, optionally selecting a version. At least one identifier is required. Text versions return one UTF-8 page (at most 2000 lines or 40 KB) plus a page range; use offset and limit to read the rest. Binary versions return only binary=true with the media type and size — their content is never inlined, so process them with run_python or run_shell instead.",
+      description: "Read a Project artifact by artifact_id or name, optionally selecting a version. At least one identifier is required. Text versions return one UTF-8 page (at most 2000 lines or 40 KB) plus a page range; use offset and limit to read the rest. Binary versions return only binary=true with the media type and size — their content is never inlined, so process them with run_shell instead.",
       execute: async (_toolCallId, params) => {
         if (!params.artifact_id && !params.name) throw new Error("artifact_id or name is required");
         const result = await options.readArtifact!({
@@ -838,36 +833,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     artifactTools.push(declareArtifact);
   }
 
-  const runPythonTool: AgentTool<typeof pythonParameters> = {
-    description: "Run Python in the current session workspace. Optionally select an Environment Revision and persistent kernel; ephemeral is the default. Save useful outputs as workspace files. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or have the script write its output to a workspace file and read that file with read_file.",
-    execute: async (toolCallId, params, signal) => {
-      const result = options.executeScientific
-        ? await options.executeScientific(
-          "python",
-          params.code,
-          params.environmentRevisionId,
-          params.kernelMode ?? "ephemeral",
-          signal,
-          toolCallId,
-          params.runner_id,
-        )
-        : await options.executePython(params.code, signal, toolCallId, params.runner_id);
-      if (result.exitCode !== 0) {
-        throw new Error(`Python exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
-      }
-      const summary = [
-        result.stdout ? `stdout:\n${result.stdout}` : "stdout: (empty)",
-        result.stderr ? `stderr:\n${result.stderr}` : "stderr: (empty)",
-        `created files: ${result.createdFiles.join(", ") || "none"}`,
-      ].join("\n");
-      return { content: [{ type: "text", text: summary }], details: result };
-    },
-    label: "Run Python",
-    name: "run_python",
-    parameters: pythonParameters,
-  };
 
-  const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...provenanceTools, ...artifactTools, runPythonTool];
+  const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...provenanceTools, ...artifactTools];
   if (options.remoteRunners?.length) {
     const runners = options.remoteRunners;
     const remoteWorkspaceParameters = Type.Object({
@@ -1395,12 +1362,13 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const shellParameters = Type.Object({
       arguments: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 32 })),
       command: Type.Optional(Type.String({ maxLength: 20_000, minLength: 1 })),
-      kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
+      environment_id: Type.Optional(Type.String({ minLength: 1 })),
+      cwd: Type.Optional(Type.String({ maxLength: 1_000 })),
       scriptPath: Type.Optional(Type.String({ maxLength: 1_000, minLength: 1 })),
       ...machineParameter,
     });
     const runShell: AgentTool<typeof shellParameters> = {
-      description: "Run a bounded shell command or an existing shell script from the authorized Session workspace or the read-only $SCIENCEDISCOVERY_SKILLS_DIR Skill package mount. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or redirect the output to a workspace file and page through it with read_file.",
+      description: "Run a command (including python -m, Python files, or Rscript) in a fresh Runner sandbox Shell. Choose runner_id and environment_id from the catalogs; the environment's latest state is used and mounted read-only. cwd is relative to this Agent's workspace. Provide exactly one of command or scriptPath; scripts may also come from the read-only $SCIENCEDISCOVERY_SKILLS_DIR mount. cd/export and interpreter variables do not persist between calls. Install/update/remove dependencies with environment management tools, not Shell. Network and filesystem access follow the authorized sandbox policy. Large output is bounded; use read_tool_output for retained output.",
       execute: async (toolCallId, params, signal) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
@@ -1418,9 +1386,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             : shellQuote(script.path);
           code = ["/usr/bin/bash", scriptWord, ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
-        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal, toolCallId, params.runner_id);
-        if (result.exitCode !== 0) throw new Error(`Shell exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
+        const result = await options.executeShell!(code, "ephemeral", signal, toolCallId, params.runner_id, {
+          environmentId: params.environment_id, cwd: params.cwd,
+        });
         return {
+          isError: result.exitCode !== 0,
           content: [{ type: "text", text: [
             result.stdout ? `stdout:\n${result.stdout}` : "stdout: (empty)",
             result.stderr ? `stderr:\n${result.stderr}` : "stderr: (empty)",
@@ -1437,46 +1407,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(runShell);
   }
-  if (options.executeScientific && (options.environments || options.remoteRunners?.length)) {
-    const rParameters = Type.Object({
-      code: Type.String({ minLength: 1 }),
-      environmentRevisionId: Type.Optional(Type.String({ minLength: 1 })),
-      kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
-      ...machineParameter,
-    });
-    const runR: AgentTool<typeof rParameters> = {
-      description: "Run R in the current session workspace using a managed R Environment Revision. Prefer R for R-native statistical or Bioconductor workflows. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output.",
-      execute: async (toolCallId, params, signal) => {
-        const result = await options.executeScientific!(
-          "r",
-          params.code,
-          params.environmentRevisionId,
-          params.kernelMode ?? "ephemeral",
-          signal,
-          toolCallId,
-          params.runner_id,
-        );
-        if (result.exitCode !== 0) throw new Error(`R exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
-        return {
-          content: [{ type: "text", text: [
-            result.stdout ? `stdout:\n${result.stdout}` : "stdout: (empty)",
-            result.stderr ? `stderr:\n${result.stderr}` : "stderr: (empty)",
-            `created files: ${result.createdFiles.join(", ") || "none"}`,
-            `environment revision: ${result.environmentRevisionId}`,
-            `kernel mode: ${result.kernelMode}`,
-          ].join("\n") }],
-          details: result,
-        };
-      },
-      label: "Run R",
-      name: "run_r",
-      parameters: rParameters,
-    };
-    tools.push(runR);
+  if (options.environments || options.remoteRunners?.length) {
 
     const environmentListParameters = Type.Object({ ...machineParameter });
     const environmentList: AgentTool<typeof environmentListParameters> = {
-      description: "List the selected Runner's shared read-only base and named scientific environments with immutable revision IDs. If setup is unavailable, use environment_setup to inspect its cause or explicitly retry after resolving it.",
+      description: "List shared managed environments on the selected Runner. Choose an environment ID to execute its latest state with run_shell; revisions are audit-only, not execution choices. Use environment_setup to inspect unavailable setup or retry after resolving its cause.",
       execute: async (_toolCallId, _params, signal) => {
         const environments = options.environmentManagement
           ? await options.environmentManagement.list(signal, _params.runner_id)

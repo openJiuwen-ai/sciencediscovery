@@ -145,7 +145,10 @@ export interface RecordExecutionOptions {
   parentSubagentId?: string;
 }
 
-export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environmentRevisionId" | "language">;
+export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environmentRevisionId" | "language"> & {
+  environmentId?: string;
+  cwd?: string;
+};
 
 export class ProvenanceRecorder {
   readonly cas: CasStore;
@@ -533,6 +536,8 @@ export class ProvenanceRecorder {
       result = await options.runnerClient.executeShell({
         agentId: options.agentId,
         code: options.code,
+        ...(options.environmentId ? { environmentId: options.environmentId } : {}),
+        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
         ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),
         ...(options.kernelIdleTimeoutMs !== undefined ? { kernelIdleTimeoutMs: options.kernelIdleTimeoutMs } : {}),
         ...(options.kernelMode !== undefined ? { kernelMode: options.kernelMode } : {}),
@@ -584,6 +589,21 @@ export class ProvenanceRecorder {
 
     const stdout = await this.cas.put(result.stdout);
     const stderr = await this.cas.put(result.stderr);
+    let environmentSyncError: unknown;
+    if (options.environmentId) {
+      try {
+        const [environments, revisions] = await Promise.all([
+          options.runnerClient.listEnvironments(), options.runnerClient.listEnvironmentRevisions(),
+        ]);
+        const revision = revisions.find((candidate) => candidate.id === result.environmentRevisionId);
+        if (!revision || revision.environmentId !== options.environmentId) throw new Error("Runner environment identity mismatch");
+        const reference = await this.cas.put(await options.runnerClient.environmentSnapshot(revision.id));
+        if (reference.hash !== revision.snapshot.hash || reference.size !== revision.snapshot.size) {
+          throw new Error("Environment revision snapshot mismatch");
+        }
+        await this.store.replaceScientificEnvironmentCatalog(environments, revisions, options.runnerId);
+      } catch (error) { environmentSyncError = error; }
+    }
     await this.store.appendExecutionRun({
       cgroupMode: result.cgroupMode,
       code,
@@ -648,10 +668,13 @@ export class ProvenanceRecorder {
       producedArtifacts: [],
       stdoutHash: stdout.hash,
       stderrHash: stderr.hash,
-      envHash: null,
+      envHash: options.environmentId
+        ? this.store.listEnvironmentRevisions().find((revision) => revision.id === result.environmentRevisionId)?.snapshot.hash ?? null
+        : null,
       parentSubagentId: options.parentSubagentId,
       inputSourceFiles: shellSourceFileInputs,
     });
+    if (environmentSyncError) throw environmentSyncError;
     return result;
   }
 

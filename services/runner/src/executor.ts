@@ -491,6 +491,7 @@ async function runSandboxed(
       let stderr = "";
       let settled = false;
       let checkingQuota = false;
+      let stopError: Error | undefined;
 
       const finish = (error?: Error, exitCode = 1) => {
         if (settled) return;
@@ -501,14 +502,15 @@ async function runSandboxed(
         if (error) reject(error);
         else resolveRun({ exitCode, stderr, stdout });
       };
-      const abort = () => {
+      const stop = (error: Error) => {
+        stopError ??= error;
         child?.kill("SIGKILL");
-        finish(new Error(`${timeoutLabel} aborted`));
       };
+      // Do not release a writer or clean up its mounts until the process has exited.
+      const abort = () => stop(new Error(`${timeoutLabel} aborted`));
       const timeout = timeoutMs > 0
         ? setTimeout(() => {
-            child?.kill("SIGKILL");
-            finish(new Error(`${timeoutLabel} timed out after ${timeoutMs} ms`));
+            stop(new Error(`${timeoutLabel} timed out after ${timeoutMs} ms`));
           }, timeoutMs)
         : undefined;
       const quotaTimer = maxWorkspaceBytes > 0
@@ -518,14 +520,12 @@ async function runSandboxed(
             void workspaceUsageBytes(workspaceRoot)
               .then((bytes) => {
                 if (bytes > maxWorkspaceBytes && !settled) {
-                  child?.kill("SIGKILL");
-                  finish(new Error(workspaceQuotaExceededMessage(maxWorkspaceBytes)));
+                  stop(new Error(workspaceQuotaExceededMessage(maxWorkspaceBytes)));
                 }
               })
               .catch((error: Error) => {
                 if (!settled) {
-                  child?.kill("SIGKILL");
-                  finish(error);
+                  stop(error);
                 }
               })
               .finally(() => { checkingQuota = false; });
@@ -534,6 +534,7 @@ async function runSandboxed(
 
       void spawnSandboxProcess(config, launch, commandArguments, seccompVariant).then((started) => {
         child = started;
+        if (stopError) child.kill("SIGKILL");
         if (!child.stdin || !child.stdout || !child.stderr) {
           child.kill("SIGKILL");
           finish(new Error("Runner failed to create isolated process streams"));
@@ -550,7 +551,7 @@ async function runSandboxed(
           stderr = next.text;
         });
         child.once("error", (error) => finish(error));
-        child.once("close", (code) => finish(undefined, code ?? 1));
+        child.once("close", (code) => finish(stopError, code ?? 1));
         // The sandbox can already be gone by the time its payload is written —
         // that is what an aborted or crashed execution looks like from here.
         // A stream error with no listener becomes an uncaught exception, so a
@@ -558,7 +559,7 @@ async function runSandboxed(
         // outcome the process's own events already carry.
         child.stdin.on("error", (error: NodeJS.ErrnoException) => {
           if (error.code === "EPIPE") return;
-          finish(error);
+          stop(error);
         });
         child.stdin.end(stdin);
       }).catch((error: Error) => finish(error));
@@ -1035,6 +1036,7 @@ export async function executeShell(
   signal?: AbortSignal,
   envProfile?: SessionEnvProfile,
   gateways?: EgressGatewayRegistry,
+  runtime?: import("./environment-store.js").EnvironmentRuntime,
 ): Promise<ShellExecutionResult> {
   if (!request.code.trim()) throw new Error("Shell code is required");
   if (!request.executionId?.trim()) throw new Error("Execution ID is required");
@@ -1059,17 +1061,33 @@ export async function executeShell(
   const localPythonPackages = await localPythonPackagePath(config);
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
   const sandbox = executorSandboxKind(config);
+  if (request.environmentId && runtime?.environment.id !== request.environmentId) {
+    throw new Error("Selected environment requires an active Runner environment lease");
+  }
+  let chdir = await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot);
+  if (request.cwd !== undefined) {
+    if (isAbsolute(request.cwd)) throw new Error("cwd must be workspace-relative");
+    const directory = await realpath(resolve(workspaceRoot, request.cwd));
+    const relativePath = relative(workspaceRoot, directory);
+    if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+      throw new Error("cwd must remain inside the writable workspace");
+    }
+    if (!(await stat(directory)).isDirectory()) throw new Error("cwd must be a directory");
+    chdir = sandbox === "seatbelt" ? directory : `${workspaceBinds.chdir}/${relativePath}`;
+  }
   const launch = await prepareSandboxLaunch(config, {
-    chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
+    chdir,
     egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox, request.sandboxEgressProxy),
-    environmentBinds: localPythonPackageBindArguments(localPythonPackages),
-    environmentPaths: localPythonPackages ? [localPythonPackages] : [],
+    environmentBinds: runtime ? environmentPrefixBindArguments(runtime.prefixPath) : localPythonPackageBindArguments(localPythonPackages),
+    environmentPaths: runtime ? [runtime.prefixPath] : localPythonPackages ? [localPythonPackages] : [],
     envProfile,
     hostInterpreterMasks: [],
     hostRuntimeSupport,
     language: "shell",
-    pathEnv: "/usr/bin:/bin",
-    pythonPathEnv: localPythonPackages
+    pathEnv: runtime
+      ? `${sandbox === "seatbelt" ? resolve(runtime.prefixPath, "bin") : "/opt/science-env/bin"}:/usr/bin:/bin`
+      : "/usr/bin:/bin",
+    pythonPathEnv: !runtime && localPythonPackages
       ? (sandbox === "seatbelt" ? localPythonPackages : LOCAL_PYTHON_PACKAGES_MOUNT)
       : undefined,
     readOnlyWorkspaceRoot,
@@ -1110,9 +1128,9 @@ export async function executeShell(
     ...processResult,
     cgroupMode: RESOURCE_LIMIT_MODE,
     createdFiles: shellCreatedFiles,
-    environmentRevisionId: sandbox === "seatbelt"
+    environmentRevisionId: runtime?.revision.id ?? (sandbox === "seatbelt"
       ? SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID
-      : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+      : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID),
     environmentVariables: launch.env,
     executionId: request.executionId,
     finishedAt: new Date().toISOString(),

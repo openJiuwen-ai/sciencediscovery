@@ -148,6 +148,37 @@ test("multi-step persistent R executions create separate runs and an artifact de
   assert.deepEqual(store.listEnvironments(), [localEnvironment]);
   assert.ok(store.listEnvironmentRevisions().some((candidate) => candidate.id === revision.id));
   assert.equal((await store.listExecutionRuns(session.id)).at(-1)?.runnerId, "remote-one");
+
+  runnerClient.executeShell = async (request) => {
+    assert.equal(request.environmentId, environment.id);
+    assert.equal(request.cwd, "analysis");
+    const timestamp = new Date().toISOString();
+    return {
+      cgroupMode: "none", createdFiles: [], modifiedFiles: [],
+      environmentRevisionId: revision.id, environmentVariables: { PATH: "/opt/science-env/bin:/usr/bin" },
+      executionId: request.executionId, exitCode: 0, finishedAt: timestamp,
+      kernelId: `ephemeral:${request.executionId}`, kernelMode: "ephemeral", language: "shell",
+      networkPolicy: "none", runnerVersion: "test", sandbox: "bubblewrap", startedAt: timestamp,
+      workingDirectory: "/workspace/analysis", stdout: "42\n", stderr: "",
+    };
+  };
+  await recorder.executeShell({
+    agentId: "main", code: "Rscript analysis.R", environmentId: environment.id, cwd: "analysis",
+    permissionEpoch, runnerClient, runnerId: "remote-one", runnerWorkspaceKey: "project/session",
+    sessionId: session.id, turnId: "turn-shell-env", workspaceRoot,
+  });
+  const shellRun = (await store.listExecutionRuns(session.id)).at(-1)!;
+  assert.equal(shellRun.environmentRevisionId, revision.id);
+  assert.equal(shellRun.tool, "run_shell");
+  assert.equal(await recorder.cas.verify(revision.snapshot.hash), true);
+  assert.deepEqual(store.listEnvironments(), [localEnvironment], "remote catalog must not replace local environments");
+  runnerClient.environmentSnapshot = async () => Buffer.from("corrupt snapshot");
+  await assert.rejects(recorder.executeShell({
+    agentId: "main", code: "Rscript analysis.R", environmentId: environment.id, cwd: "analysis",
+    permissionEpoch, runnerClient, sessionId: session.id, turnId: "turn-bad-snapshot", workspaceRoot,
+  }), /snapshot/i);
+  assert.equal((await store.listExecutionRuns(session.id)).at(-1)?.turnId, "turn-bad-snapshot",
+    "completed execution must still be recorded when environment snapshot synchronization fails");
 });
 
 test("shell execution records authoritative code, logs, environment, and generated files", async (context) => {

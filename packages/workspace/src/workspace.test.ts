@@ -48,7 +48,7 @@ test("normalizeWorkspaceRelativePath preserves nested names within each agent wr
   assert.throws(() => normalizeWorkspaceRelativePath(subagentRoot, "../escape.csv"), /escapes the workspace/);
 });
 
-test("run_python executes code and reports output without resource selection", async (context) => {
+test("run_shell selects the latest environment by ID and preserves its execution parameters", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `workspace-tool-${process.pid}-${Date.now()}`);
   await mkdir(root, { recursive: true });
   context.after(() => rm(root, { force: true, recursive: true }));
@@ -56,7 +56,11 @@ test("run_python executes code and reports output without resource selection", a
   let executedToolCallId = "";
   const tools = createWorkspaceTools(root, {
     enabledConnectorIds: [],
-    executePython: async (code, _signal, toolCallId): Promise<PythonExecutionResult> => {
+    executePython: async () => { throw new Error("legacy tool must not run"); },
+    executeShell: async (code, mode, _signal, toolCallId, runnerId, environment): Promise<ShellExecutionResult> => {
+      assert.equal(mode, "ephemeral");
+      assert.equal(runnerId, "runner-test");
+      assert.deepEqual(environment, { environmentId: "env-test", cwd: "analysis" });
       executedCode = code;
       executedToolCallId = toolCallId ?? "";
       return {
@@ -69,7 +73,7 @@ test("run_python executes code and reports output without resource selection", a
         finishedAt: new Date().toISOString(),
         kernelId: "ephemeral:execution",
         kernelMode: "ephemeral",
-        language: "python",
+        language: "shell",
         modifiedFiles: [],
         networkPolicy: "none",
         runnerVersion: "test",
@@ -81,13 +85,13 @@ test("run_python executes code and reports output without resource selection", a
       };
     },
   });
-  const tool = tools.find((candidate) => candidate.name === "run_python");
+  const tool = tools.find((candidate) => candidate.name === "run_shell");
   assert.ok(tool);
   const schema = tool.parameters as { properties?: Record<string, unknown> };
   assert.equal(schema.properties?.resourceProfileId, undefined);
 
-  const result = await tool.execute("tool-call", { code: "print('ok')" });
-  assert.equal(executedCode, "print('ok')");
+  const result = await tool.execute("tool-call", { command: "python -m sample", runner_id: "runner-test", environment_id: "env-test", cwd: "analysis" });
+  assert.equal(executedCode, "python -m sample");
   assert.equal(executedToolCallId, "tool-call");
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /stdout:\nok/);
 });
@@ -881,7 +885,7 @@ test("managed environments expose governed create, delete, install, and uninstal
     executeScientific: async () => { throw new Error("not used"); },
   });
   assert.ok(tools.some((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.list));
-  assert.ok(tools.some((candidate) => candidate.name === "run_r"));
+  assert.equal(tools.some((candidate) => candidate.name === "run_r" || candidate.name === "run_python"), false);
   for (const name of Object.values(ENVIRONMENT_TOOL_NAMES)) {
     assert.ok(tools.some((candidate) => candidate.name === name));
   }
@@ -1567,10 +1571,14 @@ test("filterTools denylist wins when a tool also appears in the allowlist", () =
 test("independent SSH/SLURM jobs are not offered to the model", () => {
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    executeShell: async () => { throw new Error("not used"); },
   });
   assert.equal(tools.some((tool) => tool.name === "propose_remote_job"), false);
-  const python = tools.find((tool) => tool.name === "run_python")!;
-  assert.match(JSON.stringify(python.parameters), /runner_id.*local/);
+  const shell = tools.find((tool) => tool.name === "run_shell")!;
+  assert.match(JSON.stringify(shell.parameters), /runner_id.*local/);
+  assert.equal(tools.some((tool) => tool.name === "run_python" || tool.name === "run_r"), false);
+  assert.equal(JSON.stringify(shell.parameters).includes("environmentRevisionId"), false);
+  assert.equal(JSON.stringify(shell.parameters).includes("kernelMode"), false);
 });
 
 test("sync_remote_workspace exposes only explicit list, push, and pull operations", async () => {

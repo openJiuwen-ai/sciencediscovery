@@ -451,6 +451,20 @@ export function createRunnerServer(
         status.startedAt = new Date().toISOString();
         status.status = "running";
         try {
+          if (language !== "shell" && environmentStore?.capability.available) {
+            const request = execution as PythonExecutionRequest;
+            const environmentId = request.environmentRevisionId
+              ? environmentStore.getRevision(request.environmentRevisionId)?.environmentId
+              : `starter-${request.language ?? "python"}`;
+            if (!environmentId) throw new Error("Unknown environment revision; select a current environment");
+            return await environmentStore.withRuntime(environmentId, async (runtime) => {
+              if (signal.aborted) throw new Error("Runner execution aborted before start");
+              if (request.environmentRevisionId && runtime.revision.id !== request.environmentRevisionId) {
+                throw new Error("Historical environment revisions are audit-only; select the latest environment");
+              }
+              return operation();
+            });
+          }
           return await operation();
         } finally {
           activeExecutions.delete(status.executionId);
@@ -820,7 +834,13 @@ export function createRunnerServer(
           "shell",
           execution.kernelMode ?? "ephemeral",
           signal,
-          () => execution.kernelMode === "persistent"
+          () => execution.environmentId
+            ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
+                if (signal.aborted) throw new Error("Runner execution aborted before start");
+                if (execution.kernelMode === "persistent") throw new Error("Managed Shell executions must be ephemeral");
+                return executeShell(config, execution, signal, undefined, gateways, runtime);
+              }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
+            : execution.kernelMode === "persistent"
             ? shellSessions.execute(execution, signal)
             : executeShell(config, execution, signal,
                 profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id),

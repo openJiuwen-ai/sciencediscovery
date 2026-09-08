@@ -223,6 +223,7 @@ export function createWorkspaceExecutionBindings(
       signal?: AbortSignal,
       toolCallId?: string,
       machine?: string,
+      environment?: { environmentId?: string; cwd?: string },
     ) => {
       options.store.assertSessionWritable(options.sessionId);
       const target = resolveExecutionTarget(machine);
@@ -237,6 +238,8 @@ export function createWorkspaceExecutionBindings(
       return options.provenanceRecorder.executeShell({
         agentId: options.agentId,
         code,
+        ...(environment?.environmentId ? { environmentId: environment.environmentId } : {}),
+        ...(environment?.cwd !== undefined ? { cwd: environment.cwd } : {}),
         artifactPathPrefix: options.artifactPathPrefix,
         executionTimeoutMs: options.executionTimeoutMs,
         kernelIdleTimeoutMs: options.kernelIdleTimeoutMs,
