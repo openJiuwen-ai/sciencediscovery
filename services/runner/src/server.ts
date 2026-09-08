@@ -79,7 +79,7 @@ import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
 import { agentExecutionKey, KeyedTaskQueue, requestAgentExecutionKey } from "./agent-execution.js";
 import { ExecutionManager } from "./execution-manager.js";
-import { committedWorkspaceSnapshot, RefStore, streamSnapshotFile, VersionStore, withWorkspaceMutation,
+import { committedWorkspaceSnapshot, publishWorkspaceFile, RefStore, streamSnapshotFile, VersionStore, withWorkspaceMutation,
   workspaceSnapshotFiles, type AgentStateRef, type SnapshotFile } from "@sciencediscovery/cas";
 import { HostNpuJobBroker } from "./npu-broker.js";
 
@@ -625,6 +625,29 @@ export function createRunnerServer(
           "x-content-type-options": "nosniff",
         });
         createReadStream(file).pipe(response);
+        return;
+      }
+      if (request.method === "PUT" && url.pathname === "/remote-workspace/transfer-file") {
+        const root = await remoteWorkspaceRoot(config.dataDir, url.searchParams.get("workspace") ?? "");
+        const path = validateRelativeWorkspacePath(url.searchParams.get("path") ?? "");
+        const conflict = url.searchParams.get("conflict") ?? "reject";
+        const size = Number(request.headers["x-workspace-size"]);
+        const sha256 = request.headers["x-workspace-sha256"];
+        const executable = Number(request.headers["x-workspace-executable"] ?? 0);
+        if (!Number.isSafeInteger(size) || size < 0 || typeof sha256 !== "string" || !/^[a-f0-9]{64}$/.test(sha256)
+          || !Number.isInteger(executable) || executable < 0 || (executable & ~0o111) !== 0
+          || !["reject", "overwrite"].includes(conflict)) throw new Error("Invalid verified upload metadata");
+        const result = await abortOnDisconnect(response, (signal) => withWorkspaceMutation(workspaceVersions, root, async () => {
+          if (config.maxWorkspaceBytes > 0) {
+            const files = await listRemoteWorkspaceFiles(root);
+            const existing = files.find((file) => file.path === path)?.size ?? 0;
+            if (files.reduce((total, file) => total + file.size, 0) - existing + size > config.maxWorkspaceBytes) throw new Error("Remote workspace exceeds its execution quota");
+          }
+          // Publish under the outer mutation; CAS/refs commit before the HTTP success receipt.
+          return publishWorkspaceFile({ root, path, chunks: request, signal, expectedBytes: size, expectedHash: sha256,
+            maxBytes: size || 1, executable, conflict: conflict as "reject" | "overwrite" });
+        }, { kind: "workspace-transfer" }, signal));
+        sendJson(response, 201, { path, size: result.bytes, sha256: result.sha256 });
         return;
       }
       if (request.method === "PUT" && url.pathname === "/remote-workspace/file") {

@@ -82,7 +82,12 @@ export class RunnerClient {
   }
 
   async snapshotRemoteWorkspace(workspace: string, paths: string[], signal?: AbortSignal): Promise<RemoteWorkspaceSnapshot> {
-    return this.request("/remote-workspace/snapshots", { method: "POST", body: JSON.stringify({ workspace, paths }), signal });
+    try {
+      return await this.request("/remote-workspace/snapshots", { method: "POST", body: JSON.stringify({ workspace, paths }), signal });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new Error(`Immutable Workspace snapshot export is unavailable; a Runner with snapshot support is required. ${error instanceof Error ? error.message : "Export failed"}`);
+    }
   }
 
   async streamWorkspaceSnapshot(snapshot: RemoteWorkspaceSnapshot, path: string, signal?: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
@@ -140,6 +145,22 @@ export class RunnerClient {
       throw new Error(body.error || `Remote workspace write failed (${response.status})`);
     }
     return await response.json() as { path: string; size: number };
+  }
+
+  async uploadWorkspaceSnapshotFile(workspace: string, path: string, chunks: AsyncIterable<Uint8Array>,
+    metadata: { size: number; sha256: string; executable?: number }, conflict: "reject" | "overwrite", signal?: AbortSignal): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/remote-workspace/transfer-file?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent(path)}&conflict=${conflict}`, {
+      method: "PUT", body: chunks as unknown as RequestInit["body"], duplex: "half", signal,
+      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/octet-stream",
+        "x-workspace-size": String(metadata.size), "x-workspace-sha256": metadata.sha256,
+        "x-workspace-executable": String(metadata.executable ?? 0) },
+    } as RequestInit);
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error || `Runner does not support verified streaming upload (${response.status})`);
+    }
+    const receipt = await response.json() as { size: number; sha256: string };
+    if (receipt.size !== metadata.size || receipt.sha256 !== metadata.sha256) throw new Error("Runner upload receipt mismatch");
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {

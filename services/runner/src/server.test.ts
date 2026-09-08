@@ -904,6 +904,29 @@ test("runner keeps logical remote workspaces persistent and transfers only expli
   assert.equal((await fetch(snapshotUrl.replace(path, "not-selected.txt"), { headers: authorization })).status, 400);
 });
 
+test("verified streaming upload checks checksum, rejects collisions and commits before returning", async (context) => {
+  const fixture = await workspaceFixture(context);
+  const server = createRunnerServer(config(fixture.dataDir));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const url = `${origin}/remote-workspace/transfer-file?workspace=test/session&path=file`;
+  const { createHash } = await import("node:crypto");
+  const sha256 = createHash("sha256").update("payload").digest("hex");
+  const headers = { authorization: "Bearer runner-test-token", "x-workspace-size": "7", "x-workspace-sha256": sha256 };
+  const wrong = await fetch(url, { method: "PUT", headers, body: "corrupt" });
+  assert.equal(wrong.status, 400);
+  const before = await (await fetch(`${origin}/remote-workspace/files?workspace=test/session`, { headers })).json();
+  assert.deepEqual(before, []);
+  const success = await fetch(url, { method: "PUT", headers, body: "payload" });
+  assert.equal(success.status, 201);
+  assert.deepEqual(await success.json(), { path: "file", size: 7, sha256 });
+  const snapshot = await (await fetch(`${origin}/remote-workspace/snapshots`, { method: "POST", headers,
+    body: JSON.stringify({ workspace: "test/session", paths: ["file"] }) })).json() as { files: Array<{ sha256: string }> };
+  assert.equal(snapshot.files[0]?.sha256, sha256);
+  assert.equal((await fetch(url, { method: "PUT", headers, body: "payload" })).status, 400);
+});
+
 test("runner NPU Broker runs a signed allowlisted smoke job", async (context) => {
   const fixture = await workspaceFixture(context);
   const smokeScript = resolve(fixture.dataDir, "smoke.cjs");
