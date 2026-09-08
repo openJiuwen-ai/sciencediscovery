@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { RefStore, VersionStore } from "@sciencediscovery/cas";
+import { RefStore, VersionStore, withWorkspaceMutation, workspaceHeadName } from "@sciencediscovery/cas";
 import type { ExecutionOwner, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 import { ExecutionManager } from "./execution-manager.js";
 
@@ -95,6 +95,35 @@ test("cancel waits for process join; queued cancellation never starts or replays
   assert.equal(queuedRan, false);
   assert.ok(manager.get("running", owner).version);
   assert.equal(manager.logs("running", owner).chunks[0]?.text, "progress");
+});
+
+test("external file publication waits for cancelled process join and the execution ref commit", async (context) => {
+  const { manager, workspace, root } = await fixture(context);
+  let joined = false;
+  manager.start(request(workspace, "writer"), async (signal) => {
+    await new Promise<void>((done) => signal.addEventListener("abort", () => setTimeout(done, 40), { once: true }));
+    joined = true;
+    await writeFile(resolve(workspace, "partial"), "cancelled output");
+    throw new Error("cancelled");
+  });
+  await until(() => manager.get("writer", owner).state === "running");
+  let published = false;
+  const versions = new VersionStore(root);
+  const upload = withWorkspaceMutation(versions, workspace, async () => {
+    assert.equal(joined, true);
+    assert.ok(manager.get("writer", owner).version);
+    const refs = await RefStore.open(versions);
+    try { assert.deepEqual(refs.head(workspaceHeadName(workspace)), manager.get("writer", owner).version); }
+    finally { refs.close(); }
+    await writeFile(resolve(workspace, "upload"), "new output"); published = true;
+  }, { kind: "external-upload" });
+  await new Promise((done) => setTimeout(done, 30));
+  assert.equal(published, false);
+  assert.equal(manager.get("writer", owner).state, "running");
+  manager.cancel("writer", owner);
+  assert.equal(published, false);
+  await upload;
+  assert.equal(published, true);
 });
 
 test("restart retains completed results and marks unfinished records unknown without replay", async (context) => {

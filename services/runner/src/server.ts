@@ -14,7 +14,7 @@
 
 import { execFile } from "node:child_process";
 import { createReadStream, rmSync } from "node:fs";
-import { chmod, lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { userInfo } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
@@ -77,6 +77,7 @@ import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
 import { agentExecutionKey, KeyedTaskQueue, requestAgentExecutionKey } from "./agent-execution.js";
 import { ExecutionManager } from "./execution-manager.js";
+import { VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { HostNpuJobBroker } from "./npu-broker.js";
 
 const execFileAsync = promisify(execFile);
@@ -292,9 +293,11 @@ async function resolveExecutionWorkspace(
   config: RunnerConfig,
   execution: PythonExecutionRequest | ShellExecutionRequest,
 ): Promise<void> {
-  if (!execution.runnerWorkspaceKey) return;
-  execution.workspaceRoot = await remoteWorkspaceRoot(config.dataDir, execution.runnerWorkspaceKey);
-  delete execution.readOnlyWorkspaceRoot;
+  if (execution.runnerWorkspaceKey) {
+    execution.workspaceRoot = await remoteWorkspaceRoot(config.dataDir, execution.runnerWorkspaceKey);
+    delete execution.readOnlyWorkspaceRoot;
+  }
+  execution.workspaceRoot = await validatedWorkspace(config.dataDir, execution.workspaceRoot);
 }
 
 function currentExecutionUser(): string {
@@ -423,6 +426,7 @@ export function createRunnerServer(
   }, profiles, gateways);
   const executionQueues = new KeyedTaskQueue();
   const managedExecutions = new ExecutionManager(config.dataDir);
+  const workspaceVersions = new VersionStore(config.dataDir);
   const seenExecutions = new Map<string, number>();
   const activeExecutions = new Map<string, RunnerExecutionStatus>();
   const executionUser = currentExecutionUser();
@@ -448,30 +452,26 @@ export function createRunnerServer(
     };
     signal.addEventListener("abort", removeCancelledQueueEntry, { once: true });
     try {
-      return await executionQueues.run(requestAgentExecutionKey(execution), async () => {
+      return await executionQueues.run(requestAgentExecutionKey(execution), () => withWorkspaceMutation(workspaceVersions, execution.workspaceRoot, async () => {
         if (signal.aborted) throw new Error("Runner execution aborted before start");
         status.startedAt = new Date().toISOString();
         status.status = "running";
-        try {
-          if (language !== "shell" && environmentStore?.capability.available) {
-            const request = execution as PythonExecutionRequest;
-            const environmentId = request.environmentRevisionId
-              ? environmentStore.getRevision(request.environmentRevisionId)?.environmentId
-              : `starter-${request.language ?? "python"}`;
-            if (!environmentId) throw new Error("Unknown environment revision; select a current environment");
-            return await environmentStore.withRuntime(environmentId, async (runtime) => {
-              if (signal.aborted) throw new Error("Runner execution aborted before start");
-              if (request.environmentRevisionId && runtime.revision.id !== request.environmentRevisionId) {
-                throw new Error("Historical environment revisions are audit-only; select the latest environment");
-              }
-              return operation();
-            });
-          }
-          return await operation();
-        } finally {
-          activeExecutions.delete(status.executionId);
+        if (language !== "shell" && environmentStore?.capability.available) {
+          const request = execution as PythonExecutionRequest;
+          const environmentId = request.environmentRevisionId
+            ? environmentStore.getRevision(request.environmentRevisionId)?.environmentId
+            : `starter-${request.language ?? "python"}`;
+          if (!environmentId) throw new Error("Unknown environment revision; select a current environment");
+          return await environmentStore.withRuntime(environmentId, async (runtime) => {
+            if (signal.aborted) throw new Error("Runner execution aborted before start");
+            if (request.environmentRevisionId && runtime.revision.id !== request.environmentRevisionId) {
+              throw new Error("Historical environment revisions are audit-only; select the latest environment");
+            }
+            return operation();
+          });
         }
-      }, execution.permissionEpoch.sessionId);
+        return await operation();
+      }, { kind: "legacy-execution", id: execution.executionId }, signal), execution.permissionEpoch.sessionId);
     } catch (error) {
       const errorMessage = shortErrorMessage(error);
       const interrupted = signal.aborted;
@@ -568,7 +568,10 @@ export function createRunnerServer(
       }
       if (request.method === "DELETE" && url.pathname === "/remote-workspace") {
         const root = await remoteWorkspaceRoot(config.dataDir, url.searchParams.get("workspace") ?? "");
-        await rm(root, { force: true, recursive: true });
+        await withWorkspaceMutation(workspaceVersions, root, async () => {
+          // Keep the identity/root stable while clearing files and committing its empty version.
+          for (const name of await readdir(root)) await rm(resolve(root, name), { force: true, recursive: true });
+        }, { kind: "workspace-clear" });
         sendJson(response, 200, { deleted: true });
         return;
       }
@@ -587,35 +590,45 @@ export function createRunnerServer(
       }
       if (request.method === "PUT" && url.pathname === "/remote-workspace/file") {
         const root = await remoteWorkspaceRoot(config.dataDir, url.searchParams.get("workspace") ?? "");
-        const file = await writableWorkspaceFile(root, url.searchParams.get("path") ?? "");
         const conflict = url.searchParams.get("conflict") ?? "reject";
         if (conflict !== "reject" && conflict !== "overwrite") throw new Error("Invalid workspace conflict policy");
-        if (conflict === "reject") {
-          try {
-            await lstat(file);
-            sendJson(response, 409, { error: "Remote workspace file already exists" } satisfies ApiError);
-            return;
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          }
-        }
         const bytes = await readBytes(request, config.maxWorkspaceBytes);
-        if (config.maxWorkspaceBytes > 0) {
-          const currentBytes = (await listRemoteWorkspaceFiles(root)).reduce((total, entry) => total + entry.size, 0);
-          let replacedBytes = 0;
-          try { replacedBytes = (await stat(file)).size; } catch { /* New file. */ }
-          if (currentBytes - replacedBytes + bytes.length > config.maxWorkspaceBytes) {
-            throw new Error("Remote workspace exceeds its execution quota");
+        const result = await withWorkspaceMutation(workspaceVersions, root, async () => {
+          const file = await writableWorkspaceFile(root, url.searchParams.get("path") ?? "");
+          if (conflict === "reject") {
+            try {
+              await lstat(file);
+              return { conflict: true as const };
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
           }
-        }
-        const temporary = `${file}.sync-${process.pid}-${Date.now()}`;
-        try {
-          await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
-          await rename(temporary, file);
-        } finally {
-          await rm(temporary, { force: true }).catch(() => undefined);
-        }
-        sendJson(response, 201, { path: relative(root, file).split(sep).join("/"), size: bytes.length });
+          if (config.maxWorkspaceBytes > 0) {
+            const currentBytes = (await listRemoteWorkspaceFiles(root)).reduce((total, entry) => total + entry.size, 0);
+            let replacedBytes = 0;
+            try { replacedBytes = (await stat(file)).size; } catch { /* New file. */ }
+            if (currentBytes - replacedBytes + bytes.length > config.maxWorkspaceBytes) {
+              throw new Error("Remote workspace exceeds its execution quota");
+            }
+          }
+          const temporary = `${file}.sync-${process.pid}-${Date.now()}`;
+          try {
+            await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+            if (conflict === "overwrite") await rename(temporary, file);
+            else {
+              try { await link(temporary, file); }
+              catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "EEXIST") return { conflict: true as const };
+                throw error;
+              }
+            }
+          } finally {
+            await rm(temporary, { force: true }).catch(() => undefined);
+          }
+          return { path: relative(root, file).split(sep).join("/"), size: bytes.length };
+        }, { kind: "workspace-upload" });
+        if ("conflict" in result) sendJson(response, 409, { error: "Remote workspace file already exists" } satisfies ApiError);
+        else sendJson(response, 201, result);
         return;
       }
       if (request.method === "GET" && url.pathname === "/npu/workloads") {

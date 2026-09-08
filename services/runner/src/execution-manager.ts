@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
-import { RefStore, snapshotWorkspace, VersionStore } from "@sciencediscovery/cas";
+import { poisonWorkspace, RefStore, snapshotWorkspace, VersionStore, withWorkspaceLease } from "@sciencediscovery/cas";
 import type { ExecutionLogPage, ExecutionOwner, ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 
 export type ExecutionLogSink = (stream: "stdout" | "stderr", chunk: Buffer) => void;
@@ -54,7 +54,7 @@ export class ExecutionManager {
     this.controllers.set(execution.id, controller);
     const key = request.workspaceRoot; // already canonicalized by the authenticated endpoint
     const previous = this.queues.get(key) ?? Promise.resolve();
-    const work = previous.then(async () => {
+    const work = previous.then(() => withWorkspaceLease(key, async () => {
       let changed = false;
       let cursor = 0;
       let retained = 0;
@@ -113,13 +113,17 @@ export class ExecutionManager {
       } catch (error) {
         execution.state = "failed";
         this.failedWorkspaces.add(key);
+        await poisonWorkspace(key).catch(() => undefined);
         execution.error = `Execution ended, but workspace version commit failed: ${error instanceof Error ? error.message : String(error)}`;
       }
       execution.finishedAt = new Date().toISOString();
       this.save(execution); // before releasing this Workspace queue
-    }).catch((error) => {
-      this.failedWorkspaces.add(key);
-      throw error;
+    }, controller.signal)).catch((error) => {
+      if (!controller.signal.aborted) this.failedWorkspaces.add(key);
+      execution.state = controller.signal.aborted ? "cancelled" : "failed";
+      execution.finishedAt = new Date().toISOString();
+      execution.error = error instanceof Error ? error.message : "Workspace admission failed";
+      this.save(execution);
     }).finally(() => {
       this.controllers.delete(execution.id);
       if (this.queues.get(key) === work) this.queues.delete(key);

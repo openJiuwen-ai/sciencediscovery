@@ -1926,8 +1926,12 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
   await waitFor((current) => current.activeExecutions.length === 0);
 });
 
-test("runner executes different Session-Agent queues concurrently", async (context) => {
+for (const sharedWorkspace of [false, true]) test(sharedWorkspace
+  ? "runner serializes different Session-Agent queues that name the same Workspace"
+  : "runner executes different Session-Agent workspaces concurrently", async (context) => {
   const fixture = await workspaceFixture(context);
+  const secondWorkspaceRoot = resolve(fixture.dataDir, "projects", "parallel-workspace");
+  await mkdir(secondWorkspaceRoot, { recursive: true });
   let active = 0;
   let maximumActive = 0;
   let entered = 0;
@@ -1941,7 +1945,8 @@ test("runner executes different Session-Agent queues concurrently", async (conte
       entered += 1;
       if (entered === 2) releaseBoth();
       try {
-        await Promise.race([
+        if (sharedWorkspace) await new Promise((done) => setTimeout(done, 40));
+        else await Promise.race([
           bothEntered,
           new Promise<never>((_resolve, reject) => {
             setTimeout(() => reject(new Error("different Session-Agent execution was serialized")), 500);
@@ -1989,12 +1994,12 @@ test("runner executes different Session-Agent queues concurrently", async (conte
       executionId: `overlap-${index}`,
       kernelMode: "persistent",
       permissionEpoch: epoch(),
-      workspaceRoot: fixture.workspaceRoot,
+      workspaceRoot: index === 0 || sharedWorkspace ? fixture.workspaceRoot : secondWorkspaceRoot,
     }))
   )));
 
   assert.deepEqual(responses.map((response) => response.status), [200, 200]);
-  assert.equal(maximumActive, 2);
+  assert.equal(maximumActive, sharedWorkspace ? 1 : 2);
   const status = await (await fetch(`${origin}/status`, {
     headers: { authorization: "Bearer runner-test-token" },
   })).json() as RunnerRuntimeStatus;

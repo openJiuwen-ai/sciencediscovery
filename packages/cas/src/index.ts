@@ -21,6 +21,7 @@ import type { CasObjectRef } from "@sciencediscovery/schema";
 import { VersionStore, type ObjectRef, type Pool } from "./versioning.js";
 
 export * from "./versioning.js";
+export * from "./workspace-lease.js";
 
 export interface ContentStore {
   hash(content: string | Buffer): string;
