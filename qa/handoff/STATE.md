@@ -21,8 +21,8 @@ whitebox_backlog:
     - journey-ke-create-kb-seed.spec.ts（J-KE1，5bb283b）
     - journey-ke-graph-renders.spec.ts（J-KE2，5bb283b）
   next:
-    - fixture 录制模式文档 + 7 项录制面落盘（test/fixtures/scholarly/）
-    - 阶段门校准清单 5 项（见 logs/2026-09-08-1932-cruise.md）
+    - fixture 录制面补齐（工具与契约已就绪 635dca1；等待运行时录制模式或阶段门校准参数后批量录）
+    - 阶段门校准清单 5 项（见 logs/2026-09-08-1932-cruise.md）+ 向 dev 提「运行时录制代理模式」增强
     - W3 消费层旅程骨架（等 W3 开工后按白盒写）
 notes: >-
   2026-09-08 18:4x 用户决策：波次门 → 阶段门 + 平行白盒测试（qa/README.md 与 playbook 已同步）。
