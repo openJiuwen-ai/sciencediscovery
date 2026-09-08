@@ -121,7 +121,8 @@ async function main(): Promise<void> {
   assert(String(firstRequest.messages[0]!.content).includes("workspace"), "workspace system prompt missing");
   const initialToolNames = (firstRequest.tools ?? []).map((tool) => tool.function.name);
   assert(
-    initialToolNames.includes("list_files") && initialToolNames.includes("run_python")
+    initialToolNames.includes("list_files") && initialToolNames.includes("run_shell")
+      && !initialToolNames.includes("run_python") && !initialToolNames.includes("run_r")
       && !initialToolNames.includes("activate_execution_mode"),
     `first-step tool specs missing, stale, or gated: ${initialToolNames.join(",")}`,
   );

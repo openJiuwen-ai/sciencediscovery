@@ -124,6 +124,10 @@ interface TestSseEvent {
   [key: string]: unknown;
 }
 
+function pythonCommand(code: string): string {
+  return `python3 - <<'PY'\n${code}\nPY`;
+}
+
 function parseSseEvents(stream: string): TestSseEvent[] {
   return stream.split("\n\n").flatMap((frame) => {
     const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
@@ -775,7 +779,7 @@ async function startToolModel(context: TestContext): Promise<{
               reasoning_content: "I should use the isolated Python tool to analyze the uploaded CSV.",
               role: "assistant",
               tool_calls: [{
-                function: { arguments: JSON.stringify({ code: analysisCode }), name: "run_python" },
+                function: { arguments: JSON.stringify({ command: pythonCommand(analysisCode) }), name: "run_shell" },
                 id: "call-run-python",
                 index: 0,
                 type: "function",
@@ -958,8 +962,8 @@ async function startSubagentModel(
               role: "assistant",
               tool_calls: [{
                 function: {
-                  arguments: JSON.stringify({ code: options.subagentPythonCode ?? "print('subagent permission check')" }),
-                  name: "run_python",
+                  arguments: JSON.stringify({ command: pythonCommand(options.subagentPythonCode ?? "print('subagent permission check')") }),
+                  name: "run_shell",
                 },
                 id: "call-subagent-python",
                 index: 0,
@@ -2057,17 +2061,17 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
       const lastRole = body.messages.at(-1)?.role;
       response.writeHead(200, { "content-type": "text/event-stream" });
       const send = (frame: unknown) => response.write(`data: ${JSON.stringify(frame)}\n\n`);
-      if (lastRole === "tool") {
+      if (lastRole === "tool" || body.messages.some((message) => message.role === "tool")) {
         send({ choices: [{ delta: { content: gatewayMode === "tool-timeout"
           ? "The requested operation did not complete."
           : "The successful tool output was summarized." } }] });
       } else {
-        // Real run_python execution: the sleep trips the configured Runner
-        // exec timeout in tool-timeout mode; the print completes in success mode.
+        // Foreground timeout ends only the wait. The detached Shell must finish
+        // normally and retain its result, rather than produce runner_exec.
         const code = gatewayMode === "tool-timeout"
           ? "import time\ntime.sleep(2)"
           : "print('A paper title says: Python execution timed out after 25 ms')";
-        send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_python", arguments: JSON.stringify({ code }) } }] } }] });
+        send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: pythonCommand(code), wait_ms: gatewayMode === "tool-timeout" ? 25 : 10000 }) } }] } }] });
       }
       response.write("data: [DONE]\n\n");
       response.end();
@@ -2215,9 +2219,27 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
     { headers: authorization },
   );
   const runnerNotice = toolTimeoutDetail.body.messages.find((message) => message.kind === "timeout_notice");
-  assert.equal(runnerNotice?.timeout?.kind, "runner_exec");
-  assert.equal(runnerNotice?.timeout?.timeoutMs, 25);
-  assert.match(runnerNotice?.content ?? "", /Runner execution timeout was reached after 25 milliseconds/);
+  assert.equal(runnerNotice, undefined);
+  const activityUrl = `${origin}/api/sessions/${toolTimeoutSession.body.id}/agent-activity`;
+  type Activity = { executions: Array<{ id: string; state: string }> };
+  let activity = await jsonRequest<Activity>(activityUrl, { headers: authorization });
+  assert.equal(activity.body.executions.length, 1);
+  const executionId = activity.body.executions[0]!.id;
+  assert.ok(["queued", "running"].includes(activity.body.executions[0]!.state));
+  const deadline = Date.now() + 10000;
+  while (activity.body.executions[0]?.state !== "completed" && Date.now() < deadline) {
+    await new Promise((done) => setTimeout(done, 25));
+    activity = await jsonRequest<Activity>(activityUrl, { headers: authorization });
+  }
+  assert.equal(activity.body.executions.length, 1);
+  assert.equal(activity.body.executions[0]?.id, executionId);
+  assert.equal(activity.body.executions[0]?.state, "completed");
+  const completedExecutions = await jsonRequest<ExecutionRun[]>(
+    `${origin}/api/sessions/${toolTimeoutSession.body.id}/execution-runs`, { headers: authorization },
+  );
+  assert.equal(completedExecutions.body.length, 1);
+  assert.equal(completedExecutions.body[0]?.exitCode, 0);
+  assert.equal(completedExecutions.body[0]?.status, "succeeded");
 
   gatewayMode = "silent";
   await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
@@ -3416,7 +3438,7 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
   assert.ok(eventTypes.indexOf("assistant.thinking.delta") < eventTypes.indexOf("tool.started"));
   assert.ok(eventTypes.indexOf("tool.started") < eventTypes.indexOf("tool.completed"));
   assert.match(stream, /"type":"tool.started"/);
-  assert.match(stream, /"name":"run_python"/);
+  assert.match(stream, /"name":"run_shell"/);
   assert.match(stream, /"type":"assistant.delta"/);
   assert.doesNotMatch(stream, /"type":"review.completed"/);
   assert.match(stream, /"type":"run.completed"/);
@@ -4458,7 +4480,7 @@ test("switching an active run to always-allow resolves its pending subagent acti
 });
 
 /**
- * A model that calls run_python twice and then answers. Both calls are governed
+ * A model that runs Python through run_shell twice and then answers. Both calls are governed
  * `code` privileges, so the pair is what an approval-mode switch made between
  * them has to act on. `pauseBeforeSecondCall` holds the second turn until the
  * test releases it, which is the window a test needs when the first call was
@@ -4485,8 +4507,8 @@ async function startTwoPythonCallModel(
           role: "assistant",
           tool_calls: [{
             function: {
-              arguments: JSON.stringify({ code: `print("step ${toolResultCount + 1}")` }),
-              name: "run_python",
+              arguments: JSON.stringify({ command: pythonCommand(`print("step ${toolResultCount + 1}")`) }),
+              name: "run_shell",
             },
             id: `call-python-${toolResultCount + 1}`,
             index: 0,
@@ -4982,8 +5004,8 @@ test("always-allow executes subagent code without permission requests or grants"
     return event.type === "subagent.step" && event.step?.kind === "tool" ? [event.step] : [];
   });
   assert.deepEqual(streamedToolSteps.map((step) => step.status), ["running", "completed"]);
-  assert.ok(streamedToolSteps.every((step) => step.input === subagentPythonCode));
-  assert.equal(streamedToolSteps[0]?.content, subagentPythonCode);
+  assert.ok(streamedToolSteps.every((step) => step.input === pythonCommand(subagentPythonCode)));
+  assert.equal(streamedToolSteps[0]?.content, pythonCommand(subagentPythonCode));
   assert.ok((streamedToolSteps[1]?.content.length ?? 0) > 400);
 
   const permissions = await jsonRequest<PermissionRequest[]>(
@@ -5014,7 +5036,7 @@ test("always-allow executes subagent code without permission requests or grants"
     { headers: authorization },
   );
   const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
-  assert.equal(toolStep?.input, subagentPythonCode);
+  assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
   assert.equal(toolStep?.status, "completed");
   assert.ok((toolStep?.content.length ?? 0) > 400);
   assert.match(toolStep?.content ?? "", /x{650}/);
@@ -5055,7 +5077,7 @@ test("failed subagent tool steps retain raw input and the full error result", as
     { headers: authorization },
   );
   const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
-  assert.equal(toolStep?.input, subagentPythonCode);
+  assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
   assert.equal(toolStep?.status, "failed");
   assert.ok((toolStep?.content.length ?? 0) > 400);
   assert.match(toolStep?.content ?? "", /RuntimeError/);
