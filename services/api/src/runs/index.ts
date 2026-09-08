@@ -2734,7 +2734,7 @@ export async function recoverSessionRuns(store: SessionStore, memoryGraphClient:
       // A crashed child has no live process holding its busy state. Recover only
       // closed, committed turn context; never replay the unfinished model/tool call.
       for (const child of store.listSubagents(session.id)) {
-        if (child.status !== "running") continue;
+        if (child.status !== "running" && child.error !== "Subagent interrupted by API restart before completion") continue;
         const versions = new VersionStore(store.dataDir);
         const refs = await RefStore.open(versions);
         try {

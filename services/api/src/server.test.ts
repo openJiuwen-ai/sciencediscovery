@@ -6264,7 +6264,7 @@ test("recovery cancels and replays undecided approvals for run and subagent scop
   const tempRoot = resolve(process.cwd(), ".tmp", `recover-approvals-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
-  const store = new SessionStore(tempRoot);
+  let store = new SessionStore(tempRoot);
   await store.load();
   const model = await store.createModel({
     apiToken: "test-token",
@@ -6300,6 +6300,8 @@ test("recovery cancels and replays undecided approvals for run and subagent scop
     session.id, "code", "workspace-code", "Run python code in subagent", { executionId: subagent.id });
   if (runScoped.allowed || subagentScoped.allowed) throw new Error("Expected pending permission requests");
 
+  store = new SessionStore(tempRoot);
+  await store.load();
   await recoverSessionRuns(store);
 
   assert.equal(store.listSubagents(session.id).find((child) => child.id === subagent.id)?.status, "failed", "a crashed child cannot remain permanently busy");
