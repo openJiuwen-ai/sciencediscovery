@@ -36,6 +36,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import micromambaManifest from "./micromamba-releases.json" with { type: "json" };
+import { EnvironmentAccess } from "./environment-access.js";
 
 const execFileAsync = promisify(execFile);
 const CATALOG_VERSION = 1;
@@ -62,6 +63,10 @@ interface ProvisionedPackage {
   build_string?: string;
   name?: string;
   version?: string;
+  channel?: string;
+  url?: string;
+  sha256?: string;
+  md5?: string;
 }
 
 interface ProvisionedPackageListEnvelope {
@@ -174,15 +179,6 @@ function wheelDistribution(filename: string): Pick<EnvironmentLocalWheel, "distr
   return { distribution: fields[0].replaceAll("_", "-"), version: fields[1] };
 }
 
-function wheelPackageRecord(wheel: EnvironmentLocalWheel): string {
-  return `pip:wheel:${JSON.stringify({
-    distribution: wheel.distribution,
-    path: wheel.sourcePath,
-    sha256: wheel.content.hash,
-    version: wheel.version,
-  })}`;
-}
-
 function parseProvisionedPackageList(listOutput: string): ProvisionedPackage[] {
   const parsed = JSON.parse(listOutput || "[]") as unknown;
   const listed = Array.isArray(parsed)
@@ -235,6 +231,7 @@ export class EnvironmentStore {
   private setupComponents: ScientificEnvironmentSetup["components"];
   private setupPromise?: Promise<ScientificEnvironmentSetup>;
   private mutationTail: Promise<void> = Promise.resolve();
+  private readonly runtimeAccess = new EnvironmentAccess();
   private lastSetupError?: string;
 
   constructor(
@@ -449,6 +446,15 @@ export class EnvironmentStore {
     return this.resolveRuntimeUnchecked(revisionId, language);
   }
 
+  /** Resolve the latest state after obtaining the lease, never before a queued update. */
+  async withRuntime<T>(environmentId: string, operation: (runtime: EnvironmentRuntime) => Promise<T>): Promise<T> {
+    return this.runtimeAccess.run(environmentId, false, async () => {
+      this.assertAvailable();
+      const environment = this.requiredEnvironment(environmentId);
+      return operation(this.resolveRuntimeUnchecked(environment.currentRevisionId, environment.language));
+    });
+  }
+
   private resolveRuntimeUnchecked(revisionId: string | undefined, language: ScientificLanguage): EnvironmentRuntime {
     const revision = revisionId
       ? this.requiredRevision(revisionId)
@@ -457,7 +463,13 @@ export class EnvironmentStore {
       throw new Error(`Environment revision ${revision.id} is ${revision.language}, not ${language}`);
     }
     const environment = this.requiredEnvironment(revision.environmentId);
-    const prefixPath = this.revisionPath(environment.id, revision.id);
+    if (environment.currentRevisionId !== revision.id) {
+      throw new Error("Historical environment revisions are audit-only; select an environment ID to use its latest state");
+    }
+    if (environment.status && environment.status !== "ready") {
+      throw new Error(`Environment ${environment.id} is ${environment.status}; repair it with environment management before execution`);
+    }
+    const prefixPath = this.revisionPath(environment.id, environment.runtimeRevisionId ?? revision.id);
     return {
       environment: { ...environment },
       interpreterPath: resolve(prefixPath, "bin", language === "python" ? "python" : "R"),
@@ -491,7 +503,7 @@ export class EnvironmentStore {
     await mkdir(resolve(prefix, ".."), { recursive: true });
     try {
       await this.runProvisioner([
-        "create", "--yes", ...this.offlineArguments(), "--clone", this.revisionPath(base.id, base.currentRevisionId), "--prefix", prefix,
+        "create", "--yes", ...this.offlineArguments(), "--clone", this.revisionPath(base.id, base.runtimeRevisionId ?? base.currentRevisionId), "--prefix", prefix,
       ], `create-${id}`);
       const baseRevision = this.currentRevision(base.id);
       const revision = await this.recordRevision(
@@ -523,7 +535,7 @@ export class EnvironmentStore {
   }
 
   async deleteTask(id: string): Promise<void> {
-    await this.enqueueMutation(() => this.deleteTaskUnlocked(id));
+    await this.runtimeAccess.run(id, true, () => this.enqueueMutation(() => this.deleteTaskUnlocked(id)));
   }
 
   private async deleteTaskUnlocked(id: string): Promise<void> {
@@ -550,9 +562,9 @@ export class EnvironmentStore {
     workspaceRoot?: string,
     indexUrl?: string,
   ): Promise<EnvironmentRevision> {
-    return await this.enqueueMutation(
+    return await this.runtimeAccess.run(id, true, () => this.enqueueMutation(
       () => this.installUnlocked(id, packages, requestedChannels, manager, workspaceRoot, indexUrl),
-    );
+    ));
   }
 
   private async installUnlocked(
@@ -569,7 +581,6 @@ export class EnvironmentStore {
     if (!["bioconductor", "conda", "cran", "pip"].includes(manager)) {
       throw new Error(`Unsupported environment package manager: ${String(manager)}`);
     }
-    if (manager === "pip" && environment.language !== "python") throw new Error("pip installs require a Python environment");
     if (manager === "pip" && requestedChannels?.length) {
       throw new Error("channels can only be used with manager=conda");
     }
@@ -577,8 +588,10 @@ export class EnvironmentStore {
     const normalizedIndexUrl = manager === "pip" && indexUrl !== undefined
       ? normalizePipIndexUrl(indexUrl)
       : externalUrl("package_indexes.pypi_simple");
-    if ((manager === "cran" || manager === "bioconductor") && environment.language !== "r") {
-      throw new Error(`${manager} installs require an R environment`);
+    if (manager !== "conda") {
+      const executable = manager === "pip" ? "python" : "R";
+      await access(resolve(this.revisionPath(id, environment.runtimeRevisionId ?? environment.currentRevisionId), "bin", executable), constants.X_OK)
+        .catch(() => { throw new Error(`Environment lacks ${executable}; install it with manager=conda first`); });
     }
     if (this.config.packageCacheDir && (manager === "cran" || manager === "bioconductor")) {
       throw new Error(`${manager} installs are unavailable in offline-cache mode; use conda packages from the seeded cache`);
@@ -606,14 +619,10 @@ export class EnvironmentStore {
     );
     if (disallowed.length) throw new Error(`Package channels are not allowed: ${disallowed.join(", ")}`);
     const previousRevision = this.currentRevision(id);
-    const previousCatalog = structuredClone(this.catalog);
     const revisionId = `rev-${randomUUID()}`;
-    const prefix = this.revisionPath(id, revisionId);
-    await mkdir(resolve(prefix, ".."), { recursive: true });
+    const prefix = this.revisionPath(id, environment.runtimeRevisionId ?? previousRevision.id);
+    await this.beginUpdate(environment);
     try {
-      await this.runProvisioner([
-        "create", "--yes", ...this.offlineArguments(), "--clone", this.revisionPath(id, previousRevision.id), "--prefix", prefix,
-      ], `clone-${revisionId}`);
       let revisionChannels = channels;
       if (manager === "conda") {
         await this.runProvisioner([
@@ -655,18 +664,19 @@ export class EnvironmentStore {
         revisionLocalWheels,
       );
       environment.currentRevisionId = revision.id;
+      environment.status = "ready";
+      delete environment.error;
       environment.updatedAt = new Date().toISOString();
       await this.saveCatalog();
       return { ...revision };
     } catch (error) {
-      this.catalog = previousCatalog;
-      await rm(prefix, { force: true, recursive: true });
+      await this.failUpdate(environment, previousRevision.id);
       throw error;
     }
   }
 
   async uninstall(id: string, packages: string[]): Promise<EnvironmentRevision> {
-    return await this.enqueueMutation(() => this.uninstallUnlocked(id, packages));
+    return await this.runtimeAccess.run(id, true, () => this.enqueueMutation(() => this.uninstallUnlocked(id, packages)));
   }
 
   private async uninstallUnlocked(id: string, packages: string[]): Promise<EnvironmentRevision> {
@@ -676,14 +686,10 @@ export class EnvironmentStore {
     const normalizedPackages = uniqueSorted(packages.map(safePackage));
     if (!normalizedPackages.length) throw new Error("At least one package is required");
     const previousRevision = this.currentRevision(id);
-    const previousCatalog = structuredClone(this.catalog);
     const revisionId = `rev-${randomUUID()}`;
-    const prefix = this.revisionPath(id, revisionId);
-    await mkdir(resolve(prefix, ".."), { recursive: true });
+    const prefix = this.revisionPath(id, environment.runtimeRevisionId ?? previousRevision.id);
+    await this.beginUpdate(environment);
     try {
-      await this.runProvisioner([
-        "create", "--yes", ...this.offlineArguments(), "--clone", this.revisionPath(id, previousRevision.id), "--prefix", prefix,
-      ], `clone-${revisionId}`);
       await this.runProvisioner([
         "remove", "--yes", ...this.offlineArguments(), "--prefix", prefix, ...normalizedPackages,
       ], `uninstall-${revisionId}`);
@@ -693,16 +699,17 @@ export class EnvironmentStore {
         environment.language,
         prefix,
         previousRevision.channels,
-        [],
+        normalizedPackages.map((name) => `conda:remove:${name}`),
         previousRevision.localWheels,
       );
       environment.currentRevisionId = revision.id;
+      environment.status = "ready";
+      delete environment.error;
       environment.updatedAt = new Date().toISOString();
       await this.saveCatalog();
       return { ...revision };
     } catch (error) {
-      this.catalog = previousCatalog;
-      await rm(prefix, { force: true, recursive: true });
+      await this.failUpdate(environment, previousRevision.id);
       throw error;
     }
   }
@@ -711,6 +718,22 @@ export class EnvironmentStore {
     if (!this.config.enabled || !this.initialized || !this.capability.available) {
       throw new Error(this.capability.unavailableReason ?? "Scientific environments are unavailable");
     }
+  }
+
+  private async beginUpdate(environment: Environment): Promise<void> {
+    environment.runtimeRevisionId ??= environment.currentRevisionId;
+    environment.status = "updating";
+    delete environment.error;
+    // Persist the marker before any package-manager side effect. Restart is fail-closed.
+    await this.saveCatalog();
+  }
+
+  private async failUpdate(environment: Environment, previousRevisionId: string): Promise<void> {
+    environment.currentRevisionId = previousRevisionId;
+    environment.status = "failed";
+    environment.error = "In-place update failed; installed files may differ from the last successful revision. Retry through environment management.";
+    environment.updatedAt = new Date().toISOString();
+    await this.saveCatalog();
   }
 
   private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -812,6 +835,12 @@ export class EnvironmentStore {
         throw new Error("Scientific environment catalog has an unsupported format");
       }
       this.catalog = parsed;
+      for (const environment of this.catalog.environments) {
+        if (environment.status === "updating") {
+          environment.status = "failed";
+          environment.error = "Environment update was interrupted; repair through environment management before execution.";
+        }
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       this.catalog = emptyCatalog();
@@ -829,9 +858,25 @@ export class EnvironmentStore {
   ): Promise<EnvironmentRevision> {
     const listOutput = await this.runProvisioner(["list", "--json", "--prefix", prefix], `snapshot-${revisionId}`);
     const listed = parseProvisionedPackageList(listOutput);
+    const pythonPath = resolve(prefix, "bin", "python");
+    const rPath = resolve(prefix, "bin", "R");
+    const pythonInstalled = await access(pythonPath, constants.X_OK).then(() => true, () => false);
+    const rInstalled = await access(rPath, constants.X_OK).then(() => true, () => false);
+    const python = pythonInstalled ? JSON.parse(await this.runManagedCommand(pythonPath, ["-I", "-c",
+      "import importlib.metadata as m,json; print(json.dumps(sorted([{'name':d.metadata['Name'],'version':d.version,'installer':(d.read_text('INSTALLER') or '').strip()} for d in m.distributions()],key=lambda d:d['name'] or '')))"
+    ], `python-inventory-${revisionId}`)) as Array<{ name: string; version: string; installer: string }> : [];
+    if (!Array.isArray(python) || python.some((p) => !p.name || !p.version)) throw new Error("Invalid Python package inventory");
+    const rOutput = rInstalled ? await this.runManagedCommand(rPath, ["--vanilla", "--slave", "-e",
+      'p <- installed.packages(fields="Repository"); write.table(p[,c("Package","Version","Repository"),drop=FALSE],stdout(),sep="\\t",row.names=FALSE,col.names=FALSE,quote=FALSE)'
+    ], `r-inventory-${revisionId}`) : "";
+    const r = rOutput.trim() ? rOutput.trim().split("\n").map((line) => {
+      const [name, version, repository] = line.split("\t");
+      if (!name || !version) throw new Error("Invalid R package inventory");
+      return { name, version, repository };
+    }) : [];
     const packages = uniqueSorted([...listed.flatMap((item) => item.name && item.version
       ? [`${item.name}=${item.version}${item.build_string ? `=${item.build_string}` : ""}`]
-      : []), ...additionalPackages, ...localWheels.map(wheelPackageRecord)]);
+      : []), ...python.map((p) => `python:${p.name}==${p.version}`), ...r.map((p) => `r:${p.name}==${p.version}`)]);
     const languagePackage = packages.find((item) => item.startsWith(language === "python" ? "python=" : "r-base="));
     const languageVersion = languagePackage?.split("=")[1] ?? "unknown";
     const createdAt = new Date().toISOString();
@@ -839,7 +884,10 @@ export class EnvironmentStore {
       channels: uniqueSorted(channels),
       createdAt,
       environmentId,
-      format: "sciencediscovery-environment-revision-v1",
+      format: "sciencediscovery-environment-revision-v2",
+      installed: { conda: listed, python, r },
+      requestedChanges: additionalPackages,
+      reconstruction: { status: "reference-only", reason: "Package inventory is retained; remote installation artifacts are not guaranteed to remain available." },
       language,
       ...(localWheels.length ? { localWheels } : {}),
       packages,

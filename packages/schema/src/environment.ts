@@ -39,6 +39,10 @@ export interface Environment {
   language: ScientificLanguage;
   name: string;
   updatedAt: string;
+  /** Stable prefix identity; historical revisions describe state, not runnable copies. */
+  runtimeRevisionId?: string;
+  status?: "ready" | "updating" | "failed";
+  error?: string;
 }
 
 export interface EnvironmentRevision {
@@ -186,6 +190,10 @@ export interface ShellExecutionRequest {
   /** Stable Agent identity within the Session; assigned by the trusted API binding. */
   agentId: string;
   code: string;
+  /** Managed environment on this Runner; resolved to the latest revision under a read lease. */
+  environmentId?: string;
+  /** Relative directory inside the writable workspace. */
+  cwd?: string;
   /** Per-run product timeout snapshot; 0 disables the timeout. */
   executionTimeoutMs?: number;
   executionId: string;
@@ -215,9 +223,7 @@ export interface ShellExecutionRequest {
 }
 
 export interface ShellExecutionResult extends Omit<ScientificExecutionResult, "environmentRevisionId" | "language"> {
-  environmentRevisionId:
-    | typeof SYSTEM_SHELL_ENVIRONMENT_REVISION_ID
-    | typeof SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID;
+  environmentRevisionId: string;
   language: "shell";
 }
 
