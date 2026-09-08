@@ -151,6 +151,9 @@ test("scientific environment lifecycle advances immutable revisions only after s
 
   await store.deleteTask(task.id);
   assert.equal(store.list().some((environment) => environment.id === task.id), false);
+  assert.ok(store.getRevision(installed.id), "deleting runtime retains past revision metadata");
+  assert.deepEqual(await store.snapshotBytes(installed.id), snapshot);
+  await assert.rejects(store.withRuntime(task.id, async () => undefined), /Unknown scientific environment/);
 });
 
 test("scientific environments accept micromamba's package-list envelope", async (context) => {

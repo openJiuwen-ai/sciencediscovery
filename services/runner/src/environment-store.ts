@@ -544,7 +544,8 @@ export class EnvironmentStore {
     if (environment.kind === "starter") throw new Error("Starter environments cannot be deleted");
     const previousCatalog = structuredClone(this.catalog);
     this.catalog.environments = this.catalog.environments.filter((candidate) => candidate.id !== id);
-    this.catalog.revisions = this.catalog.revisions.filter((revision) => revision.environmentId !== id);
+    // Removing an executable prefix must not erase the revisions used by past runs.
+    // Snapshots and available source artifacts remain audit-only records.
     try {
       await this.saveCatalog();
       await rm(resolve(this.revisionsRoot, id), { force: true, recursive: true });
