@@ -33,6 +33,8 @@ const processes = [];
 const steps = [];
 const requests = [];
 let api;
+let runnerOrigin;
+let remoteRunnerId;
 let logs = "";
 const redact = (value) => String(value).replaceAll(token, "[redacted]").replaceAll(process.cwd(), "<worktree>");
 const stub = createServer(async (request, response) => {
@@ -42,6 +44,7 @@ const stub = createServer(async (request, response) => {
     const input = JSON.parse(Buffer.concat(chunks).toString());
     requests.push(input);
     const child = input.messages?.some((message) => message.role === "system" && message.content?.includes("Applied subagent preset general-purpose"));
+    const legacy = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Legacy sync roundtrip"));
     const results = input.messages?.filter((message) => message.role === "tool") ?? [];
     let call;
     if (!child && !results.length) call = { name: "task", arguments: {
@@ -66,6 +69,16 @@ const stub = createServer(async (request, response) => {
         call = /"state"\s*:\s*"completed"/.test(text)
           ? { name: "declare_artifact", arguments: { path: "copied-result.txt", name: "Independent child result" } }
           : { name: "workspace_transfer", arguments: { operation: "status", transfer_id: id } };
+      }
+    }
+    if (legacy) {
+      call = results.length < 2
+        ? { name: "sync_remote_workspace", arguments: { runner_id: remoteRunnerId, operation: results.length ? "pull" : "push",
+            paths: ["roundtrip.txt"], conflict: "overwrite" } }
+        : results.length === 2 ? { name: "workspace_transfer", arguments: { operation: "list" } } : undefined;
+      if (results.length === 3) {
+        const records = JSON.stringify(results[2]).replaceAll('\\"', '"');
+        assert.equal((records.match(/"state"\s*:\s*"completed"/g) ?? []).length >= 2, true, records);
       }
     }
     response.writeHead(200, { "content-type": "text/event-stream" });
@@ -126,6 +139,7 @@ try {
   await new Promise((done) => stub.listen(0, "127.0.0.1", done));
   await step("1. 启动独立产品服务", "生产 API/Runner CLI 就绪，不复用现有部署。", async () => {
     const runner = await start("runner");
+    runnerOrigin = runner;
     api = await start("api", { SCIENCE_AGENT_RUNNER_URL: runner });
     const health = await fetch(`${runner}/health`, { headers: { authorization: `Bearer ${token}` } });
     assert.equal(health.status, 200);
@@ -171,6 +185,31 @@ try {
     assert.equal(await input.text(), "parent original");
     return "Parent selected.txt unchanged; no implicit child directory or result.txt";
   });
+  await step("5. 旧同步工具与 Transfer 共用记录", "主 Agent 经旧 push/pull 完成回传，随后通过新工具查到两笔持久完成记录。", async () => {
+    const url = new URL(runnerOrigin);
+    const host = await json("/api/remote-hosts", { alias: "Journey direct Runner", connectionKind: "direct",
+      endpoint: { host: url.hostname, port: Number(url.port), protocol: "http" }, token });
+    remoteRunnerId = host.id;
+    await json(`/api/remote-hosts/${host.id}/runner/connect`, {});
+    const model = await json("/api/models", { name: "Sync journey", model: "journey", apiToken: token,
+      baseUrl: `http://127.0.0.1:${stub.address().port}/v1` });
+    const project = await json("/api/projects", { name: "Legacy sync compatibility" });
+    const target = await json(`/api/projects/${project.id}/sessions`, { title: "Sync", modelId: model.id,
+      remoteRunnerHostIds: [host.id], approvalMode: "always_allow" });
+    await json(`/api/sessions/${target.id}/files`, { path: "roundtrip.txt", content: "stable roundtrip" });
+    const response = await fetch(`${api}/api/sessions/${target.id}/messages`, { method: "POST", headers: {
+      authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ content: "Legacy sync roundtrip: push, pull, then inspect Transfers." }), signal: AbortSignal.timeout(30_000) });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /"type":"run.completed"/);
+    const records = await json(`/api/sessions/${target.id}/remote-workspace/sync-records`);
+    assert.equal(records.length, 2);
+    assert.ok(records.every((record) => record.status === "completed" && record.fileCount === 1 && record.bytes === 16));
+    const file = await fetch(`${api}/api/sessions/${target.id}/file?path=roundtrip.txt`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(await file.text(), "stable roundtrip");
+    assert.equal((await json(`/api/sessions/${target.id}/artifacts`)).length, 0);
+    return "Main Agent pushed/pulled through the legacy tool and inspected durable Transfers; local bytes preserved; no implicit Artifact";
+  });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }
 finally {
@@ -183,5 +222,5 @@ finally {
   stub.closeAllConnections();
   await new Promise((done) => stub.close(done));
   await rm(dataDir, { recursive: true, force: true });
-  console.log(`${outcome}: ${steps.filter((item) => item.status === "PASS").length}/4 steps; report under .tmp/child-workspace-journey-*/report.md`);
+  console.log(`${outcome}: ${steps.filter((item) => item.status === "PASS").length}/${steps.length} steps; report under .tmp/child-workspace-journey-*/report.md`);
 }

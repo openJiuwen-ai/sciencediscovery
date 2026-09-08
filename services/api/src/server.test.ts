@@ -3914,6 +3914,36 @@ test("subagent handoff copies only declared or referenced parent files", async (
   assert.equal(manifest.availableParentInputPaths, undefined);
 });
 
+test("subagent handoff keeps both aliases on one committed source despite parent changes", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-handoff-source-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Stable handoff");
+  const session = await store.createSession(project.id, "Session", {}, {}, { allowUnconfiguredModel: true });
+  const parent = store.workspacePath(session.id);
+  await writeFile(resolve(parent, "input.txt"), "committed input");
+  const wait = store.transfers.wait.bind(store.transfers);
+  let waited = 0;
+  context.mock.method(store.transfers, "wait", async (...args: Parameters<typeof wait>) => {
+    const result = await wait(...args);
+    if (++waited === 1) await writeFile(resolve(parent, "input.txt"), "a later parent write");
+    return result;
+  });
+  await prepareSubagentHandoff(store, session.id, "stable-child", { description: "Read input.txt", prompt: "Inspect the delivered input", inputPaths: ["input.txt"] });
+  const child = store.agentWorkspacePath(session.id, "stable-child");
+  assert.equal(await readFile(resolve(child, "inputs/input.txt"), "utf8"), "committed input");
+  assert.equal(await readFile(resolve(child, "input.txt"), "utf8"), "committed input");
+  assert.equal(await readFile(resolve(parent, "input.txt"), "utf8"), "a later parent write");
+  const jobs = store.transfers.list({ sessionId: session.id, agentId: "main" });
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[0]?.sourceSnapshotId, jobs[1]?.sourceSnapshotId);
+  const revision = store.getWorkspaceFileProvenance(session.id, "subagents/stable-child/input.txt")!.currentRevision;
+  assert.equal(revision.contentHash, jobs[0]?.progress[0]?.sha256);
+  assert.equal(revision.originMeta?.sourceSnapshotId, jobs[0]?.sourceSnapshotId);
+});
+
 test("subagent handoff does not implicitly copy the only parent file", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-no-default-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
