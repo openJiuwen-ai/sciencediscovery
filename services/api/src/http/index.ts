@@ -234,6 +234,7 @@ import {
   ApiStatusError,
   cancelCurrentSessionRun,
   cancelSessionRun,
+  stopSessionSubagent,
   createSkillEvolutionRun,
   createQueuedRun,
   emptyMatch,
@@ -1714,6 +1715,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const sessionSubagentsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents$/);
       if (sessionSubagentsMatch && request.method === "GET") {
         sendJson(response, 200, store.listSubagents(sessionSubagentsMatch[1]!));
+        return;
+      }
+      const stopSubagentMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/stop$/);
+      if (stopSubagentMatch && request.method === "POST") {
+        const sessionId = decodeURIComponent(stopSubagentMatch[1]!);
+        const subagentId = decodeURIComponent(stopSubagentMatch[2]!);
+        if (!stopSessionSubagent(store, sessionId, subagentId)) sendError(response, 404, "Subagent not found in this Session");
+        else sendJson(response, 200, { stopped: true, sessionId, subagentId });
         return;
       }
       const sessionSubagentBriefMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/brief$/);

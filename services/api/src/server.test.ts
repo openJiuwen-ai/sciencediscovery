@@ -6301,6 +6301,46 @@ test("cancelling a run while a subagent approval is pending persists its termina
   assert.ok(record.event.type === "permission.resolved" && record.event.request.decidedAt);
 });
 
+test("stopping a child Agent closes only its wake gate and joins its active model call", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `subagent-stop-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const { origin } = await startTestApi(context, tempRoot);
+  const fixture = await startSubagentModel(context, { pauseSubagent: true });
+  context.after(() => fixture.releaseSubagent());
+  const model = await createTestModel(origin, { baseUrl: fixture.baseUrl, model: "stop-child", name: "Stop child" });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ name: "Stop child" }),
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" },
+    body: JSON.stringify({ title: "Stop child", modelId: model.id, approvalMode: "always_allow" }),
+  });
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ content: "Delegate inspection" }),
+  });
+  const streamPromise = run.text();
+  await fixture.subagentStarted;
+  const children = await jsonRequest<Subagent[]>(`${origin}/api/sessions/${session.body.id}/subagents`, { headers: authorization });
+  const childId = children.body[0]!.id;
+  const stop = await fetch(`${origin}/api/sessions/${session.body.id}/subagents/${childId}/stop`, { method: "POST", headers: authorization });
+  assert.equal(stop.status, 200);
+  const stream = await streamPromise;
+  assert.match(stream, /"type":"run.completed"/);
+  assert.doesNotMatch(stream, /"type":"run.cancelled"/);
+  const finished = await jsonRequest<Subagent[]>(`${origin}/api/sessions/${session.body.id}/subagents`, { headers: authorization });
+  assert.equal(finished.body[0]?.status, "cancelled");
+  const db = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
+  try {
+    const gate = db.prepare("SELECT stopped FROM agent_instance_wake_gates WHERE session = ? AND agent = ?").get(session.body.id, `subagent:${childId}`);
+    assert.equal(gate?.stopped, 1);
+    const parent = db.prepare("SELECT stopped FROM agent_wake_gates WHERE session = ?").get(session.body.id);
+    assert.equal(parent?.stopped, 0);
+  } finally { db.close(); }
+  assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/subagents/not-owned/stop`, { method: "POST", headers: authorization })).status, 404);
+  fixture.releaseSubagent();
+});
+
 test("delta coalescing merges streamed text without reordering surrounding events", async () => {
   const published: RunStreamEvent[] = [];
   const sink = createDeltaCoalescingSink((event) => { published.push(event); }, 10_000, 1_000);

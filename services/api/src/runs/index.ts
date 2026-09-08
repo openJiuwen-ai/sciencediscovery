@@ -230,6 +230,7 @@ const SUBAGENT_PROGRESS_FLUSH_MS = 250;
 const activeSessions = new Map<string, RuntimeSessionRun>();
 const scheduledSessions = new Set<string>();
 const activeRunAbortControllers = new Map<string, AbortController>();
+const activeSubagentAbortControllers = new Map<string, AbortController>();
 const cancelledRuns = new Set<string>();
 export const DEFAULT_SELF_EVOLUTION_LIBRARY_ID = DEFAULT_WRITABLE_SKILL_LIBRARY_ID;
 export const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
@@ -237,6 +238,14 @@ export const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
 type RunEventSink = (event: RunStreamEvent) => void | Promise<void>;
 type RunEventSubscriber = (event: SessionRunEvent) => void;
 const runEventSubscribers = new Map<string, Set<RunEventSubscriber>>();
+
+/** Stop only this Agent instance; its parent and sibling Agents remain available. */
+export function stopSessionSubagent(store: SessionStore, sessionId: string, subagentId: string): boolean {
+  if (!store.listSubagents(sessionId).some((child) => child.id === subagentId)) return false;
+  store.notifications.stopAgent({ sessionId, agentId: `subagent:${subagentId}` });
+  activeSubagentAbortControllers.get(subagentId)?.abort(new Error("Subagent stopped by user"));
+  return true;
+}
 
 function skillIdForSubagentType(skillCatalog: SkillCatalog, subagentType: string | undefined): string | undefined {
   const requested = subagentType?.trim().toLowerCase();
@@ -1237,12 +1246,17 @@ async function executeAgentRun(
         ? { ...input, specialistId: specialist.id }
         : input;
       const releaseSubagentSlot = reserveSubagentSlot(subagentInput.description);
+      let childId: string | undefined;
       try {
         let subagent = await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
           model: { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
           timeoutSeconds: subagentConfig.timeoutSeconds,
         });
+        childId = subagent.id;
+        const childController = new AbortController();
+        activeSubagentAbortControllers.set(childId, childController);
+        const childSignal = AbortSignal.any([signal ?? requestExecution.abortSignal, childController.signal]);
         await emit({ subagent, type: "subagent.updated" });
         // Mirror the subagent's start into one scope SubTask node. objective /
         // created_at / role are written now; status / finishedAt / summary are
@@ -1316,6 +1330,7 @@ async function executeAgentRun(
         };
         try {
           handoff = await prepareSubagentHandoff(store, sessionId, subagent.id, subagent.input);
+          childSignal.throwIfAborted();
           const handoffStep: SubagentStep = {
             content: `Workspace: ${handoff.workspaceId}\nHandoff manifest: handoff.json`,
             createdAt: new Date().toISOString(),
@@ -1369,7 +1384,7 @@ async function executeAgentRun(
             workspaceRoot: subagentWorkspaceRoot,
           });
           const childExecution = createRequestExecutionContext({
-            abortSignal: signal ?? requestExecution.abortSignal,
+            abortSignal: childSignal,
             identity: {
               executionId: subagent.id,
               ownerSessionId: sessionId,
@@ -1629,6 +1644,7 @@ async function executeAgentRun(
           () => subagentRunHandle!.beginExternalWait(),
         );
         await subagentRunHandle.execute();
+        childSignal.throwIfAborted();
         assistantOutput = steps
           .findLast((step) => step.kind === "assistant" && step.content.trim())
           ?.content.trim() ?? "";
@@ -1663,7 +1679,7 @@ async function executeAgentRun(
           const failure = classifySubagentFailure(error, {
             maxTurns: subagent.maxTurns,
             maxTurnsExceeded,
-            parentAborted: signal?.aborted ?? false,
+            parentAborted: childSignal.aborted,
           });
           subagent = {
             ...subagent,
@@ -1717,6 +1733,7 @@ async function executeAgentRun(
         });
         return subagent;
       } finally {
+        if (childId) activeSubagentAbortControllers.delete(childId);
         releaseSubagentSlot();
       }
     },
