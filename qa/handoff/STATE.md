@@ -16,14 +16,15 @@ fuse:
 budget:
   dispatches_today: 0
 stage_gate_progress:
-  review:
-    growth-algorithms: PASS（21:31 巡航，2×P3）
-    grow-ts: PASS 无 P1/P2（22:06 巡航：watermark/doom/finalize/refIds 边界全核）
-    remaining: orchestrator 重构等价性 / routes grow API / KeGrowPanel / pdf-text 修复
-  deploy: 完成——隔离栈 4390/4391 就绪（fixture env 注入，独立数据目录，token 存临时文件，启动脚本 ~/start-sd-e2e-mocked.sh）
-  mocked: 首跑完成 8F/2S/3P——归因=测试基建（WSL→Windows localhost 单向，stub 不可达；详 logs/2026-09-08-2245 补记二）；修正=Playwright 迁 WSL 内重跑（待执行）
-  real: 待 mocked 后（按预案 §1.5 注入 minimax/siliconflow）
-  report: 待
+  review: 完成（全模块 PASS，无 P1/P2；报告 qa/reports/2026-09-08-stage-I-review.md）
+  deploy: 完成（data4 栈 4390/4391，TZ=UTC 套件约定）
+  mocked: 定稿——9 过/2 败/2 跳；2 败=J-KE1/KE2 fixture 缺口（死信错误已给出 10 个 arxiv PDF 的精确文件名）
+  real: 待（凭据注入→真实种子→grow 2 cycle）
+  report: 初稿已出（PASS 有条件），待 real 层补全
+qa_next:
+  - 录制 10 个 arxiv PDF fixture（按死信错误文件名逐一 make-fixture.mjs --base64）
+  - 查明 KE embedding 在隔离栈的配置来源，补 mocked 方案
+  - 重跑 J-KE1/KE2 收口 mocked → real 层四项验收
 notes: >-
   W2 完工通知（to-zcode/2026-09-08T2200-w2-done.md）关键情报：① grow API 202 {jobId,cycleId,reused}
   / GET engineState.signals 结构；② 前端 testid ke-grow-panel/ke-grow-start/ke-grow-progress/ke-grow-signals
