@@ -19,7 +19,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
-import { VersionStore } from "@sciencediscovery/cas";
+import { RefStore, VersionStore } from "@sciencediscovery/cas";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
 import {
@@ -1636,7 +1636,7 @@ async function executeAgentRun(
         const subagentExecutionPrompt = formatSubagentExecutionPrompt(subagent.input, handoff);
         const versions = new VersionStore(store.dataDir);
         const history = continuation?.contextRef
-          ? closedModelContext(JSON.parse((await versions.readState(continuation.contextRef)).toString()) as AgentHistoryMessage[]) : [];
+          ? closedModelContext((await versions.readRecord<{ history: AgentHistoryMessage[] }>(continuation.contextRef, "SubagentContext")).value.history) : [];
         subagentRunHandle = runSubagentTask({
           bindings: {
             abortSignal: childExecution.abortSignal,
@@ -1657,7 +1657,13 @@ async function executeAgentRun(
         );
         if (notificationDelivery && !store.notifications.deliveryAllowed(notificationDelivery)) throw new Error("Agent stopped before notification delivery");
         const result = await subagentRunHandle.execute();
-        subagent.contextRef = await versions.put("agent-state", JSON.stringify(closedModelContext(result.finalMessages)), "application/json");
+        const contextRef = await versions.putRecord("SubagentContext", { history: closedModelContext(result.finalMessages) });
+        const contextRefs = await RefStore.open(versions);
+        try {
+          const name = `agents/${encodeURIComponent(`subagent:${subagent.id}`)}/continuation`;
+          await contextRefs.commit(versions, name, contextRefs.head(name), contextRef);
+        } finally { contextRefs.close(); }
+        subagent.contextRef = contextRef;
         childSignal.throwIfAborted();
         assistantOutput = steps
           .findLast((step) => step.kind === "assistant" && step.content.trim())

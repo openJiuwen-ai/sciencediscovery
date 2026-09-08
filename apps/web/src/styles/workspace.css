@@ -211,6 +211,11 @@
 .reviewer-control-card > button:disabled { cursor: not-allowed; opacity: .55; }
 /* Activity belongs to the Session; management does not acquire its write lease. */
 .agent-activity summary { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.agent-activity .workspace-fold-body { display: flex; flex-direction: column; gap: .5rem; font-size: .82rem; }
+.agent-activity h4 { margin: .5rem 0 0; font-size: .82rem; }
+.agent-activity p { margin: .3rem 0; }
+.agent-activity button { border: 1px solid var(--border-color, #dce1e7); background: var(--surface, #f7f9fc); color: inherit; border-radius: 6px; padding: .35rem .5rem; font: inherit; cursor: pointer; }
+.agent-activity button:disabled { opacity: .5; cursor: default; }
 .agent-activity article { border: 1px solid var(--border-color, #dce1e7); border-radius: 8px; padding: .65rem; margin: .5rem 0; min-width: 0; }
 .agent-activity article header { display: flex; align-items: start; justify-content: space-between; gap: .5rem; }
 .agent-activity article strong, .agent-activity code, .agent-activity small { overflow-wrap: anywhere; min-width: 0; }

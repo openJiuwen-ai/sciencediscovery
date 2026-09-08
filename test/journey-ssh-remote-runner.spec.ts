@@ -844,11 +844,14 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^环境/ }).click();
       await dialog.getByRole("combobox", { name: "Manage Runner" }).selectOption(hostId);
       await expect(dialog.getByText("Remote Python base", { exact: true })).toBeVisible();
+      await expect(dialog.getByRole("textbox", { name: "Environment name" })).toHaveCount(0);
       await dialog.getByRole("button", { name: "Add environment" }).click();
       await dialog.getByRole("combobox", { name: "Initial environment tools" }).selectOption("r");
       await dialog.getByRole("textbox", { name: "Environment name" }).fill("Remote R analysis");
       await dialog.getByRole("button", { name: "Create", exact: true }).click();
       await expect(dialog.getByText("Remote R analysis", { exact: true })).toBeVisible();
+      await expect(dialog.getByRole("textbox", { name: "Environment name" })).toHaveCount(0);
+      await expect(dialog.getByRole("combobox", { name: "Package manager for Remote R analysis" }).locator("option")).toHaveText(["conda", "pip", "CRAN", "Bioconductor"]);
     });
     await journey.step("窄窗口集中清理远端工作区", "工作区按 Project/Session 展示；取消删除不发请求，确认后显示清理结果，记录保留。", async () => {
       await page.setViewportSize({ width: 640, height: 960 });

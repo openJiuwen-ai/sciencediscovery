@@ -175,6 +175,7 @@ async function start(kind, extra) {
     SCIENCE_AGENT_EVOLVE_URL: `http://127.0.0.1:${stub.address().port}/evolve`, SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: token, ...extra,
   } });
   processes.push(child);
+  child.serviceKind = kind;
   for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => {
     logs += redact(chunk);
     const match = chunk.toString().match(/listening on (http:\/\/127\.0\.0\.1:\d+)/);
@@ -455,6 +456,28 @@ try {
     assert.equal(resumed.steps.filter((step) => step.toolName === "run_shell").length, 1);
     assert.equal(await readFile(resolve(dataDir, "projects", target.projectId, "sessions", target.id, "agent-workspaces", child.handoff.workspaceId, "child-background.txt"), "utf8"), "child-once");
     return "User activity routes exposed owned logs, rejected foreign Session, retained completed child job while stopped, and resumed its unread context once";
+  });
+  await step("14. API 重启后保留停止门与子上下文", "重启不自动重放作业；用户恢复原子 Agent 后，仍使用已提交历史和同一 Workspace。", async () => {
+    const target = await json(`/api/projects/${session.projectId}/sessions`, { title: "Child restart", modelId: session.modelId, approvalMode: "always_allow" });
+    const initial = await json(`/api/sessions/${target.id}/runs`, { content: "Child background journey: delegate one background job." });
+    await until(async () => (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.id === initial.id)?.status === "completed");
+    const [before] = await json(`/api/sessions/${target.id}/subagents`);
+    await json(`/api/sessions/${target.id}/subagents/${before.id}/stop`, {});
+    await until(async () => (await json(`/api/sessions/${target.id}/agent-activity`)).executions[0]?.state === "completed");
+    const apiProcess = processes.findLast((child) => child.serviceKind === "api");
+    const ended = new Promise((done) => apiProcess.once("exit", done)); apiProcess.kill("SIGTERM"); await ended;
+    api = await start("api", { SCIENCE_AGENT_RUNNER_URL: runnerOrigin });
+    const [restored] = await json(`/api/sessions/${target.id}/subagents`);
+    assert.deepEqual(restored.contextRef, before.contextRef);
+    assert.equal(restored.handoff.workspaceId, before.handoff.workspaceId);
+    assert.equal((await json(`/api/sessions/${target.id}/agent-activity`)).agents.find((item) => item.agentId === `subagent:${before.id}`).stopped, true);
+    assert.equal((await json(`/api/sessions/${target.id}/runs`)).length, 1);
+    await json(`/api/sessions/${target.id}/subagents/${before.id}/resume`, {});
+    await until(async () => (await json(`/api/sessions/${target.id}/runs`)).some((run) => run.automaticWake && run.status === "completed"));
+    const [after] = await json(`/api/sessions/${target.id}/subagents`);
+    assert.equal(after.steps.filter((step) => step.toolName === "run_shell").length, 1);
+    assert.equal(await readFile(resolve(dataDir, "projects", target.projectId, "sessions", target.id, "agent-workspaces", after.handoff.workspaceId, "child-background.txt"), "utf8"), "child-once");
+    return "Production API restarted; stopped child stayed stopped; explicit resume loaded the retained CAS context and original Workspace, without command replay";
   });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }
