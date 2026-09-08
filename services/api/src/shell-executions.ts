@@ -94,7 +94,9 @@ export class ShellExecutions {
           if (!observed.result || !observed.version || !observed.result.workspaceSnapshot) {
             throw new Error(observed.error ?? "Runner ended without a committed result; inspect its state before retrying");
           }
-          return observed.result;
+          // The envelope receipt is authoritative, including older Runners
+          // that do not duplicate it inside the result payload.
+          return { ...observed.result, workspaceVersion: observed.version };
         }, () => observed?.state === "cancelled" ? "cancelled" : observed?.state === "completed" ? "succeeded" : "failed");
         execution.resultRef = await this.versions.put("agent-state", JSON.stringify(result), "application/json");
         execution.runnerVersionId = observed!.version!.digest;

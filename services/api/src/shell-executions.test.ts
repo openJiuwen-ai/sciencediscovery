@@ -62,6 +62,7 @@ test("accepted background work outlives waiting and publishes a notice only afte
   const result = await f.service.wait(job.id, owner, 1000);
   assert.equal(result.state, "completed"); assert.equal(result.provenance, "committed");
   assert.equal(result.result?.stdout, "done");
+  assert.deepEqual(result.result?.workspaceVersion, f.ref, "the rooted envelope receipt reaches provenance even without a result field");
   assert.equal(result.turnId, "original-turn");
   assert.equal(f.notices.unread(owner).length, 1);
   assert.ok(f.service.snapshot(owner.sessionId)[0]!.resultRef);
