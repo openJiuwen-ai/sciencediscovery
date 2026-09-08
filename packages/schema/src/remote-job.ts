@@ -309,6 +309,14 @@ export interface RemoteWorkspaceFile {
   size: number;
 }
 
+/** A Runner-owned immutable export, scoped to the requested Workspace and paths. */
+export interface RemoteWorkspaceSnapshot {
+  id: string;
+  workspace: string;
+  capturedAt: string;
+  files: Array<{ path: string; size: number; sha256: string; executable: number }>;
+}
+
 export interface CreateRemoteJobRequest {
   command: string;
   hostId: string;

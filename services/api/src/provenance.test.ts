@@ -35,6 +35,7 @@ import {
 import { MemoryGraphClient, MemoryGraphSink } from "@sciencediscovery/memory";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
+import { committedWorkspaceSnapshot, VersionStore } from "@sciencediscovery/cas";
 import { SessionStore } from "./store.js";
 
 test("multi-step persistent R executions create separate runs and an artifact derivation", async (context) => {
@@ -93,6 +94,7 @@ test("multi-step persistent R executions create separate runs and an artifact de
         createdFiles,
         environmentRevisionId: revision.id,
         environmentVariables: { HOME: "/tmp", PATH: "/opt/science-env/bin:/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId,
         exitCode: 0,
         finishedAt: timestamp,
@@ -156,6 +158,7 @@ test("multi-step persistent R executions create separate runs and an artifact de
     return {
       cgroupMode: "none", createdFiles: [], modifiedFiles: [],
       environmentRevisionId: revision.id, environmentVariables: { PATH: "/opt/science-env/bin:/usr/bin" },
+      workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
       executionId: request.executionId, exitCode: 0, finishedAt: timestamp,
       kernelId: `ephemeral:${request.executionId}`, kernelMode: "ephemeral", language: "shell",
       networkPolicy: "none", runnerVersion: "test", sandbox: "bubblewrap", startedAt: timestamp,
@@ -197,12 +200,16 @@ test("shell execution records authoritative code, logs, environment, and generat
   const runnerClient = {
     executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
       await writeFile(resolve(workspaceRoot, "shell-output.txt"), "42\n");
+      const workspaceSnapshot = await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot);
+      // A later writer may already have replaced the live file before the API consumes this result.
+      await writeFile(resolve(workspaceRoot, "shell-output.txt"), "later execution\n");
       const timestamp = new Date().toISOString();
       return {
         cgroupMode: "none",
         createdFiles: ["shell-output.txt"],
         environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot,
         executionId: request.executionId,
         exitCode: 0,
         finishedAt: timestamp,
@@ -247,6 +254,7 @@ test("shell execution records authoritative code, logs, environment, and generat
   );
   const [derivation] = await store.listArtifactDerivations(session.id);
   assert.equal(derivation?.path, "shell-output.txt");
+  assert.equal(derivation?.content.hash, createHash("sha256").update("42\n").digest("hex"));
   assert.deepEqual(derivation?.executionRunIds, [run!.id]);
   const fileProvenance = store.getWorkspaceFileProvenance(session.id, "shell-output.txt");
   assert.ok(fileProvenance);
@@ -255,6 +263,17 @@ test("shell execution records authoritative code, logs, environment, and generat
   assert.equal(fileProvenance.currentRevision.runId, "turn-shell");
   assert.equal(fileProvenance.currentRevision.toolCallId, "shell-tool-call");
   assert.equal(fileProvenance.currentRevision.toolName, "run_shell");
+  const executeWithReceipt = runnerClient.executeShell.bind(runnerClient);
+  runnerClient.executeShell = async (request) => {
+    const result = await executeWithReceipt(request);
+    delete result.workspaceSnapshot;
+    return result;
+  };
+  await assert.rejects(recorder.executeShell({
+    agentId: "main", code: "echo output", permissionEpoch, runnerClient,
+    sessionId: session.id, turnId: "missing-receipt", workspaceRoot,
+  }), /committed Workspace snapshot/);
+  assert.equal((await store.listArtifactDerivations(session.id)).length, 1, "missing receipt must not infer file provenance from the live path");
 });
 
 test("execution provenance distinguishes runs by working directory and env snapshot", async (context) => {
@@ -281,6 +300,7 @@ test("execution provenance distinguishes runs by working directory and env snaps
         environmentVariables: calls === 1
           ? { HOME: "/tmp", PATH: "/usr/bin" }
           : { FOO: "bar", HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId, exitCode: 0, finishedAt: timestamp,
         kernelId: "shell-session-1", kernelMode: request.kernelMode ?? "ephemeral", language: "shell",
         modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
@@ -344,6 +364,7 @@ test("subagent execution prefixes generated artifact paths with the private work
         createdFiles: ["report.md"],
         environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId,
         exitCode: 0,
         finishedAt: timestamp,
@@ -444,6 +465,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
       return {
         cgroupMode: "none", createdFiles: ["report.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
         kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
         sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "done\n", workingDirectory: "/workspace",
@@ -478,6 +500,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
       return {
         cgroupMode: "none", createdFiles: ["data.csv"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
         kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
         sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "", workingDirectory: "/workspace",
@@ -611,6 +634,7 @@ test("drain is scoped by turnId: a report in one context does not absorb another
       return {
         cgroupMode: "none", createdFiles: ["report.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
         kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
         sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "done\n", workingDirectory: "/workspace",
@@ -712,6 +736,7 @@ test("declaring an execution output preserves inferred input provenance without 
         createdFiles: ["plot.svg"],
         environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId,
         exitCode: 0,
         finishedAt: timestamp,
@@ -779,6 +804,7 @@ test("an execution that produces two artifacts in one run does not wire them as 
         createdFiles: ["fig.svg", "data.csv"],
         environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: {},
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId,
         exitCode: 0,
         finishedAt: timestamp,
@@ -902,6 +928,7 @@ test("recorder mirrors provenance addressing fields to the memory graph on shell
         cgroupMode: "none", createdFiles: ["mirror-output.csv"],
         environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId, exitCode: 0, finishedAt: timestamp,
         kernelId: `ephemeral:${request.executionId}`, kernelMode: "ephemeral",
         language: "shell", modifiedFiles: [], networkPolicy: "none",
@@ -1027,6 +1054,7 @@ test("a `./`-prefixed sourcePath still mirrors the artifact to the memory graph"
         cgroupMode: "none", createdFiles: ["report.md"],
         environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId, exitCode: 0, finishedAt: timestamp,
         kernelId: `ephemeral:${request.executionId}`, kernelMode: "ephemeral",
         language: "shell", modifiedFiles: [], networkPolicy: "none",
@@ -1158,6 +1186,7 @@ test("concurrent runs drain their own chip buffer: a later run's provider never 
       return {
         cgroupMode: "none", createdFiles: ["reportA.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
         kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
         sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "done\n", workingDirectory: "/workspace",
@@ -1193,6 +1222,7 @@ test("concurrent runs drain their own chip buffer: a later run's provider never 
       return {
         cgroupMode: "none", createdFiles: ["reportB.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
         kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
         sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "done\n", workingDirectory: "/workspace",
@@ -1241,6 +1271,7 @@ test("a report declare without a referencesProvider degrades gracefully to empty
       return {
         cgroupMode: "none", createdFiles: ["report.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
         environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+        workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
         executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
         kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
         sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "done\n", workingDirectory: "/workspace",
@@ -1306,6 +1337,7 @@ test("parentSubagentId threads through executeShell and declareWorkspaceArtifact
         return {
           cgroupMode: "none", createdFiles: ["out.csv"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
           environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+          workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
           executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
           kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
           sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "ok\n", workingDirectory: "/workspace",
@@ -1347,6 +1379,7 @@ test("parentSubagentId threads through executeShell and declareWorkspaceArtifact
         return {
           cgroupMode: "none", createdFiles: ["out2.csv"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
           environmentVariables: { HOME: "/tmp", PATH: "/usr/bin" },
+          workspaceSnapshot: await committedWorkspaceSnapshot(new VersionStore(dataDir), request.workspaceRoot),
           executionId: request.executionId, exitCode: 0, finishedAt: timestamp, kernelId: `ephemeral:${request.executionId}`,
           kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
           sandbox: "bubblewrap", startedAt: timestamp, stderr: "", stdout: "ok\n", workingDirectory: "/workspace",

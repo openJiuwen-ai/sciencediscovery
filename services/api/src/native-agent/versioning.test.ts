@@ -5,14 +5,37 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
-import { RefStore, VersionStore, type TrajectoryStep, type WorkspaceTree } from "@sciencediscovery/cas";
+import { committedWorkspaceSnapshot, withWorkspaceMutation, RefStore, VersionStore, type TrajectoryStep, type WorkspaceTree } from "@sciencediscovery/cas";
 import { createMainAgentProfile, createSubagentProfile } from "@sciencediscovery/orchestration";
 import type { ModelInput } from "@sciencediscovery/model";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 import { AgentLoop, type RuntimeMessage } from "@sciencediscovery/runtime-core";
 import { createAgentRun } from "../agent-run/create-agent-run.js";
 import { setModelTurnStreamerForTest, type ModelTurnStreamer } from "./index.js";
-import { AgentVersionRecorder, agentHeadName, type AgentStateSnapshot, type ContextAssemblyRecord, type ModelContextSnapshot } from "./versioning.js";
+import { AgentStateAssembler, AgentVersionRecorder, agentHeadName, type AgentStateSnapshot, type ContextAssemblyRecord, type ModelContextSnapshot } from "./versioning.js";
+
+test("turn state uses a committed Workspace tree while the next execution is still writing", async (t) => {
+  await mkdir(resolve(".tmp"), { recursive: true });
+  const root = await mkdtemp(resolve(".tmp/agent-versioning-busy-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const workspace = resolve(root, "workspace"); await mkdir(workspace);
+  const store = new VersionStore(resolve(root, "data"));
+  await writeFile(resolve(workspace, "result"), "previous");
+  const baseline = await committedWorkspaceSnapshot(store, workspace);
+  let ready!: () => void; const started = new Promise<void>((done) => { ready = done; });
+  let release!: () => void; const finish = new Promise<void>((done) => { release = done; });
+  const writing = withWorkspaceMutation(store, workspace, async () => {
+    await writeFile(resolve(workspace, "result"), "unfinished"); ready(); await finish;
+  }, { kind: "next-execution" });
+  await started;
+  try {
+    const manifest = await store.putRecord("AgentManifest", {});
+    const assembler = new AgentStateAssembler(store, workspace, () => ({}), async () => ({}));
+    const ref = await assembler.assemble({ agentId: "main", trajectoryId: "turn", turn: 1, phase: "after",
+      manifest, agentRevision: manifest, predecessor: null, transcript: [], history: [], observations: [] });
+    assert.deepEqual((await store.readRecord<AgentStateSnapshot>(ref)).value.workspace, baseline);
+  } finally { release(); await writing; }
+});
 
 test("production AgentRun records exact contexts, complete observations, sequential MCP overwrite and manifest lineage", async () => {
   await mkdir(resolve(".tmp"), { recursive: true });

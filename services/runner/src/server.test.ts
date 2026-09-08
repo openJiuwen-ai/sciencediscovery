@@ -867,6 +867,14 @@ test("runner keeps logical remote workspaces persistent and transfers only expli
     headers: authorization,
   })).text();
   assert.equal(content, "remote-data");
+  const captured = await fetch(`${origin}/remote-workspace/snapshots`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" },
+    body: JSON.stringify({ workspace: "project-1/session-1", paths: ["inputs"] }),
+  });
+  assert.equal(captured.status, 201);
+  const snapshot = await captured.json() as { id: string; files: Array<{ path: string; sha256: string }> };
+  assert.deepEqual(snapshot.files.map((file) => file.path), ["inputs/data.txt"]);
+  assert.match(snapshot.files[0]!.sha256, /^[a-f0-9]{64}$/);
   const workspaceRoot = resolve(fixture.dataDir, "remote-workspaces", "project-1", "session-1");
   assert.equal(await readFile(resolve(workspaceRoot, "inputs", "data.txt"), "utf8"), "remote-data");
   const outside = resolve(fixture.dataDir, "outside");
@@ -888,6 +896,12 @@ test("runner keeps logical remote workspaces persistent and transfers only expli
     headers: authorization,
   })).json();
   assert.deepEqual(afterDelete, []);
+  const snapshotUrl = `${origin}/remote-workspace/snapshots/${snapshot.id}/file?workspace=${workspace}&path=${path}`;
+  assert.equal(await (await fetch(snapshotUrl, { headers: authorization })).text(), "remote-data",
+    "deleting the live Workspace does not change the rooted export");
+  assert.equal((await fetch(snapshotUrl)).status, 401);
+  assert.equal((await fetch(snapshotUrl.replace(workspace, "another-session"), { headers: authorization })).status, 400);
+  assert.equal((await fetch(snapshotUrl.replace(path, "not-selected.txt"), { headers: authorization })).status, 400);
 });
 
 test("runner NPU Broker runs a signed allowlisted smoke job", async (context) => {
@@ -1850,10 +1864,15 @@ test("runner status reports an active execution and removes it after completion"
     permissionEpoch: epoch(),
     workspaceRoot: fixture.workspaceRoot,
   }));
-  await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
-  const active = await (await fetch(`${origin}/status`, {
-    headers: { authorization: "Bearer runner-test-token" },
-  })).json() as RunnerRuntimeStatus;
+  let active: RunnerRuntimeStatus;
+  const deadline = Date.now() + 5000;
+  do {
+    active = await (await fetch(`${origin}/status`, {
+      headers: { authorization: "Bearer runner-test-token" },
+    })).json() as RunnerRuntimeStatus;
+    if (active.activeExecutions[0]?.status === "running") break;
+    await new Promise((done) => setTimeout(done, 10));
+  } while (Date.now() < deadline);
   assert.equal(active.activeExecutions[0]?.agentId, "main");
   assert.equal(active.activeExecutions[0]?.executionId, "status-execution");
   assert.equal(active.activeExecutions[0]?.sessionId, "session-test");

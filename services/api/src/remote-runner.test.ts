@@ -4,15 +4,33 @@
 // you may not use this file except in compliance with the License.
 
 import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
 import type { RunnerClient } from "@sciencediscovery/executor";
-import type { RemoteWorkspaceFile } from "@sciencediscovery/schema";
+import type { RemoteWorkspaceFile, RemoteWorkspaceSnapshot } from "@sciencediscovery/schema";
 
 import { remoteWorkspaceKey, syncRemoteWorkspace } from "./remote-runner.js";
 import { SessionStore } from "./store.js";
+
+function snapshots(remote: Map<string, Buffer>, expectedWorkspace: string) {
+  const captured = new Map<string, Map<string, Buffer>>();
+  return {
+    snapshotRemoteWorkspace: async (workspace: string, paths: string[]): Promise<RemoteWorkspaceSnapshot> => {
+      assert.equal(workspace, expectedWorkspace);
+      const id = randomUUID();
+      const copy = new Map([...remote].filter(([path]) => paths.some((selected) => path === selected || path.startsWith(`${selected}/`)))
+        .map(([path, bytes]) => [path, Buffer.from(bytes)]));
+      captured.set(id, copy);
+      return { id, workspace, capturedAt: new Date().toISOString(), files: [...copy].map(([path, bytes]) => ({
+        path, size: bytes.length, executable: 0, sha256: createHash("sha256").update(bytes).digest("hex"),
+      })) };
+    },
+    streamWorkspaceSnapshot: async (snapshot: RemoteWorkspaceSnapshot, path: string) => (async function* () { yield captured.get(snapshot.id)!.get(path)!; })(),
+  };
+}
 
 test("explicit remote workspace push and pull preserve independent files and records", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `remote-workspace-sync-${Date.now()}-${process.pid}`);
@@ -50,6 +68,7 @@ test("explicit remote workspace push and pull preserve independent files and rec
   const childKey = remoteWorkspaceKey(project.id, session.id, undefined, "child-a");
   assert.notEqual(childKey, remoteWorkspaceKey(project.id, session.id, undefined, "child-b"));
   const childRunner = {
+    ...snapshots(new Map([["child.txt", Buffer.from("child")]]), childKey),
     listRemoteWorkspaceFiles: async (key: string) => {
       assert.equal(key, childKey);
       return [{ path: "child.txt", modifiedAt: new Date().toISOString(), size: 5 }];
@@ -61,14 +80,17 @@ test("explicit remote workspace push and pull preserve independent files and rec
   assert.equal(await readFile(resolve(childRoot, "child.txt"), "utf8"), "child");
   assert.equal(store.listArtifacts(session.id).length, 0, "pull does not implicitly declare an Artifact");
   assert.ok(store.getWorkspaceFileProvenance(session.id, "subagents/child-a/child.txt")?.currentRevision.originMeta?.transferId);
+  assert.ok(store.getWorkspaceFileProvenance(session.id, "subagents/child-a/child.txt")?.currentRevision.originMeta?.sourceSnapshotId);
   await assert.rejects(readFile(resolve(store.workspacePath(session.id), "child.txt")), { code: "ENOENT" });
   const workspaceRoot = store.workspacePath(session.id);
   await writeFile(resolve(workspaceRoot, "input.txt"), "local-input");
 
   const remote = new Map<string, Buffer>();
   const runnerClient = {
+    ...snapshots(remote, remoteWorkspaceKey(project.id, session.id)),
     listRemoteWorkspaceFiles: async (key: string): Promise<RemoteWorkspaceFile[]> => {
       assert.equal(key, remoteWorkspaceKey(project.id, session.id));
+      await writeFile(resolve(workspaceRoot, "input.txt"), "next local execution");
       return [...remote.entries()].map(([path, bytes]) => ({
         modifiedAt: "2026-08-31T00:00:00.000Z",
         path,
@@ -105,6 +127,11 @@ test("explicit remote workspace push and pull preserve independent files and rec
   }), /real directory/);
   await assert.rejects(readFile(resolve(outside, "output.txt")), { code: "ENOENT" });
   remote.set("results/output.txt", Buffer.from("remote-output"));
+  const stableStream = runnerClient.streamWorkspaceSnapshot.bind(runnerClient);
+  runnerClient.streamWorkspaceSnapshot = async (snapshot, path, signal) => {
+    remote.set(path, Buffer.from("next remote execution"));
+    return stableStream(snapshot, path, signal);
+  };
 
   const pulled = await syncRemoteWorkspace({
     hostId: host.id,
@@ -115,6 +142,7 @@ test("explicit remote workspace push and pull preserve independent files and rec
   });
   assert.deepEqual(pulled.files, ["results/output.txt"]);
   assert.equal(await readFile(resolve(workspaceRoot, "results", "output.txt"), "utf8"), "remote-output");
+  runnerClient.streamWorkspaceSnapshot = stableStream;
   assert.deepEqual(store.listRemoteWorkspaceSyncs(session.id).filter((record) => !record.agentId).map((record) => [record.direction, record.status]), [
     ["pull", "completed"],
     ["pull", "failed"],
@@ -127,9 +155,9 @@ test("explicit remote workspace push and pull preserve independent files and rec
   const raceDestination = resolve(workspaceRoot, "race.txt");
   const racingRunner = {
     ...runnerClient,
-    readRemoteWorkspaceFile: async () => {
+    streamWorkspaceSnapshot: async (snapshot: RemoteWorkspaceSnapshot, path: string) => {
       await writeFile(raceDestination, "local result");
-      return Buffer.from("remote");
+      return runnerClient.streamWorkspaceSnapshot(snapshot, path);
     },
   } as unknown as RunnerClient;
   await assert.rejects(syncRemoteWorkspace({

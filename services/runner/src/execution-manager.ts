@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
-import { poisonWorkspace, RefStore, snapshotWorkspace, VersionStore, withWorkspaceLease } from "@sciencediscovery/cas";
+import { ensureWorkspaceBaseline, poisonWorkspace, RefStore, snapshotWorkspace, VersionStore, withWorkspaceLease } from "@sciencediscovery/cas";
 import type { ExecutionLogPage, ExecutionOwner, ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 
 export type ExecutionLogSink = (stream: "stdout" | "stderr", chunk: Buffer) => void;
@@ -55,6 +55,7 @@ export class ExecutionManager {
     const key = request.workspaceRoot; // already canonicalized by the authenticated endpoint
     const previous = this.queues.get(key) ?? Promise.resolve();
     const work = previous.then(() => withWorkspaceLease(key, async () => {
+      await ensureWorkspaceBaseline(this.versions, key);
       let changed = false;
       let cursor = 0;
       let retained = 0;
@@ -108,6 +109,7 @@ export class ExecutionManager {
             const name = `workspaces/${createHash("sha256").update(key).digest("hex")}/head`;
             await refs.commit(this.versions, name, refs.head(name), version);
             execution.version = version;
+            if (execution.result) execution.result.workspaceSnapshot = workspace;
           } finally { refs.close(); }
         }
       } catch (error) {

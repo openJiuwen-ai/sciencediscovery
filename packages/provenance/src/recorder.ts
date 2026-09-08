@@ -21,7 +21,7 @@ import {
   type ArtifactVersionInput,
 } from "@sciencediscovery/artifact-manager";
 import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
-import { CasStore } from "@sciencediscovery/cas";
+import { CasStore, VersionStore, workspaceSnapshotFiles, type AgentStateRef } from "@sciencediscovery/cas";
 import type {
   ArtifactDerivation,
   ArtifactOrigin,
@@ -152,6 +152,7 @@ export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environm
 
 export class ProvenanceRecorder {
   readonly cas: CasStore;
+  private readonly versions: VersionStore;
   private readonly dataCas: CasStore;
   private readonly artifactRegistry: ArtifactRegistry;
   private readonly memoryGraphSink: MemoryGraphSink | null;
@@ -162,6 +163,7 @@ export class ProvenanceRecorder {
     memoryGraphSink?: MemoryGraphSink,
   ) {
     this.cas = new CasStore(dataDir);
+    this.versions = new VersionStore(dataDir);
     this.dataCas = new CasStore(dataDir, "data");
     this.memoryGraphSink = memoryGraphSink ?? null;
     this.artifactRegistry = new ArtifactRegistry(
@@ -475,16 +477,19 @@ export class ProvenanceRecorder {
     toolName: "run_python" | "run_r" | "run_shell";
     turnId: string;
     workspaceRoot: string;
+    workspaceSnapshot?: AgentStateRef;
   }): Promise<void> {
     const derivations: ArtifactDerivation[] = [];
     const workspaceRevisions: WorkspaceFileRevisionInput[] = [];
+    if (!options.paths.length) return;
+    if (!options.workspaceSnapshot) throw new Error("Runner did not return a committed Workspace snapshot; file provenance was not inferred from mutable files");
+    const manifest = await workspaceSnapshotFiles(this.versions, options.workspaceSnapshot, options.paths);
     for (const path of options.paths) {
       const logicalPath = options.artifactPathPrefix ? `${options.artifactPathPrefix}/${path}` : path;
-      const target = resolveWorkspaceFile(options.workspaceRoot, path);
-      const [content, fileStat] = await Promise.all([
-        this.dataCas.putFile(target),
-        stat(target),
-      ]);
+      const file = manifest.find((entry) => entry.path === path);
+      if (!file) throw new Error(`Execution output is absent from its committed snapshot: ${path}`);
+      await this.versions.verifyRef(file.content);
+      const content = { hash: file.content.digest.slice(7), size: file.content.size };
       derivations.push({
         content,
         createdAt: options.finishedAt,
@@ -499,11 +504,11 @@ export class ProvenanceRecorder {
         contentHash: content.hash,
         executionRunId: options.executionId,
         mode: "write",
-        modifiedAt: fileStat.mtime.toISOString(),
+        modifiedAt: options.finishedAt,
         origin: options.parentSubagentId ? "subagent" : "tool",
         path: logicalPath,
         runId: options.turnId,
-        size: fileStat.size,
+        size: file.content.size,
         ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}),
         ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
         toolName: options.toolName,
@@ -651,6 +656,7 @@ export class ProvenanceRecorder {
         toolName: "run_shell",
         turnId: options.turnId,
         workspaceRoot: options.workspaceRoot,
+        workspaceSnapshot: result.workspaceSnapshot,
       });
     }
     const shellSourceFileInputs = this.inferredSourceFileInputs(options.sessionId, undefined, options.code);
@@ -816,6 +822,7 @@ export class ProvenanceRecorder {
         toolName: result.language === "python" ? "run_python" : "run_r",
         turnId: options.turnId,
         workspaceRoot: options.workspaceRoot,
+        workspaceSnapshot: result.workspaceSnapshot,
       });
     }
     // env snapshot hash for the provenance mirror: the revision's snapshot.hash

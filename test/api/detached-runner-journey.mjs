@@ -35,6 +35,7 @@ let serviceLog = "";
 let origin;
 let pendingUpload;
 let pendingLegacy;
+let captured;
 const redact = (value) => String(value).replaceAll(token, "[redacted]").replaceAll(process.cwd(), "<worktree>");
 async function until(check, timeout = 15_000) {
   const deadline = Date.now() + timeout;
@@ -112,6 +113,12 @@ try {
     assert.equal((await client.getShellExecution("training", owner)).state, "running");
     return "same workspace queued; independent workspace completed";
   });
+  await step("运行期间读取稳定源快照", "快照读取不等待写锁，返回已提交基线而不是运行中的文件。", async () => {
+    const snapshot = await client.snapshotRemoteWorkspace("project/session/main", []);
+    assert.deepEqual(snapshot.files, []);
+    assert.equal((await client.getShellExecution("training", owner)).state, "running");
+    return "committed empty baseline returned while the writer remains running";
+  });
   await step("上传与旧执行入口不能绕过后台写入", "同一 Workspace 的上传和旧 Shell 请求保持等待，查询日志仍可用。", async () => {
     let uploaded = false;
     let executed = false;
@@ -141,6 +148,8 @@ try {
     assert.ok(files.some((file) => file.path === "output.txt"));
     assert.ok(files.some((file) => file.path === "uploaded.txt"));
     assert.ok(files.some((file) => file.path === "legacy.txt"));
+    captured = await client.snapshotRemoteWorkspace("project/session/main", ["output.txt"]);
+    await client.writeRemoteWorkspaceFile("project/session/main", "output.txt", Buffer.from("changed after capture"), "overwrite");
     return `cancelled; next/upload/legacy completed; version=${completed.version.digest}; all three files listed`;
   });
   await step("重启后查回结果且禁止重放", "相同 ID 的结果和日志仍可查询；重新提交旧 ID 被拒绝，不执行旧命令。", async () => {
@@ -149,7 +158,9 @@ try {
     assert.equal((await client.getShellExecution("next", owner)).state, "completed");
     assert.ok((await client.shellExecutionLogs("training", owner)).chunks.some((chunk) => chunk.text.includes("progress")));
     await assert.rejects(client.startShellExecution(request("next", "echo replay")), /already been used/);
-    return "result and logs retained; duplicate submission rejected";
+    const chunks = []; for await (const bytes of await client.streamWorkspaceSnapshot(captured, "output.txt")) chunks.push(Buffer.from(bytes));
+    assert.equal(Buffer.concat(chunks).toString(), "delivered\n", "export survives restart and live source overwrite");
+    return "result, logs and immutable source export retained; duplicate submission rejected";
   });
   outcome = "PASS";
 } catch (error) {

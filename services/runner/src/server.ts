@@ -18,7 +18,8 @@ import { chmod, link, lstat, mkdir, readdir, realpath, rename, rm, stat, writeFi
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { userInfo } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -42,6 +43,7 @@ import type {
   RunnerHealth,
   RunnerRuntimeStatus,
   RemoteWorkspaceFile,
+  RemoteWorkspaceSnapshot,
   SandboxNetworkCapability,
   ScientificEnvsCapability,
   SetupScientificEnvironmentsRequest,
@@ -77,7 +79,8 @@ import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
 import { agentExecutionKey, KeyedTaskQueue, requestAgentExecutionKey } from "./agent-execution.js";
 import { ExecutionManager } from "./execution-manager.js";
-import { VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
+import { committedWorkspaceSnapshot, RefStore, streamSnapshotFile, VersionStore, withWorkspaceMutation,
+  workspaceSnapshotFiles, type AgentStateRef, type SnapshotFile } from "@sciencediscovery/cas";
 import { HostNpuJobBroker } from "./npu-broker.js";
 
 const execFileAsync = promisify(execFile);
@@ -452,7 +455,8 @@ export function createRunnerServer(
     };
     signal.addEventListener("abort", removeCancelledQueueEntry, { once: true });
     try {
-      return await executionQueues.run(requestAgentExecutionKey(execution), () => withWorkspaceMutation(workspaceVersions, execution.workspaceRoot, async () => {
+      let workspaceSnapshot: AgentStateRef | undefined;
+      const result = await executionQueues.run(requestAgentExecutionKey(execution), () => withWorkspaceMutation(workspaceVersions, execution.workspaceRoot, async () => {
         if (signal.aborted) throw new Error("Runner execution aborted before start");
         status.startedAt = new Date().toISOString();
         status.status = "running";
@@ -471,7 +475,9 @@ export function createRunnerServer(
           });
         }
         return await operation();
-      }, { kind: "legacy-execution", id: execution.executionId }, signal), execution.permissionEpoch.sessionId);
+      }, { kind: "legacy-execution", id: execution.executionId, onCommitted: (tree) => { workspaceSnapshot = tree; } }, signal), execution.permissionEpoch.sessionId);
+      if (result && typeof result === "object") Object.assign(result, { workspaceSnapshot });
+      return result;
     } catch (error) {
       const errorMessage = shortErrorMessage(error);
       const interrupted = signal.aborted;
@@ -550,6 +556,39 @@ export function createRunnerServer(
           runnerVersion: RUNNER_VERSION,
           status: "ok",
         } satisfies RunnerRuntimeStatus);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/remote-workspace/snapshots") {
+        const input = JSON.parse(await readBody(request)) as { workspace: string; paths?: string[] };
+        const workspace = validateRunnerWorkspaceKey(input.workspace);
+        if (input.paths && (!Array.isArray(input.paths) || input.paths.length > 50)) throw new Error("Snapshot accepts at most 50 paths");
+        const root = await remoteWorkspaceRoot(config.dataDir, workspace);
+        const tree = await committedWorkspaceSnapshot(workspaceVersions, root);
+        const files = await workspaceSnapshotFiles(workspaceVersions, tree, input.paths);
+        const id = randomUUID();
+        const capturedAt = new Date().toISOString();
+        const record = await workspaceVersions.putRecord("WorkspaceExport", { workspace, tree, files, capturedAt });
+        const refs = await RefStore.open(workspaceVersions);
+        try { await refs.commit(workspaceVersions, `workspace-exports/${id}`, null, record); } finally { refs.close(); }
+        sendJson(response, 201, { id, workspace, capturedAt,
+          files: files.map((file) => ({ path: file.path, size: file.content.size, sha256: file.content.digest.slice(7), executable: file.executable })),
+        } satisfies RemoteWorkspaceSnapshot);
+        return;
+      }
+      const snapshotFileMatch = url.pathname.match(/^\/remote-workspace\/snapshots\/([a-f0-9-]{36})\/file$/);
+      if (request.method === "GET" && snapshotFileMatch) {
+        const workspace = validateRunnerWorkspaceKey(url.searchParams.get("workspace") ?? "");
+        const refs = await RefStore.open(workspaceVersions);
+        let exported: AgentStateRef | null;
+        try { exported = refs.head(`workspace-exports/${snapshotFileMatch[1]}`); } finally { refs.close(); }
+        if (!exported) throw new Error("Workspace snapshot not found");
+        const record = await workspaceVersions.readRecord<{ workspace: string; files: SnapshotFile[] }>(exported, "WorkspaceExport");
+        if (record.value.workspace !== workspace) throw new Error("Workspace snapshot belongs to another Workspace");
+        const path = validateRelativeWorkspacePath(url.searchParams.get("path") ?? "");
+        const file = record.value.files.find((entry) => entry.path === path);
+        if (!file) throw new Error("File was not selected in this Workspace snapshot");
+        response.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-store" });
+        await pipeline(streamSnapshotFile(workspaceVersions, file.content), response);
         return;
       }
       if ((request.method === "GET" || request.method === "POST") && url.pathname === "/remote-workspace/files") {
@@ -945,7 +984,8 @@ export function createRunnerServer(
         method: request.method ?? "UNKNOWN",
         path: (request.url ?? "/").split("?", 1)[0] || "/",
       });
-      sendJson(response, 400, { error: error instanceof Error ? error.message : "Runner request failed" } satisfies ApiError);
+      if (response.headersSent) response.destroy();
+      else sendJson(response, 400, { error: error instanceof Error ? error.message : "Runner request failed" } satisfies ApiError);
     }
   });
   server.once("close", () => {

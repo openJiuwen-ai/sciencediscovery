@@ -140,6 +140,8 @@ export const SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID = "system-python3-bwrap-v1";
 export const SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID = "system-python3-seatbelt-v1";
 
 export interface ScientificExecutionResult {
+  /** Immutable Workspace tree captured after execution and rooted before returning. */
+  workspaceSnapshot?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   /** Always `none`: sandbox isolation does not apply CPU or memory quotas. */
   cgroupMode: "none" | "direct-v2";
   createdFiles: string[];

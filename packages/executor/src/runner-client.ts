@@ -34,6 +34,7 @@ import type {
   RunnerRuntimeStatus,
   RunnerResources,
   RemoteWorkspaceFile,
+  RemoteWorkspaceSnapshot,
   ScientificEnvironmentSetup,
   ShellExecutionRequest,
   ShellExecutionResult,
@@ -78,6 +79,21 @@ export class RunnerClient {
 
   async deleteRemoteWorkspace(workspaceKey: string): Promise<void> {
     await this.request(`/remote-workspace?workspace=${encodeURIComponent(workspaceKey)}`, { method: "DELETE" });
+  }
+
+  async snapshotRemoteWorkspace(workspace: string, paths: string[], signal?: AbortSignal): Promise<RemoteWorkspaceSnapshot> {
+    return this.request("/remote-workspace/snapshots", { method: "POST", body: JSON.stringify({ workspace, paths }), signal });
+  }
+
+  async streamWorkspaceSnapshot(snapshot: RemoteWorkspaceSnapshot, path: string, signal?: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
+    const response = await fetch(`${this.baseUrl}/remote-workspace/snapshots/${encodeURIComponent(snapshot.id)}/file?workspace=${encodeURIComponent(snapshot.workspace)}&path=${encodeURIComponent(path)}`, {
+      headers: { authorization: `Bearer ${this.token}` }, signal,
+    });
+    if (!response.ok || !response.body) {
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error || `Workspace snapshot read failed (${response.status})`);
+    }
+    return response.body;
   }
 
   async readRemoteWorkspaceFile(workspaceKey: string, path: string): Promise<Buffer> {
