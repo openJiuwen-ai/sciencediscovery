@@ -146,3 +146,14 @@ test("workspace snapshot failure closes writer admission instead of claiming a c
   assert.match(manager.get("broken", owner).error!, /version commit failed/);
   assert.throws(() => manager.start(request(workspace, "next"), async () => result("next")), /repair storage/);
 });
+
+test("failed atomic ref publication never reports an unrooted Execution version", async (context) => {
+  const { manager, workspace } = await fixture(context);
+  context.mock.method(RefStore.prototype, "commit", async () => { throw new Error("injected ref publication failure"); });
+  manager.start(request(workspace, "unrooted"), async () => result("unrooted"));
+  await until(() => manager.get("unrooted", owner).state === "failed");
+  const execution = manager.get("unrooted", owner);
+  assert.equal(execution.version, undefined, "CAS bytes alone are not a committed Workspace version");
+  assert.match(execution.error!, /ref publication failure/);
+  assert.throws(() => manager.start(request(workspace, "later"), async () => result("later")), /repair storage/);
+});

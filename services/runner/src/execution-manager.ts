@@ -98,7 +98,7 @@ export class ExecutionManager {
           const stdout = await this.versions.put("agent-state", readLog("stdout") || execution.result?.stdout || "");
           const stderr = await this.versions.put("agent-state", readLog("stderr") || execution.result?.stderr || execution.error || "");
           const code = await this.versions.put("agent-state", request.code);
-          execution.version = await this.versions.putRecord("WorkspaceExecution", {
+          const version = await this.versions.putRecord("WorkspaceExecution", {
             executionId: execution.id, ...owner, workspace, code, stdout, stderr,
             environmentRevisionId: execution.result?.environmentRevisionId ?? null,
             state: execution.state,
@@ -106,7 +106,8 @@ export class ExecutionManager {
           const refs = await RefStore.open(this.versions);
           try {
             const name = `workspaces/${createHash("sha256").update(key).digest("hex")}/head`;
-            await refs.commit(this.versions, name, refs.head(name), execution.version);
+            await refs.commit(this.versions, name, refs.head(name), version);
+            execution.version = version;
           } finally { refs.close(); }
         }
       } catch (error) {
