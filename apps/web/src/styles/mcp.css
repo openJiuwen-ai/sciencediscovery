@@ -11,6 +11,8 @@
  */
 
 .mcp-settings { min-width: 0; }
+.mcp-editor :is(input, textarea)::placeholder { color: #8a8f99; opacity: 1; }
+.mcp-editor :is(input, textarea):focus::placeholder { opacity: 0; }
 .config-panel .mcp-settings .primary-button { width: auto; }
 .config-panel .mcp-search { display: flex; margin-bottom: 0; }
 .config-panel .mcp-switch { display: inline-flex; margin-bottom: 0; }
@@ -104,3 +106,9 @@
   .mcp-tabs { gap: 16px; }
   .mcp-actions-end { flex-wrap: wrap; }
 }
+.mcp-authorization { margin: 10px 0; min-width: 0; }
+.mcp-authorization-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.mcp-oauth-state { font-size: 12px; color: var(--muted); }
+.mcp-oauth-state.authorized { color: #15835f; }
+.mcp-oauth-state.required, .mcp-oauth-state.expired { color: #a45b16; }
+.mcp-oauth-scope { font-size: 12px; margin-top: 6px; overflow-wrap: anywhere; }

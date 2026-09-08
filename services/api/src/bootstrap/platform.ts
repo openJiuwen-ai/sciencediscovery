@@ -128,7 +128,7 @@ export function createPlatformServices(
   const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
   const mcpRegistry = createBuiltinMcpSourceRegistry();
   const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
-  const mcpGateway: McpTransportClient = dependencies.mcpTransport ?? new McpNodeClient(() => customMcpServers.transportConfig());
+  const mcpGateway: McpTransportClient = dependencies.mcpTransport ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth);
   const mcpProxyMap = (): Record<string, ResolvedProxy> => {
     const serverIds = new Set<string>();
     for (const manifest of mcpRegistry.listManifests()) serverIds.add(manifest.transport.mcpServerId);

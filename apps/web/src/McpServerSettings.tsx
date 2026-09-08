@@ -20,6 +20,7 @@ import { AlertCircleIcon, CheckIcon, CloseIcon, DatabaseIcon, EditIcon, PlusIcon
 import { MarkdownRenderer } from "./Markdown.js";
 import { Bug } from "lucide-react";
 import { McpInspector } from "./McpInspector.js";
+import { McpAuthorization, type McpAuthorizationClient } from "./McpAuthorization.js";
 
 type SecretRow = { key: string; value: string | null };
 type Draft = Omit<CustomMcpServerInput, "env" | "headers" | "args"> & { argsText: string; envRows: SecretRow[]; headerRows: SecretRow[] };
@@ -32,6 +33,8 @@ function draftFor(server?: CustomMcpServerDetails): Draft {
     cwd: server?.cwd ?? "", url: server?.url ?? "", timeoutSeconds: server?.timeoutSeconds ?? 60,
     envRows: Object.keys(server?.env ?? {}).map((key) => ({ key, value: null })),
     headerRows: Object.keys(server?.headers ?? {}).map((key) => ({ key, value: null })),
+    authMode: server?.authMode ?? "headers",
+    oauth: server?.oauth ?? { clientId: "", clientSecret: "", scope: "", clientMetadataUrl: "" },
   };
 }
 
@@ -55,7 +58,7 @@ function SecretFields({ rows, onChange, label }: { rows: SecretRow[]; onChange: 
 }
 
 export function McpServerSettings({ client, sources, sessionId, sessionTitle, onChanged }: {
-  client: Pick<ApiClient, "listMcpServers" | "saveMcpServer" | "testMcpServer" | "deleteMcpServer" | "importMcpServers" | "inspectMcpTool">;
+  client: Pick<ApiClient, "listMcpServers" | "saveMcpServer" | "testMcpServer" | "deleteMcpServer" | "importMcpServers" | "inspectMcpTool"> & McpAuthorizationClient;
   sources: McpSourceManifest[];
   sessionId?: string;
   sessionTitle?: string;
@@ -74,7 +77,7 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
   const [notice, setNotice] = useState<string>();
   const [deleting, setDeleting] = useState<string>();
   const [inspecting, setInspecting] = useState<string>();
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const root = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -137,19 +140,30 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
     {inspectedServer ? <McpInspector key={inspectedServer.id} server={inspectedServer} client={client} sessionId={sessionId} sessionTitle={sessionTitle} onBack={() => setInspecting(undefined)} /> : editor && draft ? <form className="model-editor mcp-editor" onSubmit={submit}>
       <div className="mcp-section-heading"><h4>{editor.id ? t("mcp.edit") : t("mcp.add")}</h4><button aria-label={t("common.cancel")} title={t("common.cancel")} className="icon-button" type="button" disabled={!!busy} onClick={() => setEditor(undefined)}><CloseIcon size={17} /></button></div>
       <fieldset disabled={!!busy} className="mcp-form-fields">
+        <label className="mcp-enable-label"><input type="checkbox" checked={draft.enabled} onChange={(event) => change({ enabled: event.target.checked })} /><span>{t("mcp.enableServer")}</span></label>
         <label><span>{t("mcp.name")}</span><input required maxLength={100} autoFocus value={draft.name} onChange={(event) => change({ name: event.target.value })} /></label>
         <label><span>{t("mcp.description")}</span><input maxLength={2000} value={draft.description} onChange={(event) => change({ description: event.target.value })} /></label>
         <label><span>{t("mcp.transport")}</span><select value={draft.transport} onChange={(event) => change({ transport: event.target.value as Draft["transport"] })}><option value="http">Streamable HTTP</option><option value="sse">SSE</option><option value="stdio">STDIO</option></select></label>
         {draft.transport === "stdio" ? <>
           <label><span>{t("mcp.command")}</span><input required placeholder="npx" value={draft.command} onChange={(event) => change({ command: event.target.value })} /></label>
-          <label><span>{t("mcp.args")}</span><textarea rows={3} spellCheck={false} value={draft.argsText} onChange={(event) => change({ argsText: event.target.value })} /></label>
-          <label><span>{t("mcp.cwd")}</span><input value={draft.cwd} onChange={(event) => change({ cwd: event.target.value })} /></label>
+          <label><span>{t("mcp.args")}</span><textarea aria-label={t("mcp.args")} rows={3} spellCheck={false} placeholder={t("mcp.argsHint")} value={draft.argsText} onChange={(event) => change({ argsText: event.target.value })} /></label>
+          <label><span>{t("mcp.cwd")}</span><input placeholder={t("mcp.optional")} value={draft.cwd} onChange={(event) => change({ cwd: event.target.value })} /></label>
           <SecretFields label={t("mcp.env")} rows={draft.envRows} onChange={(envRows) => change({ envRows })} />
         </> : <>
           <label><span>URL</span><input required type="url" placeholder="https://example.com/mcp" value={draft.url} onChange={(event) => change({ url: event.target.value })} /></label>
+          <label><span>{t("mcp.oauth.authMode")}</span><select value={draft.authMode ?? "headers"} onChange={(event) => change({ authMode: event.target.value as Draft["authMode"] })}><option value="headers">{t("mcp.oauth.headers")}</option><option value="oauth">OAuth</option></select></label>
+          {draft.authMode === "oauth" ? <>
+            <label><span>{t("mcp.oauth.clientId")}</span><input placeholder={t("mcp.oauth.clientIdHint")} value={draft.oauth?.clientId ?? ""} onChange={(event) => change({ oauth: { ...draft.oauth!, clientId: event.target.value } })} /></label>
+            <label><span>{t("mcp.oauth.clientSecret")}</span><input type="password" autoComplete="off" placeholder={draft.oauth?.clientSecret === null ? t("mcp.secretSaved") : t("mcp.optional")} value={draft.oauth?.clientSecret ?? ""} onChange={(event) => change({ oauth: { ...draft.oauth!, clientSecret: event.target.value } })} /></label>
+            <label><span>{t("mcp.oauth.scope")}</span><input placeholder={t("mcp.optional")} value={draft.oauth?.scope ?? ""} onChange={(event) => change({ oauth: { ...draft.oauth!, scope: event.target.value } })} /></label>
+            <label><span>{t("mcp.oauth.metadataUrl")}</span><input type="url" placeholder={t("mcp.optional")} value={draft.oauth?.clientMetadataUrl ?? ""} onChange={(event) => change({ oauth: { ...draft.oauth!, clientMetadataUrl: event.target.value } })} /></label>
+            <label><span>{t("mcp.oauth.callback")}</span><input readOnly value={`${window.location.origin}/api/mcp/oauth/callback`} /></label>
+          </> : null}
           <SecretFields label={t("mcp.headers")} rows={draft.headerRows} onChange={(headerRows) => change({ headerRows })} />
         </>}
-        <div className="mcp-form-tail"><label><span>{t("mcp.timeout")}</span><input type="number" min={1} max={600} required value={draft.timeoutSeconds} onChange={(event) => change({ timeoutSeconds: Number(event.target.value) })} /></label><label className="mcp-enable-label"><input type="checkbox" checked={draft.enabled} onChange={(event) => change({ enabled: event.target.checked })} /><span>{t("mcp.enabled")}</span></label></div>
+        <div className="mcp-form-tail">
+          <label><span>{t("mcp.timeout")}</span><input type="number" min={1} max={600} required value={draft.timeoutSeconds} onChange={(event) => change({ timeoutSeconds: Number(event.target.value) })} /></label>
+        </div>
       </fieldset>
       <div className="mcp-form-actions"><button className="secondary-button" type="button" disabled={!!busy} onClick={() => setEditor(undefined)}>{t("common.cancel")}</button><button className="primary-button" type="submit" disabled={!!busy}>{busy === "save" ? <SpinnerIcon className="spin" size={15} /> : null}{t("common.save")}</button></div>
     </form> : importing ? <form className="model-editor mcp-editor" onSubmit={(event) => { event.preventDefault(); void run("import", async () => { const config: unknown = JSON.parse(json); await client.importMcpServers(config); await refresh(); setImporting(false); setJson(""); setNotice(t("mcp.imported")); }); }}>
@@ -164,17 +178,18 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
           {filtered.map((server) => <article className="mcp-server" key={server.id}>
             <div className="mcp-server-heading">
               <button className="mcp-server-title mcp-server-toggle" type="button"
-                aria-label={`${t(collapsed.has(server.id) ? "mcp.expandServer" : "mcp.collapseServer")} ${server.name}`}
-                title={t(collapsed.has(server.id) ? "mcp.expandServer" : "mcp.collapseServer")}
-                aria-expanded={!collapsed.has(server.id)} aria-controls={`mcp-details-${server.id}`}
-                onClick={() => setCollapsed((current) => {
+                aria-label={`${t(expanded.has(server.id) ? "mcp.collapseServer" : "mcp.expandServer")} ${server.name}`}
+                title={t(expanded.has(server.id) ? "mcp.collapseServer" : "mcp.expandServer")}
+                aria-expanded={expanded.has(server.id)} aria-controls={`mcp-details-${server.id}`}
+                onClick={() => setExpanded((current) => {
                   const next = new Set(current);
                   if (next.has(server.id)) next.delete(server.id); else next.add(server.id);
                   return next;
                 })}>
               <DatabaseIcon size={18} /><div><strong title={server.name}>{server.name}</strong></div></button><label className="mcp-switch" title={server.enabled ? t("mcp.disable") : t("mcp.enable")}><input role="switch" aria-label={`${t("mcp.enabled")} ${server.name}`} type="checkbox" checked={server.enabled} disabled={!!busy} onChange={() => void run(server.id, async () => { await client.saveMcpServer({ ...server, enabled: !server.enabled }, server.id); await refresh(); })} /><span /></label></div>
-            <div className="mcp-server-details" id={`mcp-details-${server.id}`} hidden={collapsed.has(server.id)}>
+            <div className="mcp-server-details" id={`mcp-details-${server.id}`} hidden={!expanded.has(server.id)}>
             <p className="mcp-server-description"><span className="mcp-server-transport">{server.transport === "http" ? "Streamable HTTP" : server.transport.toUpperCase()}</span>{server.description ? ` · ${server.description}` : ""}</p>
+            {server.authMode === "oauth" ? <McpAuthorization server={server} client={client} onChanged={async () => { setNotice(undefined); await refresh(); }} /> : null}
             <div className="mcp-server-actions"><div className="mcp-server-summary"><span className={`mcp-status ${server.status}`}><i />{t(`mcp.status.${server.status}`)}</span><span className="mcp-tool-count">{server.tools.length} {t("mcp.tools")}</span>
             {server.tools.length ? <button className="text-button mcp-inline-command" type="button" disabled={!!busy} onClick={() => { setInspecting(server.id); setNotice(undefined); setError(undefined); }}><Bug size={14} />MCP Inspector</button> : null}
             </div><div className="mcp-actions-end"><button type="button" className="mcp-test-button" aria-label={`${t("mcp.test")} ${server.name}`} title={t("mcp.test")} disabled={!!busy} onClick={() => void run(server.id, async () => { const result = await client.testMcpServer(server.id); setServers((items) => items.map((item) => item.id === server.id ? result : item)); await onChanged(); if (result.error) setError(result.error); else setNotice(`${server.name}: ${t("mcp.testPassed")}${result.durationMs !== undefined ? ` (${result.durationMs} ms)` : ""}`); })}>{busy === server.id ? <SpinnerIcon className="spin" size={14} /> : server.checkedAt ? server.error ? <AlertCircleIcon size={14} /> : <CheckIcon size={14} /> : null}{t("mcp.test")}</button><button type="button" className="icon-button" disabled={!!busy} aria-label={`${t("mcp.edit")} ${server.name}`} title={t("mcp.edit")} onClick={() => openEditor(server)}><EditIcon size={15} /></button><button type="button" className={`icon-button mcp-delete ${deleting === server.id ? "confirming" : ""}`} disabled={!!busy} data-mcp-delete={server.id} aria-label={`${deleting === server.id ? t("mcp.confirmDelete") : t("mcp.delete")} ${server.name}`} title={deleting === server.id ? t("mcp.confirmDelete") : t("mcp.delete")} onClick={() => { if (deleting !== server.id) setDeleting(server.id); else void run(server.id, async () => { await client.deleteMcpServer(server.id); setDeleting(undefined); await refresh(); setNotice(t("mcp.deleted")); }); }}>{deleting === server.id ? <CheckIcon size={15} /> : <TrashIcon size={15} />}</button></div></div>

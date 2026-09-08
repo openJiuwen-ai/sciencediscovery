@@ -27,15 +27,18 @@ export interface CustomMcpServerConfig {
   env: Record<string, string>;
   headers: Record<string, string>;
   timeoutSeconds: number;
+  authMode?: "headers" | "oauth";
+  oauth?: { clientId: string; clientSecret: string; scope: string; clientMetadataUrl: string };
 }
 
 /** Null values retain a saved secret; absent map keys remove it. */
-export interface CustomMcpServerInput extends Omit<CustomMcpServerConfig, "env" | "headers"> {
+export interface CustomMcpServerInput extends Omit<CustomMcpServerConfig, "env" | "headers" | "oauth"> {
   env: Record<string, string | null>;
   headers: Record<string, string | null>;
+  oauth?: Omit<NonNullable<CustomMcpServerConfig["oauth"]>, "clientSecret"> & { clientSecret: string | null };
 }
 
-export interface CustomMcpServerDetails extends Omit<CustomMcpServerConfig, "env" | "headers"> {
+export interface CustomMcpServerDetails extends Omit<CustomMcpServerInput, "env" | "headers"> {
   id: string;
   sourceId: string;
   env: Record<string, null>;
@@ -45,6 +48,19 @@ export interface CustomMcpServerDetails extends Omit<CustomMcpServerConfig, "env
   checkedAt?: string;
   durationMs?: number;
   tools: McpCatalogTool[];
+  authorization?: McpAuthorizationStatus;
+}
+
+export interface McpAuthorizationStatus {
+  state: "required" | "authorizing" | "authorized" | "expired";
+  expiresAt?: string;
+  scope?: string;
+  error?: string;
+}
+
+export interface McpAuthorizationStart {
+  authorizationUrl: string;
+  expiresAt: string;
 }
 
 export interface McpInspectorRequest {

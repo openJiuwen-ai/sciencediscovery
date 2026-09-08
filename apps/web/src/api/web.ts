@@ -18,6 +18,7 @@ import type {
   CustomMcpServerInput,
   McpInspectorRequest,
   McpInspectorResult,
+  McpAuthorizationStart,
   McpSourceManifest,
   McpSourceStatus,
   UpdateWebSettingsRequest,
@@ -29,6 +30,17 @@ import type {
 import { EvolveApiClient } from "./evolve.js";
 
 export class WebApiClient extends EvolveApiClient {
+  startMcpAuthorization(id: string, redirectUrl: string): Promise<McpAuthorizationStart> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/start`, { method: "POST", body: JSON.stringify({ redirectUrl }) });
+  }
+
+  cancelMcpAuthorization(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/cancel`, { method: "POST" });
+  }
+
+  clearMcpAuthorization(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/clear`, { method: "POST" });
+  }
   inspectMcpTool(id: string, body: McpInspectorRequest, signal?: AbortSignal): Promise<McpInspectorResult> {
     return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/inspect`, { method: "POST", body: JSON.stringify(body), signal });
   }

@@ -9,7 +9,7 @@
 // limitations under the License.
 
 import { fileURLToPath } from "node:url";
-import { expect } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
@@ -20,7 +20,7 @@ test.use({ locale: "zh-CN", actionTimeout: 15_000 });
  * E2E-META
  * Purpose: Custom MCP configuration and embedded Inspector work through the real UI/API.
  * Steps:
- *   1. Add a stdio server and discover tools.
+ *   1. Verify empty/blurred/focused form hints, then add a stdio server and discover tools.
  *   2. Invoke valid/invalid/error inputs and inspect the audit ID.
  *   3. Inspect mobile layout, disable, retest, import JSON and delete servers.
  * Environment: Isolated local stack and data directory, built from the current local working tree.
@@ -45,16 +45,45 @@ test("Custom MCP and Inspector user journey", { tag: "@mocked" }, async ({ page,
   const row = settings.locator(".mcp-server").filter({ has: page.locator("strong", { hasText: name }) });
   try {
     await openProjectSession(page, fixture);
-    await journey.step("添加本地 MCP", "保存后发现两个工具，显示已连接", async () => {
+    await journey.step("查看表单提示", "标题只保留字段名，灰色提示仅在输入框为空且失焦时显示", async () => {
       await page.getByRole("button", { name: /^系统设置/ }).click();
       await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^MCP 服务器/ }).click();
       await settings.getByRole("button", { name: "添加服务器", exact: true }).click();
+      const checkHint = async (input: Locator, hint: string) => {
+        await expect(input).toHaveAttribute("placeholder", hint);
+        await expect(input).toHaveValue("");
+        expect(await input.evaluate((element) => element.matches(":placeholder-shown") && getComputedStyle(element, "::placeholder").opacity === "1")).toBe(true);
+        expect(await input.evaluate((element) => getComputedStyle(element, "::placeholder").color)).toBe("rgb(138, 143, 153)");
+        await input.focus();
+        expect(await input.evaluate((element) => getComputedStyle(element, "::placeholder").opacity)).toBe("0");
+        await input.fill("test-value");
+        await input.blur();
+        expect(await input.evaluate((element) => element.matches(":placeholder-shown"))).toBe(false);
+        await input.fill("");
+        expect(await input.evaluate((element) => getComputedStyle(element, "::placeholder").opacity)).toBe("0");
+        await input.blur();
+        expect(await input.evaluate((element) => element.matches(":placeholder-shown") && getComputedStyle(element, "::placeholder").opacity === "1")).toBe(true);
+      };
+      await settings.getByLabel("认证方式").selectOption("oauth");
+      await checkHint(settings.getByLabel("Client ID", { exact: true }), "动态注册时可留空");
+      for (const label of ["Client Secret", "Scope", "客户端元数据 URL"]) await checkHint(settings.getByLabel(label, { exact: true }), "选填");
+      await settings.getByLabel("连接方式").selectOption("stdio");
+      await checkHint(settings.getByLabel("参数", { exact: true }), "每行一个");
+      await checkHint(settings.getByLabel("工作目录", { exact: true }), "选填");
+      await settings.getByLabel("参数", { exact: true }).scrollIntoViewIfNeeded();
+    });
+    await journey.step("添加本地 MCP", "保存后发现两个工具，显示已连接", async () => {
+      await expect(settings.getByLabel("工具超时（秒）")).toBeEnabled();
+      await expect(settings.getByLabel("工具超时（秒）")).toHaveValue("60");
       await settings.getByLabel("名称", { exact: true }).fill(name);
       await settings.getByLabel("连接方式").selectOption("stdio");
       await settings.getByLabel("命令", { exact: true }).fill(process.execPath);
-      await settings.getByLabel("参数（每行一个）").fill(mcpFixture);
-      await settings.getByLabel("启用", { exact: true }).check();
+      await settings.getByLabel("参数", { exact: true }).fill(mcpFixture);
+      await settings.getByLabel("启用此 MCP 服务器", { exact: true }).check();
       await settings.getByRole("button", { name: "保存", exact: true }).click();
+      await expect(row.locator(".mcp-server-details")).toBeHidden();
+      await expect(row.getByRole("button", { name: `展开服务器 ${name}`, exact: true })).toHaveAttribute("aria-expanded", "false");
+      await row.getByRole("button", { name: `展开服务器 ${name}`, exact: true }).click();
       await expect(row).toContainText("已连接");
       await expect(row).toContainText("2 个工具");
       await row.getByRole("button", { name: `测试连接 ${name}`, exact: true }).click();
@@ -134,6 +163,9 @@ test("Custom MCP and Inspector user journey", { tag: "@mocked" }, async ({ page,
       await settings.getByLabel("JSON (mcpServers)").fill(JSON.stringify({ mcpServers: { [importedName]: { command: process.execPath, args: [mcpFixture] } } }));
       await settings.getByRole("button", { name: "导入 JSON", exact: true }).click();
       const imported = settings.locator(".mcp-server").filter({ hasText: importedName });
+      await expect(imported.locator(".mcp-server-details")).toBeHidden();
+      await expect(settings.getByRole("button", { name: `收起服务器 ${name}`, exact: true })).toHaveAttribute("aria-expanded", "true");
+      await imported.getByRole("button", { name: `展开服务器 ${importedName}`, exact: true }).click();
       await expect(imported).toContainText("已停用");
       await imported.getByRole("button", { name: `删除服务器 ${importedName}`, exact: true }).click();
       await expect(imported).toBeVisible();

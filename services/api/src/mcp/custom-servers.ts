@@ -21,6 +21,7 @@ import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { decryptSecretValue, encryptSecretValue, loadOrCreateModelSecretKey } from "../store/secrets.js";
 import { customMcpAdapter } from "./custom-adapter.js";
 import { loadExtensionsConfig, type ExtensionsConfigFile, type McpServerEntry } from "./extensions-config.js";
+import { McpOAuthManager, validateOAuthUrl } from "./oauth.js";
 
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -66,6 +67,26 @@ export function normalizeCustomMcpConfig(value: unknown, previous?: CustomMcpSer
     try { parsed = new URL(url); } catch { throw new Error("A valid HTTP(S) URL is required"); }
     if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.hash) throw new Error("Use an HTTP(S) URL without user credentials or a fragment");
   }
+  const authMode = transport === "stdio" ? "headers" : value.authMode ?? "headers";
+  if (authMode !== "headers" && authMode !== "oauth") throw new Error("Unsupported MCP authorization mode");
+  let oauth: CustomMcpServerConfig["oauth"];
+  if (authMode === "oauth") {
+    validateOAuthUrl(url);
+    const raw = value.oauth ?? {};
+    if (!object(raw)) throw new Error("Invalid OAuth configuration");
+    const field = (key: string): string => {
+      const value = raw[key] ?? "";
+      if (typeof value !== "string" || value.length > 4096 || /[\0\r\n]/.test(value)) throw new Error(`Invalid OAuth ${key}`);
+      return value.trim();
+    };
+    oauth = { clientId: field("clientId"), clientSecret: raw.clientSecret === null ? previous?.oauth?.clientSecret ?? "" : field("clientSecret"), scope: field("scope"), clientMetadataUrl: field("clientMetadataUrl") };
+    if (oauth.clientSecret && !oauth.clientId) throw new Error("OAuth Client ID is required with a client secret");
+    if (oauth.clientMetadataUrl) {
+      const metadata = validateOAuthUrl(oauth.clientMetadataUrl);
+      if (metadata.protocol !== "https:" || metadata.pathname === "/") throw new Error("Client metadata URL must be an HTTPS document URL");
+    }
+    if (object(value.headers) && Object.keys(value.headers).some((key) => key.toLowerCase() === "authorization")) throw new Error("Remove the Authorization header before enabling OAuth");
+  }
   return {
     name, transport,
     description: text("description", 2_000),
@@ -77,6 +98,7 @@ export function normalizeCustomMcpConfig(value: unknown, previous?: CustomMcpSer
     env: transport === "stdio" ? secretMap(value.env ?? {}, previous?.env ?? {}, "env") : {},
     headers: transport !== "stdio" ? secretMap(value.headers ?? {}, previous?.headers ?? {}, "headers") : {},
     timeoutSeconds: Number(timeoutSeconds),
+    authMode, ...(oauth ? { oauth } : {}),
   };
 }
 
@@ -93,6 +115,7 @@ function entry(config: CustomMcpServerConfig): McpServerEntry {
 }
 
 export class CustomMcpServers {
+  readonly oauth: McpOAuthManager;
   private configs: Record<string, CustomMcpServerConfig> = {};
   private readonly checks = new Map<string, { checkedAt: string; tools: McpCatalogTool[]; error?: string; durationMs?: number }>();
   private key?: Buffer;
@@ -107,6 +130,7 @@ export class CustomMcpServers {
     private readonly onRemoved: (id: string) => Promise<void> = async () => undefined,
   ) {
     this.path = resolve(dataDir, "custom-mcp-servers.enc");
+    this.oauth = new McpOAuthManager(dataDir, (id) => this.configs[id]);
   }
 
   async load(): Promise<void> {
@@ -123,6 +147,7 @@ export class CustomMcpServers {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    await this.oauth.load(this.key);
     this.sync();
   }
 
@@ -159,7 +184,7 @@ export class CustomMcpServers {
 
   private cleanError(config: CustomMcpServerConfig, message: string): string {
     let safe = message;
-    for (const secret of [...Object.values(entry(config).env), ...Object.values(entry(config).headers), config.url].filter(Boolean)) {
+    for (const secret of [...Object.values(entry(config).env), ...Object.values(entry(config).headers), config.url, config.oauth?.clientSecret ?? ""].filter(Boolean)) {
       safe = safe.split(secret).join("[redacted]");
     }
     return safe.slice(0, 1_000);
@@ -168,13 +193,17 @@ export class CustomMcpServers {
   list(): CustomMcpServerDetails[] {
     return Object.entries(this.configs).map(([id, config]) => {
       const check = this.checks.get(id);
+      const authorization = this.oauth.status(id);
+      const needsLogin = authorization?.state === "required";
       return {
         ...config, id, sourceId: id,
+        ...(config.oauth ? { oauth: { ...config.oauth, clientSecret: config.oauth.clientSecret ? null : "" } } : {}),
+        ...(authorization ? { authorization } : {}),
         env: Object.fromEntries(Object.keys(config.env).map((key) => [key, null])),
         headers: Object.fromEntries(Object.keys(config.headers).map((key) => [key, null])),
         ...check,
-        status: !config.enabled ? "disabled" : check?.error ? "error" : check ? "ready" : "untested",
-        tools: check?.tools ?? [],
+        status: !config.enabled ? "disabled" : needsLogin || check?.error ? "error" : check ? "ready" : "untested",
+        tools: needsLogin ? [] : check?.tools ?? [],
       };
     });
   }
@@ -201,8 +230,10 @@ export class CustomMcpServers {
       if (Object.entries(this.configs).some(([otherId, other]) => otherId !== id && other.name.toLowerCase() === config.name.toLowerCase())) throw new Error("A server with this name already exists");
       if (!id && Object.keys(this.configs).length >= 50) throw new Error("At most 50 custom MCP servers are supported");
       const serverId = id ?? `custom-${randomBytes(6).toString("hex")}`;
+      const previous = this.configs[serverId];
       this.checks.delete(serverId);
       await this.persist({ ...this.configs, [serverId]: config });
+      if (previous && JSON.stringify([previous.url, previous.transport, previous.authMode, previous.oauth]) !== JSON.stringify([config.url, config.transport, config.authMode, config.oauth])) await this.oauth.clear(serverId);
       await this.refresh();
       return this.list().find((item) => item.id === serverId)!;
     });
@@ -214,6 +245,7 @@ export class CustomMcpServers {
       const next = { ...this.configs };
       delete next[id];
       await this.persist(next);
+      await this.oauth.clear(id);
       this.registry.remove(id);
       this.checks.delete(id);
       await this.onRemoved(id);
@@ -245,7 +277,7 @@ export class CustomMcpServers {
       if (!config) throw new Error("MCP server not found");
       // A separate client can probe a disabled server without enabling it for any Agent.
       const { McpNodeClient } = await import("./node-client.js");
-      const probe = new McpNodeClient(() => ({ path: undefined, signature: id, servers: { [id]: { ...entry(config), enabled: true } } }));
+      const probe = new McpNodeClient(() => ({ path: undefined, signature: id, servers: { [id]: { ...entry(config), enabled: true } } }), this.oauth);
       const started = Date.now();
       try {
         const catalog = await probe.catalog();

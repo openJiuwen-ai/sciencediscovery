@@ -50,6 +50,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import { effectiveRouting, loadExtensionsConfig, type ExtensionsConfigFile, type McpServerEntry } from "./extensions-config.js";
+import type { McpOAuthManager } from "./oauth.js";
 
 const PROXY_ENV_VARS = [
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
@@ -159,7 +160,7 @@ export class McpNodeClient {
   private readonly sessions = new Map<string, ServerSession>();
   private proxies: Record<string, ResolvedProxy> = {};
 
-  constructor(private readonly loadConfig: () => ExtensionsConfigFile = loadExtensionsConfig) {}
+  constructor(private readonly loadConfig: () => ExtensionsConfigFile = loadExtensionsConfig, private readonly oauth?: McpOAuthManager) {}
 
   private currentConfig(): ExtensionsConfigFile {
     return this.loadConfig();
@@ -183,6 +184,8 @@ export class McpNodeClient {
   }
 
   private async session(serverId: string, server: McpServerEntry): Promise<Client> {
+    await this.oauth?.prepare(serverId);
+    const authorizedFetch = this.oauth?.fetchFor(serverId);
     const proxySignature = this.proxySignature(serverId);
     const configSignature = JSON.stringify(server);
     const existing = this.sessions.get(serverId);
@@ -228,11 +231,13 @@ export class McpNodeClient {
       if (!server.url) throw new Error(`MCP server '${serverId}' with sse transport requires 'url'`);
       await connect(new SSEClientTransport(new URL(server.url), {
         requestInit: { headers: server.headers },
+        ...(authorizedFetch ? { fetch: authorizedFetch } : {}),
       }));
     } else {
       if (!server.url) throw new Error(`MCP server '${serverId}' with http transport requires 'url'`);
       await connect(new StreamableHTTPClientTransport(new URL(server.url), {
         requestInit: { headers: server.headers },
+        ...(authorizedFetch ? { fetch: authorizedFetch } : {}),
       }));
     }
     } catch (error) {
