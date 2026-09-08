@@ -7,6 +7,7 @@
 - 本地模式默认基址与绑定地址：`http://127.0.0.1:4310`。
 - Docker 默认发布地址：`http://127.0.0.1:4310`。
 - `GET /health` 与 `GET /api/health` 无需认证。
+- MCP OAuth 浏览器回调 `GET /api/mcp/oauth/callback` 不使用本地 bearer token，而是校验待处理的一次性 OAuth state，并通过 PKCE 交换授权码。
 - 其他 `/api/*` 请求必须携带 `Authorization: Bearer <SCIENCE_AGENT_AUTH_TOKEN>`。没有默认 token：该变量未设置时，服务端在首次启动生成并打印一个随机 token，并保存在 `<数据目录>/secrets/auth-token`。
 - JSON 客户端应发送 `Content-Type: application/json`；服务端对通用 JSON body 设置 1,500,000 bytes 上限。工作区上传使用 multipart 及独立配额。
 - JSON 错误至少包含 `{"error":"..."}`；部分业务错误还可包含 `code` 或 `details`。
@@ -97,6 +98,51 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 ```
 
 `SendMessageRequest` 还可包含 `annotationIds`、`references` 和 `webForceRefresh`。`SessionRun.status` 当前可能为 `queued`、`running`、`blocked`、`completed`、`failed`、`cancelled` 或 `interrupted`。
+
+## 自定义 MCP 服务器与 Inspector
+
+界面操作见[配置自定义 MCP](../how-to/configure-custom-mcp.md)。路由位于 `services/api/src/http/custom-mcp.ts`，请求和响应类型位于 `packages/schema/src/custom-mcp.ts`。下表接口均需本地 API bearer token。
+
+| 方法与路径 | 请求 | 响应 |
+|---|---|---|
+| `GET /api/mcp/servers` | 无 | `200`，`CustomMcpServerDetails[]` |
+| `POST /api/mcp/servers` | 服务器配置 | `201`，`CustomMcpServerDetails` |
+| `PUT /api/mcp/servers/:id` | 完整更新配置，不是局部 PATCH | `200`，`CustomMcpServerDetails` |
+| `DELETE /api/mcp/servers/:id` | 无 | `200`，`{"deleted":true}`；清理配置引用和本地 OAuth 凭据 |
+| `POST /api/mcp/servers/import` | `{"mcpServers":{"名称":{...}}}` | `201`，导入的 `CustomMcpServerDetails[]`；整批校验，导入项默认停用 |
+| `POST /api/mcp/servers/:id/test` | 无 | `200`，包含发现的 `tools` 和可选 `error` 的详情；可探测停用服务器，不自动启用 |
+| `POST /api/mcp/servers/:id/inspect` | `{"sessionId":"...","toolName":"...","input":{...}}` | `200`，`McpInspectorResult`，含 `ok`、`invocationId`、`durationMs`，以及可选 `raw`、`result`、`error` |
+| `POST /api/mcp/servers/:id/oauth/start` | `{"redirectUrl":"http://127.0.0.1:4310/api/mcp/oauth/callback"}` | `200`，`{authorizationUrl, expiresAt}`；回调必须与浏览器访问的应用同源 |
+| `POST /api/mcp/servers/:id/oauth/cancel` | 无 | `200`，`{"ok":true}`；取消本地待处理授权流程 |
+| `POST /api/mcp/servers/:id/oauth/clear` | 无 | `200`，`{"ok":true}`；清除本地凭据并重新探测服务器 |
+
+服务器 ID 为 `custom-` 加 12 位十六进制字符。最多保存 50 台自定义服务器，名称不区分大小写且不能重复。最小停用 HTTP 配置示例：
+
+```json
+{
+  "name": "Research tools",
+  "transport": "http",
+  "url": "https://mcp.example.com/mcp",
+  "enabled": false,
+  "timeoutSeconds": 60,
+  "authMode": "headers",
+  "headers": {}
+}
+```
+
+`transport` 为 `stdio`、`http` 或 `sse`。STDIO 使用 `command`、`args`、`cwd`、`env`，HTTP/SSE 使用 `url`、`headers`。`timeoutSeconds` 默认 60，必须为 1-600 的整数。OAuth 模式接受 `oauth: {clientId, clientSecret, scope, clientMetadataUrl}`，不能同时配置手动 Authorization 请求头。示例 URL 是占位地址，不可直接用于连接。
+
+响应中的 `env`、`headers` 只返回键名和值为 `null` 的映射，不返回秘密值。更新时，`null` **只保留同名 key 的旧值**；字符串（包括 `""`）替换旧值，省略映射中的 key 表示删除。因此重命名必须明确提供新值，对原本不存在的 key 传 `null` 会失败。界面对已保存键名的重命名要求重新填写值，未填时阻止保存。OAuth 的 `clientSecret: null` 同样保留已保存的值；详情不会返回 access/refresh token。
+
+连接失败可能通过 HTTP `200` 测试结果内的 `error` 返回。进入治理链路后的 Inspector 失败返回 `ok: false`；无效输入或调用记录建立前的错误可能返回 `400`，服务器不存在返回 `404`。不能只根据 HTTP 成功判断工具成功。Inspector 要求服务器已启用、Session 存在且工具已被发现；手动调用会记录审计，但不会替该 Session 的 Agent 启用连接器。
+
+### OAuth 浏览器回调
+
+| 方法与路径 | 查询参数 | 响应 |
+|---|---|---|
+| `GET /api/mcp/oauth/callback` | 待处理的 `state` 与 `code`，或服务商 `error` | HTML 完成页：成功 `200`，state 无效/过期、拒绝授权或交换失败为 `400` |
+
+这是上述本地 bearer 认证的例外，不是通用免认证配置接口。OAuth state 一次性使用，10 分钟过期；回调必须来自通过认证的 start 接口发起的流程。清除本地授权不等于撤销服务商端授权。远程 OAuth 端点要求 HTTPS，本机回环 HTTP 可用于开发。
 
 ## 代理配置
 

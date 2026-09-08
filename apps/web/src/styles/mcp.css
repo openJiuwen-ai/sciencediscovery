@@ -72,6 +72,7 @@
 .mcp-secret-fields legend { font-size: 12px; font-weight: 600; padding-right: 8px; }
 .mcp-secret-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) 30px; gap: 6px; margin-bottom: 8px; align-items: center; }
 .mcp-secret-row input { min-width: 0; width: 100%; }
+.mcp-secret-error { grid-column: 1 / -1; color: #a52b3c; font-size: 12px; overflow-wrap: anywhere; }
 .mcp-inline-command { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 0; background: transparent; border: 0; color: var(--accent); cursor: pointer; }
 .mcp-form-tail { display: flex; align-items: center; flex-wrap: wrap; gap: 24px; }
 .mcp-form-tail > label:first-child { max-width: 200px; }

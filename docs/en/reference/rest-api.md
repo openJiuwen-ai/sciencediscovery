@@ -7,6 +7,7 @@ This page records the key HTTP interfaces used by the current Web UI, based on `
 - Local default base and bind address: `http://127.0.0.1:4310`.
 - Docker default published address: `http://127.0.0.1:4310`.
 - `GET /health` and `GET /api/health` do not require authentication.
+- The MCP OAuth browser callback `GET /api/mcp/oauth/callback` does not use the local bearer token; it validates a pending, one-time OAuth state and exchanges the authorization code with PKCE.
 - Other `/api/*` requests require `Authorization: Bearer <SCIENCE_AGENT_AUTH_TOKEN>`. There is no default token: when the variable is unset the server generates one on its first start, prints it, and stores it in `<data-dir>/secrets/auth-token`.
 - JSON clients send `Content-Type: application/json`; generic JSON bodies are limited to 1,500,000 bytes. Workspace multipart uploads have separate quotas.
 - JSON errors contain at least `{"error":"..."}` and may also contain `code` or `details`.
@@ -93,6 +94,51 @@ A minimal Run requires only `content`:
 ```
 
 `SendMessageRequest` may also contain `annotationIds`, `references`, and `webForceRefresh`. `SessionRun.status` can be `queued`, `running`, `blocked`, `completed`, `failed`, `cancelled`, or `interrupted`.
+
+## Custom MCP servers and Inspector
+
+See [Configure custom MCP servers](../how-to/configure-custom-mcp.md) for the UI workflow. Routes are implemented in `services/api/src/http/custom-mcp.ts`; request/response types are in `packages/schema/src/custom-mcp.ts`. All routes in this table require the local API bearer token.
+
+| Method and path | Request | Response |
+|---|---|---|
+| `GET /api/mcp/servers` | none | `200`, `CustomMcpServerDetails[]` |
+| `POST /api/mcp/servers` | server configuration | `201`, `CustomMcpServerDetails` |
+| `PUT /api/mcp/servers/:id` | complete updated configuration, not a partial PATCH | `200`, `CustomMcpServerDetails` |
+| `DELETE /api/mcp/servers/:id` | none | `200`, `{"deleted":true}`; clears configuration references and local OAuth credentials |
+| `POST /api/mcp/servers/import` | `{"mcpServers":{"name":{...}}}` | `201`, imported `CustomMcpServerDetails[]`; entire batch validated, imported entries disabled |
+| `POST /api/mcp/servers/:id/test` | none | `200`, details including discovered `tools` and optional `error`; can probe a disabled server without enabling it |
+| `POST /api/mcp/servers/:id/inspect` | `{"sessionId":"...","toolName":"...","input":{...}}` | `200`, `McpInspectorResult` with `ok`, `invocationId`, `durationMs`, optional `raw`, `result`, `error` |
+| `POST /api/mcp/servers/:id/oauth/start` | `{"redirectUrl":"http://127.0.0.1:4310/api/mcp/oauth/callback"}` | `200`, `{authorizationUrl, expiresAt}`; callback must use the application's browser origin |
+| `POST /api/mcp/servers/:id/oauth/cancel` | none | `200`, `{"ok":true}`; cancels the pending local authorization attempt |
+| `POST /api/mcp/servers/:id/oauth/clear` | none | `200`, `{"ok":true}`; clears local credentials and probes the server again |
+
+Server IDs use `custom-` followed by 12 hexadecimal characters. At most 50 custom servers can be saved; names must be unique ignoring case. Minimal disabled HTTP configuration:
+
+```json
+{
+  "name": "Research tools",
+  "transport": "http",
+  "url": "https://mcp.example.com/mcp",
+  "enabled": false,
+  "timeoutSeconds": 60,
+  "authMode": "headers",
+  "headers": {}
+}
+```
+
+`transport` is `stdio`, `http`, or `sse`. STDIO uses `command`, `args`, `cwd`, and `env`; HTTP/SSE uses `url` and `headers`. `timeoutSeconds` defaults to 60 and must be an integer from 1 to 600. OAuth mode accepts `oauth: {clientId, clientSecret, scope, clientMetadataUrl}` and cannot be combined with a manually configured Authorization header. Do not copy placeholder URLs into a live configuration.
+
+`env` and `headers` in responses expose keys with `null` values, not the saved secrets. When updating, `null` retains the previous value **only for the exact same key**; a string (including `""`) replaces it, and an omitted map key removes it. A renamed key therefore needs an explicitly supplied value: sending `null` for a previously unknown key is invalid. The UI blocks saved-key renames until the value is re-entered. OAuth `clientSecret: null` similarly retains its saved value. Access/refresh tokens are never returned in these details.
+
+Connection failures may appear as `error` in an HTTP `200` test result. Governed Inspector failures return `ok: false`; malformed input and failures before a governed invocation may return `400`. Unknown servers return `404`. Inspect the body, not just HTTP success. Inspector requires an enabled server, an existing Session and a discovered tool; it records the explicit manual call without enabling that connector for the Session's Agent.
+
+### OAuth browser callback
+
+| Method and path | Query | Response |
+|---|---|---|
+| `GET /api/mcp/oauth/callback` | pending `state` plus `code`, or provider `error` | HTML completion page: `200` on success, `400` on invalid/expired state, denied authorization or failed exchange |
+
+This is the exception to local bearer authentication described above, not a general unauthenticated configuration endpoint. OAuth state is single-use and expires after 10 minutes. A callback must originate from a flow initiated via the authenticated start endpoint. Clearing local authorization is not provider-side consent revocation. Remote OAuth endpoints require HTTPS; loopback HTTP is allowed for local development.
 
 ## Proxy configuration
 

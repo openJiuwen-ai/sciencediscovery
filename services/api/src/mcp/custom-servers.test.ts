@@ -145,3 +145,23 @@ test("custom configuration rejects malformed URLs, fields and secrets", () => {
     { name: "x", url: "http://localhost", headers: { Authorization: "a\nb" } },
   ]) assert.throws(() => normalizeCustomMcpConfig(value));
 });
+
+for (const field of ["env", "headers"] as const) {
+  test(`${field}: retaining secrets is keyed by original name and invalid renames are atomic`, async () => {
+    const f = await setup();
+    try {
+      const config = field === "env" ? { command: process.execPath } : { transport: "http", url: "http://127.0.0.1/mcp" };
+      const saved = await f.manager.save({ name: "Secret retention", ...config, enabled: false, [field]: { ORIGINAL: "synthetic-secret" } });
+      await f.manager.save({ ...saved, [field]: { ORIGINAL: null } }, saved.id);
+      const values = () => f.manager.transportConfig().servers[saved.id]![field];
+      assert.deepEqual(values(), { ORIGINAL: "synthetic-secret" });
+      await assert.rejects(f.manager.save({ ...saved, [field]: { RENAMED: null } }, saved.id), /Invalid/);
+      assert.deepEqual(values(), { ORIGINAL: "synthetic-secret" });
+      await f.manager.save({ ...saved, [field]: { RENAMED: "synthetic-replacement" } }, saved.id);
+      assert.deepEqual(values(), { RENAMED: "synthetic-replacement" });
+      const restored = new CustomMcpServers(f.dir, createMcpSourceRegistry(), () => undefined, async () => undefined);
+      await restored.load();
+      assert.deepEqual(restored.transportConfig().servers[saved.id]![field], { RENAMED: "synthetic-replacement" });
+    } finally { await f.close(); }
+  });
+}

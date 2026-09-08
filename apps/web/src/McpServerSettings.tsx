@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { CustomMcpServerDetails, CustomMcpServerInput, McpSourceManifest } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api.js";
 import { useLocale } from "./i18n/index.js";
@@ -22,7 +22,7 @@ import { Bug } from "lucide-react";
 import { McpInspector } from "./McpInspector.js";
 import { McpAuthorization, type McpAuthorizationClient } from "./McpAuthorization.js";
 
-type SecretRow = { key: string; value: string | null };
+type SecretRow = { key: string; value: string | null; originalKey?: string };
 type Draft = Omit<CustomMcpServerInput, "env" | "headers" | "args"> & { argsText: string; envRows: SecretRow[]; headerRows: SecretRow[] };
 
 function draftFor(server?: CustomMcpServerDetails): Draft {
@@ -31,14 +31,19 @@ function draftFor(server?: CustomMcpServerDetails): Draft {
     transport: server?.transport ?? "http", enabled: server?.enabled ?? false,
     command: server?.command ?? "", argsText: server?.args.join("\n") ?? "",
     cwd: server?.cwd ?? "", url: server?.url ?? "", timeoutSeconds: server?.timeoutSeconds ?? 60,
-    envRows: Object.keys(server?.env ?? {}).map((key) => ({ key, value: null })),
-    headerRows: Object.keys(server?.headers ?? {}).map((key) => ({ key, value: null })),
+    envRows: Object.keys(server?.env ?? {}).map((key) => ({ key, originalKey: key, value: null })),
+    headerRows: Object.keys(server?.headers ?? {}).map((key) => ({ key, originalKey: key, value: null })),
     authMode: server?.authMode ?? "headers",
     oauth: server?.oauth ?? { clientId: "", clientSecret: "", scope: "", clientMetadataUrl: "" },
   };
 }
 
-function secretRows(rows: SecretRow[]): Record<string, string | null> {
+function needsSecretValue(row: SecretRow): boolean {
+  return row.originalKey !== undefined && row.key.trim() !== row.originalKey && (row.value === null || row.value === "");
+}
+
+function secretRows(rows: SecretRow[], renameMessage: string): Record<string, string | null> {
+  if (rows.some(needsSecretValue)) throw new Error(renameMessage);
   const entries = rows.map(({ key, value }) => [key.trim(), value] as const);
   if (entries.some(([key]) => !key) || new Set(entries.map(([key]) => key)).size !== entries.length) throw new Error("Keys must be non-empty and unique");
   return Object.fromEntries(entries);
@@ -46,12 +51,14 @@ function secretRows(rows: SecretRow[]): Record<string, string | null> {
 
 function SecretFields({ rows, onChange, label }: { rows: SecretRow[]; onChange: (rows: SecretRow[]) => void; label: string }) {
   const { t } = useLocale();
+  const id = useId();
   return <fieldset className="mcp-secret-fields">
     <legend>{label}</legend>
     {rows.map((row, index) => <div className="mcp-secret-row" key={index}>
-      <input aria-label={`${label} ${t("mcp.key")} ${index + 1}`} placeholder={t("mcp.key")} value={row.key} onChange={(event) => onChange(rows.map((item, i) => i === index ? { ...item, key: event.target.value, value: item.value ?? "" } : item))} />
-      <input aria-label={`${label} ${t("mcp.value")} ${index + 1}`} autoComplete="off" type="password" placeholder={row.value === null ? t("mcp.secretSaved") : t("mcp.value")} value={row.value ?? ""} onChange={(event) => onChange(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
+      <input aria-label={`${label} ${t("mcp.key")} ${index + 1}`} placeholder={t("mcp.key")} value={row.key} onChange={(event) => onChange(rows.map((item, i) => i === index ? { ...item, key: event.target.value } : item))} />
+      <input aria-label={`${label} ${t("mcp.value")} ${index + 1}`} aria-describedby={needsSecretValue(row) ? `${id}-${index}-error` : undefined} aria-invalid={needsSecretValue(row) || undefined} required={needsSecretValue(row)} autoComplete="off" type="password" placeholder={needsSecretValue(row) ? t("mcp.value") : row.value === null ? t("mcp.secretSaved") : t("mcp.value")} value={row.value ?? ""} onChange={(event) => onChange(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
       <button aria-label={t("mcp.removeEntry")} title={t("mcp.removeEntry")} className="icon-button" type="button" onClick={() => onChange(rows.filter((_, i) => i !== index))}><CloseIcon size={15} /></button>
+      {needsSecretValue(row) ? <span className="mcp-secret-error" id={`${id}-${index}-error`} role="alert">{t("mcp.secretRenameRequired")}</span> : null}
     </div>)}
     <button className="text-button mcp-inline-command" type="button" onClick={() => onChange([...rows, { key: "", value: "" }])}><PlusIcon size={14} />{t("mcp.addEntry")}</button>
   </fieldset>;
@@ -120,7 +127,8 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
     if (!editor) return;
     void run("save", async () => {
       const { argsText, envRows, headerRows, ...values } = editor.draft;
-      await client.saveMcpServer({ ...values, args: argsText ? argsText.split("\n").filter((line) => line.length > 0) : [], env: secretRows(envRows), headers: secretRows(headerRows) }, editor.id);
+      const renameMessage = t("mcp.secretRenameRequired");
+      await client.saveMcpServer({ ...values, args: argsText ? argsText.split("\n").filter((line) => line.length > 0) : [], env: values.transport === "stdio" ? secretRows(envRows, renameMessage) : {}, headers: values.transport !== "stdio" ? secretRows(headerRows, renameMessage) : {} }, editor.id);
       setEditor(undefined);
       await refresh();
       setNotice(t("mcp.saved"));
