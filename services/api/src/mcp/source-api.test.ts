@@ -40,7 +40,6 @@ function stubTransport(catalog: McpCatalog): McpTransportClient {
 
 test("MCP source API exposes only native MCP sources", async (context) => {
   const dataDir = await mkdtemp(resolve(tmpdir(), "sciencediscovery-mcp-api-"));
-  context.after(() => rm(dataDir, { force: true, recursive: true }));
   const config: ServerConfig = {
     authToken: "test-token",
     dataDir,
@@ -104,8 +103,16 @@ test("MCP source API exposes only native MCP sources", async (context) => {
       }],
     }),
   });
+  context.after(async () => {
+    // Close sockets before deleting fixture data. An ENOTEMPTY during async
+    // startup cleanup must not prevent the HTTP server from being closed.
+    await new Promise<void>((resolveClose) => {
+      server.close(() => resolveClose());
+      server.closeAllConnections();
+    });
+    await rm(dataDir, { force: true, recursive: true, maxRetries: 5, retryDelay: 100 });
+  });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
-  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   const response = await fetch(`${origin}/api/mcp/sources`, {
