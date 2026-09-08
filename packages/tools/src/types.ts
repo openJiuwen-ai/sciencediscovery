@@ -4,6 +4,8 @@
 import type { Static, TSchema } from "typebox";
 
 export interface AgentToolResult {
+  /** A completed tool invocation may report a domain failure without throwing. */
+  isError?: boolean;
   /**
    * Set by tools that already bound their own model-facing output (pagination,
    * an explicit preview). The registry then leaves the formatting alone unless

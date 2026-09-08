@@ -52,6 +52,41 @@ test("tool scheduling is fail-closed and only exact true enables parallel execut
   assert.equal(registry.executionMode({ args: {}, id: "4", name: "missing" }), "exclusive");
 });
 
+test("returned tool failures keep their raw result and error flag through durable observations", async () => {
+  const observed: Array<{ content: string; isError: boolean }> = [];
+  const recorded: Array<{ content: string; isError: boolean }> = [];
+  const content = JSON.stringify({ state: "failed", result: { exitCode: 1, stderr: "RuntimeError: " + "y".repeat(650) } });
+  const registry = new ToolRegistry([{
+    name: "run_shell", label: "Shell", description: "Shell", parameters: Type.Object({}),
+    async execute() { return { isError: true, content: [{ type: "text", text: content }], details: {} }; },
+  }], {
+    createResultMessage: resultMessage,
+    recordResult: async (result) => { recorded.push(result); },
+    onResult: (result) => { observed.push(result); },
+  });
+  const result = await registry.execute({ id: "failed-shell", name: "run_shell", args: {} }, new AbortController().signal);
+  assert.equal(result.isError, true);
+  assert.equal(result.content, content);
+  assert.equal(result.message.content, content);
+  for (const results of [recorded, observed]) {
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.isError, true);
+    assert.equal(results[0]?.content, content);
+  }
+});
+
+test("error-looking output is successful unless the tool marks it as a failure", async () => {
+  for (const isError of [undefined, false]) {
+    const registry = new ToolRegistry([{
+      name: "echo", label: "echo", description: "echo", parameters: Type.Object({}),
+      async execute() { return { isError, content: [{ type: "text", text: "RuntimeError: timeout" }], details: {} }; },
+    }], { createResultMessage: resultMessage });
+    const result = await registry.execute({ id: "echo", name: "echo", args: {} }, new AbortController().signal);
+    assert.equal(result.isError, false);
+    assert.equal(result.content, "RuntimeError: timeout");
+  }
+});
+
 test("result observations retain model-declared order across concurrent completion", async () => {
   const observed: Array<{ name: string; sequence: number }> = [];
   const registry = new ToolRegistry([

@@ -204,7 +204,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       const text = result.content.map((item) => item.text).join("\n");
       return {
         content: isRemoteContentTool(call.name) ? neutralizeUntrustedTags(text) : text,
-        isError: false,
+        isError: result.isError === true,
         selfBounded: result.bounded === true,
       };
     } catch (error) {
