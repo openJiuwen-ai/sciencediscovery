@@ -59,6 +59,8 @@ const stub = createServer(async (request, response) => {
     const legacy = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Legacy sync roundtrip"));
     const evolution = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Evolution committed export"));
     const managed = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Managed execution journey"));
+    const latestUser = input.messages?.findLast((message) => message.role === "user")?.content ?? "";
+    const wake = typeof latestUser === "string" && latestUser.includes("[Execution notifications]");
     const results = input.messages?.filter((message) => message.role === "tool") ?? [];
     let call;
     if (!child && !results.length) call = { name: "task", arguments: {
@@ -107,7 +109,7 @@ const stub = createServer(async (request, response) => {
       } } : undefined;
       if (results.length) assert.ok(!JSON.stringify(results).includes("refusedBecause"), JSON.stringify(results));
     }
-    if (managed) {
+    if (managed && !wake) {
       const data = (index) => JSON.parse(results[index].content);
       const first = results.length ? data(0) : undefined;
       const second = results.length > 3 ? data(3) : undefined;
@@ -127,10 +129,20 @@ const stub = createServer(async (request, response) => {
       if (results.length > 5) { assert.equal(data(5).state, "cancelled"); assert.equal(data(5).provenance, "committed"); }
       if (results.length > 6) assert.equal(data(6).length, 2);
     }
+    if (latestUser.includes("Wake execution journey") && !wake) call = results.length ? undefined : {
+      name: "run_shell", arguments: { command: "sleep 2; printf wake-complete >> wake.txt", background: true },
+    };
+    if (latestUser.includes("Timer wake journey") && !wake) call = [
+      { name: "timer_create", arguments: { after_ms: 1500, message: "timer-wake-marker" } },
+      { name: "timer_create", arguments: { after_ms: 60000, message: "cancelled-reminder" } },
+      { name: "timer_list", arguments: {} },
+      { name: "timer_cancel", arguments: { timer_id: results.length > 1 ? JSON.parse(results[1].content).id : undefined } },
+    ][results.length];
+    if (wake) call = undefined; // acknowledge facts, never rerun the original command
     response.writeHead(200, { "content-type": "text/event-stream" });
     const delta = call ? { role: "assistant", tool_calls: [{ index: 0, id: `call-${child ? "child" : "main"}-${results.length}`,
       type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] }
-      : { role: "assistant", content: child ? "Delivered isolated result." : "Child result is available." };
+      : { role: "assistant", content: wake ? "Received retained notification; no command replay." : child ? "Delivered isolated result." : "Child result is available." };
     const frame = (value, finish_reason) => ({ id: "journey", object: "chat.completion.chunk", created: 1, model: "journey",
       choices: [{ index: 0, delta: value, finish_reason }] });
     response.write(`data: ${JSON.stringify(frame(delta, null))}\n\n`);
@@ -345,6 +357,27 @@ try {
     const managedRequests = requests.filter((input) => input.messages?.some((message) => message.role === "user" && message.content?.includes?.("Managed execution journey")));
     assert.ok(managedRequests.some((input) => input.messages.filter((message) => message.role === "tool").length === 7), "Agent must finish all execution management steps");
     return "Main Agent received live IDs from background and timed foreground calls, read retained logs, cancelled explicitly, and queried committed completion/cancellation without a second Shell for management";
+  });
+  await step("9. 完成通知真正唤醒主 Agent", "前一回合已结束后，后台完成自动创建新回合并调用模型，不重放命令。", async () => {
+    const target = await json(`/api/projects/${session.projectId}/sessions`, { title: "Wake execution", modelId: session.modelId, approvalMode: "always_allow" });
+    const initial = await json(`/api/sessions/${target.id}/runs`, { content: "Wake execution journey: finish this turn after background acceptance." });
+    await until(async () => (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.id === initial.id)?.status === "completed");
+    let automatic;
+    await until(async () => { automatic = (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.automaticWake && run.status === "completed"); return automatic; });
+    assert.ok(automatic.notificationDelivery.notifications.some((notice) => notice.kind === "execution"));
+    assert.ok(requests.some((input) => input.messages?.some((message) => typeof message.content === "string" && message.content.includes(automatic.notificationDelivery.notifications[0].sourceId) && message.content.includes("[Execution notifications]"))), "completion must reach the model");
+    const file = await fetch(`${api}/api/sessions/${target.id}/file?path=wake.txt`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(await file.text(), "wake-complete");
+    return "Background completion created a distinct completed automatic run; model received its Execution ID; command output was written exactly once";
+  });
+  await step("10. 一次性提醒到期唤醒", "模型创建、查询和取消提醒；未取消的提醒到期进入新回合，不执行 Shell。", async () => {
+    const target = await json(`/api/projects/${session.projectId}/sessions`, { title: "Timer wake", modelId: session.modelId, approvalMode: "always_allow" });
+    await json(`/api/sessions/${target.id}/runs`, { content: "Timer wake journey: create one reminder and cancel the other." });
+    let automatic;
+    await until(async () => { automatic = (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.automaticWake && run.status === "completed"); return automatic; });
+    assert.deepEqual(automatic.notificationDelivery.notifications.map((notice) => notice.message), ["timer-wake-marker"]);
+    assert.ok(requests.some((input) => input.messages?.some((message) => typeof message.content === "string" && message.content.includes("[Execution notifications]") && message.content.includes("timer-wake-marker"))));
+    return "timer_create/list/cancel ran through Agent tools; only the uncancelled one-time reminder reached a new model turn";
   });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }

@@ -314,6 +314,12 @@ export type SessionRunStatus =
   | "interrupted";
 
 export interface SessionRun {
+  /** Trusted notification context, never accepted from SendMessageRequest. */
+  notificationDelivery?: {
+    sessionId: string; agentId: string; epoch: number; agentEpoch: number;
+    notifications: Array<{ id: string; sessionId: string; agentId: string; kind: "execution" | "timer"; sourceId: string; message: string; createdAt: number; readAt?: number }>;
+  };
+  automaticWake?: boolean;
   annotationIds: string[];
   assistantMessageId?: string;
   createdAt: string;

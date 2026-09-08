@@ -4614,6 +4614,8 @@ export class SessionStore {
   }
 
   async createSessionRun(input: {
+    notificationDelivery?: SessionRun["notificationDelivery"];
+    automaticWake?: boolean;
     annotationIds?: string[];
     prompt: string;
     references?: ComposerReference[];
@@ -4632,6 +4634,8 @@ export class SessionStore {
     // latest array inside the barrier for the same reason.
     return await this.mutateArray<SessionRun, SessionRun>(this.sessionRunsPath(input.sessionId), (runs) => {
       const run: SessionRun = {
+        ...(input.notificationDelivery ? { notificationDelivery: structuredClone(input.notificationDelivery) } : {}),
+        ...(input.automaticWake ? { automaticWake: true } : {}),
         annotationIds: [...new Set(input.annotationIds ?? [])],
         createdAt: new Date().toISOString(),
         id: randomUUID(),

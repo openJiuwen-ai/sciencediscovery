@@ -238,6 +238,7 @@ import {
   stopSessionSubagent,
   createSkillEvolutionRun,
   createQueuedRun,
+  createNotificationRun,
   emptyMatch,
   emptyTrace,
   getActiveSessionRun,
@@ -248,6 +249,7 @@ import {
   streamStoredRunEvents,
 } from "../runs/index.js";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
+import { NotificationDispatcher } from "../notification-dispatch.js";
 import { manageRunnerEnvironment, runnerWorkspaceBindings } from "../runner-management.js";
 import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
 import {
@@ -2884,6 +2886,21 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     }
   });
   server.once("close", () => remoteCompute.close());
+  const dispatcher = new NotificationDispatcher(store,
+    (batch) => createNotificationRun(store, skillLibraryCatalog, batch),
+    (sessionId) => scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker,
+      mcpRegistry, mcpCatalog, artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+      memoryGraphSink, sessionId, config, memoryGraphClient, evolveRuntimeFactory));
+  let notificationTimer: ReturnType<typeof setInterval> | undefined;
+  let notificationClosed = false;
+  void ready.then(() => {
+    if (notificationClosed) return;
+    notificationTimer = setInterval(() => {
+      void dispatcher.tick().catch((error) => apiLog.warn("notification_dispatch_failed", { errorMessage: shortErrorMessage(error) }));
+    }, 500);
+    notificationTimer.unref();
+  }).catch(() => undefined); // normal startup error handling owns ready failures
+  server.once("close", () => { notificationClosed = true; clearInterval(notificationTimer); dispatcher.close(); });
   patchEphemeralCallback(server);
   return server;
 }

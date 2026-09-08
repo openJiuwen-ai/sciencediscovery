@@ -14,6 +14,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
+import { AgentNotifications } from "../agent-notifications.js";
 
 import type { NpuJob } from "@sciencediscovery/schema";
 import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
@@ -21,6 +23,30 @@ import type { RunnerClient } from "@sciencediscovery/executor";
 import type { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
+
+test("one-time timer binding validates time and execution ownership without execution or a write lease", async (t) => {
+  const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+  const notifications = new AgentNotifications(db, () => false);
+  const store = { assertSessionWritable() {}, notifications,
+    shellExecutions: { get: async (id: string, owner: { agentId: string }) => {
+      assert.equal(owner.agentId, "main"); if (id !== "owned") throw new Error("not owned"); return {};
+    } },
+  } as unknown as SessionStore;
+  const timer = createWorkspaceExecutionBindings({ store, agentId: "main", sessionId: "session", executionId: "turn",
+    workspaceRoot: "/workspace", permissionScopeLabel: "test", runnerClient: {} as RunnerClient,
+    provenanceRecorder: {} as ProvenanceRecorder, permission: {} as AgentPermissionRuntime }).timers!;
+  await assert.rejects(timer.create({ message: "missing" }), /exactly one/);
+  await assert.rejects(timer.create({ afterMs: 1, at: "2030-01-01T00:00:00Z", message: "both" }), /exactly one/);
+  await assert.rejects(timer.create({ afterMs: 0, message: "invalid" }), /positive/);
+  await assert.rejects(timer.create({ at: "2030-01-01", message: "ambiguous" }), /timezone/);
+  await assert.rejects(timer.create({ afterMs: 60000, executionId: "foreign", message: "not allowed" }), /not owned/);
+  const created = await timer.create({ afterMs: 60000, executionId: "owned", message: "check result" }) as { id: string };
+  assert.equal((timer.list() as unknown[]).length, 1);
+  timer.cancel(created.id);
+  assert.equal(notifications.timers({ sessionId: "session", agentId: "main" })[0]!.state, "cancelled");
+  notifications.stop("session");
+  await assert.rejects(timer.create({ afterMs: 60000, message: "stopped" }), /stopped/);
+});
 
 test("Transfer binding exposes only owned Workspaces and rechecks Runner access after permission", async () => {
   let allowed = true; let starts = 0;

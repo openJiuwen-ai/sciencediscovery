@@ -208,6 +208,11 @@ function summarizeSubagentResult(subagent: Subagent): {
 }
 
 export interface WorkspaceToolOptions {
+  timers?: {
+    create(input: { afterMs?: number; at?: string; message: string; executionId?: string }): Promise<unknown>;
+    list(): unknown;
+    cancel(id: string): unknown;
+  };
   shellExecutions?: {
     start(code: string, input: { environmentId?: string; cwd?: string }, signal?: AbortSignal, toolCallId?: string, runnerId?: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
     wait(id: string, waitMs: number, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
@@ -1470,6 +1475,28 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: shellParameters,
     };
     tools.push(runShell);
+  }
+  if (options.timers) {
+    const createParameters = Type.Object({
+      after_ms: Type.Optional(Type.Integer({ minimum: 1 })), at: Type.Optional(Type.String()),
+      message: Type.String({ minLength: 1, maxLength: 4000 }), execution_id: Type.Optional(Type.String({ minLength: 1 })),
+    });
+    const create: AgentTool<typeof createParameters> = {
+      name: "timer_create", label: "Create timer", parameters: createParameters,
+      description: "Create a one-time reminder: exactly one of after_ms or at (ISO timestamp with timezone). It posts a notice, never executes a command or takes a Workspace write lock. Optional execution_id cancels the reminder when that execution finishes. Stopping/archiving cancels pending timers. No recurring timers.",
+      execute: async (_id, params) => {
+        const value = await options.timers!.create({ afterMs: params.after_ms, at: params.at, message: params.message, executionId: params.execution_id });
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    const list: AgentTool = { name: "timer_list", label: "List timers", parameters: Type.Object({}),
+      description: "List this Agent's one-time timers and their pending/fired/cancelled state.",
+      execute: async () => { const value = options.timers!.list(); return { content: [{ type: "text", text: JSON.stringify(value) }], details: value }; } };
+    const cancelParameters = Type.Object({ timer_id: Type.String({ minLength: 1 }) });
+    const cancel: AgentTool<typeof cancelParameters> = { name: "timer_cancel", label: "Cancel timer", parameters: cancelParameters,
+      description: "Cancel this Agent's pending reminder; does not cancel its associated execution.",
+      execute: async (_id, params) => { const value = options.timers!.cancel(params.timer_id); return { content: [{ type: "text", text: JSON.stringify(value) }], details: value }; } };
+    tools.push(create, list, cancel);
   }
   if (options.shellExecutions) {
     const manager = options.shellExecutions;

@@ -222,6 +222,8 @@ function formatSubagentToolInput(args: Record<string, unknown>): string {
   return JSON.stringify(args);
 }
 import { generateRefinedSessionTitle } from "../session-naming.js";
+import { notificationPrompt } from "../notification-dispatch.js";
+import type { NotificationBatch } from "../agent-notifications.js";
 
 import { type ServerConfig } from "../bootstrap/config.js";
 import { sendError, sendJson } from "../http/response.js";
@@ -2425,7 +2427,7 @@ export async function createQueuedRun(
   if (skillAuthoringCommandPrompt(prompt)) {
     settingsSnapshot.enabledSkillIds = [...new Set([...settingsSnapshot.enabledSkillIds, "skill-creator"])];
   }
-  const run = await store.createSessionRun({
+  let run = await store.createSessionRun({
     annotationIds: body.annotationIds,
     prompt,
     references,
@@ -2436,6 +2438,8 @@ export async function createQueuedRun(
   });
   // A Stop received while validating/enqueuing this request wins over the earlier request.
   store.notifications.resume(sessionId, wakeGeneration);
+  const unread = store.notifications.prepareDelivery({ sessionId, agentId: "main" });
+  if (unread) run = await store.updateSessionRun(sessionId, run.id, { notificationDelivery: unread });
   const renamedSession = await applyInitialSessionTitle(store, run);
   if (renamedSession) await publishRunEvent(store, sessionId, run.id, {
     session: renamedSession,
@@ -2539,6 +2543,15 @@ export async function createSkillEvolutionRun(
   });
 }
 
+export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun> {
+  if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
+  const settingsSnapshot = computeSettingsSnapshot(store, batch.sessionId);
+  const skillLibraryRefs = await skillLibraryCatalog.resolveEnabledRefs(settingsSnapshot.enabledSkillLibraries);
+  if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
+  return store.createSessionRun({ sessionId: batch.sessionId, prompt: notificationPrompt(batch),
+    settingsSnapshot, skillLibraryRefs, notificationDelivery: batch, automaticWake: true });
+}
+
 export function scheduleSessionRuns(
   store: SessionStore,
   runnerClient: RunnerClient,
@@ -2565,6 +2578,10 @@ export function scheduleSessionRuns(
       while (true) {
         const next = (await store.listSessionRuns(sessionId)).find((run) => run.status === "queued");
         if (!next) return;
+        if (next.automaticWake && (!next.notificationDelivery || !store.notifications.deliveryAllowed(next.notificationDelivery))) {
+          await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
+          continue;
+        }
         if (cancelledRuns.has(next.id)) {
           await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
           cancelledRuns.delete(next.id);
@@ -2590,6 +2607,14 @@ export function scheduleSessionRuns(
         let status: SessionRunStatus = "failed";
         let error: string | undefined;
         try {
+          const delivery = next.notificationDelivery && store.notifications.pendingDelivery(next.notificationDelivery);
+          const deliver = Boolean(delivery);
+          if (next.automaticWake && !deliver) {
+            status = "cancelled";
+            continue;
+          }
+          // Context was persisted with the queued run; Stop can still abort the active controller.
+          if (delivery) store.notifications.acknowledge(delivery);
           status = await executeAgentRun(
             store,
             runnerClient,
@@ -2608,7 +2633,7 @@ export function scheduleSessionRuns(
             next.id,
             {
               annotationIds: next.annotationIds,
-              content: next.prompt,
+              content: delivery ? (next.automaticWake ? notificationPrompt(delivery) : next.prompt + "\n\n" + notificationPrompt(delivery)) : next.prompt,
               references: next.references,
               skillLibraryRefs: next.skillLibraryRefs,
               webForceRefresh: next.webForceRefresh,

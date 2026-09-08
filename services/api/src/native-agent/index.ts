@@ -747,6 +747,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.remoteRunners ? { remoteRunners: options.remoteRunners } : {}),
     ...(options.workspaceTransfers ? { workspaceTransfers: options.workspaceTransfers } : {}),
     ...(options.shellExecutions ? { shellExecutions: options.shellExecutions } : {}),
+    ...(options.timers ? { timers: options.timers } : {}),
     skills: options.skills ?? [],
     specialists: options.specialists ?? [],
     toolPolicy: options.toolPolicy,

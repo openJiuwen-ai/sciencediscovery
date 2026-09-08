@@ -147,8 +147,20 @@ export class AgentNotifications {
     return notifications.length ? { ...owner, epoch: this.gate(owner.sessionId).epoch, agentEpoch: this.agentGate(owner).epoch, notifications } : undefined;
   }
 
+  pendingOwners(): ExecutionOwner[] {
+    return this.db.prepare("SELECT DISTINCT session, agent FROM agent_notifications WHERE read_at IS NULL")
+      .all().map((row) => ({ sessionId: String(row.session), agentId: String(row.agent) }));
+  }
+
   deliveryAllowed(batch: NotificationBatch): boolean {
     return this.canWakeAgent(batch) && this.gate(batch.sessionId).epoch === batch.epoch && this.agentGate(batch).epoch === batch.agentEpoch;
+  }
+
+  pendingDelivery(batch: NotificationBatch): NotificationBatch | undefined {
+    if (!this.deliveryAllowed(batch)) return undefined;
+    const unread = new Set(this.unread(batch).map((notice) => notice.id));
+    const notifications = batch.notifications.filter((notice) => unread.has(notice.id));
+    return notifications.length ? { ...batch, notifications } : undefined;
   }
 
   /** Acknowledge only after durable context delivery. A failed or interrupted wake retains unread records. */

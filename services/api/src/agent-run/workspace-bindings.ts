@@ -28,7 +28,7 @@ import { syncScientificEnvironmentCatalog } from "../scientific-environment-cata
 
 type ExecutionBindings = Pick<
   WorkspaceAgentOptions,
-  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "workspaceTransfers" | "shellExecutions"
+  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "workspaceTransfers" | "shellExecutions" | "timers"
 >;
 
 /**
@@ -189,6 +189,24 @@ export function createWorkspaceExecutionBindings(
     return job;
   };
   const common: ExecutionBindings = {
+    timers: {
+      create: async (input) => {
+        options.store.assertSessionWritable(options.sessionId);
+        if ((input.afterMs === undefined) === (input.at === undefined)) throw new Error("Provide exactly one of after_ms or at");
+        if (input.afterMs !== undefined && (!Number.isSafeInteger(input.afterMs) || input.afterMs <= 0)) throw new Error("after_ms must be a positive integer");
+        if (input.at !== undefined && !/(Z|[+-]\d{2}:\d{2})$/.test(input.at)) throw new Error("at requires an ISO timestamp with timezone");
+        const owner = { sessionId: options.sessionId, agentId: options.agentId };
+        if (input.executionId) await options.store.shellExecutions.get(input.executionId, owner);
+        return options.store.notifications.createTimer(owner, { dueAt: input.at !== undefined ? Date.parse(input.at) : Date.now() + input.afterMs!,
+          message: input.message, executionId: input.executionId });
+      },
+      list: () => options.store.notifications.timers({ sessionId: options.sessionId, agentId: options.agentId }),
+      cancel: (id) => {
+        const owner = { sessionId: options.sessionId, agentId: options.agentId };
+        options.store.notifications.cancelTimer(owner, id);
+        return options.store.notifications.timers(owner).find((timer) => timer.id === id);
+      },
+    },
     workspaceTransfers: {
       workspaces: () => {
         const candidates = [{ runnerId: "local", description: "Local Workspace" }, ...(options.remoteTargets ?? []).map((target) => ({ runnerId: target.runnerId, description: target.hostAlias }))];
