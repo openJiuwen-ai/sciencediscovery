@@ -9,18 +9,18 @@ Use this skill for the Protenix-backed antibody workflow. All model/NPU executio
 
 ## Non-negotiable rules
 
-- Never use `host_bridge`, `host_launch_request.json`, `run_shell`, `run_python`, a persistent kernel, `nohup`, or device passthrough to launch model/NPU work.
+- Never use `host_bridge`, `host_launch_request.json`, `run_shell`, a persistent kernel, `nohup`, or device passthrough to launch model/NPU work.
 - This skill is authoritative for a Protenix Broker run. If legacy antibody/host-setup skills are also selected, do not follow their host-shell launch, polling, or artifact workflow; use only the Broker workflow in this file.
-- `run_python` may create or inspect small workspace files, create small workspace directories, write `config.json`, probe imports in a selected scientific environment revision, run the read-only progress probe in step 5, and run the sleep TICK in step 5. Never use it to launch model/NPU work or reconstruct bundled scripts/PDB examples. Do not call `run_shell` for `mkdir`, waits, or other housekeeping.
+- `run_shell` may create or inspect small workspace files/directories, write `config.json`, probe imports with `python -c` in a selected `environment_id`, run the read-only progress probe in step 5, and run the single sleep TICK in step 5. Never use it to launch model/NPU work or reconstruct bundled scripts/PDB examples. Each call uses a fresh process; select the same local Runner and environment ID for these operations. Environment ID selects the latest state, not a historical Revision.
 - Although the complete frozen package is visible under `$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline`, do not execute or copy files from its `scripts/` / `resources/`; those package files are for the Broker adapter and operator deployment path, not for Agent-authored execution.
 - There is no default antigen/framework PDB. If the user has not provided `target_pdb`, `framework_pdb`, or chain-labelled `hotspots`, stop and ask for the missing scientific input. Do not run a bundled example.
 - Do not place or guess host paths for MindScience, RFdiffusion, ProteinMPNN, Protenix, checkpoints, HMMER, CANN, Python, or PDB files in `config.json`. Operator assets are injected by the Broker; scientific PDB inputs must be Session workspace-local relative paths. In particular, never set `models_dir`, `protenix_dir`, `protenix_ckpt`, `protenix_ckpt_url`, or `ckpt`; the manager treats these as operator-only and rejects them in Broker mode.
 - Do not edit the operator-provided Protenix checkout for Python 3.12 compatibility. The deployed `protenix_py312_compat.py` entrypoint handles integral float bounds such as `random.randint(0, 1e6)` inside the Protenix process.
 - Submit exactly once. If the job reaches `failed`, `cancelled`, or `interrupted`, do not edit paths and do not submit a replacement job in the same run. Return the job ID, exact error, failed stage, and next repair action to the user.
 - Keep monitoring in the main Agent until the Broker job reaches a terminal state. Submitting the job and then ending the turn while it is still `queued` or `running` is an incomplete run, not a successful handoff. Do not delegate an NPU job to `task` or another subagent, because subagents have private workspaces and cannot safely create or declare files in the parent workspace.
-- Immediately after a successful submit, write the returned Broker job ID to `antibody_pipeline/broker_job.json` with `run_python`. This small workspace-local checkpoint is mandatory for long runs because the Agent context may be compacted while the NPU job continues. Before every later `run_npu_job(status/logs/result/cancel)` call, verify that the `job_id` argument is the exact UUID returned by submit or read from `antibody_pipeline/broker_job.json`; if you are uncertain, read that file first. Never call `run_npu_job(status/logs/result/cancel)` with a placeholder job ID such as `JOB_ID_PLACEHOLDER` / `__JOB_ID_PLACEHOLDER__`, and never resubmit just to recover a job ID.
+- Immediately after a successful submit, write the returned Broker job ID to `antibody_pipeline/broker_job.json` with `run_shell`. This small workspace-local checkpoint is mandatory for long runs because the Agent context may be compacted while the NPU job continues. Before every later `run_npu_job(status/logs/result/cancel)` call, verify that the `job_id` argument is the exact UUID returned by submit or read from `antibody_pipeline/broker_job.json`; if you are uncertain, read that file first. Never call `run_npu_job(status/logs/result/cancel)` with a placeholder job ID such as `JOB_ID_PLACEHOLDER` / `__JOB_ID_PLACEHOLDER__`, and never resubmit just to recover a job ID.
 - Workspace files never establish completion. Only Broker `status`/`logs` can say the job is terminal. A progress probe that sees `05_screening` files, expected CIF/PDB counts, or quiet logs is a reason to call `status` next, not a reason to write a report or declare artifacts.
-- After Broker `status` returns `succeeded`, the **next tool call** must be `run_npu_job(operation="result", job_id="<job-id>")`. This is the only call that automatically declares Broker `createdFiles` as Project Artifacts (all of them when there are 50 or fewer; the first 50 when there are more). `status=succeeded` does not declare files. Do not call `run_python`, `run_shell`, `declare_artifact`, write any summary/report file, or produce a final answer between successful terminal status and this `result` call. If more than 50 files were created, the final response MUST tell the user that Project Artifacts only show the first 50 files and that the rest are in the Session workspace.
+- After Broker `status` returns `succeeded`, the **next tool call** must be `run_npu_job(operation="result", job_id="<job-id>")`. This is the only call that automatically declares Broker `createdFiles` as Project Artifacts (all of them when there are 50 or fewer; the first 50 when there are more). `status=succeeded` does not declare files. Do not call `run_shell`, `declare_artifact`, write any summary/report file, or produce a final answer between successful terminal status and this `result` call. If more than 50 files were created, the final response MUST tell the user that Project Artifacts only show the first 50 files and that the rest are in the Session workspace.
 - If `result` returns that the job is not terminal, the completion check was wrong: return to step 5 monitoring. Do not declare artifacts and do not write a summary.
 - Before `result` succeeds, do not read generated structure/result file contents, do not read screening CSV/Markdown files, do not write any summary/report file under any name, do not call `declare_artifact` or `list_artifacts`, and do not reconstruct a final stage-count report. The one allowed write before `result` is the job-ID checkpoint in step 4.
 - After `result`, treat `result.job.createdFiles`, `result.job.createdFiles.length`, and `result.artifacts` as the source of truth. Do not create an extra pipeline report. Do not replace `result` with a handful of manual `declare_artifact` calls. If `result.artifacts` is missing or empty after a succeeded job, report that artifact registration did not run; do not try to recover by declaring only screening Markdown/CSV.
@@ -53,18 +53,19 @@ Stop if `antibody.protenix.v1` is absent. Do not attempt an alternative host exe
 
 2. Resolve the Python environment before creating the job:
 
-- Use the complete pip package list from `requirements.txt` when creating a revision: `mindspore==2.7.2`, `numpy==1.26.4`, `pandas`, `biopython==1.83`, `scipy`, `scikit-learn`, `pyyaml`, `hydra-core`, `omegaconf`, `ml-collections`, `dm-tree==0.1.8`, `optree`, `tqdm`, `attrs`, `decorator`, `matplotlib==3.9.2`, `safetensors`, `sympy`, `rdkit==2024.3.5`, `biotite==1.4.0`.
-- Call `environment.list`, skip starter/non-scientific environments, and probe candidate `currentRevisionId` values by passing the small probe source to `run_python(environmentRevisionId=...)`.
+- Use the complete pip package list from `requirements.txt` when preparing the environment: `mindspore==2.7.2`, `numpy==1.26.4`, `pandas`, `biopython==1.83`, `scipy`, `scikit-learn`, `pyyaml`, `hydra-core`, `omegaconf`, `ml-collections`, `dm-tree==0.1.8`, `optree`, `tqdm`, `attrs`, `decorator`, `matplotlib==3.9.2`, `safetensors`, `sympy`, `rdkit==2024.3.5`, `biotite==1.4.0`.
+- Call `environment_list(runner_id="local")`, skip starter/non-scientific environments, and probe candidate environment IDs through `run_shell(runner_id="local", environment_id="<environment-id>", command=...)` using the small Python probe below. `currentRevisionId` is audit information, not a selectable execution parameter.
 - Prefer candidates whose environment name clearly identifies the antibody NPU managed environment, especially `antibody-npu-managed-clean`; do not choose an older similarly named environment until the clean/current candidate has been probed.
-- If a candidate probe fails, record the missing package/version, then continue probing the next candidate. A single failed `run_python` probe is not terminal.
-- Reuse only a revision whose probe prints `MANAGED_ENV_OK`.
-- If every candidate fails, call `environment.create` for a named Python environment, then call `environment.install` with `manager="pip"` and the complete package list above. Probe the returned revision again. Never use `pip`, `pip --user`, a host venv, or `run_shell` for dependency installation.
-- The deployed MindScience Protenix checkout requires `biotite==1.4.0` and `biotite.structure.io.pdbx.convert.PDBX_BOND_TYPE_ID_TO_TYPE`. Always run `managed_environment_probe.py` after installation. If a candidate revision has an older/incompatible Biotite, call `environment.install` with the complete package list from `requirements.txt`, not only the Biotite entry: installation creates a new immutable revision and the complete list keeps MindSpore, NumPy, and the remaining pipeline dependencies in that revision. Do not patch the Protenix checkout or fall back to a host Biotite package.
-- Keep the passing revision ID as `<environment-revision-id>`. A missing/incompatible package is an environment setup task, not a reason to submit the NPU job early.
+- If a candidate probe fails, record the missing package/version, then continue probing the next candidate. A single failed `run_shell` probe is not terminal.
+- Reuse only an environment whose latest state passes the probe and prints `MANAGED_ENV_OK`.
+- If every candidate fails, call `environment_create` for a named Python environment on the local Runner, then call `environment_install` with its `environmentId`, `manager="pip"`, and the complete package list above. Probe the same environment ID again. Never use `pip`, `pip --user`, a host venv, or `run_shell` for dependency installation.
+- The deployed MindScience Protenix checkout requires `biotite==1.4.0` and `biotite.structure.io.pdbx.convert.PDBX_BOND_TYPE_ID_TO_TYPE`. Always run the inline probe below after installation. If a candidate has an older/incompatible Biotite, use `environment_install` with the complete package list from `requirements.txt`, not only the Biotite entry, so the required package versions are validated together. Installation updates the environment in place and records an audit Revision; it does not clone a new execution environment. Do not patch the Protenix checkout or fall back to a host Biotite package.
+- Keep the passing environment ID as `<environment-id>`. Submit resolves its latest state again; avoid changing dependencies between probe and submit, and re-probe after any managed update. A missing/incompatible package is an environment setup task, not a reason to submit the NPU job early. Do not pass `environment_revision_id` to submit; it is rejected.
 
-Use this probe source with `run_python`; dependency discovery must not depend on host `PYTHONPATH`:
+Use this command with `run_shell`, setting `runner_id="local"` and `environment_id="<environment-id>"`; dependency discovery must not depend on host `PYTHONPATH`:
 
-```python
+```sh
+python - <<'PY'
 from importlib import import_module
 from importlib.metadata import version
 for module in ["mindspore", "numpy", "pandas", "Bio", "scipy", "sklearn", "yaml", "hydra", "omegaconf", "ml_collections", "tree", "optree", "tqdm", "attrs", "decorator", "matplotlib", "safetensors", "sympy", "rdkit", "biotite"]:
@@ -74,6 +75,7 @@ for distribution, expected in {"mindspore": "2.7.2", "numpy": "1.26.4", "dm-tree
 from biotite.structure.io.pdbx import convert as pdbx_convert
 assert hasattr(pdbx_convert, "PDBX_BOND_TYPE_ID_TO_TYPE")
 print("MANAGED_ENV_OK")
+PY
 ```
 
 3. Create only `antibody_pipeline/config.json`. The minimal form requires explicit workspace-local PDB inputs:
@@ -127,15 +129,16 @@ run_npu_job(
   operation="submit",
   workload_id="antibody.protenix.v1",
   config_path="antibody_pipeline/config.json",
-  environment_revision_id="<environment-revision-id>"
+  environment_id="<environment-id>"
 )
 ```
 
 Record the returned job ID. Do not submit another job until this job reaches a terminal state; if it fails, this run must stop.
 
-Immediately checkpoint the returned job ID:
+Immediately checkpoint the returned job ID with `run_shell` on the same local Runner and environment ID (replace the placeholders with the returned values):
 
-```python
+```sh
+python - <<'PY'
 import json, os
 record = {
     "job_id": "<returned-job-id>",
@@ -146,6 +149,7 @@ record = {
 os.makedirs("antibody_pipeline", exist_ok=True)
 with open("antibody_pipeline/broker_job.json", "w", encoding="utf-8") as fh:
     json.dump(record, fh, indent=2)
+PY
 ```
 
 This is a state checkpoint, not a result summary. It is allowed before the terminal `result` call. If later monitoring context loses the job ID, read `antibody_pipeline/broker_job.json` and continue monitoring the recorded job. Before typing any later Broker `job_id`, check that it is a real UUID from this checkpoint or the submit response. Do not use `JOB_ID_PLACEHOLDER` / `__JOB_ID_PLACEHOLDER__`, do not guess the job ID, and do not submit a replacement job.
@@ -156,7 +160,7 @@ A monitoring cycle is:
 
 1. `run_npu_job(operation="status", job_id="<job-id>")` — required every cycle.
 2. Optionally `run_npu_job(operation="logs", job_id="<job-id>")`.
-3. Optionally one short read-only `run_python` progress probe.
+3. Optionally one short read-only `run_shell` progress probe (for example, bounded `python -c` output in the same environment).
 4. If state is still `queued` or `running`, wait with one sleep TICK, then start the next cycle.
 
 Do not skip `status` for several cycles and decide completion from workspace files. Keep calling `status` until it returns one of:
@@ -166,15 +170,17 @@ Do not skip `status` for several cycles and decide completion from workspace fil
 - `cancelled`
 - `interrupted`
 
-**Sleep TICK (normal wait).** Use a dedicated `run_python` call that only sleeps, then returns. Do not put this sleep in the progress probe, and do not wrap it in `for`/`while`:
+**Sleep TICK (normal wait).** Use one dedicated `run_shell` call for a single sleep and TICK. Do not put this sleep in the progress probe, and do not wrap it in `for`/`while`:
 
-```python
-import time
-time.sleep(100)
-print("TICK", flush=True)
+```text
+run_shell(runner_id="local", environment_id="<environment-id>",
+          command="python -c 'import time; time.sleep(100); print(\"TICK\", flush=True)'",
+          wait_ms=30000)
 ```
 
-Forbidden wait patterns: `for`/`while` plus `sleep` inside one tool call; `run_shell sleep … && …`; `tail -f`; `watch`; combining status/probe/sleep into one `run_python`. One TICK per cycle is the correct wait.
+If the wait returns `running`, retain that Shell Execution ID and use `execution_status(execution_id=..., wait_ms=30000)` until terminal; the wait deadline does not stop the sleep. Do not submit a second TICK while the first is running or unknown. After a completed TICK, start the next Broker status cycle. Shell Execution IDs and Broker job IDs are different; never exchange them.
+
+Forbidden wait patterns: `for`/`while` plus `sleep` inside one tool call; shell `sleep … &&` a progress probe or model launch; `tail -f`; `watch`; combining Broker status/probe/sleep into one `run_shell`. One TICK per cycle is the correct wait.
 
 **Progress probe (optional, for stage detail).** It may print file existence, paths, counts, log mtimes, per-stage output counts, and short log tails. It may list generated `*.pdb` / `*.cif` / `*.json` names. It must not open or print those files' contents, must not make scientific quality claims, and must not create/edit/delete/declare/launch anything. Reuse the same probe when that is the clearest comparison.
 
@@ -207,7 +213,7 @@ Zero candidates passing the scientific screen is a valid result if all pipeline 
 | Symptom | Meaning | Required action |
 |---|---|---|
 | `run_npu_job` missing or workload absent | Broker disabled or wrong stack | Stop and report deployment mismatch |
-| no managed revision passes the dependency probe | Scientific environment is absent or incomplete | Create/update it with `environment.create` / `environment.install`, then probe the new revision before submission |
+| no managed environment passes the dependency probe | Scientific environment is absent or incomplete | Create/update it with `environment_create` / `environment_install`, then probe the environment ID's latest state before submission |
 | missing target/framework PDB | User has not provided the required scientific PDB input, or the Agent did not write it into the Session workspace | Stop and ask the user for the missing PDB; do not run a default example |
 | workspace input path error for a custom PDB | Agent-authored custom input is missing or escapes the Session workspace | Stop and report the offending relative input |
 | hotspot is absent or insertion-code ambiguous | The requested original PDB residue cannot be mapped safely | Stop and ask the user to correct the target chain/residue list; do not guess a replacement residue |

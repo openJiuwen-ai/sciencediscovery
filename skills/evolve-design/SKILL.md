@@ -89,13 +89,13 @@ Settle three things:
 ## Step 2 — Build the scoring; the probe proves it
 
 Write the starting point and the evaluator, then run the evaluator **once**, against the
-starting point, with `run_python`. You are checking that the thing you just wrote executes and
+starting point, with `run_shell` (for example, `python evaluator.py`, selecting a Python-capable `environment_id`). You are checking that the thing you just wrote executes and
 emits a number — a typo, a missing import, a result file never written. That is authoring
 hygiene, and it is the whole of the local check.
 
 **Do not score a broken copy locally.** The server's discrimination probe does exactly that, on
 the real shards, in the real sandbox, and hands you both numbers when the run starts. Doing it
-yourself as well buys nothing and costs something real: your `run_python` environment and the
+yourself as well buys nothing and costs something real: your selected `run_shell` environment and the
 candidate sandbox are different places, and your shard indices are not the ones the run uses, so
 the two numbers can legitimately differ. Watched one session where they did — local 0.3853,
 server 0.0000 — and the turn went into reconciling them instead of into the search.
@@ -329,4 +329,4 @@ invented numbers; reward agreement with the given source instead.
 
 Candidates get numpy / pandas / scipy / sklearn and the standard library. Anything else goes in
 `packages` — **bare names only** (optionally `==version`), no paths, URLs, or pip options. Your
-`run_python` environment and the candidate sandbox are not the same.
+`run_shell` environment and the candidate sandbox are not the same.
