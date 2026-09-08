@@ -13,7 +13,7 @@
 - 每次巡航最多派发 **1 个** dev 任务；每日派发软上限 12（记入 budget.dispatches_today，跨日在 STATE 里手工翻页）
 - **任务时效校验（派发前必做）**：把 queued 任务与当前 git/code/报告状态比对——若交互式会话已完成其内容或开发已越过它，将任务文件头标记 `[已作废]`、STATE 的 queued 移入 superseded，记日志跳过，绝不派发过期任务
 - dev 角色可能由**用户交互式会话**承担（STATE.lock.owner=human-interactive 且 wave 处于开发中）：此期间巡航只记日志；若会话 jsonl 30 分钟无写入且 git status 静止，可做**中途只读评审**（写报告、不派活不部署）
-- **白盒测试模式约束（2026-09-08 用户决策：阶段门评审制）**：开发进行中 QA 只允许追加式产出——qa/、`test/journey-ke-*`、`test/fixtures/scholarly/` 下的**新文件**；绝不编辑 dev 源码、不部署、不杀进程、不派活；git 提交只 add QA 自己的文件
+- **白盒测试模式约束（2026-09-08 用户决策：阶段门评审制）**：开发进行中 QA 只允许追加式产出——qa/（注意 `qa/handoff/logs` 被 .gitignore 忽略，日志只做本地审计不入库）、`test/journey-ke-*`、`test/helpers/ke-*.ts`、`test/fixtures/scholarly/` 下的**新文件**；绝不编辑 dev 源码、不部署、不杀进程、不派活；git 提交只 add QA 自己的文件
 - 交互式会话活跃 → 只写日志退出（**绝不与用户会话并发操作工作区**）
 - `lock.owner` 非空且未超时 → 只写日志退出；owner 为 `human-interactive` 时超时=交互会话 jsonl 30 分钟无写入；其它 owner 超时阈值 90 分钟，接管前必须确认无 claude.exe
 - 熔断：连续 3 次巡航在同一 phase 失败（完工判定失败或测试红）→ `fuse.consecutive_failures` 置 tripped 状态、写明原因、停止派活，等用户处理
