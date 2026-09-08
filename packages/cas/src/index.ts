@@ -22,6 +22,7 @@ import { VersionStore, type ObjectRef, type Pool } from "./versioning.js";
 
 export * from "./versioning.js";
 export * from "./workspace-lease.js";
+export * from "./workspace-snapshot.js";
 
 export interface ContentStore {
   hash(content: string | Buffer): string;
