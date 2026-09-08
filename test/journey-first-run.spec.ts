@@ -252,6 +252,13 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         const firstTool = await expandToolStep(page, { contains: firstMarker });
         await expect(firstTool).toContainText(firstMarker);
         await expect(page.locator(".message.assistant").last()).toContainText("首次分析已完成");
+        // Completion can schedule a separate notification turn. Check backend
+        // quiescence as well as the visible composer; never reload to hide a
+        // stale running indicator or count a queued turn as idle.
+        await expect.poll(async () => {
+          const runs = await apiJsonSafe(`/api/sessions/${fixture!.session.id}/runs`) as Array<{ status: string }>;
+          return runs.filter((run) => ["queued", "running", "waiting_permission"].includes(run.status)).map((run) => run.status);
+        }, { message: "User and completion-notification turns must finish" }).toEqual([]);
         await expect(page.getByRole("button", { name: "运行分析" })).toBeVisible();
       },
     );
