@@ -379,6 +379,31 @@ try {
     assert.ok(requests.some((input) => input.messages?.some((message) => typeof message.content === "string" && message.content.includes("[Execution notifications]") && message.content.includes("timer-wake-marker"))));
     return "timer_create/list/cancel ran through Agent tools; only the uncancelled one-time reminder reached a new model turn";
   });
+  await step("11. 停止与归档阻止自动唤醒，用户恢复汇总未读", "停门后命令可完成，但不能调用模型；用户恢复只接收记录，不重放 Shell。", async () => {
+    for (const transition of ["stop", "archive"]) {
+      const target = await json(`/api/projects/${session.projectId}/sessions`, { title: `Wake ${transition}`, modelId: session.modelId, approvalMode: "always_allow" });
+      const initial = await json(`/api/sessions/${target.id}/runs`, { content: "Wake execution journey: return after background acceptance." });
+      await until(async () => (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.id === initial.id)?.status === "completed");
+      await json(`/api/sessions/${target.id}/${transition === "stop" ? "runs/current/cancel" : "archive"}`, {});
+      await until(async () => {
+        const response = await fetch(`${api}/api/sessions/${target.id}/file?path=wake.txt`, { headers: { authorization: `Bearer ${token}` } });
+        return response.ok && (await response.text()) === "wake-complete";
+      });
+      const observationEnd = Date.now() + 1500;
+      await until(async () => {
+        assert.equal((await json(`/api/sessions/${target.id}/runs`)).length, 1, `${transition} must suppress automatic runs`);
+        return Date.now() >= observationEnd;
+      });
+      if (transition === "archive") await json(`/api/sessions/${target.id}/restore`, {});
+      const resume = await json(`/api/sessions/${target.id}/runs`, { content: "Please resume and summarize retained notifications without repeating commands." });
+      let resumed;
+      await until(async () => { resumed = (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.id === resume.id); return resumed?.status === "completed"; });
+      assert.ok(resumed.notificationDelivery?.notifications.some((notice) => notice.kind === "execution"));
+      const file = await fetch(`${api}/api/sessions/${target.id}/file?path=wake.txt`, { headers: { authorization: `Bearer ${token}` } });
+      assert.equal(await file.text(), "wake-complete");
+    }
+    return "Both Stop and Archive suppressed automatic runs after real process completion; explicit user resume delivered unread execution facts and the command remained single-execution";
+  });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }
 finally {
