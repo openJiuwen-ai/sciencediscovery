@@ -6286,6 +6286,13 @@ test("recovery cancels and replays undecided approvals for run and subagent scop
     prompt: "Run a Python check",
     subagentType: "general-purpose",
   });
+  const versions = new VersionStore(tempRoot);
+  const history = [{ role: "user", content: "Completed context, not a command to replay" }];
+  const after = await versions.putRecord("AgentStateSnapshot", { history });
+  const step = await versions.putRecord("TrajectoryStep", { after });
+  const refs = await RefStore.open(versions);
+  try { await refs.commit(versions, `agents/${encodeURIComponent(`subagent:${subagent.id}`)}/head`, null, step); }
+  finally { refs.close(); }
 
   const runScoped = await store.requestPermission(
     session.id, "code", "workspace-code", "Run python code", { executionId: run.id });
@@ -6295,6 +6302,9 @@ test("recovery cancels and replays undecided approvals for run and subagent scop
 
   await recoverSessionRuns(store);
 
+  assert.equal(store.listSubagents(session.id).find((child) => child.id === subagent.id)?.status, "failed", "a crashed child cannot remain permanently busy");
+  const recoveredContext = store.listSubagents(session.id).find((child) => child.id === subagent.id)!.contextRef!;
+  assert.deepEqual((await versions.readRecord<{ history: unknown[] }>(recoveredContext, "SubagentContext")).value.history, history);
   assert.equal(store.getPermissionRequest(runScoped.request.id)?.state, "cancelled");
   assert.equal(store.getPermissionRequest(subagentScoped.request.id)?.state, "cancelled");
   const replay = await store.listSessionRunEvents(session.id, run.id);

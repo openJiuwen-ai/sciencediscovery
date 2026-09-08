@@ -24,6 +24,7 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { RunnerClient } from "../../packages/executor/dist/index.js";
+import { VersionStore } from "../../packages/cas/dist/index.js";
 
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 if (execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim()) throw new Error("Commit candidate before E2E");
@@ -39,6 +40,8 @@ let api;
 let runnerOrigin;
 let remoteRunnerId;
 let logs = "";
+let childReplyHeld = false;
+let releaseChildReply;
 const redact = (value) => String(value).replaceAll(token, "[redacted]").replaceAll(process.cwd(), "<worktree>");
 const stub = createServer(async (request, response) => {
   try {
@@ -110,10 +113,15 @@ const stub = createServer(async (request, response) => {
       if (results.length) assert.ok(!JSON.stringify(results).includes("refusedBecause"), JSON.stringify(results));
     }
     const childBackground = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Child background journey"));
+    const restartActive = input.messages?.some((message) => typeof message.content === "string" && message.content.includes("Restart active child"));
     if (childBackground && !wake) {
       call = !results.length ? (child
         ? { name: "run_shell", arguments: { command: "sleep 2; printf child-once >> child-background.txt", background: true } }
-        : { name: "task", arguments: { description: "Background child", prompt: "Child background journey: start one job and report its ID.", subagent_type: "general-purpose" } }) : undefined;
+        : { name: "task", arguments: { description: "Background child", prompt: `Child background journey: start one job and report its ID.${restartActive ? " Restart active child" : ""}`, subagent_type: "general-purpose" } }) : undefined;
+      if (child && restartActive && results.length) {
+        childReplyHeld = true;
+        await new Promise((done) => { releaseChildReply = done; });
+      }
     }
     if (managed && !wake) {
       const data = (index) => JSON.parse(results[index].content);
@@ -478,6 +486,32 @@ try {
     assert.equal(after.steps.filter((step) => step.toolName === "run_shell").length, 1);
     assert.equal(await readFile(resolve(dataDir, "projects", target.projectId, "sessions", target.id, "agent-workspaces", after.handoff.workspaceId, "child-background.txt"), "utf8"), "child-once");
     return "Production API restarted; stopped child stayed stopped; explicit resume loaded the retained CAS context and original Workspace, without command replay";
+  });
+  await step("15. 正在运行的子 Agent 遭遇 API 退出", "从已提交 turn 恢复上下文，不永久 busy、不重放已接受的 Shell。", async () => {
+    const target = await json(`/api/projects/${session.projectId}/sessions`, { title: "Active child restart", modelId: session.modelId, approvalMode: "always_allow" });
+    await json(`/api/sessions/${target.id}/runs`, { content: "Child background journey: Restart active child after accepting one job." });
+    await until(() => childReplyHeld);
+    const [before] = await json(`/api/sessions/${target.id}/subagents`);
+    assert.equal(before.status, "running");
+    const apiProcess = processes.findLast((child) => child.serviceKind === "api");
+    const ended = new Promise((done) => apiProcess.once("exit", done)); apiProcess.kill("SIGKILL"); await ended;
+    releaseChildReply();
+    api = await start("api", { SCIENCE_AGENT_RUNNER_URL: runnerOrigin });
+    await until(async () => {
+      const runs = await json(`/api/sessions/${target.id}/runs`);
+      assert.ok(!runs.some((run) => run.automaticWake && run.status === "failed"), JSON.stringify(runs));
+      return runs.some((run) => run.automaticWake && run.status === "completed");
+    });
+    const [after] = await json(`/api/sessions/${target.id}/subagents`);
+    assert.equal(after.id, before.id);
+    assert.equal(after.status, "completed");
+    assert.equal(after.handoff.workspaceId, before.handoff.workspaceId);
+    const versions = new VersionStore(dataDir);
+    const context = (await versions.readRecord(after.contextRef, "SubagentContext")).value;
+    assert.equal(context.history.filter((item) => item.role === "assistant").flatMap((item) => item.tool_calls ?? []).filter((call) => call.function?.name === "run_shell").length, 1);
+    const file = resolve(dataDir, "projects", target.projectId, "sessions", target.id, "agent-workspaces", after.handoff.workspaceId, "child-background.txt");
+    await until(async () => { try { return await readFile(file, "utf8") === "child-once"; } catch { return false; } });
+    return "SIGKILL during the child model's second call; committed first turn restored, completion/unknown notice resumed original child, one Shell and one output write";
   });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }

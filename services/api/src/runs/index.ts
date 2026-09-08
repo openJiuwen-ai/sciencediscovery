@@ -19,7 +19,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
-import { RefStore, VersionStore } from "@sciencediscovery/cas";
+import { RefStore, VersionStore, type TrajectoryStep } from "@sciencediscovery/cas";
+import { agentHeadName } from "../native-agent/versioning.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
 import {
@@ -2730,6 +2731,26 @@ export function scheduleSessionRuns(
 export async function recoverSessionRuns(store: SessionStore, memoryGraphClient: MemoryGraphClient | null = null): Promise<void> {
   for (const project of store.listProjects()) {
     for (const session of store.listSessions(project.id, "all")) {
+      // A crashed child has no live process holding its busy state. Recover only
+      // closed, committed turn context; never replay the unfinished model/tool call.
+      for (const child of store.listSubagents(session.id)) {
+        if (child.status !== "running") continue;
+        const versions = new VersionStore(store.dataDir);
+        const refs = await RefStore.open(versions);
+        try {
+          const head = refs.head(agentHeadName(`subagent:${child.id}`));
+          if (head) {
+            const step = (await versions.readRecord<TrajectoryStep>(head, "TrajectoryStep")).value;
+            const state = (await versions.readRecord<{ history: AgentHistoryMessage[] }>(step.after, "AgentStateSnapshot")).value;
+            const contextRef = await versions.putRecord("SubagentContext", { history: closedModelContext(state.history) });
+            const name = `agents/${encodeURIComponent(`subagent:${child.id}`)}/continuation`;
+            await refs.commit(versions, name, refs.head(name), contextRef);
+            child.contextRef = contextRef;
+          }
+          await store.updateSubagent({ ...child, status: "failed", finishedAt: new Date().toISOString(),
+            error: "API process exited before this child finished; committed context retained, unfinished commands are not replayed" });
+        } finally { refs.close(); }
+      }
       for (const run of await store.listSessionRuns(session.id)) {
         if (run.status !== "running" && run.status !== "blocked") continue;
         const reason = "API process exited before this run reached a terminal state";
