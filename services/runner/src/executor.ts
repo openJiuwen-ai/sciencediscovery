@@ -483,6 +483,7 @@ async function runSandboxed(
   maxWorkspaceBytes: number,
   maxOutputBytes: number,
   seccompVariant: SeccompVariant = "baseline",
+  onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
 ): Promise<{ exitCode: number; stderr: string; stdout: string }> {
   try {
     return await new Promise<{ exitCode: number; stderr: string; stdout: string }>((resolveRun, reject) => {
@@ -543,10 +544,12 @@ async function runSandboxed(
         signal?.addEventListener("abort", abort, { once: true });
         if (signal?.aborted) abort();
         child.stdout.on("data", (chunk: Buffer) => {
+          try { onOutput?.("stdout", chunk); } catch (error) { stop(error instanceof Error ? error : new Error(String(error))); }
           const next = appendBounded(stdout, chunk, maxOutputBytes, Buffer.byteLength(stderr));
           stdout = next.text;
         });
         child.stderr.on("data", (chunk: Buffer) => {
+          try { onOutput?.("stderr", chunk); } catch (error) { stop(error instanceof Error ? error : new Error(String(error))); }
           const next = appendBounded(stderr, chunk, maxOutputBytes, Buffer.byteLength(stdout));
           stderr = next.text;
         });
@@ -1037,6 +1040,7 @@ export async function executeShell(
   envProfile?: SessionEnvProfile,
   gateways?: EgressGatewayRegistry,
   runtime?: import("./environment-store.js").EnvironmentRuntime,
+  onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
 ): Promise<ShellExecutionResult> {
   if (!request.code.trim()) throw new Error("Shell code is required");
   if (!request.executionId?.trim()) throw new Error("Execution ID is required");
@@ -1116,6 +1120,7 @@ export async function executeShell(
     maxWorkspaceBytes,
     maxOutputBytes,
     seccompVariantFor(networkAccess),
+    onOutput,
   );
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
 

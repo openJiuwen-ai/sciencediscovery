@@ -37,6 +37,9 @@ import type {
   ScientificEnvironmentSetup,
   ShellExecutionRequest,
   ShellExecutionResult,
+  ExecutionOwner,
+  ExecutionLogPage,
+  ManagedExecution,
   UninstallEnvironmentRequest,
 } from "@sciencediscovery/schema";
 
@@ -293,5 +296,29 @@ export class RunnerClient {
       throw new Error(body.error || `Runner shell execution failed (${response.status})`);
     }
     return await response.json() as ShellExecutionResult;
+  }
+
+  async startShellExecution(request: ShellExecutionRequest, signal?: AbortSignal): Promise<ManagedExecution> {
+    const body = JSON.stringify(request);
+    const timestamp = Date.now().toString();
+    return this.request("/shell-executions", {
+      method: "POST", body, signal,
+      headers: {
+        [EXECUTION_SIGNATURE_HEADER]: createExecutionSignature(this.token, timestamp, body),
+        [EXECUTION_TIMESTAMP_HEADER]: timestamp,
+      },
+    });
+  }
+
+  async getShellExecution(id: string, owner: ExecutionOwner): Promise<ManagedExecution> {
+    return this.request(`/shell-executions/${encodeURIComponent(id)}?${new URLSearchParams({ ...owner })}`);
+  }
+
+  async shellExecutionLogs(id: string, owner: ExecutionOwner, cursor = 0): Promise<ExecutionLogPage> {
+    return this.request(`/shell-executions/${encodeURIComponent(id)}/logs?${new URLSearchParams({ ...owner, cursor: String(cursor) })}`);
+  }
+
+  async cancelShellExecution(id: string, owner: ExecutionOwner): Promise<ManagedExecution> {
+    return this.request(`/shell-executions/${encodeURIComponent(id)}/cancel?${new URLSearchParams({ ...owner })}`, { method: "POST" });
   }
 }

@@ -27,6 +27,7 @@ export * from "./session.js";
 export * from "./permission.js";
 export * from "./sandbox-network.js";
 export * from "./environment.js";
+export * from "./execution.js";
 export * from "./model-usage.js";
 export * from "./model-provider.js";
 export * from "./model-provider-presets.js";

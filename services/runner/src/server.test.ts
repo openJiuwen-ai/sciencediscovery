@@ -714,6 +714,50 @@ test("workspace validation accepts remote roots without local projects and rejec
   assert.equal(await validatedWorkspace(dataDir, local), local);
 });
 
+test("managed Shell HTTP submission detaches, exposes incremental logs, queues writers and cancels without a second Shell", async (context) => {
+  const { dataDir, workspaceRoot } = await workspaceFixture(context);
+  const server = createRunnerServer(config(dataDir));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const headers = { authorization: "Bearer runner-test-token" };
+  const owner = new URLSearchParams({ sessionId: epoch().sessionId, agentId: "main" });
+  const get = async (id: string) => (await fetch(`${origin}/shell-executions/${id}?${owner}`, { headers })).json() as Promise<import("@sciencediscovery/schema").ManagedExecution>;
+  const waitFor = async (check: () => Promise<boolean>) => {
+    const deadline = Date.now() + 8000;
+    while (!await check()) {
+      if (Date.now() > deadline) throw new Error("Managed execution did not reach expected state");
+      await new Promise((done) => setTimeout(done, 10));
+    }
+  };
+  const first = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", {
+    agentId: "main", executionId: "managed-first", workspaceRoot, permissionEpoch: epoch(), executionTimeoutMs: 1,
+    code: "printf 'training-started\\n'; while :; do sleep 1; done",
+  }));
+  assert.equal(first.status, 202, await first.text());
+  await waitFor(async () => {
+    const page = await (await fetch(`${origin}/shell-executions/managed-first/logs?${owner}`, { headers })).json() as import("@sciencediscovery/schema").ExecutionLogPage;
+    return page.chunks.some((chunk: { text: string }) => chunk.text.includes("training-started"));
+  });
+  assert.equal((await get("managed-first")).state, "running", "HTTP return and a short wait budget must not kill the job");
+  const second = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", {
+    agentId: "main", executionId: "managed-second", workspaceRoot, permissionEpoch: epoch(), code: "echo after-cancel > done.txt",
+  }));
+  assert.equal(second.status, 202);
+  assert.equal((await get("managed-second")).state, "queued");
+  const denied = await fetch(`${origin}/shell-executions/managed-first?sessionId=another&agentId=main`, { headers });
+  assert.equal(denied.status, 400);
+  await fetch(`${origin}/shell-executions/managed-first/cancel?${owner}`, { method: "POST", headers });
+  await waitFor(async () => (await get("managed-first")).state === "cancelled");
+  await waitFor(async () => (await get("managed-second")).state === "completed");
+  assert.ok((await get("managed-first")).version);
+  assert.equal(await readFile(resolve(workspaceRoot, "done.txt"), "utf8"), "after-cancel\n");
+  const replay = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", {
+    agentId: "main", executionId: "managed-second", workspaceRoot, permissionEpoch: epoch(), code: "echo replay",
+  }));
+  assert.equal(replay.status, 400);
+});
+
 test("remote workspace executes signed Shell and Python without a local projects tree", async (context) => {
   const dataDir = await mkdtemp(resolve(process.cwd(), ".tmp", "remote-execution-"));
   context.after(() => rm(dataDir, { recursive: true, force: true }));

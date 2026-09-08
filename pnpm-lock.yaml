@@ -569,6 +569,9 @@ importers:
 
   services/runner:
     dependencies:
+      '@sciencediscovery/cas':
+        specifier: workspace:*
+        version: link:../../packages/cas
       '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging

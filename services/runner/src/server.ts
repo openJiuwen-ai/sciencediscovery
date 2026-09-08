@@ -76,6 +76,7 @@ import { KernelManager } from "./kernel-manager.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
 import { agentExecutionKey, KeyedTaskQueue, requestAgentExecutionKey } from "./agent-execution.js";
+import { ExecutionManager } from "./execution-manager.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
 
 const execFileAsync = promisify(execFile);
@@ -421,6 +422,7 @@ export function createRunnerServer(
     maxWorkspaceBytes: config.maxWorkspaceBytes,
   }, profiles, gateways);
   const executionQueues = new KeyedTaskQueue();
+  const managedExecutions = new ExecutionManager(config.dataDir);
   const seenExecutions = new Map<string, number>();
   const activeExecutions = new Map<string, RunnerExecutionStatus>();
   const executionUser = currentExecutionUser();
@@ -809,6 +811,45 @@ export function createRunnerServer(
         sendJson(response, 201, revision);
         return;
       }
+      const managedMatch = url.pathname.match(/^\/shell-executions\/([^/]+)(?:\/(logs|cancel))?$/);
+      if (managedMatch) {
+        const id = decodeURIComponent(managedMatch[1]!);
+        const owner = { sessionId: url.searchParams.get("sessionId") ?? "", agentId: url.searchParams.get("agentId") ?? "" };
+        if (request.method === "GET" && managedMatch[2] === "logs") {
+          sendJson(response, 200, managedExecutions.logs(id, owner, Number(url.searchParams.get("cursor") ?? "0")));
+          return;
+        }
+        if (request.method === "GET" && !managedMatch[2]) {
+          sendJson(response, 200, managedExecutions.get(id, owner));
+          return;
+        }
+        if (request.method === "POST" && managedMatch[2] === "cancel") {
+          sendJson(response, 202, managedExecutions.cancel(id, owner));
+          return;
+        }
+      }
+      if (request.method === "POST" && url.pathname === "/shell-executions") {
+        const body = await readBody(request);
+        if (!verifyExecutionSignature(config.authToken, request.headers[EXECUTION_TIMESTAMP_HEADER] as string | undefined,
+          body, request.headers[EXECUTION_SIGNATURE_HEADER] as string | undefined)) {
+          sendJson(response, 401, { error: "Invalid or expired execution signature" });
+          return;
+        }
+        const execution = JSON.parse(body) as ShellExecutionRequest;
+        await resolveExecutionWorkspace(config, execution);
+        if (execution.kernelMode === "persistent") throw new Error("Managed Shell executions must be ephemeral");
+        execution.kernelMode = "ephemeral";
+        execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
+        execution.maxOutputBytes ??= config.maxOutputBytes;
+        const accepted = managedExecutions.start(execution, (signal, log) => execution.environmentId
+          ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
+              if (signal.aborted) throw new Error("Execution cancelled before environment admission");
+              return executeShell(config, execution, signal, undefined, gateways, runtime, log);
+            }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
+          : executeShell(config, execution, signal, undefined, gateways, undefined, log));
+        sendJson(response, 202, accepted);
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/execute-shell") {
         const body = await readBody(request);
         const timestamp = request.headers[EXECUTION_TIMESTAMP_HEADER] as string | undefined;
@@ -895,6 +936,7 @@ export function createRunnerServer(
     }
   });
   server.once("close", () => {
+    void managedExecutions.close();
     void shellSessions.close();
     void gateways.close();
   });
