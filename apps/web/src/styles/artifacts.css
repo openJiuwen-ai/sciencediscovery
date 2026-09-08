@@ -39,6 +39,10 @@
 .manuscript-preview { max-height: 560px; overflow: auto; padding: 14px; border: 1px solid var(--border); border-radius: 8px; }
 .manuscript-preview details { margin-top: 18px; }
 .manuscript-preview pre, .artifact-source-preview { overflow: auto; max-height: 460px; border-radius: 8px; background: var(--surface-sunk); padding: 11px; font: 10px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+/* pre-wrap alone never breaks runs without whitespace (DNA/RNA sequences,
+ * hashes); they overflowed the preview and inflated the modal grid track.
+ * Wrap them anywhere instead of forcing the reader into horizontal scrolling. */
+.artifact-source-preview { overflow-wrap: anywhere; }
 .dataset-preview { display: grid; gap: 6px; }
 .dataset-view-tabs { display: flex; gap: 4px; }
 .dataset-view-tabs button { border: 0; border-radius: 6px; background: var(--surface-hover); color: var(--muted); padding: 5px 9px; cursor: pointer; font-size: 10px; white-space: nowrap; }

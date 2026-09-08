@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import type { ArtifactVersionProvenance, MemoryGraphNode, ScientificArtifact, ScientificArtifactVersion, Session } from "@sciencediscovery/schema";
@@ -89,6 +90,27 @@ test("JSON preview labels unparseable documents and still shows the raw text", (
   assert.match(html, /not valid JSON/);
   assert.match(html, /&quot;truncated&quot;: tru/);
   assert.match(html, /Preview truncated/);
+});
+
+test("JSON preview keeps long unbreakable values complete in the DOM", () => {
+  const sequence = "GTCAACACTGG".repeat(60);
+  const html = renderToStaticMarkup(createElement(JsonSourcePreview, {
+    parsed: true,
+    source: `{\n  "dna": "${sequence}"\n}`,
+    truncated: false,
+  }));
+  assert.match(html, new RegExp(sequence));
+});
+
+// Issue #69: long unbreakable JSON values (DNA/RNA sequences) stretched the
+// artifact dialog past the viewport edge — no scrollbar, no hint, content
+// silently cut. Lock the two rules that keep the dialog on screen and wrap
+// such values inside the preview.
+test("artifact preview stylesheet keeps the dialog on screen and wraps unbreakable runs", () => {
+  const dialogs = readFileSync(new URL("../src/styles/dialogs.css", import.meta.url), "utf8");
+  assert.match(dialogs, /\.artifact-modal-backdrop \{[^}]*grid-template-columns: minmax\(0, 100%\)/);
+  const artifacts = readFileSync(new URL("../src/styles/artifacts.css", import.meta.url), "utf8");
+  assert.match(artifacts, /\.artifact-source-preview \{ overflow-wrap: anywhere; \}/);
 });
 
 test("dataset table replaces an empty grid with an explicit no-rows explanation", () => {
