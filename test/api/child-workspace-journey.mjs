@@ -197,6 +197,9 @@ try {
     const target = await json(`/api/projects/${project.id}/sessions`, { title: "Sync", modelId: model.id,
       remoteRunnerHostIds: [host.id], approvalMode: "always_allow" });
     await json(`/api/sessions/${target.id}/files`, { path: "roundtrip.txt", content: "stable roundtrip" });
+    // User upload is itself an explicit Artifact action; sync must not add a
+    // second Artifact or silently advance that uploaded Artifact's version.
+    const artifactsBeforeSync = await json(`/api/sessions/${target.id}/artifacts`);
     const response = await fetch(`${api}/api/sessions/${target.id}/messages`, { method: "POST", headers: {
       authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ content: "Legacy sync roundtrip: push, pull, then inspect Transfers." }), signal: AbortSignal.timeout(30_000) });
@@ -207,7 +210,7 @@ try {
     assert.ok(records.every((record) => record.status === "completed" && record.fileCount === 1 && record.bytes === 16));
     const file = await fetch(`${api}/api/sessions/${target.id}/file?path=roundtrip.txt`, { headers: { authorization: `Bearer ${token}` } });
     assert.equal(await file.text(), "stable roundtrip");
-    assert.equal((await json(`/api/sessions/${target.id}/artifacts`)).length, 0);
+    assert.deepEqual(await json(`/api/sessions/${target.id}/artifacts`), artifactsBeforeSync);
     return "Main Agent pushed/pulled through the legacy tool and inspected durable Transfers; local bytes preserved; no implicit Artifact";
   });
   outcome = "PASS";
