@@ -31,7 +31,7 @@ import { cleanupJourney, createProjectAndSession, openProjectSession } from "./h
  */
 test("沙箱网络设置只推荐当前 Shell 工具", { tag: "@mocked" }, async ({ page, journey }) => {
   journey.scenario({ goal: "查看 Shell 命令的联网设置，不被已删除的工具名误导。", preconditions: ["隔离本地栈已启动；不执行命令或调用模型"] });
-  const fixture = await createProjectAndSession(page, { projectName: `Network guidance ${Date.now()}`, sessionTitle: "Network guidance" });
+  const fixture = await createProjectAndSession(page, { projectName: `Network guidance ${Date.now()}`, sessionTitle: "Inspect sandbox settings" });
   try {
     const dialog = page.getByRole("dialog", { name: "System configuration", exact: true });
     await journey.step("打开沙箱网络设置", "设置说明只提 run_shell，仍显示联网模式和安全边界。", async () => {
