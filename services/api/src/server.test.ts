@@ -101,7 +101,7 @@ import { RefStore, VersionStore, withWorkspaceMutation, workspaceHeadName } from
 
 import {
   aggregateToolText,
-  createApiServer,
+  createApiServer as createProductionApiServer,
   createDeltaCoalescingSink,
   loadServerConfig,
   prepareSubagentHandoff,
@@ -116,6 +116,18 @@ import type { McpTransportClient } from "@sciencediscovery/data-source";
 
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
+
+// General API fixtures do not own live Python MCP servers. MCP integration
+// cases pass their explicit transport; an unexpected invocation fails closed.
+const emptyMcpCatalog: McpCatalog = { loadedAt: "2026-01-01T00:00:00.000Z", revision: "api-fixture-empty", servers: [] };
+const noMcpTransport: McpTransportClient = {
+  catalog: async () => emptyMcpCatalog,
+  reload: async () => emptyMcpCatalog,
+  invoke: async () => { throw new Error("This API fixture must explicitly provide an MCP transport before invoking MCP"); },
+};
+function createApiServer(...[config, dependencies]: Parameters<typeof createProductionApiServer>) {
+  return createProductionApiServer(config, { mcpTransport: noMcpTransport, ...dependencies });
+}
 
 interface TestSseEvent {
   subagent?: { id: string };
