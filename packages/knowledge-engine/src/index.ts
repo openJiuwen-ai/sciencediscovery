@@ -19,3 +19,6 @@ export * from "./extraction/schema.js";
 export * from "./extraction/parse.js";
 export * from "./extraction/provenance-gate.js";
 export * from "./extraction/prompt.js";
+export * from "./growth/selection.js";
+export * from "./growth/convergence.js";
+export * from "./growth/patch-queries.js";

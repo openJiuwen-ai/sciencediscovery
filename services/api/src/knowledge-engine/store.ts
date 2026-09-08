@@ -88,6 +88,27 @@ export interface KeEdgeRow {
 
 export type KeJobStatus = "pending" | "running" | "succeeded" | "failed" | "dead";
 
+export type KeFrontierStatus = "pending" | "done" | "failed" | "skipped";
+
+export interface KeFrontierRow {
+  readonly id: string;
+  readonly kbId: string;
+  readonly cycleId: string;
+  readonly paperRef: Record<string, unknown>;
+  readonly dedupKey: string;
+  readonly depth: number;
+  readonly relevanceScore: number | null;
+  readonly parentId: string | null;
+  readonly source: string;
+  readonly sources: readonly string[];
+  readonly citeHits: number;
+  readonly attempts: number;
+  readonly status: KeFrontierStatus;
+  readonly expandedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface KeJobRow {
   readonly id: string;
   readonly type: string;
@@ -231,6 +252,37 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE TRIGGER ke_documents_fts_delete AFTER DELETE ON ke_documents BEGIN
         DELETE FROM ke_documents_fts WHERE document_id = old.id;
       END;
+    `,
+  },
+  {
+    version: 2,
+    name: "ke_growth",
+    sql: `
+      CREATE TABLE ke_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE ke_frontier (
+        id TEXT PRIMARY KEY,
+        kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        cycle_id TEXT NOT NULL,
+        paper_ref TEXT NOT NULL,
+        dedup_key TEXT NOT NULL,
+        depth INTEGER NOT NULL DEFAULT 0,
+        relevance_score REAL,
+        parent_id TEXT,
+        source TEXT NOT NULL DEFAULT 'backward_citation',
+        sources TEXT NOT NULL DEFAULT '[]',
+        cite_hits INTEGER NOT NULL DEFAULT 1,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        expanded_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (cycle_id, dedup_key)
+      );
+      CREATE INDEX ke_frontier_cycle_status ON ke_frontier (cycle_id, status, depth, attempts, created_at);
+      CREATE INDEX ke_frontier_kb ON ke_frontier (kb_id);
     `,
   },
 ];
@@ -904,6 +956,234 @@ export class KnowledgeEngineStore {
       .all(...params, limit) as Array<Record<string, unknown>>;
     return rows.map(mapJob);
   }
+
+  // ------------------------------------------------------------- ke_settings
+
+  getSetting(key: string): string | null {
+    const row = this.database.prepare("SELECT value FROM ke_settings WHERE key = ?").get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value ?? null;
+  }
+
+  setSetting(key: string, value: string): void {
+    this.database
+      .prepare("INSERT INTO ke_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(key, value);
+  }
+
+  // --------------------------------------------------------------- frontier
+
+  /**
+   * Add a candidate to a cycle's frontier. On the (cycle_id, dedup_key)
+   * conflict the hit is MERGED: cite_hits +1 and the discovery source is
+   * unioned into the sources hit matrix (Chao1's capture–recapture input).
+   */
+  frontierAdd(input: {
+    kbId: string;
+    cycleId: string;
+    paperRef: Record<string, unknown>;
+    dedupKey: string;
+    depth: number;
+    relevanceScore: number | null;
+    parentId: string | null;
+    source: string;
+  }): { item: KeFrontierRow; inserted: boolean } {
+    const timestamp = now();
+    return this.inTransaction(() => {
+      const existing = this.database
+        .prepare("SELECT * FROM ke_frontier WHERE cycle_id = ? AND dedup_key = ?")
+        .get(input.cycleId, input.dedupKey) as Record<string, unknown> | undefined;
+      if (!existing) {
+        const id = randomUUID();
+        this.database
+          .prepare(
+            `INSERT INTO ke_frontier
+               (id, kb_id, cycle_id, paper_ref, dedup_key, depth, relevance_score, parent_id, source, sources, cite_hits, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)`,
+          )
+          .run(
+            id,
+            input.kbId,
+            input.cycleId,
+            JSON.stringify(input.paperRef),
+            input.dedupKey,
+            input.depth,
+            input.relevanceScore,
+            input.parentId,
+            input.source,
+            JSON.stringify([input.source]),
+            timestamp,
+            timestamp,
+          );
+        return { item: this.getFrontierItem(id)!, inserted: true };
+      }
+      const sources = parseJson<string[]>(existing["sources"], []);
+      if (!sources.includes(input.source)) {
+        sources.push(input.source);
+      }
+      this.database
+        .prepare("UPDATE ke_frontier SET cite_hits = cite_hits + 1, sources = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(sources), timestamp, existing["id"] as string);
+      return { item: this.getFrontierItem(String(existing["id"]))!, inserted: false };
+    });
+  }
+
+  getFrontierItem(id: string): KeFrontierRow | undefined {
+    const row = this.database.prepare("SELECT * FROM ke_frontier WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? mapFrontier(row) : undefined;
+  }
+
+  frontierCounts(cycleId: string): { total: number; pending: number; done: number; failed: number; skipped: number } {
+    const row = this.database
+      .prepare(
+        `SELECT count(*) AS total,
+                sum(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                sum(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
+                sum(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                sum(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped
+         FROM ke_frontier WHERE cycle_id = ?`,
+      )
+      .get(cycleId) as { total: number; pending: number | null; done: number | null; failed: number | null; skipped: number | null };
+    return {
+      total: Number(row.total),
+      pending: Number(row.pending ?? 0),
+      done: Number(row.done ?? 0),
+      failed: Number(row.failed ?? 0),
+      skipped: Number(row.skipped ?? 0),
+    };
+  }
+
+  /**
+   * Next candidate to process: shallowest depth, fewest attempts, highest
+   * relevance — the deterministic crawl order. Deferred ids (rate-limited
+   * this run) are excluded so a stubborn host is not re-picked immediately.
+   */
+  frontierNextPending(cycleId: string, excludeIds: readonly string[] = []): KeFrontierRow | undefined {
+    const exclusion = excludeIds.length > 0 ? `AND id NOT IN (${excludeIds.map(() => "?").join(",")})` : "";
+    const row = this.database
+      .prepare(
+        `SELECT * FROM ke_frontier
+         WHERE cycle_id = ? AND status = 'pending' ${exclusion}
+         ORDER BY depth, attempts, relevance_score DESC NULLS LAST, created_at, id
+         LIMIT 1`,
+      )
+      .get(cycleId, ...excludeIds) as Record<string, unknown> | undefined;
+    return row ? mapFrontier(row) : undefined;
+  }
+
+  frontierMarkStatus(id: string, status: "done" | "failed" | "skipped"): void {
+    this.database.prepare("UPDATE ke_frontier SET status = ?, updated_at = ? WHERE id = ?").run(status, now(), id);
+  }
+
+  frontierMarkExpanded(id: string): void {
+    this.database.prepare("UPDATE ke_frontier SET expanded_at = ?, updated_at = ? WHERE id = ?").run(now(), now(), id);
+  }
+
+  /** Returns the new attempts count. */
+  frontierBumpAttempts(id: string): number {
+    return this.inTransaction(() => {
+      this.database.prepare("UPDATE ke_frontier SET attempts = attempts + 1, updated_at = ? WHERE id = ?").run(now(), id);
+      const row = this.database.prepare("SELECT attempts FROM ke_frontier WHERE id = ?").get(id) as { attempts: number };
+      return Number(row.attempts);
+    });
+  }
+
+  frontierBoostScore(id: string, boost: number): void {
+    this.database
+      .prepare("UPDATE ke_frontier SET relevance_score = coalesce(relevance_score, 0) + ?, updated_at = ? WHERE id = ?")
+      .run(boost, now(), id);
+  }
+
+  frontierSkipRemaining(cycleId: string): number {
+    const result = this.database
+      .prepare("UPDATE ke_frontier SET status = 'skipped', updated_at = ? WHERE cycle_id = ? AND status = 'pending'")
+      .run(now(), cycleId);
+    return Number(result.changes);
+  }
+
+  /** Discovery-path overlap statistics for Chao1: observed (distinct papers
+   *  with ≥1 source), f1/f2 (papers found by exactly one / two paths), and
+   *  unsourced (papers in the KB with no discovery path recorded). */
+  frontierSourceStats(kbId: string): { observed: number; f1: number; f2: number; unsourced: number } {
+    const rows = this.database
+      .prepare(
+        `SELECT dedup_key, sources FROM ke_frontier WHERE kb_id = ?`,
+      )
+      .all(kbId) as Array<{ dedup_key: string; sources: string }>;
+    const pathCounts = new Map<string, number>();
+    for (const row of rows) {
+      const sources = parseJson<string[]>(row.sources, []);
+      pathCounts.set(row.dedup_key, Math.max(pathCounts.get(row.dedup_key) ?? 0, sources.length));
+    }
+    let f1 = 0;
+    let f2 = 0;
+    for (const count of pathCounts.values()) {
+      if (count === 1) f1 += 1;
+      else if (count === 2) f2 += 1;
+    }
+    const observed = pathCounts.size;
+    // KB papers that no discovery path reached (seed uploads etc.).
+    const docKeys = this.database
+      .prepare("SELECT dedup_key FROM ke_documents WHERE kb_id = ?")
+      .all(kbId) as Array<{ dedup_key: string }>;
+    const unsourced = docKeys.filter((doc) => !pathCounts.has(doc.dedup_key)).length;
+    return { observed, f1, f2, unsourced };
+  }
+
+  // ------------------------------------------------- growth support queries
+
+  countEntitiesCreatedSince(kbId: string, sinceIso: string): number {
+    const row = this.database
+      .prepare("SELECT count(*) AS total FROM ke_entities WHERE kb_id = ? AND created_at >= ?")
+      .get(kbId, sinceIso) as { total: number };
+    return Number(row.total);
+  }
+
+  countEdgesCreatedSince(kbId: string, sinceIso: string): number {
+    const row = this.database
+      .prepare("SELECT count(*) AS total FROM ke_edges WHERE kb_id = ? AND created_at >= ?")
+      .get(kbId, sinceIso) as { total: number };
+    return Number(row.total);
+  }
+
+  /** Entities with their graph degree (for patch-query construction). */
+  listEntitiesWithDegree(kbId: string): Array<KeEntityRow & { degree: number }> {
+    const rows = this.database
+      .prepare(
+        `SELECT e.*, (SELECT count(*) FROM ke_edges WHERE kb_id = e.kb_id AND (src_id = e.id OR dst_id = e.id)) AS degree
+         FROM ke_entities e WHERE e.kb_id = ?`,
+      )
+      .all(kbId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({ ...mapEntity(row), degree: Number(row["degree"]) }));
+  }
+
+  /** Strongest co-occurring neighbor names per entity (patch-query text). */
+  topNeighborNames(kbId: string, entityIds: readonly string[], perEntity: number): Map<string, string[]> {
+    const result = new Map<string, string[]>();
+    for (const entityId of entityIds) {
+      const rows = this.database
+        .prepare(
+          `SELECT n.name, count(*) AS weight FROM ke_edges e
+           JOIN ke_entities n ON n.id = CASE WHEN e.src_id = ? THEN e.dst_id ELSE e.src_id END
+           WHERE e.kb_id = ? AND (e.src_id = ? OR e.dst_id = ?)
+           GROUP BY n.id ORDER BY weight DESC, n.name LIMIT ?`,
+        )
+        .all(entityId, kbId, entityId, entityId, perEntity) as Array<{ name: string }>;
+      result.set(entityId, rows.map((row) => row.name));
+    }
+    return result;
+  }
+
+  /** Documents of a KB ordered for seed selection (newest first, id tiebreak). */
+  listDocumentsForSeeding(kbId: string, limit: number): KeDocumentRow[] {
+    const rows = this.database
+      .prepare("SELECT * FROM ke_documents WHERE kb_id = ? ORDER BY created_at DESC, id LIMIT ?")
+      .all(kbId, limit) as Array<Record<string, unknown>>;
+    return rows.map(mapDocument);
+  }
 }
 
 // ------------------------------------------------------------------ mappers
@@ -983,6 +1263,27 @@ function mapJob(row: Record<string, unknown>): KeJobRow {
     maxAttempts: Number(row["max_attempts"]),
     runAfter: String(row["run_after"]),
     error: (row["error"] as string | null) ?? null,
+    createdAt: String(row["created_at"]),
+    updatedAt: String(row["updated_at"]),
+  };
+}
+
+function mapFrontier(row: Record<string, unknown>): KeFrontierRow {
+  return {
+    id: String(row["id"]),
+    kbId: String(row["kb_id"]),
+    cycleId: String(row["cycle_id"]),
+    paperRef: parseJson<Record<string, unknown>>(row["paper_ref"], {}),
+    dedupKey: String(row["dedup_key"]),
+    depth: Number(row["depth"]),
+    relevanceScore: (row["relevance_score"] as number | null) ?? null,
+    parentId: (row["parent_id"] as string | null) ?? null,
+    source: String(row["source"] ?? "backward_citation"),
+    sources: parseJson<string[]>(row["sources"], []),
+    citeHits: Number(row["cite_hits"]),
+    attempts: Number(row["attempts"]),
+    status: String(row["status"]) as KeFrontierStatus,
+    expandedAt: (row["expanded_at"] as string | null) ?? null,
     createdAt: String(row["created_at"]),
     updatedAt: String(row["updated_at"]),
   };
