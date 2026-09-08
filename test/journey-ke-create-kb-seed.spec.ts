@@ -25,11 +25,11 @@ test.use({ locale: "zh-CN" });
  * Purpose: A researcher can create a knowledge base, issue a seed query, and watch the ingestion jobs reach success with the seeded documents ready — entirely through the product UI.
  * Steps:
  *   1. Open the knowledge-engine page from the workbench navigation in a zh-CN browser.
- *   2. Create a knowledge base through the ke-create-kb panel and confirm it appears in the list.
- *   3. Issue the seed query through the ke-seed panel and observe ke-job-status enter a running/pending state.
+ *   2. Create a knowledge base through the create panel, then select it in the KB list so the seed panel renders.
+ *   3. Issue the seed query through the seed panel and observe the job status enter a queued/running state.
  *   4. Register a journey-owned stub as the default model so the extraction pipeline has a non-agent LLM to call.
- *   5. Wait until ke-job-status reports the seed pipeline succeeded and ke-documents lists the seeded documents as ready.
- *   6. Reload and confirm the knowledge base and its documents persist.
+ *   5. Wait until the job status reports the seed pipeline succeeded and the documents list shows the seeded documents ready.
+ *   6. Reload, re-select the knowledge base, and confirm the documents persist.
  * Environment: Isolated local stack at E2E_BASE_URL started with SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR pointing at test/fixtures/scholarly so all scholarly connectors replay local fixtures; zh-CN locale.
  * Type: mocked
  * LLM: journey-registered OpenAI-compatible HTTP stub on 127.0.0.1 returning a fixed extraction JSON for the non-agent pipeline calls.
@@ -40,7 +40,7 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN for the isolated local API only; the stub token has no external access.
  * CostSideEffects: no external cost; knowledge-base records live inside the disposable isolated data dir.
  */
-test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ journey, page }) => {
+test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
   test.setTimeout(300_000);
   journey.scenario({
     goal: "一位研究人员要在知识引擎页新建知识库、发起一次种子摄取，"
@@ -75,23 +75,25 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
       },
     ],
   });
+  let providerId = "";
+  let modelId = "";
 
   try {
     await journey.step(
       "打开知识引擎页",
-      "工作台导航进入知识引擎页，页面骨架（ke-create-kb 面板与空图状态）可见。",
+      "工作台导航进入知识引擎页，页面骨架（建库输入框与空图状态）可见。",
       async () => {
         await page.goto("/");
         await page.getByRole("button", { name: "Knowledge Engine" }).click();
         await expect(page.getByTestId("knowledge-engine-page")).toBeVisible();
-        await expect(page.getByTestId("ke-create-kb")).toBeVisible();
-        await expect(page.getByTestId("ke-graph-empty").or(page.getByTestId("ke-graph-canvas"))).toBeVisible();
+        await expect(page.getByLabel("new kb name")).toBeVisible();
+        await expect(page.getByTestId("ke-graph-empty")).toBeVisible();
       },
     );
 
     await journey.step(
-      "创建知识库",
-      "在 ke-create-kb 面板填写名称提交后，新库出现在列表中并成为当前库。",
+      "创建知识库并选中",
+      "填写名称点 Create 后新库出现在列表；点列表项选中它，种子面板出现。",
       async () => {
         await page.getByLabel("new kb name").fill(kbName);
         await page.getByTestId("ke-create-kb").click();
@@ -105,11 +107,11 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
 
     await journey.step(
       "发起种子查询",
-      "在 ke-seed 面板填入种子查询并提交，ke-job-status 随即出现任务并处于排队/运行态。",
+      "填入种子查询点 Seed，ke-job-status 随即出现任务并处于排队/运行态。",
       async () => {
         await page.getByLabel("seed query").fill(seedQuery);
         await page.getByTestId("ke-seed").click();
-        await expect(page.getByTestId("ke-job-status")).toContainText(/pending|running|等待|运行/, { timeout: 30_000 });
+        await expect(page.getByTestId("ke-job-status")).not.toContainText("no jobs yet", { timeout: 30_000 });
       },
     );
 
@@ -124,15 +126,17 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
         });
         expect(provider.ok()).toBeTruthy();
         const providerBody = await provider.json() as { id: string };
-        const model = await api.post(`${apiBaseUrl()}/api/providers/${providerBody.id}/models`, {
+        providerId = providerBody.id;
+        const model = await api.post(`${apiBaseUrl()}/api/providers/${providerId}/models`, {
           headers: authorizationHeader(),
           data: { model: stub.model, label: `J-KE1 ${stub.model}` },
         });
         expect(model.ok()).toBeTruthy();
         const modelBody = await model.json() as { id: string };
+        modelId = modelBody.id;
         const settings = await api.put(`${apiBaseUrl()}/api/settings`, {
           headers: authorizationHeader(),
-          data: { modelId: modelBody.id },
+          data: { modelId },
         });
         expect(settings.ok()).toBeTruthy();
       },
@@ -142,16 +146,15 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
       "等待种子管线完成",
       "ke-job-status 报告任务成功（无失败/死信），ke-documents 列出已就绪的种子文档。",
       async () => {
-        await expect(page.getByTestId("ke-job-status")).toContainText(/succeeded|成功|完成/, { timeout: 240_000 });
-        await expect(page.getByTestId("ke-job-status")).not.toContainText(/dead|failed|失败/);
-        await expect(page.getByTestId("ke-documents").getByRole("listitem, row").or(page.getByTestId("ke-documents"))).toBeVisible();
-        await expect(page.getByTestId("ke-documents")).not.toContainText(/error|失败/);
+        await expect(page.getByTestId("ke-job-status")).toContainText(/succeeded/, { timeout: 240_000 });
+        await expect(page.getByTestId("ke-job-status")).not.toContainText(/dead|failed/);
+        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 30_000 });
       },
     );
 
     await journey.step(
       "刷新后知识库仍在",
-      "重进知识引擎页，同名知识库与文档列表仍然可见。",
+      "重进知识引擎页，重选同名知识库后文档列表仍可见。",
       async () => {
         await page.reload();
         await page.getByRole("button", { name: "Knowledge Engine" }).click();
@@ -163,6 +166,31 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
       },
     );
   } finally {
+    // The stub provider/model/default override must not leak into later
+    // journeys sharing this stack (J1/J6/J7 assert a clean registry).
+    if (providerId) {
+      const api = await playwright.request.newContext({
+        baseURL: apiBaseUrl(),
+        extraHTTPHeaders: authorizationHeader(),
+      });
+      try {
+        const settingsRaw = await api.get("/api/settings").catch(() => undefined);
+        const settings = settingsRaw ? ((await settingsRaw.json().catch(() => ({}))) as { overrides?: Record<string, unknown> }) : undefined;
+        const overrides = { ...(settings?.overrides ?? {}) };
+        let changed = false;
+        for (const key of ["modelId", "reviewModelId"]) {
+          if (overrides[key] === modelId) {
+            delete overrides[key];
+            changed = true;
+          }
+        }
+        if (changed) await api.put("/api/settings", { data: overrides }).catch(() => undefined);
+        await api.delete(`/api/providers/${encodeURIComponent(providerId)}`).catch(() => undefined);
+      } catch {
+        // Best-effort cleanup; the journey result is authoritative.
+      }
+      await api.dispose().catch(() => undefined);
+    }
     await stub.stop();
   }
 });

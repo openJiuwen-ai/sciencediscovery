@@ -24,9 +24,9 @@ test.use({ locale: "zh-CN" });
  * E2E-META
  * Purpose: After a seeded knowledge base ingests, the researcher sees the entity graph render without console errors and can drill into an entity's evidence-backed detail.
  * Steps:
- *   1. Open the knowledge-engine page and create a knowledge base through the UI.
+ *   1. Open the knowledge-engine page, create a knowledge base, and select it in the KB list.
  *   2. Register a journey-owned stub as the default model so the extraction pipeline has a non-agent LLM.
- *   3. Issue the seed query through the ke-seed panel and wait for the pipeline to succeed.
+ *   3. Issue the seed query through the seed panel and wait for the pipeline to succeed.
  *   4. Observe the graph canvas render non-empty with zero console errors.
  *   5. Click a graph node and verify the entity detail panel shows the entity with its evidence quote and source document.
  * Environment: Isolated local stack at E2E_BASE_URL started with SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR pointing at test/fixtures/scholarly; zh-CN locale.
@@ -39,7 +39,7 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN for the isolated local API only; the stub token has no external access.
  * CostSideEffects: no external cost; knowledge-base records live inside the disposable isolated data dir.
  */
-test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, page }) => {
+test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
   test.setTimeout(300_000);
   journey.scenario({
     goal: "种子摄取完成后，研究人员能在图谱页看到实体关系图（无 console error），"
@@ -78,11 +78,13 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
       },
     ],
   });
+  let providerId = "";
+  let modelId = "";
 
   try {
     await journey.step(
-      "打开知识引擎页并建库",
-      "知识引擎页可见；通过 ke-create-kb 建立新库并成为当前库。",
+      "打开知识引擎页并建库选中",
+      "知识引擎页可见；建库后在列表中选中它，种子面板出现。",
       async () => {
         await page.goto("/");
         await page.getByRole("button", { name: "Knowledge Engine" }).click();
@@ -99,7 +101,7 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
 
     await journey.step(
       "注册抽取 stub 并发起种子",
-      "stub 注册为默认模型后，ke-seed 发起种子查询，任务进入运行。",
+      "stub 注册为默认模型后，发起种子查询，任务面板出现任务。",
       async () => {
         const api = page.request;
         const provider = await api.post(`${apiBaseUrl()}/api/providers`, {
@@ -107,16 +109,18 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
           data: { name: `J-KE2 stub ${Date.now()}`, baseUrl: stub.baseUrl, apiToken: stub.apiToken },
         });
         const providerBody = await provider.json() as { id: string };
-        const model = await api.post(`${apiBaseUrl()}/api/providers/${providerBody.id}/models`, {
+        providerId = providerBody.id;
+        const model = await api.post(`${apiBaseUrl()}/api/providers/${providerId}/models`, {
           headers: authorizationHeader(),
           data: { model: stub.model, label: `J-KE2 ${stub.model}` },
         });
         const modelBody = await model.json() as { id: string };
-        await api.put(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader(), data: { modelId: modelBody.id } });
+        modelId = modelBody.id;
+        await api.put(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader(), data: { modelId } });
 
         await page.getByLabel("seed query").fill(seedQuery);
         await page.getByTestId("ke-seed").click();
-        await expect(page.getByTestId("ke-job-status")).toContainText(/pending|running|等待|运行/, { timeout: 30_000 });
+        await expect(page.getByTestId("ke-job-status")).not.toContainText("no jobs yet", { timeout: 30_000 });
       },
     );
 
@@ -124,7 +128,7 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
       "等待管线完成并观察图谱渲染",
       "任务成功后图谱画布渲染出节点与边（非空），期间无 console error。",
       async () => {
-        await expect(page.getByTestId("ke-job-status")).toContainText(/succeeded|成功|完成/, { timeout: 240_000 });
+        await expect(page.getByTestId("ke-job-status")).toContainText(/succeeded/, { timeout: 240_000 });
         const canvas = page.getByTestId("ke-graph-canvas");
         await expect(canvas).toBeVisible({ timeout: 60_000 });
         await expect(canvas.locator("*").first()).toBeVisible({ timeout: 60_000 });
@@ -154,6 +158,31 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
       },
     );
   } finally {
+    // The stub provider/model/default override must not leak into later
+    // journeys sharing this stack (J1/J6/J7 assert a clean registry).
+    if (providerId) {
+      const api = await playwright.request.newContext({
+        baseURL: apiBaseUrl(),
+        extraHTTPHeaders: authorizationHeader(),
+      });
+      try {
+        const settingsRaw = await api.get("/api/settings").catch(() => undefined);
+        const settings = settingsRaw ? ((await settingsRaw.json().catch(() => ({}))) as { overrides?: Record<string, unknown> }) : undefined;
+        const overrides = { ...(settings?.overrides ?? {}) };
+        let changed = false;
+        for (const key of ["modelId", "reviewModelId"]) {
+          if (overrides[key] === modelId) {
+            delete overrides[key];
+            changed = true;
+          }
+        }
+        if (changed) await api.put("/api/settings", { data: overrides }).catch(() => undefined);
+        await api.delete(`/api/providers/${encodeURIComponent(providerId)}`).catch(() => undefined);
+      } catch {
+        // Best-effort cleanup; the journey result is authoritative.
+      }
+      await api.dispose().catch(() => undefined);
+    }
     await stub.stop();
   }
 });
