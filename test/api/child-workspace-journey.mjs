@@ -187,7 +187,7 @@ try {
   });
   await step("5. 旧同步工具与 Transfer 共用记录", "主 Agent 经旧 push/pull 完成回传，随后通过新工具查到两笔持久完成记录。", async () => {
     const url = new URL(runnerOrigin);
-    const host = await json("/api/remote-hosts", { alias: "Journey direct Runner", connectionKind: "direct",
+    const host = await json("/api/remote-hosts", { alias: "journey-direct-runner", connectionKind: "direct",
       endpoint: { host: url.hostname, port: Number(url.port), protocol: "http" }, token });
     remoteRunnerId = host.id;
     await json(`/api/remote-hosts/${host.id}/runner/connect`, {});
