@@ -5890,7 +5890,28 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
   const dataDir = resolve(process.cwd(), ".tmp", `workspace-admission-${randomUUID()}`);
   await mkdir(dataDir, { recursive: true });
   context.after(() => rm(dataDir, { recursive: true, force: true }));
-  const { origin } = await startTestApi(context, dataDir);
+  const uploads: Record<string, unknown>[] = [];
+  const graph = createHttpServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      if (request.url === "/observe/upload-file") uploads.push(JSON.parse(body));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "healthy" }));
+    });
+  });
+  await new Promise<void>((done) => graph.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => graph.close(() => done())));
+  const server = createApiServer({ ...testConfig(dataDir, "http://127.0.0.1:1"), memoryGraph: {
+    url: `http://127.0.0.1:${(graph.address() as AddressInfo).port}`, internalToken: "test",
+  } });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const enabled = await fetch(`${origin}/api/memory/settings`, {
+    method: "PUT", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(enabled.status, 200);
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
     method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ name: "Single writer" }),
@@ -5916,6 +5937,7 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
     try {
       await new Promise((done) => setTimeout(done, 60));
       assert.equal(returned, false);
+      assert.equal(uploads.length, 0, "SourceFile is not published before upload admission");
       await assert.rejects(access(resolve(workspace, name)), { code: "ENOENT" });
     } finally { release(); await writer; }
     const response = await upload;
@@ -5928,6 +5950,15 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
       assert.equal(record.value.kind, multipart ? "user-upload" : "user-file-write");
       await versions.validateClosure(head);
     } finally { refs.close(); }
+    if (multipart) {
+      for (let attempt = 0; attempt < 100 && !uploads.length; attempt += 1) {
+        await new Promise((done) => setTimeout(done, 10));
+      }
+      assert.equal(uploads.length, 1);
+      assert.equal(uploads[0]!.file_id, `source_file:session:${session.body.id}:${name}`);
+      assert.equal(uploads[0]!.content_hash, createHash("sha256").update("uploaded").digest("hex"));
+      assert.equal(uploads[0]!.size, Buffer.byteLength("uploaded"));
+    }
   }
 });
 

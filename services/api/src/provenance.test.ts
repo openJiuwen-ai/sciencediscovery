@@ -954,9 +954,13 @@ test("recorder mirrors provenance addressing fields to the memory graph on shell
     const client = new MemoryGraphClient({ url: `http://127.0.0.1:${port}`, token: "t" });
     const sink = new MemoryGraphSink(client, () => true);
     const recorder = new ProvenanceRecorder(dataDir, store, sink);
+    await writeFile(resolve(workspaceRoot, "source.csv"), "v\n1\n");
+    await recorder.registerWorkspaceArtifact({
+      origin: "user_upload", path: "source.csv", sessionId: session.id, workspaceRoot,
+    });
     await recorder.executeShell({
       agentId: "main",
-      code: "echo ok", permissionEpoch, runnerClient,
+      code: "cat source.csv > mirror-output.csv", permissionEpoch, runnerClient,
       sessionId: session.id, turnId: "turn-mirror", workspaceRoot,
     });
     // The sink is fire-and-forget; poll briefly until the POST lands.
@@ -969,6 +973,7 @@ test("recorder mirrors provenance addressing fields to the memory graph on shell
     // persistence at mirror time).
     const body = captured as unknown as Record<string, unknown>;
     assert.equal(body.turn_id, "turn-mirror");
+    assert.deepEqual(body.input_source_files, [{ file_id: `source_file:session:${session.id}:source.csv` }]);
     assert.ok(body.stdout_hash, "stdout_hash mirrored");
     assert.ok(body.stderr_hash, "stderr_hash mirrored");
     assert.ok(body.env_hash === null, "env_hash null for shell runs");
@@ -989,6 +994,8 @@ test("recorder mirrors provenance addressing fields to the memory graph on shell
     assert.equal(declaredArtifacts[0]!.turn_id, "turn-mirror");
     assert.equal(declaredArtifacts[0]!.project_id, project.id);
     assert.ok(declaredArtifacts[0]!.content_hash, "declared artifact content_hash mirrored");
+    assert.deepEqual(declaredBody.input_source_files, body.input_source_files,
+      "declaring a committed Shell output retains uploaded SourceFile inputs");
   } finally {
     await new Promise<void>((r) => fake.close(() => r()));
   }
