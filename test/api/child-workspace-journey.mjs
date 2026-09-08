@@ -256,7 +256,7 @@ try {
       assert.equal(response.status, 200); assert.match(await response.text(), /"type":"run.completed"/);
       await until(async () => (await json(`/api/evolve/runs?sessionId=${target.id}`)).some((run) => run.status === "succeeded"));
       assert.equal(evolutionExports.length, 2, "probe and search both stage the Workspace");
-      assert.ok(evolutionExports.every((value) => value.baseline === "committed solver" && value.solver === "committed solver" && value.test === "committed tests"));
+      assert.deepEqual(evolutionExports, Array.from({ length: 2 }, () => ({ baseline: "committed solver", solver: "committed solver", test: "committed tests" })));
       assert.equal((await runner.getShellExecution(executionId, owner)).state, "running");
     } finally { await runner.cancelShellExecution(executionId, owner); }
     return "Main Agent created Evolution; probe/search consumed committed baseline and tests while the writer remained running; writer explicitly cancelled afterwards";
