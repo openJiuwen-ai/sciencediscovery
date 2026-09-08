@@ -482,6 +482,7 @@ export class ProvenanceRecorder {
     turnId: string;
     workspaceRoot: string;
     workspaceSnapshot?: AgentStateRef;
+    workspaceVersion?: AgentStateRef;
   }): Promise<void> {
     const derivations: ArtifactDerivation[] = [];
     const workspaceRevisions: WorkspaceFileRevisionInput[] = [];
@@ -505,6 +506,7 @@ export class ProvenanceRecorder {
         turnId: options.turnId,
       });
       workspaceRevisions.push({
+        ...(options.workspaceVersion ? { publicationVersion: options.workspaceVersion } : {}),
         contentHash: content.hash,
         executionRunId: options.executionId,
         mode: "write",
@@ -661,6 +663,7 @@ export class ProvenanceRecorder {
         turnId: options.turnId,
         workspaceRoot: options.workspaceRoot,
         workspaceSnapshot: result.workspaceSnapshot,
+        workspaceVersion: result.workspaceVersion,
       });
     }
     const shellSourceFileInputs = this.inferredSourceFileInputs(options.sessionId, undefined, options.code);

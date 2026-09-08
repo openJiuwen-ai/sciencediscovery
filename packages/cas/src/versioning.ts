@@ -293,6 +293,14 @@ export class RefStore {
       .map((row) => JSON.parse(row.target as string) as AgentStateRef);
   }
 
+  /** Durable publication order, not file mtime or RPC completion time. */
+  publicationSequence(name: string, target?: AgentStateRef): number | undefined {
+    const row = target
+      ? this.db.prepare("SELECT id FROM history_refs WHERE name=? AND target=? ORDER BY id DESC LIMIT 1").get(name, canonicalize(target))
+      : this.db.prepare("SELECT id FROM history_refs WHERE name=? ORDER BY id DESC LIMIT 1").get(name);
+    return row ? Number(row.id) : undefined;
+  }
+
   roots(): AgentStateRef[] {
     return this.db.prepare("SELECT target FROM live_refs UNION SELECT target FROM history_refs").all()
       .map((row) => JSON.parse(row.target as string) as AgentStateRef);

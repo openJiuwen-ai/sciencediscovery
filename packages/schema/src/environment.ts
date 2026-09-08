@@ -225,6 +225,8 @@ export interface ShellExecutionRequest {
 }
 
 export interface ShellExecutionResult extends Omit<ScientificExecutionResult, "environmentRevisionId" | "language"> {
+  /** Rooted publication receipt; separate from the content tree. */
+  workspaceVersion?: ScientificExecutionResult["workspaceSnapshot"];
   environmentRevisionId: string;
   language: "shell";
 }

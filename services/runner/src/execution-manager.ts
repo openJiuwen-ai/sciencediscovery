@@ -110,6 +110,7 @@ export class ExecutionManager {
             await refs.commit(this.versions, name, refs.head(name), version);
             execution.version = version;
             if (execution.result) execution.result.workspaceSnapshot = workspace;
+            if (execution.result) execution.result.workspaceVersion = version;
           } finally { refs.close(); }
         }
       } catch (error) {

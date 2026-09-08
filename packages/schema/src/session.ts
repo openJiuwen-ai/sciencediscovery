@@ -197,6 +197,7 @@ export interface WorkspaceFileRecord {
 
 /** Immutable attribution for one observed content state of a Workspace file. */
 export interface WorkspaceFileRevision {
+  publicationSequence?: number;
   artifactVersionIds: string[];
   contentHash?: string;
   createdAt: string;
@@ -218,6 +219,8 @@ export interface WorkspaceFileRevision {
 }
 
 export interface WorkspaceFileRevisionInput {
+  /** Trusted local Runner receipt. Not a user-supplied ordering number. */
+  publicationVersion?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   artifactVersionId?: string;
   contentHash?: string;
   executionRunId?: string;

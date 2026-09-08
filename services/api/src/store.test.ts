@@ -18,6 +18,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation } from "@sciencediscovery/cas";
 
 import type { ArtifactJob, ComposerReference, Environment, EnvironmentRevision, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
 import {
@@ -132,6 +133,31 @@ async function readPersistedCatalog(tempRoot: string): Promise<PersistedCatalog>
   database.close();
   return JSON.parse(row.json) as PersistedCatalog;
 }
+
+test("late execution provenance retains history without rolling back the latest business revision", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `publication-order-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Ordering");
+  const session = await store.createSession(project.id, "Ordering", {}, {}, { allowUnconfiguredModel: true });
+  const workspace = store.workspacePath(session.id); const versions = new VersionStore(root);
+  const publish = async (text: string) => {
+    await withWorkspaceMutation(versions, workspace, () => writeFile(resolve(workspace, "file.txt"), text), { kind: "test" });
+    const refs = await RefStore.open(versions);
+    try { return refs.head(workspaceHeadName(workspace))!; } finally { refs.close(); }
+  };
+  const older = await publish("old"); const newer = await publish("new");
+  const input = { path: "file.txt", mode: "write" as const, origin: "tool" as const, size: 3, modifiedAt: "2030-01-01T00:00:00Z" };
+  const latest = await store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: newer, executionRunId: "new" });
+  const late = await store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: older, executionRunId: "old", modifiedAt: "2040-01-01T00:00:00Z" });
+  assert.notEqual(late.id, latest.id); assert.ok(late.publicationSequence! < latest.publicationSequence!);
+  assert.equal(store.getWorkspaceFileProvenance(session.id, input.path)!.currentRevision.id, latest.id);
+  const edit = await store.recordWorkspaceFileRevision(session.id, { ...input, origin: "upload" });
+  await store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: newer, executionRunId: "duplicate-late" });
+  assert.equal(store.getWorkspaceFileProvenance(session.id, input.path)!.currentRevision.id, edit.id, "unreceipted newer writer wins ties with its baseline publication");
+  const unrooted = await versions.putRecord("WorkspaceExecution", { executionId: "not-published" });
+  await assert.rejects(store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: unrooted }), /not rooted/);
+});
 
 test("Reviewer Specialist levels are cumulative", () => {
   assert.equal(reviewerSpecialistSupportsLevel("quick", "quick"), true);

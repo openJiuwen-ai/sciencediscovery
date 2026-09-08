@@ -13,8 +13,8 @@
 // limitations under the License.
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { VersionStore, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
+import { appendFile, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
@@ -3002,6 +3002,19 @@ export class SessionStore {
       }
       let catalogChanged = false;
       const revisions: WorkspaceFileRevision[] = [];
+      // Resolve order inside the same metadata barrier as the pointer update.
+      // An unreceipted writer observes the current head (and wins ties), so a
+      // prior execution cannot overwrite its projection while it commits.
+      const refs = await RefStore.open(new VersionStore(this.dataDir));
+      const publicationSequences = new Map<WorkspaceFileRevisionInput, number>();
+      try {
+        for (const { input, path } of prepared) {
+          const root = await realpath(this.workspaceLocation(sessionId, path).root);
+          const sequence = refs.publicationSequence(workspaceHeadName(root), input.publicationVersion);
+          if (input.publicationVersion && sequence === undefined) throw new Error("Workspace publication receipt is not rooted in this Workspace");
+          publicationSequences.set(input, sequence ?? 0);
+        }
+      } finally { refs.close(); }
       for (const { input, path } of prepared) {
         const parent = input.parentRevisionId
           ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === input.parentRevisionId)
@@ -3037,6 +3050,7 @@ export class SessionStore {
         const fileId = record?.id ?? randomUUID();
         const contentHash = input.contentHash ?? parent?.contentHash;
         const revision: WorkspaceFileRevision = {
+          publicationSequence: publicationSequences.get(input)!,
           artifactVersionIds: input.artifactVersionId ? [input.artifactVersionId] : [],
           ...(contentHash ? { contentHash } : {}),
           createdAt: now,
@@ -3069,7 +3083,7 @@ export class SessionStore {
             updatedAt: now,
           };
           this.catalog.workspaceFileRecords.push(record);
-        } else {
+        } else if (!input.publicationVersion || !current || (publicationSequences.get(input)! > (current.publicationSequence ?? -1))) {
           record.currentRevisionId = revision.id;
           record.sessionTitle = session.title;
           record.updatedAt = now;
