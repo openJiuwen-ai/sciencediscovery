@@ -110,8 +110,7 @@ interface Harness {
   embeddingCalls: string[][];
 }
 
-function createHarness(options: { withEmbedding?: boolean } = {}): Harness {
-  const root = tempRoot("ke-orchestrator");
+function createHarness(root: string, options: { withEmbedding?: boolean } = {}): Harness {
   const store = KnowledgeEngineStore.open(root);
   const transport = stubTransport([
     { match: "/search?query=", status: 200, body: EPMC_SEARCH },
@@ -152,9 +151,9 @@ async function drain(runner: KeJobRunner, maxTicks = 20): Promise<void> {
 }
 
 test("seed → ingest(JATS) → extract: full pipeline builds the graph", async (context) => {
-  const root = resolve(process.cwd(), ".tmp");
+  const root = tempRoot("ke-orch-pipeline");
   context.after(() => rm(root, { force: true, recursive: true }));
-  const { store, orchestrator, runner } = createHarness();
+  const { store, orchestrator, runner } = createHarness(root);
 
   const kb = store.createKnowledgeBase({ name: "Ebola" });
   const { enqueued } = await orchestrator.seedKb(kb.id, "ebola glycoprotein antibody", 10);
@@ -191,9 +190,9 @@ test("seed → ingest(JATS) → extract: full pipeline builds the graph", async 
 });
 
 test("extraction writes embeddings when the client is configured", async (context) => {
-  const root = resolve(process.cwd(), ".tmp");
+  const root = tempRoot("ke-orch-embed");
   context.after(() => rm(root, { force: true, recursive: true }));
-  const { store, orchestrator, runner, embeddingCalls } = createHarness({ withEmbedding: true });
+  const { store, orchestrator, runner, embeddingCalls } = createHarness(root, { withEmbedding: true });
 
   const kb = store.createKnowledgeBase({ name: "Ebola" });
   await orchestrator.seedKb(kb.id, "ebola", 10);
@@ -207,9 +206,9 @@ test("extraction writes embeddings when the client is configured", async (contex
 });
 
 test("re-seeding the same query is idempotent (watermarks)", async (context) => {
-  const root = resolve(process.cwd(), ".tmp");
+  const root = tempRoot("ke-orch-reseed");
   context.after(() => rm(root, { force: true, recursive: true }));
-  const { store, orchestrator, runner } = createHarness();
+  const { store, orchestrator, runner } = createHarness(root);
 
   const kb = store.createKnowledgeBase({ name: "Ebola" });
   await orchestrator.seedKb(kb.id, "ebola", 10);
@@ -229,7 +228,7 @@ test("re-seeding the same query is idempotent (watermarks)", async (context) => 
 });
 
 test("ingest with no full text anywhere marks the document error without retry", async (context) => {
-  const root = resolve(process.cwd(), ".tmp");
+  const root = tempRoot("ke-orch-notfound");
   context.after(() => rm(root, { force: true, recursive: true }));
   const transport = stubTransport([
     { match: "/search?query=", status: 200, body: EPMC_SEARCH },
@@ -237,7 +236,7 @@ test("ingest with no full text anywhere marks the document error without retry",
     { match: "api.openalex.org", status: 404, body: "{}" },
     { match: "api.semanticscholar.org", status: 404, body: "{}" },
   ]);
-  const rootStore = KnowledgeEngineStore.open(tempRoot("ke-orchestrator-nf"));
+  const rootStore = KnowledgeEngineStore.open(root);
   const chain = buildSourceChain({ transport });
   const orchestrator = new KeOrchestrator({
     store: rootStore,

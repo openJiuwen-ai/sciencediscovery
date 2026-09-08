@@ -874,9 +874,10 @@ export class KnowledgeEngineStore {
 
   completeJob(id: string): void {
     // State guard: only an in-flight job may complete (no resurrecting a
-    // dead/succeeded row by a stale caller).
+    // dead/succeeded row by a stale caller). The error column is cleared —
+    // it holds the LAST attempt's error and must not outlive a success.
     this.database
-      .prepare("UPDATE ke_jobs SET status = 'succeeded', updated_at = ? WHERE id = ? AND status = 'running'")
+      .prepare("UPDATE ke_jobs SET status = 'succeeded', error = NULL, updated_at = ? WHERE id = ? AND status = 'running'")
       .run(now(), id);
   }
 
@@ -885,7 +886,7 @@ export class KnowledgeEngineStore {
    * exponential backoff; at the cap it becomes 'dead' and stops consuming
    * retries (the doom-loop guard). Only an in-flight job may fail.
    */
-  failJob(id: string, error: string, options: { backoffBaseMs?: number } = {}): KeJobRow {
+  failJob(id: string, error: string, options: { backoffBaseMs?: number; deadLetter?: boolean } = {}): KeJobRow {
     const job = this.getJob(id);
     if (!job) {
       throw new Error(`ke_job ${id} not found`);
@@ -894,7 +895,7 @@ export class KnowledgeEngineStore {
     if (job.status !== "running") {
       return job;
     }
-    if (job.attempts >= job.maxAttempts) {
+    if (options.deadLetter || job.attempts >= job.maxAttempts) {
       this.database
         .prepare("UPDATE ke_jobs SET status = 'dead', error = ?, updated_at = ? WHERE id = ? AND status = 'running'")
         .run(error, timestamp, id);
@@ -952,7 +953,7 @@ export class KnowledgeEngineStore {
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.database
-      .prepare(`SELECT * FROM ke_jobs ${where} ORDER BY created_at, id LIMIT ?`)
+      .prepare(`SELECT * FROM ke_jobs ${where} ORDER BY created_at DESC, id DESC LIMIT ?`)
       .all(...params, limit) as Array<Record<string, unknown>>;
     return rows.map(mapJob);
   }
@@ -1034,6 +1035,14 @@ export class KnowledgeEngineStore {
       | Record<string, unknown>
       | undefined;
     return row ? mapFrontier(row) : undefined;
+  }
+
+  /** All frontier items of a cycle (status panel, tests). */
+  frontierList(cycleId: string): KeFrontierRow[] {
+    const rows = this.database
+      .prepare("SELECT * FROM ke_frontier WHERE cycle_id = ? ORDER BY depth, created_at, id")
+      .all(cycleId) as Array<Record<string, unknown>>;
+    return rows.map(mapFrontier);
   }
 
   frontierCounts(cycleId: string): { total: number; pending: number; done: number; failed: number; skipped: number } {
@@ -1149,6 +1158,28 @@ export class KnowledgeEngineStore {
     return Number(row.total);
   }
 
+  /** Succeeded extraction-job completion times, newest first (concept-
+   *  saturation signal window). The job type literal is the orchestrator's
+   *  ke_extract; ke_jobs carries the kb inside its JSON payload. */
+  extractionCompletions(kbId: string, limit = 100): string[] {
+    const rows = this.database
+      .prepare(
+        `SELECT updated_at FROM ke_jobs
+         WHERE type = 'ke_extract' AND status = 'succeeded' AND json_extract(payload, '$.kbId') = ?
+         ORDER BY updated_at DESC, id DESC LIMIT ?`,
+      )
+      .all(kbId, limit) as Array<{ updated_at: string }>;
+    return rows.map((row) => row.updated_at);
+  }
+
+  /** All document dedup keys of a KB (Lincoln–Petersen marked population). */
+  documentDedupKeys(kbId: string): { count: number; dedupKeys: string[] } {
+    const rows = this.database.prepare("SELECT dedup_key FROM ke_documents WHERE kb_id = ?").all(kbId) as Array<{
+      dedup_key: string;
+    }>;
+    return { count: rows.length, dedupKeys: rows.map((row) => row.dedup_key) };
+  }
+
   /** Entities with their graph degree (for patch-query construction). */
   listEntitiesWithDegree(kbId: string): Array<KeEntityRow & { degree: number }> {
     const rows = this.database
@@ -1177,10 +1208,17 @@ export class KnowledgeEngineStore {
     return result;
   }
 
-  /** Documents of a KB ordered for seed selection (newest first, id tiebreak). */
+  /** Documents of a KB ordered for seed selection (newest first, id tiebreak).
+   *  Only docs carrying a resolvable identity (source_uri or a stored
+   *  paperRef) qualify — anything else would send a synthetic ref into
+   *  citation resolution and waste the API call. */
   listDocumentsForSeeding(kbId: string, limit: number): KeDocumentRow[] {
     const rows = this.database
-      .prepare("SELECT * FROM ke_documents WHERE kb_id = ? ORDER BY created_at DESC, id LIMIT ?")
+      .prepare(
+        `SELECT * FROM ke_documents
+         WHERE kb_id = ? AND (source_uri IS NOT NULL OR json_extract(source_meta, '$.paperRef') IS NOT NULL)
+         ORDER BY created_at DESC, id LIMIT ?`,
+      )
       .all(kbId, limit) as Array<Record<string, unknown>>;
     return rows.map(mapDocument);
   }

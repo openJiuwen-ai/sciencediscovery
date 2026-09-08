@@ -78,6 +78,56 @@ export interface KeGraph {
   edges: KeGraphEdge[];
 }
 
+export interface KeCrawlBudget {
+  maxPapers: number;
+  maxDepth: number;
+  maxPerPaper: number;
+}
+
+export interface KeGrowHandle {
+  jobId: string;
+  cycleId: string;
+  reused: boolean;
+}
+
+export interface KeFrontierCounts {
+  total: number;
+  pending: number;
+  done: number;
+  failed: number;
+  skipped: number;
+}
+
+/** Engine state persisted at the end of each grow cycle (convergence). */
+export interface KeEngineState {
+  converged?: boolean;
+  cycleId?: string;
+  query?: string;
+  updatedAt?: string;
+  counts?: KeFrontierCounts;
+  signals?: {
+    conceptSaturation: { met: boolean; newEntities: number; newEdges: number; window: number; insufficientData: boolean };
+    citationCoverage: { met: boolean; processed: number; total: number; ratio: number };
+    frontierExhaustion: { met: boolean; pending: number; budgetExhausted: boolean };
+    boundaryCoverage: {
+      met: boolean;
+      observed: number;
+      f1: number;
+      f2: number;
+      estimatedTotal: number | null;
+      coverage: number | null;
+      insufficientData: boolean;
+      recallEstimate: { recall: number | null; estimatedTotal: number | null; insufficientData: boolean } | null;
+    };
+  };
+}
+
+export interface KeGrowStatus {
+  engineState: KeEngineState;
+  activeCycle: { jobId: string; cycleId: string; status: string } | null;
+  frontier: KeFrontierCounts | null;
+}
+
 export interface KeEntityDetail {
   entity: KeGraphEntity & {
     description: string | null;
@@ -133,6 +183,17 @@ export class KnowledgeEngineApiClient extends EvolveApiClient {
 
   getKeGraph(kbId: string): Promise<KeGraph> {
     return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/graph`);
+  }
+
+  startKeGrow(kbId: string, query?: string, budget?: Partial<KeCrawlBudget>): Promise<KeGrowHandle> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/grow`, {
+      method: "POST",
+      body: JSON.stringify({ query, budget }),
+    });
+  }
+
+  getKeGrow(kbId: string): Promise<KeGrowStatus> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/grow`);
   }
 
   getKeEntity(entityId: string): Promise<KeEntityDetail> {

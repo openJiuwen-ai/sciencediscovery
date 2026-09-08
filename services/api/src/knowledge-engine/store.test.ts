@@ -49,7 +49,7 @@ test("open applies migrations idempotently and persists data", async (context) =
     version: number;
     name: string;
   }>;
-  assert.deepEqual(migrations.map((row) => row.version), [1]);
+  assert.deepEqual(migrations.map((row) => row.version), [1, 2]);
   sidecar.close();
 });
 

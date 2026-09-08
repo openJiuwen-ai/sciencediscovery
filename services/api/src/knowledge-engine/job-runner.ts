@@ -121,7 +121,11 @@ export class KeJobRunner {
         this.store.completeJob(job.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.store.failJob(job.id, message, { backoffBaseMs: this.backoffBaseMs });
+        // Handlers mark definitive failures (doom-loop aborts, contract
+        // errors) nonRetryable: dead-letter immediately instead of burning
+        // backoff cycles on work that can never succeed.
+        const deadLetter = (error as { nonRetryable?: boolean }).nonRetryable === true;
+        this.store.failJob(job.id, message, { backoffBaseMs: this.backoffBaseMs, deadLetter });
         this.onError("ke_job_failed", { jobId: job.id, type: job.type, attempts: job.attempts, error: message });
       }
       ran = true;

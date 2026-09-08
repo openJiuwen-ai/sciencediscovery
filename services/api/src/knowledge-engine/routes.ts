@@ -28,6 +28,7 @@ import { sendJson } from "../http/response.js";
 import { ApiStatusError } from "../runs/index.js";
 
 import type { KeOrchestrator } from "./orchestrator.js";
+import { DEFAULT_CRAWL_BUDGET, KE_GROW_JOB, type CrawlBudget } from "./grow.js";
 import type { KeDocumentRow, KeEdgeRow, KeEntityRow, KnowledgeEngineStore } from "./store.js";
 
 /** KE request errors ride the top-level classifier via ApiStatusError
@@ -90,7 +91,7 @@ export async function handleKeSeed(
 ): Promise<void> {
   requireKb(store, kbId);
   const body = await readJson<{ query?: string; maxPapers?: number }>(request);
-  const query = body.query?.trim();
+  const query = typeof body.query === "string" ? body.query.trim() : "";
   if (!query) {
     throw new KeApiError("query is required", 400, "KE_INVALID_INPUT");
   }
@@ -101,6 +102,66 @@ export async function handleKeSeed(
   const maxPapers = Math.min(Math.max(Math.floor(maxPapersRaw), 1), 25);
   const result = await orchestrator.seedKb(kbId, query, maxPapers);
   sendJson(response, 202, result);
+}
+
+// -------------------------------------------------------------------- grow
+
+function budgetField(value: unknown, fallback: number, min: number, max: number, field: string): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new KeApiError(`budget.${field} must be a finite number`, 400, "KE_INVALID_INPUT");
+  }
+  return Math.min(Math.max(Math.floor(value), min), max);
+}
+
+export async function handleKeStartGrow(
+  request: IncomingMessage,
+  response: ServerResponse,
+  orchestrator: KeOrchestrator,
+  store: KnowledgeEngineStore,
+  kbId: string,
+): Promise<void> {
+  requireKb(store, kbId);
+  const body = await readJson<{
+    query?: string;
+    budget?: { maxPapers?: unknown; maxDepth?: unknown; maxPerPaper?: unknown };
+  }>(request);
+  let budget: CrawlBudget | undefined;
+  if (body.budget !== undefined && body.budget !== null) {
+    if (typeof body.budget !== "object") {
+      throw new KeApiError("budget must be an object", 400, "KE_INVALID_INPUT");
+    }
+    budget = {
+      maxPapers: budgetField(body.budget.maxPapers, DEFAULT_CRAWL_BUDGET.maxPapers, 1, 500, "maxPapers"),
+      maxDepth: budgetField(body.budget.maxDepth, DEFAULT_CRAWL_BUDGET.maxDepth, 0, 5, "maxDepth"),
+      maxPerPaper: budgetField(body.budget.maxPerPaper, DEFAULT_CRAWL_BUDGET.maxPerPaper, 1, 100, "maxPerPaper"),
+    };
+  }
+  // An empty query falls back to the KB identity inside the cycle.
+  const handle = orchestrator.startGrow(kbId, typeof body.query === "string" ? body.query.trim() : "", budget);
+  sendJson(response, 202, handle);
+}
+
+export function handleKeGetGrow(response: ServerResponse, store: KnowledgeEngineStore, kbId: string): void {
+  requireKb(store, kbId);
+  const kb = store.getKnowledgeBase(kbId)!;
+  const engineState = (kb.engineState ?? {}) as Record<string, unknown>;
+  // Query the two active statuses explicitly: an unfiltered listJobs window
+  // returns the OLDEST N jobs, so after enough historical cycles the running
+  // one would fall outside it and the panel would report "no active cycle".
+  const activeJob = [
+    ...store.listJobs({ type: KE_GROW_JOB, kbId, status: "running", limit: 5 }),
+    ...store.listJobs({ type: KE_GROW_JOB, kbId, status: "pending", limit: 5 }),
+  ][0];
+  const stateCycleId = typeof engineState["cycleId"] === "string" ? (engineState["cycleId"] as string) : null;
+  const cycleId = activeJob ? String(activeJob.payload["cycleId"]) : stateCycleId;
+  sendJson(response, 200, {
+    engineState,
+    activeCycle: activeJob
+      ? { jobId: activeJob.id, cycleId: String(activeJob.payload["cycleId"]), status: activeJob.status }
+      : null,
+    frontier: cycleId ? store.frontierCounts(cycleId) : null,
+  });
 }
 
 // -------------------------------------------------------------- documents

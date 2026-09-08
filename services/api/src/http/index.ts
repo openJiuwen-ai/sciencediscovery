@@ -58,11 +58,13 @@ import {
   handleKeCreateKb,
   handleKeGetEntity,
   handleKeGetGraph,
+  handleKeGetGrow,
   handleKeGetKb,
   handleKeListDocuments,
   handleKeListJobs,
   handleKeListKbs,
   handleKeSeed,
+  handleKeStartGrow,
 } from "../knowledge-engine/routes.js";
 import type {
   ArtifactCandidate,
@@ -2242,6 +2244,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const keGraphMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/graph$/);
       if (keGraphMatch && request.method === "GET") {
         handleKeGetGraph(response, knowledgeEngineStore, decodeURIComponent(keGraphMatch[1]!));
+        return;
+      }
+      const keGrowMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/grow$/);
+      if (keGrowMatch && request.method === "POST") {
+        await handleKeStartGrow(request, response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keGrowMatch[1]!));
+        return;
+      }
+      if (keGrowMatch && request.method === "GET") {
+        handleKeGetGrow(response, knowledgeEngineStore, decodeURIComponent(keGrowMatch[1]!));
         return;
       }
       const keEntityMatch = url.pathname.match(/^\/api\/knowledge-engine\/entities\/([^/]+)$/);

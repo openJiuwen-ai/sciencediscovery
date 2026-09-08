@@ -39,16 +39,32 @@ import type { ModelEndpoint } from "@sciencediscovery/model";
 
 import type { EmbeddingClient } from "./embedding.js";
 import { callPipelineLlm, type PipelineInvoke } from "./llm.js";
-import type { KeJobRow, KnowledgeEngineStore } from "./store.js";
+import type { KeDocumentRow, KeJobRow, KnowledgeEngineStore } from "./store.js";
 import { normalizeEntityName } from "./store.js";
 import type { SourceChain } from "./connectors/source-chain.js";
 import { downloadPaperPdf } from "./connectors/source-chain.js";
 import type { ScholarlyTransport } from "./connectors/transport.js";
-import { NotFoundError, paperDedupKey, RateLimitError, type PaperRef } from "./connectors/types.js";
+import {
+  NotFoundError,
+  paperDedupKey,
+  RateLimitError,
+  type PaperConnector,
+  type PaperRef,
+} from "./connectors/types.js";
+import {
+  runGrowCycle,
+  startGrowCycle,
+  type CrawlBudget,
+  type GrowCycleHandle,
+  type GrowDeps,
+  KE_GROW_JOB,
+} from "./grow.js";
 
 export const KE_SEED_JOB = "ke_seed";
 export const KE_INGEST_JOB = "ke_ingest";
 export const KE_EXTRACT_JOB = "ke_extract";
+export { KE_GROW_JOB };
+export type { CrawlBudget, GrowCycleHandle, GrowDeps };
 
 const CORE_ENTITY_LIST_SIZE = 50;
 const MIN_EXTRACTABLE_TEXT = 200;
@@ -68,6 +84,8 @@ export interface KeOrchestratorDeps {
   readonly paperText?: (pdfBytes: Uint8Array, docId: string) => Promise<string>;
   /** SSRF guard for downloads (fixture environments pass a no-op). */
   readonly assertUrl?: (url: string) => Promise<void>;
+  /** Test seam: override individual grow-cycle dependencies. */
+  readonly grow?: Partial<GrowDeps>;
   readonly onWarn?: (message: string, detail?: unknown) => void;
 }
 
@@ -86,6 +104,7 @@ export class KeOrchestrator {
     runner.register(KE_SEED_JOB, (job, signal) => this.handleSeed(job, signal));
     runner.register(KE_INGEST_JOB, (job, signal) => this.handleIngest(job, signal));
     runner.register(KE_EXTRACT_JOB, (job, signal) => this.handleExtract(job, signal));
+    runner.register(KE_GROW_JOB, (job) => this.handleGrow(job));
   }
 
   /** Public API: enqueue a seed run (deduplicated per kb+query). */
@@ -97,6 +116,11 @@ export class KeOrchestrator {
       maxAttempts: 2,
     });
     return { jobId: job.id, enqueued };
+  }
+
+  /** Public API: start a growth cycle (at most one active cycle per KB). */
+  startGrow(kbId: string, query: string, budget?: CrawlBudget): GrowCycleHandle {
+    return startGrowCycle(this.deps.store, kbId, query, budget);
   }
 
   // ------------------------------------------------------------------ seed
@@ -174,6 +198,25 @@ export class KeOrchestrator {
       }
       return;
     }
+    try {
+      await this.performIngest(doc, signal);
+    } catch (error) {
+      // NotFound is definitive (no full text anywhere): performIngest already
+      // marked the doc — the job completes without burning retries.
+      if (error instanceof NotFoundError) return;
+      throw error;
+    }
+  }
+
+  /**
+   * Download + ingest one document: JATS full text when EuropePMC has it
+   * (structured, parse-free), else PDF through the source chain → paper
+   * worker. Shared by the ingest job handler and the grow cycle's download
+   * dependency. On a definitive NotFound the document is marked 'error' and
+   * the error RETHROWN — callers decide whether that ends the work item
+   * (ingest job: yes; grow frontier item: marked failed, crawl continues).
+   */
+  private async performIngest(doc: KeDocumentRow, _signal?: AbortSignal): Promise<void> {
     const ref = doc.sourceMeta["paperRef"] as PaperRef | undefined;
 
     // Path 1 (preferred): EuropePMC structured JATS full text — parse-free.
@@ -202,12 +245,12 @@ export class KeOrchestrator {
         }
       } catch (error) {
         if (error instanceof RateLimitError) throw error; // 429 carries Retry-After — never degrade it to a warn
-        this.warn("ke_ingest_jats_failed", { docId, error: errorMessage(error) });
+        this.warn("ke_ingest_jats_failed", { docId: doc.id, error: errorMessage(error) });
       }
     }
 
     // Path 2: PDF through the source chain → paper worker.
-    if (!ref) throw new Error(`document ${docId} has no paperRef to ingest from`);
+    if (!ref) throw new Error(`document ${doc.id} has no paperRef to ingest from`);
     if (!this.deps.paperText) throw new Error("PDF ingestion is not configured (paperText hook missing)");
     let outcome;
     try {
@@ -217,19 +260,20 @@ export class KeOrchestrator {
       }, (message) => this.warn(message));
     } catch (error) {
       if (error instanceof NotFoundError) {
-        // Definitive: no full text anywhere — mark the doc and STOP retrying.
+        // Definitive: no full text anywhere — mark the doc and rethrow so the
+        // caller's work item closes without retrying.
         this.deps.store.upsertDocument({
           kbId: doc.kbId,
           dedupKey: doc.dedupKey,
           status: "error",
           sourceMeta: { ...doc.sourceMeta, ingest_error: error.message },
         });
-        return;
       }
-      throw error; // transient — job backoff applies
+      throw error;
     }
-    const text = await this.deps.paperText(outcome.bytes, doc.id);    if (text.trim().length < MIN_EXTRACTABLE_TEXT) {
-      throw new Error(`paper worker produced too little text (${text.trim().length} chars) for ${docId}`);
+    const text = await this.deps.paperText(outcome.bytes, doc.id);
+    if (text.trim().length < MIN_EXTRACTABLE_TEXT) {
+      throw new Error(`paper worker produced too little text (${text.trim().length} chars) for ${doc.id}`);
     }
     this.deps.store.upsertDocument({
       kbId: doc.kbId,
@@ -248,6 +292,112 @@ export class KeOrchestrator {
       dedupKey: `extract|${docId}`,
       maxAttempts: 2,
     });
+  }
+
+  // ------------------------------------------------------------------ grow
+
+  private async handleGrow(job: KeJobRow): Promise<unknown> {
+    return runGrowCycle(this.deps.store, job, this.buildGrowDeps(), (message) => this.warn("ke_grow", { message }));
+  }
+
+  /**
+   * Assemble the grow cycle's dependencies. Metadata resolution goes through
+   * a connector sub-chain (the citation-capable sources — Semantic Scholar
+   * and OpenAlex, matching the DeepAnalyze resolver set): a rate limit is
+   * PER SOURCE, so throttling at one upstream falls through to the next and
+   * only backs off the whole cycle when every capable source is throttled.
+   */
+  private buildGrowDeps(): GrowDeps {
+    const resolvers = this.deps.chain.connectors.filter(
+      (connector) => connector.resolveCitations || connector.resolveCitingPapers,
+    );
+    const callChain = async (
+      capability: "resolveCitations" | "resolveCitingPapers" | "search",
+      invoke: (connector: PaperConnector) => Promise<PaperRef[] | undefined>,
+    ): Promise<PaperRef[]> => {
+      let lastRateLimit: RateLimitError | null = null;
+      for (const connector of resolvers) {
+        if (!connector[capability]) continue;
+        try {
+          const refs = await invoke(connector);
+          if (refs && refs.length > 0) return refs;
+        } catch (error) {
+          if (error instanceof RateLimitError) {
+            lastRateLimit = error;
+            continue;
+          }
+          this.warn("ke_grow_resolver_failed", { capability, source: connector.name, error: errorMessage(error) });
+        }
+      }
+      if (lastRateLimit) throw lastRateLimit;
+      return [];
+    };
+    const defaults: GrowDeps = {
+      download: (kbId, ref) => this.downloadForGrow(kbId, ref),
+      resolveCitations: (ref) => callChain("resolveCitations", (connector) => connector.resolveCitations!(ref)),
+      resolveForward: (ref) => callChain("resolveCitingPapers", (connector) => connector.resolveCitingPapers!(ref)),
+      searchPapers: (query, limit) => callChain("search", (connector) => connector.search(query, limit)),
+      embed: async (text) => {
+        if (!this.deps.embedding) return null;
+        try {
+          return await this.deps.embedding.embedOne(text);
+        } catch (error) {
+          this.warn("ke_grow_embedding_failed", { error: errorMessage(error) });
+          return null;
+        }
+      },
+    };
+    return { ...defaults, ...this.deps.grow };
+  }
+
+  /**
+   * Grow-cycle download: find-or-create the document (metadata-only refresh
+   * for existing ones — never touch status/sourceMeta watermarks), then run
+   * the shared ingest pipeline. Idempotent: an already-ingested document
+   * returns immediately (topping up extraction if that watermark is missing).
+   * NotFoundError propagates so the grow loop marks the frontier item failed.
+   */
+  private async downloadForGrow(kbId: string, ref: PaperRef): Promise<{ documentId: string }> {
+    const dedupKey = paperDedupKey(ref);
+    const existing = this.deps.store.findDocumentByDedupKey(kbId, dedupKey);
+    const doc = this.deps.store.upsertDocument(
+      existing
+        ? {
+            kbId,
+            dedupKey,
+            title: ref.title,
+            authors: ref.authors,
+            year: ref.year,
+            venue: ref.venue ?? null,
+            abstract: ref.abstract,
+            // Backfill the paperRef when the doc predates it — performIngest
+            // reads the ref exclusively from sourceMeta, and the caller holds
+            // a valid one right here.
+            sourceMeta: existing.sourceMeta["paperRef"]
+              ? existing.sourceMeta
+              : { ...existing.sourceMeta, paperRef: ref as unknown as Record<string, unknown> },
+          }
+        : {
+            kbId,
+            dedupKey,
+            sourceUri: ref.doi ? `doi:${ref.doi}` : ref.arxivId ? `arxiv:${ref.arxivId}` : `${ref.source}:${ref.sourceId}`,
+            title: ref.title,
+            authors: ref.authors,
+            year: ref.year,
+            venue: ref.venue ?? null,
+            abstract: ref.abstract,
+            status: "pending",
+            sourceMeta: { paperRef: ref as unknown as Record<string, unknown> },
+          },
+    );
+    if (doc.sourceMeta["ingested_at"] || (doc.status === "ready" && doc.fulltext)) {
+      if (!doc.sourceMeta["extracted_at"]) {
+        this.enqueueExtraction(kbId, doc.id);
+      }
+      return { documentId: doc.id };
+    }
+    await this.performIngest(doc);
+    return { documentId: doc.id };
   }
 
   // --------------------------------------------------------------- extract

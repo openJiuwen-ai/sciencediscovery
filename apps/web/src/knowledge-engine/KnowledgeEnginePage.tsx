@@ -19,10 +19,12 @@ import type {
   KeDocument,
   KeEntityDetail,
   KeGraph,
+  KeGrowStatus,
   KeJob,
   KeKb,
 } from "../api/knowledge-engine.js";
 import { KeGraphCanvas } from "./KeGraphCanvas.js";
+import { KeGrowPanel } from "./KeGrowPanel.js";
 
 export interface KnowledgeEnginePageProps {
   client: ApiClient;
@@ -59,11 +61,16 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   const [graph, setGraph] = useState<KeGraph>({ entities: [], edges: [] });
   const [documents, setDocuments] = useState<KeDocument[]>([]);
   const [jobs, setJobs] = useState<KeJob[]>([]);
+  const [growStatus, setGrowStatus] = useState<KeGrowStatus | undefined>(undefined);
   const [selectedEntityId, setSelectedEntityId] = useState<string | undefined>(undefined);
   const [detail, setDetail] = useState<KeEntityDetail | undefined>(undefined);
   const [newKbName, setNewKbName] = useState("");
   const [seedQuery, setSeedQuery] = useState("");
   const [error, setError] = useState<string | undefined>(undefined);
+  // Bumped by local actions (seed, grow start) to re-arm the poll chain when
+  // it had stopped (no active jobs) — a plain refresh alone would leave the
+  // recursive timeout dead and the grow progress frozen.
+  const [pollNonce, setPollNonce] = useState(0);
 
   // Stale-response guards: a refresh that resolves after the user switched
   // KBs (or after unmount) must not land.
@@ -99,16 +106,18 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
 
   const refreshKbData = useCallback(async (kbId: string) => {
     try {
-      const [graphResult, documentsResult, jobsResult] = await Promise.all([
+      const [graphResult, documentsResult, jobsResult, growResult] = await Promise.all([
         client.getKeGraph(kbId),
         client.listKeDocuments(kbId),
         client.listKeJobs(kbId),
+        client.getKeGrow(kbId),
       ]);
       // Drop the response if the user switched KBs (or left) mid-flight.
       if (!mountedRef.current || activeKbIdRef.current !== kbId) return;
       setGraph(graphResult);
       setDocuments(documentsResult.documents);
       setJobs(jobsResult.jobs);
+      setGrowStatus(growResult);
       setError(undefined);
     } catch (loadError) {
       reportError(loadError);
@@ -139,14 +148,14 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [activeKbId, refreshKbData]);
+  }, [activeKbId, pollNonce, refreshKbData]);
 
-  // Manual refresh trigger after local actions (seed), independent of the chain.
+  // Manual refresh trigger after local actions (seed, grow start): bumping
+  // the nonce re-runs the poll effect above, which refreshes immediately AND
+  // re-arms the chain if it had stopped.
   const kickRefresh = useCallback(() => {
-    if (activeKbIdRef.current) {
-      void refreshKbData(activeKbIdRef.current);
-    }
-  }, [refreshKbData]);
+    setPollNonce((nonce) => nonce + 1);
+  }, []);
 
   useEffect(() => {
     if (!selectedEntityId) {
@@ -242,6 +251,7 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
               >
                 Seed 10 papers
               </button>
+              <KeGrowPanel client={client} kbId={activeKbId} status={growStatus} onChanged={kickRefresh} onError={reportError} />
               <h4 style={{ margin: "16px 0 4px" }}>Jobs</h4>
               <div data-testid="ke-job-status" style={{ fontSize: 12, color: "#475569" }}>
                 {jobs.length === 0 ? "no jobs yet" : null}

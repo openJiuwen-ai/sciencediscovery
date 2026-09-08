@@ -45,20 +45,23 @@ export async function extractPdfText(options: PdfTextOptions): Promise<string> {
     throw new Error(`invalid docId for staging path: ${options.docId.slice(0, 40)}`);
   }
   const workDir = resolve(options.workDirRoot, options.docId);
-  await mkdir(workDir, { recursive: true });
+  // The worker REQUIRES an empty output directory, so the input PDF lives
+  // next to (not inside) it.
+  const outputDir = resolve(workDir, "out");
+  await mkdir(outputDir, { recursive: true });
   const pdfPath = resolve(workDir, "source.pdf");
   try {
     await writeFile(pdfPath, options.pdfBytes);
     const { stdout } = await execFileAsync(
       options.pythonPath,
-      [options.workerPath, pdfPath, workDir],
+      [options.workerPath, pdfPath, outputDir],
       { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, signal: options.signal, timeout: WORKER_TIMEOUT_MS },
     );
     const manifest = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { textPath?: string };
     if (!manifest.textPath) {
       throw new Error("paper worker manifest has no textPath");
     }
-    return await readFile(resolve(workDir, manifest.textPath), "utf8");
+    return await readFile(resolve(outputDir, manifest.textPath), "utf8");
   } finally {
     await rm(workDir, { force: true, recursive: true }).catch(() => {});
   }
