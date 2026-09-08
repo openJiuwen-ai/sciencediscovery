@@ -844,7 +844,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^环境/ }).click();
       await dialog.getByRole("combobox", { name: "Manage Runner" }).selectOption(hostId);
       await expect(dialog.getByText("Remote Python base", { exact: true })).toBeVisible();
-      await dialog.getByRole("combobox", { name: "Environment language" }).selectOption("r");
+      await dialog.getByRole("button", { name: "Add environment" }).click();
+      await dialog.getByRole("combobox", { name: "Initial environment tools" }).selectOption("r");
       await dialog.getByRole("textbox", { name: "Environment name" }).fill("Remote R analysis");
       await dialog.getByRole("button", { name: "Create", exact: true }).click();
       await expect(dialog.getByText("Remote R analysis", { exact: true })).toBeVisible();

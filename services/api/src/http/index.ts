@@ -2730,6 +2730,49 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const activityMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/agent-activity(?:\/(executions|transfers|timers)\/([^/]+)\/(logs|cancel))?$/);
+      if (activityMatch) {
+        const sessionId = decodeURIComponent(activityMatch[1]!);
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        const owners = [{ sessionId, agentId: "main" }, ...store.listSubagents(sessionId).map((child) => ({ sessionId, agentId: `subagent:${child.id}` }))];
+        const executions = owners.flatMap((owner) => store.shellExecutions.list(owner));
+        const transfers = owners.flatMap((owner) => store.transfers.list(owner));
+        const timers = owners.flatMap((owner) => store.notifications.timers(owner));
+        if (!activityMatch[2] && request.method === "GET") {
+          sendJson(response, 200, { executions, transfers, timers, agents: owners.map((owner) => ({ ...owner, stopped: !store.notifications.canWakeAgent(owner) })) });
+          return;
+        }
+        const kind = activityMatch[2]; const id = decodeURIComponent(activityMatch[3] ?? ""); const operation = activityMatch[4];
+        const item = (kind === "executions" ? executions : kind === "transfers" ? transfers : timers).find((entry) => entry.id === id);
+        if (!item) return sendError(response, 404, "Record not found in this Session");
+        const owner = { sessionId, agentId: item.agentId };
+        const runner = (runnerId: string) => {
+          if (runnerId === "local") return runnerClient;
+          store.assertSessionAllowsRemoteRunner(sessionId, runnerId);
+          return remoteCompute.runnerClient(runnerId);
+        };
+        if (kind === "executions" && operation === "logs" && request.method === "GET") {
+          const cursor = Number(url.searchParams.get("cursor") ?? 0);
+          if (!Number.isSafeInteger(cursor) || cursor < 0) return sendError(response, 400, "Invalid log cursor");
+          sendJson(response, 200, await store.shellExecutions.logs(id, owner, runner, cursor)); return;
+        }
+        if (operation === "cancel" && request.method === "POST") {
+          // Explicit management remains available even after Stop/Archive; it never starts work.
+          if (kind === "executions") sendJson(response, 200, await store.shellExecutions.cancel(id, owner, runner));
+          else if (kind === "transfers") sendJson(response, 200, await store.transfers.cancel(id, owner));
+          else { store.notifications.cancelTimer(owner, id); sendJson(response, 200, { cancelled: true }); }
+          return;
+        }
+        return sendError(response, 405, "Unsupported activity operation");
+      }
+      const resumeChildMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/resume$/);
+      if (resumeChildMatch && request.method === "POST") {
+        const sessionId = decodeURIComponent(resumeChildMatch[1]!); const subagentId = decodeURIComponent(resumeChildMatch[2]!);
+        store.assertSessionWritable(sessionId);
+        if (!store.listSubagents(sessionId).some((child) => child.id === subagentId)) return sendError(response, 404, "Subagent not found in this Session");
+        store.notifications.resumeAgent({ sessionId, agentId: `subagent:${subagentId}` });
+        sendJson(response, 200, { resumed: true }); return;
+      }
       const executionRunsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/execution-runs$/);
       if (executionRunsMatch && request.method === "GET") {
         if (!store.getSession(executionRunsMatch[1]!)) return sendError(response, 404, "Session not found");

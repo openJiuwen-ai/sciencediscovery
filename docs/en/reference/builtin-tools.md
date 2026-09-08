@@ -12,8 +12,10 @@ This page lists tools visible inside the agent loop. `createWorkspaceTools` in `
 | `list_artifacts` | none | Lists user-visible Project Artifacts across Sessions, including origin, creation snapshot, and latest version |
 | `read_artifact` | `artifact_id` or `name`; optional `version`, `offset`, `limit` | Reads one page of a Project Artifact version: UTF-8 text at most 2000 lines or 40 KiB, with the line range and next offset. Binary versions return `binary: true` with media type and size, never a body or base64 |
 | `declare_artifact` | `path` or `paths` (1–50); optional `name`, `description` | Declares writable workspace files as Project Artifacts. Batch entries succeed/fail independently. Logical names can form virtual sidebar directories without moving files; the server infers preview kind |
-| `run_python` | `code`; optional `environmentRevisionId`, `kernelMode` | Runs Python in Bubblewrap; default ephemeral process, optional managed environment and persistent kernel; non-zero exit is a tool error |
-| `run_shell` | exactly one of `command`, `scriptPath`; optional `arguments`, `kernelMode` | Bounded workspace shell; network follows the sandbox network access policy (no network by default). Default persistent Session shell carries `cd`, allowed environment changes, and `source` into later shell/Python/R calls; `ephemeral` is clean |
+| `run_shell` | exactly one of `command`, `scriptPath`; optional `arguments`, `runner_id`, `environment_id`, `wait_ms`, `background` | Fresh sandboxed process in the Agent × Runner Workspace; latest environment, no persistent interpreter/cd/export state. Waiting expires without stopping the command |
+| `execution_status` / `execution_logs` / `execution_cancel` | Execution ID; status may list or wait, logs accept a cursor | Manage owned execution through a separate channel, not another Shell |
+| `workspace_transfer` | `operation`: workspaces/start/list/status/cancel; explicit source/target IDs and file mappings | Copies committed snapshots, records partial success, never implicitly declares an Artifact |
+| `timer_create` / `timer_list` / `timer_cancel` | Exactly one of `after_ms` or `at`, message, optional `execution_id`; cancel uses `timer_id` | One-time reminders to the owning Agent; stop/archive suppress automatic wake and cancel pending timers |
 | `read_tool_output` | `ref`; one of optional line range (`offset`, `limit`), character range (`charOffset`, `charLimit`), or literal search (`query`, `contextChars`, `maxMatches`, `caseSensitive`) | Recovers one missing fact from a stored tool result; repeated/excessive reads emit advisory guidance but remain allowed |
 
 Every tool result crosses one bound before model input. Ordinary non-self-bounded results above 8 KiB are stored and receive structured ref metadata so later compaction is recoverable; results above 2000 lines or 50 KiB are immediately rendered as a head/tail preview plus that ref. Full text remains verbatim per Session under `<dataDir>/tool-outputs/<sessionId>/`. `read_tool_output` should use literal `query` search first, line ranges for normal text, and character ranges only when one line is too wide. All modes remain bounded to about 40 KiB. It tracks each ref within the AgentRun and advises the model after duplicate ranges/queries or roughly 64/96 KiB of cumulative reads; it never blocks a justified read. Thresholds use the `SCIENCE_AGENT_TOOL_OUTPUT_*` environment variables documented in `.env.example`.
@@ -42,12 +44,13 @@ Node performs permission, CAS, and `WebInvocation` audit, and calls the vendors 
 
 ## Scientific environment tools
 
+Python and R execute through `run_shell`; separate `run_python` / `run_r` tools are removed. Managed updates occur in place without cloning each revision. See [execution and Workspace lifecycle](../explanation/execution-workspaces.md).
+
 These appear after managed scientific-environment setup and capability injection.
 
 | Tool | Parameters | Behavior |
 |---|---|---|
-| `run_r` | like `run_python` | Runs in a managed R revision and reports revision/kernel mode |
-| `environment_list` | none | Lists global read-only bases, named environments, and current immutable revisions |
+| `environment_list` | optional `runner_id` | Lists the selected Runner's bases and named environments; revisions are audit-only |
 | `environment_create` | `name`, `language`; optional `baseEnvironmentId` | Clones a named Python/R environment; prepares R base on first explicit R creation |
 | `environment_delete` | `environmentId` | Deletes a named environment; bases are protected |
 | `environment_install` | `environmentId`, `packages[]`; optional `manager`, `channels[]`, `indexUrl` | Defaults to conda; Python also supports PyPI specs or a Session-relative `.whl` through pip; validates HTTPS index and channel policies and creates a revision |

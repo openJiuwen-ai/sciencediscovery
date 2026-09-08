@@ -209,3 +209,16 @@
 .reviewer-control-level strong { color: var(--text-heading); font-size: 12px; }
 .reviewer-control-card > button { width: 100%; min-height: 36px; }
 .reviewer-control-card > button:disabled { cursor: not-allowed; opacity: .55; }
+/* Activity belongs to the Session; management does not acquire its write lease. */
+.agent-activity summary { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.agent-activity article { border: 1px solid var(--border-color, #dce1e7); border-radius: 8px; padding: .65rem; margin: .5rem 0; min-width: 0; }
+.agent-activity article header { display: flex; align-items: start; justify-content: space-between; gap: .5rem; }
+.agent-activity article strong, .agent-activity code, .agent-activity small { overflow-wrap: anywhere; min-width: 0; }
+.agent-activity code, .agent-activity small { display: block; margin: .35rem 0; font-size: .75rem; }
+.activity-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin-top: .5rem; }
+.activity-actions button { white-space: normal; }
+.activity-badge { border-radius: 12px; padding: .15rem .5rem; background: #e9edf3; font-size: .75rem; flex-shrink: 0; }
+.activity-badge.running, .activity-badge.pending { color: #1759a6; background: #e2efff; }
+.activity-badge.completed, .activity-badge.fired { color: #176738; background: #e0f5e8; }
+.activity-badge.failed, .activity-badge.unknown, .activity-badge.partial { color: #963c12; background: #fff0df; }
+.agent-activity pre { max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .75rem; }

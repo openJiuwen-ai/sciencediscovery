@@ -12,8 +12,10 @@
 | `list_artifacts` | 无 | 列出当前 Project 中跨 Session 的用户可见产物，包含来源、创建 Session 快照和最新版本元数据 |
 | `read_artifact` | `artifact_id` 或 `name`，可选 `version`、`offset`、`limit` | 按 Project 产物身份分页读取指定版本：文本返回 UTF-8，单页最多 2000 行或 40 KiB，并给出行范围与下一 `offset`；二进制版本只返回 `binary: true` 与媒体类型、大小，不返回正文或 base64 |
 | `declare_artifact` | `path` 或 `paths`（1–50 项），可选 `name`、`description` | 将当前 Agent 可写工作区内的文件显式声明为 Project 产物。单 `path` 保留原返回，`name` 默认等于规范化后的工作区相对 `path`，可显式覆盖为其它安全逻辑路径；`paths` 优先且逐项返回 `ok/error`，成功项不回滚，每项使用自身完整相对 path 并忽略顶层 `name/description`；name 中的 `/` 在产物侧边栏显示为虚拟目录，不创建或移动物理文件；预览 kind 由服务端内部推断，最终报告也必须声明 |
-| `run_python` | `code`，可选 `environmentRevisionId`、`kernelMode: ephemeral\|persistent` | 在 bubblewrap 沙箱执行 Python；默认一次性进程，可选托管环境与持久内核；非零退出即工具错误 |
-| `run_shell` | `command` 或 `scriptPath` 二选一，可选 `arguments`、`kernelMode` | 有界 shell：默认复用 Session 持久 shell 会话（`cd`/`export`/`source` 跨调用生效，白名单变量也注入后续 `run_python`/`run_r`；见 [sandbox-execution.md §8](../explanation/sandbox-execution.md#8-持久-shell-会话与-session-env-profile)）；`kernelMode=ephemeral` 为一次性干净 shell；只见工作区，网络按沙箱网络访问策略（默认无网络） |
+| `run_shell` | `command` 或 `scriptPath` 二选一，可选 `arguments`、`runner_id`、`environment_id`、`wait_ms`、`background` | Agent × Runner Workspace 中的新沙箱进程；按环境 ID 使用最新版，无跨调用 cd/export/解释器内存；等待到期不停止进程 |
+| `execution_status` / `execution_logs` / `execution_cancel` | Execution ID；状态支持列举/等待，日志支持 cursor | 独立管理通道，不另起 Shell、不取 Workspace 写锁 |
+| `workspace_transfer` | workspaces/start/list/status/cancel；显式 Workspace ID 与文件映射 | 复制已提交快照，记录逐文件结果与部分成功，不自动声明 Artifact |
+| `timer_create` / `timer_list` / `timer_cancel` | `after_ms` 与 `at` 二选一，message，可选 execution_id；取消用 timer_id | 所属 Agent 的一次性提醒；Stop/Archive 禁止自动唤醒并取消待触发提醒 |
 | `read_tool_output` | `ref`；可选且互斥的行范围（`offset`、`limit`）、字符范围（`charOffset`、`charLimit`）或文本搜索（`query`、`contextChars`、`maxMatches`、`caseSensitive`） | 从已存工具结果中恢复一个明确缺失的事实；重复或累计读取过多会提示收敛，但不会阻止合理读取 |
 
 所有工具结果在进入模型输入前经过同一个边界：普通的非自限界结果超过 8 KiB 时原样落盘并在消息元数据中附结构化 ref，保证后续压缩可恢复；超过 2000 行或 50 KiB 时，首次展示即改为 head/tail 预览 + ref。完整正文按 Session 保存在 `<dataDir>/tool-outputs/<sessionId>/`。`read_tool_output` 应优先用 `query` 做普通文本搜索，常规文本使用行范围，只有单行过宽时才使用字符范围；三种模式的返回都限制在约 40 KiB。工具在单次 AgentRun 内按 ref 统计读取，重复范围/查询或累计约 64/96 KiB 时会提醒模型只为明确缺失信息继续读取，但不会阻断合理操作。阈值可通过 `.env.example` 中的 `SCIENCE_AGENT_TOOL_OUTPUT_*` 环境变量调整。
@@ -46,7 +48,7 @@
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| `run_r` | 同 `run_python`（`code` / `environmentRevisionId` / `kernelMode`） | 在托管 R 环境 revision 中执行；输出附带 revision 与 kernel mode |
+| Python / R | 统一经 `run_shell` | 原地更新环境、Revision 仅追溯；详见 [执行与 Workspace 生命周期](../explanation/execution-workspaces.md) |
 | `environment_list` | 无 | 列出全局共享的只读 base 与命名环境，以及当前不可变 revision ID |
 | `environment_create` | `name`、`language: python\|r`，可选 `baseEnvironmentId` | 从对应只读 base（或指定 base）克隆命名环境；首次显式创建 R 环境时按需准备 R base |
 | `environment_delete` | `environmentId` | 删除命名环境；base 拒绝删除 |

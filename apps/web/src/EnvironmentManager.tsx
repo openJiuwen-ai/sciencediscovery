@@ -135,6 +135,7 @@ export function EnvironmentManager({ client, onError, compact = false }: { clien
   const [revisions, setRevisions] = useState<EnvironmentRevision[]>([]);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
   const [language, setLanguage] = useState<ScientificLanguage>("python");
   const [installDrafts, setInstallDrafts] = useState<Record<string, string>>({});
   const [managerDrafts, setManagerDrafts] = useState<Record<string, EnvironmentPackageManager>>({});
@@ -198,6 +199,7 @@ export function EnvironmentManager({ client, onError, compact = false }: { clien
     await run(async () => {
       await client.createEnvironment({ language, name: requestedName });
       setName("");
+      setCreating(false);
     });
   }
 
@@ -262,20 +264,21 @@ export function EnvironmentManager({ client, onError, compact = false }: { clien
       </button>
       <p className="config-note">Startup begins this work in the background. It downloads the pinned standalone provisioner into the application data directory and creates only the Python base. Creating an R environment later installs the R base on demand. System Python, R, conda, and shell configuration are unchanged.</p>
     </> : <>
-      <form className="environment-create" onSubmit={(event) => void createEnvironment(event)}>
-        <div><strong>Create named environment</strong><small>Named environments start from the matching read-only base and receive a new immutable revision after every successful package change.</small></div>
-        <select aria-label="Environment language" disabled={busy} value={language} onChange={(event) => setLanguage(event.target.value as ScientificLanguage)}><option value="python">Python</option><option value="r">R</option></select>
+      {!creating ? <button className="secondary-button" type="button" onClick={() => setCreating(true)}>Add environment</button> : <form className="environment-create" onSubmit={(event) => void createEnvironment(event)}>
+        <div><strong>Create named environment</strong><small>Choose initial tools; add Python, R or other packages to the same environment. Updates apply in place; revisions record history, not runnable copies.</small></div>
+        <select aria-label="Initial environment tools" disabled={busy} value={language} onChange={(event) => setLanguage(event.target.value as ScientificLanguage)}><option value="python">Start with Python</option><option value="r">Start with R</option></select>
         <input aria-label="Environment name" disabled={busy} maxLength={80} required value={name} onChange={(event) => setName(event.target.value)} placeholder="single-cell" />
         <button className="primary-button" disabled={busy || !name.trim()} type="submit">Create</button>
-      </form>
+        <button className="secondary-button" disabled={busy} type="button" onClick={() => setCreating(false)}>Cancel</button>
+      </form>}
 
       <div className="environment-catalog">
         {environments.map((environment) => {
           const revision = revisionById.get(environment.currentRevisionId);
           return <article key={environment.id}>
-            <div className="environment-card-heading"><span><strong>{environment.name}</strong><small>{environment.language.toUpperCase()} · {environment.kind === "starter" ? "base" : "named"} · revision {environment.currentRevisionId.slice(0, 12)}</small></span>{environment.kind === "task" ? <button className="danger-button" disabled={busy} onClick={() => void deleteEnvironment(environment)} type="button">Delete</button> : <span className="environment-readonly">Read-only</span>}</div>
+            <div className="environment-card-heading"><span><strong>{environment.name}</strong><small>{environment.kind === "starter" ? `${environment.language.toUpperCase()} base` : "Managed environment"} · latest · audit {environment.currentRevisionId.slice(0, 12)}</small><code>{environment.id}</code></span>{environment.kind === "task" ? <button className="danger-button" disabled={busy} onClick={() => void deleteEnvironment(environment)} type="button">Delete</button> : <span className="environment-readonly">Read-only</span>}</div>
             <p>{revision?.packages.length ? revision.packages.join(" · ") : "Package snapshot unavailable"}</p>
-            {environment.kind === "task" ? <div className="environment-install"><select aria-label={`Package manager for ${environment.name}`} disabled={busy} value={managerDrafts[environment.id] ?? "conda"} onChange={(event) => setManagerDrafts((current) => ({ ...current, [environment.id]: event.target.value as EnvironmentPackageManager }))}><option value="conda">conda</option>{environment.language === "python" ? <option value="pip">pip</option> : <><option value="cran">CRAN</option><option value="bioconductor">Bioconductor</option></>}</select><input aria-label={`Packages for ${environment.name}`} disabled={busy} value={installDrafts[environment.id] ?? ""} onChange={(event) => setInstallDrafts((current) => ({ ...current, [environment.id]: event.target.value }))} placeholder={environment.language === "python" ? "scanpy=1.10 leidenalg" : "DESeq2 edgeR"} /><button className="secondary-button" disabled={busy || !(installDrafts[environment.id] ?? "").trim()} onClick={() => void installPackages(environment.id)} type="button">Install packages</button></div> : null}
+            {environment.kind === "task" ? <div className="environment-install"><select aria-label={`Package manager for ${environment.name}`} disabled={busy} value={managerDrafts[environment.id] ?? "conda"} onChange={(event) => setManagerDrafts((current) => ({ ...current, [environment.id]: event.target.value as EnvironmentPackageManager }))}><option value="conda">conda</option><option value="pip">pip</option><option value="cran">CRAN</option><option value="bioconductor">Bioconductor</option></select><input aria-label={`Packages for ${environment.name}`} disabled={busy} value={installDrafts[environment.id] ?? ""} onChange={(event) => setInstallDrafts((current) => ({ ...current, [environment.id]: event.target.value }))} placeholder="python r-base numpy" /><button className="secondary-button" disabled={busy || !(installDrafts[environment.id] ?? "").trim()} onClick={() => void installPackages(environment.id)} type="button">Install packages</button></div> : null}
           </article>;
         })}
       </div>

@@ -193,6 +193,7 @@ import {
   TimeoutSettingsEditor,
 } from "./RuntimeControls.js";
 import { effectiveRemoteRunnerHostIds, ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
+import { AgentActivityPanel } from "./AgentActivityPanel.js";
 import { RunUsageInline, UsagePage } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
@@ -4629,13 +4630,14 @@ export function App() {
               </details>
             ) : null}
 
+            {activeSessionId ? <AgentActivityPanel key={activeSessionId} client={client} sessionId={activeSessionId} /> : null}
             <details className="workspace-fold" aria-label="Provenance record">
               <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>Provenance record</strong></summary>
               <div className="workspace-fold-body">
                 <div className="trust-metrics">
                   <div><strong>{executionRuns.length}</strong><span>Execution runs</span></div>
                   <div><strong>{latestExecution?.language ?? "—"}</strong><span>Language</span></div>
-                  <div><strong>{latestExecution?.kernelMode ?? "—"}</strong><span>Kernel mode</span></div>
+                  <div><strong>Fresh process</strong><span>Shell execution</span></div>
                   <div><strong>{latestEnvironment?.name ?? "—"}</strong><span>Environment</span></div>
                   <div><strong>{latestExecution?.environmentRevisionId?.slice(0, 12) ?? "—"}</strong><span>Environment revision</span></div>
                   <div><strong>{derivations.length}</strong><span>Derivations</span></div>
@@ -4646,7 +4648,7 @@ export function App() {
                 </div>
               </div>
             </details>
-            <div className="boundary-note"><span><ShieldCheckIcon size={15} /></span><p title="Python, R, and shell run in bubblewrap with an immutable Environment Revision, one writable workspace, and no network."><strong>Isolated execution</strong> · Epoch {permissionEpoch?.id.slice(0, 8) ?? "loading"}{permissionEpoch?.memoryLostReason ? ` · ${permissionEpoch.memoryLostReason}` : ""}</p></div>
+            <div className="boundary-note"><span><ShieldCheckIcon size={15} /></span><p title="Shell runs Python, R and other tools in a sandbox with a read-only managed environment and an independent Agent × Runner workspace."><strong>Isolated execution</strong> · Epoch {permissionEpoch?.id.slice(0, 8) ?? "loading"}</p></div>
           </aside>}
           {workspaceCollapsed ? (
             <button aria-label={t("app.showWorkspace")} className="workspace-expander" onClick={() => setWorkspaceCollapsed(false)} title={t("app.showWorkspace")} type="button">

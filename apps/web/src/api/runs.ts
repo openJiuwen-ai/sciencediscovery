@@ -16,6 +16,8 @@ import type {
   CancelRunResult,
   CreateSkillEvolutionRunRequest,
   ExecutionRun,
+  AgentShellExecution,
+  WorkspaceTransfer,
   RunStreamEvent,
   SessionUsageSummary,
   GlobalModelUsageSummary,
@@ -28,7 +30,26 @@ import type {
 
 import { SessionsApiClient } from "./sessions.js";
 
+export interface AgentActivity {
+  executions: AgentShellExecution[];
+  transfers: WorkspaceTransfer[];
+  timers: Array<{ id: string; agentId: string; dueAt: number; message: string; state: "pending" | "fired" | "cancelled" }>;
+  agents: Array<{ agentId: string; stopped: boolean }>;
+}
+
 export class RunsApiClient extends SessionsApiClient {
+  getAgentActivity(sessionId: string): Promise<AgentActivity> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/agent-activity`);
+  }
+  executionLogs(sessionId: string, id: string): Promise<{ chunks: Array<{ text: string }> }> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/agent-activity/executions/${encodeURIComponent(id)}/logs`);
+  }
+  cancelActivity(sessionId: string, kind: "executions" | "transfers" | "timers", id: string): Promise<unknown> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/agent-activity/${kind}/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
+  resumeSubagent(sessionId: string, id: string): Promise<unknown> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(id)}/resume`, { method: "POST" });
+  }
   getRuntimeStatus(): Promise<RuntimeStatus> {
     return this.request("/api/runtime-status");
   }

@@ -415,7 +415,11 @@ try {
     const initial = await json(`/api/sessions/${target.id}/runs`, { content: "Child background journey: delegate one background job." });
     await until(async () => (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.id === initial.id)?.status === "completed");
     let automatic;
-    await until(async () => { automatic = (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.automaticWake && run.notificationDelivery?.agentId.startsWith("subagent:") && run.status === "completed"); return automatic; });
+    await until(async () => {
+      automatic = (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.automaticWake && run.notificationDelivery?.agentId.startsWith("subagent:"));
+      if (automatic && ["failed", "cancelled", "interrupted"].includes(automatic.status)) assert.fail(JSON.stringify(automatic));
+      return automatic?.status === "completed";
+    });
     const children = await json(`/api/sessions/${target.id}/subagents`);
     assert.equal(children.length, 1);
     const child = children[0];
@@ -428,6 +432,29 @@ try {
     assert.equal(await readFile(resolve(dataDir, "projects", target.projectId, "sessions", target.id, "agent-workspaces", child.handoff.workspaceId, "child-background.txt"), "utf8"), "child-once");
     assert.ok(!(await json(`/api/sessions/${target.id}/files`)).some((file) => file.path === "child-background.txt"));
     return "Original child ID/context/workspace resumed; one Shell invocation and one output write; parent Workspace unchanged";
+  });
+  await step("13. 用户管理子作业、停门和恢复", "用户能读日志而不另起 Shell；单独停止子 Agent 阻止完成唤醒，显式恢复后汇总未读；跨 Session ID 不能读取记录。", async () => {
+    const target = await json(`/api/projects/${session.projectId}/sessions`, { title: "Child stop resume", modelId: session.modelId, approvalMode: "always_allow" });
+    const initial = await json(`/api/sessions/${target.id}/runs`, { content: "Child background journey: delegate one background job." });
+    await until(async () => (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.id === initial.id)?.status === "completed");
+    const [child] = await json(`/api/sessions/${target.id}/subagents`);
+    await json(`/api/sessions/${target.id}/subagents/${child.id}/stop`, {});
+    let activity;
+    await until(async () => { activity = await json(`/api/sessions/${target.id}/agent-activity`); return activity.executions[0]?.state === "completed"; });
+    assert.equal(activity.agents.find((agent) => agent.agentId === `subagent:${child.id}`).stopped, true);
+    const job = activity.executions[0];
+    const output = await json(`/api/sessions/${target.id}/agent-activity/executions/${job.id}/logs`);
+    assert.ok(Array.isArray(output.chunks));
+    const inaccessible = await fetch(`${api}/api/sessions/${session.id}/agent-activity/executions/${job.id}/logs`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(inaccessible.status, 404);
+    const end = Date.now() + 1200;
+    await until(async () => { assert.equal((await json(`/api/sessions/${target.id}/runs`)).length, 1); return Date.now() >= end; });
+    await json(`/api/sessions/${target.id}/subagents/${child.id}/resume`, {});
+    await until(async () => (await json(`/api/sessions/${target.id}/runs`)).some((run) => run.automaticWake && run.status === "completed"));
+    const [resumed] = await json(`/api/sessions/${target.id}/subagents`);
+    assert.equal(resumed.steps.filter((step) => step.toolName === "run_shell").length, 1);
+    assert.equal(await readFile(resolve(dataDir, "projects", target.projectId, "sessions", target.id, "agent-workspaces", child.handoff.workspaceId, "child-background.txt"), "utf8"), "child-once");
+    return "User activity routes exposed owned logs, rejected foreign Session, retained completed child job while stopped, and resumed its unread context once";
   });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }
