@@ -290,7 +290,7 @@ test("the passthrough sandbox resolves its stable Python path through the host P
   const tempRoot = resolve(process.cwd(), ".tmp", `bwrap-path-${Date.now()}-${process.pid}`);
   const hostBin = resolve(tempRoot, "host-bin");
   await mkdir(hostBin, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const hostPython = resolve(hostBin, "python3");
   await writeFile(hostPython, "#!/bin/sh\nprintf 'alternate host python\\n'\n");
@@ -304,6 +304,34 @@ test("the passthrough sandbox resolves its stable Python path through the host P
 
   assert.equal(stdout, "alternate host python\n");
 });
+
+const testApiOrigins = new Map<string, { origin: string; close(): Promise<void> }>();
+
+async function removeTestRoot(root: string): Promise<void> {
+  const api = testApiOrigins.get(root);
+  if (api) {
+    const { origin } = api;
+    // A completed foreground request may have queued a completion turn. Close
+    // the Session gates before removing files that those turns still own.
+    const projects = await jsonRequest<Project[]>(`${origin}/api/projects`, { headers: authorization });
+    for (const project of projects.body) {
+      const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${project.id}/sessions`, { headers: authorization });
+      for (const session of sessions.body) {
+        await jsonRequest(`${origin}/api/sessions/${session.id}/run/cancel`, { headers: authorization, method: "POST" });
+      }
+    }
+    const deadline = Date.now() + 10000;
+    let status = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
+    while (status.body.sessions.length && Date.now() < deadline) {
+      await new Promise((done) => setTimeout(done, 25));
+      status = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
+    }
+    assert.deepEqual(status.body.sessions, [], "Fixture teardown must drain Agent turns before deleting data");
+    await api.close();
+    testApiOrigins.delete(root);
+  }
+  await rm(root, { force: true, recursive: true });
+}
 
 async function startTestApi(
   context: TestContext,
@@ -339,7 +367,12 @@ async function startTestApi(
     server.close(() => resolveClose());
     server.closeAllConnections();
   }));
-  return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  testApiOrigins.set(dataDir, { origin, close: () => new Promise<void>((done) => {
+    server.close(() => done());
+    server.closeAllConnections();
+  }) });
+  return { origin };
 }
 
 async function startScientificTestApi(
@@ -630,7 +663,7 @@ async function createTestModel(
 test("authenticated proxy REST returns complete settings URLs and manages MCP policies", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `proxy-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
 
   assert.equal((await fetch(`${origin}/api/proxy/settings`)).status, 401);
@@ -1372,7 +1405,7 @@ const CONFIGURED_TOKENS = {
 test("loadServerConfig uses safe local defaults", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `config-defaults-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const config = loadServerConfig({ SCIENCE_AGENT_DATA_DIR: tempRoot });
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 4310);
@@ -1441,7 +1474,7 @@ test("loadServerConfig validates gateway timeout bounds", () => {
 test("creating a Project opens an implicit Session and refines its first-message title", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1512,7 +1545,7 @@ test("creating a Project opens an implicit Session and refines its first-message
 test("every later unnamed Session independently reuses first-message automatic naming", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `later-session-auto-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1588,7 +1621,7 @@ test("every later unnamed Session independently reuses first-message automatic n
 test("Session title refinement completes while the first task is still running", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-concurrent-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, false, true);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1641,7 +1674,7 @@ test("Session title refinement completes while the first task is still running",
 test("Session title refinement persists when the naming model finishes after the run stream closes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-after-terminal-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, true);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1712,7 +1745,7 @@ test("Session title refinement persists when the naming model finishes after the
 test("concurrent first messages keep every run and auto-name only once from queue order one", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-first-message-concurrency-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, true, true);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1774,7 +1807,7 @@ test("concurrent first messages keep every run and auto-name only once from queu
 test("an asynchronous title refinement never overwrites a manual rename", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-manual-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, true);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1826,7 +1859,7 @@ test("an asynchronous title refinement never overwrites a manual rename", async 
 test("a second message never triggers another naming request", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-dedupe-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, false, false, "Compact title");
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1873,7 +1906,7 @@ test("a second message never triggers another naming request", async (context) =
 test("an explicitly named Session is never auto-renamed", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-explicit-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1925,7 +1958,7 @@ test("aggregateToolText preserves every textual tool-result block", () => {
 test("permission wait timeout and abort cancel only the abandoned request and emit its terminal state", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `permission-timeout-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   await store.load();
   const model = await store.createModel({
@@ -1984,7 +2017,7 @@ test("permission wait timeout and abort cancel only the abandoned request and em
 test("runtime-status Kernel teardown is authenticated and proxied to the Runner", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `kernel-teardown-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   let runnerRequest: { authorization?: string; body?: unknown; path?: string } = {};
   const runner = createHttpServer(async (request, response) => {
     const chunks: Buffer[] = [];
@@ -2025,7 +2058,7 @@ test("runtime-status Kernel teardown is authenticated and proxied to the Runner"
 test("timeout settings drive live runs, runtime status, and persistent explainable timeout messages", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `timeout-runtime-status-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const runner = createRunnerServer({
     authToken: "runner-test-token",
@@ -2291,7 +2324,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
 test("native MCP literature flow produces an audited cited summary", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `literature-review-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const modelServer = await startLiteratureModel(context);
   const searchSchema = {
       additionalProperties: false,
@@ -2488,7 +2521,7 @@ test("native MCP literature flow produces an audited cited summary", async (cont
 test("workbench search and Composer references use authenticated authoritative identities", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `workbench-search-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const modelServer = await startTextModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
@@ -2579,7 +2612,7 @@ test("workbench search and Composer references use authenticated authoritative i
 test("running sessions accept queued runs and start them after the active run completes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `queued-runs-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const modelServer = await startTextModel(context, true);
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
@@ -2627,7 +2660,7 @@ test("running sessions accept queued runs and start them after the active run co
 test("completed runs persist the assistant message identity used by hydrated timeline deduplication", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `completed-run-message-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const modelServer = await startTextModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
@@ -2668,7 +2701,7 @@ test("completed runs persist the assistant message identity used by hydrated tim
 test("environment setup and mutation routes reject unauthenticated callers", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `environment-permission-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const requests = [
     fetch(`${origin}/api/environment-source-settings`),
@@ -2699,7 +2732,7 @@ test("environment setup and mutation routes reject unauthenticated callers", asy
 test("authenticated environment catalog routes proxy create, install, uninstall, and delete", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `environment-routes-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const installBodies: Array<Record<string, unknown>> = [];
   const { origin } = await startScientificTestApi(context, tempRoot, (body) => installBodies.push(body));
 
@@ -2826,7 +2859,7 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
 test("an active run keeps its effective settings snapshot while later runs use updates", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const delayedModel = await startTextModel(context, true);
   const nextModel = await startTextModel(context);
@@ -2958,7 +2991,7 @@ test("an active run keeps its effective settings snapshot while later runs use u
 test("skill lifecycle APIs author, import, edit, select, audit impact, and delete safely", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `skill-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
 
   assert.equal((await fetch(`${origin}/api/skills`)).status, 401);
@@ -3126,7 +3159,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
 test("Agent-created Skill stays in draft until review publishes it to a Skill Library", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const modelServer = await startSkillCreatorModel(context);
   const model = await createTestModel(origin, {
@@ -3193,7 +3226,7 @@ test("Agent-created Skill stays in draft until review publishes it to a Skill Li
 test("PDF upload extracts full text and tables into the session workspace", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `paper-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
     body: JSON.stringify({ name: "Paper project" }),
@@ -3307,7 +3340,7 @@ test("PDF upload extracts full text and tables into the session workspace", asyn
 test("legacy Reviewer does not inject findings or block the main agent", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `review-loop-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin, {
     baseUrl: await startReviewerCorrectionModel(context),
@@ -3349,7 +3382,7 @@ test("legacy Reviewer does not inject findings or block the main agent", async (
 test("API runs a configured OpenAI-compatible model through the gateway and Python", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const { origin } = await startTestApi(context, tempRoot);
   const toolModel = await startToolModel(context);
@@ -3567,7 +3600,7 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
 test("API runs one observable subagent through task and keeps nested task denied", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const subagentCatalog = ({
     loadedAt: new Date().toISOString(),
     revision: "arxiv-subagent-catalog",
@@ -3775,7 +3808,7 @@ test("API runs one observable subagent through task and keeps nested task denied
 test("API does not auto-select a specialist by description for a subagent type", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-specialist-no-match-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { subagentType: "code-engineer" });
   const model = await createTestModel(origin, {
@@ -3832,7 +3865,7 @@ test("API does not auto-select a specialist by description for a subagent type",
 test("API validates subagent Brief v1 structured output before summarizing task result", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-brief-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { structuredSubagentResult: true });
   const model = await createTestModel(origin, {
@@ -3881,7 +3914,7 @@ test("API validates subagent Brief v1 structured output before summarizing task 
 test("subagent handoff skips oversized parent files instead of failing the run setup", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-limits-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   store.setAvailableSkillIds([]);
   await store.load();
@@ -3911,7 +3944,7 @@ test("subagent handoff skips oversized parent files instead of failing the run s
 test("subagent handoff copies only declared or referenced parent files", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-selective-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   store.setAvailableSkillIds([]);
   await store.load();
@@ -3958,7 +3991,7 @@ test("subagent handoff copies only declared or referenced parent files", async (
 test("subagent handoff keeps both aliases on one committed source despite parent changes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-handoff-source-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   await store.load();
   const project = await store.createProject("Stable handoff");
@@ -3988,7 +4021,7 @@ test("subagent handoff keeps both aliases on one committed source despite parent
 test("subagent handoff does not implicitly copy the only parent file", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-no-default-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   store.setAvailableSkillIds([]);
   await store.load();
@@ -4017,7 +4050,7 @@ test("subagent handoff does not implicitly copy the only parent file", async (co
 test("subagent handoff preserves copied input snapshots for audit", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-audit-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   store.setAvailableSkillIds([]);
   await store.load();
@@ -4042,7 +4075,7 @@ test("subagent handoff preserves copied input snapshots for audit", async (conte
 test("API fails subagents when structured output fails schema validation", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-brief-invalid-schema-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, {
     structuredSubagentOutput: "{\"summary\":\"Structured inspection\"}",
@@ -4094,7 +4127,7 @@ test("API fails subagents when structured output fails schema validation", async
 test("API preserves raw subagent structured output when final JSON parsing fails", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-brief-raw-output-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, {
     structuredSubagentOutput: "analysis complete but no final json",
@@ -4142,7 +4175,7 @@ test("API preserves raw subagent structured output when final JSON parsing fails
 test("API PATCH endpoint updates a non-running subagent brief and rejects running updates", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-brief-patch-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { pauseSubagent: true });
   const model = await createTestModel(origin, {
@@ -4299,7 +4332,7 @@ test("API PATCH endpoint updates a non-running subagent brief and rejects runnin
 test("manual subagent permission requests use the outer SSE sink and refresh the shared epoch", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-permission-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { subagentUsesPython: true });
   const model = await createTestModel(origin, {
@@ -4377,7 +4410,7 @@ test("manual subagent permission requests use the outer SSE sink and refresh the
 test("concurrent permission decisions serialize and return an authoritative conflict", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-permission-conflict-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const created = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
     body: JSON.stringify({ name: "Permission conflict" }),
@@ -4427,7 +4460,7 @@ test("concurrent permission decisions serialize and return an authoritative conf
 test("switching an active run to always-allow resolves its pending subagent action", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-active-always-allow-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { subagentUsesPython: true });
   const model = await createTestModel(origin, {
@@ -4567,7 +4600,7 @@ async function startTwoPythonCallModel(
 test("switching to always-allow during a run stops asking for the tool calls that follow", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-always-allow-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startTwoPythonCallModel(context);
   const model = await createTestModel(origin, {
@@ -4689,7 +4722,7 @@ test("switching to always-allow during a run stops asking for the tool calls tha
 test("switching to ask during a run stops the tool calls that follow for approval", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-ask-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startTwoPythonCallModel(context, { pauseBeforeSecondCall: true });
   const model = await createTestModel(origin, {
@@ -4781,7 +4814,7 @@ test("switching to ask during a run stops the tool calls that follow for approva
 test("manual concurrent actions keep independent live waiters and resume independently", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-independent-permissions-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, {
     requireConcurrentSubagents: true,
@@ -4900,7 +4933,7 @@ test("manual concurrent actions keep independent live waiters and resume indepen
 test("allow-matching resolves every currently pending action covered by the Session grant", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-matching-permissions-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, {
     requireConcurrentSubagents: true,
@@ -4987,7 +5020,7 @@ test("allow-matching resolves every currently pending action covered by the Sess
 test("always-allow executes subagent code without permission requests or grants", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-auto-permission-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const subagentPythonCode = "print('x' * 650)";
   const fixture = await startSubagentModel(context, { subagentPythonCode, subagentUsesPython: true });
@@ -5064,7 +5097,7 @@ test("always-allow executes subagent code without permission requests or grants"
 test("failed subagent tool steps retain raw input and the full error result", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-failed-tool-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const subagentPythonCode = "raise RuntimeError('y' * 650)";
   const fixture = await startSubagentModel(context, { subagentPythonCode, subagentUsesPython: true });
@@ -5109,7 +5142,7 @@ test("failed subagent tool steps retain raw input and the full error result", as
 test("API flushes in-flight subagent progress before the run completes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-progress-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { pauseSubagent: true });
   const model = await createTestModel(origin, {
@@ -5159,7 +5192,7 @@ test("API flushes in-flight subagent progress before the run completes", async (
 test("API runs two task calls concurrently with independent persisted records", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-concurrency-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { requireConcurrentSubagents: true, taskCount: 2 });
   const model = await createTestModel(origin, {
@@ -5241,7 +5274,7 @@ test("API runs two task calls concurrently with independent persisted records", 
 test("API rolls surplus task calls through the bounded per-run concurrency pool", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-limit-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const taskCount = DEFAULT_MAX_CONCURRENT_SUBAGENTS + 1;
   const fixture = await startSubagentModel(context, {
@@ -5294,7 +5327,7 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
 test("hierarchical settings and Project/Session lifecycle APIs preserve and delete the expected data", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-lifecycle-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const modelA = await createTestModel(origin, { model: "model-a", name: "Model A" });
   const modelB = await createTestModel(origin, { model: "model-b", name: "Model B" });
@@ -5512,7 +5545,7 @@ test("deleting a session/project mirrors the cleanup to the memory-graph sidecar
   // not short-circuited (default is off).
   const tempRoot = resolve(process.cwd(), ".tmp", `cleanup-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const received: { path: string; body: unknown }[] = [];
   const fakeSidecar = createHttpServer((request, response) => {
@@ -5629,7 +5662,7 @@ test("deleting a session/project mirrors the cleanup to the memory-graph sidecar
 test("model connectivity endpoint uses the encrypted saved credential", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `model-connectivity-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   let providerAuthorization = "";
   const provider = createHttpServer(async (request, response) => {
     providerAuthorization = request.headers.authorization ?? "";
@@ -5670,7 +5703,7 @@ test("model connectivity endpoint uses the encrypted saved credential", async (c
 test("provider REST discovers models, reports upstream failure, and keeps manual fallback honest", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `provider-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   let failDiscovery = false;
   const receivedAuth: Array<string | undefined> = [];
@@ -5797,7 +5830,7 @@ test("provider REST discovers models, reports upstream failure, and keeps manual
 test("model registry persists multiple profiles and assigns them per session", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `models-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const { origin } = await startTestApi(context, tempRoot);
 
@@ -6009,7 +6042,7 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
 test("WSP-001 multipart upload preserves hashes and exposes specific workspace preview kinds", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-upload-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
@@ -6115,7 +6148,7 @@ test("WSP-001 multipart upload preserves hashes and exposes specific workspace p
 test("WSP-003 rejects traversal upload paths and leaves the host untouched", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-escape-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
@@ -6158,7 +6191,7 @@ test("WSP-003 rejects traversal upload paths and leaves the host untouched", asy
 test("same-named uploads remain physically isolated and append one Project artifact version chain", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-iso-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
@@ -6210,7 +6243,7 @@ test("same-named uploads remain physically isolated and append one Project artif
 test("artifact outputs endpoint is Session-scoped and rejects an unknown Session", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `artifact-outputs-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
     body: JSON.stringify({ name: "Artifact outputs API" }),
@@ -6237,7 +6270,7 @@ test("artifact outputs endpoint is Session-scoped and rejects an unknown Session
 test("Artifact deletion endpoint logically deletes without removing history or workspace files", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `artifact-lifecycle-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
@@ -6338,7 +6371,7 @@ test("Artifact deletion endpoint logically deletes without removing history or w
 test("recovery cancels and replays undecided approvals for run and subagent scopes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `recover-approvals-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   let store = new SessionStore(tempRoot);
   await store.load();
   const model = await store.createModel({
@@ -6403,7 +6436,7 @@ test("recovery cancels and replays undecided approvals for run and subagent scop
 test("cancelling a run while a subagent approval is pending persists its terminal state once", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `subagent-cancel-approval-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { subagentUsesPython: true });
   const model = await createTestModel(origin, {
@@ -6551,7 +6584,7 @@ test("delta coalescing publishes a window when its timer fires", async () => {
 test("publishing routes growable payloads into child streams and keeps the main timeline slim", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `stream-routing-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   await store.load();
   const model = await store.createModel({
@@ -6605,7 +6638,7 @@ test("publishing routes growable payloads into child streams and keeps the main 
 test("the model catalog endpoint serves the packaged snapshot and keeps it when a refresh fails", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `model-catalog-api-${Date.now()}-${process.pid}`);
   await mkdir(resolve(tempRoot, "packaged"), { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const document = (contextWindow: number) => ({
     openai: {
@@ -6686,7 +6719,7 @@ test("the model catalog endpoint serves the packaged snapshot and keeps it when 
 test("provider model REST saves stated facts and shows them back on the listing", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `provider-model-facts-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const upstream = createHttpServer((request, response) => {
     response.writeHead(200, { "content-type": "application/json" });
