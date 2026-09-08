@@ -4,14 +4,14 @@
 /**
  * E2E-META
  * Purpose: Delegate selected input to an independent child Workspace and retrieve its local Artifact.
- * Steps: Start isolated CLI services; create Session/input; delegate; verify child output and parent isolation.
+ * Steps: Start isolated CLI services; create Session/input; delegate; verify child output/parent isolation; legacy sync; Evolution export during a write.
  * Environment: Built and committed task worktree; production API/Runner CLI, ephemeral loopback ports and .tmp data.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible stub.
  * WebSearch: none
  * PaperSources: none
  * MCP: none
- * OtherExternal: local bubblewrap Shell; scientific package setup disabled.
+ * OtherExternal: local bubblewrap Shell and journey-owned Evolution sidecar stub; scientific package setup disabled.
  * Credentials: randomly generated in memory; no external credentials.
  * CostSideEffects: temporary local processes and records, removed in finally; no external calls or charges.
  * Run: node test/api/child-workspace-journey.mjs
@@ -19,9 +19,10 @@
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
+import { RunnerClient } from "../../packages/executor/dist/index.js";
 
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 if (execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim()) throw new Error("Commit candidate before E2E");
@@ -32,6 +33,7 @@ const token = randomUUID();
 const processes = [];
 const steps = [];
 const requests = [];
+const evolutionExports = [];
 let api;
 let runnerOrigin;
 let remoteRunnerId;
@@ -39,12 +41,22 @@ let logs = "";
 const redact = (value) => String(value).replaceAll(token, "[redacted]").replaceAll(process.cwd(), "<worktree>");
 const stub = createServer(async (request, response) => {
   try {
+    if (request.url === "/evolve/health") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ status: "ok" }));
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
+    if (request.url === "/evolve/probe" || request.url === "/evolve/runs") {
+      evolutionExports.push({ baseline: input.baseline_code,
+        solver: await readFile(resolve(input.workspace_dir, "solver.py"), "utf8"),
+        test: await readFile(resolve(input.workspace_dir, "test.py"), "utf8") });
+      if (request.url.endsWith("/probe")) return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ baseline: 0.4, worsened: 0.1, flat: false, label: "constant" }));
+      return response.writeHead(200, { "content-type": "application/x-ndjson" }).end(JSON.stringify({ sequence: 1, createdAt: new Date().toISOString(),
+        event: { type: "search_finished", status: "succeeded", candidates: 0, bestNodeIndex: null } }) + "\n");
+    }
     requests.push(input);
     const child = input.messages?.some((message) => message.role === "system" && message.content?.includes("Applied subagent preset general-purpose"));
     const legacy = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Legacy sync roundtrip"));
+    const evolution = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Evolution committed export"));
     const results = input.messages?.filter((message) => message.role === "tool") ?? [];
     let call;
     if (!child && !results.length) call = { name: "task", arguments: {
@@ -81,6 +93,14 @@ const stub = createServer(async (request, response) => {
         assert.equal((records.match(/"state"\s*:\s*"completed"/g) ?? []).length >= 2, true, records);
       }
     }
+    if (evolution) {
+      call = results.length ? undefined : { name: "create_evolve_run", arguments: {
+        statement: "Improve solver against committed tests", howScored: "Fraction of frozen tests passed", mode: "test_gate",
+        startingPointPath: "solver.py", entrypointPath: "solver.py", testCmd: "python test.py", frozenGlobs: ["test.py"],
+        caseSplit: { gateGroups: 8, rolloutGroups: 4, testGroups: 2 }, expansions: 12, workers: 1,
+      } };
+      if (results.length) assert.ok(!JSON.stringify(results).includes("refusedBecause"), JSON.stringify(results));
+    }
     response.writeHead(200, { "content-type": "text/event-stream" });
     const delta = call ? { role: "assistant", tool_calls: [{ index: 0, id: `call-${child ? "child" : "main"}-${results.length}`,
       type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] }
@@ -108,7 +128,7 @@ async function start(kind, extra) {
     SCIENTIFIC_ENVS: "0", SCIENCE_AGENT_NPU_BROKER: "0", SCIENCE_AGENT_SSH_CONFIG_PATH: resolve(root, "absent-config"),
     SCIENCE_AGENT_MODEL_CATALOG_PATH: resolve(root, "absent-models"),
     SCIENCE_AGENT_MEMORY_GRAPH_URL: `http://127.0.0.1:${stub.address().port}/unused`,
-    SCIENCE_AGENT_EVOLVE_URL: `http://127.0.0.1:${stub.address().port}/unused`, ...extra,
+    SCIENCE_AGENT_EVOLVE_URL: `http://127.0.0.1:${stub.address().port}/evolve`, SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: token, ...extra,
   } });
   processes.push(child);
   for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => {
@@ -212,6 +232,34 @@ try {
     assert.equal(await file.text(), "stable roundtrip");
     assert.deepEqual(await json(`/api/sessions/${target.id}/artifacts`), artifactsBeforeSync);
     return "Main Agent pushed/pulled through the legacy tool and inspected durable Transfers; local bytes preserved; no implicit Artifact";
+  });
+  await step("6. 后台写入期间导出 Evolution 输入", "主 Agent 发起搜索；基线代码和测试目录都来自已提交树，不读取后台任务的半成品。", async () => {
+    const target = await json(`/api/projects/${session.projectId}/sessions`, { title: "Evolution export", modelId: session.modelId, approvalMode: "full-auto" });
+    for (const [name, content] of [["solver.py", "committed solver"], ["test.py", "committed tests"]]) {
+      const form = new FormData(); form.append("files", new Blob([content]), name);
+      const uploaded = await fetch(`${api}/api/sessions/${target.id}/workspace/upload`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form });
+      assert.equal(uploaded.status, 201);
+    }
+    const runner = new RunnerClient(runnerOrigin, token);
+    const owner = { sessionId: target.id, agentId: "main" };
+    const executionId = randomUUID();
+    await runner.startShellExecution({ agentId: "main", executionId,
+      workspaceRoot: resolve(dataDir, "projects", target.projectId, "sessions", target.id, "workspace"),
+      code: "printf unfinished > solver.py; printf unfinished > test.py; echo writer-ready; while :; do sleep 1; done",
+      permissionEpoch: { id: "export-journey", sessionId: target.id, createdAt: new Date().toISOString(), environmentRevisionId: "audit-only",
+        mounts: [{ source: "workspace", mode: "read-write" }], networkPolicy: "none", secretRefs: [], reason: "journey" },
+    });
+    try {
+      await until(async () => (await runner.shellExecutionLogs(executionId, owner)).chunks.some((chunk) => chunk.text.includes("writer-ready")));
+      const response = await fetch(`${api}/api/sessions/${target.id}/messages`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ content: "Evolution committed export: improve solver against the committed tests." }), signal: AbortSignal.timeout(30_000) });
+      assert.equal(response.status, 200); assert.match(await response.text(), /"type":"run.completed"/);
+      await until(async () => (await json(`/api/evolve/runs?sessionId=${target.id}`)).some((run) => run.status === "succeeded"));
+      assert.equal(evolutionExports.length, 2, "probe and search both stage the Workspace");
+      assert.ok(evolutionExports.every((value) => value.baseline === "committed solver" && value.solver === "committed solver" && value.test === "committed tests"));
+      assert.equal((await runner.getShellExecution(executionId, owner)).state, "running");
+    } finally { await runner.cancelShellExecution(executionId, owner); }
+    return "Main Agent created Evolution; probe/search consumed committed baseline and tests while the writer remained running; writer explicitly cancelled afterwards";
   });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }

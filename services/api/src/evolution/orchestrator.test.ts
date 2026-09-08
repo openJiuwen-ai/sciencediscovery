@@ -22,7 +22,8 @@
 
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { VersionStore, committedWorkspaceSnapshot, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { resolve } from "node:path";
 import { after, test } from "node:test";
 
@@ -170,6 +171,8 @@ async function harness(sidecarUrl: string, name: string, options: {
   cas?: { read: (hash: string) => Promise<Buffer> };
   publishResult?: (input: { run: EvolveRun; winnerCodeHash: string }) => Promise<void>;
   runTokens?: RunTokenRegistry;
+  workspacePath?: (sessionId: string) => string;
+  workspaceVersions?: VersionStore;
 } = {}) {
   const dataDir = temporaryDataDir(name);
   const store = new EvolutionStore(dataDir);
@@ -180,11 +183,44 @@ async function harness(sidecarUrl: string, name: string, options: {
     null,
     undefined,
     options.runTokens ?? null,
-    { apiOrigin: options.apiOrigin, cas: options.cas, publishResult: options.publishResult },
+    { ...options },
   );
   after(() => rm(dataDir, { force: true, recursive: true }));
   return { orchestrator, store };
 }
+
+test("test-gated Evolution stages the committed Workspace while an execution is writing", async () => {
+  const dataDir = temporaryDataDir("evolve-stable-source");
+  const workspace = resolve(dataDir, "workspace"); await mkdir(workspace, { recursive: true });
+  after(() => rm(dataDir, { recursive: true, force: true }));
+  const versions = new VersionStore(dataDir);
+  await writeFile(resolve(workspace, "test.py"), "committed test");
+  await committedWorkspaceSnapshot(versions, workspace);
+  let finish!: () => void; let started!: () => void;
+  const ready = new Promise<void>((done) => { started = done; });
+  const release = new Promise<void>((done) => { finish = done; });
+  const writer = withWorkspaceMutation(versions, workspace, async () => {
+    await writeFile(resolve(workspace, "test.py"), "unfinished test"); started(); await release;
+  }, { kind: "test" });
+  await ready;
+  const sidecar = await startFakeSidecar({ events: [FINISHED("succeeded", 1)] });
+  after(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "evolve-stable-export", {
+    workspacePath: () => workspace, workspaceVersions: versions,
+  });
+  const input = goal(); input.engine = "puct";
+  input.scorecard.criteria = [{ ...input.scorecard.criteria[0]!, measure: {
+    kind: "test_gate", testCmd: ["pytest"], frozen: ["test.py"], entrypoint: ["solver.py"],
+    caseSplit: { gateGroups: 1, rolloutGroups: 1, testGroups: 1 },
+  } }];
+  try {
+    const run = await orchestrator.start({ goal: input, sessionId: "s1" });
+    await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "stable export");
+    const exported = sidecar.requests()[0]?.workspace_dir;
+    assert.equal(typeof exported, "string");
+    assert.equal(await readFile(resolve(exported as string, "test.py"), "utf8"), "committed test");
+  } finally { finish(); await writer; }
+});
 
 async function waitFor(predicate: () => Promise<boolean> | boolean, label: string): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt += 1) {

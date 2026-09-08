@@ -40,8 +40,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { cp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
+import { committedWorkspaceSnapshot, materializeWorkspaceSnapshot, type VersionStore } from "@sciencediscovery/cas";
 
 import type { EvolveBudget, EvolveEvent, EvolveEventRecord, EvolveGoal, EvolveRun } from "@sciencediscovery/schema";
 import { isEvolveRunActive } from "@sciencediscovery/schema";
@@ -137,6 +138,8 @@ export interface EvolveOrchestratorOptions {
   /** Where a session's project files live. Only a test-gated search needs it,
    *  and only to take one snapshot per run. */
   workspacePath?: (sessionId: string) => string;
+  /** Required for Workspace exports; live-file copying is not a fallback. */
+  workspaceVersions?: VersionStore;
   /** Pin an engine for every run, overriding the goal. For reproductions. */
   engine?: string;
   /**
@@ -348,18 +351,20 @@ export class EvolveOrchestrator {
     };
   }
 
-  /** Freeze the project as it is now, under the run's own directory. */
+  /** Export the latest committed project tree, even while a writer is active. */
   private async snapshotWorkspace(run: EvolveRun): Promise<string> {
     const source = this.options.workspacePath?.(run.sessionId);
-    if (!source) {
+    const versions = this.options.workspaceVersions;
+    if (!source || !versions) {
       throw new DatasetStagingError(
         "test-gated scoring needs the project files, and this control plane cannot reach "
-        + "the session's workspace",
+        + "the session's committed workspace snapshots",
       );
     }
     const destination = resolve(this.store.runDirectory(run.id), "workspace");
-    await cp(source, destination, { recursive: true });
-    apiLog.info("evolve_workspace_snapshot", { runId: run.id });
+    const snapshot = await committedWorkspaceSnapshot(versions, source);
+    await materializeWorkspaceSnapshot(versions, snapshot, destination);
+    apiLog.info("evolve_workspace_snapshot", { runId: run.id, sourceSnapshotId: snapshot.digest });
     return destination;
   }
 

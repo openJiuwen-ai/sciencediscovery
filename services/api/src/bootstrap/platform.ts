@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
@@ -24,7 +23,6 @@ import { reviewerLog } from "@sciencediscovery/provenance";
 import type {
   EvolveGoal, EvolveRunProposal, ModelsDevPayload, ResolvedProxy,
 } from "@sciencediscovery/schema";
-import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 
 import { apiLog, configureApiLogging } from "../logging.js";
 import { MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
@@ -35,7 +33,8 @@ import { PaperService } from "../papers.js";
 import { PermissionDecisionQueue } from "@sciencediscovery/governance";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { RunnerClient } from "@sciencediscovery/executor";
-import { CasStore } from "@sciencediscovery/cas";
+import { CasStore, VersionStore } from "@sciencediscovery/cas";
+import { storeEvolutionInput } from "../evolution/workspace-input.js";
 import { CandidateSources } from "../evolution/candidates.js";
 import { RunTokenRegistry } from "../evolution/llm-proxy.js";
 import { EvolveOrchestrator } from "../evolution/orchestrator.js";
@@ -206,6 +205,7 @@ export function createPlatformServices(
       apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
       cas: evolveCas,
       workspacePath: (sessionId: string) => store.workspacePath(sessionId),
+      workspaceVersions: new VersionStore(store.dataDir),
       // Wired here because this is the only scope holding both the evolve
       // subsystem's stores and the session store that owns artifacts.
       publishResult: async ({ run, winnerCodeHash }) => {
@@ -283,12 +283,9 @@ export function createPlatformServices(
     }
   };
   const storeEvolveInput = (sessionId: string) =>
-    async (input: { content?: string; path?: string }) => {
-      const bytes = input.content !== undefined
-        ? Buffer.from(input.content, "utf-8")
-        : await readFile(resolveWorkspaceFile(store.workspacePath(sessionId), input.path ?? ""));
-      return `sha256:${(await evolveCas.put(bytes)).hash}`;
-    };
+    (input: { content?: string; path?: string }) => storeEvolutionInput(
+      new VersionStore(store.dataDir), store.workspacePath(sessionId), input,
+    );
 
   /**
    * The `/evolve` capability, registered once.

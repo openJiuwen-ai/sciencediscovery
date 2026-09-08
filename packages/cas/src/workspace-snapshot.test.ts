@@ -1,13 +1,13 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { VersionStore } from "./versioning.js";
+import { VersionStore, type WorkspaceTree } from "./versioning.js";
 import { committedWorkspaceSnapshot, withWorkspaceMutation } from "./workspace-lease.js";
-import { streamSnapshotFile, workspaceSnapshotFiles } from "./workspace-snapshot.js";
+import { materializeWorkspaceSnapshot, streamSnapshotFile, workspaceSnapshotFiles } from "./workspace-snapshot.js";
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "workspace-snapshot-"));
@@ -72,4 +72,52 @@ test("failed writes publish actual partial effects and provide a committed recei
     await writeFile(join(workspace, "partial"), "kept"); throw new Error("failed command");
   }, { kind: "test", onCommitted: (tree) => { receipt = tree; } }), /failed command/);
   assert.deepEqual(receipt, await committedWorkspaceSnapshot(versions, workspace));
+});
+
+test("whole-tree export preserves Linux structure and exports a fixed committed tree", async (t) => {
+  const { workspace, versions } = await fixture(t);
+  await mkdir(join(workspace, "empty"));
+  await writeFile(join(workspace, "run"), "original"); await chmod(join(workspace, "run"), 0o751);
+  await symlink("run", join(workspace, "link"));
+  const rawName = Buffer.from([0xff]);
+  await writeFile(Buffer.concat([Buffer.from(`${workspace}/`), rawName]), "raw name");
+  const snapshot = await committedWorkspaceSnapshot(versions, workspace);
+  await writeFile(join(workspace, "run"), "changed");
+  const destination = join(workspace, "..", "export");
+  await materializeWorkspaceSnapshot(versions, snapshot, destination);
+  assert.equal(await readFile(join(destination, "run"), "utf8"), "original");
+  assert.equal((await stat(join(destination, "run"))).mode & 0o111, 0o111);
+  assert.equal(await readlink(join(destination, "link")), "run");
+  assert.ok((await stat(join(destination, "empty"))).isDirectory());
+  assert.equal(await readFile(Buffer.concat([Buffer.from(`${destination}/`), rawName]), "utf8"), "raw name");
+  assert.deepEqual(await committedWorkspaceSnapshot(versions, destination), snapshot);
+  await writeFile(join(destination, "run"), "independent");
+  assert.equal(await readFile(join(workspace, "run"), "utf8"), "changed");
+  const entry = (await versions.readRecord<WorkspaceTree>(snapshot)).value.entries.find((entry) => entry.name === Buffer.from("run").toString("base64url"));
+  assert.equal(entry?.type, "file");
+  if (entry?.type === "file") assert.equal((await versions.readData(entry.content)).toString(), "original");
+});
+
+test("whole-tree export refuses existing destinations and never deletes their contents", async (t) => {
+  const { workspace, versions } = await fixture(t);
+  await writeFile(join(workspace, "keep"), "keep");
+  const snapshot = await committedWorkspaceSnapshot(versions, workspace);
+  await assert.rejects(materializeWorkspaceSnapshot(versions, snapshot, workspace), { code: "EEXIST" });
+  assert.equal(await readFile(join(workspace, "keep"), "utf8"), "keep");
+});
+
+test("whole-tree export does not publish corrupt bytes or traversal entries", async (t) => {
+  const { workspace, versions } = await fixture(t);
+  await writeFile(join(workspace, "file"), "valid");
+  const snapshot = await committedWorkspaceSnapshot(versions, workspace);
+  const [file] = await workspaceSnapshotFiles(versions, snapshot);
+  await writeFile(versions.objectPath(file!.content), "wrong");
+  const destination = join(workspace, "..", "corrupt-export");
+  await assert.rejects(materializeWorkspaceSnapshot(versions, snapshot, destination), /integrity failure/);
+  await assert.rejects(stat(destination), { code: "ENOENT" });
+  const invalid = await versions.putRecord("WorkspaceTree", { entries: [{
+    name: Buffer.from("../escape").toString("base64url"), type: "directory", tree: snapshot,
+  }] });
+  await assert.rejects(materializeWorkspaceSnapshot(versions, invalid, join(workspace, "..", "invalid-export")), /Invalid snapshot filename/);
+  await assert.rejects(stat(join(workspace, "..", "escape")), { code: "ENOENT" });
 });

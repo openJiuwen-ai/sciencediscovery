@@ -3,7 +3,10 @@
 
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
+import { mkdir, open, rm, symlink } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { assertRef, type AgentStateRef, type DataRef, type VersionStore, type WorkspaceTree } from "./versioning.js";
+import { withWorkspaceMutation } from "./workspace-lease.js";
 
 export interface SnapshotFile { path: string; content: DataRef; executable: number }
 
@@ -40,4 +43,47 @@ export async function* streamSnapshotFile(store: VersionStore, content: DataRef)
     const bytes = chunk as Buffer; size += bytes.length; hash.update(bytes); yield bytes;
   }
   if (size !== content.size || `sha256:${hash.digest("hex")}` !== content.digest) throw new Error("Snapshot file integrity failure");
+}
+
+/** Materialize into a new, private directory, never into an existing Workspace.
+ * The caller may hand the directory to a consumer only after this resolves.
+ * Preserve raw Linux names, empty directories and link targets without following
+ * links or consulting the original live tree. No hardlinks to mutable files/CAS. */
+export async function materializeWorkspaceSnapshot(store: VersionStore, tree: AgentStateRef, destination: string): Promise<void> {
+  const root = resolve(destination);
+  await mkdir(dirname(root), { recursive: true });
+  await mkdir(root, { mode: 0o700 }); // Exclusive: failure must not remove someone else's directory.
+  try {
+    await withWorkspaceMutation(store, root, async () => {
+      const walk = async (ref: AgentStateRef, directory: Buffer): Promise<void> => {
+        const record = await store.readRecord<WorkspaceTree>(ref, "WorkspaceTree");
+        const names = new Set<string>();
+        for (const entry of record.value.entries) {
+          const name = Buffer.from(entry.name, "base64url");
+          if (!name.length || name.includes(0) || name.includes(47) || name.equals(Buffer.from("."))
+            || name.equals(Buffer.from("..")) || name.toString("base64url") !== entry.name || names.has(entry.name)) {
+            throw new Error("Invalid snapshot filename");
+          }
+          names.add(entry.name);
+          const path = Buffer.concat([directory, Buffer.from("/"), name]);
+          if (entry.type === "directory") {
+            await mkdir(path); await walk(entry.tree, path);
+          } else if (entry.type === "file") {
+            const file = await open(path, "wx", 0o600);
+            try {
+              for await (const bytes of streamSnapshotFile(store, entry.content)) await file.writeFile(bytes);
+              await file.chmod(0o600 | (entry.executable & 0o111));
+              await file.sync();
+            } finally { await file.close(); }
+          } else if (entry.type === "symlink") {
+            await symlink(Buffer.from(entry.target, "base64url"), path);
+          } else throw new Error("Invalid snapshot entry type");
+        }
+      };
+      await walk(tree, Buffer.from(root));
+    }, { kind: "snapshot-export", id: tree.digest });
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  }
 }
