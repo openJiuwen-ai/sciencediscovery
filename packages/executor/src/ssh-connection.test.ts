@@ -9,6 +9,7 @@ import test from "node:test";
 import ssh2 from "ssh2";
 
 import { hostKeyFingerprint, SshConnection, SshHostKeyUntrustedError, type SshCredentials } from "./ssh-connection.js";
+import { generateSshKeyPair } from "./ssh-keys.js";
 
 test("Runner file transfer uses the authenticated SFTP session and fails on disconnect", async (context) => {
   let client: ssh2.Client;
@@ -37,12 +38,14 @@ test("Runner file transfer uses the authenticated SFTP session and fails on disc
 });
 
 test("authentication diagnostics reflect actual SSH protocol exchanges without exposing credentials", async (context) => {
-  const hostKeys = ssh2.utils.generateKeyPairSync("ed25519");
-  const parsed = ssh2.utils.parseKey(hostKeys.private);
+  // ssh2 1.17 keygen strips leading zero public-key bytes; use the same
+  // fixed-width OpenSSH encoding as product-generated keys instead.
+  const hostKeys = generateSshKeyPair("authentication-test-host");
+  const parsed = ssh2.utils.parseKey(hostKeys.privateKey);
   assert.ok(!(parsed instanceof Error) && !Array.isArray(parsed));
   const trustedHostKey = { algorithm: "ssh-ed25519", fingerprint: hostKeyFingerprint(parsed.getPublicSSH()) };
   const password = ` ${randomBytes(24).toString("hex")} `;
-  const privateKey = ssh2.utils.generateKeyPairSync("ed25519").private;
+  const privateKey = generateSshKeyPair("authentication-test-client").privateKey;
   const passphrase = randomBytes(24).toString("hex");
   const credentials: SshCredentials = { username: "operator", password, privateKey, passphrase };
 
@@ -52,7 +55,7 @@ test("authentication diagnostics reflect actual SSH protocol exchanges without e
       const connections = new Set<ssh2.Connection>();
       const offered: ssh2.AuthenticationType[] = scenario === "key rejected" ? ["publickey"] : scenario.startsWith("interactive") ? ["keyboard-interactive"] : ["publickey", "password"];
       const server = new ssh2.Server({
-        hostKeys: [hostKeys.private],
+        hostKeys: [hostKeys.privateKey],
         banner: `Authorized users only. password=${password.trim()} token=${randomBytes(24).toString("hex")} ${privateKey} ${passphrase} ${"notice ".repeat(100)}`,
       }, (connection) => {
         connections.add(connection);
