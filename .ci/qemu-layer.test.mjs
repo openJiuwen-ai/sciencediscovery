@@ -199,6 +199,21 @@ test("only the verification job can turn the run red", async () => {
   assert.doesNotMatch(result, /jobs\./);
 });
 
+test("the result comment tells a reader how to re-run, and the trigger makes that true", async () => {
+  const result = await readFile(join(ciDirectory, "codearts-pr-result.sh"), "utf8");
+  const workflow = await workflowText();
+  // This went missing once. The sentence carrying it had been rewritten for
+  // the CI branch -- push the source branch, do not comment `rerun` -- and was
+  // then deleted along with that branch's other quirks, which left a working
+  // trigger nobody was told about. The two have to be asserted together: a
+  // hint without the trigger is a lie, and a trigger without the hint is what
+  // a merge request author reads as "there is nothing I can do".
+  assert.match(result, /<code>rerun<\/code>/,
+    "the result comment must say how to re-run the pipeline");
+  assert.match(workflow, /merge_comment: rerun/,
+    "the comment promises a rerun trigger the workflow has to declare");
+});
+
 test("both guest layers install and build before handing the workspace over", async () => {
   const layer = await readFile(join(ciDirectory, "codearts-layer.sh"), "utf8");
   for (const [fn, guest] of [["run_ut_guest", "ut-guest"], ["run_e2e", "e2e"]]) {
