@@ -9,6 +9,7 @@
 // limitations under the License.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
@@ -46,7 +47,7 @@ for (const field of ["env", "headers"] as const) {
     const newKey = field === "env" ? "MCP_TEST_RENAMED" : "authorization";
     const settings = page.getByRole("dialog", { name: "系统设置" }).locator(".mcp-settings");
     const row = settings.locator(".mcp-server").filter({ has: page.locator("strong", { hasText: name }) });
-    const key = settings.getByLabel(`${label} 键 1`, { exact: true });
+    const key = settings.getByLabel(`${label} 键名 1`, { exact: true });
     const value = settings.getByLabel(`${label} 值 1`, { exact: true });
     const save = settings.getByRole("button", { name: "保存", exact: true });
     let child: ChildProcess | undefined;
@@ -62,9 +63,16 @@ for (const field of ["env", "headers"] as const) {
       if (field === "headers") {
         child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url)), "--http", "0"], { env: { ...process.env, MCP_FIXTURE_AUTH: "Bearer fixture-only" }, stdio: ["ignore", "ignore", "pipe"] });
         port = await new Promise<number>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error("Local MCP startup timeout")), 10_000);
+          const lines = createInterface({ input: child!.stderr! });
+          const timer = setTimeout(() => { lines.close(); reject(new Error("Local MCP startup timeout")); }, 10_000);
           child!.once("error", (error) => { clearTimeout(timer); reject(error); });
-          child!.stderr!.once("data", (data) => { clearTimeout(timer); try { resolve(JSON.parse(String(data)).port); } catch (error) { reject(error); } });
+          child!.once("exit", () => { clearTimeout(timer); lines.close(); reject(new Error("Local MCP exited before readiness")); });
+          lines.on("line", (line) => {
+            let message: { port?: number };
+            try { message = JSON.parse(line); } catch { return; }
+            if (!Number.isInteger(message?.port) || message.port! <= 0) return;
+            clearTimeout(timer); lines.close(); resolve(message.port!);
+          });
         });
       }
       await openProjectSession(page, fixture);
