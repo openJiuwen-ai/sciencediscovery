@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { AgentNotifications } from "./agent-notifications.js";
 
 import type {
   ChatMessage,
@@ -386,6 +387,7 @@ export class SessionStore {
   private readonly workspaceFileMutationQueues = new Map<string, Promise<void>>();
   private catalog: Catalog = emptyCatalog();
   private database?: DatabaseSync;
+  private notificationStore?: AgentNotifications;
   private loaded = false;
   private saveQueue = Promise.resolve();
   private secretKey?: Buffer;
@@ -412,6 +414,11 @@ export class SessionStore {
     this.initialTimeoutSettings = initialTimeoutSettings;
     this.initialQuotaSettings = initialQuotaSettings;
     this.initialNeo4jPassword = initialNeo4jPassword?.trim() || undefined;
+  }
+
+  get notifications(): AgentNotifications {
+    if (!this.notificationStore) throw new Error("Notification storage is not initialized");
+    return this.notificationStore;
   }
 
   private normalizeReviewCriteria(values: string[] | undefined): string[] {
@@ -515,6 +522,10 @@ export class SessionStore {
       CREATE INDEX IF NOT EXISTS permission_authorizations_execution
         ON permission_authorizations(execution_id, created_at DESC);
     `);
+    this.notificationStore = new AgentNotifications(this.database, (sessionId) => {
+      const session = this.getSession(sessionId);
+      return !session || Boolean(session.archivedAt);
+    });
     this.secretKey = await this.loadOrCreateSecretKey();
     this.migrateRemoteHostTokens();
     const modelIdsWithSecrets = new Set((this.database.prepare("SELECT model_id FROM model_secrets").all() as Array<{ model_id: string }>).map((row) => row.model_id));
@@ -3797,6 +3808,8 @@ export class SessionStore {
   async archiveSession(sessionId: string): Promise<Session> {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
+    // Close the wake gate before yielding to catalog persistence. Restore does not reopen it.
+    this.notifications.stop(sessionId);
     if (!session.archivedAt) {
       session.archivedAt = new Date().toISOString();
       session.updatedAt = session.archivedAt;
@@ -3887,6 +3900,7 @@ export class SessionStore {
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE session_id = ?").run(session.id);
+    this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
   }
 
@@ -3956,6 +3970,7 @@ export class SessionStore {
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE project_id = ?").run(projectId);
+    for (const session of sessions) this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
     await rm(resolve(this.dataDir, "projects", projectId), { force: true, recursive: true });
   }

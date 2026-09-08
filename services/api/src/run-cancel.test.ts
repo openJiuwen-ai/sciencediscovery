@@ -17,6 +17,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 
 import type { CancelRunResult, ModelProfile, Project, RunnerHealth, Session, SessionDetail, SessionRun, SessionRunEvent, SessionUsageSummary } from "@sciencediscovery/schema";
@@ -114,7 +115,7 @@ function writeSseEvent(response: ServerResponse, event: unknown): void {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-/** The scripted model calls run_python, so the REAL in-process tool execution
+/** The scripted model calls run_shell, so the REAL in-process tool execution
  *  hits the permission gate and the run blocks awaiting the user's decision. */
 function startBlockingPermissionGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
   let runCount = 0;
@@ -125,7 +126,7 @@ function startBlockingPermissionGateway(context: TestContext): Promise<{ origin:
       request.on("end", () => {
         response.writeHead(200, { "content-type": "text/event-stream" });
         writeSseEvent(response, {
-          choices: [{ delta: { tool_calls: [{ index: 0, id: `call-python-${runCount}`, type: "function", function: { name: "run_python", arguments: JSON.stringify({ code: "print(1)" }) } }] } }],
+          choices: [{ delta: { tool_calls: [{ index: 0, id: `call-shell-${runCount}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: "printf 1" }) } }] } }],
         });
         response.write("data: [DONE]\n\n");
         response.end();
@@ -196,6 +197,7 @@ function startStubRunner(context: TestContext): Promise<string> {
 }
 
 interface TestApi {
+  dataDir: string;
   gatewayRunCount: () => number;
   modelId: string;
   origin: string;
@@ -238,11 +240,18 @@ async function startApi(
   });
   assert.equal(projectResponse.status, 201);
   return {
+    dataDir,
     gatewayRunCount: gateway.runCount,
     modelId: (await modelResponse.json() as ModelProfile).id,
     origin,
     projectId: (await projectResponse.json() as Project).id,
   };
+}
+
+function wakeStopped(api: TestApi, sessionId: string): boolean {
+  const db = new DatabaseSync(resolve(api.dataDir, "catalog.sqlite"), { readOnly: true });
+  try { return Boolean(db.prepare("SELECT stopped FROM agent_wake_gates WHERE session = ?").get(sessionId)?.stopped); }
+  finally { db.close(); }
 }
 
 async function createSession(api: TestApi, title: string, overrides: Partial<Pick<Session, "approvalMode">> = {}): Promise<string> {
@@ -411,13 +420,15 @@ test("stopping a stuck run ends the stream as cancelled and frees the Session", 
   const sessionId = await createSession(api, "Stuck session");
 
   const cancelBeforeRun = await cancelRun(api, sessionId);
-  assert.equal(cancelBeforeRun.status, 409, "cancelling with no active run is an explicit conflict");
-  assert.match((await cancelBeforeRun.json() as { error: string }).error, /No run is active/);
+  assert.equal(cancelBeforeRun.status, 200, "Stop closes automatic wakeups even without a foreground run");
+  assert.deepEqual(await cancelBeforeRun.json(), { cancelled: true, sessionId });
+  assert.equal(wakeStopped(api, sessionId), true);
 
   const run = await startRun(api, sessionId, "Analyze the dataset");
   assert.equal(run.status, 200);
   const streamed = readUntilTerminal(run);
   await waitForGatewayTurn(api, 1);
+  assert.equal(wakeStopped(api, sessionId), false, "an explicit new user request resumes automatic wakeups");
 
   const queued = await startRun(api, sessionId, "Second run while the first is stuck");
   assert.equal(queued.status, 200, "a second prompt queues behind the active run");
@@ -428,6 +439,7 @@ test("stopping a stuck run ends the stream as cancelled and frees the Session", 
   const cancelResult = await cancel.json() as CancelRunResult;
   assert.equal(cancelResult.cancelled, true);
   assert.equal(cancelResult.sessionId, sessionId);
+  assert.equal(wakeStopped(api, sessionId), true);
 
   const types = await streamed;
   assert.equal(types.at(0), "run.queued");
@@ -439,7 +451,7 @@ test("stopping a stuck run ends the stream as cancelled and frees the Session", 
   const queuedCancel = await cancelRun(api, sessionId);
   assert.equal(queuedCancel.status, 200, "the queued follow-up becomes the current run and can be stopped");
   assert.ok((await queuedStream).includes("run.cancelled"));
-  assert.equal((await cancelRun(api, sessionId)).status, 409, "a repeated Stop after the queue drains is a safe no-op");
+  assert.equal((await cancelRun(api, sessionId)).status, 200, "a repeated Stop after the queue drains is a safe no-op");
 });
 
 test("a stuck Session does not block runs in another Session", async (context) => {
@@ -473,6 +485,7 @@ test("cancelling a blocked run persists the approval's terminal state and the to
   await waitForGatewayTurn(api, 1);
   await waitForRunStatus(api, sessionId, blocked.id, "blocked");
   assert.equal((await cancelRunById(api, sessionId, blocked.id)).status, 202);
+  assert.equal(wakeStopped(api, sessionId), true, "stopping the active run by ID closes the same gate");
   await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
 
   const eventsResponse = await fetch(
@@ -482,9 +495,9 @@ test("cancelling a blocked run persists the approval's terminal state and the to
   assert.equal(eventsResponse.status, 200);
   const events = await eventsResponse.json() as SessionRunEvent[];
 
-  const started = events.find((record) => record.event.type === "tool.started" && record.event.trace.name === "run_python");
+  const started = events.find((record) => record.event.type === "tool.started" && record.event.trace.name === "run_shell");
   assert.ok(started?.event.type === "tool.started");
-  assert.match(JSON.stringify(started.event.trace.args ?? {}), /print\(1\)/, "the replayed tool call keeps its arguments");
+  assert.match(JSON.stringify(started.event.trace.args ?? {}), /printf 1/, "the replayed tool call keeps its arguments");
 
   const requiredIndex = events.findIndex((record) => record.event.type === "permission.required");
   assert.ok(requiredIndex >= 0, "the approval request itself is part of the replay");

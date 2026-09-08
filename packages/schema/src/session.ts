@@ -450,11 +450,11 @@ export interface CreateSkillEvolutionRunRequest {
   targetLibraryId?: string;
 }
 
-/** Result of stopping the agent run that is currently streaming for a Session. */
+/** Stop also disables automatic wakeups when no foreground run is active. */
 
 export interface CancelRunResult {
   cancelled: boolean;
-  runId: string;
+  runId?: string;
   sessionId: string;
 }
 

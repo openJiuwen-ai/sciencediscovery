@@ -2067,6 +2067,8 @@ export async function cancelCurrentSessionRun(
     sendError(response, 404, "Session not found");
     return;
   }
+  // This gate persists independently of the foreground request or Runner process.
+  store.notifications.stop(sessionId);
   // Manual Reviewer runs do not create a SessionRun, so Stop must cancel its
   // own per-Session controller as well as the main Agent run when one exists.
   const reviewerCancelled = cancelReviewerCheckpoints(sessionId);
@@ -2095,7 +2097,7 @@ export async function cancelCurrentSessionRun(
         : { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);
       return;
     }
-    sendError(response, 409, "No run is active for this session");
+    sendJson(response, legacyResponse ? 202 : 200, { cancelled: true, sessionId } satisfies CancelRunResult);
     return;
   }
   cancelledRuns.add(active.id);
@@ -2395,6 +2397,7 @@ export async function createQueuedRun(
   body: SendMessageRequest,
 ): Promise<SessionRun> {
   const session = store.assertSessionWritable(sessionId);
+  const wakeGeneration = store.notifications.generation(sessionId);
   if (session.archivedAt) throw new ApiStatusError(409, "Session is archived and read-only");
   const submittedPrompt = body.content?.trim();
   const slashRefresh = submittedPrompt?.startsWith("/web-refresh ");
@@ -2427,6 +2430,8 @@ export async function createQueuedRun(
     ...(skillLibraryRefs.length ? { skillLibraryRefs } : {}),
     webForceRefresh: body.webForceRefresh === true || slashRefresh,
   });
+  // A Stop received while validating/enqueuing this request wins over the earlier request.
+  store.notifications.resume(sessionId, wakeGeneration);
   const renamedSession = await applyInitialSessionTitle(store, run);
   if (renamedSession) await publishRunEvent(store, sessionId, run.id, {
     session: renamedSession,
@@ -2831,6 +2836,7 @@ export async function cancelSessionRun(
     sendJson(response, 200, run);
     return;
   }
+  if (run.status !== "queued") store.notifications.stop(sessionId);
   cancelledRuns.add(runId);
   runLog.info("run_cancel_requested", { reason: "user_cancelled", runId, sessionId });
   const controller = activeRunAbortControllers.get(runId);
@@ -2851,6 +2857,7 @@ export async function cancelSessionRun(
       sendJson(response, 200, current);
       return;
     }
+    store.notifications.stop(sessionId);
     activeRunAbortControllers.get(runId)?.abort();
     sendJson(response, 202, current);
     return;
