@@ -18,6 +18,7 @@ import { VersionStore, withWorkspaceMutation, withWorkspaceAdmission, withWorksp
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
+import { ShellExecutions } from "./shell-executions.js";
 import { WorkspaceTransfers } from "./workspace-transfers.js";
 
 import type {
@@ -398,6 +399,7 @@ export class SessionStore {
   private catalog: Catalog = emptyCatalog();
   private database?: DatabaseSync;
   private notificationStore?: AgentNotifications;
+  private shellExecutionStore?: ShellExecutions;
   private transferStore?: WorkspaceTransfers;
   private loaded = false;
   private saveQueue = Promise.resolve();
@@ -430,6 +432,11 @@ export class SessionStore {
   get notifications(): AgentNotifications {
     if (!this.notificationStore) throw new Error("Notification storage is not initialized");
     return this.notificationStore;
+  }
+
+  get shellExecutions(): ShellExecutions {
+    if (!this.shellExecutionStore) throw new Error("Shell Execution storage is not initialized");
+    return this.shellExecutionStore;
   }
 
   get transfers(): WorkspaceTransfers {
@@ -543,6 +550,7 @@ export class SessionStore {
       return !session || Boolean(session.archivedAt);
     });
     this.transferStore = new WorkspaceTransfers(this.database, new VersionStore(this.dataDir));
+    this.shellExecutionStore = new ShellExecutions(this.database, new VersionStore(this.dataDir), this.notificationStore);
     this.secretKey = await this.loadOrCreateSecretKey();
     this.migrateRemoteHostTokens();
     const modelIdsWithSecrets = new Set((this.database.prepare("SELECT model_id FROM model_secrets").all() as Array<{ model_id: string }>).map((row) => row.model_id));

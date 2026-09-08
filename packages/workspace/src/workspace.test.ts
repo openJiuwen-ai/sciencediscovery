@@ -1605,6 +1605,33 @@ test("workspace_transfer exposes explicit mappings and independent management op
   await assert.rejects(tool.execute("missing", { operation: "start" }), /explicit file mappings/);
 });
 
+test("Shell background mode and management tools do not start additional Shells", async () => {
+  const calls: string[] = [];
+  const job = { id: "job", state: "running", runnerId: "remote" } as import("@sciencediscovery/schema").AgentShellExecution;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("legacy endpoint must not run"); },
+    shellExecutions: {
+      start: async (code, input, _signal, call, runner) => { calls.push(JSON.stringify({ code, input, call, runner })); return job; },
+      wait: async (id, ms) => { calls.push(`wait:${id}:${ms}`); return job; },
+      get: async () => job, list: () => [job],
+      logs: async (id, cursor) => { calls.push(`logs:${id}:${cursor}`); return { chunks: [], nextCursor: 0, retentionTruncated: false, truncated: false }; },
+      cancel: async (id) => { calls.push(`cancel:${id}`); return job; },
+    },
+  });
+  const shell = tools.find((tool) => tool.name === "run_shell")!;
+  const background = await shell.execute("background", { command: "python -m sample", background: true, runner_id: "remote", environment_id: "env", cwd: "input" });
+  assert.equal(calls.length, 1, "background returns on acceptance without waiting");
+  assert.deepEqual(JSON.parse(calls[0]!), { code: "python -m sample", input: { environmentId: "env", cwd: "input" }, call: "background", runner: "remote" });
+  assert.match((background.content[0] as { text: string }).text, /still running/);
+  await shell.execute("foreground", { command: "echo next", wait_ms: 5 });
+  assert.equal(calls.at(-1), "wait:job:5");
+  await tools.find((tool) => tool.name === "execution_status")!.execute("status", { execution_id: "job", wait_ms: 0 });
+  await tools.find((tool) => tool.name === "execution_logs")!.execute("logs", { execution_id: "job", cursor: 3 });
+  await tools.find((tool) => tool.name === "execution_cancel")!.execute("cancel", { execution_id: "job" });
+  assert.deepEqual(calls.slice(-3), ["wait:job:0", "logs:job:3", "cancel:job"]);
+});
+
 test("sync_remote_workspace exposes only explicit list, push, and pull operations", async () => {
   const calls: string[] = [];
   const tools = createWorkspaceTools(process.cwd(), {

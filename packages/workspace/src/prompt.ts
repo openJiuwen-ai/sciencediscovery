@@ -298,6 +298,7 @@ export function buildWorkspaceSystemPrompt(
 
 export interface WorkspaceAgentOptions {
   workspaceTransfers?: WorkspaceToolOptions["workspaceTransfers"];
+  shellExecutions?: WorkspaceToolOptions["shellExecutions"];
   remoteRunners?: WorkspaceToolOptions["remoteRunners"];
   config: AgentConfig;
   createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
@@ -312,13 +313,7 @@ export interface WorkspaceAgentOptions {
     toolCallId?: string,
     machine?: string,
   ) => Promise<import("@sciencediscovery/schema").PythonExecutionResult>;
-  executeShell: (
-    code: string,
-    kernelMode: KernelMode,
-    signal?: AbortSignal,
-    toolCallId?: string,
-    machine?: string,
-  ) => Promise<ShellExecutionResult>;
+  executeShell: NonNullable<WorkspaceToolOptions["executeShell"]>;
   executeScientific?: (
     language: ScientificLanguage,
     code: string,

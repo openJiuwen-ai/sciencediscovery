@@ -360,15 +360,15 @@ export class RunnerClient {
     });
   }
 
-  async getShellExecution(id: string, owner: ExecutionOwner): Promise<ManagedExecution> {
-    return this.request(`/shell-executions/${encodeURIComponent(id)}?${new URLSearchParams({ ...owner })}`);
+  async getShellExecution(id: string, owner: ExecutionOwner, signal?: AbortSignal): Promise<ManagedExecution> {
+    return this.request(`/shell-executions/${encodeURIComponent(id)}?${new URLSearchParams({ ...owner })}`, { signal });
   }
 
-  async shellExecutionLogs(id: string, owner: ExecutionOwner, cursor = 0): Promise<ExecutionLogPage> {
-    return this.request(`/shell-executions/${encodeURIComponent(id)}/logs?${new URLSearchParams({ ...owner, cursor: String(cursor) })}`);
+  async shellExecutionLogs(id: string, owner: ExecutionOwner, cursor = 0, signal?: AbortSignal): Promise<ExecutionLogPage> {
+    return this.request(`/shell-executions/${encodeURIComponent(id)}/logs?${new URLSearchParams({ ...owner, cursor: String(cursor) })}`, { signal });
   }
 
-  async cancelShellExecution(id: string, owner: ExecutionOwner): Promise<ManagedExecution> {
-    return this.request(`/shell-executions/${encodeURIComponent(id)}/cancel?${new URLSearchParams({ ...owner })}`, { method: "POST" });
+  async cancelShellExecution(id: string, owner: ExecutionOwner, signal?: AbortSignal): Promise<ManagedExecution> {
+    return this.request(`/shell-executions/${encodeURIComponent(id)}/cancel?${new URLSearchParams({ ...owner })}`, { method: "POST", signal });
   }
 }

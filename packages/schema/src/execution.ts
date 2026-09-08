@@ -22,3 +22,20 @@ export interface ExecutionLogPage {
   truncated: boolean;
   retentionTruncated: boolean;
 }
+
+/** Control-plane ownership; Runner refs remain namespaced, not local CAS refs. */
+export interface AgentShellExecution extends ExecutionOwner {
+  id: string;
+  runnerId: string;
+  workspaceId: string;
+  turnId: string;
+  state: ManagedExecution["state"];
+  queuedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  accepted: boolean;
+  provenance: "pending" | "committed" | "unconfirmed";
+  runnerVersionId?: string;
+  result?: ShellExecutionResult;
+  error?: string;
+}

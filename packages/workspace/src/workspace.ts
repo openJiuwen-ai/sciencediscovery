@@ -208,6 +208,14 @@ function summarizeSubagentResult(subagent: Subagent): {
 }
 
 export interface WorkspaceToolOptions {
+  shellExecutions?: {
+    start(code: string, input: { environmentId?: string; cwd?: string }, signal?: AbortSignal, toolCallId?: string, runnerId?: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
+    wait(id: string, waitMs: number, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
+    list(): import("@sciencediscovery/schema").AgentShellExecution[];
+    get(id: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
+    logs(id: string, cursor?: number): Promise<import("@sciencediscovery/schema").ExecutionLogPage>;
+    cancel(id: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
+  };
   createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
   declareArtifact?: (input: {
     description?: string;
@@ -1397,6 +1405,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
   if (options.executeShell) {
     const shellParameters = Type.Object({
+      background: Type.Optional(Type.Boolean({ description: "Return after acceptance without waiting for completion." })),
+      wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30_000, description: "Foreground wait budget (default 10000 ms), not a process timeout." })),
       arguments: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 32 })),
       command: Type.Optional(Type.String({ maxLength: 20_000, minLength: 1 })),
       environment_id: Type.Optional(Type.String({ minLength: 1 })),
@@ -1405,7 +1415,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       ...machineParameter,
     });
     const runShell: AgentTool<typeof shellParameters> = {
-      description: "Run a command (including python -m, Python files, or Rscript) in a fresh Runner sandbox Shell. Choose runner_id and environment_id from the catalogs; the environment's latest state is used and mounted read-only. cwd is relative to this Agent's workspace. Provide exactly one of command or scriptPath; scripts may also come from the read-only $SCIENCEDISCOVERY_SKILLS_DIR mount. cd/export and interpreter variables do not persist between calls. Install/update/remove dependencies with environment management tools, not Shell. Network and filesystem access follow the authorized sandbox policy. Large output is bounded; use read_tool_output for retained output.",
+      description: "Run a command (including python -m, Python files, or Rscript) in a fresh Runner sandbox Shell. Choose runner_id and environment_id from the catalogs; the environment's latest state is used and mounted read-only. cwd is relative to this Agent's workspace. Provide exactly one of command or scriptPath; scripts may also come from the read-only $SCIENCEDISCOVERY_SKILLS_DIR mount. cd/export and interpreter variables do not persist between calls. Install/update/remove dependencies with environment management tools, not Shell. Network and filesystem access follow the authorized sandbox policy. Large output is bounded; use read_tool_output for retained output."
+        + (options.shellExecutions ? " Foreground execution waits up to wait_ms (default 10000); background=true returns after acceptance. A wait deadline does not stop the command. Retain the returned Execution ID and use execution_status/logs/cancel; do not resubmit a running or unknown command." : ""),
       execute: async (toolCallId, params, signal) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
@@ -1423,6 +1434,22 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             : shellQuote(script.path);
           code = ["/usr/bin/bash", scriptWord, ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
+        if (options.shellExecutions) {
+          let execution = await options.shellExecutions.start(code, {
+            environmentId: params.environment_id, cwd: params.cwd,
+          }, signal, toolCallId, params.runner_id);
+          if (!params.background) execution = await options.shellExecutions.wait(execution.id, params.wait_ms ?? 10_000, signal);
+          const pending = execution.state === "queued" || execution.state === "running";
+          return {
+            isError: ["failed", "cancelled", "unknown"].includes(execution.state),
+            content: [{ type: "text", text: JSON.stringify({
+              ...execution,
+              ...(pending ? { instruction: "Execution is still running or queued. The wait ended, not the command. Use execution_status, execution_logs or execution_cancel; do not resubmit it." } : {}),
+            }) }],
+            details: execution,
+          };
+        }
+        if (params.background || params.wait_ms !== undefined) throw new Error("Managed Shell Execution is unavailable on this runtime");
         const result = await options.executeShell!(code, "ephemeral", signal, toolCallId, params.runner_id, {
           environmentId: params.environment_id, cwd: params.cwd,
         });
@@ -1443,6 +1470,48 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: shellParameters,
     };
     tools.push(runShell);
+  }
+  if (options.shellExecutions) {
+    const manager = options.shellExecutions;
+    const statusParameters = Type.Object({
+      execution_id: Type.Optional(Type.String({ minLength: 1 })),
+      wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30_000 })),
+    });
+    const statusTool: AgentTool<typeof statusParameters> = {
+      name: "execution_status", label: "Execution status",
+      description: "List this Agent's executions, or inspect one by execution_id. Optional wait_ms waits without cancelling the command. No Shell is started and no Workspace write lock is taken. Unknown means inspect before retrying, never automatic replay.",
+      parameters: statusParameters,
+      execute: async (_id, params, signal) => {
+        if (params.wait_ms !== undefined && !params.execution_id) throw new Error("wait_ms requires execution_id");
+        const value = params.execution_id
+          ? await manager.wait(params.execution_id, params.wait_ms ?? 0, signal)
+          : manager.list();
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    tools.push(statusTool);
+    const logsParameters = Type.Object({ execution_id: Type.String({ minLength: 1 }), cursor: Type.Optional(Type.Integer({ minimum: 0 })) });
+    const logsTool: AgentTool<typeof logsParameters> = {
+      name: "execution_logs", label: "Execution logs",
+      description: "Read retained stdout/stderr incrementally without a Shell or Workspace write lock. Pass nextCursor to continue; retentionTruncated means older output exceeded the retained budget.",
+      parameters: logsParameters,
+      execute: async (_id, params) => {
+        const value = await manager.logs(params.execution_id, params.cursor);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    tools.push(logsTool);
+    const cancelParameters = Type.Object({ execution_id: Type.String({ minLength: 1 }) });
+    const cancelTool: AgentTool<typeof cancelParameters> = {
+      name: "execution_cancel", label: "Cancel execution",
+      description: "Explicitly request cancellation of this Agent's execution. Query status until termination and version/provenance finalization; this call does not imply the process already stopped.",
+      parameters: cancelParameters,
+      execute: async (_id, params) => {
+        const value = await manager.cancel(params.execution_id);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    tools.push(cancelTool);
   }
   if (options.environments || options.remoteRunners?.length) {
 

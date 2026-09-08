@@ -4,7 +4,7 @@
 /**
  * E2E-META
  * Purpose: Delegate selected input to an independent child Workspace and retrieve its local Artifact.
- * Steps: Start isolated CLI services; create Session/input; delegate; verify child output/parent isolation; legacy sync; Evolution export during a write; delete Session/Project safely during background execution.
+ * Steps: Start isolated CLI services; create Session/input; delegate; verify child output/parent isolation; legacy sync; Evolution export during a write; delete Session/Project safely during background execution; manage foreground/background Shell through Agent tools.
  * Environment: Built and committed task worktree; production API/Runner CLI, ephemeral loopback ports and .tmp data.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible stub.
@@ -58,6 +58,7 @@ const stub = createServer(async (request, response) => {
     const child = input.messages?.some((message) => message.role === "system" && message.content?.includes("Applied subagent preset general-purpose"));
     const legacy = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Legacy sync roundtrip"));
     const evolution = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Evolution committed export"));
+    const managed = input.messages?.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Managed execution journey"));
     const results = input.messages?.filter((message) => message.role === "tool") ?? [];
     let call;
     if (!child && !results.length) call = { name: "task", arguments: {
@@ -105,6 +106,26 @@ const stub = createServer(async (request, response) => {
         split: { gateShards: 8, rolloutShards: 4, testShards: 2, seed: 0, shardRows: 1, trainRows: null }, expansions: 12, workers: 1,
       } } : undefined;
       if (results.length) assert.ok(!JSON.stringify(results).includes("refusedBecause"), JSON.stringify(results));
+    }
+    if (managed) {
+      const data = (index) => JSON.parse(results[index].content);
+      const first = results.length ? data(0) : undefined;
+      const second = results.length > 3 ? data(3) : undefined;
+      if (first) assert.ok(first.accepted && ["queued", "running"].includes(first.state), "background submission must return before completion");
+      if (second) assert.ok(second.accepted && ["queued", "running"].includes(second.state), "foreground deadline must leave its command alive");
+      call = [
+        { name: "run_shell", arguments: { command: "echo managed-ready; sleep 0.3; printf managed > managed.txt", background: true } },
+        { name: "execution_status", arguments: { execution_id: first?.id, wait_ms: 3000 } },
+        { name: "execution_logs", arguments: { execution_id: first?.id } },
+        { name: "run_shell", arguments: { command: "echo waiting-ready; while :; do sleep 1; done", wait_ms: 1 } },
+        { name: "execution_cancel", arguments: { execution_id: second?.id } },
+        { name: "execution_status", arguments: { execution_id: second?.id, wait_ms: 3000 } },
+        { name: "execution_status", arguments: {} },
+      ][results.length];
+      if (results.length > 1) { assert.equal(data(1).state, "completed"); assert.equal(data(1).provenance, "committed"); }
+      if (results.length > 2) assert.ok(data(2).chunks.some((chunk) => chunk.text.includes("managed-ready")));
+      if (results.length > 5) { assert.equal(data(5).state, "cancelled"); assert.equal(data(5).provenance, "committed"); }
+      if (results.length > 6) assert.equal(data(6).length, 2);
     }
     response.writeHead(200, { "content-type": "text/event-stream" });
     const delta = call ? { role: "assistant", tool_calls: [{ index: 0, id: `call-${child ? "child" : "main"}-${results.length}`,
@@ -309,6 +330,21 @@ try {
       }
     }
     return "Session and Project DELETE each waited behind a live production Runner, logs remained queryable, explicit cancellation committed a version, HTTP deletion completed, and Session/root disappeared";
+  });
+  await step("8. Agent 管理前后台 Shell 执行", "后台提交及前台等待到期都返回仍运行的 ID；专用工具可读日志、取消并查询已提交结果。", async () => {
+    const target = await json(`/api/projects/${session.projectId}/sessions`, { title: "Managed execution", modelId: session.modelId, approvalMode: "always_allow" });
+    const response = await fetch(`${api}/api/sessions/${target.id}/messages`, { method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ content: "Managed execution journey: start background work, inspect its logs and result, then cancel a foreground task whose waiting deadline elapsed." }),
+      signal: AbortSignal.timeout(30_000) });
+    assert.equal(response.status, 200);
+    const stream = await response.text(); assert.match(stream, /"type":"run.completed"/);
+    assert.ok(!stream.includes('"type":"run.failed"'), redact(stream));
+    const file = await fetch(`${api}/api/sessions/${target.id}/file?path=managed.txt`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(file.status, 200); assert.equal(await file.text(), "managed");
+    const managedRequests = requests.filter((input) => input.messages?.some((message) => message.role === "user" && message.content?.includes?.("Managed execution journey")));
+    assert.ok(managedRequests.some((input) => input.messages.filter((message) => message.role === "tool").length === 7), "Agent must finish all execution management steps");
+    return "Main Agent received live IDs from background and timed foreground calls, read retained logs, cancelled explicitly, and queried committed completion/cancellation without a second Shell for management";
   });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }

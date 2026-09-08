@@ -28,7 +28,7 @@ import { syncScientificEnvironmentCatalog } from "../scientific-environment-cata
 
 type ExecutionBindings = Pick<
   WorkspaceAgentOptions,
-  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "workspaceTransfers"
+  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "workspaceTransfers" | "shellExecutions"
 >;
 
 /**
@@ -135,12 +135,60 @@ export function createWorkspaceExecutionBindings(
       runnerWorkspaceKey: target.workspaceKey,
     };
   };
+  const prepareShell = async (
+      code: string,
+      kernelMode: KernelMode,
+      signal?: AbortSignal,
+      toolCallId?: string,
+      machine?: string,
+      environment?: { environmentId?: string; cwd?: string },
+    ) => {
+      options.store.assertSessionWritable(options.sessionId);
+      let target = resolveExecutionTarget(machine);
+      await options.permission.requirePrivilege({
+        action: "code",
+        executionId: options.executionId,
+        resource: "workspace-code",
+        signal,
+        ...(toolCallId ? { toolCallId } : {}),
+        summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
+      });
+      target = resolveExecutionTarget(machine);
+      options.store.assertSessionWritable(options.sessionId);
+      signal?.throwIfAborted();
+      return {
+        agentId: options.agentId,
+        code,
+        ...(environment?.environmentId ? { environmentId: environment.environmentId } : {}),
+        ...(environment?.cwd !== undefined ? { cwd: environment.cwd } : {}),
+        artifactPathPrefix: options.artifactPathPrefix,
+        executionTimeoutMs: options.executionTimeoutMs,
+        kernelIdleTimeoutMs: options.kernelIdleTimeoutMs,
+        kernelMode,
+        maxOutputBytes: options.maxOutputBytes,
+        maxWorkspaceBytes: options.maxWorkspaceBytes,
+        permissionEpoch: options.permission.getEpoch(),
+        ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
+        runnerId: target.runnerId,
+        runnerClient: target.runnerClient,
+        ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
+        ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
+        ...sandboxEgressProxy(),
+        sessionId: options.sessionId,
+        signal,
+        ...(toolCallId ? { toolCallId } : {}),
+        turnId: options.executionId,
+        workspaceRoot: options.workspaceRoot,
+        parentSubagentId: options.parentSubagentId,
+      };
+  };
   const readSessionNpuJob = async (jobId: string) => {
     const job = await options.runnerClient.getNpuJob(jobId, options.sessionId);
     if (job.sessionId !== options.sessionId) throw new Error("NPU job not found in this Session");
     return job;
   };
-  const common = {
+  const common: ExecutionBindings = {
     workspaceTransfers: {
       workspaces: () => {
         const candidates = [{ runnerId: "local", description: "Local Workspace" }, ...(options.remoteTargets ?? []).map((target) => ({ runnerId: target.runnerId, description: target.hostAlias }))];
@@ -256,50 +304,33 @@ export function createWorkspaceExecutionBindings(
         parentSubagentId: options.parentSubagentId,
       });
     },
-    executeShell: async (
-      code: string,
-      kernelMode: KernelMode,
-      signal?: AbortSignal,
-      toolCallId?: string,
-      machine?: string,
-      environment?: { environmentId?: string; cwd?: string },
-    ) => {
-      options.store.assertSessionWritable(options.sessionId);
-      const target = resolveExecutionTarget(machine);
-      await options.permission.requirePrivilege({
-        action: "code",
-        executionId: options.executionId,
-        resource: "workspace-code",
-        signal,
-        ...(toolCallId ? { toolCallId } : {}),
-        summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
-      });
-      return options.provenanceRecorder.executeShell({
-        agentId: options.agentId,
-        code,
-        ...(environment?.environmentId ? { environmentId: environment.environmentId } : {}),
-        ...(environment?.cwd !== undefined ? { cwd: environment.cwd } : {}),
-        artifactPathPrefix: options.artifactPathPrefix,
-        executionTimeoutMs: options.executionTimeoutMs,
-        kernelIdleTimeoutMs: options.kernelIdleTimeoutMs,
-        kernelMode,
-        maxOutputBytes: options.maxOutputBytes,
-        maxWorkspaceBytes: options.maxWorkspaceBytes,
-        permissionEpoch: options.permission.getEpoch(),
-        ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
-        ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
-        runnerId: target.runnerId,
-        runnerClient: target.runnerClient,
-        ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
-        ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
-        ...sandboxEgressProxy(),
-        sessionId: options.sessionId,
-        signal,
-        ...(toolCallId ? { toolCallId } : {}),
-        turnId: options.executionId,
-        workspaceRoot: options.workspaceRoot,
-        parentSubagentId: options.parentSubagentId,
-      });
+    executeShell: async (...args) => options.provenanceRecorder.executeShell(await prepareShell(...args)),
+    shellExecutions: {
+      start: async (code, environment, signal, toolCallId, runnerId) => {
+        const prepared = await prepareShell(code, "ephemeral", signal, toolCallId, runnerId, environment);
+        const owner = { sessionId: options.sessionId, agentId: options.agentId };
+        return options.store.shellExecutions.start(owner, {
+          runnerId: prepared.runnerId!, turnId: options.executionId,
+          workspaceId: options.store.workspaceIdentity(options.sessionId, options.agentId, prepared.runnerId).id,
+        }, () => resolveExecutionTarget(runnerId).runnerClient,
+        (id, dispatch, completionStatus) => options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }));
+      },
+      wait: async (id, waitMs, signal) => {
+        const owner = { sessionId: options.sessionId, agentId: options.agentId };
+        const record = await options.store.shellExecutions.get(id, owner);
+        if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
+        return options.store.shellExecutions.wait(id, owner, waitMs, signal);
+      },
+      list: () => options.store.shellExecutions.list({ sessionId: options.sessionId, agentId: options.agentId }).filter((record) => {
+        try { if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId); return true; } catch { return false; }
+      }),
+      get: async (id) => {
+        const record = await options.store.shellExecutions.get(id, { sessionId: options.sessionId, agentId: options.agentId });
+        if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
+        return record;
+      },
+      logs: (id, cursor) => options.store.shellExecutions.logs(id, { sessionId: options.sessionId, agentId: options.agentId }, (runnerId) => resolveExecutionTarget(runnerId).runnerClient, cursor),
+      cancel: (id) => options.store.shellExecutions.cancel(id, { sessionId: options.sessionId, agentId: options.agentId }, (runnerId) => resolveExecutionTarget(runnerId).runnerClient),
     },
     ...(options.scientificEnvironments || options.remoteTargets?.length ? {
       environmentManagement: {

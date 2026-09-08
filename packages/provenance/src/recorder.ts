@@ -148,6 +148,10 @@ export interface RecordExecutionOptions {
 export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environmentRevisionId" | "language"> & {
   environmentId?: string;
   cwd?: string;
+  /** Trusted coordinator supplies a durable identity and joins the Runner result. */
+  executionId?: string;
+  dispatch?: RunnerClient["executeShell"];
+  completionStatus?: () => "succeeded" | "failed" | "cancelled";
 };
 
 export class ProvenanceRecorder {
@@ -529,7 +533,7 @@ export class ProvenanceRecorder {
   }
 
   async executeShell(options: RecordShellExecutionOptions): Promise<ShellExecutionResult> {
-    const executionId = randomUUID();
+    const executionId = options.executionId ?? randomUUID();
     const sandbox = await runnerSandboxKind(options.runnerClient);
     const shellSpec = await this.cas.put(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC);
     if (shellSpec.hash !== DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH) {
@@ -538,7 +542,7 @@ export class ProvenanceRecorder {
     const code = await this.cas.put(options.code);
     let result: ShellExecutionResult;
     try {
-      result = await options.runnerClient.executeShell({
+      result = await (options.dispatch ?? options.runnerClient.executeShell.bind(options.runnerClient))({
         agentId: options.agentId,
         code: options.code,
         ...(options.environmentId ? { environmentId: options.environmentId } : {}),
@@ -580,7 +584,7 @@ export class ProvenanceRecorder {
         sandbox,
         sessionId: options.sessionId,
         startedAt: timestamp,
-        status: interruptedExecutionStatus(options.signal),
+        status: options.completionStatus?.() ?? interruptedExecutionStatus(options.signal),
         stderr: await this.cas.put(error instanceof Error ? error.message : "Runner shell execution failed"),
         stdout: await this.cas.put(""),
         tool: "run_shell",
@@ -631,7 +635,7 @@ export class ProvenanceRecorder {
       sandbox: result.sandbox,
       sessionId: options.sessionId,
       startedAt: result.startedAt,
-      status: result.exitCode === 0 ? "succeeded" : "failed",
+      status: options.completionStatus?.() ?? (result.exitCode === 0 ? "succeeded" : "failed"),
       stderr,
       stdout,
       tool: "run_shell",
@@ -668,7 +672,7 @@ export class ProvenanceRecorder {
       language: null,
       codeHash: code.hash,
       exitCode: result.exitCode,
-      status: result.exitCode === 0 ? "succeeded" : "failed",
+      status: options.completionStatus?.() ?? (result.exitCode === 0 ? "succeeded" : "failed"),
       startedAt: result.startedAt,
       finishedAt: result.finishedAt,
       producedArtifacts: [],
