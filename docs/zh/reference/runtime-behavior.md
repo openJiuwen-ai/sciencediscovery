@@ -45,7 +45,7 @@ my-skill/
 
 Runner 启动与健康检查不会等待环境安装。新数据目录会在后台下载并校验自管 micromamba，然后只创建 Python base；在 **系统配置 → Environments** 可查看当前 state、phase、说明、失败原因与时间，失败后可重试。默认不会下载 R；第一次显式创建 R 命名环境时才按需准备 R base，升级前已经存在的 R base 不会删除。
 
-环境 catalog 是实例级全局共享的，不按 Project 隔离。Python/R base 只读且不可删除；需要增删包时先创建命名环境。设置页与 Agent 都通过受控 API 创建/删除环境、安装/卸载 conda package spec，每次成功变更都会生成不可变 revision 并使 `currentRevisionId` 前移。不要让 Agent 用 `run_shell` 直接调用 conda、mamba、micromamba 或 pip 修改托管前缀；这不是受支持路径，也绕开 revision 溯源。
+每个 Runner 拥有自己的环境 catalog，在该 Runner 的 Project 之间共享。Python/R base 只读且不可删除；命名环境可以同时安装两种语言。受控装包/卸包原地更新 prefix，并推进 `currentRevisionId`；Revision 是追溯记录，不是可执行的历史环境副本。执行按 Environment ID 解析最新版。沙箱内托管 prefix 只读，Prompt 提示使用环境管理工具，不拦截或改写 Shell 命令。详见[执行与 Workspace 生命周期](../explanation/execution-workspaces.md)。
 
 ## 权限与评审器
 

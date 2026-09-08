@@ -278,10 +278,20 @@ export function createWorkspaceExecutionBindings(
           signal,
           summary: `Run host NPU workload ${input.workloadId} ${options.permissionScopeLabel}`,
         });
+        const { environmentId: selectedId, ...request } = input;
+        let environmentId = selectedId;
+        const epochRevision = options.permission.getEpoch().environmentRevisionId;
+        if (!environmentId && epochRevision) {
+          // An epoch freezes audit context, not the executable environment version.
+          const revisions = await options.runnerClient.listEnvironmentRevisions();
+          environmentId = revisions.find((revision) => revision.id === epochRevision)?.environmentId;
+        }
+        const environment = environmentId
+          ? (await options.runnerClient.listEnvironments()).find((entry) => entry.id === environmentId) : undefined;
+        if (environmentId && (!environment || environment.status !== "ready")) throw new Error("Managed environment is missing or not ready");
         return await options.runnerClient.submitNpuJob({
-          ...input,
-          environmentRevisionId: input.environmentRevisionId
-            ?? options.permission.getEpoch().environmentRevisionId,
+          ...request,
+          ...(environment ? { environmentRevisionId: environment.currentRevisionId } : {}),
           sessionId: options.sessionId,
           workspaceRoot: options.workspaceRoot,
         });

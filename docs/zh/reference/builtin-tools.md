@@ -49,7 +49,7 @@
 | 工具 | 参数 | 说明 |
 |---|---|---|
 | Python / R | 统一经 `run_shell` | 原地更新环境、Revision 仅追溯；详见 [执行与 Workspace 生命周期](../explanation/execution-workspaces.md) |
-| `environment_list` | 无 | 列出全局共享的只读 base 与命名环境，以及当前不可变 revision ID |
+| `environment_list` | 可选 `runner_id` | 列出该 Runner 共享的只读 base 与命名环境；Revision 仅追溯，执行选择 Environment ID 的最新版 |
 | `environment_create` | `name`、`language: python\|r`，可选 `baseEnvironmentId` | 从对应只读 base（或指定 base）克隆命名环境；首次显式创建 R 环境时按需准备 R base |
 | `environment_delete` | `environmentId` | 删除命名环境；base 拒绝删除 |
 | `environment_install` | `environmentId`、`packages[]`，可选 `manager` / `channels[]` / `indexUrl` | `manager` 默认 `conda`；Python 环境可选 `pip` 安装一个或多个 PyPI 规格或当前 Session workspace 相对 `.whl`。仅 `manager=pip` 可传独立 HTTPS `indexUrl`，效果等价于单次 `pip --index-url` 并覆盖全局 pip 源。包规格不接受远程 URL；本地 wheel 按 SHA-256 持久保存并写入 revision snapshot。conda 渠道仍须在白名单或内置镜像预设内 |
@@ -83,14 +83,14 @@
 
 | 工具 | 出现条件 | 参数要点 |
 |---|---|---|
-| `run_npu_job` | Runner 启用 `SCIENCE_AGENT_NPU_BROKER=1` 且加载到 NPU workload 白名单 | `operation=list_workloads\|submit\|status\|logs\|result\|cancel`；`workload_id` 必须来自白名单，`config_path` 必须是当前 Session workspace 相对路径；需要 Python 的 workload 使用 `environment_revision_id` 选择托管科学环境，省略时使用 Session 当前 revision；内置 workload 为 `npu.smoke_test` 与 `antibody.protenix.v1` |
+| `run_npu_job` | Runner 启用 `SCIENCE_AGENT_NPU_BROKER=1` 且加载到 NPU workload 白名单 | `operation=list_workloads\|submit\|status\|logs\|result\|cancel`；`workload_id` 来自白名单，`config_path` 为 Workspace 相对路径；`environment_id` 选择环境最新版，省略时使用 Session 所选环境；内置 workload 为 `npu.smoke_test` 与 `antibody.protenix.v1` |
 | `read_skill` | 本次运行至少选择一个技能 | `skillId`（枚举限定为本次运行选中的技能）；按需读取冻结 revision 的完整 `SKILL.md` instructions，并列出可选 supporting resources |
 | `read_skill_resource` | 选中的技能中至少一个带文本资源 | `skillId`（枚举限定为本次运行选中的技能）+ `path`；读取 `read_skill` 后按需加载 supporting resource，返回有界 UTF-8 内容，**从不**执行或安装 |
 | `create_skill` | 主 Agent 本次运行选中且已通过 `read_skill` 加载 `skill-creator` | 从用户明确描述生成持久化但未激活的 Skill 草稿；同名待审 Skill 的再次修改会更新同一个审核项，并与上一次 Agent 提案做 Diff；对话中提供审核入口，用户确认后把审核内容发布为 Skill Library 的新不可变版本 |
 
 技能加载流程见 [skill-progressive-disclosure.md](../explanation/skill-progressive-disclosure.md)。本次运行已选技能的**完整冻结包**在沙箱启动前就已放入只读的 `$SCIENCEDISCOVERY_SKILLS_DIR/<skillId>`，Prompt 逐个给出包路径和包 hash。引用时用该变量而不是它展开后的值——`/skills` 只在 bubblewrap 下成立。`read_file` 与 `list_files` 可直接分页读取包内文件，并接受 `$SCIENCEDISCOVERY_SKILLS_DIR/...`、`${SCIENCEDISCOVERY_SKILLS_DIR}/...` 和裸 bind 路径三种写法；`run_shell` 的 `scriptPath` 也可以直接指向包内脚本并用 `arguments` 传显式 argv，无需先复制到工作区。`$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` 是为后续自演进预留的可写目录，默认为空。放入技能包**不等于**自动执行或安装其中的 `scripts/`；执行必须由 Agent 显式发起。`read_skill` / `read_skill_resource` 作为兼容通道保留。
 
-`run_npu_job` 不是通用宿主 shell。它只把 Agent 请求转成 Runner 内 Host NPU Broker 的作业操作，由 Broker 按 JSON 白名单启动固定 entrypoint，并按当前 Session 校验 job 的 status / logs / result / cancel。默认 NPU workload 的 Python 由 Runner 根据 `environment_revision_id` 在 `.sciencediscovery-data/scientific-envs/` 中解析，Agent 不能提交任意解释器路径。技能应先用 `environment.list` 和指定 revision 的 `run_python` 验证依赖；没有满足条件的环境时，通过 `environment.create` / `environment.install` 创建新 revision，再把返回的 revision ID 交给 `run_npu_job`。内置抗体 workload 使用 Protenix 路径 `antibody.protenix.v1`；其他模型后端需要显式自定义白名单或后续扩展。
+`run_npu_job` 是独立、显式启用的 Host NPU Broker，不是通用宿主 Shell。Broker 只启动白名单固定入口并校验 Session 归属。Agent 传 `environment_id`，API 将其最新版转换为 Broker 内部审计字段；旧 Revision ID 不能作为环境选择项。通过 `environment_list` 和受控环境工具准备依赖后传入环境 ID。NPU 硬件可用性和特定 workload 验证与常规沙箱 Shell 分开管理。
 
 ## 一致性说明
 

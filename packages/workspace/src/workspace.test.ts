@@ -334,30 +334,32 @@ test("run_npu_job submits only allowlisted workloads with workspace-scoped input
   const tool = tools.find((candidate) => candidate.name === "run_npu_job");
   assert.ok(tool);
   assert.match(tool.name, /^[a-zA-Z0-9_-]+$/);
+  assert.equal(JSON.stringify(tool.parameters).includes("environment_revision_id"), false);
+  await assert.rejects(tool.execute("legacy-revision", { operation: "submit", environment_revision_id: "old" } as never), /use environment_id/);
 
   const workloads = await tool.execute("npu-list", { operation: "list_workloads" });
   assert.doesNotMatch(workloads.content[0]?.type === "text" ? workloads.content[0].text : "", /antibody\.pipeline\.v1/);
   assert.match(workloads.content[0]?.type === "text" ? workloads.content[0].text : "", /antibody\.protenix\.v1/);
   await tool.execute("npu-submit", {
     config_path: "/workspace/antibody_pipeline/config.json",
-    environment_revision_id: "rev-antibody",
+    environment_id: "env-antibody",
     operation: "submit",
     workload_id: "antibody.protenix.v1",
   });
   assert.deepEqual(submitted, [{
-    environmentRevisionId: "rev-antibody",
+    environmentId: "env-antibody",
     inputs: { configPath: "antibody_pipeline/config.json" },
     workloadId: "antibody.protenix.v1",
   }]);
   submitted.length = 0;
   await tool.execute("npu-submit-protenix", {
     config_path: "/workspace/antibody_pipeline/config.json",
-    environment_revision_id: "rev-protenix",
+    environment_id: "env-protenix",
     operation: "submit",
     workload_id: "antibody.protenix.v1",
   });
   assert.deepEqual(submitted, [{
-    environmentRevisionId: "rev-protenix",
+    environmentId: "env-protenix",
     inputs: { configPath: "antibody_pipeline/config.json" },
     workloadId: "antibody.protenix.v1",
   }]);

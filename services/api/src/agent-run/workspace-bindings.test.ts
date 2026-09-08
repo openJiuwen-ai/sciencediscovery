@@ -361,6 +361,8 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
         ? { ...baseJob, id: jobId, sessionId: "session-2" }
         : { ...baseJob, id: jobId },
       listNpuWorkloads: async () => [{ description: "protenix", id: "antibody.protenix.v1", label: "Protenix", phase: "builtin" }],
+      listEnvironmentRevisions: async () => [{ id: "epoch-revision", environmentId: "env" }],
+      listEnvironments: async () => [{ id: "env", status: "ready", currentRevisionId: "latest-revision" }],
       npuJobLogs: async () => baseJob.logs,
       npuJobResult: async () => ({ job: baseJob }),
       submitNpuJob: async (input: unknown) => {
@@ -383,13 +385,16 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
   });
   assert.equal(job.id, "npu-job-1");
   assert.deepEqual(submitted, [{
-    environmentRevisionId: "epoch-revision",
+    environmentRevisionId: "latest-revision",
     inputs: { configPath: "antibody_pipeline/config.json" },
     sessionId: "session-1",
     workloadId: "antibody.protenix.v1",
     workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
   }]);
   assert.deepEqual(permissionSummaries, ["Run host NPU workload antibody.protenix.v1 in test"]);
+  await bindings.npuBroker!.submit({ environmentId: "env", workloadId: "antibody.protenix.v1", inputs: {} });
+  assert.equal((submitted[1] as { environmentRevisionId: string }).environmentRevisionId, "latest-revision");
+  await assert.rejects(bindings.npuBroker!.submit({ environmentId: "epoch-revision", workloadId: "antibody.protenix.v1", inputs: {} }), /missing or not ready/);
 
   await assert.rejects(bindings.npuBroker!.get("foreign-job"), /NPU job not found in this Session/);
 });

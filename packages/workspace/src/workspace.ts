@@ -286,7 +286,7 @@ export interface WorkspaceToolOptions {
     logs: (jobId: string, signal?: AbortSignal) => Promise<NpuJobLogs>;
     result: (jobId: string, signal?: AbortSignal) => Promise<NpuJobResult>;
     submit: (
-      input: Omit<CreateNpuJobRequest, "sessionId" | "workspaceRoot">,
+      input: Omit<CreateNpuJobRequest, "sessionId" | "workspaceRoot" | "environmentRevisionId"> & { environmentId?: string },
       signal?: AbortSignal,
     ) => Promise<NpuJob>;
   };
@@ -946,8 +946,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         description: "Workspace-relative config path when the selected workload lists requiredInputs including configPath, for example antibody_pipeline/config.json.",
         minLength: 1,
       })),
-      environment_revision_id: Type.Optional(Type.String({
-        description: "ScienceDiscovery scientific environment revision for workloads that require managed Python. Omit to use the Session's selected revision.",
+      environment_id: Type.Optional(Type.String({
+        description: "Managed environment ID; always resolves its latest revision. Omit to use the Session-selected environment.",
         minLength: 1,
       })),
       job_id: Type.Optional(Type.String({ minLength: 1 })),
@@ -991,13 +991,14 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Submit or inspect an allowlisted host NPU Broker job without leaving the ScienceDiscovery sandbox.",
         "Use operation=list_workloads first, then choose only a workload id returned by that call.",
         "For operation=submit, provide config_path when the selected workload's requiredInputs includes configPath.",
-        "For a workload with requiresEnvironmentRevision=true, verify a ScienceDiscovery managed environment first and pass its revision as environment_revision_id; omitting it uses the Session-selected revision.",
+        "For a workload with requiresEnvironmentRevision=true, provide environment_id from environment_list; the server resolves its latest revision. Historical revision selection is not supported.",
         "Use status/logs/result/cancel with job_id after submission.",
         "When operation=result returns job.createdFiles, those workspace files are automatically declared as Project artifacts when artifact declaration is available; otherwise call declare_artifact on those exact paths.",
         "Do not use run_shell to access /home, source host env.sh, write host_launch_request.json, or expect NPU devices inside bwrap.",
       ].join(" "),
       execute: async (toolCallId, params, signal) => {
         const broker = options.npuBroker!;
+        if (Object.hasOwn(params, "environment_revision_id")) throw new Error("Historical revision selection is not supported; use environment_id");
         if (params.operation === "list_workloads") {
           const workloads = await broker.listWorkloads(signal);
           return { content: [{ type: "text", text: JSON.stringify({ workloads }) }], details: { workloads } };
@@ -1016,9 +1017,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             if (requested.root !== "workspace") throw new Error("config_path must be in the writable session workspace");
             inputs.configPath = normalizeWorkspaceRelativePath(workspaceRoot, requested.path);
           }
-          const environmentRevisionId = params.environment_revision_id?.trim();
+          const environmentId = params.environment_id?.trim();
           const job = await broker.submit({
-            ...(environmentRevisionId ? { environmentRevisionId } : {}),
+            ...(environmentId ? { environmentId } : {}),
             inputs,
             workloadId,
           }, signal);

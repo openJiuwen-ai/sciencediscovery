@@ -41,7 +41,7 @@ Imports are untrusted. ZIP validation rejects traversal, symlinks, encryption, d
 
 Runner startup and health do not wait for environment installation. A new data directory downloads and verifies application-owned micromamba in the background and creates only the Python base. **System configuration → Environments** shows state, phase, description, failure, and timestamps and permits retry. R is downloaded only on the first explicit named-R environment creation; existing R bases survive upgrades.
 
-The environment catalog is instance-global, not per Project. Python/R bases are read-only and undeletable. Package changes require a named environment, use controlled APIs, create immutable revisions, and advance `currentRevisionId`. Direct conda/mamba/micromamba/pip mutation through `run_shell` is unsupported and bypasses provenance.
+Each Runner owns an environment catalog shared by its Projects. Python/R bases are read-only and undeletable. A named environment may contain both languages. Controlled package updates change its prefix in place and advance `currentRevisionId`, an audit record rather than a runnable historical copy. Executions select an environment ID and resolve its latest state. Managed prefixes are read-only inside the sandbox; prompts direct package changes to environment tools without intercepting Shell commands. See [execution and Workspace lifecycle](../explanation/execution-workspaces.md).
 
 ## Permissions and reviewer
 

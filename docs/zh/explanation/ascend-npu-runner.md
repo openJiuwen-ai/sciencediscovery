@@ -20,7 +20,7 @@ Container ID verify failed (session ct_id=0; device ct_id=...)
 - NPU 模型作业不走持久 kernel REPL。
 - Host NPU Broker 默认关闭，只有 `SCIENCE_AGENT_NPU_BROKER=1` 时才向 Agent 暴露 `run_npu_job`。
 - Broker 只运行 workload 白名单中的固定 entrypoint，不提供任意宿主 shell。
-- 内置 NPU workload（包括 smoke test）需要一个已验证的 ScienceDiscovery 托管科学环境 revision。缺少 `environment_revision_id`，或该 revision 不能解析到 Python runtime 时，submit 会在入队前直接拒绝。
+- 内置 NPU workload（包括 smoke test）需要托管 Python 环境。Agent 用 `environment_id` 选择环境，API 解析最新版并传给 Broker 内部审计字段；缺少可用 Python runtime 时在入队前拒绝。Agent 不再选择历史 Revision。
 - workload 子进程在宿主 namespace 中运行，用于访问 CANN / MindSpore / Ascend 设备；路径、Session、job 生命周期仍由 Runner 校验。
 - Agent 可写的 `config.json` 只描述 workspace 输入、preset 与运行参数；Python、helper scripts、CANN、HMMER、MindScience、模型权重/数据库目录等宿主资产只能来自管理员环境变量或 workload manifest。它们可以位于 `/home`、共享盘或其他部署目录，但不能由 Agent 在 `config.json` 中改写。
 - 抗体 adapter 不执行 Session workspace 里的 helper 脚本；如 manager 生成了 `<workspace>/helpers/...` 脚本路径或 `--scripts-dir <workspace>/helpers` 目录参数，adapter 会重写到宿主 skill/bundle 的只读 `scripts/` 目录并拒绝残留的 workspace helper 执行路径。
