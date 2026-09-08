@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import type { Subagent, SubagentBrief, SubagentInput, WorkspaceFile, WorkspaceFileRevisionInput } from "@sciencediscovery/schema";
@@ -112,7 +112,7 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
     });
   const selected = selectSubagentHandoffInputs(availableParentInputFiles, input);
   const parentInputFiles = selected.files;
-  await mkdir(childRoot, { recursive: true });
+  await store.createAgentWorkspace(sessionId, subagentId);
   const copyInput = async (sourcePath: string, targetPath: string) => {
     const owner = { sessionId, agentId: "main" };
     const sourceWorkspaceId = store.workspaceIdentity(sessionId).id;

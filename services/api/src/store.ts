@@ -14,7 +14,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
+import { VersionStore, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
@@ -257,6 +257,9 @@ interface StagedDeletion {
   entries: Array<{ source: string; staged: string }>;
   root: string;
   sessionIds: string[];
+  scopes?: string[];
+  projectId?: string;
+  committed?: boolean;
 }
 
 function withDefaultProjectSkillSettings(input: RuntimeSettingsOverrides): RuntimeSettingsOverrides {
@@ -1314,34 +1317,71 @@ export class SessionStore {
       await mkdir(dirname(entry.source), { recursive: true });
       await rename(entry.staged, entry.source);
     }
-    await rm(operation.root, { force: true, recursive: true });
   }
 
-  private async stageDeletion(paths: string[], sessionIds: string[]): Promise<StagedDeletion> {
-    const root = resolve(this.dataDir, ".trash", randomUUID());
-    const entries: StagedDeletion["entries"] = [];
-    for (const source of [...new Set(paths)]) {
-      if (!await this.pathExists(source)) continue;
-      const relativePath = relative(this.dataDir, source);
-      if (!relativePath || relativePath.startsWith("..")) throw new Error("Deletion path escaped the data directory");
-      entries.push({ source, staged: resolve(root, "data", relativePath) });
+  private async deletionWorkspaceRoots(scopes: string[]): Promise<string[]> {
+    const roots: string[] = [];
+    for (const session of this.catalog.sessions) {
+      const root = this.workspacePath(session.id);
+      if (!scopes.some((scope) => root.startsWith(`${scope}/`) || root === scope)) continue;
+      if (await this.pathExists(root)) roots.push(root);
+      const children = resolve(root, "..", "agent-workspaces");
+      if (await this.pathExists(children)) {
+        for (const child of await readdir(children, { withFileTypes: true })) {
+          if (child.isDirectory()) roots.push(resolve(children, child.name));
+        }
+      }
     }
-    const operation: StagedDeletion = { entries, root, sessionIds: [...sessionIds] };
+    return roots;
+  }
+
+  private async withDeletionBoundary<T>(paths: () => string[], sessionIds: () => string[], scopes: string[],
+    action: (operation: StagedDeletion) => Promise<T>, projectId?: string): Promise<T> {
+    const root = resolve(this.dataDir, ".trash", randomUUID());
+    const operation: StagedDeletion = { entries: [], root, sessionIds: sessionIds(), scopes, projectId };
+    // The recovery journal must exist before admission closes, including a crash
+    // before the first rename. Coordination itself lives outside these paths.
+    await mkdir(root, { recursive: true });
+    await writeFile(resolve(root, "operation.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
+    let restored = false;
     try {
-      await mkdir(root, { recursive: true });
-      await writeFile(resolve(root, "operation.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
-      for (const entry of entries) {
-        await mkdir(dirname(entry.staged), { recursive: true });
-        await rename(entry.source, entry.staged);
-      }
-      return operation;
-    } catch (error) {
-      try {
-        await this.rollbackStagedDeletion(operation);
-      } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], "Deletion staging and rollback both failed");
-      }
-      throw error;
+      const versions = new VersionStore(this.dataDir);
+      return await withWorkspaceRetirement(versions, scopes, root, async (roots, reopen) => {
+        try {
+          // Creation admitted before the fence must finish before enumerating
+          // Session roots and catalog IDs; otherwise a new Session is orphaned.
+          const distinct = [...new Set(paths())];
+          operation.sessionIds = sessionIds();
+          for (const source of distinct.filter((path) => !distinct.some((parent) => parent !== path && path.startsWith(`${parent}/`)))) {
+            if (!await this.pathExists(source)) continue;
+            const relativePath = relative(this.dataDir, source);
+            if (!relativePath || relativePath.startsWith("..")) throw new Error("Deletion path escaped the data directory");
+            operation.entries.push({ source, staged: resolve(root, "data", relativePath) });
+          }
+          await writeFile(resolve(root, "operation.next.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
+          await rename(resolve(root, "operation.next.json"), resolve(root, "operation.json"));
+          for (const workspace of roots) {
+            if (await this.pathExists(workspace)) await this.mutateWorkspace(workspace, "pre-deletion", async () => {});
+          }
+          return await action(operation);
+        } catch (error) {
+          if (operation.committed) throw error;
+          try { await this.rollbackStagedDeletion(operation); }
+          catch (rollbackError) { throw new AggregateError([error, rollbackError], "Deletion and rollback both failed"); }
+          restored = true;
+          reopen();
+          throw error;
+        }
+      }, () => this.deletionWorkspaceRoots(scopes));
+    } finally {
+      if (restored) await this.finishStagedDeletion(operation);
+    }
+  }
+
+  private async stageDeletion(operation: StagedDeletion): Promise<void> {
+    for (const entry of operation.entries) {
+      await mkdir(dirname(entry.staged), { recursive: true });
+      await rename(entry.source, entry.staged);
     }
   }
 
@@ -1375,9 +1415,15 @@ export class SessionStore {
           });
         if (!valid) throw new Error("Invalid deletion operation manifest");
         operation.root = root;
-        const catalogStillReferencesData = operation.sessionIds.some((id) => Boolean(this.getSession(id)));
-        if (catalogStillReferencesData) await this.rollbackStagedDeletion(operation);
-        else await this.finishStagedDeletion(operation);
+        const scopes = operation.scopes ?? operation.entries.map((entry) => entry.source);
+        if (!scopes.every((scope) => resolve(scope).startsWith(`${this.dataDir}/`))) throw new Error("Invalid deletion scope");
+        await withWorkspaceRetirement(new VersionStore(this.dataDir), scopes, root, async (_roots, reopen) => {
+          const catalogStillReferencesData = operation.sessionIds.some((id) => Boolean(this.getSession(id)))
+            || Boolean(operation.projectId && this.getProject(operation.projectId));
+          if (catalogStillReferencesData) { await this.rollbackStagedDeletion(operation); reopen(); }
+          else await this.finishStagedDeletion(operation);
+        }, () => this.deletionWorkspaceRoots(scopes));
+        await this.finishStagedDeletion(operation);
       } catch (error) {
         console.warn(`Could not recover deletion staging directory ${root}:`, error);
       }
@@ -2491,6 +2537,8 @@ export class SessionStore {
       title: cleanLabel(title, UNTITLED_SESSION_TITLE),
       updatedAt: now,
     };
+    return withWorkspaceAdmission(new VersionStore(this.dataDir),
+      resolve(this.dataDir, "projects", projectId, "sessions", session.id, "workspace"), async () => {
     await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
     await writeFile(this.messagesPath(session.id), "[]\n", "utf8");
     await mkdir(resolve(this.dataDir, "session-runs"), { recursive: true });
@@ -2500,6 +2548,7 @@ export class SessionStore {
     this.catalog.sessions.push(session);
     await this.saveCatalog();
     return session;
+    });
   }
 
   getSession(sessionId: string): Session | undefined {
@@ -3876,7 +3925,9 @@ export class SessionStore {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
     if (confirmationId !== session.id) throw new Error("Session deletion confirmation does not match the target");
-    const operation = await this.stageDeletion(this.knownSessionDataPaths(session), [session.id]);
+    return this.withDeletionBoundary(() => this.knownSessionDataPaths(session), () => [session.id],
+      [resolve(this.dataDir, "projects", session.projectId, "sessions", session.id)], async (operation) => {
+    await this.stageDeletion(operation);
     const previousSessions = this.catalog.sessions;
     const previousPermissionEpochs = this.catalog.permissionEpochs;
     const previousPermissionGrants = this.catalog.permissionGrants;
@@ -3900,6 +3951,7 @@ export class SessionStore {
         record.sessionId === session.id ? { ...record, sessionTitle: session.title } : record);
       this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => record.sessionId !== session.id);
       await this.saveCatalog();
+      operation.committed = true;
     } catch (error) {
       this.catalog.sessions = previousSessions;
       this.catalog.permissionEpochs = previousPermissionEpochs;
@@ -3916,16 +3968,20 @@ export class SessionStore {
     this.database?.prepare("DELETE FROM permission_authorizations WHERE session_id = ?").run(session.id);
     this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
+    });
   }
 
   async deleteProject(projectId: string, confirmationId: string): Promise<void> {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
     if (confirmationId !== project.id) throw new Error("Project deletion confirmation does not match the target");
-    const sessions = this.listSessions(projectId, "all");
-    const paths = sessions.flatMap((session) => this.knownSessionDataPaths(session));
-    if (!sessions.length) paths.push(resolve(this.dataDir, "projects", projectId));
-    const operation = await this.stageDeletion(paths, sessions.map((session) => session.id));
+    let sessions: Session[] = [];
+    return this.withDeletionBoundary(() => {
+      sessions = this.listSessions(projectId, "all");
+      return [...sessions.flatMap((session) => this.knownSessionDataPaths(session)), resolve(this.dataDir, "projects", projectId)];
+    }, () => sessions.map((session) => session.id),
+      [resolve(this.dataDir, "projects", projectId)], async (operation) => {
+    await this.stageDeletion(operation);
     const sessionIds = new Set(sessions.map((session) => session.id));
     const previousProjects = this.catalog.projects;
     const previousSessions = this.catalog.sessions;
@@ -3965,6 +4021,7 @@ export class SessionStore {
       this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.filter((record) => record.projectId !== projectId);
       this.catalog.workspaceFileRevisions = this.catalog.workspaceFileRevisions.filter((revision) => revision.projectId !== projectId);
       await this.saveCatalog();
+      operation.committed = true;
     } catch (error) {
       this.catalog.projects = previousProjects;
       this.catalog.sessions = previousSessions;
@@ -3986,7 +4043,7 @@ export class SessionStore {
     this.database?.prepare("DELETE FROM permission_authorizations WHERE project_id = ?").run(projectId);
     for (const session of sessions) this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
-    await rm(resolve(this.dataDir, "projects", projectId), { force: true, recursive: true });
+    }, projectId);
   }
 
   async updateSession(
@@ -5156,6 +5213,14 @@ export class SessionStore {
     const main = this.workspacePath(sessionId);
     const identity = this.workspaceIdentity(sessionId, `subagent:${subagentId}`);
     return resolve(main, "..", "agent-workspaces", identity.id);
+  }
+
+  async createAgentWorkspace(sessionId: string, subagentId: string): Promise<void> {
+    const root = this.agentWorkspacePath(sessionId, subagentId);
+    await withWorkspaceAdmission(new VersionStore(this.dataDir), root, async () => {
+      this.assertSessionWritable(sessionId);
+      await mkdir(root, { recursive: true });
+    });
   }
 
   /** Resolve persisted logical audit paths without mounting child Workspaces inside the parent. */

@@ -8,6 +8,7 @@ import { dirname, resolve, sep } from "node:path";
 
 import { withWorkspaceLease, withWorkspaceLeases, withWorkspaceMutation } from "./workspace-lease.js";
 import type { VersionStore } from "./versioning.js";
+import { withWorkspaceAdmissions } from "./workspace-lifecycle.js";
 
 /** Paths are resolved only after the control plane grants source/target Workspace access. */
 async function safePath(root: string, path: string, createParents: boolean): Promise<string> {
@@ -104,7 +105,9 @@ export async function copyWorkspaceFile(input: {
   conflict?: "reject" | "overwrite"; signal?: AbortSignal;
   versions?: VersionStore;
 }) {
-  return withWorkspaceLeases([input.sourceRoot, input.targetRoot], () => copyUnlocked(input), input.signal);
+  const roots = [input.sourceRoot, input.targetRoot];
+  const copy = () => withWorkspaceLeases(roots, () => copyUnlocked(input), input.signal);
+  return input.versions ? withWorkspaceAdmissions(input.versions, roots, copy, input.signal) : copy();
 }
 
 async function copyUnlocked(input: Parameters<typeof copyWorkspaceFile>[0]) {

@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { RefStore, snapshotWorkspace, type AgentStateRef, type VersionStore } from "./versioning.js";
+import { withWorkspaceAdmission } from "./workspace-lifecycle.js";
 
 const owned = new AsyncLocalStorage<Map<string, { active: boolean }>>();
 export const workspaceHeadName = (root: string) => `workspaces/${createHash("sha256").update(root).digest("hex")}/head`;
@@ -97,7 +98,7 @@ export async function committedWorkspaceSnapshot(versions: VersionStore, root: s
   };
   // A nested observer must not snapshot its caller's unfinished mutation.
   if (owned.getStore()?.get(canonical)?.active) return previous();
-  return withWorkspaceLease(canonical, async () => {
+  return withWorkspaceAdmission(versions, canonical, () => withWorkspaceLease(canonical, async () => {
     const workspace = await snapshotWorkspace(versions, canonical);
     const refs = await RefStore.open(versions);
     try {
@@ -111,7 +112,7 @@ export async function committedWorkspaceSnapshot(versions: VersionStore, root: s
       await refs.commit(versions, name, head, version);
     } finally { refs.close(); }
     return workspace;
-  }, undefined, previous);
+  }, undefined, previous), undefined, previous);
 }
 
 /** Acquire both sides of a local copy in canonical order; opposite-direction
@@ -127,7 +128,7 @@ export async function withWorkspaceLeases<T>(roots: string[], operation: () => P
  * before admitting the next writer, without masking the original operation error. */
 export async function withWorkspaceMutation<T>(versions: VersionStore, root: string, operation: () => Promise<T>,
   metadata: { kind: string; id?: string; onCommitted?: (workspace: AgentStateRef) => void }, signal?: AbortSignal): Promise<T> {
-  return withWorkspaceLease(root, async () => {
+  return withWorkspaceAdmission(versions, root, () => withWorkspaceLease(root, async () => {
     await ensureWorkspaceBaseline(versions, root);
     let value: T | undefined;
     let failure: unknown;
@@ -147,5 +148,5 @@ export async function withWorkspaceMutation<T>(versions: VersionStore, root: str
     } catch (error) { await poisonWorkspace(root).catch(() => undefined); throw error; }
     if (failed) throw failure;
     return value as T;
-  }, signal);
+  }, signal), signal);
 }

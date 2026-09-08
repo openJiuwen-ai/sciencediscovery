@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
-import { ensureWorkspaceBaseline, poisonWorkspace, RefStore, snapshotWorkspace, VersionStore, withWorkspaceLease } from "@sciencediscovery/cas";
+import { ensureWorkspaceBaseline, poisonWorkspace, RefStore, snapshotWorkspace, VersionStore, withWorkspaceLease, withWorkspaceAdmission } from "@sciencediscovery/cas";
 import type { ExecutionLogPage, ExecutionOwner, ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 
 export type ExecutionLogSink = (stream: "stdout" | "stderr", chunk: Buffer) => void;
@@ -54,7 +54,7 @@ export class ExecutionManager {
     this.controllers.set(execution.id, controller);
     const key = request.workspaceRoot; // already canonicalized by the authenticated endpoint
     const previous = this.queues.get(key) ?? Promise.resolve();
-    const work = previous.then(() => withWorkspaceLease(key, async () => {
+    const work = previous.then(() => withWorkspaceAdmission(this.versions, key, () => withWorkspaceLease(key, async () => {
       await ensureWorkspaceBaseline(this.versions, key);
       let changed = false;
       let cursor = 0;
@@ -120,8 +120,8 @@ export class ExecutionManager {
       }
       execution.finishedAt = new Date().toISOString();
       this.save(execution); // before releasing this Workspace queue
-    }, controller.signal)).catch((error) => {
-      if (!controller.signal.aborted) this.failedWorkspaces.add(key);
+    }, controller.signal), controller.signal)).catch((error) => {
+      if (!controller.signal.aborted && (error as { code?: string }).code !== "WORKSPACE_RETIRED") this.failedWorkspaces.add(key);
       execution.state = controller.signal.aborted ? "cancelled" : "failed";
       execution.finishedAt = new Date().toISOString();
       execution.error = error instanceof Error ? error.message : "Workspace admission failed";

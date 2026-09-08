@@ -4,7 +4,7 @@
 /**
  * E2E-META
  * Purpose: Delegate selected input to an independent child Workspace and retrieve its local Artifact.
- * Steps: Start isolated CLI services; create Session/input; delegate; verify child output/parent isolation; legacy sync; Evolution export during a write.
+ * Steps: Start isolated CLI services; create Session/input; delegate; verify child output/parent isolation; legacy sync; Evolution export during a write; delete Session/Project safely during background execution.
  * Environment: Built and committed task worktree; production API/Runner CLI, ephemeral loopback ports and .tmp data.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible stub.
@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { RunnerClient } from "../../packages/executor/dist/index.js";
 
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -265,6 +266,49 @@ try {
       assert.equal((await runner.getShellExecution(executionId, owner)).state, "running");
     } finally { await runner.cancelShellExecution(executionId, owner); }
     return "Main Agent created Evolution; probe/search consumed committed baseline and tests while the writer remained running; writer explicitly cancelled afterwards";
+  });
+  await step("7. 后台任务期间安全删除 Session 和 Project", "删除等待进程退出和版本提交；期间仍可查日志、取消；删除后执行记录保留且目录不会被排队写入重建。", async () => {
+    const runner = new RunnerClient(runnerOrigin, token);
+    for (const kind of ["session", "project"]) {
+      const project = kind === "project" ? await json("/api/projects", { name: "Delete while running" }) : { id: session.projectId };
+      const target = await json(`/api/projects/${project.id}/sessions`, { title: "Delete while running", modelId: session.modelId });
+      const workspaceRoot = resolve(dataDir, "projects", project.id, "sessions", target.id, "workspace");
+      const scope = kind === "project" ? resolve(dataDir, "projects", project.id) : resolve(workspaceRoot, "..");
+      const executionId = randomUUID(); const owner = { sessionId: target.id, agentId: "main" };
+      await runner.startShellExecution({ agentId: "main", executionId, workspaceRoot,
+        code: "printf retained > result.txt; echo deletion-writer-ready; while :; do sleep 1; done",
+        permissionEpoch: { id: "deletion-journey", sessionId: target.id, createdAt: new Date().toISOString(), environmentRevisionId: "audit-only",
+          mounts: [{ source: "workspace", mode: "read-write" }], networkPolicy: "none", secretRefs: [], reason: "journey" } });
+      let deletion;
+      try {
+        await until(async () => (await runner.shellExecutionLogs(executionId, owner)).chunks.some((chunk) => chunk.text.includes("deletion-writer-ready")));
+        let settled = false;
+        const path = kind === "project" ? `/api/projects/${project.id}` : `/api/sessions/${target.id}`;
+        deletion = fetch(`${api}${path}`, { method: "DELETE", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ confirmationId: kind === "project" ? project.id : target.id }), signal: AbortSignal.timeout(30_000) })
+          .then((response) => { settled = true; return response; });
+        await until(async () => {
+          const db = new DatabaseSync(resolve(dataDir, ".workspace-lifecycle", "registry.sqlite"), { readOnly: true });
+          try { return Boolean(db.prepare("SELECT scope FROM fences WHERE scope = ?").get(scope)); }
+          finally { db.close(); }
+        });
+        assert.equal(settled, false, "delete must not move a live writer's root");
+        assert.equal((await runner.getShellExecution(executionId, owner)).state, "running");
+        assert.ok((await runner.shellExecutionLogs(executionId, owner)).chunks.length, "management channel remains usable");
+        await runner.cancelShellExecution(executionId, owner);
+        const response = await deletion;
+        assert.equal(response.status, 200, await response.text());
+        const execution = await runner.getShellExecution(executionId, owner);
+        assert.equal(execution.state, "cancelled"); assert.ok(execution.version, "execution receipt committed before deletion completed");
+        const missing = await fetch(`${api}/api/sessions/${target.id}`, { headers: { authorization: `Bearer ${token}` } });
+        assert.equal(missing.status, 404);
+        await assert.rejects(readFile(resolve(workspaceRoot, "result.txt")), { code: "ENOENT" });
+      } finally {
+        await runner.cancelShellExecution(executionId, owner).catch(() => {});
+        await deletion?.catch(() => {});
+      }
+    }
+    return "Session and Project DELETE each waited behind a live production Runner, logs remained queryable, explicit cancellation committed a version, HTTP deletion completed, and Session/root disappeared";
   });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }

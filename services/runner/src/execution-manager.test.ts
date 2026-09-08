@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { RefStore, VersionStore, withWorkspaceMutation, workspaceHeadName } from "@sciencediscovery/cas";
+import { RefStore, VersionStore, withWorkspaceMutation, withWorkspaceRetirement, workspaceHeadName } from "@sciencediscovery/cas";
 import type { ExecutionOwner, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 import { ExecutionManager } from "./execution-manager.js";
 
@@ -37,6 +37,18 @@ async function fixture(context: { after: (fn: () => Promise<void>) => void }) {
   context.after(async () => { await manager.close(); await rm(root, { recursive: true, force: true }); });
   return { root, workspace, manager };
 }
+
+test("deletion admission failure is not a poisoned version store after a successful rollback", async (context) => {
+  const { manager, workspace, root } = await fixture(context);
+  await withWorkspaceRetirement(new VersionStore(root), [workspace], "rollback", async (_roots, reopen) => {
+    manager.start(request(workspace, "blocked-delete"), async () => { assert.fail("closed Workspace executed"); });
+    await until(() => manager.get("blocked-delete", owner).state === "failed");
+    assert.match(manager.get("blocked-delete", owner).error!, /deleted/);
+    reopen();
+  });
+  manager.start(request(workspace, "after-rollback"), async () => result("after-rollback"));
+  await until(() => manager.get("after-rollback", owner).state === "completed");
+});
 
 test("background admission does not block observers; one workspace queues, another runs, CAS commits before release", async (context) => {
   const { manager, workspace, root } = await fixture(context);
