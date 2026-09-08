@@ -69,7 +69,7 @@ test("arXiv governance follows the provider terms: one connection, one request e
 
 test("built-in sources explicitly opt into the existing queue and pacing guards", () => {
   const manifests = createBuiltinMcpSourceRegistry().listManifests();
-  assert.equal(manifests.length, 12);
+  assert.equal(manifests.length, 13);
   for (const manifest of manifests) {
     assert.equal(manifest.governance.maxQueueDepth, 8, manifest.id);
     assert.equal(manifest.governance.queueTimeoutMs, 20_000, manifest.id);

@@ -53,6 +53,7 @@ export function knownConnectorIdSet(): ReadonlySet<string> {
     "clinvar",
     "chembl",
     "geo",
+    "llm-wiki",
   ]);
 }
 

@@ -209,7 +209,7 @@ export class McpNodeClient {
     if (server.transport === "stdio") {
       if (!server.command) throw new Error(`MCP server '${serverId}' with stdio transport requires 'command'`);
       const bundledPython = (server.command === "python" || server.command === "python3")
-        && server.args.some((arg) => arg === "sciencediscovery_gateway.public_biomed_mcp" || arg === "sciencediscovery_gateway.uniprot_mcp");
+        && server.args.some((arg) => arg.startsWith("sciencediscovery_gateway."));
       const command = bundledPython
         ? resolveMcpPython()
         : server.command;

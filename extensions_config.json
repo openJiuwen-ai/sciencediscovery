@@ -1,5 +1,17 @@
 {
   "mcpServers": {
+    "llm-wiki": {
+      "command": "python",
+      "args": ["-m", "sciencediscovery_gateway.llm_wiki_mcp"],
+      "description": "Read-only LLM Wiki knowledge base for any domain",
+      "enabled": true,
+      "env": {
+        "SCIENCE_AGENT_LLM_WIKI_URL": "$SCIENCE_AGENT_LLM_WIKI_URL",
+        "SCIENCE_AGENT_LLM_WIKI_TOKEN": "$SCIENCE_AGENT_LLM_WIKI_TOKEN"
+      },
+      "tool_call_timeout": 60,
+      "type": "stdio"
+    },
     "biomed": {
       "args": [
         "-m",

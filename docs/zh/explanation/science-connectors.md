@@ -74,7 +74,40 @@ Agent 并不能直接看到全部 MCP 工具。从 connector 定义到进入模�
 Source Catalog 只暴露 MCP server 中实际存在且 schema 兼容的工具。缺失或不兼容的工具使来源进入
 `degraded`，不会作为可调用工具交给 Agent。
 
-## 5. 下载与 PDF 抽取
+## 5. 本地 LLM Wiki
+
+`llm-wiki` 通过随包的 stdio MCP 桥接服务读取任意领域的 LLM Wiki 知识库。
+来源类型为 `knowledge-base`，不预设学科、页面分类或领域标签；服务需符合下述 HTTP 接口约定。
+启用分两层：`extensions_config.json` 中 `mcpServers.llm-wiki.enabled`（默认 `true`，与其他内置 MCP 一致）
+只控制是否拉起桥接进程，改为 `false` 可完全不启动；会话数据源开关默认关闭（`enabledByDefault: false`），
+需在会话中启用 **LLM Wiki** 后 Agent 才能调用。在 API 进程的环境中配置 `SCIENCE_AGENT_LLM_WIKI_URL`
+（默认 `http://127.0.0.1:8100`，只填 origin，不加 `/api/v1`）；如服务需要 Bearer 鉴权，
+再设置 `SCIENCE_AGENT_LLM_WIKI_TOKEN`。URL 环境变量同时供 Node 引用生成和 Python HTTP 请求使用，
+请保留配置文件中的 `$SCIENCE_AGENT_LLM_WIKI_URL` 映射。服务地址应从 API/桥接进程所在机器访问；
+容器内的 `127.0.0.1` 指向容器自身。
+
+提供三个只读工具：
+
+| 工具 | HTTP 接口约定 | 参数 |
+|---|---|---|
+| `search` | `POST /api/v1/query/structured` | `query`、`limit`（默认 5，最多 25） |
+| `get_page` | `GET /api/v1/wiki/{path}` | `path`（检索返回的相对页面路径） |
+| `get_pages` | `POST /api/v1/wiki/pages/batch` | `paths`（最多 20）、`max_tokens`（默认 8000，100–16000） |
+
+检索使用 hybrid 模式，不调用知识库的答案生成接口。批量结果保留 `missing` 和预算统计，
+另提供 `omitted_paths` 表示因预算未读取的页面；这些页面不等同于不存在。
+检索请求发送 `question`、`top_k`、`mode: "hybrid"`，响应使用 `sources` 数组；
+页面以 `page_id` 或 `path` 标识，正文、分类、标签等字段原样保留在 `structuredData` 中。
+单页接口返回页面对象；批量接口接收 `paths`、`max_tokens`、`token_budget_enabled: true`，
+返回 `pages` 和 `missing`。来源标识通过页面的 `source_refs` 或 `sources` 字符串数组提供，
+可以指向任意类型的原始资料。批量响应未提供来源或更新时间时，可用单页工具补取。
+
+Wiki 被声明为私有来源，结果缓存关闭。记录使用 `curated-record`，以 Wiki 页面为主引用、
+原始资料标识为交叉引用，并保存页面响应的 SHA-256 作为引用版本。
+读取 Wiki 不代表读取了其引用资料的全文。HTTP 引用仅由配置的 origin 和经过校验的页面路径生成；
+其他科研来源的 HTTPS 校验保持原有规则。此 connector 只提供检索与读取功能。
+
+## 6. 下载与 PDF 抽取
 
 检索和文件传输是不同动作：
 
@@ -86,7 +119,7 @@ Source Catalog 只暴露 MCP server 中实际存在且 schema 兼容的工具。
 同一模型回合中的多个独立工具并行执行，主循环等待全部结束。下载及其依赖的抽取不能放在同一回合；
 首期不提供工具 DAG 或 `dependsOn` 接口。
 
-## 6. 审计与引用
+## 7. 审计与引用
 
 每次 MCP 调用保存请求、原始响应和规范化响应的 CAS 引用，并记录 source、tool、尝试次数、缓存命中、
 权限授权、许可证和错误。记录与候选文件必须保持 source/identifier/citation 身份一致，URL 必须使用
@@ -95,7 +128,7 @@ HTTPS 且命中来源 manifest 的 host 白名单。
 数据库记录、论文摘要和已抽取全文具有不同 `contentScope`；只有 `paper_extract_pdf` 成功后才能声称读取
 了全文。Claim/Evidence 评审只消费受治理的 MCP 调用或可追溯执行结果。
 
-## 7. UI 状态
+## 8. UI 状态
 
 本轮以后端为主，只提供基础 Artifact 下载候选、任务状态、取消/重试视图，并显示 MCP Invocation
 审计数量。旧 Connector 搜索/导入入口已移除，避免调用已删除接口或绕过治理链路。Source、Tool、

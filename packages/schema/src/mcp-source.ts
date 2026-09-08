@@ -25,6 +25,7 @@ export type McpSourceKind =
   | "variation"
   | "pathway"
   | "chemistry"
+  | "knowledge-base"
   | "dataset";
 
 export type McpToolKind =

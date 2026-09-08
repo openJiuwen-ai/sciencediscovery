@@ -41,7 +41,27 @@ Thus built-ins are fully visible; MCP names are visible but schemas appear only 
 
 Literature: PubMed, arXiv, Europe PMC, bioRxiv, medRxiv. Databases: UniProt, PDB, Ensembl, Reactome, ClinVar, ChEMBL, GEO. A missing or incompatible tool makes its source degraded and unavailable to the Agent.
 
-## 5. Download and PDF extraction
+## 5. Local LLM Wiki
+
+`llm-wiki` reads an LLM Wiki knowledge base of any domain through the bundled stdio MCP bridge.
+Its source kind is `knowledge-base`, with no preset discipline, page categories, or domain labels; the service must conform to the HTTP interface below.
+Enablement has two layers: `mcpServers.llm-wiki.enabled` in `extensions_config.json` (default `true`, like other built-in MCPs) only controls whether the bridge process is spawned — set it to `false` to avoid spawning it at all; the session data-source switch is off by default (`enabledByDefault: false`), and the Agent can call the tools only after **LLM Wiki** is enabled in the session.
+Set `SCIENCE_AGENT_LLM_WIKI_URL` in the API process environment (default `http://127.0.0.1:8100`, origin only, without `/api/v1`); if the service requires Bearer authentication, also set `SCIENCE_AGENT_LLM_WIKI_TOKEN`.
+The URL variable is used by both Node citation generation and Python HTTP requests, so keep the `$SCIENCE_AGENT_LLM_WIKI_URL` mapping in the config file. The service address must be reachable from the machine hosting the API/bridge process; `127.0.0.1` inside a container points at the container itself.
+
+Three read-only tools:
+
+| Tool | HTTP interface | Parameters |
+|---|---|---|
+| `search` | `POST /api/v1/query/structured` | `query`, `limit` (default 5, max 25) |
+| `get_page` | `GET /api/v1/wiki/{path}` | `path` (relative page path returned by search) |
+| `get_pages` | `POST /api/v1/wiki/pages/batch` | `paths` (max 20), `max_tokens` (default 8000, 100–16000) |
+
+Search uses hybrid mode and never calls the knowledge base's answer-generation endpoint. Batch results keep `missing` and budget statistics and add `omitted_paths` for pages not read due to the budget; such pages are not nonexistent. Search sends `question`, `top_k`, `mode: "hybrid"` and consumes the `sources` array; pages are identified by `page_id` or `path`, and body/category/tag fields are passed through in `structuredData`. The single-page endpoint returns the page object; the batch endpoint takes `paths`, `max_tokens`, `token_budget_enabled: true` and returns `pages` and `missing`. Source identifiers come from the page's `source_refs` or `sources` string arrays and may point to any kind of original material. If a batch response lacks sources or update times, use the single-page tool to fetch them.
+
+The Wiki is declared a private source with result caching disabled. Records use `curated-record`, with the Wiki page as the primary citation, original-material identifiers as cross-references, and the SHA-256 of the page response as the citation version. Reading the Wiki does not mean the full text of its referenced material was read. HTTP citations are built only from the configured origin and validated page paths; HTTPS validation for other scientific sources keeps its existing rules. This connector provides retrieval and reading only.
+
+## 6. Download and PDF extraction
 
 1. MCP query/prepare returns an `ArtifactCandidate` without downloading.
 2. A later `artifact_download` waits for terminal download state.
@@ -50,10 +70,10 @@ Literature: PubMed, arXiv, Europe PMC, bioRxiv, medRxiv. Databases: UniProt, PDB
 
 Independent same-turn tools run concurrently; a download and its dependent extraction cannot share a turn. There is no initial DAG/`dependsOn` API.
 
-## 6. Audit and citation
+## 7. Audit and citation
 
 Every MCP invocation records CAS references for request/raw/normalized response plus source, tool, attempts, cache, permission, license, and error. Candidate source/identifier/citation identity must match and URLs must be HTTPS on manifest-allowed hosts. Database record, abstract, and extracted full text have distinct `contentScope`; full-text claims require successful extraction. Claim/Evidence review accepts only governed MCP or traceable execution.
 
-## 7. UI state
+## 8. UI state
 
 The current UI offers basic candidates, job status, cancel/retry, and invocation count. Legacy connector search/import is removed. Full Source/Tool/Invocation/ExtractionJob/permission UI is not yet implemented. Dangerous actions ask individually by default; Allow same type creates a Session grant and releases matching pending actions; Always allow appends an authorization per action without a wildcard grant.
