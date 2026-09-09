@@ -505,7 +505,7 @@ async function runSandboxed(
       };
       const stop = (error: Error) => {
         stopError ??= error;
-        child?.kill("SIGKILL");
+        if (child) killSandboxProcess(child);
       };
       // Do not release a writer or clean up its mounts until the process has exited.
       const abort = () => stop(new Error(`${timeoutLabel} aborted`));
@@ -535,9 +535,9 @@ async function runSandboxed(
 
       void spawnSandboxProcess(config, launch, commandArguments, seccompVariant).then((started) => {
         child = started;
-        if (stopError) child.kill("SIGKILL");
+        if (stopError) killSandboxProcess(child);
         if (!child.stdin || !child.stdout || !child.stderr) {
-          child.kill("SIGKILL");
+          killSandboxProcess(child);
           finish(new Error("Runner failed to create isolated process streams"));
           return;
         }
@@ -868,6 +868,20 @@ export function sandboxCommandPath(launch: SandboxLaunch, linuxPath: string, hos
   return launch.sandbox === "seatbelt" ? hostPath : linuxPath;
 }
 
+const sandboxProcessGroups = new WeakSet<ChildProcessWithoutNullStreams>();
+
+/** Kill the namespace init as well as the monitor, including during bwrap setup. */
+export function killSandboxProcess(child: ChildProcessWithoutNullStreams): boolean {
+  if (!sandboxProcessGroups.has(child) || !child.pid) return child.kill("SIGKILL");
+  try {
+    process.kill(-child.pid, "SIGKILL");
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
 /** Spawn through the selected sandbox and attach Linux seccomp when applicable. */
 export async function spawnSandboxProcess(
   config: SandboxRuntimeConfig,
@@ -880,15 +894,23 @@ export async function spawnSandboxProcess(
     if ((launch.sandbox ?? executorSandboxKind(config)) === "bubblewrap") {
       filter = await open(await ensureSeccompFilter(config.dataDir, seccompVariant), "r");
     }
+    const processGroup = (launch.sandbox ?? executorSandboxKind(config)) === "bubblewrap";
     const child = spawn(launch.executable ?? config.bwrapPath, [
-      ...launch.args,
+      // Node establishes a new session before exec. Keep bwrap's namespace init
+      // in that group: --new-session would move it out of reach of group kill.
+      ...launch.args.filter((arg) => !processGroup || arg !== "--new-session"),
       ...launch.commandPrefix,
       ...commandArguments,
     ], {
+      detached: processGroup,
       ...(launch.hostCwd ? { cwd: launch.hostCwd } : {}),
       env: launch.sandbox === "seatbelt" ? launch.env : undefined,
       stdio: filter ? ["pipe", "pipe", "pipe", filter.fd] : ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
+    if (processGroup) {
+      sandboxProcessGroups.add(child);
+      child.once("close", () => sandboxProcessGroups.delete(child));
+    }
     await filter?.close();
     return child;
   } catch (error) {
