@@ -22,9 +22,9 @@ stage_gate_progress:
   real: 待（凭据注入→真实种子→grow 2 cycle）
   report: 初稿已出（PASS 有条件），待 real 层补全
 qa_next:
-  - 录制 10 个 arxiv PDF fixture（按死信错误文件名逐一 make-fixture.mjs --base64）
-  - 查明 KE embedding 在隔离栈的配置来源，补 mocked 方案
-  - 重跑 J-KE1/KE2 收口 mocked → real 层四项验收
+  - KE-only 重跑进行中（data5+10 fixture+embedding stub）→ 绿则 mocked 关闭
+  - real 层四项验收（凭据注入→真实种子→grow 2 cycle→报告补全）
+  - 阶段 II 素材已到位：W3 完成（327bed0，通知含 journey 接口事实）；W4 后触发阶段 II 门
 notes: >-
   W2 完工通知（to-zcode/2026-09-08T2200-w2-done.md）关键情报：① grow API 202 {jobId,cycleId,reused}
   / GET engineState.signals 结构；② 前端 testid ke-grow-panel/ke-grow-start/ke-grow-progress/ke-grow-signals
