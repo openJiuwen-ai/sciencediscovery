@@ -111,6 +111,19 @@ After discovery, the adapter derives a local tool ID from a normalized name plus
 
 Generic tools may have side effects, so they are `idempotent: false`, have caching disabled and one automatic attempt, and do not use keyword routing. Current Source governance defaults are concurrency 1, queue depth 8, queue timeout 20 seconds, and response limit 5,000,000 bytes. These are client governance parameters, not a sandbox guarantee for external programs. Resending an authentication-rejected request after OAuth refresh is authentication handling, not a tool-failure retry policy.
 
+Limits are grouped by custom server ID and shared across Sessions within one backend Broker instance, rather than allocated separately to each Session. Limit handling is:
+
+| Condition | Behavior |
+|---|---|
+| One call is already running | Subsequent calls wait for an execution slot; at most eight queued calls are allowed, excluding the active call |
+| Eight calls are already queued and a new call must also wait | Reject the new call immediately with `RATE_LIMIT_QUEUE_FULL`, without sending it to the MCP server |
+| A queued call has not acquired a slot within 20 seconds | Remove it from the queue and return `RATE_LIMIT_QUEUE_TIMEOUT`, without sending it to the MCP server |
+| Response size exceeds 5,000,000 bytes | Fail the call with `RESPONSE_TOO_LARGE`; do not truncate and return it as a successful result |
+
+These failures are recorded in Invocation audit. Queue-full and queue-timeout errors have `retryable: true`, meaning a new call may be made later, not that the current call is automatically requeued. Oversized responses have `retryable: false`. Queue wait timeout and tool execution timeout are separate limits.
+
+Response size is checked after the SDK returns a result, by measuring the UTF-8 byte length of JSON containing `content` and `structuredContent`. This is not a streaming network or memory hard limit. The remote tool may already have completed, and rejecting its response does not roll back remote side effects.
+
 Agent availability depends on global server enablement, discovered tools, and effective Session connector settings, which may inherit Project/global settings. Availability does not force an Agent call every turn. The Broker performs input checks, permission policy, and audit.
 
 Inspector requires an existing Session, an enabled server, and a discovered tool. Explicit manual execution passes `allowedSourceIds: [id]` for that server without changing the Session's Agent connector selection, and still uses the same Broker. It returns success/failure, duration, `invocationId`, available raw response, and normalized result, associated with the Project/Session audit path. Cancelling passes an abort signal but cannot guarantee rollback of remote side effects.
