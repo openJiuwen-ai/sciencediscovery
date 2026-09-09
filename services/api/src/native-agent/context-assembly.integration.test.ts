@@ -280,7 +280,7 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
     const mainTraces = await traceRecords(traceRoot, "main-example");
     assert.equal(mainTraces.length, 4);
     for (const record of mainTraces) {
-      assert.equal(record.schemaVersion, 4);
+      assert.equal(record.schemaVersion, 5);
       assert.ok(record.collection);
       assert.ok(record.admitted);
       assert.ok(record.renderedContext);
@@ -288,6 +288,15 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
       const collection = record.collection as { contributors?: Array<{ durationMs?: number; status?: string }> };
       assert.ok(collection.contributors?.every((item) => item.status === "contributed" && (item.durationMs ?? -1) >= 0));
     }
+    assert.deepEqual(mainTraces[3]?.planProgress, {
+      agentId: "main",
+      anchorFound: true,
+      currentModelTurn: 3,
+      modelStepsSinceUpdate: 1,
+      toolCallId: "call-update_plan",
+      toolResultsSinceUpdate: 1,
+      updatedAt: "2026-08-25T00:00:00.000Z",
+    });
     assert.equal((await traceRecords(traceRoot, "subagent-example"))[0]?.selectedPath, "legacy");
     assert.equal((await traceRecords(traceRoot, "reviewer-example"))[0]?.selectedPath, "dynamic");
     assert.equal((await traceRecords(traceRoot, "legacy-example"))[0]?.selectedPath, "legacy");

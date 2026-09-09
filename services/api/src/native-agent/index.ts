@@ -520,6 +520,8 @@ class NativeAgent implements NativeAgentHandle {
           contextId: this.contextId,
           mode: contextMode,
           onTrace: async (trace) => {
+            const planProgress = trace.admitted?.diagnostics
+              .find((diagnostic) => diagnostic.code === "PLAN_PROGRESS_OBSERVATION")?.details;
             runLog.info("context.assembled", {
               attachmentCount: trace.admitted?.attachments.length ?? 0,
               contextId: this.contextId,
@@ -532,6 +534,7 @@ class NativeAgent implements NativeAgentHandle {
               sectionCount: trace.admitted?.sections.length ?? 0,
               turn: trace.turn,
               used: trace.used,
+              ...(planProgress ? { planProgress } : {}),
               ...(trace.rendered ? {
                 compactionAfterTokens: trace.rendered.compaction.afterTokens,
                 compactionBeforeTokens: trace.rendered.compaction.beforeTokens,
@@ -554,6 +557,7 @@ class NativeAgent implements NativeAgentHandle {
               contextConfig: { budget: contextBudget, mode: trace.mode, scope: contextScope },
               ...(trace.error ? { error: trace.error } : {}),
               llmInput: trace.modelInput,
+              ...(planProgress ? { planProgress } : {}),
               renderedContext: trace.rendered,
               ...(trace.recovery ? { recovery: trace.recovery } : {}),
               selectedPath: trace.used,

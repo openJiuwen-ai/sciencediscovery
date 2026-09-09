@@ -240,12 +240,15 @@ beside the original attempt rather than overwriting it:
 <trace-dir>/<context-id>/turn-0001-recovery-1.json
 ```
 
-Trace schema v4 contains:
+Trace schema v5 contains:
 
 - mode, Agent scope, selected path, and resolved budgets;
 - each Contributor's raw output, duration, status, and error;
 - validated collection before budget admission;
 - sections, attachments, messages, and diagnostics after admission;
+- `planProgress` when an active Plan exists: its Agent/tool-call identity,
+  whether the declaring call remains visible after compaction, and the number
+  of subsequent model steps and completed non-Plan tool results;
 - rendered Prompt, section IDs, invocation history, tools, window statistics,
   and window diagnostics in `renderedContext`;
 - compaction reason, estimated tokens before/after, compacted tool-output refs,
@@ -255,6 +258,12 @@ Trace schema v4 contains:
 
 In `shadow`, `renderedContext` is the dynamic candidate while `llmInput` is the
 legacy input actually selected for the model.
+
+Plan progress is observational only. It does not label a Plan stale, schedule
+an automatic update, block another tool, or prevent the model from finishing.
+When compaction removes the declaring `update_plan` call, the trace records
+`anchorFound: false` and omits age counters instead of guessing from wall-clock
+time or an unrelated turn number.
 
 Trace files use mode `0600`, but contain user messages, tool inputs/results,
 Skill metadata, retrieved content, and complete prompts. Treat them as
