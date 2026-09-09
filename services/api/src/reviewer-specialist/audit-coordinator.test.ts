@@ -131,6 +131,9 @@ test("feedback persistence failure leaves the audit task failed instead of compl
   assert.ok(task);
   await waitFor(async () => (await store.listReviewerAuditTasks(session.id))[0]?.status === "failed");
   assert.equal((await store.listReviewerAuditTasks(session.id))[0]?.errorSummary, "feedback write failed");
+  const checkpoint = (await store.getSessionDetail(session.id))?.messages.find((message) => message.id === task.checkpointMessageId);
+  assert.equal(checkpoint?.reviewerCheckpoint?.status, "failed");
+  assert.equal(checkpoint?.reviewerCheckpoint?.error, "feedback write failed");
   assert.deepEqual(await store.listReviewFeedback(session.id), []);
   store.appendReviewFeedback = originalAppend;
   const retry = await coordinator.enqueueArtifactVersion({
@@ -432,6 +435,36 @@ test("Stop review cancels a quiet-window batch before it starts", async (context
   assert.equal((await store.listReviewerAuditTasks(session.id))[0]?.status, "cancelled");
   await new Promise((resolveWait) => setTimeout(resolveWait, 25));
   assert.equal(executions, 0);
+});
+
+test("Stop review settles a stale running checkpoint after its task has already failed", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-stop-stale-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer stale stop");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
+  const report = await store.createArtifactVersion({
+    content: { hash: "f".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
+  });
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => { throw new Error("Reviewer model is unavailable"); } }, { quickBatchQuietMs: 0 });
+  const task = await coordinator.enqueueArtifactVersion({
+    artifactVersionId: report.version.id, contentHash: report.version.content.hash, mediaType: report.version.mediaType, sessionId: session.id,
+  });
+  assert.ok(task);
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id))[0]?.status === "failed");
+  assert.equal((await store.getSessionDetail(session.id))?.messages.find((message) => message.id === task.checkpointMessageId)?.reviewerCheckpoint?.status, "failed");
+
+  // Simulate a checkpoint written by the old worker before this reconciliation
+  // was deployed: Stop must repair the user-visible stale running card.
+  await store.appendReviewerCheckpointMessage(session.id, "stale-running-checkpoint", "manual-review:stale-running-checkpoint");
+  assert.equal(await coordinator.cancelSession(session.id), true);
+  const repaired = (await store.getSessionDetail(session.id))?.messages.find((message) => message.id === "stale-running-checkpoint");
+  assert.equal(repaired?.reviewerCheckpoint?.status, "failed");
+  assert.equal(repaired?.reviewerCheckpoint?.error, "Review stopped because no active Reviewer task remained");
 });
 
 test("an automatic audit with no current report is silently superseded without checkpoint or feedback", async (context) => {

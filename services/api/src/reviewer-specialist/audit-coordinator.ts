@@ -12,7 +12,11 @@ import type {
   ReviewerSpecialistLevel,
   ReviewFeedback,
 } from "@sciencediscovery/schema";
-import { cancelReviewerCheckpoints, isReviewerReportCandidate } from "@sciencediscovery/provenance";
+import {
+  cancelReviewerCheckpoints,
+  isReviewerReportCandidate,
+  reviewerCheckpointPromptContent,
+} from "@sciencediscovery/provenance";
 
 import { SessionStore } from "../store.js";
 
@@ -155,8 +159,11 @@ export class ReviewerAuditCoordinator {
     this.timers.delete(sessionId);
     this.pendingWakeAt.delete(sessionId);
     const tasks = await this.store.listReviewerAuditTasks(sessionId);
+    const activeTaskIds = new Set(tasks
+      .filter((item) => item.status === "queued" || item.status === "running")
+      .map((item) => item.id));
     const now = new Date().toISOString();
-    for (const task of tasks.filter((item) => item.status === "queued" || item.status === "running")) {
+    for (const task of tasks.filter((item) => activeTaskIds.has(item.id))) {
       this.active.get(task.id)?.abort();
       await this.store.updateReviewerAuditTask(sessionId, task.id, {
         errorSummary: "Review cancelled by user",
@@ -166,8 +173,26 @@ export class ReviewerAuditCoordinator {
     }
     // Retains compatibility with explicit checkpoint calls issued by the main
     // Agent while remaining fully independent from the main Agent Stop path.
-    cancelReviewerCheckpoints(sessionId);
-    return tasks.some((task) => task.status === "queued" || task.status === "running");
+    const cancelledCheckpoint = cancelReviewerCheckpoints(sessionId);
+    // A process restart or a failure before the execution callback can leave a
+    // persisted checkpoint marked running after its durable task is terminal.
+    // Treat it as cancellable UI work and reconcile it here, so Stop always
+    // settles the card the researcher can still see.
+    const detail = await this.store.getSessionDetail(sessionId);
+    const runningCheckpoints = detail?.messages.filter((message) =>
+      message.kind === "reviewer_checkpoint" && message.reviewerCheckpoint?.status === "running") ?? [];
+    for (const checkpoint of runningCheckpoints) {
+      const task = tasks.find((item) => item.checkpointMessageId === checkpoint.id);
+      const error = task?.status === "failed" && task.errorSummary
+        ? task.errorSummary
+        : activeTaskIds.has(task?.id ?? "")
+          ? "Review cancelled by user"
+          : "Review stopped because no active Reviewer task remained";
+      await this.store.updateReviewerCheckpointMessage(sessionId, checkpoint.id, {
+        content: reviewerCheckpointPromptContent([], error), error, status: "failed",
+      });
+    }
+    return activeTaskIds.size > 0 || cancelledCheckpoint || runningCheckpoints.length > 0;
   }
 
   private latestReportArtifactVersionIds(sessionId: string): string[] {
@@ -404,11 +429,17 @@ export class ReviewerAuditCoordinator {
           const cancelled = Boolean(controller?.signal.aborted) || (error instanceof DOMException && error.name === "AbortError");
           const current = (await this.store.listReviewerAuditTasks(sessionId)).find((item) => item.id === task.id);
           if (!current || TERMINAL.has(current.status)) continue;
+          const detail = cancelled ? "Review cancelled by user" : (error instanceof Error ? error.message : "Reviewer Specialist failed");
           await this.store.updateReviewerAuditTask(sessionId, task.id, {
-            errorSummary: cancelled ? "Review cancelled by user" : (error instanceof Error ? error.message : "Reviewer Specialist failed"),
+            errorSummary: detail,
             finishedAt: new Date().toISOString(),
             status: cancelled ? "cancelled" : "failed",
           });
+          if (current.checkpointPublishedAt) {
+            await this.store.updateReviewerCheckpointMessage(sessionId, current.checkpointMessageId, {
+              content: reviewerCheckpointPromptContent([], detail), error: detail, status: "failed",
+            });
+          }
         } finally {
           if (controller) this.active.delete(task.id);
           if (this.automaticTaskId === task.id) this.automaticTaskId = undefined;
