@@ -135,7 +135,13 @@ test("panel renders independent plan snapshots for different agents", () => {
 });
 
 test("expanded plan card shows the live scope and step states", () => {
-  const plan = buildPlan();
+  const plan = buildPlan({
+    items: [
+      { step: "Collect papers", status: "completed" },
+      { step: "Compare results", status: "in_progress" },
+      { step: "Write report", status: "pending" },
+    ],
+  });
   const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
     expandedCards: { [activityCardId("plan", `${plan.runId}:${plan.agentId}`)]: true },
     onToggleCard: noopToggle,
@@ -144,7 +150,15 @@ test("expanded plan card shows the live scope and step states", () => {
 
   assert.match(html, /aria-expanded="true"/);
   assert.match(html, /Compare two independent methods/);
-  assert.match(html, /Run both methods/);
+  assert.match(html, /Collect papers/);
+  assert.match(html, /Compare results/);
+  assert.match(html, /Write report/);
+  assert.match(html, /aria-label="Completed"/);
+  assert.match(html, /aria-label="In progress"/);
+  assert.match(html, /aria-label="Pending"/);
+  assert.match(html, /plan-item-status completed/);
+  assert.match(html, /plan-item-status in_progress/);
+  assert.match(html, /plan-item-status pending/);
   assert.match(html, /data-status="pending"/);
 });
 

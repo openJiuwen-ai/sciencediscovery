@@ -24,7 +24,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
-import { ChevronRightIcon } from "./icons.js";
+import { CheckIcon, ChevronRightIcon, SpinnerIcon } from "./icons.js";
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
 import type { RunPlanSnapshot } from "./session/run-activity.js";
@@ -37,6 +37,13 @@ function planSummary(plan: RunPlanSnapshot): string {
   const completed = plan.items.filter((item) => item.status === "completed").length;
   const active = plan.items.filter((item) => item.status === "in_progress").length;
   return `${completed}/${plan.items.length} completed${active ? ` · ${active} active` : ""}`;
+}
+
+function PlanItemStatus({ status }: { status: RunPlanSnapshot["items"][number]["status"] }) {
+  const label = status === "completed" ? "Completed" : status === "in_progress" ? "In progress" : "Pending";
+  return <span aria-label={label} className={`plan-item-status ${status}`} role="img">
+    {status === "completed" ? <CheckIcon size={13} /> : status === "in_progress" ? <SpinnerIcon size={14} /> : null}
+  </span>;
 }
 
 export function PlanCard({
@@ -57,7 +64,10 @@ export function PlanCard({
       </button>
       {expanded ? <div className="plan-card-body">
         {plan.explanation ? <p>{plan.explanation}</p> : null}
-        <ol>{plan.items.map((item, index) => <li key={`${index}:${item.step}`} data-status={item.status}>{item.step}</li>)}</ol>
+        <ol className="plan-item-list">{plan.items.map((item, index) => <li key={`${index}:${item.step}`} data-status={item.status}>
+          <PlanItemStatus status={item.status} />
+          <span>{item.step}</span>
+        </li>)}</ol>
       </div> : null}
     </article>
   );

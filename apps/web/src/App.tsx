@@ -3872,6 +3872,13 @@ export function App() {
   const activeTimelineSubagentIds = collectTimelineSubagentIds(runTimeline);
   const replayTimelineSubagentIds = new Map(Object.entries(sessionReplayTimelines).map(([runId, timeline]) =>
     [runId, collectTimelineSubagentIds(timeline.entries)]));
+  const latestPlannedRunId = [...sessionRuns]
+    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .findLast((run) => plans.some((plan) => plan.runId === run.id))?.id;
+  const workspacePlanRunId = activeTimelineRunId ?? latestPlannedRunId;
+  const workspacePlans = workspacePlanRunId
+    ? plans.filter((plan) => plan.runId === workspacePlanRunId)
+    : [];
   const replayedRunIds = new Set(Object.keys(sessionReplayTimelines).filter((runId) => runId !== activeTimelineRunId));
   const conversationBlocks = buildConversationBlocks(displayedMessages, sessionRuns, replayedRunIds);
   const timelinePermissionRequestIds = collectTimelinePermissionRequestIds([
@@ -3879,17 +3886,18 @@ export function App() {
     ...Object.values(sessionReplayTimelines).flatMap((timeline) => timeline.entries),
   ]);
   const queuedRuns = sessionRuns.filter((run) => run.status === "queued");
-  // Activity cards (plans, subagents, remote jobs, permission prompts, result
-  // previews) are attributed to the run that produced them and rendered right
+  // Timeline activity cards (subagents, remote jobs, permission prompts, and
+  // result previews) are attributed to the run that produced them and rendered right
   // after that run's conversation block instead of piling up below the whole
-  // flow. The run currently streaming or replaying keeps its cards right
-  // after its timeline, which is already the chronological end of the flow.
+  // flow. Plans are projected independently into the right-hand Workspace.
+  // The run currently streaming or replaying keeps its cards right after its
+  // timeline, which is already the chronological end of the flow.
   const runActivityGroups = groupRunActivity(sessionRuns, {
     downloadCandidates,
     downloadJobs,
     downloadPlans,
     permissionRequests: permissionRequests.filter((request) => !timelinePermissionRequestIds.has(request.id)),
-    plans,
+    plans: [],
     previewFiles: files.filter(isArtifactPreviewFile),
     remoteJobs,
     subagents,
@@ -4056,7 +4064,6 @@ export function App() {
     const footerSubagents = group.subagents.filter((subagent) => !timelineSubagentIds.has(subagent.id));
     return (
       <div className="run-activity-group" key={group.runId ?? "unattributed"}>
-        <OrchestrationPanel expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} plans={group.plans} />
         <SubagentCards onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />
@@ -4569,6 +4576,16 @@ export function App() {
                 <button aria-label={t("app.hideWorkspace")} className="icon-button workspace-collapse-button" onClick={() => setWorkspaceCollapsed(true)} title={t("app.hideWorkspace")} type="button"><PanelRightIcon size={15} /></button>
               </div>
             </div>
+            {workspacePlans.length ? <details className="workspace-fold workspace-plan-section" open>
+              <summary>
+                <ChevronRightIcon className="fold-chevron" size={15} />
+                <strong>Tasks</strong>
+                <span className="fold-meta">{workspacePlans.reduce((count, plan) => count + plan.items.filter((item) => item.status === "completed").length, 0)}/{workspacePlans.reduce((count, plan) => count + plan.items.length, 0)}</span>
+              </summary>
+              <div className="workspace-fold-body">
+                <OrchestrationPanel expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} plans={workspacePlans} />
+              </div>
+            </details> : null}
             {activeSessionId && !sessionArchived ? (
               <label className={dragActive ? "drop-zone active" : "drop-zone"} onDragEnter={() => setDragActive(true)} onDragLeave={() => setDragActive(false)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                 event.preventDefault();

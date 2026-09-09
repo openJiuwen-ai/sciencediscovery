@@ -147,6 +147,9 @@
 .workspace-fold-body .vision-picker, .workspace-fold-body .pdf-upload, .workspace-fold-body .paper-library { margin-top: 0; }
 .workspace-fold-body .reviewer-control-card { margin-top: 0; }
 .workspace-fold-body .trust-metrics { margin-top: 0; }
+.workspace-plan-section .workspace-fold-body { padding: 8px; }
+.workspace-plan-section .orchestration-panel { width: 100%; max-width: none; margin: 0; gap: 8px; }
+.workspace-plan-section .plan-card { padding: 9px; }
 
 .vision-picker { display: block; margin-top: 14px; }
 .vision-picker > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }

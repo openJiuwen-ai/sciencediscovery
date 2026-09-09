@@ -90,7 +90,14 @@
 .plan-card-heading small, .track-list-heading span, .subagent-list-heading span { color: var(--muted); font-size: 11px; }
 .plan-card-heading i { background: var(--border); color: var(--text-secondary); font-size: 10px; font-style: normal; text-transform: uppercase; }
 .plan-card p { margin: 10px 0; color: var(--text-heading); }
-.plan-card ol { margin: 8px 0; padding-left: 22px; color: var(--text-secondary); }
+.plan-card ol { margin: 8px 0; padding: 0; color: var(--text-secondary); }
+.plan-item-list { display: grid; gap: 8px; list-style: none; }
+.plan-item-list li { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 8px; font-size: 12px; line-height: 1.45; }
+.plan-item-list li[data-status="completed"] > span:last-child { color: var(--muted); text-decoration: line-through; }
+.plan-item-status { display: grid; width: 16px; height: 16px; place-items: center; box-sizing: border-box; margin-top: 1px; border: 1.5px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: transparent; }
+.plan-item-status.completed { border-color: var(--success); background: var(--success-soft); color: var(--success); }
+.plan-item-status.in_progress { border: 0; border-radius: 50%; background: transparent; color: var(--accent); }
+.plan-item-status.in_progress svg { animation: spin 1s linear infinite; }
 .plan-card details { color: var(--muted); font-size: 12px; }
 .plan-actions { display: flex; gap: 8px; margin-top: 12px; }
 .subagent-list { display: grid; gap: 7px; border-inline-start: 4px solid var(--success-bright); }
