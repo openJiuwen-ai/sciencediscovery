@@ -1924,16 +1924,19 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
     headers: { authorization: "Bearer runner-test-token" },
   })).json() as RunnerRuntimeStatus;
   const waitFor = async (predicate: (value: RunnerRuntimeStatus) => boolean) => {
+    const startedAt = Date.now();
     let current: RunnerRuntimeStatus | undefined;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       current = await status();
       if (predicate(current)) return current;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
-    // The state it did reach, because "did not reach the expected state" on
-    // its own says nothing about which wait gave up or what the runner was
-    // holding at the time.
-    throw new Error("Runner status did not reach the expected state: " + JSON.stringify(current));
+    // The state it did reach and how long it waited for it. This budget counts
+    // polls, so its wall time shrinks as the machine slows: without the
+    // elapsed figure a failure cannot say whether the runner never did the
+    // thing or whether this simply gave up early.
+    throw new Error(`Runner status did not reach the expected state after ${Date.now() - startedAt} ms: `
+      + JSON.stringify(current));
   };
 
   const runningController = new AbortController();
