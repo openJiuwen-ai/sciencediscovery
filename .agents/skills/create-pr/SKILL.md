@@ -26,6 +26,10 @@ attribution: [.agents/skills/ci/SKILL.md](../ci/SKILL.md).
    three; do not open a merge request without them.
 2. **Target `openJiuwen/sciencediscovery` on gitcode.com.** GitHub is a synced
    mirror with its own SHAs; a merge request opened there is in the wrong place.
+   **Push the task branch only to the personal fork** (`gitcode-fork` →
+   `wang_cheng_zhao/sciencediscovery`). Do **not** `git push origin <branch>` or
+   create the branch on the upstream repository. Create the merge request with
+   `--head wang_cheng_zhao:<branch> --base main`.
 3. **Read the merge request back after creating it.** The create response is
    thin and will not tell you whether it landed as intended.
 4. **Say what was verified in the body**, with the actual numbers. "Tests pass"
@@ -81,10 +85,11 @@ CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:e2e
 ## The process
 
 [CONTRIBUTING.md](../../../CONTRIBUTING.md) owns it — the branch and push
-commands and the `pr create` invocation. Follow it. A branch on the upstream
-repository and a branch on a personal fork both trigger CodeArts; for a fork
-pass `--head <fork-owner>:<branch>`. This skill covers what the CLI does not
-make obvious once you get there.
+commands and the `pr create` invocation. Follow it. Task branches live on the
+personal fork only (`git push -u gitcode-fork <branch>`). CodeArts still runs
+on the resulting merge request; pass `--head wang_cheng_zhao:<branch>`. Do not
+open the source branch on `openJiuwen/sciencediscovery`. This skill covers what
+the CLI does not make obvious once you get there.
 
 ## Body shape
 

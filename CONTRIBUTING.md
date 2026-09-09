@@ -354,15 +354,21 @@ unprivileged user namespaces, cleared with
 container it is normally unfixable for a process using that same host kernel;
 a full-system VM can instead provide an independent guest kernel.
 
-Then branch from an up-to-date `main`, push the branch, and open the merge
-request on GitCode. Never push to `main`; rebase rather than merge when it
-moves, so the diff stays readable.
+Then branch from an up-to-date `main`, **push the branch to your personal
+fork**, and open the merge request against `openJiuwen/sciencediscovery`. Never
+push task branches to the upstream repository (`origin`); never push to
+`main`. Rebase rather than merge when `main` moves, so the diff stays readable.
+
+This clone's fork remote is `gitcode-fork`
+(`git@gitcode.com:wang_cheng_zhao/sciencediscovery.git`). Substitute your own
+fork owner if it differs.
 
 ```bash
 git fetch origin && git checkout -b <type>/<short-topic> origin/main
-git push -u origin <branch>
+git push -u gitcode-fork <branch>
 gitcode pr create -R openJiuwen/sciencediscovery \
-  --head <branch> --base main --title "<type>: <what changed>" --body-file <file>
+  --head wang_cheng_zhao:<branch> --base main \
+  --title "<type>: <what changed>" --body-file <file>
 ```
 
 State in the body what was verified, with the numbers each layer reported.
