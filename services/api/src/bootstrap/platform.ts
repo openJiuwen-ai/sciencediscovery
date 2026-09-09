@@ -16,6 +16,8 @@ import { resolve } from "node:path";
 
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
+import { createIdeaTreeAuthorityRegistry, type IdeaTreePersistence } from "@sciencediscovery/idea-tree";
+import { ideaTreeRepositoryForSession } from "../idea-tree/python-client.js";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { CustomMcpServers } from "../mcp/custom-servers.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
@@ -55,6 +57,8 @@ export interface ApiServerDependencies {
   fetchModelCatalog?: (options: { proxy?: ResolvedProxy; url: string }) => Promise<ModelsDevPayload>;
   /** Test seam: resolve usage display exchange rates without touching the network. */
   fetchUsageExchangeRate?: typeof fetch;
+  /** Test/embedding seam. Production uses the Python tree service. */
+  ideaTreeRepository?: (scope: { projectId: string; sessionId: string }) => IdeaTreePersistence;
   /** Test seam: drive MCP through a stub transport instead of live servers. */
   mcpTransport?: McpTransportClient;
   /** Test seam: exercise remote-host HTTP flows without connecting to a real SSH machine. */
@@ -115,6 +119,7 @@ export function createPlatformServices(
   }, config.memoryGraph.neo4jPassword);
   const skillCatalog = new SkillCatalog(config.dataDir, repositoryRoot);
   const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken);
+  const ideaTreeAuthorities = createIdeaTreeAuthorityRegistry();
 
   mgLog.setDataDir(config.dataDir);
   reviewerLog.setLogDir(resolve(config.dataDir, "logs"));
@@ -126,6 +131,14 @@ export function createPlatformServices(
   });
   const memoryGraphSink = new MemoryGraphSink(memoryGraphClient, () => store.getMemoryGraphSettings().enabled);
   const memoryGraphEnabled = () => store.getMemoryGraphSettings().enabled;
+  const ideaTreeRepository = (sessionId: string) => {
+    const session = store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    return dependencies.ideaTreeRepository?.({ projectId: session.projectId, sessionId }) ?? ideaTreeRepositoryForSession(
+      { token: config.evolve.internalToken, url: config.evolve.url },
+      { projectId: session.projectId, sessionId },
+    );
+  };
   const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
   const mcpRegistry = createBuiltinMcpSourceRegistry();
   const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
@@ -372,6 +385,8 @@ export function createPlatformServices(
     evolveOrchestrator,
     evolveRunTokens,
     evolveRuntimeFactory,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
     mcpBroker,
     mcpCatalog,
     mcpGateway,
@@ -409,6 +424,8 @@ export async function initializePlatformServices(
     evolutionStore,
     evolveOrchestrator,
     evolveRuntimeFactory,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
     mcpBroker,
     mcpCatalog,
     mcpRegistry,
@@ -474,6 +491,8 @@ export async function initializePlatformServices(
         remoteCompute,
         skillCatalog,
         skillLibraryCatalog,
+        ideaTreeAuthorities,
+        ideaTreeRepository(session.id),
         memoryGraphSink,
         session.id,
         config,

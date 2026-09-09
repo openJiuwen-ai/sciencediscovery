@@ -97,6 +97,8 @@ export interface Subagent {
   rawStructuredResult?: string;
   structuredResult?: unknown;
   sessionId: string;
+  /** Exact executable Specialist configuration used for this task. */
+  specialistConfigHash?: string;
   specialistId?: string;
   status: "cancelled" | "completed" | "failed" | "running" | "timed_out";
   steps: SubagentStep[];

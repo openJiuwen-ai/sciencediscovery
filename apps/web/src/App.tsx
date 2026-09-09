@@ -96,6 +96,8 @@ import type {
   UpdateWebSettingsRequest,
   MemoryGraphSettingsDetails,
   UpdateMemoryGraphSettingsRequest,
+  IdeaTreeSettingsDetails,
+  UpdateIdeaTreeSettingsRequest,
   WebSettingsDetails,
   WorkspaceCapabilities,
   WorkspaceFile,
@@ -225,6 +227,7 @@ import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
+import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, ideaTreeWeightsValid, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
 import { EvidenceModal } from "./EvidenceModal.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
@@ -237,6 +240,7 @@ import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 // App layer so the right-rail card can open it directly (previously the only
 // entries were the per-product modals).
 const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
+import { IdeaTreeView } from "./IdeaTreeView.js";
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ApprovalModeToggle } from "./composer/ApprovalModeToggle.js";
@@ -675,6 +679,7 @@ export type SystemSettingsGroup =
   | "connection"
   | "environments"
   | "global"
+  | "idea-tree"
   | "language"
   | "memory-graph"
   | "models"
@@ -704,6 +709,7 @@ const SYSTEM_SETTINGS_GROUPS: Array<{
   { id: "proxies" },
   { id: "web" },
   { id: "memory-graph" },
+  { id: "idea-tree" },
   { id: "environments" },
   { id: "skills" },
   { id: "specialists" },
@@ -1225,6 +1231,7 @@ export function App() {
   const [mcpSources, setMcpSources] = useState<McpSourceManifest[]>([]);
   const [webSettings, setWebSettings] = useState<WebSettingsDetails>();
   const [memoryGraphSettings, setMemoryGraphSettings] = useState<MemoryGraphSettingsDetails>();
+  const [ideaTreeSettings, setIdeaTreeSettings] = useState<IdeaTreeSettingsDetails>();
   // Configuration editors write only to these dialog-scoped drafts. They are
   // deliberately owned here so changing the left-hand section cannot unmount
   // and lose a draft, or accidentally persist it.
@@ -1234,6 +1241,7 @@ export function App() {
   const [sandboxNetworkSettingsEdit, setSandboxNetworkSettingsEdit] = useState<SandboxNetworkSettings>();
   const [webSettingsEdit, setWebSettingsEdit] = useState<WebSettingsDraft>();
   const [memoryGraphSettingsEdit, setMemoryGraphSettingsEdit] = useState<MemoryGraphSettingsDraft>();
+  const [ideaTreeSettingsEdit, setIdeaTreeSettingsEdit] = useState<IdeaTreeSettingsDraft>();
   const [localeEdit, setLocaleEdit] = useState<"en" | "zh-CN">();
   const [tokenEdit, setTokenEdit] = useState<string>();
   // Set when the server rejected the current token, so the Connection panel can
@@ -1496,7 +1504,8 @@ export function App() {
       client.getSandboxNetworkSettings(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
+      client.getIdeaTreeSettings(),
+    ]).then(([modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph, ideaTree]) => {
       if (!active) return;
       setModels(modelItems);
       setModelProviders(providerRegistry.providers);
@@ -1510,6 +1519,7 @@ export function App() {
       setSandboxNetworkSettings(sandboxNetwork);
       setWebSettings(web);
       setMemoryGraphSettings(memoryGraph);
+      setIdeaTreeSettings(ideaTree);
       setWorkspaceCapabilities({
         maxFileBytes: quotas.uploadMaxFileBytes,
         maxRequestBytes: quotas.uploadMaxRequestBytes,
@@ -1848,7 +1858,8 @@ export function App() {
       client.listMcpSources(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([projectItems, modelItems, providerRegistry, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
+      client.getIdeaTreeSettings(),
+    ]).then(([projectItems, modelItems, providerRegistry, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph, ideaTree]) => {
       setProjects(projectItems);
       setModels(modelItems);
       setModelProviders(providerRegistry.providers);
@@ -1866,6 +1877,7 @@ export function App() {
       setMcpSources(mcpSourceDetails.map((item) => item.manifest));
       setWebSettings(web);
       setMemoryGraphSettings(memoryGraph);
+      setIdeaTreeSettings(ideaTree);
       setWorkspaceCapabilities({
         maxFileBytes: quotas.uploadMaxFileBytes,
         maxRequestBytes: quotas.uploadMaxRequestBytes,
@@ -2581,6 +2593,19 @@ export function App() {
     }
   }
 
+  async function saveIdeaTreeSettings(input: UpdateIdeaTreeSettingsRequest): Promise<void> {
+    reportSystemSettingsError();
+    try {
+      const saved = await client.updateIdeaTreeSettings(input);
+      setIdeaTreeSettings(saved);
+      setIdeaTreeSettingsEdit(undefined);
+      pushToast("success", t("ideaTree.saved"));
+    } catch (reason) {
+      reportSystemSettingsError(reason instanceof Error ? reason.message : "Could not save Idea Tree settings");
+      throw reason;
+    }
+  }
+
   function clearSystemSettingsDrafts(): void {
     setGlobalSettingsEdit(undefined);
     setTimeoutSettingsEdit(undefined);
@@ -2588,6 +2613,7 @@ export function App() {
     setSandboxNetworkSettingsEdit(undefined);
     setWebSettingsEdit(undefined);
     setMemoryGraphSettingsEdit(undefined);
+    setIdeaTreeSettingsEdit(undefined);
     setLocaleEdit(undefined);
     setTokenEdit(undefined);
   }
@@ -2637,6 +2663,7 @@ export function App() {
       if (sandboxNetworkSettingsEdit) await saveSandboxNetworkSettings(sandboxNetworkSettingsEdit);
       if (webSettingsEdit) await saveWebSettings(webSettingsRequest(webSettingsEdit));
       if (memoryGraphSettingsEdit) await saveMemoryGraphSettings(memoryGraphSettingsRequest(memoryGraphSettingsEdit));
+      if (ideaTreeSettingsEdit && ideaTreeWeightsValid(ideaTreeSettingsEdit)) await saveIdeaTreeSettings(ideaTreeSettingsRequest(ideaTreeSettingsEdit));
       if (providerSettingsRef.current?.hasUnsavedDraft()) {
         const saved = await providerSettingsRef.current.saveDraft();
         if (!saved) return;
@@ -4741,6 +4768,8 @@ export function App() {
               </div>
             </details> : null}
 
+            {session ? <IdeaTreeView client={client} onOpenSubagent={setOpenSubagentId} onOpenArtifact={(id) => { const artifact = artifacts.find(item => item.id === id); if (artifact) setArtifactModalName(artifact.name); }} onError={reportError} refreshKey={`exec:${executionRuns.length}:msg:${session.messages.length}`} sessionId={session.id} /> : null}
+
             {session ? <MemoryGraphView subgraph={memorySubgraph} health={memoryHealth} onOpenExplorer={() => setMemoryExplorerOpen(true)} /> : null}
 
             {session ? <EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /> : null}
@@ -5043,6 +5072,17 @@ export function App() {
                 memoryGraphSettings
                   ? <MemoryGraphSettingsEditor draft={memoryGraphSettingsEdit ?? createMemoryGraphSettingsDraft(memoryGraphSettings)} onChange={setMemoryGraphSettingsEdit} settings={memoryGraphSettings} />
                   : <p className="muted">{t("settings.loadingMemoryGraph")}</p>
+              ) : null}
+              {systemSettingsGroup === "idea-tree" ? (
+                ideaTreeSettings
+                  ? <IdeaTreeSettingsEditor
+                    draft={ideaTreeSettingsEdit ?? createIdeaTreeSettingsDraft(ideaTreeSettings)}
+                    onChange={setIdeaTreeSettingsEdit}
+                    onSave={() => void saveIdeaTreeSettings(ideaTreeSettingsRequest(ideaTreeSettingsEdit ?? createIdeaTreeSettingsDraft(ideaTreeSettings)))}
+                    saving={systemSettingsSaving}
+                    settings={ideaTreeSettings}
+                  />
+                  : <p className="muted">{t("settings.loadingIdeaTree")}</p>
               ) : null}
               {systemSettingsGroup === "skills" ? <SkillManager
                 client={client}

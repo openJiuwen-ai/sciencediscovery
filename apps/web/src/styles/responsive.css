@@ -33,6 +33,7 @@
   .content-grid { display: flex; flex-direction: column; }
   .conversation { min-height: 720px; border-right: 0; }
   .workspace-panel { border-top: 1px solid var(--border); }
+  .workflow-controls > label { grid-template-columns: minmax(120px, .7fr) minmax(0, 1.3fr); }
   .workspace-resizer, .composer-hint { display: none; }
   .session-bar { padding: 6px 14px; }
   .session-bar .connection { display: none; }
@@ -81,6 +82,7 @@
   .composer-run-actions { width: 100%; flex-direction: column; }
   .send-button { width: 100%; }
   .trust-metrics { grid-template-columns: repeat(2, 1fr); }
+  .workflow-controls > label { grid-template-columns: minmax(0, 1fr); gap: 5px; }
   .config-backdrop { padding: 12px; }
   .config-panel { max-height: calc(100vh - 24px); padding: 24px 20px; }
   .system-config-dialog { width: 100%; height: calc(100vh - 24px); padding: 0; }

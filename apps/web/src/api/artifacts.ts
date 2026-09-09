@@ -35,6 +35,7 @@ import type {
   CreateArtifactAnnotationRequest,
   CreateArtifactPlanRequest,
   EvidenceLink,
+  IdeaTreeGraph,
   McpInvocation,
   PermissionRequest,
   PaperAcquisition,
@@ -140,6 +141,15 @@ export class ArtifactsApiClient extends RunsApiClient {
 
   getArtifactDashboard(sessionId: string): Promise<ArtifactDashboard> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/artifact-dashboard`);
+  }
+
+  getIdeaTreeGraph(sessionId: string, treeId?: string): Promise<{
+    graph: IdeaTreeGraph | null;
+    hasIdeaTreeRun: boolean;
+    treeIds: string[];
+  }> {
+    const query = treeId ? `?tree_id=${encodeURIComponent(treeId)}` : "";
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/graph${query}`);
   }
 
   /** Per-version structured preview payload routed by `kind`. */

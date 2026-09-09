@@ -253,6 +253,22 @@ importers:
         specifier: 26.1.1
         version: 26.1.1
 
+  packages/idea-tree:
+    dependencies:
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@sciencediscovery/tools':
+        specifier: workspace:*
+        version: link:../tools
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/mcp-sources:
     dependencies:
       '@sciencediscovery/schema':
@@ -480,6 +496,9 @@ importers:
       '@sciencediscovery/governance':
         specifier: workspace:*
         version: link:../../packages/governance
+      '@sciencediscovery/idea-tree':
+        specifier: workspace:*
+        version: link:../../packages/idea-tree
       '@sciencediscovery/mcp-sources':
         specifier: workspace:*
         version: link:../../packages/mcp-sources
@@ -541,6 +560,9 @@ importers:
       tsx:
         specifier: 4.23.1
         version: 4.23.1
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
       typescript:
         specifier: 7.0.2
         version: 7.0.2

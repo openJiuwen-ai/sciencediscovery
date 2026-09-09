@@ -56,7 +56,10 @@ from .vendor.puct.sandbox import SandboxCapability, detect_local_capability
 
 log = get_logger("server")
 
+from .vendor.idea_tree.idea_tree_service import router as idea_tree_router
+
 app = FastAPI(title="sciencediscovery-evolve")
+app.include_router(idea_tree_router)
 
 #: Engines by name; the request's ``engine`` field selects, so an operator can
 #: pin the stub for a reproduction without touching the API.

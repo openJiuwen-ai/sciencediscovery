@@ -182,6 +182,27 @@ test("keeps streamed SubAgent steps when a terminal snapshot omits its process",
   assert.equal(group?.type === "subagents" && group.subagents[0]?.steps[0]?.content, "Evidence search completed");
 });
 
+test("Idea Tree phases are ordered, deduplicated, rendered, and closed at terminal events", () => {
+  const entries = apply([
+    { phase: "preflight_research", treeId: "tree-1", type: "idea_tree.phase" },
+    { phase: "preflight_research", treeId: "tree-1", type: "idea_tree.phase" },
+    { nodeId: "node-2", phase: "executing_leaf", treeId: "tree-1", type: "idea_tree.phase" },
+    { reason: "Run cancelled by test", type: "run.cancelled" },
+  ]);
+
+  assert.deepEqual(entries.map((entry) => entry.type), ["idea-tree-phase", "idea-tree-phase"]);
+  assert.deepEqual(entries.map((entry) => entry.type === "idea-tree-phase" && entry.status), ["completed", "completed"]);
+  const html = renderToStaticMarkup(createElement(RunTimeline, {
+    entries,
+    isRunning: false,
+    onToggle: () => undefined,
+  }));
+  assert.match(html, /Researching literature/);
+  assert.match(html, /Executing leaf/);
+  assert.match(html, /node-2/);
+  assert.equal((html.match(/idea-tree-phase completed/g) ?? []).length, 2);
+});
+
 test("renders completed activity as collapsible disclosures", () => {
   const entries = apply([
     { phase: "thinking", turn: 1, type: "agent.phase" },

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import {
+  DEFAULT_IDEA_TREE_SETTINGS,
   DEFAULT_MEMORY_GRAPH_SETTINGS,
   DEFAULT_WEB_SETTINGS,
   type EnabledSkillLibrary,
@@ -23,6 +24,8 @@ import {
   SKILL_SELECTION_FIELDS,
   type ConnectorId,
   type FreeSearchEngine,
+  type IdeaTreeAssessorConfig,
+  type IdeaTreeSettings,
   type PaidSearchProvider,
   type McpProxyPolicies,
   type MemoryGraphSettings,
@@ -33,6 +36,7 @@ import {
   type RuntimeSettingsOverrides,
   type SystemQuotaSettings,
   type SystemTimeoutSettings,
+  type UpdateIdeaTreeSettingsRequest,
   type WebFetchProvider,
   type WebSettings,
 } from "@sciencediscovery/schema";
@@ -415,4 +419,168 @@ export function normalizeMcpProxyPolicies(value: unknown): McpProxyPolicies {
     if (normalized !== "inherit") policies[id] = normalized;
   }
   return policies;
+}
+
+/** Coerce a possibly-empty string to undefined so the caller can fall back to
+ *  the product default. The Idea Tree contract treats empty strings as
+ *  "use default" — this helper centralizes that rule. */
+function optionalString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new Error("Expected a string");
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/** Coerce a maybe-provided numeric field, validating its range. When omitted,
+ *  falls back to the current stored value. */
+function boundedInteger(
+  value: unknown,
+  field: keyof IdeaTreeSettings,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (value === undefined || value === null) return fallback;
+  if (!Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(`${field} must be an integer between ${min} and ${max}`);
+  }
+  const numeric = value as number;
+  if (numeric < min || numeric > max) {
+    throw new Error(`${field} must be between ${min} and ${max}`);
+  }
+  return numeric;
+}
+
+/** Normalize one Assessor config overlay. Empty strings become undefined so
+ *  the workflow skill's built-in defaults are used. The scoringCriteria, when
+ *  provided, is a free-form text describing the scoring rubric. */
+function normalizeAssessor(
+  input: unknown,
+  fallback: IdeaTreeAssessorConfig,
+): IdeaTreeAssessorConfig {
+  if (input === undefined || input === null) return structuredClone(fallback);
+  if (!isRecord(input)) throw new Error("Assessor config must be an object");
+  const systemPrompt = hasOwn(input, "systemPrompt")
+    ? optionalString(input.systemPrompt)
+    : fallback.systemPrompt;
+  const scoringCriteria = hasOwn(input, "scoringCriteria")
+    ? optionalString(input.scoringCriteria)
+    : fallback.scoringCriteria;
+  const weight = hasOwn(input, "weight")
+    ? (typeof input.weight === "number" && Number.isFinite(input.weight)
+      ? input.weight
+      : (() => { throw new Error("Assessor weight must be a finite number"); })())
+    : fallback.weight;
+  return {
+    ...(systemPrompt ? { systemPrompt } : {}),
+    ...(scoringCriteria ? { scoringCriteria } : {}),
+    ...(weight !== undefined ? { weight } : {}),
+  };
+}
+
+/**
+ * Normalize an Idea Tree settings update against the current stored value.
+ *
+ * - Empty strings become undefined so the product defaults (or the workflow
+ *   skill's built-in values) are used.
+ * - Numeric fields are range-validated: maxDepth [1,20], maxNodes [1,10000],
+ *   maxSearchRounds [1,10000]. Omitted fields retain the current value.
+ * - Weight validation: if all three assessor weights are provided, they must
+ *   sum to 1.0 within a 0.001 tolerance. Partial weights are kept as-is so
+ *   the caller can update one without re-specifying the others; the sum is
+ *   only enforced when all three are present.
+ */
+export function normalizeIdeaTreeSettings(
+  input: UpdateIdeaTreeSettingsRequest,
+  current: IdeaTreeSettings,
+): IdeaTreeSettings {
+  const maxDepth = boundedInteger(input.maxDepth, "maxDepth", 1, 20, current.maxDepth);
+  const maxNodes = boundedInteger(input.maxNodes, "maxNodes", 1, 10_000, current.maxNodes);
+  const maxSearchRounds = boundedInteger(
+    input.maxSearchRounds,
+    "maxSearchRounds",
+    1,
+    10_000,
+    current.maxSearchRounds,
+  );
+  const scoreDirection = input.scoreDirection === "maximize" || input.scoreDirection === "minimize"
+    ? input.scoreDirection
+    : current.scoreDirection;
+  const designSystemPrompt = hasOwn(input, "designSystemPrompt")
+    ? optionalString(input.designSystemPrompt)
+    : current.designSystemPrompt;
+  const assessorActivity = normalizeAssessor(input.assessorActivity, current.assessorActivity);
+  const assessorStability = normalizeAssessor(input.assessorStability, current.assessorStability);
+  const assessorSustainability = normalizeAssessor(input.assessorSustainability, current.assessorSustainability);
+  const aggregatorSystemPrompt = hasOwn(input, "aggregatorSystemPrompt")
+    ? optionalString(input.aggregatorSystemPrompt)
+    : current.aggregatorSystemPrompt;
+  const propagateInsightSystemPrompt = hasOwn(input, "propagateInsightSystemPrompt")
+    ? optionalString(input.propagateInsightSystemPrompt)
+    : current.propagateInsightSystemPrompt;
+  // Weight validation: enforce the 1.0 sum only when all three weights are
+  // explicitly provided in this update. Partial updates keep the current
+  // values for the un-touched assessors, so the sum is only meaningful when
+  // the caller is re-balancing the whole tier at once.
+  const providedWeights = [
+    input.assessorActivity?.weight,
+    input.assessorStability?.weight,
+    input.assessorSustainability?.weight,
+  ].filter((value) => typeof value === "number");
+  if (providedWeights.length === 3) {
+    const sum = (input.assessorActivity!.weight as number)
+      + (input.assessorStability!.weight as number)
+      + (input.assessorSustainability!.weight as number);
+    if (Math.abs(sum - 1) > 0.001) {
+      throw new Error(`Assessor weights must sum to 1.0 (got ${sum})`);
+    }
+  }
+  return {
+    maxDepth,
+    maxNodes,
+    maxSearchRounds,
+    scoreDirection,
+    ...(designSystemPrompt ? { designSystemPrompt } : {}),
+    assessorActivity,
+    assessorStability,
+    assessorSustainability,
+    ...(aggregatorSystemPrompt ? { aggregatorSystemPrompt } : {}),
+    ...(propagateInsightSystemPrompt ? { propagateInsightSystemPrompt } : {}),
+  };
+}
+
+/** Fill missing Idea Tree settings fields from the product defaults. Used on
+ *  catalog load and on partial GETs so the runtime always sees a complete
+ *  settings object. Unknown keys are dropped silently (same rule as the
+ *  memory-graph normalizer) so a stale catalog row carrying a renamed field
+ *  does not wedge boot. */
+export function resolveIdeaTreeSettings(value: unknown): IdeaTreeSettings {
+  if (value === undefined || value === null) return structuredClone(DEFAULT_IDEA_TREE_SETTINGS);
+  if (!isRecord(value)) throw new Error("Idea Tree settings must be an object");
+  const current: IdeaTreeSettings = {
+    maxDepth: typeof value.maxDepth === "number" ? value.maxDepth : DEFAULT_IDEA_TREE_SETTINGS.maxDepth,
+    maxNodes: typeof value.maxNodes === "number" ? value.maxNodes : DEFAULT_IDEA_TREE_SETTINGS.maxNodes,
+    maxSearchRounds: typeof value.maxSearchRounds === "number"
+      ? value.maxSearchRounds
+      : DEFAULT_IDEA_TREE_SETTINGS.maxSearchRounds,
+    scoreDirection: value.scoreDirection === "maximize" || value.scoreDirection === "minimize"
+      ? value.scoreDirection
+      : DEFAULT_IDEA_TREE_SETTINGS.scoreDirection,
+    ...(typeof value.designSystemPrompt === "string" && value.designSystemPrompt.trim()
+      ? { designSystemPrompt: value.designSystemPrompt.trim() }
+      : {}),
+    assessorActivity: normalizeAssessor(value.assessorActivity, DEFAULT_IDEA_TREE_SETTINGS.assessorActivity),
+    assessorStability: normalizeAssessor(value.assessorStability, DEFAULT_IDEA_TREE_SETTINGS.assessorStability),
+    assessorSustainability: normalizeAssessor(
+      value.assessorSustainability,
+      DEFAULT_IDEA_TREE_SETTINGS.assessorSustainability,
+    ),
+    ...(typeof value.aggregatorSystemPrompt === "string" && value.aggregatorSystemPrompt.trim()
+      ? { aggregatorSystemPrompt: value.aggregatorSystemPrompt.trim() }
+      : {}),
+    ...(typeof value.propagateInsightSystemPrompt === "string" && value.propagateInsightSystemPrompt.trim()
+      ? { propagateInsightSystemPrompt: value.propagateInsightSystemPrompt.trim() }
+      : {}),
+  };
+  return current;
 }

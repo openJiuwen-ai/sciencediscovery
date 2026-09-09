@@ -245,6 +245,22 @@ test("skill library client methods target versioned library endpoints", async ()
   }
 });
 
+test("getIdeaTreeGraph uses the independent Session-scoped graph endpoint", async () => {
+  const previousFetch = globalThis.fetch;
+  let requestedUrl = "";
+  globalThis.fetch = async (input) => {
+    requestedUrl = String(input);
+    return Response.json({ graph: null, hasIdeaTreeRun: true, treeIds: ["tree/a"] });
+  };
+  try {
+    const result = await new ApiClient("test-token").getIdeaTreeGraph("session/a", "tree/a");
+    assert.deepEqual(result, { graph: null, hasIdeaTreeRun: true, treeIds: ["tree/a"] });
+    assert.equal(requestedUrl, "/api/sessions/session%2Fa/idea-tree/graph?tree_id=tree%2Fa");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("readProjectArtifactVersion downloads retained content from the Project endpoint", async () => {
   const previousFetch = globalThis.fetch;
   let requestedUrl = "";

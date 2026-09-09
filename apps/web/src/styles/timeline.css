@@ -59,6 +59,10 @@
 .skill-review-timeline-cta button:focus-visible { outline: 3px solid var(--accent-tint); outline-offset: 2px; }
 .run-timeline > .message { margin-bottom: 28px; }
 .run-timeline > .timeline-permission, .run-timeline > .boundary-note { width: calc(100% - var(--timeline-gutter)); margin: 0 0 11px var(--timeline-gutter); }
+.run-timeline > .idea-tree-phase { border-color: var(--accent-border-soft); background: var(--accent-soft); }
+.run-timeline > .idea-tree-phase > span { background: var(--accent-softer); color: var(--accent); }
+.run-timeline > .idea-tree-phase.running > span { animation: spin 1s linear infinite; }
+.run-timeline > .idea-tree-phase p, .run-timeline > .idea-tree-phase strong { color: var(--accent-ink); }
 .timeline-permission.allowed { border-color: var(--success-border); background: var(--success-soft); }
 .timeline-permission.denied, .timeline-permission.cancelled { border-color: var(--danger-border); background: var(--danger-soft); }
 .timeline-permission > div > small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; }

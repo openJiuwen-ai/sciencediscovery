@@ -122,6 +122,17 @@ test("a run in one Session never writes into another Session's timeline", () => 
   assert.equal(withBoth["session-a"], withA["session-a"], "an untouched Session keeps its exact buffer");
 });
 
+test("an Idea Tree phase starts a replayable Session timeline", () => {
+  const phase: RunStreamEvent = {
+    phase: "building_tree",
+    treeId: "tree-1",
+    type: "idea_tree.phase",
+  };
+  const timelines = recordSessionTimelineEvent({}, "session-a", phase, { runId: "run-idea", sequence: 1 });
+  assert.equal(timelines["session-a"]?.runId, "run-idea");
+  assert.equal(timelines["session-a"]?.entries[0]?.type, "idea-tree-phase");
+});
+
 test("starting a run clears only that Session's timeline", () => {
   const timelines = dispatch({}, "session-a", "session-a", [thinkingStart, toolStarted]).timelines;
   const withB = dispatch(timelines, "session-b", "session-b", [thinkingStart]).timelines;

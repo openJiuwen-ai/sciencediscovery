@@ -3011,11 +3011,15 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   assert.equal(initial.response.status, 200);
   assert.deepEqual(initial.body.map((item) => item.id), [
     "antibody-protenix-pipeline",
+    "assessment-screening",
     "citation-reviewer",
     "code-engineer",
     "computation-reviewer",
+    "creative-material-design",
     "evidence-extractor",
     "evolve-design",
+    "idea-tree-team",
+    "insight-aggregator",
     "life-science-evidence-brief",
     "literature-searcher",
     "report-writer",
@@ -3026,6 +3030,13 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   ]);
   assert.equal(initial.body[0]?.readOnly, true);
   assert.equal("instructions" in (initial.body[0] ?? {}), false);
+  const fixtureExecutor = initial.body.find((skill) => skill.id === "idea-tree-team");
+  assert.deepEqual(fixtureExecutor?.ideaTreeExecutor, {
+    authorityKey: "idea-tree-result",
+    authorityVersion: "3.0.0",
+    available: true,
+    developmentOnly: true,
+  });
 
   const dialogueDraft = await jsonRequest<{ name: string; origin: string; sourceSummary: string }>(`${origin}/api/skills/drafts/dialogue`, {
     body: JSON.stringify({ description: "Prepare a repeatable microscopy quantification workflow." }),
@@ -3117,11 +3128,19 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   });
   assert.equal(project.response.status, 201);
   const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
-    body: JSON.stringify({ title: "Inherits skill" }),
+    body: JSON.stringify({
+      title: "Inherits skill",
+    }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
   assert.deepEqual(session.body.enabledSkillIds, [created.body.id]);
+  const standardSession = await jsonRequest<Session>(`${origin}/api/sessions/${session.body.id}`, {
+    body: JSON.stringify({}),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PATCH",
+  });
+  assert.equal(standardSession.response.status, 200);
   const impact = await jsonRequest<SkillDeletionImpact>(`${origin}/api/skills/${created.body.id}/deletion-impact`, {
     headers: authorization,
   });

@@ -49,10 +49,13 @@ import type {
   Environment,
   EnvironmentRevision,
   EnvironmentSourceSettings,
+  EffectiveRuntimeSettings,
   ExecutionRun,
   EvidenceLink,
   EvidenceItem,
   CreateProxyServerRequest,
+  IdeaTreeSettings,
+  IdeaTreeSettingsDetails,
   McpProxyPolicies,
   MemoryGraphSettings,
   MemoryGraphSettingsDetails,
@@ -95,7 +98,6 @@ import type {
   SessionReviewerSpecialistSettings,
   ReviewerSpecialistLevel,
   ReviewerSpecialistSettings,
-  EffectiveRuntimeSettings,
   ResolvedRuntimeSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsField,
@@ -106,6 +108,7 @@ import type {
   SessionRun,
   SessionRunEvent,
   SessionRunStatus,
+  IdeaTreeRunSettingsSnapshot,
   SessionUsageSummary,
   GlobalModelUsageSummary,
   ScientificArtifact,
@@ -121,6 +124,7 @@ import type {
   SystemQuotaSettings,
   SystemTimeoutSettings,
   TimeoutKind,
+  UpdateIdeaTreeSettingsRequest,
   UpdateMcpProxyPoliciesRequest,
   UpdateMemoryGraphSettingsRequest,
   UpdateEnvironmentSourceSettingsRequest,
@@ -223,6 +227,7 @@ import { openSshPublicKey } from "@sciencediscovery/executor";
 import { planStandaloneProfileMigration, providerSecretKey, validateLiveProvider } from "./store/providers.js";
 import {
   knownConnectorIdSet,
+  normalizeIdeaTreeSettings,
   normalizeMcpProxyPolicies,
   normalizeMemoryGraphSettings,
   normalizeProxyDefaultPolicy,
@@ -233,6 +238,7 @@ import {
   normalizeTimeoutSettings,
   normalizeWebSettings,
   PROXY_SERVER_KINDS,
+  resolveIdeaTreeSettings,
   resolveQuotaSettings,
   RUNTIME_SETTINGS_FIELDS,
   withoutSkillSelection,
@@ -727,6 +733,8 @@ export class SessionStore {
       : normalizedGlobalSettings;
     const memoryGraphSettings = normalizeMemoryGraphSettings(saved.memoryGraphSettings);
     const migratedMemoryGraphSettings = JSON.stringify(memoryGraphSettings) !== JSON.stringify(saved.memoryGraphSettings ?? null);
+    const ideaTreeSettings = resolveIdeaTreeSettings(saved.ideaTreeSettings);
+    const migratedIdeaTreeSettings = JSON.stringify(ideaTreeSettings) !== JSON.stringify(saved.ideaTreeSettings ?? null);
     // One-time backward-compat seed: if no password is stored yet but `.env`
     // still carries SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD (pre-frontend-
     // toggle users), seed the encrypted store from it. Subsequent loads ignore
@@ -1031,6 +1039,7 @@ export class SessionStore {
       environmentRevisions,
       environmentSourceSettings,
       globalSettings,
+      ideaTreeSettings,
       mcpProxyPolicies,
       memoryGraphSettings,
       models,
@@ -1084,6 +1093,7 @@ export class SessionStore {
       || migratedModels
       || migratedHierarchicalSettings
       || migratedMemoryGraphSettings
+      || migratedIdeaTreeSettings
       || migratedEnvironmentRevisions
       || migratedEpoch
       || migratedSessionSettings
@@ -2059,6 +2069,34 @@ export class SessionStore {
     return this.getMemoryGraphSettings();
   }
 
+  /** Idea Tree system settings. Persisted in the catalog JSON (the settings
+   *  table) and filled from `DEFAULT_IDEA_TREE_SETTINGS` for any missing
+   *  field. The runtime reads these when a user triggers `/idea-tree-team` in a
+   *  Run — there is no per-Session override. */
+  getIdeaTreeSettings(): IdeaTreeSettings {
+    return structuredClone(this.catalog.ideaTreeSettings);
+  }
+
+  /** Idea Tree settings as returned to the UI. Currently identical to the
+   *  stored settings (no live status to merge, unlike the memory-graph
+   *  view), but exposed as `IdeaTreeSettingsDetails` so the HTTP layer can
+   *  return the documented view shape without the store leaking its internal
+   *  type. */
+  getIdeaTreeSettingsDetails(): IdeaTreeSettingsDetails {
+    return structuredClone(this.catalog.ideaTreeSettings);
+  }
+
+  /** Persist an Idea Tree settings update. Each field is independent — only
+   *  the keys present in the payload move. The normalizer validates numeric
+   *  ranges and the assessor weight sum (enforced only when all three weights
+   *  are provided together). */
+  async updateIdeaTreeSettings(input: UpdateIdeaTreeSettingsRequest): Promise<IdeaTreeSettings> {
+    const next = normalizeIdeaTreeSettings(input, this.catalog.ideaTreeSettings);
+    this.catalog.ideaTreeSettings = next;
+    await this.saveCatalog();
+    return this.getIdeaTreeSettings();
+  }
+
   getProjectSettings(projectId: string): RuntimeSettingsDetails {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
@@ -2712,7 +2750,12 @@ export class SessionStore {
     sessionId: string,
     parentTurnId: string,
     input: SubagentInput,
-    execution: { maxTurns?: number; model?: ModelRunInfo; timeoutSeconds?: number } = {},
+    execution: {
+      maxTurns?: number;
+      model?: ModelRunInfo;
+      specialistConfigHash?: string;
+      timeoutSeconds?: number;
+    } = {},
   ): Promise<Subagent> {
     this.assertSessionWritable(sessionId);
     const description = requiredLabel(input.description, "Subagent description");
@@ -2741,6 +2784,7 @@ export class SessionStore {
       ...(execution.model ? { model: structuredClone(execution.model) } : {}),
       parentTurnId,
       sessionId,
+      ...(execution.specialistConfigHash ? { specialistConfigHash: execution.specialistConfigHash } : {}),
       ...(validSpecialistId ? { specialistId: validSpecialistId } : {}),
       status: "running",
       steps: [{
@@ -3305,6 +3349,9 @@ export class SessionStore {
     let artifact = this.catalog.artifacts.find((candidate) =>
       candidate.projectId === projectId && candidate.name === logicalName && !candidate.deletedAt);
     if (artifact && artifact.kind !== input.kind) throw new Error("Artifact kind cannot change across versions");
+    if (artifact?.origin === "server_generated" && (input.origin ?? "llm_declared") !== "server_generated") {
+      throw new Error("Server-generated Artifacts accept new versions only from a server-generated writer");
+    }
     if (!artifact) {
       artifact = {
         createdAt: now,
@@ -4614,7 +4661,10 @@ export class SessionStore {
         references: structuredClone(input.references ?? []),
         ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
         sessionId: input.sessionId,
-        settingsSnapshot: structuredClone(input.settingsSnapshot),
+        settingsSnapshot: {
+          ...structuredClone(input.settingsSnapshot),
+          ideaTreeEnabled: input.settingsSnapshot.ideaTreeEnabled === true,
+        },
         ...(input.skillLibraryRefs?.length ? { skillLibraryRefs: structuredClone(input.skillLibraryRefs) } : {}),
         ...(input.webForceRefresh ? { webForceRefresh: true } : {}),
         status: "queued",

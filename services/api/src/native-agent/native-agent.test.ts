@@ -20,6 +20,8 @@ import test from "node:test";
 
 import type { ContextContributorFactory } from "@sciencediscovery/context";
 import type { AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
+import type { AgentTool } from "@sciencediscovery/tools";
+import { Type } from "typebox";
 
 import {
   configuredMaxParallelToolCalls,
@@ -405,6 +407,37 @@ test("dynamic context keeps one Skill body and adds a durable lower-authority re
     assert.equal(historyText.match(/Follow the frozen literature workflow\./gu)?.length, 1);
     assert.match(historyText, /channel="active_skills"/u);
     assert.match(historyText, /instructionsVisibleInHistory":true/u);
+  } finally {
+    restore();
+  }
+});
+
+test("run-scoped extra tools are visible and executable only when supplied to the Lead Native Agent", async () => {
+  const parameters = Type.Object({ tree_id: Type.String() });
+  const treeView: AgentTool<typeof parameters> = {
+    description: "Lead-only fixture tree view",
+    execute: async (_toolCallId, params) => ({
+      content: [{ type: "text", text: `view:${params.tree_id}` }],
+      details: { treeId: params.tree_id },
+    }),
+    label: "Tree view",
+    name: "tree_view",
+    parameters,
+  };
+  const { calls, streamer } = scriptStreamer([
+    (call) => {
+      assert.equal(call.tools.some((candidate) => candidate.name === "tree_view"), true);
+      return toolTurn("tree_view", { tree_id: "tree-0123456789abcdef" });
+    },
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({ ...workspace(), extraTools: [treeView] } as NativeAgentOptions);
+    const result = await agent.execute("inspect the tree");
+    assert.equal(calls.length, 2);
+    const toolMessage = result.finalMessages.find((message) => message.role === "tool");
+    assert.match(String(toolMessage?.content), /view:tree-0123456789abcdef/u);
   } finally {
     restore();
   }

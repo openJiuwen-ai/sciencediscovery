@@ -301,6 +301,7 @@ class NativeAgent implements NativeAgentHandle {
       ...(options.memoryGraphEnabled ? { memoryGraphEnabled: options.memoryGraphEnabled } : {}),
       ...(options.remoteRunners?.length ? { remoteRunners: options.remoteRunners.map((runner) => `${runner.runnerId}: ${runner.description || runner.hostAlias}`) } : {}),
       ...(options.specialist ? { specialist: options.specialist } : {}),
+      ...(options.workflowInstructions ? { workflowInstructions: options.workflowInstructions } : {}),
       ...(options.specialists?.filter((specialist) => specialist.builtIn).length
         ? { builtinSpecialists: options.specialists!.filter((specialist) => specialist.builtIn).map((specialist) => ({ description: specialist.description, name: specialist.name })) }
         : {}),
@@ -732,6 +733,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
   return createWorkspaceTools(options.workspaceRoot, {
     ...(options.createSkill ? { createSkill: options.createSkill } : {}),
     enabledConnectorIds: options.enabledConnectorIds,
+    ...(options.extraTools?.length ? { extraTools: options.extraTools } : {}),
     ...(options.environments ? { environments: options.environments } : {}),
     ...(options.environmentManagement ? { environmentManagement: options.environmentManagement } : {}),
     ...(options.runSubagent ? { runSubagent: options.runSubagent } : {}),
