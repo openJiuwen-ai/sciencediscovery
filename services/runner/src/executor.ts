@@ -53,6 +53,7 @@ import { ensureSeccompFilter, type SeccompVariant } from "./seccomp.js";
 import { profileKeyAllowed, sedimentableCwd, type SessionEnvProfile } from "./session-env-profile.js";
 import type { EnvironmentStore } from "./environment-store.js";
 import { buildSeatbeltProfile, seatbeltWorkspaceMapping } from "./seatbelt.js";
+import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { RUNNER_VERSION } from "./version.js";
 export { RUNNER_VERSION } from "./version.js";
@@ -286,6 +287,14 @@ export async function resolveSandboxSkillRoots(
 ): Promise<SandboxSkillRoots | undefined> {
   if (!requestedPackagesRoot) return undefined;
   const packagesRoot = await validatedWorkspace(dataDir, requestedPackagesRoot);
+  // A snapshot this Runner published for a remote execution is only mountable
+  // while it still matches the manifest it was published under, so a damaged or
+  // half-written tree fails the execution instead of being mounted.
+  const managedParent = resolve(dataDir, "projects", ".skill-packages");
+  if (packagesRoot === managedParent || packagesRoot.startsWith(managedParent + sep)) {
+    const snapshot = await new RunnerSkillPackages(dataDir).get(relative(managedParent, packagesRoot));
+    if (snapshot.root !== packagesRoot) throw new Error("Unpublished Skill snapshot");
+  }
   if (!(await stat(packagesRoot)).isDirectory()) throw new Error("Runner Skill packages root must be a directory");
   const extensionsRoot = resolve(workspaceRoot, SKILL_EXTENSIONS_WORKSPACE_PATH);
   await mkdir(extensionsRoot, { recursive: true });

@@ -14,6 +14,7 @@
 
 import {
   createExecutionSignature,
+  skillBundleIdentity,
   EXECUTION_SIGNATURE_HEADER,
   EXECUTION_TIMESTAMP_HEADER,
 } from "@sciencediscovery/runner";
@@ -38,6 +39,8 @@ import type {
   ScientificEnvironmentSetup,
   ShellExecutionRequest,
   ShellExecutionResult,
+  SkillPackageBundle,
+  SkillPackageManifest,
   ExecutionOwner,
   ExecutionLogPage,
   ManagedExecution,
@@ -52,6 +55,34 @@ export class RunnerClient {
     private readonly baseUrl: string,
     private readonly token: string,
   ) {}
+
+  /**
+   * Make this Runner hold the selected frozen packages and say where it mounted
+   * them. The manifest alone names the snapshot, so a Runner that already has
+   * those exact bytes answers without anything being read or shipped; only a
+   * miss calls `loadBundle`. The returned path is the Runner's own, never this
+   * machine's staging root.
+   */
+  async prepareSkillPackages(
+    manifest: SkillPackageManifest,
+    loadBundle: () => Promise<SkillPackageBundle>,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const id = skillBundleIdentity(manifest);
+    try {
+      let result = await this.request<{ id: string; root?: string }>(`/skill-packages/${id}`, { signal });
+      if (result.id !== id) throw new Error("Runner answered for a different Skill snapshot");
+      if (!result.root) {
+        result = await this.request("/skill-packages", { method: "POST", body: JSON.stringify(await loadBundle()), signal });
+      }
+      if (result.id !== id || !result.root) throw new Error("Runner did not confirm Skill snapshot publication");
+      return result.root;
+    } catch (error) {
+      // Never fall through to an execution with no packages mounted: a Session
+      // that selected Skills must not silently run without them.
+      throw new Error(`Remote Skill preparation failed: ${(error as Error).message}`, { cause: error });
+    }
+  }
 
   async health(): Promise<RunnerHealth> {
     const response = await fetch(`${this.baseUrl}/health`);

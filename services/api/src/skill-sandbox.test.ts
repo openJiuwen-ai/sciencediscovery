@@ -24,7 +24,7 @@ import { strToU8, zipSync } from "fflate";
 import { SKILL_EXTENSIONS_WORKSPACE_PATH } from "@sciencediscovery/schema";
 import { hashSkillPackageFiles, SkillCatalog, type RuntimeSkillSnapshot } from "@sciencediscovery/specialist";
 
-import { prepareSkillSandbox, skillPackageSetHash, SKILL_SNAPSHOT_MANIFEST } from "./skill-sandbox.js";
+import { prepareSkillSandbox, readPreparedSkillBundle, skillPackageSetHash, SKILL_SNAPSHOT_MANIFEST } from "./skill-sandbox.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -99,11 +99,19 @@ test("prepares only selected complete frozen Skill packages before sandbox execu
   const manifestText = await readFile(resolve(snapshotRoot, SKILL_SNAPSHOT_MANIFEST), "utf8");
   assert.doesNotMatch(manifestText, /frozen marker/);
   assert.ok(manifestText.length < script.length / 10);
+  const transport = await readPreparedSkillBundle(snapshotRoot);
+  assert.deepEqual(transport.skills.map((skill) => skill.id), [selected.id]);
+  assert.equal(transport.skills[0]?.hash, selected.hash);
+  assert.deepEqual(Buffer.from(transport.skills[0]!.files.find((file) => file.path === "assets/data.bin")!.content, "base64"), selectedSource.get("assets/data.bin"));
+  assert.ok(!JSON.stringify(transport).includes(snapshotRoot));
 
   // Preparing the same execution identity is idempotent and never re-reads live package files.
   selectedSource.set("scripts/foo.py", Buffer.from("print('live edit')\n"));
   await prepareSkillSandbox(snapshotRoot, workspaceRoot, [selected]);
   assert.deepEqual(await readFile(resolve(snapshotRoot, "selected-skill", "scripts", "foo.py")), script);
+  await rm(resolve(snapshotRoot, "selected-skill", "scripts", "foo.py"));
+  await writeFile(resolve(snapshotRoot, "selected-skill", "scripts", "foo.py"), "changed");
+  await assert.rejects(readPreparedSkillBundle(snapshotRoot), /integrity/);
 });
 
 test("the package set hash is stable per selected Skill set so one snapshot is shared", () => {

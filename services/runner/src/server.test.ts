@@ -34,7 +34,7 @@ import type {
   ShellExecutionResult,
 } from "@sciencediscovery/schema";
 
-import { appendBounded, executePython, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
+import { appendBounded, executePython, executeShell, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
@@ -592,6 +592,32 @@ test("bubblewrap runner starts with complete read-only Skill packages and a writ
     "future",
   );
   assert.equal(await readFile(resolve(packageRoot, "SKILL.md"), "utf8"), "Frozen instructions\n");
+});
+
+test("a shell execution runs a script out of the mounted package and keeps its exit code", async (context) => {
+  const fixture = await workspaceFixture(context);
+  const skillPackagesRoot = resolve(dirname(fixture.workspaceRoot), "skill-snapshots", "run-shell");
+  await mkdir(resolve(skillPackagesRoot, "selected-skill", "scripts"), { recursive: true });
+  await writeFile(resolve(skillPackagesRoot, "selected-skill", "SKILL.md"), "Frozen instructions\n");
+  // Frozen files are read-only and carry no mode, so a packaged script is run
+  // through its interpreter — never read out and re-evaluated by the model.
+  await writeFile(
+    resolve(skillPackagesRoot, "selected-skill", "scripts", "check.sh"),
+    "printf 'checked %s\\n' \"$1\"\nexit 7\n",
+    { mode: 0o444 },
+  );
+
+  const result = await executeShell(config(fixture.dataDir), {
+    agentId: "main",
+    code: 'sh "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill/scripts/check.sh" sample',
+    executionId: "execution-skill-script",
+    permissionEpoch: epoch(),
+    skillPackagesRoot,
+    workspaceRoot: fixture.workspaceRoot,
+  });
+
+  assert.equal(result.exitCode, 7);
+  assert.match(result.stdout, /^checked sample$/m);
 });
 
 test("runner rejects workspaces outside its configured projects root", async (context) => {

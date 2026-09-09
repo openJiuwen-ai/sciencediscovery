@@ -47,3 +47,4 @@ export {
   startRunnerServer,
   type RunnerConfig,
 } from "./server.js";
+export { skillBundleIdentity, skillBundleManifest, verifySkillBundle } from "./skill-packages.js";

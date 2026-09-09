@@ -14,6 +14,11 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import { SKILL_SNAPSHOT_MANIFEST } from "../skill-sandbox.js";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "../agent-notifications.js";
 
@@ -68,7 +73,31 @@ test("Transfer binding exposes only owned Workspaces and rechecks Runner access 
   assert.deepEqual(binding.workspaces().map((item) => item.id), ["child-local"]);
 });
 
-test("main and child execution bindings route by Runner ID and record isolated workspace ownership", async () => {
+test("main and child execution bindings route by Runner ID and record isolated workspace ownership", async (t) => {
+  const skillRoot = await mkdtemp(resolve(tmpdir(), "binding-skills-"));
+  t.after(() => rm(skillRoot, { recursive: true, force: true }));
+  await mkdir(resolve(skillRoot, "selected"));
+  await writeFile(resolve(skillRoot, "selected/SKILL.md"), "frozen");
+  const hash = createHash("sha256").update("8:SKILL.md:6:frozen").digest("hex");
+  await writeFile(resolve(skillRoot, SKILL_SNAPSHOT_MANIFEST), JSON.stringify({ schemaVersion: 1,
+    skills: [{ id: "selected", hash, revision: 1, version: "1" }] }));
+  let preparations = 0;
+  let failSync = false;
+  // Stands in for a Runner that does not hold this set yet, so every remote
+  // execution here also exercises shipping the frozen bytes.
+  const remoteClient = { prepareSkillPackages: async (
+    manifest: { skills: { hash: string; id: string }[] },
+    loadBundle: () => Promise<{ skills: { files: { content: string; path: string }[] }[] }>,
+  ) => {
+    assert.deepEqual(manifest.skills.map((skill) => skill.id), ["selected"]);
+    assert.equal(manifest.skills[0]?.hash, hash);
+    const bundle = await loadBundle();
+    assert.deepEqual(bundle.skills[0]?.files.map((file) => file.path), ["SKILL.md"]);
+    assert.equal(Buffer.from(bundle.skills[0]!.files[0]!.content, "base64").toString(), "frozen");
+    preparations++;
+    if (failSync) throw new Error("sync failed");
+    return "/runner/projects/.skill-packages/frozen";
+  } } as unknown as RunnerClient;
   const executed: Array<{
     agentId: string;
     executionTimeoutMs?: number;
@@ -112,7 +141,7 @@ test("main and child execution bindings route by Runner ID and record isolated w
     } as unknown as ProvenanceRecorder,
     runnerClient: {} as RunnerClient,
     sessionId: "session-1",
-    skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1",
+    skillPackagesRoot: skillRoot,
     store: {
       assertSessionWritable() {},
       // No network in this epoch, so the binding resolves no outbound route.
@@ -129,7 +158,7 @@ test("main and child execution bindings route by Runner ID and record isolated w
     remoteTargets: [{
       runnerId: "runner-1",
       hostAlias: "institution-linux",
-      runnerClient: () => ({} as RunnerClient),
+      runnerClient: () => remoteClient,
       workspaceKey: "project-1/session-1",
     }],
   });
@@ -138,7 +167,7 @@ test("main and child execution bindings route by Runner ID and record isolated w
     agentId: "subagent:subagent-1",
     executionId: "subagent-execution",
     remoteTargets: [{ runnerId: "runner-1", hostAlias: "institution-linux",
-      runnerClient: () => ({} as RunnerClient), workspaceKey: "project-1/session-1/agents/subagent-1" }],
+      runnerClient: () => remoteClient, workspaceKey: "project-1/session-1/agents/subagent-1" }],
   });
 
   // Being allowed a remote machine does not move the default off this one.
@@ -149,22 +178,28 @@ test("main and child execution bindings route by Runner ID and record isolated w
   assert.deepEqual(executed, [
     {
       agentId: "main", runnerId: "local", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
-      skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1", turnId: "main-execution",
+      skillPackagesRoot: skillRoot, turnId: "main-execution",
     },
     {
       agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
       runnerId: "runner-1", remoteHostAlias: "institution-linux",
       runnerWorkspaceKey: "project-1/session-1",
+      skillPackagesRoot: "/runner/projects/.skill-packages/frozen",
       turnId: "main-execution",
     },
     {
       agentId: "subagent:subagent-1", runnerId: "local",
-      skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1",
+      skillPackagesRoot: skillRoot,
       turnId: "subagent-execution",
     },
     { agentId: "subagent:subagent-1", runnerId: "runner-1", remoteHostAlias: "institution-linux",
+      skillPackagesRoot: "/runner/projects/.skill-packages/frozen",
       runnerWorkspaceKey: "project-1/session-1/agents/subagent-1", turnId: "subagent-execution" },
   ]);
+  assert.equal(preparations, 2);
+  failSync = true;
+  await assert.rejects(main.executeShell!("echo no", "ephemeral", undefined, undefined, "runner-1"), /sync failed/);
+  assert.equal(executed.length, 4);
   // A machine outside the allowlist is refused, and a Session with none can
   // only ever be told about the local machine.
   await assert.rejects(

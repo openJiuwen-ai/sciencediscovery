@@ -14,6 +14,36 @@
 
 export type SkillSource = "built-in" | "managed";
 
+/**
+ * What identifies one selected frozen package. `hash` is the content hash of
+ * the package's files, so this alone says which bytes a Runner needs — the
+ * files themselves only have to travel when it does not have them yet.
+ */
+export interface SkillPackageMetadata {
+  id: string;
+  revision: number;
+  version: string;
+  hash: string;
+}
+
+/** Metadata of the whole selected set, enough to ask a Runner what it already holds. */
+export interface SkillPackageManifest {
+  skills: SkillPackageMetadata[];
+}
+
+/** One frozen file; `content` is base64 so binary resources survive the transfer. */
+export interface SkillPackageFile {
+  path: string;
+  size: number;
+  hash: string;
+  content: string;
+}
+
+/** Complete selected frozen packages, never an Agent Workspace transfer. */
+export interface SkillPackageBundle {
+  skills: Array<SkillPackageMetadata & { files: SkillPackageFile[] }>;
+}
+
 export const BUILT_IN_SKILL_LIBRARY_ID = "built-in-skills";
 /** Default writable destination for user-reviewed Agent Skill drafts. */
 export const DEFAULT_WRITABLE_SKILL_LIBRARY_ID = "project-skills";

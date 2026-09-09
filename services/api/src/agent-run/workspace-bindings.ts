@@ -25,6 +25,7 @@ import type { SessionStore } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
+import { readPreparedSkillBundle, readPreparedSkillManifest } from "../skill-sandbox.js";
 
 type ExecutionBindings = Pick<
   WorkspaceAgentOptions,
@@ -126,14 +127,36 @@ export function createWorkspaceExecutionBindings(
         ? `This Session may not run on ${requested}; allowed machines: local, ${allowed.join(", ")}`
         : `This Session may only run on the local machine`);
     }
-    // Skill packages are staged on this machine, so a remote execution reads
-    // its Skill resources through the tool instead of a mounted package.
     return {
       runnerId: target.runnerId,
       remoteHostAlias: target.hostAlias,
       runnerClient: target.runnerClient(),
       runnerWorkspaceKey: target.workspaceKey,
     };
+  };
+  /**
+   * The execution's machine, with this run's frozen Skill packages already on
+   * it. A remote Runner cannot mount this machine's staging root, so the
+   * selected packages are synced to that Runner and it reports back its own
+   * mount path; a failed sync fails the execution rather than running without
+   * the Skills the Session selected.
+   */
+  const prepareExecutionTarget = async (machine: string | undefined, signal?: AbortSignal) => {
+    let target = resolveExecutionTarget(machine);
+    if (target.runnerId !== "local" && options.skillPackagesRoot) {
+      const root = options.skillPackagesRoot;
+      const mounted = await target.runnerClient.prepareSkillPackages(
+        await readPreparedSkillManifest(root),
+        () => readPreparedSkillBundle(root),
+        signal,
+      );
+      // A transfer takes time, so the machine is resolved again: a Session that
+      // lost this machine meanwhile must not still run on it.
+      target = { ...resolveExecutionTarget(machine), skillPackagesRoot: mounted };
+    }
+    options.store.assertSessionWritable(options.sessionId);
+    signal?.throwIfAborted();
+    return target;
   };
   const prepareShell = async (
       code: string,
@@ -153,9 +176,7 @@ export function createWorkspaceExecutionBindings(
         ...(toolCallId ? { toolCallId } : {}),
         summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
-      target = resolveExecutionTarget(machine);
-      options.store.assertSessionWritable(options.sessionId);
-      signal?.throwIfAborted();
+      target = await prepareExecutionTarget(machine, signal);
       return {
         agentId: options.agentId,
         code,
@@ -299,7 +320,7 @@ export function createWorkspaceExecutionBindings(
     } } : {}),
     executePython: async (code: string, signal?: AbortSignal, toolCallId?: string, machine?: string) => {
       options.store.assertSessionWritable(options.sessionId);
-      const target = resolveExecutionTarget(machine);
+      let target = resolveExecutionTarget(machine);
       await options.permission.requirePrivilege({
         action: "code",
         executionId: options.executionId,
@@ -308,6 +329,7 @@ export function createWorkspaceExecutionBindings(
         ...(toolCallId ? { toolCallId } : {}),
         summary: `Run Python code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
+      target = await prepareExecutionTarget(machine, signal);
       return options.provenanceRecorder.executePython({
         agentId: options.agentId,
         code,
@@ -436,7 +458,7 @@ export function createWorkspaceExecutionBindings(
         machine?: string,
       ) => {
         options.store.assertSessionWritable(options.sessionId);
-        const target = resolveExecutionTarget(machine);
+        let target = resolveExecutionTarget(machine);
         await options.permission.requirePrivilege({
           action: "code",
           executionId: options.executionId,
@@ -445,6 +467,7 @@ export function createWorkspaceExecutionBindings(
           ...(toolCallId ? { toolCallId } : {}),
           summary: `Run ${language} code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
         });
+        target = await prepareExecutionTarget(machine, signal);
         return options.provenanceRecorder.executeScientific({
           agentId: options.agentId,
           code,

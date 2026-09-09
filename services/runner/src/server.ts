@@ -22,6 +22,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { createOperationalLogger, shortErrorMessage } from "@sciencediscovery/operational-logging";
 import {
@@ -118,6 +119,12 @@ export interface RunnerConfig extends ExecutorConfig {
 }
 
 const MAX_BODY_BYTES = 2_000_000;
+/**
+ * A whole selected Skill set arrives in one body, so it gets its own budget
+ * rather than the command limit — but still a budget: Skills are documents and
+ * scripts, and 64 MiB of base64 is far past anything a Session should select.
+ */
+const MAX_SKILL_BUNDLE_BYTES = 67_108_864;
 type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string; runnerWorkspaceKey?: string };
 interface NpuJobSessionRequest {
   sessionId?: string;
@@ -421,6 +428,7 @@ export function createRunnerServer(
   }),
   egressGateways?: EgressGatewayRegistry,
 ): Server {
+  const skillPackages = new RunnerSkillPackages(config.dataDir);
   const logger = createOperationalLogger({ category: "runner", dataDir: config.dataDir, service: "runner" });
   const profiles = envProfiles ?? new SessionEnvProfileStore();
   const gateways = egressGateways ?? new EgressGatewayRegistry(config.dataDir, (event, detail) => {
@@ -553,6 +561,16 @@ export function createRunnerServer(
       }
       if (request.method === "GET" && url.pathname === "/resources") {
         sendJson(response, 200, await collectRunnerResources(config.dataDir));
+        return;
+      }
+      const skillMatch = /^\/skill-packages\/([a-f0-9]{64})$/.exec(url.pathname);
+      if (request.method === "GET" && skillMatch) {
+        sendJson(response, 200, await skillPackages.get(skillMatch[1]!));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/skill-packages") {
+        const bundle = JSON.parse((await readBytes(request, MAX_SKILL_BUNDLE_BYTES)).toString("utf8"));
+        sendJson(response, 200, await abortOnDisconnect(response, (signal) => skillPackages.put(bundle, signal)));
         return;
       }
       if (request.method === "GET" && url.pathname === "/status") {
