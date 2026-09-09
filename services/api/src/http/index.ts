@@ -313,7 +313,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
       if (task.reviewLevel === "deep") {
         const runtimeSettings = store.resolveRuntimeSettings(task.sessionId).effective;
-        const selectedModel = store.getModel(runtimeSettings.modelId);
+        const selectedModel = store.getModel(runtimeSettings.reviewModelId);
         const apiToken = selectedModel ? store.getModelApiToken(selectedModel.id) : undefined;
         if (!selectedModel || !apiToken) throw new Error("The selected Reviewer model is unavailable");
         const permission = {

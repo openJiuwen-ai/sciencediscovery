@@ -133,6 +133,15 @@ test("feedback persistence failure leaves the audit task failed instead of compl
   assert.equal((await store.listReviewerAuditTasks(session.id))[0]?.errorSummary, "feedback write failed");
   assert.deepEqual(await store.listReviewFeedback(session.id), []);
   store.appendReviewFeedback = originalAppend;
+  const retry = await coordinator.enqueueArtifactVersion({
+    artifactVersionId: registered.version.id,
+    contentHash: registered.version.content.hash,
+    mediaType: registered.version.mediaType,
+    sessionId: session.id,
+  });
+  assert.ok(retry);
+  assert.notEqual(retry.id, task.id, "a failed automatic audit must allow the same Artifact version to retry");
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id)).some((item) => item.id === retry.id && item.status === "completed"));
 });
 
 test("automatic lane is released when checkpoint admission fails", async (context) => {
@@ -216,13 +225,13 @@ test("automatic audit batches artifacts and retains only each Artifact's newest 
   }, { quickBatchQuietMs: 100 });
   const firstTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: first.version.id, contentHash: first.version.content.hash, mediaType: first.version.mediaType, sessionId: session.id });
   const updatedTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: second.version.id, contentHash: second.version.content.hash, mediaType: second.version.mediaType, sessionId: session.id });
-  const batchedTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: summary.version.id, contentHash: summary.version.content.hash, mediaType: summary.version.mediaType, sessionId: session.id });
-  assert.ok(firstTask && updatedTask && batchedTask);
+  const ignoredText = await coordinator.enqueueArtifactVersion({ artifactVersionId: summary.version.id, contentHash: summary.version.content.hash, mediaType: summary.version.mediaType, sessionId: session.id });
+  assert.ok(firstTask && updatedTask);
+  assert.equal(ignoredText, undefined, "plain text is not automatically treated as a report deliverable");
   assert.equal(firstTask.id, updatedTask.id);
-  assert.equal(firstTask.id, batchedTask.id);
-  assert.deepEqual(batchedTask.artifactVersionIds, [second.version.id, summary.version.id]);
+  assert.deepEqual(updatedTask.artifactVersionIds, [second.version.id]);
   await waitFor(async () => (await store.listReviewerAuditTasks(session.id))[0]?.status === "completed");
-  assert.deepEqual(executed?.artifactVersionIds, [second.version.id, summary.version.id]);
+  assert.deepEqual(executed?.artifactVersionIds, [second.version.id]);
 });
 
 test("a generated Artifact registered during a running audit waits for the next batch", async (context) => {
@@ -262,6 +271,52 @@ test("a generated Artifact registered during a running audit waits for the next 
   release();
   await waitFor(async () => (await store.listReviewerAuditTasks(session.id)).every((task) => task.status === "completed"));
   assert.deepEqual(executions, [[first.version.id], [second.version.id]]);
+});
+
+test("a generated Artifact registered while drain is exiting schedules a new wakeup", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-exit-wakeup-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer exit wakeup");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
+  const first = await store.createArtifactVersion({
+    content: { hash: "1".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "first.md",
+  });
+  const second = await store.createArtifactVersion({
+    content: { hash: "2".repeat(64), size: 1 }, kind: "markdown", logicalName: "second.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "second.md",
+  });
+  let executions = 0;
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => { executions += 1; return []; } }, { quickBatchQuietMs: 0 });
+  const originalList = store.listReviewerAuditTasks.bind(store);
+  let registeredAtExit = false;
+  store.listReviewerAuditTasks = async (sessionId) => {
+    const tasks = await originalList(sessionId);
+    if (!registeredAtExit && executions === 1 && tasks.every((task) => task.status !== "queued" && task.status !== "running")) {
+      registeredAtExit = true;
+      await coordinator.enqueueArtifactVersion({
+        artifactVersionId: second.version.id,
+        contentHash: second.version.content.hash,
+        mediaType: second.version.mediaType,
+        sessionId,
+      });
+    }
+    return tasks;
+  };
+  context.after(() => { store.listReviewerAuditTasks = originalList; });
+
+  await coordinator.enqueueArtifactVersion({
+    artifactVersionId: first.version.id,
+    contentHash: first.version.content.hash,
+    mediaType: first.version.mediaType,
+    sessionId: session.id,
+  });
+  await waitFor(async () => executions === 2);
+  assert.equal(registeredAtExit, true);
 });
 
 test("uploads and Agent code/data outputs remain Artifacts but are not automatically audited", async (context) => {

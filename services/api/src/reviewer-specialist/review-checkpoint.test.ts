@@ -83,7 +83,6 @@ test("report candidate policy requires an approved report extension and matching
   const { artifact, version } = fixture();
   const reportFiles: Array<readonly [string, string]> = [
     ["analysis.md", "text/markdown"],
-    ["appendix.txt", "text/plain"],
     ["report.html", "text/html"],
     ["paper.tex", "application/x-tex"],
     ["methods.qmd", "text/markdown"],
@@ -95,6 +94,7 @@ test("report candidate policy requires an approved report extension and matching
   }
   const nonReportFiles: Array<readonly [string, string]> = [
     ["execution.log", "text/plain"],
+    ["appendix.txt", "text/plain"],
     ["GSEA_gmt.gmt", "text/plain"],
     ["g2m_enrichment_analysis.py", "text/x-python"],
     ["enrichment_results.csv", "text/csv"],

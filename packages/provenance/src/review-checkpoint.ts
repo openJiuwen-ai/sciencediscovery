@@ -122,7 +122,6 @@ const REPORT_MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, readonly string[]
   ".qmd": ["text/markdown"],
   ".rst": ["text/plain"],
   ".tex": ["application/x-tex"],
-  ".txt": ["text/plain"],
 };
 
 function normalizedMediaType(mediaType: string): string {

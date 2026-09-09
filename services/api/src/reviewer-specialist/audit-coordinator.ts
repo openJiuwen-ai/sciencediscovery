@@ -57,6 +57,8 @@ export class ReviewerAuditCoordinator {
   /** One automatic audit for the whole API process; manual review is not throttled here. */
   private automaticTaskId: string | undefined;
   private readonly draining = new Set<string>();
+  /** A task admitted while drain is exiting must wake the next drain, not be dropped. */
+  private readonly pendingWakeAt = new Map<string, number>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
@@ -151,6 +153,7 @@ export class ReviewerAuditCoordinator {
     const scheduled = this.timers.get(sessionId);
     if (scheduled) clearTimeout(scheduled);
     this.timers.delete(sessionId);
+    this.pendingWakeAt.delete(sessionId);
     const tasks = await this.store.listReviewerAuditTasks(sessionId);
     const now = new Date().toISOString();
     for (const task of tasks.filter((item) => item.status === "queued" || item.status === "running")) {
@@ -270,9 +273,13 @@ export class ReviewerAuditCoordinator {
   }
 
   private scheduleAt(sessionId: string, dueAt: number): void {
+    if (this.draining.has(sessionId)) {
+      const pending = this.pendingWakeAt.get(sessionId);
+      if (pending === undefined || dueAt < pending) this.pendingWakeAt.set(sessionId, dueAt);
+      return;
+    }
     const existing = this.timers.get(sessionId);
     if (existing) clearTimeout(existing);
-    if (this.draining.has(sessionId)) return;
     const timer = setTimeout(() => {
       this.timers.delete(sessionId);
       void this.drain(sessionId);
@@ -409,7 +416,12 @@ export class ReviewerAuditCoordinator {
       }
     } finally {
       this.draining.delete(sessionId);
-      if (delayedUntil !== undefined) this.scheduleAt(sessionId, delayedUntil);
+      const pendingWakeAt = this.pendingWakeAt.get(sessionId);
+      this.pendingWakeAt.delete(sessionId);
+      const nextWakeAt = [delayedUntil, pendingWakeAt]
+        .filter((value): value is number => value !== undefined)
+        .reduce<number | undefined>((earliest, value) => earliest === undefined ? value : Math.min(earliest, value), undefined);
+      if (nextWakeAt !== undefined) this.scheduleAt(sessionId, nextWakeAt);
     }
   }
 

@@ -5075,6 +5075,7 @@ export class SessionStore {
           || (candidate.inputFingerprint === task.inputFingerprint
             && candidate.origin === task.origin
             && candidate.status !== "cancelled"
+            && candidate.status !== "failed"
             && candidate.status !== "superseded"));
         if (existing) return structuredClone(existing);
         tasks.push(structuredClone(task));
