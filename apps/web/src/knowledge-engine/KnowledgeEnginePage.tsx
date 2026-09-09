@@ -19,12 +19,14 @@ import type {
   KeDocument,
   KeEntityDetail,
   KeGraph,
+  KeGraphRoots,
   KeGrowStatus,
   KeJob,
   KeKb,
 } from "../api/knowledge-engine.js";
 import { KeGraphCanvas } from "./KeGraphCanvas.js";
 import { KeGrowPanel } from "./KeGrowPanel.js";
+import { KeRootsView } from "./KeRootsView.js";
 
 export interface KnowledgeEnginePageProps {
   client: ApiClient;
@@ -66,6 +68,10 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   const [documents, setDocuments] = useState<KeDocument[]>([]);
   const [jobs, setJobs] = useState<KeJob[]>([]);
   const [growStatus, setGrowStatus] = useState<KeGrowStatus | undefined>(undefined);
+  const [roots, setRoots] = useState<KeGraphRoots | undefined>(undefined);
+  // Progressive drill-down: null = community bubbles (when the graph has
+  // communities), "all" = full graph, number = one community's members.
+  const [drill, setDrill] = useState<number | "all" | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | undefined>(undefined);
   const [detail, setDetail] = useState<KeEntityDetail | undefined>(undefined);
   const [newKbName, setNewKbName] = useState("");
@@ -117,11 +123,12 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   // Returns the number of failed endpoints so the poll chain can apply a
   // failure grace window instead of dying on a stale (empty) jobs list.
   const refreshKbData = useCallback(async (kbId: string): Promise<number> => {
-    const [graphResult, documentsResult, jobsResult, growResult] = await Promise.allSettled([
+    const [graphResult, documentsResult, jobsResult, growResult, rootsResult] = await Promise.allSettled([
       client.getKeGraph(kbId),
       client.listKeDocuments(kbId),
       client.listKeJobs(kbId),
       client.getKeGrow(kbId),
+      client.getKeGraphRoots(kbId),
     ]);
     // Drop the response if the user switched KBs (or left) mid-flight.
     if (!mountedRef.current || activeKbIdRef.current !== kbId) return 0;
@@ -130,6 +137,7 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
     if (documentsResult.status === "fulfilled") setDocuments(documentsResult.value.documents); else failed.push("documents");
     if (jobsResult.status === "fulfilled") setJobs(jobsResult.value.jobs); else failed.push("jobs");
     if (growResult.status === "fulfilled") setGrowStatus(growResult.value); else failed.push("grow");
+    if (rootsResult.status === "fulfilled") setRoots(rootsResult.value); else failed.push("roots");
     if (failed.length === 0) {
       setTransientIssue(undefined);
       setError(undefined);
@@ -201,6 +209,22 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   const activeKb = kbs.find((kb) => kb.id === activeKbId);
   const activeJobs = jobs.filter((job) => job.status === "pending" || job.status === "running");
 
+  // Drill-down view model: the community being inspected (if any) and the
+  // graph filtered to its members.
+  const drilledCommunity = typeof drill === "number" ? roots?.communities.find((c) => c.id === drill) : undefined;
+  const visibleGraph: KeGraph = (() => {
+    if (typeof drill !== "number") return graph;
+    const memberIds = new Set(
+      graph.entities.filter((entity) => entity.communityId === drill).map((entity) => entity.id),
+    );
+    return {
+      entities: graph.entities.filter((entity) => memberIds.has(entity.id)),
+      edges: graph.edges.filter((edge) => memberIds.has(edge.srcId) && memberIds.has(edge.dstId)),
+    };
+  })();
+  // Roots view only when there is something meaningful to cluster.
+  const showRoots = drill === null && roots !== undefined && roots.communities.length > 1;
+
   return (
     <div style={OVERLAY_STYLE} data-testid="knowledge-engine-page">
       <header style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: "1px solid #e2e8f0" }}>
@@ -224,6 +248,8 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
                 onClick={() => {
                   setActiveKbId(kb.id);
                   setSelectedEntityId(undefined);
+                  setDrill(null);
+                  setRoots(undefined);
                 }}
                 style={{
                   display: "block", width: "100%", textAlign: "left", margin: "4px 0", padding: 8,
@@ -280,6 +306,18 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
                 Seed 10 papers
               </button>
               <KeGrowPanel client={client} kbId={activeKbId} status={growStatus} onChanged={kickRefresh} onError={reportError} />
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  data-testid="ke-resolve"
+                  title="Batch entity resolution (offline track; honors the SCIENCE_AGENT_KE_ENTITY_RESOLUTION mode switch)"
+                  onClick={() => {
+                    void client.startKeResolution(activeKbId).then(kickRefresh).catch(reportError);
+                  }}
+                >
+                  Resolve duplicate entities
+                </button>
+              </div>
               <h4 style={{ margin: "16px 0 4px" }}>Jobs</h4>
               <div data-testid="ke-job-status" style={{ fontSize: 12, color: "#475569" }}>
                 {jobs.length === 0 ? "no jobs yet" : null}
@@ -303,12 +341,43 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
         </aside>
         <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
           {error ? <div role="alert" style={{ padding: 8, color: "#b91c1c" }}>{error}</div> : null}
+          {graph.entities.length > 0 ? (
+            <div
+              data-testid="ke-breadcrumb"
+              style={{ padding: "6px 12px", borderBottom: "1px solid #e2e8f0", fontSize: 13, color: "#475569", display: "flex", gap: 8, alignItems: "center" }}
+            >
+              <button type="button" data-testid="ke-breadcrumb-roots" onClick={() => setDrill(null)} disabled={drill === null}>
+                Communities
+              </button>
+              <button type="button" data-testid="ke-breadcrumb-all" onClick={() => setDrill("all")} disabled={drill === "all"}>
+                Full graph
+              </button>
+              {drilledCommunity ? (
+                <span>
+                  › <strong>{drilledCommunity.name}</strong> ({drilledCommunity.size} entities)
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           <div style={{ flex: 1, minHeight: 0 }}>
-            {graph.entities.length > 0 ? (
-              <KeGraphCanvas graph={graph} onSelect={setSelectedEntityId} selectedId={selectedEntityId} />
-            ) : (
+            {graph.entities.length === 0 ? (
               <div style={{ padding: 40, color: "#94a3b8" }} data-testid="ke-graph-empty">
                 {activeKb ? "No entities yet — seed papers to build the graph." : "Create or select a knowledge base."}
+              </div>
+            ) : showRoots && roots ? (
+              <KeRootsView
+                roots={roots}
+                onSelectCommunity={(communityId) => {
+                  setDrill(communityId);
+                  setSelectedEntityId(undefined);
+                }}
+              />
+            ) : visibleGraph.entities.length > 0 ? (
+              <KeGraphCanvas graph={visibleGraph} onSelect={setSelectedEntityId} selectedId={selectedEntityId} />
+            ) : (
+              <div style={{ padding: 40, color: "#94a3b8" }} data-testid="ke-community-empty">
+                This community has no member entities in the current graph snapshot — the partition may be
+                refreshing. Back to communities in a moment.
               </div>
             )}
           </div>

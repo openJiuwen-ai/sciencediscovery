@@ -1,0 +1,1846 @@
+{
+  "id": "entity-resolution-realworld",
+  "kind": "entity-resolution",
+  "description": "实体消解评测真实题集（生物医学 KB 5300+ 实体，批量 shadow 预览 120 条 + 主线程人工复核）。same=人工确认应合并（缩写/全称、中英异名、单复数、词序、别称等）；similar=人工确认的误并陷阱（判 new）；review（版本合并政策待定）不入集。图夹具为全部 survivor 实体且不带 aliases——考察 resolver 自行发现 alias 关系的能力。",
+  "construction": {
+    "method": "realworld-shadow-preview + human-review",
+    "sources": [
+      "data\\tmp\\er-preview-full.json",
+      "data\\tmp\\er-preview-verdicts.json"
+    ],
+    "builtAt": "2026-09-02T03:43:55.923Z",
+    "builder": "scripts/entity-resolution-build-realworld.ts",
+    "counts": {
+      "previewRows": 120,
+      "same": 114,
+      "sameExplicitVerdict": 9,
+      "sameDefaultVerdict": 105,
+      "similar": 2,
+      "skippedReview": 4,
+      "graphEntities": 91
+    }
+  },
+  "graph": [
+    {
+      "id": "rw-e001",
+      "name": "protein data bank",
+      "type": "dataset",
+      "definition": "A databank which mainly archives experimentally determined structures."
+    },
+    {
+      "id": "rw-e002",
+      "name": "uniprot knowledgebase",
+      "type": "dataset",
+      "definition": "A key protein sequence database containing over 100 million sequences"
+    },
+    {
+      "id": "rw-e003",
+      "name": "alphafold database",
+      "type": "dataset",
+      "definition": "A repository of computed structure models predicted using deep learning methods."
+    },
+    {
+      "id": "rw-e004",
+      "name": "ensembl",
+      "type": "dataset",
+      "definition": "A genome database providing automatic annotation of eukaryotic genomes."
+    },
+    {
+      "id": "rw-e005",
+      "name": "swiss prot",
+      "type": "dataset",
+      "definition": "A manually annotated and reviewed protein database used as the training corpus, consisting of 546,790 sequences"
+    },
+    {
+      "id": "rw-e006",
+      "name": "pdbbind dataset",
+      "type": "dataset",
+      "definition": "A standard dataset of protein-ligand complex structures with measured binding affinities"
+    },
+    {
+      "id": "rw-e007",
+      "name": "disprot",
+      "type": "dataset",
+      "definition": "A database of experimentally identified disordered proteins that categorizes disordered and ordered regions of proteins"
+    },
+    {
+      "id": "rw-e008",
+      "name": "protherm",
+      "type": "dataset",
+      "definition": "蛋白质和突变体热力学数据库。"
+    },
+    {
+      "id": "rw-e009",
+      "name": "davis dataset",
+      "type": "dataset",
+      "definition": "药物-靶点结合亲和力基准数据集"
+    },
+    {
+      "id": "rw-e010",
+      "name": "g β 1 dataset",
+      "type": "dataset",
+      "definition": "The most accurate and exhaustive thermodynamic stability dataset in the literature."
+    },
+    {
+      "id": "rw-e011",
+      "name": "inweb inbiomap",
+      "type": "dataset",
+      "definition": "Integrated human protein interaction network combining multiple PPI databases"
+    },
+    {
+      "id": "rw-e012",
+      "name": "skempi 2.0",
+      "type": "dataset",
+      "definition": "Updated database of 7,085 mutational binding affinity entries (345 PDB wild-type structures) with Kd and ΔG."
+    },
+    {
+      "id": "rw-e013",
+      "name": "decoy sets",
+      "type": "dataset",
+      "definition": "Large collections of model structures widely used as test cases for predictive methods."
+    },
+    {
+      "id": "rw-e014",
+      "name": "astral scope",
+      "type": "dataset",
+      "definition": "A dataset of single protein domains (version 1.75) used for training RGN2."
+    },
+    {
+      "id": "rw-e015",
+      "name": "soil reference protein catalog",
+      "type": "dataset",
+      "definition": "Reference catalog of approximately 2 billion non-redundant protein sequences assembled by Plass from 640 soil metagenome samples."
+    },
+    {
+      "id": "rw-e016",
+      "name": "hprd dataset",
+      "type": "dataset",
+      "definition": "Human Protein References Database, used as source of positive PPI samples (2007 version for benchmark, 2010 version for external testing)."
+    },
+    {
+      "id": "rw-e017",
+      "name": "homology modeling",
+      "type": "task",
+      "definition": "Template-based modeling using folds with significant sequence similarity."
+    },
+    {
+      "id": "rw-e018",
+      "name": "inverse folding",
+      "type": "task",
+      "definition": "预测蛋白质序列使其折叠成所需结构的问题，也称为固定骨架设计。"
+    },
+    {
+      "id": "rw-e019",
+      "name": "subcellular localization",
+      "type": "task",
+      "definition": "Per-protein prediction of subcellular localization including membrane vs water-soluble and 10 localization classes"
+    },
+    {
+      "id": "rw-e020",
+      "name": "model quality assessment",
+      "type": "task",
+      "definition": "Evaluation of the quality of predicted protein models, introduced as a CASP category since 2006."
+    },
+    {
+      "id": "rw-e021",
+      "name": "template based modeling",
+      "type": "task",
+      "definition": "Structure prediction by recognizing matching folds from known structures with or without sequence similarity."
+    },
+    {
+      "id": "rw-e022",
+      "name": "side chain packing",
+      "type": "task",
+      "definition": "Modeling the 3D positions of amino acid side chains"
+    },
+    {
+      "id": "rw-e023",
+      "name": "protein stability prediction",
+      "type": "task",
+      "definition": "预测蛋白质在单点突变后稳定性变化的过程。"
+    },
+    {
+      "id": "rw-e024",
+      "name": "antibody design",
+      "type": "task",
+      "definition": "The computational task of designing antibody sequences, including nanobodies, that are diverse, well-expressed, stable, and non-polyreactive."
+    },
+    {
+      "id": "rw-e025",
+      "name": "intrinsic disorder prediction",
+      "type": "task",
+      "definition": "Per-residue prediction of protein regions lacking a stable 3D structure (intrinsic disorder)."
+    },
+    {
+      "id": "rw-e026",
+      "name": "fixed backbone design",
+      "type": "task",
+      "definition": "Produce novel amino acid sequences conforming to a predefined protein backbone structure."
+    },
+    {
+      "id": "rw-e027",
+      "name": "functional annotation",
+      "type": "task",
+      "definition": "The process of assigning molecular function, biological role or family membership to protein sequences."
+    },
+    {
+      "id": "rw-e028",
+      "name": "peptide protein docking",
+      "type": "task",
+      "definition": "Computational task of predicting the binding structure of a peptide to a protein receptor"
+    },
+    {
+      "id": "rw-e029",
+      "name": "promoter region prediction",
+      "type": "task",
+      "definition": "启动子区域预测，基因组学中的长序列建模任务"
+    },
+    {
+      "id": "rw-e030",
+      "name": "enhancer prediction",
+      "type": "task",
+      "definition": "The computational task of predicting enhancer loci on a genome."
+    },
+    {
+      "id": "rw-e031",
+      "name": "zero shot mutation fitness prediction",
+      "type": "task",
+      "definition": "Predicting the fitness effects of protein mutations directly from pretrained model likelihoods without task-specific training."
+    },
+    {
+      "id": "rw-e032",
+      "name": "deep mutational scan (dms)",
+      "type": "task",
+      "definition": "An experimental technique that measures the functional effects of many individual mutations or combinations of mutations in a protein."
+    },
+    {
+      "id": "rw-e033",
+      "name": "multi objective optimization",
+      "type": "task",
+      "definition": "多目标优化"
+    },
+    {
+      "id": "rw-e034",
+      "name": "transformer architecture",
+      "type": "architecture",
+      "definition": "A neural network architecture that serves as the backbone for large language models and lacks the spatial inductive bias of convolution-based models."
+    },
+    {
+      "id": "rw-e035",
+      "name": "language model",
+      "type": "architecture",
+      "definition": "在氨基酸序列上训练并用于在不考虑结构的情况下生成新序列的网络架构。"
+    },
+    {
+      "id": "rw-e036",
+      "name": "stacked autoencoder (sae)",
+      "type": "architecture",
+      "definition": "A deep neural network consisting of multiple layers of autoencoders that are layer-wise trained in turn, with the output of the former layer wired to inputs of the successive layer."
+    },
+    {
+      "id": "rw-e037",
+      "name": "variational autoencoders",
+      "type": "architecture",
+      "definition": "用于建模进化序列密度的变分自编码器。"
+    },
+    {
+      "id": "rw-e038",
+      "name": "graph neural network (gnn)",
+      "type": "architecture",
+      "definition": "A neural network that operates on graph-structured data, used in SSEmb to process the protein structure graph."
+    },
+    {
+      "id": "rw-e039",
+      "name": "recurrent neural network",
+      "type": "architecture",
+      "definition": "常用于建模序列数据的神经网络。"
+    },
+    {
+      "id": "rw-e040",
+      "name": "generative adversarial networks",
+      "type": "architecture",
+      "definition": "用于创建成对距离图等真实蛋白质结构的生成模型。"
+    },
+    {
+      "id": "rw-e041",
+      "name": "se(3) equivariant model",
+      "type": "architecture",
+      "definition": "A deep SE(3)-equivariant graph transformer architecture that simultaneously predicts each residue's identity and side-chain conformation."
+    },
+    {
+      "id": "rw-e042",
+      "name": "geometric vector perceptrons",
+      "type": "architecture",
+      "definition": "扩展标准全连接层以处理欧几里得向量集合的神经网络层，支持标量与向量特征的同时处理"
+    },
+    {
+      "id": "rw-e043",
+      "name": "t5",
+      "type": "architecture",
+      "definition": "A text-to-text transfer transformer auto-encoder language model"
+    },
+    {
+      "id": "rw-e044",
+      "name": "gated hidden unit (proposed)",
+      "type": "architecture",
+      "definition": "A novel recurrent hidden unit motivated by the LSTM but simpler to compute, featuring separate reset and update gates that allow adaptive remembering and forgetting."
+    },
+    {
+      "id": "rw-e045",
+      "name": "clustal w",
+      "type": "tool",
+      "definition": "A multiple sequence alignment program that uses progressive alignment with position-specific gap penalties."
+    },
+    {
+      "id": "rw-e046",
+      "name": "hmmer",
+      "type": "tool",
+      "definition": "A sensitive homology detection method that uses hidden Markov models."
+    },
+    {
+      "id": "rw-e047",
+      "name": "esm if",
+      "type": "tool",
+      "definition": "A protein language model focused exclusively on the protein inverse folding task."
+    },
+    {
+      "id": "rw-e048",
+      "name": "hhpred",
+      "type": "tool",
+      "definition": "一种非神经对齐技术。"
+    },
+    {
+      "id": "rw-e049",
+      "name": "iupred2",
+      "type": "tool",
+      "definition": "A commonly used predictor of intrinsically disordered protein regions."
+    },
+    {
+      "id": "rw-e050",
+      "name": "amber力场",
+      "type": "tool",
+      "definition": "用于全原子分子动力学模拟的经典力场"
+    },
+    {
+      "id": "rw-e051",
+      "name": "rcsb",
+      "type": "tool",
+      "definition": "Research Collaboratory for Structural Bioinformatics, provider of PDB data and uniformity project mmCIF files."
+    },
+    {
+      "id": "rw-e052",
+      "name": "openmp",
+      "type": "tool",
+      "definition": "支持共享内存多线程并行编程的应用程序接口"
+    },
+    {
+      "id": "rw-e053",
+      "name": "psfig",
+      "type": "tool",
+      "definition": "LaTeX command and macro package for inserting PostScript figures into documents"
+    },
+    {
+      "id": "rw-e054",
+      "name": "epsfig.sty",
+      "type": "tool",
+      "definition": "LaTeX style file implementing EPS figure inclusion macros"
+    },
+    {
+      "id": "rw-e055",
+      "name": "nmr spectroscopy",
+      "type": "tool",
+      "definition": "An experimental technique that furnishes information about both structure and motion of biomolecules at atomic resolution"
+    },
+    {
+      "id": "rw-e056",
+      "name": "kirkwood buff force field",
+      "type": "tool",
+      "definition": "A force-field model for denaturants (urea and GdmCl) with scaled denaturant-protein interactions to balance affinities"
+    },
+    {
+      "id": "rw-e057",
+      "name": "dssp",
+      "type": "tool",
+      "definition": "蛋白质二级结构字典"
+    },
+    {
+      "id": "rw-e058",
+      "name": "smog webtool",
+      "type": "tool",
+      "definition": "A web tool used to obtain input files for structure-based model simulations."
+    },
+    {
+      "id": "rw-e059",
+      "name": "deep mutational scanning",
+      "type": "method",
+      "definition": "High-throughput experimental method that measures functional effects of a large number of protein mutations."
+    },
+    {
+      "id": "rw-e060",
+      "name": "hidden markov model",
+      "type": "method",
+      "definition": "在已知酵母朊病毒上训练的，用于寻找候选朊病毒蛋白的统计模型。"
+    },
+    {
+      "id": "rw-e061",
+      "name": "profile hidden markov model",
+      "type": "method",
+      "definition": "A probabilistic model used for the statistical inference of homology, built from an aligned set of family-representative sequences."
+    },
+    {
+      "id": "rw-e062",
+      "name": "positional encoding",
+      "type": "method",
+      "definition": "可训练的位置编码组件，用于打破 Transformer 的置换等变性限制，使其能逼近任意序列到序列函数。"
+    },
+    {
+      "id": "rw-e063",
+      "name": "x ray crystal structure",
+      "type": "method",
+      "definition": "用于解析具有酶活性的人工蛋白质结构的技术。"
+    },
+    {
+      "id": "rw-e064",
+      "name": "saxs",
+      "type": "method",
+      "definition": "Small-angle X-ray scattering, a label-free technique to probe global dimensions and shapes of proteins"
+    },
+    {
+      "id": "rw-e065",
+      "name": "lennard jones 势",
+      "type": "method",
+      "definition": "描述残基间相互作用的 6-12 势函数"
+    },
+    {
+      "id": "rw-e066",
+      "name": "direct coupling analysis (dca)",
+      "type": "method",
+      "definition": "A statistical method for predicting residue contacts from multiple sequence alignments"
+    },
+    {
+      "id": "rw-e067",
+      "name": "nuclear magnetic resonance (nmr) spectroscopy",
+      "type": "method",
+      "definition": "An experimental technique used to study IDR conformational properties."
+    },
+    {
+      "id": "rw-e068",
+      "name": "epr spectroscopy",
+      "type": "method",
+      "definition": "Electron paramagnetic resonance spectroscopy, a biophysical technique used to characterize IDP conformations."
+    },
+    {
+      "id": "rw-e069",
+      "name": "alexander polynomial",
+      "type": "method",
+      "definition": "用于确定结类型的数学算法，是一种拓扑不变量。"
+    },
+    {
+      "id": "rw-e070",
+      "name": "residual dipolar couplings",
+      "type": "method",
+      "definition": "NMR observable sensitive to motional averaging over sub- and supra-τc time scales (ps to ms)."
+    },
+    {
+      "id": "rw-e071",
+      "name": "random forest (rf)",
+      "type": "method",
+      "definition": "随机森林，传统机器学习方法，曾用于打分函数"
+    },
+    {
+      "id": "rw-e072",
+      "name": "single molecule förster resonance energy transfer",
+      "type": "method",
+      "definition": "An experimental technique that probes distance distributions between individual pairs of residues using the Förster relation between FRET efficiency and interchromophore distance."
+    },
+    {
+      "id": "rw-e073",
+      "name": "sparse inverse covariance estimation",
+      "type": "method",
+      "definition": "A statistical method for fitting Markov Random Fields by estimating sparse inverse covariance matrices."
+    },
+    {
+      "id": "rw-e074",
+      "name": "go like模型",
+      "type": "method",
+      "definition": "一种粗粒化蛋白质模型，仅考虑天然态接触拓扑的相互作用"
+    },
+    {
+      "id": "rw-e075",
+      "name": "cα model",
+      "type": "method",
+      "definition": "A coarse-grained protein model using only alpha carbon atoms for chain representation"
+    },
+    {
+      "id": "rw-e076",
+      "name": "principal component analysis",
+      "type": "method",
+      "definition": "Dimensionality reduction technique used to project conformational ensembles onto principal modes"
+    },
+    {
+      "id": "rw-e077",
+      "name": "smith waterman algorithm",
+      "type": "method",
+      "definition": "Dynamic programming algorithm for local sequence alignment"
+    },
+    {
+      "id": "rw-e078",
+      "name": "single wavelength anomalous diffraction",
+      "type": "method",
+      "definition": "A phasing strategy using anomalous scattering from a single wavelength, treated within a maximum-likelihood formalism."
+    },
+    {
+      "id": "rw-e079",
+      "name": "self avoiding random walk",
+      "type": "method",
+      "definition": "A random walk on a lattice in which no two vertices are visited more than once."
+    },
+    {
+      "id": "rw-e080",
+      "name": "model free analysis",
+      "type": "method",
+      "definition": "An approach for deriving backbone motional information from dipolar couplings via extraction of spherical harmonics"
+    },
+    {
+      "id": "rw-e081",
+      "name": "maximum likelihood inference",
+      "type": "method",
+      "definition": "A statistical inference approach that estimates model parameters by maximizing the likelihood of observed data."
+    },
+    {
+      "id": "rw-e082",
+      "name": "pseudolikelihood maximization",
+      "type": "method",
+      "definition": "A method for fitting Markov Random Fields, generally considered state-of-the-art for unsupervised contact prediction."
+    },
+    {
+      "id": "rw-e083",
+      "name": "af multimer",
+      "type": "method",
+      "definition": "An extension of AlphaFold2 developed for predicting multimeric protein complex structures"
+    },
+    {
+      "id": "rw-e084",
+      "name": "high throughput assay",
+      "type": "method",
+      "definition": "Experimental screening methods that measure large numbers of variants but typically with lower fidelity."
+    },
+    {
+      "id": "rw-e085",
+      "name": "go like potential",
+      "type": "method",
+      "definition": "结构基础势函数，倾向于稳定蛋白质的天然接触"
+    },
+    {
+      "id": "rw-e086",
+      "name": "ensemble",
+      "type": "method",
+      "definition": "An implementation of SAXS-driven ensemble modelling"
+    },
+    {
+      "id": "rw-e087",
+      "name": "back propagation",
+      "type": "method",
+      "definition": "Training algorithm that propagates errors backward through neural networks"
+    },
+    {
+      "id": "rw-e088",
+      "name": "sidechain repacking",
+      "type": "method",
+      "definition": "Discrete combinatorial optimization of sidechain rotamers using Monte Carlo simulated annealing"
+    },
+    {
+      "id": "rw-e089",
+      "name": "1d gaussian axial fluctuation (gaf)",
+      "type": "method",
+      "definition": "An approach used to model residual dipolar coupling (RDC) measurements of protein dynamics."
+    },
+    {
+      "id": "rw-e090",
+      "name": "weighted histogram method",
+      "type": "method",
+      "definition": "A method to calculate average thermodynamic properties from multiple simulations"
+    },
+    {
+      "id": "rw-e091",
+      "name": "associative memory energy function",
+      "type": "method",
+      "definition": "基于已知实验结构集合的能量函数"
+    }
+  ],
+  "items": [
+    {
+      "id": "rw-s001",
+      "gold": "same",
+      "candidate": {
+        "name": "protein databank",
+        "type": "dataset",
+        "definition": "A database of experimentally determined protein structures used for training and evaluation."
+      },
+      "expectTarget": "rw-e001",
+      "note": "All refer to the PDB: 'protein data bank', 'protein databank' (spelling variant), 'pdb' (abbreviation), and 'rcsb pdb' (hosting organization of the same databa…"
+    },
+    {
+      "id": "rw-s002",
+      "gold": "same",
+      "candidate": {
+        "name": "pdb",
+        "type": "dataset",
+        "definition": "包含实验X射线结构的蛋白质数据库。"
+      },
+      "expectTarget": "rw-e001",
+      "note": "All refer to the PDB: 'protein data bank', 'protein databank' (spelling variant), 'pdb' (abbreviation), and 'rcsb pdb' (hosting organization of the same databa…"
+    },
+    {
+      "id": "rw-s003",
+      "gold": "same",
+      "candidate": {
+        "name": "pdb (protein data bank)",
+        "type": "dataset",
+        "definition": "Source database of protein-DNA complex structures downloaded to construct the dataset."
+      },
+      "expectTarget": "rw-e001",
+      "note": "All refer to the PDB: 'protein data bank', 'protein databank' (spelling variant), 'pdb' (abbreviation), and 'rcsb pdb' (hosting organization of the same databa…"
+    },
+    {
+      "id": "rw-s004",
+      "gold": "same",
+      "candidate": {
+        "name": "protein data bank (pdb)",
+        "type": "dataset",
+        "definition": "A database of experimentally determined protein structures used for training OmegaFold."
+      },
+      "expectTarget": "rw-e001",
+      "note": "All refer to the PDB: 'protein data bank', 'protein databank' (spelling variant), 'pdb' (abbreviation), and 'rcsb pdb' (hosting organization of the same databa…"
+    },
+    {
+      "id": "rw-s005",
+      "gold": "same",
+      "candidate": {
+        "name": "rcsb pdb",
+        "type": "dataset",
+        "definition": "提供蛋白质三维结构数据的权威数据库。"
+      },
+      "expectTarget": "rw-e001",
+      "note": "All refer to the PDB: 'protein data bank', 'protein databank' (spelling variant), 'pdb' (abbreviation), and 'rcsb pdb' (hosting organization of the same databa…"
+    },
+    {
+      "id": "rw-s006",
+      "gold": "same",
+      "candidate": {
+        "name": "uniprot",
+        "type": "dataset",
+        "definition": "包含2.09亿条自然存在的蛋白质序列的大型数据库。"
+      },
+      "expectTarget": "rw-e002",
+      "note": "All refer to the UniProt protein sequence database: 'uniprot knowledgebase', 'uniprotkb' (abbreviation of UniProt Knowledgebase), and 'uniprot database' are al…"
+    },
+    {
+      "id": "rw-s007",
+      "gold": "same",
+      "candidate": {
+        "name": "uniprotkb",
+        "type": "dataset",
+        "definition": "蛋白质序列数据库之一。"
+      },
+      "expectTarget": "rw-e002",
+      "note": "All refer to the UniProt protein sequence database: 'uniprot knowledgebase', 'uniprotkb' (abbreviation of UniProt Knowledgebase), and 'uniprot database' are al…"
+    },
+    {
+      "id": "rw-s008",
+      "gold": "same",
+      "candidate": {
+        "name": "uniprot database",
+        "type": "dataset",
+        "definition": "用于比对幻觉生成序列与天然蛋白质序列相似性的数据库。"
+      },
+      "expectTarget": "rw-e002",
+      "note": "All refer to the UniProt protein sequence database: 'uniprot knowledgebase', 'uniprotkb' (abbreviation of UniProt Knowledgebase), and 'uniprot database' are al…"
+    },
+    {
+      "id": "rw-s009",
+      "gold": "same",
+      "candidate": {
+        "name": "alphafold db",
+        "type": "dataset",
+        "definition": "由 AlphaFold 预测产生的大规模蛋白质结构数据库"
+      },
+      "expectTarget": "rw-e003",
+      "note": "'alphafold database' and 'alphafold db' are the same AlphaFold-predicted protein structure repository."
+    },
+    {
+      "id": "rw-s010",
+      "gold": "same",
+      "candidate": {
+        "name": "ensembl database",
+        "type": "dataset",
+        "definition": "A genomic database providing annotated regulatory elements including enhancers and open chromatin regions."
+      },
+      "expectTarget": "rw-e004",
+      "note": "'ensembl' and 'ensembl database' are the same eukaryotic genome annotation database."
+    },
+    {
+      "id": "rw-s011",
+      "gold": "same",
+      "candidate": {
+        "name": "swiss prot database",
+        "type": "dataset",
+        "definition": "包含已知功能注释序列的数据库。"
+      },
+      "expectTarget": "rw-e005",
+      "note": "两者均指SwissProt蛋白质数据库，仅名称中是否含'database'一词不同"
+    },
+    {
+      "id": "rw-s012",
+      "gold": "same",
+      "candidate": {
+        "name": "pdbbind",
+        "type": "dataset",
+        "definition": "用于训练和评估的蛋白质-配体结合亲和力数据库。"
+      },
+      "expectTarget": "rw-e006",
+      "note": "两者均指同一蛋白质-配体结合亲和力数据集 PDBbind，仅为中英文表述差异"
+    },
+    {
+      "id": "rw-s013",
+      "gold": "same",
+      "candidate": {
+        "name": "disprot database",
+        "type": "dataset",
+        "definition": "A database of intrinsically disordered protein sequences"
+      },
+      "expectTarget": "rw-e007",
+      "note": "disprot 是 disprot database 的缩写，两者指向同一个蛋白质无序区域数据库"
+    },
+    {
+      "id": "rw-s014",
+      "gold": "same",
+      "candidate": {
+        "name": "protherm database",
+        "type": "dataset",
+        "definition": "Database of experimentally determined folding free energy changes of protein mutants"
+      },
+      "expectTarget": "rw-e008",
+      "note": "protherm 是 protherm database 的缩写形式，指同一蛋白质热力学数据库。"
+    },
+    {
+      "id": "rw-s015",
+      "gold": "same",
+      "candidate": {
+        "name": "davis",
+        "type": "dataset",
+        "definition": "Few-shot DTI benchmark dataset with experimentally determined dissociation constants"
+      },
+      "expectTarget": "rw-e009",
+      "note": "drug-target binding affinity benchmark dataset with experimental Kd values，名称写法变体"
+    },
+    {
+      "id": "rw-s016",
+      "gold": "same",
+      "candidate": {
+        "name": "gβ1 dataset",
+        "type": "dataset",
+        "definition": "The most accurate and exhaustive thermodynamic stability dataset in the literature, containing 935 mutations used as a benchmark for stability predictors."
+      },
+      "expectTarget": "rw-e010",
+      "note": "两条实体名称仅是 'g β 1' 与 'gβ1' 的空格差异，描述同一热力学稳定性基准数据集"
+    },
+    {
+      "id": "rw-s017",
+      "gold": "same",
+      "candidate": {
+        "name": "inweb inbiomap dataset",
+        "type": "dataset",
+        "definition": "A human PPI dataset integrated from 8 large databases, with confidence scores used to classify samples as high or low quality."
+      },
+      "expectTarget": "rw-e011",
+      "note": "两者名称仅差'dataset'一词，描述内容也一致，指同一集成人类PPI网络数据集"
+    },
+    {
+      "id": "rw-s018",
+      "gold": "same",
+      "candidate": {
+        "name": "skempi v2.0",
+        "type": "dataset",
+        "definition": "A database of protein complexes containing experimentally determined ΔΔG values for wildtype and mutated complexes"
+      },
+      "expectTarget": "rw-e012",
+      "note": "两者均为 SKEMPI 2.0 数据集，仅版本号写法不同（2.0 vs v2.0），指向同一数据库版本。"
+    },
+    {
+      "id": "rw-s019",
+      "gold": "same",
+      "candidate": {
+        "name": "decoy set",
+        "type": "dataset",
+        "definition": "An ensemble of incorrect protein model structures used to benchmark scoring functions"
+      },
+      "expectTarget": "rw-e013",
+      "note": "两者均指用于基准测试评分函数的错误蛋白模型结构集合，仅为单复数变体"
+    },
+    {
+      "id": "rw-s020",
+      "gold": "same",
+      "candidate": {
+        "name": "astral",
+        "type": "dataset",
+        "definition": "Protein domain sequence database derived from SCOPe, used for selecting superfamily representatives"
+      },
+      "expectTarget": "rw-e014",
+      "note": "Both refer to the ASTRAL protein domain sequence database derived from SCOPe, with entry 1 being a specific version (1.75) of the same dataset."
+    },
+    {
+      "id": "rw-s021",
+      "gold": "same",
+      "candidate": {
+        "name": "soil reference catalog",
+        "type": "dataset",
+        "definition": "Redundancy-filtered protein catalog of 2 billion sequences assembled by Plass from 640 soil metagenomic samples."
+      },
+      "expectTarget": "rw-e015",
+      "note": "两者均指由Plass从640个土壤宏基因组样本组装并去冗余得到的约20亿条非冗余蛋白质序列目录，是同一数据集的不同名称。"
+    },
+    {
+      "id": "rw-s022",
+      "gold": "same",
+      "candidate": {
+        "name": "hprd",
+        "type": "dataset",
+        "definition": "Human Protein Reference Database, a database of curated human protein-protein interactions."
+      },
+      "expectTarget": "rw-e016",
+      "note": "二者均为人类蛋白质参考数据库（HPRD），仅全称中 Reference 单复数差异。"
+    },
+    {
+      "id": "rw-s023",
+      "gold": "same",
+      "candidate": {
+        "name": "homologous modeling",
+        "type": "task",
+        "definition": "Building a three-dimensional model of a target protein from one or more homologous structures (also known as homology modeling)."
+      },
+      "expectTarget": "rw-e017",
+      "note": "同义异形：'homologous'为形容词变体，两者均指基于同源模板构建蛋白质三维结构的方法"
+    },
+    {
+      "id": "rw-s024",
+      "gold": "same",
+      "candidate": {
+        "name": "inverse folding problem",
+        "type": "task",
+        "definition": "The challenge of finding a sequence that folds to a given structure or carries out a given function."
+      },
+      "expectTarget": "rw-e018",
+      "note": "两者都指预测蛋白质序列折叠成目标结构的问题，仅命名略有不同"
+    },
+    {
+      "id": "rw-s025",
+      "gold": "same",
+      "candidate": {
+        "name": "subcellular localization prediction",
+        "type": "task",
+        "definition": "Per-protein prediction of the subcellular compartment in which a protein resides (10 classes, Q10)."
+      },
+      "expectTarget": "rw-e019",
+      "note": "均为蛋白质亚细胞定位预测任务，描述中都明确提到per-protein预测及10个分类类别，仅名称是否带'prediction'一词之差。"
+    },
+    {
+      "id": "rw-s026",
+      "gold": "same",
+      "candidate": {
+        "name": "model quality estimation",
+        "type": "task",
+        "definition": "Prediction of the accuracy of a three-dimensional model."
+      },
+      "expectTarget": "rw-e020",
+      "note": "三者均指对预测蛋白三维模型质量进行评估/估计的任务，'model'与'structure model'同义，'assessment'与'estimation'在该领域为同义术语（如CASP的MQA类别）"
+    },
+    {
+      "id": "rw-s027",
+      "gold": "same",
+      "candidate": {
+        "name": "structure quality assessment",
+        "type": "task",
+        "definition": "The evaluation of protein structure models for quality, consistency, and agreement with experimental data."
+      },
+      "expectTarget": "rw-e020",
+      "note": "三者均指对预测蛋白三维模型质量进行评估/估计的任务，'model'与'structure model'同义，'assessment'与'estimation'在该领域为同义术语（如CASP的MQA类别）"
+    },
+    {
+      "id": "rw-s028",
+      "gold": "same",
+      "candidate": {
+        "name": "template based modeling (tbm)",
+        "type": "task",
+        "definition": "CASP category assessing methods on predicting proteins whose folds are related to ones already in the Protein Data Bank"
+      },
+      "expectTarget": "rw-e021",
+      "note": "tbm is the standard abbreviation for template based modeling"
+    },
+    {
+      "id": "rw-s029",
+      "gold": "same",
+      "candidate": {
+        "name": "side chain geometry prediction",
+        "type": "task",
+        "definition": "Predicting the geometry of amino acid side chains as part of PSP."
+      },
+      "expectTarget": "rw-e022",
+      "note": "三者均指在已知主链结构的前提下预测氨基酸侧链三维位置/几何构型的同一任务，仅为不同命名（packing / geometry prediction / placement）"
+    },
+    {
+      "id": "rw-s030",
+      "gold": "same",
+      "candidate": {
+        "name": "side chain placement",
+        "type": "task",
+        "definition": "CASP中扩展的氨基酸侧链放置预测任务"
+      },
+      "expectTarget": "rw-e022",
+      "note": "三者均指在已知主链结构的前提下预测氨基酸侧链三维位置/几何构型的同一任务，仅为不同命名（packing / geometry prediction / placement）"
+    },
+    {
+      "id": "rw-s031",
+      "gold": "same",
+      "candidate": {
+        "name": "protein stability change prediction",
+        "type": "task",
+        "definition": "Prediction of the thermodynamic stability changes resulting from amino acid substitutions in proteins"
+      },
+      "expectTarget": "rw-e023",
+      "note": "[人工复核] 均指突变后热力学稳定性变化预测"
+    },
+    {
+      "id": "rw-s032",
+      "gold": "same",
+      "candidate": {
+        "name": "antibody generation",
+        "type": "task",
+        "definition": "The task of designing novel antibodies using generative AI models"
+      },
+      "expectTarget": "rw-e024",
+      "note": "[人工复核] 计算抗体设计语境下同义"
+    },
+    {
+      "id": "rw-s033",
+      "gold": "same",
+      "candidate": {
+        "name": "disorder prediction",
+        "type": "task",
+        "definition": "Prediction of protein regions that lack stable tertiary structure."
+      },
+      "expectTarget": "rw-e025",
+      "note": "All four describe the same task of predicting protein regions lacking a stable 3D structure, differing only in phrasing (intrinsic/structural/disorder region d…"
+    },
+    {
+      "id": "rw-s034",
+      "gold": "same",
+      "candidate": {
+        "name": "structural disorder prediction",
+        "type": "task",
+        "definition": "Predicting regions of proteins that do not adopt a single three-dimensional structure."
+      },
+      "expectTarget": "rw-e025",
+      "note": "All four describe the same task of predicting protein regions lacking a stable 3D structure, differing only in phrasing (intrinsic/structural/disorder region d…"
+    },
+    {
+      "id": "rw-s035",
+      "gold": "same",
+      "candidate": {
+        "name": "disorder region prediction",
+        "type": "task",
+        "definition": "Prediction of protein disordered regions (residues missing atomic coordinates in X-ray structures)."
+      },
+      "expectTarget": "rw-e025",
+      "note": "All four describe the same task of predicting protein regions lacking a stable 3D structure, differing only in phrasing (intrinsic/structural/disorder region d…"
+    },
+    {
+      "id": "rw-s036",
+      "gold": "same",
+      "candidate": {
+        "name": "fix backbone design",
+        "type": "task",
+        "definition": "在已知结构骨架下设计抗体序列的任务。"
+      },
+      "expectTarget": "rw-e026",
+      "note": "两者都指在已知蛋白质骨架结构下设计序列的任务，仅中英文表述不同"
+    },
+    {
+      "id": "rw-s037",
+      "gold": "same",
+      "candidate": {
+        "name": "function annotation",
+        "type": "task",
+        "definition": "Assignment of biological function to protein sequences, often guided by structural homology."
+      },
+      "expectTarget": "rw-e027",
+      "note": "functional与function为同一概念的形容词/名词形式变体，均指蛋白序列的生物学功能注释"
+    },
+    {
+      "id": "rw-s038",
+      "gold": "same",
+      "candidate": {
+        "name": "protein peptide docking",
+        "type": "task",
+        "definition": "计算模型预测蛋白质与肽段相互作用结构的过程。"
+      },
+      "expectTarget": "rw-e028",
+      "note": "peptide protein docking 与 protein peptide docking 是同一概念，仅词序不同。"
+    },
+    {
+      "id": "rw-s039",
+      "gold": "same",
+      "candidate": {
+        "name": "promoter prediction",
+        "type": "task",
+        "definition": "The computational task of predicting promoter sequences in a genome."
+      },
+      "expectTarget": "rw-e029",
+      "note": "promoter region prediction 与 promoter prediction 同义，均指预测基因组中的启动子区域"
+    },
+    {
+      "id": "rw-s040",
+      "gold": "same",
+      "candidate": {
+        "name": "enhancer identification",
+        "type": "task",
+        "definition": "The task of identifying enhancer regulatory elements in DNA sequences"
+      },
+      "expectTarget": "rw-e030",
+      "note": "enhancer prediction 与 enhancer identification 同义，均指预测/识别基因组中的增强子"
+    },
+    {
+      "id": "rw-s041",
+      "gold": "same",
+      "candidate": {
+        "name": "zero shot protein fitness prediction",
+        "type": "task",
+        "definition": "无需额外标注数据即可预测蛋白质序列变化对适应性的影响"
+      },
+      "expectTarget": "rw-e031",
+      "note": "两者均指无需任务特定训练即可预测蛋白质突变对适应性影响，'mutation fitness prediction'与'protein fitness prediction'在此语境下为同一概念"
+    },
+    {
+      "id": "rw-s042",
+      "gold": "same",
+      "candidate": {
+        "name": "deep mutational scans",
+        "type": "task"
+      },
+      "expectTarget": "rw-e032",
+      "note": "单复数变体，且均指同一种深度突变扫描实验技术"
+    },
+    {
+      "id": "rw-x001",
+      "gold": "similar",
+      "candidate": {
+        "name": "compound optimization",
+        "type": "task",
+        "definition": "The drug discovery process of evaluating and optimizing multiple physicochemical and in vivo properties such as affinity, hydrophobicity, solubility, toxicity, pharmacogenetics, and pharmacodynamics."
+      },
+      "note": "[人工复核] 具体领域任务 vs 通用技术——化合物优化是多目标优化在药发现的应用，不是同一概念"
+    },
+    {
+      "id": "rw-s043",
+      "gold": "same",
+      "candidate": {
+        "name": "transformer",
+        "type": "architecture",
+        "definition": "A pre-trained model architecture that has enabled text generation with human-like capabilities."
+      },
+      "expectTarget": "rw-e034",
+      "note": "都是对Transformer神经网络架构本身的指称，仅在命名（全称/简称/复数/语序）上略有差异。"
+    },
+    {
+      "id": "rw-s044",
+      "gold": "same",
+      "candidate": {
+        "name": "transformer model",
+        "type": "architecture",
+        "definition": "An attention-based encoder-decoder neural network architecture used for sequence-to-sequence modeling."
+      },
+      "expectTarget": "rw-e034",
+      "note": "都是对Transformer神经网络架构本身的指称，仅在命名（全称/简称/复数/语序）上略有差异。"
+    },
+    {
+      "id": "rw-s045",
+      "gold": "same",
+      "candidate": {
+        "name": "transformer neural network",
+        "type": "architecture",
+        "definition": "一种基于自注意力技术的序列转换最先进架构。"
+      },
+      "expectTarget": "rw-e034",
+      "note": "都是对Transformer神经网络架构本身的指称，仅在命名（全称/简称/复数/语序）上略有差异。"
+    },
+    {
+      "id": "rw-s046",
+      "gold": "same",
+      "candidate": {
+        "name": "transformer architectures",
+        "type": "architecture",
+        "definition": "Deep learning architecture used by LLMs to discern patterns in protein sequence data sets."
+      },
+      "expectTarget": "rw-e034",
+      "note": "都是对Transformer神经网络架构本身的指称，仅在命名（全称/简称/复数/语序）上略有差异。"
+    },
+    {
+      "id": "rw-s047",
+      "gold": "same",
+      "candidate": {
+        "name": "protein language model",
+        "type": "architecture",
+        "definition": "基于蛋白质序列训练的机器学习模型。"
+      },
+      "expectTarget": "rw-e035",
+      "note": "[人工复核] survivor 名过泛但其 definition 实为蛋白质语言模型，实质同一；命名政策遗留"
+    },
+    {
+      "id": "rw-s048",
+      "gold": "same",
+      "candidate": {
+        "name": "stacked autoencoder",
+        "type": "architecture",
+        "definition": "Deep learning architecture composed of stacked autoencoders"
+      },
+      "expectTarget": "rw-e036",
+      "note": "两者均指由多个自编码器逐层堆叠而成的深度架构，1中的SAE是4的缩写形式。"
+    },
+    {
+      "id": "rw-s049",
+      "gold": "same",
+      "candidate": {
+        "name": "variational autoencoder",
+        "type": "architecture",
+        "definition": "用于生成蛋白质主链3D坐标和设计新序列的生成模型。"
+      },
+      "expectTarget": "rw-e037",
+      "note": "两者均指变分自编码器，5中的复数形式与8中的单数形式指向同一概念。"
+    },
+    {
+      "id": "rw-s050",
+      "gold": "same",
+      "candidate": {
+        "name": "graph neural network",
+        "type": "architecture",
+        "definition": "A neural network architecture used for modeling protein structures represented as graphs, though limited by the over-smoothing issue."
+      },
+      "expectTarget": "rw-e038",
+      "note": "实体1和3均指图神经网络，实体1多了缩写(GNN)"
+    },
+    {
+      "id": "rw-s051",
+      "gold": "same",
+      "candidate": {
+        "name": "recurrent neural network (rnn)",
+        "type": "architecture",
+        "definition": "A neural network method applied for activity and property predictions in drug discovery."
+      },
+      "expectTarget": "rw-e039",
+      "note": "三者均指用于处理序列数据的循环神经网络，仅存在缩写、单复数及括注形式差异。"
+    },
+    {
+      "id": "rw-s052",
+      "gold": "same",
+      "candidate": {
+        "name": "recurrent neural networks",
+        "type": "architecture",
+        "definition": "Neural network architecture used for sequence processing"
+      },
+      "expectTarget": "rw-e039",
+      "note": "三者均指用于处理序列数据的循环神经网络，仅存在缩写、单复数及括注形式差异。"
+    },
+    {
+      "id": "rw-s053",
+      "gold": "same",
+      "candidate": {
+        "name": "generative adversarial network",
+        "type": "architecture",
+        "definition": "一种用于设计具有优化属性化合物的生成对抗网络概念。"
+      },
+      "expectTarget": "rw-e040",
+      "note": "两者均指向生成对抗网络（GAN）这一架构概念，仅为单复数变体。"
+    },
+    {
+      "id": "rw-s054",
+      "gold": "same",
+      "candidate": {
+        "name": "se(3) equivariant transformer",
+        "type": "architecture",
+        "definition": "A transformer architecture equivariant to SE(3) transformations, used for inverse folding."
+      },
+      "expectTarget": "rw-e041",
+      "note": "Both refer to the SE(3)-equivariant transformer/graph transformer architecture used for inverse folding and side-chain prediction."
+    },
+    {
+      "id": "rw-s055",
+      "gold": "same",
+      "candidate": {
+        "name": "geometric vector perceptron (gvp)",
+        "type": "architecture",
+        "definition": "A graph neural network architecture designed for geometric/structural data, used as the basis for SSEmb's GNN module."
+      },
+      "expectTarget": "rw-e042",
+      "note": "实体2是实体1的全称的缩写形式（GVP），指向同一架构概念"
+    },
+    {
+      "id": "rw-s056",
+      "gold": "same",
+      "candidate": {
+        "name": "t5 architecture",
+        "type": "architecture",
+        "definition": "A text-to-text transfer transformer architecture used in ProtTrans, which delivers consistent improvements over basic BERT models."
+      },
+      "expectTarget": "rw-e043",
+      "note": "两者均指代同一 T5（Text-to-Text Transfer Transformer）架构，仅名称长短不同"
+    },
+    {
+      "id": "rw-s057",
+      "gold": "same",
+      "candidate": {
+        "name": "gated recurrent units",
+        "type": "architecture",
+        "definition": "一种部分解决梯度消失问题的循环神经网络结构。"
+      },
+      "expectTarget": "rw-e044",
+      "note": "Both refer to the same gated recurrent unit (GRU) architecture, one as the proposed variant and the other as a Chinese description of the same structure."
+    },
+    {
+      "id": "rw-s058",
+      "gold": "same",
+      "candidate": {
+        "name": "clustalw",
+        "type": "tool",
+        "definition": "A bioinformatics tool used for multiple sequence alignment to diagnose mutations by comparing normal and person's gene sequences."
+      },
+      "expectTarget": "rw-e045",
+      "note": "ClustalW 的同一工具，仅空格写法不同（Clustal W vs ClustalW）。"
+    },
+    {
+      "id": "rw-s059",
+      "gold": "same",
+      "candidate": {
+        "name": "hmmer 3",
+        "type": "tool",
+        "definition": "Hidden Markov model-based tool for sequence analysis, used for HMM building in JNet"
+      },
+      "expectTarget": "rw-e046",
+      "note": "[人工复核] 文献中 HMMER3/HMMER 通用互换指当前主版本，与 jpred/iupred 的代际算法差异不同"
+    },
+    {
+      "id": "rw-s060",
+      "gold": "same",
+      "candidate": {
+        "name": "esm if1",
+        "type": "tool",
+        "definition": "大型蛋白质语言模型，通过主链原子坐标预测蛋白质序列似然性。"
+      },
+      "expectTarget": "rw-e047",
+      "note": "ESM-IF 和 ESM-IF1 是同一 ESM 反向折叠蛋白语言模型的不同写法（IF1 为正式名称，IF 为常见简写）。"
+    },
+    {
+      "id": "rw-s061",
+      "gold": "same",
+      "candidate": {
+        "name": "hhpredb",
+        "type": "tool",
+        "definition": "Protein homology detection and structure prediction server based on HMM-HMM comparison."
+      },
+      "expectTarget": "rw-e048",
+      "note": "hhpredb 是基于 HMM-HMM 比对的 HHPred 同源检测/结构预测服务器"
+    },
+    {
+      "id": "rw-s062",
+      "gold": "same",
+      "candidate": {
+        "name": "iupred2a",
+        "type": "tool",
+        "definition": "Server for predicting residue-wise protein disorder."
+      },
+      "expectTarget": "rw-e049",
+      "note": "IUPred 系列工具的不同版本，核心方法相同，均用于蛋白质无序区预测"
+    },
+    {
+      "id": "rw-s063",
+      "gold": "same",
+      "candidate": {
+        "name": "amber force field",
+        "type": "tool",
+        "definition": "A molecular mechanics force field used in normal mode calculations (as modified for NMA in MoVies)."
+      },
+      "expectTarget": "rw-e050",
+      "note": "中文「amber力场」与英文「amber force field」为同一概念的中英文异名"
+    },
+    {
+      "id": "rw-s064",
+      "gold": "same",
+      "candidate": {
+        "name": "rcsb.org",
+        "type": "tool",
+        "definition": "A research-focused web portal offering tools and features for searching, browsing, visualizing, validating, and analyzing macromolecular structures."
+      },
+      "expectTarget": "rw-e051",
+      "note": "RCSB.org 是 RCSB（Research Collaboratory for Structural Bioinformatics）的官方网站门户，二者指向同一机构"
+    },
+    {
+      "id": "rw-s065",
+      "gold": "same",
+      "candidate": {
+        "name": "openmp api",
+        "type": "tool",
+        "definition": "用于CPU多核并行计算的编程接口。"
+      },
+      "expectTarget": "rw-e052",
+      "note": "OpenMP即OpenMP API，缩写与全称关系，指代同一并行编程接口。"
+    },
+    {
+      "id": "rw-s066",
+      "gold": "same",
+      "candidate": {
+        "name": "psfig.sty",
+        "type": "tool",
+        "definition": "LaTeX style file implementing PostScript figure inclusion macros"
+      },
+      "expectTarget": "rw-e053",
+      "note": "psfig.sty 是 psfig 宏包对应的样式文件，指向同一概念"
+    },
+    {
+      "id": "rw-s067",
+      "gold": "same",
+      "candidate": {
+        "name": "epsfig",
+        "type": "tool",
+        "definition": "LaTeX macro package for including Encapsulated PostScript (EPS) figures"
+      },
+      "expectTarget": "rw-e054",
+      "note": "epsfig.sty 是 epsfig 宏包对应的样式文件，指向同一概念"
+    },
+    {
+      "id": "rw-s068",
+      "gold": "same",
+      "candidate": {
+        "name": "nuclear magnetic resonance (nmr)",
+        "type": "tool",
+        "definition": "An experimental spectroscopic technique used to measure protein structural and dynamical properties such as RDCs."
+      },
+      "expectTarget": "rw-e055",
+      "note": "nmr spectroscopy 即 nuclear magnetic resonance spectroscopy，缩写与全称关系"
+    },
+    {
+      "id": "rw-s069",
+      "gold": "same",
+      "candidate": {
+        "name": "kirkwood buff forcefield",
+        "type": "tool",
+        "definition": "A force field, abbreviated KBFF, designed to model aqueous solutions of urea and guanidinium chloride with fidelity to Kirkwood-Buff integrals."
+      },
+      "expectTarget": "rw-e056",
+      "note": "两者均指代Kirkwood-Buff力场(KBFF)，仅'force field'与'forcefield'拼写不同，描述也指向同一模型"
+    },
+    {
+      "id": "rw-s070",
+      "gold": "same",
+      "candidate": {
+        "name": "dssp program",
+        "type": "tool",
+        "definition": "用于计算蛋白质相对溶剂可及面积的程序。"
+      },
+      "expectTarget": "rw-e057",
+      "note": "dssp 与 dssp program 均指 DSSP 蛋白质结构分析工具，是缩写与全称的变体。"
+    },
+    {
+      "id": "rw-s071",
+      "gold": "same",
+      "candidate": {
+        "name": "smog",
+        "type": "tool",
+        "definition": "A web server providing convenient setup of native structure-based simulations with options for custom forcefield choice and parameterization."
+      },
+      "expectTarget": "rw-e058",
+      "note": "Both are the SMOG web-based tool for structure-based model simulations, with descriptions covering complementary features (input file preparation and simulatio…"
+    },
+    {
+      "id": "rw-s072",
+      "gold": "same",
+      "candidate": {
+        "name": "deep mutational scan",
+        "type": "method",
+        "definition": "An experimental technique that comprehensively measures the functional effects of mutations in a protein."
+      },
+      "expectTarget": "rw-e059",
+      "note": "两者指同一高通量实验方法，仅为动名词与动词原形的词形差异"
+    },
+    {
+      "id": "rw-s073",
+      "gold": "same",
+      "candidate": {
+        "name": "hidden markov models",
+        "type": "method",
+        "definition": "Shallow machine learning methods used for classification and labeling problems in proteins and text."
+      },
+      "expectTarget": "rw-e060",
+      "note": "同一概念的单复数形式"
+    },
+    {
+      "id": "rw-s074",
+      "gold": "same",
+      "candidate": {
+        "name": "profile hidden markov models",
+        "type": "method",
+        "definition": "Simple statistical language models widely used for homology modeling and search in protein biology."
+      },
+      "expectTarget": "rw-e061",
+      "note": "同一概念的单复数形式"
+    },
+    {
+      "id": "rw-s075",
+      "gold": "same",
+      "candidate": {
+        "name": "sequence level positional embeddings",
+        "type": "method",
+        "definition": "Learned positional embeddings for input tokens, integrated by concatenation with token embeddings, enabling reasoning over in-sequence positions."
+      },
+      "expectTarget": "rw-e062",
+      "note": "[人工复核] 可学习位置嵌入=位置编码，定义一致"
+    },
+    {
+      "id": "rw-s076",
+      "gold": "same",
+      "candidate": {
+        "name": "x射线晶体学",
+        "type": "method",
+        "definition": "只能提供蛋白质单一模型而缺乏构象异质性信息的实验方法。"
+      },
+      "expectTarget": "rw-e063",
+      "note": "[人工复核] survivor 命名欠妥（结构 vs 技术）但双方 definition 均指衍射技术，实质同一概念；合并后 canonical 命名应取技术名"
+    },
+    {
+      "id": "rw-s077",
+      "gold": "same",
+      "candidate": {
+        "name": "x ray crystallography",
+        "type": "method",
+        "definition": "Experimental technique that determines the 3D atomic structure of protein complexes, often co-measured with Kd or Ki."
+      },
+      "expectTarget": "rw-e063",
+      "note": "[人工复核] 同上"
+    },
+    {
+      "id": "rw-s078",
+      "gold": "same",
+      "candidate": {
+        "name": "small angle x ray scattering (saxs)",
+        "type": "method",
+        "definition": "An experimental technique used to measure IDR radius of gyration and other conformational properties."
+      },
+      "expectTarget": "rw-e064",
+      "note": "SAXS是Small-angle X-ray scattering的缩写与全称关系。"
+    },
+    {
+      "id": "rw-s079",
+      "gold": "same",
+      "candidate": {
+        "name": "lennard jones potential",
+        "type": "method",
+        "definition": "描述原子间范德华相互作用的经典势能函数"
+      },
+      "expectTarget": "rw-e065",
+      "note": "中文名'势'与英文名'potential'为同一概念的不同语言表达"
+    },
+    {
+      "id": "rw-s080",
+      "gold": "same",
+      "candidate": {
+        "name": "direct coupling analysis",
+        "type": "method",
+        "definition": "A technique that learns evolutionary constraints among a set of similar sequences by fitting a Markov Random Field (Potts model) to the underlying MSA."
+      },
+      "expectTarget": "rw-e066",
+      "note": "三者均为 Direct Coupling Analysis（直接耦合分析），仅在全称、缩写、中文名等命名形式上不同，指向同一方法。"
+    },
+    {
+      "id": "rw-s081",
+      "gold": "same",
+      "candidate": {
+        "name": "dca",
+        "type": "method",
+        "definition": "Direct Coupling Analysis，直接耦合分析方法"
+      },
+      "expectTarget": "rw-e066",
+      "note": "三者均为 Direct Coupling Analysis（直接耦合分析），仅在全称、缩写、中文名等命名形式上不同，指向同一方法。"
+    },
+    {
+      "id": "rw-s082",
+      "gold": "same",
+      "candidate": {
+        "name": "nuclear magnetic resonance spectroscopy",
+        "type": "method",
+        "definition": "An experimental technique for determining 3D structures of macromolecules using NMR."
+      },
+      "expectTarget": "rw-e067",
+      "note": "NMR spectroscopy 的全称、缩写、中文名，均指同一核磁共振波谱技术。"
+    },
+    {
+      "id": "rw-s083",
+      "gold": "same",
+      "candidate": {
+        "name": "nuclear magnetic resonance",
+        "type": "method",
+        "definition": "An experimental spectroscopic technique used to determine protein structures."
+      },
+      "expectTarget": "rw-e067",
+      "note": "NMR spectroscopy 的全称、缩写、中文名，均指同一核磁共振波谱技术。"
+    },
+    {
+      "id": "rw-s084",
+      "gold": "same",
+      "candidate": {
+        "name": "nmr光谱",
+        "type": "method",
+        "definition": "可提供反映蛋白质在溶液中实际动态的构象集合的实验方法。"
+      },
+      "expectTarget": "rw-e067",
+      "note": "NMR spectroscopy 的全称、缩写、中文名，均指同一核磁共振波谱技术。"
+    },
+    {
+      "id": "rw-s085",
+      "gold": "same",
+      "candidate": {
+        "name": "electron paramagnetic resonance spectroscopy",
+        "type": "method",
+        "definition": "An experimental technique providing distance and orientation restraints used in integrative modeling."
+      },
+      "expectTarget": "rw-e068",
+      "note": "EPR spectroscopy 及其全称 electron paramagnetic resonance spectroscopy，指同一电子顺磁共振技术。"
+    },
+    {
+      "id": "rw-s086",
+      "gold": "same",
+      "candidate": {
+        "name": "alexander polynomial invariant",
+        "type": "method",
+        "definition": "A mathematical invariant used in a classification algorithm to identify topologically non-trivial proteins."
+      },
+      "expectTarget": "rw-e069",
+      "note": "两者都指同一数学拓扑不变量，'invariant'仅为该多项式属性的描述性修饰，核心概念相同。"
+    },
+    {
+      "id": "rw-s087",
+      "gold": "same",
+      "candidate": {
+        "name": "residual dipolar coupling",
+        "type": "method",
+        "definition": "An NMR measurement used to probe structural fluctuations on the nanosecond to microsecond timescale"
+      },
+      "expectTarget": "rw-e070",
+      "note": "单复数变体，指同一 NMR 观测量"
+    },
+    {
+      "id": "rw-s088",
+      "gold": "same",
+      "candidate": {
+        "name": "random forest",
+        "type": "method",
+        "definition": "A machine-learning algorithm that has been applied to PPI prediction."
+      },
+      "expectTarget": "rw-e071",
+      "note": "实体1是实体6的缩写形式，均指通用的随机森林方法。"
+    },
+    {
+      "id": "rw-s089",
+      "gold": "same",
+      "candidate": {
+        "name": "single molecule forster resonance energy transfer",
+        "type": "method",
+        "definition": "An experimental technique used to probe conformational properties of IDPs at the single-molecule level."
+      },
+      "expectTarget": "rw-e072",
+      "note": "同一概念，仅 'förster' 拼写变体（ö vs o），其余定义一致"
+    },
+    {
+      "id": "rw-x002",
+      "gold": "similar",
+      "candidate": {
+        "name": "covariance matrix inversion",
+        "type": "method",
+        "definition": "Statistical approach for deriving residue-residue coevolutionary couplings from multiple sequence alignments."
+      },
+      "note": "[人工复核] 矩阵求逆操作 vs 带稀疏约束的估计方法——judge 理由牵强（相关但不相同）"
+    },
+    {
+      "id": "rw-s090",
+      "gold": "same",
+      "candidate": {
+        "name": "gō like 模型",
+        "type": "method",
+        "definition": "仅考虑天然相互作用的简化蛋白质折叠模型，残基以 Cα 原子位置的单一珠粒表示"
+      },
+      "expectTarget": "rw-e074",
+      "note": "均指仅保留/依赖天然态接触相互作用的粗粒化或简化蛋白质模型，go like / gō like / gō type / gō 为中英文异名及常见别称"
+    },
+    {
+      "id": "rw-s091",
+      "gold": "same",
+      "candidate": {
+        "name": "go like model",
+        "type": "method",
+        "definition": "A coarse-grained protein model that retains only native contact interactions, minimizing contact energy in the native conformation."
+      },
+      "expectTarget": "rw-e074",
+      "note": "均指仅保留/依赖天然态接触相互作用的粗粒化或简化蛋白质模型，go like / gō like / gō type / gō 为中英文异名及常见别称"
+    },
+    {
+      "id": "rw-s092",
+      "gold": "same",
+      "candidate": {
+        "name": "gō type model",
+        "type": "method",
+        "definition": "A coarse-grained protein model in which only interactions present in the native structure are attractive"
+      },
+      "expectTarget": "rw-e074",
+      "note": "均指仅保留/依赖天然态接触相互作用的粗粒化或简化蛋白质模型，go like / gō like / gō type / gō 为中英文异名及常见别称"
+    },
+    {
+      "id": "rw-s093",
+      "gold": "same",
+      "candidate": {
+        "name": "gō模型",
+        "type": "method",
+        "definition": "假设天然态内相互作用完全一致的最小受挫极端模型"
+      },
+      "expectTarget": "rw-e074",
+      "note": "均指仅保留/依赖天然态接触相互作用的粗粒化或简化蛋白质模型，go like / gō like / gō type / gō 为中英文异名及常见别称"
+    },
+    {
+      "id": "rw-s094",
+      "gold": "same",
+      "candidate": {
+        "name": "cα 模型",
+        "type": "method",
+        "definition": "将蛋白质残基简化为位于 Cα 原子位置的单一珠粒的粗粒化表示方法"
+      },
+      "expectTarget": "rw-e075",
+      "note": "均指仅以 Cα 原子位置作为残基单一珠粒的粗粒化链表示方法，cα model 与 cα 模型为中英文异名"
+    },
+    {
+      "id": "rw-s095",
+      "gold": "same",
+      "candidate": {
+        "name": "principal component analysis (pca)",
+        "type": "method",
+        "definition": "A factor extraction method commonly used in analyzing the factor structure of HADS."
+      },
+      "expectTarget": "rw-e076",
+      "note": "实体1是全称，实体3是缩写PCA，指向同一概念。"
+    },
+    {
+      "id": "rw-s096",
+      "gold": "same",
+      "candidate": {
+        "name": "smith waterman alignment",
+        "type": "method",
+        "definition": "用于确定两个蛋白质复合物之间同源程度的序列比对方法。"
+      },
+      "expectTarget": "rw-e077",
+      "note": "Smith-Waterman 算法与 Smith-Waterman 比对指同一局部序列比对方法"
+    },
+    {
+      "id": "rw-s097",
+      "gold": "same",
+      "candidate": {
+        "name": "single wavelength anomalous dispersion",
+        "type": "method",
+        "definition": "An experimental phasing technique included within experimental phasing that collects a single data set from a single crystal."
+      },
+      "expectTarget": "rw-e078",
+      "note": "SAD 既可写作 Single-wavelength Anomalous Diffraction 也可写作 Single-wavelength Anomalous Dispersion，指同一单波长反常散射相位确定方法。"
+    },
+    {
+      "id": "rw-s098",
+      "gold": "same",
+      "candidate": {
+        "name": "self avoiding walk",
+        "type": "method",
+        "definition": "A path on a lattice that does not visit the same vertex twice, used to represent a physically admissible protein chain."
+      },
+      "expectTarget": "rw-e079",
+      "note": "self-avoiding random walk 与 self-avoiding walk 是同一概念的两种常见命名，SAW 即可指代两者。"
+    },
+    {
+      "id": "rw-s099",
+      "gold": "same",
+      "candidate": {
+        "name": "model free approach",
+        "type": "method",
+        "definition": "A traditional approach that describes local internal motions using an order parameter and a relaxation time without reference to a specific motional model."
+      },
+      "expectTarget": "rw-e080",
+      "note": "Both refer to the same Lipari-Szabo model-free method; 'analysis' and 'approach' are synonymous descriptors for this NMR dynamics framework."
+    },
+    {
+      "id": "rw-s100",
+      "gold": "same",
+      "candidate": {
+        "name": "maximum likelihood",
+        "type": "method",
+        "definition": "A branch of statistical inference that asserts the best model on the evidence of the data is the one that explains what has been observed with the highest probability."
+      },
+      "expectTarget": "rw-e081",
+      "note": "[人工复核] 原理与其推断应用在实践中同指"
+    },
+    {
+      "id": "rw-s101",
+      "gold": "same",
+      "candidate": {
+        "name": "pseudolikelihoods",
+        "type": "method",
+        "definition": "A statistical technique used to infer Potts models for improved contact prediction in proteins."
+      },
+      "expectTarget": "rw-e082",
+      "note": "\"pseudolikelihood maximization\", \"pseudolikelihoods\", and \"pseudolikelihood method\" are the same technique under different word forms."
+    },
+    {
+      "id": "rw-s102",
+      "gold": "same",
+      "candidate": {
+        "name": "pseudolikelihood method",
+        "type": "method",
+        "definition": "An approximate maximum-likelihood inference method that avoids computing the partition function in exponential-family models."
+      },
+      "expectTarget": "rw-e082",
+      "note": "\"pseudolikelihood maximization\", \"pseudolikelihoods\", and \"pseudolikelihood method\" are the same technique under different word forms."
+    },
+    {
+      "id": "rw-s103",
+      "gold": "same",
+      "candidate": {
+        "name": "alphafold multimer",
+        "type": "method",
+        "definition": "A refined version of AlphaFold2 specifically designed for the prediction of protein complexes."
+      },
+      "expectTarget": "rw-e083",
+      "note": "af multimer 是 alphafold multimer / alphafold2 multimer 的常见缩写形式，三者均指同一蛋白复合体预测方法。"
+    },
+    {
+      "id": "rw-s104",
+      "gold": "same",
+      "candidate": {
+        "name": "alphafold2 multimer",
+        "type": "method",
+        "definition": "An extension of AlphaFold2 for multichain protein complex structure prediction."
+      },
+      "expectTarget": "rw-e083",
+      "note": "af multimer 是 alphafold multimer / alphafold2 multimer 的常见缩写形式，三者均指同一蛋白复合体预测方法。"
+    },
+    {
+      "id": "rw-s105",
+      "gold": "same",
+      "candidate": {
+        "name": "high throughput screening",
+        "type": "method",
+        "definition": "允许在体外测试数百万分子以确定可能对目标蛋白质起作用的化合物的技术。"
+      },
+      "expectTarget": "rw-e084",
+      "note": "high throughput assay 与 high throughput screening 是同一实验筛选概念的常见别称，均指对大量分子/变体进行高通量实验测试"
+    },
+    {
+      "id": "rw-s106",
+      "gold": "same",
+      "candidate": {
+        "name": "gō potentials",
+        "type": "method",
+        "definition": "Energy potentials based on topological information such as the contact map of the native state, used within structure-based models."
+      },
+      "expectTarget": "rw-e085",
+      "note": "三者均指基于蛋白质天然接触图谱/拓扑信息的结构基础势函数，是同一概念的不同命名形式（带/不带变音符号、单复数）。"
+    },
+    {
+      "id": "rw-s107",
+      "gold": "same",
+      "candidate": {
+        "name": "gō like potential",
+        "type": "method",
+        "definition": "A simplified model potential that retains information about native contacts while removing energetic frustration and heterogeneity among native interactions."
+      },
+      "expectTarget": "rw-e085",
+      "note": "三者均指基于蛋白质天然接触图谱/拓扑信息的结构基础势函数，是同一概念的不同命名形式（带/不带变音符号、单复数）。"
+    },
+    {
+      "id": "rw-s108",
+      "gold": "same",
+      "candidate": {
+        "name": "ensemble method",
+        "type": "method",
+        "definition": "采用系综水平描述蛋白质折叠过程的方法"
+      },
+      "expectTarget": "rw-e086",
+      "note": "[人工复核] 双方定义均指构象系综建模，名称均偏泛但实质同一"
+    },
+    {
+      "id": "rw-s109",
+      "gold": "same",
+      "candidate": {
+        "name": "back propagation algorithm",
+        "type": "method",
+        "definition": "An optimization algorithm used with classification errors to fine-tune parameters in the stacked autoencoder."
+      },
+      "expectTarget": "rw-e087",
+      "note": "三者均指神经网络中将误差梯度从输出层反向传播以更新参数的训练算法，仅是空格/有无'algo'的写法变体"
+    },
+    {
+      "id": "rw-s110",
+      "gold": "same",
+      "candidate": {
+        "name": "backpropagation",
+        "type": "method",
+        "definition": "The well-known training technique for neural networks that propagates error gradients from the output back through the network."
+      },
+      "expectTarget": "rw-e087",
+      "note": "三者均指神经网络中将误差梯度从输出层反向传播以更新参数的训练算法，仅是空格/有无'algo'的写法变体"
+    },
+    {
+      "id": "rw-s111",
+      "gold": "same",
+      "candidate": {
+        "name": "sidechain repacking algorithms",
+        "type": "method",
+        "definition": "Algorithms used to design the sequence by defining backbone conformations and repacking sidechains."
+      },
+      "expectTarget": "rw-e088",
+      "note": "两者均指蛋白质侧链构象优化/重排方法，'algorithms'仅为复数词缀，指向同一概念"
+    },
+    {
+      "id": "rw-s112",
+      "gold": "same",
+      "candidate": {
+        "name": "gaussian axial fluctuation model",
+        "type": "method",
+        "definition": "An anisotropic model describing fast time-scale local dynamic fluctuations based on the observation of peptide plane motions extracted from an MD trajectory."
+      },
+      "expectTarget": "rw-e089",
+      "note": "第一条是GAF方法（1D gaussian axial fluctuation的缩写），第二条是GAF的全称模型，指同一概念。"
+    },
+    {
+      "id": "rw-s113",
+      "gold": "same",
+      "candidate": {
+        "name": "weighted histogram analysis method",
+        "type": "method",
+        "definition": "A method for calculating thermodynamics properties by merging multiple simulations carried out under constant temperature."
+      },
+      "expectTarget": "rw-e090",
+      "note": "weighted histogram method 是 weighted histogram analysis method (WHAM) 的省略称谓"
+    },
+    {
+      "id": "rw-s114",
+      "gold": "same",
+      "candidate": {
+        "name": "associative memory hamiltonian",
+        "type": "method",
+        "definition": "A protein folding potential energy function that encodes favorable native interactions based on memory of known structures"
+      },
+      "expectTarget": "rw-e091",
+      "note": "Hamiltonian 即能量函数，二者是蛋白质折叠中基于已知结构记忆的同一势能函数的等价名称"
+    }
+  ]
+}

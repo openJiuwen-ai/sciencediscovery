@@ -199,4 +199,46 @@ export class KnowledgeEngineApiClient extends EvolveApiClient {
   getKeEntity(entityId: string): Promise<KeEntityDetail> {
     return this.request(`/api/knowledge-engine/entities/${encodeURIComponent(entityId)}`);
   }
+
+  getKeGraphRoots(kbId: string): Promise<KeGraphRoots> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/roots`);
+  }
+
+  startKeResolution(kbId: string): Promise<{ jobId: string; enqueued: boolean }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/resolution`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
+}
+
+export interface KeCommunityEntity {
+  id: string;
+  name: string;
+  type: string;
+  supportCount: number;
+}
+
+export interface KeCommunity {
+  id: number;
+  name: string;
+  size: number;
+  repEntity: KeCommunityEntity;
+  topEntities: KeCommunityEntity[];
+}
+
+export interface KeCommunityEdge {
+  source: number;
+  target: number;
+  weight: number;
+  count: number;
+}
+
+export interface KeGraphRoots {
+  communities: KeCommunity[];
+  communityEdges: KeCommunityEdge[];
+  method: "louvain" | "entity-type";
+  fingerprint: string;
+  entityCount: number;
+  edgeCount: number;
 }

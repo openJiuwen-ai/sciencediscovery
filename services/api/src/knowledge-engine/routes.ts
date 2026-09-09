@@ -29,7 +29,8 @@ import { ApiStatusError } from "../runs/index.js";
 
 import type { KeOrchestrator } from "./orchestrator.js";
 import { DEFAULT_CRAWL_BUDGET, KE_GROW_JOB, type CrawlBudget } from "./grow.js";
-import type { KeDocumentRow, KeEdgeRow, KeEntityRow, KnowledgeEngineStore } from "./store.js";
+import type { GraphRootsService } from "./graph-roots.js";
+import type { KeDocumentRow, KeEdgeRow, KeEntityMergeRow, KeEntityRow, KnowledgeEngineStore } from "./store.js";
 
 /** KE request errors ride the top-level classifier via ApiStatusError
  *  (status + machine-readable code), never fall through to a bare 500. */
@@ -283,4 +284,73 @@ export function handleKeGetEntity(response: ServerResponse, store: KnowledgeEngi
     neighbors,
     evidence,
   });
+}
+
+// ---------------------------------------------------------------- resolution
+
+/** Enqueue a batch entity-resolution run (dedup per KB; the job itself
+ *  no-ops with a 'skipped' note when the resolution mode switch is off). */
+export function handleKeStartResolution(
+  response: ServerResponse,
+  orchestrator: KeOrchestrator,
+  store: KnowledgeEngineStore,
+  kbId: string,
+): void {
+  requireKb(store, kbId);
+  sendJson(response, 202, orchestrator.startResolution(kbId));
+}
+
+function leanMerge(merge: KeEntityMergeRow): Record<string, unknown> {
+  const snapshot = merge.absorbedSnapshot;
+  // absorbed name for display: physical merges snapshot the absorbed row,
+  // online attaches/shadow previews carry the candidate/absorbedName.
+  const absorbedName =
+    (snapshot["absorbed"] as { name?: string } | undefined)?.name ??
+    (snapshot["candidate"] as { name?: string } | undefined)?.name ??
+    (snapshot["absorbedName"] as string | undefined) ??
+    null;
+  return {
+    id: merge.id,
+    canonicalId: merge.canonicalId,
+    absorbedId: merge.absorbedId,
+    absorbedName,
+    decidedBy: merge.decidedBy,
+    score: merge.score,
+    judgeRationale: merge.judgeRationale,
+    jobId: merge.jobId,
+    undoneAt: merge.undoneAt,
+    createdAt: merge.createdAt,
+  };
+}
+
+export function handleKeListMerges(response: ServerResponse, store: KnowledgeEngineStore, kbId: string): void {
+  requireKb(store, kbId);
+  sendJson(response, 200, { merges: store.listEntityMerges(kbId).map(leanMerge) });
+}
+
+/** Roll back a physical merge from its snapshot (best-effort; online-attach
+ *  audit rows are not unmergeable). */
+export function handleKeUnmerge(response: ServerResponse, store: KnowledgeEngineStore, mergeId: string): void {
+  try {
+    store.unmergeEntity(mergeId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("not found")) throw new KeApiError(message, 404, "KE_MERGE_NOT_FOUND");
+    if (message.includes("already undone")) throw new KeApiError(message, 409, "KE_MERGE_ALREADY_UNDONE");
+    if (message.includes("online attach")) throw new KeApiError(message, 400, "KE_MERGE_NOT_UNMERGEABLE");
+    throw error;
+  }
+  sendJson(response, 200, { unmerged: mergeId });
+}
+
+// --------------------------------------------------------------- graph roots
+
+export async function handleKeGetGraphRoots(
+  response: ServerResponse,
+  rootsService: GraphRootsService,
+  store: KnowledgeEngineStore,
+  kbId: string,
+): Promise<void> {
+  requireKb(store, kbId);
+  sendJson(response, 200, await rootsService.getGraphRoots(kbId));
 }

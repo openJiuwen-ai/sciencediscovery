@@ -29,16 +29,30 @@
 import {
   applyProvenanceGate,
   buildExtractionPrompt,
+  buildJudgePrompt,
   embeddingToBlob,
+  extractAbbrevPairs,
+  parseExtractionResponse,
+  parseJudgeVerdict,
+  resolveEntityCandidate,
+  DEFAULT_RESOLVER_THRESHOLDS,
   HAYSTACK_CAP,
   jatsToMarkdown,
-  parseExtractionResponse,
+  type EntityResolutionMode,
   type ExtractionSchema,
+  type JudgeSide,
+  type JudgeVerdict,
 } from "@sciencediscovery/knowledge-engine";
 import type { ModelEndpoint } from "@sciencediscovery/model";
 
 import type { EmbeddingClient } from "./embedding.js";
 import { callPipelineLlm, type PipelineInvoke } from "./llm.js";
+import { buildResolverRepo, recordOnlineAttach, resolveEntityResolutionMode } from "./resolution.js";
+import {
+  enqueueEntityResolution,
+  runEntityResolution,
+  KE_ENTITY_RESOLUTION_JOB,
+} from "./resolution-runner.js";
 import type { KeDocumentRow, KeJobRow, KnowledgeEngineStore } from "./store.js";
 import { normalizeEntityName } from "./store.js";
 import type { SourceChain } from "./connectors/source-chain.js";
@@ -63,7 +77,7 @@ import {
 export const KE_SEED_JOB = "ke_seed";
 export const KE_INGEST_JOB = "ke_ingest";
 export const KE_EXTRACT_JOB = "ke_extract";
-export { KE_GROW_JOB };
+export { KE_GROW_JOB, KE_ENTITY_RESOLUTION_JOB };
 export type { CrawlBudget, GrowCycleHandle, GrowDeps };
 
 const CORE_ENTITY_LIST_SIZE = 50;
@@ -86,6 +100,9 @@ export interface KeOrchestratorDeps {
   readonly assertUrl?: (url: string) => Promise<void>;
   /** Test seam: override individual grow-cycle dependencies. */
   readonly grow?: Partial<GrowDeps>;
+  /** Test seam: override the entity-resolution mode switch (default:
+   *  env SCIENCE_AGENT_KE_ENTITY_RESOLUTION → ke_settings → 'off'). */
+  readonly resolutionMode?: () => EntityResolutionMode;
   readonly onWarn?: (message: string, detail?: unknown) => void;
 }
 
@@ -105,6 +122,25 @@ export class KeOrchestrator {
     runner.register(KE_INGEST_JOB, (job, signal) => this.handleIngest(job, signal));
     runner.register(KE_EXTRACT_JOB, (job, signal) => this.handleExtract(job, signal));
     runner.register(KE_GROW_JOB, (job) => this.handleGrow(job));
+    runner.register(KE_ENTITY_RESOLUTION_JOB, (job, signal) =>
+      runEntityResolution(
+        {
+          store: this.deps.store,
+          ...(this.deps.resolveEndpoint ? { resolveEndpoint: this.deps.resolveEndpoint } : {}),
+          ...(this.deps.llmInvoke ? { llmInvoke: this.deps.llmInvoke } : {}),
+          ...(this.deps.embedding ? { embedding: this.deps.embedding } : {}),
+          ...(this.deps.resolutionMode ? { mode: this.deps.resolutionMode } : {}),
+          ...(this.deps.onWarn ? { onWarn: this.deps.onWarn } : {}),
+        },
+        job,
+        signal,
+      ),
+    );
+  }
+
+  /** Public API: enqueue a batch entity-resolution run (dedup per KB). */
+  startResolution(kbId: string): { jobId: string; enqueued: boolean } {
+    return enqueueEntityResolution(this.deps.store, kbId);
   }
 
   /** Public API: enqueue a seed run (deduplicated per kb+query). */
@@ -438,23 +474,169 @@ export class KeOrchestrator {
     // Deterministic provenance gate: unverifiable relations never reach the graph.
     const gate = applyProvenanceGate(relations, haystack);
 
+    // Online entity resolution (opt-in): decide merge vs new BEFORE writing.
+    // off → the upsert path below is byte-identical to pre-resolution
+    // behavior; shadow → decide + audit but write unchanged; on → merge
+    // decisions attach onto the existing entity (aliases + support).
+    const resolutionMode = (this.deps.resolutionMode ?? (() => resolveEntityResolutionMode(this.deps.store)))();
+    const resolverRepo = resolutionMode === "off" ? null : buildResolverRepo(this.deps.store);
+    const thresholds = DEFAULT_RESOLVER_THRESHOLDS;
+    const abbrevMap = resolverRepo ? extractAbbrevPairs(fulltext) : undefined;
+    const judgeBudget = { judgeLeft: thresholds.maxJudgePerDoc };
+    // Per-document embedding cache: the resolver may embed several candidates.
+    const embedCache = new Map<string, Float32Array | number[] | null>();
+    const embedFn =
+      resolverRepo && this.deps.embedding
+        ? async (text: string): Promise<Float32Array | number[] | null> => {
+            if (!embedCache.has(text)) {
+              try {
+                const vectors = await this.deps.embedding!.embed([text]);
+                embedCache.set(text, vectors[0] ?? null);
+              } catch {
+                embedCache.set(text, null); // embedding outage → L3 skips
+              }
+            }
+            return embedCache.get(text) ?? null;
+          }
+        : undefined;
+    const judgeFn = resolverRepo
+      ? async (a: JudgeSide, b: JudgeSide): Promise<JudgeVerdict> => {
+          const text = await callPipelineLlm(
+            { endpoint, ...(this.deps.llmInvoke ? { invoke: this.deps.llmInvoke } : {}) },
+            JUDGE_SYSTEM_PROMPT,
+            buildJudgePrompt(a, b),
+            signal,
+          );
+          return parseJudgeVerdict(text) ?? { verdict: "unrelated", reason: "unparseable judge response" };
+        }
+      : undefined;
+
+    // Pre-batch ALL candidate embeddings in one call (DA parity: a single
+    // up-front batch instead of N lazy per-candidate HTTP calls inside the
+    // resolver loop). Fail-open: an outage leaves the cache empty and L3
+    // skips per candidate.
+    if (resolverRepo && this.deps.embedding) {
+      try {
+        const names = [...new Set(entities.map((entity) => entity.name))];
+        const vectors = await this.deps.embedding.embed(names);
+        names.forEach((name, index) => embedCache.set(name, vectors[index] ?? null));
+      } catch {
+        // embedding outage → L3 skipped for the whole document
+      }
+    }
+
     // Entities first (edges reference ids). Dedup within the response:
     // support counts distinct documents, not repeated mentions.
     const seenNames = new Set<string>();
     const nameToId = new Map<string, string>();
     const writtenIds: string[] = [];
+    // Two candidates from the SAME document resolving to the same target
+    // attach once for support (distinct-doc invariant), always for aliases.
+    const attachedThisDoc = new Set<string>();
     for (const entity of entities) {
       const normalized = normalizeEntityName(entity.name);
       if (seenNames.has(normalized)) continue;
       seenNames.add(normalized);
-      const stored = this.deps.store.upsertEntity({
-        kbId: doc.kbId,
-        name: entity.name,
-        type: entity.type,
-        description: entity.definition ?? null,
-        aliases: entity.aliases ?? [],
-        firstSeenDoc: doc.id,
-      });
+
+      let stored;
+      let resolvedMerge: { targetId: string; via: string; score?: number; rationale?: string } | null = null;
+      // The whole decide+attach block is fail-open (DA parity): any resolver
+      // or attach failure falls back to the plain upsert — a resolver outage
+      // can only miss merges, never fail the extraction job.
+      try {
+        if (resolverRepo) {
+          const decision = await resolveEntityCandidate(
+            resolverRepo,
+            doc.kbId,
+            {
+              name: entity.name,
+              type: entity.type,
+              ...(entity.definition !== undefined && entity.definition !== null ? { definition: entity.definition } : {}),
+              ...(entity.aliases ? { aliases: entity.aliases } : {}),
+            },
+            {
+              ...(abbrevMap ? { abbrevMap } : {}),
+              thresholds,
+              ...(embedFn ? { embed: embedFn } : {}),
+              ...(judgeFn ? { judge: judgeFn } : {}),
+              budget: judgeBudget,
+            },
+          );
+          if (decision.action === "merge" && decision.targetId) {
+            resolvedMerge = {
+              targetId: decision.targetId,
+              via: decision.via,
+              ...(decision.score !== undefined ? { score: decision.score } : {}),
+              ...(decision.rationale !== undefined ? { rationale: decision.rationale } : {}),
+            };
+          }
+        }
+
+        if (resolvedMerge && resolutionMode === "on") {
+          stored = this.deps.store.attachToEntity(resolvedMerge.targetId, {
+            name: entity.name,
+            aliases: entity.aliases ?? [],
+            description: entity.definition ?? null,
+            docId: doc.id,
+            incrementSupport: !attachedThisDoc.has(resolvedMerge.targetId),
+          });
+          recordOnlineAttach(this.deps.store, {
+            kbId: doc.kbId,
+            targetId: resolvedMerge.targetId,
+            candidate: {
+              name: entity.name,
+              type: entity.type,
+              ...(entity.definition !== undefined && entity.definition !== null ? { definition: entity.definition } : {}),
+              ...(entity.aliases ? { aliases: entity.aliases } : {}),
+            },
+            decidedBy: resolvedMerge.via,
+            ...(resolvedMerge.score !== undefined ? { score: resolvedMerge.score } : {}),
+            ...(resolvedMerge.rationale !== undefined ? { rationale: resolvedMerge.rationale } : {}),
+            jobId: job.id,
+          });
+        } else {
+          if (resolvedMerge && resolutionMode === "shadow") {
+            // Audit-only: the decision is recorded, the write path is unchanged.
+            recordOnlineAttach(this.deps.store, {
+              kbId: doc.kbId,
+              targetId: resolvedMerge.targetId,
+              candidate: {
+                name: entity.name,
+                type: entity.type,
+                ...(entity.definition !== undefined && entity.definition !== null ? { definition: entity.definition } : {}),
+                ...(entity.aliases ? { aliases: entity.aliases } : {}),
+              },
+              decidedBy: `shadow:${resolvedMerge.via}`,
+              ...(resolvedMerge.score !== undefined ? { score: resolvedMerge.score } : {}),
+              ...(resolvedMerge.rationale !== undefined ? { rationale: resolvedMerge.rationale } : {}),
+              jobId: job.id,
+            });
+          }
+          stored = this.deps.store.upsertEntity({
+            kbId: doc.kbId,
+            name: entity.name,
+            type: entity.type,
+            description: entity.definition ?? null,
+            aliases: entity.aliases ?? [],
+            firstSeenDoc: doc.id,
+          });
+        }
+      } catch (error) {
+        this.warn("ke_resolution_attach_failed", {
+          docId: doc.id,
+          entity: entity.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        stored = this.deps.store.upsertEntity({
+          kbId: doc.kbId,
+          name: entity.name,
+          type: entity.type,
+          description: entity.definition ?? null,
+          aliases: entity.aliases ?? [],
+          firstSeenDoc: doc.id,
+        });
+      }
+      attachedThisDoc.add(stored.id);
       nameToId.set(normalized, stored.id);
       for (const alias of entity.aliases ?? []) {
         nameToId.set(normalizeEntityName(alias), stored.id);
@@ -522,6 +704,11 @@ export class KeOrchestrator {
 
 const EXTRACTION_SYSTEM_PROMPT =
   "你是学科知识抽取引擎。只输出用户要求的 JSON，不要输出解释、前言或后记。证据必须逐字来自文档。";
+
+/** The entity-resolution judge gets its OWN system prompt — the extraction
+ *  one carries an evidence-quote instruction that does not apply to judging. */
+const JUDGE_SYSTEM_PROMPT =
+  "你是实体消解裁决器。只输出用户要求的 JSON，不要输出解释、前言或后记。";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

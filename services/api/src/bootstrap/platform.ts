@@ -48,6 +48,7 @@ import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
 import { NativeWebProviderClient, WebBroker } from "@sciencediscovery/data-source";
 import { EmbeddingClient } from "../knowledge-engine/embedding.js";
+import { createGraphRootsService } from "../knowledge-engine/graph-roots.js";
 import { KeJobRunner } from "../knowledge-engine/job-runner.js";
 import { KeOrchestrator } from "../knowledge-engine/orchestrator.js";
 import { extractPdfText } from "../knowledge-engine/pdf-text.js";
@@ -391,24 +392,27 @@ export function createPlatformServices(
   const keEmbedding = keEmbeddingBaseUrl && keEmbeddingApiKey && keEmbeddingModel
     ? new EmbeddingClient({ baseUrl: keEmbeddingBaseUrl, apiKey: keEmbeddingApiKey, model: keEmbeddingModel })
     : undefined;
+  // Pipeline model endpoint (global default task model) shared by KE
+  // extraction, resolution judging and community naming.
+  const keResolveEndpoint = () => {
+    const modelId = store.getGlobalSettings().overrides.modelId;
+    const model = store.getModel(modelId);
+    if (!model) return undefined;
+    return {
+      baseUrl: model.baseUrl,
+      model: model.model,
+      apiToken: store.getModelApiToken(model.id),
+      ...(model.apiProtocol ? { apiProtocol: model.apiProtocol } : {}),
+      ...(model.apiVariant ? { apiVariant: model.apiVariant } : {}),
+    };
+  };
   const keOrchestrator = new KeOrchestrator({
     store: knowledgeEngineStore,
     chain: keChain,
     transport: keTransport,
     schema: BIOMEDICAL_SCHEMA,
     embedding: keEmbedding,
-    resolveEndpoint: () => {
-      const modelId = store.getGlobalSettings().overrides.modelId;
-      const model = store.getModel(modelId);
-      if (!model) return undefined;
-      return {
-        baseUrl: model.baseUrl,
-        model: model.model,
-        apiToken: store.getModelApiToken(model.id),
-        ...(model.apiProtocol ? { apiProtocol: model.apiProtocol } : {}),
-        ...(model.apiVariant ? { apiVariant: model.apiVariant } : {}),
-      };
-    },
+    resolveEndpoint: keResolveEndpoint,
     paperText: (pdfBytes, docId) =>
       extractPdfText({
         pythonPath: config.paperPythonPath,
@@ -429,10 +433,18 @@ export function createPlatformServices(
   // validate / gaps) — a plain port object; the agent runtime registers the
   // LLM tools when this is present.
   const knowledgeEngineTools = createKnowledgeEngineTools(knowledgeEngineStore);
+  // Community roots for the progressive graph drill-down (fingerprint-cached,
+  // stale-while-revalidate, LLM-named when a pipeline model is configured).
+  const keGraphRoots = createGraphRootsService({
+    store: knowledgeEngineStore,
+    resolveEndpoint: keResolveEndpoint,
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+  });
 
   return {
     artifactManager,
     evolutionStore,
+    keGraphRoots,
     keJobRunner,
     keOrchestrator,
     knowledgeEngineStore,

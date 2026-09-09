@@ -28,6 +28,8 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { cosineScan, embeddingFromBlob, trigramSimilarity } from "@sciencediscovery/knowledge-engine";
+
 export interface KnowledgeBaseRow {
   readonly id: string;
   readonly name: string;
@@ -87,6 +89,28 @@ export interface KeEdgeRow {
 }
 
 export type KeJobStatus = "pending" | "running" | "succeeded" | "failed" | "dead";
+
+export interface KeEntityMergeRow {
+  readonly id: string;
+  readonly kbId: string;
+  readonly canonicalId: string;
+  readonly absorbedId: string;
+  readonly absorbedSnapshot: Record<string, unknown>;
+  readonly decidedBy: string;
+  readonly score: number | null;
+  readonly judgeRationale: string | null;
+  readonly jobId: string | null;
+  readonly undoneAt: string | null;
+  readonly createdAt: string;
+}
+
+/** Metadata recorded on a physical merge or online attach. */
+export interface KeMergeMeta {
+  readonly decidedBy: string; // 'alias' | 'abbrev' | 'embedding' | 'llm' | 'manual' | 'batch-llm' | 'shadow:*'
+  readonly score?: number;
+  readonly rationale?: string;
+  readonly jobId?: string;
+}
 
 export type KeFrontierStatus = "pending" | "done" | "failed" | "skipped";
 
@@ -283,6 +307,43 @@ const MIGRATIONS: readonly Migration[] = [
       );
       CREATE INDEX ke_frontier_cycle_status ON ke_frontier (cycle_id, status, depth, attempts, created_at);
       CREATE INDEX ke_frontier_kb ON ke_frontier (kb_id);
+    `,
+  },
+  {
+    version: 3,
+    name: "ke_resolution",
+    sql: `
+      -- Merge/attach audit + rollback snapshots (DeepAnalyze
+      -- subject_entity_merges). absorbed_id is plain TEXT (no FK): online
+      -- attach rows carry a synthetic 'candidate:<normalized>' id.
+      CREATE TABLE ke_entity_merges (
+        id TEXT PRIMARY KEY,
+        kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        canonical_id TEXT NOT NULL,
+        absorbed_id TEXT NOT NULL,
+        absorbed_snapshot TEXT NOT NULL,
+        decided_by TEXT NOT NULL,
+        score REAL,
+        judge_rationale TEXT,
+        job_id TEXT,
+        undone_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX ke_entity_merges_kb ON ke_entity_merges (kb_id, created_at);
+      -- Distinct-document support detail. Backfilled one row per entity from
+      -- first_seen_doc; populated going forward by upsert/attach and by the
+      -- merge executor's edge-evidence backfill. support_count itself stays
+      -- the GREATEST-guarded counter — the detail table exists so merges can
+      -- recount a true distinct-doc union instead of a naive sum.
+      CREATE TABLE ke_entity_docs (
+        entity_id TEXT NOT NULL REFERENCES ke_entities(id) ON DELETE CASCADE,
+        doc_id TEXT NOT NULL,
+        kb_id TEXT NOT NULL,
+        PRIMARY KEY (entity_id, doc_id)
+      );
+      CREATE INDEX ke_entity_docs_kb ON ke_entity_docs (kb_id, entity_id);
+      INSERT OR IGNORE INTO ke_entity_docs (entity_id, doc_id, kb_id)
+        SELECT id, first_seen_doc, kb_id FROM ke_entities WHERE first_seen_doc IS NOT NULL;
     `,
   },
 ];
@@ -627,8 +688,9 @@ export class KnowledgeEngineStore {
       const existing = this.database
         .prepare("SELECT * FROM ke_entities WHERE kb_id = ? AND normalized_name = ? AND type = ?")
         .get(input.kbId, normalizedName, input.type) as Record<string, unknown> | undefined;
+      let entityId: string;
       if (!existing) {
-        const id = randomUUID();
+        entityId = randomUUID();
         this.database
           .prepare(
             `INSERT INTO ke_entities
@@ -636,7 +698,7 @@ export class KnowledgeEngineStore {
              VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
           )
           .run(
-            id,
+            entityId,
             input.kbId,
             input.name,
             normalizedName,
@@ -648,6 +710,20 @@ export class KnowledgeEngineStore {
             timestamp,
           );
       } else {
+        entityId = String(existing["id"]);
+      }
+      // Distinct-document support detail (merge recount input) BEFORE the
+      // support update: the row insert is the idempotency anchor — a repeat
+      // (entity, docId) pair means a re-run, and support must not
+      // double-count it (DA conditions its increment the same way).
+      let docRowInserted = false;
+      if (input.firstSeenDoc) {
+        const inserted = this.database
+          .prepare("INSERT OR IGNORE INTO ke_entity_docs (entity_id, doc_id, kb_id) VALUES (?, ?, ?)")
+          .run(entityId, input.firstSeenDoc, input.kbId);
+        docRowInserted = Number(inserted.changes) > 0;
+      }
+      if (existing) {
         const aliases = mergeAliases(parseJson<string[]>(existing["aliases"], []));
         // Cap alias growth: hot entities would otherwise accumulate an
         // unbounded surface-form list over the KB's lifetime.
@@ -659,6 +735,11 @@ export class KnowledgeEngineStore {
         ) {
           aliases.push(input.name);
         }
+        // Without a docId the caller opts out of detail tracking (tests,
+        // manual writes) and the increment stays unconditional; with one,
+        // only a NEW detail row earns the bump.
+        const supportDelta =
+          input.incrementSupport === false ? 0 : input.firstSeenDoc ? (docRowInserted ? 1 : 0) : 1;
         this.database
           .prepare(
             `UPDATE ke_entities SET
@@ -666,7 +747,7 @@ export class KnowledgeEngineStore {
                description = coalesce(?, description), updated_at = ?
              WHERE id = ?`,
           )
-          .run(input.incrementSupport === false ? 0 : 1, JSON.stringify(aliases), input.description ?? null, timestamp, existing["id"] as string);
+          .run(supportDelta, JSON.stringify(aliases), input.description ?? null, timestamp, entityId);
       }
       const stored = this.getEntityByNormalizedName(input.kbId, normalizedName, input.type);
       if (!stored) {
@@ -715,6 +796,550 @@ export class KnowledgeEngineStore {
     this.database
       .prepare("UPDATE ke_entities SET embedding = ?, updated_at = ? WHERE id = ?")
       .run(embedding, now(), id);
+  }
+
+  // ------------------------------------------------------------- resolution
+
+  /**
+   * Alias lookup (resolver L1): exact hit on any entity's alias list, compared
+   * NORMALIZED on both sides (aliases are stored as surface forms). Scans the
+   * KB's entities in insertion order — deterministic and plenty fast at KB
+   * scale (no pg_trgm alias index in SQLite).
+   */
+  findEntityByAlias(kbId: string, normalizedAlias: string): KeEntityRow | undefined {
+    const rows = this.database
+      .prepare("SELECT * FROM ke_entities WHERE kb_id = ? ORDER BY created_at, id")
+      .all(kbId) as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      const aliases = parseJson<string[]>(row["aliases"], []);
+      if (aliases.some((alias) => normalizeEntityName(alias) === normalizedAlias)) {
+        return mapEntity(row);
+      }
+    }
+    return undefined;
+  }
+
+  /** Exact canonical-name hit across types (resolver L0 — DA's L0 was
+   *  type-independent; the (kb, name, type) dedup key stays untouched). */
+  findEntityByName(kbId: string, normalizedName: string): KeEntityRow | undefined {
+    const row = this.database
+      .prepare("SELECT * FROM ke_entities WHERE kb_id = ? AND normalized_name = ? ORDER BY created_at, id LIMIT 1")
+      .get(kbId, normalizedName) as Record<string, unknown> | undefined;
+    return row ? mapEntity(row) : undefined;
+  }
+
+  /** Trigram-similarity recall over canonical names (resolver L3.5 + batch
+   *  string channel). JS scoring over the KB's rows replaces pg_trgm. */
+  similarEntitiesByName(kbId: string, name: string, minSim: number, limit: number): Array<KeEntityRow & { sim: number }> {
+    const normalized = normalizeEntityName(name);
+    if (!normalized) return [];
+    const rows = this.database
+      .prepare("SELECT * FROM ke_entities WHERE kb_id = ?")
+      .all(kbId) as Array<Record<string, unknown>>;
+    return rows
+      .map((row) => ({ entity: mapEntity(row), sim: trigramSimilarity(normalized, String(row["normalized_name"])) }))
+      .filter((hit) => hit.sim >= minSim)
+      .sort((a, b) => b.sim - a.sim || a.entity.id.localeCompare(b.entity.id))
+      .slice(0, limit)
+      .map((hit) => ({ ...hit.entity, sim: hit.sim }));
+  }
+
+  /** Embedding cosine recall (resolver L3 + batch embedding channel):
+   *  brute-force scan over stored vectors — millisecond-scale at KB sizes. */
+  nearestEntitiesByEmbedding(
+    kbId: string,
+    embedding: ArrayLike<number>,
+    limit: number,
+  ): Array<KeEntityRow & { cosine: number }> {
+    const rows = this.listEntities(kbId, { withEmbedding: true });
+    const items = rows
+      .filter((row) => row.embedding !== null)
+      .map((row) => ({ item: row, embedding: embeddingFromBlob(row.embedding!) }));
+    return cosineScan(embedding, items, { topK: limit }).map((match) => ({ ...match.item, cosine: match.score }));
+  }
+
+  listEntitiesByIds(kbId: string, ids: readonly string[]): KeEntityRow[] {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(", ");
+    // Deterministic member order (id) — the cluster judge's 1-based indices
+    // and the merge sequence both depend on it.
+    const rows = this.database
+      .prepare(`SELECT * FROM ke_entities WHERE kb_id = ? AND id IN (${placeholders}) ORDER BY id`)
+      .all(kbId, ...ids) as Array<Record<string, unknown>>;
+    return rows.map(mapEntity);
+  }
+
+  /**
+   * Online-resolution attach: the candidate merged into an EXISTING entity at
+   * write time. Mirrors upsertEntity's merge semantics (support +1, alias
+   * union normalized-dedup + capped, description fills only when null) plus
+   * the distinct-doc detail row. The audit row is the caller's job
+   * (recordEntityMerge) — keeping the two separate lets shadow mode record
+   * without writing.
+   */
+  attachToEntity(
+    targetId: string,
+    input: {
+      name: string;
+      aliases?: readonly string[];
+      description?: string | null;
+      docId?: string | null;
+      /** Pass false when the target already absorbed a candidate from this
+       *  same document — support counts distinct documents, not mentions. */
+      incrementSupport?: boolean;
+    },
+  ): KeEntityRow {
+    const timestamp = now();
+    return this.inTransaction(() => {
+      const existing = this.getEntity(targetId);
+      if (!existing) {
+        throw new Error(`attachToEntity: entity ${targetId} not found`);
+      }
+      const aliases = [...existing.aliases];
+      const pushAlias = (surface: string) => {
+        const trimmed = surface.trim();
+        if (
+          trimmed &&
+          normalizeEntityName(trimmed) !== existing.normalizedName &&
+          !aliases.some((a) => normalizeEntityName(a) === normalizeEntityName(trimmed)) &&
+          aliases.length < MAX_ENTITY_ALIASES
+        ) {
+          aliases.push(trimmed);
+        }
+      };
+      pushAlias(input.name);
+      for (const alias of input.aliases ?? []) pushAlias(alias);
+      this.database
+        .prepare(
+          `UPDATE ke_entities SET
+             support_count = support_count + ?, aliases = ?,
+             description = coalesce(?, description), updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(input.incrementSupport === false ? 0 : 1, JSON.stringify(aliases), input.description ?? null, timestamp, targetId);
+      if (input.docId) {
+        this.database
+          .prepare("INSERT OR IGNORE INTO ke_entity_docs (entity_id, doc_id, kb_id) VALUES (?, ?, ?)")
+          .run(targetId, input.docId, existing.kbId);
+      }
+      // DA parity (online-attach recountSupport): distinct-doc recount that
+      // never lowers support, and promotion to 'core' at ≥3 supporting docs.
+      // (upsertEntity deliberately stays promotion-free — pre-existing
+      // semantics; mergeEntities shares this recount.)
+      this.database
+        .prepare(
+          `UPDATE ke_entities
+           SET support_count = MAX(support_count,
+                 (SELECT count(*) FROM ke_entity_docs WHERE entity_id = ?)),
+               trust_level = CASE
+                 WHEN MAX(support_count,
+                   (SELECT count(*) FROM ke_entity_docs WHERE entity_id = ?)) >= 3
+                 THEN 'core' ELSE trust_level END
+           WHERE id = ?`,
+        )
+        .run(targetId, targetId, targetId);
+      return this.getEntity(targetId)!;
+    });
+  }
+
+  /** Audit row for merges, online attaches, shadow previews and judge
+   *  rejections. Returns the row id. */
+  recordEntityMerge(input: {
+    kbId: string;
+    canonicalId: string;
+    absorbedId: string;
+    snapshot: Record<string, unknown>;
+    decidedBy: string;
+    score?: number;
+    rationale?: string;
+    jobId?: string;
+  }): string {
+    const id = randomUUID();
+    this.database
+      .prepare(
+        `INSERT INTO ke_entity_merges
+           (id, kb_id, canonical_id, absorbed_id, absorbed_snapshot, decided_by, score, judge_rationale, job_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.kbId,
+        input.canonicalId,
+        input.absorbedId,
+        JSON.stringify(input.snapshot),
+        input.decidedBy,
+        input.score ?? null,
+        input.rationale ?? null,
+        input.jobId ?? null,
+        now(),
+      );
+    return id;
+  }
+
+  listEntityMerges(kbId: string, options: { limit?: number } = {}): KeEntityMergeRow[] {
+    const rows = this.database
+      .prepare("SELECT * FROM ke_entity_merges WHERE kb_id = ? ORDER BY created_at DESC, id DESC LIMIT ?")
+      .all(kbId, options.limit ?? 500) as Array<Record<string, unknown>>;
+    return rows.map(mapMerge);
+  }
+
+  /** Judged-pair cache for batch resume: every pair ever decided (merges,
+   *  rejects, online attaches) as canonical pair keys — never re-judged.
+   *  SHADOW rows are excluded: a shadow run's positive previews are not real
+   *  decisions, and counting them would make the documented shadow→on
+   *  workflow silently no-op (everyPairCached skips the judge, groups come
+   *  back empty, nothing ever merges). */
+  judgedPairKeys(kbId: string): string[] {
+    const rows = this.database
+      .prepare("SELECT canonical_id, absorbed_id FROM ke_entity_merges WHERE kb_id = ? AND decided_by NOT LIKE 'shadow:%'")
+      .all(kbId) as Array<{ canonical_id: string; absorbed_id: string }>;
+    return rows.map((row) =>
+      row.canonical_id < row.absorbed_id
+        ? `${row.canonical_id}|${row.absorbed_id}`
+        : `${row.absorbed_id}|${row.canonical_id}`,
+    );
+  }
+
+  /**
+   * Physical merge of two entities judged the same concept (DeepAnalyze
+   * scholarly/entity-merge, SQLite port). The absorbed entity is deleted
+   * after its edges, doc detail and aliases move onto the canonical survivor;
+   * a full pre-merge snapshot lands in ke_entity_merges for rollback.
+   *
+   * Invariants preserved:
+   *   - support_count stays a distinct-doc count (recomputed from
+   *     ke_entity_docs via MAX — never a naive sum, never lowered);
+   *   - the edge logical key (kb, src, dst, type, evidence_doc) never
+   *     collides — colliding redirected edges fold support into the survivor;
+   *   - self-loops produced by redirecting A–B edges are dropped (kept in
+   *     the snapshot for rollback);
+   *   - single transaction (node:sqlite is single-writer; the BEGIN
+   *     IMMEDIATE is the deadlock guard DA needed row locks for).
+   */
+  mergeEntities(kbId: string, canonicalId: string, absorbedId: string, meta: KeMergeMeta): { mergeId: string } {
+    if (canonicalId === absorbedId) throw new Error("cannot merge an entity into itself");
+    return this.inTransaction(() => {
+      const canon = this.getEntity(canonicalId);
+      const absorbed = this.getEntity(absorbedId);
+      if (!canon || !absorbed || canon.kbId !== kbId || absorbed.kbId !== kbId) {
+        throw new Error(
+          `mergeEntities: entity not found in kb ${kbId} (canonical=${canon !== undefined}, absorbed=${absorbed !== undefined})`,
+        );
+      }
+
+      // --- Snapshot everything rollback needs, BEFORE any mutation ---
+      // Embeddings are excluded (NULLed by the merge anyway — the survivor
+      // re-embeds on the next backfill pass).
+      const absorbedEdges = (
+        this.database
+          .prepare("SELECT * FROM ke_edges WHERE src_id = ? OR dst_id = ? ORDER BY id")
+          .all(absorbedId, absorbedId) as Array<Record<string, unknown>>
+      ).map(mapEdge);
+      const absorbedDocs = (
+        this.database.prepare("SELECT doc_id FROM ke_entity_docs WHERE entity_id = ?").all(absorbedId) as Array<{ doc_id: string }>
+      ).map((row) => row.doc_id);
+      const canonDocs = (
+        this.database.prepare("SELECT doc_id FROM ke_entity_docs WHERE entity_id = ?").all(canonicalId) as Array<{ doc_id: string }>
+      ).map((row) => row.doc_id);
+
+      const mergeId = this.recordEntityMerge({
+        kbId,
+        canonicalId,
+        absorbedId,
+        snapshot: {
+          absorbed: { ...absorbed, embedding: null },
+          absorbedEdges,
+          absorbedDocs,
+          canonicalBefore: { ...canon, embedding: null },
+          canonicalDocsBefore: canonDocs,
+        },
+        decidedBy: meta.decidedBy,
+        ...(meta.score !== undefined ? { score: meta.score } : {}),
+        ...(meta.rationale !== undefined ? { rationale: meta.rationale } : {}),
+        ...(meta.jobId !== undefined ? { jobId: meta.jobId } : {}),
+      });
+
+      // --- Canonical row update ---
+      // Aliases: union of both sides plus the absorbed canonical name (which
+      // must remain resolvable). Surface forms kept, normalized dedup, capped.
+      const aliases = [...canon.aliases];
+      const pushAlias = (surface: string | null) => {
+        if (!surface) return;
+        const trimmed = surface.trim();
+        if (
+          trimmed &&
+          normalizeEntityName(trimmed) !== canon.normalizedName &&
+          !aliases.some((a) => normalizeEntityName(a) === normalizeEntityName(trimmed)) &&
+          aliases.length < MAX_ENTITY_ALIASES
+        ) {
+          aliases.push(trimmed);
+        }
+      };
+      for (const alias of absorbed.aliases) pushAlias(alias);
+      pushAlias(absorbed.name);
+      const canonDef = canon.description ?? "";
+      const absorbedDef = absorbed.description ?? "";
+      this.database
+        .prepare(
+          `UPDATE ke_entities SET
+             aliases = ?,
+             description = ?,
+             trust_level = CASE WHEN trust_level = 'core' OR ? = 'core' THEN 'core' ELSE trust_level END,
+             first_seen_doc = coalesce(first_seen_doc, ?),
+             embedding = NULL,
+             updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          JSON.stringify(aliases),
+          canonDef.length >= absorbedDef.length ? canon.description : absorbed.description,
+          absorbed.trustLevel,
+          absorbed.firstSeenDoc,
+          now(),
+          canonicalId,
+        );
+
+      // --- Edge redirection (before DELETE, so ON DELETE CASCADE sees none) ---
+      for (const edge of absorbedEdges) {
+        const newSrc = edge.srcId === absorbedId ? canonicalId : edge.srcId;
+        const newDst = edge.dstId === absorbedId ? canonicalId : edge.dstId;
+        if (newSrc === newDst) {
+          // A–B edge collapses to a self-loop: drop (snapshot preserves it).
+          this.database.prepare("DELETE FROM ke_edges WHERE id = ?").run(edge.id);
+          continue;
+        }
+        const collision = this.database
+          .prepare(
+            `SELECT id FROM ke_edges
+             WHERE kb_id = ? AND src_id = ? AND dst_id = ? AND type = ?
+               AND (evidence_doc_id IS ? OR evidence_doc_id = ?)`,
+          )
+          .get(kbId, newSrc, newDst, edge.type, edge.evidenceDocId, edge.evidenceDocId) as { id: string } | undefined;
+        if (collision) {
+          // Fold support into the surviving row.
+          this.database
+            .prepare("UPDATE ke_edges SET support_count = support_count + ?, updated_at = ? WHERE id = ?")
+            .run(edge.supportCount, now(), collision.id);
+          this.database.prepare("DELETE FROM ke_edges WHERE id = ?").run(edge.id);
+        } else {
+          this.database
+            .prepare("UPDATE ke_edges SET src_id = ?, dst_id = ?, updated_at = ? WHERE id = ?")
+            .run(newSrc, newDst, now(), edge.id);
+        }
+      }
+
+      // --- Support detail: move absorbed docs onto canonical, backfill the
+      // survivor from its (now redirected) edge evidence, then distinct-doc
+      // recount (MAX inside — never a naive sum, never lowered).
+      this.database
+        .prepare(
+          "INSERT OR IGNORE INTO ke_entity_docs (entity_id, doc_id, kb_id) SELECT ?, doc_id, ? FROM ke_entity_docs WHERE entity_id = ?",
+        )
+        .run(canonicalId, kbId, absorbedId);
+      this.database
+        .prepare(
+          `INSERT OR IGNORE INTO ke_entity_docs (entity_id, doc_id, kb_id)
+           SELECT ?, evidence_doc_id, ? FROM ke_edges
+           WHERE (src_id = ? OR dst_id = ?) AND evidence_doc_id IS NOT NULL`,
+        )
+        .run(canonicalId, kbId, canonicalId, canonicalId);
+
+      // --- Distinct-doc recount on the survivor (+ DA trust promotion) ---
+      this.database
+        .prepare(
+          `UPDATE ke_entities
+           SET support_count = MAX(support_count,
+                 (SELECT count(*) FROM ke_entity_docs WHERE entity_id = ?)),
+               trust_level = CASE
+                 WHEN MAX(support_count,
+                   (SELECT count(*) FROM ke_entity_docs WHERE entity_id = ?)) >= 3
+                 THEN 'core' ELSE trust_level END
+           WHERE id = ?`,
+        )
+        .run(canonicalId, canonicalId, canonicalId);
+
+      // --- Delete absorbed (edges and docs already moved; CASCADE no-ops) ---
+      this.database.prepare("DELETE FROM ke_entity_docs WHERE entity_id = ?").run(absorbedId);
+      this.database.prepare("DELETE FROM ke_entities WHERE id = ?").run(absorbedId);
+
+      return { mergeId };
+    });
+  }
+
+  /**
+   * Best-effort rollback from the audit snapshot: restores the absorbed row
+   * and its edges, hands folded support back, and restores both entities'
+   * pre-merge scalars. Drift accumulated after the merge (new edges/docs/
+   * aliases written since) is NOT compensated — documented as best-effort.
+   * Online-attach rows carry no absorbed entity and cannot unmerge.
+   */
+  unmergeEntity(mergeId: string): void {
+    this.inTransaction(() => {
+      const row = this.database.prepare("SELECT * FROM ke_entity_merges WHERE id = ?").get(mergeId) as
+        | Record<string, unknown>
+        | undefined;
+      if (!row) throw new Error(`unmergeEntity: merge ${mergeId} not found`);
+      if (row["undone_at"]) throw new Error(`unmergeEntity: merge ${mergeId} already undone`);
+      const snap = parseJson<{
+        onlineAttach?: boolean;
+        absorbed: KeEntityRow;
+        absorbedEdges: KeEdgeRow[];
+        absorbedDocs: string[];
+        canonicalBefore: KeEntityRow;
+        canonicalDocsBefore: string[];
+      } | null>(row["absorbed_snapshot"], null);
+      if (!snap || snap.onlineAttach) {
+        throw new Error(`unmergeEntity: merge ${mergeId} has no absorbed entity (online attach — undo = remove the alias)`);
+      }
+      const kbId = String(row["kb_id"]);
+      const canonicalId = String(row["canonical_id"]);
+      const absorbedId = String(row["absorbed_id"]);
+
+      // Rebuild the absorbed row under its original id (if still absent).
+      const a = snap.absorbed;
+      this.database
+        .prepare(
+          `INSERT OR IGNORE INTO ke_entities
+             (id, kb_id, name, normalized_name, type, description, aliases, embedding,
+              support_count, trust_level, first_seen_doc, community_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          a.id,
+          a.kbId,
+          a.name,
+          a.normalizedName,
+          a.type,
+          a.description,
+          JSON.stringify(a.aliases ?? []),
+          a.supportCount,
+          a.trustLevel,
+          a.firstSeenDoc,
+          a.communityId,
+          a.createdAt,
+          a.updatedAt,
+        );
+
+      // Restore absorbed edges. Three cases per snapshotted edge:
+      //   1. its row still exists under the same id → it was redirected in
+      //      place; restore the original endpoints/support;
+      //   2. it was folded into a collision target (found by the REDIRECTED
+      //      endpoints) → hand the support back AND re-insert the original;
+      //   3. neither → it was dropped as a self-loop; re-insert the original.
+      for (const edge of snap.absorbedEdges) {
+        const byId = this.database.prepare("SELECT id FROM ke_edges WHERE id = ?").get(edge.id);
+        if (byId) {
+          this.database
+            .prepare("UPDATE ke_edges SET src_id = ?, dst_id = ?, support_count = ?, updated_at = ? WHERE id = ?")
+            .run(edge.srcId, edge.dstId, edge.supportCount, now(), edge.id);
+          continue;
+        }
+        const redSrc = edge.srcId === absorbedId ? canonicalId : edge.srcId;
+        const redDst = edge.dstId === absorbedId ? canonicalId : edge.dstId;
+        if (redSrc !== redDst) {
+          const foldTarget = this.database
+            .prepare(
+              `SELECT id, support_count FROM ke_edges
+               WHERE kb_id = ? AND src_id = ? AND dst_id = ? AND type = ?
+                 AND (evidence_doc_id IS ? OR evidence_doc_id = ?)`,
+            )
+            .get(kbId, redSrc, redDst, edge.type, edge.evidenceDocId, edge.evidenceDocId) as
+            | { id: string; support_count: number }
+            | undefined;
+          if (foldTarget) {
+            const remaining = foldTarget.support_count - edge.supportCount;
+            if (remaining > 0) {
+              this.database.prepare("UPDATE ke_edges SET support_count = ? WHERE id = ?").run(remaining, foldTarget.id);
+            } else {
+              this.database.prepare("DELETE FROM ke_edges WHERE id = ?").run(foldTarget.id);
+            }
+          }
+        }
+        this.database
+          .prepare(
+            `INSERT OR IGNORE INTO ke_edges
+               (id, kb_id, src_id, dst_id, type, evidence_quote, evidence_doc_id, support_count, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            edge.id,
+            kbId,
+            edge.srcId,
+            edge.dstId,
+            edge.type,
+            edge.evidenceQuote,
+            edge.evidenceDocId,
+            edge.supportCount,
+            edge.createdAt,
+            edge.updatedAt,
+          );
+      }
+
+      // Restore absorbed doc detail; remove from canonical exactly the docs
+      // the merge contributed — absorbed detail rows plus evidence docs of
+      // redirected edges — except docs canonical already had (post-merge
+      // drift is left untouched, best-effort contract).
+      const canonDocsBefore = new Set(snap.canonicalDocsBefore);
+      const mergeContributed = new Set<string>(snap.absorbedDocs);
+      for (const edge of snap.absorbedEdges) {
+        if (edge.evidenceDocId) mergeContributed.add(edge.evidenceDocId);
+      }
+      for (const docId of snap.absorbedDocs) {
+        this.database
+          .prepare("INSERT OR IGNORE INTO ke_entity_docs (entity_id, doc_id, kb_id) VALUES (?, ?, ?)")
+          .run(a.id, docId, a.kbId);
+      }
+      for (const docId of mergeContributed) {
+        if (canonDocsBefore.has(docId)) continue;
+        this.database.prepare("DELETE FROM ke_entity_docs WHERE entity_id = ? AND doc_id = ?").run(canonicalId, docId);
+      }
+
+      // Restore canonical's pre-merge scalars (aliases/support/description/
+      // trust/first_seen) exactly from the snapshot.
+      const c = snap.canonicalBefore;
+      this.database
+        .prepare(
+          `UPDATE ke_entities SET
+             aliases = ?, support_count = ?, description = ?,
+             trust_level = ?, first_seen_doc = ?, embedding = NULL, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(JSON.stringify(c.aliases ?? []), c.supportCount, c.description, c.trustLevel, c.firstSeenDoc, now(), canonicalId);
+
+      this.database.prepare("UPDATE ke_entity_merges SET undone_at = ? WHERE id = ?").run(now(), mergeId);
+    });
+  }
+
+  /** Fingerprint inputs for the graph-roots cache: the partition depends on
+   *  entity/edge counts AND support weights (upserts bump support without
+   *  changing counts) AND the latest edge creation. */
+  entitySupportStats(kbId: string): { count: number; supportSum: number } {
+    const row = this.database
+      .prepare("SELECT count(*) AS c, coalesce(sum(support_count), 0) AS s FROM ke_entities WHERE kb_id = ?")
+      .get(kbId) as { c: number; s: number };
+    return { count: Number(row.c), supportSum: Number(row.s) };
+  }
+
+  edgeFingerprint(kbId: string): { count: number; supportSum: number; maxCreatedAt: string | null } {
+    const row = this.database
+      .prepare(
+        "SELECT count(*) AS c, coalesce(sum(support_count), 0) AS s, max(created_at) AS m FROM ke_edges WHERE kb_id = ?",
+      )
+      .get(kbId) as { c: number; s: number; m: string | null };
+    return { count: Number(row.c), supportSum: Number(row.s), maxCreatedAt: row.m ?? null };
+  }
+
+  /** Persist Louvain assignments onto the rows (visualization cache). Every
+   *  entity gets the new assignment; anything absent from the map is cleared
+   *  so stale communities never linger after a recompute. */
+  setCommunityIds(kbId: string, assignments: ReadonlyMap<string, number>): void {
+    this.inTransaction(() => {
+      this.database.prepare("UPDATE ke_entities SET community_id = NULL WHERE kb_id = ?").run(kbId);
+      const update = this.database.prepare("UPDATE ke_entities SET community_id = ? WHERE kb_id = ? AND id = ?");
+      for (const [id, communityId] of assignments) {
+        update.run(communityId, kbId, id);
+      }
+    });
   }
 
   /** FTS5 recall over entity names and aliases; returns entity ids ordered by rank. */
@@ -1360,6 +1985,22 @@ function mapEdge(row: Record<string, unknown>): KeEdgeRow {
     supportCount: Number(row["support_count"]),
     createdAt: String(row["created_at"]),
     updatedAt: String(row["updated_at"]),
+  };
+}
+
+function mapMerge(row: Record<string, unknown>): KeEntityMergeRow {
+  return {
+    id: String(row["id"]),
+    kbId: String(row["kb_id"]),
+    canonicalId: String(row["canonical_id"]),
+    absorbedId: String(row["absorbed_id"]),
+    absorbedSnapshot: parseJson<Record<string, unknown>>(row["absorbed_snapshot"], {}),
+    decidedBy: String(row["decided_by"]),
+    score: (row["score"] as number | null) ?? null,
+    judgeRationale: (row["judge_rationale"] as string | null) ?? null,
+    jobId: (row["job_id"] as string | null) ?? null,
+    undoneAt: (row["undone_at"] as string | null) ?? null,
+    createdAt: String(row["created_at"]),
   };
 }
 

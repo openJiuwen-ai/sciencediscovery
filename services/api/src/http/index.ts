@@ -65,6 +65,10 @@ import {
   handleKeListKbs,
   handleKeSeed,
   handleKeStartGrow,
+  handleKeGetGraphRoots,
+  handleKeStartResolution,
+  handleKeListMerges,
+  handleKeUnmerge,
 } from "../knowledge-engine/routes.js";
 import type {
   ArtifactCandidate,
@@ -277,6 +281,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const {
     artifactManager,
     evolutionStore,
+    keGraphRoots,
     keOrchestrator,
     knowledgeEngineStore,
     knowledgeEngineTools,
@@ -2246,6 +2251,26 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const keGraphMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/graph$/);
       if (keGraphMatch && request.method === "GET") {
         handleKeGetGraph(response, knowledgeEngineStore, decodeURIComponent(keGraphMatch[1]!));
+        return;
+      }
+      const keRootsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/roots$/);
+      if (keRootsMatch && request.method === "GET") {
+        await handleKeGetGraphRoots(response, keGraphRoots, knowledgeEngineStore, decodeURIComponent(keRootsMatch[1]!));
+        return;
+      }
+      const keResolutionMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/resolution$/);
+      if (keResolutionMatch && request.method === "POST") {
+        handleKeStartResolution(response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keResolutionMatch[1]!));
+        return;
+      }
+      const keMergesMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/merges$/);
+      if (keMergesMatch && request.method === "GET") {
+        handleKeListMerges(response, knowledgeEngineStore, decodeURIComponent(keMergesMatch[1]!));
+        return;
+      }
+      const keUnmergeMatch = url.pathname.match(/^\/api\/knowledge-engine\/merges\/([^/]+)\/unmerge$/);
+      if (keUnmergeMatch && request.method === "POST") {
+        handleKeUnmerge(response, knowledgeEngineStore, decodeURIComponent(keUnmergeMatch[1]!));
         return;
       }
       const keGrowMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/grow$/);
