@@ -49,6 +49,10 @@ const SIDEBAR_STYLE: CSSProperties = {
 };
 
 const POLL_INTERVAL_MS = 2_500;
+/** Consecutive fully/partially failed refresh rounds before the poll chain
+ *  gives up and surfaces a hard error (transient SQLite BUSY etc. must never
+ *  kill the chain — see qa P2 poll-chain death). */
+const MAX_CONSECUTIVE_REFRESH_FAILURES = 8;
 
 /**
  * Knowledge Engine page: KB management (create/seed), ingestion job status,
@@ -67,6 +71,9 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   const [newKbName, setNewKbName] = useState("");
   const [seedQuery, setSeedQuery] = useState("");
   const [error, setError] = useState<string | undefined>(undefined);
+  // Non-banner hint for transient per-endpoint refresh failures (a BUSY graph
+  // query must not look fatal and must not freeze the rest of the panel).
+  const [transientIssue, setTransientIssue] = useState<string | undefined>(undefined);
   // Bumped by local actions (seed, grow start) to re-arm the poll chain when
   // it had stopped (no active jobs) — a plain refresh alone would leave the
   // recursive timeout dead and the grow progress frozen.
@@ -104,42 +111,60 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
     }
   }, [client, reportError]);
 
-  const refreshKbData = useCallback(async (kbId: string) => {
-    try {
-      const [graphResult, documentsResult, jobsResult, growResult] = await Promise.all([
-        client.getKeGraph(kbId),
-        client.listKeDocuments(kbId),
-        client.listKeJobs(kbId),
-        client.getKeGrow(kbId),
-      ]);
-      // Drop the response if the user switched KBs (or left) mid-flight.
-      if (!mountedRef.current || activeKbIdRef.current !== kbId) return;
-      setGraph(graphResult);
-      setDocuments(documentsResult.documents);
-      setJobs(jobsResult.jobs);
-      setGrowStatus(growResult);
+  // Per-endpoint isolation (allSettled): one transient failure (e.g. a slow
+  // graph query hitting SQLite BUSY) must not discard the other three
+  // sections — that fail-closed round was what froze the panel on empty.
+  // Returns the number of failed endpoints so the poll chain can apply a
+  // failure grace window instead of dying on a stale (empty) jobs list.
+  const refreshKbData = useCallback(async (kbId: string): Promise<number> => {
+    const [graphResult, documentsResult, jobsResult, growResult] = await Promise.allSettled([
+      client.getKeGraph(kbId),
+      client.listKeDocuments(kbId),
+      client.listKeJobs(kbId),
+      client.getKeGrow(kbId),
+    ]);
+    // Drop the response if the user switched KBs (or left) mid-flight.
+    if (!mountedRef.current || activeKbIdRef.current !== kbId) return 0;
+    const failed: string[] = [];
+    if (graphResult.status === "fulfilled") setGraph(graphResult.value); else failed.push("graph");
+    if (documentsResult.status === "fulfilled") setDocuments(documentsResult.value.documents); else failed.push("documents");
+    if (jobsResult.status === "fulfilled") setJobs(jobsResult.value.jobs); else failed.push("jobs");
+    if (growResult.status === "fulfilled") setGrowStatus(growResult.value); else failed.push("grow");
+    if (failed.length === 0) {
+      setTransientIssue(undefined);
       setError(undefined);
-    } catch (loadError) {
-      reportError(loadError);
+    } else {
+      setTransientIssue(`refresh partially failed (${failed.join(", ")}) — retrying`);
     }
-  }, [client, reportError]);
+    return failed.length;
+  }, [client]);
 
   useEffect(() => {
     void refreshKbs();
   }, [refreshKbs]);
 
-  // Recursive-timeout poll chain: one refresh, then re-arm ONLY while jobs
-  // are active (read through the ref, so the chain never re-triggers itself
-  // on state updates). Switching KBs cancels the old chain exactly once.
+  // Recursive-timeout poll chain: one refresh, then re-arm while jobs are
+  // active (read through the ref, so the chain never re-triggers itself on
+  // state updates). Failed rounds get a grace window: the chain keeps polling
+  // until MAX_CONSECUTIVE_REFRESH_FAILURES in a row, so a transient error can
+  // never strand the panel on stale data (the original chain read the stale
+  // empty jobsRef after a failed round and died permanently).
   useEffect(() => {
     if (!activeKbId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let consecutiveFailures = 0;
     const loop = async () => {
-      await refreshKbData(activeKbId);
+      const failed = await refreshKbData(activeKbId);
       if (cancelled) return;
+      consecutiveFailures = failed > 0 ? consecutiveFailures + 1 : 0;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_REFRESH_FAILURES) {
+        setTransientIssue(undefined);
+        reportError(new Error("refresh keeps failing — polling stopped; use Seed/Grow to retry"));
+        return;
+      }
       const hasActive = jobsRef.current.some((job) => job.status === "pending" || job.status === "running");
-      if (hasActive) {
+      if (hasActive || consecutiveFailures > 0) {
         timer = setTimeout(() => void loop(), POLL_INTERVAL_MS);
       }
     };
@@ -148,7 +173,7 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [activeKbId, pollNonce, refreshKbData]);
+  }, [activeKbId, pollNonce, refreshKbData, reportError]);
 
   // Manual refresh trigger after local actions (seed, grow start): bumping
   // the nonce re-runs the poll effect above, which refreshes immediately AND
@@ -181,6 +206,9 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
       <header style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: "1px solid #e2e8f0" }}>
         <strong>Knowledge Engine</strong>
         <span style={{ color: "#64748b", fontSize: 13 }}>{activeKb ? activeKb.name : "no knowledge base selected"}</span>
+        {transientIssue ? (
+          <span data-testid="ke-transient-issue" style={{ color: "#b45309", fontSize: 12 }}>{transientIssue}</span>
+        ) : null}
         <span style={{ flex: 1 }} />
         <button type="button" onClick={onClose}>Close</button>
       </header>
