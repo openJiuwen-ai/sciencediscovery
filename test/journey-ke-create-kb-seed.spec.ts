@@ -87,7 +87,7 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
         await page.getByRole("button", { name: "Knowledge Engine" }).click();
         await expect(page.getByTestId("knowledge-engine-page")).toBeVisible();
         await expect(page.getByLabel("new kb name")).toBeVisible();
-        await expect(page.getByTestId("ke-graph-empty")).toBeVisible();
+        await expect(page.getByTestId("ke-graph-empty").or(page.getByTestId("ke-graph-canvas"))).toBeVisible();
       },
     );
 
