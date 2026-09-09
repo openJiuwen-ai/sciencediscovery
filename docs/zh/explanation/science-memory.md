@@ -65,12 +65,14 @@
 
 1. **上传文件** → `MemoryGraphSink.observeUploadFile` → sidecar `POST /observe/upload-file` → `upsert_source_file`：MERGE `SourceFile`（`file_id` 确定性）+ 建 `SourceFile -[:feeds]-> ResearchGoal`。上传完成即镜像，fire-and-forget（图谱不可达 = no-op，上传本身不受影响）。`ResearchGoal` 可能尚未存在（上传可能早于首条消息），此时**不建占位 goal 节点**——文件先悬空（有节点、无 `feeds` 边），等首条消息时由 `upsert_session_first_message` MERGE 真实 goal 后统一补挂本会话所有悬空 SourceFile。重传同名文件 MERGE 命中同一 `file_id`，不造重复节点。
 2. **首条用户消息** → `MemoryGraphSink.observeSessionFirstMessage` → sidecar `POST /observe/session-first-message` → 写 `Session` + `ResearchGoal` + `has_goal`。
-4. **每次代码执行完成** → `observeExecution` → `POST /observe/execution` → `upsert_execution`：
+3. **每次代码执行完成** → `observeExecution` → `POST /observe/execution` → `upsert_execution`：
    - MERGE 一个 `ToolCall`（`task_type='code_execution'`）+ `Code`，建 `ToolCall -[:produces]-> Code`；
    - 执行 diff 只记录 Derivation 与 CAS，不把尚未声明的文件作为 `produced_artifacts` 写图；
    - 调 `_link_subtasks_by_finish_time` 重建本会话 `next` 时序链（先删本会话旧 `temporal_chain` 边再重连，`ResearchGoal → head → … → last`）。
-5. **每次文献检索（MCP）完成** → `observeMcpInvocation` → `POST /observe/mcp-search` → `upsert_mcp_search`：MERGE `ToolCall`（`task_id="subtask:mcp:<invocation_id>"`）+ 批量 MERGE `Paper`（按 `(session_id, normalized_link)` 去重，命中则 `retrieval_count+1`），建 `ToolCall -[:produces]-> Paper`。
-6. **subagent 运行** → `observeSubagent` → `POST /observe/subagent` → MERGE 一个 scope `Task`（`task_type='subagent'`）；subagent 内部的代码执行/文献检索镜像成子 `ToolCall` 节点，通过 `contains` + `next` 挂到 scope 下，`produces` 边走 `scope → 子的 Code/Artifact`（scope 拥有其子的产品，自身不产）。
+4. **每次文献检索（MCP）完成** → `observeMcpInvocation` → `POST /observe/mcp-search` → `upsert_mcp_search`：MERGE `ToolCall`（`task_id="subtask:mcp:<invocation_id>"`）+ 批量 MERGE `Paper`（按 `(session_id, normalized_link)` 去重，命中则 `retrieval_count+1`），建 `ToolCall -[:produces]-> Paper`。
+5. **subagent 运行** → `observeSubagent` → `POST /observe/subagent` → MERGE 一个 scope `Task`（`task_type='subagent'`）；subagent 内部的代码执行/文献检索镜像成子 `ToolCall` 节点，通过 `contains` + `next` 挂到 scope 下，`produces` 边走 `scope → 子的 Code/Artifact`（scope 拥有其子的产品，自身不产）。
+
+轻量 Plan 有意不作为 ResearchGoal 的权威来源，不会覆盖根据首条用户消息推断出的目标。未来如需修正研究目标，应提供独立的 Goal 生命周期，而不是让 Memory 与 Plan 进度快照重新耦合。
 
 任务链成型后，从前端"工作区面板"即可看到一张随执行增长的有向图：研究目标在顶，`ToolCall` 沿 `next` 排成时间线（subagent 的 scope 通过 `contains` 归组其子 `ToolCall`），每个 `ToolCall` 向下 `produces` 它的代码、文件、文献。
 

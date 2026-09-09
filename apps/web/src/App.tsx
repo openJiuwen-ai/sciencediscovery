@@ -3198,10 +3198,10 @@ export function App() {
     }
     if (streamEvent.type === "plan.updated" && runId) {
       const plan = { ...streamEvent.plan, runId };
-      setPlans((current) => [
-        ...current.filter((item) => item.runId !== runId || item.agentId !== plan.agentId),
-        plan,
-      ]);
+      setPlans((current) => {
+        const otherPlans = current.filter((item) => item.runId !== runId || item.agentId !== plan.agentId);
+        return plan.items.length ? [...otherPlans, plan] : otherPlans;
+      });
     }
     if (streamEvent.type === "subagent.updated"
       || streamEvent.type === "subagent.step"

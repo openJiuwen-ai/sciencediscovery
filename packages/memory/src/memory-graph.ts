@@ -247,8 +247,8 @@ export interface ObserveUploadFilePayload {
  * Lightweight keyword heuristic for a ResearchGoal's domain.
  *
  * Pure passive fallback — precision is not the goal; "the graph has a goal
- * with a plausible domain" is. The LLM's explicit plan.scope corrects it
- * later. Biology keywords take priority over DataAnalysis so a
+ * with a plausible domain" is. Biology keywords take priority over
+ * DataAnalysis so a
  * data-analysis task that happens to mention a gene lands in Biology.
  *
  * Bilingual: ScienceDiscovery users write in Chinese, so each domain pairs English

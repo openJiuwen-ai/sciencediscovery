@@ -40,12 +40,12 @@ import {
 } from "../src/session/run-activity.js";
 
 test("folds persisted plan events to the latest snapshot per agent", () => {
-  const event = (sequence: number, agentId: string, step: string): SessionRunEvent => ({
+  const event = (sequence: number, agentId: string, step?: string): SessionRunEvent => ({
     createdAt: `2026-07-15T00:00:0${sequence}.000Z`,
     event: {
       plan: {
         agentId,
-        items: [{ status: "pending", step }],
+        items: step ? [{ status: "pending", step }] : [],
         toolCallId: `call-${sequence}`,
         turn: sequence,
         updatedAt: `2026-07-15T00:00:0${sequence}.000Z`,
@@ -63,6 +63,33 @@ test("folds persisted plan events to the latest snapshot per agent", () => {
       { agentId: "subagent:one", runId: "run-1", step: "worker" },
       { agentId: "main", runId: "run-1", step: "new" },
     ],
+  );
+});
+
+test("an empty plan snapshot clears only that agent from the current UI projection", () => {
+  const event = (sequence: number, agentId: string, step?: string): SessionRunEvent => ({
+    createdAt: `2026-07-15T00:00:0${sequence}.000Z`,
+    event: {
+      plan: {
+        agentId,
+        items: step ? [{ status: "pending", step }] : [],
+        toolCallId: `call-${sequence}`,
+        turn: sequence,
+        updatedAt: `2026-07-15T00:00:0${sequence}.000Z`,
+      },
+      type: "plan.updated",
+    },
+    runId: "run-1",
+    sequence,
+    sessionId: "session-1",
+  });
+  assert.deepEqual(
+    collectLatestRunPlans([
+      event(1, "main", "Main task"),
+      event(2, "subagent:one", "Worker task"),
+      event(3, "main"),
+    ]).map(({ agentId, items }) => ({ agentId, step: items[0]?.step })),
+    [{ agentId: "subagent:one", step: "Worker task" }],
   );
 });
 

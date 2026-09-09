@@ -126,6 +126,10 @@ export function collectLatestRunPlans(events: readonly SessionRunEvent[]): RunPl
   const latest = new Map<string, RunPlanSnapshot>();
   for (const record of events) {
     if (record.event.type !== "plan.updated") continue;
+    if (!record.event.plan.items.length) {
+      latest.delete(record.event.plan.agentId);
+      continue;
+    }
     latest.set(record.event.plan.agentId, { ...record.event.plan, runId: record.runId });
   }
   return [...latest.values()].toSorted((left, right) => left.updatedAt.localeCompare(right.updatedAt));
