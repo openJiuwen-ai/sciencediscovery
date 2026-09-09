@@ -3,7 +3,7 @@
 > 规则见 qa/handoff/CRUISE-PLAYBOOK.md。任何 agent 修改本文件必须同时把动作追加到 logs/。
 
 ```yaml
-stage: II                   # W3(327bed0) + W4(7cb66fe) 已全部落地
+stage: III（W5 已提交 395bdfe——六波全齐，终局 E2E 窗口待会话空闲）
 wave: W4 完成——阶段 II 门开启
 stage_gate_pending: true    # 13:0x 置位（W4 完工通知）
 qa_mode: stage-gate
