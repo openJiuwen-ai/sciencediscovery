@@ -3,32 +3,26 @@
 > 规则见 qa/handoff/CRUISE-PLAYBOOK.md。任何 agent 修改本文件必须同时把动作追加到 logs/。
 
 ```yaml
-stage: I                    # 阶段 I = W1+W2；II = W3+W4；III = W5
-wave: W2 完成（fbc0c3f）——阶段 I 全部落库，进入阶段门
-stage_gate_pending: true    # 21:31 巡航置位（W2 完工通知含「给阶段 I 门的接口事实」）
-qa_mode: stage-gate         # 六拍执行中：评审（进行）→ 等会话空闲后部署+E2E → 阶段报告
-turn: zcode                 # QA 行动方
+stage: II                   # W3(327bed0) + W4(7cb66fe) 已全部落地
+wave: W4 完成——阶段 II 门开启
+stage_gate_pending: true    # 13:0x 置位（W4 完工通知）
+qa_mode: stage-gate
+turn: zcode
 lock:
-  owner: zcode-cruise        # 22:05 接管（会话 30.7 分钟无写入 + claude.exe=0）
-  since: 2026-09-08T22:05+08:00
+  owner: human-interactive  # 13:01 仍活跃；部署/E2E 等空闲 ≥30 分钟
+  since: 2026-09-09T13:01+08:00
 fuse:
   consecutive_failures: 0
 budget:
   dispatches_today: 0
 stage_gate_progress:
-  review: 完成（全模块 PASS，无 P1/P2；报告 qa/reports/2026-09-08-stage-I-review.md）
-  deploy: 完成（data4 栈 4390/4391，TZ=UTC 套件约定）
-  mocked: 定稿——9 过/2 败/2 跳；2 败=J-KE1/KE2 fixture 缺口（死信错误已给出 10 个 arxiv PDF 的精确文件名）
-  real: 待（凭据注入→真实种子→grow 2 cycle）
-  report: 初稿已出（PASS 有条件），待 real 层补全
-qa_next:
-  - KE-only 重跑进行中（data5+10 fixture+embedding stub）→ 绿则 mocked 关闭
-  - real 层四项验收（凭据注入→真实种子→grow 2 cycle→报告补全）
-  - 阶段 II 素材已到位：W3 完成（327bed0，通知含 journey 接口事实）；W4 后触发阶段 II 门
+  review: 完成——0×P1 / 1×P2（attach 重跑 support 虚增，任务书 2026-09-09T1320）/ 7×P3；直搬声明核实为真（Louvain/消解门/合并快照/W3 kb 作用域）
+  deploy: 待会话空闲（复用隔离栈模式：mocked data7 + real data2）
+  mocked: 待——回归 + J-KE1/KE2（若 P2-V2 已修）/ J-KE3 首跑 / 新增 roots 下钻断言（testid ke-roots/ke-community/ke-breadcrumb 已由 W4 通知给出）
+  real: 待——P2b 修复确认后重种子（目标 B7 ≥8）+ resolution mode=on 实机链路 + grow 2-cycle
+  report: 待——阶段 II 报告（评审数据已齐）
 notes: >-
-  W2 完工通知（to-zcode/2026-09-08T2200-w2-done.md）关键情报：① grow API 202 {jobId,cycleId,reused}
-  / GET engineState.signals 结构；② 前端 testid ke-grow-panel/ke-grow-start/ke-grow-progress/ke-grow-signals
-  （J-KE2 可加 grow 步骤）；③ pdf-text 空目录契约修复（W1 冒烟盲区，已加回归护栏）；④ 冒烟 KB
-  4b62533a-c0d2-4f9f-8177-8272e09fd6b2（真实数据，real 层可复用）；⑤ S2 无 key 限流凶猛、OpenAlex
-  是主力 resolver（real 层归因参考）；⑥ deferred 搁浅任务保持 DA 语义（已知限制已注释，留 W5 议）。
+  阶段 I 开放项仍未闭环：P2-V2（面板冻结，0e32e78 未命中，等 dev 二修）+ P2b（maxTokens）。二者与阶段 II E2E
+  共用部署窗口。W4 通知另给：resolution eval 脚本（scripts/ke-resolution-eval.mjs，确定性基线 P=1.0/R=0.583，
+  R≥0.60 需真实模型）——阶段 II real 层可顺带跑 realworld 集。
 ```
