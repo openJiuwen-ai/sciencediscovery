@@ -313,9 +313,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
       if (task.reviewLevel === "deep") {
         const runtimeSettings = store.resolveRuntimeSettings(task.sessionId).effective;
-        const selectedModel = store.getModel(runtimeSettings.reviewModelId);
+        // Reviewer Specialist is an internal quality role of this Session,
+        // not a separately configured Agent. Deep review therefore reuses
+        // the Session's effective main-Agent model and credentials.
+        const selectedModel = store.getModel(runtimeSettings.modelId);
         const apiToken = selectedModel ? store.getModelApiToken(selectedModel.id) : undefined;
-        if (!selectedModel || !apiToken) throw new Error("The selected Reviewer model is unavailable");
+        if (!selectedModel || !apiToken) throw new Error("The Session main Agent model is unavailable");
         const permission = {
           getEpoch: () => store.getSessionPermissionEpoch(task.sessionId)!,
           requirePrivilege: async (privilege: {
