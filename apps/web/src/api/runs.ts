@@ -21,6 +21,8 @@ import type {
   RunStreamEvent,
   SessionUsageSummary,
   GlobalModelUsageSummary,
+  ModelUsageAnalyticsFilters,
+  ModelUsageAnalyticsSummary,
   SessionRun,
   SessionRunEvent,
   RuntimeStatus,
@@ -35,6 +37,21 @@ export interface AgentActivity {
   transfers: WorkspaceTransfer[];
   timers: Array<{ id: string; agentId: string; dueAt: number; message: string; state: "pending" | "fired" | "cancelled" }>;
   agents: Array<{ agentId: string; stopped: boolean }>;
+}
+
+type UsageAnalyticsQueryFilters = ModelUsageAnalyticsFilters & {
+  displayCurrency?: "CNY" | "USD";
+  format?: string;
+};
+
+function usageAnalyticsQuery(filters: UsageAnalyticsQueryFilters): string {
+  const params = new URLSearchParams();
+  for (const key of ["from", "to", "projectId", "modelProfileId", "timeZone", "format", "displayCurrency"] as const) {
+    const value = filters[key];
+    if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }
 
 export class RunsApiClient extends SessionsApiClient {
@@ -80,6 +97,25 @@ export class RunsApiClient extends SessionsApiClient {
 
   getGlobalModelUsage(): Promise<GlobalModelUsageSummary> {
     return this.request("/api/usage/models");
+  }
+
+  getModelUsageAnalytics(filters: ModelUsageAnalyticsFilters = {}): Promise<ModelUsageAnalyticsSummary> {
+    return this.request(`/api/usage/analytics${usageAnalyticsQuery(filters)}`);
+  }
+
+  async exportModelUsageAnalytics(
+    format: "csv" | "json",
+    filters: UsageAnalyticsQueryFilters = {},
+  ): Promise<Blob> {
+    const response = await fetch(`/api/usage/analytics/export${usageAnalyticsQuery({ ...filters, format })}`, {
+      headers: { authorization: `Bearer ${this.token}` },
+    });
+    if (!response.ok) {
+      this.reportAuthStatus(response.status);
+      const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
+      throw new Error(error.error || `Usage export failed (${response.status})`);
+    }
+    return await response.blob();
   }
 
   listRuns(sessionId: string): Promise<SessionRun[]> {

@@ -173,6 +173,38 @@ test("cancellation drains started writers without committing a partial Step", as
   assert.equal(commits, 0);
 });
 
+test("cancellation after a reported model turn still emits model usage", async () => {
+  const controller = new AbortController();
+  const events: RunEvent<Usage>[] = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, Usage>({
+    maxModelTurns: 1,
+    maxParallelToolCalls: 1,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: {
+      async invoke() {
+        return {
+          assistantMessage: { role: "assistant" },
+          toolCalls: [{ id: "cancel", name: "write", args: {} }],
+          usage: { tokens: 7 },
+        };
+      },
+    },
+    toolDispatcher: {
+      async execute() {
+        controller.abort();
+        throw new Error("cancelled writer");
+      },
+    },
+    turnLifecycle: { async beforeTurn() {}, async afterAssembly() {}, async afterTurn() { throw new Error("not committed"); } },
+    eventSink: (event) => events.push(event),
+  });
+
+  await assert.rejects(() => loop.run([], controller.signal, () => {}), /cancelled writer/);
+  const usageEvent = events.find((event) => event.type === "model_usage");
+  assert.deepEqual(usageEvent?.type === "model_usage" ? usageEvent.usage : undefined, { tokens: 7 });
+  assert.equal(loop.snapshot().phase, "cancelled");
+});
+
 test("the max-turn boundary closes every assistant tool call before returning", async () => {
   let turn = 0;
   const loop = new AgentLoop<RuntimeMessage, Input, never>({

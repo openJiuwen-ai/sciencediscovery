@@ -20,6 +20,7 @@ React 浏览器 UI，构建后由控制 API 作为静态资源托管；开发时
 | `Permissions.tsx` | 权限卡片与授权管理 |
 | `Orchestration.tsx` | 子 Agent 卡片、specialist、计划展示 |
 | `RemoteCompute.tsx` / `ScientificArtifacts.tsx` / `RuntimeControls.tsx` / `EnvironmentManager.tsx` / `SkillManager.tsx` / `MemoryGraphView.tsx` | 各系统配置与领域面板 |
+| `UsagePage.tsx` | 用量看板：模型/日期筛选、Token 与费用总览、按日堆积柱状图、随筛选收敛的明细下钻与 CSV/JSON 导出；长日期范围可横向拖动/滚动，默认显示最新日期，向左查看更早记录 |
 | `ManagementControls.tsx` / `WorkbenchNavigation.tsx` | 生命周期对话框、全局搜索与 composer 引用（@artifact、#session、/skill） |
 | `Markdown.tsx` / `Toasts.tsx` / `icons.tsx` | 渲染基础设施 |
 

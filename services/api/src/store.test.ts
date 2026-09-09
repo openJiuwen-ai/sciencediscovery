@@ -539,9 +539,9 @@ test("SessionStore appends run events losslessly and survives reload", async (co
 test("SessionStore serializes concurrent model usage writes without losing records", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `model-usage-concurrency-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
 
   const store = new SessionStore(tempRoot);
+  context.after(() => store.close());
   await store.load();
   const model = await store.createModel({
     apiToken: "token",
@@ -580,8 +580,57 @@ test("SessionStore serializes concurrent model usage writes without losing recor
   );
 
   const reopened = new SessionStore(tempRoot);
+  context.after(() => reopened.close());
   await reopened.load();
   assert.equal((await reopened.listModelInvocationUsage(session.id)).length, records.length);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+});
+
+test("SessionStore ignores duplicate model usage attempts but keeps retries", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-usage-idempotent-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+
+  const store = new SessionStore(tempRoot);
+  context.after(() => store.close());
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+  });
+  const project = await store.createProject("Usage idempotency");
+  const session = await store.createSession(project.id, "Idempotent usage", model.id);
+  const now = new Date().toISOString();
+  const record: ModelInvocationUsage = {
+    attemptIndex: 0,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    costUsd: null,
+    finishedAt: now,
+    id: "usage-0",
+    inputTokens: 1,
+    invocationId: "logical-call",
+    invocationKind: "task",
+    model: model.model,
+    modelProfileId: model.id,
+    modelProfileName: model.name,
+    outputTokens: 2,
+    projectId: project.id,
+    sessionId: session.id,
+    startedAt: now,
+    totalTokens: 3,
+    usageStatus: "reported",
+  };
+
+  await store.appendModelInvocationUsage(record);
+  await store.appendModelInvocationUsage({ ...record, id: "usage-duplicate", totalTokens: 30 });
+  await store.appendModelInvocationUsage({ ...record, attemptIndex: 1, id: "usage-retry", totalTokens: 4 });
+
+  const records = await store.listModelInvocationUsage(session.id);
+  assert.deepEqual(records.map((usage) => usage.id).toSorted(), ["usage-0", "usage-retry"]);
+  assert.deepEqual(records.map((usage) => usage.attemptIndex).toSorted(), [0, 1]);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
 });
 
 test("SessionStore serializes concurrent Session run creation and updates", async (context) => {

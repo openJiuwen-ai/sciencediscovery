@@ -14,7 +14,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type {
   CommitSkillLibraryVersionRequest,
@@ -114,7 +114,10 @@ function diffSkills(
 async function writePackageDirectory(root: string, files: ReadonlyMap<string, Buffer>): Promise<void> {
   for (const [path, bytes] of files) {
     const target = resolve(root, ...path.split("/"));
-    if (!target.startsWith(`${root}/`)) throw validationError(`Unsafe skill package path: ${path}`);
+    const relativeTarget = relative(root, target);
+    if (!relativeTarget || relativeTarget === ".." || relativeTarget.startsWith(`..${sep}`) || isAbsolute(relativeTarget)) {
+      throw validationError(`Unsafe skill package path: ${path}`);
+    }
     await mkdir(resolve(target, ".."), { recursive: true });
     await writeFile(target, bytes, { flag: "wx" });
   }

@@ -154,6 +154,7 @@ export type RunEvent<TUsage> =
   | { delta: string; kind: "text" | "thinking"; type: "model_delta" }
   | { call: RuntimeToolCall; type: "tool_execution_start" }
   | { call: RuntimeToolCall; content: string; isError: boolean; type: "tool_execution_end" }
+  | { type: "model_usage"; usage: TUsage }
   | { attempt: 1; reason: "model-input-overflow"; turn: number; type: "context_recovery" }
   | { type: "completed"; truncated?: boolean; usage?: TUsage };
 
@@ -305,9 +306,12 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
           this.transition("calling_model", turn);
           modelTurn = await this.options.modelClient.invoke(assembly.modelInput, signal, observer);
         }
+        if (modelTurn.usage !== undefined) {
+          usage = modelTurn.usage;
+          this.emit({ type: "model_usage", usage });
+        }
         this.raiseForAbort(signal);
         onProgress();
-        if (modelTurn.usage !== undefined) usage = modelTurn.usage;
         this.state.history.push(modelTurn.assistantMessage);
         if (modelTurn.toolCalls.length === 0) {
           if (this.options.turnLifecycle) await this.options.turnLifecycle.afterTurn({ turn, history: structuredClone(this.state.history), modelTurn, results: [] });

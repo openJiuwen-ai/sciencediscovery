@@ -93,6 +93,10 @@ Compose 读取仓库根目录 `.env`，并把以下键插值到 `docker-compose.
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员 micromamba 路径；留空使用镜像内已校验副本 |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存路径；离线 provision 前需填充内容 |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | 镜像内 bubblewrap 可执行文件 |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | 用量看板展示币种换算开关；关闭后费用只显示各模型原始币种 |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | 用量看板 USD/CNY 汇率源，默认使用无需 API key 的 Frankfurter；自定义 URL 时汇率来源按 URL host 标注 |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | 用量看板汇率缓存 TTL，默认 6 小时 |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | 用量看板汇率请求超时 |
 
 API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，对外只发布 API 端口。操作步骤与沙箱放权边界见[Docker 部署](../how-to/deployment.md#docker-部署)。
 
@@ -107,6 +111,7 @@ API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，�
 | `.sciencediscovery-data/mcp-result-cache.sqlite` | MCP 连接器结果缓存 |
 | `.sciencediscovery-data/web-cache.sqlite`、`.sciencediscovery-data/web-audit.sqlite` | Web Search/Fetch 缓存与 `WebInvocation` 审计 |
 | `.sciencediscovery-data/model-secrets.key` | 提供方 token 的 AES-256-GCM 密钥（仅属主可读；无密钥则 token 无用） |
+| `.sciencediscovery-data/exchange-rates/usage-display-rates.json` | 用量看板展示币种汇率缓存；刷新失败时可回退为陈旧缓存，页面会标注陈旧缓存状态 |
 | `.sciencediscovery-data/projects/<project-id>/sessions/<session-id>/workspace/` | 每会话工作区：上传/生成文件、`papers/<paper-id>/` 抽取结果 |
 | `.sciencediscovery-data/cas/`、`.sciencediscovery-data/execution-runs/`、`.sciencediscovery-data/prompt-manifests/`、`.sciencediscovery-data/reviews/`、`.sciencediscovery-data/messages/` | 内容寻址 blob、执行记录、prompt manifest、聊天、评审 |
 | `.sciencediscovery-data/claims/`、`.sciencediscovery-data/evidence-items/`、`.sciencediscovery-data/evidence-links/`、`.sciencediscovery-data/mcp-invocations/`、`.sciencediscovery-data/artifact-derivations/` | claim/证据溯源与 MCP 审计 |

@@ -147,6 +147,37 @@ function startBlockingPermissionGateway(context: TestContext): Promise<{ origin:
   });
 }
 
+function startBlockingPermissionUsageGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
+  let runCount = 0;
+  const server = createHttpServer((request, response) => {
+    if (request.url === "/chat/completions" && request.method === "POST") {
+      runCount += 1;
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        writeSseEvent(response, {
+          choices: [{ delta: { tool_calls: [{ index: 0, id: `call-shell-${runCount}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: "printf 1" }) } }] } }],
+        });
+        writeSseEvent(response, { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } });
+        response.write("data: [DONE]\n\n");
+        response.end();
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  context.after(() => new Promise<void>((done) => {
+    server.close(() => done());
+    server.closeAllConnections();
+  }));
+  return new Promise((ready) => {
+    server.listen(0, "127.0.0.1", () => ready({
+      origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      runCount: () => runCount,
+    }));
+  });
+}
+
 function startUsageGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
   let runCount = 0;
   const server = createHttpServer((request, response) => {
@@ -420,6 +451,35 @@ test("GET session usage reports gateway token usage for a completed run", async 
   assert.equal(usage.totals.outputTokens, 3);
   assert.equal(usage.totals.totalTokens, 10);
   assert.equal(usage.totals.unreportedInvocationCount, 0);
+});
+
+test("cancelling a blocked run preserves reported model usage", async (context) => {
+  const api = await startApi(context, "blocked-cancel-usage", startBlockingPermissionUsageGateway);
+  const sessionId = await createSession(api, "Blocked cancel usage", { approvalMode: "ask_for_dangerous" });
+
+  const blocked = await createRun(api, sessionId, "Run code and keep usage");
+  try {
+    await waitForGatewayTurn(api, 1);
+    await waitForRunStatus(api, sessionId, blocked.id, "blocked");
+
+    assert.equal((await cancelRunById(api, sessionId, blocked.id)).status, 202);
+    await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
+
+    const usage = await getUsage(api, sessionId);
+    assert.equal(usage.totals.invocationCount, 1);
+    assert.equal(usage.totals.reportedInvocationCount, 1);
+    assert.equal(usage.totals.inputTokens, 7);
+    assert.equal(usage.totals.outputTokens, 3);
+    assert.equal(usage.totals.totalTokens, 10);
+    assert.equal(usage.latestInvocation?.outcome, "cancelled");
+    assert.equal(usage.latestInvocation?.usageStatus, "reported");
+  } finally {
+    const current = (await listRuns(api, sessionId)).find((run) => run.id === blocked.id);
+    if (current && (current.status === "queued" || current.status === "running" || current.status === "blocked")) {
+      await cancelRunById(api, sessionId, blocked.id);
+      await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
+    }
+  }
 });
 
 test("stopping a stuck run ends the stream as cancelled and frees the Session", async (context) => {

@@ -71,7 +71,9 @@ function normalizeUserPricing(value: unknown): UserModelPricing | undefined {
     throw new Error("The model price must state both an input and an output rate");
   }
   const cachedInput = factRate(pricing.cachedInput, "The model cached input price");
+  const cacheWriteInput = factRate(pricing.cacheWriteInput, "The model cache write price");
   return {
+    ...(cacheWriteInput !== undefined ? { cacheWriteInput } : {}),
     ...(cachedInput !== undefined ? { cachedInput } : {}),
     currency: pricing.currency,
     input,

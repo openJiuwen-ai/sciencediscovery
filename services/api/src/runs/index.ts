@@ -773,6 +773,7 @@ async function executeAgentRun(
   };
   let promptManifest: PromptManifest | undefined;
   const taskInvocationId = randomUUID();
+  let taskInvocationAttempted = false;
   let lastAgentUsage = unreportedModelUsage();
   let assistantModelContext: AgentHistoryMessage[] = [];
   let turnNumber = 0;
@@ -1897,6 +1898,7 @@ async function executeAgentRun(
       return child.status === "completed" ? "completed" : child.status === "cancelled" ? "cancelled" : "failed";
     }
     lastAgentUsage = unreportedModelUsage();
+    taskInvocationAttempted = true;
     const initialResult = await mainExecution.executeAgentRun({
       history: promptHistory,
       prompt: promptUserMessage.content,
@@ -1952,6 +1954,7 @@ async function executeAgentRun(
       invocationId: taskInvocationId,
       invocationKind: "task",
       manifest: promptManifest,
+      outcome: "completed",
       runId,
       usage: taskUsage,
     });
@@ -1986,6 +1989,37 @@ async function executeAgentRun(
     return "completed";
   } catch (error) {
     if (cancelledRuns.has(runId)) {
+      if (!promptManifest && taskInvocationAttempted) {
+        try {
+          promptManifest = await createPromptManifest({
+            cas: provenanceRecorder.cas,
+            error: "Agent run cancelled",
+            messages: promptMessages,
+            model: selectedModel,
+            runtimeSettings: settingsSnapshot,
+            sessionId,
+            startedAt: runStartedAt,
+            systemPrompt,
+            systemPromptVersion: WORKSPACE_SYSTEM_PROMPT_VERSION,
+            ...(skillLibraryRefs ? { skillLibraryRefs } : {}),
+            skillRefs: activeSkills.map(({ hash, id, revision, version }) => ({ hash, id, revision, version })),
+            ...(sessionSpecialist ? { specialistRef: { id: sessionSpecialist.id, name: sessionSpecialist.name } } : {}),
+            turnId: runId,
+            usage: lastAgentUsage,
+          });
+          await store.appendPromptManifest(promptManifest);
+          await appendModelUsageForManifest(store, {
+            invocationId: taskInvocationId,
+            invocationKind: "task",
+            manifest: promptManifest,
+            outcome: "cancelled",
+            runId,
+            usage: lastAgentUsage,
+          });
+        } catch {
+          // The cancellation event remains authoritative if usage persistence fails.
+        }
+      }
       await flushWorkspaceRefresh();
       await emit({ reason: "Run cancelled", runId, type: "run.cancelled" });
       return "cancelled";
@@ -2019,6 +2053,7 @@ async function executeAgentRun(
           invocationId: taskInvocationId,
           invocationKind: "task",
           manifest: promptManifest,
+          outcome: "failed",
           runId,
           usage: lastAgentUsage,
         });

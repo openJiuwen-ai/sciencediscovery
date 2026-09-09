@@ -569,13 +569,18 @@ class NativeAgent implements NativeAgentHandle {
           tools: () => this.toolRegistry.visibleSpecs(),
         });
       const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, modelTurnStreamer);
+      let reportedModelUsage = false;
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         maxModelTurns: MAX_MODEL_TURNS,
         maxParallelToolCalls: configuredMaxParallelToolCalls(),
         contextAssembler,
         modelClient,
         toolDispatcher: this.toolRegistry,
-        eventSink: (event) => { this.versionRecorder?.event(event); this.emitRuntimeEvent(event); },
+        eventSink: (event) => {
+          this.versionRecorder?.event(event);
+          this.emitRuntimeEvent(event);
+          if (event.type === "model_usage") reportedModelUsage = true;
+        },
         turnLifecycle: this.versionRecorder,
         waitController: this.waitController,
       });
@@ -583,7 +588,7 @@ class NativeAgent implements NativeAgentHandle {
         .catch((error: unknown) => raiseForAbort(error));
       this.history = result.history;
       const usage = result.usage;
-      this.emit({ type: "model_usage", ...(usage ? { usage, usageReported: true } : { usageReported: false }) });
+      if (!reportedModelUsage) this.emit({ type: "model_usage", ...(usage ? { usage, usageReported: true } : { usageReported: false }) });
       if (usage) this.emit({ type: "usage", usage });
       return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")) };
     } finally {
@@ -704,6 +709,9 @@ class NativeAgent implements NativeAgentHandle {
           result: { content: [{ type: "text", text: event.content }], details: {} },
           isError: event.isError,
         });
+        break;
+      case "model_usage":
+        this.emit({ type: "model_usage", usage: event.usage, usageReported: true });
         break;
       case "completed":
         if (event.truncated) this.emit({ type: "turn_truncated" });

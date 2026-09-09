@@ -344,6 +344,45 @@ test("recalled skill library snapshots expose immutable complete package files",
   }
 });
 
+test("skill library package storage accepts paths whose segment starts with dots", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    await catalog.create({ id: "dot-prefix-library" });
+    const committed = await catalog.commitVersion("dot-prefix-library", {
+      author: { kind: "system" },
+      operations: [{
+        package: {
+          files: [
+            {
+              content: "---\nname: dot-prefix-skill\ndescription: Preserve package resources whose names begin with dots.\nmetadata:\n  version: 1.0.0\n---\n\nUse the bundled resource.\n",
+              path: "SKILL.md",
+            },
+            { content: "dot-prefixed resource", path: "references/..foo.md" },
+          ],
+        },
+        type: "upsert",
+      }],
+    });
+    assert.equal(committed.conflicts.length, 0);
+
+    const search = await catalog.search({
+      libraries: [{
+        contentHash: committed.version!.contentHash,
+        libraryId: "dot-prefix-library",
+        versionId: committed.version!.id,
+      }],
+      query: "dot prefix",
+    });
+    const snapshot = (await catalog.resolveSkills(search.candidates))[0]!;
+    const resource = snapshot.readPackageFiles().find((file) => file.path === "references/..foo.md");
+    assert.equal(Buffer.from(resource!.bytes).toString("utf8"), "dot-prefixed resource");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("queued runs pin enabled skill library heads to immutable version refs", async () => {
   const dataDir = await temporaryDataDir();
   try {

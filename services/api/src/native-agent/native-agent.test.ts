@@ -136,7 +136,9 @@ test("loop streams a tool round trip and returns wire-format final messages", as
     assert(end && end.type === "tool_execution_end" && !end.isError);
     const usageEvents = events.filter((event) => event.type === "usage");
     assert.equal(usageEvents.length, 1);
-    const modelUsage = events.find((event) => event.type === "model_usage");
+    const modelUsageEvents = events.filter((event) => event.type === "model_usage");
+    assert.equal(modelUsageEvents.length, 1);
+    const modelUsage = modelUsageEvents[0];
     assert(modelUsage && modelUsage.type === "model_usage" && modelUsage.usageReported);
 
     // The second model call saw the tool result in history.
@@ -755,6 +757,43 @@ test("abort cancels the run and pre-abort rejects immediately", async () => {
     const aborted = createNativeAgent(workspace() as NativeAgentOptions);
     aborted.abort();
     await assert.rejects(() => aborted.execute("go"), /Agent run cancelled/);
+  } finally {
+    restore();
+  }
+});
+
+test("abort preserves reported usage from a completed model turn", async () => {
+  const usage = { inputTokens: 11, outputTokens: 4, totalTokens: 15, cacheReadTokens: 2, cacheWriteTokens: null };
+  const { streamer } = scriptStreamer([
+    () => ({ ...toolTurn("run_shell", { command: "python -c 'print(1)'" }), usage }),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const events: AgentEvent[] = [];
+    let markToolStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => { markToolStarted = resolve; });
+    const agent = createNativeAgent({
+      ...workspace(),
+      executeShell: async (_code, _mode, signal) => {
+        markToolStarted();
+        assert(signal);
+        await new Promise((_resolve, reject) => {
+          if (signal.aborted) return reject(new Error("aborted"));
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+        throw new Error("unreachable");
+      },
+    } as NativeAgentOptions);
+    agent.subscribe((event) => events.push(event));
+
+    const run = agent.execute("go");
+    await toolStarted;
+    agent.abort();
+    await assert.rejects(() => run, /Agent run cancelled/);
+
+    const modelUsage = events.findLast((event) => event.type === "model_usage");
+    assert(modelUsage && modelUsage.type === "model_usage" && modelUsage.usageReported);
+    assert.deepEqual(modelUsage.usage, usage);
   } finally {
     restore();
   }

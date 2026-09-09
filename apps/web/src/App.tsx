@@ -50,6 +50,7 @@ import type {
   ModelApiVariant,
   ModelThinkingEffort,
   ModelThinkingMode,
+  ModelUsageAnalyticsFilters,
   ModelUsageBucket,
   MemoryGraphNodeLabel,
   PaperAcquisition,
@@ -83,6 +84,7 @@ import type {
   ScientificArtifact,
   ScientificArtifactKind,
   GlobalModelUsageSummary,
+  ModelUsageAnalyticsSummary,
   Subagent,
   SkillDescriptor,
   Specialist,
@@ -195,7 +197,7 @@ import {
 } from "./RuntimeControls.js";
 import { effectiveRemoteRunnerHostIds, ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
 import { AgentActivityPanel } from "./AgentActivityPanel.js";
-import { RunUsageInline, UsagePage } from "./UsagePage.js";
+import { RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
 import { WorkspaceFileProvenanceModal } from "./WorkspaceFileProvenanceModal.js";
@@ -1053,6 +1055,17 @@ export async function runSessionCreationOnce<T>({
   return true;
 }
 
+function usageAnalyticsFilters(filters: UsageAnalyticsUiFilters = {}): ModelUsageAnalyticsFilters {
+  return {
+    ...filters,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
+}
+
+function shouldRefreshUsageForEvent(workspaceView: "session" | "usage", event: RunStreamEvent): boolean {
+  return workspaceView === "usage" && event.type === "run.status" && isTerminalRunStatus(event.status);
+}
+
 export function App() {
   const { locale, setLocale, t } = useLocale();
   // No built-in fallback token: the server generates one on its first start and
@@ -1134,6 +1147,8 @@ export function App() {
   const [evidenceLinks, setEvidenceLinks] = useState<EvidenceLink[]>([]);
   const [sessionUsage, setSessionUsage] = useState<SessionUsageSummary>();
   const [globalUsage, setGlobalUsage] = useState<GlobalModelUsageSummary>();
+  const [usageAnalytics, setUsageAnalytics] = useState<ModelUsageAnalyticsSummary>();
+  const [usageFilters, setUsageFilters] = useState<UsageAnalyticsUiFilters>({});
   const [workspaceView, setWorkspaceView] = useState<"session" | "usage">(() => initialView.view === "usage" ? "usage" : "session");
   // `/evolve` runs for the active session, plus which one the panel shows. The
   // card is the only persistent handle a search has (the command never creates
@@ -1294,6 +1309,7 @@ export function App() {
   const sessionActivity = useRef(createSessionActivity());
   const sessionRunSnapshots = useRef(new Map<string, SessionRun[]>());
   const activeSessionIdRef = useRef<string | undefined>(undefined);
+  const workspaceViewRef = useRef(workspaceView);
   const latestSessionSummaries = useRef(new Map<string, VersionedSessionSummary>());
   const renameRevision = useRef(0);
   const renameSavesInFlight = useRef(new Set<string>());
@@ -1435,6 +1451,10 @@ export function App() {
   }, [activeSessionId]);
 
   useEffect(() => {
+    workspaceViewRef.current = workspaceView;
+  }, [workspaceView]);
+
+  useEffect(() => {
     setOpenSubagentId(undefined);
   }, [activeProjectId, activeSessionId, workspaceView]);
 
@@ -1548,6 +1568,17 @@ export function App() {
     setErrorState(message);
     if (message) pushToast("error", t("error.request"), message);
   }, [pushToast]);
+
+  const refreshUsageData = useCallback(async (): Promise<void> => {
+    const filters = usageAnalyticsFilters(usageFilters);
+    const [usage, analytics] = await Promise.all([
+      client.getGlobalModelUsage(),
+      client.getModelUsageAnalytics(filters),
+    ]);
+    setGlobalUsage(usage);
+    setUsageAnalytics(analytics);
+    setError(undefined);
+  }, [client, setError, usageFilters]);
 
   // The artifact named by the URL (or an old shared link) no longer exists:
   // tell the user, close the modal and let the URL sync drop the stale key.
@@ -3165,6 +3196,9 @@ export function App() {
       sessionTitle,
     });
     if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail);
+    if (shouldRefreshUsageForEvent(workspaceViewRef.current, streamEvent)) {
+      void refreshUsageData().catch((reason: Error) => setError(reason.message));
+    }
     if (!routing.updatesSessionView) return;
     if (streamEvent.type === "run.status" && isTerminalRunStatus(streamEvent.status)) {
       void refreshArtifactOutputs(sessionId).catch(() => undefined);
@@ -3677,15 +3711,16 @@ export function App() {
   useEffect(() => {
     if (workspaceView !== "usage") return;
     let active = true;
-    void client.getGlobalModelUsage().then((usage) => {
-      if (!active) return;
-      setGlobalUsage(usage);
-      setError(undefined);
-    }).catch((reason: Error) => {
+    void refreshUsageData().catch((reason: Error) => {
       if (active) setError(reason instanceof Error ? reason.message : "Could not load model usage");
     });
     return () => { active = false; };
-  }, [client, workspaceView]);
+  }, [refreshUsageData, setError, workspaceView]);
+
+  async function exportUsageAnalytics(format: "csv" | "json", displayCurrency: "CNY" | "USD"): Promise<void> {
+    const blob = await client.exportModelUsageAnalytics(format, { ...usageAnalyticsFilters(usageFilters), displayCurrency });
+    downloadBlob(blob, `model-usage-analytics.${format}`);
+  }
 
   async function openSessionFromUsage(sessionId: string): Promise<void> {
     const match = workbenchIndex.find((item) => item.sessionId === sessionId)
@@ -4257,7 +4292,17 @@ export function App() {
 
       <main className="main-area">
         {workspaceView === "usage" ? (
-          <UsagePage summary={globalUsage} onOpenSession={(sessionId) => void openSessionFromUsage(sessionId)} />
+          <UsagePage
+            analytics={usageAnalytics}
+            filters={usageFilters}
+            onExport={(format, displayCurrency) => void exportUsageAnalytics(format, displayCurrency).catch((reason: Error) => setError(reason.message))}
+            onFiltersChange={(filters) => {
+              setUsageFilters(filters);
+              setUsageAnalytics(undefined);
+            }}
+            onOpenSession={(sessionId) => void openSessionFromUsage(sessionId)}
+            summary={globalUsage}
+          />
         ) : openSubagent && session && openSubagent.sessionId === session.id ? (
           <SubagentConversation
             key={openSubagent.id}
@@ -5137,6 +5182,7 @@ export {
   runsRequiringEventReplay,
   selectSessionReplayRun,
   shouldApplySessionScopedUpdate,
+  shouldRefreshUsageForEvent,
   sortSessionRuns,
 };
 export type {

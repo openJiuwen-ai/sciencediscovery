@@ -58,6 +58,8 @@ import type {
   MemoryGraphSettingsDetails,
   McpInvocation,
   ModelFactOverrides,
+  ModelUsageAnalyticsFilters,
+  ModelUsageAnalyticsSummary,
   ModelInvocationUsage,
   ModelRunInfo,
   ModelProfile,
@@ -136,6 +138,7 @@ import type {
   WorkspaceFileRecord,
   WorkspaceFileRevision,
   WorkspaceFileRevisionInput,
+  ResolvedModelPricing,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
@@ -163,6 +166,7 @@ import {
   getModelProviderPreset,
   lookupModelCatalog,
   MODEL_API_VARIANTS,
+  resolveModelFacts,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
@@ -172,7 +176,7 @@ import {
 } from "@sciencediscovery/executor";
 import { toolOutputStoreRoot } from "@sciencediscovery/tools";
 import { normalizeWorkspaceRelativePath } from "@sciencediscovery/workspace";
-import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
+import { summarizeGlobalModelUsage, summarizeModelUsage, summarizeModelUsageAnalytics } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
 import { BUNDLED_SKILL_IDS } from "@sciencediscovery/specialist";
 import { BUILTIN_SPECIALISTS } from "@sciencediscovery/specialist";
@@ -1099,6 +1103,13 @@ export class SessionStore {
     }
     await this.recoverTrashOperations();
     this.loaded = true;
+  }
+
+  close(): void {
+    this.database?.close();
+    this.database = undefined;
+    this.secretKey = undefined;
+    this.loaded = false;
   }
 
   private async saveCatalog(): Promise<void> {
@@ -4875,6 +4886,7 @@ export class SessionStore {
       ...usage,
       cacheReadTokens: usage.cacheReadTokens ?? null,
       cacheWriteTokens: usage.cacheWriteTokens ?? null,
+      outcome: usage.outcome ?? "completed",
       ...(usage.projectId || session?.projectId ? { projectId: usage.projectId ?? session?.projectId } : {}),
     };
   }
@@ -4891,6 +4903,13 @@ export class SessionStore {
       this.modelUsagePath(usage.sessionId),
       (records) => {
         this.assertSessionWritable(usage.sessionId);
+        if (records.some((record) =>
+          record.sessionId === usage.sessionId
+          && record.invocationId === usage.invocationId
+          && record.invocationKind === usage.invocationKind
+          && record.attemptIndex === usage.attemptIndex)) {
+          return;
+        }
         records.push(this.normalizeModelInvocationUsage(usage));
       },
     );
@@ -4917,6 +4936,29 @@ export class SessionStore {
       projectNameById,
       sessionTitleById,
     });
+  }
+
+  private modelUsagePricingByProfileId(): Map<string, ResolvedModelPricing> {
+    const pricingByModelProfileId = new Map<string, ResolvedModelPricing>();
+    for (const model of this.catalog.models) {
+      const provider = this.getProvider(model.providerId);
+      const catalog = lookupModelCatalog(model.model, provider?.presetId);
+      const pricing = resolveModelFacts({ catalog, user: model.facts }).pricing;
+      if (pricing) pricingByModelProfileId.set(model.id, pricing);
+    }
+    return pricingByModelProfileId;
+  }
+
+  async getModelUsageAnalyticsSummary(filters: ModelUsageAnalyticsFilters = {}): Promise<ModelUsageAnalyticsSummary> {
+    const projectNameById = new Map(this.catalog.projects.map((project) => [project.id, project.name]));
+    const projectIdBySessionId = new Map(this.catalog.sessions.map((session) => [session.id, session.projectId]));
+    const sessionTitleById = new Map(this.catalog.sessions.map((session) => [session.id, session.title]));
+    return summarizeModelUsageAnalytics(await this.listAllModelInvocationUsage(), {
+      pricingByModelProfileId: this.modelUsagePricingByProfileId(),
+      projectIdBySessionId,
+      projectNameById,
+      sessionTitleById,
+    }, filters);
   }
 
   async listReviews(sessionId: string): Promise<ReviewRun[]> {

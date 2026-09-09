@@ -73,6 +73,12 @@ export interface ServerConfig {
   /** URL the gateway's proxy tools call back into to run Node tool handlers. */
   /** Multipart upload and Session workspace quotas. */
   workspaceUpload: WorkspaceUploadLimits;
+  usageExchangeRates?: {
+    enabled: boolean;
+    sourceUrl: string;
+    timeoutMs: number;
+    ttlMs: number;
+  };
   /** Memory-graph sidecar (services/memory-graph, Python FastAPI, loopback).
    *  The on/off switch lives in the store (System Settings → Memory graph),
    *  not in env, so there is no `enabled` here. `neo4jPassword` is read from
@@ -94,6 +100,16 @@ export interface ServerConfig {
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 export const repositoryRoot = resolve(moduleDirectory, "../../../..");
+
+const DEFAULT_USAGE_EXCHANGE_RATE_URL = "https://api.frankfurter.dev/v2/rate/USD/CNY";
+
+function parseBooleanFlag(value: string | undefined, fallback: boolean): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  throw new Error("Boolean environment flags must be one of true/false, yes/no, on/off, or 1/0");
+}
 
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   // Keep the single-user control plane local unless deployment explicitly opts in.
@@ -137,6 +153,14 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   const permissionWaitTimeoutMs = parseTimeoutMilliseconds(
     "SCIENCE_AGENT_PERMISSION_WAIT_TIMEOUT_MS",
     DEFAULT_SYSTEM_TIMEOUT_SETTINGS.permissionWaitTimeoutMs,
+  );
+  const usageExchangeRateTtlMs = parseTimeoutMilliseconds(
+    "SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS",
+    6 * 60 * 60 * 1000,
+  );
+  const usageExchangeRateTimeoutMs = parseTimeoutMilliseconds(
+    "SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS",
+    2500,
   );
   const parseByteLimit = (name: string, fallback: number): number => {
     const raw = env[name]?.trim();
@@ -198,6 +222,12 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
         "SCIENCE_AGENT_WORKSPACE_MAX_BYTES",
         DEFAULT_WORKSPACE_MAX_BYTES,
       ),
+    },
+    usageExchangeRates: {
+      enabled: parseBooleanFlag(env.SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED, true),
+      sourceUrl: env.SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL?.trim() || DEFAULT_USAGE_EXCHANGE_RATE_URL,
+      timeoutMs: usageExchangeRateTimeoutMs,
+      ttlMs: usageExchangeRateTtlMs,
     },
     memoryGraph: {
       url: env.SCIENCE_AGENT_MEMORY_GRAPH_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:17674",

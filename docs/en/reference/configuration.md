@@ -93,6 +93,10 @@ Compose reads the root `.env` and interpolates these keys into `docker-compose.y
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator micromamba path |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | Bubblewrap in the image |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | Enables usage-dashboard display currency conversion; disabled keeps each model's original estimate currency |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | USD/CNY source for the usage dashboard; default is no-key Frankfurter; custom URLs are labeled by their host |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | Usage-dashboard exchange-rate cache TTL; defaults to 6 hours |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | Usage-dashboard exchange-rate request timeout |
 
 The API explicitly listens on `0.0.0.0:4310` **inside the container**, while runner `4311` remains on container loopback. Only the API port is published, and its host-side default is `127.0.0.1`. See [Docker deployment](../how-to/deployment.md#docker-deployment).
 
@@ -107,6 +111,7 @@ Unless overridden, persistent application data is kept in the repository:
 | `.sciencediscovery-data/mcp-result-cache.sqlite` | MCP result cache |
 | `.sciencediscovery-data/web-cache.sqlite`, `.sciencediscovery-data/web-audit.sqlite` | Web cache and `WebInvocation` audit |
 | `.sciencediscovery-data/model-secrets.key` | Owner-readable AES-256-GCM key for provider tokens |
+| `.sciencediscovery-data/exchange-rates/usage-display-rates.json` | Display exchange-rate cache for the usage dashboard; refresh failures can fall back to stale cache and the page labels stale-cache use |
 | `.sciencediscovery-data/projects/<project-id>/sessions/<session-id>/workspace/` | Per-session uploaded/generated files and `papers/<paper-id>/` extraction results |
 | `.sciencediscovery-data/cas/`, `execution-runs/`, `prompt-manifests/`, `reviews/`, `messages/` | Content-addressed blobs, execution records, prompt manifests, reviews, and chat |
 | `.sciencediscovery-data/claims/`, `evidence-items/`, `evidence-links/`, `mcp-invocations/`, `artifact-derivations/` | Claim/evidence provenance and MCP audit |

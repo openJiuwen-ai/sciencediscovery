@@ -13,18 +13,22 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 
-import type { GlobalModelUsageSummary, ModelProfile, Project, RunnerHealth, Session, SessionUsageSummary } from "@sciencediscovery/schema";
+import type {
+  GlobalModelUsageSummary,
+  ModelUsageAnalyticsSummary,
+  RunnerHealth,
+  SessionUsageSummary,
+} from "@sciencediscovery/schema";
 
 import { createApiServer, type ServerConfig } from "./server.js";
 
 const authorization = { authorization: "Bearer test-token" };
-const jsonHeaders = { ...authorization, "content-type": "application/json" };
 
 const RUNNER_HEALTH: RunnerHealth = {
   cgroupDelegated: false,
@@ -114,10 +118,28 @@ function startStubDeps(context: TestContext): Promise<{ gatewayOrigin: string; r
   });
 }
 
+async function assertResponseStatus(response: Response, status: number): Promise<void> {
+  if (response.status === status) return;
+  assert.fail(`Expected ${status}, got ${response.status}: ${await response.text()}`);
+}
+
 test("USG-013 session and global usage APIs expose breakdown fields", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `usage-api-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });
-  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const now = "2026-01-01T00:00:00.000Z";
+  const project = { createdAt: now, id: "project-usage", name: "Usage Project", updatedAt: now };
+  const session = {
+    approvalMode: "always_allow" as const,
+    createdAt: now,
+    id: "session-usage",
+    projectId: project.id,
+    title: "Usage Session",
+    updatedAt: now,
+  };
+  await writeFile(resolve(dataDir, "catalog.json"), `${JSON.stringify({
+    projects: [project],
+    sessions: [session],
+  }, null, 2)}\n`, "utf8");
 
   const deps = await startStubDeps(context);
   const api = createApiServer(testConfig(dataDir, deps.runnerOrigin));
@@ -127,36 +149,6 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
     api.closeAllConnections();
   }));
   const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
-
-  const modelResponse = await fetch(`${origin}/api/models`, {
-    body: JSON.stringify({
-      apiToken: "token",
-      baseUrl: "https://models.example.test/v1",
-      model: "usage-model",
-      name: "Usage Model",
-      vision: false,
-    }),
-    headers: jsonHeaders,
-    method: "POST",
-  });
-  assert.equal(modelResponse.status, 201);
-  const model = await modelResponse.json() as ModelProfile;
-
-  const projectResponse = await fetch(`${origin}/api/projects`, {
-    body: JSON.stringify({ name: "Usage Project" }),
-    headers: jsonHeaders,
-    method: "POST",
-  });
-  assert.equal(projectResponse.status, 201);
-  const project = await projectResponse.json() as Project;
-
-  const sessionResponse = await fetch(`${origin}/api/projects/${project.id}/sessions`, {
-    body: JSON.stringify({ modelId: model.id, title: "Usage Session" }),
-    headers: jsonHeaders,
-    method: "POST",
-  });
-  assert.equal(sessionResponse.status, 201);
-  const session = await sessionResponse.json() as Session;
 
   await mkdir(resolve(dataDir, "model-usage"), { recursive: true });
   await writeFile(resolve(dataDir, "model-usage", `${session.id}.json`), `${JSON.stringify([
@@ -170,9 +162,9 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
       inputTokens: 10,
       invocationId: "inv-1",
       invocationKind: "task",
-      model: model.model,
-      modelProfileId: model.id,
-      modelProfileName: model.name,
+      model: "usage-model",
+      modelProfileId: "usage-model-profile",
+      modelProfileName: "Usage Model",
       outputTokens: 5,
       projectId: project.id,
       runId: "run-1",
@@ -191,9 +183,9 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
       inputTokens: null,
       invocationId: "inv-2",
       invocationKind: "semantic-review",
-      model: model.model,
-      modelProfileId: model.id,
-      modelProfileName: model.name,
+      model: "usage-model",
+      modelProfileId: "usage-model-profile",
+      modelProfileName: "Usage Model",
       outputTokens: null,
       projectId: project.id,
       runId: "run-1",
@@ -205,7 +197,7 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
   ], null, 2)}\n`, "utf8");
 
   const sessionUsageResponse = await fetch(`${origin}/api/sessions/${session.id}/usage`, { headers: authorization });
-  assert.equal(sessionUsageResponse.status, 200);
+  await assertResponseStatus(sessionUsageResponse, 200);
   const sessionUsage = await sessionUsageResponse.json() as SessionUsageSummary;
   assert.equal(sessionUsage.totals.totalTokens, 15);
   assert.equal(sessionUsage.totals.cacheReadTokens, 4);
@@ -215,11 +207,32 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
   assert.equal(sessionUsage.byRun[0]?.key, "run-1");
 
   const globalUsageResponse = await fetch(`${origin}/api/usage/models`, { headers: authorization });
-  assert.equal(globalUsageResponse.status, 200);
+  await assertResponseStatus(globalUsageResponse, 200);
   const globalUsage = await globalUsageResponse.json() as GlobalModelUsageSummary;
   assert.equal(globalUsage.totals.invocationCount, 2);
-  assert.equal(globalUsage.byModel[0]?.modelProfileId, model.id);
+  assert.equal(globalUsage.byModel[0]?.modelProfileId, "usage-model-profile");
   assert.equal(globalUsage.byModel[0]?.projects[0]?.projectId, project.id);
   assert.equal(globalUsage.byModel[0]?.projects[0]?.sessions[0]?.sessionId, session.id);
   assert.equal(globalUsage.byModel[0]?.projects[0]?.sessions[0]?.runs[0]?.runId, "run-1");
+
+  const analyticsResponse = await fetch(`${origin}/api/usage/analytics?from=2026-01-01&to=2026-01-01`, { headers: authorization });
+  await assertResponseStatus(analyticsResponse, 200);
+  const analytics = await analyticsResponse.json() as ModelUsageAnalyticsSummary;
+  assert.equal(analytics.overview.totalTokens, 15);
+  assert.equal(analytics.dailyByModel.length, 1);
+  assert.equal(analytics.dailyByModel[0]?.date, "2026-01-01");
+  assert.equal(analytics.dailyByModel[0]?.cacheReadTokens, 4);
+  assert.equal(analytics.dailyByModel[0]?.estimatedCost, undefined);
+
+  const csvResponse = await fetch(`${origin}/api/usage/analytics/export?format=csv&from=2026-01-01&to=2026-01-01`, { headers: authorization });
+  await assertResponseStatus(csvResponse, 200);
+  assert.match(csvResponse.headers.get("content-type") ?? "", /text\/csv/);
+  const csv = await csvResponse.text();
+  assert.match(csv, /"2026-01-01","Usage Model"/);
+  assert.match(csv, /"15","","","","","","",""$/m);
+
+  const jsonResponse = await fetch(`${origin}/api/usage/analytics/export?format=json&from=2026-01-01&to=2026-01-01`, { headers: authorization });
+  await assertResponseStatus(jsonResponse, 200);
+  const exported = await jsonResponse.json() as ModelUsageAnalyticsSummary;
+  assert.equal(exported.overview.totalTokens, 15);
 });

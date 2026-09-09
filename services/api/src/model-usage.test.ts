@@ -17,7 +17,13 @@ import { test } from "node:test";
 
 import type { ModelInvocationUsage } from "@sciencediscovery/schema";
 
-import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
+import {
+  estimateInvocationCost,
+  modelUsageAnalyticsToCsv,
+  summarizeGlobalModelUsage,
+  summarizeModelUsage,
+  summarizeModelUsageAnalytics,
+} from "./model-usage.js";
 
 function usage(overrides: Partial<ModelInvocationUsage>): ModelInvocationUsage {
   return {
@@ -146,4 +152,171 @@ test("USG-009 global usage drills down model -> project -> session -> run", () =
   assert.equal(modelA?.projects[0]?.sessions[0]?.sessionTitle, "Session A");
   assert.equal(modelA?.projects[0]?.sessions[0]?.runs[0]?.runId, "run-a");
   assert.equal(modelA?.projects[0]?.sessions[0]?.runs[0]?.invocations.length, 1);
+});
+
+test("USG-014 daily analytics aggregates tokens by date and model with filters", () => {
+  const summary = summarizeModelUsageAnalytics([
+    usage({
+      id: "u1",
+      inputTokens: 1_000,
+      modelProfileId: "model-a",
+      modelProfileName: "Model A",
+      outputTokens: 200,
+      projectId: "project-a",
+      startedAt: "2026-09-01T12:59:00.000Z",
+      totalTokens: 1_200,
+    }),
+    usage({
+      cacheReadTokens: 50,
+      id: "u2",
+      inputTokens: 400,
+      modelProfileId: "model-a",
+      modelProfileName: "Model A",
+      outputTokens: 100,
+      projectId: "project-a",
+      startedAt: "2026-09-01T12:59:30.000Z",
+      totalTokens: 500,
+    }),
+    usage({
+      id: "u3",
+      inputTokens: 10,
+      model: "other-model",
+      modelProfileId: "model-b",
+      modelProfileName: "Model B",
+      outputTokens: 5,
+      projectId: "project-a",
+      startedAt: "2026-09-02T00:00:00.000Z",
+      totalTokens: 15,
+    }),
+    usage({
+      id: "u4",
+      inputTokens: null,
+      modelProfileId: "model-a",
+      modelProfileName: "Model A",
+      outputTokens: null,
+      projectId: "project-a",
+      startedAt: "2026-09-02T01:00:00.000Z",
+      totalTokens: null,
+      usageStatus: "provider-not-reported",
+    }),
+  ], {
+    projectIdBySessionId: new Map([["session-a", "project-a"]]),
+    projectNameById: new Map([["project-a", "Alpha"]]),
+    sessionTitleById: new Map([["session-a", "Session A"]]),
+  }, { from: "2026-09-01", modelProfileId: "model-a", to: "2026-09-01" });
+
+  assert.equal(summary.dailyByModel.length, 1);
+  assert.equal(summary.dailyByModel[0]?.date, "2026-09-01");
+  assert.equal(summary.dailyByModel[0]?.inputTokens, 1_400);
+  assert.equal(summary.dailyByModel[0]?.outputTokens, 300);
+  assert.equal(summary.dailyByModel[0]?.cacheReadTokens, 50);
+  assert.equal(summary.dailyByModel[0]?.totalTokens, 1_700);
+  assert.equal(summary.overview.totalTokens, 1_700);
+});
+
+test("USG-015 analytics estimates costs from pricing and keeps unpriced models empty", () => {
+  const priced = usage({
+    cacheReadTokens: 100_000,
+    cacheWriteTokens: 200_000,
+    inputTokens: 1_000_000,
+    outputTokens: 500_000,
+    totalTokens: 1_500_000,
+  });
+  assert.deepEqual(estimateInvocationCost(priced, {
+    cachedInput: 0.5,
+    cacheWriteInput: 3,
+    currency: "CNY",
+    input: 2,
+    output: 8,
+    unit: "per-1m-tokens",
+  }), { amount: 6.65, currency: "CNY" });
+
+  const summary = summarizeModelUsageAnalytics([
+    priced,
+    usage({
+      id: "unpriced",
+      costUsd: null,
+      inputTokens: 1_000,
+      modelProfileId: "model-b",
+      modelProfileName: "Model B",
+      outputTokens: 1_000,
+      totalTokens: 2_000,
+    }),
+  ], {
+    pricingByModelProfileId: new Map([[
+      "model-a",
+      { cacheWriteInput: 3, currency: "USD", input: 1, output: 2, unit: "per-1m-tokens" },
+    ]]),
+    projectIdBySessionId: new Map([["session-a", "project-a"]]),
+    projectNameById: new Map([["project-a", "Alpha"]]),
+    sessionTitleById: new Map([["session-a", "Session A"]]),
+  });
+
+  assert.equal(summary.overview.estimatedCosts[0]?.currency, "USD");
+  assert.equal(summary.overview.estimatedCosts[0]?.amount, 2.7);
+  assert.equal(summary.dailyByModel.find((row) => row.modelProfileId === "model-a")?.estimatedCost?.amount, 2.7);
+  assert.equal(summary.dailyByModel.find((row) => row.modelProfileId === "model-a")?.estimatedCosts[0]?.amount, 2.7);
+  assert.equal(summary.dailyByModel.find((row) => row.modelProfileId === "model-b")?.estimatedCost, undefined);
+});
+
+test("USG-016 analytics buckets and filters days in the configured time zone", () => {
+  const summary = summarizeModelUsageAnalytics([
+    usage({ startedAt: "2026-01-01T16:30:00.000Z" }),
+  ], {
+    pricingByModelProfileId: new Map(),
+    projectIdBySessionId: new Map([["session-a", "project-a"]]),
+    projectNameById: new Map([["project-a", "Alpha"]]),
+    sessionTitleById: new Map([["session-a", "Session A"]]),
+  }, { from: "2026-01-02", to: "2026-01-02" });
+
+  assert.equal(summary.filters.timeZone, "Asia/Shanghai");
+  assert.equal(summary.dailyByModel.length, 1);
+  assert.equal(summary.dailyByModel[0]?.date, "2026-01-02");
+  assert.equal(summary.overview.totalTokens, 15);
+});
+
+test("USG-017 analytics CSV export is stable and escapes spreadsheet formulas", () => {
+  const csv = modelUsageAnalyticsToCsv({
+    dailyByModel: [{
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      date: "2026-09-01",
+      estimatedCost: { amount: 0.42, currency: "USD" },
+      estimatedCosts: [
+        { amount: 0.42, currency: "USD" },
+        { amount: 3.1, currency: "CNY" },
+      ],
+      inputTokens: 10,
+      model: "=cmd",
+      modelProfileId: "model-a",
+      modelProfileName: "+unsafe",
+      outputTokens: 5,
+      totalTokens: 15,
+    }],
+    exchangeRates: [{
+      baseCurrency: "USD",
+      effectiveDate: "2026-09-01",
+      provider: "Frankfurter",
+      quoteCurrency: "CNY",
+      rate: 6.69,
+      retrievedAt: "2026-09-01T00:00:00.000Z",
+      sourceUrl: "https://api.frankfurter.dev/v2/rate/USD/CNY",
+      stale: false,
+    }],
+    filters: {},
+    generatedAt: "2026-09-01T00:00:00.000Z",
+    overview: {
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      estimatedCosts: [{ amount: 0.42, currency: "USD" }],
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    },
+  }, { displayCurrency: "CNY" });
+
+  assert.match(csv, /"date","modelProfileName".*"estimatedCostOriginal","originalCurrency","displayCost","displayCurrency","displayExchangeRate"/);
+  assert.match(csv, /"'\+unsafe"/);
+  assert.match(csv, /"'=cmd"/);
+  assert.match(csv, /"0.42 \/ 3.1","USD \/ CNY","5.9098","CNY","USD\/CNY 6.69","Frankfurter","2026-09-01T00:00:00.000Z"/);
 });

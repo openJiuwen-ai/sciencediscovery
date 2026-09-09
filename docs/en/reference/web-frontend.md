@@ -20,6 +20,7 @@ The React browser UI is served as static assets by the control API after build a
 | `Permissions.tsx` | Permission cards and grant management |
 | `Orchestration.tsx` | Subagent cards, specialists, and plans |
 | `RemoteCompute.tsx`, `ScientificArtifacts.tsx`, `RuntimeControls.tsx`, `EnvironmentManager.tsx`, `SkillManager.tsx`, `MemoryGraphView.tsx` | System and domain panels |
+| `UsagePage.tsx` | Usage dashboard with model/date filters, token and cost overview, stacked daily bars, filter-scoped drilldown details, and CSV/JSON exports; long date ranges support horizontal drag/scroll, default to the latest dates, and scroll left for older records |
 | `ManagementControls.tsx`, `WorkbenchNavigation.tsx` | Lifecycle dialogs, search, and composer references |
 | `Markdown.tsx`, `Toasts.tsx`, `icons.tsx` | Rendering infrastructure |
 

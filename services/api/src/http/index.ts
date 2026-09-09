@@ -222,6 +222,8 @@ import {
   capturedModelUsage,
   unreportedModelUsage,
 } from "../model-usage/index.js";
+import { modelUsageAnalyticsToCsv } from "../model-usage.js";
+import { UsageExchangeRateProvider } from "../exchange-rates.js";
 import { timeoutFailure, timeoutMessage } from "../timeouts/index.js";
 import { isAuthorized } from "./auth.js";
 import { readBytes, readJson, readMultipartSkill } from "./body.js";
@@ -265,6 +267,21 @@ export { loadServerConfig, type ServerConfig } from "../bootstrap/config.js";
 export * from "../runs/index.js";
 
 export type { ApiServerDependencies } from "../bootstrap/platform.js";
+
+function usageAnalyticsFilters(url: URL) {
+  return {
+    ...(url.searchParams.get("from") ? { from: url.searchParams.get("from")! } : {}),
+    ...(url.searchParams.get("modelProfileId") ? { modelProfileId: url.searchParams.get("modelProfileId")! } : {}),
+    ...(url.searchParams.get("projectId") ? { projectId: url.searchParams.get("projectId")! } : {}),
+    ...(url.searchParams.get("timeZone") ? { timeZone: url.searchParams.get("timeZone")! } : {}),
+    ...(url.searchParams.get("to") ? { to: url.searchParams.get("to")! } : {}),
+  };
+}
+
+function usageDisplayCurrency(url: URL): "CNY" | "USD" | undefined {
+  const value = url.searchParams.get("displayCurrency");
+  return value === "CNY" || value === "USD" ? value : undefined;
+}
 
 export function createApiServer(config = loadServerConfig(), dependencies: ApiServerDependencies = {}): Server {
   const platform = createPlatformServices(config, repositoryRoot, dependencies);
@@ -435,6 +452,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // `?refresh=1` forces a live fetch.
   const providerModelListCache = new Map<string, { fetchedAt: string; models: DiscoveredModel[] }>();
   const PROVIDER_MODEL_CACHE_TTL_MS = 5 * 60_000;
+  const usageExchangeRateProvider = new UsageExchangeRateProvider({
+    config: config.usageExchangeRates,
+    dataDir: config.dataDir,
+    fetchImpl: dependencies.fetchUsageExchangeRate,
+  });
+  const usageAnalyticsSummary = async (url: URL) => {
+    const summary = await store.getModelUsageAnalyticsSummary(usageAnalyticsFilters(url));
+    const exchangeRates = await usageExchangeRateProvider.rates();
+    return exchangeRates.length ? { ...summary, exchangeRates } : summary;
+  };
   /** Overrides saved on the profile that backs a listing row, so the row shows
    *  what the user stated instead of what the vendor last published. */
   const savedFacts = (profileId: string | undefined): ModelFactOverrides | undefined =>
@@ -2833,6 +2860,40 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/usage/analytics") {
+        sendJson(response, 200, await usageAnalyticsSummary(url));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/usage/analytics/export") {
+        const format = url.searchParams.get("format") ?? "csv";
+        const summary = await usageAnalyticsSummary(url);
+        if (format === "json") {
+          response.writeHead(200, {
+            "cache-control": "no-store",
+            "content-disposition": "attachment; filename=\"model-usage-analytics.json\"",
+            "content-type": "application/json; charset=utf-8",
+            "x-content-type-options": "nosniff",
+          });
+          response.end(`${JSON.stringify(summary, null, 2)}\n`);
+          return;
+        }
+        if (format === "csv") {
+          const body = modelUsageAnalyticsToCsv(summary, { displayCurrency: usageDisplayCurrency(url) });
+          response.writeHead(200, {
+            "cache-control": "no-store",
+            "content-disposition": "attachment; filename=\"model-usage-analytics.csv\"",
+            "content-length": Buffer.byteLength(body),
+            "content-type": "text/csv; charset=utf-8",
+            "x-content-type-options": "nosniff",
+          });
+          response.end(body);
+          return;
+        }
+        sendError(response, 400, "Usage export format must be csv or json");
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/usage/models") {
         sendJson(response, 200, await store.getGlobalModelUsageSummary());
         return;
@@ -2962,6 +3023,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     notificationTimer.unref();
   }).catch(() => undefined); // normal startup error handling owns ready failures
   server.once("close", () => { notificationClosed = true; clearInterval(notificationTimer); dispatcher.close(); });
+  server.on("close", () => {
+    store.close();
+  });
   patchEphemeralCallback(server);
   return server;
 }

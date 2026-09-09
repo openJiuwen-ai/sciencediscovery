@@ -53,6 +53,8 @@ export interface ApiServerDependencies {
   connectorFetch?: typeof fetch;
   /** Test seam: resolve the model catalog from a fixture instead of models.dev. */
   fetchModelCatalog?: (options: { proxy?: ResolvedProxy; url: string }) => Promise<ModelsDevPayload>;
+  /** Test seam: resolve usage display exchange rates without touching the network. */
+  fetchUsageExchangeRate?: typeof fetch;
   /** Test seam: drive MCP through a stub transport instead of live servers. */
   mcpTransport?: McpTransportClient;
   /** Test seam: exercise remote-host HTTP flows without connecting to a real SSH machine. */
