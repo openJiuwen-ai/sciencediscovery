@@ -225,10 +225,10 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       + "and keep what scores better on a held-out split. "
       + `${runtime.approvalMode === "always_allow" ? "Starts immediately." : "Creates an approval card the user confirms."} `
       + "You design the whole run — read the workspace and the conversation, then run your evaluator "
-      + "**once** with run_python, against the starting point, to confirm it executes and emits a "
+      + "**once** with run_shell, against the starting point, to confirm it executes and emits a "
       + "number. Do NOT also score a deliberately broken copy: this call runs a discrimination probe "
-      + "that does exactly that on the real shards in the real sandbox, and returns both numbers. Your "
-      + "run_python environment and the candidate sandbox are different places with different shard "
+      + "that does exactly that on the real shards in the real sandbox, and returns both numbers. The "
+      + "sandbox run_shell gives you and the candidate sandbox are different places with different shard "
       + "indices, so a local second opinion can disagree with the probe and send the turn into "
       + "reconciling them instead of into the search. When they disagree, the probe is right. "
       + "What you verify is the SCORING, never the answer: do not go "
