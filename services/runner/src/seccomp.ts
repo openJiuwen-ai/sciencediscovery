@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const BPF_LD_W_ABS = 0x20;
@@ -132,7 +133,21 @@ export async function ensureSeccompFilter(
     variant === "baseline" ? profile.filename : profile.filename.replace("seccomp-", "seccomp-network-"),
   );
   await mkdir(runtimeDirectory, { recursive: true });
-  await writeFile(path, baselineSeccompFilter(architecture, variant), { mode: 0o600 });
+  // Every execution of the same variant publishes to this one path, and each
+  // one then hands the file to bwrap to read. Writing in place would truncate
+  // the inode a concurrent launch is already holding open, and bwrap would load
+  // a program cut short mid-instruction: the kernel rejects that with
+  // `prctl(PR_SET_SECCOMP) reported EINVAL` and the whole execution fails.
+  // Renaming only swaps the directory entry, so a reader keeps the complete
+  // file it opened.
+  const staging = `${path}.${randomUUID()}`;
+  await writeFile(staging, baselineSeccompFilter(architecture, variant), { mode: 0o600 });
+  try {
+    await rename(staging, path);
+  } catch (error) {
+    await rm(staging, { force: true });
+    throw error;
+  }
   return path;
 }
 

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -68,6 +68,34 @@ test("baseline seccomp writes architecture-specific filter files", async () => {
     assert.match(arm64Path, /seccomp-aarch64\.bpf$/);
     assert.equal(auditArchitecture(await readFile(x64Path)), AUDIT_ARCH_X86_64);
     assert.equal(auditArchitecture(await readFile(arm64Path)), AUDIT_ARCH_AARCH64);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("a launch already holding the filter file keeps a whole program while another execution publishes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sciencediscovery-seccomp-"));
+  try {
+    const complete = baselineSeccompFilter("x64");
+    const path = await ensureBaselineSeccompFilter(root, "x64");
+    // What a sandbox launch does: take the file, then hand it to bwrap, which
+    // reads the program only once the child is running. Meanwhile other
+    // executions of the same variant publish to that same path.
+    const held = await open(path, "r");
+    try {
+      const before = await held.stat();
+      await Promise.all(Array.from({ length: 8 }, () => ensureBaselineSeccompFilter(root, "x64")));
+      // Publication must replace the directory entry rather than rewrite the
+      // inode the launch is holding: a truncated program is not a shorter
+      // program, it is one PR_SET_SECCOMP rejects with EINVAL.
+      assert.notEqual((await stat(path)).ino, before.ino);
+      assert.deepEqual(await held.readFile(), complete);
+    } finally {
+      await held.close();
+    }
+    assert.deepEqual(await readFile(path), complete);
+    // No staging file is left where the runtime directory is scanned.
+    assert.deepEqual(await readdir(join(root, "runner-runtime")), ["seccomp-x86_64.bpf"]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

@@ -5,9 +5,9 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
-import type { SkillPackageBundle } from "@sciencediscovery/schema";
+import type { PermissionEpoch, SkillPackageBundle } from "@sciencediscovery/schema";
 import { RunnerSkillPackages, skillBundleIdentity } from "./skill-packages.js";
-import { resolveSandboxSkillRoots } from "./executor.js";
+import { executeShell, resolveSandboxSkillRoots, type ExecutorConfig } from "./executor.js";
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 /** A Runner data directory of this test's own, inside the repository temp root. */
@@ -25,6 +25,29 @@ function bundle(id = "selected", revision = 1, script = "echo frozen\n"): SkillP
   }
   return { skills: [{ id, revision, version: "1", hash: hash.digest("hex"),
     files: [...data].map(([path, bytes]) => ({ path, size: bytes.length, hash: digest(bytes), content: bytes.toString("base64") })) }] };
+}
+
+function executorConfig(dir: string): ExecutorConfig {
+  return {
+    bwrapPath: process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
+    dataDir: dir,
+    execTimeoutMs: 60_000,
+    maxOutputBytes: 1_073_741_824,
+    maxWorkspaceBytes: 10_737_418_240,
+  };
+}
+
+function epoch(): PermissionEpoch {
+  return {
+    createdAt: new Date().toISOString(),
+    environmentRevisionId: "test-shell",
+    id: "epoch-skill-packages",
+    mounts: [{ mode: "read-write", source: "workspace" }],
+    networkPolicy: "none",
+    reason: "test",
+    secretRefs: [],
+    sessionId: "session-test",
+  };
 }
 
 test("whole selected bundles are immutable, binary-safe and keyed by set/revision/content", async (t) => {
@@ -82,6 +105,55 @@ test("aborted staging is never published or mountable; corruption and symlinks f
   await assert.rejects(resolveSandboxSkillRoots(dir, dir, stored.root), /integrity/);
   await rm(script); await symlink(resolve(stored.root, "selected/SKILL.md"), script);
   await assert.rejects(store.get(stored.id), /Symlink/);
+});
+
+/**
+ * The sandbox half of the remote Skill mount. `put()` is exactly what a sync
+ * from the control plane leaves on this Runner, so mounting that published
+ * snapshot and running a script out of it is the remote contract — proved here,
+ * in the tier that has a real bubblewrap sandbox, rather than from the client
+ * package, which runs on hosts that cannot create namespaces at all.
+ */
+test("a snapshot published for a remote execution is mounted read-only and its scripts run", async (t) => {
+  const dir = await dataDir("skill-mount-");
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new RunnerSkillPackages(dir);
+  const workspace = resolve(dir, "projects/workspace");
+  await mkdir(workspace, { recursive: true });
+  // A wider set was synced earlier, so the Skill dropped from the selection is
+  // really on this Runner and only absent from the tree this execution mounts.
+  await store.put({ skills: [...bundle().skills, ...bundle("unselected").skills] });
+  const stored = await store.put(bundle("selected", 1, "printf 'checked %s\\n' \"$1\"\nexit 7\n"));
+
+  const result = await executeShell(executorConfig(dir), {
+    agentId: "main",
+    code: [
+      'ls "$SCIENCEDISCOVERY_SKILLS_DIR"',
+      'sh "$SCIENCEDISCOVERY_SKILLS_DIR/selected/scripts/check.sh" remotely',
+    ].join("\n"),
+    executionId: "execution-remote-skill-mount",
+    permissionEpoch: epoch(),
+    skillPackagesRoot: stored.root,
+    workspaceRoot: workspace,
+  });
+
+  // The packaged script's own exit code and output, and nothing on the tree but
+  // what this execution selected.
+  assert.equal(result.exitCode, 7);
+  assert.equal(result.stdout, "selected\nchecked remotely\n");
+
+  // Damaged after publication: the execution fails instead of mounting it.
+  const script = resolve(stored.root, "selected/scripts/check.sh");
+  await rm(script);
+  await writeFile(script, "echo tampered\n");
+  await assert.rejects(executeShell(executorConfig(dir), {
+    agentId: "main",
+    code: "echo unreachable",
+    executionId: "execution-remote-skill-damaged",
+    permissionEpoch: epoch(),
+    skillPackagesRoot: stored.root,
+    workspaceRoot: workspace,
+  }), /integrity/);
 });
 
 test("a snapshot whose manifest was rewritten to match tampered bytes is still refused", async (t) => {

@@ -15,38 +15,31 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import type { PermissionEpoch, ShellExecutionRequest, SkillPackageBundle } from "@sciencediscovery/schema";
+import type { SkillPackageBundle } from "@sciencediscovery/schema";
 import { skillBundleManifest } from "@sciencediscovery/runner";
 
 import { RunnerClient } from "./runner-client.js";
 
 /**
- * The remote Skill mount, proved against a second Runner started the way the
- * product starts one: its own process, its own data directory, reached only
- * over HTTP. Nothing here touches SSH — the tunnel is a transport detail, while
- * what has to hold is that a Runner which never shared a filesystem with the
- * control plane still mounts the selected frozen packages.
+ * Getting the selected frozen packages onto a second Runner, proved against one
+ * started the way the product starts it: its own process, its own data
+ * directory, reached only over HTTP. Nothing here touches SSH — the tunnel is a
+ * transport detail, while what has to hold is that a Runner which never shared a
+ * filesystem with the control plane ends up holding the same bytes and answers
+ * with a path of its own.
+ *
+ * Mounting those packages and running their scripts needs a real sandbox, which
+ * an ordinary CI host cannot create, so that half lives beside the sandbox in
+ * `services/runner` (`skill-packages.test.ts`). Do not bring an execution back
+ * into this file: this package is host tier.
  */
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const TOKEN = "remote-skill-packages-token";
-
-function epoch(): PermissionEpoch {
-  return {
-    createdAt: new Date().toISOString(),
-    environmentRevisionId: "test-shell",
-    id: "epoch-remote-skills",
-    mounts: [{ mode: "read-write", source: "workspace" }],
-    networkPolicy: "none",
-    reason: "test",
-    secretRefs: [],
-    sessionId: "session-1",
-  };
-}
 
 /** One selected frozen package, hashed exactly the way the catalog freezes it. */
 function bundle(files: Record<string, string>, id = "selected", revision = 1): SkillPackageBundle {
@@ -74,6 +67,21 @@ const SELECTED = {
   "SKILL.md": "Frozen instructions\n",
   "scripts/check.sh": "printf 'checked %s\\n' \"$1\"\nexit 7\n",
 };
+
+/** What a Runner ended up holding for one snapshot, read off its own disk. */
+async function publishedTree(root: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  const walk = async (directory: string, prefix = ""): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = prefix + entry.name;
+      if (entry.isDirectory()) await walk(resolve(directory, entry.name), `${path}/`);
+      // The snapshot manifest is the Runner's own bookkeeping, not package content.
+      else if (path !== ".skill-bundle.json") files[path] = await readFile(resolve(directory, entry.name), "utf8");
+    }
+  };
+  await walk(root);
+  return files;
+}
 
 async function startRemoteRunner(context: { after: (callback: () => Promise<void> | void) => void }) {
   const dataDir = resolve(repositoryRoot, ".tmp", `remote-skill-runner-${process.pid}-${randomUUID()}`);
@@ -113,28 +121,11 @@ async function startRemoteRunner(context: { after: (callback: () => Promise<void
   return { client: new RunnerClient(`http://127.0.0.1:${port}`, TOKEN), dataDir };
 }
 
-/**
- * A control-plane workspace path: it does not exist on the Runner, so an
- * execution only succeeds because the Runner resolves its own workspace and
- * mounts its own copy of the packages.
- */
-function shell(code: string, executionId: string, skillPackagesRoot: string): ShellExecutionRequest {
-  return {
-    agentId: "main",
-    code,
-    executionId,
-    permissionEpoch: epoch(),
-    runnerWorkspaceKey: "project-1/session-1",
-    skillPackagesRoot,
-    workspaceRoot: resolve(repositoryRoot, ".tmp", "control-plane-only", "workspace"),
-  };
-}
-
-test("a second Runner mounts the selected packages it was sent and runs scripts out of them", async (context) => {
+test("a second Runner ends up holding exactly the selected packages, under a path of its own", async (context) => {
   const remote = await startRemoteRunner(context);
   // An earlier run put a wider set on this Runner, so the Skill dropped from
   // the selection really is present in its store and only absent from the tree
-  // this run mounts.
+  // this run will mount.
   const earlier = selection(bundle(SELECTED), bundle({ "SKILL.md": "Dropped\n" }, "unselected"));
   await remote.client.prepareSkillPackages(skillBundleManifest(earlier), async () => earlier);
 
@@ -143,16 +134,12 @@ test("a second Runner mounts the selected packages it was sent and runs scripts 
 
   // The mount path is the Runner's own; no control-plane absolute path travels.
   assert.ok(root.startsWith(resolve(remote.dataDir, "projects", ".skill-packages")), root);
-
-  const result = await remote.client.executeShell(shell([
-    'ls "$SCIENCEDISCOVERY_SKILLS_DIR"',
-    'sh "$SCIENCEDISCOVERY_SKILLS_DIR/selected/scripts/check.sh" remotely',
-  ].join("\n"), "remote-skill-script", root));
-
-  // The real exit code and output of the packaged script, not a re-evaluation,
-  // and nothing on the Skill tree but what this run selected.
-  assert.equal(result.exitCode, 7);
-  assert.equal(result.stdout, "selected\nchecked remotely\n");
+  // Byte-for-byte the selected set, and nothing else — the Skill this run
+  // dropped stays in the Runner's store but out of this snapshot.
+  assert.deepEqual(await publishedTree(root), {
+    "selected/SKILL.md": SELECTED["SKILL.md"],
+    "selected/scripts/check.sh": SELECTED["scripts/check.sh"],
+  });
 
   // A Runner that already holds the set is not sent the bytes again.
   const cached = await remote.client.prepareSkillPackages(skillBundleManifest(selected), async () => {
@@ -166,28 +153,23 @@ test("a changed selection or revision gets its own tree instead of reusing a sta
   const first = bundle(SELECTED);
   const root = await remote.client.prepareSkillPackages(skillBundleManifest(first), async () => first);
 
-  // Same Skill, new frozen revision: a different tree, with the new script.
+  // Same Skill, new frozen revision: a different tree, holding the new script.
   const revised = bundle({ ...SELECTED, "scripts/check.sh": "printf 'revised\\n'\n" }, "selected", 2);
   const revisedRoot = await remote.client.prepareSkillPackages(skillBundleManifest(revised), async () => revised);
   assert.notEqual(revisedRoot, root);
-  const afterRevision = await remote.client.executeShell(
-    shell('sh "$SCIENCEDISCOVERY_SKILLS_DIR/selected/scripts/check.sh"', "remote-skill-revised", revisedRoot),
-  );
-  assert.equal(afterRevision.exitCode, 0);
-  assert.match(afterRevision.stdout, /^revised$/m);
+  assert.equal((await publishedTree(revisedRoot))["selected/scripts/check.sh"], "printf 'revised\\n'\n");
+  // The old tree is left alone rather than overwritten in place.
+  assert.equal((await publishedTree(root))["selected/scripts/check.sh"], SELECTED["scripts/check.sh"]);
 
   // A different selected Skill is a different tree too, and the Skill dropped
   // from the selection is not in it.
   const other = bundle({ "SKILL.md": "Another package\n" }, "other");
   const otherRoot = await remote.client.prepareSkillPackages(skillBundleManifest(other), async () => other);
   assert.notEqual(otherRoot, root);
-  const afterSwap = await remote.client.executeShell(
-    shell('ls "$SCIENCEDISCOVERY_SKILLS_DIR"', "remote-skill-swap", otherRoot),
-  );
-  assert.deepEqual(afterSwap.stdout.trim().split("\n"), ["other"]);
+  assert.deepEqual(await publishedTree(otherRoot), { "other/SKILL.md": "Another package\n" });
 });
 
-test("a failed sync or a damaged remote tree fails the execution instead of pretending", async (context) => {
+test("a failed sync or a damaged remote tree fails preparation instead of pretending", async (context) => {
   const remote = await startRemoteRunner(context);
   const selected = bundle(SELECTED);
 
@@ -207,13 +189,15 @@ test("a failed sync or a damaged remote tree fails the execution instead of pret
     /Remote Skill preparation failed/,
   );
 
-  // A published tree damaged afterwards stops being mountable.
+  // A published tree damaged afterwards stops being handed out: the Runner
+  // re-checks it against its own manifest and refuses rather than returning a
+  // root the execution would go on to mount.
   const root = await remote.client.prepareSkillPackages(skillBundleManifest(selected), async () => selected);
   const script = resolve(root, "selected", "scripts", "check.sh");
   await rm(script);
   await writeFile(script, "echo tampered\n");
   await assert.rejects(
-    remote.client.executeShell(shell("echo unreachable", "remote-skill-damaged", root)),
-    /integrity/,
+    remote.client.prepareSkillPackages(skillBundleManifest(selected), async () => selected),
+    /Remote Skill preparation failed.*integrity/s,
   );
 });
