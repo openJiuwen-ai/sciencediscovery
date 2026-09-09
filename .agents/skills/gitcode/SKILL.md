@@ -26,7 +26,7 @@ resolve flags. Only if a flag is still unclear, run
 7. Scope: only repos the user named (or cwd remote when clearly that clone).
 8. **Transports**: metadata/API → `gitcode` CLI; code/MR head → **SSH** git. HTTPS git easily fails (hangs without a credential helper; web/HTTPS fetches commonly return **403**), so always use SSH and do not scrape gitcode.com HTML.
 9. Follow [Cross-references and issue association](#cross-references-and-issue-association) for visible links and unverified auto-close behavior.
-10. **sciencediscovery merge requests:** push the source branch to the personal fork (`gitcode-fork` / `wang_cheng_zhao/sciencediscovery`) and create with `--head wang_cheng_zhao:<branch>`. Do not `git push origin <task-branch>` onto `openJiuwen/sciencediscovery`.
+10. **sciencediscovery merge requests:** each operator uses their own GitCode fork of `openJiuwen/sciencediscovery` (do not hard-code a login). Resolve `<gitcode-login>` from `gitcode auth status --json`. Push the source branch to that fork (common remote name `gitcode-fork`) and create with `--head <gitcode-login>:<branch>`. Do not `git push origin <task-branch>` onto `openJiuwen/sciencediscovery`. If the fork is missing: `gitcode repo fork openJiuwen/sciencediscovery --json`.
 
 ## Hosts
 
@@ -80,8 +80,8 @@ gitcode issue comment edit <comment_id> -R owner/repo --body "…"   # may not s
 gitcode issue close N -R owner/repo --yes --json
 gitcode issue reopen N -R owner/repo --yes --json
 
-# PRs — sciencediscovery: source branch on the fork, never on origin
-gitcode pr create -R openJiuwen/sciencediscovery --head wang_cheng_zhao:branch --base main --title "…" --body-file pr.md --json
+# PRs — sciencediscovery: source branch on the operator's own fork, never on origin
+gitcode pr create -R openJiuwen/sciencediscovery --head <gitcode-login>:branch --base main --title "…" --body-file pr.md --json
 gitcode pr create -R upstream/repo --head myfork:branch --title "…" --body-file pr.md --json
 gitcode pr create -R owner/repo --head branch --fill --json
 gitcode pr create -R owner/repo --head branch --title "WIP" --draft --json
