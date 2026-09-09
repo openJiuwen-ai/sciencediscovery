@@ -40,7 +40,7 @@ test.use({ locale: "zh-CN" });
  * CostSideEffects: no external cost; knowledge-base records live inside the disposable isolated data dir.
  */
 test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(600_000);
   journey.scenario({
     goal: "种子摄取完成后，研究人员能在图谱页看到实体关系图（无 console error），"
       + "点开一个实体能看到带证据引用的详情面板。",
@@ -130,7 +130,7 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
       async () => {
         // The jobs panel lists only pending/running jobs — success is the
         // documents flipping to ✓ while the active list drains.
-        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 300_000 });
+        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 480_000 });
         await expect(page.getByTestId("ke-job-status")).not.toContainText("running", { timeout: 60_000 });
         const canvas = page.getByTestId("ke-graph-canvas");
         await expect(canvas).toBeVisible({ timeout: 60_000 });

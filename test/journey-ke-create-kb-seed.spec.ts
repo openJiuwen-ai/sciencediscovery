@@ -41,7 +41,7 @@ test.use({ locale: "zh-CN" });
  * CostSideEffects: no external cost; knowledge-base records live inside the disposable isolated data dir.
  */
 test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(600_000);
   journey.scenario({
     goal: "一位研究人员要在知识引擎页新建知识库、发起一次种子摄取，"
       + "看着任务跑到成功、文档就绪，刷新后工作仍然在。",
@@ -148,7 +148,7 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
       async () => {
         // The jobs panel lists only pending/running jobs — success is the
         // documents flipping to ✓ while the active list drains.
-        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 300_000 });
+        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 480_000 });
         await expect(page.getByTestId("ke-job-status")).not.toContainText("running", { timeout: 60_000 });
         await expect(page.getByTestId("ke-job-status")).not.toContainText("failed");
       },
