@@ -68,3 +68,85 @@ export async function kePipelineStub(responseJson: unknown): Promise<KePipelineS
     stop: () => new Promise<void>((stopped) => server!.close(() => stopped())),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Agent-session stub with a dynamic kbId: scriptedModel scripts are static,
+// but the KE tools require the runtime-created kbId. This stub reads the id
+// (and the discovered entity name) through getters at request time.
+// Turn sequence per conversation: 1) list_knowledge_bases, 2) concept_explore,
+// 3) final text answer quoting the evidence.
+export interface KeAgentStubState {
+  getKbId(): string | undefined;
+  getEntityName(): string | undefined;
+  getEvidenceQuote(): string | undefined;
+}
+
+export interface KeAgentStub extends KePipelineStub {
+  readonly state: KeAgentStubState;
+}
+
+export async function keAgentStub(state: KeAgentStubState): Promise<KeAgentStub> {
+  const model = "ke-journey-agent-model";
+  const apiToken = "ke-journey-agent-token";
+  let server: Server | undefined;
+  let turn = 0;
+  await new Promise<void>((ready) => {
+    server = createServer((request, response) => {
+      request.on("data", () => undefined);
+      request.on("end", () => {
+        turn += 1;
+        const chunk = (delta: Record<string, unknown>, finishReason: string | null) =>
+          `data: ${JSON.stringify({
+            choices: [{ delta, finish_reason: finishReason, index: 0 }],
+            created: 1,
+            id: "chatcmpl-ke-agent",
+            model,
+            object: "chat.completion.chunk",
+          })}\n\n`;
+        response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+        if (turn === 1) {
+          response.write(chunk({
+            role: "assistant",
+            tool_calls: [{
+              function: { arguments: "{}", name: "list_knowledge_bases" },
+              id: `call-ke-agent-${turn}`,
+              index: 0,
+              type: "function",
+            }],
+          }, null));
+          response.write(chunk({}, "tool_calls"));
+        } else if (turn === 2) {
+          const kbId = state.getKbId() ?? "";
+          response.write(chunk({
+            role: "assistant",
+            tool_calls: [{
+              function: { arguments: JSON.stringify({ kbId, hops: 1, limit: 20 }), name: "concept_explore" },
+              id: `call-ke-agent-${turn}`,
+              index: 0,
+              type: "function",
+            }],
+          }, null));
+          response.write(chunk({}, "tool_calls"));
+        } else {
+          const entity = state.getEntityName() ?? "mAb114";
+          const quote = state.getEvidenceQuote() ?? "";
+          response.write(chunk({ content: `根据知识图谱，${entity} 与 Ebola virus glycoprotein 存在 binds 关系。原文证据：“${quote}”。`, role: "assistant" }, null));
+          response.write(chunk({}, "stop"));
+        }
+        response.end("data: [DONE]\n\n");
+      });
+    });
+    server.listen(0, "127.0.0.1", () => ready());
+  });
+  const address = server!.address();
+  if (typeof address !== "object" || address === null) {
+    throw new Error("ke agent stub failed to bind");
+  }
+  return {
+    apiToken,
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    model,
+    state,
+    stop: () => new Promise<void>((stopped) => server!.close(() => stopped())),
+  };
+}
