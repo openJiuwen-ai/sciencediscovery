@@ -1924,12 +1924,16 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
     headers: { authorization: "Bearer runner-test-token" },
   })).json() as RunnerRuntimeStatus;
   const waitFor = async (predicate: (value: RunnerRuntimeStatus) => boolean) => {
+    let current: RunnerRuntimeStatus | undefined;
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      const current = await status();
+      current = await status();
       if (predicate(current)) return current;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
-    throw new Error("Runner status did not reach the expected state");
+    // The state it did reach, because "did not reach the expected state" on
+    // its own says nothing about which wait gave up or what the runner was
+    // holding at the time.
+    throw new Error("Runner status did not reach the expected state: " + JSON.stringify(current));
   };
 
   const runningController = new AbortController();
@@ -1991,18 +1995,27 @@ for (const sharedWorkspace of [false, true]) test(sharedWorkspace
       permissionEpoch: epoch(), workspaceRoot: index === 0 || sharedWorkspace ? fixture.workspaceRoot : other,
     })))).then((value) => { finished = true; return value; });
   let maximumActive = 0;
+  let lastStatus: RunnerRuntimeStatus | undefined;
   const deadline = Date.now() + 10_000;
   while (!finished && Date.now() < deadline) {
     const status = await (await fetch(origin + "/status", {
       headers: { authorization: "Bearer runner-test-token" },
     })).json() as RunnerRuntimeStatus;
+    lastStatus = status;
     maximumActive = Math.max(maximumActive, status.activeExecutions.filter((value) => value.status === "running").length);
     await new Promise((done) => setTimeout(done, 10));
   }
   const completed = await responses;
   assert.deepEqual(completed.map((response) => response.status), [200, 200]);
-  for (const response of completed) assert.equal((await response.json() as ShellExecutionResult).exitCode, 0);
-  assert.equal(maximumActive, sharedWorkspace ? 1 : 2);
+  // A shell that answers non-zero has already said why, in the fields these
+  // assertions used to drop: the bodies were parsed inline and discarded, so
+  // when one guest-tier run failed here it left `1 !== 0` and nothing else to
+  // look at. Both results and the last status travel into the message instead.
+  const results = await Promise.all(completed.map(
+    (response) => response.json() as Promise<ShellExecutionResult>));
+  const evidence = JSON.stringify({ maximumActive, lastStatus, results });
+  for (const result of results) assert.equal(result.exitCode, 0, evidence);
+  assert.equal(maximumActive, sharedWorkspace ? 1 : 2, evidence);
 });
 
 test("execution endpoints reject persistent workers before running code, including once grants and remote roots", async (context) => {
