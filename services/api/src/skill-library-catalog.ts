@@ -720,6 +720,7 @@ export class SkillLibraryCatalog {
         description: detail.description,
         hash: detail.hash,
         id: detail.id,
+        metadata: structuredClone(detail.metadata ?? {}),
         readResource: (path: string) => {
           const resource = detail.resources.find((item) => item.path === path);
           const bytes = clonedFiles.get(path);

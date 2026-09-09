@@ -83,6 +83,56 @@ test("remote environment audit revisions never replace the local catalog or disa
   }
 });
 
+test("server-generated Artifacts reject non-server versions with the same logical name", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `server-artifact-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  const project = await store.createProject("Server Artifact boundary");
+  const session = await store.createSession(
+    project.id,
+    "Protected score",
+    {},
+    {},
+    { allowUnconfiguredModel: true },
+  );
+  const logicalName = "idea-tree/tree-1/1.1/execution/server-score/pms-score.json";
+  const authoritative = await store.createArtifactVersion({
+    content: { hash: "a".repeat(64), size: 10 },
+    kind: "json",
+    logicalName,
+    mediaType: "application/json",
+    origin: "server_generated",
+    sessionId: session.id,
+  });
+
+  await assert.rejects(
+    store.createArtifactVersion({
+      content: { hash: "b".repeat(64), size: 11 },
+      kind: "json",
+      logicalName,
+      mediaType: "application/json",
+      origin: "llm_declared",
+      sessionId: session.id,
+    }),
+    /Server-generated Artifacts accept new versions only from a server-generated writer/u,
+  );
+  assert.equal(store.getArtifact(session.id, authoritative.artifact.id)?.currentVersion, 1);
+  assert.equal(store.listArtifactVersions(session.id, authoritative.artifact.id).length, 1);
+
+  const serverUpdate = await store.createArtifactVersion({
+    content: { hash: "c".repeat(64), size: 12 },
+    kind: "json",
+    logicalName,
+    mediaType: "application/json",
+    origin: "server_generated",
+    sessionId: session.id,
+  });
+  assert.equal(serverUpdate.version.version, 2);
+});
+
 test("SessionStore persists global package sources and migrates old catalogs to upstream", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `environment-sources-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

@@ -22,6 +22,7 @@ import type {
 import type { ConnectorId } from "./connectors.js";
 import type { EvolveRun } from "./evolution.js";
 import type { ModelRunInfo, ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
+import type { IdeaTreePhase, IdeaTreeRunSettingsSnapshot } from "./idea-tree.js";
 import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, PlanSnapshot } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
@@ -356,7 +357,7 @@ export interface SessionRun {
   references: ComposerReference[];
   retryOfRunId?: string;
   sessionId: string;
-  settingsSnapshot: EffectiveRuntimeSettings;
+  settingsSnapshot: EffectiveRuntimeSettings & IdeaTreeRunSettingsSnapshot;
   /** Version-pinned skill libraries declared as prompt sources for this run. */
   skillLibraryRefs?: PromptSkillLibraryRef[];
   startedAt?: string;
@@ -402,6 +403,7 @@ export type RunStreamEvent =
    * Terminal for that response only; the run may continue with a new identity.
    */
   | { responseId: string; turn: number; type: "assistant.response.settled" }
+  | { nodeId?: string; phase: IdeaTreePhase; treeId?: string; type: "idea_tree.phase" }
   | { trace: ToolTrace; type: "tool.started" }
   | { trace: ToolTrace; type: "tool.completed" }
   | { chunk: string; toolCallId: string; type: "tool.output" }

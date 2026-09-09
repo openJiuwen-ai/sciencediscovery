@@ -43,6 +43,7 @@ function snapshot(id: string, source: ReadonlyMap<string, Buffer>, revision: num
     description: "Synthetic complete package snapshot.",
     hash: hashSkillPackageFiles(frozen),
     id,
+    metadata: {},
     readPackageFiles: () => [...frozen].map(([path, bytes]) => ({
       bytes: Buffer.from(bytes),
       hash: createHash("sha256").update(bytes).digest("hex"),

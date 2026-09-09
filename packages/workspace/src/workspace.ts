@@ -222,6 +222,8 @@ export interface WorkspaceToolOptions {
     cancel(id: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
   };
   createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
+  /** Run-scoped capabilities supplied by the API composition layer. */
+  extraTools?: AgentTool[];
   declareArtifact?: (input: {
     description?: string;
     name?: string;
@@ -827,7 +829,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             throw new Error(`paths must contain at most ${MAX_DECLARE_ARTIFACT_PATHS} paths`);
           }
           const artifacts: Array<
-            | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number }
+            | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number; version_id: string }
             | { error: string; ok: false; path: string }
           > = [];
           for (const path of params.paths) {
@@ -840,6 +842,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
                 origin: result.artifact.origin,
                 path,
                 version: result.version.version,
+                version_id: result.version.id,
               });
             } catch (error) {
               artifacts.push({
@@ -864,6 +867,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           name: result.artifact.name,
           origin: result.artifact.origin,
           version: result.version.version,
+          version_id: result.version.id,
           ...(result.instruction ? { instruction: result.instruction } : {}),
         }) }], details: result };
       },
@@ -975,7 +979,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const declareNpuJobArtifacts = async (paths: string[]) => {
       if (!options.declareArtifact || paths.length === 0) return [];
       const artifacts: Array<
-        | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number }
+        | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number; version_id: string }
         | { error: string; ok: false; path: string }
       > = [];
       for (const path of paths.slice(0, MAX_DECLARE_ARTIFACT_PATHS)) {
@@ -988,6 +992,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             origin: result.artifact.origin,
             path,
             version: result.version.version,
+            version_id: result.version.id,
           });
         } catch (error) {
           artifacts.push({
@@ -1902,6 +1907,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(extractPdf);
   }
+  tools.push(...(options.extraTools ?? []));
   return filterTools(tools, options.toolPolicy);
 }
 

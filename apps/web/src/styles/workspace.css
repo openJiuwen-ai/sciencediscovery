@@ -21,6 +21,20 @@
 .workspace-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: var(--border); transition: background var(--motion-fast), width var(--motion-fast); }
 .workspace-resizer:hover::after, .workspace-resizer.resizing::after { left: 2px; width: 3px; background: var(--accent-border); }
 .workspace-heading-actions { display: flex; align-items: center; gap: 7px; }
+.workflow-controls { display: grid; gap: 10px; margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); padding: 11px; }
+.workflow-controls > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.workflow-controls > header > span { display: grid; min-width: 0; gap: 2px; }
+.workflow-controls > header strong { color: var(--text-heading); font-size: 13px; }
+.workflow-controls > header small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.workflow-controls > header i { flex: 0 0 auto; border-radius: 999px; background: var(--accent-soft); padding: 4px 8px; color: var(--accent-ink); font-size: 10px; font-style: normal; font-weight: 750; }
+.workflow-controls > label { display: grid; grid-template-columns: minmax(92px, .7fr) minmax(0, 1.3fr); align-items: center; gap: 9px; }
+.workflow-controls > label > span { color: var(--text-secondary); font-size: 12px; font-weight: 650; }
+.workflow-controls select { width: 100%; min-width: 0; min-height: 34px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 5px 8px; color: var(--text); font-size: 12px; }
+.workflow-controls select:focus-visible { border-color: var(--accent-border); outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+.workflow-controls select[aria-invalid="true"] { border-color: var(--danger-border); }
+.workflow-controls select:disabled { cursor: not-allowed; opacity: .55; }
+.workflow-error { margin: 0; border-radius: 7px; background: var(--danger-soft); padding: 7px 9px; color: var(--danger); font-size: 11px; line-height: 1.45; }
+.workflow-controls-skeleton { display: grid; gap: 7px; margin-top: 12px; }
 .developer-files-toggle { min-height: 28px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); padding: 4px 7px; color: var(--muted); cursor: pointer; font-size: 10px; font-weight: 650; }
 .developer-files-toggle:hover, .developer-files-toggle.active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-ink); }
 .workspace-collapse-button { width: 30px; height: 30px; color: var(--text-faint); }

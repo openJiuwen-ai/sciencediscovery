@@ -77,6 +77,16 @@ export interface SkillDescriptor {
   diagnostics: SkillValidationDiagnostic[];
   hash: string;
   id: string;
+  /** Server-computed availability; never trusted from Skill frontmatter. */
+  ideaTreeExecutor?: {
+    authorityKey: string;
+    authorityVersion: string;
+    available: boolean;
+    developmentOnly: boolean;
+    reason?: string;
+  };
+  /** Normalized string metadata from SKILL.md frontmatter. */
+  metadata?: Record<string, string>;
   name: string;
   readOnly: boolean;
   resourceSummary: SkillResourceSummary;

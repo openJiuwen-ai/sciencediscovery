@@ -38,6 +38,7 @@ import type {
   ModelConnectivityTestResult,
   MemoryGraphSettingsDetails,
   ModelCatalogDetails,
+  IdeaTreeSettingsDetails,
   UninstallEnvironmentRequest,
   RegisterRemoteHostRequest,
   RemoteConnectLog,
@@ -55,6 +56,7 @@ import type {
   SystemQuotaSettings,
   SystemTimeoutSettings,
   UpdateMemoryGraphSettingsRequest,
+  UpdateIdeaTreeSettingsRequest,
   UpdateEnvironmentSourceSettingsRequest,
   UpdateModelProfileRequest,
   UpdateModelProviderRequest,
@@ -303,6 +305,14 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   updateMemoryGraphSettings(body: UpdateMemoryGraphSettingsRequest): Promise<MemoryGraphSettingsDetails> {
     return this.request("/api/memory/settings", { body: JSON.stringify(body), method: "PUT" });
+  }
+
+  getIdeaTreeSettings(): Promise<IdeaTreeSettingsDetails> {
+    return this.request("/api/settings/idea-tree");
+  }
+
+  updateIdeaTreeSettings(body: UpdateIdeaTreeSettingsRequest): Promise<IdeaTreeSettingsDetails> {
+    return this.request("/api/settings/idea-tree", { body: JSON.stringify(body), method: "PUT" });
   }
 
   listModels(): Promise<ModelProfile[]> {

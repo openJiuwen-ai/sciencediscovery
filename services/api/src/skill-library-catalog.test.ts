@@ -20,6 +20,8 @@ import { fileURLToPath } from "node:url";
 
 import { BUNDLED_SKILL_IDS, SkillCatalog } from "@sciencediscovery/specialist";
 import { BUILT_IN_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
+import { ideaTreeRepositoryForSession } from "./idea-tree/python-client.js";
+import { createIdeaTreeAuthorityRegistry } from "@sciencediscovery/idea-tree";
 
 import { createQueuedRun, createSkillEvolutionRun, DEFAULT_SELF_EVOLUTION_LIBRARY_ID, SKILL_EVOLUTION_PROMPT_MARKER } from "./runs/index.js";
 import { SessionStore } from "./store.js";
@@ -411,8 +413,17 @@ test("queued runs pin enabled skill library heads to immutable version refs", as
       skillSelectionMode: "selected",
     });
     const session = await store.createSession(project.id, "Queued library session");
+    const persistence = ideaTreeRepositoryForSession({ url: "http://127.0.0.1:1" }, { projectId: project.id, sessionId: session.id });
 
-    const run = await createQueuedRun(store, skillCatalog, catalog, session.id, { content: "find literature evidence" });
+    const run = await createQueuedRun(
+      store,
+      skillCatalog,
+      catalog,
+      createIdeaTreeAuthorityRegistry(),
+      session.id,
+      { content: "find literature evidence" },
+      persistence,
+    );
     assert.deepEqual(run.skillLibraryRefs, [{
       contentHash: committed.version!.contentHash,
       libraryId: "queued-library",
@@ -452,10 +463,28 @@ test("run-level skill self-evolution queues a guided proposal run", async () => 
       skillSelectionMode: "selected",
     });
     const session = await store.createSession(project.id, "Self-evolution session");
-    const source = await createQueuedRun(store, skillCatalog, catalog, session.id, { content: "Summarize a tiny CSV validation workflow" });
+    const authorities = createIdeaTreeAuthorityRegistry();
+    const persistence = ideaTreeRepositoryForSession({ url: "http://127.0.0.1:1" }, { projectId: project.id, sessionId: session.id });
+    const source = await createQueuedRun(
+      store,
+      skillCatalog,
+      catalog,
+      authorities,
+      session.id,
+      { content: "Summarize a tiny CSV validation workflow" },
+      persistence,
+    );
     await store.updateSessionRunStatus(session.id, source.id, "completed", { finishedAt: new Date().toISOString(), startedAt: new Date().toISOString() });
 
-    const evolution = await createSkillEvolutionRun(store, skillCatalog, catalog, session.id, source.id);
+    const evolution = await createSkillEvolutionRun(
+      store,
+      skillCatalog,
+      catalog,
+      authorities,
+      persistence,
+      session.id,
+      source.id,
+    );
     assert.equal(evolution.status, "queued");
     assert.match(evolution.prompt, new RegExp(SKILL_EVOLUTION_PROMPT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(evolution.prompt, /propose_skill_library_update/);

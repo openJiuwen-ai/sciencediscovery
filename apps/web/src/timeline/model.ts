@@ -59,6 +59,7 @@ function startsRunTimeline(event: RunStreamEvent): boolean {
   return event.type === "run.started"
     || (event.type === "run.status" && (event.status === "running" || event.status === "blocked"))
     || event.type === "agent.phase"
+    || event.type === "idea_tree.phase"
     || event.type === "assistant.thinking.delta"
     || event.type === "assistant.thinking.snapshot"
     || event.type === "assistant.delta"
