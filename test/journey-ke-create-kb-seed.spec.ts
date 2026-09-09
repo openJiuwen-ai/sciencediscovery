@@ -146,9 +146,11 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
       "等待种子管线完成",
       "ke-job-status 报告任务成功（无失败/死信），ke-documents 列出已就绪的种子文档。",
       async () => {
-        await expect(page.getByTestId("ke-job-status")).toContainText(/succeeded/, { timeout: 240_000 });
-        await expect(page.getByTestId("ke-job-status")).not.toContainText(/dead|failed/);
-        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 30_000 });
+        // The jobs panel lists only pending/running jobs — success is the
+        // documents flipping to ✓ while the active list drains.
+        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 300_000 });
+        await expect(page.getByTestId("ke-job-status")).not.toContainText("running", { timeout: 60_000 });
+        await expect(page.getByTestId("ke-job-status")).not.toContainText("failed");
       },
     );
 

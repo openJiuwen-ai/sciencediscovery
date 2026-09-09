@@ -128,7 +128,10 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
       "等待管线完成并观察图谱渲染",
       "任务成功后图谱画布渲染出节点与边（非空），期间无 console error。",
       async () => {
-        await expect(page.getByTestId("ke-job-status")).toContainText(/succeeded/, { timeout: 240_000 });
+        // The jobs panel lists only pending/running jobs — success is the
+        // documents flipping to ✓ while the active list drains.
+        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 300_000 });
+        await expect(page.getByTestId("ke-job-status")).not.toContainText("running", { timeout: 60_000 });
         const canvas = page.getByTestId("ke-graph-canvas");
         await expect(canvas).toBeVisible({ timeout: 60_000 });
         await expect(canvas.locator("*").first()).toBeVisible({ timeout: 60_000 });
