@@ -1,0 +1,352 @@
+{
+  "id": "gap-hit",
+  "kind": "gap-hit",
+  "version": "2026-09-01-v1",
+  "status": "active",
+  "description": "结构空洞命中评测（gap-hit）题集。12 个手工设计的稠密小型知识图谱，每个图围绕 gold 空洞构造：missing-edge 型 gold 保证 ≥minCommon 共邻（holes 可命中）或构成方法迁移场景（transfers 可命中）；同时掺入不满足阈值的 gold（不可命中，使 hitRate 非 1）与未被标注的噪声空洞（使 precision 非 1）。",
+  "format": {
+    "items[].graph": "待评测图谱：entities（id+name+type，supportCount 可选默认 1，communityId 可选）与 edges（subject/predicate/object 三元组，subject/object 引用实体 id）",
+    "items[].goldGaps": "人工标注的空洞清单：missing-edge（subject/object 引用实体 id）| missing-entity（entity 为图中缺失的实体名）",
+    "thresholds": "题集级 findGaps 参数覆盖：minCommon 覆盖 holes 共邻阈值（默认 3）",
+    "scoring": "实体对忽略谓词：gold missing-edge 规范化为无序实体对（normalizeEntityName：大小写/空白/连字符不敏感），与 findGaps 输出的 holes(a,b)、transfers(method,to) 求交。holes 信号不预测谓词（精确三元组匹配恒 0），语义近似需 LLM 判定、违背确定性初衷，故固化为实体对口径。missing-entity 型 gold 当前 findGaps 永不产出，计入 unmatchableGold 如实标注，不进命中率分母。指标：hitRate = goldHit/goldTotal（gold 被产出覆盖比例），precision = producedHit/producedPairs（产出命中 gold 比例）"
+  },
+  "construction": {
+    "method": "手工设计。每个图 5-8 个抽象科研实体（蛋白质/药物/通路/方法/数据集等通用类型，不绑定特定数据集），先放 gold 空洞，再反推满足 holes（≥3 共邻无直接边）或 transfers（uses/improves/extends 边 + ≥2 共邻上下文）的连边，最后补噪声实体/边制造非 gold 空洞",
+    "hitRate 非 1 的设计": "部分 gold 共邻数 <minCommon（gh03/gh04/gh08/gh10/gh11/gh12）或仅 1 邻居，holes/transfers 原理上不可命中——检验 executor 如实报告不饱和",
+    "precision 非 1 的设计": "每个可命中图同时产生 1-4 个未标注的噪声空洞（共邻达标但非 gold 的实体对）",
+    "规模局限": "12 题小图，结论为方向性；图结构手工构造，共邻分布与真实知识图谱不同"
+  },
+  "thresholds": { "minCommon": 3 },
+  "items": [
+    {
+      "id": "gh01",
+      "note": "纯净 holes 命中 + 噪声：gold(ka,kb) 共享 3 条通路可命中；p1-p2 共邻 {ka,kb,d1} 为噪声空洞拉低 precision；d1 仅 2 共邻不产生额外命中",
+      "graph": {
+        "entities": [
+          { "id": "ka", "name": "KinaseAlpha", "type": "protein" },
+          { "id": "kb", "name": "KinaseBeta", "type": "protein" },
+          { "id": "p1", "name": "PathwayP1", "type": "pathway" },
+          { "id": "p2", "name": "PathwayP2", "type": "pathway" },
+          { "id": "p3", "name": "PathwayP3", "type": "pathway" },
+          { "id": "d1", "name": "DrugDelta", "type": "drug" }
+        ],
+        "edges": [
+          { "subject": "ka", "predicate": "participates_in", "object": "p1" },
+          { "subject": "ka", "predicate": "participates_in", "object": "p2" },
+          { "subject": "ka", "predicate": "participates_in", "object": "p3" },
+          { "subject": "kb", "predicate": "participates_in", "object": "p1" },
+          { "subject": "kb", "predicate": "participates_in", "object": "p2" },
+          { "subject": "kb", "predicate": "participates_in", "object": "p3" },
+          { "subject": "d1", "predicate": "inhibits", "object": "p1" },
+          { "subject": "d1", "predicate": "inhibits", "object": "p2" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "ka", "object": "kb", "note": "两激酶共享 3 条通路但无直接边——holes 可命中" }
+      ]
+    },
+    {
+      "id": "gh02",
+      "note": "transfers 命中：x uses m，y 与 x 共享 2 个 marker → m 迁移到 y；z 同样满足上下文但非 gold（噪声迁移）；m1-m2 共邻 {x,y,z} 为噪声空洞",
+      "graph": {
+        "entities": [
+          { "id": "m", "name": "MethodMimic", "type": "method" },
+          { "id": "x", "name": "CellLineX", "type": "cell" },
+          { "id": "y", "name": "CellLineY", "type": "cell" },
+          { "id": "z", "name": "CellLineZ", "type": "cell" },
+          { "id": "m1", "name": "MarkerM1", "type": "biomarker" },
+          { "id": "m2", "name": "MarkerM2", "type": "biomarker" }
+        ],
+        "edges": [
+          { "subject": "x", "predicate": "uses", "object": "m" },
+          { "subject": "x", "predicate": "expresses", "object": "m1" },
+          { "subject": "x", "predicate": "expresses", "object": "m2" },
+          { "subject": "y", "predicate": "expresses", "object": "m1" },
+          { "subject": "y", "predicate": "expresses", "object": "m2" },
+          { "subject": "z", "predicate": "expresses", "object": "m1" },
+          { "subject": "z", "predicate": "expresses", "object": "m2" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "m", "object": "y", "note": "方法迁移候选：transfers(method,to) 可命中" }
+      ]
+    },
+    {
+      "id": "gh03",
+      "note": "不饱和设计：gold(l,r) 共邻仅 2（<minCommon=3）且无 transfer 路径——原理上不可命中，全图零产出（precision 为 null）",
+      "graph": {
+        "entities": [
+          { "id": "r", "name": "ReceptorRho", "type": "protein" },
+          { "id": "l", "name": "LigandLambda", "type": "compound" },
+          { "id": "t1", "name": "TissueTau1", "type": "tissue" },
+          { "id": "t2", "name": "TissueTau2", "type": "tissue" },
+          { "id": "d2", "name": "DrugDune", "type": "drug" }
+        ],
+        "edges": [
+          { "subject": "r", "predicate": "expressed_in", "object": "t1" },
+          { "subject": "r", "predicate": "expressed_in", "object": "t2" },
+          { "subject": "l", "predicate": "detected_in", "object": "t1" },
+          { "subject": "l", "predicate": "detected_in", "object": "t2" },
+          { "subject": "d2", "predicate": "targets", "object": "r" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "l", "object": "r", "note": "配体-受体缺直接边，但共邻仅 2 个组织——设计为不可命中" }
+      ]
+    },
+    {
+      "id": "gh04",
+      "note": "holes+transfers 混合：gold(g1,g2) 共邻 3 个筛选（holes 命中）；gold(crispr,g2) 为方法迁移（transfers 命中）；gold(g2,dm) 共邻仅 2 不可命中；s1-s2 噪声空洞、crispr→dm 噪声迁移",
+      "graph": {
+        "entities": [
+          { "id": "crispr", "name": "MethodCRISPR", "type": "method" },
+          { "id": "g1", "name": "GeneG1", "type": "gene" },
+          { "id": "g2", "name": "GeneG2", "type": "gene" },
+          { "id": "s1", "name": "ScreenS1", "type": "assay" },
+          { "id": "s2", "name": "ScreenS2", "type": "assay" },
+          { "id": "s3", "name": "ScreenS3", "type": "assay" },
+          { "id": "dm", "name": "DiseaseDM", "type": "disease" }
+        ],
+        "edges": [
+          { "subject": "g1", "predicate": "uses", "object": "crispr" },
+          { "subject": "g1", "predicate": "profiled_by", "object": "s1" },
+          { "subject": "g1", "predicate": "profiled_by", "object": "s2" },
+          { "subject": "g1", "predicate": "profiled_by", "object": "s3" },
+          { "subject": "g2", "predicate": "profiled_by", "object": "s1" },
+          { "subject": "g2", "predicate": "profiled_by", "object": "s2" },
+          { "subject": "g2", "predicate": "profiled_by", "object": "s3" },
+          { "subject": "dm", "predicate": "associated_with", "object": "s1" },
+          { "subject": "dm", "predicate": "associated_with", "object": "s2" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "g1", "object": "g2", "note": "两基因共享 3 个筛选无直接边——holes 可命中" },
+        { "type": "missing-edge", "subject": "crispr", "object": "g2", "note": "g1 的方法迁移到共享上下文的 g2——transfers 可命中" },
+        { "type": "missing-edge", "subject": "g2", "object": "dm", "note": "共邻仅 {s1,s2}=2，不可命中" }
+      ]
+    },
+    {
+      "id": "gh05",
+      "note": "已有边排除 + 高噪声：p1-p2 共邻 3 但已有 interacts_with 边（正确地不产出）；gold(c1,c2) 可命中；c1-c3/c2-c3/dp-p1/dp-p2 四个噪声空洞使 precision=1/5",
+      "graph": {
+        "entities": [
+          { "id": "p1", "name": "ProteinP1", "type": "protein" },
+          { "id": "p2", "name": "ProteinP2", "type": "protein" },
+          { "id": "c1", "name": "ComplexC1", "type": "complex" },
+          { "id": "c2", "name": "ComplexC2", "type": "complex" },
+          { "id": "c3", "name": "ComplexC3", "type": "complex" },
+          { "id": "dp", "name": "DrugPinnacle", "type": "drug" }
+        ],
+        "edges": [
+          { "subject": "p1", "predicate": "part_of", "object": "c1" },
+          { "subject": "p1", "predicate": "part_of", "object": "c2" },
+          { "subject": "p1", "predicate": "part_of", "object": "c3" },
+          { "subject": "p2", "predicate": "part_of", "object": "c1" },
+          { "subject": "p2", "predicate": "part_of", "object": "c2" },
+          { "subject": "p2", "predicate": "part_of", "object": "c3" },
+          { "subject": "p1", "predicate": "interacts_with", "object": "p2" },
+          { "subject": "dp", "predicate": "binds", "object": "c1" },
+          { "subject": "dp", "predicate": "binds", "object": "c2" },
+          { "subject": "dp", "predicate": "binds", "object": "c3" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "c1", "object": "c2", "note": "两复合物共享 {p1,p2,dp} 无直接边——holes 可命中" }
+      ]
+    },
+    {
+      "id": "gh06",
+      "note": "missing-entity 标注演示：gold(e1,e2) holes 可命中；missing-entity 型 gold 当前 findGaps 永不产出，计入 unmatchableGold 不进命中率分母",
+      "graph": {
+        "entities": [
+          { "id": "e1", "name": "EnzymeE1", "type": "enzyme" },
+          { "id": "e2", "name": "EnzymeE2", "type": "enzyme" },
+          { "id": "u1", "name": "SubstrateU1", "type": "metabolite" },
+          { "id": "u2", "name": "SubstrateU2", "type": "metabolite" },
+          { "id": "u3", "name": "SubstrateU3", "type": "metabolite" }
+        ],
+        "edges": [
+          { "subject": "e1", "predicate": "catalyzes", "object": "u1" },
+          { "subject": "e1", "predicate": "catalyzes", "object": "u2" },
+          { "subject": "e1", "predicate": "catalyzes", "object": "u3" },
+          { "subject": "e2", "predicate": "catalyzes", "object": "u1" },
+          { "subject": "e2", "predicate": "catalyzes", "object": "u2" },
+          { "subject": "e2", "predicate": "catalyzes", "object": "u3" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "e1", "object": "e2", "note": "两酶共享 3 个底物无直接边——holes 可命中" },
+        { "type": "missing-entity", "entity": "HTS-ScreeningPlatform", "note": "图中缺失的高通量筛选平台实体——findGaps 不产出 missing-entity，标注不可命中" }
+      ]
+    },
+    {
+      "id": "gh07",
+      "note": "extends 迁移 + 已迁移排除：x extends mb、y 与 x 共享 2 数据集 → gold(mb,y) transfers 命中；z 已 uses mb（不再产出）；噪声：x-z/ds1-ds2 空洞、ma→y/ma→z 迁移",
+      "graph": {
+        "entities": [
+          { "id": "mb", "name": "MethodBase", "type": "method" },
+          { "id": "ma", "name": "MethodAux", "type": "method" },
+          { "id": "x", "name": "ModelX", "type": "model" },
+          { "id": "y", "name": "ModelY", "type": "model" },
+          { "id": "z", "name": "ModelZ", "type": "model" },
+          { "id": "ds1", "name": "DatasetDS1", "type": "dataset" },
+          { "id": "ds2", "name": "DatasetDS2", "type": "dataset" }
+        ],
+        "edges": [
+          { "subject": "x", "predicate": "extends", "object": "mb" },
+          { "subject": "x", "predicate": "uses", "object": "ma" },
+          { "subject": "x", "predicate": "evaluated_on", "object": "ds1" },
+          { "subject": "x", "predicate": "evaluated_on", "object": "ds2" },
+          { "subject": "y", "predicate": "evaluated_on", "object": "ds1" },
+          { "subject": "y", "predicate": "evaluated_on", "object": "ds2" },
+          { "subject": "z", "predicate": "evaluated_on", "object": "ds1" },
+          { "subject": "z", "predicate": "evaluated_on", "object": "ds2" },
+          { "subject": "z", "predicate": "uses", "object": "mb" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "mb", "object": "y", "note": "x extends mb，y 与 x 共享 2 个评测数据集——transfers 可命中" }
+      ]
+    },
+    {
+      "id": "gh08",
+      "note": "部分命中：gold(hsp,cpa) 共邻 3 条应激通路可命中；gold(hsp,cpb) 共邻仅 2 不可命中；sp1-sp2 噪声空洞；atp/inh 仅 1 邻居不参与成对分析",
+      "graph": {
+        "entities": [
+          { "id": "hsp", "name": "ChaperoneHSP", "type": "protein" },
+          { "id": "cpa", "name": "ClientProtA", "type": "protein" },
+          { "id": "cpb", "name": "ClientProtB", "type": "protein" },
+          { "id": "atp", "name": "CofactorATP", "type": "cofactor" },
+          { "id": "sp1", "name": "StressPath1", "type": "pathway" },
+          { "id": "sp2", "name": "StressPath2", "type": "pathway" },
+          { "id": "sp3", "name": "StressPath3", "type": "pathway" },
+          { "id": "inh", "name": "InhibitorI", "type": "drug" }
+        ],
+        "edges": [
+          { "subject": "hsp", "predicate": "regulates", "object": "sp1" },
+          { "subject": "hsp", "predicate": "regulates", "object": "sp2" },
+          { "subject": "hsp", "predicate": "regulates", "object": "sp3" },
+          { "subject": "cpa", "predicate": "regulates", "object": "sp1" },
+          { "subject": "cpa", "predicate": "regulates", "object": "sp2" },
+          { "subject": "cpa", "predicate": "regulates", "object": "sp3" },
+          { "subject": "cpb", "predicate": "regulates", "object": "sp1" },
+          { "subject": "cpb", "predicate": "regulates", "object": "sp2" },
+          { "subject": "atp", "predicate": "cofactor_of", "object": "hsp" },
+          { "subject": "inh", "predicate": "inhibits", "object": "hsp" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "hsp", "object": "cpa", "note": "伴侣蛋白与客户蛋白共享 3 条通路——holes 可命中" },
+        { "type": "missing-edge", "subject": "hsp", "object": "cpb", "note": "共邻仅 {sp1,sp2}=2，不可命中" }
+      ]
+    },
+    {
+      "id": "gh09",
+      "note": "跨社区空洞：kc1(community 1) 与 kc2(community 2) 共享 3 个支架蛋白——holes 可命中且 crossCommunity=true；低噪声（仅 1 产出对）",
+      "graph": {
+        "entities": [
+          { "id": "kc1", "name": "KinaseC1", "type": "protein", "communityId": 1 },
+          { "id": "kc2", "name": "KinaseC2", "type": "protein", "communityId": 2 },
+          { "id": "sc1", "name": "ScaffoldS1", "type": "protein" },
+          { "id": "sc2", "name": "ScaffoldS2", "type": "protein" },
+          { "id": "sc3", "name": "ScaffoldS3", "type": "protein" }
+        ],
+        "edges": [
+          { "subject": "kc1", "predicate": "docks_with", "object": "sc1" },
+          { "subject": "kc1", "predicate": "docks_with", "object": "sc2" },
+          { "subject": "kc1", "predicate": "docks_with", "object": "sc3" },
+          { "subject": "kc2", "predicate": "docks_with", "object": "sc1" },
+          { "subject": "kc2", "predicate": "docks_with", "object": "sc2" },
+          { "subject": "kc2", "predicate": "docks_with", "object": "sc3" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "kc1", "object": "kc2", "note": "跨社区共享 3 个支架蛋白——最有价值的 holes 类型" }
+      ]
+    },
+    {
+      "id": "gh10",
+      "note": "单转移 + 不饱和：gold(rnaseq,astro) transfers 可命中；gold(rnaseq,n1) 中 rnaseq 仅 1 邻居，原理上不可命中；无噪声（precision=1）",
+      "graph": {
+        "entities": [
+          { "id": "rnaseq", "name": "MethodRNAseq", "type": "method" },
+          { "id": "neu", "name": "CellTypeNeuron", "type": "cell" },
+          { "id": "astro", "name": "CellTypeAstro", "type": "cell" },
+          { "id": "n1", "name": "MarkerN1", "type": "biomarker" },
+          { "id": "n2", "name": "MarkerN2", "type": "biomarker" }
+        ],
+        "edges": [
+          { "subject": "neu", "predicate": "uses", "object": "rnaseq" },
+          { "subject": "neu", "predicate": "expresses", "object": "n1" },
+          { "subject": "neu", "predicate": "expresses", "object": "n2" },
+          { "subject": "astro", "predicate": "expresses", "object": "n1" },
+          { "subject": "astro", "predicate": "expresses", "object": "n2" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "rnaseq", "object": "astro", "note": "神经元的方法迁移到共享 2 个 marker 的星形胶质细胞——transfers 可命中" },
+        { "type": "missing-edge", "subject": "rnaseq", "object": "n1", "note": "rnaseq 仅 1 个邻居，不参与成对分析——不可命中" }
+      ]
+    },
+    {
+      "id": "gh11",
+      "note": "推断链缺口：gold(kx,dp) 共邻 3 条通路可命中；gold(dm,t2d) 为 dm→kx→通路→t2d 的纯推断链末端，共邻 0 不可命中；glu-lip 噪声空洞",
+      "graph": {
+        "entities": [
+          { "id": "dm", "name": "DrugMistle", "type": "drug" },
+          { "id": "dp", "name": "DrugPeregrine", "type": "drug" },
+          { "id": "kx", "name": "KinaseX", "type": "protein" },
+          { "id": "glu", "name": "PathwayGLU", "type": "pathway" },
+          { "id": "lip", "name": "PathwayLIP", "type": "pathway" },
+          { "id": "inf", "name": "PathwayINF", "type": "pathway" },
+          { "id": "t2d", "name": "DiseaseT2D", "type": "disease" }
+        ],
+        "edges": [
+          { "subject": "dm", "predicate": "activates", "object": "kx" },
+          { "subject": "kx", "predicate": "regulates", "object": "glu" },
+          { "subject": "kx", "predicate": "regulates", "object": "lip" },
+          { "subject": "kx", "predicate": "regulates", "object": "inf" },
+          { "subject": "dp", "predicate": "modulates", "object": "glu" },
+          { "subject": "dp", "predicate": "modulates", "object": "lip" },
+          { "subject": "dp", "predicate": "modulates", "object": "inf" },
+          { "subject": "t2d", "predicate": "associated_with", "object": "glu" },
+          { "subject": "t2d", "predicate": "associated_with", "object": "lip" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "kx", "object": "dp", "note": "激酶与药物共享 3 条通路无直接边——holes 可命中" },
+        { "type": "missing-edge", "subject": "dm", "object": "t2d", "note": "推断链 dm→kx→通路→t2d 末端缺口，共邻 0——不可命中" }
+      ]
+    },
+    {
+      "id": "gh12",
+      "note": "基准共享 + 不饱和：gold(v1,af1) 共邻 3 个基准可命中；gold(v2,b1) 中 v2 仅 1 邻居（extends v1）不参与成对分析，不可命中；b1-b2 噪声空洞",
+      "graph": {
+        "entities": [
+          { "id": "v1", "name": "MethodV1", "type": "method" },
+          { "id": "v2", "name": "MethodV2", "type": "method" },
+          { "id": "af1", "name": "AppField1", "type": "field" },
+          { "id": "af2", "name": "AppField2", "type": "field" },
+          { "id": "b1", "name": "BenchB1", "type": "benchmark" },
+          { "id": "b2", "name": "BenchB2", "type": "benchmark" },
+          { "id": "b3", "name": "BenchB3", "type": "benchmark" }
+        ],
+        "edges": [
+          { "subject": "v2", "predicate": "extends", "object": "v1" },
+          { "subject": "v1", "predicate": "benchmarked_on", "object": "b1" },
+          { "subject": "v1", "predicate": "benchmarked_on", "object": "b2" },
+          { "subject": "v1", "predicate": "benchmarked_on", "object": "b3" },
+          { "subject": "af1", "predicate": "benchmarked_on", "object": "b1" },
+          { "subject": "af1", "predicate": "benchmarked_on", "object": "b2" },
+          { "subject": "af1", "predicate": "benchmarked_on", "object": "b3" },
+          { "subject": "af2", "predicate": "benchmarked_on", "object": "b1" },
+          { "subject": "af2", "predicate": "benchmarked_on", "object": "b2" }
+        ]
+      },
+      "goldGaps": [
+        { "type": "missing-edge", "subject": "v1", "object": "af1", "note": "方法与应用领域共享 3 个基准——holes 可命中" },
+        { "type": "missing-edge", "subject": "v2", "object": "b1", "note": "v2 仅 1 个邻居（extends v1），不参与成对分析——不可命中" }
+      ]
+    }
+  ]
+}

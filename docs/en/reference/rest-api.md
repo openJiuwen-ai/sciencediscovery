@@ -121,3 +121,25 @@ curl -X POST http://127.0.0.1:4310/api/proxy/servers \
 ```
 
 Never place real proxy credentials in documentation, scripts, or shell history. The authenticated settings endpoint returns full URLs by current design, so protect the bearer token and browser session like a credential-management interface.
+
+
+## Knowledge engine
+
+Subject knowledge bases: literature ingestion, entity/relation graph, growth cycles, entity resolution, and communities. All routes require bearer authentication. See [Knowledge engine](../explanation/knowledge-engine.md).
+
+| Method and path | Request | Success |
+|---|---|---|
+| `GET /api/knowledge-engine/kbs` | none | `200`, `{kbs}` with stats |
+| `POST /api/knowledge-engine/kbs` | `{name, description?}` | `201`, created KB |
+| `GET /api/knowledge-engine/kbs/:id` | none | `200`, KB with stats |
+| `POST /api/knowledge-engine/kbs/:id/seed` | `{query, maxPapers?}` (1–25) | `202`, `{jobId, enqueued}` |
+| `GET /api/knowledge-engine/kbs/:id/documents` | none | `200`, lean document list |
+| `GET /api/knowledge-engine/kbs/:id/jobs` | none | `200`, recent jobs |
+| `GET /api/knowledge-engine/kbs/:id/graph` | none | `200`, lean entities + edges (no fulltext/embeddings) |
+| `GET /api/knowledge-engine/kbs/:id/roots` | none | `200`, community roots (fingerprint-cached, stale-while-revalidate) |
+| `POST /api/knowledge-engine/kbs/:id/grow` | `{query?, budget?: {maxPapers?, maxDepth?, maxPerPaper?}}` | `202`, grow cycle handle |
+| `GET /api/knowledge-engine/kbs/:id/grow` | none | `200`, engine state + active cycle + frontier counts |
+| `POST /api/knowledge-engine/kbs/:id/resolution` | `{}` | `202`, `{jobId, enqueued}`; no-ops when resolution mode is `off` |
+| `GET /api/knowledge-engine/kbs/:id/merges` | none | `200`, merge/attach audit rows |
+| `POST /api/knowledge-engine/merges/:mergeId/unmerge` | none | `200`; `404` unknown, `409` already undone, `400` online attach (not unmergeable) |
+| `GET /api/knowledge-engine/entities/:id` | none | `200`, entity detail with verbatim evidence |

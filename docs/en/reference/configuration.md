@@ -55,6 +55,13 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_WEB_DIR` | `apps/web/dist` | Static UI assets |
 | `SCIENCE_AGENT_PAPER_PYTHON_PATH` | `<data-dir>/envs/paper/bin/python` | PDF-worker Python |
 | `SCIENCE_AGENT_PAPER_WORKER_PATH` | `services/paper/paper_worker.py` | PDF-worker entry point |
+| `SCIENCE_AGENT_KE_EMBEDDING_BASE_URL` | unset | Knowledge-engine embedding endpoint (OpenAI-compatible); unset disables embeddings (extraction/resolution degrade gracefully) |
+| `SCIENCE_AGENT_KE_EMBEDDING_API_KEY` | unset | Knowledge-engine embedding API key |
+| `SCIENCE_AGENT_KE_EMBEDDING_MODEL` | unset | Knowledge-engine embedding model id |
+| `SCIENCE_AGENT_KE_ENTITY_RESOLUTION` | `off` | Entity-resolution mode: `off` (byte-identical legacy writes), `shadow` (decide + audit only), `on` (merge). Precedence: this env var > ke_settings `entity_resolution_mode` > `off` — ke_settings applies only when the env var is unset |
+| `SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR` | unset | Replay recorded scholarly HTTP responses from this directory instead of the network (mocked E2E) |
+| `SCIENCE_AGENT_KE_OPENALEX_API_KEY` | unset | OpenAlex API key for the knowledge-engine source chain |
+| `SCIENCE_AGENT_KE_UNPAYWALL_EMAIL` | unset | Unpaywall contact email (enables the connector) |
 
 The Ascend NPU Broker is for deployments that need host Ascend devices, and administrators must enable it explicitly. Keep `SCIENCE_AGENT_NPU_BROKER=0` when the host has no Ascend NPU, lacks CANN/MindSpore, or should not expose NPU jobs to the Agent; then `run_npu_job` is absent from the tool table. Enabling it does not change the normal local-mode startup command. Before enabling the Broker, create and verify at least one ScienceDiscovery managed Python scientific environment revision that can import the required CANN/MindSpore stack. Built-in NPU workloads, including `npu.smoke_test`, require `environment_revision_id`; when the Agent does not pass one explicitly, the API uses the current Session revision. When `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` is empty, the built-in allowlist currently contains `npu.smoke_test` and `antibody.protenix.v1`. Add models through a custom JSON allowlist with fixed entry points, not arbitrary Agent-supplied commands. `SCIENCE_AGENT_NPU_PYTHON` is kept only for custom allowlists that explicitly use `${python}`; the built-in allowlist uses `${managedPython}` and ignores it. Changing the allowlist is equivalent to changing executable host-code entry points and should be reviewed as a deployment change. Model weights, databases, HMMER, CANN, MindScience checkouts, and similar site assets stay outside the repository and are normally referenced through the environment variables or workload configuration above.
 

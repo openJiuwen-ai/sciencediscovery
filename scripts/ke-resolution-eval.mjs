@@ -37,7 +37,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const keDist = path.join(repoRoot, "packages", "knowledge-engine", "dist", "index.js");
@@ -52,7 +52,7 @@ const {
   computeMetrics,
   goldClusterOf,
   ER_GATE,
-} = await import(keDist);
+} = await import(pathToFileURL(keDist).href);
 
 const argv = process.argv.slice(2);
 const opt = (name) => {
