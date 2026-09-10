@@ -99,6 +99,10 @@ For example: `tree_view` → add A with the observed revision → wait for succe
 4. Use the default catalyst profile unless the user explicitly enables, skips, or narrows stages.
 5. On resume, reuse exact valid shared context or checkpoints when available. Do not repeat completed work merely because a legacy `preflightStatus` field says `running`.
 
+For a new rapid catalyst exploration with no user-specified depth, prefer `max_depth=2`: ROOT → distinct directions → executable candidates. The Runtime requires evaluated leaves to reach `maxDepth`; do not create unnecessary chains just to fill a larger default depth. Preserve the persisted depth and limits when resuming an existing tree.
+
+Reserve node and execution capacity for later improvements instead of spending it all on the initial batch. `max_search_rounds` counts leaf claims, not batches of candidates. Create enough initial candidates to begin comparison, then add further candidates as findings justify them. Respect explicit user limits.
+
 ## Step 1: SHARED CONTEXT
 
 For a new catalyst tree, literature and evidence are enabled by default.
@@ -116,6 +120,12 @@ Artifacts remain optional durability and provenance mechanisms. When an Artifact
 Call `tree_view` before each decision cycle. Inspect revision, remaining limits, eligible leaves, retry states, completed insights, shared context, and pending propagation.
 
 Create legal nodes with `tree_add_node`. Priority is an ordering hint, not a scientific score. The Lead may formulate concrete, executable hypotheses, but it must leave candidate construction and evaluation to the enabled leaf Specialists.
+
+Early in exploration, establish multiple directions that differ meaningfully in mechanism, composition, or structure. After results arrive, balance targeted refinement of promising directions with unresolved alternatives; do not converge solely because one model assessment has the highest score. There is no fixed number of new nodes required per cycle.
+
+For each feedback-driven candidate, include in its hypothesis: the prior candidate and finding that motivated it, the concrete design change, the unresolved question the next evaluation should answer, and the potential new tradeoff. Avoid renamed duplicates or arbitrary parameter changes merely to extend the run.
+
+Preserve evaluated hypotheses and results. Add an improvement under a legal active, pending parent with remaining depth capacity; it may be a sibling of the evaluated candidate, with the feedback source recorded in its hypothesis. Do not append children below a max-depth leaf or rewrite an evaluated node to represent a new experiment.
 
 A claimable leaf has:
 
@@ -230,7 +240,13 @@ The finalizer binds the result to the active execution, validates the score rang
 
 ## Step 7: DECIDE, FINISH, AND SUMMARIZE
 
-Choose the next useful action: execute, expand, retry, prune, or stop. Stop when a hard limit is reached, no valuable work remains, marginal information gain is low, or the user asks.
+After every completed assessment and propagation cycle, review what changed: which candidate warrants improvement, which weakness can be addressed by a concrete design change, and which distinct alternative remains worth testing. Completing all initially planned candidates does not by itself justify stopping.
+
+If worthwhile pending candidates or substantively new, executable ideas remain and the budget permits, return to Step 2. Add justified new candidates, select, execute, and propagate again. Reuse valid shared context and prior results; do not restart initialization or repeat completed assessments merely to create another cycle. Handle recoverable failures through Step 6 and prune unproductive candidates when appropriate.
+
+Stop only with a specific reason: the user requests it; remaining node or execution limits prevent the next useful legal operation; no substantively different executable idea can be derived from the findings; or further evaluation is unlikely to resolve a meaningful uncertainty for the current recommendation. Explain the evidence for the latter two judgments rather than just declaring exploration complete.
+
+If the harness exposes remaining token or time budget, reserve enough to complete the current execution, propagation, and final summary before starting another leaf. Do not deliberately run into a hard token cutoff. If that budget is unavailable, do not invent a remaining-token estimate; use the visible tree limits and Runtime signals.
 
 Once stopping is justified:
 
